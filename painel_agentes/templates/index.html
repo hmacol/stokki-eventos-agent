@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block titulo %}Agentes{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .categoria { margin-bottom: 36px; }
+  .categoria h2 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 14px 4px;
+  }
+  .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .cartao {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .cartao .titulo-linha {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .cartao h3 { margin: 0; font-size: 15px; font-weight: 700; }
+  .cartao p.descricao { margin: 0; font-size: 13px; color: var(--texto-suave); line-height: 1.5; }
+  .cartao .ultima-execucao { font-size: 12px; color: var(--texto-suave); }
+  .cartao form { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .cartao label.teste { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+{% for nome_categoria, agentes in categorias %}
+<div class="categoria">
+  <h2>{{ nome_categoria }}</h2>
+  <div class="grade">
+    {% for agente in agentes %}
+    <div class="cartao">
+      <div class="titulo-linha">
+        <h3>{{ agente.nome }}</h3>
+        {% if agente.rodando %}
+          <span class="badge badge-rodando">Rodando</span>
+        {% elif agente.ultima_execucao %}
+          {% if agente.ultima_execucao.status == 'SUCESSO' %}
+            <span class="badge badge-sucesso">OK</span>
+          {% elif agente.ultima_execucao.status == 'INTERROMPIDO' %}
+            <span class="badge badge-interrompido">Interrompido</span>
+          {% elif agente.ultima_execucao.status == 'TIMEOUT' %}
+            <span class="badge badge-timeout">Tempo esgotado</span>
+          {% else %}
+            <span class="badge badge-erro">Erro</span>
+          {% endif %}
+        {% else %}
+          <span class="badge badge-nunca">Nunca rodou</span>
+        {% endif %}
+      </div>
+      <p class="descricao">{{ agente.descricao }}</p>
+      {% if agente.ultima_execucao %}
+      <p class="ultima-execucao">
+        Última execução: {{ agente.ultima_execucao.iniciado_em }}
+        {% if agente.ultima_execucao.modo_teste %}<span class="badge badge-teste">teste</span>{% endif %}
+        · <a href="{{ url_for('execucao', execucao_id=agente.ultima_execucao.id) }}">ver log</a>
+      </p>
+      {% endif %}
+      <form method="POST" action="{{ url_for('rodar', agente_id=agente.id) }}">
+        <button type="submit" class="botao{% if agente.rodando %} desabilitado{% endif %}"
+               {% if agente.rodando %}disabled{% endif %}>
+          {% if agente.rodando %}Rodando…{% else %}Rodar{% endif %}
+        </button>
+        {% if agente.suporta_teste %}
+        <label class="teste">
+          <input type="checkbox" name="modo_teste">
+          Modo teste
+        </label>
+        {% endif %}
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

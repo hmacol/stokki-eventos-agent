@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block titulo %}{{ agente.nome if agente else execucao.agente_nome }} — Execução{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .cabecalho-exec {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .cabecalho-exec h1 { margin: 0; font-size: 20px; }
+  .meta { font-size: 13px; color: var(--texto-suave); margin-top: 4px; }
+
+  .resumo-barra {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .resumo-item { display: flex; align-items: center; gap: 6px; color: var(--texto-suave); }
+  .resumo-item strong { color: var(--texto); font-weight: 700; }
+  .resumo-item.tem-erro strong { color: var(--erro); }
+  .resumo-item.tem-aviso strong { color: #B4790C; }
+  .resumo-separador { color: var(--borda); }
+
+  #log-box {
+    background: var(--primaria);
+    border-radius: 10px;
+    padding: 18px 20px;
+    font-size: 12.5px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 68vh;
+    overflow-y: auto;
+  }
+  #log-box .linha-info { color: #B8B8D8; }
+  #log-box .linha-warning { color: #FFCE7A; font-weight: 600; }
+  #log-box .linha-error { color: #FF9B92; font-weight: 700; }
+  #log-box .linha-etapa {
+    color: #fff;
+    font-weight: 700;
+    display: block;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #33334D;
+  }
+  #log-box .linha-etapa:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+  #log-box .linha-simples { color: #86869E; }
+
+  .voltar { display: inline-block; margin-top: 20px; font-size: 13px; color: var(--texto-suave); text-decoration: none; }
+  .voltar:hover { color: var(--texto); }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-exec">
+  <div>
+    <h1>{{ execucao.agente_nome }}</h1>
+    <p class="meta">
+      Iniciado em {{ execucao.iniciado_em }}
+      {% if execucao.modo_teste %}<span class="badge badge-teste">modo teste</span>{% endif %}
+    </p>
+  </div>
+  <span id="status-badge" class="badge badge-rodando">Rodando</span>
+</div>
+
+<div class="resumo-barra">
+  <div class="resumo-item">⏱ <strong id="resumo-tempo">0s</strong></div>
+  <span class="resumo-separador">·</span>
+  <div class="resumo-item" id="resumo-erros-item">🔴 <strong id="resumo-erros">0</strong> erro(s)</div>
+  <span class="resumo-separador">·</span>
+  <div class="resumo-item" id="resumo-avisos-item">🟡 <strong id="resumo-avisos">0</strong> aviso(s)</div>
+</div>
+
+<pre id="log-box" class="mono">Carregando log…</pre>
+
+<a class="voltar" href="{{ url_for('index') }}">&larr; Voltar pros agentes</a>
+
+<script>
+  const execucaoId = {{ execucao.id }};
+  const iniciadoEm = new Date("{{ execucao.iniciado_em.replace(' ', 'T') }}");
+  const logBox = document.getElementById('log-box');
+  const statusBadge = document.getElementById('status-badge');
+  const tempoEl = document.getElementById('resumo-tempo');
+  const errosEl = document.getElementById('resumo-erros');
+  const avisosEl = document.getElementById('resumo-avisos');
+  let intervalo = null;
+  let cronometro = null;
+
+  function escaparHtml(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto;
+    return div.innerHTML;
+  }
+
+  function badgeClasse(status) {
+    if (status === 'SUCESSO') return 'badge badge-sucesso';
+    if (status === 'ERRO') return 'badge badge-erro';
+    if (status === 'INTERROMPIDO') return 'badge badge-interrompido';
+    if (status === 'TIMEOUT') return 'badge badge-timeout';
+    return 'badge badge-rodando';
+  }
+  function badgeTexto(status) {
+    if (status === 'SUCESSO') return 'Concluído';
+    if (status === 'ERRO') return 'Erro';
+    if (status === 'INTERROMPIDO') return 'Interrompido (painel reiniciado no meio da execução)';
+    if (status === 'TIMEOUT') return 'Tempo esgotado (processo travado, encerrado à força)';
+    return 'Rodando';
+  }
+
+  function formatarTempo(segundos) {
+    if (segundos < 60) return `${segundos}s`;
+    const min = Math.floor(segundos / 60);
+    const seg = segundos % 60;
+    return `${min}min ${seg}s`;
+  }
+
+  function atualizarCronometro() {
+    const decorridoSeg = Math.max(0, Math.floor((Date.now() - iniciadoEm.getTime()) / 1000));
+    tempoEl.textContent = formatarTempo(decorridoSeg);
+  }
+
+  function renderizarLog(textoLog) {
+    if (!textoLog) {
+      logBox.textContent = '(sem saída ainda)';
+      return;
+    }
+    const linhas = textoLog.split('\n');
+    let erros = 0, avisos = 0;
+    const html = linhas.map(linha => {
+      const escapada = escaparHtml(linha);
+      if (/\[ERROR\]/.test(linha)) { erros++; return `<span class="linha-error">${escapada}</span>`; }
+      if (/\[WARNING\]/.test(linha)) { avisos++; return `<span class="linha-warning">${escapada}</span>`; }
+      if (/>>>\s*ETAPA/i.test(linha)) { return `<span class="linha-etapa">${escapada}</span>`; }
+      if (/\[INFO\]/.test(linha)) { return `<span class="linha-info">${escapada}</span>`; }
+      return `<span class="linha-simples">${escapada}</span>`;
+    }).join('\n');
+    logBox.innerHTML = html;
+
+    errosEl.textContent = erros;
+    avisosEl.textContent = avisos;
+    document.getElementById('resumo-erros-item').classList.toggle('tem-erro', erros > 0);
+    document.getElementById('resumo-avisos-item').classList.toggle('tem-aviso', avisos > 0);
+  }
+
+  function atualizar() {
+    fetch(`/execucao/${execucaoId}/status`)
+      .then(r => r.json())
+      .then(dados => {
+        const jaEstavaNoFim = logBox.scrollHeight - logBox.scrollTop <= logBox.clientHeight + 30;
+        renderizarLog(dados.log);
+        if (jaEstavaNoFim) logBox.scrollTop = logBox.scrollHeight;
+
+        statusBadge.className = badgeClasse(dados.status);
+        statusBadge.textContent = badgeTexto(dados.status);
+        if (dados.status !== 'RODANDO') {
+          if (intervalo) clearInterval(intervalo);
+          if (cronometro) clearInterval(cronometro);
+          atualizarCronometro();
+        }
+      })
+      .catch(() => { /* tenta de novo no próximo ciclo */ });
+  }
+
+  atualizar();
+  atualizarCronometro();
+  intervalo = setInterval(atualizar, 2000);
+  cronometro = setInterval(atualizarCronometro, 1000);
+</script>
+{% endblock %}

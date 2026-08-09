@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block titulo %}Mapa de Rotas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .barra-controle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .barra-controle input[type=date], .barra-controle select {
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .barra-controle label { display: flex; align-items: center; gap: 6px; }
+  .barra-controle .toggle-regioes { margin-left: auto; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .layout-mapa { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+  .legenda {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px;
+    max-height: 72vh;
+    overflow-y: auto;
+  }
+  .legenda h3 { margin: 0 0 10px; font-size: 13px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; }
+  .item-rota {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12.5px;
+    transition: opacity 0.15s;
+  }
+  .item-rota:hover { background: var(--fundo); }
+  .item-rota .cor-swatch { width: 12px; height: 12px; border-radius: 3px; margin-top: 2px; flex-shrink: 0; }
+  .item-rota .nome-rota { font-weight: 600; }
+  .item-rota .qtd-paradas { color: var(--texto-suave); }
+  #map { width: 100%; height: 72vh; border-radius: 10px; border: 1px solid var(--borda); }
+  .aviso {
+    background: #FDF3E1;
+    border: 1px solid #F0D9A8;
+    color: #8A5A0C;
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
+  .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
+  .info-parada .remetente { color: #4F86F7; font-weight: 600; }
+  .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 16px;">Mapa de Rotas</h1>
+
+<form class="barra-controle" method="GET" action="{{ url_for('mapa_rotas') }}" id="form-controle">
+  <label for="data">Data das rotas:</label>
+  <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
+  <button type="submit" class="botao">Buscar</button>
+
+  {% if dados and dados.remetentes %}
+  <label for="filtro-remetente">Remetente:</label>
+  <select id="filtro-remetente">
+    <option value="">Todos</option>
+    {% for r in dados.remetentes %}
+    <option value="{{ r }}">{{ r }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <label class="toggle-regioes">
+    <input type="checkbox" id="toggle-regioes" checked>
+    Mostrar regiões de agrupamento
+  </label>
+</form>
+
+{% if erro %}
+<div class="aviso">Não consegui buscar as rotas: {{ erro }}</div>
+{% elif not dados or not dados.rotas %}
+<div class="aviso">Nenhuma rota encontrada com pedido geolocalizado pra essa data.</div>
+{% elif not dados.google_maps_key %}
+<div class="aviso">Falta a chave do Google Maps (google_maps.api_key) no config.yaml -- sem ela não dá pra desenhar o mapa.</div>
+{% else %}
+<div class="layout-mapa">
+  <div class="legenda">
+    <h3>{{ dados.rotas|length }} rota(s) — {{ dados.data_alvo }}</h3>
+    <div id="lista-rotas"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script>
+  const DADOS_ROTAS = {{ dados.rotas | tojson }};
+  const DADOS_REGIOES = {{ dados.regioes | tojson }};
+  const BASE = {{ dados.base | tojson }};
+  const CORES = ["#0EA575", "#4F86F7", "#E1483D", "#B24FE0", "#E8A33D",
+                "#14A6A6", "#D0479A", "#6B7CE0", "#8FBF3F", "#E06B4F"];
+  const ICONES_NUMERADOS = {};
+
+  let map;
+  const grupos = [];  // { rota, cor, renderer, markers: [], polylineRef }
+  const retangulosRegiao = [];
+  let infoWindowAberta = null;
+
+  function iconeNumerado(numero, cor) {
+    const chave = `${numero}-${cor}`;
+    if (ICONES_NUMERADOS[chave]) return ICONES_NUMERADOS[chave];
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
+      <circle cx="14" cy="14" r="12" fill="${cor}" stroke="#fff" stroke-width="2"/>
+      <text x="14" y="19" font-size="12" font-weight="700" text-anchor="middle" fill="#fff" font-family="Arial">${numero}</text>
+    </svg>`;
+    const icone = {
+      url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+      scaledSize: new google.maps.Size(28, 28),
+      anchor: new google.maps.Point(14, 14),
+    };
+    ICONES_NUMERADOS[chave] = icone;
+    return icone;
+  }
+
+  function montarInfoHtml(parada) {
+    return `<div class="info-parada">
+      <div class="titulo">${parada.nome}</div>
+      <div class="remetente">${parada.remetente}</div>
+      <div>${parada.titulo}</div>
+      <div class="endereco">${parada.endereco}</div>
+    </div>`;
+  }
+
+  function desenharRegioes() {
+    DADOS_REGIOES.forEach(regiao => {
+      const retangulo = new google.maps.Rectangle({
+        bounds: { north: regiao.lat_max, south: regiao.lat_min, east: regiao.lng_max, west: regiao.lng_min },
+        map: map,
+        strokeColor: "#141428", strokeOpacity: 0.35, strokeWeight: 1,
+        fillColor: "#141428", fillOpacity: 0.04,
+        clickable: false,
+      });
+      retangulosRegiao.push(retangulo);
+    });
+  }
+
+  function aplicarFiltroRemetente(remetenteFiltro) {
+    grupos.forEach(g => {
+      const rotaTemRemetente = !remetenteFiltro || g.rota.paradas.some(p => p.remetente === remetenteFiltro);
+      const opacidade = rotaTemRemetente ? 1 : 0.12;
+      g.renderer.setOptions({ polylineOptions: { strokeColor: g.cor, strokeWeight: 4, strokeOpacity: rotaTemRemetente ? 0.9 : 0.15 } });
+      g.markers.forEach((marker, i) => {
+        const parada = g.rota.paradas[i];
+        const paradaVisivel = !remetenteFiltro || parada.remetente === remetenteFiltro;
+        marker.setOpacity(paradaVisivel ? 1 : 0.15);
+      });
+      g.itemLegenda.style.opacity = rotaTemRemetente ? "1" : "0.35";
+    });
+  }
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById("map"), {
+      center: BASE, zoom: 11,
+    });
+
+    new google.maps.Marker({
+      position: BASE, map: map, title: "Base",
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+
+    desenharRegioes();
+
+    const listaEl = document.getElementById("lista-rotas");
+    const directionsService = new google.maps.DirectionsService();
+    const infoWindow = new google.maps.InfoWindow();
+
+    DADOS_ROTAS.forEach((rota, i) => {
+      const cor = CORES[i % CORES.length];
+
+      const item = document.createElement("div");
+      item.className = "item-rota";
+      item.innerHTML = `
+        <span class="cor-swatch" style="background:${cor}"></span>
+        <div>
+          <div class="nome-rota">${rota.nome}</div>
+          <div class="qtd-paradas">${rota.paradas.length} parada(s)</div>
+        </div>`;
+      listaEl.appendChild(item);
+
+      const renderer = new google.maps.DirectionsRenderer({
+        map: map,
+        suppressMarkers: true,  // marcadores próprios, numerados, com clique -- não os padrão do Google
+        polylineOptions: { strokeColor: cor, strokeWeight: 4 },
+      });
+
+      const markersDaRota = rota.paradas.map((parada, idx) => {
+        const marker = new google.maps.Marker({
+          position: { lat: parada.lat, lng: parada.lng },
+          map: map,
+          icon: iconeNumerado(idx + 1, cor),
+          title: parada.nome,
+        });
+        marker.addListener("click", () => {
+          infoWindow.setContent(montarInfoHtml(parada));
+          infoWindow.open(map, marker);
+        });
+        return marker;
+      });
+
+      const grupo = { rota, cor, renderer, markers: markersDaRota, itemLegenda: item };
+      grupos.push(grupo);
+
+      const waypoints = rota.paradas.slice(0, -1).map(p => ({
+        location: { lat: p.lat, lng: p.lng }, stopover: true,
+      }));
+      const ultimaParada = rota.paradas[rota.paradas.length - 1];
+
+      directionsService.route({
+        origin: BASE,
+        destination: { lat: ultimaParada.lat, lng: ultimaParada.lng },
+        waypoints: waypoints,
+        optimizeWaypoints: false,  // já está na ordem certa (mais longe -> mais perto da base)
+        travelMode: google.maps.TravelMode.DRIVING,
+      }, (result, status) => {
+        if (status === "OK") {
+          renderer.setDirections(result);
+        } else {
+          console.warn(`Não consegui traçar a rota "${rota.nome}": ${status}`);
+        }
+      });
+
+      item.addEventListener("click", () => {
+        const escondendo = renderer.getMap() !== null;
+        renderer.setMap(escondendo ? null : map);
+        markersDaRota.forEach(m => m.setMap(escondendo ? null : map));
+        item.style.opacity = escondendo ? "0.4" : "1";
+      });
+    });
+
+    document.getElementById("filtro-remetente")?.addEventListener("change", (e) => {
+      aplicarFiltroRemetente(e.target.value);
+    });
+
+    document.getElementById("toggle-regioes").addEventListener("change", (e) => {
+      retangulosRegiao.forEach(r => r.setMap(e.target.checked ? map : null));
+    });
+  }
+</script>
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
+</script>
+{% endif %}
+{% endblock %}

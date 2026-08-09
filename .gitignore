@@ -1,0 +1,30 @@
+# Segredos / credenciais
+config.yaml
+**/sessao_stokki.json
+**/*service_account*.json
+**/*service-account*.json
+**/gcs-service-account.json
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+py
+
+# Dados, logs e saídas geradas em runtime
+dados/
+debug/
+saida_investigacao_stokki/
+documentos_pedido/dados/
+roteirizacao/dados/
+painel_agentes/dados/
+dashboard_embarcadores/dados/
+dashboard_embarcadores/debug/
+output/
+*.log
+*.csv
+
+# Planilhas e documentos de dados reais
+*.xlsx
+*.docx

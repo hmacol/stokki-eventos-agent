@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Freshlog — Comparativo de Embarcadores</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --cor-primaria: #141428;
+    --cor-primaria-clara: #E6FBF5;
+    --cor-acento: #00C896;
+    --cor-destaque: #F5A623;
+    --cor-texto: #1F2937;
+    --cor-texto-suave: #6B7280;
+    --cor-fundo: #F3F4F6;
+    --cor-borda: #E5E7EB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: var(--cor-fundo);
+    font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: var(--cor-texto);
+  }
+  header {
+    background: #fff; padding: 20px 32px; border-bottom: 1px solid var(--cor-borda);
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  }
+  header h1 { font-size: 20px; margin: 0; color: var(--cor-primaria); }
+  header .atualizado { font-size: 12px; color: var(--cor-texto-suave); }
+  .faixa-acento { height: 4px; background: var(--cor-acento); }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: #fff; border: 1px solid var(--cor-borda); border-radius: 10px; padding: 18px 20px;
+  }
+  .card .rotulo { font-size: 12px; font-weight: 600; color: var(--cor-texto-suave); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+  .card .valor { font-size: 30px; font-weight: 800; color: var(--cor-primaria); }
+  .painel {
+    background: #fff; border: 1px solid var(--cor-borda); border-radius: 10px; padding: 20px;
+    margin-bottom: 20px;
+  }
+  .painel h2 { font-size: 15px; margin: 0 0 14px 0; color: var(--cor-primaria); }
+  .painel-cabecalho { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .painel-cabecalho h2 { margin: 0; }
+  .filtros { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filtros select {
+    padding: 6px 10px; border: 1px solid var(--cor-borda); border-radius: 6px;
+    font-size: 13px; color: var(--cor-texto); background: #fff;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; background: var(--cor-fundo); color: var(--cor-primaria); font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--cor-borda); }
+  .sem-dados { text-align: center; padding: 60px 20px; color: var(--cor-texto-suave); }
+  .sem-resultado { text-align: center; padding: 24px; color: var(--cor-texto-suave); font-size: 13px; }
+  canvas { max-height: 380px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Comparativo de Embarcadores — Freshlog</h1>
+    <div style="display:flex;align-items:center;gap:14px;">
+      <span class="atualizado">
+        {% if dados.atualizado_em %}Atualizado em {{ dados.atualizado_em }}{% else %}Ainda sem dados{% endif %}
+      </span>
+      {% if not dados.sem_dados %}
+      <a href="/exportar/png" style="padding:8px 14px;background:#fff;border:1px solid var(--cor-borda);
+        border-radius:6px;font-size:13px;color:var(--cor-primaria);text-decoration:none;font-weight:600;">
+        📷 Tirar foto
+      </a>
+      <a href="/exportar/pdf" style="padding:8px 14px;background:var(--cor-acento);border:none;
+        border-radius:6px;font-size:13px;color:#fff;text-decoration:none;font-weight:600;">
+        📄 Exportar PDF
+      </a>
+      {% endif %}
+    </div>
+  </header>
+  <div class="faixa-acento"></div>
+
+  <main>
+    {% if dados.sem_dados %}
+      <div class="sem-dados">
+        <p>Nenhum dado disponível ainda. Rode <code>py -3.11 atualizar_dashboard.py</code> pra gerar a primeira atualização.</p>
+      </div>
+    {% else %}
+      <div class="cards">
+        <div class="card"><div class="rotulo">Total de pedidos (ano)</div><div class="valor">{{ dados.total_pedidos }}</div></div>
+        <div class="card"><div class="rotulo">Embarcadores</div><div class="valor">{{ dados.total_embarcadores }}</div></div>
+        <div class="card"><div class="rotulo">Destinatários únicos</div><div class="valor">{{ dados.total_destinatarios }}</div></div>
+        <div class="card"><div class="rotulo">Clientes recorrentes</div><div class="valor">{{ dados.clientes_recorrentes }}</div></div>
+      </div>
+
+      <div class="painel">
+        <h2>Pedidos por semana — desde o início do ano</h2>
+        <canvas id="graficoSemanas"></canvas>
+      </div>
+
+      <div class="painel">
+        <div class="painel-cabecalho">
+          <h2>Pedidos por semana — filtrado por embarcador</h2>
+          <div class="filtros">
+            <select id="filtroEmbarcadorBarras">
+              <option value="">Escolha um embarcador…</option>
+              {% for e in opcoes.embarcadores %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <canvas id="graficoBarrasEmbarcador"></canvas>
+        <p id="semResultadoBarras" class="sem-resultado" style="display:none;">Escolha um embarcador acima pra ver o gráfico.</p>
+      </div>
+
+      <div class="painel">
+        <div class="painel-cabecalho">
+          <h2>Pedidos por embarcador — distribuição</h2>
+          <div class="filtros">
+            <select id="filtroAnoRosca">
+              <option value="">Ano: todos</option>
+              {% for a in opcoes.anos %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+            </select>
+            <select id="filtroMesRosca">
+              <option value="">Mês: todos</option>
+              {% for m in opcoes.meses %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </select>
+            <select id="filtroSemanaRosca">
+              <option value="">Semana: todas</option>
+              {% for s in opcoes.semanas %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--cor-texto-suave);margin:0 0 12px 0;">
+          Se escolher uma semana, o filtro de semana manda; senão, o mês; senão, o ano.
+          Mostra os 12 embarcadores com mais pedidos no período — o resto entra em "Outros".
+        </p>
+        <canvas id="graficoRosca"></canvas>
+      </div>
+
+      <div class="painel">
+        <div class="painel-cabecalho">
+          <h2>Fluxo mensal por embarcador</h2>
+        </div>
+        <p style="font-size:12px;color:var(--cor-texto-suave);margin:0 0 12px 0;">
+          Embarcadores com o mesmo CNPJ cadastrado na nossa base já aparecem unificados sob um nome só.
+        </p>
+        <div style="max-height:520px;overflow-y:auto;overflow-x:auto;border:1px solid var(--cor-borda);border-radius:8px;">
+          <table>
+            <thead>
+              <tr style="position:sticky;top:0;">
+                <th>Embarcador</th>
+                {% for m in dados.meses %}<th style="text-align:right;">{{ m }}</th>{% endfor %}
+                <th style="text-align:right;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in dados.fluxo_embarcadores %}
+              <tr>
+                <td>{{ e.nome }}</td>
+                {% for qtd in e.meses %}<td style="text-align:right;">{{ qtd if qtd else "—" }}</td>{% endfor %}
+                <td style="text-align:right;font-weight:700;">{{ e.total }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="painel">
+        <div class="painel-cabecalho">
+          <h2>Destinatários mais recorrentes (top 20)</h2>
+          <div class="filtros">
+            <select id="filtroAnoDestinatarios">
+              <option value="">Ano: todos</option>
+              {% for a in opcoes.anos %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+            </select>
+            <select id="filtroMesDestinatarios">
+              <option value="">Mês: todos</option>
+              {% for m in opcoes.meses %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <table>
+          <thead><tr><th>Cliente</th><th style="text-align:right;">Pedidos</th></tr></thead>
+          <tbody id="corpoTabelaDestinatarios">
+            {% for d in dados.top_destinatarios %}
+            <tr><td>{{ d.nome }}</td><td style="text-align:right;font-weight:700;">{{ d.pedidos }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </main>
+
+  {% if not dados.sem_dados %}
+  <script>
+    const corAcento = '#00C896';
+    const corPrimaria = '#141428';
+    const corBorda = '#E5E7EB';
+
+    function coresParaFatias(qtd) {
+      const cores = [];
+      for (let i = 0; i < qtd; i++) {
+        cores.push(`hsl(${Math.round((i * 360) / qtd)}, 65%, 55%)`);
+      }
+      return cores;
+    }
+
+    // ── Pedidos por semana (fixo, sem filtro) ────────────────────────────────
+    new Chart(document.getElementById('graficoSemanas'), {
+      type: 'line',
+      data: {
+        labels: {{ dados.semanas | tojson }},
+        datasets: [{
+          label: 'Pedidos por semana',
+          data: {{ dados.pedidos_por_semana | tojson }},
+          borderColor: corAcento,
+          backgroundColor: 'rgba(0,200,150,0.12)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 3,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } },
+      }
+    });
+
+    // ── Pedidos por semana filtrado por embarcador (barras) ──────────────────
+    let graficoBarras = null;
+    async function atualizarGraficoBarras() {
+      const embarcador = document.getElementById('filtroEmbarcadorBarras').value;
+      const canvas = document.getElementById('graficoBarrasEmbarcador');
+      const aviso = document.getElementById('semResultadoBarras');
+      if (!embarcador) {
+        if (graficoBarras) { graficoBarras.destroy(); graficoBarras = null; }
+        canvas.style.display = 'none';
+        aviso.style.display = 'block';
+        return;
+      }
+      canvas.style.display = 'block';
+      aviso.style.display = 'none';
+      const resp = await fetch(`/api/pedidos_semana_embarcador?embarcador=${encodeURIComponent(embarcador)}`);
+      const dado = await resp.json();
+      if (graficoBarras) graficoBarras.destroy();
+      graficoBarras = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: dado.semanas,
+          datasets: [{ label: embarcador, data: dado.pedidos, backgroundColor: corAcento, borderRadius: 4 }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } },
+        }
+      });
+    }
+    document.getElementById('filtroEmbarcadorBarras').addEventListener('change', atualizarGraficoBarras);
+    atualizarGraficoBarras();
+
+    // ── Pedidos por embarcador (rosca/pizza), filtro ano/mes/semana ──────────
+    const LIMITE_FATIAS = 12;
+    let graficoRosca = null;
+    async function atualizarGraficoRosca() {
+      const ano = document.getElementById('filtroAnoRosca').value;
+      const mes = document.getElementById('filtroMesRosca').value;
+      const semana = document.getElementById('filtroSemanaRosca').value;
+      const params = new URLSearchParams();
+      if (semana) params.set('semana', semana);
+      else if (mes) params.set('mes', mes);
+      else if (ano) params.set('ano', ano);
+
+      const resp = await fetch(`/api/pedidos_por_embarcador?${params.toString()}`);
+      const dado = await resp.json();
+
+      let labels = dado.map(d => d.nome);
+      let valores = dado.map(d => d.pedidos);
+      if (labels.length > LIMITE_FATIAS) {
+        const top = dado.slice(0, LIMITE_FATIAS);
+        const resto = dado.slice(LIMITE_FATIAS).reduce((s, d) => s + d.pedidos, 0);
+        labels = top.map(d => d.nome).concat(['Outros']);
+        valores = top.map(d => d.pedidos).concat([resto]);
+      }
+
+      if (graficoRosca) graficoRosca.destroy();
+      graficoRosca = new Chart(document.getElementById('graficoRosca'), {
+        type: 'doughnut',
+        data: { labels: labels, datasets: [{ data: valores, backgroundColor: coresParaFatias(labels.length) }] },
+        options: { responsive: true, plugins: { legend: { position: 'right' } } }
+      });
+    }
+    ['filtroAnoRosca', 'filtroMesRosca', 'filtroSemanaRosca'].forEach(id => {
+      document.getElementById(id).addEventListener('change', (ev) => {
+        if (ev.target.id !== 'filtroAnoRosca') document.getElementById('filtroAnoRosca').value = '';
+        if (ev.target.id !== 'filtroMesRosca') document.getElementById('filtroMesRosca').value = '';
+        if (ev.target.id !== 'filtroSemanaRosca') document.getElementById('filtroSemanaRosca').value = '';
+        if (ev.target.value) document.getElementById(ev.target.id).value = ev.target.value;
+        atualizarGraficoRosca();
+      });
+    });
+    atualizarGraficoRosca();
+
+    // ── Destinatários mais recorrentes, filtro ano/mes ───────────────────────
+    async function atualizarTabelaDestinatarios() {
+      const ano = document.getElementById('filtroAnoDestinatarios').value;
+      const mes = document.getElementById('filtroMesDestinatarios').value;
+      const params = new URLSearchParams();
+      if (ano) params.set('ano', ano);
+      if (mes) params.set('mes', mes);
+
+      const resp = await fetch(`/api/destinatarios_recorrentes?${params.toString()}`);
+      const dado = await resp.json();
+      const corpo = document.getElementById('corpoTabelaDestinatarios');
+      corpo.innerHTML = dado.map(d =>
+        `<tr><td>${d.nome}</td><td style="text-align:right;font-weight:700;">${d.pedidos}</td></tr>`
+      ).join('') || '<tr><td colspan="2" style="text-align:center;color:#6B7280;">Nenhum pedido no período.</td></tr>';
+    }
+    document.getElementById('filtroAnoDestinatarios').addEventListener('change', atualizarTabelaDestinatarios);
+    document.getElementById('filtroMesDestinatarios').addEventListener('change', atualizarTabelaDestinatarios);
+  </script>
+  {% endif %}
+</body>
+</html>

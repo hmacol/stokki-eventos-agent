@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block titulo %}Painel de Agentes{% endblock %} — Freshlog</title>
+<style>
+  :root {
+    --primaria: #141428;
+    --primaria-clara: #1F1F3D;
+    --acento: #0EA575;
+    --acento-real: #0EA575;
+    --sucesso: #0EA575;
+    --erro: #E1483D;
+    --rodando: #E8A33D;
+    --fundo: #F3F4F6;
+    --superficie: #FFFFFF;
+    --borda: #E5E7EB;
+    --texto: #1F2937;
+    --texto-suave: #6B7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  header {
+    background: var(--primaria);
+    color: #fff;
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header .marca {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header .marca .nome {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+  }
+  header .marca .subtitulo {
+    font-size: 13px;
+    color: #A3A3C2;
+  }
+  header nav a {
+    color: #C7C7E0;
+    text-decoration: none;
+    font-size: 14px;
+    margin-left: 24px;
+    transition: color 0.15s;
+  }
+  header nav a:hover { color: #fff; }
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .badge-sucesso { background: #E5F7EF; color: var(--sucesso); }
+  .badge-erro { background: #FDEBEA; color: var(--erro); }
+  .badge-rodando { background: #FDF3E1; color: #B4790C; }
+  .badge-interrompido { background: #EBEBEF; color: #5A5A6E; }
+  .badge-timeout { background: #FCE8E0; color: #B5471F; }
+  .badge-nunca { background: #F0F0F3; color: var(--texto-suave); }
+  .badge-teste { background: #EDEBFB; color: #6D5BD0; }
+
+  a.botao, button.botao {
+    display: inline-block;
+    background: var(--primaria);
+    color: #fff;
+    border: none;
+    padding: 9px 18px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  a.botao:hover, button.botao:hover { background: var(--primaria-clara); }
+  a.botao:disabled, button.botao:disabled, button.botao.desabilitado {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  code, pre, .mono {
+    font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', Menlo, monospace;
+  }
+</style>
+{% block estilo_extra %}{% endblock %}
+</head>
+<body>
+<header>
+  <div class="marca">
+    <span class="nome">Painel de Agentes</span>
+    <span class="subtitulo">Agente Stokki Freshlog</span>
+  </div>
+  <nav>
+    <a href="{{ url_for('index') }}">Agentes</a>
+    <a href="{{ url_for('mapa_rotas') }}">Mapa de Rotas</a>
+    <a href="{{ url_for('historico') }}">Histórico</a>
+  </nav>
+</header>
+<main>
+{% block conteudo %}{% endblock %}
+</main>
+</body>
+</html>

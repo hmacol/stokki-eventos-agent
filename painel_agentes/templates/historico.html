@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block titulo %}Histórico{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  table { width: 100%; border-collapse: collapse; background: var(--superficie); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--borda); }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #FAFAFB; }
+  td a { color: var(--primaria); text-decoration: none; font-weight: 600; }
+  td a:hover { text-decoration: underline; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 18px;">Histórico de execuções</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Agente</th>
+      <th>Status</th>
+      <th>Início</th>
+      <th>Fim</th>
+      <th>Modo</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ex in execucoes %}
+    <tr>
+      <td>{{ ex.agente_nome }}</td>
+      <td>
+        {% if ex.status == 'SUCESSO' %}<span class="badge badge-sucesso">OK</span>
+        {% elif ex.status == 'ERRO' %}<span class="badge badge-erro">Erro</span>
+        {% elif ex.status == 'INTERROMPIDO' %}<span class="badge badge-interrompido">Interrompido</span>
+        {% elif ex.status == 'TIMEOUT' %}<span class="badge badge-timeout">Tempo esgotado</span>
+        {% else %}<span class="badge badge-rodando">Rodando</span>{% endif %}
+      </td>
+      <td>{{ ex.iniciado_em }}</td>
+      <td>{{ ex.finalizado_em or '—' }}</td>
+      <td>{% if ex.modo_teste %}<span class="badge badge-teste">teste</span>{% else %}—{% endif %}</td>
+      <td><a href="{{ url_for('execucao', execucao_id=ex.id) }}">ver log</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="color:var(--texto-suave);">Nenhuma execução ainda.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
