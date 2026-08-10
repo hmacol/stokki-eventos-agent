@@ -1,23 +1,16 @@
-# rodar_sequencial.ps1
+# rodar_sequencial_noite.ps1
 #
-# Roda uma lista de agentes em SEQUÊNCIA -- cada um só começa depois
-# que o anterior TERMINOU DE VERDADE (não é um horário "chutado" com
-# alguns minutos de espaço, é esperar o processo sair de verdade).
-# Pedido do Hugo, 04/08: "dá pra programar pra um agente só começar
-# depois que o outro finalizar?" -- resolve de vez a colisão no banco
-# SQLite compartilhado que derrubou ExecutarTudo e Notificador quando
-# os dois disparavam ao mesmo tempo (14h).
+# Igual ao rodar_sequencial.ps1 (SequenciaTarde), mas pra passada da
+# noite: cada agente só começa depois que o anterior TERMINOU DE
+# VERDADE. Pedido do Hugo, 10/08.
 #
 # Chamado pelo Agendador de Tarefas do Windows (task
-# StokkiEventos_SequenciaTarde, 18:00). Pedido do Hugo, 10/08: depois
-# do ExecutarTudo entra a verificação de duplicados no VUUPT (limpa
-# antes de criar rota em cima de duplicidade), CriarRotasDiarias cria
-# as rotas do próximo dia útil, o Notificador avisa embarcadores com
-# os dados já corrigidos por essa mesma execução, e por último
-# ProcessarDocumentos roda depois das notificações (não trava nem
-# atrasa o aviso ao cliente). Os incrementos de hora em hora à noite
-# (task StokkiEventos_SequenciaNoite, 22:00) já encontram as rotas
-# criadas aqui -- pode ser rodado manualmente também, pra testar.
+# StokkiEventos_SequenciaNoite, 22:00): ExecutarTudo faz a última
+# correção de pedidos do dia (agendamento/insucesso/impressão/
+# importação), VerificarDuplicadosVuupt limpa cópias sobressalentes
+# antes do incremento, e IncrementarRotas aloca na rota do dia
+# qualquer pedido novo que tenha entrado depois da CriarRotasDiarias
+# da tarde -- pode ser rodado manualmente também, pra testar.
 
 $Raiz = "C:\agente_stokki_eventos"
 $Python = "py"
@@ -26,12 +19,10 @@ $LogDir = "$Raiz\dados"
 $passos = @(
     @{ Nome = "ExecutarTudo"; Script = "$Raiz\executar_tudo.py"; Cwd = $Raiz }
     @{ Nome = "VerificarDuplicadosVuupt"; Script = "$Raiz\verificar_pedidos_duplicados_vuupt.py"; Cwd = $Raiz }
-    @{ Nome = "CriarRotasDiarias"; Script = "$Raiz\roteirizacao\criar_rotas_diarias.py"; Cwd = "$Raiz\roteirizacao" }
-    @{ Nome = "Notificador"; Script = "$Raiz\notificar_pedidos_em_espera.py"; Cwd = $Raiz }
-    @{ Nome = "ProcessarDocumentos"; Script = "$Raiz\documentos_pedido\processar_documentos.py"; Cwd = "$Raiz\documentos_pedido" }
+    @{ Nome = "IncrementarRotas"; Script = "$Raiz\roteirizacao\incrementar_rotas.py"; Cwd = "$Raiz\roteirizacao" }
 )
 
-$logArquivo = "$LogDir\sequencia_tarde.log"
+$logArquivo = "$LogDir\sequencia_noite.log"
 "" | Out-File -FilePath $logArquivo -Append -Encoding utf8
 "====================================================================" | Out-File -FilePath $logArquivo -Append -Encoding utf8
 "[$(Get-Date -Format 'dd/MM/yyyy HH:mm:ss')] Sequência iniciada" | Out-File -FilePath $logArquivo -Append -Encoding utf8
@@ -46,8 +37,8 @@ foreach ($passo in $passos) {
     # depois que esse encerrou, sem depender de horário nenhum.
     $processo = Start-Process -FilePath $Python -ArgumentList @("-3.11", $passo.Script) `
         -WorkingDirectory $passo.Cwd -NoNewWindow -Wait -PassThru `
-        -RedirectStandardOutput "$LogDir\$($passo.Nome)_sequencia_stdout.log" `
-        -RedirectStandardError "$LogDir\$($passo.Nome)_sequencia_stderr.log"
+        -RedirectStandardOutput "$LogDir\$($passo.Nome)_sequencia_noite_stdout.log" `
+        -RedirectStandardError "$LogDir\$($passo.Nome)_sequencia_noite_stderr.log"
 
     $duracao = (Get-Date) - $inicio
     $codigo = $processo.ExitCode

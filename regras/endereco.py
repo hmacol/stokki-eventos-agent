@@ -29,7 +29,9 @@ Uso:
 import json
 import logging
 import re
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import requests
@@ -38,7 +40,11 @@ from regras.transportadoras import CatalogoTransportadoras, ResultadoResolucao
 
 logger = logging.getLogger(__name__)
 
-FonteEndereco = Literal["mensagem_llm", "local_entrega", "redespacho", "destino"]
+FonteEndereco = Literal[
+    "mensagem_llm", "local_entrega", "redespacho", "destino", "aguardando_redespacho",
+]
+
+_ROTEIRIZACAO_DIR = Path(__file__).resolve().parent.parent / "roteirizacao"
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
@@ -165,6 +171,7 @@ def resolver_endereco_entrega(
     detalhe: dict,
     catalogo: CatalogoTransportadoras,
     anthropic_api_key: str = "",
+    google_maps_api_key: str = "",
 ) -> ResultadoEndereco:
     """
     Resolve o endereço de entrega final aplicando a hierarquia de prioridade.
@@ -172,6 +179,9 @@ def resolver_endereco_entrega(
     detalhe: dict retornado por stokki.pedidos.obter_detalhe()
     catalogo: CatalogoTransportadoras carregado de BD_TRANSPORTADORAS.xlsx
     anthropic_api_key: chave da API Anthropic (deixar vazio para pular LLM)
+    google_maps_api_key: chave do Google Maps (deixar vazio para pular a
+        checagem de área atendida do Local de Entrega — nesse caso o
+        Local de Entrega é sempre usado como antes, sem checar redespacho)
     """
     mensagens = detalhe.get("mensagens", [])
     local_entrega = detalhe.get("local_entrega")
@@ -201,10 +211,20 @@ def resolver_endereco_entrega(
             # livre do endereço ("perto do metrô") não passava na
             # validação -- mesmo o catálogo tendo o endereço correto.
             transp_resolvida = resultado_transp
+            transp_alt_resolvida = None
             if transp_alternativa:
-                transp_resolvida = catalogo.resolver(transp_alternativa)
-                if transp_resolvida.tipo == "TERCEIROS" and transp_resolvida.endereco_redespacho:
-                    end_llm = _redespacho_para_dict(transp_resolvida.endereco_redespacho)
+                transp_alt_resolvida = catalogo.resolver(transp_alternativa)
+                if transp_alt_resolvida.tipo == "TERCEIROS" and transp_alt_resolvida.endereco_redespacho:
+                    end_llm = _redespacho_para_dict(transp_alt_resolvida.endereco_redespacho)
+                # Só substitui a transportadora formal pela alternativa se
+                # ela foi resolvida com um tipo conhecido -- uma alternativa
+                # desconhecida na planilha (ex.: mensagem citando um serviço
+                # avulso tipo "LaLaMove") não pode apagar o tipo real da
+                # transportadora formal (ex.: RETIRADA), senão o pedido
+                # escapa do filtro que impede pedidos RETIRADA de ir pro
+                # VUUPT (confirmado com o Hugo, pedido #PS-36209, 09/08).
+                if transp_alt_resolvida.tipo is not None:
+                    transp_resolvida = transp_alt_resolvida
 
             # Valida estruturalmente ANTES de aceitar (ver
             # _validar_endereco_plausivel) — sem isso, mensagem confusa
@@ -232,7 +252,7 @@ def resolver_endereco_entrega(
                 observacao = resultado_llm.get("observacao", "")
                 if transp_resolvida and transp_resolvida.conflito:
                     observacao += f" | CONFLITO na planilha: {transp_resolvida.motivo}"
-                if transp_resolvida and transp_resolvida.desconhecida:
+                if transp_alt_resolvida and transp_alt_resolvida.desconhecida:
                     observacao += f" | Transportadora desconhecida: {transp_alternativa}"
 
                 logger.info(
@@ -249,12 +269,27 @@ def resolver_endereco_entrega(
                 )
 
     # ── Prioridade 2: Local de Entrega (campo formal) ─────────────────────────
+    # Exceção (pedido do Hugo, 10/08, caso #PS-36198): se o Local de
+    # Entrega está fora da área atendida pela Freshlog (mesma checagem
+    # de roteirizacao/notificar_area_nao_atendida.py), ele deixa de ter
+    # prioridade automática -- primeiro verifica se a transportadora tem
+    # redespacho conhecido (prioridade 3, abaixo). Só cai de volta pro
+    # Local de Entrega se a checagem de área não puder ser feita (sem
+    # chave do Google Maps).
+    local_entrega_fora_area = False
     if local_entrega:
-        logger.info("Endereço resolvido via Local de Entrega.")
-        return ResultadoEndereco(
-            endereco=_bloco_para_dict(local_entrega),
-            fonte="local_entrega",
-            transportadora=_transp_para_dict(resultado_transp),
+        local_entrega_fora_area = _bloco_fora_area_atendida(local_entrega, google_maps_api_key)
+        if not local_entrega_fora_area:
+            logger.info("Endereço resolvido via Local de Entrega.")
+            return ResultadoEndereco(
+                endereco=_bloco_para_dict(local_entrega),
+                fonte="local_entrega",
+                transportadora=_transp_para_dict(resultado_transp),
+            )
+        logger.info(
+            f"Local de Entrega fora da área atendida "
+            f"({local_entrega.get('cidade','')}-{local_entrega.get('uf','')}) -- "
+            f"verificando redespacho da transportadora antes de usar."
         )
 
     # ── Prioridade 3: Redespacho por transportadora (TERCEIROS) ──────────────
@@ -274,6 +309,28 @@ def resolver_endereco_entrega(
                 requer_revisao=resultado_transp.conflito,
                 observacao=observacao,
             )
+
+    # Local de Entrega fora da área atendida e SEM redespacho conhecido pra
+    # transportadora (desconhecida, conflito, ou tipo diferente de
+    # TERCEIROS): não dá pra decidir sozinho -- sinaliza pro pipeline
+    # segurar o pedido (não importar no VUUPT ainda) e notificar o
+    # embarcador pedindo nome da transportadora + endereço de redespacho.
+    if local_entrega_fora_area:
+        motivo_transp = resultado_transp.motivo if resultado_transp else ""
+        observacao = (
+            f"Local de Entrega ({local_entrega.get('cidade','')}-{local_entrega.get('uf','')}) "
+            f"fora da área atendida e sem redespacho conhecido para a transportadora "
+            f"{nome_transportadora!r}."
+            + (f" {motivo_transp}" if motivo_transp else "")
+        )
+        logger.warning(observacao)
+        return ResultadoEndereco(
+            endereco={},
+            fonte="aguardando_redespacho",
+            transportadora=_transp_para_dict(resultado_transp),
+            requer_revisao=True,
+            observacao=observacao,
+        )
 
     # Transportadora desconhecida: usa o destino mas avisa
     if resultado_transp and resultado_transp.desconhecida and nome_transportadora:
@@ -349,6 +406,49 @@ def _interpretar_mensagens_llm(mensagens: list, api_key: str) -> dict | None:
     except Exception as e:
         logger.warning(f"Falha ao interpretar mensagens via LLM: {e}")
         return None
+
+
+# ── Área atendida ────────────────────────────────────────────────────────────
+
+def _bloco_fora_area_atendida(bloco: dict, google_maps_api_key: str) -> bool:
+    """
+    Reaproveita a MESMA lógica de área atendida usada em
+    roteirizacao/notificar_area_nao_atendida.py (Grande SP + regiões com
+    dia fixo de roteirizacao/regioes_dia_fixo.py) pra decidir se um bloco
+    de endereço (aqui, o Local de Entrega) está fora da área atendida
+    pela Freshlog.
+
+    Sem chave do Google Maps, não dá pra checar o raio da Grande SP com
+    segurança -- retorna False (mantém o comportamento anterior: Local
+    de Entrega sempre vale) em vez de arriscar um falso positivo.
+    """
+    if not bloco or not google_maps_api_key:
+        return False
+
+    if str(_ROTEIRIZACAO_DIR) not in sys.path:
+        sys.path.insert(0, str(_ROTEIRIZACAO_DIR))
+
+    from geocodificacao import geocodificar
+    from notificar_area_nao_atendida import classificar_pedido
+    from regioes_dia_fixo import (
+        ENDERECO_REFERENCIA_SP, RAIO_GRANDE_SP_KM,
+        dia_fixo_da_cidade, extrair_cidade, extrair_uf,
+    )
+    from roteirizacao_dados import _distancia_km, obter_coordenadas
+
+    endereco_completo = (
+        f"{bloco.get('endereco', '')}, {bloco.get('cidade', '')} - "
+        f"{bloco.get('uf', '')}, {bloco.get('cep', '')}"
+    )
+    servico_sintetico = {"address": endereco_completo}
+    coords_sp = geocodificar(ENDERECO_REFERENCIA_SP, google_maps_api_key)
+
+    tipo = classificar_pedido(
+        servico_sintetico, google_maps_api_key, coords_sp,
+        extrair_cidade, extrair_uf, dia_fixo_da_cidade,
+        obter_coordenadas, _distancia_km, RAIO_GRANDE_SP_KM,
+    )
+    return tipo is not None
 
 
 # ── Helpers de conversão ──────────────────────────────────────────────────────

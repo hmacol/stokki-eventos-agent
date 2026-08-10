@@ -50,6 +50,7 @@ from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
+import redespacho_confirmacao
 
 # ── Configuração de logging ────────────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -80,16 +81,28 @@ PAUSA_ENTRE_PEDIDOS = 1.0  # segundos — ajustada 06/08: 0.3s (04/08) causou 42
 # pra 1.0s -- 429 quase constante desperdiça mais tempo esperando retry (3s+ por vez) do
 # que economiza pausando menos. Ainda bem mais rápido que os 2.2s originais.
 
-# Status confirmados via debug_status_e_impressao.py (case-sensitive).
-# Valores como 'hold', 'review', 'processing' em lowercase são ignorados
-# pelo servidor e retornam tudo sem filtro — usar apenas os listados abaixo.
-STATUS_AGUARDANDO_TRANSPORTADOR = "Waiting for Carrier"  # 185 pedidos
-STATUS_ABERTO                   = "Open"                 # 60 pedidos
-STATUS_SEPARANDO                = "Separating"           # 4 pedidos
+# Status confirmados (case-sensitive -- valores em lowercase ou fora
+# desta lista são ignorados pelo servidor e retornam tudo sem filtro).
+# Lista COMPLETA dos 5 status do funil de pedidos de saída, confirmada
+# em 09/08 direto no HTML do painel outbound (data-situation="..." nos
+# cards do dashboard + os mesmos 5 nomes no handler JS que popula os
+# contadores) -- outros valores que a API de contagem também retorna
+# ("review", "processing", "waiting_approval") NÃO são status de
+# pedido de saída: pertencem à fila separada de "Pedidos de
+# integração" (Vendas), confirmado pelo próprio HTML (o badge desses
+# contadores fica no link pra /integration/sale, não num card deste
+# dashboard) -- por isso ficam de fora daqui.
+STATUS_AGUARDANDO_TRANSPORTADOR = "Waiting for Carrier"  # 277 pedidos (09/08)
+STATUS_ABERTO                   = "Open"                 # 14 pedidos (09/08)
+STATUS_SEPARANDO                = "Separating"           # 2 pedidos (09/08)
+STATUS_PACK                     = "Ready to Pack"         # 52 pedidos (09/08)
+STATUS_HOLD                     = "On hold"               # 25 pedidos (09/08)
 STATUSES_EM_ABERTO              = [
     STATUS_AGUARDANDO_TRANSPORTADOR,
     STATUS_ABERTO,
     STATUS_SEPARANDO,
+    STATUS_PACK,
+    STATUS_HOLD,
 ]
 
 # Embarcadores com regra especial: importa QUALQUER pedido em aberto,
@@ -100,6 +113,7 @@ STATUSES_EM_ABERTO              = [
 EMBARCADORES_IMPORTAR_ABERTOS: dict[str, str] = {
     "98": "COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA",
     "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
+    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
 }
 
 
@@ -111,7 +125,8 @@ def _buscar_dados_embarcador_banco(stkkc_id: int) -> dict:
     (usados para a solicitação de confirmação de agendamento).
     """
     padrao = {"sender_id": None, "apelido": "", "habilidade": "",
-             "cnpj_embarcador": "", "email": "", "notificar_email": True}
+             "cnpj_embarcador": "", "email": "", "notificar_email": True,
+             "fator_ponderado": 1.0}
     if not DB_PATH.exists():
         return padrao
     try:
@@ -119,7 +134,7 @@ def _buscar_dados_embarcador_banco(stkkc_id: int) -> dict:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT sender_id, apelido, nome_remetente, habilidade, "
-            "cnpj_embarcador, email, notificar_email "
+            "cnpj_embarcador, email, notificar_email, fator_ponderado "
             "FROM interno WHERE stkkc_id = ?",
             (stkkc_id,)
         ).fetchone()
@@ -132,6 +147,7 @@ def _buscar_dados_embarcador_banco(stkkc_id: int) -> dict:
                 "cnpj_embarcador": row["cnpj_embarcador"] or "",
                 "email":           row["email"] or "",
                 "notificar_email": bool(row["notificar_email"]) if row["notificar_email"] is not None else True,
+                "fator_ponderado": float(row["fator_ponderado"]) if row["fator_ponderado"] else 1.0,
             }
     except Exception as e:
         logger.debug(f"Erro ao buscar embarcador stkkc_id={stkkc_id}: {e}")
@@ -246,6 +262,7 @@ def montar_payload_vuupt(
     indice_xmls: dict | None = None,
     scheduled_start_final: str | None = None,
     scheduled_end_final: str | None = None,
+    fator_ponderado: float = 1.0,
 ) -> dict:
     """
     Constrói o payload para criar/atualizar um servico no VUUPT.
@@ -310,10 +327,10 @@ def montar_payload_vuupt(
 
     telefone_e164 = _normalizar_telefone_e164(telefone) if telefone else ""
 
-    # Titulo: PS-XXXXX - Referencia / Apelido - Destinatario
-    partes_titulo = [codigo_ps]
+    # Titulo: #PS-XXXXX - Referencia / Apelido - Destinatario
+    partes_titulo = [f"#{codigo_ps}"]
     if referencia:
-        partes_titulo[0] = f"{codigo_ps} - {referencia}"
+        partes_titulo[0] = f"#{codigo_ps} - {referencia}"
     nome_emb = apelido_embarcador or embarcador.get("nome", "")
     if nome_emb:
         partes_titulo.append(nome_emb)
@@ -321,10 +338,19 @@ def montar_payload_vuupt(
         partes_titulo.append(nome_dest)
     titulo = " / ".join(partes_titulo) if len(partes_titulo) > 1 else partes_titulo[0]
 
+    # Volume normalizado (dimension_3): quantidade de volumes do pedido
+    # (aba "Detalhes do transporte" da Stokki — conferência do galpão,
+    # com fallback pro valor da NF-e) multiplicada pelo fator_ponderado
+    # do embarcador (interno.fator_ponderado, cadastrado no banco).
+    # Sem quantidade informada, assume 1 volume.
+    qtd_volumes_bruta = detalhe.get("quantidade_volumes") or 1
+    volume_final = max(1, round(qtd_volumes_bruta * fator_ponderado))
+
     payload = {
         "title": titulo,
         "code":  codigo_ps,
         "type":  "delivery",
+        "dimension_3": volume_final,
         "customer": {
             "name":    nome_dest,
             "code":    cnpj_dest,
@@ -413,6 +439,7 @@ def processar_pedido(
         "tem_agendamento": None,
         "fonte_agendamento": None,
         "skill_aplicada": None,
+        "volume_dimension_3": None,
         "requer_revisao": False,
         "observacao":     "",
         "referencia":     referencia,
@@ -450,7 +477,8 @@ def processar_pedido(
         detalhe = stokki_pedidos.obter_detalhe(sess_stokki, id_stokki)
 
         # 2. Resolução do endereço
-        res_end = resolver_endereco_entrega(detalhe, catalogo, anthropic_api_key)
+        res_end = resolver_endereco_entrega(
+            detalhe, catalogo, anthropic_api_key, google_maps_api_key)
 
         # Pedidos com transportadora RETIRADA nao vao pro VUUPT
         # (transportadora coleta no galpao, nao ha rota de entrega)
@@ -461,6 +489,42 @@ def processar_pedido(
             )
             resultado["acao"] = "ignorado_retirada"
             return resultado
+
+        # Local de Entrega fora da área atendida e sem redespacho conhecido
+        # pra transportadora (pedido do Hugo, 10/08, caso #PS-36198): segura
+        # o pedido (não importa no VUUPT) e notifica o embarcador pedindo
+        # nome da transportadora + endereço de redespacho.
+        if res_end.fonte == "aguardando_redespacho":
+            resultado["fonte_endereco"] = res_end.fonte
+            resultado["requer_revisao"] = True
+            resultado["observacao"]     = res_end.observacao
+            stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
+            dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
+            local_entrega = detalhe.get("local_entrega") or {}
+            if modo_teste:
+                logger.info(
+                    f"  [TESTE] {codigo_ps}: exigiria solicitação de confirmação de "
+                    f"redespacho (e-mail NÃO enviado em modo teste) — {res_end.observacao}"
+                )
+            elif dados_banco.get("notificar_email", True) and dados_banco.get("email"):
+                enviado, motivo_email = redespacho_confirmacao.enviar_solicitacao(
+                    pedido=codigo_ps,
+                    nome_dest=detalhe.get("destino", {}).get("nome", ""),
+                    cidade=local_entrega.get("cidade", ""),
+                    uf=local_entrega.get("uf", ""),
+                    nome_transportadora=res_end.transportadora.get("nome", ""),
+                    email_emb=dados_banco.get("email", ""),
+                    config_email=config_email or {},
+                )
+                if enviado:
+                    logger.info(f"  {codigo_ps}: solicitação de confirmação de redespacho enviada.")
+                elif motivo_email:
+                    logger.debug(
+                        f"  {codigo_ps}: solicitação de redespacho não enviada ({motivo_email})."
+                    )
+            resultado["acao"] = "aguardando_redespacho"
+            return resultado
+
         resultado["fonte_endereco"] = res_end.fonte
         resultado["requer_revisao"] = res_end.requer_revisao
         resultado["observacao"]     = res_end.observacao
@@ -496,7 +560,8 @@ def processar_pedido(
         tipo_carga_encontrado = habilidade_bruta in TIPOS_CARGA_VALIDOS
 
         cnpj_destino = detalhe.get("destino", {}).get("documento", "")
-        nivel, nivel_encontrado = classificar_nivel(cnpj_destino, mapa_niveis or {})
+        nivel, nivel_encontrado, nivel_requer_revisao = classificar_nivel(
+            cnpj_destino, mapa_niveis or {})
 
         nome_skill = f"{tipo_carga}-{nivel}"
         skill_ids  = vuupt.skill_ids_por_nome(nome_skill) if not modo_teste else []
@@ -510,9 +575,25 @@ def processar_pedido(
                 f"  {codigo_ps}: embarcador (stkkc_id={stkkc_id_final}) sem 'habilidade' "
                 f"válida cadastrada em interno — aplicando tipo de carga padrão ({TIPO_CARGA_PADRAO})."
             )
-        if not nivel_encontrado:
+        if nivel_requer_revisao:
+            # CNPJ sem classificação na planilha: segue com nível padrão
+            # (2) provisório, mas marcado para revisão manual (pedido do
+            # Hugo, 10/08) — diferente de CPF, que aplica o padrão (1)
+            # direto, sem exigir revisão.
+            resultado["requer_revisao"] = True
+            obs_nivel = (
+                f"CNPJ do destinatário sem classificação de nível na planilha "
+                f"de complexidade — aplicando nível padrão ({nivel}) provisoriamente, "
+                f"requer classificação manual."
+            )
+            resultado["observacao"] = (
+                f"{resultado['observacao']} {obs_nivel}".strip()
+                if resultado["observacao"] else obs_nivel
+            )
+            logger.info(f"  {codigo_ps}: {obs_nivel}")
+        elif not nivel_encontrado:
             logger.info(
-                f"  {codigo_ps}: CNPJ/CPF do destinatário não encontrado na planilha "
+                f"  {codigo_ps}: CPF do destinatário não encontrado na planilha "
                 f"de complexidade — aplicando nível padrão ({nivel})."
             )
 
@@ -588,8 +669,10 @@ def processar_pedido(
             indice_xmls=indice_xmls,
             scheduled_start_final=scheduled_start_final,
             scheduled_end_final=scheduled_end_final,
+            fator_ponderado=dados_banco.get("fator_ponderado", 1.0),
         )
         resultado["fonte_telefone"] = payload.pop("_fonte_telefone", "stokki")
+        resultado["volume_dimension_3"] = payload.get("dimension_3")
 
         # 3b. Geocodificação do endereço de entrega — lat/long entram em
         # DOIS níveis do payload (confirmado via debug/testar_coords_servico):

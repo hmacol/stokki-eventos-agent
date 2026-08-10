@@ -66,7 +66,9 @@ from otimizacao_client import aguardar_conclusao, buscar_veiculo_por_code, criar
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 CODE_VEICULO = "TAPIOCA"
 TAMANHO_MINIMO_ROTA = 10  # pedido do Hugo, 01/08
-TAMANHO_MAXIMO_ROTA = 15  # pedido do Hugo, 01/08 -- margem abaixo da capacidade real do TAPIOCA (20)
+TAMANHO_MAXIMO_ROTA = 18  # pedido do Hugo, 09/08 -- aumentado de 15 para 18 entregas por rota
+VOLUME_MAXIMO_ROTA = 100  # pedido do Hugo, 09/08 -- limite máximo de caixas/volumes por rota
+DISTANCIA_MAXIMA_ROTA_KM = 15  # pedido do Hugo, 09/08 -- máximo entre pedidos da mesma rota
 
 
 def _carregar_config() -> dict:
@@ -145,7 +147,9 @@ def main(modo_teste: bool = False, confirmar_uso_obsoleto: bool = False):
         total_sublotes = 0
         for regiao, servicos_regiao in grupos_validos.items():
             sublotes = dividir_em_sublotes(servicos_regiao, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                                          tamanho_maximo=TAMANHO_MAXIMO_ROTA, api_key=gmaps_key)
+                                          tamanho_maximo=TAMANHO_MAXIMO_ROTA,
+                                          volume_maximo=VOLUME_MAXIMO_ROTA,
+                                          distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM, api_key=gmaps_key)
             total_sublotes += len(sublotes)
 
             for indice, sublote in enumerate(sublotes, start=1):

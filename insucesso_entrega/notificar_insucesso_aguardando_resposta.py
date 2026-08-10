@@ -78,7 +78,7 @@ def _montar_conteudo(nome_remetente: str, pergunta: str, motivo_texto: str, pedi
     cores, rodapé) vem de email_utils.envelope_html()."""
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 

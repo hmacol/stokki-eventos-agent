@@ -172,3 +172,103 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7) -> list[dict]
 
     logger.info(f"{len(resultado)} PDF(s) novo(s) baixado(s) de e-mail.")
     return resultado
+
+
+# ── Busca direcionada: remetentes de embarcadores conhecidos ────────────────
+# Diferente de buscar_pdfs_por_email() (busca ampla, varre a INBOX inteira
+# procurando qualquer PDF) -- essa busca é restrita a remetentes específicos
+# de embarcadores que mandam Boleto por e-mail, e olha a pasta "Todos os
+# e-mails" (o Gmail organiza esse tipo de e-mail em pastas/labels por
+# cliente -- confirmado com o Hugo, 10/08 -- não fica garantido estar na
+# INBOX). {remetente: nome_legível}
+REMETENTES_EMBARCADORES: dict[str, str] = {
+    "escritorio@laticiniosdourado.ind.br": "Laticínios Dourado",
+    "faturamento@nuualimentos.com.br": "Maria Dolores (NUU)",
+}
+PASTA_TODOS_OS_EMAILS = '"[Gmail]/Todos os e-mails"'
+
+
+def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7) -> list[dict]:
+    """
+    Busca PDFs anexados (soltos -- sem ZIP, fora de escopo por
+    enquanto, ver pedido do Hugo 10/08) em e-mails recentes vindos dos
+    REMETENTES_EMBARCADORES acima. Mesmo formato de retorno de
+    buscar_pdfs_por_email() -- alimenta o mesmo pipeline depois.
+    """
+    cfg_email = config.get("email", {})
+    usuario = cfg_email.get("remetente", "")
+    senha_app = cfg_email.get("senha_app", "")
+    if not usuario or not senha_app:
+        logger.warning("IMAP desativado — remetente/senha_app não configurados em config.yaml.")
+        return []
+
+    PASTA_TEMP_ANEXOS.mkdir(parents=True, exist_ok=True)
+    resultado = []
+
+    try:
+        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=30)
+        mail.login(usuario, senha_app)
+        mail.select(PASTA_TODOS_OS_EMAILS)
+
+        data_limite = (datetime.now() - timedelta(days=dias_retroativos)).strftime("%d-%b-%Y")
+
+        for remetente, nome_embarcador in REMETENTES_EMBARCADORES.items():
+            status, dados = mail.search(None, f'(FROM "{remetente}" SINCE {data_limite})')
+            if status != "OK":
+                logger.warning(f"Falha ao buscar e-mails de {remetente!r}.")
+                continue
+
+            ids = dados[0].split()
+            logger.info(f"  {nome_embarcador} ({remetente}): {len(ids)} e-mail(s) "
+                       f"nos últimos {dias_retroativos} dia(s).")
+
+            for msg_id in ids:
+                status_fetch, dados_msg = mail.fetch(msg_id, "(RFC822)")
+                if status_fetch != "OK" or not dados_msg or not dados_msg[0]:
+                    continue
+                try:
+                    msg = email.message_from_bytes(dados_msg[0][1])
+                except Exception:
+                    continue
+
+                message_id = msg.get("Message-ID", "")
+                if _ja_processado(message_id):
+                    continue
+
+                assunto = _decodificar_header(msg.get("Subject", ""))
+                remetente_completo = _decodificar_header(msg.get("From", ""))
+
+                algum_pdf_nesse_email = False
+                if msg.is_multipart():
+                    for parte in msg.walk():
+                        nome_anexo = parte.get_filename()
+                        if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
+                            continue
+                        nome_anexo = Path(_decodificar_header(nome_anexo)).name
+                        if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
+                            continue
+                        conteudo = parte.get_payload(decode=True)
+                        if not conteudo:
+                            continue
+
+                        algum_pdf_nesse_email = True
+                        caminho_local = PASTA_TEMP_ANEXOS / f"{msg_id.decode()}_{nome_anexo}"
+                        with open(caminho_local, "wb") as f:
+                            f.write(conteudo)
+
+                        resultado.append({
+                            "caminho_local": caminho_local, "nome_arquivo": nome_anexo,
+                            "assunto_email": assunto, "remetente_email": remetente_completo,
+                            "message_id": message_id,
+                        })
+
+                if algum_pdf_nesse_email:
+                    _marcar_processado(message_id)
+
+        mail.logout()
+
+    except Exception as e:
+        logger.exception(f"Erro ao buscar PDFs de embarcadores conhecidos: {e}")
+
+    logger.info(f"{len(resultado)} PDF(s) novo(s) baixado(s) de embarcadores conhecidos.")
+    return resultado

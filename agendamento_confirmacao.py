@@ -142,7 +142,7 @@ def enviar_solicitacao(pedido: str, nome_dest: str, numero_nf: str,
     if not pode:
         return False, motivo_bloqueio
 
-    assunto = f"Agendamento de entrega — {nome_dest} (Pedido {pedido} / NF {numero_nf or '—'})"
+    assunto = f"Agendamento de entrega — {nome_dest} (Pedido #{pedido} / NF {numero_nf or '—'})"
 
     # Marcador oculto: mesmo formato do agente_relatorio, pra ler_respostas_
     # agendamento.py (portado igual) identificar a thread pelo pedido.
@@ -172,7 +172,7 @@ def enviar_solicitacao(pedido: str, nome_dest: str, numero_nf: str,
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="font-size:12px;color:{COR_TEXTO_SUAVE};padding-right:16px;">Pedido</td>
-              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;">{html.escape(pedido or '')}</td>
+              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;">#{html.escape(pedido or '')}</td>
             </tr>
             <tr>
               <td style="font-size:12px;color:{COR_TEXTO_SUAVE};padding-top:6px;">Nota Fiscal</td>

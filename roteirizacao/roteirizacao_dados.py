@@ -67,6 +67,36 @@ def elegivel_para_data(servico: dict, data_alvo) -> bool:
     return data_agendada <= data_alvo
 
 
+def extrair_volume_caixas(servico: dict) -> int:
+    """
+    Quantidade de caixas/volumes do pedido, vinda do campo
+    'dimension_3' do serviço VUUPT (pedido do Hugo, 09/08: limite de
+    100 caixas por rota, além do limite de entregas). Fallback seguro
+    pra 1 caixa quando o campo vem ausente/nulo/não numérico -- nunca
+    quebra o agrupamento por causa de 1 pedido sem essa dimensão
+    preenchida.
+    """
+    vol = servico.get("dimension_3")
+    if vol is not None:
+        try:
+            return max(1, int(vol))
+        except (ValueError, TypeError):
+            pass
+    return 1
+
+
+def extrair_nivel_dificuldade(servico: dict) -> int:
+    """
+    Nível de dificuldade de entrega (1 a 4) do pedido -- não vem nativo
+    do VUUPT, é injetado no dict do serviço em criar_rotas_diarias.py
+    (chave '_nivel_dificuldade', via regras.complexidade_entrega) ANTES
+    de chamar as funções deste módulo. Sem essa chave (ex: chamado fora
+    desse fluxo), assume o nível mais leniente (1) -- nunca quebra o
+    agrupamento por falta dela.
+    """
+    return servico.get("_nivel_dificuldade") or 1
+
+
 def extrair_cep(servico: dict) -> str | None:
     """
     Extrai o CEP (8 dígitos, sem pontuação) do campo 'address' do
@@ -231,52 +261,54 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
     return atual
 
 
-def _tamanhos_balanceados(total: int, minimo: int, maximo: int) -> list[int]:
-    """
-    Divide `total` pedidos em grupos o mais equilibrados possível,
-    cada um dentro de [minimo, maximo] quando matematicamente
-    possível. Ex: 27 com min=10/max=15 -> [14,13] (não [15,12]).
-
-    Quando total não permite respeitar os dois limites ao mesmo tempo
-    (ex: 17 só divide em 2 grupos de 8-9, abaixo do mínimo de 10),
-    prioriza o MÁXIMO (limite físico do veículo) e avisa no log.
-    """
-    if total <= maximo:
-        return [total]
-    k = math.ceil(total / maximo)
-    base = total // k
-    resto = total % k
-    tamanhos = [base + 1 if i < resto else base for i in range(k)]
-    if min(tamanhos) < minimo:
-        logger.warning(
-            f"{total} pedido(s) não dividem em grupos de pelo menos {minimo} respeitando "
-            f"o máximo de {maximo} -- menor grupo ficará com {min(tamanhos)} (melhor possível)."
-        )
-    return tamanhos
+# Nível de dificuldade 3: pode misturar com níveis 1/2, mas a rota
+# inteira fica limitada a este tamanho assim que QUALQUER entrega
+# nível 3 entra nela (pedido do Hugo, 10/08). Nível 4 é mais estrito
+# ainda: nunca divide rota com nenhum outro pedido (ver NIVEL_ROTA_EXCLUSIVA).
+NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
+NIVEL_ROTA_EXCLUSIVA = 4
 
 
-def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_maximo: int = 15,
+def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_maximo: int = 18,
+                        volume_maximo: int = 100, distancia_maxima_km: float | None = 15,
                         api_key: str | None = None) -> list[list[dict]]:
     """
-    Divide uma região grande em sublotes BALANCEADOS entre
-    `tamanho_minimo` e `tamanho_maximo` pedidos cada (pedido do Hugo,
-    01/08: "mínimo de 10... forçar os endereços mais próximos" — e
-    antes, 01/08: "no máximo 15, mas não necessariamente 15" — o
-    veículo TAPIOCA aguenta até 20, o Hugo quer uma margem).
+    Divide uma região grande em sublotes respeitando QUATRO travas ao
+    mesmo tempo (pedido do Hugo, 09/08: "no máximo 18 entregas OU 100
+    caixas por rota, o que vier primeiro" -- e depois, 09/08: "máximo
+    de 15km de distância entre pedidos da mesma rota", achado ao
+    revisar a rota #6 do dia, que tinha pego um pedido de Niterói-RJ
+    junto com pedidos de São Paulo por ser "a rota mais próxima com
+    espaço", mesmo estando a mais de 300km; e 10/08: nível de
+    dificuldade da entrega, ver extrair_nivel_dificuldade):
+      - até `tamanho_maximo` entregas por sublote (18 por padrão) --
+        reduzido para NIVEL_3_TAMANHO_MAXIMO_ROTA (4) assim que o
+        sublote contém alguma entrega nível 3; entrega nível 4 nunca
+        divide sublote com mais ninguém (rota exclusiva, mesmo
+        tratamento do pedido "gigante" de caixas, abaixo);
+      - até `volume_maximo` caixas (soma de extrair_volume_caixas) por
+        sublote;
+      - nenhum par de pedidos do MESMO sublote pode estar a mais de
+        `distancia_maxima_km` um do outro (quando ambos têm
+        coordenada -- sem coordenada não dá pra checar, não bloqueia).
+        `distancia_maxima_km=None` desliga essa trava por completo
+        (pedido do Hugo, 10/08: rotas de Viagem não têm limite de
+        distância -- só as outras travas de tamanho/volume/nível valem).
 
     Considera PROXIMIDADE real: ordena os serviços por coordenada
     (lat, lng) quando disponível antes de dividir, pra que cada
     sublote fique com pedidos geograficamente vizinhos entre si; cai
-    pra CEP completo como reserva quando não há coordenada.
+    pra CEP completo como reserva quando não há coordenada. Sobre essa
+    ordem já próxima, empacota de forma GANANCIOSA (greedy bin
+    packing): vai enchendo o sublote atual até que o próximo pedido
+    estoure uma das travas, aí fecha o sublote e abre outro -- isso
+    tende a aproximar cada rota do limite (18 ou 100), sem nunca
+    estourar nenhuma das travas.
 
-    Se a região já tem <= tamanho_maximo, retorna ela inteira como um
-    único sublote (sem dividir à toa, mesmo que fique abaixo do
-    mínimo — nesse caso quem chama decide, ver consolidar_regioes_
-    pequenas, que já devia ter garantido o mínimo antes de chegar aqui).
+    Exceção de pedido gigante ou nível 4: um único pedido com mais de
+    `volume_maximo` caixas, ou com nível de dificuldade 4, nunca cabe
+    junto com nenhum outro -- aloca uma rota exclusiva isolada só pra ele.
     """
-    if len(servicos) <= tamanho_maximo:
-        return [list(servicos)]
-
     def _chave_ordenacao(servico: dict):
         coords = obter_coordenadas(servico, api_key)
         if coords:
@@ -284,14 +316,54 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         cep = extrair_cep(servico)
         return (1, int(cep) if cep else float("inf"), 0.0)
 
-    ordenados = sorted(servicos, key=_chave_ordenacao)
-    tamanhos = _tamanhos_balanceados(len(servicos), tamanho_minimo, tamanho_maximo)
+    def _cabe_na_distancia(servico: dict, sublote_atual: list[dict]) -> bool:
+        if distancia_maxima_km is None:
+            return True
+        coords_novo = obter_coordenadas(servico, api_key)
+        if not coords_novo:
+            return True
+        for outro in sublote_atual:
+            coords_outro = obter_coordenadas(outro, api_key)
+            if coords_outro and _distancia_km(*coords_novo, *coords_outro) > distancia_maxima_km:
+                return False
+        return True
 
-    sublotes = []
-    inicio = 0
-    for tamanho in tamanhos:
-        sublotes.append(ordenados[inicio:inicio + tamanho])
-        inicio += tamanho
+    ordenados = sorted(servicos, key=_chave_ordenacao)
+
+    sublotes: list[list[dict]] = []
+    sublote_atual: list[dict] = []
+    caixas_atual = 0
+
+    for servico in ordenados:
+        cx_pedido = extrair_volume_caixas(servico)
+        nivel_pedido = extrair_nivel_dificuldade(servico)
+
+        if cx_pedido > volume_maximo or nivel_pedido == NIVEL_ROTA_EXCLUSIVA:
+            if sublote_atual:
+                sublotes.append(sublote_atual)
+                sublote_atual = []
+                caixas_atual = 0
+            sublotes.append([servico])
+            continue
+
+        tem_nivel_3 = nivel_pedido == 3 or any(extrair_nivel_dificuldade(s) == 3 for s in sublote_atual)
+        tamanho_maximo_efetivo = NIVEL_3_TAMANHO_MAXIMO_ROTA if tem_nivel_3 else tamanho_maximo
+
+        cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo_efetivo
+        cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
+        cabe_distancia = _cabe_na_distancia(servico, sublote_atual)
+
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia):
+            sublotes.append(sublote_atual)
+            sublote_atual = []
+            caixas_atual = 0
+
+        sublote_atual.append(servico)
+        caixas_atual += cx_pedido
+
+    if sublote_atual:
+        sublotes.append(sublote_atual)
+
     return sublotes
 
 

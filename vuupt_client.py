@@ -274,16 +274,24 @@ class VuuptClient:
             erro = {"message": resp.text}
         raise VuuptAPIError(f"Status {resp.status_code}: {erro}")
 
-    def cancelar_servico(self, service_id: int) -> dict:
-        """Cancela um serviço existente via PUT, definindo status='canceled'."""
+    def cancelar_servico(self, service_id: int) -> dict | None:
+        """
+        Cancela/exclui um serviço existente via DELETE. Retorna None em
+        sucesso (a API responde 204 sem corpo).
+
+        NOTA (confirmado com o Hugo, 10/08, investigando o PS-36209): a
+        versão anterior fazia PUT com {"status": "canceled"} -- a API
+        aceita a requisição (200 OK) mas ignora a mudança silenciosamente,
+        então o serviço nunca era cancelado de verdade, mesmo sem erro
+        nenhum. DELETE é o que de fato funciona.
+        """
         resp = chamar_com_retry(
-            self.session.put,
+            self.session.delete,
             f"{BASE_URL}/services/{service_id}",
-            json={"status": "canceled"},
             timeout=20,
         )
         if resp.ok:
-            return resp.json()
+            return resp.json() if resp.text else None
         try:
             erro = resp.json()
         except Exception:

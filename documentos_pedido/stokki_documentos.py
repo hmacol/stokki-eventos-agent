@@ -2,29 +2,49 @@
 """
 stokki_documentos.py
 
-Busca documentos (NF, Boleto, CC, Agendamento, etc) já anexados na
-aba "Documentos" de cada pedido na Stokki -- pedido do Hugo, 05/08.
-Confirmado com o Hugo: é a MESMA aba que já usamos pra ANEXAR o
-canhoto em expedir_pedidos.py::anexar_canhoto() -- reaproveita a
-mesma navegação (login + ir pro /provider/inventory/outbound/show/{id}
-+ clicar na aba Documentos), já testada em produção.
+Busca documentos de cada pedido na Stokki -- pedido do Hugo, 05/08 e
+10/08. Confirmado com o Hugo: navega pela MESMA página que já usamos
+pra ANEXAR o canhoto em expedir_pedidos.py::anexar_canhoto() (login +
+/provider/inventory/outbound/show/{id}), já testada em produção.
 
-IMPORTANTE -- parte NÃO VALIDADA: o formato de como os documentos JÁ
-EXISTENTES aparecem dentro dessa aba (nomes de elemento, link de
-download) ainda não foi visto de verdade -- só a navegação ATÉ a aba
-foi confirmada (usada pra fazer upload, não pra listar o que já tem
-lá). listar_documentos_da_aba() abaixo tenta alguns seletores
-plausíveis, mas precisa ser confirmado/ajustado contra a tela real --
-ver debug/investigar_aba_documentos.py, feito exatamente pra isso.
+FASE 1 (10/08, validada contra pedido real PS-27776/Padrão Puro) --
+DANFE: quando o pedido tem NF-e com XML anexado, a página tem um
+botão ".btn_danfe" (data-url = caminho do XML) que dispara um POST
+pra /pt-br/document/danfe (form_danfe: _token + file_url) e devolve o
+PDF do DANFE pronto. gerar_danfe() replica esse POST direto via
+fetch() no contexto da página (evita abrir a popup target=_blank que
+o botão abre de verdade). Pedido sem NF-e/XML não tem esse botão --
+gerar_danfe() retorna None nesse caso, sem erro.
+
+FASE 2 (10/08, validada contra pedidos reais de Marchef-Itaueira e
+Cogumelado, que têm Boleto anexado -- pedido do Hugo, "vamos seguir
+pros boletos") -- documentos JÁ anexados na aba "Documentos" do
+pedido (Boleto, Comprovante de Entrega, Romaneio Interno, DANFE
+subido manualmente pelo cliente, etc). Confirmado: o elemento é
+"#document" (já presente no DOM assim que a página carrega, SEM
+precisar clicar em nenhuma aba -- é um tab-pane escondido por CSS,
+não removido do DOM), com um ".callout" por documento. O RÓTULO
+visível é texto LIVRE digitado por quem anexou (visto: "BOLETO 8482",
+"BO 8553", "nota", "NOTA", "Boleto") -- nada padronizado, então
+listar_documentos_da_aba() não tenta adivinhar o tipo pelo rótulo: só
+baixa o arquivo e deixa classificador.py (que já reconhece Boleto
+pelo CONTEÚDO do PDF -- linha digitável, vencimento, código de
+barras) decidir. O único item que listar_documentos_da_aba() ignora
+de propósito é o XML da NF-e (link "/xml/nfe/...", não é PDF) -- esse
+já é tratado à parte por gerar_danfe().
 """
+import base64
 import logging
 import re
 from pathlib import Path
+
+from fingerprint_documentos import ja_enviado_para_pedido
 
 logger = logging.getLogger(__name__)
 
 STOKKI_BASE = "https://freshlog.stokki.com.br"
 URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
+URL_DANFE = f"{STOKKI_BASE}/pt-br/document/danfe"
 
 PASTA_TEMP_DOWNLOADS = Path(__file__).parent / "dados" / "downloads_stokki_temp"
 
@@ -55,48 +75,29 @@ def _login(page, config: dict):
     page.wait_for_timeout(400)
 
 
-def ir_para_aba_documentos(page, codigo_ps: str) -> bool:
-    """Navega até a aba Documentos de um pedido -- mesma sequência já
-    validada em produção por anexar_canhoto(). Retorna False se não
-    conseguir achar a aba (pedido não existe, layout mudou, etc)."""
-    page.goto(
-        f"{URL_PROVIDER_SHW}/{_extrair_id(codigo_ps)}",
-        wait_until="networkidle", timeout=30_000,
-    )
-    page.wait_for_timeout(400)
-
-    seletores_tab = ["#document-tab", "a[href='#document ']", "a:text('Documentos')"]
-    for sel in seletores_tab:
-        try:
-            page.click(sel, timeout=5_000)
-            return True
-        except Exception:
-            continue
-    return False
-
-
 def listar_documentos_da_aba(page) -> list[dict]:
     """
-    NÃO VALIDADO contra a tela real -- ver aviso no topo do arquivo.
-    Tenta achar links de download de PDF dentro da aba Documentos
-    (já deve estar aberta, ver ir_para_aba_documentos). Retorna
-    [{"nome_visivel", "href"}] pra cada documento encontrado.
-
-    Depois de rodar debug/investigar_aba_documentos.py contra um
-    pedido real, essa função deve ser ajustada pro seletor certo.
+    Lista os documentos já anexados na aba Documentos do pedido (a
+    page já precisa estar na tela /provider/.../show/{id} -- ver
+    buscar_documentos_do_pedido). Retorna [{"nome_visivel", "href"}]
+    pra cada documento, exceto o XML da NF-e (ver docstring do
+    módulo) -- esse fica de fora, é tratado à parte por gerar_danfe().
     """
-    try:
-        elementos = page.query_selector_all("a[href$='.pdf'], a[href*='/document/download']")
-        documentos = []
-        for el in elementos:
-            href = el.get_attribute("href")
-            texto = (el.inner_text() or "").strip()
-            if href:
-                documentos.append({"nome_visivel": texto or href.split("/")[-1], "href": href})
-        return documentos
-    except Exception as e:
-        logger.warning(f"  Falha ao listar documentos da aba: {e}")
+    if not page.query_selector("#document"):
         return []
+
+    documentos = []
+    for callout in page.query_selector_all("#document .callout"):
+        link_el = callout.query_selector("a.btn")
+        if not link_el:
+            continue
+        href = link_el.get_attribute("href") or ""
+        if not href or "/xml/nfe/" in href:
+            continue
+        label_el = callout.query_selector("p.mb-auto")
+        texto = (label_el.inner_text().strip() if label_el else "") or href.split("/")[-1]
+        documentos.append({"nome_visivel": texto, "href": href})
+    return documentos
 
 
 def baixar_documento(page, url_documento: str, nome_arquivo: str) -> Path | None:
@@ -126,23 +127,73 @@ def baixar_documento(page, url_documento: str, nome_arquivo: str) -> Path | None
         return None
 
 
+def gerar_danfe(page, codigo_ps: str) -> Path | None:
+    """
+    Gera o PDF do DANFE pro pedido (a page já precisa estar na tela
+    /provider/.../show/{id} desse pedido -- ver buscar_documentos_do_pedido).
+    Retorna None se o pedido não tem NF-e/XML anexado (botão ".btn_danfe"
+    não existe na página nesse caso -- não é erro, só não tem o que gerar).
+    """
+    if not page.query_selector(".btn_danfe"):
+        return None
+
+    file_url = page.eval_on_selector(".btn_danfe", "el => el.dataset.url")
+    token = page.eval_on_selector("#form_danfe input[name='_token']", "el => el.value")
+    if not file_url or not token:
+        logger.warning(f"  {codigo_ps}: botão DANFE presente mas sem data-url/_token -- pulando.")
+        return None
+
+    try:
+        resultado = page.evaluate("""async ({url, fileUrl, token}) => {
+            const fd = new FormData();
+            fd.append('_token', token);
+            fd.append('file_url', fileUrl);
+            const resp = await fetch(url, { method: 'POST', body: fd, credentials: 'include' });
+            const buffer = await resp.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            let binario = '';
+            for (let i = 0; i < bytes.length; i++) binario += String.fromCharCode(bytes[i]);
+            return { status: resp.status, contentType: resp.headers.get('content-type'), b64: btoa(binario) };
+        }""", {"url": URL_DANFE, "fileUrl": file_url, "token": token})
+    except Exception as e:
+        logger.warning(f"  {codigo_ps}: falha ao gerar DANFE: {e}")
+        return None
+
+    if resultado["status"] != 200 or "pdf" not in (resultado["contentType"] or "").lower():
+        logger.warning(f"  {codigo_ps}: resposta do DANFE não é um PDF "
+                       f"(status={resultado['status']}, content-type={resultado['contentType']!r}).")
+        return None
+
+    PASTA_TEMP_DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    caminho_local = PASTA_TEMP_DOWNLOADS / f"{codigo_ps}_DANFE.pdf"
+    caminho_local.write_bytes(base64.b64decode(resultado["b64"]))
+    return caminho_local
+
+
 def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str) -> list[dict]:
     """
-    Fluxo completo pra 1 pedido: vai pra aba Documentos, lista o que
-    tem, baixa cada um. Retorna [{"caminho_local", "nome_arquivo"}]
-    -- mesmo formato usado por email_documentos.py, pra alimentar o
-    mesmo pipeline de classificar/casar/enviar depois.
+    Fluxo completo pra 1 pedido: gera o DANFE (Fase 1, pula se já foi
+    enviado antes -- ele muda de hash a cada geração, então precisa
+    desse controle à parte do fingerprint por conteúdo) e baixa tudo
+    que já está anexado na aba Documentos (Fase 2 -- Boleto e outros).
+    Retorna [{"caminho_local", "nome_arquivo"}] -- mesmo formato usado
+    por email_documentos.py, pra alimentar o mesmo pipeline de
+    classificar/casar/enviar depois.
     """
-    if not ir_para_aba_documentos(page, codigo_ps):
-        logger.warning(f"  {codigo_ps}: não encontrou a aba Documentos.")
-        return []
-
-    documentos_na_tela = listar_documentos_da_aba(page)
-    if not documentos_na_tela:
-        return []
+    page.goto(
+        f"{URL_PROVIDER_SHW}/{_extrair_id(codigo_ps)}",
+        wait_until="networkidle", timeout=30_000,
+    )
+    page.wait_for_timeout(400)
 
     baixados = []
-    for doc in documentos_na_tela:
+
+    if not ja_enviado_para_pedido(codigo_ps, "Nota Fiscal"):
+        caminho_danfe = gerar_danfe(page, codigo_ps)
+        if caminho_danfe:
+            baixados.append({"caminho_local": caminho_danfe, "nome_arquivo": caminho_danfe.name})
+
+    for doc in listar_documentos_da_aba(page):
         nome_arquivo = doc["nome_visivel"]
         if not nome_arquivo.lower().endswith(".pdf"):
             nome_arquivo += ".pdf"

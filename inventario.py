@@ -220,6 +220,8 @@ def gerar_excel(pedidos: list, caminho: Path, somente_novos: bool = False):
         fill = PatternFill("solid", fgColor=cor)
         for col, (campo, _, _) in enumerate(headers, 1):
             val = p.get(campo, "")
+            if campo == "codigo_ps" and val:
+                val = f"#{val}"
             c = ws.cell(row=i, column=col, value=val)
             c.font      = Font(name="Arial", size=10)
             c.fill      = fill

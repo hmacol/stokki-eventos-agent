@@ -18,7 +18,12 @@ Fonte: planilha Excel mantida pelo Hugo, com pelo menos estas colunas
     CNPJ/CPF   -- documento do destinatário (com ou sem máscara)
     Nível      -- 1 (mais fácil) a 4 (possível mais de 3h de espera)
 
-Destinatário cujo CNPJ/CPF não está na planilha: aplica NIVEL_PADRAO (1).
+Destinatário cujo CPF não está na planilha: aplica NIVEL_PADRAO_CPF (1)
+direto, sem exigir revisão — CPF (pessoa física) é considerado baixo
+risco por padrão. Destinatário cujo CNPJ não está na planilha: aplica
+NIVEL_PADRAO_CNPJ (2) como valor provisório e marca requer_revisao=True —
+CNPJ exige classificação manual na planilha antes de confiar nesse nível
+(pedido do Hugo, 10/08).
 """
 import logging
 import re
@@ -29,10 +34,14 @@ import openpyxl
 
 logger = logging.getLogger(__name__)
 
-# Aplicado quando o CNPJ/CPF do destinatário não está na planilha —
+# Aplicados quando o documento do destinatário não está na planilha —
 # nunca fica sem nível nenhum (mesmo espírito do padrão "Seco-1" original,
-# aqui só a metade do nível).
-NIVEL_PADRAO = 1
+# aqui só a metade do nível). CPF usa o padrão mais baixo direto; CNPJ usa
+# um padrão mais conservador (2) e fica marcado para revisão manual, já
+# que carga jurídica tende a ter operação mais complexa (pedido do Hugo,
+# 10/08).
+NIVEL_PADRAO_CPF = 1
+NIVEL_PADRAO_CNPJ = 2
 
 NIVEIS_VALIDOS = {1, 2, 3, 4}
 
@@ -55,6 +64,11 @@ COLUNAS_CEP = {"CEP", "DESTINATARIOCEP"}
 
 def _so_digitos(s) -> str:
     return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _e_cnpj(doc: str) -> bool:
+    """CNPJ tem 14 dígitos; CPF tem 11. Fora disso não dá pra afirmar."""
+    return len(doc) == 14
 
 
 def _normalizar_cabecalho(s) -> str:
@@ -93,7 +107,8 @@ def carregar_niveis(caminho: str | Path) -> dict[str, int]:
         a menos numa entrega difícil) e avisa no log para revisão manual.
 
     Caminho vazio ou arquivo inexistente: retorna {} (todo destinatário
-    cai no NIVEL_PADRAO) — não é erro fatal, só um aviso no log.
+    cai no padrão por tipo de documento — CPF ou CNPJ) — não é erro
+    fatal, só um aviso no log.
     """
     if not caminho:
         return {}
@@ -102,7 +117,8 @@ def carregar_niveis(caminho: str | Path) -> dict[str, int]:
     if not caminho.exists():
         logger.warning(
             f"Planilha de complexidade de entrega não encontrada: {caminho} — "
-            f"todos os destinatários usarão o nível padrão ({NIVEL_PADRAO})."
+            f"todos os destinatários usarão o nível padrão por tipo de documento "
+            f"(CPF={NIVEL_PADRAO_CPF}, CNPJ={NIVEL_PADRAO_CNPJ})."
         )
         return {}
 
@@ -190,14 +206,22 @@ def carregar_niveis(caminho: str | Path) -> dict[str, int]:
     return mapa
 
 
-def classificar_nivel(documento: str, mapa: dict[str, int]) -> tuple[int, bool]:
+def classificar_nivel(documento: str, mapa: dict[str, int]) -> tuple[int, bool, bool]:
     """
-    Retorna (nível, encontrado_na_planilha).
+    Retorna (nível, encontrado_na_planilha, requer_revisao).
 
-    Se o documento vier vazio ou não estiver no mapa, aplica NIVEL_PADRAO
-    e retorna encontrado_na_planilha=False.
+    Se o documento estiver no mapa, usa o nível da planilha e
+    requer_revisao=False.
+
+    Se não estiver: aplica o padrão conforme o tipo de documento. Para
+    CPF, usa NIVEL_PADRAO_CPF (1) e isso é o suficiente
+    (requer_revisao=False). Para CNPJ, usa NIVEL_PADRAO_CNPJ (2) e marca
+    requer_revisao=True — precisa de classificação manual na planilha
+    antes de confiar nesse nível.
     """
     doc = _so_digitos(documento)
     if doc and doc in mapa:
-        return mapa[doc], True
-    return NIVEL_PADRAO, False
+        return mapa[doc], True, False
+    if _e_cnpj(doc):
+        return NIVEL_PADRAO_CNPJ, False, True
+    return NIVEL_PADRAO_CPF, False, False

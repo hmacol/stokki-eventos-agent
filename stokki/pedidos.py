@@ -320,10 +320,32 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
     if m_stkkc:
         stkkc_id = int(m_stkkc.group(1))
 
+    # Quantidade de volumes -- aba "Detalhes do transporte". Prioriza o
+    # valor informado na conferência do galpão (verificado fisicamente,
+    # sempre preenchido) sobre o mencionado na NF-e (frequentemente
+    # "Não informado"). Usado pra calcular o dimension_3 do VUUPT.
+    quantidade_volumes = None
+    m_conf = re.search(
+        r"Quantidade de volumes informado na confer[êe]ncia:\s*</strong>\s*([^<]*?)\s*<br>",
+        html,
+    )
+    m_nfe = re.search(
+        r"Quantidade de volumes mencionado na NF-e:\s*</strong>\s*([^<]*?)\s*<br>",
+        html,
+    )
+    for m in (m_conf, m_nfe):
+        if m:
+            try:
+                quantidade_volumes = int(float(m.group(1).strip().replace(",", ".")))
+                break
+            except ValueError:
+                continue
+
     return {
         "id":         id_pedido,
         "referencia": referencia,
         "stkkc_id":   stkkc_id,
+        "quantidade_volumes": quantidade_volumes,
         "cliente":    blocos.get("cliente"),
         "transportadora": blocos.get("transportadora"),
         "local_entrega": blocos.get("local_entrega"),

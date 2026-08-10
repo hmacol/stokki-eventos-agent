@@ -44,11 +44,34 @@ def extrair_cnpj(texto: str) -> str | None:
     return digitos if len(digitos) == 14 else None
 
 
+def extrair_cnpj_pagador_boleto(texto: str) -> str | None:
+    """Pro CNPJ que interessa num BOLETO: o do PAGADOR (cliente
+    destinatário, ligado a UM pedido específico) -- não o do
+    Beneficiário (o embarcador que emitiu o boleto, sempre o MESMO
+    CNPJ em todos os boletos dele, então inútil pra descobrir qual
+    pedido é -- lição de pedidos reais da Dourado, 10/08, onde o
+    primeiro CNPJ do texto sempre batia com o próprio embarcador).
+    Procura o primeiro CNPJ depois da palavra "Pagador"; cai pro
+    genérico (primeiro CNPJ do documento) se não achar esse padrão."""
+    if texto:
+        pos = texto.lower().find("pagador")
+        if pos != -1:
+            match = PADRAO_CNPJ.search(texto, pos)
+            if match:
+                digitos = re.sub(r"\D", "", match.group(0))
+                if len(digitos) == 14:
+                    return digitos
+    return extrair_cnpj(texto)
+
+
 def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
-                               texto_pdf: str, vuupt) -> dict:
+                               texto_pdf: str, vuupt, tipo_documento: str | None = None) -> dict:
     """
     Retorna {"codigo_pedido": "PS-XXXXX" ou None, "metodo": "...",
     "motivo_falha": "..." (só quando codigo_pedido é None)}.
+
+    tipo_documento: quando é "Boleto", usa extrair_cnpj_pagador_boleto()
+    em vez do genérico extrair_cnpj() -- ver docstring de lá.
     """
     codigo = extrair_codigo_pedido(nome_arquivo)
     if codigo:
@@ -59,7 +82,8 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
         if codigo:
             return {"codigo_pedido": codigo, "metodo": "assunto_email", "motivo_falha": None}
 
-    cnpj = extrair_cnpj(texto_pdf)
+    cnpj = (extrair_cnpj_pagador_boleto(texto_pdf) if tipo_documento == "Boleto"
+            else extrair_cnpj(texto_pdf))
     if not cnpj:
         return {"codigo_pedido": None, "metodo": None,
                 "motivo_falha": "Sem código de pedido no nome/assunto, e sem CNPJ reconhecível no PDF."}

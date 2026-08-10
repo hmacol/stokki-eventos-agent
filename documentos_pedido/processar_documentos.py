@@ -3,16 +3,18 @@
 processar_documentos.py
 
 Orquestrador do agente de documentos por pedido -- pedido do Hugo,
-05/08: trata Nota Fiscal, Boleto, Carta de Correção, Agendamento e
-qualquer outro documento disponível, buscando por E-MAIL e por
-STOKKI, classificando, casando com o pedido certo (PS-XXXXX), e
-enviando pro Google Cloud Storage.
+05/08 e 10/08: trata Nota Fiscal, Boleto, Carta de Correção,
+Agendamento e qualquer outro documento disponível, buscando por
+E-MAIL e por STOKKI, classificando, casando com o pedido certo
+(PS-XXXXX), e enviando pro Google Cloud Storage.
 
 Fluxo:
   1. Busca PDFs novos por e-mail (busca ampla, últimos N dias)
-  2. Busca PDFs na aba Documentos da Stokki, pra uma lista de pedidos
-     dada (--pedidos PS-1,PS-2,... -- busca por TODOS os pedidos seria
-     lento demais; ver notas no código)
+  2. Busca documentos na Stokki (por enquanto, Fase 1: só o DANFE,
+     gerado a partir do XML da NF-e -- ver stokki_documentos.py). Lista
+     de pedidos: --pedidos PS-1,PS-2 pra testar manualmente, ou
+     auto-descoberta (padrão) seguindo a mesma regra de prioridade da
+     subida pro VUUPT -- ver selecionar_pedidos.py.
   3. Pra cada PDF (de qualquer origem): calcula hash, pula se já
      processado, classifica o tipo, casa com um pedido, envia pro GCS
   4. Documento que não casa com nenhum pedido -- fica marcado como
@@ -20,7 +22,7 @@ Fluxo:
 
 COMO USAR:
     py -3.11 processar_documentos.py --modo-teste
-    py -3.11 processar_documentos.py --pedidos PS-35471,PS-35472
+    py -3.11 processar_documentos.py --modo-teste --pedidos PS-35471,PS-35472
 """
 import argparse
 import logging
@@ -78,10 +80,16 @@ def _extrair_texto_pdf_completo(caminho_pdf: Path) -> str:
         return ""
 
 
-def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool) -> str:
+def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
+                           tipos_permitidos: set[str] | None = None) -> str:
     """
     item: {"caminho_local", "nome_arquivo", "assunto_email" (opcional)}
-    Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL", "ERRO".
+    tipos_permitidos: se informado, documento classificado com um tipo
+    fora desse conjunto é ignorado (status "FORA_DE_ESCOPO") -- usado
+    pela busca de e-mail de embarcadores conhecidos, que por enquanto
+    só trata Boleto (pedido do Hugo, 10/08).
+    Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL",
+    "FORA_DE_ESCOPO", "ERRO".
     """
     caminho = item["caminho_local"]
     nome_arquivo = item["nome_arquivo"]
@@ -92,8 +100,14 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool) ->
         return "JA_PROCESSADO"
 
     classificacao = classificar_documento(caminho)
+    if tipos_permitidos is not None and classificacao["tipo"] not in tipos_permitidos:
+        logger.info(f"  {nome_arquivo}: classificado como '{classificacao['tipo']}', "
+                   f"fora do escopo atual ({tipos_permitidos}) -- ignorado.")
+        return "FORA_DE_ESCOPO"
+
     texto_completo = _extrair_texto_pdf_completo(caminho)
-    correspondencia = casar_documento_com_pedido(nome_arquivo, assunto_email, texto_completo, vuupt)
+    correspondencia = casar_documento_com_pedido(nome_arquivo, assunto_email, texto_completo, vuupt,
+                                                 tipo_documento=classificacao["tipo"])
 
     codigo_pedido = correspondencia["codigo_pedido"]
     origem = "email" if assunto_email is not None else "stokki"
@@ -147,8 +161,19 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
             "detalhe": f"{len(itens_email)} encontrado(s)",
         }
 
-        # ── Etapa 2: Stokki (lista explícita de pedidos, ver docstring) ──
-        if pedidos_stokki:
+        # ── Etapa 2: Stokki ────────────────────────────────────────────────
+        # Lista de pedidos: se --pedidos foi passado explicitamente, usa ela
+        # (útil pra teste manual); senão, descobre sozinho seguindo a mesma
+        # regra de prioridade da subida pro VUUPT -- pedido do Hugo, 10/08
+        # (ver selecionar_pedidos.py).
+        if pedidos_stokki is not None:
+            lista_pedidos = pedidos_stokki
+        else:
+            from selecionar_pedidos import descobrir_pedidos
+            lista_pedidos = descobrir_pedidos(config)
+            logger.info(f"{len(lista_pedidos)} pedido(s) selecionado(s) automaticamente pra busca na Stokki.")
+
+        if lista_pedidos:
             from playwright.sync_api import sync_playwright
             from stokki_documentos import _login, buscar_documentos_do_pedido
 
@@ -157,8 +182,14 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
                 page = browser.new_context().new_page()
                 _login(page, config)
 
+                # Cada pedido em aberto precisa ser visitado toda vez -- um
+                # boleto ou outro documento pode ter sido anexado a qualquer
+                # momento na aba Documentos (não tem como saber sem olhar).
+                # A DANFE em si (que muda de hash a cada geração) tem seu
+                # próprio controle pra não regerar à toa -- ver
+                # buscar_documentos_do_pedido -> gerar_danfe.
                 total_stokki = 0
-                for codigo_ps in pedidos_stokki:
+                for codigo_ps in lista_pedidos:
                     itens_stokki = buscar_documentos_do_pedido(page, config, codigo_ps)
                     total_stokki += len(itens_stokki)
                     for item in itens_stokki:
@@ -170,11 +201,41 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
 
             resumo_etapas["Documentos (Stokki)"] = {
                 "status": "ok",
-                "detalhe": f"{total_stokki} encontrado(s) em {len(pedidos_stokki)} pedido(s)",
+                "detalhe": f"{total_stokki} encontrado(s) em {len(lista_pedidos)} pedido(s)",
             }
         else:
-            logger.info("Nenhum pedido especificado pra busca na Stokki (--pedidos) -- pulando essa etapa.")
-            resumo_etapas["Documentos (Stokki)"] = {"status": "ok", "detalhe": "Pulada (nenhum --pedidos informado)"}
+            logger.info("Nenhum pedido pra buscar documentos na Stokki nesta execução.")
+            resumo_etapas["Documentos (Stokki)"] = {"status": "ok", "detalhe": "Nenhum pedido elegível"}
+
+        # ── Etapa 3: e-mail de embarcadores conhecidos (Boleto) ──────────────
+        # Diferente da Etapa 1 (busca ampla): remetentes específicos (Dourado,
+        # Maria Dolores/NUU), pasta "Todos os e-mails". Por enquanto só trata
+        # Boleto -- pedido do Hugo, 10/08 ("só Boleto por enquanto"). Um PDF
+        # que junte vários boletos num arquivo só (ex: "BOLETOS.pdf" da
+        # Dourado) é separado em 1 arquivo por boleto antes de classificar/
+        # casar -- ver boleto_splitter.py.
+        from email_documentos import buscar_pdfs_por_email_embarcadores
+        from boleto_splitter import separar_boletos
+
+        PASTA_BOLETOS_SEPARADOS = Path(__file__).parent / "dados" / "boletos_separados"
+
+        itens_embarcadores = buscar_pdfs_por_email_embarcadores(config)
+        logger.info(f"{len(itens_embarcadores)} PDF(s) encontrado(s) de embarcadores conhecidos.")
+
+        total_boletos = 0
+        for item in itens_embarcadores:
+            for caminho_separado in separar_boletos(item["caminho_local"], PASTA_BOLETOS_SEPARADOS):
+                sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
+                status = processar_um_documento(sub_item, vuupt, config, modo_teste,
+                                               tipos_permitidos={"Boleto"})
+                if status != "FORA_DE_ESCOPO":
+                    contadores[status] = contadores.get(status, 0) + 1
+                    total_boletos += 1
+
+        resumo_etapas["Documentos (e-mail embarcadores)"] = {
+            "status": "ok",
+            "detalhe": f"{total_boletos} boleto(s) de {len(itens_embarcadores)} anexo(s)",
+        }
 
         resumo_etapas["Resumo geral"] = {
             "status": "erro" if contadores["ERRO"] else "ok",
@@ -200,7 +261,8 @@ if __name__ == "__main__":
     parser.add_argument("--modo-teste", action="store_true",
                         help="Mostra o que seria feito, sem enviar nada pro GCS de verdade")
     parser.add_argument("--pedidos", type=str, default="",
-                        help="Códigos de pedido pra buscar documentos na Stokki, separados por vírgula (ex: PS-1,PS-2)")
+                        help="Códigos de pedido pra buscar documentos na Stokki, separados por vírgula "
+                             "(ex: PS-1,PS-2). Se omitido, descobre sozinho (ver selecionar_pedidos.py).")
     args = parser.parse_args()
 
     lista_pedidos = [p.strip() for p in args.pedidos.split(",") if p.strip()] if args.pedidos else None

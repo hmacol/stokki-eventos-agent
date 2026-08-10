@@ -69,6 +69,17 @@ AGENTES = [
         "categoria": "Pipeline principal",
     },
     {
+        "id": "verificar_duplicados_vuupt",
+        "nome": "Verificar Pedidos Duplicados no VUUPT",
+        "descricao": "Audita e cancela cópias sobressalentes não atribuídas de serviços duplicados no VUUPT.",
+        "script": "verificar_pedidos_duplicados_vuupt.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": [],
+        "categoria": "Pipeline principal",
+    },
+    {
         "id": "atualizar_agendamentos",
         "nome": "Atualizar Agendamentos Confirmados",
         "descricao": "Aplica no VUUPT os agendamentos já confirmados por e-mail.",

@@ -82,6 +82,19 @@ def marcar_processado(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: 
     conn.close()
 
 
+def ja_enviado_para_pedido(codigo_pedido: str, tipo: str) -> bool:
+    """True se já existe um documento desse tipo enviado com sucesso pra
+    esse pedido -- usado pra pular pedido sem precisar reabrir a página
+    no Stokki e regerar o documento (ex: DANFE) de novo à toa."""
+    conn = _conectar()
+    row = conn.execute(
+        "SELECT 1 FROM documentos_processados WHERE codigo_pedido = ? AND tipo = ? AND status = 'ENVIADO'",
+        (codigo_pedido, tipo),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
 def listar_pendentes_revisao(limite: int = 100) -> list[dict]:
     """Documentos que não conseguiram ser casados com nenhum pedido --
     pra revisão manual do Hugo."""

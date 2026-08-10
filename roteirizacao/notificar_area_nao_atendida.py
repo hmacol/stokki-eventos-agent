@@ -140,7 +140,7 @@ def _montar_conteudo(nome_remetente: str, tipo: str, pedidos: list[dict]) -> str
 
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(extrair_cidade(p) or '-')} - {html.escape(extrair_uf(p) or '-')}</td>
     </tr>""" for p in pedidos)
 

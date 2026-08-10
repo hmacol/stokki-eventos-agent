@@ -112,7 +112,7 @@ def _carregar_embarcadores_por_sender_id() -> dict:
 def _montar_conteudo(nome_remetente: str, pedidos: list[dict]) -> str:
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title','') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 

@@ -60,7 +60,11 @@ def classificar_documento(caminho_pdf: Path) -> dict:
     reconhecível, mas ainda é salvo (categoria "Outro", pedido do
     Hugo: "qualquer outro documento disponível").
     """
-    nome_normalizado = caminho_pdf.name.lower()
+    # "_" -> " ": sem isso, \b não separa "_danfe" de um sufixo (ex:
+    # "PS-27776_DANFE.pdf") -- "_" conta como caractere de palavra pro
+    # regex, então não existe fronteira de \b ali. Não mexe em "-" porque
+    # alguns padrões (ex: r"\bnf-?e?\b") esperam o hífen literal.
+    nome_normalizado = caminho_pdf.name.lower().replace("_", " ")
     texto = _texto_do_pdf(caminho_pdf).lower()
 
     sinais = [

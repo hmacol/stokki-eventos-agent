@@ -102,6 +102,8 @@ def _gravar_detalhes_csv(carimbo: str, resultados: list[dict]) -> Path:
         w.writeheader()
         for r in resultados:
             linha = dict(r)
+            if linha.get("codigo_ps"):
+                linha["codigo_ps"] = f"#{linha['codigo_ps']}"
             linha["requer_revisao"] = "sim" if r.get("requer_revisao") else ""
             linha["erro"] = str(r.get("erro") or "")
             w.writerow(linha)
@@ -171,7 +173,7 @@ def _regenerar_status(ultimo: dict, resultados: list[dict], arq_csv: Path):
         linhas_md.append("### Erros")
         linhas_md.append("")
         for r in erros[:20]:
-            linhas_md.append(f"- `{r.get('codigo_ps','?')}`: {str(r['erro'])[:120]}")
+            linhas_md.append(f"- `#{r.get('codigo_ps','?')}`: {str(r['erro'])[:120]}")
         if len(erros) > 20:
             linhas_md.append(f"- ... e mais {len(erros) - 20} (ver CSV)")
         linhas_md.append("")
@@ -179,7 +181,7 @@ def _regenerar_status(ultimo: dict, resultados: list[dict], arq_csv: Path):
         linhas_md.append("### Revisão manual")
         linhas_md.append("")
         for r in revisao[:20]:
-            linhas_md.append(f"- `{r.get('codigo_ps','?')}`: {str(r.get('observacao',''))[:120]}")
+            linhas_md.append(f"- `#{r.get('codigo_ps','?')}`: {str(r.get('observacao',''))[:120]}")
         if len(revisao) > 20:
             linhas_md.append(f"- ... e mais {len(revisao) - 20} (ver CSV)")
         linhas_md.append("")
