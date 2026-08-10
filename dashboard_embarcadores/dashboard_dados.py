@@ -76,7 +76,7 @@ def _buscar_registros_mes(vuupt, ano: int, mes: int) -> list[dict]:
     fim = _primeiro_dia_proximo_mes(ano, mes)
     filtro = [
         {"field": "scheduled_start", "operator": "gte", "value": inicio.strftime("%Y-%m-%d")},
-        {"field": "scheduled_start", "operator": "lte", "value": fim.strftime("%Y-%m-%d")},
+        {"field": "scheduled_start", "operator": "lt", "value": fim.strftime("%Y-%m-%d")},
     ]
     servicos = vuupt.listar_servicos(filtro, per_page=100)
     reduzidos = []

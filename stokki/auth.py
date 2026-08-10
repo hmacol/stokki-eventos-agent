@@ -20,8 +20,10 @@ Uso:
 """
 import json
 import logging
+import os
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -106,9 +108,16 @@ class StokkiSession:
         """Retorna True se a resposta indica sessão expirada/não autenticada."""
         if resp.status_code in (401, 403):
             return True
-        # O Stokki redireciona para /login quando a sessão expira
-        if "login" in resp.url and resp.status_code in (200, 302):
-            return True
+        # O Stokki redireciona para /login quando a sessão expira -- checa
+        # o PATH da URL terminando em "/login", não uma substring solta
+        # em qualquer lugar da URL (isso pegava falsos positivos em
+        # páginas legítimas cujo path/query só continha "login" em algum
+        # lugar, ex.: um relatório de "último login", disparando um
+        # re-login via Playwright caro à toa).
+        if resp.status_code in (200, 302):
+            caminho = urlparse(resp.url).path.rstrip("/")
+            if caminho.endswith("/login"):
+                return True
         return False
 
     def _carregar_ou_renovar_sessao(self):
@@ -158,6 +167,15 @@ class StokkiSession:
             json.dumps(dados, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
+        try:
+            # Restringe o arquivo (cookies + CSRF token = bearer da sessão
+            # automatizada) a leitura/escrita só pelo dono -- defesa extra
+            # num host compartilhado. Sem efeito real no Windows (ACLs, não
+            # bits POSIX), mas inofensivo lá e efetivo se isso um dia rodar
+            # em Linux/Mac.
+            os.chmod(COOKIES_PATH, 0o600)
+        except OSError:
+            pass
         logger.info(f"Cookies salvos em {COOKIES_PATH} ({len(playwright_cookies)} cookies).")
 
     def _fazer_login_playwright(self):
@@ -169,48 +187,53 @@ class StokkiSession:
         logger.info("Fazendo login no Stokki via Playwright...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-
             try:
-                page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=30_000)
-                page.wait_for_selector("[name='email']", timeout=15_000)
-                page.fill("[name='email']", self._usuario)
-                page.fill("[name='password']", self._senha)
-                page.click("button[type='submit']")
-                page.wait_for_url(lambda url: "login" not in url, timeout=30_000)
-                logger.info(f"Login OK. URL: {page.url}")
+                context = browser.new_context()
+                page = context.new_page()
 
-                # Visita a area /provider/ dentro do Playwright para que
-                # os cookies de sessao dessa area sejam estabelecidos antes
-                # de salvar -- sem isso, chamadas requests para /provider/
-                # redirecionam para /login mesmo com sessao valida no /administrator/.
                 try:
-                    page.goto(
-                        f"{BASE_URL}/pt-br/provider",
-                        wait_until="domcontentloaded",
-                        timeout=15_000,
+                    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=30_000)
+                    page.wait_for_selector("[name='email']", timeout=15_000)
+                    page.fill("[name='email']", self._usuario)
+                    page.fill("[name='password']", self._senha)
+                    page.click("button[type='submit']")
+                    page.wait_for_url(lambda url: "login" not in url, timeout=30_000)
+                    logger.info(f"Login OK. URL: {page.url}")
+
+                    # Visita a area /provider/ dentro do Playwright para que
+                    # os cookies de sessao dessa area sejam estabelecidos antes
+                    # de salvar -- sem isso, chamadas requests para /provider/
+                    # redirecionam para /login mesmo com sessao valida no /administrator/.
+                    try:
+                        page.goto(
+                            f"{BASE_URL}/pt-br/provider",
+                            wait_until="domcontentloaded",
+                            timeout=15_000,
+                        )
+                        logger.info("Area /provider/ visitada para estabelecer cookies.")
+                    except Exception as e:
+                        logger.debug(f"Aviso ao visitar /provider/: {e}")
+
+                    # Captura o CSRF token da meta tag
+                    csrf_token = page.evaluate(
+                        "() => document.querySelector('meta[name=csrf-token]')?.content || ''"
                     )
-                    logger.info("Area /provider/ visitada para estabelecer cookies.")
-                except Exception as e:
-                    logger.debug(f"Aviso ao visitar /provider/: {e}")
+                    if csrf_token:
+                        self._csrf_token = csrf_token
+                        logger.info("CSRF token capturado.")
+                    else:
+                        logger.warning("CSRF token não encontrado na página.")
 
-                # Captura o CSRF token da meta tag
-                csrf_token = page.evaluate(
-                    "() => document.querySelector('meta[name=csrf-token]')?.content || ''"
-                )
-                if csrf_token:
-                    self._csrf_token = csrf_token
-                    logger.info("CSRF token capturado.")
-                else:
-                    logger.warning("CSRF token não encontrado na página.")
+                except PlaywrightTimeout as e:
+                    raise SessaoExpiradaError(f"Timeout durante o login no Stokki: {e}") from e
 
-            except PlaywrightTimeout as e:
+                cookies = context.cookies()
+            finally:
+                # Garante que o Chromium headless sempre e fechado, mesmo
+                # se um seletor mudar e o login falhar com um erro que nao
+                # seja PlaywrightTimeout -- sem isso, o processo vazava e
+                # se acumulava a cada execucao agendada com falha.
                 browser.close()
-                raise SessaoExpiradaError(f"Timeout durante o login no Stokki: {e}") from e
-
-            cookies = context.cookies()
-            browser.close()
 
         self._salvar_cookies(cookies)
 

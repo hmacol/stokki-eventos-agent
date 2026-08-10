@@ -132,12 +132,18 @@
     return icone;
   }
 
+  function escaparHtml(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto == null ? '' : String(texto);
+    return div.innerHTML;
+  }
+
   function montarInfoHtml(parada) {
     return `<div class="info-parada">
-      <div class="titulo">${parada.nome}</div>
-      <div class="remetente">${parada.remetente}</div>
-      <div>${parada.titulo}</div>
-      <div class="endereco">${parada.endereco}</div>
+      <div class="titulo">${escaparHtml(parada.nome)}</div>
+      <div class="remetente">${escaparHtml(parada.remetente)}</div>
+      <div>${escaparHtml(parada.titulo)}</div>
+      <div class="endereco">${escaparHtml(parada.endereco)}</div>
     </div>`;
   }
 
@@ -192,7 +198,7 @@
       item.innerHTML = `
         <span class="cor-swatch" style="background:${cor}"></span>
         <div>
-          <div class="nome-rota">${rota.nome}</div>
+          <div class="nome-rota">${escaparHtml(rota.nome)}</div>
           <div class="qtd-paradas">${rota.paradas.length} parada(s)</div>
         </div>`;
       listaEl.appendChild(item);

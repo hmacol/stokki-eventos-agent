@@ -14,6 +14,7 @@ COMO USAR (desenvolvimento):
 COMO USAR (produção):
     py -3.11 -m waitress --host=0.0.0.0 --port=8070 painel_agentes:app
 """
+import hmac
 import logging
 import sys
 from datetime import date, datetime, timedelta
@@ -40,8 +41,10 @@ logging.basicConfig(
     ],
 )
 
+from urllib.parse import urlparse
+
 import yaml
-from flask import Flask, Response, redirect, render_template, request, url_for, jsonify
+from flask import Flask, Response, abort, redirect, render_template, request, url_for, jsonify
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
@@ -78,11 +81,33 @@ def requer_auth(f):
                 "e painel_agentes.senha no config.yaml antes de subir.", 500,
             )
         auth = request.authorization
-        if not auth or auth.username != usuario_esperado or auth.password != senha_esperada:
+        if not auth or not (
+            hmac.compare_digest(auth.username, usuario_esperado)
+            and hmac.compare_digest(auth.password, senha_esperada)
+        ):
             return Response(
                 "Autenticação necessária", 401,
                 {"WWW-Authenticate": 'Basic realm="Painel de Agentes"'},
             )
+        return f(*args, **kwargs)
+    return decorado
+
+
+def exige_mesma_origem(f):
+    """
+    Bloqueia POSTs cuja Origin/Referer não seja deste próprio host --
+    proteção contra CSRF (achado da auditoria de 09/08: as rotas que
+    disparam/derrubam agentes só tinham Basic Auth, que o navegador
+    reanexa automaticamente a qualquer POST same-origin, inclusive um
+    form auto-submit hospedado em outro site). Aplicado só nas rotas
+    POST de ação -- não muda em nada o uso normal via navegador, que
+    sempre manda Origin/Referer em um submit de formulário.
+    """
+    @wraps(f)
+    def decorado(*args, **kwargs):
+        origem = request.headers.get("Origin") or request.headers.get("Referer")
+        if not origem or urlparse(origem).netloc != request.host:
+            abort(403, "Origem da requisição não confere (proteção CSRF).")
         return f(*args, **kwargs)
     return decorado
 
@@ -109,6 +134,7 @@ def index():
 
 @app.route("/rodar/<agente_id>", methods=["POST"])
 @requer_auth
+@exige_mesma_origem
 def rodar(agente_id):
     agente = buscar_agente(agente_id)
     if not agente:
@@ -147,6 +173,7 @@ def execucao_status(execucao_id):
 
 @app.route("/encerrar-tudo", methods=["POST"])
 @requer_auth
+@exige_mesma_origem
 def encerrar_tudo():
     quantidade = encerrar_todas_execucoes()
     return redirect(url_for("index", encerrado=quantidade))

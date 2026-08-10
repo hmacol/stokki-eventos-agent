@@ -22,16 +22,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Cache em memória por execução, por caminho de credenciais -- sem isso,
+# enviar_documento() recriava o client (recarregando o JSON da service
+# account e reautenticando) a cada documento do lote, em vez de uma vez
+# só por execução.
+_clientes_gcs: dict[str, object] = {}
+
 
 def _cliente_gcs(config: dict):
-    """Cria o cliente do GCS a partir das credenciais no config.yaml.
-    Import do google-cloud-storage fica AQUI DENTRO (não no topo do
-    arquivo) -- assim o resto do módulo (e o resto do projeto que
-    importa esse arquivo) não quebra se a biblioteca ainda não tiver
-    sido instalada, só essa função específica."""
-    from google.cloud import storage as gcs_sdk
-    from google.oauth2 import service_account
-
+    """Cria (ou reaproveita, dentro da mesma execução) o cliente do GCS
+    a partir das credenciais no config.yaml. Import do google-cloud-storage
+    fica AQUI DENTRO (não no topo do arquivo) -- assim o resto do módulo
+    (e o resto do projeto que importa esse arquivo) não quebra se a
+    biblioteca ainda não tiver sido instalada, só essa função específica."""
     cfg_gcs = config.get("gcs", {})
     caminho_credenciais = cfg_gcs.get("credenciais_json", "")
     if not caminho_credenciais or not Path(caminho_credenciais).exists():
@@ -40,8 +43,16 @@ def _cliente_gcs(config: dict):
             f"confira gcs.credenciais_json no config.yaml. Ver SETUP_GCS.md."
         )
 
+    if caminho_credenciais in _clientes_gcs:
+        return _clientes_gcs[caminho_credenciais]
+
+    from google.cloud import storage as gcs_sdk
+    from google.oauth2 import service_account
+
     credenciais = service_account.Credentials.from_service_account_file(caminho_credenciais)
-    return gcs_sdk.Client(credentials=credenciais, project=credenciais.project_id)
+    cliente = gcs_sdk.Client(credentials=credenciais, project=credenciais.project_id)
+    _clientes_gcs[caminho_credenciais] = cliente
+    return cliente
 
 
 def montar_caminho_gcs(codigo_pedido: str, tipo_documento: str, nome_arquivo: str) -> str:

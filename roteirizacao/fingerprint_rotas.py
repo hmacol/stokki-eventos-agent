@@ -32,17 +32,6 @@ def _conectar():
     return conn
 
 
-def ja_alocado(service_id: int) -> bool:
-    """True se este pedido já foi adicionado a uma rota antes (pelo
-    criar_rotas_diarias.py ou incrementar_rotas.py)."""
-    conn = _conectar()
-    row = conn.execute(
-        "SELECT 1 FROM pedidos_roteirizados WHERE service_id = ?", (service_id,)
-    ).fetchone()
-    conn.close()
-    return row is not None
-
-
 def marcar_alocado(service_id: int, route_id: int):
     """Registra que este pedido foi adicionado à rota `route_id`."""
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

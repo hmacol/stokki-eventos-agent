@@ -41,21 +41,14 @@ from pipeline import (
     _buscar_dados_embarcador_banco,
 )
 from fingerprint_importacao import DB_PATH as FP_DB_PATH
+from regras.embarcadores import embarcador_prioritario
 from regras.transportadoras import CatalogoTransportadoras
 
 
 def _embarcador_prioritario(linha) -> bool:
-    """True se a linha pertence a um embarcador prioritario."""
-    import unicodedata
-    def norm(s):
-        s = re.sub(r"<[^>]+>", "", s).upper().strip()
-        s = unicodedata.normalize("NFKD", s)
-        return "".join(c for c in s if not unicodedata.combining(c))
-    nome = norm(str(linha.get("client", "") if isinstance(linha, dict) else ""))
-    return any(
-        norm(n) in nome or nome in norm(n)
-        for n in EMBARCADORES_IMPORTAR_ABERTOS.values()
-    )
+    """True se a linha pertence a um embarcador prioritario.
+    Ver regras/embarcadores.py -- compartilhado com pipeline.py."""
+    return embarcador_prioritario(linha, EMBARCADORES_IMPORTAR_ABERTOS)
 
 
 def _codigos_ja_importados() -> set:
@@ -107,6 +100,24 @@ def _extrair_campos(linha) -> dict:
 
 def coletar_pedidos(sess, filtro_cliente=""):
     todos: dict[int, dict] = {}  # id_stokki -> dados
+
+    if filtro_cliente and filtro_cliente not in EMBARCADORES_IMPORTAR_ABERTOS:
+        # Embarcador especifico fora dos dois prioritarios -- busca direto
+        # por esse cliente em todos os status abertos (mesmo caminho usado
+        # por pipeline.py pra filtro_embarcador arbitrario). Sem isso, o
+        # loop da Fonte 1 abaixo nunca bate no id e a Fonte 2 e pulada por
+        # filtro_cliente estar preenchido -- resultado sempre vazio.
+        for status in STATUSES_EM_ABERTO:
+            for linha in stokki_pedidos.iterar_todos_pedidos(
+                sess, status=status, cliente=filtro_cliente, pausa_entre_paginas=0.2
+            ):
+                campos = _extrair_campos(linha)
+                id_ = campos.get("id_stokki")
+                if id_ and id_ not in todos:
+                    campos["fonte"] = "Embarcador filtrado"
+                    todos[id_] = campos
+        logger.info(f"Total coletado: {len(todos)} pedido(s)")
+        return todos
 
     # Fonte 1: Embarcadores prioritarios
     for id_emb, nome_emb in EMBARCADORES_IMPORTAR_ABERTOS.items():

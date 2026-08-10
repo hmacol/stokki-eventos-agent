@@ -23,6 +23,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def sanitizar_cabecalho(texto) -> str:
+    """Remove CR/LF de um valor antes de usá-lo em cabeçalho de e-mail
+    (Subject/From/To). Sem isso, um dado externo (nome de cliente,
+    título de pedido, etc.) contendo \\r\\n poderia injetar cabeçalhos
+    extras na mensagem enviada."""
+    if texto is None:
+        return ""
+    return str(texto).replace("\r", " ").replace("\n", " ")
+
+
 _RAIZ = Path(__file__).parent
 LOGO_PATH = _RAIZ / "assets" / "logo_freshlog.png"
 
@@ -84,7 +95,7 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
     """
     try:
         msg = MIMEMultipart("related")
-        msg["Subject"] = assunto
+        msg["Subject"] = sanitizar_cabecalho(assunto)
         msg["From"]    = config_email.get("remetente", "hugo@freshlogbr.com")
         msg["To"]      = ", ".join(destinatarios)
 

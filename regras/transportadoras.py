@@ -107,11 +107,13 @@ class CatalogoTransportadoras:
         self._indice: dict[str, list[_Entrada]] = {}
         for e in entradas:
             self._indice.setdefault(e.nome_normalizado, []).append(e)
-        # Índice por CNPJ → _Entrada (pega a primeira entrada com esse CNPJ)
-        self._indice_cnpj: dict[str, _Entrada] = {}
+        # Índice por CNPJ → lista de _Entrada (mesmo padrão do índice por
+        # nome -- permite detectar conflito em vez de pegar a primeira
+        # entrada em silêncio, contradizendo o proprio design do modulo).
+        self._indice_cnpj: dict[str, list[_Entrada]] = {}
         for e in entradas:
-            if e.cnpj and e.cnpj not in self._indice_cnpj:
-                self._indice_cnpj[e.cnpj] = e
+            if e.cnpj:
+                self._indice_cnpj.setdefault(e.cnpj, []).append(e)
 
         conflitos = {k: v for k, v in self._indice.items() if len({e.tipo for e in v}) > 1}
         if conflitos:
@@ -149,8 +151,20 @@ class CatalogoTransportadoras:
             cnpj = ""
             for idx in range(9, min(len(row), 20)):
                 val = row[idx]
-                if val and str(val).strip().isdigit() and len(str(val).strip()) >= 14:
-                    cnpj = str(val).strip()
+                if not val:
+                    continue
+                val_str = str(val).strip()
+                if not val_str.isdigit():
+                    continue
+                if len(val_str) == 13:
+                    # Excel guarda a celula como numero -> perde o zero a
+                    # esquerda de CNPJs que comecam com "0". CNPJ tem
+                    # sempre 14 digitos, entao 13 so pode significar isso
+                    # -- sem o zfill, esses CNPJs nunca entravam no indice
+                    # e caiam pra correspondencia por nome (mais fraca).
+                    val_str = val_str.zfill(14)
+                if len(val_str) >= 14:
+                    cnpj = val_str
                     break
 
             endereco = None
@@ -194,7 +208,23 @@ class CatalogoTransportadoras:
         """
         # Prioridade 1: CNPJ
         if cnpj and cnpj in self._indice_cnpj:
-            entrada = self._indice_cnpj[cnpj]
+            candidatos_cnpj = self._indice_cnpj[cnpj]
+            tipos_cnpj = {e.tipo for e in candidatos_cnpj}
+            if len(tipos_cnpj) > 1:
+                entradas_detalhes = "; ".join(
+                    f"{e.nome_original!r}→{e.tipo}" for e in candidatos_cnpj
+                )
+                return ResultadoResolucao(
+                    tipo=None,
+                    nome_original=nome_transportadora,
+                    nome_normalizado=_normalizar(nome_transportadora),
+                    conflito=True,
+                    motivo=(
+                        f"CNPJ {cnpj!r} tem tipos conflitantes em BD_TRANSPORTADORAS.xlsx: "
+                        f"[{entradas_detalhes}]. Remover as entradas duplicadas/erradas da planilha."
+                    ),
+                )
+            entrada = candidatos_cnpj[0]
             return ResultadoResolucao(
                 tipo=entrada.tipo,
                 nome_original=nome_transportadora or entrada.nome_original,

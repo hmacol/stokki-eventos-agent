@@ -11,9 +11,14 @@ Assíncrono: cria com status "waiting", processa em alguns segundos —
 usar consultar_otimizacao() em polling até sair de waiting/processing.
 """
 import logging
+import sys
 import time
+from pathlib import Path
 
 import requests
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from http_retry import chamar_com_retry
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +63,8 @@ def criar_otimizacao(token: str, base_lat: float, base_lng: float,
         "activities": [{"service_id": str(sid)} for sid in service_ids],
     }
 
-    resp = requests.post(
+    resp = chamar_com_retry(
+        requests.post,
         f"{API_BASE}/route-optimization",
         json=payload,
         headers={
@@ -75,7 +81,8 @@ def criar_otimizacao(token: str, base_lat: float, base_lng: float,
 def consultar_otimizacao(token: str, otimizacao_id: int) -> dict:
     """GET /route-optimization/{id} -- status e, quando processado, a
     solução (rotas montadas + serviços não atribuídos)."""
-    resp = requests.get(
+    resp = chamar_com_retry(
+        requests.get,
         f"{API_BASE}/route-optimization/{otimizacao_id}",
         headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
         timeout=30,
@@ -91,13 +98,14 @@ def aguardar_conclusao(token: str, otimizacao_id: int,
     processing, ou até esgotar as tentativas (retorna o último estado
     conhecido nesse caso — quem chama decide como tratar um timeout).
     """
+    dados = consultar_otimizacao(token, otimizacao_id)
     for tentativa in range(tentativas):
-        time.sleep(intervalo_seg)
-        dados = consultar_otimizacao(token, otimizacao_id)
         status = dados.get("status")
         logger.info(f"  Otimização {otimizacao_id}: tentativa {tentativa + 1}, status={status}")
         if status not in STATUS_EM_ANDAMENTO:
             return dados
+        time.sleep(intervalo_seg)
+        dados = consultar_otimizacao(token, otimizacao_id)
     logger.warning(f"Otimização {otimizacao_id} não concluiu após {tentativas} tentativas "
                    f"({tentativas * intervalo_seg}s) — status ainda '{dados.get('status')}'.")
     return dados
@@ -163,8 +171,8 @@ def buscar_veiculo_por_code(token: str, code: str) -> dict | None:
     headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
     page = 1
     while True:
-        resp = requests.get(f"{API_BASE}/vehicles", headers=headers,
-                           params={"per_page": 100, "page": page}, timeout=15)
+        resp = chamar_com_retry(requests.get, f"{API_BASE}/vehicles", headers=headers,
+                                params={"per_page": 100, "page": page}, timeout=15)
         resp.raise_for_status()
         corpo = resp.json()
         for v in corpo.get("data", []):

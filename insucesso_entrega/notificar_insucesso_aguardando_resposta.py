@@ -20,6 +20,7 @@ identidade visual Freshlog) em vez de montar o HTML na mão -- estava
 com cor de destaque errada (roxo, não a #00C896 padrão) e o logo
 embutido de um jeito ligeiramente diferente do resto do projeto.
 """
+import html
 import logging
 import re
 import sys
@@ -77,19 +78,19 @@ def _montar_conteudo(nome_remetente: str, pergunta: str, motivo_texto: str, pedi
     cores, rodapé) vem de email_utils.envelope_html()."""
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{p.get('code','')}</td>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{(p.get('title') or '')[:60]}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
     return f"""
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_PRIMARIA};letter-spacing:0.5px;">
-  INSUCESSO NA ENTREGA — {motivo_texto.upper()}
+  INSUCESSO NA ENTREGA — {html.escape(motivo_texto.upper())}
 </p>
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
   Precisamos de uma resposta
 </p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
-  Olá, {nome_remetente}.<br>{pergunta}
+  Olá, {html.escape(nome_remetente or '')}.<br>{pergunta}
 </p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
       style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">

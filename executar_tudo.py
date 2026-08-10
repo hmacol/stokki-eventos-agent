@@ -74,13 +74,13 @@ def main(modo_teste: bool = False,
     logger.info("=" * 60)
 
     resumo_etapas = {}
+    config = _carregar_config()  # carregada uma vez -- não muda durante a execução
 
     # ── Etapa 1: Leitura de respostas de agendamento (IMAP) ───────────────────
     if not sem_agendamento:
         logger.info("\n>>> ETAPA 1: Leitura de respostas de confirmacao de agendamento")
         logger.info("-" * 60)
         try:
-            config = _carregar_config()
             resultado_agendamento = processar_respostas_agendamento(config)
             logger.info(
                 f"Respostas: {resultado_agendamento['processados']} processada(s), "
@@ -107,7 +107,6 @@ def main(modo_teste: bool = False,
         logger.info("\n>>> ETAPA 1b: Leitura de respostas de insucesso na entrega")
         logger.info("-" * 60)
         try:
-            config = _carregar_config()
             resultado_insucesso = processar_respostas_insucesso(config)
             logger.info(
                 f"Respostas: {resultado_insucesso['processados']} processada(s), "
@@ -135,7 +134,6 @@ def main(modo_teste: bool = False,
         logger.info("\n>>> ETAPA 2: Estacao de Impressao (Em espera -> Aguardando Transportador)")
         logger.info("-" * 60)
         try:
-            config = _carregar_config()
             resultado_impressao = imprimir_pedidos_pendentes(config, dry_run=modo_teste)
             if modo_teste:
                 logger.info(
@@ -204,7 +202,6 @@ def main(modo_teste: bool = False,
     logger.info("=" * 60)
 
     try:
-        config = _carregar_config()
         notificar_execucao(resumo_etapas, elapsed, modo_teste, config)
     except Exception as e:
         logger.warning(f"Falha ao notificar execução por e-mail (não afeta o resultado): {e}")

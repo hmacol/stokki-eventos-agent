@@ -164,6 +164,13 @@ def main():
                 metodo = request.method
                 url = response.url
 
+                if "login" in url.lower():
+                    # Nunca captura o request/response do próprio login —
+                    # o corpo da requisição de login carrega a senha em
+                    # texto puro (page.fill("[name='password']", senha)),
+                    # e não é dado relevante para a investigação de APIs.
+                    return
+
                 # Lê o corpo ANTES de decidir se guarda — para HTML,
                 # precisamos saber o tamanho antes de aplicar o filtro de
                 # tamanho mínimo (descarta fragmentos HTML pequenos e

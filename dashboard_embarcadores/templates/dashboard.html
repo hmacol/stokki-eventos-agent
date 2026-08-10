@@ -311,8 +311,14 @@
       const dado = await resp.json();
       const corpo = document.getElementById('corpoTabelaDestinatarios');
       corpo.innerHTML = dado.map(d =>
-        `<tr><td>${d.nome}</td><td style="text-align:right;font-weight:700;">${d.pedidos}</td></tr>`
+        `<tr><td>${escaparHtml(d.nome)}</td><td style="text-align:right;font-weight:700;">${escaparHtml(d.pedidos)}</td></tr>`
       ).join('') || '<tr><td colspan="2" style="text-align:center;color:#6B7280;">Nenhum pedido no período.</td></tr>';
+    }
+
+    function escaparHtml(texto) {
+      const div = document.createElement('div');
+      div.textContent = texto == null ? '' : String(texto);
+      return div.innerHTML;
     }
     document.getElementById('filtroAnoDestinatarios').addEventListener('change', atualizarTabelaDestinatarios);
     document.getElementById('filtroMesDestinatarios').addEventListener('change', atualizarTabelaDestinatarios);

@@ -39,6 +39,7 @@ COMO USAR (só teste local rápido, sem waitress):
     (abre em http://localhost:8060 -- vai pedir usuário/senha)
 """
 import functools
+import hmac
 import json
 import logging
 import sys
@@ -98,7 +99,10 @@ def requer_login(func):
     @functools.wraps(func)
     def decorada(*args, **kwargs):
         auth = request.authorization
-        if not auth or auth.username != _CREDENCIAIS["usuario"] or auth.password != _CREDENCIAIS["senha"]:
+        if not auth or not (
+            hmac.compare_digest(auth.username, _CREDENCIAIS["usuario"])
+            and hmac.compare_digest(auth.password, _CREDENCIAIS["senha"])
+        ):
             return Response(
                 "Acesso restrito — informe usuário e senha.", 401,
                 {"WWW-Authenticate": 'Basic realm="Dashboard Freshlog"'},

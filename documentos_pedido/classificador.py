@@ -63,14 +63,25 @@ def classificar_documento(caminho_pdf: Path) -> dict:
     nome_normalizado = caminho_pdf.name.lower()
     texto = _texto_do_pdf(caminho_pdf).lower()
 
-    for tipo_nome, padroes_nome, padroes_texto in TIPOS_DOCUMENTO:
-        bate_nome = any(re.search(p, nome_normalizado) for p in padroes_nome)
-        bate_texto = any(re.search(p, texto) for p in padroes_texto) if texto else False
+    sinais = [
+        (tipo_nome,
+         any(re.search(p, nome_normalizado) for p in padroes_nome),
+         any(re.search(p, texto) for p in padroes_texto) if texto else False)
+        for tipo_nome, padroes_nome, padroes_texto in TIPOS_DOCUMENTO
+    ]
 
+    # Nome do arquivo é o sinal mais confiável (ver docstring) -- varre
+    # TODOS os tipos por nome (respeitando a ordem específico->genérico
+    # de TIPOS_DOCUMENTO) antes de cair pro texto. Sem isso, um tipo
+    # mais genérico da lista podia vencer só por bater no texto antes
+    # de um tipo mais específico, com nome inequívoco, ser considerado.
+    for tipo_nome, bate_nome, bate_texto in sinais:
         if bate_nome and bate_texto:
             return {"tipo": tipo_nome, "confianca": "alta", "sinal": "nome_arquivo+texto_pdf"}
+    for tipo_nome, bate_nome, _ in sinais:
         if bate_nome:
             return {"tipo": tipo_nome, "confianca": "media", "sinal": "nome_arquivo"}
+    for tipo_nome, _, bate_texto in sinais:
         if bate_texto:
             return {"tipo": tipo_nome, "confianca": "media", "sinal": "texto_pdf"}
 

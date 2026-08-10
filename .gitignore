@@ -12,6 +12,9 @@ __pycache__/
 *.pyc
 py
 
+# Config local de ferramentas (específico da máquina/usuário)
+.claude/
+
 # Dados, logs e saídas geradas em runtime
 dados/
 debug/

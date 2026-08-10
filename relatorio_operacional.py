@@ -115,7 +115,7 @@ def _carregar_mapa_embarcadores() -> dict:
 def _filtro_periodo(data_inicio, data_fim_exclusiva):
     return [
         {"field": "scheduled_start", "operator": "gte", "value": data_inicio.strftime("%Y-%m-%d")},
-        {"field": "scheduled_start", "operator": "lte", "value": data_fim_exclusiva.strftime("%Y-%m-%d")},
+        {"field": "scheduled_start", "operator": "lt", "value": data_fim_exclusiva.strftime("%Y-%m-%d")},
     ]
 
 

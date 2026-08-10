@@ -18,6 +18,7 @@ Execute:
   py -3.11 expedir_pedidos.py --modo-teste
 """
 import argparse
+import html
 import logging
 import re
 import smtplib
@@ -255,9 +256,9 @@ def notificar_validacao_pendente(pendentes: list, config_email: dict, modo_teste
         linhas += (
             f"<tr>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-weight:600;"
-            f"font-size:13px;color:#1F2937;'>{s.get('code','')}</td>"
+            f"font-size:13px;color:#1F2937;'>{html.escape(s.get('code','') or '')}</td>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
-            f"color:#6B7280;'>{filled}</td>"
+            f"color:#6B7280;'>{html.escape(filled)}</td>"
             f"</tr>"
         )
 
@@ -280,7 +281,7 @@ abra cada pedido e clique em <strong>Validar Canhoto</strong>.</p></div>
 Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
 </div></body></html>"""
 
-    assunto = f"[Freshlog] {len(pendentes)} canhoto(s) aguardando validacao no VUUPT"
+    assunto = f"[Freshlog] {len(pendentes)} canhoto(s) aguardando validacao no VUUPT".replace("\r", " ").replace("\n", " ")
     destino = "hugo@freshlogbr.com" if modo_teste else responsavel
 
     try:
@@ -393,13 +394,13 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
         linhas += (
             f"<tr>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-weight:600;"
-            f"font-size:13px;color:#1F2937;'>{s.get('code','')}</td>"
+            f"font-size:13px;color:#1F2937;'>{html.escape(s.get('code','') or '')}</td>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
-            f"color:#6B7280;'>{s.get('title','')}</td>"
+            f"color:#6B7280;'>{html.escape(s.get('title','') or '')}</td>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
-            f"color:#6B7280;'>{completed}</td>"
+            f"color:#6B7280;'>{html.escape(completed)}</td>"
             f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
-            f"color:{COR_ERRO};'>{motivo}</td>"
+            f"color:{COR_ERRO};'>{html.escape(motivo or '')}</td>"
             f"</tr>"
         )
 
@@ -424,7 +425,7 @@ insucesso e decidir o próximo passo (nova tentativa, redespacho, cancelamento e
 Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
 </div></body></html>"""
 
-    assunto = f"[Freshlog] {len(insucessos)} pedido(s) com insucesso na entrega"
+    assunto = f"[Freshlog] {len(insucessos)} pedido(s) com insucesso na entrega".replace("\r", " ").replace("\n", " ")
     destino = "hugo@freshlogbr.com" if modo_teste else responsavel
 
     try:
@@ -533,28 +534,37 @@ def _setup_playwright(config: dict):
     usuario, senha = _credenciais_provider(config)
     pw      = sync_playwright().start()
     browser = pw.chromium.launch(headless=True)
-    ctx     = browser.new_context()
-    page    = ctx.new_page()
+    try:
+        ctx  = browser.new_context()
+        page = ctx.new_page()
 
-    # Login direto pelo /pt-br/login (pagina de login do provider)
-    logger.info(f"Login provider com usuario: {usuario!r}")
-    page.goto(f"{STOKKI_BASE}/pt-br/login", wait_until="domcontentloaded", timeout=30_000)
-    page.wait_for_selector("[name=\'email\']", timeout=15_000)
-    page.fill("[name=\'email\']", usuario)
-    page.fill("[name=\'password\']", senha)
-    page.click("button[type=\'submit\']")
-    page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
-    page.wait_for_timeout(1000)
-    logger.info(f"Login OK. URL: {page.url}")
+        # Login direto pelo /pt-br/login (pagina de login do provider)
+        logger.info(f"Login provider com usuario: {usuario!r}")
+        page.goto(f"{STOKKI_BASE}/pt-br/login", wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_selector("[name=\'email\']", timeout=15_000)
+        page.fill("[name=\'email\']", usuario)
+        page.fill("[name=\'password\']", senha)
+        page.click("button[type=\'submit\']")
+        page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+        page.wait_for_timeout(1000)
+        logger.info(f"Login OK. URL: {page.url}")
 
-    # Navega para a estacao de expedicao
-    page.goto(
-        f"{STOKKI_BASE}/pt-br/provider/operation/shipping",
-        wait_until="domcontentloaded",
-        timeout=20_000,
-    )
-    page.wait_for_timeout(1000)
-    logger.info(f"Estacao de expedicao. URL: {page.url}")
+        # Navega para a estacao de expedicao
+        page.goto(
+            f"{STOKKI_BASE}/pt-br/provider/operation/shipping",
+            wait_until="domcontentloaded",
+            timeout=20_000,
+        )
+        page.wait_for_timeout(1000)
+        logger.info(f"Estacao de expedicao. URL: {page.url}")
+    except Exception:
+        # Se o login falhar (seletor mudou, timeout, credencial invalida),
+        # fecha o que ja foi aberto antes de propagar -- sem isso, o
+        # browser/processo Playwright ficava orfao, ja que o try/finally
+        # de quem chama so comeca a proteger DEPOIS que esta funcao retorna.
+        browser.close()
+        pw.stop()
+        raise
 
     return pw, browser, page
 
@@ -585,20 +595,6 @@ def _canhoto_ja_anexado(page, codigo_ps: str) -> bool:
     except Exception as e:
         logger.debug(f"  Verificacao de canhoto existente falhou: {e}")
         return False  # em caso de duvida, tenta anexar
-    """Sessao separada do administrador para anexar documentos."""
-    from playwright.sync_api import sync_playwright
-    usuario = config.get("stokki", {}).get("usuario", "")
-    senha   = config.get("stokki", {}).get("senha", "")
-    pw      = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True)
-    ctx     = browser.new_context()
-    page    = ctx.new_page()
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=30_000)
-    page.fill("[name=\'email\']", usuario)
-    page.fill("[name=\'password\']", senha)
-    page.click("button[type=\'submit\']")
-    page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
-    return pw, browser, page
 
 
 def anexar_canhoto(page, codigo_ps: str, pdf_path: Path) -> bool:

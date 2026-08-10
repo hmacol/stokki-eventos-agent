@@ -36,6 +36,7 @@ _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 (_RAIZ / "dados").mkdir(parents=True, exist_ok=True)
 
+from regras.embarcadores import embarcador_prioritario, resolver_stkkc_id_por_nome
 from regras.endereco import resolver_endereco_entrega
 from regras.transportadoras import CatalogoTransportadoras
 from stokki.auth import StokkiSession
@@ -138,28 +139,11 @@ def _buscar_dados_embarcador_banco(stkkc_id: int) -> dict:
 
 
 def _embarcador_prioritario(linha) -> bool:
-    """
-    True se a linha pertence a um embarcador prioritario (todos os status).
+    """True se a linha pertence a um embarcador prioritario (todos os status).
     Aceita tanto o dict da linha do aaData quanto o nome do cliente ja
-    extraido como string.
-    """
-    import unicodedata
-    def norm(s):
-        s = re.sub(r"<[^>]+>", "", s).upper().strip()
-        s = unicodedata.normalize("NFKD", s)
-        return "".join(c for c in s if not unicodedata.combining(c))
-    if isinstance(linha, dict):
-        nome = norm(str(linha.get("client", "")))
-    else:
-        nome = norm(str(linha or ""))
-    if not nome:
-        # Nome vazio nunca e prioritario — sem isso, "" in <qualquer nome>
-        # dava True e descartava TODOS os pedidos da Fonte 2.
-        return False
-    return any(
-        norm(n) in nome or nome in norm(n)
-        for n in EMBARCADORES_IMPORTAR_ABERTOS.values()
-    )
+    extraido como string. Ver regras/embarcadores.py -- compartilhado
+    com inventario.py."""
+    return embarcador_prioritario(linha, EMBARCADORES_IMPORTAR_ABERTOS)
 
 
 def _carregar_config() -> dict:
@@ -706,33 +690,15 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             filtro_cliente_api = filtro_embarcador
             logger.info(f"Filtro de embarcador: stkkc_id={filtro_stkkc_id}")
         else:
-            # Busca por nome no banco
-            if DB_PATH.exists():
-                import unicodedata as _ud
-                def _norm(s):
-                    s = s.upper()
-                    s = _ud.normalize("NFKD", s)
-                    return "".join(c for c in s if not _ud.combining(c))
-                conn = sqlite3.connect(DB_PATH)
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    "SELECT stkkc_id, nome_remetente, apelido FROM interno WHERE stkkc_id IS NOT NULL"
-                ).fetchall()
-                conn.close()
-                busca = _norm(filtro_embarcador)
-                match = next(
-                    (r for r in rows if busca in _norm(r["nome_remetente"] or "") or
-                     busca in _norm(r["apelido"] or "")), None
-                )
-                if match:
-                    filtro_stkkc_id = match["stkkc_id"]
-                    filtro_cliente_api = str(match["stkkc_id"])
-                    logger.info(
-                        f"Filtro de embarcador: '{filtro_embarcador}' -> "
-                        f"stkkc_id={filtro_stkkc_id} ({match['nome_remetente']})"
-                    )
-                else:
-                    raise SystemExit(f"Embarcador '{filtro_embarcador}' não encontrado no banco.")
+            # Busca por nome no banco (regras/embarcadores.py -- compartilhado
+            # com inventario.py)
+            stkkc_id_encontrado = resolver_stkkc_id_por_nome(filtro_embarcador, DB_PATH)
+            if stkkc_id_encontrado is not None:
+                filtro_stkkc_id = stkkc_id_encontrado
+                filtro_cliente_api = str(stkkc_id_encontrado)
+                logger.info(f"Filtro de embarcador: '{filtro_embarcador}' -> stkkc_id={filtro_stkkc_id}")
+            else:
+                raise SystemExit(f"Embarcador '{filtro_embarcador}' não encontrado no banco.")
 
     # Inicia sessoes
     sess_stokki = StokkiSession(config)

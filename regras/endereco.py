@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 FonteEndereco = Literal["mensagem_llm", "local_entrega", "redespacho", "destino"]
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
 
 UFS_VALIDAS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT",
@@ -192,6 +192,20 @@ def resolver_endereco_entrega(
             transp_alternativa = resultado_llm.get("transportadora_alternativa")
             end_llm = resultado_llm.get("endereco")
 
+            # Resolve a transportadora alternativa (se houver) ANTES de
+            # validar o endereço -- se ela for TERCEIROS com endereço de
+            # redespacho conhecido no catálogo, esse endereço confiável
+            # substitui o texto livre extraído pelo LLM. Sem essa ordem,
+            # uma transportadora alternativa válida ("manda pela Kanejo,
+            # perto do metrô") era descartada inteira só porque o texto
+            # livre do endereço ("perto do metrô") não passava na
+            # validação -- mesmo o catálogo tendo o endereço correto.
+            transp_resolvida = resultado_transp
+            if transp_alternativa:
+                transp_resolvida = catalogo.resolver(transp_alternativa)
+                if transp_resolvida.tipo == "TERCEIROS" and transp_resolvida.endereco_redespacho:
+                    end_llm = _redespacho_para_dict(transp_resolvida.endereco_redespacho)
+
             # Valida estruturalmente ANTES de aceitar (ver
             # _validar_endereco_plausivel) — sem isso, mensagem confusa
             # podia virar endereço de entrega com dado essencialmente
@@ -213,13 +227,6 @@ def resolver_endereco_entrega(
                     )
 
             if not endereco_invalido:
-                # Se LLM encontrou transportadora alternativa, resolve ela também
-                transp_resolvida = resultado_transp
-                if transp_alternativa:
-                    transp_resolvida = catalogo.resolver(transp_alternativa)
-                    if transp_resolvida.tipo == "TERCEIROS" and transp_resolvida.endereco_redespacho:
-                        end_llm = _redespacho_para_dict(transp_resolvida.endereco_redespacho)
-
                 endereco_final = end_llm or _bloco_para_dict(destino)
                 horario_entrega = resultado_llm.get("horario_entrega")
                 observacao = resultado_llm.get("observacao", "")

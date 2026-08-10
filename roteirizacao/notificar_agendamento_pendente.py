@@ -22,6 +22,7 @@ buscar_customer_por_id) para os pedidos que JÁ estão sem scheduled_start
 válido -- evita gastar uma chamada de API por pedido pra quem já tem
 agendamento em dia.
 """
+import html
 import logging
 import re
 import sqlite3
@@ -111,8 +112,8 @@ def _carregar_embarcadores_por_sender_id() -> dict:
 def _montar_conteudo(nome_remetente: str, pedidos: list[dict]) -> str:
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{p.get('code','')}</td>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{p.get('title','')[:60]}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title','') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
     return f"""
@@ -121,7 +122,7 @@ def _montar_conteudo(nome_remetente: str, pedidos: list[dict]) -> str:
   Confirmação de agendamento pendente
 </p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
-  Olá, {nome_remetente}.<br>
+  Olá, {html.escape(nome_remetente or '')}.<br>
   Os pedidos abaixo têm destinatários que exigem agendamento de entrega, mas ainda não há uma
   data e horário confirmados (ou o agendamento já está vencido). Solicitamos o envio da data e
   do horário de agendamento com a maior brevidade possível, para evitar atrasos na entrega.

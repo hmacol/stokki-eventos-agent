@@ -28,7 +28,6 @@ import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta
-from email.header import decode_header
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent  # sobe de insucesso_entrega/ pra raiz do projeto
@@ -37,6 +36,13 @@ sys.path.insert(0, str(_RAIZ))
 import requests
 import yaml
 
+from email_leitura_utils import (
+    fetch_em_lote as _fetch_em_lote,
+    remover_acentos as _remover_acentos,
+    decodificar_header as _decodificar_header,
+    remover_texto_citado as _remover_texto_citado,
+    extrair_texto_corpo as _extrair_texto_corpo,
+)
 from vuupt_client import VuuptClient
 from motivos_falha import texto_do_motivo, pergunta_do_motivo
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo, marcar_respondido
@@ -71,76 +77,6 @@ def _marcar_email_processado(message_id: str, remetente_email: str):
     )
     conn.commit()
     conn.close()
-
-
-def _remover_acentos(texto: str) -> str:
-    substituicoes = str.maketrans(
-        "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ",
-        "aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN",
-    )
-    return texto.translate(substituicoes)
-
-
-def _decodificar_header(valor) -> str:
-    if not valor:
-        return ""
-    partes = decode_header(valor)
-    resultado = ""
-    for texto, encoding in partes:
-        if isinstance(texto, bytes):
-            enc = encoding or "utf-8"
-            try:
-                resultado += texto.decode(enc, errors="ignore")
-            except (LookupError, UnicodeDecodeError):
-                resultado += texto.decode("latin-1", errors="ignore")
-        else:
-            resultado += texto
-    return resultado
-
-
-def _remover_texto_citado(corpo: str) -> str:
-    padroes_corte = [
-        r"\nEm .{0,80}escreveu:",
-        r"\n_{5,}",
-        r"\nDe:\s.{0,80}\nEnviado:",
-        r"\n>{1,}",
-        r"\n-{2,}\s*Mensagem original",
-    ]
-    texto = corpo
-    for padrao in padroes_corte:
-        match = re.search(padrao, texto, re.IGNORECASE)
-        if match:
-            texto = texto[:match.start()]
-    return texto.strip()
-
-
-def _extrair_texto_corpo(msg) -> str:
-    if msg.is_multipart():
-        for parte in msg.walk():
-            if parte.get_content_type() == "text/plain":
-                try:
-                    return parte.get_payload(decode=True).decode(
-                        parte.get_content_charset() or "utf-8", errors="ignore"
-                    )
-                except Exception:
-                    continue
-        for parte in msg.walk():
-            if parte.get_content_type() == "text/html":
-                try:
-                    html = parte.get_payload(decode=True).decode(
-                        parte.get_content_charset() or "utf-8", errors="ignore"
-                    )
-                    return re.sub(r"<[^>]+>", " ", html)
-                except Exception:
-                    continue
-        return ""
-    else:
-        try:
-            return msg.get_payload(decode=True).decode(
-                msg.get_content_charset() or "utf-8", errors="ignore"
-            )
-        except Exception:
-            return str(msg.get_payload())
 
 
 def _extrair_grupo_do_corpo(corpo: str) -> tuple[int, int] | None:
@@ -257,23 +193,45 @@ def processar_respostas_insucesso(config: dict) -> dict:
         ids = dados[0].split()
         logger.info(f"E-mails encontrados nos últimos {dias_retroativos} dia(s): {len(ids)} (filtrando por assunto a seguir)")
 
+        # Fetch em lote (email_leitura_utils.py, compartilhado com
+        # ler_respostas_agendamento.py) em vez de 1 round-trip IMAP por
+        # e-mail -- primeiro só os cabeçalhos, pra filtrar por assunto
+        # e já-processado antes de baixar o corpo completo dos que sobram.
+        cabecalhos_por_id = _fetch_em_lote(mail, ids, "(BODY.PEEK[HEADER])")
+
+        ids_para_processar = []
         for msg_id in ids:
-            status_fetch, dados_msg = mail.fetch(msg_id, "(RFC822)")
-            if status_fetch != "OK" or not dados_msg or not dados_msg[0]:
-                continue
-            try:
-                msg = email.message_from_bytes(dados_msg[0][1])
-            except Exception:
+            msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+            entrada = cabecalhos_por_id.get(msg_id_str)
+            if not entrada:
                 continue
 
-            assunto = _decodificar_header(msg.get("Subject", ""))
+            msg_header = email.message_from_bytes(entrada[1])
+            assunto = _decodificar_header(msg_header.get("Subject", ""))
             assunto_normalizado = _remover_acentos(assunto.lower())
             if "aguardando retorno" not in assunto_normalizado:
                 continue
 
-            message_id = msg.get("Message-ID", "")
+            message_id = msg_header.get("Message-ID", "")
             if _ja_processado(message_id):
                 continue
+
+            ids_para_processar.append(msg_id)
+
+        corpos_por_id = _fetch_em_lote(mail, ids_para_processar, "(RFC822)") if ids_para_processar else {}
+
+        for msg_id in ids_para_processar:
+            msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+            entrada = corpos_por_id.get(msg_id_str)
+            if not entrada:
+                continue
+            try:
+                msg = email.message_from_bytes(entrada[1])
+            except Exception:
+                continue
+
+            assunto = _decodificar_header(msg.get("Subject", ""))
+            message_id = msg.get("Message-ID", "")
 
             remetente_raw = _decodificar_header(msg.get("From", ""))
             remetente_email_match = re.search(r"[\w\.\-+]+@[\w\.\-]+", remetente_raw)

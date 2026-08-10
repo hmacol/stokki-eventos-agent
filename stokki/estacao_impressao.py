@@ -52,31 +52,36 @@ def listar_pedidos_em_espera(config: dict) -> list:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        page    = context.new_page()
+        try:
+            context = browser.new_context()
+            page    = context.new_page()
 
-        # Navega para o provider antes do login para estabelecer sessao correta
-        page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_selector("[name='email']", timeout=15_000)
-        page.fill("[name='email']", usuario)
-        page.fill("[name='password']", senha)
-        page.click("button[type='submit']")
-        page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            # Navega para o provider antes do login para estabelecer sessao correta
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_selector("[name='email']", timeout=15_000)
+            page.fill("[name='email']", usuario)
+            page.fill("[name='password']", senha)
+            page.click("button[type='submit']")
+            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
 
-        # Captura a resposta JSON da estacao de impressao
-        resultado_json = {}
+            # Captura a resposta JSON da estacao de impressao
+            resultado_json = {}
 
-        def capturar(response):
-            if "printing/order" in response.url:
-                try:
-                    resultado_json["data"] = response.json()
-                except Exception:
-                    pass
+            def capturar(response):
+                if "printing/order" in response.url:
+                    try:
+                        resultado_json["data"] = response.json()
+                    except Exception:
+                        pass
 
-        page.on("response", capturar)
-        page.goto(URL_PRINTING, wait_until="networkidle", timeout=30_000)
-        page.wait_for_timeout(2000)
-        browser.close()
+            page.on("response", capturar)
+            page.goto(URL_PRINTING, wait_until="networkidle", timeout=30_000)
+            page.wait_for_timeout(2000)
+        finally:
+            # Garante que o Chromium headless sempre e fechado -- sem isso,
+            # uma falha de login (seletor mudou, timeout, etc.) deixava o
+            # processo orfao, acumulando a cada execucao agendada.
+            browser.close()
 
     html_tabela = resultado_json.get("data", {}).get("div_billing", "")
     if not html_tabela:
@@ -97,30 +102,32 @@ def buscar_pedido_por_nf(config: dict, numero_nf: str):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        page    = context.new_page()
+        try:
+            context = browser.new_context()
+            page    = context.new_page()
 
-        page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_selector("[name='email']", timeout=15_000)
-        page.fill("[name='email']", usuario)
-        page.fill("[name='password']", senha)
-        page.click("button[type='submit']")
-        page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_selector("[name='email']", timeout=15_000)
+            page.fill("[name='email']", usuario)
+            page.fill("[name='password']", senha)
+            page.click("button[type='submit']")
+            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
 
-        csrf = page.evaluate(
-            "() => document.querySelector('meta[name=csrf-token]')?.content || ''"
-        )
-        response = context.request.post(
-            URL_SEARCH,
-            form={"po": numero_nf},
-            headers={
-                "X-CSRF-Token": csrf,
-                "Referer": URL_PRINTING,
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        )
-        dados = response.json() if response.ok else {}
-        browser.close()
+            csrf = page.evaluate(
+                "() => document.querySelector('meta[name=csrf-token]')?.content || ''"
+            )
+            response = context.request.post(
+                URL_SEARCH,
+                form={"po": numero_nf},
+                headers={
+                    "X-CSRF-Token": csrf,
+                    "Referer": URL_PRINTING,
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            dados = response.json() if response.ok else {}
+        finally:
+            browser.close()
 
     if not dados.get("success"):
         logger.warning(f"Pedido {numero_nf!r} nao encontrado.")
@@ -359,6 +366,19 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                     ids_para_processar = [i for i in ids_para_processar if i not in ids_ignorados_config]
 
             for data_id in ids_para_processar:
+                if resultado["processados"] >= LIMITE_SEGURANCA_IMPRESSAO:
+                    # Freio de segurança verificado A CADA pedido, não só
+                    # depois que a fila inteira já foi percorrida -- sem
+                    # isso, uma fila de milhares de pedidos travados clicava
+                    # em todos antes do aviso, e o "limite" não limitava nada.
+                    logger.warning(
+                        f"ATENÇÃO: atingiu o limite de segurança de "
+                        f"{LIMITE_SEGURANCA_IMPRESSAO} pedido(s) processados nesta "
+                        f"execução -- parando aqui. Confira manualmente se sobrou "
+                        f"pedido na fila."
+                    )
+                    break
+
                 # Verificação defensiva (achado em produção, 06/08): se o
                 # popup do pedido ANTERIOR ficou preso aberto (fechamento
                 # falhou silenciosamente), ele bloqueia o clique de TODO
@@ -412,11 +432,6 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                     except Exception as e2:
                         logger.warning(f"  Não foi possível salvar screenshot: {e2}")
 
-            if resultado["processados"] >= LIMITE_SEGURANCA_IMPRESSAO:
-                logger.warning(
-                    "ATENÇÃO: atingiu o limite de segurança — confira manualmente "
-                    "se sobrou pedido na fila."
-                )
         finally:
             browser.close()
 

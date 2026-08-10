@@ -24,6 +24,7 @@ Fluxo (ver integração em pipeline.py):
      (rodada seguinte do pipeline, depois que ler_respostas_agendamento.py
      tiver processado a resposta).
 """
+import html
 import logging
 import sqlite3
 from datetime import datetime
@@ -163,7 +164,7 @@ def enviar_solicitacao(pedido: str, nome_dest: str, numero_nf: str,
       <tr>
         <td style="padding:14px 18px;background-color:{COR_PRIMARIA_CLARA};">
           <p style="margin:0 0 2px 0;font-size:11px;font-weight:600;color:{COR_PRIMARIA};text-transform:uppercase;letter-spacing:0.4px;">Cliente</p>
-          <p style="margin:0;font-size:16px;font-weight:600;color:{COR_TEXTO};">{nome_dest}</p>
+          <p style="margin:0;font-size:16px;font-weight:600;color:{COR_TEXTO};">{html.escape(nome_dest or '')}</p>
         </td>
       </tr>
       <tr>
@@ -171,11 +172,11 @@ def enviar_solicitacao(pedido: str, nome_dest: str, numero_nf: str,
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="font-size:12px;color:{COR_TEXTO_SUAVE};padding-right:16px;">Pedido</td>
-              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;">{pedido}</td>
+              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;">{html.escape(pedido or '')}</td>
             </tr>
             <tr>
               <td style="font-size:12px;color:{COR_TEXTO_SUAVE};padding-top:6px;">Nota Fiscal</td>
-              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;padding-top:6px;">{numero_nf or '—'}</td>
+              <td style="font-size:13px;color:{COR_TEXTO};font-weight:600;padding-top:6px;">{html.escape(numero_nf) if numero_nf else '—'}</td>
             </tr>
           </table>
         </td>

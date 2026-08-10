@@ -74,7 +74,23 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def main(modo_teste: bool = False):
+def main(modo_teste: bool = False, confirmar_uso_obsoleto: bool = False):
+    if not confirmar_uso_obsoleto:
+        # rotas_client.py (linhas 5-9) documenta, como achado confirmado em
+        # producao, que POST /route-optimization -- o unico endpoint que
+        # este script chama -- so calcula uma solucao e NUNCA materializa
+        # rotas reais: pedidos "roteirizados" por aqui continuam
+        # not_assigned no VUUPT. criar_rotas_diarias.py foi escrito
+        # especificamente para substituir este script, usando POST /routes
+        # de verdade. Roda-lo sem confirmacao explicita so queimaria
+        # geocodificacao + chamadas a API sem rotear nada.
+        raise SystemExit(
+            "roteirizar.py usa POST /route-optimization, que nao materializa rotas reais "
+            "(ver rotas_client.py:5-9) -- os pedidos continuam not_assigned no VUUPT. "
+            "Use roteirizacao/criar_rotas_diarias.py, que substitui este fluxo. "
+            "Se voce tem certeza que quer rodar mesmo assim, chame com --confirmo-uso-obsoleto."
+        )
+
     inicio = time.time()
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Roteirização iniciada.")
 
@@ -194,5 +210,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agente de roteirização automática")
     parser.add_argument("--modo-teste", action="store_true",
                         help="Mostra o que seria planejado, sem chamar a API de otimização")
+    parser.add_argument("--confirmo-uso-obsoleto", action="store_true",
+                        help="Confirma que sabe que este script usa um endpoint que nao materializa "
+                             "rotas reais (ver criar_rotas_diarias.py) e quer rodar mesmo assim")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste)
+    main(modo_teste=args.modo_teste, confirmar_uso_obsoleto=args.confirmo_uso_obsoleto)

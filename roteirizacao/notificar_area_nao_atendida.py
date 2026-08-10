@@ -19,6 +19,7 @@ Cada pedido só é notificado UMA VEZ (fingerprint_area_nao_atendida.py)
 -- não é um fluxo com resposta estruturada esperada, então não faz
 sentido reenviar todo dia.
 """
+import html
 import logging
 import re
 import sys
@@ -139,14 +140,14 @@ def _montar_conteudo(nome_remetente: str, tipo: str, pedidos: list[dict]) -> str
 
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{p.get('code','')}</td>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{extrair_cidade(p) or '-'} - {extrair_uf(p) or '-'}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(p.get('code','') or '')}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(extrair_cidade(p) or '-')} - {html.escape(extrair_uf(p) or '-')}</td>
     </tr>""" for p in pedidos)
 
     return f"""
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">{titulo}</p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
-  Olá, {nome_remetente}.<br>{texto}
+  Olá, {html.escape(nome_remetente or '')}.<br>{texto}
 </p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
       style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">

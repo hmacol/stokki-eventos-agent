@@ -140,6 +140,13 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7) -> list[dict]
                     if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
                         continue
                     nome_anexo = _decodificar_header(nome_anexo)
+                    # Usa só o nome-base do anexo (sem diretórios) -- o
+                    # nome vem do header Content-Disposition do e-mail,
+                    # que é controlado pelo remetente e pode conter
+                    # "../" para tentar escrever fora de PASTA_TEMP_ANEXOS.
+                    nome_anexo = Path(nome_anexo).name
+                    if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
+                        continue
                     conteudo = parte.get_payload(decode=True)
                     if not conteudo:
                         continue

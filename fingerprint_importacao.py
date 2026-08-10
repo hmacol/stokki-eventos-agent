@@ -42,8 +42,19 @@ def _calcular_hash(payload: dict) -> str:
 
 
 def _db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fingerprint_importacao_vuupt (
+            codigo         TEXT PRIMARY KEY,
+            hash_conteudo  TEXT,
+            hash_endereco  TEXT,
+            customer_id    INTEGER,
+            sender_id      INTEGER,
+            atualizado_em  TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
     return conn
 
 

@@ -15,16 +15,13 @@ Execute:
   py -3.11 notificar_pedidos_em_espera.py --modo-teste   (envia para hugo@freshlogbr.com)
 """
 import argparse
+import html
 import logging
 import re
-import smtplib
 import sqlite3
 import sys
 import time
 from collections import defaultdict
-from email.mime.image import MIMEImage
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
 import yaml
@@ -34,6 +31,7 @@ from notificar_execucao_agente import notificar_execucao
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
+from email_utils import enviar_email
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
@@ -48,7 +46,6 @@ logger = logging.getLogger("notificador")
 
 CONFIG_PATH  = _RAIZ / "config.yaml"
 DB_PATH      = _RAIZ / "dados" / "dados.db"
-LOGO_PATH    = _RAIZ / "assets" / "logo_freshlog.png"
 EMAIL_TESTE  = "hugo@freshlogbr.com"
 
 STATUS_EM_ESPERA_API = "On hold"
@@ -183,17 +180,17 @@ def _montar_corpo(nome_emb, pedidos):
         linhas += (
             f"<tr>"
             f"<td style='padding:10px 14px;border-bottom:1px solid {COR_BORDA};font-size:13px;"
-            f"color:{COR_TEXTO};font-weight:600;'>{p['codigo_ps']}</td>"
+            f"color:{COR_TEXTO};font-weight:600;'>{html.escape(str(p['codigo_ps']))}</td>"
             f"<td style='padding:10px 14px;border-bottom:1px solid {COR_BORDA};font-size:12px;"
-            f"color:{COR_TEXTO_SUAVE};'>{p['destino']}</td>"
+            f"color:{COR_TEXTO_SUAVE};'>{html.escape(str(p['destino']))}</td>"
             f"<td style='padding:10px 14px;border-bottom:1px solid {COR_BORDA};font-size:12px;"
-            f"color:{COR_TEXTO_SUAVE};'>{p['data']}</td>"
+            f"color:{COR_TEXTO_SUAVE};'>{html.escape(str(p['data']))}</td>"
             f"</tr>"
         )
     conteudo = f"""
     <h2 style="margin:0 0 4px;font-size:20px;color:{COR_TEXTO};">Pedidos aguardando envio do XML</h2>
     <p style="margin:0 0 24px;font-size:14px;color:{COR_TEXTO_SUAVE};">
-      Ola, <strong>{nome_emb}</strong>!<br><br>
+      Ola, <strong>{html.escape(str(nome_emb))}</strong>!<br><br>
       Os pedidos abaixo estao em espera aguardando o XML da Nota Fiscal Eletronica.
       Por favor, <strong>envie o XML pelo portal</strong> o mais breve possivel para que
       possamos dar continuidade a expedicao.
@@ -213,37 +210,6 @@ def _montar_corpo(nome_emb, pedidos):
     return _envelope_html(conteudo, "Freshlog Logistica - solicitacao automatica de XML de NF-e.")
 
 
-def _enviar_email(destinatarios, assunto, corpo_html, config_email):
-    try:
-        msg = MIMEMultipart("related")
-        msg["Subject"] = assunto
-        msg["From"]    = config_email.get("remetente", "hugo@freshlogbr.com")
-        msg["To"]      = ", ".join(destinatarios)
-
-        alt = MIMEMultipart("alternative")
-        alt.attach(MIMEText(corpo_html, "html", "utf-8"))
-        msg.attach(alt)
-
-        if LOGO_PATH.exists():
-            with open(LOGO_PATH, "rb") as f:
-                img = MIMEImage(f.read())
-            img.add_header("Content-ID", "<logo_freshlog>")
-            img.add_header("Content-Disposition", "inline", filename="logo_freshlog.png")
-            msg.attach(img)
-
-        usuario  = config_email.get("remetente", "hugo@freshlogbr.com")
-        senha    = config_email.get("senha_app") or config_email.get("senha", "")
-        host     = config_email.get("smtp_host", "smtp.gmail.com")
-        port     = int(config_email.get("smtp_port", 587))
-
-        with smtplib.SMTP(host, port, timeout=30) as smtp:
-            smtp.starttls()
-            smtp.login(usuario, senha)
-            smtp.send_message(msg)
-        return True
-    except Exception as e:
-        logger.error(f"Falha ao enviar para {destinatarios}: {e}")
-        return False
 
 
 def main(modo_teste=False):
@@ -344,7 +310,7 @@ def main(modo_teste=False):
                     f"(original: {emails}) | {qtd} pedido(s): {[p['codigo_ps'] for p in pedidos]}"
                 )
 
-            if _enviar_email(destinos, assunto, corpo, config_email):
+            if enviar_email(destinos, assunto, corpo, config_email):
                 if not modo_teste:
                     logger.info(f"  OK: {nome} -> {', '.join(emails)}")
                 else:

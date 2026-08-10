@@ -89,6 +89,17 @@ def extrair_cep(servico: dict) -> str | None:
     return None
 
 
+# Memoização em memória por execução -- obter_coordenadas() é chamada
+# várias vezes pro MESMO serviço em estágios diferentes do agrupamento
+# (agrupar_por_regiao, dividir_em_sublotes, ordenar_por_distancia_base,
+# e repetidamente dentro do laço de merge de consolidar_regioes_pequenas).
+# geocodificar() já cacheia em SQLite entre execuções, mas cada chamada
+# ainda abre uma conexão nova -- pra uma rodada com algumas centenas de
+# pedidos isso vira milhares de conexões redundantes por execução. Esse
+# cache evita reconsultar o mesmo endereço mais de uma vez por rodada.
+_cache_coordenadas: dict[tuple[str, str], tuple[float, float] | None] = {}
+
+
 def obter_coordenadas(servico: dict, api_key: str | None) -> tuple[float, float] | None:
     """
     Busca as coordenadas do endereço do serviço, reaproveitando o
@@ -102,7 +113,12 @@ def obter_coordenadas(servico: dict, api_key: str | None) -> tuple[float, float]
     endereco = servico.get("address")
     if not endereco:
         return None
-    return geocodificar(endereco, api_key or "")
+    chave = (endereco, api_key or "")
+    if chave in _cache_coordenadas:
+        return _cache_coordenadas[chave]
+    resultado = geocodificar(endereco, api_key or "")
+    _cache_coordenadas[chave] = resultado
+    return resultado
 
 
 def _distancia_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

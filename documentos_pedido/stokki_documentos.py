@@ -104,7 +104,9 @@ def baixar_documento(page, url_documento: str, nome_arquivo: str) -> Path | None
     já autenticados da page (mesma técnica de fetch() nativo usada em
     expedir_na_stokki, evita reautenticar)."""
     PASTA_TEMP_DOWNLOADS.mkdir(parents=True, exist_ok=True)
-    caminho_local = PASTA_TEMP_DOWNLOADS / nome_arquivo
+    # Nome-base apenas -- nome_arquivo vem do texto/href de um link
+    # escaneado na página, e não deve poder escrever fora da pasta.
+    caminho_local = PASTA_TEMP_DOWNLOADS / Path(nome_arquivo).name
 
     try:
         conteudo_base64 = page.evaluate("""async (url) => {

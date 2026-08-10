@@ -248,6 +248,9 @@ def extrair_referencia_da_linha(linha) -> str:
               if l.strip() and not l.strip().startswith("Refer")]
     # linhas[0] = #PS-XXXXX, linhas[1] = referencia
     return linhas[1] if len(linhas) > 1 else ""
+
+
+def extrair_transportadora(linha) -> str:
     """
     Extrai o nome da transportadora de uma linha do aaData.
     Útil para pré-filtrar redespacho sem precisar buscar o detalhe.

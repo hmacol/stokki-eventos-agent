@@ -244,7 +244,7 @@ class VuuptClient:
     def criar_servico(self, payload: dict) -> dict:
         """Cria um serviço (pedido) no VUUPT. Retorna o JSON de resposta. Lança VuuptAPIError em falha."""
         resp = chamar_com_retry(self.session.post, f"{BASE_URL}/services", json=payload, timeout=20)
-        if resp.status_code == 200:
+        if resp.ok:
             return resp.json()
         try:
             erro = resp.json()
@@ -266,7 +266,7 @@ class VuuptClient:
         Retorna o JSON de resposta. Lança VuuptAPIError em caso de falha.
         """
         resp = chamar_com_retry(self.session.put, f"{BASE_URL}/services/{service_id}", json=payload, timeout=20)
-        if resp.status_code == 200:
+        if resp.ok:
             return resp.json()
         try:
             erro = resp.json()
@@ -282,7 +282,7 @@ class VuuptClient:
             json={"status": "canceled"},
             timeout=20,
         )
-        if resp.status_code == 200:
+        if resp.ok:
             return resp.json()
         try:
             erro = resp.json()
@@ -334,7 +334,7 @@ class VuuptClient:
     def atualizar_customer(self, customer_id: int, dados: dict) -> dict:
         """PUT direto em /customers/{id} — grava os campos enviados no contato existente."""
         resp = chamar_com_retry(self.session.put, f"{BASE_URL}/customers/{customer_id}", json=dados, timeout=20)
-        if resp.status_code == 200:
+        if resp.ok:
             return resp.json()
         try:
             erro = resp.json()
@@ -345,7 +345,7 @@ class VuuptClient:
     def criar_customer(self, dados: dict) -> dict:
         """POST em /customers — cadastra um contato novo com os dados já corretos desde a criação."""
         resp = chamar_com_retry(self.session.post, f"{BASE_URL}/customers", json=dados, timeout=20)
-        if resp.status_code == 200:
+        if resp.ok:
             return resp.json()
         try:
             erro = resp.json()
@@ -438,6 +438,36 @@ class VuuptClient:
         customer_info = payload.get("customer", {})
         customer_code = customer_info.get("code", "")
 
+        existente = self.buscar_servico_por_code(code) if code else None
+
+        # Casos de "pular" (nada muda no VUUPT) são resolvidos ANTES de
+        # chamar resolver_customer_id -- essa chamada faz 2 requisições
+        # HTTP (GET /customers + PUT|POST /customers) que não têm efeito
+        # nenhum quando o serviço nem vai ser criado/atualizado. Numa
+        # importação diária que reprocessa muitos pedidos inalterados,
+        # isso multiplicava chamadas à API sem necessidade -- justamente
+        # o tipo de tráfego que já causou 429 no projeto.
+        if existente:
+            status_atual = existente.get("status", "")
+            if status_atual != self.STATUS_ATUALIZAVEL:
+                logger.warning(
+                    f"Pedido '{code}' já existe com status='{status_atual}' (não é 'Não atribuído') "
+                    f"— pulando atualização para não interferir na entrega já planejada."
+                )
+                return None, "pulado_atribuido"
+
+            if code and not houve_alteracao(code, payload):
+                logger.info(
+                    f"Pedido '{code}' sem alteração desde a última importação — pulando reenvio."
+                )
+                return None, "pulado_sem_alteracao"
+
+        # A partir daqui o serviço VAI ser criado ou atualizado -- resolve
+        # o contato (destinatário) ANTES, para que o VUUPT já tenha o
+        # contato com nome/endereço/telefone corretos ANTES do serviço
+        # nascer/mudar, e o evento de webhook correspondente já saia
+        # certo, sem depender de uma correção posterior que o webhook
+        # poderia não capturar a tempo.
         customer_id_resolvido = None
         if customer_code:
             try:
@@ -457,8 +487,6 @@ class VuuptClient:
                     f"'{code}': {e}. Seguindo com o objeto 'customer' embutido normalmente."
                 )
 
-        existente = self.buscar_servico_por_code(code) if code else None
-
         if not existente:
             payload_para_enviar = dict(payload)
             if customer_id_resolvido:
@@ -474,20 +502,6 @@ class VuuptClient:
                     sender_id=service.get("sender_id"),
                 )
             return resultado, "criado"
-
-        status_atual = existente.get("status", "")
-        if status_atual != self.STATUS_ATUALIZAVEL:
-            logger.warning(
-                f"Pedido '{code}' já existe com status='{status_atual}' (não é 'Não atribuído') "
-                f"— pulando atualização para não interferir na entrega já planejada."
-            )
-            return None, "pulado_atribuido"
-
-        if code and not houve_alteracao(code, payload):
-            logger.info(
-                f"Pedido '{code}' sem alteração desde a última importação — pulando reenvio."
-            )
-            return None, "pulado_sem_alteracao"
 
         # A decisão de forma completa vs. leve usa o payload ORIGINAL (com
         # 'customer' completo, incluindo lat/long) — é essa comparação que
