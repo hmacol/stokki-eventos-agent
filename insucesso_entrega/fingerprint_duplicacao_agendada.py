@@ -103,6 +103,25 @@ def marcar_executada(service_id: int, novo_code: str):
     conn.close()
 
 
+def cancelar_agendamento(service_id: int) -> bool:
+    """
+    Cancela uma duplicação AGENDADA ainda pendente (o remetente
+    respondeu pedindo pra não reenviar antes da data agendada chegar
+    -- pedido do Hugo, 11/08). Retorna True se havia um agendamento
+    PENDENTE pra cancelar.
+    """
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conectar()
+    cur = conn.execute(
+        "UPDATE duplicacoes_agendadas SET status = 'CANCELADO', executado_em = ? "
+        "WHERE service_id = ? AND status = 'PENDENTE'",
+        (agora, service_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
 def marcar_falha(service_id: int, motivo: str):
     """Se a duplicação vencida falhar (ex: serviço não achado mais no
     VUUPT), marca como FALHOU em vez de ficar tentando pra sempre a

@@ -2,10 +2,15 @@
 """
 notificar_insucesso_aguardando_resposta.py
 
-Pedido do Hugo, 03/08: pra alguns motivos de insucesso (ver
-motivos_falha.py::aguarda_resposta), em vez de duplicar automaticamente,
-notifica o remetente com uma PERGUNTA ESPECÍFICA daquele motivo e
-aguarda resposta antes de qualquer ação.
+NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso é duplicado
+imediatamente (ver motivos_falha.py::deve_duplicar) e este módulo
+manda o AVISO ao remetente: "seus pedidos foram duplicados pra
+reentrega no próximo dia útil; responda se quiser cancelar". A
+resposta é lida por ler_respostas_insucesso.py, que cancela a
+reentrega no VUUPT quando o remetente pedir.
+(Regra anterior, 03/08: alguns motivos perguntavam ANTES de duplicar
+e aguardavam resposta -- o esqueleto de agrupamento/fingerprint/
+marcador é o mesmo, só o texto e o momento da duplicação mudaram.)
 
 Agrupa por (remetente, motivo) -- cada motivo tem uma pergunta
 diferente, então viram e-mails separados mesmo pro mesmo remetente.
@@ -39,18 +44,15 @@ EMAIL_TESTE = "hugo@freshlogbr.com"
 
 def identificar_aguardando_resposta(insucessos: list[dict]) -> list[dict]:
     """
-    Filtra os insucessos cujo motivo exige aguardar resposta (ver
-    motivos_falha.py) e que ainda podem ser notificados (não
-    respondidos, e não notificados hoje ainda -- fingerprint_
-    aguardando_resposta.py::pode_notificar).
+    NOVA REGRA (pedido do Hugo, 11/08): TODOS os insucessos geram o
+    aviso de duplicação ao remetente (não só os motivos marcados com
+    aguarda_resposta, que era a regra de 03/08). O filtro que fica é o
+    rate-limit do fingerprint (pode_notificar): 1 e-mail por dia por
+    pedido, até chegar resposta.
     """
-    from motivos_falha import aguarda_resposta
     from fingerprint_aguardando_resposta import pode_notificar
 
-    return [
-        s for s in insucessos
-        if aguarda_resposta(s.get("failed_reason_id")) and pode_notificar(s.get("id"))
-    ]
+    return [s for s in insucessos if pode_notificar(s.get("id"))]
 
 
 def _carregar_embarcadores_por_sender_id() -> dict:
@@ -72,25 +74,44 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     return embs
 
 
-def _montar_conteudo(nome_remetente: str, pergunta: str, motivo_texto: str, pedidos: list[dict],
-                     sender_id, failed_reason_id) -> str:
-    """Só o CONTEÚDO (título, pergunta, tabela) -- o envelope (logo,
-    cores, rodapé) vem de email_utils.envelope_html()."""
+def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict],
+                     sender_id, failed_reason_id, dias_uteis_atraso: int | None = None) -> str:
+    """Só o CONTEÚDO (título, aviso de duplicação, tabela) -- o envelope
+    (logo, cores, rodapé) vem de email_utils.envelope_html().
+
+    Nova regra (Hugo, 11/08): o e-mail deixou de ser uma PERGUNTA
+    ("podemos reenviar?") e virou um AVISO ("já duplicamos; responda
+    se quiser cancelar"). Pra motivos de duplicação agendada
+    (dias_uteis_atraso), o texto informa o prazo em dias úteis."""
     linhas = "".join(f"""
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
+    if dias_uteis_atraso:
+        prazo = (f"A nova tentativa está programada para "
+                 f"<strong>{dias_uteis_atraso} dia(s) útil(eis)</strong> após a ocorrência.")
+    else:
+        prazo = "A nova tentativa está programada para o <strong>próximo dia útil</strong>."
+
+    aviso = (
+        f"Os pedidos abaixo tiveram <strong>insucesso na entrega</strong> "
+        f"(motivo: {html.escape(motivo_texto)}) e <strong>já foram duplicados</strong> "
+        f"para uma nova tentativa. {prazo}<br><br>"
+        "Caso <strong>não</strong> deseje o reenvio, basta responder este e-mail "
+        "solicitando o cancelamento. Sem resposta, a reentrega segue normalmente."
+    )
+
     return f"""
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_PRIMARIA};letter-spacing:0.5px;">
   INSUCESSO NA ENTREGA — {html.escape(motivo_texto.upper())}
 </p>
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
-  Precisamos de uma resposta
+  Pedidos duplicados para reentrega
 </p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
-  Olá, {html.escape(nome_remetente or '')}.<br>{pergunta}
+  Olá, {html.escape(nome_remetente or '')}.<br>{aviso}
 </p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
       style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">
@@ -112,7 +133,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
     como notificado (fingerprint_aguardando_resposta.py), mesmo em
     modo_teste NÃO marca (deixa livre pra testar de novo).
     """
-    from motivos_falha import texto_do_motivo, pergunta_do_motivo
+    from motivos_falha import texto_do_motivo, duplicar_com_atraso
     from fingerprint_aguardando_resposta import marcar_notificado
 
     embarcadores = _carregar_embarcadores_por_sender_id()
@@ -129,9 +150,13 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
             continue
 
         motivo_texto = texto_do_motivo(failed_reason_id)
-        pergunta = pergunta_do_motivo(failed_reason_id)
-        assunto = f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s), aguardando retorno"
-        conteudo = _montar_conteudo(emb["nome"], pergunta, motivo_texto, pedidos, sender_id, failed_reason_id)
+        # "aguardando retorno" segue no assunto de propósito: é o que o
+        # ler_respostas_insucesso.py usa pra filtrar as respostas no IMAP.
+        assunto = (f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s) "
+                   f"duplicado(s) para reentrega, aguardando retorno")
+        conteudo = _montar_conteudo(emb["nome"], motivo_texto, pedidos, sender_id,
+                                    failed_reason_id,
+                                    dias_uteis_atraso=duplicar_com_atraso(failed_reason_id))
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
         destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
 

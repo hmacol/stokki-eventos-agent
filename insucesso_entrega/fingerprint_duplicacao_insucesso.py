@@ -25,6 +25,14 @@ def _conectar():
             duplicado_em          TEXT NOT NULL
         )
     """)
+    # cancelado_em (11/08): quando o remetente responde pedindo pra NÃO
+    # reenviar, a reentrega é cancelada no VUUPT e registrada aqui. A
+    # linha NUNCA é removida -- é ela que garante que o insucesso não
+    # será duplicado de novo nas execuções seguintes.
+    try:
+        conn.execute("ALTER TABLE insucessos_duplicados ADD COLUMN cancelado_em TEXT")
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
     conn.commit()
     return conn
 
@@ -48,5 +56,34 @@ def marcar_duplicado(service_id_original: int, novo_code: str):
         VALUES (?, ?, ?)
         ON CONFLICT(service_id_original) DO NOTHING
     """, (service_id_original, novo_code, agora))
+    conn.commit()
+    conn.close()
+
+
+def buscar_novo_code(service_id_original: int) -> str | None:
+    """Código do serviço DUPLICADO (a reentrega) criado pra este
+    insucesso, ou None se nunca foi duplicado. Usado pra localizar a
+    reentrega no VUUPT quando o remetente pede cancelamento."""
+    conn = _conectar()
+    row = conn.execute(
+        "SELECT novo_code FROM insucessos_duplicados WHERE service_id_original = ?",
+        (service_id_original,),
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def marcar_cancelado(service_id_original: int):
+    """Registra que a reentrega deste insucesso foi CANCELADA no VUUPT
+    (a pedido do remetente). A linha permanece na tabela -- o
+    ja_duplicado() continua True, então o insucesso nunca é duplicado
+    de novo (pedido do Hugo, 11/08: 'incluir no fingerprint para não
+    ser importado novamente')."""
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conectar()
+    conn.execute(
+        "UPDATE insucessos_duplicados SET cancelado_em = ? WHERE service_id_original = ?",
+        (agora, service_id_original),
+    )
     conn.commit()
     conn.close()

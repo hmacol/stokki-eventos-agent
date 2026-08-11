@@ -137,12 +137,14 @@ def main(modo_teste: bool = False,
                 f"Respostas: {resultado_insucesso['processados']} processada(s), "
                 f"{resultado_insucesso['grupos_atualizados']} pedido(s) atualizado(s), "
                 f"{resultado_insucesso['duplicados']} duplicado(s), "
+                f"{resultado_insucesso.get('cancelados', 0)} reentrega(s) cancelada(s), "
                 f"{resultado_insucesso['nao_entendidos']} nao entendida(s)."
             )
             resumo_etapas["Insucesso (respostas)"] = {
                 "status": "ok",
                 "detalhe": f"{resultado_insucesso['processados']} processada(s), "
-                          f"{resultado_insucesso['duplicados']} duplicado(s)",
+                          f"{resultado_insucesso['duplicados']} duplicado(s), "
+                          f"{resultado_insucesso.get('cancelados', 0)} cancelada(s)",
             }
         except Exception as e:
             logger.error(f"Erro na leitura de respostas de insucesso: {e}")
@@ -199,8 +201,12 @@ def main(modo_teste: bool = False,
         logger.info("\n>>> ETAPA 2: Estacao de Impressao -- PULADA (--sem-impressao)")
         resumo_etapas["Impressão"] = {"status": "ok", "detalhe": "Pulada (--sem-impressao)"}
 
-    # Expedição SAIU deste fluxo (06/08) -- roda separada, a cada 30 min,
-    # ver StokkiEventos_ExpedicaoFrequente no setup_tarefas.ps1.
+    # Expedição SAIU deste fluxo (06/08) -- roda separada, a cada 30 min
+    # (tarefa StokkiEventos_ExpedicaoFrequente, ver
+    # criar_tarefa_expedicao_frequente.ps1). ATENÇÃO: entre 06/08 e 11/08
+    # essa tarefa não existia (nunca foi criada) e a expedição ficou sem
+    # rodar -- ~570 pedidos entregues ficaram represados em "Aguardando
+    # Transportador" até a rodada retroativa de 11/08.
 
     # ── Etapa 3: Pipeline de importacao ───────────────────────────────────────
     logger.info("\n>>> ETAPA 3: Pipeline de importacao Stokki -> VUUPT")

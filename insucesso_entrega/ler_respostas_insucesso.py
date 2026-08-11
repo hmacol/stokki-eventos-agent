@@ -4,10 +4,18 @@ ler_respostas_insucesso.py
 
 Lê a caixa de entrada do Gmail (via IMAP), identifica respostas aos
 e-mails de "insucesso na entrega -- aguardando retorno" (ver
-notificar_insucesso_aguardando_resposta.py), usa a API da Anthropic
-(Claude) pra decidir, a partir do texto livre da resposta, se o(s)
-pedido(s) daquele grupo devem ser DUPLICADOS ou não -- e já aplica a
-duplicação quando for o caso.
+notificar_insucesso_aguardando_resposta.py) e usa a API da Anthropic
+(Claude) pra decidir, a partir do texto livre da resposta, o que fazer.
+
+NOVA REGRA (pedido do Hugo, 11/08): como TODO insucesso agora é
+duplicado NA HORA e o e-mail é um AVISO ("já duplicamos; responda se
+quiser cancelar"), a decisão aqui virou CANCELAR ou MANTER:
+  - Remetente pediu cancelamento -> cancela a reentrega no VUUPT
+    (serviço duplicado, ou o agendamento se ainda não venceu) e marca
+    no fingerprint -- o insucesso nunca mais é duplicado.
+  - Remetente confirmou/aceitou o reenvio -> mantém a reentrega.
+    (Transição: se for pendência do fluxo antigo de pergunta, em que
+    nada foi duplicado ainda, duplica agora.)
 
 Portado de ler_respostas_agendamento.py (mesmo padrão: IMAP + marcador
 oculto + Claude) -- só a extração e a ação final são diferentes (aqui
@@ -24,9 +32,11 @@ import email
 import imaplib
 import json
 import logging
+import os
 import re
 import sqlite3
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -44,7 +54,7 @@ from email_leitura_utils import (
     extrair_texto_corpo as _extrair_texto_corpo,
 )
 from vuupt_client import VuuptClient
-from motivos_falha import texto_do_motivo, pergunta_do_motivo
+from motivos_falha import texto_do_motivo
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo, marcar_respondido
 
 logger = logging.getLogger(__name__)
@@ -53,6 +63,39 @@ IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 DB_PATH = _RAIZ / "dados" / "dados.db"
 ORIGEM_EMAIL_PROCESSADO = "INSUCESSO"
+
+# Trava contra execução SIMULTÂNEA (11/08): a leitura passou a rodar
+# também dentro do expedir_pedidos.py (tarefa de 30 em 30 min), e os
+# disparos de 10:00/13:00 coincidem com o executar_tudo. Sem a trava,
+# os dois processos leriam o mesmo e-mail de resposta ao mesmo tempo
+# (o fingerprint de message_id só é gravado DEPOIS de processar) e
+# aplicariam a ação duas vezes.
+_LOCK_PATH = _RAIZ / "dados" / "ler_respostas_insucesso.lock"
+_LOCK_IDADE_MAX_S = 600  # trava mais velha que isso = processo morto, pode roubar
+
+
+def _adquirir_trava() -> bool:
+    try:
+        if _LOCK_PATH.exists():
+            if time.time() - _LOCK_PATH.stat().st_mtime < _LOCK_IDADE_MAX_S:
+                return False
+            _LOCK_PATH.unlink()  # trava órfã de um processo que morreu
+        fd = os.open(str(_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except Exception as e:
+        logger.debug(f"Trava de leitura indisponível ({e}) -- seguindo sem trava.")
+        return True  # na dúvida não deixa a leitura parar pra sempre
+
+
+def _liberar_trava():
+    try:
+        _LOCK_PATH.unlink()
+    except Exception:
+        pass
 
 
 def _ja_processado(message_id: str) -> bool:
@@ -87,37 +130,40 @@ def _extrair_grupo_do_corpo(corpo: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
-def _extrair_decisao_via_claude(texto_resposta: str, pergunta_original: str, motivo_texto: str,
+def _extrair_decisao_via_claude(texto_resposta: str, motivo_texto: str,
                                 codigos: list[str], api_key: str) -> dict:
     """
     Usa a API da Anthropic pra decidir, a partir da resposta em texto
-    livre do remetente, se os pedidos afetados por esse insucesso
-    (motivo: {motivo_texto}) devem ser DUPLICADOS pra nova tentativa.
+    livre do remetente, se a REENTREGA (já criada/agendada) dos pedidos
+    deve ser CANCELADA ou mantida.
 
-    Retorna dict: {"deve_duplicar": bool, "resumo": str, "nao_entendido": bool}
+    Retorna dict: {"cancelar": bool, "resumo": str, "nao_entendido": bool}
     """
     prompt = f"""Você vai analisar a resposta de um embarcador a um e-mail sobre um INSUCESSO NA ENTREGA.
 
 Motivo do insucesso: "{motivo_texto}"
-Pergunta feita ao embarcador: "{pergunta_original}"
 Pedido(s) afetado(s): {", ".join(codigos)}
+
+O e-mail original AVISOU o embarcador de que esses pedidos JÁ FORAM DUPLICADOS para uma nova
+tentativa de entrega (reentrega) no próximo dia útil, e que ele poderia responder caso NÃO
+quisesse o reenvio.
 
 Resposta do embarcador:
 \"\"\"
 {texto_resposta.strip()[:2000]}
 \"\"\"
 
-Com base nessa resposta, o(s) pedido(s) devem ser DUPLICADOS pra uma nova tentativa de entrega?
-Considere "sim, duplicar" quando o embarcador confirmar que o problema foi resolvido, deu aval
-pra reenviar, ou disse quando a entrega pode ser refeita. Considere "não duplicar" quando o
-embarcador disser que não é o caso, que foi cancelado, ou não deixar claro que o reenvio deve
-acontecer agora.
+Com base nessa resposta, a reentrega deve ser CANCELADA?
+Considere "cancelar" quando o embarcador pedir pra não reenviar, disser que o pedido foi
+cancelado, que vai resolver por outro meio, ou recusar a nova tentativa de qualquer forma.
+Considere "manter" (cancelar=false) quando ele confirmar/agradecer o reenvio, der aval,
+combinar horário/data pra nova entrega, ou não pedir cancelamento.
 
 Responda APENAS com um JSON válido neste formato exato, sem texto antes ou depois:
-{{"deve_duplicar": true, "resumo": "breve resumo de 1 frase da resposta", "nao_entendido": false}}
+{{"cancelar": true, "resumo": "breve resumo de 1 frase da resposta", "nao_entendido": false}}
 
 Se não conseguir entender a resposta o suficiente pra decidir, retorne:
-{{"deve_duplicar": false, "resumo": "", "nao_entendido": true}}
+{{"cancelar": false, "resumo": "", "nao_entendido": true}}
 """
 
     try:
@@ -141,17 +187,92 @@ Se não conseguir entender a resposta o suficiente pra decidir, retorne:
         return json.loads(texto_resposta_ia)
     except Exception as e:
         logger.error(f"Erro ao extrair decisão via Claude: {e}")
-        return {"deve_duplicar": False, "resumo": "", "nao_entendido": True}
+        return {"cancelar": False, "resumo": "", "nao_entendido": True}
+
+
+def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
+    """
+    Cancela a reentrega de um insucesso cujo remetente respondeu
+    pedindo cancelamento (pedido do Hugo, 11/08):
+
+      - Se o serviço duplicado JÁ existe no VUUPT: DELETE nele
+        (cancelar_servico) e marca cancelado_em no fingerprint de
+        duplicação -- a linha fica lá, então ja_duplicado() continua
+        True e o insucesso nunca é duplicado/importado de novo.
+      - Se a duplicação estava só AGENDADA (motivo com atraso, ainda
+        não venceu): cancela o agendamento.
+
+    Retorna True se cancelou algo (serviço ou agendamento).
+    """
+    import fingerprint_duplicacao_insucesso
+    import fingerprint_duplicacao_agendada
+
+    service_id = pendente["service_id"]
+    code = pendente.get("code") or str(service_id)
+
+    novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(service_id)
+    if novo_code:
+        try:
+            duplicado = vuupt.buscar_servico_por_code(novo_code)
+            if duplicado:
+                vuupt.cancelar_servico(duplicado["id"])
+                fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
+                logger.info(f"  Reentrega de {code} cancelada no VUUPT ({novo_code}).")
+                return True
+            # Duplicado sumiu do VUUPT (cancelado manualmente?) -- marca
+            # cancelado no fingerprint mesmo assim, o efeito desejado
+            # (não reenviar, não duplicar de novo) já está garantido.
+            fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
+            logger.warning(f"  Reentrega {novo_code} de {code} não encontrada no VUUPT -- "
+                           "marcada como cancelada no fingerprint.")
+            return True
+        except Exception as e:
+            logger.error(f"  Falha ao cancelar reentrega {novo_code} de {code}: {e}")
+            return False
+
+    if fingerprint_duplicacao_agendada.cancelar_agendamento(service_id):
+        # Bloqueia também a duplicação imediata futura: com a regra nova
+        # ("todo insucesso duplica"), sem esta marca o insucesso ainda
+        # na janela de busca seria duplicado na próxima execução.
+        fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, "")
+        fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
+        logger.info(f"  Duplicação agendada de {code} cancelada antes de vencer.")
+        return True
+
+    # Nada duplicado nem agendado (pendência do fluxo antigo de
+    # pergunta). Registra como duplicado+cancelado no fingerprint pra
+    # que a regra nova ("todo insucesso duplica") NÃO crie a reentrega
+    # que o remetente acabou de recusar.
+    fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, "")
+    fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
+    logger.info(f"  {code}: nada a cancelar (sem duplicado nem agendamento) -- "
+                "registrado no fingerprint pra nunca ser duplicado.")
+    return True
 
 
 def processar_respostas_insucesso(config: dict) -> dict:
     """
-    Conecta no Gmail via IMAP, busca respostas aos e-mails de insucesso
-    aguardando resposta, decide via Claude se deve duplicar, aplica a
-    duplicação quando for o caso, e marca o grupo como respondido.
+    Conecta no Gmail via IMAP, busca respostas aos e-mails de aviso de
+    duplicação por insucesso, decide via Claude se a reentrega deve ser
+    CANCELADA ou mantida, aplica a decisão (cancelamento no VUUPT, ou
+    duplicação tardia pra pendências do fluxo antigo) e marca o grupo
+    como respondido.
 
-    Retorna {"processados", "grupos_atualizados", "duplicados", "nao_entendidos"}
+    Retorna {"processados", "grupos_atualizados", "duplicados",
+    "cancelados", "nao_entendidos"}
     """
+    if not _adquirir_trava():
+        logger.info("Outra leitura de respostas de insucesso em andamento -- pulando este ciclo.")
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
+
+    try:
+        return _processar_respostas_insucesso_travado(config)
+    finally:
+        _liberar_trava()
+
+
+def _processar_respostas_insucesso_travado(config: dict) -> dict:
+    """Corpo real de processar_respostas_insucesso -- só roda segurando a trava."""
     cfg_email = config.get("email", {})
     cfg_anthropic = config.get("anthropic", {})
     cfg_vuupt = config.get("vuupt_api", {})
@@ -163,19 +284,21 @@ def processar_respostas_insucesso(config: dict) -> dict:
 
     if not usuario_imap or not senha_app:
         logger.warning("IMAP desativado — remetente/senha_app não configurados em config.yaml.")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "nao_entendidos": 0}
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
     if not api_key or api_key == "SUA_CHAVE_AQUI":
         logger.warning("Chave da API Anthropic não configurada em config.yaml (seção anthropic).")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "nao_entendidos": 0}
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
 
     from expedir_pedidos import duplicar_servico_por_insucesso
     import fingerprint_duplicacao_insucesso
+    import fingerprint_duplicacao_agendada
 
     vuupt = VuuptClient(vuupt_token)
 
     processados = 0
     grupos_atualizados = 0
     duplicados = 0
+    cancelados = 0
     nao_entendidos = 0
 
     try:
@@ -188,7 +311,7 @@ def processar_respostas_insucesso(config: dict) -> dict:
         status, dados = mail.search(None, f"(SINCE {data_limite})")
         if status != "OK":
             logger.warning("Falha ao buscar e-mails no IMAP.")
-            return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "nao_entendidos": 0}
+            return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
 
         ids = dados[0].split()
         logger.info(f"E-mails encontrados nos últimos {dias_retroativos} dia(s): {len(ids)} (filtrando por assunto a seguir)")
@@ -260,11 +383,10 @@ def processar_respostas_insucesso(config: dict) -> dict:
                 continue
 
             motivo_texto = texto_do_motivo(failed_reason_id)
-            pergunta_original = pergunta_do_motivo(failed_reason_id)
             codigos = [p.get("code") or str(p["service_id"]) for p in pendentes]
 
             decisao = _extrair_decisao_via_claude(
-                corpo_sem_citacao, pergunta_original, motivo_texto, codigos, api_key
+                corpo_sem_citacao, motivo_texto, codigos, api_key
             )
 
             if decisao.get("nao_entendido"):
@@ -273,25 +395,35 @@ def processar_respostas_insucesso(config: dict) -> dict:
                 _marcar_email_processado(message_id, remetente_email)
                 continue
 
-            deve_duplicar_decisao = bool(decisao.get("deve_duplicar"))
+            cancelar_decisao = bool(decisao.get("cancelar"))
             resumo = decisao.get("resumo", "")
 
             for p in pendentes:
-                marcar_respondido(p["service_id"], corpo_sem_citacao, deve_duplicar_decisao)
+                marcar_respondido(p["service_id"], corpo_sem_citacao, not cancelar_decisao)
                 grupos_atualizados += 1
 
-                if deve_duplicar_decisao and p.get("code") and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"]):
-                    servico_original = vuupt.buscar_servico_por_code(p["code"])
-                    if servico_original:
-                        novo = duplicar_servico_por_insucesso(vuupt, servico_original)
-                        if novo:
-                            fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], novo.get("code", ""))
-                            duplicados += 1
-                    else:
-                        logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
+                if cancelar_decisao:
+                    if _cancelar_reentrega(p, vuupt):
+                        cancelados += 1
+                else:
+                    # Mantém a reentrega já criada. Transição do fluxo
+                    # antigo (pergunta antes de duplicar): se nada foi
+                    # duplicado nem agendado pra este insucesso ainda,
+                    # a resposta positiva duplica agora.
+                    if (p.get("code")
+                            and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"])
+                            and not fingerprint_duplicacao_agendada.ja_agendado(p["service_id"])):
+                        servico_original = vuupt.buscar_servico_por_code(p["code"])
+                        if servico_original:
+                            novo = duplicar_servico_por_insucesso(vuupt, servico_original)
+                            if novo:
+                                fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], novo.get("code", ""))
+                                duplicados += 1
+                        else:
+                            logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
 
             logger.info(
-                f"Grupo {grupo} ({motivo_texto}) respondido: duplicar={deve_duplicar_decisao} "
+                f"Grupo {grupo} ({motivo_texto}) respondido: cancelar={cancelar_decisao} "
                 f"-- \"{resumo}\" ({len(pendentes)} pedido(s))"
             )
             _marcar_email_processado(message_id, remetente_email)
@@ -304,11 +436,12 @@ def processar_respostas_insucesso(config: dict) -> dict:
     logger.info(
         f"Leitura de respostas de insucesso concluída: {processados} e-mail(s) processado(s), "
         f"{grupos_atualizados} pedido(s) atualizado(s), {duplicados} duplicado(s), "
-        f"{nao_entendidos} não entendido(s)."
+        f"{cancelados} reentrega(s) cancelada(s), {nao_entendidos} não entendido(s)."
     )
     return {
         "processados": processados, "grupos_atualizados": grupos_atualizados,
-        "duplicados": duplicados, "nao_entendidos": nao_entendidos,
+        "duplicados": duplicados, "cancelados": cancelados,
+        "nao_entendidos": nao_entendidos,
     }
 
 

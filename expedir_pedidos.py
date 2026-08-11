@@ -38,7 +38,8 @@ sys.path.insert(0, str(_RAIZ / "insucesso_entrega"))
 
 import fingerprint_expedicao
 import fingerprint_duplicacao_insucesso
-from motivos_falha import texto_do_motivo, deve_duplicar
+import fingerprint_duplicacao_agendada
+from motivos_falha import texto_do_motivo, deve_duplicar, aprender_motivos, duplicar_com_atraso
 from notificar_insucesso_aguardando_resposta import (
     identificar_aguardando_resposta, notificar_remetentes as notificar_insucesso_aguardando_resposta,
 )
@@ -146,7 +147,11 @@ def _buscar_servicos_por_status_done(token: str, status_done_alvo: str, horas: i
             params={
                 "page": page, "per_page": 100,
                 "sort": "-completed_at",
-                "include": "checklistAnswers",
+                # failedReason: descrição oficial do motivo de insucesso,
+                # usada pra aprender motivos novos automaticamente
+                # (motivos_falha.aprender_motivos) -- irrelevante (null)
+                # pros entregues com sucesso, não custa nada extra.
+                "include": "checklistAnswers,failedReason",
             },
             timeout=30,
         )
@@ -199,6 +204,14 @@ def buscar_servicos_insucesso(token: str, horas: int = HORAS_PADRAO) -> list:
     """
     encontrados = _buscar_servicos_por_status_done(token, "failed", horas, exigir_canhoto=False)
     logger.info(f"VUUPT: {len(encontrados)} pedido(s) com insucesso na entrega nas ultimas {horas}h")
+
+    # Motivo de falha que ainda não está no de-para: registra a
+    # descrição oficial do VUUPT automaticamente (pedido do Hugo,
+    # 11/08). Só o texto -- regra de duplicação continua manual.
+    novos = aprender_motivos(encontrados)
+    if novos:
+        logger.info(f"{novos} motivo(s) de falha novo(s) registrado(s) automaticamente.")
+
     return encontrados
 
 
@@ -712,9 +725,33 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # exige canhoto/checklist validado -- confirmado com dado real
         # (03/08): insucessos nunca têm checklistAnswers preenchido,
         # então esse gate deixava a notificação (e a duplicação) presas
-        # pra sempre. Decisão do Hugo, 03/08: notifica e decide a
-        # duplicação direto pelo MOTIVO (failed_reason_id), sem esperar
-        # validação nenhuma. NÃO expedidos na Stokki.
+        # pra sempre. NÃO expedidos na Stokki.
+        #
+        # NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso é duplicado
+        # IMEDIATAMENTE (deve_duplicar só exclui os motivos de duplicação
+        # agendada, ex. Loja/Câmara em Manutenção = 3 dias úteis). O
+        # remetente recebe um AVISO de que a reentrega já foi criada pro
+        # próximo dia útil e pode responder pedindo cancelamento -- a
+        # resposta é lida por ler_respostas_insucesso.py, que cancela a
+        # reentrega no VUUPT. (Regra anterior, 03/08: duplicava só por
+        # motivo, e alguns motivos perguntavam ANTES de duplicar.)
+        # 3a. Lê respostas aos avisos de insucesso ANTES de duplicar os
+        # novos (pedido do Hugo, 11/08: "vamos colocar na tarefa de 30
+        # em 30") -- um pedido de cancelamento do remetente é aplicado
+        # em no máximo ~30 min, sem esperar o executar_tudo (que também
+        # segue rodando a leitura, pra cobrir as respostas da noite; a
+        # trava interna do módulo impede os dois de processarem o mesmo
+        # e-mail ao mesmo tempo).
+        if modo_teste:
+            logger.info("[TESTE] Leitura de respostas de insucesso pulada.")
+        else:
+            try:
+                from ler_respostas_insucesso import processar_respostas_insucesso
+                resultado_respostas = processar_respostas_insucesso(config)
+                logger.info(f"Respostas de insucesso: {resultado_respostas}")
+            except Exception as e:
+                logger.warning(f"Falha na leitura de respostas de insucesso (segue sem): {e}")
+
         insucessos = buscar_servicos_insucesso(vuupt_token, horas=horas)
         if insucessos:
             codigos_insucesso = [s.get('code') for s in insucessos]
@@ -730,17 +767,62 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         if novo:
                             fingerprint_duplicacao_insucesso.marcar_duplicado(s.get("id"), novo.get("code", ""))
 
-            # Pra alguns motivos (pedido do Hugo, 03/08), em vez de
-            # duplicar, notifica o remetente com uma pergunta
-            # específica e aguarda resposta antes de qualquer ação.
+            # Motivos de duplicação AGENDADA (duplicar_apos_dias_uteis,
+            # pedido do Hugo 06/08 e mantido em 11/08 -- "mantém os 3
+            # dias para câmara quebrada"): agenda pra N dias úteis.
+            # Bloco portado em 11/08 da cópia antiga insucesso_entrega/
+            # expedir_pedidos.py (que nada executa -- o agendamento
+            # nunca chegou a rodar de verdade até aqui).
+            for s in insucessos:
+                dias_uteis = duplicar_com_atraso(s.get("failed_reason_id"))
+                if dias_uteis and not fingerprint_duplicacao_agendada.ja_agendado(s.get("id")):
+                    if modo_teste:
+                        logger.info(f"  [TESTE] Agendaria duplicação de {s.get('code')} pra "
+                                   f"{dias_uteis} dia(s) útil(eis) a partir de hoje.")
+                    else:
+                        data_agendada = fingerprint_duplicacao_agendada.agendar(
+                            s.get("id"), s.get("code", ""), s.get("failed_reason_id"), dias_uteis,
+                        )
+                        logger.info(f"  Duplicação de {s.get('code')} agendada pra {data_agendada} "
+                                   f"({dias_uteis} dia(s) útil(eis)).")
+
+            # Aviso de duplicação pra TODOS os insucessos (rate-limit de
+            # 1 e-mail/dia por pedido via fingerprint): "já duplicamos,
+            # reenvio no próximo dia útil; responda pra cancelar".
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
             if pendentes_resposta:
                 resultado_espera = notificar_insucesso_aguardando_resposta(
                     pendentes_resposta, config_email, modo_teste
                 )
-                logger.info(f"Notificação de insucesso aguardando resposta: {resultado_espera}")
+                logger.info(f"Aviso de duplicação aos remetentes: {resultado_espera}")
 
             notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+
+        # Duplicações agendadas que já venceram (independente de ter
+        # insucesso NOVO nesta execução -- uma agendada há dias pode
+        # vencer num dia sem nenhum insucesso novo).
+        vencidas = fingerprint_duplicacao_agendada.buscar_pendentes_vencidas()
+        if vencidas:
+            logger.info(f"{len(vencidas)} duplicação(ões) agendada(s) vencida(s) -- processando.")
+            vuupt_para_agendadas = VuuptClient(vuupt_token)
+            for pendente in vencidas:
+                if modo_teste:
+                    logger.info(f"  [TESTE] Duplicaria (agendada) {pendente['code']} "
+                               f"(vencida em {pendente['data_agendada']}).")
+                    continue
+                servico_original = vuupt_para_agendadas.buscar_servico_por_code(pendente["code"])
+                if not servico_original:
+                    logger.warning(f"  {pendente['code']}: não encontrado mais no VUUPT -- "
+                                   f"marcando como falha, não tenta de novo.")
+                    fingerprint_duplicacao_agendada.marcar_falha(pendente["service_id"], "Serviço não encontrado no VUUPT")
+                    continue
+                novo = duplicar_servico_por_insucesso(vuupt_para_agendadas, servico_original)
+                if novo:
+                    fingerprint_duplicacao_agendada.marcar_executada(pendente["service_id"], novo.get("code", ""))
+                    fingerprint_duplicacao_insucesso.marcar_duplicado(pendente["service_id"], novo.get("code", ""))
+                    logger.info(f"  Duplicação agendada executada: {pendente['code']} -> {novo.get('code')}")
+                else:
+                    fingerprint_duplicacao_agendada.marcar_falha(pendente["service_id"], "Falha ao criar o novo serviço")
 
         if not validados:
             logger.info("Nenhum pedido com canhoto validado. Nada a expedir.")

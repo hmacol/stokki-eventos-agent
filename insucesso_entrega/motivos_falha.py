@@ -29,10 +29,23 @@ compreensível + se deve duplicar automaticamente o serviço ou não (ou
 aguardar resposta, ou duplicar com atraso, pra alguns). Motivo NÃO
 cadastrado aqui: notifica normalmente mas NÃO duplica nem aguarda
 resposta (mais seguro por padrão).
+
+Motivos NOVOS (pedido do Hugo, 11/08): quando um failed_reason_id
+aparece sem estar neste de-para, a DESCRIÇÃO oficial é registrada
+automaticamente a partir do próprio VUUPT (include=failedReason na
+busca de insucessos -> aprender_motivos), num cache persistente em
+dados/motivos_vuupt_auto.json. Só o TEXTO é automático -- a regra
+(duplicar / aguardar resposta / atraso) continua sendo decisão
+manual aqui no dicionário; motivo aprendido nunca duplica sozinho.
 """
+import json
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_ARQ_MOTIVOS_AUTO = Path(__file__).parent.parent / "dados" / "motivos_vuupt_auto.json"
+_cache_auto: dict[int, str] | None = None  # carregado 1x por processo
 
 MOTIVOS_FALHA: dict[int, dict] = {
     # failed_reason_id: {"texto": "...", "duplicar": True/False/None,
@@ -69,12 +82,14 @@ MOTIVOS_FALHA: dict[int, dict] = {
                     "o reenvio.",
     },
     5733: {"texto": "Validade ou Lote Rasurado", "duplicar": False},
-    6830: {"texto": "(texto pendente -- 2 ocorrência(s))", "duplicar": None},
+    # 6830 e 6829 saíram do dicionário (11/08): estavam como "(texto
+    # pendente)" e aqui dentro BLOQUEAVAM o aprendizado automático da
+    # descrição real -- como "duplicar" era None, remover não muda
+    # comportamento nenhum (motivo fora do de-para também não duplica).
     5807: {"texto": "Sem agendamento", "duplicar": True},
     8366: {"texto": "Produto Avariado", "duplicar": False},
     5731: {"texto": "Produto Faltando", "duplicar": True},
     5732: {"texto": "Produto Divergente", "duplicar": True},
-    6829: {"texto": "(texto pendente -- 1 ocorrência(s))", "duplicar": None},
     8220: {"texto": "Falta de Boleto", "duplicar": True},
     8353: {
         "texto": "Loja ou Câmara em Manutenção", "duplicar": False,
@@ -84,27 +99,91 @@ MOTIVOS_FALHA: dict[int, dict] = {
 }
 
 
+def _motivos_auto() -> dict[int, str]:
+    """Cache de motivos aprendidos automaticamente do VUUPT
+    ({failed_reason_id: descricao}). Lido do JSON uma vez por processo."""
+    global _cache_auto
+    if _cache_auto is None:
+        try:
+            with open(_ARQ_MOTIVOS_AUTO, encoding="utf-8") as f:
+                _cache_auto = {int(k): v for k, v in json.load(f).items()}
+        except FileNotFoundError:
+            _cache_auto = {}
+        except Exception as e:
+            logger.warning(f"Falha ao ler {_ARQ_MOTIVOS_AUTO.name}: {e}")
+            _cache_auto = {}
+    return _cache_auto
+
+
+def aprender_motivos(servicos: list) -> int:
+    """
+    Registra automaticamente a descrição oficial de motivos de falha
+    NOVOS, a partir de serviços que vieram da API com
+    include=failedReason (pedido do Hugo, 11/08 -- caso real: motivo
+    #8037 apareceu sem estar no de-para e a notificação saiu genérica).
+
+    Só registra o TEXTO -- a regra de duplicação/pergunta continua
+    manual no MOTIVOS_FALHA (motivo aprendido nunca duplica sozinho).
+    Retorna quantos motivos novos foram registrados.
+    """
+    auto = _motivos_auto()
+    novos = 0
+    for s in servicos or []:
+        rid = s.get("failed_reason_id")
+        fr = s.get("failedReason") or s.get("failed_reason") or {}
+        descricao = (fr.get("description") or "").strip() if isinstance(fr, dict) else ""
+        if not rid or not descricao:
+            continue
+        if rid in MOTIVOS_FALHA or auto.get(rid) == descricao:
+            continue
+        auto[rid] = descricao
+        novos += 1
+        logger.info(f"Motivo de falha novo aprendido do VUUPT: #{rid} = {descricao!r} "
+                    "(sem regra de duplicação -- definir em MOTIVOS_FALHA se precisar)")
+    if novos:
+        try:
+            _ARQ_MOTIVOS_AUTO.parent.mkdir(parents=True, exist_ok=True)
+            with open(_ARQ_MOTIVOS_AUTO, "w", encoding="utf-8") as f:
+                json.dump({str(k): v for k, v in sorted(auto.items())},
+                          f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Falha ao salvar {_ARQ_MOTIVOS_AUTO.name}: {e}")
+    return novos
+
+
 def texto_do_motivo(failed_reason_id) -> str:
     """Texto compreensível do motivo, pra usar na notificação por
-    e-mail. Cai num texto genérico (com o ID) se o motivo não estiver
-    no de-para -- nunca quebra por motivo desconhecido/novo."""
+    e-mail. Ordem: de-para manual -> motivos aprendidos do VUUPT ->
+    texto genérico com o ID. Nunca quebra por motivo desconhecido."""
     if failed_reason_id is None:
         return "Motivo não informado"
     info = MOTIVOS_FALHA.get(failed_reason_id)
-    if info is None:
-        return f"Motivo #{failed_reason_id} (ainda não cadastrado no de-para)"
-    return info["texto"]
+    if info is not None:
+        return info["texto"]
+    descricao = _motivos_auto().get(failed_reason_id)
+    if descricao:
+        return f"{descricao} (novo -- sem regra de duplicação)"
+    return f"Motivo #{failed_reason_id} (ainda não cadastrado no de-para)"
 
 
 def deve_duplicar(failed_reason_id) -> bool:
-    """True só se o motivo estiver cadastrado E explicitamente marcado
-    duplicar=True. Motivo desconhecido, aguardando resposta, ou
-    cadastrado mas ainda duplicar=None/False, NUNCA duplica
-    automaticamente -- seguro por padrão."""
-    info = MOTIVOS_FALHA.get(failed_reason_id)
-    if info is None:
+    """
+    NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso duplica
+    IMEDIATAMENTE -- motivo conhecido, aprendido ou desconhecido --
+    exceto os motivos com duplicação AGENDADA (duplicar_apos_dias_
+    uteis, ex: Loja/Câmara em Manutenção), que continuam esperando os
+    N dias úteis ("mantém os 3 dias para câmara quebrada").
+
+    O controle passou a ser DEPOIS do fato: o remetente recebe um
+    aviso de que o pedido foi duplicado pra reentrega no dia seguinte
+    e, se responder pedindo cancelamento, a reentrega é cancelada no
+    VUUPT (ler_respostas_insucesso.py). Os campos "duplicar" do
+    dicionário acima NÃO são mais consultados aqui -- ficam como
+    histórico da regra antiga (03/08-11/08, duplicação por motivo).
+    """
+    if duplicar_com_atraso(failed_reason_id):
         return False
-    return info["duplicar"] is True
+    return True
 
 
 def aguarda_resposta(failed_reason_id) -> bool:
