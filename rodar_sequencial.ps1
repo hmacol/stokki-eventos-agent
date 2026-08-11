@@ -20,7 +20,11 @@
 # criadas aqui -- pode ser rodado manualmente também, pra testar.
 
 $Raiz = "C:\agente_stokki_eventos"
-$Python = "py"
+# Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem
+# extensão) largado em C:\Windows\System32 que ganha do py.exe na
+# resolução do Start-Process e derrubava a sequência inteira com
+# "%1 não é um aplicativo Win32 válido" (visto em 10/08, 18h).
+$Python = "C:\Windows\py.exe"
 $LogDir = "$Raiz\dados"
 
 $passos = @(

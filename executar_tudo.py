@@ -27,6 +27,7 @@ Execute:
 """
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -42,15 +43,39 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+def _handlers_logging():
+    """Console sempre; arquivo se der. O executar_tudo.log às vezes está
+    aberto por outro processo sem compartilhamento de escrita e o open
+    falha com PermissionError -- isso derrubava a execução inteira antes
+    de qualquer etapa rodar (visto 10/08 às 10h, ~10x no histórico).
+    Nesse caso escreve num arquivo alternativo com o PID no nome; em
+    último caso segue só com o console."""
+    handlers = [logging.StreamHandler()]
+    aviso = None
+    destino = _RAIZ / "dados" / "executar_tudo.log"
+    alternativo = destino.with_name(f"executar_tudo_{os.getpid()}.log")
+    for caminho in (destino, alternativo):
+        try:
+            handlers.append(logging.FileHandler(caminho, encoding="utf-8"))
+            if caminho is alternativo:
+                aviso = (f"Log padrão indisponível ({destino}); "
+                         f"gravando esta execução em {alternativo}.")
+            break
+        except OSError as e:
+            aviso = (f"Sem acesso a nenhum arquivo de log ({e}); "
+                     f"seguindo só com o console.")
+    return handlers, aviso
+
+
+_handlers, _aviso_log = _handlers_logging()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(_RAIZ / "dados" / "executar_tudo.log", encoding="utf-8"),
-    ],
+    handlers=_handlers,
 )
 logger = logging.getLogger("executar_tudo")
+if _aviso_log:
+    logger.warning(_aviso_log)
 
 import pipeline as pipeline_mod
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
