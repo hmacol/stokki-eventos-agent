@@ -11,12 +11,16 @@ config.yaml
 __pycache__/
 *.pyc
 py
+.venv/
+venv/
+env/
 
 # Config local de ferramentas (específico da máquina/usuário)
 .claude/
 
 # Dados, logs e saídas geradas em runtime
-dados/
+dados/*
+!dados/BD_MOTORISTAS.xlsx
 debug/
 saida_investigacao_stokki/
 documentos_pedido/dados/
@@ -30,4 +34,5 @@ output/
 
 # Planilhas e documentos de dados reais
 *.xlsx
+!dados/BD_MOTORISTAS.xlsx
 *.docx
