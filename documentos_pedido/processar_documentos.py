@@ -57,8 +57,10 @@ from vuupt_client import VuuptClient
 from notificar_execucao_agente import notificar_execucao
 
 from classificador import classificar_documento
-from matcher import casar_documento_com_pedido
-from fingerprint_documentos import calcular_hash, ja_processado, marcar_processado
+from matcher import casar_documento_com_pedido, extrair_nf_da_danfe, IndexadorNF
+from boleto_parser import extrair_metadados_boleto
+from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
+                                    pedidos_nf_pendentes, atualizar_nf_pedido)
 from email_documentos import buscar_pdfs_por_email
 import storage_gcs
 
@@ -81,13 +83,17 @@ def _extrair_texto_pdf_completo(caminho_pdf: Path) -> str:
 
 
 def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
-                           tipos_permitidos: set[str] | None = None) -> str:
+                           tipos_permitidos: set[str] | None = None,
+                           indexador_nf: IndexadorNF | None = None) -> str:
     """
     item: {"caminho_local", "nome_arquivo", "assunto_email" (opcional)}
     tipos_permitidos: se informado, documento classificado com um tipo
     fora desse conjunto é ignorado (status "FORA_DE_ESCOPO") -- usado
     pela busca de e-mail de embarcadores conhecidos, que por enquanto
     só trata Boleto (pedido do Hugo, 10/08).
+    indexador_nf: índice NF->pedido compartilhado da execução -- as
+    DANFEs processadas o alimentam, os boletos consultam (spec de
+    boletos parcelados, 11/08).
     Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL",
     "FORA_DE_ESCOPO", "ERRO".
     """
@@ -106,8 +112,25 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         return "FORA_DE_ESCOPO"
 
     texto_completo = _extrair_texto_pdf_completo(caminho)
+
+    # Metadados específicos por tipo: NF da DANFE alimenta o índice,
+    # metadados do boleto habilitam o casamento por NF (regras 2/3)
+    numero_nf = cnpj_contraparte = None
+    numero_parcela = total_parcelas = None
+    metadados_boleto = None
+    if classificacao["tipo"] == "Nota Fiscal":
+        numero_nf, cnpj_contraparte = extrair_nf_da_danfe(texto_completo)
+    elif classificacao["tipo"] == "Boleto":
+        metadados_boleto = extrair_metadados_boleto(caminho, texto_pdf=texto_completo)
+        numero_nf = metadados_boleto["numero_nf"]
+        cnpj_contraparte = metadados_boleto["cnpj_pagador"]
+        numero_parcela = metadados_boleto["parcela_atual"]
+        total_parcelas = metadados_boleto["total_parcelas"]
+
     correspondencia = casar_documento_com_pedido(nome_arquivo, assunto_email, texto_completo, vuupt,
-                                                 tipo_documento=classificacao["tipo"])
+                                                 tipo_documento=classificacao["tipo"],
+                                                 metadados_boleto=metadados_boleto,
+                                                 indexador_nf=indexador_nf)
 
     codigo_pedido = correspondencia["codigo_pedido"]
     origem = "email" if assunto_email is not None else "stokki"
@@ -116,12 +139,22 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         logger.warning(f"  {nome_arquivo}: não casou com nenhum pedido -- {correspondencia['motivo_falha']}")
         if not modo_teste:
             marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], None,
-                             "REVISAO_MANUAL", motivo=correspondencia["motivo_falha"])
+                             "REVISAO_MANUAL", motivo=correspondencia["motivo_falha"],
+                             numero_nf=numero_nf, numero_parcela=numero_parcela,
+                             total_parcelas=total_parcelas, cnpj_contraparte=cnpj_contraparte)
         return "REVISAO_MANUAL"
 
+    info_parcela = (f", parcela {numero_parcela}/{total_parcelas or '?'}"
+                    if numero_parcela is not None else "")
+    info_nf = f", NF {numero_nf}" if numero_nf else ""
     logger.info(f"  {nome_arquivo}: classificado como '{classificacao['tipo']}' "
                f"(confiança {classificacao['confianca']}), casado com {codigo_pedido} "
-               f"(método: {correspondencia['metodo']})")
+               f"(método: {correspondencia['metodo']}{info_nf}{info_parcela})")
+
+    # DANFE casada alimenta o índice NF->pedido da execução atual --
+    # os boletos da etapa de e-mail (que roda depois) já enxergam
+    if indexador_nf is not None and classificacao["tipo"] == "Nota Fiscal":
+        indexador_nf.registrar(numero_nf, cnpj_contraparte, codigo_pedido)
 
     if modo_teste:
         logger.info(f"  [TESTE] Enviaria pro GCS: {codigo_pedido}/{classificacao['tipo']}/{nome_arquivo}")
@@ -130,11 +163,36 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     try:
         gcs_path = storage_gcs.enviar_documento(config, caminho, codigo_pedido, classificacao["tipo"])
         marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], codigo_pedido,
-                         "ENVIADO", gcs_path=gcs_path)
+                         "ENVIADO", gcs_path=gcs_path, numero_nf=numero_nf,
+                         numero_parcela=numero_parcela, total_parcelas=total_parcelas,
+                         cnpj_contraparte=cnpj_contraparte)
         return "ENVIADO"
     except Exception as e:
         logger.error(f"  {nome_arquivo}: falha ao enviar pro GCS: {e}")
         return "ERRO"
+
+
+def _backfill_nf_danfes_locais(indexador: IndexadorNF):
+    """DANFEs processadas ANTES da migração de 11/08 estão no banco sem
+    numero_nf. Os PDFs delas ainda existem em downloads_stokki_temp/ --
+    extrai a NF de cada um, atualiza o banco e alimenta o índice. Roda
+    rápido (só olha pedidos pendentes que ainda têm o PDF local)."""
+    pendentes = pedidos_nf_pendentes()
+    if not pendentes:
+        return
+    from stokki_documentos import PASTA_TEMP_DOWNLOADS
+    preenchidos = 0
+    for codigo_ps in pendentes:
+        caminho = PASTA_TEMP_DOWNLOADS / f"{codigo_ps}_DANFE.pdf"
+        if not caminho.exists():
+            continue
+        numero_nf, cnpj = extrair_nf_da_danfe(_extrair_texto_pdf_completo(caminho))
+        if numero_nf:
+            atualizar_nf_pedido(codigo_ps, numero_nf, cnpj)
+            indexador.registrar(numero_nf, cnpj, codigo_ps)
+            preenchidos += 1
+    if preenchidos:
+        logger.info(f"Backfill de NF: {preenchidos} DANFE(s) antiga(s) indexada(s) a partir dos PDFs locais.")
 
 
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
@@ -149,11 +207,18 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
     try:
         vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
 
+        # Índice NF->pedido: DANFEs do banco + backfill dos PDFs locais.
+        # As DANFEs da execução atual entram nele conforme são casadas.
+        indexador_nf = IndexadorNF()
+        _backfill_nf_danfes_locais(indexador_nf)
+        indexador_nf.carregar_do_banco()
+
         # ── Etapa 1: e-mail ──────────────────────────────────────────────
         itens_email = buscar_pdfs_por_email(config)
         logger.info(f"{len(itens_email)} PDF(s) encontrado(s) por e-mail.")
         for item in itens_email:
-            status = processar_um_documento(item, vuupt, config, modo_teste)
+            status = processar_um_documento(item, vuupt, config, modo_teste,
+                                           indexador_nf=indexador_nf)
             contadores[status] = contadores.get(status, 0) + 1
 
         resumo_etapas["Documentos (e-mail)"] = {
@@ -194,7 +259,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
                     total_stokki += len(itens_stokki)
                     for item in itens_stokki:
                         item["assunto_email"] = None  # marca origem como stokki
-                        status = processar_um_documento(item, vuupt, config, modo_teste)
+                        status = processar_um_documento(item, vuupt, config, modo_teste,
+                                                       indexador_nf=indexador_nf)
                         contadores[status] = contadores.get(status, 0) + 1
 
                 browser.close()
@@ -227,7 +293,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
             for caminho_separado in separar_boletos(item["caminho_local"], PASTA_BOLETOS_SEPARADOS):
                 sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
                 status = processar_um_documento(sub_item, vuupt, config, modo_teste,
-                                               tipos_permitidos={"Boleto"})
+                                               tipos_permitidos={"Boleto"},
+                                               indexador_nf=indexador_nf)
                 if status != "FORA_DE_ESCOPO":
                     contadores[status] = contadores.get(status, 0) + 1
                     total_boletos += 1

@@ -38,6 +38,19 @@ EMBARCADORES_QUALQUER_STATUS: dict[str, str] = {
     "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
 }
 
+# Embarcadores que mandam boleto por E-MAIL (ver email_documentos.py::
+# REMETENTES_EMBARCADORES). O boleto chega junto/DEPOIS da expedição,
+# quando o pedido já saiu dos status em aberto (vira "Sent") -- então a
+# DANFE dele nunca entraria no índice NF->pedido só com a seleção de
+# abertos, e o boleto ficava preso em revisão manual (falha vista na
+# rodada real de 11/08). Pra fechar esse buraco, a seleção também
+# inclui os pedidos "Sent" mais recentes desses embarcadores.
+EMBARCADORES_BOLETO_EMAIL: dict[str, str] = {
+    "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
+    "48": "MARIA DOLORES INDUSTRIA E COMERCIO DE ALIMENTOS LTDA",
+}
+STATUS_EXPEDIDO = "Sent"
+
 
 def _codigo_da_linha(linha) -> str | None:
     id_stokki = stokki_pedidos.extrair_id_da_linha(linha)
@@ -77,4 +90,39 @@ def descobrir_pedidos(config: dict) -> list[str]:
     logger.info(f"Aguardando Transportador (outros embarcadores): "
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
+    n_antes = len(codigos)
+    for codigo in descobrir_expedidos_recentes(sessao):
+        if codigo not in codigos_vistos:
+            codigos_vistos.add(codigo)
+            codigos.append(codigo)
+    logger.info(f"Expedidos recentes (embarcadores de boleto por e-mail): "
+               f"{len(codigos) - n_antes} pedido(s) adicionados.")
+
+    return codigos
+
+
+def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: int = 60) -> list[str]:
+    """
+    Os N pedidos "Sent" mais recentes de cada embarcador que manda
+    boleto por e-mail (ver EMBARCADORES_BOLETO_EMAIL). Quem já tem a
+    Nota Fiscal enviada/indexada é filtrado FORA aqui mesmo -- assim,
+    em regime, só os expedidos novos do dia geram visita de página
+    (os antigos não custam nada).
+    """
+    from fingerprint_documentos import ja_enviado_para_pedido
+
+    codigos: list[str] = []
+    for id_emb, nome_emb in EMBARCADORES_BOLETO_EMAIL.items():
+        try:
+            pagina = stokki_pedidos.listar_pedidos(
+                sessao, status=STATUS_EXPEDIDO, cliente=id_emb,
+                pagina=0, por_pagina=limite_por_embarcador,
+                ordenar_coluna="1", ordenar_dir="desc",
+            )
+            for linha in pagina.get("aaData", []):
+                codigo = _codigo_da_linha(linha)
+                if codigo and not ja_enviado_para_pedido(codigo, "Nota Fiscal"):
+                    codigos.append(codigo)
+        except Exception as e:
+            logger.warning(f"Erro ao buscar expedidos recentes de {nome_emb!r}: {e}")
     return codigos

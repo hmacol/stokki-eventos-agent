@@ -72,6 +72,8 @@ def listar_pedidos(
     busca: str = "",
     pagina: int = 0,
     por_pagina: int = 100,
+    ordenar_coluna: str = "0",
+    ordenar_dir: str = "asc",
 ) -> dict:
     """
     Retorna uma página de pedidos no formato DataTables.
@@ -108,9 +110,12 @@ def listar_pedidos(
         "columns[9][data]": "marker",     "columns[9][name]": "",  "columns[9][searchable]": "true",  "columns[9][orderable]": "false",  "columns[9][search][value]": "",  "columns[9][search][regex]": "false",
         "columns[10][data]": "state",     "columns[10][name]": "", "columns[10][searchable]": "true", "columns[10][orderable]": "false", "columns[10][search][value]": "", "columns[10][search][regex]": "false",
         "columns[11][data]": "action",    "columns[11][name]": "", "columns[11][searchable]": "true", "columns[11][orderable]": "false", "columns[11][search][value]": "", "columns[11][search][regex]": "false",
-        # ordenação, busca global e paginação
-        "order[0][column]": "0",
-        "order[0][dir]": "asc",
+        # ordenação, busca global e paginação. ordenar_coluna="1" +
+        # ordenar_dir="desc" = pedidos mais recentes primeiro (coluna 1
+        # = id, a única ordenável junto com expedition_date) -- usado
+        # pela indexação de NF de pedidos já expedidos (status "Sent").
+        "order[0][column]": ordenar_coluna,
+        "order[0][dir]": ordenar_dir,
         "search[value]": "",
         "search[regex]": "false",
         "start": pagina * por_pagina,
