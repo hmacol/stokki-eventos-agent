@@ -26,6 +26,14 @@ from pathlib import Path
 TIPOS_DOCUMENTO = [
     ("Carta de Correção", [r"carta.*corre[cç][aã]o", r"\bcc-?e\b", r"correcao"],
      [r"carta de corre[cç][aã]o", r"cc-?e\s*n[uú]mero", r"corre[cç][aã]o de nota fiscal"]),
+    # Antes de Boleto de propósito: o "Pedido de Venda" do sistema do
+    # De Tommaso (visto em e-mail real de 11/08) menciona vencimento/
+    # duplicatas e era classificado como Boleto por engano. Só casa a
+    # forma com letras ESPAÇADAS do cabeçalho do relatório deles
+    # ("P E D I D O  D E  V E N D A") -- a frase normal "pedido de
+    # venda" pode aparecer em dados adicionais de DANFE legítima.
+    ("Pedido de Venda", [r"pedido\s*de\s*venda"],
+     [r"p\s+e\s+d\s+i\s+d\s+o\s+d\s+e\s+v\s+e\s+n\s+d\s+a"]),
     ("Boleto", [r"boleto", r"\bbolet[oa]\b"],
      [r"linha digit[aá]vel", r"vencimento", r"c[oó]digo de barras", r"boleto banc[aá]rio"]),
     ("Agendamento", [r"agendamento", r"\bagenda\b"],

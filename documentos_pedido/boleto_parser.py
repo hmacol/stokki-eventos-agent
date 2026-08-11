@@ -49,6 +49,14 @@ PADRAO_DOC_LINHA = re.compile(
     r"\b\d{2}/\d{2}/\d{4}\s+(\d{3,9})(?:[-/](\d{1,2})(?:/(\d{1,2}))?)?\s+D[MS]\b"
 )
 
+# 4º formato real (De Tommaso/CIAO, Itaú 341-7, visto em 11/08): o
+# layout quebra a linha antes da data, então a linha de valores vem
+# como "documento 035880 DM N Processamento ..." -- o rótulo
+# "documento" cola direto no número, sem data na frente.
+PADRAO_DOC_SEM_DATA = re.compile(
+    r"\bdocumento\s+(\d{3,9})(?:[-/](\d{1,2})(?:/(\d{1,2}))?)?\s+D[MS]\b", re.IGNORECASE
+)
+
 # Fallbacks genéricos da spec, quando a linha de valores não bate
 PADRAO_NF_GENERICO = [
     re.compile(r"NF\s*[:\.]?\s*(\d{1,9})", re.IGNORECASE),
@@ -147,7 +155,7 @@ def extrair_metadados_boleto(caminho_pdf: Path, texto_pdf: str | None = None) ->
 
     # Número da NF + parcela -- na ordem de confiabilidade real
     m_hist = PADRAO_NF_HISTORICO.search(texto_pdf)
-    m_doc = PADRAO_DOC_LINHA.search(texto_pdf)
+    m_doc = PADRAO_DOC_LINHA.search(texto_pdf) or PADRAO_DOC_SEM_DATA.search(texto_pdf)
     if m_doc:
         if m_doc.group(2):
             resultado["parcela_atual"] = int(m_doc.group(2))

@@ -17,11 +17,12 @@ from pathlib import Path
 _PASTA_DADOS = Path(__file__).parent / "dados"
 
 # Ordem de busca: mesma precedência do fluxo que gerou os arquivos --
-# downloads da Stokki primeiro (maioria), boletos já separados do PDF
-# multi-boleto, e por último anexos brutos de e-mail.
+# downloads da Stokki primeiro (maioria), boletos/NFs já separados dos
+# PDFs consolidados, e por último anexos brutos de e-mail.
 PASTAS_BUSCA = [
     _PASTA_DADOS / "downloads_stokki_temp",
     _PASTA_DADOS / "boletos_separados",
+    _PASTA_DADOS / "nfs_separadas",
     _PASTA_DADOS / "anexos_temp",
 ]
 

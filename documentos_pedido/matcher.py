@@ -15,10 +15,17 @@ Hierarquia de casamento (casar_documento_com_pedido):
      VÁRIOS pedidos em aberto, onde o CNPJ sozinho é ambíguo.
   3. [Boleto] numero_nf bate com exatamente 1 pedido no índice (e o
      CNPJ não conflita com o registrado).
+  3b. numero_nf (de boleto OU de DANFE) bate com a REFERÊNCIA no
+     título do serviço no VUUPT ("#PS-36008 - 024746 / ..."): a
+     importação usa o número da NF como referência do pedido, então o
+     título carrega a NF -- confirmado em serviços reais de Jersey
+     Vale, Grupo Trigo e De Tommaso (11/08). Só casa se todos os
+     resultados apontarem pro MESMO pedido.
   4. CNPJ no VUUPT (buscar_customer_por_code) -> serviços do cliente.
      Só casa se achar exatamente 1 -- 0 ou N ficam pra revisão manual
      (melhor não adivinhar errado do que grudar documento no pedido
-     errado).
+     errado). Pra Nota Fiscal, o CNPJ usado é o do DESTINATÁRIO da
+     DANFE (o primeiro CNPJ do texto seria o do próprio emitente).
   (A "Regra 4" da spec -- CNPJ + valor da duplicata -- não foi
   implementada: o serviço do VUUPT não carrega valor de NF/parcela,
   confirmado na API real em 11/08, então não há contra o que cruzar.)
@@ -34,9 +41,11 @@ PADRAO_CODIGO_PEDIDO = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 # boleto) -- falso CNPJ visto em documento real ("NFS SP.pdf", 10/08).
 PADRAO_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
 
-# Número da NF na DANFE (layout NFePHP visto em todas as DANFEs reais
-# do projeto): "Nº. 000.149.747" logo abaixo de "NF-e" no cabeçalho.
-PADRAO_NF_DANFE = re.compile(r"N[ºo°]\.?\s*([\d.]{6,12})")
+# Número da NF na DANFE. Dois layouts reais: NFePHP (Stokki) imprime
+# "Nº. 000.149.747"; o emissor do De Tommaso/CIAO imprime "N. 000035880"
+# (sem o º, mas sempre com o ponto). Um "N" solto sem º nem ponto NÃO
+# casa -- senão qualquer "N 12345678" do texto viraria falso positivo.
+PADRAO_NF_DANFE = re.compile(r"N(?:[ºo°]\.?|\.)\s*([\d.]{6,12})")
 
 # Seção do destinatário na DANFE. Precisa ser o cabeçalho de seção
 # "DESTINATÁRIO / REMETENTE" -- a palavra "DESTINATÁRIO:" também
@@ -186,17 +195,71 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
 
     # Regras 2 e 3: boleto casado com a DANFE pelo número da NF
     numero_nf = None
+    cnpj_destinatario_danfe = None
     if tipo_documento == "Boleto" and metadados_boleto:
         numero_nf = metadados_boleto.get("numero_nf")
         if indexador_nf and numero_nf:
             resolvido = indexador_nf.resolver(numero_nf, metadados_boleto.get("cnpj_pagador"))
             if resolvido:
                 return {**resolvido, "motivo_falha": None}
+    elif tipo_documento == "Nota Fiscal":
+        numero_nf, cnpj_destinatario_danfe = extrair_nf_da_danfe(texto_pdf)
+
+    # Regra 3b: número da NF como REFERÊNCIA no título do serviço.
+    # Busca primeiro com zero-padding de 6 dígitos (formato dos títulos
+    # reais: "024746", "035880", "371038"). Os dígitos crus só entram
+    # como fallback quando a NF tem menos de 6 dígitos (título sem
+    # zero-padding, ex: "NF. 5480" da Marchef) -- e aí a verificação de
+    # CNPJ é OBRIGATÓRIA, porque um termo curto pode casar por engano
+    # com o próprio código PS-XXXXX do título (falso positivo visto em
+    # teste real: NF 35881 batendo em "#PS-35881"). Quando o documento
+    # tem CNPJ, o cliente do serviço encontrado TEM que ser esse CNPJ.
+    if numero_nf:
+        cnpj_doc = ((metadados_boleto or {}).get("cnpj_pagador")
+                    if tipo_documento == "Boleto" else cnpj_destinatario_danfe)
+        ref6 = numero_nf.zfill(6)
+        termos = [(ref6, False)] + ([(numero_nf, True)] if numero_nf != ref6 else [])
+        for termo, cnpj_obrigatorio in termos:
+            try:
+                servicos_ref = vuupt.listar_servicos(
+                    [{"field": "title", "operator": "contains", "value": termo}], per_page=5
+                )
+            except Exception as e:
+                logger.warning(f"  Falha na busca por referência {termo!r} no VUUPT: {e}")
+                break
+            if not servicos_ref:
+                continue
+            codigos = {s.get("code", "").lstrip("#") for s in servicos_ref}
+            codigos.discard("")
+            if len(codigos) != 1:
+                break       # achou mas ambíguo -- termo mais frouxo só pioraria
+            codigo_ref = next(iter(codigos))
+
+            if cnpj_doc:
+                try:
+                    cliente_doc = vuupt.buscar_customer_por_code(cnpj_doc)
+                except Exception:
+                    cliente_doc = None
+                ids_customers = {s.get("customer_id") for s in servicos_ref}
+                if cliente_doc and cliente_doc.get("id") in ids_customers:
+                    return {"codigo_pedido": codigo_ref,
+                            "metodo": "nf_referencia_titulo", "motivo_falha": None}
+                break       # CNPJ do documento não é o cliente do serviço -- conflito
+            if not cnpj_obrigatorio:
+                # Sem CNPJ no documento: aceita só o formato exato de
+                # 6 dígitos (específico o bastante pra não colidir)
+                return {"codigo_pedido": codigo_ref,
+                        "metodo": "nf_referencia_titulo", "motivo_falha": None}
+            break
 
     # Regra final: CNPJ -> cliente no VUUPT com exatamente 1 serviço
     if tipo_documento == "Boleto":
         cnpj = ((metadados_boleto or {}).get("cnpj_pagador")
                 or extrair_cnpj_pagador_boleto(texto_pdf))
+    elif tipo_documento == "Nota Fiscal":
+        # Numa DANFE o primeiro CNPJ do texto é o do EMITENTE (o próprio
+        # embarcador) -- o que identifica o pedido é o do destinatário.
+        cnpj = cnpj_destinatario_danfe or extrair_cnpj(texto_pdf)
     else:
         cnpj = extrair_cnpj(texto_pdf)
 

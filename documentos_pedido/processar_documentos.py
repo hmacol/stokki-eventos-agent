@@ -279,21 +279,32 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
         # Boleto -- pedido do Hugo, 10/08 ("só Boleto por enquanto"). Um PDF
         # que junte vários boletos num arquivo só (ex: "BOLETOS.pdf" da
         # Dourado) é separado em 1 arquivo por boleto antes de classificar/
-        # casar -- ver boleto_splitter.py.
+        # casar -- ver boleto_splitter.py. O mesmo vale pra NF: o De
+        # Tommaso manda as DANFEs do dia num PDF consolidado ("NFs FRESH
+        # DD.MM.pdf") -- ver nf_splitter.py. Um arquivo nunca mistura os
+        # dois formatos, então os splitters são encadeados: se o de NF
+        # não separou nada, tenta o de boleto. Os tipos aproveitados
+        # variam por embarcador (item["tipos_permitidos"], ver
+        # REMETENTES_EMBARCADORES em email_documentos.py).
         from email_documentos import buscar_pdfs_por_email_embarcadores
         from boleto_splitter import separar_boletos
+        from nf_splitter import separar_nfs
 
         PASTA_BOLETOS_SEPARADOS = Path(__file__).parent / "dados" / "boletos_separados"
+        PASTA_NFS_SEPARADAS = Path(__file__).parent / "dados" / "nfs_separadas"
 
         itens_embarcadores = buscar_pdfs_por_email_embarcadores(config)
         logger.info(f"{len(itens_embarcadores)} PDF(s) encontrado(s) de embarcadores conhecidos.")
 
         total_boletos = 0
         for item in itens_embarcadores:
-            for caminho_separado in separar_boletos(item["caminho_local"], PASTA_BOLETOS_SEPARADOS):
+            partes = separar_nfs(item["caminho_local"], PASTA_NFS_SEPARADAS)
+            if partes == [item["caminho_local"]]:
+                partes = separar_boletos(item["caminho_local"], PASTA_BOLETOS_SEPARADOS)
+            for caminho_separado in partes:
                 sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
                 status = processar_um_documento(sub_item, vuupt, config, modo_teste,
-                                               tipos_permitidos={"Boleto"},
+                                               tipos_permitidos=item.get("tipos_permitidos") or {"Boleto"},
                                                indexador_nf=indexador_nf)
                 if status != "FORA_DE_ESCOPO":
                     contadores[status] = contadores.get(status, 0) + 1
@@ -301,7 +312,7 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
 
         resumo_etapas["Documentos (e-mail embarcadores)"] = {
             "status": "ok",
-            "detalhe": f"{total_boletos} boleto(s) de {len(itens_embarcadores)} anexo(s)",
+            "detalhe": f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)",
         }
 
         resumo_etapas["Resumo geral"] = {

@@ -177,13 +177,25 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7) -> list[dict]
 # ── Busca direcionada: remetentes de embarcadores conhecidos ────────────────
 # Diferente de buscar_pdfs_por_email() (busca ampla, varre a INBOX inteira
 # procurando qualquer PDF) -- essa busca é restrita a remetentes específicos
-# de embarcadores que mandam Boleto por e-mail, e olha a pasta "Todos os
+# de embarcadores que mandam documentos por e-mail, e olha a pasta "Todos os
 # e-mails" (o Gmail organiza esse tipo de e-mail em pastas/labels por
 # cliente -- confirmado com o Hugo, 10/08 -- não fica garantido estar na
-# INBOX). {remetente: nome_legível}
-REMETENTES_EMBARCADORES: dict[str, str] = {
-    "escritorio@laticiniosdourado.ind.br": "Laticínios Dourado",
-    "faturamento@nuualimentos.com.br": "Maria Dolores (NUU)",
+# INBOX).
+#
+# A chave é o que vai no FROM da busca IMAP -- que casa por SUBSTRING, então
+# um domínio inteiro ("@detommaso.com.br") pega qualquer remetente de lá
+# (pedro@ é o mais usado, mas pode variar -- pedido do Hugo, 11/08).
+# "tipos" é o conjunto de tipos de documento que aquele embarcador manda e
+# que o pipeline deve aproveitar (o resto vira FORA_DE_ESCOPO): Dourado e
+# NUU só mandam Boleto; o De Tommaso manda as NFs do dia (PDF consolidado,
+# ver nf_splitter.py) junto com os boletos.
+REMETENTES_EMBARCADORES: dict[str, dict] = {
+    "escritorio@laticiniosdourado.ind.br": {"nome": "Laticínios Dourado",
+                                            "tipos": {"Boleto"}},
+    "faturamento@nuualimentos.com.br": {"nome": "Maria Dolores (NUU)",
+                                        "tipos": {"Boleto"}},
+    "@detommaso.com.br": {"nome": "De Tommaso",
+                          "tipos": {"Boleto", "Nota Fiscal"}},
 }
 PASTA_TODOS_OS_EMAILS = '"[Gmail]/Todos os e-mails"'
 
@@ -193,7 +205,9 @@ def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7) 
     Busca PDFs anexados (soltos -- sem ZIP, fora de escopo por
     enquanto, ver pedido do Hugo 10/08) em e-mails recentes vindos dos
     REMETENTES_EMBARCADORES acima. Mesmo formato de retorno de
-    buscar_pdfs_por_email() -- alimenta o mesmo pipeline depois.
+    buscar_pdfs_por_email(), com um campo extra "tipos_permitidos"
+    (os tipos que o embarcador daquele remetente manda) -- alimenta o
+    mesmo pipeline depois.
     """
     cfg_email = config.get("email", {})
     usuario = cfg_email.get("remetente", "")
@@ -212,7 +226,9 @@ def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7) 
 
         data_limite = (datetime.now() - timedelta(days=dias_retroativos)).strftime("%d-%b-%Y")
 
-        for remetente, nome_embarcador in REMETENTES_EMBARCADORES.items():
+        for remetente, cfg_embarcador in REMETENTES_EMBARCADORES.items():
+            nome_embarcador = cfg_embarcador["nome"]
+            tipos_permitidos = cfg_embarcador["tipos"]
             status, dados = mail.search(None, f'(FROM "{remetente}" SINCE {data_limite})')
             if status != "OK":
                 logger.warning(f"Falha ao buscar e-mails de {remetente!r}.")
@@ -259,7 +275,7 @@ def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7) 
                         resultado.append({
                             "caminho_local": caminho_local, "nome_arquivo": nome_anexo,
                             "assunto_email": assunto, "remetente_email": remetente_completo,
-                            "message_id": message_id,
+                            "message_id": message_id, "tipos_permitidos": tipos_permitidos,
                         })
 
                 if algum_pdf_nesse_email:

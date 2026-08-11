@@ -135,3 +135,55 @@ py -3.11 documentos_pedido/processar_documentos.py
 - [x] Suporte completo a múltiplos arquivos de boleto por pedido sem sobrescrever nem ignorar parcelas.
 - [x] Suporte à separação automática de PDFs lote contendo boletos de múltiplos pedidos e parcelas.
 - [x] Registro transparente e detalhado em `dados/processar_documentos.log` e e-mail de notificação.
+
+---
+
+## 6. Extensão 11/08/2026 — De Tommaso (NF + Boleto por e-mail)
+
+Pedido do Hugo: buscar e-mails de **@detommaso.com.br** (domínio inteiro
+via substring do FROM no IMAP — pedro@ é o mais usado, mas pode variar).
+
+Como os e-mails chegam (analisado em e-mail real de 11/08, assunto
+"NF e Boleto 11.08"):
+
+- **NFs consolidadas**: 1-2 PDFs "NFs FRESH DD.MM[.ciao].pdf" com TODAS
+  as DANFEs do dia (1 por página; nota de 2 páginas agrupada). Emissor:
+  CIAO IND E COM PROD ALIMENTICIOS (CNPJ 05294174000128), layout
+  próprio com "N. 000035880" (sem º).
+- **Boletos individuais**: Itaú 341, 1 PDF por duplicata, nome do
+  arquivo = 341 + CNPJ do pagador + sufixo. Número da NF no campo
+  "Núm. do documento" ("documento 035880 DM"), sem histórico "Ref. a NF".
+- **Pedidos de Venda**: PDFs "0400XX.pdf" com o pedido interno deles —
+  NÃO são documentos do pipeline (novo tipo "Pedido de Venda" no
+  classificador, fora de escopo).
+
+Mudanças:
+
+1. `email_documentos.REMETENTES_EMBARCADORES` agora carrega
+   `{"nome", "tipos"}` por remetente; De Tommaso aceita
+   `{"Boleto", "Nota Fiscal"}` (Dourado/NUU seguem só Boleto).
+2. Novo `nf_splitter.py` (espelho do boleto_splitter): separa PDF
+   multi-DANFE por página com "RECEBEMOS DE", salva em
+   `dados/nfs_separadas/` (pasta incluída em localizar_arquivos.py).
+3. `boleto_parser`: 4º formato real — `PADRAO_DOC_SEM_DATA`
+   ("documento 035880 DM", linha sem data na frente).
+4. `matcher`: `PADRAO_NF_DANFE` aceita "N. 000035880"; **nova Regra 3b**
+   `nf_referencia_titulo` — o número da NF é a REFERÊNCIA no título do
+   serviço VUUPT ("#PS-36008 - 024746 / ..."), confirmado em Jersey
+   Vale, Grupo Trigo e De Tommaso. Busca com zero-padding de 6 dígitos;
+   dígitos crus só como fallback COM verificação obrigatória de CNPJ
+   (falso positivo real: NF 35881 casando no código "#PS-35881").
+   Quando o documento tem CNPJ, o cliente do serviço precisa bater.
+   Regra 4 pra NF passa a usar o CNPJ do DESTINATÁRIO da DANFE (o
+   primeiro CNPJ do texto é o do emitente).
+
+Ordem que faz tudo casar: o e-mail chega ~13h (mercadoria deixada no
+CD), a importação Stokki→VUUPT roda às 18h (ExecutarTudo, passo 1 da
+sequência) e o ProcessarDocumentos roda DEPOIS (passo 5) — na hora do
+casamento os pedidos novos já existem com a NF na referência do título.
+E-mails de até 7 dias atrás entram na primeira rodada real (backfill).
+
+Atenção: os e-mails do De Tommaso caem numa label do Gmail (fora da
+INBOX), então a busca ampla não os consome antes da busca direcionada.
+Se um dia chegarem na INBOX, a busca ampla processa o PDF consolidado
+SEM split — limitação conhecida.
