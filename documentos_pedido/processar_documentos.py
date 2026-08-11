@@ -277,18 +277,15 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
         # Diferente da Etapa 1 (busca ampla): remetentes específicos (Dourado,
         # Maria Dolores/NUU), pasta "Todos os e-mails". Por enquanto só trata
         # Boleto -- pedido do Hugo, 10/08 ("só Boleto por enquanto"). Um PDF
-        # que junte vários boletos num arquivo só (ex: "BOLETOS.pdf" da
-        # Dourado) é separado em 1 arquivo por boleto antes de classificar/
-        # casar -- ver boleto_splitter.py. O mesmo vale pra NF: o De
-        # Tommaso manda as DANFEs do dia num PDF consolidado ("NFs FRESH
-        # DD.MM.pdf") -- ver nf_splitter.py. Um arquivo nunca mistura os
-        # dois formatos, então os splitters são encadeados: se o de NF
-        # não separou nada, tenta o de boleto. Os tipos aproveitados
-        # variam por embarcador (item["tipos_permitidos"], ver
+        # que junte vários boletos e/ou NFs num arquivo só (ex: "BOLETOS.pdf"
+        # da Dourado, "NFs FRESH DD.MM.pdf" do De Tommaso, ou
+        # "DANFEs_Boletos_DD-MM.pdf" da Vida Veg -- esse último mistura NF e
+        # boleto no mesmo arquivo) é separado em 1 arquivo por documento
+        # antes de classificar/casar -- ver documento_splitter.py. Os tipos
+        # aproveitados variam por embarcador (item["tipos_permitidos"], ver
         # REMETENTES_EMBARCADORES em email_documentos.py).
         from email_documentos import buscar_pdfs_por_email_embarcadores
-        from boleto_splitter import separar_boletos
-        from nf_splitter import separar_nfs
+        from documento_splitter import separar_documentos_mistos
 
         PASTA_BOLETOS_SEPARADOS = Path(__file__).parent / "dados" / "boletos_separados"
         PASTA_NFS_SEPARADAS = Path(__file__).parent / "dados" / "nfs_separadas"
@@ -298,10 +295,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
 
         total_boletos = 0
         for item in itens_embarcadores:
-            partes = separar_nfs(item["caminho_local"], PASTA_NFS_SEPARADAS)
-            if partes == [item["caminho_local"]]:
-                partes = separar_boletos(item["caminho_local"], PASTA_BOLETOS_SEPARADOS)
-            for caminho_separado in partes:
+            partes = separar_documentos_mistos(item["caminho_local"], PASTA_NFS_SEPARADAS, PASTA_BOLETOS_SEPARADOS)
+            for caminho_separado, _tipo_detectado in partes:
                 sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
                 status = processar_um_documento(sub_item, vuupt, config, modo_teste,
                                                tipos_permitidos=item.get("tipos_permitidos") or {"Boleto"},

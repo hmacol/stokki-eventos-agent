@@ -184,11 +184,17 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7) -> list[dict]
 #
 # A chave é o que vai no FROM da busca IMAP -- que casa por SUBSTRING, então
 # um domínio inteiro ("@detommaso.com.br") pega qualquer remetente de lá
-# (pedro@ é o mais usado, mas pode variar -- pedido do Hugo, 11/08).
+# (pedro@ é o mais usado, mas pode variar -- pedido do Hugo, 11/08). Mesmo
+# padrão pra Vida Veg ("@vidaveg.com.br"): logistica@ é o mais usado, mas o
+# time deles manda de vários endereços (adm@, logistica1@..4@, artur.neto@)
+# -- confirmado nos e-mails reais, 11/08.
 # "tipos" é o conjunto de tipos de documento que aquele embarcador manda e
 # que o pipeline deve aproveitar (o resto vira FORA_DE_ESCOPO): Dourado e
 # NUU só mandam Boleto; o De Tommaso manda as NFs do dia (PDF consolidado,
-# ver nf_splitter.py) junto com os boletos.
+# ver documento_splitter.py) junto com os boletos, em arquivos separados. A
+# Vida Veg manda um único PDF consolidado ("DANFEs_Boletos_DD-MM-AAAA.pdf")
+# que MISTURA NF e boleto no mesmo arquivo -- documento_splitter.py separa
+# os dois corretamente mesmo intercalados.
 REMETENTES_EMBARCADORES: dict[str, dict] = {
     "escritorio@laticiniosdourado.ind.br": {"nome": "Laticínios Dourado",
                                             "tipos": {"Boleto"}},
@@ -196,6 +202,8 @@ REMETENTES_EMBARCADORES: dict[str, dict] = {
                                         "tipos": {"Boleto"}},
     "@detommaso.com.br": {"nome": "De Tommaso",
                           "tipos": {"Boleto", "Nota Fiscal"}},
+    "@vidaveg.com.br": {"nome": "Vida Veg",
+                        "tipos": {"Boleto", "Nota Fiscal"}},
 }
 PASTA_TODOS_OS_EMAILS = '"[Gmail]/Todos os e-mails"'
 
