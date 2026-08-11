@@ -8,7 +8,16 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 
 Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
-    DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS
+    DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
+    TELEFONE_MOTORISTA | EMAIL_MOTORISTA
+
+TELEFONE_MOTORISTA / EMAIL_MOTORISTA (doc de origem:
+DOC_EXECUCAO_CLAUDE_NOTIFICACAO_MOTORISTAS.md): contato usado por
+roteirizacao/avisar_motoristas_rotas.py para o aviso de rota (WhatsApp
+copiar/colar + e-mail opcional). Colunas ainda não existem na planilha
+atual -- ausentes, ficam None (telefone=None -- entra sem número na
+mensagem; email=None -- motorista simplesmente não recebe e-mail),
+mesmo padrão seguro do resto do módulo.
 
 ZONAS_PREFERIDAS (pedido do Hugo, 10/08): lista separada por vírgula
 das zonas da Grande SP que o motorista atende -- mesmas categorias de
@@ -76,6 +85,8 @@ class MotoristaPreferencias:
     max_rotas_dia: int
     ativo: bool
     zonas_preferidas: list[str]  # ver roteirizacao/zonas_sp.py -- vazio = nenhuma zona da Grande SP habilitada
+    telefone: str | None = None  # coluna TELEFONE_MOTORISTA -- usado em avisar_motoristas_rotas.py (WhatsApp)
+    email: str | None = None  # coluna EMAIL_MOTORISTA -- usado em avisar_motoristas_rotas.py (e-mail de aviso)
 
 
 def _normalizar_texto(s) -> str:
@@ -135,6 +146,9 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     nome = str(registro.get("NOME_MOTORISTA") or "").strip() or f"Motorista {agent_id}"
     max_rotas_dia = _parse_int_opcional(registro.get("MAX_ROTAS_DIA")) or 1
 
+    telefone = str(registro.get("TELEFONE_MOTORISTA") or "").strip() or None
+    email = str(registro.get("EMAIL_MOTORISTA") or "").strip() or None
+
     return MotoristaPreferencias(
         agent_id=agent_id,
         vehicle_id=_parse_int_opcional(registro.get("VEHICLE_ID_VUUPT")),
@@ -144,6 +158,8 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         max_rotas_dia=max_rotas_dia,
         ativo=_parse_bool(registro.get("ATIVO")),
         zonas_preferidas=_parse_zonas_preferidas(registro.get("ZONAS_PREFERIDAS")),
+        telefone=telefone,
+        email=email,
     )
 
 
