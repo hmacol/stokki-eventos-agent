@@ -1,0 +1,715 @@
+# -*- coding: utf-8 -*-
+"""
+roteirizacao/gerar_pdf_romaneios.py
+
+Gera 1 PDF por romaneio (= rota do VUUPT) com a papelada que o
+motorista leva na entrega: pedido a pedido, NA ORDEM DE VISITA da
+rota, todas as Notas Fiscais do pedido seguidas dos Boletos -- doc de
+origem: DOC_EXECUCAO_CLAUDE_ROMANEIOS_PDF.md.
+
+Reaproveita o que já existe: as rotas vêm do VUUPT (mesma leitura de
+avisar_motoristas_rotas.py), o índice de documentos vem do SQLite
+(documentos_processados, ver documentos_pedido/fingerprint_documentos.py)
+e os PDFs físicos ainda estão nas pastas temporárias de
+documentos_pedido/dados/ (ver documentos_pedido/localizar_arquivos.py)
+-- nada é baixado do GCS.
+
+Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras entre
+os documentos):
+  1. CAPA com logo Freshlog: tabela com 1 linha por pedido na ordem de
+     visita (pedido, embarcador, cliente, status NF/BOL com check/x).
+  2. Documentos emendados direto: NFs e depois boletos, pedido a pedido.
+  3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
+     Estrelas ou Pedramoura): tabela na ordem da rota com campos de
+     recebedor/data/assinatura, identificando motorista, rota e dia.
+
+Pendências (sem NF, sem boleto, arquivo ilegível) aparecem como X
+vermelho na capa e listadas no _resumo.txt + notificação.
+
+Idempotente: regerar a mesma data sobrescreve tudo daquela pasta.
+
+COMO USAR:
+    py -3.11 roteirizacao/gerar_pdf_romaneios.py --modo-teste --data hoje
+    py -3.11 roteirizacao/gerar_pdf_romaneios.py --data 15/08/2026 --rota 5041749
+"""
+import argparse
+import io
+import logging
+import re
+import sqlite3
+import sys
+import time
+from datetime import date, datetime
+from pathlib import Path
+
+_RAIZ_LOCAL   = Path(__file__).parent
+_RAIZ_PROJETO = Path(__file__).parent.parent
+sys.path.insert(0, str(_RAIZ_PROJETO))
+sys.path.insert(0, str(_RAIZ_LOCAL))
+# append (não insert): documentos_pedido/ entra por último pra não
+# sombrear nenhum módulo de roteirizacao/ ou da raiz.
+sys.path.append(str(_RAIZ_PROJETO / "documentos_pedido"))
+(_RAIZ_LOCAL / "dados").mkdir(parents=True, exist_ok=True)
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+# basicConfig ANTES de importar avisar_motoristas_rotas: o import dele
+# também chama basicConfig, mas com o root logger já configurado a
+# chamada de lá vira no-op e os logs ficam no arquivo daqui.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_RAIZ_LOCAL / "dados" / "gerar_pdf_romaneios.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("gerar_pdf_romaneios")
+
+import yaml
+from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader, PdfWriter
+
+from avisar_motoristas_rotas import (
+    _extrair_servicos_da_rota,
+    _normalizar_texto,
+    _parse_data,
+    buscar_rotas_do_dia,
+)
+from localizar_arquivos import resolver_arquivo_local
+from notificar_execucao_agente import notificar_execucao
+from regras.preferencias_motoristas import CatalogoMotoristas
+
+PASTA_ROMANEIOS = _RAIZ_LOCAL / "dados" / "romaneios"
+DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
+LOGO_PATH = _RAIZ_PROJETO / "assets" / "logo_freshlog.png"
+
+# Embarcadores cujas entregas geram folha de CANHOTEIRA no fim do
+# romaneio (pedido do Hugo, 11/08). sender_id do VUUPT (tabela interno).
+SENDERS_CANHOTEIRA = {
+    12887364: "PADRÃO PURO",
+    21785428: "QUATRO ESTRELAS",
+    21911340: "PEDRAMOURA",
+}
+
+# Página A4 em pixels a 150 dpi -- o resolution=150.0 no Image.save é
+# o que faz 1240px virarem 595pt (A4 de verdade) no PDF final.
+A4_PX = (1240, 1754)
+DPI = 150.0
+MARGEM = 100
+
+# Identidade visual (cores tiradas do logo Freshlog: folha verde-água
+# em degradê + texto azul-marinho).
+NAVY        = (23, 29, 51)
+TEAL        = (34, 220, 160)
+CINZA_ZEBRA = (243, 246, 249)
+CINZA_LINHA = (215, 221, 229)
+CINZA_TXT   = (108, 115, 130)
+VERDE_OK    = (16, 150, 95)
+VERMELHO    = (204, 62, 62)
+
+DIAS_SEMANA_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira",
+                  "Sexta-feira", "Sábado", "Domingo"]
+
+
+def _carregar_config() -> dict:
+    with open(_RAIZ_PROJETO / "config.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+# ---------------------------------------------------------------------------
+# Seleção de documentos (SQLite)
+# ---------------------------------------------------------------------------
+
+def carregar_documentos_por_pedido(codigos: set[str]) -> tuple[dict[str, list[dict]], int]:
+    """
+    Uma ida só ao banco: todos os documentos ENVIADOS ('Nota Fiscal' e
+    'Boleto') dos códigos informados, agrupados por codigo_pedido.
+    Também conta quantos documentos desses pedidos estão parados em
+    REVISAO_MANUAL (não entram no PDF, mas o resumo avisa).
+    """
+    docs_por_pedido: dict[str, list[dict]] = {}
+    em_revisao = 0
+    if not codigos:
+        return docs_por_pedido, em_revisao
+
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    try:
+        lista = sorted(codigos)
+        # SQLite limita em 999 variáveis por statement -- lotes de 900.
+        for i in range(0, len(lista), 900):
+            lote = lista[i:i + 900]
+            marcadores = ",".join("?" * len(lote))
+            for row in con.execute(
+                f"SELECT * FROM documentos_processados "
+                f"WHERE status='ENVIADO' AND tipo IN ('Nota Fiscal','Boleto') "
+                f"AND codigo_pedido IN ({marcadores})", lote):
+                docs_por_pedido.setdefault(row["codigo_pedido"], []).append(dict(row))
+            em_revisao += con.execute(
+                f"SELECT COUNT(*) FROM documentos_processados "
+                f"WHERE status='REVISAO_MANUAL' AND codigo_pedido IN ({marcadores})",
+                lote).fetchone()[0]
+    finally:
+        con.close()
+    return docs_por_pedido, em_revisao
+
+
+def carregar_embarcadores() -> dict[int, str]:
+    """sender_id -> nome curto do embarcador (tabela interno). Na
+    interno, o nome_remetente é o nome de fantasia curto ('COGUMELADO',
+    'PADRÃO PURO') e o apelido costuma ser a razão social comprida --
+    pra capa, o curto é o que cabe na coluna."""
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.row_factory = sqlite3.Row
+        try:
+            return {int(r["sender_id"]): (r["nome_remetente"] or r["apelido"] or "").strip()
+                    for r in con.execute(
+                        "SELECT sender_id, apelido, nome_remetente FROM interno "
+                        "WHERE sender_id IS NOT NULL")}
+        finally:
+            con.close()
+    except Exception as e:
+        logger.warning(f"Falha ao carregar embarcadores da tabela interno: {e}")
+        return {}
+
+
+def _nf_norm(numero_nf) -> str | None:
+    s = str(numero_nf or "").strip().lstrip("0")
+    return s or None
+
+
+def selecionar_nfs(docs: list[dict]) -> list[dict]:
+    """
+    Notas Fiscais do pedido, deduplicadas por número de NF: pode haver
+    mais de um registro pra mesma nota (DANFE gerada na Stokki + nota
+    anexada manualmente, hashes diferentes). Preferência: origem
+    'stokki' (DANFE oficial gerada do XML); empate -> mais recente.
+    NF sem numero_nf extraído não tem como dedupar -- entra sempre.
+    """
+    grupos: dict[str, list[dict]] = {}
+    for d in docs:
+        if d.get("tipo") != "Nota Fiscal":
+            continue
+        chave = _nf_norm(d.get("numero_nf")) or f"__sem_nf__{d['hash_conteudo']}"
+        grupos.setdefault(chave, []).append(d)
+
+    escolhidas = []
+    for grupo in grupos.values():
+        escolhidas.append(max(grupo, key=lambda d: (d.get("origem") == "stokki",
+                                                    d.get("processado_em") or "")))
+
+    def _ordem(d):
+        nf = _nf_norm(d.get("numero_nf"))
+        if nf and nf.isdigit():
+            return (0, int(nf), d.get("processado_em") or "")
+        return (1, 0, d.get("processado_em") or "")
+    escolhidas.sort(key=_ordem)
+    return escolhidas
+
+
+def selecionar_boletos(docs: list[dict]) -> list[dict]:
+    """Boletos do pedido, sem dedup (hash é PK; parcelas não colidem).
+    Ordem: nº da NF, nº da parcela, data de processamento."""
+    boletos = [d for d in docs if d.get("tipo") == "Boleto"]
+    boletos.sort(key=lambda d: (_nf_norm(d.get("numero_nf")) or "~",
+                                d.get("numero_parcela") or 0,
+                                d.get("processado_em") or ""))
+    return boletos
+
+
+# ---------------------------------------------------------------------------
+# Desenho (Pillow): identidade visual, capa e canhoteira
+# ---------------------------------------------------------------------------
+
+def _fonte(tamanho_px: int, negrito: bool = False) -> ImageFont.FreeTypeFont:
+    candidatos = (["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf"] if negrito
+                  else ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf"])
+    for caminho in candidatos:
+        try:
+            return ImageFont.truetype(caminho, tamanho_px)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+_LOGO_CACHE: list = []
+
+
+def _logo() -> Image.Image | None:
+    if not _LOGO_CACHE:
+        try:
+            _LOGO_CACHE.append(Image.open(LOGO_PATH).convert("RGBA"))
+        except Exception as e:
+            logger.warning(f"Logo não carregado ({LOGO_PATH}): {e}")
+            _LOGO_CACHE.append(None)
+    return _LOGO_CACHE[0]
+
+
+def _pagina_branca() -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    img = Image.new("RGB", A4_PX, "white")
+    return img, ImageDraw.Draw(img)
+
+
+def _truncar(draw: ImageDraw.ImageDraw, texto: str, fonte, largura_max: int) -> str:
+    """Trunca pelo comprimento RENDERIZADO (textlength), não por nº de
+    caracteres -- é o que evita texto estourando a margem direita."""
+    texto = str(texto or "").strip()
+    if draw.textlength(texto, font=fonte) <= largura_max:
+        return texto
+    while texto and draw.textlength(texto + "…", font=fonte) > largura_max:
+        texto = texto[:-1]
+    return texto.rstrip() + "…"
+
+
+def _limpar_titulo(codigo: str, titulo: str) -> str:
+    """O title do serviço no VUUPT começa repetindo o código do pedido
+    ('#PS-36008 - 024746 / CLIENTE ...') -- tira esse prefixo pra não
+    duplicar com o código que já aparece na mesma linha."""
+    titulo = str(titulo or "").strip()
+    return re.sub(rf"^#?{re.escape(codigo)}\s*-\s*", "", titulo) if codigo else titulo
+
+
+def _nome_cliente(titulo_limpo: str) -> str:
+    """O title (sem o prefixo do código) vem como
+    'ref / EMBARCADOR / CLIENTE' -- o cliente é o último segmento."""
+    partes = [p.strip() for p in titulo_limpo.split("/") if p.strip()]
+    return partes[-1] if partes else titulo_limpo
+
+
+def _cabecalho(img: Image.Image, draw: ImageDraw.ImageDraw,
+               titulo: str, subtitulo: str) -> int:
+    """Cabeçalho padrão das páginas geradas: logo à esquerda, título e
+    subtítulo à direita, barra verde-água. Retorna o y onde o conteúdo
+    pode começar."""
+    logo = _logo()
+    if logo is not None:
+        img.paste(logo, (MARGEM, 78), logo)
+    draw.text((A4_PX[0] - MARGEM, 105), titulo, font=_fonte(48, True),
+              fill=NAVY, anchor="rm")
+    if subtitulo:
+        draw.text((A4_PX[0] - MARGEM, 165), subtitulo, font=_fonte(26),
+                  fill=CINZA_TXT, anchor="rm")
+    draw.rectangle([(MARGEM, 208), (A4_PX[0] - MARGEM, 215)], fill=TEAL)
+    return 250
+
+
+def _rodape(draw: ImageDraw.ImageDraw):
+    draw.text((A4_PX[0] // 2, A4_PX[1] - 58),
+              f"Freshlog · romaneio gerado automaticamente em "
+              f"{datetime.now().strftime('%d/%m/%Y %H:%M')}",
+              font=_fonte(18), fill=CINZA_TXT, anchor="mm")
+
+
+def _marca(draw: ImageDraw.ImageDraw, cx: int, cy: int, ok: bool):
+    """Check verde / X vermelho desenhados na mão (Arial não tem esses
+    glifos de forma confiável)."""
+    if ok:
+        draw.line([(cx - 11, cy + 1), (cx - 3, cy + 9), (cx + 12, cy - 9)],
+                  fill=VERDE_OK, width=5, joint="curve")
+    else:
+        draw.line([(cx - 9, cy - 9), (cx + 9, cy + 9)], fill=VERMELHO, width=5)
+        draw.line([(cx - 9, cy + 9), (cx + 9, cy - 9)], fill=VERMELHO, width=5)
+
+
+# Colunas da tabela da capa (x em px)
+_COL_N, _COL_PEDIDO, _COL_EMB, _COL_CLI = 118, 165, 345, 660
+_COL_NF_CX, _COL_BOL_CX = 1030, 1110
+_LARG_EMB, _LARG_CLI = 295, 350
+
+
+def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
+    draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + 48)], fill=NAVY)
+    f = _fonte(22, True)
+    meio = y + 24
+    draw.text((_COL_N, meio), "#", font=f, fill="white", anchor="lm")
+    draw.text((_COL_PEDIDO, meio), "PEDIDO", font=f, fill="white", anchor="lm")
+    draw.text((_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
+    draw.text((_COL_CLI, meio), "CLIENTE", font=f, fill="white", anchor="lm")
+    draw.text((_COL_NF_CX, meio), "NF", font=f, fill="white", anchor="mm")
+    draw.text((_COL_BOL_CX, meio), "BOL", font=f, fill="white", anchor="mm")
+    return y + 48
+
+
+def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
+               data_alvo: date, tem_canhoteira: bool) -> list[Image.Image]:
+    """Capa: identidade Freshlog + resumo da rota + tabela com 1 linha
+    por pedido (ordem de visita) mostrando o status de NF e boleto."""
+    data_br = data_alvo.strftime("%d/%m/%Y")
+    dia_semana = DIAS_SEMANA_PT[data_alvo.weekday()]
+    nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
+
+    img, draw = _pagina_branca()
+    y = _cabecalho(img, draw, "ROMANEIO DE ENTREGAS", nome_rota)
+
+    # Bloco de informações da rota
+    def _info(x, rotulo, valor, anchor="ls"):
+        draw.text((x, y + 18), rotulo, font=_fonte(20), fill=CINZA_TXT, anchor=anchor)
+        draw.text((x, y + 56), valor, font=_fonte(30, True), fill=NAVY, anchor=anchor)
+    _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
+    _info(640, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 360))
+    _info(A4_PX[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
+    if tem_canhoteira:
+        draw.text((MARGEM, y + 100), "Inclui CANHOTEIRA nas páginas finais",
+                  font=_fonte(22, True), fill=VERDE_OK, anchor="ls")
+    y += 130
+
+    paginas = [img]
+    y = _tabela_header_capa(draw, y)
+    fonte_ped, fonte_txt = _fonte(23, True), _fonte(22)
+    altura_linha, limite_y = 46, A4_PX[1] - 130
+
+    for item in itens:
+        if y + altura_linha > limite_y:            # nova página de continuação
+            _rodape(draw)
+            img, draw = _pagina_branca()
+            y = _cabecalho(img, draw, "ROMANEIO (continuação)", nome_rota)
+            y = _tabela_header_capa(draw, y + 10)
+            paginas.append(img)
+        if item["posicao"] % 2 == 0:
+            draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + altura_linha)],
+                           fill=CINZA_ZEBRA)
+        meio = y + altura_linha // 2
+        draw.text((_COL_N, meio), str(item["posicao"]), font=fonte_txt,
+                  fill=CINZA_TXT, anchor="lm")
+        draw.text((_COL_PEDIDO, meio), item["codigo"], font=fonte_ped,
+                  fill=NAVY, anchor="lm")
+        draw.text((_COL_EMB, meio), _truncar(draw, item["embarcador"], fonte_txt, _LARG_EMB),
+                  font=fonte_txt, fill=NAVY, anchor="lm")
+        draw.text((_COL_CLI, meio), _truncar(draw, item["cliente"], fonte_txt, _LARG_CLI),
+                  font=fonte_txt, fill=NAVY, anchor="lm")
+        _marca(draw, _COL_NF_CX, meio, item["tem_nf"])
+        _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
+        y += altura_linha
+
+    _rodape(draw)
+    return paginas
+
+
+def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
+                     data_alvo: date) -> list[Image.Image]:
+    """Folha(s) de canhoteira: tabela na ordem da rota com as entregas
+    dos embarcadores monitorados e campos de recebedor/data/assinatura.
+    Identifica motorista, rota e dia no cabeçalho (pedido do Hugo)."""
+    data_br = data_alvo.strftime("%d/%m/%Y")
+    nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
+    embarcadores_presentes = " · ".join(sorted({e["embarcador"] for e in entregas}))
+
+    def _nova_pagina(continuacao: bool = False):
+        img, draw = _pagina_branca()
+        titulo = "CANHOTEIRA" + (" (continuação)" if continuacao else "")
+        y = _cabecalho(img, draw, titulo, nome_rota)
+        draw.text((MARGEM, y + 20), f"Motorista: {nome_motorista}   ·   {nome_rota}   ·   {data_br}",
+                  font=_fonte(26, True), fill=NAVY, anchor="ls")
+        draw.text((MARGEM, y + 58), f"Recolher canhoto assinado de cada entrega abaixo — "
+                                    f"{embarcadores_presentes}",
+                  font=_fonte(21), fill=CINZA_TXT, anchor="ls")
+        y += 90
+        # header da tabela
+        draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + 48)], fill=NAVY)
+        f = _fonte(22, True)
+        draw.text((118, y + 24), "PARADA", font=f, fill="white", anchor="lm")
+        draw.text((250, y + 24), "ENTREGA", font=f, fill="white", anchor="lm")
+        draw.text((700, y + 24), "RECEBEDOR / DATA / ASSINATURA", font=f,
+                  fill="white", anchor="lm")
+        return img, draw, y + 48
+
+    paginas = []
+    img, draw, y = _nova_pagina()
+    paginas.append(img)
+    altura_linha, limite_y = 150, A4_PX[1] - 130
+    fonte_rotulo = _fonte(20)
+
+    for entrega in entregas:
+        if y + altura_linha > limite_y:
+            _rodape(draw)
+            img, draw, y = _nova_pagina(continuacao=True)
+            paginas.append(img)
+
+        # coluna parada
+        draw.text((140, y + altura_linha // 2), str(entrega["posicao"]),
+                  font=_fonte(34, True), fill=NAVY, anchor="mm")
+        # coluna entrega (3 linhas)
+        nfs = entrega["nfs"] or "—"
+        draw.text((250, y + 40), f"{entrega['codigo']}  ·  NF {nfs}",
+                  font=_fonte(24, True), fill=NAVY, anchor="ls")
+        draw.text((250, y + 78), entrega["embarcador"], font=_fonte(22),
+                  fill=VERDE_OK, anchor="ls")
+        draw.text((250, y + 114), _truncar(draw, entrega["cliente"], _fonte(22), 400),
+                  font=_fonte(22), fill=CINZA_TXT, anchor="ls")
+        # coluna assinatura
+        draw.text((700, y + 52), "Recebedor:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(830, y + 56), (1130, y + 56)], fill=CINZA_LINHA, width=2)
+        draw.text((700, y + 116), "Assinatura:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(830, y + 120), (1000, y + 120)], fill=CINZA_LINHA, width=2)
+        draw.text((1020, y + 116), "Data:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(1080, y + 120), (1130, y + 120)], fill=CINZA_LINHA, width=2)
+
+        draw.line([(MARGEM, y + altura_linha), (A4_PX[0] - MARGEM, y + altura_linha)],
+                  fill=CINZA_LINHA, width=2)
+        y += altura_linha
+
+    _rodape(draw)
+    return paginas
+
+
+def _paginas_pillow(imagens: list[Image.Image], buffers_vivos: list) -> list:
+    """Converte páginas Pillow em páginas pypdf. O BytesIO precisa
+    continuar vivo até o writer.write() (pypdf lê o stream de forma
+    lazy) -- por isso ele é acumulado em buffers_vivos pelo chamador."""
+    buf = io.BytesIO()
+    imagens[0].save(buf, format="PDF", save_all=True,
+                    append_images=imagens[1:], resolution=DPI)
+    buf.seek(0)
+    buffers_vivos.append(buf)
+    return list(PdfReader(buf).pages)
+
+
+# ---------------------------------------------------------------------------
+# Montagem do PDF da rota
+# ---------------------------------------------------------------------------
+
+def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], list[str]]:
+    """
+    Resolve o arquivo local e valida que o PDF abre. Devolve (lista de
+    (registro, reader) utilizáveis, lista de problemas legíveis pra
+    pendência). Arquivo ausente ou PDF corrompido não derruba a rota.
+    """
+    abertos, problemas = [], []
+    for row in rows:
+        nome = row.get("nome_arquivo") or "?"
+        caminho = resolver_arquivo_local(nome)
+        if caminho is None:
+            problemas.append(f"arquivo não localizado: {nome}")
+            continue
+        try:
+            reader = PdfReader(str(caminho))
+            if reader.is_encrypted:
+                reader.decrypt("")
+            _ = len(reader.pages)               # força o parse -- pega PDF corrompido aqui
+            abertos.append((row, reader))
+        except Exception as e:
+            problemas.append(f"PDF ilegível: {nome}")
+            logger.warning(f"  PDF ilegível ({nome}): {e}")
+    return abertos, problemas
+
+
+def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
+                    embarcadores: dict[int, str], nome_motorista: str,
+                    data_alvo: date, caminho_saida: Path) -> dict:
+    writer = PdfWriter()
+    buffers_vivos: list = []        # BytesIO das páginas Pillow -- vivos até o write()
+    readers_vivos: list = []        # PdfReaders dos arquivos -- idem
+    pendencias: list[str] = []
+    total_nfs = total_boletos = 0
+
+    # Passada 1: resolve e valida os documentos de todos os pedidos --
+    # a capa precisa do status de tudo antes de qualquer página.
+    itens: list[dict] = []
+    total = len(servicos)
+    for posicao, s in enumerate(servicos, start=1):
+        codigo = (s.get("code") or "").lstrip("#")
+        titulo_limpo = _limpar_titulo(codigo, s.get("title"))
+        sender_id = s.get("sender_id")
+        embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
+        docs = docs_por_pedido.get(codigo, [])
+
+        nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
+        boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
+
+        faltas = []
+        if not nfs:
+            faltas.append("sem nota fiscal")
+        if not boletos:
+            faltas.append("sem boleto")
+        faltas.extend(problemas_nf + problemas_bol)
+        pendencias.extend(f"{codigo}: {f}" for f in faltas)
+
+        numeros_nf = [_nf_norm(row.get("numero_nf")) for row, _r in nfs]
+        itens.append({
+            "posicao": posicao, "codigo": codigo,
+            "embarcador": embarcador, "cliente": _nome_cliente(titulo_limpo),
+            "sender_id": sender_id,
+            "nfs": ", ".join(n for n in numeros_nf if n),
+            "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
+            "_abertos_nf": nfs, "_abertos_bol": boletos,
+        })
+
+    entregas_canhoteira = [i for i in itens if i["sender_id"] in SENDERS_CANHOTEIRA]
+    for i in entregas_canhoteira:               # nome padronizado na canhoteira
+        i["embarcador"] = SENDERS_CANHOTEIRA[i["sender_id"]]
+
+    # Capa
+    for pagina in _paginas_pillow(
+            gerar_capa(rota, itens, nome_motorista, data_alvo,
+                       tem_canhoteira=bool(entregas_canhoteira)),
+            buffers_vivos):
+        writer.add_page(pagina)
+
+    # Documentos emendados: NFs e depois boletos, pedido a pedido.
+    for item in itens:
+        for _row, reader in item["_abertos_nf"]:
+            readers_vivos.append(reader)
+            for pagina in reader.pages:
+                writer.add_page(pagina)
+            total_nfs += 1
+        for _row, reader in item["_abertos_bol"]:
+            readers_vivos.append(reader)
+            for pagina in reader.pages:
+                writer.add_page(pagina)
+            total_boletos += 1
+
+    # Canhoteira (só quando a rota tem entrega dos embarcadores monitorados)
+    if entregas_canhoteira:
+        for pagina in _paginas_pillow(
+                gerar_canhoteira(rota, entregas_canhoteira, nome_motorista, data_alvo),
+                buffers_vivos):
+            writer.add_page(pagina)
+
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+    with open(caminho_saida, "wb") as f:
+        writer.write(f)
+
+    return {"pedidos": total, "paginas": len(writer.pages),
+            "nfs": total_nfs, "boletos": total_boletos,
+            "canhoteira": len(entregas_canhoteira), "pendencias": pendencias}
+
+
+def nome_arquivo_saida(rota: dict, nome_motorista: str, data_alvo: date) -> str:
+    m = re.search(r"#(\d+)", rota.get("name") or "")
+    numero = m.group(1) if m else "X"
+    slug = re.sub(r"[^A-Z0-9]+", "_", _normalizar_texto(nome_motorista)).strip("_") \
+        or "SEM_MOTORISTA"
+    return f"romaneio_{data_alvo.isoformat()}_rota{numero}_id{rota.get('id')}_{slug}.pdf"
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
+    inicio = time.time()
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(
+        cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
+    )
+    nome_por_agent_id = {m.agent_id: m.nome for m in catalogo.motoristas}
+    embarcadores = carregar_embarcadores()
+
+    data_alvo = _parse_data(data_str)
+    data_br = data_alvo.strftime("%d/%m/%Y")
+    logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Gerando PDFs de romaneio para {data_br}.")
+
+    rotas = buscar_rotas_do_dia(token, data_alvo)
+    if rota_id is not None:
+        rotas = [r for r in rotas if r.get("id") == rota_id]
+        if not rotas:
+            logger.error(f"Rota {rota_id} não encontrada entre as rotas de {data_br} "
+                         f"(ou está cancelada).")
+            return 1
+    logger.info(f"{len(rotas)} rota(s) para {data_br}.")
+
+    pasta = PASTA_ROMANEIOS / ("teste" if modo_teste else "") / data_alvo.isoformat()
+    pasta.mkdir(parents=True, exist_ok=True)
+
+    # Idempotência: a pasta é 100% regenerável. Execução completa limpa
+    # tudo da data (remove órfãos de rota renomeada/motorista trocado);
+    # com --rota, limpa só os PDFs daquela rota.
+    padrao = f"*_id{rota_id}_*.pdf" if rota_id is not None else "romaneio_*.pdf"
+    for antigo in pasta.glob(padrao):
+        antigo.unlink()
+
+    codigos: set[str] = set()
+    rotas_com_servicos = []
+    for r in rotas:
+        servicos = _extrair_servicos_da_rota(r)
+        if not servicos:
+            logger.warning(f"Rota {r.get('name')} (id {r.get('id')}) sem serviços -- pulada.")
+            continue
+        rotas_com_servicos.append((r, servicos))
+        codigos.update((s.get("code") or "").lstrip("#") for s in servicos)
+
+    docs_por_pedido, em_revisao = carregar_documentos_por_pedido(codigos)
+    logger.info(f"{sum(len(v) for v in docs_por_pedido.values())} documento(s) ENVIADO(s) "
+                f"encontrados para {len(codigos)} pedido(s); {em_revisao} em REVISAO_MANUAL.")
+
+    resumo_etapas: dict = {}
+    linhas_resumo: list[str] = [f"Romaneios de {data_br} -- gerados em "
+                                f"{time.strftime('%d/%m/%Y %H:%M:%S')}", ""]
+    todas_pendencias: list[str] = []
+    gerados = com_erro = 0
+
+    for rota, servicos in rotas_com_servicos:
+        agent_id = rota.get("agent_id")
+        nome_motorista = nome_por_agent_id.get(agent_id, "(sem motorista)")
+        etiqueta = f"{rota.get('name')} — {nome_motorista}"
+        caminho_saida = pasta / nome_arquivo_saida(rota, nome_motorista, data_alvo)
+        try:
+            stats = montar_pdf_rota(rota, servicos, docs_por_pedido, embarcadores,
+                                    nome_motorista, data_alvo, caminho_saida)
+            gerados += 1
+            detalhe = (f"{stats['pedidos']} pedido(s), {stats['nfs']} NF(s), "
+                       f"{stats['boletos']} boleto(s), {stats['paginas']} página(s), "
+                       f"{len(stats['pendencias'])} pendência(s)"
+                       + (f", canhoteira com {stats['canhoteira']} entrega(s)"
+                          if stats["canhoteira"] else ""))
+            resumo_etapas[etiqueta] = {"status": "ok", "detalhe": detalhe}
+            linhas_resumo.append(f"[OK] {etiqueta}: {detalhe} -> {caminho_saida.name}")
+            todas_pendencias.extend(stats["pendencias"])
+            logger.info(f"  {caminho_saida.name}: {detalhe}")
+        except Exception as e:
+            com_erro += 1
+            resumo_etapas[etiqueta] = {"status": "erro", "detalhe": str(e)}
+            linhas_resumo.append(f"[ERRO] {etiqueta}: {e}")
+            logger.exception(f"Erro ao montar PDF da rota {rota.get('id')}: {e}")
+
+    if todas_pendencias:
+        linhas_resumo += ["", "PENDÊNCIAS:"] + [f"  - {p}" for p in todas_pendencias]
+    if em_revisao:
+        linhas_resumo += ["", f"{em_revisao} documento(s) desses pedidos em REVISAO_MANUAL "
+                              f"(fora do PDF -- resolver no fluxo de documentos)."]
+
+    # Com --rota o resumo cobriria só aquela rota -- não sobrescrever o
+    # _resumo.txt da execução completa da data.
+    if rota_id is None:
+        (pasta / "_resumo.txt").write_text("\n".join(linhas_resumo) + "\n", encoding="utf-8")
+
+    resumo_etapas["Resumo geral"] = {
+        "status": "erro" if com_erro else "ok",
+        "detalhe": f"{gerados} PDF(s) gerado(s), {com_erro} erro(s), "
+                  f"{len(todas_pendencias)} pendência(s), {em_revisao} doc(s) em revisão manual",
+    }
+
+    duracao = time.time() - inicio
+    logger.info(f"Concluído em {duracao:.1f}s: {resumo_etapas['Resumo geral']['detalhe']}. "
+                f"Saída: {pasta}")
+
+    if modo_teste:
+        logger.info("[MODO TESTE] Notificação de execução não enviada.")
+    else:
+        try:
+            notificar_execucao(resumo_etapas, duracao, modo_teste, config)
+        except Exception as e:
+            logger.warning(f"Falha ao notificar execução (não afeta o resultado): {e}")
+
+    return 1 if com_erro else 0
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Gera 1 PDF por rota do dia com NFs e boletos na ordem de visita")
+    parser.add_argument("--modo-teste", action="store_true",
+                        help="Gera os PDFs em dados/romaneios/teste/ e não envia notificação")
+    parser.add_argument("--data", default="hoje",
+                        help="Data alvo: 'hoje' (padrão), 'amanhã' ou DD/MM/AAAA")
+    parser.add_argument("--rota", type=int, default=None,
+                        help="route_id do VUUPT: regenera só o PDF dessa rota")
+    args = parser.parse_args()
+    sys.exit(main(modo_teste=args.modo_teste, data_str=args.data, rota_id=args.rota))

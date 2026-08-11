@@ -113,6 +113,17 @@ AGENTES = [
         "categoria": "Roteirização",
     },
     {
+        "id": "gerar_romaneios",
+        "nome": "Gerar PDFs de Romaneio",
+        "descricao": "Gera 1 PDF por rota do dia com NFs e boletos na ordem de visita (job das 04h).",
+        "script": "roteirizacao/gerar_pdf_romaneios.py",
+        "cwd": "roteirizacao",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": [],
+        "categoria": "Roteirização",
+    },
+    {
         "id": "notificar_espera",
         "nome": "Notificar Pedidos em Espera",
         "descricao": "Notifica embarcadores sobre pedidos parados aguardando faturamento/liberação.",
