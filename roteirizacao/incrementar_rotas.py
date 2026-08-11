@@ -152,18 +152,38 @@ def _data_inicio_rota(rota: dict) -> date | None:
         return None
 
 
+# Status de rota que ainda não estão na rua (confirmados contra dado real
+# da API, 11/08): "not_started", "assigned", "accepted" e "not_assigned"
+# -- pedido do Hugo, permitir incrementar rota de HOJE nesses casos, já
+# que o motorista ainda não começou a rodar. "started" continua bloqueado
+# (rota em execução -- é exatamente o caso que motivou a trava original,
+# 06/08: motorista reclamou de pedido aparecendo do nada numa rota já na
+# rua). Qualquer status não reconhecido (novo/desconhecido) também
+# bloqueia, por segurança -- só libera pros valores explicitamente
+# confirmados como seguros.
+STATUS_ROTA_HOJE_LIBERADOS = {"not_started", "assigned", "accepted", "not_assigned"}
+
+
 def _rota_e_de_hoje_ou_passada(rota: dict) -> bool:
     """
     Trava de segurança principal (06/08, pedido do Hugo -- crítico:
     motorista reclamou de pedido aparecendo do nada numa rota já na
-    rua). Prioriza o campo start_at REAL da API; só cai pro nome como
-    reserva se start_at não vier preenchido ou não for reconhecível
-    -- nunca o contrário, pra não confiar em texto de exibição quando
-    temos o dado estruturado disponível.
+    rua; ajustada 11/08, também pedido do Hugo, pra liberar rota de
+    HOJE quando o status ainda indica que ela não saiu pra rua -- ver
+    STATUS_ROTA_HOJE_LIBERADOS). Prioriza o campo start_at REAL da
+    API; só cai pro nome como reserva se start_at não vier preenchido
+    ou não for reconhecível -- nunca o contrário, pra não confiar em
+    texto de exibição quando temos o dado estruturado disponível.
+    Rota de data PASSADA (anterior a hoje) continua sempre bloqueada,
+    não importa o status.
     """
     data_start_at = _data_inicio_rota(rota)
     if data_start_at is not None:
-        return data_start_at <= date.today()
+        if data_start_at < date.today():
+            return True
+        if data_start_at == date.today():
+            return rota.get("status") not in STATUS_ROTA_HOJE_LIBERADOS
+        return False
     return _data_da_rota_e_passada(rota.get("name", ""))
 
 
@@ -420,19 +440,19 @@ def main(modo_teste: bool = False):
 
         # TRAVA DE SEGURANÇA (06/08, pedido do Hugo -- crítico): motorista
         # reclamou de pedido aparecendo do nada numa rota que já estava
-        # na rua. O filtro acima (startswith no prefixo de amanhã) já
-        # deveria bastar sozinho, mas dado o risco operacional real de
-        # mexer numa rota em execução, blindamos aqui de novo, explicitamente
-        # -- checa a data de início REAL da rota (campo start_at da API,
-        # mais confiável que o nome) e NUNCA aceita uma cujo start_at seja
-        # hoje ou passado. Se algum dia essa checagem barrar alguma rota,
-        # é sinal de bug em algum outro lugar (nome/start_at inconsistente
-        # entre si, etc) -- vale investigar, não só silenciar.
+        # na rua. Ajustada 11/08 (também pedido do Hugo): rota de HOJE com
+        # status "not_started", "assigned" ou "accepted" -- motorista ainda
+        # não começou a rodar -- passa a ser candidata normalmente; só
+        # continua bloqueada rota de hoje com status "started" (ou
+        # qualquer outro não reconhecido) e QUALQUER rota de data passada,
+        # não importa o status (ver STATUS_ROTA_HOJE_LIBERADOS e
+        # _rota_e_de_hoje_ou_passada). Checa a data/status REAIS da API
+        # (mais confiável que o nome, que é só texto de exibição).
         rotas_bloqueadas = [r for r in todas_rotas if _rota_e_de_hoje_ou_passada(r)]
         if rotas_bloqueadas:
-            logger.warning(f"{len(rotas_bloqueadas)} rota(s) de hoje/passada encontrada(s) e EXCLUÍDA(S) "
-                           f"por segurança (nunca alocamos nelas): "
-                           f"{[(r.get('name'), r.get('start_at')) for r in rotas_bloqueadas]}")
+            logger.warning(f"{len(rotas_bloqueadas)} rota(s) de hoje (em execução/status não liberado) ou "
+                           f"passada(s) encontrada(s) e EXCLUÍDA(S) por segurança (nunca alocamos nelas): "
+                           f"{[(r.get('name'), r.get('start_at'), r.get('status')) for r in rotas_bloqueadas]}")
         ids_bloqueados = {r["id"] for r in rotas_bloqueadas}
         rotas_hoje = [r for r in rotas_hoje if r["id"] not in ids_bloqueados]
 
