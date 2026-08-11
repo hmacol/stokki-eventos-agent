@@ -21,6 +21,7 @@ env/
 # Dados, logs e saídas geradas em runtime
 dados/*
 !dados/BD_MOTORISTAS.xlsx
+!dados/centro_expandido_sp.json
 debug/
 saida_investigacao_stokki/
 documentos_pedido/dados/

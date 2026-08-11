@@ -9,7 +9,18 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
     DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
-    TELEFONE_MOTORISTA | EMAIL_MOTORISTA
+    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA
+
+PLACA (pedido do Hugo, 11/08): placa do veículo do motorista, usada
+pela trava de rodízio municipal de SP (ver roteirizacao/rodizio_sp.py
+e roteirizacao/alocacao_motoristas.py::selecionar_motorista_equitativo).
+Sincronizada automaticamente quando possível por
+scripts/sincronizar_placas_motoristas.py (via GET /agents + GET
+/vehicles do VUUPT -- só funciona pro motorista que já tem vehicle_id
+vinculado ao agente lá; confirmado em 11/08 que a maioria NÃO tem),
+com preenchimento manual pra quem a API não resolve. Motorista sem
+PLACA cadastrada: nunca é bloqueado por rodízio (dado ausente não
+bloqueia -- mesmo padrão do resto do módulo).
 
 TELEFONE_MOTORISTA / EMAIL_MOTORISTA (doc de origem:
 DOC_EXECUCAO_CLAUDE_NOTIFICACAO_MOTORISTAS.md): contato usado por
@@ -87,6 +98,7 @@ class MotoristaPreferencias:
     zonas_preferidas: list[str]  # ver roteirizacao/zonas_sp.py -- vazio = nenhuma zona da Grande SP habilitada
     telefone: str | None = None  # coluna TELEFONE_MOTORISTA -- usado em avisar_motoristas_rotas.py (WhatsApp)
     email: str | None = None  # coluna EMAIL_MOTORISTA -- usado em avisar_motoristas_rotas.py (e-mail de aviso)
+    placa: str | None = None  # coluna PLACA -- usado pela trava de rodízio (ver roteirizacao/rodizio_sp.py)
 
 
 def _normalizar_texto(s) -> str:
@@ -149,6 +161,12 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     telefone = str(registro.get("TELEFONE_MOTORISTA") or "").strip() or None
     email = str(registro.get("EMAIL_MOTORISTA") or "").strip() or None
 
+    placa_bruta = registro.get("PLACA")
+    if placa_bruta is None or (isinstance(placa_bruta, float) and pd.isna(placa_bruta)):
+        placa = None
+    else:
+        placa = re.sub(r"[^A-Z0-9]", "", _normalizar_texto(placa_bruta)) or None
+
     return MotoristaPreferencias(
         agent_id=agent_id,
         vehicle_id=_parse_int_opcional(registro.get("VEHICLE_ID_VUUPT")),
@@ -160,6 +178,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         zonas_preferidas=_parse_zonas_preferidas(registro.get("ZONAS_PREFERIDAS")),
         telefone=telefone,
         email=email,
+        placa=placa,
     )
 
 

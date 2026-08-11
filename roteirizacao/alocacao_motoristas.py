@@ -21,6 +21,7 @@ from datetime import date
 from regioes_dia_fixo import RAIO_GRANDE_SP_KM, extrair_cidade, regiao_da_cidade
 from roteirizacao_dados import obter_coordenadas, _distancia_km
 from zonas_sp import classificar_rota_zona
+from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,12 @@ def selecionar_motorista_equitativo(
         ZONAS_PREFERIDAS do motorista, trava igualmente rígida (pedido
         do Hugo, 10/08). Rota sem zona reconhecível (dado insuficiente)
         não aplica essa trava -- mesmo padrão seguro do resto do módulo.
+      - rodízio de placas de SP (pedido do Hugo, 11/08, ver
+        rodizio_sp.py): se a rota tem pelo menos 1 parada dentro do
+        Centro Expandido e `data_rota` é dia útil, motorista cuja placa
+        está restrita nesse dia NUNCA é considerado pra essa rota --
+        trava igualmente rígida, independente de Viagem/Zona. Motorista
+        sem PLACA cadastrada não é afetado por essa trava.
 
     `contagem_alocacoes_dia` é lida mas NÃO é alterada aqui -- quem
     chama incrementa depois de confirmar que a rota foi criada de
@@ -85,6 +92,11 @@ def selecionar_motorista_equitativo(
     zona = None if eh_viagem else classificar_rota_zona(sublote, api_key)
     dia_semana = data_rota.weekday()
 
+    # Rodízio de placas de SP: só vale a pena checar a área do sublote
+    # 1 vez (não por motorista) se o dia da semana sequer tem alguma
+    # restrição de dígito (segunda-sexta) -- sábado/domingo pula direto.
+    rota_em_rodizio = dia_semana in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, api_key)
+
     elegiveis = [
         m for m in motoristas
         if m.ativo
@@ -92,12 +104,14 @@ def selecionar_motorista_equitativo(
         and contagem_alocacoes_dia.get(m.agent_id, 0) < m.max_rotas_dia
         and (m.aceita_viagens if eh_viagem else True)
         and (zona is None or zona in m.zonas_preferidas)
+        and not (rota_em_rodizio and placa_restrita_no_dia(m.placa, dia_semana))
     ]
 
     if not elegiveis:
         tipo_str = "VIAGEM" if eh_viagem else f"Grande SP/{zona or 'zona desconhecida'}"
+        rodizio_str = " [dentro do Centro Expandido -- rodízio pode ter reduzido os elegíveis]" if rota_em_rodizio else ""
         logger.warning(
-            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}] em "
+            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}]{rodizio_str} em "
             f"{data_rota.isoformat()} -- rota será criada sem motorista."
         )
         return None
