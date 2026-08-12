@@ -24,6 +24,7 @@ import smtplib
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -76,6 +77,7 @@ URL_PROVIDER_ADM = f"{STOKKI_BASE}/pt-br/administrator/inventory/outbound/show"
 URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 
 HORAS_PADRAO = 48
+FUSO_LOCAL   = ZoneInfo("America/Sao_Paulo")
 
 
 def _carregar_config():
@@ -371,6 +373,21 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
     notificar_validacao_pendente, adaptado pro conteúdo de insucesso.
     """
     if not insucessos:
+        return
+
+    # A busca usa uma janela de HORAS_PADRAO (48h) pra não perder nenhum
+    # insucesso entre execuções, mas isso fazia o e-mail repetir insucessos
+    # de ontem que já tinham sido notificados (pedido do Hugo, 12/08: email
+    # cumulativo entre dias). Filtra aqui só pra notificação -- mantém a
+    # janela de 48h intacta pra duplicação/agendamento, que já tem
+    # fingerprint próprio pra não repetir ação.
+    hoje_local = datetime.now(FUSO_LOCAL).date()
+    insucessos = [
+        s for s in insucessos
+        if (dt := _parse_data(s.get("completed_at"))) and dt.astimezone(FUSO_LOCAL).date() == hoje_local
+    ]
+    if not insucessos:
+        logger.info("  Nenhum insucesso concluido hoje -- notificacao pulada.")
         return
 
     remetente   = config_email.get("remetente", "")
