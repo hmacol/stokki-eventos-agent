@@ -161,6 +161,26 @@ def _distancia_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def calcular_km_estimado(sublote: list[dict], base_lat: float, base_lng: float,
+                         api_key: str | None) -> float:
+    """
+    KM total estimado (haversine) de UMA rota, na ordem de visita:
+    base -> p1 -> ... -> pN -> base. Serviço sem coordenada é ignorado
+    no somatório (não dá pra medir). Extraída de selecao_modelo.py::
+    _km_total (que soma isso sobre vários sublotes) pra ser reaproveitada
+    também pelo cálculo de km dos rascunhos de rota (painel_agentes/
+    rascunhos_rota.py), evitando duas implementações divergindo.
+    """
+    coords = [c for c in (obter_coordenadas(s, api_key) for s in sublote) if c]
+    if not coords:
+        return 0.0
+    total = _distancia_km(base_lat, base_lng, *coords[0])
+    for i in range(len(coords) - 1):
+        total += _distancia_km(*coords[i], *coords[i + 1])
+    total += _distancia_km(*coords[-1], base_lat, base_lng)
+    return total
+
+
 def agrupar_por_regiao(servicos: list[dict], api_key: str | None = None,
                        digitos_prefixo: int = 2, tamanho_grade_graus: float = 0.1) -> dict[str, list[dict]]:
     """

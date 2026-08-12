@@ -1,0 +1,686 @@
+{% extends "base.html" %}
+{% block titulo %}Planejamento de Rotas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1600px; }
+  .barra-controle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .barra-controle input[type=date] {
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .barra-controle .status-lote { margin-left: auto; color: var(--texto-suave); }
+  .aviso {
+    background: #FDF3E1;
+    border: 1px solid #F0D9A8;
+    color: #8A5A0C;
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .layout-planejamento { display: grid; grid-template-columns: 260px 380px 1fr; gap: 16px; align-items: start; }
+  .coluna {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px;
+    max-height: 78vh;
+    overflow-y: auto;
+  }
+  .coluna h3 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #map { width: 100%; height: 78vh; border-radius: 10px; border: 1px solid var(--borda); }
+
+  .lista-paradas { list-style: none; margin: 0; padding: 0; min-height: 24px; }
+  .lista-paradas.pool { min-height: 200px; }
+  .item-parada {
+    background: var(--fundo);
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    padding: 7px 9px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    cursor: grab;
+    line-height: 1.4;
+  }
+  .item-parada .codigo { font-weight: 700; }
+  .item-parada .remetente { color: #4F86F7; }
+  .item-parada .destinatario { color: #8A5A0C; }
+  .item-parada .endereco { color: var(--texto-suave); font-size: 11px; }
+  .item-parada.sortable-ghost { opacity: 0.3; }
+  .item-parada.sortable-chosen { box-shadow: 0 0 0 2px var(--acento); }
+
+  .campo-busca {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--borda);
+    margin-bottom: 10px;
+  }
+  .item-parada.busca-oculta { display: none; }
+
+  .card-rota {
+    border: 1px solid var(--borda);
+    border-left: 5px solid var(--cor-rota, var(--borda));
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 12px;
+  }
+  .card-rota.busca-oculta { display: none; }
+  .card-rota .cabecalho { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .card-rota .nome { font-weight: 700; font-size: 12.5px; }
+  .card-rota .metricas { font-size: 11px; color: var(--texto-suave); margin: 2px 0 6px; }
+  .card-rota select {
+    width: 100%;
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--borda);
+    margin-bottom: 6px;
+  }
+  .badge-trava {
+    display: inline-block;
+    background: #FDEBEA;
+    color: var(--erro);
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 100px;
+    margin: 0 4px 4px 0;
+  }
+  .card-rota .acoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .card-rota .acoes button {
+    flex: 1 1 auto;
+    min-width: 70px;
+    font-size: 11px;
+    padding: 5px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    cursor: pointer;
+  }
+  .card-rota .acoes button:hover { background: var(--fundo); }
+  .card-rota .acoes button.perigo { color: var(--erro); }
+  .card-rota.enviada { opacity: 0.75; background: var(--fundo); }
+  .status-envio { font-size: 11px; padding: 5px 8px; border-radius: 5px; margin-bottom: 6px; }
+  .status-envio.ok { background: #E5F7EF; color: var(--sucesso); }
+  .status-envio.erro { background: #FDEBEA; color: var(--erro); }
+  #botao-nova-rota {
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px dashed var(--borda);
+    background: var(--fundo);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
+  .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
+  .info-parada .remetente { color: #4F86F7; font-weight: 600; }
+  .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 16px;">Planejamento de Rotas</h1>
+
+<form class="barra-controle" method="GET" action="{{ url_for('planejamento') }}">
+  <label for="data">Data:</label>
+  <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
+  <button type="submit" class="botao">Buscar</button>
+  {% if dados %}
+  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool</span>
+  {% endif %}
+</form>
+
+{% if erro %}
+<div class="aviso">Não consegui montar o planejamento: {{ erro }}</div>
+{% elif not dados %}
+<div class="aviso">Nenhum dado carregado.</div>
+{% elif not dados.rascunhos and not dados.pool %}
+<div class="aviso">Nenhum rascunho nem pedido pendente para essa data. Rode "Criar Rotas Diárias (Rascunho)" no painel de agentes primeiro.</div>
+{% elif not dados.google_maps_key %}
+<div class="aviso">Falta a chave do Google Maps (google_maps.api_key) no config.yaml -- sem ela não dá pra desenhar o mapa.</div>
+{% else %}
+<div class="layout-planejamento">
+  <div class="coluna">
+    <h3>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></h3>
+    <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
+    <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, remetente, destinatário ou endereço...">
+    <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
+  </div>
+
+  <div class="coluna">
+    <h3>Rotas (rascunho)</h3>
+    <button id="botao-nova-rota" type="button">+ Nova rota</button>
+    <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
+    <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, remetente ou destinatário...">
+    <div id="lista-rotas"></div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script>
+  const RASCUNHOS = {{ dados.rascunhos | tojson }};
+  const POOL = {{ dados.pool | tojson }};
+  const BASE = {{ dados.base | tojson }};
+  const MOTORISTAS = {{ dados.motoristas | tojson }};
+  const DATA_ALVO_ISO = {{ dados.data_alvo_iso | tojson }};
+  const CORES = ["#0EA575", "#4F86F7", "#E1483D", "#B24FE0", "#E8A33D",
+                "#14A6A6", "#D0479A", "#6B7CE0", "#8FBF3F", "#E06B4F"];
+  const ICONES_NUMERADOS = {};
+  const POOL_BY_ID = {};
+  POOL.forEach(p => POOL_BY_ID[p.service_id] = p);
+
+  let map;
+  const coresPorRascunho = {};
+  const gruposMapa = {};  // rascunho_id -> { renderer, markers: [] }
+  let infoWindow;
+
+  function escaparHtml(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto == null ? '' : String(texto);
+    return div.innerHTML;
+  }
+
+  function iconeNumerado(numero, cor) {
+    const chave = `${numero}-${cor}`;
+    if (ICONES_NUMERADOS[chave]) return ICONES_NUMERADOS[chave];
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
+      <circle cx="14" cy="14" r="12" fill="${cor}" stroke="#fff" stroke-width="2"/>
+      <text x="14" y="19" font-size="12" font-weight="700" text-anchor="middle" fill="#fff" font-family="Arial">${numero}</text>
+    </svg>`;
+    const icone = {
+      url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+      scaledSize: new google.maps.Size(28, 28),
+      anchor: new google.maps.Point(14, 14),
+    };
+    ICONES_NUMERADOS[chave] = icone;
+    return icone;
+  }
+
+  function montarInfoHtml(parada) {
+    return `<div class="info-parada">
+      <div class="titulo">${escaparHtml(parada.codigo)}</div>
+      <div class="remetente">${escaparHtml(parada.remetente)}</div>
+      <div>${escaparHtml(parada.titulo)}</div>
+      <div class="endereco">${escaparHtml(parada.endereco)}</div>
+    </div>`;
+  }
+
+  async function postJSON(url, body) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || `Falha em ${url}`);
+    return dados;
+  }
+
+  function itemParadaHtml(p) {
+    const destinatario = p.destinatario_nome
+      ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>`
+      : "";
+    return `<span class="codigo">${escaparHtml(p.codigo)}</span><br>
+      <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
+      <span class="endereco">${escaparHtml(p.endereco)}</span>`;
+  }
+
+  function criarLiParada(p) {
+    const li = document.createElement("li");
+    li.className = "item-parada";
+    li.dataset.serviceId = p.service_id;
+    li.dataset.lat = p.latitude ?? "";
+    li.dataset.lng = p.longitude ?? "";
+    // texto usado pela busca client-side (código, remetente, destinatário, endereço)
+    li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco]
+      .filter(Boolean).join(" ").toLowerCase();
+    li.innerHTML = itemParadaHtml({ ...p, remetente: p.remetente_nome || p.remetente });
+    return li;
+  }
+
+  function montarSelectMotorista(rascunho) {
+    const opcoes = ['<option value="">Sem motorista</option>'].concat(
+      MOTORISTAS.map(m => `<option value="${m.agent_id}" ${m.agent_id === rascunho.agent_id ? "selected" : ""}>${escaparHtml(m.nome)}</option>`)
+    );
+    return opcoes.join("");
+  }
+
+  function metricasHtml(rascunho) {
+    const km = rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km` : "km ?";
+    const paradas = document.querySelectorAll(`#lista-parada-${rascunho.id} .item-parada`).length;
+    return `${paradas} parada(s) — ${km}`;
+  }
+
+  function badgesHtml(badges) {
+    return (badges || []).map(b => `<span class="badge-trava">${escaparHtml(b)}</span>`).join("");
+  }
+
+  function statusHtml(rascunho) {
+    if (rascunho.status === "ENVIADO") {
+      return `<div class="status-envio ok">Enviada à VUUPT (rota #${rascunho.vuupt_route_id})</div>`;
+    }
+    if (rascunho.status === "ERRO_ENVIO") {
+      return `<div class="status-envio erro">Falha no envio: ${escaparHtml(rascunho.erro_envio)}</div>`;
+    }
+    return "";
+  }
+
+  function criarCardRota(rascunho, cor) {
+    const enviada = rascunho.status === "ENVIADO";
+    const div = document.createElement("div");
+    div.className = "card-rota" + (enviada ? " enviada" : "");
+    div.id = `card-rota-${rascunho.id}`;
+    div.style.setProperty("--cor-rota", cor);
+    // texto usado pela busca client-side, junto do nome da rota
+    div.dataset.busca = rascunho.nome.toLowerCase();
+    div.innerHTML = `
+      <div class="cabecalho">
+        <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
+        <span class="nome">${escaparHtml(rascunho.nome)}</span>
+      </div>
+      <div class="metricas" id="metricas-${rascunho.id}">${rascunho.paradas.length} parada(s) — ${rascunho.km_estimado != null ? rascunho.km_estimado.toFixed(1) + " km" : "km ?"}</div>
+      <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
+      <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
+      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${enviada ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
+      <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
+      <div class="acoes">
+        ${enviada ? "" : `
+        <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
+        <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
+        <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
+        <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
+      </div>`;
+    const ul = div.querySelector(".lista-paradas");
+    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p)));
+    return div;
+  }
+
+  function atualizarCardComResposta(rascunho) {
+    if (!rascunho) return;
+    const metricasEl = document.getElementById(`metricas-${rascunho.id}`);
+    if (metricasEl) {
+      metricasEl.textContent = `${rascunho.paradas.length} parada(s) — ${rascunho.km_estimado != null ? rascunho.km_estimado.toFixed(1) + " km" : "km ?"}`;
+    }
+    const badgesEl = document.getElementById(`badges-${rascunho.id}`);
+    if (badgesEl) badgesEl.innerHTML = badgesHtml(rascunho.badges);
+    redesenharRota(rascunho.id);
+  }
+
+  function limparGrupoMapa(rascunhoId) {
+    const grupo = gruposMapa[rascunhoId];
+    if (!grupo) return;
+    if (grupo.renderer) grupo.renderer.setMap(null);
+    grupo.markers.forEach(m => m.setMap(null));
+    delete gruposMapa[rascunhoId];
+  }
+
+  function redesenharRota(rascunhoId) {
+    limparGrupoMapa(rascunhoId);
+    const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+    if (!ul) return;
+    const paradas = Array.from(ul.children)
+      .map(li => ({
+        lat: parseFloat(li.dataset.lat), lng: parseFloat(li.dataset.lng),
+        codigo: li.querySelector(".codigo")?.textContent || "",
+        remetente: li.querySelector(".remetente")?.textContent || "",
+        endereco: li.querySelector(".endereco")?.textContent || "",
+      }))
+      .filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+    if (!paradas.length) return;
+
+    const cor = coresPorRascunho[rascunhoId] || CORES[Object.keys(coresPorRascunho).length % CORES.length];
+    coresPorRascunho[rascunhoId] = cor;
+
+    const markers = paradas.map((p, idx) => {
+      const marker = new google.maps.Marker({
+        position: { lat: p.lat, lng: p.lng }, map: map,
+        icon: iconeNumerado(idx + 1, cor), title: p.codigo,
+      });
+      marker.addListener("click", () => {
+        infoWindow.setContent(montarInfoHtml(p));
+        infoWindow.open(map, marker);
+      });
+      return marker;
+    });
+
+    const renderer = new google.maps.DirectionsRenderer({
+      map: map, suppressMarkers: true,
+      polylineOptions: { strokeColor: cor, strokeWeight: 4 },
+    });
+
+    gruposMapa[rascunhoId] = { renderer, markers };
+
+    if (paradas.length === 1) return;  // sem trajeto pra traçar com 1 parada só
+
+    const directionsService = new google.maps.DirectionsService();
+    const waypoints = paradas.slice(0, -1).map(p => ({ location: { lat: p.lat, lng: p.lng }, stopover: true }));
+    const ultima = paradas[paradas.length - 1];
+    directionsService.route({
+      origin: BASE, destination: { lat: ultima.lat, lng: ultima.lng },
+      waypoints, optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING,
+    }, (result, status) => {
+      if (status === "OK" && gruposMapa[rascunhoId]) {
+        gruposMapa[rascunhoId].renderer.setDirections(result);
+      }
+    });
+  }
+
+  function removerLiDoDom(serviceId) {
+    document.querySelectorAll(`.item-parada[data-service-id="${serviceId}"]`).forEach(li => li.remove());
+  }
+
+  async function onDragEnd(evt) {
+    const serviceId = Number(evt.item.dataset.serviceId);
+    const fromId = evt.from.dataset.listId;
+    const toId = evt.to.dataset.listId;
+
+    try {
+      if (fromId === toId) {
+        if (fromId !== "pool") {
+          const ordem = Array.from(evt.to.children).map(li => Number(li.dataset.serviceId));
+          const resp = await postJSON("/api/planejamento/reordenar", { rascunho_id: Number(fromId), ordem_service_ids: ordem });
+          atualizarCardComResposta(resp.rascunho);
+        }
+        return;
+      }
+
+      if (fromId === "pool") {
+        const parada = POOL_BY_ID[serviceId];
+        const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: Number(toId), parada, ordem: evt.newIndex });
+        delete POOL_BY_ID[serviceId];
+        document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+        atualizarCardComResposta(resp.rascunho);
+      } else if (toId === "pool") {
+        const resp = await postJSON("/api/planejamento/remover-parada", { rascunho_id: Number(fromId), service_id: serviceId });
+        // servidor devolve os dados completos da parada removida -- não depende de
+        // nenhum estado antigo guardado no front, funciona mesmo depois de vários
+        // saltos (pool -> rota -> pool -> outra rota) na mesma sessão sem reload
+        if (resp.parada_removida) POOL_BY_ID[serviceId] = resp.parada_removida;
+        document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+        atualizarCardComResposta(resp.rascunho);
+      } else {
+        const resp = await postJSON("/api/planejamento/mover-parada", {
+          service_id: serviceId, rascunho_origem_id: Number(fromId), rascunho_destino_id: Number(toId), nova_ordem: evt.newIndex,
+        });
+        atualizarCardComResposta(resp.rascunho_origem);
+        atualizarCardComResposta(resp.rascunho_destino);
+      }
+    } catch (e) {
+      alert(`Falha ao salvar o ajuste: ${e.message}. Recarregue a página.`);
+    }
+  }
+
+  function iniciarSortable(ul) {
+    new Sortable(ul, { group: "paradas", animation: 150, onEnd: onDragEnd });
+  }
+
+  async function otimizarSequencia(rascunhoId) {
+    try {
+      const resp = await postJSON("/api/planejamento/otimizar-sequencia", { rascunho_id: rascunhoId });
+      const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+      const porId = {};
+      Array.from(ul.children).forEach(li => porId[li.dataset.serviceId] = li);
+      resp.rascunho.paradas.forEach(p => {
+        const li = porId[p.service_id];
+        if (li) ul.appendChild(li);
+      });
+      atualizarCardComResposta(resp.rascunho);
+    } catch (e) {
+      alert(`Falha ao otimizar: ${e.message}`);
+    }
+  }
+
+  async function descartarRota(rascunhoId) {
+    if (!confirm("Descartar essa rota? As paradas voltam pro pool.")) return;
+    try {
+      await postJSON("/api/planejamento/descartar-rota", { rascunho_id: rascunhoId });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao descartar: ${e.message}`);
+    }
+  }
+
+  async function criarNovaRota() {
+    try {
+      await postJSON("/api/planejamento/nova-rota", { data_alvo: DATA_ALVO_ISO });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao criar rota: ${e.message}`);
+    }
+  }
+
+  function aplicarResultadoEnvio(resultado) {
+    const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
+    if (resultado.ok) {
+      let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
+      if (resultado.codigos_removidos && resultado.codigos_removidos.length) {
+        msg += ` -- ${resultado.codigos_removidos.length} pedido(s) já estavam em outra rota e voltaram pro pool: ${resultado.codigos_removidos.join(", ")}`;
+      }
+      if (statusEl) statusEl.innerHTML = `<div class="status-envio ok">${escaparHtml(msg)}</div>`;
+    } else if (statusEl) {
+      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro)}</div>`;
+    }
+  }
+
+  async function confirmarEnvio(rascunhoIds, botaoOrigem) {
+    if (!rascunhoIds.length) return;
+    const confirmMsg = rascunhoIds.length === 1
+      ? "Confirmar e enviar essa rota pra VUUPT? Depois disso ela não pode mais ser editada aqui."
+      : `Confirmar e enviar ${rascunhoIds.length} rota(s) pra VUUPT? Depois disso elas não podem mais ser editadas aqui.`;
+    if (!confirm(confirmMsg)) return;
+    if (botaoOrigem) { botaoOrigem.disabled = true; botaoOrigem.textContent = "Enviando..."; }
+    try {
+      const resp = await postJSON("/api/planejamento/confirmar-envio", { rascunho_ids: rascunhoIds });
+      resp.resultados.forEach(aplicarResultadoEnvio);
+      const falhas = resp.resultados.filter(r => !r.ok);
+      if (falhas.length) {
+        alert(`${falhas.length} de ${rascunhoIds.length} rota(s) falharam no envio. Veja o aviso em cada card.`);
+      }
+      // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao confirmar envio: ${e.message}`);
+      if (botaoOrigem) { botaoOrigem.disabled = false; botaoOrigem.textContent = "Confirmar e enviar"; }
+    }
+  }
+
+  async function atualizarPool(botao) {
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Buscando...";
+    try {
+      const resp = await fetch(`/api/planejamento/pool?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar o pool.");
+
+      const listaPool = document.getElementById("lista-pool");
+      let novos = 0;
+      dados.pool.forEach(p => {
+        if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
+        POOL_BY_ID[p.service_id] = p;
+        listaPool.appendChild(criarLiParada(p));
+        novos++;
+      });
+
+      // pedido que saiu do not_assigned por outra via (ex: alocado
+      // manualmente direto na VUUPT enquanto a tela estava aberta) --
+      // remove do pool local pra não ficar mostrando algo que já não
+      // está mais disponível
+      const idsAtuais = new Set(dados.pool.map(p => p.service_id));
+      Object.keys(POOL_BY_ID).map(Number).forEach(serviceId => {
+        if (!idsAtuais.has(serviceId)) {
+          delete POOL_BY_ID[serviceId];
+          const li = listaPool.querySelector(`.item-parada[data-service-id="${serviceId}"]`);
+          if (li) li.remove();
+        }
+      });
+
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo
+
+      botao.textContent = novos > 0 ? `${novos} pedido(s) novo(s) encontrado(s)` : "Nenhum pedido novo";
+    } catch (e) {
+      alert(`Falha ao atualizar o pool: ${e.message}`);
+      botao.textContent = original;
+    } finally {
+      setTimeout(() => { botao.textContent = original; botao.disabled = false; }, 2500);
+    }
+  }
+
+  async function imprimirRota(rascunhoId, botao) {
+    // a aba precisa abrir AGORA, de forma síncrona com o clique --
+    // se esperar o fetch terminar pra só então window.open(), o
+    // navegador trata como popup não solicitado pelo usuário e
+    // bloqueia. Abre em branco com um aviso, e só troca a URL depois
+    // que os documentos carregarem (ou falharem -- não trava a
+    // impressão: segue com o que já tinha indexado).
+    const aba = window.open("", "_blank");
+    if (aba) {
+      aba.document.write(`<html><body style="font-family:sans-serif;padding:24px;color:#333;">
+        <p>Buscando notas fiscais e boletos atualizados... pode levar até 1 minuto.</p>
+      </body></html>`);
+    }
+
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Carregando documentos...";
+
+    try {
+      await postJSON("/api/planejamento/carregar-documentos", { rascunho_id: rascunhoId });
+    } catch (e) {
+      console.warn(`Falha ao carregar documentos (abrindo romaneio com o que já tinha indexado): ${e.message}`);
+    } finally {
+      const url = `/api/planejamento/romaneio/${rascunhoId}`;
+      if (aba && !aba.closed) aba.location.href = url; else window.open(url, "_blank");
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById("map"), { center: BASE, zoom: 11 });
+    infoWindow = new google.maps.InfoWindow();
+
+    new google.maps.Marker({
+      position: BASE, map: map, title: "Base",
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+
+    const listaPool = document.getElementById("lista-pool");
+    POOL.forEach(p => listaPool.appendChild(criarLiParada({ ...p, remetente_nome: p.remetente_nome })));
+    iniciarSortable(listaPool);
+
+    const listaRotas = document.getElementById("lista-rotas");
+    RASCUNHOS.forEach((rascunho, i) => {
+      coresPorRascunho[rascunho.id] = CORES[i % CORES.length];
+      const card = criarCardRota(rascunho, coresPorRascunho[rascunho.id]);
+      listaRotas.appendChild(card);
+      // rota já ENVIADA não recebe Sortable -- fica travada, sem
+      // aceitar arrastar pra dentro/fora dela (já virou rota de
+      // verdade na VUUPT, editar aqui só mudaria o rascunho local)
+      if (rascunho.status !== "ENVIADO") {
+        iniciarSortable(card.querySelector(".lista-paradas"));
+      }
+      redesenharRota(rascunho.id);
+    });
+
+    listaRotas.addEventListener("click", (e) => {
+      if (e.target.classList.contains("botao-otimizar")) {
+        otimizarSequencia(Number(e.target.dataset.rascunhoId));
+      } else if (e.target.classList.contains("botao-descartar")) {
+        descartarRota(Number(e.target.dataset.rascunhoId));
+      } else if (e.target.classList.contains("botao-enviar")) {
+        confirmarEnvio([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-imprimir")) {
+        imprimirRota(Number(e.target.dataset.rascunhoId), e.target);
+      }
+    });
+
+    listaRotas.addEventListener("change", async (e) => {
+      if (!e.target.classList.contains("select-motorista")) return;
+      const rascunhoId = Number(e.target.dataset.rascunhoId);
+      const agentId = e.target.value ? Number(e.target.value) : null;
+      const motorista = MOTORISTAS.find(m => m.agent_id === agentId);
+      try {
+        await postJSON("/api/planejamento/trocar-motorista", {
+          rascunho_id: rascunhoId, agent_id: agentId,
+          vehicle_id: motorista ? motorista.vehicle_id : null,
+          motorista_nome: motorista ? motorista.nome : null,
+        });
+      } catch (err) {
+        alert(`Falha ao trocar motorista: ${err.message}`);
+      }
+    });
+
+    document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
+    document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
+      const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
+      confirmarEnvio(idsPendentes, e.target);
+    });
+
+    document.getElementById("botao-atualizar-pool").addEventListener("click", (e) => atualizarPool(e.target));
+
+    document.getElementById("busca-pool").addEventListener("input", (e) => {
+      const texto = e.target.value.trim().toLowerCase();
+      document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+        li.classList.toggle("busca-oculta", !!texto && !li.dataset.busca.includes(texto));
+      });
+    });
+
+    document.getElementById("busca-rotas").addEventListener("input", (e) => {
+      const texto = e.target.value.trim().toLowerCase();
+      document.querySelectorAll(".card-rota").forEach(card => {
+        if (!texto) {
+          card.classList.remove("busca-oculta");
+          card.querySelectorAll(".item-parada").forEach(li => li.classList.remove("busca-oculta"));
+          return;
+        }
+        const nomeRotaBate = card.dataset.busca.includes(texto);
+        const itens = card.querySelectorAll(".item-parada");
+        let algumaParadaBate = false;
+        itens.forEach(li => {
+          const bate = li.dataset.busca.includes(texto);
+          if (bate) algumaParadaBate = true;
+          // busca por nome de rota mostra todas as paradas dela; busca por
+          // parada (código/remetente/destinatário/endereço) filtra só as que baterem
+          li.classList.toggle("busca-oculta", !nomeRotaBate && !bate);
+        });
+        card.classList.toggle("busca-oculta", !nomeRotaBate && !algumaParadaBate);
+      });
+    });
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
+</script>
+{% endif %}
+{% endblock %}

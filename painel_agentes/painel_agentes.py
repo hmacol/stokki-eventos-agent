@@ -44,7 +44,7 @@ logging.basicConfig(
 from urllib.parse import urlparse
 
 import yaml
-from flask import Flask, Response, abort, redirect, render_template, request, url_for, jsonify
+from flask import Flask, Response, abort, redirect, render_template, request, url_for, jsonify, send_file
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
@@ -53,6 +53,11 @@ from executor import (
     encerrar_todas_execucoes,
 )
 from mapa_rotas import buscar_rotas_para_mapa
+from planejamento_rotas import (
+    buscar_dados_planejamento, buscar_pool_nao_alocados, gerar_romaneio_pdf,
+    carregar_documentos_do_rascunho,
+)
+import rascunhos_rota
 
 app = Flask(__name__)
 
@@ -209,6 +214,233 @@ def mapa_rotas():
         "mapa_rotas.html", dados=dados, erro=erro,
         data_alvo_input=data_alvo.strftime("%Y-%m-%d"),
     )
+
+
+def _parse_data_param(padrao_amanha: bool = False) -> date:
+    data_param = request.args.get("data")
+    padrao = date.today() + timedelta(days=1) if padrao_amanha else date.today()
+    if not data_param:
+        return padrao
+    try:
+        return datetime.strptime(data_param, "%Y-%m-%d").date()
+    except ValueError:
+        return padrao
+
+
+@app.route("/planejamento")
+@requer_auth
+def planejamento():
+    data_alvo = _parse_data_param()
+    try:
+        dados = buscar_dados_planejamento(data_alvo)
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados de planejamento")
+        dados = None
+        erro = str(e)
+
+    return render_template(
+        "planejamento_rotas.html", dados=dados, erro=erro,
+        data_alvo_input=data_alvo.isoformat(),
+    )
+
+
+@app.route("/api/planejamento/pool")
+@requer_auth
+def api_pool():
+    """Busca ao vivo na VUUPT só o pool de não alocados (botão
+    'Atualizar' da tela) -- não mexe nos rascunhos/mapa já carregados,
+    pra não perder o estado de edição em andamento."""
+    data_alvo = _parse_data_param()
+    try:
+        pool = buscar_pool_nao_alocados(data_alvo)
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"pool": pool})
+
+
+@app.route("/api/planejamento/romaneio/<int:rascunho_id>")
+@requer_auth
+def api_romaneio(rascunho_id):
+    """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
+    o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
+    roteirizacao/gerar_pdf_romaneios.py (capa + NFs + boletos +
+    canhoteira) aplicado direto sobre o rascunho local."""
+    try:
+        caminho = gerar_romaneio_pdf(rascunho_id)
+    except ValueError as e:
+        return str(e), 404
+    except Exception as e:
+        logging.getLogger(__name__).exception(f"Falha ao gerar romaneio do rascunho {rascunho_id}")
+        return f"Falha ao gerar romaneio: {e}", 500
+    return send_file(caminho, mimetype="application/pdf", download_name=caminho.name)
+
+
+@app.route("/api/planejamento/carregar-documentos", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_carregar_documentos():
+    """Busca NF/boleto na hora (e-mail + Stokki) pros pedidos do
+    rascunho, escopado só a ele -- chamado antes de abrir o romaneio
+    (botão 'Imprimir rota'), porque o job agendado de documentos só
+    roda às 18h. Pode levar até ~1 min (abre navegador pra cada pedido
+    na Stokki)."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_id = body["rascunho_id"]
+        contadores = carregar_documentos_do_rascunho(rascunho_id)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception(f"Falha ao carregar documentos do rascunho {body.get('rascunho_id')}")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "contadores": contadores})
+
+
+def _rascunho_ou_404(rascunho_id):
+    rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return None
+    return rascunho
+
+
+@app.route("/api/planejamento/mover-parada", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_mover_parada():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.mover_parada(
+            body["service_id"], body["rascunho_origem_id"],
+            body["rascunho_destino_id"], body["nova_ordem"],
+        )
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({
+        "ok": True,
+        "rascunho_origem": _rascunho_ou_404(body["rascunho_origem_id"]),
+        "rascunho_destino": _rascunho_ou_404(body["rascunho_destino_id"]),
+    })
+
+
+@app.route("/api/planejamento/reordenar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_reordenar():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.reordenar_paradas(body["rascunho_id"], body["ordem_service_ids"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/remover-parada", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_remover_parada():
+    body = request.get_json(force=True)
+    try:
+        parada_removida = rascunhos_rota.remover_parada(body["rascunho_id"], body["service_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({
+        "ok": True,
+        "rascunho": _rascunho_ou_404(body["rascunho_id"]),
+        "parada_removida": parada_removida,
+    })
+
+
+@app.route("/api/planejamento/adicionar-parada", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_adicionar_parada():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.adicionar_parada(body["rascunho_id"], body["parada"], body.get("ordem"))
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/trocar-motorista", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_trocar_motorista():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.trocar_motorista(
+            body["rascunho_id"], body.get("agent_id"), body.get("vehicle_id"), body.get("motorista_nome"),
+        )
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/nova-rota", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_nova_rota():
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+        if not rascunhos_do_dia:
+            return jsonify({"erro": "Nenhum lote ativo para essa data -- rode o pipeline em modo rascunho primeiro."}), 400
+        lote_id = rascunhos_do_dia[0]["lote_id"]
+        referencia = rascunhos_do_dia[0]
+        rascunho_id = rascunhos_rota.criar_rascunho_vazio(
+            data_alvo, lote_id, body.get("particao") or referencia["particao"],
+            body.get("tipo_rota") or referencia["tipo_rota"],
+            referencia["start_location_base_id"], referencia["end_location_base_id"],
+            referencia["start_at"],
+        )
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
+
+
+@app.route("/api/planejamento/otimizar-sequencia", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_otimizar_sequencia():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.otimizar_sequencia(body["rascunho_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/descartar-rota", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_descartar_rota():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.descartar_rascunho(body["rascunho_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/planejamento/confirmar-envio", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_confirmar_envio():
+    """Materializa os rascunhos aprovados na VUUPT de verdade (Fase 3).
+    Processa cada rascunho_id independentemente -- falha em um não
+    impede os outros de serem enviados (falha parcial é reportada por
+    item, não aborta o lote inteiro)."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_ids = body["rascunho_ids"]
+    except KeyError as e:
+        return jsonify({"erro": str(e)}), 400
+
+    token = _carregar_config().get("vuupt_api", {}).get("token", "")
+    resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
+    return jsonify({"ok": True, "resultados": resultados})
 
 
 if __name__ == "__main__":

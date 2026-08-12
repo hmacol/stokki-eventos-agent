@@ -34,12 +34,15 @@ GLOBAL pro dia (não por região) -- pra incrementar_rotas.py conseguir
 encontrá-las depois.
 
 COMO USAR:
-    py -3.11 criar_rotas_diarias.py                # execução normal
-    py -3.11 criar_rotas_diarias.py --modo-teste    # só mostra o que criaria
+    py -3.11 criar_rotas_diarias.py                  # execução normal (cria direto na VUUPT)
+    py -3.11 criar_rotas_diarias.py --modo-teste      # só mostra o que criaria, não grava nada
+    py -3.11 criar_rotas_diarias.py --gerar-rascunho  # grava rascunho local (dados/dados.db) para
+                                                       # revisão/ajuste no painel de planejamento --
+                                                       # modo padrão a partir de 12/08 (pedido do
+                                                       # Hugo: nada vai pra VUUPT sem revisão manual)
 """
 import argparse
 import logging
-import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -80,10 +83,12 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, elegivel_para_data
+from roteirizacao_dados import agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, elegivel_para_data, calcular_km_estimado
 from selecao_modelo import escolher_melhor_modelo
-from rotas_client import criar_rota
+from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
+sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
+from rascunhos_rota import criar_lote_rascunhos
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
@@ -144,67 +149,10 @@ def _data_alvo_rotas(agora: datetime) -> date:
     return _proximo_dia_util(base)
 
 
-PADRAO_CONFLITO_ROTA = re.compile(
-    r"j[aá] faz parte de uma rota.*?(PS-\d+)", re.IGNORECASE | re.DOTALL
-)
-
-
-def _criar_rota_removendo_conflitos(token: str, nome_rota: str, start_at: str,
-                                     sublote: list[dict], max_tentativas: int = 8,
-                                     agent_id: int | None = None, vehicle_id: int | None = None):
-    """
-    Cria a rota com o sublote dado -- se o VUUPT recusar por algum
-    serviço já estar em OUTRA rota (achado em produção, 06/08: a lista
-    'not_assigned' pode ficar levemente desatualizada entre a busca e
-    a criação de fato, e a API rejeita o POST INTEIRO por causa de 1
-    serviço só, perdendo os outros 10-15 pedidos legítimos do lote
-    junto), remove só o(s) serviço(s) apontado(s) no erro e tenta de
-    novo -- não perde o lote inteiro por causa de 1 entrada obsoleta.
-
-    Retorna (rota_criada_ou_None, sublote_final_usado, codigos_removidos).
-    Se sobrar 0 serviços ou passar de max_tentativas, retorna
-    (None, [], codigos_removidos) -- quem chama decide como logar.
-    """
-    sublote_atual = list(sublote)
-    codigos_removidos = []
-
-    for _ in range(max_tentativas):
-        if not sublote_atual:
-            return None, [], codigos_removidos
-
-        service_ids = [s["id"] for s in sublote_atual]
-        try:
-            rota = criar_rota(
-                token, nome=nome_rota, start_at=start_at,
-                start_location_base_id=BASE_LOCATION_ID, service_ids=service_ids,
-                end_location_base_id=BASE_LOCATION_ID,
-                agent_id=agent_id, vehicle_id=vehicle_id,
-            )
-            return rota, sublote_atual, codigos_removidos
-        except Exception as e:
-            match = PADRAO_CONFLITO_ROTA.search(str(e))
-            if not match:
-                raise  # erro de outro tipo -- não sabemos remediar, propaga como antes
-
-            codigo_conflitante = match.group(1)
-            antes = len(sublote_atual)
-            sublote_atual = [s for s in sublote_atual if s.get("code", "").lstrip("#") != codigo_conflitante]
-            if len(sublote_atual) == antes:
-                # o código apontado no erro não bate com nenhum do sublote atual
-                # (já deve ter sido removido numa tentativa anterior, ou algo
-                # mudou) -- evita loop infinito reenviando o mesmo pedido
-                raise
-            codigos_removidos.append(codigo_conflitante)
-            logger.warning(f"  '{nome_rota}': {codigo_conflitante} já está em outra rota (dado desatualizado) "
-                           f"-- removendo do lote e tentando de novo com os {len(sublote_atual)} restante(s).")
-
-    raise Exception(f"Excedeu {max_tentativas} tentativas removendo conflitos -- "
-                    f"removidos até agora: {codigos_removidos}")
-
-
-def main(modo_teste: bool = False):
+def main(modo_teste: bool = False, gerar_rascunho: bool = False):
     inicio = time.time()
-    logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Criação de rotas diárias iniciada.")
+    prefixo_log = "[MODO TESTE] " if modo_teste else ("[RASCUNHO] " if gerar_rascunho else "")
+    logger.info(f"{prefixo_log}Criação de rotas diárias iniciada.")
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -234,7 +182,7 @@ def main(modo_teste: bool = False):
         )
 
         filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-        servicos_brutos = vuupt.listar_servicos(filtro, per_page=100)
+        servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
         logger.info(f"{len(servicos_brutos)} serviço(s) 'not_assigned' encontrado(s).")
 
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
@@ -358,6 +306,7 @@ def main(modo_teste: bool = False):
         pedidos_alocados = 0
         indice_global = 1
         modelos_vencedores: dict[str, str] = {}
+        rascunhos_acumulados: list[dict] = []
 
         def _rotear_particao(servicos_particao: list[dict], label: str):
             nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_sem_motorista
@@ -422,6 +371,36 @@ def main(modo_teste: bool = False):
                 vehicle_id = motorista.vehicle_id if motorista else None
                 motorista_str = motorista.nome if motorista else "SEM MOTORISTA [ALERTA_ALOCACAO]"
 
+                if gerar_rascunho:
+                    zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
+                    km_estimado = (
+                        calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
+                        if coords_base else None
+                    )
+                    rascunhos_acumulados.append({
+                        "nome": nome_rota,
+                        "particao": label,
+                        "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
+                        "zona": zona,
+                        "agent_id": agent_id,
+                        "vehicle_id": vehicle_id,
+                        "motorista_nome": motorista.nome if motorista else None,
+                        "start_location_base_id": BASE_LOCATION_ID,
+                        "end_location_base_id": BASE_LOCATION_ID,
+                        "start_at": start_at,
+                        "km_estimado": km_estimado,
+                        "sublote": sublote,
+                    })
+                    logger.info(f"[RASCUNHO] [{label}] '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
+                               f"(mais longe -> mais perto da base) -- motorista sugerido: {motorista_str}: {codigos}")
+                    rotas_criadas += 1
+                    pedidos_alocados += len(sublote)
+                    if motorista:
+                        contagem_alocacoes_dia[motorista.agent_id] = contagem_alocacoes_dia.get(motorista.agent_id, 0) + 1
+                    else:
+                        rotas_sem_motorista += 1
+                    continue
+
                 if modo_teste:
                     logger.info(f"[TESTE] [{label}] Criaria rota '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
                                f"(mais longe -> mais perto da base) -- motorista: {motorista_str}: {codigos}")
@@ -434,8 +413,9 @@ def main(modo_teste: bool = False):
                     continue
 
                 try:
-                    rota, sublote_criado, codigos_removidos = _criar_rota_removendo_conflitos(
+                    rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
                         token, nome_rota, start_at, sublote,
+                        start_location_base_id=BASE_LOCATION_ID, end_location_base_id=BASE_LOCATION_ID,
                         agent_id=agent_id, vehicle_id=vehicle_id,
                     )
                     if rota is None:
@@ -462,10 +442,20 @@ def main(modo_teste: bool = False):
         for label, servicos_particao in particoes:
             _rotear_particao(servicos_particao, label)
 
+        if gerar_rascunho and rascunhos_acumulados:
+            lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)
+            logger.info(f"Lote de rascunhos gravado: '{lote_id}' ({len(rascunhos_acumulados)} rascunho(s)) "
+                       f"-- aguardando revisão no painel de planejamento.")
+
         prefixo_teste = "[Teste] " if modo_teste else ""
+        if gerar_rascunho:
+            detalhe_criacao = (f"{rotas_criadas} rascunho(s) gerado(s), {pedidos_alocados} pedido(s) alocado(s), "
+                               f"aguardando revisão no painel de planejamento.")
+        else:
+            detalhe_criacao = f"{prefixo_teste}{rotas_criadas} rota(s) criada(s), {pedidos_alocados} pedido(s) alocado(s)."
         resumo_etapas["Criação de rotas"] = {
             "status": "ok",
-            "detalhe": f"{prefixo_teste}{rotas_criadas} rota(s) criada(s), {pedidos_alocados} pedido(s) alocado(s)."
+            "detalhe": detalhe_criacao
                       + (" Modelo do dia: " + "; ".join(f"{l}: {m}" for l, m in modelos_vencedores.items()) + "."
                          if modelos_vencedores else "")
                       + (f" [ALERTA_NIVEL] {len(cnpjs_pendentes_nivel)} CNPJ(s) de destinatário sem "
@@ -502,5 +492,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cria as rotas do dia seguinte a partir dos pedidos not_assigned")
     parser.add_argument("--modo-teste", action="store_true",
                         help="Mostra o que seria criado, sem chamar a API de verdade")
+    parser.add_argument("--gerar-rascunho", action="store_true",
+                        help="Grava os sublotes calculados como rascunho local (dados/dados.db) "
+                             "para revisão/ajuste no painel de planejamento, em vez de criar a rota "
+                             "direto na VUUPT")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste)
+    main(modo_teste=args.modo_teste, gerar_rascunho=args.gerar_rascunho)

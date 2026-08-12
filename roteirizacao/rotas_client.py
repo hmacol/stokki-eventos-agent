@@ -20,6 +20,7 @@ Mesma autenticação Bearer usada em todo o projeto. Domínio api.vuupt.com
 (diferente do app.vuupt.com usado pelo resto do agente_stokki_eventos).
 """
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -31,6 +32,10 @@ from http_retry import chamar_com_retry
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.vuupt.com/api/v1"
+
+PADRAO_CONFLITO_ROTA = re.compile(
+    r"j[aá] faz parte de uma rota.*?(PS-\d+)", re.IGNORECASE | re.DOTALL
+)
 
 
 def _headers(token: str) -> dict:
@@ -90,6 +95,69 @@ def criar_rota(token: str, nome: str, start_at: str, start_location_base_id: int
     resp = chamar_com_retry(requests.post, f"{API_BASE}/routes", json=payload, headers=_headers(token), timeout=30)
     _verificar_resposta(resp)
     return resp.json()["route"]
+
+
+def criar_rota_removendo_conflitos(token: str, nome_rota: str, start_at: str,
+                                   sublote: list[dict], start_location_base_id: int,
+                                   end_location_base_id: int | None = None,
+                                   max_tentativas: int = 8,
+                                   agent_id: int | None = None, vehicle_id: int | None = None):
+    """
+    Cria a rota com o sublote dado -- se o VUUPT recusar por algum
+    serviço já estar em OUTRA rota (achado em produção, 06/08: a lista
+    'not_assigned' pode ficar levemente desatualizada entre a busca e
+    a criação de fato, e a API rejeita o POST INTEIRO por causa de 1
+    serviço só, perdendo os outros 10-15 pedidos legítimos do lote
+    junto), remove só o(s) serviço(s) apontado(s) no erro e tenta de
+    novo -- não perde o lote inteiro por causa de 1 entrada obsoleta.
+
+    `sublote` é uma lista de dicts com pelo menos as chaves "id"
+    (service_id) e "code" (código do pedido, ex: "PS-12345" -- usado
+    só pra casar com o código apontado na mensagem de erro). Usada
+    tanto pelo pipeline automático (roteirizacao/criar_rotas_diarias.py)
+    quanto pelo envio manual de rascunhos aprovados na tela de
+    planejamento (painel_agentes/painel_agentes.py) -- extraída daqui
+    pra não duplicar a lógica de regex+retry nos dois lugares.
+
+    Retorna (rota_criada_ou_None, sublote_final_usado, codigos_removidos).
+    Se sobrar 0 serviços ou passar de max_tentativas, retorna
+    (None, [], codigos_removidos) -- quem chama decide como logar.
+    """
+    sublote_atual = list(sublote)
+    codigos_removidos = []
+
+    for _ in range(max_tentativas):
+        if not sublote_atual:
+            return None, [], codigos_removidos
+
+        service_ids = [s["id"] for s in sublote_atual]
+        try:
+            rota = criar_rota(
+                token, nome=nome_rota, start_at=start_at,
+                start_location_base_id=start_location_base_id, service_ids=service_ids,
+                end_location_base_id=end_location_base_id,
+                agent_id=agent_id, vehicle_id=vehicle_id,
+            )
+            return rota, sublote_atual, codigos_removidos
+        except Exception as e:
+            match = PADRAO_CONFLITO_ROTA.search(str(e))
+            if not match:
+                raise  # erro de outro tipo -- não sabemos remediar, propaga como antes
+
+            codigo_conflitante = match.group(1)
+            antes = len(sublote_atual)
+            sublote_atual = [s for s in sublote_atual if s.get("code", "").lstrip("#") != codigo_conflitante]
+            if len(sublote_atual) == antes:
+                # o código apontado no erro não bate com nenhum do sublote atual
+                # (já deve ter sido removido numa tentativa anterior, ou algo
+                # mudou) -- evita loop infinito reenviando o mesmo pedido
+                raise
+            codigos_removidos.append(codigo_conflitante)
+            logger.warning(f"  '{nome_rota}': {codigo_conflitante} já está em outra rota (dado desatualizado) "
+                           f"-- removendo do lote e tentando de novo com os {len(sublote_atual)} restante(s).")
+
+    raise Exception(f"Excedeu {max_tentativas} tentativas removendo conflitos -- "
+                    f"removidos até agora: {codigos_removidos}")
 
 
 def buscar_rota(token: str, route_id: int, include: list[str] | None = None) -> dict:

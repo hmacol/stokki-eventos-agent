@@ -95,6 +95,26 @@ SENDERS_CANHOTEIRA = {
     21911340: "PEDRAMOURA",
 }
 
+# Pedido de reentrega ganha um código com sufixo "-R1", "-R2"... no
+# VUUPT (ver insucesso_entrega/expedir_pedidos.py::duplicar_servico_
+# por_insucesso) -- é o MESMO pedido original, mesma NF/boleto valem
+# pra qualquer tentativa de entrega dele. documentos_processados.
+# codigo_pedido é sempre gravado no código BASE (achado 12/08, testando
+# o botão "Imprimir rota": o matcher normaliza o código a partir do
+# regex PS-\d+ no nome do arquivo/PDF, que não pega o sufixo -- não é
+# by design, mas é 100% consistente hoje: 0 de 1224 documentos no banco
+# têm sufixo -R). Buscar pelo código COM sufixo nunca casava nada pra
+# reentrega -- bug pré-existente, também presente no romaneio das 04h
+# pra rotas reais (não é algo introduzido pelo rascunho/planejamento).
+_PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
+
+
+def _codigo_base(codigo: str) -> str:
+    """'PS-36327-R1' -> 'PS-36327' -- usar SÓ pra buscar documentos;
+    a exibição do pedido na capa/canhoteira mantém o código completo
+    (o motorista precisa saber que é a reentrega, não o pedido original)."""
+    return _PADRAO_SUFIXO_REENTREGA.sub("", codigo or "")
+
 # Página A4 em pixels a 150 dpi -- o resolution=150.0 no Image.save é
 # o que faz 1240px virarem 595pt (A4 de verdade) no PDF final.
 A4_PX = (1240, 1754)
@@ -516,7 +536,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
         sender_id = s.get("sender_id")
         embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
-        docs = docs_por_pedido.get(codigo, [])
+        docs = docs_por_pedido.get(_codigo_base(codigo), [])
 
         nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
         boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
@@ -634,7 +654,7 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
             logger.warning(f"Rota {r.get('name')} (id {r.get('id')}) sem serviços -- pulada.")
             continue
         rotas_com_servicos.append((r, servicos))
-        codigos.update((s.get("code") or "").lstrip("#") for s in servicos)
+        codigos.update(_codigo_base((s.get("code") or "").lstrip("#")) for s in servicos)
 
     docs_por_pedido, em_revisao = carregar_documentos_por_pedido(codigos)
     logger.info(f"{sum(len(v) for v in docs_por_pedido.values())} documento(s) ENVIADO(s) "

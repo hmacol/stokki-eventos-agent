@@ -36,7 +36,7 @@ from pathlib import Path
 
 from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
-    obter_coordenadas, _distancia_km, extrair_volume_caixas,
+    calcular_km_estimado, extrair_volume_caixas,
 )
 from otimizacao_rotas import agrupar_por_sweep, agrupar_por_savings, ordenar_2opt
 from alocacao_motoristas import classificar_rota_viagem
@@ -47,19 +47,9 @@ ARQUIVO_HISTORICO = Path(__file__).parent / "dados" / "selecao_modelo_historico.
 
 
 def _km_total(sublotes, base_lat, base_lng, api_key):
-    """KM total estimado (haversine) de todas as rotas, na ordem de
-    visita: base -> p1 -> ... -> pN -> base. Serviço sem coordenada é
-    ignorado no somatório (não dá pra medir)."""
-    total = 0.0
-    for sublote in sublotes:
-        coords = [c for c in (obter_coordenadas(s, api_key) for s in sublote) if c]
-        if not coords:
-            continue
-        total += _distancia_km(base_lat, base_lng, *coords[0])
-        for i in range(len(coords) - 1):
-            total += _distancia_km(*coords[i], *coords[i + 1])
-        total += _distancia_km(*coords[-1], base_lat, base_lng)
-    return total
+    """KM total estimado (haversine) de todas as rotas, somando o km de
+    cada sublote individualmente (roteirizacao_dados.calcular_km_estimado)."""
+    return sum(calcular_km_estimado(sublote, base_lat, base_lng, api_key) for sublote in sublotes)
 
 
 def _validar(servicos, sublotes, tamanho_maximo, volume_maximo):

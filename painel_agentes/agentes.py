@@ -104,12 +104,27 @@ AGENTES = [
     {
         "id": "criar_rotas_diarias",
         "nome": "Criar Rotas Diárias",
-        "descricao": "Cria as rotas do dia seguinte a partir dos pedidos not_assigned (job das 13h).",
+        "descricao": "Cria as rotas do dia seguinte a partir dos pedidos not_assigned (job das 13h). "
+                    "Ainda cria direto na VUUPT -- é o que o agendamento automático (rodar_sequencial.ps1) "
+                    "usa; passa a rodar em modo rascunho quando a tela de planejamento (Fase 2/3) estiver pronta.",
         "script": "roteirizacao/criar_rotas_diarias.py",
         "cwd": "roteirizacao",
         "suporta_teste": True,
         "flag_teste": "--modo-teste",
         "args_fixos": [],
+        "categoria": "Roteirização",
+    },
+    {
+        "id": "criar_rotas_diarias_rascunho",
+        "nome": "Criar Rotas Diárias (Rascunho)",
+        "descricao": "Mesmo cálculo de rotas de sempre, mas grava como RASCUNHO local (dados/dados.db) "
+                    "em vez de criar direto na VUUPT -- pra testar/gerar rascunhos pra revisão no painel "
+                    "de planejamento, sem mexer no fluxo automático de produção.",
+        "script": "roteirizacao/criar_rotas_diarias.py",
+        "cwd": "roteirizacao",
+        "suporta_teste": False,
+        "flag_teste": None,
+        "args_fixos": ["--gerar-rascunho"],
         "categoria": "Roteirização",
     },
     {

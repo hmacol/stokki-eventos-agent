@@ -195,7 +195,7 @@ def _backfill_nf_danfes_locais(indexador: IndexadorNF):
         logger.info(f"Backfill de NF: {preenchidos} DANFE(s) antiga(s) indexada(s) a partir dos PDFs locais.")
 
 
-def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
+def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True):
     inicio = time.time()
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Processamento de documentos iniciado.")
 
@@ -214,7 +214,7 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
         indexador_nf.carregar_do_banco()
 
         # ── Etapa 1: e-mail ──────────────────────────────────────────────
-        itens_email = buscar_pdfs_por_email(config)
+        itens_email = buscar_pdfs_por_email(config, modo_teste=modo_teste)
         logger.info(f"{len(itens_email)} PDF(s) encontrado(s) por e-mail.")
         for item in itens_email:
             status = processar_um_documento(item, vuupt, config, modo_teste,
@@ -290,7 +290,7 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
         PASTA_BOLETOS_SEPARADOS = Path(__file__).parent / "dados" / "boletos_separados"
         PASTA_NFS_SEPARADAS = Path(__file__).parent / "dados" / "nfs_separadas"
 
-        itens_embarcadores = buscar_pdfs_por_email_embarcadores(config)
+        itens_embarcadores = buscar_pdfs_por_email_embarcadores(config, modo_teste=modo_teste)
         logger.info(f"{len(itens_embarcadores)} PDF(s) encontrado(s) de embarcadores conhecidos.")
 
         total_boletos = 0
@@ -323,10 +323,13 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None):
     duracao = time.time() - inicio
     logger.info(f"Processamento de documentos finalizado em {duracao:.1f}s. Contadores: {contadores}")
 
-    try:
-        notificar_execucao(resumo_etapas, duracao, modo_teste, config)
-    except Exception as e:
-        logger.warning(f"Falha ao notificar execução (não afeta o resultado): {e}")
+    if notificar:
+        try:
+            notificar_execucao(resumo_etapas, duracao, modo_teste, config)
+        except Exception as e:
+            logger.warning(f"Falha ao notificar execução (não afeta o resultado): {e}")
+
+    return contadores
 
 
 if __name__ == "__main__":

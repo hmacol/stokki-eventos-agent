@@ -18,7 +18,6 @@ Reaproveita roteirizacao/rotas_client.py (listar_rotas) e a mesma
 lógica de desembrulhar services.data já usada em incrementar_rotas.py.
 """
 import logging
-import sqlite3
 import sys
 import time
 from datetime import date, timedelta
@@ -32,61 +31,17 @@ import yaml
 
 from rotas_client import listar_rotas
 from geocodificacao import geocodificar
+from mapa_util import carregar_remetentes_por_sender_id, celula_grade, extrair_servicos_da_rota
 
 logger = logging.getLogger(__name__)
 
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 PREFIXO_NOME_ROTA = "Planejamento"
 
-# Mesmo valor de roteirizacao_dados.py::agrupar_por_regiao() -- não
-# importado direto de lá pra não arrastar as dependências de
-# geocodificação daquele módulo aqui; é só uma constante, mantida
-# sincronizada manualmente. Se mudar lá, mudar aqui também.
-TAMANHO_GRADE_GRAUS = 0.1
-
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _extrair_servicos_da_rota(rota: dict) -> list[dict]:
-    """Mesma lógica de incrementar_rotas.py: 'services' vem embrulhado
-    como {"data": [...]}, não lista direta."""
-    servicos_wrapper = rota.get("services")
-    if isinstance(servicos_wrapper, dict):
-        return servicos_wrapper.get("data", []) or []
-    if isinstance(servicos_wrapper, list):
-        return servicos_wrapper
-    return []
-
-
-def _carregar_remetentes_por_sender_id() -> dict[int, str]:
-    """sender_id -> nome pra mostrar (apelido, ou nome_remetente se não
-    tiver apelido) -- mesmo padrão usado em notificar_area_nao_atendida.py."""
-    db_path = _RAIZ / "dados" / "dados.db"
-    if not db_path.exists():
-        return {}
-    conn = sqlite3.connect(db_path)
-    rows = conn.execute(
-        "SELECT sender_id, nome_remetente, apelido FROM interno WHERE sender_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    return {sender_id: (apelido or nome_remetente or f"Remetente {sender_id}")
-           for sender_id, nome_remetente, apelido in rows}
-
-
-def _celula_grade(lat: float, lng: float) -> dict:
-    """Mesmo arredondamento de agrupar_por_regiao() -- devolve o centro
-    e os limites da célula de ~11km que contém esse ponto."""
-    lat_grade = round(lat / TAMANHO_GRADE_GRAUS) * TAMANHO_GRADE_GRAUS
-    lng_grade = round(lng / TAMANHO_GRADE_GRAUS) * TAMANHO_GRADE_GRAUS
-    meia_grade = TAMANHO_GRADE_GRAUS / 2
-    return {
-        "chave": f"{lat_grade:.2f},{lng_grade:.2f}",
-        "lat_min": lat_grade - meia_grade, "lat_max": lat_grade + meia_grade,
-        "lng_min": lng_grade - meia_grade, "lng_max": lng_grade + meia_grade,
-    }
 
 
 def buscar_rotas_para_mapa(data_alvo: date | None = None) -> dict:
@@ -106,7 +61,7 @@ def buscar_rotas_para_mapa(data_alvo: date | None = None) -> dict:
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
 
     t0 = time.perf_counter()
-    remetentes_por_id = _carregar_remetentes_por_sender_id()
+    remetentes_por_id = carregar_remetentes_por_sender_id()
     logger.info(f"[mapa-rotas] carregar remetentes: {time.perf_counter() - t0:.2f}s ({len(remetentes_por_id)} remetente(s))")
 
     data_alvo = data_alvo or (date.today() + timedelta(days=1))
@@ -153,7 +108,7 @@ def buscar_rotas_para_mapa(data_alvo: date | None = None) -> dict:
     remetentes_vistos: set[str] = set()
 
     for rota in rotas_do_dia:
-        servicos = _extrair_servicos_da_rota(rota)
+        servicos = extrair_servicos_da_rota(rota)
         paradas = []
         for s in servicos:
             lat, lng = s.get("latitude"), s.get("longitude")
@@ -173,7 +128,7 @@ def buscar_rotas_para_mapa(data_alvo: date | None = None) -> dict:
                 "titulo": s.get("title", ""), "remetente": remetente,
             })
 
-            celula = _celula_grade(lat_f, lng_f)
+            celula = celula_grade(lat_f, lng_f)
             if celula["chave"] not in regioes_por_chave:
                 regioes_por_chave[celula["chave"]] = {**celula, "qtd_paradas": 0}
             regioes_por_chave[celula["chave"]]["qtd_paradas"] += 1

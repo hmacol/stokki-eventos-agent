@@ -145,7 +145,7 @@ class VuuptClient:
         return resp.json().get("meta", {}).get("pagination", {}).get("total", 0)
 
     def listar_servicos(self, filtros: list[dict], per_page: int = 100,
-                        limite_paginas: int = 500) -> list[dict]:
+                        limite_paginas: int = 500, include: list[str] | None = None) -> list[dict]:
         """
         Lista TODOS os serviços que casam com os filtros, paginando
         automaticamente via meta.pagination.total_pages até esgotar.
@@ -153,11 +153,20 @@ class VuuptClient:
         limite_paginas: trava de segurança (500 páginas × per_page=100 =
         50.000 registros) — se atingir, loga aviso e para, em vez de
         entrar num loop indefinido por engano de filtro.
+
+        include: mesmo mecanismo de listar_rotas() em rotas_client.py --
+        ex: include=["customer"] embute o contato completo (inclusive
+        'name', o nome do destinatário) em cada serviço, sem precisar
+        de 1 chamada extra por serviço via buscar_customer_por_id
+        (confirmado 12/08: /services aceita include=customer igual
+        /routes aceita include=services).
         """
         todos: list[dict] = []
         pagina = 1
         while True:
             params = self._montar_params_filtro(filtros, {"per_page": per_page, "page": pagina})
+            if include:
+                params["include"] = ",".join(include)
             resp = chamar_com_retry(self.session.get, f"{BASE_URL}/services", params=params, timeout=30)
             resp.raise_for_status()
             corpo = resp.json()
