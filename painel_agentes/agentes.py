@@ -91,6 +91,17 @@ AGENTES = [
         "categoria": "Agendamento",
     },
     {
+        "id": "ler_planilha_entregas_nuu",
+        "nome": "Ler Planilha de Entregas (NUU)",
+        "descricao": "Lê o ENTREGAS.xlsx que a NUU/Maria Dolores manda por e-mail: agendamento confirmado e endereço divergente por NF.",
+        "script": "ler_planilha_entregas_nuu.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": [],
+        "categoria": "Agendamento",
+    },
+    {
         "id": "criar_rotas_diarias",
         "nome": "Criar Rotas Diárias",
         "descricao": "Cria as rotas do dia seguinte a partir dos pedidos not_assigned (job das 13h).",

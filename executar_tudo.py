@@ -80,6 +80,7 @@ if _aviso_log:
 import pipeline as pipeline_mod
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
 from ler_respostas_agendamento import processar_respostas_agendamento
+from ler_planilha_entregas_nuu import processar_planilhas_entregas
 sys.path.insert(0, str(Path(__file__).parent / "insucesso_entrega"))
 from ler_respostas_insucesso import processar_respostas_insucesso
 from notificar_execucao_agente import notificar_execucao
@@ -126,6 +127,38 @@ def main(modo_teste: bool = False,
     else:
         logger.info("\n>>> ETAPA 1: Leitura de respostas de agendamento -- PULADA (--sem-agendamento)")
         resumo_etapas["Agendamento"] = {"status": "ok", "detalhe": "Pulada (--sem-agendamento)"}
+
+    # ── Etapa 1a: Planilha de entregas da NUU/Maria Dolores (IMAP) ─────────────
+    # Mesmo racional da Etapa 1: roda ANTES do Pipeline (Etapa 3) pra
+    # pipeline.py já enxergar, na mesma execução, o agendamento que a
+    # planilha confirmou (via agendamento_confirmacao.buscar_confirmacao,
+    # consultada na criação do serviço no VUUPT) -- pedido do Hugo, 11/08.
+    if not sem_agendamento:
+        logger.info("\n>>> ETAPA 1a: Leitura da planilha de entregas (NUU/Maria Dolores)")
+        logger.info("-" * 60)
+        try:
+            resultado_entregas_nuu = processar_planilhas_entregas(config, modo_teste=modo_teste)
+            logger.info(
+                f"Planilha NUU: {resultado_entregas_nuu['planilhas']} planilha(s), "
+                f"{resultado_entregas_nuu['casados']}/{resultado_entregas_nuu['linhas']} NF(s) casada(s) "
+                f"com pedido, {resultado_entregas_nuu['agendamentos_aplicados']} agendamento(s), "
+                f"{resultado_entregas_nuu['enderecos_novos']} endereço(s) divergente(s)."
+            )
+            resumo_etapas["Planilha de entregas (NUU)"] = {
+                "status": "ok",
+                "detalhe": f"{resultado_entregas_nuu['casados']}/{resultado_entregas_nuu['linhas']} NF(s) casada(s), "
+                          f"{resultado_entregas_nuu['agendamentos_aplicados']} agendamento(s), "
+                          f"{resultado_entregas_nuu['enderecos_novos']} endereço(s) divergente(s)",
+            }
+        except Exception as e:
+            logger.error(f"Erro na leitura da planilha de entregas da NUU: {e}")
+            resumo_etapas["Planilha de entregas (NUU)"] = {"status": "erro", "detalhe": str(e)}
+
+        logger.info("-" * 60)
+        time.sleep(2)
+    else:
+        logger.info("\n>>> ETAPA 1a: Leitura da planilha de entregas (NUU) -- PULADA (--sem-agendamento)")
+        resumo_etapas["Planilha de entregas (NUU)"] = {"status": "ok", "detalhe": "Pulada (--sem-agendamento)"}
 
     # ── Etapa 1b: Leitura de respostas de insucesso na entrega (IMAP) ──────────
     if not sem_insucesso_resposta:
