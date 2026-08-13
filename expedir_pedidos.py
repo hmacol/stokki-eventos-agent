@@ -25,6 +25,7 @@ import smtplib
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -39,6 +40,7 @@ sys.path.insert(0, str(_RAIZ / "insucesso_entrega"))
 import fingerprint_expedicao
 import fingerprint_duplicacao_insucesso
 import fingerprint_duplicacao_agendada
+import fingerprint_notificacao_interna
 from motivos_falha import texto_do_motivo, deve_duplicar, aprender_motivos, duplicar_com_atraso
 from notificar_insucesso_aguardando_resposta import (
     identificar_aguardando_resposta, notificar_remetentes as notificar_insucesso_aguardando_resposta,
@@ -77,6 +79,12 @@ URL_PROVIDER_ADM = f"{STOKKI_BASE}/pt-br/administrator/inventory/outbound/show"
 URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 
 HORAS_PADRAO = 48
+FUSO_LOCAL   = ZoneInfo("America/Sao_Paulo")
+
+# O e-mail de "dia sem insucesso" só sai nas execuções finais do dia
+# (a tarefa de 30 em 30 min roda até 19h30) -- antes disso o dia ainda
+# não terminou e um insucesso ainda pode aparecer.
+HORA_EMAIL_SEM_INSUCESSO = 19
 
 
 def _carregar_config():
@@ -390,6 +398,29 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
     if not insucessos:
         return
 
+    # A busca usa janela de HORAS_PADRAO (48h) pra duplicação/agendamento
+    # não perder nada entre execuções, mas isso fazia este e-mail repetir
+    # insucessos de ontem a cada 30 min (pedido do Hugo, 12/08 e 13/08:
+    # e-mail só com os insucessos DO DIA, sem repetição). O filtro vale só
+    # pra notificação -- a janela de 48h segue intacta pra duplicação,
+    # que tem fingerprint próprio. Entram no e-mail os insucessos de hoje
+    # + qualquer um nunca notificado (ex.: concluído ontem depois da
+    # última execução de 19h30, que senão sumiria sem aviso), e o e-mail
+    # só sai se houver algum NOVO desde o último envio.
+    hoje_local = datetime.now(FUSO_LOCAL).date()
+    de_hoje = [
+        s for s in insucessos
+        if (dt := _parse_data(s.get("completed_at"))) and dt.astimezone(FUSO_LOCAL).date() == hoje_local
+    ]
+    novos = [s for s in insucessos if not fingerprint_notificacao_interna.ja_notificado(s.get("id"))]
+    if not novos:
+        logger.info("  Nenhum insucesso novo desde o ultimo e-mail -- notificacao interna pulada.")
+        return
+    por_id = {s.get("id"): s for s in de_hoje}
+    for s in novos:
+        por_id.setdefault(s.get("id"), s)
+    insucessos = sorted(por_id.values(), key=lambda s: s.get("completed_at") or "")
+
     remetente   = config_email.get("remetente", "")
     senha       = config_email.get("senha_app") or config_email.get("senha", "")
     responsavel = config_email.get("email_responsavel", "")
@@ -457,10 +488,72 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
             smtp.login(remetente, senha)
             smtp.send_message(msg)
         logger.info(f"  Notificacao de insucesso de entrega enviada para {destino}")
+        # Marca só depois do envio dar certo (falha de SMTP tenta de novo
+        # na próxima execução) e nunca em modo_teste (teste não pode
+        # suprimir o e-mail de produção seguinte).
+        if not modo_teste:
+            fingerprint_notificacao_interna.marcar_notificados(insucessos)
     except Exception as e:
         logger.warning(f"  Falha ao enviar notificacao de insucesso: {e}")
         for s in insucessos:
             logger.warning(f"  Insucesso: {s.get('code')}")
+
+
+def notificar_sem_insucesso_hoje(config_email: dict, modo_teste: bool):
+    """
+    E-mail interno de "dia limpo" (pedido do Hugo, 13/08): quando o dia
+    termina sem NENHUM insucesso de entrega, avisa isso explicitamente
+    -- sem ele, a ausência do e-mail de insucesso seria ambígua (dia
+    limpo ou agente quebrado?). Só sai nas execuções finais do dia
+    (>= HORA_EMAIL_SEM_INSUCESSO; a tarefa roda até 19h30) e no máximo
+    1 vez por dia (fingerprint).
+    """
+    agora = datetime.now(FUSO_LOCAL)
+    if agora.hour < HORA_EMAIL_SEM_INSUCESSO:
+        return
+    data_iso = agora.date().isoformat()
+    if fingerprint_notificacao_interna.sem_insucesso_ja_enviado(data_iso):
+        return
+
+    remetente   = config_email.get("remetente", "")
+    senha       = config_email.get("senha_app") or config_email.get("senha", "")
+    responsavel = config_email.get("email_responsavel", "")
+    if not responsavel:
+        logger.info("E-mail de responsavel nao configurado -- aviso de dia sem insucesso pulado.")
+        return
+
+    COR_OK   = "#00C896"
+    data_fmt = agora.strftime("%d/%m/%Y")
+
+    corpo = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+<div style="background:{COR_OK};padding:20px;border-radius:8px 8px 0 0;">
+<h2 style="color:#fff;margin:0;">Sem Insucessos na Entrega Hoje</h2></div>
+<div style="background:#f9f9f9;padding:24px;border:1px solid #E5E7EB;border-top:none;border-radius:0 0 8px 8px;">
+<p style="color:#1F2937;">Nenhum pedido foi marcado como <strong>entrega com insucesso</strong> no VUUPT
+hoje ({data_fmt}). Nenhuma ação necessária.</p>
+<p style="font-size:12px;color:#6B7280;margin-top:20px;">
+Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
+</div></body></html>"""
+
+    assunto = f"[Freshlog] Sem insucessos na entrega hoje ({data_fmt})"
+    destino = "hugo@freshlogbr.com" if modo_teste else responsavel
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = assunto
+        msg["From"]    = remetente
+        msg["To"]      = destino
+        msg.attach(MIMEText(corpo, "html", "utf-8"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(remetente, senha)
+            smtp.send_message(msg)
+        logger.info(f"  Aviso de dia sem insucesso enviado para {destino}")
+        if not modo_teste:
+            fingerprint_notificacao_interna.marcar_sem_insucesso_enviado(data_iso)
+    except Exception as e:
+        logger.warning(f"  Falha ao enviar aviso de dia sem insucesso: {e}")
 
 
 # ── Stokki ────────────────────────────────────────────────────────────────────
@@ -704,8 +797,11 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # 1. Busca entregues com canhoto
         servicos = buscar_servicos_entregues(vuupt_token, horas=horas)
         if not servicos:
+            # Sem return: mesmo sem canhoto novo, a parte de INSUCESSO
+            # abaixo precisa rodar (notificação, duplicação, aviso de dia
+            # sem insucesso) -- o gate da expedição em si é o
+            # "if not validados" mais adiante.
             logger.info("Nenhum pedido com canhoto no periodo.")
-            return
 
         # 2. Separa validados dos pendentes
         validados = [s for s in servicos if canhoto_validado(s)]
@@ -803,6 +899,17 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 logger.info(f"Aviso de duplicação aos remetentes: {resultado_espera}")
 
             notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+
+        # Dia sem NENHUM insucesso: no fim do dia avisa explicitamente
+        # (pedido do Hugo, 13/08) -- a função decide sozinha o horário
+        # (>= 19h) e o limite de 1 e-mail por dia.
+        hoje_local = datetime.now(FUSO_LOCAL).date()
+        teve_insucesso_hoje = any(
+            (dt := _parse_data(s.get("completed_at"))) and dt.astimezone(FUSO_LOCAL).date() == hoje_local
+            for s in insucessos
+        )
+        if not teve_insucesso_hoje:
+            notificar_sem_insucesso_hoje(config_email, modo_teste)
 
         # Duplicações agendadas que já venceram (independente de ter
         # insucesso NOVO nesta execução -- uma agendada há dias pode
