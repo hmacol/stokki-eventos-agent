@@ -131,7 +131,7 @@ def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict
     }
 
 
-def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict]) -> str:
+def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None) -> str:
     """
     Grava um lote novo de rascunhos numa única transação.
 
@@ -140,11 +140,17 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict]) -> str:
     start_location_base_id, end_location_base_id, start_at,
     km_estimado, sublote (lista de serviços brutos da VUUPT).
 
-    Retorna o lote_id gerado (usado depois pra listar só esse lote).
+    `lote_id` explícito ACRESCENTA os rascunhos a um lote já existente
+    em vez de abrir um novo -- botão "Roteirizar" da tela (Hugo, 12/08):
+    a tela mostra sempre só o lote ativo mais recente, então um lote
+    novo a cada roteirização da seleção esconderia os rascunhos que já
+    estavam em edição.
+
+    Retorna o lote_id usado (gerado ou repassado).
     """
     from mapa_util import carregar_remetentes_por_sender_id
 
-    lote_id = f"{data_alvo.isoformat()}-{uuid.uuid4().hex[:8]}"
+    lote_id = lote_id or f"{data_alvo.isoformat()}-{uuid.uuid4().hex[:8]}"
     remetentes_por_id = carregar_remetentes_por_sender_id()
 
     conn = _conectar()
@@ -460,6 +466,41 @@ def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | N
         conn.commit()
     finally:
         conn.close()
+
+
+# Espelho de criar_rotas_diarias.BASE_LOCATION_ID (operational_base_id
+# da base na VUUPT, confirmado em produção) -- importar criar_rotas_
+# diarias aqui só pra ler a constante puxaria selecao_modelo/rotas_client
+# e todo o resto do pipeline pra dentro do painel.
+BASE_LOCATION_ID = 6950
+
+
+def referencia_para_rascunho_manual(data_alvo: date) -> dict:
+    """
+    Campos que um rascunho criado NA TELA (nova rota vazia ou rota a
+    partir da seleção) herda: do primeiro rascunho do lote ativo da
+    data, quando existe; senão -- data ainda sem lote, achado do Hugo
+    12/08: a tela travava com "Nenhum lote ativo para essa data" mesmo
+    com pool na tela -- os MESMOS padrões que criar_rotas_diarias.py
+    usaria (lote_id novo no padrão de criar_lote_rascunhos, base 6950
+    na ida e na volta, saída 13:00Z, partição Seco/GRANDE_SP), e o
+    rascunho criado passa a ser ele mesmo o lote ativo da data.
+    """
+    rascunhos_do_dia = listar_rascunhos_do_dia(data_alvo)
+    if rascunhos_do_dia:
+        r = rascunhos_do_dia[0]
+        return {chave: r[chave] for chave in (
+            "lote_id", "particao", "tipo_rota",
+            "start_location_base_id", "end_location_base_id", "start_at",
+        )}
+    return {
+        "lote_id": f"{data_alvo.isoformat()}-{uuid.uuid4().hex[:8]}",
+        "particao": "Seco",
+        "tipo_rota": "GRANDE_SP",
+        "start_location_base_id": BASE_LOCATION_ID,
+        "end_location_base_id": BASE_LOCATION_ID,
+        "start_at": f"{data_alvo.isoformat()}T13:00:00Z",
+    }
 
 
 def criar_rascunho_vazio(data_alvo: date, lote_id: str, particao: str, tipo_rota: str,

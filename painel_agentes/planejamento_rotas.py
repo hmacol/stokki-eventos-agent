@@ -156,25 +156,29 @@ def _regiao_do_servico(servico: dict) -> str:
     return "Sem região identificada"
 
 
-def _resumo_agendados_futuros(servicos_brutos: list[dict], data_alvo: date) -> list[dict]:
+def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
     """
-    Agrega os not_assigned agendados pra DEPOIS de data_alvo num
-    "resumo do futuro" (pedido do Hugo, 12/08: "mostre também os
-    pedidos que estão agendados, quantidade de pedidos e volumes para
-    cada região"): um bloco por dia, em ordem cronológica, cada um com
-    as regiões e seus totais de pedidos e caixas. Cada região traz
-    também "grandes": os pedidos acima de LIMITE_ALERTA_CAIXAS, que
-    viram alerta visual no card do dia.
+    Agrega TODO pedido agendado e não finalizado (independente da data,
+    pedido do Hugo, 12/08 -- antes era o "resumo do futuro", só os
+    agendados pra depois da data em edição): um bloco por dia, em ordem
+    cronológica, cada um com as regiões e seus totais de pedidos e
+    caixas. Cada região traz também "grandes": os pedidos acima de
+    LIMITE_ALERTA_CAIXAS, que viram alerta visual no card do dia. Dia
+    já passado (< hoje) sai marcado com "atrasado": agendou, não
+    finalizou e a data ficou pra trás.
 
-    scheduled_start malformado é ignorado aqui de propósito -- pedido
-    assim é tratado como SEM agendamento por elegivel_para_data, ou
-    seja, já aparece no pool do dia; contar de novo no futuro duplicaria.
+    Quem decide o que entra é o chamador (buscar_pool_e_agendados
+    junta not_assigned + accepted + on_route -- done/canceled ficam de
+    fora); aqui só se exige agendamento válido: scheduled_start vazio
+    ou malformado é pedido SEM agendamento (mesmo critério de
+    elegivel_para_data), não tem dia pra aparecer no resumo.
     """
+    hoje = date.today()
     por_dia: dict[date, dict[str, dict]] = {}
-    for s in servicos_brutos:
+    for s in servicos:
         data_agendada = _data_agendada(s)
-        if not data_agendada or data_agendada <= data_alvo:
-            continue  # sem agendamento (ou malformado) ou já elegível -- assunto do pool
+        if not data_agendada:
+            continue  # sem agendamento (ou malformado) -- assunto do pool
 
         regioes_do_dia = por_dia.setdefault(data_agendada, {})
         reg = regioes_do_dia.setdefault(_regiao_do_servico(s), {"pedidos": 0, "caixas": 0, "codigos": [], "grandes": []})
@@ -196,6 +200,7 @@ def _resumo_agendados_futuros(servicos_brutos: list[dict], data_alvo: date) -> l
             "data_iso": data_agendada.isoformat(),
             "data_fmt": data_agendada.strftime("%d/%m"),
             "dia_semana": DIAS_NOMES[data_agendada.weekday()],
+            "atrasado": data_agendada < hoje,
             "total_pedidos": sum(r["pedidos"] for r in regioes),
             "total_caixas": sum(r["caixas"] for r in regioes),
             "regioes": regioes,
@@ -205,18 +210,22 @@ def _resumo_agendados_futuros(servicos_brutos: list[dict], data_alvo: date) -> l
 
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
     """
-    Busca ao vivo na VUUPT os pedidos not_assigned e separa, com UMA
-    chamada só à API, em:
+    Busca ao vivo na VUUPT os pedidos e separa em:
 
-      - "pool": elegíveis pra essa data que ainda não estão em nenhum
-        rascunho ATIVO (a coluna arrastável da tela) -- extraída de
-        buscar_dados_planejamento() pra ser reaproveitada pelo botão
-        "Atualizar" (Hugo, 12/08: verificar pedido novo chegando na
-        VUUPT sem recarregar a página, perdendo a edição em andamento);
-      - "resumo_futuro": agendados pra depois dessa data, agregados por
-        dia e região (_resumo_agendados_futuros). Aqui NÃO se desconta
-        quem está em rascunho: rascunho ativo é sempre da data em
-        edição, e o resumo é justamente a demanda que ainda vai chegar;
+      - "pool": not_assigned elegíveis pra essa data que ainda não estão
+        em nenhum rascunho ATIVO (a coluna arrastável da tela) --
+        extraída de buscar_dados_planejamento() pra ser reaproveitada
+        pelo botão "Atualizar" (Hugo, 12/08: verificar pedido novo
+        chegando na VUUPT sem recarregar a página, perdendo a edição em
+        andamento);
+      - "resumo_agendados": TODO agendado não finalizado, independente
+        da data, agregado por dia e região (_resumo_pedidos_agendados;
+        pedido do Hugo, 12/08 -- substitui o antigo "resumo do futuro").
+        Não finalizado = not_assigned (a mesma busca do pool) + accepted
+        + on_route (2 buscas extras, leves: são só as paradas das rotas
+        vivas do momento); done e canceled ficam de fora. Aqui NÃO se
+        desconta quem está em rascunho: o resumo é a foto da demanda
+        agendada, o pool é a bancada de trabalho;
       - "agendamentos_por_service_id": {service_id: data ISO} de TODO
         not_assigned com agendamento válido -- usado por
         buscar_dados_planejamento pra mostrar o agendamento também nas
@@ -246,9 +255,20 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         if agendado:
             agendamentos_por_service_id[s["id"]] = agendado.isoformat()
 
+    # Agendado já em rota (accepted/on_route) também é "não finalizado".
+    # Falha aqui não derruba a tela: o resumo fica só com os
+    # not_assigned, que continuam sendo a maior parte.
+    servicos_resumo = list(servicos_brutos)
+    for status_rota in ("accepted", "on_route"):
+        try:
+            servicos_resumo += vuupt.listar_servicos(
+                [{"field": "status", "operator": "eq", "value": status_rota}], per_page=100)
+        except Exception as e:
+            logger.warning(f"Falha ao buscar serviços '{status_rota}' pro resumo de agendados: {e}")
+
     return {
         "pool": pool,
-        "resumo_futuro": _resumo_agendados_futuros(servicos_brutos, data_alvo),
+        "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
     }
 
@@ -256,13 +276,13 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     """
     Retorna {"data_alvo", "rascunhos": [...], "pool": [...],
-    "resumo_futuro": [...], "base", "google_maps_key",
+    "resumo_agendados": [...], "base", "google_maps_key",
     "motoristas": [...]} pra tela de planejamento.
 
     Cada rascunho vem com "badges" (avisos de trava estourada) já
     calculados. O pool é o not_assigned elegível pra essa data que
-    ainda não está em nenhum rascunho do lote ativo; resumo_futuro é a
-    demanda agendada pra depois dela, por dia e região.
+    ainda não está em nenhum rascunho do lote ativo; resumo_agendados é
+    todo pedido agendado não finalizado, por dia e região.
     """
     data_alvo = data_alvo or date.today()
     config = _carregar_config()
@@ -298,11 +318,86 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "data_alvo_iso": data_alvo.isoformat(),
         "rascunhos": rascunhos,
         "pool": pool_e_agendados["pool"],
-        "resumo_futuro": pool_e_agendados["resumo_futuro"],
+        "resumo_agendados": pool_e_agendados["resumo_agendados"],
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
         "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,
+    }
+
+
+_PADRAO_INDICE_ROTA = re.compile(r"#(\d+)\s*$")
+
+
+def roteirizar_selecionados(data_alvo: date, service_ids: list[int]) -> dict:
+    """
+    Roda o criador de rotas (criar_rotas_diarias.roteirizar_para_
+    rascunhos: partição Seco/Frio, seleção de modelo + 2-opt, motorista
+    equitativo) SÓ com os pedidos selecionados no pool -- botão
+    "Roteirizar" da tela (pedido do Hugo, 12/08). Os rascunhos gerados
+    entram no lote ATIVO da data (não num lote novo, que esconderia os
+    rascunhos já em edição -- a tela mostra sempre só o lote mais
+    recente).
+
+    Os serviços são rebuscados AO VIVO na VUUPT (o pool da tela não
+    carrega o customer.code, que a classificação de nível exige) --
+    pedido selecionado que já saiu do not_assigned nesse meio-tempo, ou
+    que outra aba já colocou em rascunho, fica de fora e é contado em
+    "pedidos_indisponiveis".
+
+    Numeração '#N' e equilíbrio de motoristas continuam do lote ativo
+    (rascunhos ENVIADOS inclusive -- já são rotas reais do dia).
+
+    Retorna {"rotas_criadas", "pedidos_roteirizados", "pedidos_indisponiveis"}.
+    """
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+
+    rascunhos_ativos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    ids_em_rascunho = {p["service_id"] for r in rascunhos_ativos for p in r["paradas"]}
+
+    vuupt = VuuptClient(token)
+    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
+    servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+    por_id = {s["id"]: s for s in servicos_brutos}
+
+    selecionados = [por_id[sid] for sid in service_ids if sid in por_id and sid not in ids_em_rascunho]
+    indisponiveis = len(service_ids) - len(selecionados)
+    if not selecionados:
+        raise ValueError("Nenhum dos pedidos selecionados está disponível pra roteirizar "
+                         "(já em rascunho ou não estão mais 'not_assigned' na VUUPT). "
+                         "Atualize a página e tente de novo.")
+
+    indice_inicial = 1
+    contagem_alocacoes_dia: dict[int, int] = {}
+    for r in rascunhos_ativos:
+        m = _PADRAO_INDICE_ROTA.search(r["nome"] or "")
+        if m:
+            indice_inicial = max(indice_inicial, int(m.group(1)) + 1)
+        if r.get("agent_id"):
+            contagem_alocacoes_dia[r["agent_id"]] = contagem_alocacoes_dia.get(r["agent_id"], 0) + 1
+
+    # import tardio de propósito: puxa o pipeline inteiro (selecao_modelo,
+    # alocacao_motoristas, notificadores...) -- só paga esse custo quando
+    # o botão é usado, não em todo GET /planejamento
+    import criar_rotas_diarias
+
+    rascunhos_novos = criar_rotas_diarias.roteirizar_para_rascunhos(
+        selecionados, data_alvo, config,
+        indice_inicial=indice_inicial,
+        contagem_alocacoes_dia=contagem_alocacoes_dia,
+        sufixo_label=" (seleção manual)",
+    )
+    if not rascunhos_novos:
+        raise ValueError("O criador de rotas não gerou nenhuma rota pra essa seleção.")
+
+    referencia = rascunhos_rota.referencia_para_rascunho_manual(data_alvo)
+    rascunhos_rota.criar_lote_rascunhos(data_alvo, rascunhos_novos, lote_id=referencia["lote_id"])
+
+    return {
+        "rotas_criadas": len(rascunhos_novos),
+        "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
+        "pedidos_indisponiveis": indisponiveis,
     }
 
 

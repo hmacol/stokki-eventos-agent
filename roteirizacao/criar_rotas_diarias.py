@@ -150,6 +150,129 @@ def _data_alvo_rotas(agora: datetime) -> date:
     return _proximo_dia_util(base)
 
 
+def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
+                              indice_inicial: int = 1,
+                              contagem_alocacoes_dia: dict[int, int] | None = None,
+                              sufixo_label: str = "") -> list[dict]:
+    """
+    Miolo do criador de rotas (classificação de nível/tipo de carga,
+    partição Seco x Refrigerado/Congelado, seleção de modelo + 2-opt,
+    alocação equitativa de motorista) aplicado a uma lista EXPLÍCITA de
+    serviços brutos da VUUPT, devolvendo rascunhos prontos pra
+    rascunhos_rota.criar_lote_rascunhos -- botão "Roteirizar" da seleção
+    do pool na tela de planejamento (pedido do Hugo, 12/08: escolher
+    pedidos e rodar o criador de rotas só com eles).
+
+    Diferente do main(): não busca nada na VUUPT (a seleção JÁ é a
+    entrada), não filtra elegibilidade (selecionar na tela é decisão
+    explícita, vence o agendamento) e não dispara nenhuma notificação
+    (dia fixo/agendamento pendente/área não atendida são assunto do job
+    agendado). `indice_inicial` e `contagem_alocacoes_dia` vêm de quem
+    chama, pra continuar a numeração '#N' e o equilíbrio de motoristas
+    do lote já existente do dia (a contagem é MUTADA aqui, +1 por rota
+    gerada). `sufixo_label` distingue as linhas do histórico de seleção
+    de modelo das do job diário.
+    """
+    config = config or _carregar_config()
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo_motoristas = CatalogoMotoristas.carregar(
+        cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
+    )
+    contagem = contagem_alocacoes_dia if contagem_alocacoes_dia is not None else {}
+
+    data_alvo_br = data_alvo.strftime("%d/%m/%Y")
+    start_at = f"{data_alvo.strftime('%Y-%m-%d')}T13:00:00Z"
+
+    # mesma classificação do main(): nível de dificuldade (CNPJ do
+    # destinatário) e tipo de carga (sender_id), injetados no dict
+    caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
+    mapa_niveis = carregar_niveis(caminho_niveis)
+    mapa_tipos_carga = carregar_tipos_carga_por_sender(DB_PATH)
+    for s in servicos:
+        cnpj_destino = (s.get("customer") or {}).get("code", "")
+        nivel, _, _ = classificar_nivel(cnpj_destino, mapa_niveis)
+        s["_nivel_dificuldade"] = nivel
+        tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
+        s["_tipo_carga"] = tipo_carga
+
+    particoes = [
+        ("Seco", [s for s in servicos if s["_tipo_carga"] not in TIPOS_CARGA_FRIA]),
+        ("Refrigerado/Congelado", [s for s in servicos if s["_tipo_carga"] in TIPOS_CARGA_FRIA]),
+    ]
+
+    coords_base = None
+    try:
+        coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
+    except Exception as e:
+        logger.warning(f"Não consegui geocodificar a base -- seguindo com o agrupamento fixo: {e}")
+
+    indice = indice_inicial
+    rascunhos: list[dict] = []
+    for label, servicos_particao in particoes:
+        if not servicos_particao:
+            continue
+
+        if coords_base:
+            _modelo, sublotes = escolher_melhor_modelo(
+                servicos_particao, coords_base[0], coords_base[1], gmaps_key,
+                data_alvo=data_alvo, label=f"{label}{sufixo_label}",
+                tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=TAMANHO_MAXIMO_ROTA,
+                volume_maximo=VOLUME_MAXIMO_ROTA,
+                distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+            )
+        else:
+            # mesmo fluxo de reserva do main() quando a base não geocodifica
+            sublotes = []
+            grupos_iniciais = agrupar_por_regiao(servicos_particao, api_key=gmaps_key)
+            grupos_validos = consolidar_regioes_pequenas(grupos_iniciais, minimo=TAMANHO_MINIMO_ROTA, api_key=gmaps_key)
+            for servicos_regiao in grupos_validos.values():
+                distancia_maxima_da_regiao = (
+                    DISTANCIA_MAXIMA_VIAGEM_KM if classificar_rota_viagem(servicos_regiao, gmaps_key)
+                    else DISTANCIA_MAXIMA_ROTA_KM
+                )
+                sublotes.extend(dividir_em_sublotes(
+                    servicos_regiao, tamanho_minimo=TAMANHO_MINIMO_ROTA,
+                    tamanho_maximo=TAMANHO_MAXIMO_ROTA, volume_maximo=VOLUME_MAXIMO_ROTA,
+                    distancia_maxima_km=distancia_maxima_da_regiao, api_key=gmaps_key))
+
+        for sublote in sublotes:
+            nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
+            indice += 1
+            eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
+            zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
+            motorista = selecionar_motorista_equitativo(
+                sublote, data_alvo, catalogo_motoristas.motoristas, contagem, gmaps_key,
+            )
+            if motorista:
+                contagem[motorista.agent_id] = contagem.get(motorista.agent_id, 0) + 1
+            km_estimado = (
+                calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
+                if coords_base else None
+            )
+            rascunhos.append({
+                "nome": nome_rota,
+                "particao": label,
+                "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
+                "zona": zona,
+                "agent_id": motorista.agent_id if motorista else None,
+                "vehicle_id": motorista.vehicle_id if motorista else None,
+                "motorista_nome": motorista.nome if motorista else None,
+                "start_location_base_id": BASE_LOCATION_ID,
+                "end_location_base_id": BASE_LOCATION_ID,
+                "start_at": start_at,
+                "km_estimado": km_estimado,
+                "sublote": sublote,
+            })
+            logger.info(f"[SELEÇÃO] [{label}] '{nome_rota}' [{'VIAGEM' if eh_viagem else 'GRANDE_SP'}] "
+                       f"com {len(sublote)} pedido(s) -- motorista sugerido: "
+                       f"{motorista.nome if motorista else 'SEM MOTORISTA [ALERTA_ALOCACAO]'}: "
+                       f"{[s.get('code') for s in sublote]}")
+    return rascunhos
+
+
 def main(modo_teste: bool = False, gerar_rascunho: bool = False):
     inicio = time.time()
     prefixo_log = "[MODO TESTE] " if modo_teste else ("[RASCUNHO] " if gerar_rascunho else "")

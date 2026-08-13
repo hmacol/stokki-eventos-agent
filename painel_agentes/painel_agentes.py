@@ -55,7 +55,7 @@ from executor import (
 from mapa_rotas import buscar_rotas_para_mapa
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
-    carregar_documentos_do_rascunho,
+    carregar_documentos_do_rascunho, roteirizar_selecionados,
 )
 import rascunhos_rota
 import torre_controle
@@ -337,11 +337,12 @@ def api_torre_destratar():
 @app.route("/api/planejamento/pool")
 @requer_auth
 def api_pool():
-    """Busca ao vivo na VUUPT o pool de não alocados + resumo do futuro
-    (botão 'Atualizar' da tela) -- não mexe nos rascunhos/mapa já
-    carregados, pra não perder o estado de edição em andamento. O resumo
-    volta já renderizado (mesmo partial _resumo_futuro.html do load da
-    página), a tela só troca o innerHTML do container."""
+    """Busca ao vivo na VUUPT o pool de não alocados + resumo dos
+    pedidos agendados (botão 'Atualizar' da tela) -- não mexe nos
+    rascunhos/mapa já carregados, pra não perder o estado de edição em
+    andamento. O resumo volta já renderizado (mesmo partial
+    _resumo_agendados.html do load da página), a tela só troca o
+    innerHTML do container."""
     data_alvo = _parse_data_param()
     try:
         resultado = buscar_pool_e_agendados(data_alvo)
@@ -349,7 +350,7 @@ def api_pool():
         return jsonify({"erro": str(e)}), 500
     return jsonify({
         "pool": resultado["pool"],
-        "resumo_html": render_template("_resumo_futuro.html", resumo_futuro=resultado["resumo_futuro"]),
+        "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
     })
 
 
@@ -478,13 +479,9 @@ def api_nova_rota():
     body = request.get_json(force=True)
     try:
         data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
-        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
-        if not rascunhos_do_dia:
-            return jsonify({"erro": "Nenhum lote ativo para essa data -- rode o pipeline em modo rascunho primeiro."}), 400
-        lote_id = rascunhos_do_dia[0]["lote_id"]
-        referencia = rascunhos_do_dia[0]
+        referencia = rascunhos_rota.referencia_para_rascunho_manual(data_alvo)
         rascunho_id = rascunhos_rota.criar_rascunho_vazio(
-            data_alvo, lote_id, body.get("particao") or referencia["particao"],
+            data_alvo, referencia["lote_id"], body.get("particao") or referencia["particao"],
             body.get("tipo_rota") or referencia["tipo_rota"],
             referencia["start_location_base_id"], referencia["end_location_base_id"],
             referencia["start_at"],
@@ -499,19 +496,17 @@ def api_nova_rota():
 @exige_mesma_origem
 def api_criar_rota_com_paradas():
     """Rascunho novo já com as paradas selecionadas no pool (seleção
-    múltipla da tela, Hugo 12/08) -- mesma exigência de lote ativo da
-    nova-rota (herda partição/tipo/bases/start_at do lote), só que sem
-    o vaivém de criar vazia e arrastar parada por parada."""
+    múltipla da tela, Hugo 12/08) -- herda partição/tipo/bases/start_at
+    do lote ativo da data (ou dos padrões do pipeline, quando a data
+    ainda não tem lote), sem o vaivém de criar vazia e arrastar parada
+    por parada."""
     body = request.get_json(force=True)
     try:
         data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
         paradas = body["paradas"]
         if not paradas:
             return jsonify({"erro": "Nenhum pedido selecionado."}), 400
-        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
-        if not rascunhos_do_dia:
-            return jsonify({"erro": "Nenhum lote ativo para essa data -- rode o pipeline em modo rascunho primeiro."}), 400
-        referencia = rascunhos_do_dia[0]
+        referencia = rascunhos_rota.referencia_para_rascunho_manual(data_alvo)
         rascunho_id = rascunhos_rota.criar_rascunho_com_paradas(
             data_alvo, referencia["lote_id"], referencia["particao"], referencia["tipo_rota"],
             referencia["start_location_base_id"], referencia["end_location_base_id"],
@@ -520,6 +515,30 @@ def api_criar_rota_com_paradas():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
+
+
+@app.route("/api/planejamento/roteirizar-selecionados", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_roteirizar_selecionados():
+    """Roda o criador de rotas (mesmo miolo do job diário: partição
+    Seco/Frio, seleção de modelo + 2-opt, motorista sugerido) só com os
+    pedidos selecionados na tela (Hugo, 12/08) -- os rascunhos gerados
+    entram no lote ativo da data. Pode levar alguns segundos
+    (geocodificação + comparação dos 3 modelos)."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        service_ids = [int(sid) for sid in body["service_ids"]]
+        if not service_ids:
+            return jsonify({"erro": "Nenhum pedido selecionado."}), 400
+        resultado = roteirizar_selecionados(data_alvo, service_ids)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao roteirizar a seleção")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
 
 
 @app.route("/api/planejamento/otimizar-sequencia", methods=["POST"])

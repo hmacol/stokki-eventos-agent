@@ -84,6 +84,7 @@
   .item-parada.busca-oculta { display: none; }
   .item-parada.flag-oculta { display: none; }
   .item-parada.cep-oculta { display: none; }
+  .item-parada.caixas-oculta { display: none; }
   .item-parada.selecionada {
     border-color: var(--acento);
     box-shadow: inset 0 0 0 1px var(--acento);
@@ -138,8 +139,8 @@
     border: 1px solid var(--borda);
     border-radius: 5px;
   }
-  .filtro-cep { display: flex; gap: 6px; }
-  .filtro-cep input { flex: 1; min-width: 0; }
+  .filtro-cep, .filtro-caixas { display: flex; gap: 6px; }
+  .filtro-cep input, .filtro-caixas input { flex: 1; min-width: 0; }
   .dica-selecao { font-size: 10.5px; color: var(--texto-suave); margin: 0 0 8px; }
   .barra-selecao { display: flex; gap: 6px; margin-bottom: 10px; }
   .barra-selecao button {
@@ -154,6 +155,10 @@
   .barra-selecao button:hover { background: var(--fundo); }
   .barra-selecao button:disabled { opacity: 0.5; cursor: default; }
   #botao-criar-rota-selecao { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  /* azul de propósito (mesmo tom do remetente) -- verde é do "Criar rota"
+     (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
+     pode gerar várias rotas, confundir os dois seria fácil */
+  #botao-roteirizar-selecao { border-color: #4F86F7; color: #4F86F7; font-weight: 700; }
   .filtro-flag {
     display: flex;
     align-items: center;
@@ -244,22 +249,22 @@
   .info-parada .remetente { color: #4F86F7; font-weight: 600; }
   .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
 
-  .resumo-futuro {
+  .resumo-agendados {
     background: var(--superficie);
     border: 1px solid var(--borda);
     border-radius: 10px;
     padding: 14px 18px;
     margin-bottom: 16px;
   }
-  .resumo-futuro h3 {
+  .resumo-agendados h3 {
     margin: 0 0 10px;
     font-size: 13px;
     color: var(--texto-suave);
     text-transform: uppercase;
     letter-spacing: 0.4px;
   }
-  .dias-futuro { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
-  .card-dia-futuro {
+  .dias-agendados { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .card-dia-agendado {
     flex: 0 0 auto;
     min-width: 190px;
     max-width: 250px;
@@ -271,14 +276,23 @@
     text-decoration: none;
     color: inherit;
   }
-  .card-dia-futuro:hover { border-color: var(--acento); }
-  .card-dia-futuro .cabecalho-dia { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
-  .card-dia-futuro .dia-nome { font-weight: 700; }
-  .card-dia-futuro .dia-totais { color: var(--texto-suave); white-space: nowrap; }
-  .card-dia-futuro ul { list-style: none; margin: 0; padding: 0; }
-  .card-dia-futuro li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.6; }
-  .card-dia-futuro .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
-  .card-dia-futuro .alerta-caixas { color: var(--erro); font-weight: 700; cursor: help; }
+  .card-dia-agendado:hover { border-color: var(--acento); }
+  .card-dia-agendado.atrasado { border-color: var(--erro); }
+  .card-dia-agendado .selo-atraso {
+    color: var(--erro);
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    cursor: help;
+  }
+  .card-dia-agendado .cabecalho-dia { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .card-dia-agendado .dia-nome { font-weight: 700; }
+  .card-dia-agendado .dia-totais { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-agendado ul { list-style: none; margin: 0; padding: 0; }
+  .card-dia-agendado li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.6; }
+  .card-dia-agendado .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-agendado .alerta-caixas { color: var(--erro); font-weight: 700; cursor: help; }
 </style>
 {% endblock %}
 
@@ -290,16 +304,16 @@
   <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
   <button type="submit" class="botao">Buscar</button>
   {% if dados %}
-  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool{% if dados.resumo_futuro %} — {{ dados.resumo_futuro | sum(attribute='total_pedidos') }} agendado(s) pro futuro{% endif %}</span>
+  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool{% if dados.resumo_agendados %} — {{ dados.resumo_agendados | sum(attribute='total_pedidos') }} agendado(s) não finalizado(s){% endif %}</span>
   {% endif %}
 </form>
 
-{# fora do if/elif principal de propósito: o resumo do futuro aparece
-   mesmo quando a data em edição não tem rascunho nem pool (é
-   justamente o caso "nada pra hoje, mas olha o que vem aí") #}
+{# fora do if/elif principal de propósito: o resumo dos agendados
+   aparece mesmo quando a data em edição não tem rascunho nem pool (é
+   justamente o caso "nada pra hoje, mas olha o que está agendado") #}
 {% if dados %}
-<div id="resumo-futuro-container">
-  {% with resumo_futuro = dados.resumo_futuro %}{% include "_resumo_futuro.html" %}{% endwith %}
+<div id="resumo-agendados-container">
+  {% with resumo_agendados = dados.resumo_agendados %}{% include "_resumo_agendados.html" %}{% endwith %}
 </div>
 {% endif %}
 
@@ -325,10 +339,15 @@
       <input type="text" id="cep-de" class="campo-busca" placeholder="CEP de (ex: 01000)">
       <input type="text" id="cep-ate" class="campo-busca" placeholder="CEP até (ex: 05999)">
     </div>
+    <div class="filtro-caixas" title="Faixa de quantidade de caixas do pedido. Pedido sem volume informado conta como 1 caixa (mesma convenção das travas de rota).">
+      <input type="number" id="caixas-de" class="campo-busca" min="0" placeholder="Caixas: mín">
+      <input type="number" id="caixas-ate" class="campo-busca" min="0" placeholder="Caixas: máx">
+    </div>
     <div class="barra-selecao">
-      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis com os filtros atuais (busca, agendamento e faixa de CEP)">Selecionar visíveis</button>
+      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
+      <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: agrupa por região (Seco separado de Refrigerado/Congelado), compara os 3 modelos, otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
     </div>
     <div class="dica-selecao">Clique num pedido (ou no ponto dele no mapa) pra selecionar; clique de novo pra desmarcar. No mapa: "Não alocados" mostra o pool em vermelho e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.</div>
     <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
@@ -465,6 +484,9 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.cep = cepDoEndereco(p.endereco);
+    // fallback de 1 caixa pra pedido sem volume -- mesma convenção das
+    // travas do servidor e do totalizador da rota
+    li.dataset.caixas = p.volume_caixas || 1;
     // texto usado pela busca client-side (código, remetente, destinatário, endereço)
     li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco]
       .filter(Boolean).join(" ").toLowerCase();
@@ -703,12 +725,18 @@
   function liVisivelNoPool(li) {
     return !li.classList.contains("busca-oculta") &&
            !li.classList.contains("flag-oculta") &&
-           !li.classList.contains("cep-oculta");
+           !li.classList.contains("cep-oculta") &&
+           !li.classList.contains("caixas-oculta");
   }
 
   function filtroCepAtivo() {
     return !!(document.getElementById("cep-de").value.replace(/\D/g, "") ||
               document.getElementById("cep-ate").value.replace(/\D/g, ""));
+  }
+
+  function filtroCaixasAtivo() {
+    return !!(document.getElementById("caixas-de").value.trim() ||
+              document.getElementById("caixas-ate").value.trim());
   }
 
   function renumerarPool() {
@@ -729,9 +757,9 @@
   function atualizarPreviewPool() {
     renumerarPool();  // o número do card e o do ponto nascem juntos
     // aparece no mapa quem está selecionado (sempre) ou quem passa nos
-    // filtros ativos, quando o toggle "não alocados" ou a faixa de CEP
-    // estão ligados
-    const mostrarPool = mostrarPoolNoMapa || filtroCepAtivo();
+    // filtros ativos, quando o toggle "não alocados", a faixa de CEP ou
+    // a faixa de caixas estão ligados
+    const mostrarPool = mostrarPoolNoMapa || filtroCepAtivo() || filtroCaixasAtivo();
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
       const id = Number(li.dataset.serviceId);
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
@@ -755,6 +783,7 @@
         icon: icone,
         title: p ? `${p.codigo} — ${p.endereco}` : "",
         zIndex: selecionado ? 3 : 2,
+        clickable: !desenhandoPoligono,  // criado no meio do desenho não pode engolir o clique do vértice
       });
       // no meio do desenho do polígono o clique é vértice, não seleção
       marker.addListener("click", () => { if (!desenhandoPoligono) alternarSelecao(id); });
@@ -798,10 +827,27 @@
     atualizarPreviewPool();
   }
 
+  function aplicarFiltroCaixas() {
+    // faixa de quantidade de caixas (mín/máx, extremos inclusos); campo
+    // vazio = sem limite daquele lado. Todo pedido tem data-caixas (>= 1
+    // pelo fallback), então não existe caso "sem valor" aqui.
+    const de = parseInt(document.getElementById("caixas-de").value, 10);
+    const ate = parseInt(document.getElementById("caixas-ate").value, 10);
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      const caixas = Number(li.dataset.caixas);
+      const oculta = (!isNaN(de) && caixas < de) || (!isNaN(ate) && caixas > ate);
+      li.classList.toggle("caixas-oculta", oculta);
+    });
+    atualizarPreviewPool();
+  }
+
   function atualizarBarraSelecao() {
     const botaoCriar = document.getElementById("botao-criar-rota-selecao");
     botaoCriar.disabled = SELECIONADOS.size === 0;
     botaoCriar.textContent = SELECIONADOS.size ? `Criar rota (${SELECIONADOS.size})` : "Criar rota";
+    const botaoRoteirizar = document.getElementById("botao-roteirizar-selecao");
+    botaoRoteirizar.disabled = SELECIONADOS.size === 0;
+    botaoRoteirizar.textContent = SELECIONADOS.size ? `Roteirizar (${SELECIONADOS.size})` : "Roteirizar";
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
   }
 
@@ -876,8 +922,8 @@
     verticesPoligono = [];
     poligonoTemp = new google.maps.Polygon({
       map: map, paths: [],
-      fillColor: "#0EA575", fillOpacity: 0.12,
-      strokeColor: "#0EA575", strokeWeight: 2,
+      fillColor: COR_SELECIONADO, fillOpacity: 0.12,
+      strokeColor: COR_SELECIONADO, strokeWeight: 2,
       clickable: false,
     });
     map.setOptions({ draggableCursor: "crosshair", disableDoubleClickZoom: true });
@@ -925,12 +971,12 @@
 
     botaoPoolMapa = document.createElement("button");
     botaoPoolMapa.type = "button";
-    botaoPoolMapa.title = "Mostrar/ocultar os pedidos não alocados (pool) como pontos pretos no mapa";
+    botaoPoolMapa.title = "Mostrar/ocultar os pedidos não alocados (pool) como pontos vermelhos numerados no mapa";
     botaoPoolMapa.addEventListener("click", () => definirMostrarPoolNoMapa(!mostrarPoolNoMapa));
 
     botaoPoligono = document.createElement("button");
     botaoPoligono.type = "button";
-    botaoPoligono.title = "Desenhar um polígono no mapa pra selecionar todos os pedidos dentro dele";
+    botaoPoligono.title = "Selecionar por área: cada clique no mapa é um vértice do polígono; duplo clique (ou este botão) conclui, Esc cancela";
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
 
     container.appendChild(botaoPoolMapa);
@@ -939,17 +985,6 @@
 
     definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
     pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
-
-    drawingManager = new google.maps.drawing.DrawingManager({
-      drawingControl: false,
-      polygonOptions: {
-        fillColor: "#0EA575", fillOpacity: 0.12,
-        strokeColor: "#0EA575", strokeWeight: 2,
-        clickable: false,
-      },
-    });
-    drawingManager.setMap(map);
-    drawingManager.addListener("polygoncomplete", selecionarPorPoligono);
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && desenhandoPoligono) pararDesenhoPoligono();
@@ -976,6 +1011,31 @@
     }
   }
 
+  async function roteirizarSelecionados(botao) {
+    // diferente do "Criar rota" (1 rascunho com a seleção como está):
+    // roda o MESMO criador de rotas do job diário, escopado à seleção
+    // -- pode gerar mais de uma rota; os rascunhos entram no lote ativo
+    // da tela. A ordem da seleção não importa (o algoritmo agrupa e
+    // sequencia sozinho), então manda o Set direto.
+    const ids = Array.from(SELECIONADOS);
+    if (!ids.length) return;
+    botao.disabled = true;
+    botao.textContent = "Roteirizando...";
+    try {
+      const resp = await postJSON("/api/planejamento/roteirizar-selecionados",
+        { data_alvo: DATA_ALVO_ISO, service_ids: ids });
+      if (resp.pedidos_indisponiveis) {
+        alert(`${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s). ` +
+          `${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão ` +
+          `mais disponíveis na VUUPT).`);
+      }
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao roteirizar: ${e.message}`);
+      atualizarBarraSelecao();
+    }
+  }
+
   async function onDragEnd(evt) {
     const serviceId = Number(evt.item.dataset.serviceId);
     const fromId = evt.from.dataset.listId;
@@ -987,6 +1047,8 @@
           const ordem = Array.from(evt.to.children).map(li => Number(li.dataset.serviceId));
           const resp = await postJSON("/api/planejamento/reordenar", { rascunho_id: Number(fromId), ordem_service_ids: ordem });
           atualizarCardComResposta(resp.rascunho);
+        } else {
+          atualizarPreviewPool();  // reordenou o pool -- números dos cards/pontos acompanham
         }
         return;
       }
@@ -1017,8 +1079,9 @@
     } catch (e) {
       alert(`Falha ao salvar o ajuste: ${e.message}. Recarregue a página.`);
     }
-    aplicarFiltroFlag();  // item saiu/voltou do pool -- contador e filtro acompanham
-    aplicarFiltroCep();   // idem pro filtro de CEP (e o preview no mapa junto)
+    aplicarFiltroFlag();    // item saiu/voltou do pool -- contador e filtro acompanham
+    aplicarFiltroCep();     // idem pro filtro de CEP
+    aplicarFiltroCaixas();  // idem pro filtro de caixas (e o preview no mapa junto)
     atualizarBarraSelecao();
   }
 
@@ -1031,6 +1094,9 @@
   function iniciarSortable(ul) {
     new Sortable(ul, {
       group: "paradas", animation: 150,
+      // clicar no campo de posição (modo "digitando a posição") não pode
+      // iniciar um drag -- preventOnFilter:false deixa o input funcionar
+      filter: "input", preventOnFilter: false,
       onStart: () => { dragRecente = true; },
       onEnd: (evt) => { onDragEnd(evt); setTimeout(() => { dragRecente = false; }, 0); },
     });
@@ -1140,14 +1206,15 @@
 
       document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
       document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo
-      aplicarFiltroFlag();  // idem pro filtro de "precisa sair no dia"
-      aplicarFiltroCep();   // idem pro filtro de CEP (e preview no mapa dos itens novos/removidos)
+      aplicarFiltroFlag();    // idem pro filtro de "precisa sair no dia"
+      aplicarFiltroCep();     // idem pro filtro de CEP
+      aplicarFiltroCaixas();  // idem pro filtro de caixas (e preview no mapa dos itens novos/removidos)
       atualizarBarraSelecao();
 
-      // resumo do futuro (agendados por dia/região) vem já renderizado
+      // resumo dos agendados (por dia/região) vem já renderizado
       // do servidor -- mesmo partial do load da página, só troca o HTML
       if (dados.resumo_html !== undefined) {
-        const containerResumo = document.getElementById("resumo-futuro-container");
+        const containerResumo = document.getElementById("resumo-agendados-container");
         if (containerResumo) containerResumo.innerHTML = dados.resumo_html;
       }
 
@@ -1227,9 +1294,30 @@
       });
     });
 
+    // filtro por quantidade de caixas: mesmo comportamento da faixa de
+    // CEP (aplica na hora e enquadra o preview após pausa na digitação)
+    ["caixas-de", "caixas-ate"].forEach(id => {
+      document.getElementById(id).addEventListener("input", () => {
+        aplicarFiltroCaixas();
+        clearTimeout(timerEnquadrar);
+        if (filtroCaixasAtivo()) timerEnquadrar = setTimeout(enquadrarPreview, 400);
+      });
+    });
+
     document.getElementById("botao-selecionar-visiveis").addEventListener("click", selecionarVisiveis);
     document.getElementById("botao-limpar-selecao").addEventListener("click", limparSelecao);
     document.getElementById("botao-criar-rota-selecao").addEventListener("click", (e) => criarRotaComSelecionados(e.target));
+    document.getElementById("botao-roteirizar-selecao").addEventListener("click", (e) => roteirizarSelecionados(e.target));
+
+    // modo de reordenação (arrastar x digitar posição) -- persistido,
+    // e a troca re-renderiza os números de todas as rotas na hora
+    const seletorModo = document.getElementById("modo-ordenacao");
+    seletorModo.value = modoOrdenacao;
+    seletorModo.addEventListener("change", () => {
+      modoOrdenacao = seletorModo.value;
+      localStorage.setItem("planejamento.modoOrdenacao", modoOrdenacao);
+      document.querySelectorAll("#lista-rotas .lista-paradas").forEach(ul => renumerarRotaEl(ul, Number(ul.dataset.listId)));
+    });
 
     const listaRotas = document.getElementById("lista-rotas");
     RASCUNHOS.forEach((rascunho, i) => {
@@ -1258,6 +1346,12 @@
     });
 
     listaRotas.addEventListener("change", async (e) => {
+      if (e.target.classList.contains("numero-input")) {
+        const li = e.target.closest(".item-parada");
+        const ul = e.target.closest(".lista-paradas");
+        if (li && ul) await moverParaPosicao(Number(ul.dataset.listId), Number(li.dataset.serviceId), Number(e.target.value));
+        return;
+      }
       if (!e.target.classList.contains("select-motorista")) return;
       const rascunhoId = Number(e.target.dataset.rascunhoId);
       const agentId = e.target.value ? Number(e.target.value) : null;
@@ -1314,7 +1408,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script async
-  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&libraries=drawing,geometry&callback=initMap">
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
 </script>
 {% endif %}
 {% endblock %}
