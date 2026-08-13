@@ -94,9 +94,10 @@ def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
 
     Antes de confiar na DANFE vinda da Stokki, confere contra o serviço
     do VUUPT:
-      - referência do título ("#PS-36413 - 035888 / ...") numérica de 6
-        dígitos batendo com a NF -> ok (nesses embarcadores a referência
-        É o nº da NF);
+      - referência do título ("#PS-36413 - 035888 / ...") toda numérica
+        (3-9 dígitos; era só 6, mas a MARCHEF usa 4 -- ref 7076 escapava
+        da checagem, caso real 12/08) batendo com a NF -> ok (nesses
+        embarcadores a referência É o nº da NF);
       - referência diferente mas destinatário da DANFE == contato do
         serviço -> ok (referência pode ser outro número, ex. pedido de
         venda: PS-36419 ref 040087 / NF 35147);
@@ -116,7 +117,7 @@ def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
 
     titulo = (servico.get("title") or "").strip()
     referencia = re.sub(rf"^#?{re.escape(codigo_pedido)}\s*-\s*", "", titulo).split("/")[0].strip()
-    if not re.fullmatch(r"\d{6}", referencia):
+    if not re.fullmatch(r"\d{3,9}", referencia):
         return None
     if int(referencia) == int(numero_nf):
         return None
