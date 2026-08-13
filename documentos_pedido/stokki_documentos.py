@@ -50,7 +50,11 @@ PASTA_TEMP_DOWNLOADS = Path(__file__).parent / "dados" / "downloads_stokki_temp"
 
 
 def _extrair_id(codigo_ps: str) -> str:
-    m = re.search(r"(\d+)$", codigo_ps)
+    # Primeira sequência de dígitos, NÃO a última: reentrega tem código
+    # 'PS-36327-R1' e r'(\d+)$' extraía o '1' do sufixo -- a página
+    # aberta era /show/1 (pedido MOMBAK de 2024) e a DANFE/boleto DELE
+    # entravam como documentos do pedido errado (caso real, 12/08).
+    m = re.search(r"(\d+)", codigo_ps)
     return m.group(1) if m else ""
 
 

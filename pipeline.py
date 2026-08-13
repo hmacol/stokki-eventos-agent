@@ -796,7 +796,9 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         # funciona por código de pedido (confirmado via debug_busca.py).
         import re as _re
         codigo = filtro_pedido.lstrip("#").upper()
-        m = _re.search(r"(\d+)$", codigo)
+        # Primeira sequência de dígitos (não a última): 'PS-36327-R1'
+        # com r'(\d+)$' viraria id 1 -- pedido errado na Stokki.
+        m = _re.search(r"(\d+)", codigo)
         if not m:
             raise SystemExit(f"Não foi possível extrair ID numérico de: {filtro_pedido!r}")
         id_stokki = int(m.group(1))

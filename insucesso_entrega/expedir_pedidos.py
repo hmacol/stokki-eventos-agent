@@ -470,7 +470,10 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
 # ── Stokki ────────────────────────────────────────────────────────────────────
 
 def _extrair_id(codigo_ps: str) -> str:
-    m = re.search(r"(\d+)$", codigo_ps)
+    # Primeira sequência de dígitos, NÃO a última: reentrega tem código
+    # 'PS-36327-R1' e r'(\d+)$' extraía o '1' do sufixo -- expedir/anexar
+    # canhoto iam pro pedido id 1 da Stokki (pedido errado).
+    m = re.search(r"(\d+)", codigo_ps)
     return m.group(1) if m else ""
 
 
