@@ -506,13 +506,18 @@ def gerar_romaneio_pdf(rascunho_id: int) -> Path:
 
     data_alvo = date.fromisoformat(rascunho["data_alvo"])
     servicos = [
-        {"code": p["codigo"], "title": p["titulo"], "sender_id": p["sender_id"]}
+        {"code": p["codigo"], "title": p["titulo"], "sender_id": p["sender_id"],
+         # mesmos nomes de campo do serviço VUUPT: a capa em paisagem
+         # mostra endereço de entrega e usa dimension_3 como fallback
+         # de volumes quando a DANFE não dá a contagem real (13/08).
+         "address": p.get("endereco") or "",
+         "dimension_3": p.get("volume_caixas")}
         for p in rascunho["paradas"]
     ]
     codigos = {_codigo_base(s["code"]) for s in servicos}
 
     docs_por_pedido, _em_revisao = gpr.carregar_documentos_por_pedido(codigos)
-    embarcadores = gpr.carregar_embarcadores()
+    embarcadores, fatores = gpr.carregar_embarcadores()
     nome_motorista = rascunho.get("motorista_nome") or "(sem motorista)"
     rota_fake = {"name": rascunho["nome"], "id": rascunho["id"]}
 
@@ -520,7 +525,7 @@ def gerar_romaneio_pdf(rascunho_id: int) -> Path:
     caminho_saida = PASTA_ROMANEIOS_RASCUNHO / f"rascunho_{rascunho_id}.pdf"
 
     gpr.montar_pdf_rota(rota_fake, servicos, docs_por_pedido, embarcadores,
-                        nome_motorista, data_alvo, caminho_saida)
+                        fatores, nome_motorista, data_alvo, caminho_saida)
     return caminho_saida
 
 

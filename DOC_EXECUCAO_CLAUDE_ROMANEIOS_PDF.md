@@ -40,12 +40,21 @@ Notas Fiscais do pedido, seguidas de todos os Boletos.
 
 ## Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras)
 
-1. **Capa** com identidade Freshlog (logo `assets/logo_freshlog.png`,
-   azul-marinho + verde-água): data, motorista, nº de pedidos e uma
-   **tabela com 1 linha por pedido** na ordem de visita — pedido,
-   embarcador (nome curto da tabela `interno`), cliente e status de
-   **NF / BOL** com check verde ou X vermelho (pendência). Continua em
-   página extra se a rota tiver mais pedidos do que cabe.
+1. **Capa em PAISAGEM** (pedido do Hugo, 13/08) com identidade Freshlog
+   (logo `assets/logo_freshlog.png`, azul-marinho + verde-água): data,
+   motorista, nº de pedidos e uma **tabela com 1 linha por pedido** na
+   ordem de visita — pedido, embarcador (nome curto da tabela
+   `interno`), cliente, **endereço de entrega** (campo `address` do
+   serviço VUUPT, sem CEP/Brasil), **volumes**, **peso bruto em kg** e
+   status de **NF / BOL** com check verde ou X vermelho (pendência).
+   Continua em página extra se a rota tiver mais pedidos do que cabe.
+   - **Volumes e peso**: extraídos do bloco "Transportador / volumes
+     transportados" da **DANFE local** do pedido (regex sobre o texto
+     do pypdf; soma quando o pedido tem mais de uma NF). Sem DANFE
+     legível, volumes caem pro `dimension_3` do serviço VUUPT dividido
+     pelo `interno.fator_ponderado` do embarcador (o `dimension_3` é o
+     volume **ponderado** = qtd real × fator, ver `pipeline.py`) e o
+     peso fica "—". A canhoteira segue em retrato.
 2. **Documentos emendados direto** (sem separadores): NFs e depois
    boletos, pedido a pedido, na ordem de visita.
 3. **CANHOTEIRA** (páginas finais, só quando a rota tem entrega de

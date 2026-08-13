@@ -16,9 +16,13 @@ documentos_pedido/dados/ (ver documentos_pedido/localizar_arquivos.py)
 
 Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras entre
 os documentos):
-  1. CAPA com logo Freshlog: tabela com 1 linha por pedido na ordem de
-     visita (pedido + nº da NF, embarcador, cliente, status NF/BOL com
-     check/x).
+  1. CAPA com logo Freshlog, em PAISAGEM (pedido do Hugo, 13/08):
+     tabela com 1 linha por pedido na ordem de visita (pedido + nº da
+     NF, embarcador, cliente, endereço de entrega, volumes, peso e
+     status NF/BOL com check/x). Volumes e peso bruto vêm da DANFE
+     local do pedido; sem DANFE, os volumes caem pro dimension_3 do
+     VUUPT dividido pelo fator_ponderado do embarcador (o dimension_3
+     é o volume PONDERADO, não a contagem real) e o peso fica "—".
   2. Documentos emendados direto: NFs e depois boletos, pedido a pedido.
   3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
@@ -126,7 +130,10 @@ def _codigo_base(codigo: str) -> str:
 
 # Página A4 em pixels a 150 dpi -- o resolution=150.0 no Image.save é
 # o que faz 1240px virarem 595pt (A4 de verdade) no PDF final.
-A4_PX = (1240, 1754)
+# Capa em PAISAGEM (pedido do Hugo, 13/08) pra caber endereço, volumes
+# e peso; canhoteira segue em RETRATO.
+A4_RETRATO  = (1240, 1754)
+A4_PAISAGEM = (1754, 1240)
 DPI = 150.0
 MARGEM = 100
 
@@ -187,24 +194,31 @@ def carregar_documentos_por_pedido(codigos: set[str]) -> tuple[dict[str, list[di
     return docs_por_pedido, em_revisao
 
 
-def carregar_embarcadores() -> dict[int, str]:
-    """sender_id -> nome curto do embarcador (tabela interno). Na
-    interno, o nome_remetente é o nome de fantasia curto ('COGUMELADO',
-    'PADRÃO PURO') e o apelido costuma ser a razão social comprida --
-    pra capa, o curto é o que cabe na coluna."""
+def carregar_embarcadores() -> tuple[dict[int, str], dict[int, float]]:
+    """(sender_id -> nome curto, sender_id -> fator_ponderado), da
+    tabela interno. Na interno, o nome_remetente é o nome de fantasia
+    curto ('COGUMELADO', 'PADRÃO PURO') e o apelido costuma ser a razão
+    social comprida -- pra capa, o curto é o que cabe na coluna. O
+    fator_ponderado serve pra DESFAZER a ponderação do dimension_3 do
+    VUUPT (= qtd real x fator, ver pipeline.py) quando a DANFE não dá
+    a quantidade real de volumes."""
     try:
         con = sqlite3.connect(DB_PATH)
         con.row_factory = sqlite3.Row
         try:
-            return {int(r["sender_id"]): (r["nome_remetente"] or r["apelido"] or "").strip()
-                    for r in con.execute(
-                        "SELECT sender_id, apelido, nome_remetente FROM interno "
-                        "WHERE sender_id IS NOT NULL")}
+            nomes, fatores = {}, {}
+            for r in con.execute(
+                    "SELECT sender_id, apelido, nome_remetente, fator_ponderado "
+                    "FROM interno WHERE sender_id IS NOT NULL"):
+                sid = int(r["sender_id"])
+                nomes[sid] = (r["nome_remetente"] or r["apelido"] or "").strip()
+                fatores[sid] = float(r["fator_ponderado"]) if r["fator_ponderado"] else 1.0
+            return nomes, fatores
         finally:
             con.close()
     except Exception as e:
         logger.warning(f"Falha ao carregar embarcadores da tabela interno: {e}")
-        return {}
+        return {}, {}
 
 
 def _nf_norm(numero_nf) -> str | None:
@@ -252,6 +266,108 @@ def selecionar_boletos(docs: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Volumes, peso e endereço de entrega (pedido do Hugo, 13/08)
+# ---------------------------------------------------------------------------
+
+# Bloco "TRANSPORTADOR / VOLUMES TRANSPORTADOS" da DANFE, no texto
+# extraído por pypdf: o valor vem ENTRE os rótulos ('QUANTIDADE\n6\n
+# ESPÉCIE', 'PESO BRUTO\n53,640\nPESO LÍQUIDO'). Campo vazio na DANFE
+# deixa os rótulos colados ('PESO BRUTO\nPESO LÍQUIDO') -- não casa, e
+# é isso que se quer (validado em 30 DANFEs reais, 13/08).
+_RE_DANFE_QTD  = re.compile(r"QUANTIDADE\s+(\d[\d.]*)\s+ESP[EÉ]CIE", re.IGNORECASE)
+_RE_DANFE_PESO = re.compile(r"PESO\s+BRUTO\s+([\d.,]+)\s+PESO\s+L[IÍ]QUIDO", re.IGNORECASE)
+# Layout alternativo (algumas DANFEs de terceiros): os 3 valores vêm
+# ANTES da linha de rótulos ('1 5,500 5,000\nQUANTIDADE ESPÉCIE MARCA
+# NUMERAÇÃO PESO BRUTO PESO LÍQUIDO').
+_RE_DANFE_TRIO = re.compile(
+    r"(\d[\d.]*)\s+([\d.,]+)\s+([\d.,]+)\s+"
+    r"QUANTIDADE\s+ESP[EÉ]CIE\s+MARCA\s+NUMERA[CÇ][AÃ]O\s+PESO\s+BRUTO",
+    re.IGNORECASE)
+
+
+def _num_br(valor: str) -> float | None:
+    """'53,640' / '1.234,5' -> float. None se não parsear."""
+    try:
+        return float(str(valor).replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _qtd_peso_da_danfe(reader: PdfReader) -> tuple[int | None, float | None]:
+    """(quantidade de volumes, peso bruto em kg) do bloco de transporte
+    da DANFE, ou None no que não der pra extrair. O bloco fica na 1ª
+    página, mas varre até 3 (DANFE de terceiro com página extra)."""
+    for pagina in reader.pages[:3]:
+        try:
+            texto = pagina.extract_text() or ""
+        except Exception:
+            continue
+        qtd = peso = None
+        m = _RE_DANFE_QTD.search(texto)
+        if m:
+            valor = _num_br(m.group(1))
+            if valor and 0 < valor < 10000:
+                qtd = int(round(valor))
+        m = _RE_DANFE_PESO.search(texto)
+        if m:
+            valor = _num_br(m.group(1))
+            if valor and 0 < valor < 100000:
+                peso = valor
+        if qtd is None and peso is None:
+            m = _RE_DANFE_TRIO.search(texto)
+            if m:
+                v_qtd, v_peso = _num_br(m.group(1)), _num_br(m.group(2))
+                if v_qtd and 0 < v_qtd < 10000:
+                    qtd = int(round(v_qtd))
+                if v_peso and 0 < v_peso < 100000:
+                    peso = v_peso
+        if qtd is not None or peso is not None:
+            return qtd, peso
+    return None, None
+
+
+def _qtd_peso_do_pedido(nfs_abertas: list[tuple[dict, PdfReader]]) -> tuple[int | None, float | None]:
+    """Soma volumes e peso bruto de todas as NFs do pedido. None quando
+    nenhuma NF informa aquele campo."""
+    qtd_total = peso_total = None
+    for _row, reader in nfs_abertas:
+        qtd, peso = _qtd_peso_da_danfe(reader)
+        if qtd is not None:
+            qtd_total = (qtd_total or 0) + qtd
+        if peso is not None:
+            peso_total = (peso_total or 0.0) + peso
+    return qtd_total, peso_total
+
+
+def _volumes_fallback(servico: dict, fator: float) -> int | None:
+    """Sem DANFE legível, estima a quantidade real de volumes desfazendo
+    a ponderação do dimension_3 (= max(1, round(qtd x fator)), ver
+    pipeline.py). Exata pra fator 1.0 (maioria dos embarcadores)."""
+    try:
+        vol = int(float(servico.get("dimension_3")))
+    except (TypeError, ValueError):
+        return None
+    if vol <= 0:
+        return None
+    return max(1, round(vol / (fator or 1.0)))
+
+
+def _endereco_entrega(servico: dict) -> str:
+    """Endereço do serviço VUUPT sem o rabo ', CEP, Brasil' -- na capa
+    o que importa é rua/número/bairro/cidade, e a coluna é disputada."""
+    endereco = str(servico.get("address") or "").strip()
+    endereco = re.sub(r",?\s*Brasil\s*$", "", endereco, flags=re.IGNORECASE)
+    endereco = re.sub(r",?\s*\d{5}-?\d{3}\s*$", "", endereco)
+    return endereco
+
+
+def _fmt_peso(peso: float | None) -> str:
+    if peso is None:
+        return "—"
+    return f"{peso:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+# ---------------------------------------------------------------------------
 # Desenho (Pillow): identidade visual, capa e canhoteira
 # ---------------------------------------------------------------------------
 
@@ -279,8 +395,8 @@ def _logo() -> Image.Image | None:
     return _LOGO_CACHE[0]
 
 
-def _pagina_branca() -> tuple[Image.Image, ImageDraw.ImageDraw]:
-    img = Image.new("RGB", A4_PX, "white")
+def _pagina_branca(tamanho: tuple[int, int] = A4_RETRATO) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    img = Image.new("RGB", tamanho, "white")
     return img, ImageDraw.Draw(img)
 
 
@@ -313,22 +429,23 @@ def _nome_cliente(titulo_limpo: str) -> str:
 def _cabecalho(img: Image.Image, draw: ImageDraw.ImageDraw,
                titulo: str, subtitulo: str) -> int:
     """Cabeçalho padrão das páginas geradas: logo à esquerda, título e
-    subtítulo à direita, barra verde-água. Retorna o y onde o conteúdo
-    pode começar."""
+    subtítulo à direita, barra verde-água. Dimensiona pela largura da
+    própria página (capa em paisagem, canhoteira em retrato). Retorna o
+    y onde o conteúdo pode começar."""
     logo = _logo()
     if logo is not None:
         img.paste(logo, (MARGEM, 78), logo)
-    draw.text((A4_PX[0] - MARGEM, 105), titulo, font=_fonte(48, True),
+    draw.text((img.width - MARGEM, 105), titulo, font=_fonte(48, True),
               fill=NAVY, anchor="rm")
     if subtitulo:
-        draw.text((A4_PX[0] - MARGEM, 165), subtitulo, font=_fonte(26),
+        draw.text((img.width - MARGEM, 165), subtitulo, font=_fonte(26),
                   fill=CINZA_TXT, anchor="rm")
-    draw.rectangle([(MARGEM, 208), (A4_PX[0] - MARGEM, 215)], fill=TEAL)
+    draw.rectangle([(MARGEM, 208), (img.width - MARGEM, 215)], fill=TEAL)
     return 250
 
 
-def _rodape(draw: ImageDraw.ImageDraw):
-    draw.text((A4_PX[0] // 2, A4_PX[1] - 58),
+def _rodape(img: Image.Image, draw: ImageDraw.ImageDraw):
+    draw.text((img.width // 2, img.height - 58),
               f"Freshlog · romaneio gerado automaticamente em "
               f"{datetime.now().strftime('%d/%m/%Y %H:%M')}",
               font=_fonte(18), fill=CINZA_TXT, anchor="mm")
@@ -345,21 +462,26 @@ def _marca(draw: ImageDraw.ImageDraw, cx: int, cy: int, ok: bool):
         draw.line([(cx - 9, cy + 9), (cx + 9, cy - 9)], fill=VERMELHO, width=5)
 
 
-# Colunas da tabela da capa (x em px). A coluna PEDIDO é larga porque a
-# célula mostra código + nº da NF ('PS-36008 · NF 24746').
-_COL_N, _COL_PEDIDO, _COL_EMB, _COL_CLI = 118, 165, 460, 700
-_COL_NF_CX, _COL_BOL_CX = 1030, 1110
-_LARG_EMB, _LARG_CLI = 225, 300
+# Colunas da tabela da capa em PAISAGEM (x em px, página de 1754). A
+# coluna PEDIDO é larga porque a célula mostra código + nº da NF
+# ('PS-36008 · NF 24746').
+_COL_N, _COL_PEDIDO, _COL_EMB, _COL_CLI, _COL_END = 118, 160, 450, 630, 880
+_COL_VOL_CX, _COL_PESO_CX = 1375, 1485
+_COL_NF_CX, _COL_BOL_CX = 1575, 1630
+_LARG_EMB, _LARG_CLI, _LARG_END = 165, 235, 450
 
 
 def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
-    draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + 48)], fill=NAVY)
+    draw.rectangle([(MARGEM, y), (A4_PAISAGEM[0] - MARGEM, y + 48)], fill=NAVY)
     f = _fonte(22, True)
     meio = y + 24
     draw.text((_COL_N, meio), "#", font=f, fill="white", anchor="lm")
     draw.text((_COL_PEDIDO, meio), "PEDIDO", font=f, fill="white", anchor="lm")
     draw.text((_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
     draw.text((_COL_CLI, meio), "CLIENTE", font=f, fill="white", anchor="lm")
+    draw.text((_COL_END, meio), "ENDEREÇO DE ENTREGA", font=f, fill="white", anchor="lm")
+    draw.text((_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
+    draw.text((_COL_PESO_CX, meio), "PESO (KG)", font=f, fill="white", anchor="mm")
     draw.text((_COL_NF_CX, meio), "NF", font=f, fill="white", anchor="mm")
     draw.text((_COL_BOL_CX, meio), "BOL", font=f, fill="white", anchor="mm")
     return y + 48
@@ -367,13 +489,14 @@ def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
 
 def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                data_alvo: date, tem_canhoteira: bool) -> list[Image.Image]:
-    """Capa: identidade Freshlog + resumo da rota + tabela com 1 linha
-    por pedido (ordem de visita) mostrando o status de NF e boleto."""
+    """Capa em PAISAGEM: identidade Freshlog + resumo da rota + tabela
+    com 1 linha por pedido (ordem de visita) mostrando embarcador,
+    cliente, endereço de entrega, volumes, peso e status de NF/boleto."""
     data_br = data_alvo.strftime("%d/%m/%Y")
     dia_semana = DIAS_SEMANA_PT[data_alvo.weekday()]
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
 
-    img, draw = _pagina_branca()
+    img, draw = _pagina_branca(A4_PAISAGEM)
     y = _cabecalho(img, draw, "ROMANEIO DE ENTREGAS", nome_rota)
 
     # Bloco de informações da rota
@@ -381,8 +504,8 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         draw.text((x, y + 18), rotulo, font=_fonte(20), fill=CINZA_TXT, anchor=anchor)
         draw.text((x, y + 56), valor, font=_fonte(30, True), fill=NAVY, anchor=anchor)
     _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
-    _info(640, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 360))
-    _info(A4_PX[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
+    _info(760, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 540))
+    _info(A4_PAISAGEM[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
     if tem_canhoteira:
         draw.text((MARGEM, y + 100), "Inclui CANHOTEIRA nas páginas finais",
                   font=_fonte(22, True), fill=VERDE_OK, anchor="ls")
@@ -391,17 +514,18 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
     paginas = [img]
     y = _tabela_header_capa(draw, y)
     fonte_ped, fonte_txt, fonte_nf = _fonte(23, True), _fonte(22), _fonte(20)
-    altura_linha, limite_y = 46, A4_PX[1] - 130
+    fonte_end = _fonte(20)
+    altura_linha, limite_y = 46, A4_PAISAGEM[1] - 130
 
     for item in itens:
         if y + altura_linha > limite_y:            # nova página de continuação
-            _rodape(draw)
-            img, draw = _pagina_branca()
+            _rodape(img, draw)
+            img, draw = _pagina_branca(A4_PAISAGEM)
             y = _cabecalho(img, draw, "ROMANEIO (continuação)", nome_rota)
             y = _tabela_header_capa(draw, y + 10)
             paginas.append(img)
         if item["posicao"] % 2 == 0:
-            draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + altura_linha)],
+            draw.rectangle([(MARGEM, y), (A4_PAISAGEM[0] - MARGEM, y + altura_linha)],
                            fill=CINZA_ZEBRA)
         meio = y + altura_linha // 2
         draw.text((_COL_N, meio), str(item["posicao"]), font=fonte_txt,
@@ -418,6 +542,12 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                   font=fonte_txt, fill=NAVY, anchor="lm")
         draw.text((_COL_CLI, meio), _truncar(draw, item["cliente"], fonte_txt, _LARG_CLI),
                   font=fonte_txt, fill=NAVY, anchor="lm")
+        draw.text((_COL_END, meio), _truncar(draw, item["endereco"], fonte_end, _LARG_END),
+                  font=fonte_end, fill=NAVY, anchor="lm")
+        draw.text((_COL_VOL_CX, meio), str(item["volumes"]) if item["volumes"] else "—",
+                  font=fonte_txt, fill=NAVY, anchor="mm")
+        draw.text((_COL_PESO_CX, meio), _fmt_peso(item["peso"]),
+                  font=fonte_txt, fill=NAVY, anchor="mm")
         if item.get("nf_dispensada"):
             draw.text((_COL_NF_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
         else:
@@ -425,7 +555,7 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
         y += altura_linha
 
-    _rodape(draw)
+    _rodape(img, draw)
     return paginas
 
 
@@ -449,7 +579,7 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
                   font=_fonte(21), fill=CINZA_TXT, anchor="ls")
         y += 90
         # header da tabela
-        draw.rectangle([(MARGEM, y), (A4_PX[0] - MARGEM, y + 48)], fill=NAVY)
+        draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + 48)], fill=NAVY)
         f = _fonte(22, True)
         draw.text((118, y + 24), "PARADA", font=f, fill="white", anchor="lm")
         draw.text((250, y + 24), "ENTREGA", font=f, fill="white", anchor="lm")
@@ -460,12 +590,12 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
     paginas = []
     img, draw, y = _nova_pagina()
     paginas.append(img)
-    altura_linha, limite_y = 150, A4_PX[1] - 130
+    altura_linha, limite_y = 150, A4_RETRATO[1] - 130
     fonte_rotulo = _fonte(20)
 
     for entrega in entregas:
         if y + altura_linha > limite_y:
-            _rodape(draw)
+            _rodape(img, draw)
             img, draw, y = _nova_pagina(continuacao=True)
             paginas.append(img)
 
@@ -488,11 +618,11 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
         draw.text((1020, y + 116), "Data:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
         draw.line([(1080, y + 120), (1130, y + 120)], fill=CINZA_LINHA, width=2)
 
-        draw.line([(MARGEM, y + altura_linha), (A4_PX[0] - MARGEM, y + altura_linha)],
+        draw.line([(MARGEM, y + altura_linha), (A4_RETRATO[0] - MARGEM, y + altura_linha)],
                   fill=CINZA_LINHA, width=2)
         y += altura_linha
 
-    _rodape(draw)
+    _rodape(img, draw)
     return paginas
 
 
@@ -538,8 +668,8 @@ def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], l
 
 
 def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
-                    embarcadores: dict[int, str], nome_motorista: str,
-                    data_alvo: date, caminho_saida: Path) -> dict:
+                    embarcadores: dict[int, str], fatores: dict[int, float],
+                    nome_motorista: str, data_alvo: date, caminho_saida: Path) -> dict:
     writer = PdfWriter()
     buffers_vivos: list = []        # BytesIO das páginas Pillow -- vivos até o write()
     readers_vivos: list = []        # PdfReaders dos arquivos -- idem
@@ -570,10 +700,20 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         pendencias.extend(f"{codigo}: {f}" for f in faltas)
 
         numeros_nf = [_nf_norm(row.get("numero_nf")) for row, _r in nfs]
+
+        # Volumes e peso bruto: DANFE primeiro (contagem real); sem NF
+        # legível, volumes caem pro dimension_3 despoderado e o peso
+        # fica sem valor ("—" na capa).
+        volumes, peso = _qtd_peso_do_pedido(nfs)
+        if volumes is None:
+            volumes = _volumes_fallback(s, fatores.get(sender_id, 1.0))
+
         itens.append({
             "posicao": posicao, "codigo": codigo,
             "embarcador": embarcador, "cliente": _nome_cliente(titulo_limpo),
             "sender_id": sender_id,
+            "endereco": _endereco_entrega(s),
+            "volumes": volumes, "peso": peso,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
             # NF dispensada E ausente -> capa mostra "—" no lugar da
@@ -645,7 +785,7 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
         cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
     )
     nome_por_agent_id = {m.agent_id: m.nome for m in catalogo.motoristas}
-    embarcadores = carregar_embarcadores()
+    embarcadores, fatores = carregar_embarcadores()
 
     data_alvo = _parse_data(data_str)
     data_br = data_alvo.strftime("%d/%m/%Y")
@@ -697,7 +837,7 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
         caminho_saida = pasta / nome_arquivo_saida(rota, nome_motorista, data_alvo)
         try:
             stats = montar_pdf_rota(rota, servicos, docs_por_pedido, embarcadores,
-                                    nome_motorista, data_alvo, caminho_saida)
+                                    fatores, nome_motorista, data_alvo, caminho_saida)
             gerados += 1
             detalhe = (f"{stats['pedidos']} pedido(s), {stats['nfs']} NF(s), "
                        f"{stats['boletos']} boleto(s), {stats['paginas']} página(s), "
