@@ -46,26 +46,43 @@
   .carregando { color: var(--texto-suave); font-size: 13px; padding: 8px 0; }
   .atualizando { opacity: 0.55; transition: opacity 0.2s; }
 
-  /* ── Faixa 1: barra do dia ── */
-  .barra-dia {
+  /* ── Faixa 1: saúde do dia ──
+     Semáforo + KPIs fundidos numa régua só (redesenho 13/08): os 6
+     cards de KPI viravam 6 paradas de leitura com o mesmo peso visual;
+     aqui o que está normal é texto discreto e só o que pede atenção
+     ganha cor. O semáforo carrega a contagem de ações da fila. */
+  .faixa-saude {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 8px 18px;
     flex-wrap: wrap;
     background: var(--superficie);
     border: 1px solid var(--borda);
     border-radius: 10px;
     padding: 12px 18px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
     font-size: 13px;
   }
-  .barra-dia input[type=date] { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
-  .semaforo { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; }
-  .semaforo .luz { width: 11px; height: 11px; border-radius: 100px; background: var(--texto-suave); }
+  .faixa-saude input[type=date] { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .semaforo {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-weight: 700; font-size: 13px;
+    padding: 5px 14px; border-radius: 100px; background: var(--fundo);
+  }
+  .semaforo .luz { width: 11px; height: 11px; border-radius: 100px; background: var(--texto-suave); flex: none; }
+  .semaforo.ok { background: #E5F7EF; color: #0A7D55; }
   .semaforo.ok .luz { background: var(--st-sucesso); }
+  .semaforo.atencao { background: #FDF3E1; color: #8A5A0C; }
   .semaforo.atencao .luz { background: var(--st-atencao); }
-  .semaforo.critico .luz { background: var(--st-falha); }
-  .semaforo.critico { color: var(--st-falha); }
+  .semaforo.critico { background: #FDEBEA; color: var(--st-falha); }
+  .semaforo.critico .luz { background: var(--st-falha); animation: pulso 1.2s ease-in-out infinite; }
+  .kpis-linha { display: flex; align-items: baseline; gap: 6px 18px; flex-wrap: wrap; }
+  .kpi-seg { white-space: nowrap; color: var(--texto-suave); font-size: 12.5px; cursor: default; }
+  .kpi-seg .n { font-size: 17px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .kpi-seg .n .contexto { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); }
+  .kpi-seg.bom .n { color: var(--st-sucesso); }
+  .kpi-seg.alerta .n { color: #A36F00; }
+  .kpi-seg.ruim .n { color: var(--st-falha); }
   .carimbo { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
   .carimbo.erro { color: var(--erro); font-weight: 600; }
   .botao-refresh {
@@ -74,13 +91,40 @@
   }
   .botao-refresh:hover { border-color: var(--acento); color: var(--acento); }
 
-  /* ── Stepper do pipeline ── */
+  /* ── Pipeline colapsado (redesenho 13/08) ──
+     O stepper completo saía do topo: etapa com erro já vira item da
+     fila de ação (com botão Reexecutar), então a linha só precisa
+     mostrar o estado. "rodar etapas" expande o stepper de sempre. */
+  .pipeline-linha {
+    display: flex; align-items: center; gap: 6px 16px; flex-wrap: wrap;
+    background: var(--superficie); border: 1px solid var(--borda);
+    border-radius: 10px; padding: 8px 18px; margin-bottom: 12px; font-size: 12px;
+  }
+  .pipeline-linha .rotulo-pipeline {
+    font-size: 11px; font-weight: 700; color: var(--texto-suave);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .etapa-mini { display: inline-flex; align-items: center; gap: 6px; color: var(--texto-suave); }
+  .etapa-mini .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa-mini.sucesso .estado { background: var(--st-sucesso); }
+  .etapa-mini.erro { color: var(--st-falha); font-weight: 700; }
+  .etapa-mini.erro .estado { background: var(--st-falha); }
+  .etapa-mini.rodando { color: var(--texto); font-weight: 600; }
+  .etapa-mini.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .pipeline-linha .alternar {
+    margin-left: auto; background: none; border: none; color: var(--acento);
+    font-size: 12px; cursor: pointer; padding: 2px 4px;
+  }
+  .pipeline-linha .alternar:hover { text-decoration: underline; }
+
+  /* ── Stepper do pipeline (agora escondido atrás do "rodar etapas") ── */
   .stepper {
-    display: grid;
+    display: none;
     grid-template-columns: repeat(6, 1fr) auto;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
+  .stepper.aberto { display: grid; }
   .etapa {
     background: var(--superficie);
     border: 1px solid var(--borda);
@@ -118,23 +162,7 @@
   .etapa-tudo button:hover:not(:disabled) { background: var(--primaria-clara); }
   .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  /* ── Faixa 2: KPIs ── */
-  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
-  .kpi {
-    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .kpi .rotulo { font-size: 11px; font-weight: 600; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
-  .kpi .valor { font-size: 30px; font-weight: 700; color: var(--texto); line-height: 1.1; }
-  .kpi .valor .contexto { font-size: 15px; font-weight: 600; color: var(--texto-suave); }
-  .kpi .sub { font-size: 11.5px; margin-top: 6px; color: var(--texto-suave); }
-  .kpi .sub.bom { color: var(--st-sucesso); font-weight: 600; }
-  .kpi .sub.alerta { color: #A36F00; font-weight: 600; }
-  .kpi .sub.ruim { color: var(--st-falha); font-weight: 600; }
-  .kpi .micro-trilha { height: 5px; background: var(--trilha-verde); border-radius: 4px; margin-top: 8px; overflow: hidden; }
-  .kpi .micro-fill { height: 100%; background: var(--st-sucesso); border-radius: 4px; }
-
-  /* ── Faixa 3 ── */
+  /* ── Faixa 2 ── */
   .corpo { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
 
   .legenda { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--texto); margin-bottom: 10px; }
@@ -247,7 +275,7 @@
 
   @media (max-width: 1100px) {
     .stepper { grid-template-columns: repeat(3, 1fr); }
-    .kpis { grid-template-columns: repeat(3, 1fr); }
+    .carimbo { margin-left: 0; }
     .corpo { grid-template-columns: 1fr; }
     .linha-rota { grid-template-columns: 150px 1fr 70px; }
   }
@@ -255,24 +283,31 @@
 {% endblock %}
 
 {% block conteudo %}
-<div class="barra-dia">
+<div class="faixa-saude">
   <strong>Torre de Controle</strong>
   <form method="get" action="{{ url_for('torre') }}" style="display:inline-flex;gap:8px;align-items:center;">
     <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
   </form>
   <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
+  <div class="kpis-linha" id="kpis"></div>
   <span class="carimbo" id="carimbo">Carregando dados…</span>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
 </div>
 
-<div class="stepper" id="stepper">
-  <div class="carregando">Carregando etapas…</div>
+<div class="pipeline-linha" id="pipeline-linha">
+  <span class="carregando">Carregando etapas…</span>
 </div>
-
-<div class="kpis" id="kpis"></div>
+<div class="stepper" id="stepper"></div>
 
 <div class="corpo">
   <div>
+    {# Fila primeiro de propósito (redesenho 13/08): é a única parte da
+       torre que pede decisão -- o resto é acompanhamento. #}
+    <div class="card" id="card-excecoes">
+      <h3><span>Fila de ação <span id="contagem-acoes"></span></span></h3>
+      <div id="excecoes"><div class="carregando">Carregando…</div></div>
+    </div>
+
     <div class="card" id="card-rotas">
       <h3><span>Andamento das rotas</span><a href="#" id="link-mapa">ver no mapa</a></h3>
       <div class="legenda">
@@ -281,11 +316,6 @@
         <span class="item"><span class="ponto" style="background:var(--trilha);border:1px solid var(--borda)"></span>Restantes</span>
       </div>
       <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
-    </div>
-
-    <div class="card" id="card-excecoes">
-      <h3>Fila de exceções</h3>
-      <div id="excecoes"><div class="carregando">Carregando…</div></div>
     </div>
 
     <div class="card">
@@ -357,8 +387,36 @@ function esc(t) {
 
 // ── Renderização ────────────────────────────────────────────────────
 
+let pipelineAberto = false;
+let ultimasEtapas = [];
+
+function alternarPipeline() {
+  pipelineAberto = !pipelineAberto;
+  renderStepper(ultimasEtapas);
+}
+
 function renderStepper(etapas) {
+  ultimasEtapas = etapas;
   algumaEtapaRodando = etapas.some(e => e.rodando);
+
+  // Linha compacta: um ponto por etapa; erro já vira item na fila de
+  // ação com botão Reexecutar, então aqui é só estado.
+  const ok = etapas.filter(e => !e.rodando && e.status === "SUCESSO").length;
+  const minis = etapas.map(e => {
+    let classe = "", sufixo = "";
+    if (e.rodando) { classe = "rodando"; sufixo = " — rodando…"; }
+    else if (e.status === "SUCESSO") classe = "sucesso";
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; sufixo = ` — ${e.status}`; }
+    const quando = e.quando ? ` · última: ${e.quando.slice(5, 16)}` : " · nunca rodou";
+    return `<span class="etapa-mini ${classe}" title="${esc(e.detalhe)}${esc(quando)}">
+      <span class="estado"></span>${esc(e.titulo)}${esc(sufixo)}</span>`;
+  }).join("");
+  document.getElementById("pipeline-linha").innerHTML =
+    `<span class="rotulo-pipeline">Pipeline ${ok}/${etapas.length} ok</span>` + minis +
+    `<button class="alternar" onclick="alternarPipeline()">${pipelineAberto ? "esconder etapas ▴" : "rodar etapas ▾"}</button>`;
+
+  document.getElementById("stepper").classList.toggle("aberto", pipelineAberto);
+
   const cards = etapas.map(e => {
     let classe = "", tituloEstado = "nunca rodou";
     if (e.rodando) { classe = "rodando"; tituloEstado = "rodando agora"; }
@@ -387,41 +445,31 @@ function renderStepper(etapas) {
 }
 
 function renderKpis(d) {
+  // Régua de saúde (redesenho 13/08): tudo numa linha, cor só no que
+  // pede atenção; o contexto que morava nos sub-textos dos cards
+  // virou title (hover) de cada segmento.
   const p = d.pedidos;
   const finalizadas = p.sucesso + p.falha;
   const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
   const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
   const r = d.rotas_resumo;
+  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim"));
 
-  let subTaxa = `<div class="sub">sem entregas finalizadas ainda</div>`;
-  if (taxa !== null) {
-    const classe = taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim");
-    const icone = taxa >= 95 ? "✓" : "▲";
-    subTaxa = `<div class="sub ${classe}">${icone} meta 95% · ${p.sucesso} de ${finalizadas}</div>`;
-  }
-
-  const tiles = [
-    `<div class="kpi"><div class="rotulo">Entregues hoje</div>
-       <div class="valor">${p.sucesso}<span class="contexto"> / ${p.total}</span></div>
-       <div class="micro-trilha"><div class="micro-fill" style="width:${pctEntregue}%"></div></div>
-       <div class="sub">${pctEntregue}% do dia</div></div>`,
-    `<div class="kpi"><div class="rotulo">Taxa de sucesso</div>
-       <div class="valor">${taxa === null ? "–" : taxa + '<span class="contexto">%</span>'}</div>${subTaxa}</div>`,
-    `<div class="kpi"><div class="rotulo">Em rota agora</div>
-       <div class="valor">${p.contagem.on_route || 0}</div>
-       <div class="sub">${p.contagem.accepted || 0} aceito(s) aguardando saída</div></div>`,
-    `<div class="kpi"><div class="rotulo">Sem rota (atrasados)</div>
-       <div class="valor">${p.qtd_nao_atribuidos}</div>
-       <div class="sub ${p.qtd_nao_atribuidos ? "alerta" : "bom"}">${p.qtd_nao_atribuidos ? "▲ agendamento vencido" : "✓ nada atrasado"}</div>
-       <div class="sub">pool p/ próximas rotas: ${p.backlog_pool}</div></div>`,
-    `<div class="kpi"><div class="rotulo">Insucessos hoje</div>
-       <div class="valor">${p.falha}</div>
-       <div class="sub ${p.falha ? "ruim" : "bom"}">${p.falha ? "✗ ver fila de exceções" : "✓ nenhum"}</div></div>`,
-    `<div class="kpi"><div class="rotulo">Rotas</div>
-       <div class="valor">${r.concluidas}<span class="contexto"> / ${d.rotas.length}</span></div>
-       <div class="sub">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</div></div>`,
+  const segs = [
+    `<span class="kpi-seg" title="${pctEntregue}% do dia entregue">
+       <span class="n">${p.sucesso}<span class="contexto">/${p.total}</span></span> entregues</span>`,
+    `<span class="kpi-seg ${classeTaxa}" title="${taxa === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
+       <span class="n">${taxa === null ? "–" : taxa + "%"}</span> sucesso</span>`,
+    `<span class="kpi-seg" title="${p.contagem.accepted || 0} aceito(s) aguardando saída">
+       <span class="n">${p.contagem.on_route || 0}</span> em rota</span>`,
+    `<span class="kpi-seg ${p.qtd_nao_atribuidos ? "alerta" : ""}" title="agendamento vencido e ainda sem rota · pool p/ próximas rotas: ${p.backlog_pool}">
+       <span class="n">${p.qtd_nao_atribuidos}</span> sem rota</span>`,
+    `<span class="kpi-seg ${p.falha ? "ruim" : ""}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
+       <span class="n">${p.falha}</span> insucesso${p.falha === 1 ? "" : "s"}</span>`,
+    `<span class="kpi-seg" title="${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)">
+       <span class="n">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span> rotas</span>`,
   ];
-  document.getElementById("kpis").innerHTML = tiles.join("");
+  document.getElementById("kpis").innerHTML = segs.join("");
 }
 
 function renderRotas(d) {
@@ -496,8 +544,11 @@ function renderExcecoes(d) {
   const alvo = document.getElementById("excecoes");
   const partes = [];
 
+  const contagem = document.getElementById("contagem-acoes");
+  if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
+
   if (!d.excecoes.length) {
-    partes.push(`<div class="excecao-vazia">✓ Nenhuma exceção — operação normal.</div>`);
+    partes.push(`<div class="excecao-vazia">✓ Nenhuma ação pendente — operação normal.</div>`);
   } else {
     const linhas = d.excecoes.map(x => {
       let acao = "";
@@ -697,7 +748,13 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") alternarMapa
 function renderSemaforo(d) {
   const el = document.getElementById("semaforo");
   el.className = "semaforo " + d.semaforo;
-  const rotulos = { ok: "Operação normal", atencao: "Atenção", critico: "Ação necessária" };
+  const n = (d.excecoes || []).length;
+  const acoes = `${n} ${n === 1 ? "ação" : "ações"}`;
+  const rotulos = {
+    ok: "Operação normal",
+    atencao: `Atenção — ${acoes}`,
+    critico: `Crítico — ${acoes}`,
+  };
   document.getElementById("semaforo-texto").textContent = rotulos[d.semaforo] || d.semaforo;
 }
 
