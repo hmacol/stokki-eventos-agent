@@ -56,6 +56,7 @@ from mapa_rotas import buscar_rotas_para_mapa
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
+    alocar_motoristas_rascunhos,
 )
 import rascunhos_rota
 import torre_controle
@@ -470,6 +471,26 @@ def api_trocar_motorista():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/alocar-motoristas", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_alocar_motoristas():
+    """Roda a alocação equitativa de motoristas (mesma do criador de
+    rotas) nos rascunhos do lote ativo que ainda estão sem motorista --
+    botão "Alocar motoristas" da tela (Hugo, 13/08). Rascunho com
+    motorista já escolhido (manual ou sugerido) não é alterado."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        resultado = alocar_motoristas_rascunhos(data_alvo)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao alocar motoristas nos rascunhos")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
 
 
 @app.route("/api/planejamento/nova-rota", methods=["POST"])

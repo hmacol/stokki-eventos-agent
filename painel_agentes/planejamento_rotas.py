@@ -35,6 +35,7 @@ from vuupt_client import VuuptClient
 from roteirizacao_dados import elegivel_para_data, extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
+from alocacao_motoristas import selecionar_motorista_equitativo
 from mapa_util import carregar_remetentes_por_sender_id
 
 import rascunhos_rota
@@ -404,6 +405,73 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int]) -> dict:
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
     }
+
+
+def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
+    """
+    Botão "Alocar motoristas" da tela (Hugo, 13/08): roda a MESMA
+    alocação equitativa do pipeline (alocacao_motoristas.
+    selecionar_motorista_equitativo -- Viagem exige ACEITA_VIAGENS,
+    zona predominante, rodízio de placa, menor carga do dia) sobre os
+    rascunhos do lote ativo que ainda estão SEM motorista, antes do
+    envio à VUUPT -- pensado pras rotas montadas manualmente na tela
+    ("+ Nova rota" / "Criar rota" da seleção), que nascem sem
+    motorista, e pras que ficaram sem por falta de elegível na
+    roteirização automática.
+
+    Escolha manual é respeitada: rascunho que já tem agent_id NÃO é
+    tocado (pra realocar um, troque o select dele pra "Sem motorista"
+    e clique de novo). O equilíbrio parte das alocações já existentes
+    no lote ativo (ENVIADOS inclusive -- já são rotas reais do dia),
+    mesma convenção de roteirizar_selecionados.
+
+    Retorna {"alocados": [{rascunho_id, nome, agent_id, vehicle_id,
+    motorista_nome}], "sem_elegivel": [nomes], "ja_tinham": N,
+    "sem_paradas": N}.
+    """
+    config = _carregar_config()
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+
+    rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    contagem_alocacoes_dia: dict[int, int] = {}
+    for r in rascunhos:
+        if r.get("agent_id"):
+            contagem_alocacoes_dia[r["agent_id"]] = contagem_alocacoes_dia.get(r["agent_id"], 0) + 1
+
+    alocados: list[dict] = []
+    sem_elegivel: list[str] = []
+    ja_tinham = sem_paradas = 0
+    for r in rascunhos:
+        if r["status"] != rascunhos_rota.STATUS_RASCUNHO:
+            continue
+        if r.get("agent_id"):
+            ja_tinham += 1
+            continue
+        if not r["paradas"]:
+            sem_paradas += 1
+            continue
+        # Formato bruto que os classificadores (zona/viagem/rodízio)
+        # esperam: campo 'address' -- obter_coordenadas geocodifica por
+        # ele, com cache já quente (as paradas foram geocodificadas
+        # desses mesmos endereços ao entrar no rascunho).
+        sublote = [{"address": p["endereco"]} for p in r["paradas"]]
+        motorista = selecionar_motorista_equitativo(
+            sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
+        )
+        if not motorista:
+            sem_elegivel.append(r["nome"])
+            continue
+        rascunhos_rota.trocar_motorista(r["id"], motorista.agent_id, motorista.vehicle_id, motorista.nome)
+        contagem_alocacoes_dia[motorista.agent_id] = contagem_alocacoes_dia.get(motorista.agent_id, 0) + 1
+        alocados.append({
+            "rascunho_id": r["id"], "nome": r["nome"], "agent_id": motorista.agent_id,
+            "vehicle_id": motorista.vehicle_id, "motorista_nome": motorista.nome,
+        })
+
+    return {"alocados": alocados, "sem_elegivel": sem_elegivel,
+            "ja_tinham": ja_tinham, "sem_paradas": sem_paradas}
 
 
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"

@@ -370,6 +370,7 @@
   <div class="coluna">
     <h3>Rotas (rascunho)</h3>
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
+    <button id="botao-alocar-motoristas" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
@@ -1171,6 +1172,42 @@
     }
   }
 
+  async function alocarMotoristas(botao) {
+    // roda a alocação automática do pipeline só nas rotas SEM motorista
+    // (escolha manual não é tocada) e reflete o resultado nos selects
+    // dos cards sem recarregar a página
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Alocando...";
+    try {
+      const resp = await postJSON("/api/planejamento/alocar-motoristas", { data_alvo: DATA_ALVO_ISO });
+      (resp.alocados || []).forEach(a => {
+        const select = document.querySelector(`.select-motorista[data-rascunho-id="${a.rascunho_id}"]`);
+        if (select) select.value = String(a.agent_id);
+        const r = RASCUNHOS.find(x => x.id === a.rascunho_id);
+        if (r) { r.agent_id = a.agent_id; r.vehicle_id = a.vehicle_id; r.motorista_nome = a.motorista_nome; }
+      });
+      const linhas = [];
+      if (resp.alocados && resp.alocados.length) {
+        linhas.push(`${resp.alocados.length} rota(s) receberam motorista:`);
+        resp.alocados.forEach(a => linhas.push(`• ${a.nome} → ${a.motorista_nome}`));
+      } else {
+        linhas.push("Nenhuma rota estava aguardando motorista.");
+      }
+      if (resp.ja_tinham) linhas.push(`${resp.ja_tinham} rota(s) já tinham motorista e foram mantidas (pra realocar, troque pra "Sem motorista" e clique de novo).`);
+      if (resp.sem_paradas) linhas.push(`${resp.sem_paradas} rota(s) vazia(s) ficaram de fora.`);
+      if (resp.sem_elegivel && resp.sem_elegivel.length) {
+        linhas.push(`Sem motorista elegível (disponibilidade do dia, zona, viagem ou rodízio) pra: ${resp.sem_elegivel.join(", ")}.`);
+      }
+      alert(linhas.join("\n"));
+    } catch (e) {
+      alert(`Falha ao alocar motoristas: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   function aplicarResultadoEnvio(resultado) {
     const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
     if (resultado.ok) {
@@ -1402,6 +1439,7 @@
     });
 
     document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
+    document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);
