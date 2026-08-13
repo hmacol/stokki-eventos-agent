@@ -18,6 +18,7 @@ import logging
 
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
+from regras.embarcadores import _normalizar
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,22 @@ EMBARCADORES_QUALQUER_STATUS: dict[str, str] = {
     "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
 }
 
+# Embarcadores cujas entregas NÃO precisam ir acompanhadas de Nota
+# Fiscal (pedido do Hugo, 13/08): a etapa da Stokki pula a geração do
+# DANFE desses pedidos (a aba Documentos continua sendo olhada -- boleto
+# etc). São os mesmos 3 embarcadores da CANHOTEIRA do romaneio
+# (roteirizacao/gerar_pdf_romaneios.py::SENDERS_CANHOTEIRA). O casamento
+# é pelo NOME do cliente na linha da listagem (normalizado, sem acento),
+# não por ID -- o ID Stokki da Pedramoura não está mapeado.
+EMBARCADORES_SEM_NF = ("PADRAO PURO", "QUATRO ESTRELAS", "PEDRAMOURA")
+
+
+def _pedido_sem_nf(linha) -> bool:
+    cliente = str(linha.get("client", "")) if isinstance(linha, dict) else ""
+    nome = _normalizar(cliente)
+    return bool(nome) and any(n in nome for n in EMBARCADORES_SEM_NF)
+
+
 # Embarcadores que mandam boleto por E-MAIL (ver email_documentos.py::
 # REMETENTES_EMBARCADORES). O boleto chega junto/DEPOIS da expedição,
 # quando o pedido já saiu dos status em aberto (vira "Sent") -- então a
@@ -57,15 +74,28 @@ def _codigo_da_linha(linha) -> str | None:
     return f"PS-{id_stokki}" if id_stokki else None
 
 
-def descobrir_pedidos(config: dict) -> list[str]:
+def descobrir_pedidos(config: dict) -> tuple[list[str], set[str]]:
     """
-    Retorna a lista de códigos PS-XXXXX a processar nesta execução:
-    todos os pedidos em aberto dos embarcadores prioritários +
-    todos os pedidos "Aguardando Transportador" do resto.
+    Retorna (codigos, codigos_sem_nf):
+      - codigos: lista de códigos PS-XXXXX a processar nesta execução --
+        todos os pedidos em aberto dos embarcadores prioritários +
+        todos os pedidos "Aguardando Transportador" do resto;
+      - codigos_sem_nf: subconjunto cujos embarcadores não precisam de
+        Nota Fiscal (EMBARCADORES_SEM_NF) -- pra etapa da Stokki pular
+        a geração do DANFE desses pedidos.
     """
     sessao = StokkiSession(config)
     codigos_vistos: set[str] = set()
     codigos: list[str] = []
+    codigos_sem_nf: set[str] = set()
+
+    def _registrar(linha) -> None:
+        codigo = _codigo_da_linha(linha)
+        if codigo and codigo not in codigos_vistos:
+            codigos_vistos.add(codigo)
+            codigos.append(codigo)
+            if _pedido_sem_nf(linha):
+                codigos_sem_nf.add(codigo)
 
     for id_emb, nome_emb in EMBARCADORES_QUALQUER_STATUS.items():
         for status in STATUSES_EM_ABERTO:
@@ -73,20 +103,14 @@ def descobrir_pedidos(config: dict) -> list[str]:
                 for linha in stokki_pedidos.iterar_todos_pedidos(
                     sessao, status=status, cliente=id_emb, pausa_entre_paginas=0.3
                 ):
-                    codigo = _codigo_da_linha(linha)
-                    if codigo and codigo not in codigos_vistos:
-                        codigos_vistos.add(codigo)
-                        codigos.append(codigo)
+                    _registrar(linha)
             except Exception as e:
                 logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
     logger.info(f"Embarcadores prioritários (documentos): {len(codigos)} pedido(s) em aberto.")
 
     n_antes = len(codigos)
     for linha in stokki_pedidos.iterar_todos_pedidos(sessao, status=STATUS_AGUARDANDO_TRANSPORTADOR):
-        codigo = _codigo_da_linha(linha)
-        if codigo and codigo not in codigos_vistos:
-            codigos_vistos.add(codigo)
-            codigos.append(codigo)
+        _registrar(linha)
     logger.info(f"Aguardando Transportador (outros embarcadores): "
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
@@ -98,7 +122,7 @@ def descobrir_pedidos(config: dict) -> list[str]:
     logger.info(f"Expedidos recentes (embarcadores de boleto por e-mail): "
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
-    return codigos
+    return codigos, codigos_sem_nf
 
 
 def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: int = 60) -> list[str]:

@@ -29,6 +29,13 @@ Notas Fiscais do pedido, seguidas de todos os Boletos.
 - **NFs**: dedup por nº de NF (pode existir DANFE gerada + nota anexada
   manualmente). Preferência: `origem='stokki'` (DANFE oficial); empate →
   mais recente. NF sem número extraído entra sempre. Ordem: nº da NF.
+- **NF dispensada** (pedido do Hugo, 13/08): entregas de **Padrão Puro,
+  Quatro Estrelas e Pedramoura** (os mesmos sender_ids da canhoteira)
+  não precisam ir acompanhadas de NF — a falta de NF não vira pendência
+  e a capa mostra "—" na coluna NF em vez do X vermelho. O agente de
+  documentos também **pula a geração da DANFE** desses pedidos na
+  Stokki (`documentos_pedido/selecionar_pedidos.py::EMBARCADORES_SEM_NF`).
+  Se uma NF antiga já existir no banco, ela ainda é impressa.
 - **Boletos**: sem dedup (hash é PK). Ordem: nº NF → nº parcela → data.
 
 ## Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras)

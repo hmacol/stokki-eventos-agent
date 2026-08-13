@@ -174,7 +174,8 @@ def gerar_danfe(page, codigo_ps: str) -> Path | None:
     return caminho_local
 
 
-def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str) -> list[dict]:
+def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
+                                buscar_nf: bool = True) -> list[dict]:
     """
     Fluxo completo pra 1 pedido: gera o DANFE (Fase 1, pula se já foi
     enviado antes -- ele muda de hash a cada geração, então precisa
@@ -183,6 +184,12 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str) -> list[dict
     Retorna [{"caminho_local", "nome_arquivo"}] -- mesmo formato usado
     por email_documentos.py, pra alimentar o mesmo pipeline de
     classificar/casar/enviar depois.
+
+    buscar_nf=False pula SÓ a geração do DANFE -- pedidos de
+    embarcadores cujas entregas não precisam ir acompanhadas de Nota
+    Fiscal (Padrão Puro, Quatro Estrelas, Pedramoura -- pedido do Hugo,
+    13/08; ver EMBARCADORES_SEM_NF em selecionar_pedidos.py). A aba
+    Documentos continua sendo olhada normalmente (boleto etc).
     """
     page.goto(
         f"{URL_PROVIDER_SHW}/{_extrair_id(codigo_ps)}",
@@ -192,7 +199,7 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str) -> list[dict
 
     baixados = []
 
-    if not ja_enviado_para_pedido(codigo_ps, "Nota Fiscal"):
+    if buscar_nf and not ja_enviado_para_pedido(codigo_ps, "Nota Fiscal"):
         caminho_danfe = gerar_danfe(page, codigo_ps)
         if caminho_danfe:
             baixados.append({"caminho_local": caminho_danfe, "nome_arquivo": caminho_danfe.name})

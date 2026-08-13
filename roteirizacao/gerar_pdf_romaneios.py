@@ -96,6 +96,14 @@ SENDERS_CANHOTEIRA = {
     21911340: "PEDRAMOURA",
 }
 
+# Esses mesmos 3 embarcadores não precisam ir acompanhados de Nota
+# Fiscal (pedido do Hugo, 13/08) -- a entrega deles é controlada pela
+# CANHOTEIRA. Falta de NF não é pendência pra eles (a capa mostra "—"
+# na coluna NF em vez do X vermelho), e o agente de documentos nem gera
+# a DANFE (ver documentos_pedido/selecionar_pedidos.py::
+# EMBARCADORES_SEM_NF).
+SENDERS_SEM_NF = set(SENDERS_CANHOTEIRA)
+
 # Pedido de reentrega ganha um código com sufixo "-R1", "-R2"... no
 # VUUPT (ver insucesso_entrega/expedir_pedidos.py::duplicar_servico_
 # por_insucesso) -- é o MESMO pedido original, mesma NF/boleto valem
@@ -410,7 +418,10 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                   font=fonte_txt, fill=NAVY, anchor="lm")
         draw.text((_COL_CLI, meio), _truncar(draw, item["cliente"], fonte_txt, _LARG_CLI),
                   font=fonte_txt, fill=NAVY, anchor="lm")
-        _marca(draw, _COL_NF_CX, meio, item["tem_nf"])
+        if item.get("nf_dispensada"):
+            draw.text((_COL_NF_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
+        else:
+            _marca(draw, _COL_NF_CX, meio, item["tem_nf"])
         _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
         y += altura_linha
 
@@ -549,8 +560,9 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
         boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
 
+        nf_dispensada = sender_id in SENDERS_SEM_NF
         faltas = []
-        if not nfs:
+        if not nfs and not nf_dispensada:
             faltas.append("sem nota fiscal")
         if not boletos:
             faltas.append("sem boleto")
@@ -564,6 +576,10 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             "sender_id": sender_id,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
+            # NF dispensada E ausente -> capa mostra "—" no lugar da
+            # marca (se uma NF antiga existir no banco, ela ainda vai
+            # impressa e a capa mostra o check normal).
+            "nf_dispensada": nf_dispensada and not nfs,
             "_abertos_nf": nfs, "_abertos_bol": boletos,
         })
 

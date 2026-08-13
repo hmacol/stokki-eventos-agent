@@ -305,12 +305,21 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         # (útil pra teste manual); senão, descobre sozinho seguindo a mesma
         # regra de prioridade da subida pro VUUPT -- pedido do Hugo, 10/08
         # (ver selecionar_pedidos.py).
+        # pedidos_sem_nf: pedidos de embarcadores cujas entregas não
+        # precisam ir acompanhadas de Nota Fiscal (Padrão Puro, Quatro
+        # Estrelas, Pedramoura -- pedido do Hugo, 13/08): a visita ao
+        # pedido pula a geração do DANFE (a aba Documentos continua).
+        # Na lista manual (--pedidos) não tem como saber o embarcador,
+        # então o DANFE é gerado normalmente.
+        pedidos_sem_nf: set[str] = set()
         if pedidos_stokki is not None:
             lista_pedidos = pedidos_stokki
         else:
             from selecionar_pedidos import descobrir_pedidos
-            lista_pedidos = descobrir_pedidos(config)
-            logger.info(f"{len(lista_pedidos)} pedido(s) selecionado(s) automaticamente pra busca na Stokki.")
+            lista_pedidos, pedidos_sem_nf = descobrir_pedidos(config)
+            logger.info(f"{len(lista_pedidos)} pedido(s) selecionado(s) automaticamente pra busca na Stokki"
+                        + (f" ({len(pedidos_sem_nf)} de embarcador sem NF -- DANFE não será gerada)."
+                           if pedidos_sem_nf else "."))
 
         if lista_pedidos:
             from playwright.sync_api import sync_playwright
@@ -329,7 +338,9 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                 # buscar_documentos_do_pedido -> gerar_danfe.
                 total_stokki = 0
                 for codigo_ps in lista_pedidos:
-                    itens_stokki = buscar_documentos_do_pedido(page, config, codigo_ps)
+                    itens_stokki = buscar_documentos_do_pedido(
+                        page, config, codigo_ps,
+                        buscar_nf=codigo_ps not in pedidos_sem_nf)
                     total_stokki += len(itens_stokki)
                     for item in itens_stokki:
                         item["assunto_email"] = None  # marca origem como stokki
