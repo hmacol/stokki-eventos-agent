@@ -1,0 +1,30 @@
+{# Resumo do futuro: pedidos agendados pra DEPOIS da data em edição,
+   agregados por dia e região (planejamento_rotas.py::
+   _resumo_agendados_futuros). Renderizado no load da página
+   (planejamento_rotas.html) e re-renderizado pelo botão "Atualizar"
+   via /api/planejamento/pool (chave resumo_html) -- por isso é um
+   partial: mesmo markup nos dois caminhos. #}
+{% if resumo_futuro %}
+<div class="resumo-futuro">
+  <h3>Resumo do futuro — {{ resumo_futuro | sum(attribute='total_pedidos') }} pedido(s) agendado(s)</h3>
+  <div class="dias-futuro">
+    {% for dia in resumo_futuro %}
+    <a class="card-dia-futuro" href="{{ url_for('planejamento', data=dia.data_iso) }}"
+       title="Abrir o planejamento de {{ dia.dia_semana }} {{ dia.data_fmt }}">
+      <div class="cabecalho-dia">
+        <span class="dia-nome">{{ dia.dia_semana }} {{ dia.data_fmt }}</span>
+        <span class="dia-totais">{{ dia.total_pedidos }} ped · {{ dia.total_caixas }} cx</span>
+      </div>
+      <ul>
+        {% for r in dia.regioes %}
+        <li title="{{ r.codigos | join(', ') }}">
+          <span class="regiao-nome">{{ r.regiao }}{% if r.grandes %} <span class="alerta-caixas" title="Pedido(s) grande(s): {{ r.grandes | join(', ') }}">⚠</span>{% endif %}</span>
+          <span class="regiao-numeros">{{ r.pedidos }} ped · {{ r.caixas }} cx</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

@@ -84,6 +84,7 @@ from notificar_agendamento_pendente import identificar_pendentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
+from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
 from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
 from regras.preferencias_motoristas import CatalogoMotoristas
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
@@ -345,9 +346,13 @@ def main(modo_teste: bool = False):
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
         # roda antes de tudo, mesma lógica de criar_rotas_diarias.py.
         try:
-            qtd_agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos, vuupt)
-            if qtd_agendados_dia_fixo:
-                logger.info(f"{qtd_agendados_dia_fixo} pedido(s) agendado(s) por região de dia fixo.")
+            agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos, vuupt)
+            if agendados_dia_fixo:
+                logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
+                # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
+                resultado_aviso = notificar_agendamentos_dia_fixo(
+                    agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste)
+                logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta o incremento): {e}")
 

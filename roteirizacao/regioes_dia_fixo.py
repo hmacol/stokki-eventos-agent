@@ -3,15 +3,21 @@
 regioes_dia_fixo.py
 
 Regiões com dia fixo de entrega (pedido do Hugo, 02/08, definidas por
-"direção"/estrada, com geolocalização validando o agrupamento):
+"direção"/estrada, com geolocalização validando o agrupamento; 12/08:
+regiões passaram a aceitar MAIS DE UM dia da semana, e além de cidades
+também há regiões por ENDEREÇO -- galpões/operadores logísticos
+identificados por trechos de rua/CEP, ver ENDERECOS_DIA_FIXO):
 
-  Vale do Paraíba (Suzano, Mogi das Cruzes, Biritiba Mirim, Jacareí, São José dos
-  Campos) -- Segunda
+  Vale do Paraíba (Suzano, Mogi das Cruzes, Biritiba Mirim, Jacareí,
+  São José dos Campos) -- Segunda
   Baixada Santista (Cubatão, São Vicente, Santos, Guarujá, Praia
   Grande) -- Terça
   Sorocaba (Sorocaba, Votorantim, São Roque, Itu, Salto) -- Terça
   Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva) -- Quarta
   Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta
+  Barueri (Barueri, Santana do Parnaíba, Jandira) -- Terça e Quinta
+  ABCD (Santo André, São Bernardo do Campo, São Caetano do Sul,
+  Diadema, Ribeirão Pires, Mauá) -- Segunda, Quarta e Sexta
 
 Cidades fora dessas regiões: se estiverem dentro do raio da Grande SP
 (RAIO_GRANDE_SP_KM de São Paulo), entrega normal, sem restrição. Fora
@@ -45,18 +51,52 @@ DIAS_NOMES = {SEGUNDA: "Segunda", TERCA: "Terça", QUARTA: "Quarta",
              QUINTA: "Quinta", SEXTA: "Sexta", SABADO: "Sábado", DOMINGO: "Domingo"}
 
 # Regiões confirmadas com o Hugo, 02/08 -- cada uma com nome (pra
-# mensagens/logs), dia da semana, e lista de cidades.
+# mensagens/logs), dias da semana (12/08: virou LISTA -- Barueri e ABCD
+# recebem em mais de um dia) e lista de cidades. Biritiba Mirim
+# incluída em 12/08 (estava no comentário do topo desde 02/08, mas
+# faltava na lista efetiva).
 REGIOES: list[dict] = [
-    {"nome": "Vale do Paraíba", "dia": SEGUNDA,
-     "cidades": ["SUZANO", "MOGI DAS CRUZES", "JACAREI", "SAO JOSE DOS CAMPOS"]},
-    {"nome": "Baixada Santista", "dia": TERCA,
+    {"nome": "Vale do Paraíba", "dias": [SEGUNDA],
+     "cidades": ["SUZANO", "MOGI DAS CRUZES", "BIRITIBA MIRIM", "JACAREI", "SAO JOSE DOS CAMPOS"]},
+    {"nome": "Baixada Santista", "dias": [TERCA],
      "cidades": ["CUBATAO", "SAO VICENTE", "SANTOS", "GUARUJA", "PRAIA GRANDE"]},
-    {"nome": "Sorocaba", "dia": TERCA,
+    {"nome": "Sorocaba", "dias": [TERCA],
      "cidades": ["SOROCABA", "VOTORANTIM", "SAO ROQUE", "ITU", "SALTO"]},
-    {"nome": "Campinas", "dia": QUARTA,
+    {"nome": "Campinas", "dias": [QUARTA],
      "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA"]},
-    {"nome": "Piracicaba", "dia": QUARTA,
+    {"nome": "Piracicaba", "dias": [QUARTA],
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
+    {"nome": "Barueri", "dias": [TERCA, QUINTA],
+     "cidades": ["BARUERI", "SANTANA DO PARNAIBA", "JANDIRA"]},
+    {"nome": "ABCD", "dias": [SEGUNDA, QUARTA, SEXTA],
+     "cidades": ["SANTO ANDRE", "SAO BERNARDO DO CAMPO", "SAO CAETANO DO SUL",
+                 "DIADEMA", "RIBEIRAO PIRES", "MAUA"]},
+]
+
+# Regiões por ENDEREÇO (pedido do Hugo, 12/08: "cadastrar também uma
+# rua específica como Região") -- destinos logísticos (galpões/
+# operadores) com dia fixo próprio, identificados por trechos do
+# endereço do serviço (nome da rua e/ou CEP, comparados sem acento e em
+# maiúsculas). Têm PRIORIDADE sobre a regra da cidade: um pedido pro
+# galpão da TAFF em Barueri segue os dias da TAFF, não os de Barueri.
+# Endereços levantados no BD_CLIENTES.xlsx (12/08).
+ENDERECOS_DIA_FIXO: list[dict] = [
+    # Rua Makita Brasil, 300 - Cooperativa, São Bernardo do Campo/SP
+    # (galpão Centrosul/Friozem -- endereço confirmado no
+    # BD_TRANSPORTADORAS, mesmo da Andrea Belotto/Frezze/Gessy Lopes).
+    # São Bernardo é cidade da região ABCD (seg/qua/sex), mas esta regra
+    # por endereço tem prioridade: no galpão, só quarta/sexta.
+    {"nome": "Centrosul", "dias": [QUARTA, SEXTA],
+     "padroes": ["MAKITA BRASIL", "09852-080", "09852080"]},
+    # Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra/SP
+    {"nome": "Transfrios", "dias": [SEGUNDA, QUARTA],
+     "padroes": ["FRANCISCO HENGLES", "06885-160", "06885160"]},
+    # Av. Arterial Sul, 451 (tb. Rod. Raposo Tavares km 20,5) - Parque Ipê, São Paulo/SP
+    {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA],
+     "padroes": ["ARTERIAL SUL", "05577-300", "05577300"]},
+    # Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri/SP
+    {"nome": "TAFF", "dias": [TERCA, QUINTA],
+     "padroes": ["VILA LOBOS QUERO", "06422-122", "06422122"]},
 ]
 
 # Raio (km) a partir de São Paulo considerado "Grande SP" -- entrega
@@ -75,12 +115,12 @@ def _normalizar_texto(s) -> str:
 
 
 def _montar_indice() -> dict[str, dict]:
-    """Índice invertido (cidade normalizada -> {"dia", "regiao"}),
+    """Índice invertido (cidade normalizada -> {"dias", "regiao"}),
     montado uma vez a partir de REGIOES."""
     indice = {}
     for regiao in REGIOES:
         for cidade in regiao["cidades"]:
-            indice[_normalizar_texto(cidade)] = {"dia": regiao["dia"], "regiao": regiao["nome"]}
+            indice[_normalizar_texto(cidade)] = {"dias": regiao["dias"], "regiao": regiao["nome"]}
     return indice
 
 
@@ -112,11 +152,21 @@ def extrair_uf(servico: dict) -> str | None:
     return ocorrencias[-1].group(1).strip()
 
 
-def dia_fixo_da_cidade(cidade: str) -> int | None:
-    """Retorna o dia da semana fixo (date.weekday()) pra essa cidade,
-    ou None se ela não estiver em nenhuma região com dia fixo."""
+def dias_fixos_da_cidade(cidade: str) -> list[int] | None:
+    """Dias da semana fixos (date.weekday()) dessa cidade, ou None se
+    ela não estiver em nenhuma região com dia fixo."""
     info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
-    return info["dia"] if info else None
+    return info["dias"] if info else None
+
+
+def dia_fixo_da_cidade(cidade: str) -> int | None:
+    """COMPATIBILIDADE (assinatura antiga, de quando região tinha 1 dia
+    só): o primeiro dia fixo da cidade, ou None. Os consumidores que
+    restam (classificar_pedido em notificar_area_nao_atendida.py e
+    regras/endereco.py) só usam como flag `is not None` -- quem precisa
+    dos dias de verdade usa dias_fixos_da_cidade/regra_dia_fixo_do_servico."""
+    dias = dias_fixos_da_cidade(cidade)
+    return dias[0] if dias else None
 
 
 def regiao_da_cidade(cidade: str) -> str | None:
@@ -124,6 +174,28 @@ def regiao_da_cidade(cidade: str) -> str | None:
     None se não estiver em nenhuma região com dia fixo."""
     info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
     return info["regiao"] if info else None
+
+
+def regra_dia_fixo_do_servico(servico: dict) -> dict | None:
+    """
+    Resolve a regra de dia fixo que vale pra ESTE serviço, olhando o
+    campo 'address': primeiro as regiões por ENDEREÇO (mais
+    específicas -- galpão/operador logístico), depois a cidade.
+
+    Retorna {"nome": str, "dias": list[int], "origem": "endereco"|"cidade"}
+    ou None se nenhuma regra se aplica (entrega sem restrição de dia).
+    """
+    endereco_norm = _normalizar_texto(servico.get("address") or "")
+    if endereco_norm:
+        for regra in ENDERECOS_DIA_FIXO:
+            if any(_normalizar_texto(p) in endereco_norm for p in regra["padroes"] if p):
+                return {"nome": regra["nome"], "dias": regra["dias"], "origem": "endereco"}
+
+    cidade = extrair_cidade(servico)
+    dias = dias_fixos_da_cidade(cidade) if cidade else None
+    if dias:
+        return {"nome": cidade.title(), "dias": dias, "origem": "cidade"}
+    return None
 
 
 def proxima_data_dia_semana(dia_semana_alvo: int, a_partir_de: date) -> date:
@@ -139,33 +211,50 @@ def proxima_data_dia_semana(dia_semana_alvo: int, a_partir_de: date) -> date:
     return a_partir_de + timedelta(days=dias_ate)
 
 
-def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None) -> int:
-    """
-    Pra cada serviço SEM scheduled_start ainda, cujo endereço bate com
-    uma cidade de dia fixo: calcula a próxima data daquele dia da
-    semana e grava no VUUPT (scheduled_start/scheduled_end, horário
-    08h-16h). Não mexe em pedido que já tem scheduled_start (de
-    qualquer origem) -- evita sobrescrever agendamento já definido e
-    evita reagendar o mesmo pedido toda vez que essa função roda.
+def proxima_data_dias_semana(dias_semana: list[int], a_partir_de: date) -> date:
+    """Ocorrência mais próxima de QUALQUER um dos dias da lista,
+    estritamente após `a_partir_de` -- regiões com mais de um dia fixo
+    (ex.: ABCD = seg/qua/sex) entregam no primeiro dia que chegar."""
+    return min(proxima_data_dia_semana(d, a_partir_de) for d in dias_semana)
 
-    Retorna quantos pedidos foram atualizados.
+
+def nomes_dias(dias_semana: list[int]) -> str:
+    """Nomes dos dias no plural, pra mensagens: [SEGUNDA] -> "Segundas";
+    [SEGUNDA, QUARTA, SEXTA] -> "Segundas, Quartas e Sextas"."""
+    nomes = [DIAS_NOMES[d] + "s" for d in sorted(dias_semana)]
+    if len(nomes) == 1:
+        return nomes[0]
+    return ", ".join(nomes[:-1]) + " e " + nomes[-1]
+
+
+def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None) -> list[dict]:
+    """
+    Pra cada serviço SEM scheduled_start ainda, que caia numa regra de
+    dia fixo (cidade da região OU endereço cadastrado -- ver
+    regra_dia_fixo_do_servico): calcula a próxima data válida e grava
+    no VUUPT (scheduled_start/scheduled_end, horário 08h-16h). Não mexe
+    em pedido que já tem scheduled_start (de qualquer origem) -- evita
+    sobrescrever agendamento já definido e evita reagendar o mesmo
+    pedido toda vez que essa função roda.
+
+    Retorna a lista dos agendamentos feitos (12/08 -- antes era só a
+    contagem): [{"servico", "regiao", "dias", "data"}], que quem chama
+    usa pra notificar os remetentes (pedido do Hugo, 12/08:
+    "notificação aos clientes que o pedido deles foi agendado para a
+    data correta" -- notificar_agendamento_dia_fixo.py).
     """
     hoje = hoje or date.today()
-    atualizados = 0
+    atualizados: list[dict] = []
 
     for s in servicos:
         if s.get("scheduled_start"):
             continue
 
-        cidade = extrair_cidade(s)
-        if not cidade:
+        regra = regra_dia_fixo_do_servico(s)
+        if not regra:
             continue
 
-        dia_fixo = dia_fixo_da_cidade(cidade)
-        if dia_fixo is None:
-            continue
-
-        data_alvo = proxima_data_dia_semana(dia_fixo, hoje)
+        data_alvo = proxima_data_dias_semana(regra["dias"], hoje)
         scheduled_start = f"{data_alvo.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00"
         scheduled_end = f"{data_alvo.isoformat()}T{HORARIO_FIM_PADRAO}-03:00"
 
@@ -176,10 +265,12 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
             })
             s["scheduled_start"] = scheduled_start  # reflete no dict em memória também
             s["scheduled_end"] = scheduled_end
-            logger.info(f"  {s.get('code')}: cidade '{cidade}' (região {regiao_da_cidade(cidade)}) -- "
+            logger.info(f"  {s.get('code')}: {regra['origem']} '{regra['nome']}' "
+                       f"(entrega às {nomes_dias(regra['dias'])}) -- "
                        f"agendado pra {data_alvo.strftime('%d/%m/%Y')} (próxima ocorrência).")
-            atualizados += 1
+            atualizados.append({"servico": s, "regiao": regra["nome"],
+                                "dias": regra["dias"], "data": data_alvo})
         except Exception as e:
-            logger.warning(f"  {s.get('code')}: falha ao aplicar dia fixo de '{cidade}': {e}")
+            logger.warning(f"  {s.get('code')}: falha ao aplicar dia fixo de '{regra['nome']}': {e}")
 
     return atualizados

@@ -93,6 +93,7 @@ from notificar_agendamento_pendente import identificar_pendentes, notificar_reme
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
+from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
 from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
@@ -191,9 +192,13 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         # dict em memória (o resto do fluxo, incluindo o filtro de
         # elegibilidade abaixo, já lida com isso automaticamente).
         try:
-            qtd_agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos_brutos, vuupt)
-            if qtd_agendados_dia_fixo:
-                logger.info(f"{qtd_agendados_dia_fixo} pedido(s) agendado(s) por região de dia fixo.")
+            agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos_brutos, vuupt)
+            if agendados_dia_fixo:
+                logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
+                # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
+                resultado_aviso = notificar_agendamentos_dia_fixo(
+                    agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste)
+                logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta a criação de rotas): {e}")
 

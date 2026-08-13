@@ -31,11 +31,15 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import quote
 
 _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
-from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO
+from email_utils import (
+    envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
+    COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +78,94 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     return embs
 
 
+def _dias_fixos_do_grupo(pedidos: list[dict]) -> dict[str, str]:
+    """
+    Regras de dia fixo de entrega que se aplicam aos pedidos deste
+    grupo (regioes_dia_fixo.py -- cidade da região, ex.: Sorocaba só
+    recebe às terças, OU endereço/galpão cadastrado, ex.: Transfrios às
+    segundas/quartas), mapeadas pro texto dos dias ("Terças e Quintas").
+    Usado pra avisar o embarcador no e-mail/rascunho de reagendamento
+    (pedido do Hugo, 12/08: "dependendo do pedido a duplicação ou
+    reagendamento só pode ser em dias específicos"). Pedido sem
+    'address' (ou fora de todas as regras) fica de fora.
+    """
+    from roteirizacao.regioes_dia_fixo import regra_dia_fixo_do_servico, nomes_dias
+
+    dias = {}
+    for p in pedidos:
+        regra = regra_dia_fixo_do_servico(p)
+        if regra:
+            dias[regra["nome"]] = nomes_dias(regra["dias"])
+    return dias
+
+
+def _botoes_resposta(email_resposta: str, assunto_original: str, pedidos: list[dict],
+                     sender_id, failed_reason_id, dias_fixos: dict[str, str]) -> str:
+    """Dois botões de ação (pedido do Hugo, 12/08: "facilitar a resposta").
+
+    São links mailto: -- o painel não tem URL pública, então botão com
+    link HTTP não funcionaria pro embarcador; o que já existe é a
+    leitura de respostas via IMAP (ler_respostas_insucesso.py). Cada
+    botão abre no cliente de e-mail do remetente um RASCUNHO de resposta
+    já preenchido (cancelar / reagendar com campo de data), que ao ser
+    enviado cai no fluxo normal de leitura.
+
+    O marcador [[INSUCESSO_GRUPO:...]] vai DENTRO do corpo do rascunho:
+    um compose via mailto NÃO cita o e-mail original, então o marcador
+    invisível do rodapé não iria junto e a leitura não acharia o grupo.
+    """
+    codigos = ", ".join("#" + (p.get("code", "") or "").lstrip("#") for p in pedidos)
+    marcador = f"[[INSUCESSO_GRUPO:{sender_id}:{failed_reason_id}]]"
+    rodape_marcador = ("--- nao apague a linha abaixo (identificacao automatica dos pedidos) ---\r\n"
+                       f"{marcador}")
+
+    corpo_cancelar = ("CANCELAR o reenvio dos pedidos: " + codigos + "\r\n\r\n"
+                      "Solicito o cancelamento da nova tentativa de entrega.\r\n\r\n"
+                      + rodape_marcador)
+
+    # Cidades com dia fixo: avisa no próprio rascunho, pra data pedida
+    # já vir num dia válido (se vier em outro dia, a leitura ajusta pra
+    # próxima ocorrência do dia da região -- ler_respostas_insucesso.py).
+    obs_dias_fixos = ""
+    if dias_fixos:
+        obs_dias_fixos = ("Obs: " + "; ".join(
+            f"entregas para {rotulo} ocorrem somente às {dias_texto}"
+            for rotulo, dias_texto in sorted(dias_fixos.items())
+        ) + ".\r\n\r\n")
+
+    corpo_reagendar = ("REAGENDAR o reenvio dos pedidos: " + codigos + "\r\n\r\n"
+                       "Nova data desejada: ___/___/______   <- preencha aqui antes de enviar\r\n\r\n"
+                       + obs_dias_fixos + rodape_marcador)
+
+    def _mailto(corpo: str) -> str:
+        return (f"mailto:{quote(email_resposta)}"
+                f"?subject={quote('Re: ' + assunto_original)}"
+                f"&body={quote(corpo)}")
+
+    estilo_botao = ("display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;"
+                    "color:#FFFFFF;text-decoration:none;border-radius:8px;")
+    return f"""
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto 0 auto;">
+  <tr>
+    <td style="border-radius:8px;background:{COR_ERRO};">
+      <a href="{html.escape(_mailto(corpo_cancelar))}" style="{estilo_botao}">Cancelar reenvio</a>
+    </td>
+    <td style="width:16px;font-size:0;">&nbsp;</td>
+    <td style="border-radius:8px;background:{COR_ACENTO};">
+      <a href="{html.escape(_mailto(corpo_reagendar))}" style="{estilo_botao}">Reagendar para outra data</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:12px 0 0 0;font-size:12px;color:{COR_TEXTO_SUAVE};line-height:1.6;text-align:center;">
+  Os botões abrem uma resposta pronta no seu e-mail — é só enviar.
+  No reagendamento, preencha a data desejada antes de enviar.
+  Se preferir, responda este e-mail normalmente.
+</p>"""
+
+
 def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict],
-                     sender_id, failed_reason_id, dias_uteis_atraso: int | None = None) -> str:
+                     sender_id, failed_reason_id, dias_uteis_atraso: int | None = None,
+                     assunto_original: str = "", email_resposta: str = "") -> str:
     """Só o CONTEÚDO (título, aviso de duplicação, tabela) -- o envelope
     (logo, cores, rodapé) vem de email_utils.envelope_html().
 
@@ -95,13 +185,29 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
     else:
         prazo = "A nova tentativa está programada para o <strong>próximo dia útil</strong>."
 
+    # Cidades com dia fixo de entrega (regioes_dia_fixo.py): o prazo
+    # acima não vale pra elas -- a reentrega (e qualquer reagendamento)
+    # cai no dia da região (pedido do Hugo, 12/08).
+    dias_fixos = _dias_fixos_do_grupo(pedidos)
+    if dias_fixos:
+        prazo += " " + " ".join(
+            f"Atenção: entregas para <strong>{html.escape(rotulo)}</strong> ocorrem "
+            f"somente às <strong>{dias_texto}</strong> (dia fixo da região) — reentregas e "
+            f"reagendamentos caem na próxima data de entrega da região."
+            for rotulo, dias_texto in sorted(dias_fixos.items())
+        )
+
     aviso = (
         f"Os pedidos abaixo tiveram <strong>insucesso na entrega</strong> "
         f"(motivo: {html.escape(motivo_texto)}) e <strong>já foram duplicados</strong> "
         f"para uma nova tentativa. {prazo}<br><br>"
-        "Caso <strong>não</strong> deseje o reenvio, basta responder este e-mail "
-        "solicitando o cancelamento. Sem resposta, a reentrega segue normalmente."
+        "Caso <strong>não</strong> deseje o reenvio, ou prefira a reentrega em "
+        "<strong>outra data</strong>, use os botões abaixo da lista de pedidos "
+        "(ou responda este e-mail). Sem resposta, a reentrega segue normalmente."
     )
+
+    botoes = _botoes_resposta(email_resposta, assunto_original, pedidos,
+                              sender_id, failed_reason_id, dias_fixos) if email_resposta else ""
 
     return f"""
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_PRIMARIA};letter-spacing:0.5px;">
@@ -119,6 +225,7 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
 <th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Pedido</th>
 <th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Descrição</th>
 </tr></thead><tbody>{linhas}</tbody></table>
+{botoes}
 <p style="margin:20px 0 0 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
   Atenciosamente,<br><strong>Freshlog Logística</strong>
 </p>
@@ -156,7 +263,9 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                    f"duplicado(s) para reentrega, aguardando retorno")
         conteudo = _montar_conteudo(emb["nome"], motivo_texto, pedidos, sender_id,
                                     failed_reason_id,
-                                    dias_uteis_atraso=duplicar_com_atraso(failed_reason_id))
+                                    dias_uteis_atraso=duplicar_com_atraso(failed_reason_id),
+                                    assunto_original=assunto,
+                                    email_resposta=config_email.get("remetente", ""))
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
         destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
 

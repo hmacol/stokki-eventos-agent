@@ -9,10 +9,21 @@ notificar_insucesso_aguardando_resposta.py) e usa a API da Anthropic
 
 NOVA REGRA (pedido do Hugo, 11/08): como TODO insucesso agora é
 duplicado NA HORA e o e-mail é um AVISO ("já duplicamos; responda se
-quiser cancelar"), a decisão aqui virou CANCELAR ou MANTER:
+quiser cancelar"), a decisão aqui virou CANCELAR, REAGENDAR ou MANTER
+(12/08: o e-mail ganhou botões mailto: de "Cancelar reenvio" e
+"Reagendar para outra data" que abrem uma resposta pré-preenchida --
+ver notificar_insucesso_aguardando_resposta.py::_botoes_resposta; a
+resposta cai aqui no fluxo normal):
   - Remetente pediu cancelamento -> cancela a reentrega no VUUPT
-    (serviço duplicado, ou o agendamento se ainda não venceu) e marca
-    no fingerprint -- o insucesso nunca mais é duplicado.
+    (serviço duplicado, ou o agendamento se ainda não venceu), marca
+    no fingerprint -- o insucesso nunca mais é duplicado -- e avisa o
+    ATENDIMENTO por e-mail (config email.email_atendimento).
+  - Remetente pediu REAGENDAMENTO com data -> agenda a reentrega pra
+    data pedida (scheduled_start no VUUPT; duplica na hora se ainda não
+    existia) -- a roteirização só pega o pedido no dia certo
+    (roteirizacao_dados.py::elegivel_para_data). Cidade com dia fixo de
+    entrega (regioes_dia_fixo.py, ex.: Sorocaba = terça) tem a data
+    ajustada pra próxima ocorrência do dia da região.
   - Remetente confirmou/aceitou o reenvio -> mantém a reentrega.
     (Transição: se for pendência do fluxo antigo de pergunta, em que
     nada foi duplicado ainda, duplica agora.)
@@ -37,7 +48,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent  # sobe de insucesso_entrega/ pra raiz do projeto
@@ -45,6 +56,10 @@ sys.path.insert(0, str(_RAIZ))
 
 import requests
 import yaml
+
+from email_utils import (
+    envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ERRO,
+)
 
 from email_leitura_utils import (
     fetch_em_lote as _fetch_em_lote,
@@ -130,40 +145,53 @@ def _extrair_grupo_do_corpo(corpo: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+_DIAS_SEMANA_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+                   "sexta-feira", "sábado", "domingo"]
+
+
 def _extrair_decisao_via_claude(texto_resposta: str, motivo_texto: str,
                                 codigos: list[str], api_key: str) -> dict:
     """
     Usa a API da Anthropic pra decidir, a partir da resposta em texto
-    livre do remetente, se a REENTREGA (já criada/agendada) dos pedidos
-    deve ser CANCELADA ou mantida.
+    livre do remetente (ou do rascunho pré-preenchido dos botões do
+    e-mail), o que fazer com a REENTREGA já criada/agendada: cancelar,
+    reagendar pra uma data específica, ou manter.
 
-    Retorna dict: {"cancelar": bool, "resumo": str, "nao_entendido": bool}
+    Retorna dict: {"acao": "cancelar"|"reagendar"|"manter",
+                   "data": "YYYY-MM-DD"|None, "resumo": str,
+                   "nao_entendido": bool}
     """
+    hoje = date.today()
     prompt = f"""Você vai analisar a resposta de um embarcador a um e-mail sobre um INSUCESSO NA ENTREGA.
 
 Motivo do insucesso: "{motivo_texto}"
 Pedido(s) afetado(s): {", ".join(codigos)}
+Hoje é {_DIAS_SEMANA_PT[hoje.weekday()]}, {hoje.strftime("%d/%m/%Y")}.
 
 O e-mail original AVISOU o embarcador de que esses pedidos JÁ FORAM DUPLICADOS para uma nova
-tentativa de entrega (reentrega) no próximo dia útil, e que ele poderia responder caso NÃO
-quisesse o reenvio.
+tentativa de entrega (reentrega) no próximo dia útil, e ofereceu dois botões de resposta rápida:
+"CANCELAR o reenvio" e "REAGENDAR o reenvio" (com um campo de data pra preencher). O embarcador
+pode ter usado um dos botões ou escrito livremente.
 
 Resposta do embarcador:
 \"\"\"
 {texto_resposta.strip()[:2000]}
 \"\"\"
 
-Com base nessa resposta, a reentrega deve ser CANCELADA?
-Considere "cancelar" quando o embarcador pedir pra não reenviar, disser que o pedido foi
-cancelado, que vai resolver por outro meio, ou recusar a nova tentativa de qualquer forma.
-Considere "manter" (cancelar=false) quando ele confirmar/agradecer o reenvio, der aval,
-combinar horário/data pra nova entrega, ou não pedir cancelamento.
+Decida a ação sobre a reentrega:
+- "cancelar": ele pediu pra não reenviar, disse que o pedido foi cancelado, que vai resolver
+  por outro meio, ou recusou a nova tentativa de qualquer forma.
+- "reagendar": ele pediu que a nova tentativa aconteça em uma DATA específica. Preencha "data"
+  no formato YYYY-MM-DD, resolvendo datas relativas ("sexta que vem", "semana que vem") a partir
+  de hoje. Se ele pediu reagendamento mas NÃO deu a data (ex.: mandou o modelo ___/___/______
+  sem preencher), retorne nao_entendido=true.
+- "manter": ele confirmou/agradeceu o reenvio, deu aval, ou não pediu mudança nenhuma.
 
 Responda APENAS com um JSON válido neste formato exato, sem texto antes ou depois:
-{{"cancelar": true, "resumo": "breve resumo de 1 frase da resposta", "nao_entendido": false}}
+{{"acao": "cancelar", "data": null, "resumo": "breve resumo de 1 frase da resposta", "nao_entendido": false}}
 
 Se não conseguir entender a resposta o suficiente pra decidir, retorne:
-{{"cancelar": false, "resumo": "", "nao_entendido": true}}
+{{"acao": "manter", "data": null, "resumo": "", "nao_entendido": true}}
 """
 
     try:
@@ -187,7 +215,7 @@ Se não conseguir entender a resposta o suficiente pra decidir, retorne:
         return json.loads(texto_resposta_ia)
     except Exception as e:
         logger.error(f"Erro ao extrair decisão via Claude: {e}")
-        return {"cancelar": False, "resumo": "", "nao_entendido": True}
+        return {"acao": "manter", "data": None, "resumo": "", "nao_entendido": True}
 
 
 def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
@@ -250,20 +278,291 @@ def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
     return True
 
 
+def _ajustar_data_por_dia_fixo(servico: dict, nova_data: date) -> tuple[date, str | None]:
+    """
+    Regras de dia fixo de entrega (regioes_dia_fixo.py -- cidade da
+    região OU endereço/galpão cadastrado; ex.: Sorocaba só recebe às
+    terças, ABCD às segundas/quartas/sextas, galpão Transfrios às
+    segundas/quartas) valem também pro reagendamento pedido pelo
+    remetente (pedido do Hugo, 12/08): se a data pedida cai num dia
+    fora da regra, empurra pra PRÓXIMA data válida a partir dela.
+
+    Retorna (data_final, aviso) -- aviso é None quando nada mudou.
+    """
+    from roteirizacao.regioes_dia_fixo import (
+        regra_dia_fixo_do_servico, proxima_data_dias_semana, nomes_dias,
+    )
+    regra = regra_dia_fixo_do_servico(servico)
+    if not regra or nova_data.weekday() in regra["dias"]:
+        return nova_data, None
+    ajustada = proxima_data_dias_semana(regra["dias"], nova_data)
+    aviso = (f"{regra['nome']} só recebe às {nomes_dias(regra['dias'])} -- "
+             f"data pedida {nova_data.strftime('%d/%m')} ajustada pra "
+             f"{ajustada.strftime('%d/%m/%Y')}")
+    return ajustada, aviso
+
+
+def _reagendar_reentrega(pendente: dict, nova_data: date, vuupt: "VuuptClient") -> date | None:
+    """
+    Reagenda a reentrega de um insucesso pra data pedida pelo remetente
+    (botão 'Reagendar para outra data' -- pedido do Hugo, 12/08):
+
+      - Regra de dia fixo (cidade da região ou endereço/galpão): a data
+        pedida é ajustada pra próxima data válida (_ajustar_data_por_dia_fixo).
+      - Se o serviço duplicado JÁ existe no VUUPT: grava scheduled_start/
+        scheduled_end na data (08h-16h, mesmo padrão de
+        regioes_dia_fixo.py) -- a roteirização só pega o pedido no dia
+        certo (roteirizacao_dados.py::elegivel_para_data).
+      - Senão (duplicação agendada pra frente, ou nada ainda): duplica
+        AGORA já com scheduled_start na data, e cancela o agendamento
+        local se havia um (a data explícita do remetente substitui o
+        prazo automático do motivo). Criar já com a data -- em vez de
+        só mover a data do agendamento local -- garante que a
+        roteirização pega o pedido exatamente no dia pedido; um
+        duplicado criado sem scheduled_start só entraria em rota no
+        ciclo seguinte à data movida.
+
+    Retorna a DATA final agendada (pode diferir da pedida por causa do
+    dia fixo), ou None se não conseguiu reagendar -- quem chama usa a
+    data pra confirmar ao remetente, e o None pra avisar o atendimento.
+    """
+    import fingerprint_duplicacao_insucesso
+    import fingerprint_duplicacao_agendada
+    from expedir_pedidos import duplicar_servico_por_insucesso
+
+    service_id = pendente["service_id"]
+    code = pendente.get("code") or str(service_id)
+
+    def _agendamento(data: date) -> dict:
+        return {
+            "scheduled_start": f"{data.isoformat()}T08:00:00-03:00",
+            "scheduled_end": f"{data.isoformat()}T16:00:00-03:00",
+        }
+
+    novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(service_id)
+    if novo_code:
+        try:
+            duplicado = vuupt.buscar_servico_por_code(novo_code)
+            if not duplicado:
+                logger.warning(f"  Reentrega {novo_code} de {code} não encontrada no VUUPT -- "
+                               "nada reagendado (verificar manualmente).")
+                return None
+            data_final, aviso = _ajustar_data_por_dia_fixo(duplicado, nova_data)
+            if aviso:
+                logger.info(f"  {code}: {aviso}.")
+            vuupt.atualizar_servico(duplicado["id"], _agendamento(data_final))
+            logger.info(f"  Reentrega de {code} ({novo_code}) reagendada no VUUPT "
+                        f"pra {data_final.strftime('%d/%m/%Y')}.")
+            return data_final
+        except Exception as e:
+            logger.error(f"  Falha ao reagendar reentrega {novo_code} de {code}: {e}")
+            return None
+
+    servico_original = vuupt.buscar_servico_por_code(pendente.get("code") or "")
+    if not servico_original:
+        logger.warning(f"  Não achei o serviço {code} no VUUPT pra duplicar com a nova data -- pulando.")
+        return None
+    data_final, aviso = _ajustar_data_por_dia_fixo(servico_original, nova_data)
+    if aviso:
+        logger.info(f"  {code}: {aviso}.")
+
+    novo = duplicar_servico_por_insucesso(vuupt, servico_original)
+    if not novo:
+        return None
+    if fingerprint_duplicacao_agendada.cancelar_agendamento(service_id):
+        logger.info(f"  {code}: duplicação agendada cancelada (substituída pela data pedida).")
+    fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo.get("code", ""))
+    try:
+        vuupt.atualizar_servico(novo["id"], _agendamento(data_final))
+        logger.info(f"  {code} duplicado ({novo.get('code')}) já agendado "
+                    f"pra {data_final.strftime('%d/%m/%Y')}.")
+        return data_final
+    except Exception as e:
+        # A reentrega existe, só ficou sem a data -- a roteirização
+        # aplica o dia fixo da região sozinha (aplicar_regioes_dia_fixo)
+        # ou roteiriza no próximo ciclo. Retorna None pra o atendimento
+        # ser avisado e confirmar a data manualmente.
+        logger.error(f"  {code} duplicado, mas falha ao gravar o agendamento: {e}")
+        return None
+
+
+def _notificar_atendimento_cancelamento(config_email: dict, motivo_texto: str,
+                                        itens: list[tuple[str, bool]],
+                                        resumo: str, remetente_email: str):
+    """
+    Avisa o ATENDIMENTO que um embarcador pediu o cancelamento do
+    reenvio (botão 'Cancelar reenvio' -- pedido do Hugo, 12/08).
+    `itens`: [(code, cancelou_ok)] -- itens com falha aparecem
+    destacados pra tratamento manual. Destinatário: config
+    email.email_atendimento (fallback: email_responsavel, remetente).
+    """
+    destino = (config_email.get("email_atendimento")
+               or config_email.get("email_responsavel")
+               or config_email.get("remetente"))
+    if not destino:
+        logger.warning("Sem destinatário de atendimento configurado -- notificação de cancelamento não enviada.")
+        return
+
+    import html as _html
+    linhas = ""
+    for code, ok in itens:
+        status = ("Reentrega cancelada no Vuupt" if ok
+                  else "FALHA ao cancelar — verificar manualmente no Vuupt")
+        cor = COR_TEXTO if ok else COR_ERRO
+        linhas += f"""
+    <tr>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{_html.escape('#' + (code or '').lstrip('#'))}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};color:{cor};">{status}</td>
+    </tr>"""
+
+    conteudo = f"""
+<p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">
+  ATENDIMENTO — CANCELAMENTO DE REENVIO
+</p>
+<p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
+  Embarcador pediu o cancelamento da reentrega
+</p>
+<p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
+  O remetente <strong>{_html.escape(remetente_email)}</strong> respondeu ao aviso de insucesso
+  (motivo: {_html.escape(motivo_texto)}) pedindo o <strong>cancelamento do reenvio</strong>.<br>
+  Resumo da resposta: {_html.escape(resumo or '(sem resumo)')}
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">
+<thead><tr style="background:{COR_FUNDO};">
+<th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Pedido</th>
+<th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Situação</th>
+</tr></thead><tbody>{linhas}</tbody></table>
+"""
+    falhas = sum(1 for _, ok in itens if not ok)
+    assunto = f"[Freshlog] Atendimento: cancelamento de reenvio — {len(itens)} pedido(s)"
+    if falhas:
+        assunto += f" ({falhas} com FALHA)"
+    corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
+                          cor_acento=COR_ERRO)
+    enviar_email([destino], assunto, corpo, config_email)
+
+
+def _notificar_remetente_reagendamento(config_email: dict, remetente_email: str,
+                                       motivo_texto: str,
+                                       itens: list[tuple[str, "date | None"]],
+                                       data_pedida: date):
+    """
+    Confirma ao remetente a data em que cada reentrega foi agendada
+    após o pedido de reagendamento (pedido do Hugo, 12/08: "notificação
+    aos clientes que o pedido deles foi agendado para a data correta")
+    -- em especial quando a data pedida caiu num dia sem entrega pra
+    região/ponto e foi ajustada pra próxima data válida.
+    `itens`: [(code, data_final|None)].
+    """
+    if not remetente_email:
+        return
+
+    import html as _html
+    linhas = ""
+    algum_ajuste = False
+    for code, data_final in itens:
+        if data_final:
+            texto_data = f"<strong>{data_final.strftime('%d/%m/%Y')}</strong>"
+            if data_final != data_pedida:
+                algum_ajuste = True
+                texto_data += " (ajustada para o dia de entrega da região)"
+        else:
+            texto_data = "não foi possível reagendar — nossa equipe entrará em contato"
+        linhas += f"""
+    <tr>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{_html.escape('#' + (code or '').lstrip('#'))}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{texto_data}</td>
+    </tr>"""
+
+    obs_ajuste = ""
+    if algum_ajuste:
+        obs_ajuste = (
+            f"<br>A data solicitada ({data_pedida.strftime('%d/%m/%Y')}) cai num dia em que a "
+            "região (ou ponto de entrega) não recebe — nesses casos, o pedido foi agendado "
+            "para a <strong>próxima data de entrega válida</strong>."
+        )
+
+    conteudo = f"""
+<p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_PRIMARIA};letter-spacing:0.5px;">
+  REAGENDAMENTO — {_html.escape(motivo_texto.upper())}
+</p>
+<p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
+  Reentrega reagendada
+</p>
+<p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
+  Recebemos sua solicitação de reagendamento e os pedidos abaixo foram agendados
+  conforme a tabela.{obs_ajuste}
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">
+<thead><tr style="background:{COR_FUNDO};">
+<th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Pedido</th>
+<th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Nova data de entrega</th>
+</tr></thead><tbody>{linhas}</tbody></table>
+<p style="margin:20px 0 0 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
+  Atenciosamente,<br><strong>Freshlog Logística</strong>
+</p>
+"""
+    assunto = f"[Freshlog] Reentrega reagendada — {len(itens)} pedido(s)"
+    corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
+    enviar_email([remetente_email], assunto, corpo, config_email)
+
+
+def _notificar_atendimento_falha_reagendamento(config_email: dict, motivo_texto: str,
+                                               codes_falha: list[str],
+                                               remetente_email: str, data_pedida: date):
+    """
+    Avisa o atendimento quando algum reagendamento pedido pelo
+    remetente NÃO pôde ser aplicado (o e-mail de confirmação ao
+    remetente promete que "nossa equipe entrará em contato" -- alguém
+    precisa de fato assumir o caso).
+    """
+    destino = (config_email.get("email_atendimento")
+               or config_email.get("email_responsavel")
+               or config_email.get("remetente"))
+    if not destino:
+        logger.warning("Sem destinatário de atendimento configurado -- falha de reagendamento não notificada.")
+        return
+
+    import html as _html
+    lista = "".join(f"<li>{_html.escape('#' + (c or '').lstrip('#'))}</li>" for c in codes_falha)
+    conteudo = f"""
+<p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">
+  ATENDIMENTO — FALHA NO REAGENDAMENTO
+</p>
+<p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
+  Reagendamento pedido pelo embarcador não pôde ser aplicado
+</p>
+<p style="margin:0 0 12px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
+  O remetente <strong>{_html.escape(remetente_email)}</strong> pediu o reagendamento da
+  reentrega (motivo do insucesso: {_html.escape(motivo_texto)}) para
+  <strong>{data_pedida.strftime('%d/%m/%Y')}</strong>, mas os pedidos abaixo não puderam
+  ser reagendados automaticamente — verificar no Vuupt e confirmar a data com o cliente:
+</p>
+<ul style="margin:0 0 8px 0;font-size:14px;color:{COR_TEXTO};line-height:1.8;">{lista}</ul>
+"""
+    assunto = f"[Freshlog] Atendimento: falha no reagendamento — {len(codes_falha)} pedido(s)"
+    corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
+                          cor_acento=COR_ERRO)
+    enviar_email([destino], assunto, corpo, config_email)
+
+
 def processar_respostas_insucesso(config: dict) -> dict:
     """
     Conecta no Gmail via IMAP, busca respostas aos e-mails de aviso de
     duplicação por insucesso, decide via Claude se a reentrega deve ser
-    CANCELADA ou mantida, aplica a decisão (cancelamento no VUUPT, ou
-    duplicação tardia pra pendências do fluxo antigo) e marca o grupo
-    como respondido.
+    CANCELADA, REAGENDADA (pra data pedida) ou mantida, aplica a decisão
+    (cancelamento no VUUPT + aviso ao atendimento, reagendamento no
+    VUUPT/agendamento local, ou duplicação tardia pra pendências do
+    fluxo antigo) e marca o grupo como respondido.
 
     Retorna {"processados", "grupos_atualizados", "duplicados",
-    "cancelados", "nao_entendidos"}
+    "cancelados", "reagendados", "nao_entendidos"}
     """
     if not _adquirir_trava():
         logger.info("Outra leitura de respostas de insucesso em andamento -- pulando este ciclo.")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
 
     try:
         return _processar_respostas_insucesso_travado(config)
@@ -284,10 +583,10 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
 
     if not usuario_imap or not senha_app:
         logger.warning("IMAP desativado — remetente/senha_app não configurados em config.yaml.")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
     if not api_key or api_key == "SUA_CHAVE_AQUI":
         logger.warning("Chave da API Anthropic não configurada em config.yaml (seção anthropic).")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
+        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
 
     from expedir_pedidos import duplicar_servico_por_insucesso
     import fingerprint_duplicacao_insucesso
@@ -299,6 +598,7 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
     grupos_atualizados = 0
     duplicados = 0
     cancelados = 0
+    reagendados = 0
     nao_entendidos = 0
 
     try:
@@ -311,7 +611,7 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
         status, dados = mail.search(None, f"(SINCE {data_limite})")
         if status != "OK":
             logger.warning("Falha ao buscar e-mails no IMAP.")
-            return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "nao_entendidos": 0}
+            return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
 
         ids = dados[0].split()
         logger.info(f"E-mails encontrados nos últimos {dias_retroativos} dia(s): {len(ids)} (filtrando por assunto a seguir)")
@@ -395,16 +695,40 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
                 _marcar_email_processado(message_id, remetente_email)
                 continue
 
-            cancelar_decisao = bool(decisao.get("cancelar"))
+            acao = decisao.get("acao") or "manter"
             resumo = decisao.get("resumo", "")
 
+            nova_data = None
+            if acao == "reagendar":
+                try:
+                    nova_data = date.fromisoformat(str(decisao.get("data") or ""))
+                except ValueError:
+                    nova_data = None
+                if not nova_data or nova_data < date.today():
+                    # Sem data utilizável -- trata como não entendido: o
+                    # grupo continua pendente pra uma nova resposta.
+                    logger.warning(f"Reagendamento de {remetente_email} pro grupo {grupo} "
+                                   f"sem data válida ({decisao.get('data')!r}).")
+                    nao_entendidos += 1
+                    _marcar_email_processado(message_id, remetente_email)
+                    continue
+
+            itens_cancelamento = []
+            itens_reagendamento = []
             for p in pendentes:
-                marcar_respondido(p["service_id"], corpo_sem_citacao, not cancelar_decisao)
+                marcar_respondido(p["service_id"], corpo_sem_citacao, acao != "cancelar")
                 grupos_atualizados += 1
 
-                if cancelar_decisao:
-                    if _cancelar_reentrega(p, vuupt):
+                if acao == "cancelar":
+                    ok = _cancelar_reentrega(p, vuupt)
+                    if ok:
                         cancelados += 1
+                    itens_cancelamento.append((p.get("code") or str(p["service_id"]), ok))
+                elif acao == "reagendar":
+                    data_final = _reagendar_reentrega(p, nova_data, vuupt)
+                    if data_final:
+                        reagendados += 1
+                    itens_reagendamento.append((p.get("code") or str(p["service_id"]), data_final))
                 else:
                     # Mantém a reentrega já criada. Transição do fluxo
                     # antigo (pergunta antes de duplicar): se nada foi
@@ -422,9 +746,27 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
                         else:
                             logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
 
+            if acao == "cancelar":
+                # Aviso ao atendimento (pedido do Hugo, 12/08) -- inclui
+                # itens com falha de cancelamento, que precisam de ação manual.
+                _notificar_atendimento_cancelamento(cfg_email, motivo_texto,
+                                                    itens_cancelamento, resumo, remetente_email)
+            elif acao == "reagendar":
+                # Confirma ao remetente a data efetivamente agendada
+                # (pode ter sido ajustada pro dia fixo da região) e, se
+                # algum pedido falhou, aciona o atendimento.
+                _notificar_remetente_reagendamento(cfg_email, remetente_email,
+                                                   motivo_texto, itens_reagendamento, nova_data)
+                codes_falha = [c for c, d in itens_reagendamento if not d]
+                if codes_falha:
+                    _notificar_atendimento_falha_reagendamento(cfg_email, motivo_texto,
+                                                               codes_falha, remetente_email,
+                                                               nova_data)
+
             logger.info(
-                f"Grupo {grupo} ({motivo_texto}) respondido: cancelar={cancelar_decisao} "
-                f"-- \"{resumo}\" ({len(pendentes)} pedido(s))"
+                f"Grupo {grupo} ({motivo_texto}) respondido: acao={acao}"
+                + (f" (nova data {nova_data.strftime('%d/%m/%Y')})" if nova_data else "")
+                + f" -- \"{resumo}\" ({len(pendentes)} pedido(s))"
             )
             _marcar_email_processado(message_id, remetente_email)
 
@@ -436,12 +778,13 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
     logger.info(
         f"Leitura de respostas de insucesso concluída: {processados} e-mail(s) processado(s), "
         f"{grupos_atualizados} pedido(s) atualizado(s), {duplicados} duplicado(s), "
-        f"{cancelados} reentrega(s) cancelada(s), {nao_entendidos} não entendido(s)."
+        f"{cancelados} reentrega(s) cancelada(s), {reagendados} reagendada(s), "
+        f"{nao_entendidos} não entendido(s)."
     )
     return {
         "processados": processados, "grupos_atualizados": grupos_atualizados,
         "duplicados": duplicados, "cancelados": cancelados,
-        "nao_entendidos": nao_entendidos,
+        "reagendados": reagendados, "nao_entendidos": nao_entendidos,
     }
 
 

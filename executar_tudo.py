@@ -171,13 +171,15 @@ def main(modo_teste: bool = False,
                 f"{resultado_insucesso['grupos_atualizados']} pedido(s) atualizado(s), "
                 f"{resultado_insucesso['duplicados']} duplicado(s), "
                 f"{resultado_insucesso.get('cancelados', 0)} reentrega(s) cancelada(s), "
+                f"{resultado_insucesso.get('reagendados', 0)} reagendada(s), "
                 f"{resultado_insucesso['nao_entendidos']} nao entendida(s)."
             )
             resumo_etapas["Insucesso (respostas)"] = {
                 "status": "ok",
                 "detalhe": f"{resultado_insucesso['processados']} processada(s), "
                           f"{resultado_insucesso['duplicados']} duplicado(s), "
-                          f"{resultado_insucesso.get('cancelados', 0)} cancelada(s)",
+                          f"{resultado_insucesso.get('cancelados', 0)} cancelada(s), "
+                          f"{resultado_insucesso.get('reagendados', 0)} reagendada(s)",
             }
         except Exception as e:
             logger.error(f"Erro na leitura de respostas de insucesso: {e}")

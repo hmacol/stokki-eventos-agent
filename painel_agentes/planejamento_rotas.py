@@ -22,7 +22,7 @@ NUNCA é bloqueada por causa delas (decisão do Hugo, 12/08).
 import logging
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -33,6 +33,7 @@ import yaml
 
 from vuupt_client import VuuptClient
 from roteirizacao_dados import elegivel_para_data, extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
+from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
 from mapa_util import carregar_remetentes_por_sender_id
 
@@ -58,6 +59,11 @@ TAMANHO_MAXIMO_ROTA = 18
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 20
+# Pedido "grande": acima disso vira alerta visual nos cards e no resumo
+# do futuro (pedido do Hugo, 12/08) -- um pedido desses sozinho já
+# ocupa boa parte do VOLUME_MAXIMO_ROTA de uma rota e merece atenção
+# na hora de montar o dia (veículo/rota própria).
+LIMITE_ALERTA_CAIXAS = 70
 
 
 def _carregar_config() -> dict:
@@ -100,9 +106,24 @@ def _badges_trava(rascunho: dict) -> list[str]:
     return badges
 
 
+def _data_agendada(servico: dict) -> date | None:
+    """Data do scheduled_start do serviço, ou None se vazio/malformado
+    (malformado = tratado como sem agendamento, o mesmo critério de
+    roteirizacao_dados.py::elegivel_para_data)."""
+    scheduled_start = servico.get("scheduled_start")
+    if not scheduled_start:
+        return None
+    try:
+        return datetime.fromisoformat(scheduled_start).date()
+    except (ValueError, TypeError):
+        return None
+
+
 def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str]) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
+    agendado = _data_agendada(servico)
     return {
+        "agendado_para": agendado.isoformat() if agendado else None,
         "service_id": servico["id"],
         "codigo": servico.get("code", ""),
         "titulo": servico.get("title", ""),
@@ -117,14 +138,90 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str]) -> dict
     }
 
 
-def buscar_pool_nao_alocados(data_alvo: date, config: dict | None = None) -> list[dict]:
+def _regiao_do_servico(servico: dict) -> str:
     """
-    Busca ao vivo na VUUPT o pool de pedidos not_assigned elegíveis pra
-    essa data que ainda não estão em nenhum rascunho ATIVO -- extraída
-    de buscar_dados_planejamento() pra ser reaproveitada pelo botão
-    "Atualizar" da tela (Hugo, 12/08: verificar pedido novo chegando na
-    VUUPT sem precisar recarregar a página inteira, perdendo o estado
-    de edição das rotas em andamento).
+    Rótulo de região pro resumo do futuro. Prioridade igual à das regras
+    de dia fixo: galpão/operador logístico identificado pelo endereço
+    (TAFF, Transfrios...), depois a REGIÃO da cidade (regioes_dia_fixo.
+    REGIOES -- "Vale do Paraíba", "ABCD"...), depois a própria cidade
+    (Grande SP sem dia fixo), e por fim um balde genérico quando nem a
+    cidade dá pra extrair do endereço.
+    """
+    regra = regra_dia_fixo_do_servico(servico)
+    if regra and regra["origem"] == "endereco":
+        return regra["nome"]
+    cidade = extrair_cidade(servico)
+    if cidade:
+        return regiao_da_cidade(cidade) or cidade.title()
+    return "Sem região identificada"
+
+
+def _resumo_agendados_futuros(servicos_brutos: list[dict], data_alvo: date) -> list[dict]:
+    """
+    Agrega os not_assigned agendados pra DEPOIS de data_alvo num
+    "resumo do futuro" (pedido do Hugo, 12/08: "mostre também os
+    pedidos que estão agendados, quantidade de pedidos e volumes para
+    cada região"): um bloco por dia, em ordem cronológica, cada um com
+    as regiões e seus totais de pedidos e caixas. Cada região traz
+    também "grandes": os pedidos acima de LIMITE_ALERTA_CAIXAS, que
+    viram alerta visual no card do dia.
+
+    scheduled_start malformado é ignorado aqui de propósito -- pedido
+    assim é tratado como SEM agendamento por elegivel_para_data, ou
+    seja, já aparece no pool do dia; contar de novo no futuro duplicaria.
+    """
+    por_dia: dict[date, dict[str, dict]] = {}
+    for s in servicos_brutos:
+        data_agendada = _data_agendada(s)
+        if not data_agendada or data_agendada <= data_alvo:
+            continue  # sem agendamento (ou malformado) ou já elegível -- assunto do pool
+
+        regioes_do_dia = por_dia.setdefault(data_agendada, {})
+        reg = regioes_do_dia.setdefault(_regiao_do_servico(s), {"pedidos": 0, "caixas": 0, "codigos": [], "grandes": []})
+        caixas = extrair_volume_caixas(s)
+        reg["pedidos"] += 1
+        reg["caixas"] += caixas
+        reg["codigos"].append(s.get("code", ""))
+        if caixas > LIMITE_ALERTA_CAIXAS:
+            reg["grandes"].append(f"{s.get('code', '')} ({caixas} cx)")
+
+    resumo = []
+    for data_agendada in sorted(por_dia):
+        regioes = [
+            {"regiao": nome, **info}
+            for nome, info in sorted(por_dia[data_agendada].items(),
+                                     key=lambda item: (-item[1]["pedidos"], item[0]))
+        ]
+        resumo.append({
+            "data_iso": data_agendada.isoformat(),
+            "data_fmt": data_agendada.strftime("%d/%m"),
+            "dia_semana": DIAS_NOMES[data_agendada.weekday()],
+            "total_pedidos": sum(r["pedidos"] for r in regioes),
+            "total_caixas": sum(r["caixas"] for r in regioes),
+            "regioes": regioes,
+        })
+    return resumo
+
+
+def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
+    """
+    Busca ao vivo na VUUPT os pedidos not_assigned e separa, com UMA
+    chamada só à API, em:
+
+      - "pool": elegíveis pra essa data que ainda não estão em nenhum
+        rascunho ATIVO (a coluna arrastável da tela) -- extraída de
+        buscar_dados_planejamento() pra ser reaproveitada pelo botão
+        "Atualizar" (Hugo, 12/08: verificar pedido novo chegando na
+        VUUPT sem recarregar a página, perdendo a edição em andamento);
+      - "resumo_futuro": agendados pra depois dessa data, agregados por
+        dia e região (_resumo_agendados_futuros). Aqui NÃO se desconta
+        quem está em rascunho: rascunho ativo é sempre da data em
+        edição, e o resumo é justamente a demanda que ainda vai chegar;
+      - "agendamentos_por_service_id": {service_id: data ISO} de TODO
+        not_assigned com agendamento válido -- usado por
+        buscar_dados_planejamento pra mostrar o agendamento também nas
+        paradas já em rascunho (que continuam not_assigned na VUUPT até
+        o envio), sem precisar de coluna nova em rascunhos_parada.
     """
     config = config or _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -142,17 +239,30 @@ def buscar_pool_nao_alocados(data_alvo: date, config: dict | None = None) -> lis
         if s["id"] not in ids_em_rascunho and elegivel_para_data(s, data_alvo)
     ]
     pool.sort(key=lambda p: p["codigo"])
-    return pool
+
+    agendamentos_por_service_id = {}
+    for s in servicos_brutos:
+        agendado = _data_agendada(s)
+        if agendado:
+            agendamentos_por_service_id[s["id"]] = agendado.isoformat()
+
+    return {
+        "pool": pool,
+        "resumo_futuro": _resumo_agendados_futuros(servicos_brutos, data_alvo),
+        "agendamentos_por_service_id": agendamentos_por_service_id,
+    }
 
 
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     """
-    Retorna {"data_alvo", "rascunhos": [...], "pool": [...], "base",
-    "google_maps_key", "motoristas": [...]} pra tela de planejamento.
+    Retorna {"data_alvo", "rascunhos": [...], "pool": [...],
+    "resumo_futuro": [...], "base", "google_maps_key",
+    "motoristas": [...]} pra tela de planejamento.
 
     Cada rascunho vem com "badges" (avisos de trava estourada) já
     calculados. O pool é o not_assigned elegível pra essa data que
-    ainda não está em nenhum rascunho do lote ativo.
+    ainda não está em nenhum rascunho do lote ativo; resumo_futuro é a
+    demanda agendada pra depois dela, por dia e região.
     """
     data_alvo = data_alvo or date.today()
     config = _carregar_config()
@@ -166,7 +276,15 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
 
-    pool = buscar_pool_nao_alocados(data_alvo, config)
+    pool_e_agendados = buscar_pool_e_agendados(data_alvo, config)
+
+    # agendamento das paradas já em rascunho vem da MESMA busca do pool
+    # (elas continuam not_assigned na VUUPT até o envio) -- pedido do
+    # Hugo, 12/08: mostrar o agendamento também nos cards das rotas
+    agendamentos = pool_e_agendados["agendamentos_por_service_id"]
+    for r in rascunhos:
+        for p in r["paradas"]:
+            p["agendado_para"] = agendamentos.get(p["service_id"])
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -179,10 +297,12 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
         "data_alvo_iso": data_alvo.isoformat(),
         "rascunhos": rascunhos,
-        "pool": pool,
+        "pool": pool_e_agendados["pool"],
+        "resumo_futuro": pool_e_agendados["resumo_futuro"],
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
+        "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,
     }
 
 

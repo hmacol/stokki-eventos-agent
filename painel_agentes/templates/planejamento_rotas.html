@@ -82,6 +82,107 @@
     margin-bottom: 10px;
   }
   .item-parada.busca-oculta { display: none; }
+  .item-parada.flag-oculta { display: none; }
+  .item-parada.cep-oculta { display: none; }
+  .item-parada.selecionada {
+    border-color: var(--acento);
+    box-shadow: inset 0 0 0 1px var(--acento);
+    background: #E5F7EF;
+  }
+  .controle-mapa { display: flex; gap: 8px; margin: 10px; }
+  .controle-mapa button {
+    background: #fff;
+    border: 1px solid var(--borda);
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    padding: 7px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .controle-mapa button:hover { background: var(--fundo); }
+  .controle-mapa button.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .item-parada .numero {
+    display: inline-block;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 100px;
+    padding: 0 4px;
+    background: #6B7280;
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    margin-right: 6px;
+    vertical-align: text-bottom;
+  }
+  .item-parada .numero.como-input {
+    background: none;
+    padding: 0;
+    min-width: 0;
+    height: auto;
+    line-height: normal;
+  }
+  .numero-input {
+    width: 42px;
+    font-size: 11px;
+    padding: 2px 4px;
+    border: 2px solid var(--borda);
+    border-radius: 5px;
+  }
+  .modo-ordenacao { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 10px; }
+  .modo-ordenacao select {
+    flex: 1;
+    font-size: 12px;
+    padding: 4px 6px;
+    border: 1px solid var(--borda);
+    border-radius: 5px;
+  }
+  .filtro-cep { display: flex; gap: 6px; }
+  .filtro-cep input { flex: 1; min-width: 0; }
+  .dica-selecao { font-size: 10.5px; color: var(--texto-suave); margin: 0 0 8px; }
+  .barra-selecao { display: flex; gap: 6px; margin-bottom: 10px; }
+  .barra-selecao button {
+    flex: 1 1 auto;
+    font-size: 11px;
+    padding: 5px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    cursor: pointer;
+  }
+  .barra-selecao button:hover { background: var(--fundo); }
+  .barra-selecao button:disabled { opacity: 0.5; cursor: default; }
+  #botao-criar-rota-selecao { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .filtro-flag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .item-parada .agendamento {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: #EAF1FE;
+    color: #2C5FC4;
+  }
+  .item-parada .agendamento.atrasado { background: #FDEBEA; color: var(--erro); }
+  .item-parada .badge-caixas {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: #FDEBEA;
+    color: var(--erro);
+  }
 
   .card-rota {
     border: 1px solid var(--borda);
@@ -142,6 +243,42 @@
   .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
   .info-parada .remetente { color: #4F86F7; font-weight: 600; }
   .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
+
+  .resumo-futuro {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  .resumo-futuro h3 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .dias-futuro { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .card-dia-futuro {
+    flex: 0 0 auto;
+    min-width: 190px;
+    max-width: 250px;
+    background: var(--fundo);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .card-dia-futuro:hover { border-color: var(--acento); }
+  .card-dia-futuro .cabecalho-dia { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .card-dia-futuro .dia-nome { font-weight: 700; }
+  .card-dia-futuro .dia-totais { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-futuro ul { list-style: none; margin: 0; padding: 0; }
+  .card-dia-futuro li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.6; }
+  .card-dia-futuro .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-futuro .alerta-caixas { color: var(--erro); font-weight: 700; cursor: help; }
 </style>
 {% endblock %}
 
@@ -153,9 +290,18 @@
   <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
   <button type="submit" class="botao">Buscar</button>
   {% if dados %}
-  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool</span>
+  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool{% if dados.resumo_futuro %} — {{ dados.resumo_futuro | sum(attribute='total_pedidos') }} agendado(s) pro futuro{% endif %}</span>
   {% endif %}
 </form>
+
+{# fora do if/elif principal de propósito: o resumo do futuro aparece
+   mesmo quando a data em edição não tem rascunho nem pool (é
+   justamente o caso "nada pra hoje, mas olha o que vem aí") #}
+{% if dados %}
+<div id="resumo-futuro-container">
+  {% with resumo_futuro = dados.resumo_futuro %}{% include "_resumo_futuro.html" %}{% endwith %}
+</div>
+{% endif %}
 
 {% if erro %}
 <div class="aviso">Não consegui montar o planejamento: {{ erro }}</div>
@@ -170,7 +316,21 @@
   <div class="coluna">
     <h3>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></h3>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
+    <label class="filtro-flag" title="Mostrar só os pedidos com agendamento pra essa data (ou atrasado) — o que não pode ficar de fora das rotas do dia">
+      <input type="checkbox" id="flag-precisa-sair">
+      Só o que precisa sair no dia (<span id="contagem-flag">0</span>)
+    </label>
     <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, remetente, destinatário ou endereço...">
+    <div class="filtro-cep" title="Faixa de CEP: aceita prefixo (ex: 01310) ou CEP completo. Os pedidos na faixa aparecem no mapa antes de virar rota.">
+      <input type="text" id="cep-de" class="campo-busca" placeholder="CEP de (ex: 01000)">
+      <input type="text" id="cep-ate" class="campo-busca" placeholder="CEP até (ex: 05999)">
+    </div>
+    <div class="barra-selecao">
+      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis com os filtros atuais (busca, agendamento e faixa de CEP)">Selecionar visíveis</button>
+      <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
+      <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
+    </div>
+    <div class="dica-selecao">Clique num pedido (ou no ponto dele no mapa) pra selecionar; clique de novo pra desmarcar. No mapa: "Não alocados" mostra o pool em vermelho e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.</div>
     <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
   </div>
 
@@ -179,6 +339,13 @@
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, remetente ou destinatário...">
+    <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
+      Reordenar:
+      <select id="modo-ordenacao">
+        <option value="arrastar">arrastando os cards</option>
+        <option value="numero">digitando a posição</option>
+      </select>
+    </label>
     <div id="lista-rotas"></div>
   </div>
 
@@ -191,8 +358,15 @@
   const BASE = {{ dados.base | tojson }};
   const MOTORISTAS = {{ dados.motoristas | tojson }};
   const DATA_ALVO_ISO = {{ dados.data_alvo_iso | tojson }};
-  const CORES = ["#0EA575", "#4F86F7", "#E1483D", "#B24FE0", "#E8A33D",
-                "#14A6A6", "#D0479A", "#6B7CE0", "#8FBF3F", "#E06B4F"];
+  const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
+  // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
+  // 12/08): vermelho é reservado pros pedidos NÃO ALOCADOS no mapa --
+  // rota vermelha confundiria com pool. O verde acento também fica de
+  // fora: é a cor de SELECIONADO (mapa e card).
+  const CORES = ["#4F86F7", "#E8A33D", "#B24FE0", "#14A6A6", "#6B7CE0",
+                "#8FBF3F", "#7C5CDB", "#3F8EAD", "#4C6B8A", "#0F7B8A"];
+  const COR_NAO_ALOCADO = "#E1483D";
+  const COR_SELECIONADO = "#0EA575";
   const ICONES_NUMERADOS = {};
   const POOL_BY_ID = {};
   POOL.forEach(p => POOL_BY_ID[p.service_id] = p);
@@ -244,13 +418,43 @@
     return dados;
   }
 
+  function badgesPedidoHtml(p) {
+    // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
+    const partes = [];
+    if (p.agendado_para) {
+      const [ano, mes, dia] = p.agendado_para.split("-");
+      if (p.agendado_para < DATA_ALVO_ISO) {
+        partes.push(`<span class="agendamento atrasado">Agendado ${dia}/${mes} — atrasado</span>`);
+      } else if (p.agendado_para === DATA_ALVO_ISO) {
+        partes.push(`<span class="agendamento">Agendado pro dia</span>`);
+      } else {
+        partes.push(`<span class="agendamento">Agendado ${dia}/${mes}</span>`);
+      }
+    }
+    if ((p.volume_caixas || 0) > LIMITE_ALERTA_CAIXAS) {
+      partes.push(`<span class="badge-caixas">⚠ ${p.volume_caixas} caixas</span>`);
+    }
+    return partes.length ? `<br>${partes.join(" ")}` : "";
+  }
+
   function itemParadaHtml(p) {
     const destinatario = p.destinatario_nome
       ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>`
       : "";
-    return `<span class="codigo">${escaparHtml(p.codigo)}</span><br>
+    // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
+    // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
+    return `<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span><br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
-      <span class="endereco">${escaparHtml(p.endereco)}</span>`;
+      <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
+  }
+
+  function cepDoEndereco(endereco) {
+    // formato real do address da VUUPT: "..., Cidade - UF, CEP[, Brasil]"
+    // (mesma premissa de regioes_dia_fixo.extrair_cidade) -- pega a
+    // ÚLTIMA ocorrência de CEP, que é a do fim do endereço
+    const ocorrencias = (endereco || "").match(/\b\d{5}-?\d{3}\b/g);
+    if (!ocorrencias) return "";
+    return ocorrencias[ocorrencias.length - 1].replace("-", "");
   }
 
   function criarLiParada(p) {
@@ -259,6 +463,8 @@
     li.dataset.serviceId = p.service_id;
     li.dataset.lat = p.latitude ?? "";
     li.dataset.lng = p.longitude ?? "";
+    li.dataset.agendadoPara = p.agendado_para || "";
+    li.dataset.cep = cepDoEndereco(p.endereco);
     // texto usado pela busca client-side (código, remetente, destinatário, endereço)
     li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco]
       .filter(Boolean).join(" ").toLowerCase();
@@ -273,14 +479,64 @@
     return opcoes.join("");
   }
 
-  function metricasHtml(rascunho) {
+  function metricasTexto(rascunho) {
+    // totalizador da rota: paradas, caixas (mesmo fallback de 1 caixa
+    // por pedido sem volume usado nas travas do servidor) e km estimado
     const km = rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km` : "km ?";
-    const paradas = document.querySelectorAll(`#lista-parada-${rascunho.id} .item-parada`).length;
-    return `${paradas} parada(s) — ${km}`;
+    const caixas = rascunho.paradas.reduce((soma, p) => soma + (p.volume_caixas || 1), 0);
+    return `${rascunho.paradas.length} parada(s) — ${caixas} caixa(s) — ${km}`;
   }
 
   function badgesHtml(badges) {
     return (badges || []).map(b => `<span class="badge-trava">${escaparHtml(b)}</span>`).join("");
+  }
+
+  function renumerarRotaEl(ul, rascunhoId) {
+    // numera as paradas na ordem atual da rota (mesmo número do marcador
+    // no mapa, na cor da rota). No modo "digitando a posição", o badge
+    // vira um campo editável -- trocar o número move a parada pra lá.
+    const enviada = !!ul.closest(".card-rota.enviada");
+    const lis = Array.from(ul.children);
+    const cor = coresPorRascunho[rascunhoId] || "#6B7280";
+    lis.forEach((li, i) => {
+      li.dataset.numero = i + 1;
+      const el = li.querySelector(".numero");
+      if (!el) return;
+      if (modoOrdenacao === "numero" && !enviada) {
+        el.classList.add("como-input");
+        el.innerHTML = `<input class="numero-input" type="number" min="1" max="${lis.length}"
+          value="${i + 1}" style="border-color:${cor}" title="Digite a nova posição e saia do campo (ou Enter)">`;
+      } else {
+        el.classList.remove("como-input");
+        el.textContent = i + 1;
+        el.style.background = cor;
+      }
+    });
+  }
+
+  function renumerarRota(rascunhoId) {
+    const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+    if (ul) renumerarRotaEl(ul, rascunhoId);
+  }
+
+  async function moverParaPosicao(rascunhoId, serviceId, posicao) {
+    const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+    if (!ul) return;
+    if (!posicao || isNaN(posicao)) { renumerarRota(rascunhoId); return; }  // valor inválido: só re-renderiza
+    const li = Array.from(ul.children).find(l => Number(l.dataset.serviceId) === serviceId);
+    if (!li) return;
+    const destino = Math.max(0, Math.min(ul.children.length - 1, posicao - 1));
+    ul.removeChild(li);
+    const restantes = Array.from(ul.children);
+    if (destino >= restantes.length) ul.appendChild(li);
+    else ul.insertBefore(li, restantes[destino]);
+    const ordem = Array.from(ul.children).map(l => Number(l.dataset.serviceId));
+    try {
+      const resp = await postJSON("/api/planejamento/reordenar", { rascunho_id: rascunhoId, ordem_service_ids: ordem });
+      atualizarCardComResposta(resp.rascunho);
+    } catch (e) {
+      alert(`Falha ao reordenar: ${e.message}. Recarregue a página.`);
+    }
   }
 
   function statusHtml(rascunho) {
@@ -306,7 +562,7 @@
         <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
         <span class="nome">${escaparHtml(rascunho.nome)}</span>
       </div>
-      <div class="metricas" id="metricas-${rascunho.id}">${rascunho.paradas.length} parada(s) — ${rascunho.km_estimado != null ? rascunho.km_estimado.toFixed(1) + " km" : "km ?"}</div>
+      <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${enviada ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
@@ -320,6 +576,7 @@
       </div>`;
     const ul = div.querySelector(".lista-paradas");
     rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p)));
+    renumerarRotaEl(ul, rascunho.id);
     return div;
   }
 
@@ -327,10 +584,11 @@
     if (!rascunho) return;
     const metricasEl = document.getElementById(`metricas-${rascunho.id}`);
     if (metricasEl) {
-      metricasEl.textContent = `${rascunho.paradas.length} parada(s) — ${rascunho.km_estimado != null ? rascunho.km_estimado.toFixed(1) + " km" : "km ?"}`;
+      metricasEl.textContent = metricasTexto(rascunho);
     }
     const badgesEl = document.getElementById(`badges-${rascunho.id}`);
     if (badgesEl) badgesEl.innerHTML = badgesHtml(rascunho.badges);
+    renumerarRota(rascunho.id);
     redesenharRota(rascunho.id);
   }
 
@@ -397,6 +655,327 @@
     document.querySelectorAll(`.item-parada[data-service-id="${serviceId}"]`).forEach(li => li.remove());
   }
 
+  function aplicarFiltroFlag() {
+    // "precisa sair no dia" = tem agendamento pra data em edição ou
+    // anterior (atrasado) -- compromisso que não pode ficar de fora.
+    // Atualiza o contador sempre; só esconde itens se a flag estiver ativa.
+    const ativo = document.getElementById("flag-precisa-sair").checked;
+    let precisamSair = 0;
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      const precisa = !!li.dataset.agendadoPara && li.dataset.agendadoPara <= DATA_ALVO_ISO;
+      if (precisa) precisamSair++;
+      li.classList.toggle("flag-oculta", ativo && !precisa);
+    });
+    document.getElementById("contagem-flag").textContent = precisamSair;
+  }
+
+  // ---- Seleção múltipla + filtro por faixa de CEP (Hugo, 12/08) ----
+  // Seleção vive só no front (Set de service_ids); ela vira estado de
+  // verdade no servidor apenas no "Criar rota" (rascunho novo já com
+  // as paradas). Pré-visualização: os pedidos do pool na faixa de CEP
+  // (e os selecionados, sempre) aparecem como pontos no mapa -- cinza
+  // = só filtrado, escuro = selecionado; clicar no ponto (des)seleciona.
+  const SELECIONADOS = new Set();
+  const marcadoresPreview = {};  // service_id -> marker
+
+  // Toggle "não alocados no mapa" (pontos pretos) -- persiste no
+  // localStorage porque criar rota/descartar recarrega a página e
+  // perder o toggle a cada rota criada atrapalharia o fluxo
+  // polígono -> criar rota -> polígono de montar o dia inteiro.
+  let mostrarPoolNoMapa = localStorage.getItem("planejamento.mostrarPoolNoMapa") === "1";
+  let botaoPoolMapa = null;
+  let botaoPoligono = null;
+
+  // Desenho de polígono FEITO À MÃO (clique = vértice, duplo clique
+  // conclui) em vez da lib "drawing" do Maps -- a lib não carregou/rodou
+  // na primeira versão (12/08) e o desenho manual não depende de nada
+  // além do mapa em si, além de dar feedback visual desde o 1º clique.
+  let desenhandoPoligono = false;
+  let verticesPoligono = [];
+  let poligonoTemp = null;
+  let listenersDesenho = [];
+
+  // Como reordenar paradas dentro da rota: "arrastar" (drag & drop) ou
+  // "numero" (digitar a posição no campo do card) -- escolha do usuário,
+  // persistida (Hugo, 12/08: formato mais dinâmico pra alterar ordens).
+  let modoOrdenacao = localStorage.getItem("planejamento.modoOrdenacao") || "arrastar";
+
+  function liVisivelNoPool(li) {
+    return !li.classList.contains("busca-oculta") &&
+           !li.classList.contains("flag-oculta") &&
+           !li.classList.contains("cep-oculta");
+  }
+
+  function filtroCepAtivo() {
+    return !!(document.getElementById("cep-de").value.replace(/\D/g, "") ||
+              document.getElementById("cep-ate").value.replace(/\D/g, ""));
+  }
+
+  function renumerarPool() {
+    // numera os cards VISÍVEIS do pool em sequência (1..N) -- o mesmo
+    // número vai pro ponto do pedido no mapa. Badge verde = selecionado,
+    // vermelho = não alocado (mesmas cores dos pontos).
+    let n = 0;
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      li.dataset.numero = liVisivelNoPool(li) ? ++n : "";
+      const el = li.querySelector(".numero");
+      if (!el) return;
+      el.classList.remove("como-input");
+      el.textContent = li.dataset.numero;
+      el.style.background = SELECIONADOS.has(Number(li.dataset.serviceId)) ? COR_SELECIONADO : COR_NAO_ALOCADO;
+    });
+  }
+
+  function atualizarPreviewPool() {
+    renumerarPool();  // o número do card e o do ponto nascem juntos
+    // aparece no mapa quem está selecionado (sempre) ou quem passa nos
+    // filtros ativos, quando o toggle "não alocados" ou a faixa de CEP
+    // estão ligados
+    const mostrarPool = mostrarPoolNoMapa || filtroCepAtivo();
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      const id = Number(li.dataset.serviceId);
+      const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+      const selecionado = SELECIONADOS.has(id);
+      const mostrar = !isNaN(lat) && !isNaN(lng) &&
+        (selecionado || (mostrarPool && liVisivelNoPool(li)));
+      const existente = marcadoresPreview[id];
+      if (!mostrar) {
+        if (existente) { existente.setMap(null); delete marcadoresPreview[id]; }
+        return;
+      }
+      const icone = iconeNumerado(li.dataset.numero || "", selecionado ? COR_SELECIONADO : COR_NAO_ALOCADO);
+      if (existente) {
+        existente.setIcon(icone);
+        existente.setZIndex(selecionado ? 3 : 2);
+        return;
+      }
+      const p = POOL_BY_ID[id];
+      const marker = new google.maps.Marker({
+        position: { lat, lng }, map: map,
+        icon: icone,
+        title: p ? `${p.codigo} — ${p.endereco}` : "",
+        zIndex: selecionado ? 3 : 2,
+      });
+      // no meio do desenho do polígono o clique é vértice, não seleção
+      marker.addListener("click", () => { if (!desenhandoPoligono) alternarSelecao(id); });
+      marcadoresPreview[id] = marker;
+    });
+    // marker órfão: item que saiu do pool (virou parada de rota / sumiu
+    // no Atualizar) some do preview junto
+    Object.keys(marcadoresPreview).map(Number).forEach(id => {
+      if (!document.querySelector(`#lista-pool .item-parada[data-service-id="${id}"]`)) {
+        marcadoresPreview[id].setMap(null);
+        delete marcadoresPreview[id];
+      }
+    });
+  }
+
+  function enquadrarPreview() {
+    const markers = Object.values(marcadoresPreview);
+    if (!markers.length) return;
+    if (markers.length === 1) { map.panTo(markers[0].getPosition()); return; }
+    const bounds = new google.maps.LatLngBounds();
+    markers.forEach(m => bounds.extend(m.getPosition()));
+    map.fitBounds(bounds, 60);
+  }
+
+  function aplicarFiltroCep() {
+    // faixa por prefixo: "de" completa com 0 e "até" completa com 9
+    // ("01000" a "05999" = 01000-000 até 05999-999); pedido sem CEP
+    // extraível do endereço fica de fora quando o filtro está ativo
+    const de = document.getElementById("cep-de").value.replace(/\D/g, "");
+    const ate = document.getElementById("cep-ate").value.replace(/\D/g, "");
+    const deNorm = de ? de.padEnd(8, "0") : null;
+    const ateNorm = ate ? ate.padEnd(8, "9") : null;
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      let oculta = false;
+      if (deNorm || ateNorm) {
+        const cep = li.dataset.cep;
+        oculta = !cep || (deNorm !== null && cep < deNorm) || (ateNorm !== null && cep > ateNorm);
+      }
+      li.classList.toggle("cep-oculta", oculta);
+    });
+    atualizarPreviewPool();
+  }
+
+  function atualizarBarraSelecao() {
+    const botaoCriar = document.getElementById("botao-criar-rota-selecao");
+    botaoCriar.disabled = SELECIONADOS.size === 0;
+    botaoCriar.textContent = SELECIONADOS.size ? `Criar rota (${SELECIONADOS.size})` : "Criar rota";
+    document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
+  }
+
+  function alternarSelecao(serviceId) {
+    const li = document.querySelector(`#lista-pool .item-parada[data-service-id="${serviceId}"]`);
+    if (!li) return;
+    if (SELECIONADOS.has(serviceId)) SELECIONADOS.delete(serviceId);
+    else SELECIONADOS.add(serviceId);
+    li.classList.toggle("selecionada", SELECIONADOS.has(serviceId));
+    atualizarBarraSelecao();
+    atualizarPreviewPool();
+  }
+
+  function selecionarVisiveis() {
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      if (!liVisivelNoPool(li)) return;
+      SELECIONADOS.add(Number(li.dataset.serviceId));
+      li.classList.add("selecionada");
+    });
+    atualizarBarraSelecao();
+    atualizarPreviewPool();
+  }
+
+  function limparSelecao() {
+    SELECIONADOS.clear();
+    document.querySelectorAll("#lista-pool .item-parada.selecionada")
+      .forEach(li => li.classList.remove("selecionada"));
+    atualizarBarraSelecao();
+    atualizarPreviewPool();
+  }
+
+  function definirMostrarPoolNoMapa(valor) {
+    mostrarPoolNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarPoolNoMapa", valor ? "1" : "0");
+    if (botaoPoolMapa) {
+      botaoPoolMapa.textContent = valor ? "● Não alocados: no mapa" : "○ Não alocados: ocultos";
+      botaoPoolMapa.classList.toggle("ativo", valor);
+    }
+    atualizarPreviewPool();
+  }
+
+  function definirCliqueNosMarcadores(clicavel) {
+    // durante o desenho do polígono, clique tem que virar vértice mesmo
+    // em cima de um ponto -- senão o marcador engole o clique
+    Object.values(marcadoresPreview).forEach(m => m.setClickable(clicavel));
+    Object.values(gruposMapa).forEach(g => g.markers.forEach(m => m.setClickable(clicavel)));
+  }
+
+  function pararDesenhoPoligono() {
+    desenhandoPoligono = false;
+    listenersDesenho.forEach(l => google.maps.event.removeListener(l));
+    listenersDesenho = [];
+    if (poligonoTemp) { poligonoTemp.setMap(null); poligonoTemp = null; }
+    verticesPoligono = [];
+    if (map) map.setOptions({ draggableCursor: null, disableDoubleClickZoom: false });
+    definirCliqueNosMarcadores(true);
+    if (botaoPoligono) {
+      botaoPoligono.textContent = "⬠ Selecionar área";
+      botaoPoligono.classList.remove("ativo");
+    }
+  }
+
+  function alternarDesenhoPoligono() {
+    if (desenhandoPoligono) { concluirPoligono(); return; }
+    desenhandoPoligono = true;
+    botaoPoligono.textContent = "✓ Concluir área (Esc cancela)";
+    botaoPoligono.classList.add("ativo");
+    // sem os pontos visíveis não dá pra saber o que o laço vai pegar --
+    // liga a exibição dos não alocados junto
+    if (!mostrarPoolNoMapa) definirMostrarPoolNoMapa(true);
+    definirCliqueNosMarcadores(false);
+    verticesPoligono = [];
+    poligonoTemp = new google.maps.Polygon({
+      map: map, paths: [],
+      fillColor: "#0EA575", fillOpacity: 0.12,
+      strokeColor: "#0EA575", strokeWeight: 2,
+      clickable: false,
+    });
+    map.setOptions({ draggableCursor: "crosshair", disableDoubleClickZoom: true });
+    listenersDesenho = [
+      map.addListener("click", (e) => {
+        verticesPoligono.push(e.latLng);
+        poligonoTemp.setPath(verticesPoligono);
+      }),
+      map.addListener("dblclick", () => concluirPoligono()),
+    ];
+  }
+
+  function dentroDoPoligono(lat, lng, vertices) {
+    // ray casting clássico -- sem depender da lib "geometry" do Maps
+    let dentro = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const vi = vertices[i], vj = vertices[j];
+      const cruza = (vi.lat > lat) !== (vj.lat > lat) &&
+        lng < (vj.lng - vi.lng) * (lat - vi.lat) / (vj.lat - vi.lat) + vi.lng;
+      if (cruza) dentro = !dentro;
+    }
+    return dentro;
+  }
+
+  function concluirPoligono() {
+    const vertices = verticesPoligono.map(v => ({ lat: v.lat(), lng: v.lng() }));
+    pararDesenhoPoligono();
+    if (vertices.length < 3) return;  // sem área fechada -- vale como cancelamento
+    // pega só quem está visível com os filtros atuais (busca/flag/CEP)
+    // -- selecionar item escondido criaria seleção "invisível"
+    document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
+      const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+      if (isNaN(lat) || isNaN(lng) || !liVisivelNoPool(li)) return;
+      if (!dentroDoPoligono(lat, lng, vertices)) return;
+      SELECIONADOS.add(Number(li.dataset.serviceId));
+      li.classList.add("selecionada");
+    });
+    atualizarBarraSelecao();
+    atualizarPreviewPool();
+  }
+
+  function criarControlesMapa() {
+    const container = document.createElement("div");
+    container.className = "controle-mapa";
+
+    botaoPoolMapa = document.createElement("button");
+    botaoPoolMapa.type = "button";
+    botaoPoolMapa.title = "Mostrar/ocultar os pedidos não alocados (pool) como pontos pretos no mapa";
+    botaoPoolMapa.addEventListener("click", () => definirMostrarPoolNoMapa(!mostrarPoolNoMapa));
+
+    botaoPoligono = document.createElement("button");
+    botaoPoligono.type = "button";
+    botaoPoligono.title = "Desenhar um polígono no mapa pra selecionar todos os pedidos dentro dele";
+    botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
+
+    container.appendChild(botaoPoolMapa);
+    container.appendChild(botaoPoligono);
+    map.controls[google.maps.ControlPosition.TOP_CENTER].push(container);
+
+    definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
+    pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
+
+    drawingManager = new google.maps.drawing.DrawingManager({
+      drawingControl: false,
+      polygonOptions: {
+        fillColor: "#0EA575", fillOpacity: 0.12,
+        strokeColor: "#0EA575", strokeWeight: 2,
+        clickable: false,
+      },
+    });
+    drawingManager.setMap(map);
+    drawingManager.addListener("polygoncomplete", selecionarPorPoligono);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && desenhandoPoligono) pararDesenhoPoligono();
+    });
+  }
+
+  async function criarRotaComSelecionados(botao) {
+    // paradas na ordem em que aparecem no pool (dá pra ajustar depois
+    // arrastando ou com "Otimizar sequência" no card novo)
+    const paradas = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .map(li => Number(li.dataset.serviceId))
+      .filter(id => SELECIONADOS.has(id))
+      .map(id => POOL_BY_ID[id])
+      .filter(Boolean);
+    if (!paradas.length) return;
+    botao.disabled = true;
+    botao.textContent = "Criando rota...";
+    try {
+      await postJSON("/api/planejamento/criar-rota-com-paradas", { data_alvo: DATA_ALVO_ISO, paradas });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao criar rota: ${e.message}`);
+      atualizarBarraSelecao();
+    }
+  }
+
   async function onDragEnd(evt) {
     const serviceId = Number(evt.item.dataset.serviceId);
     const fromId = evt.from.dataset.listId;
@@ -416,6 +995,8 @@
         const parada = POOL_BY_ID[serviceId];
         const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: Number(toId), parada, ordem: evt.newIndex });
         delete POOL_BY_ID[serviceId];
+        SELECIONADOS.delete(serviceId);  // virou parada de rota -- sai da seleção do pool
+        evt.item.classList.remove("selecionada");
         document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
         atualizarCardComResposta(resp.rascunho);
       } else if (toId === "pool") {
@@ -436,10 +1017,23 @@
     } catch (e) {
       alert(`Falha ao salvar o ajuste: ${e.message}. Recarregue a página.`);
     }
+    aplicarFiltroFlag();  // item saiu/voltou do pool -- contador e filtro acompanham
+    aplicarFiltroCep();   // idem pro filtro de CEP (e o preview no mapa junto)
+    atualizarBarraSelecao();
   }
 
+  // Distingue arrastar de clicar no pool: o click de seleção só vale
+  // se não houve drag -- o click do navegador dispara logo depois do
+  // mouseup (antes de qualquer timeout), então a flag ainda está
+  // levantada quando ele chega.
+  let dragRecente = false;
+
   function iniciarSortable(ul) {
-    new Sortable(ul, { group: "paradas", animation: 150, onEnd: onDragEnd });
+    new Sortable(ul, {
+      group: "paradas", animation: 150,
+      onStart: () => { dragRecente = true; },
+      onEnd: (evt) => { onDragEnd(evt); setTimeout(() => { dragRecente = false; }, 0); },
+    });
   }
 
   async function otimizarSequencia(rascunhoId) {
@@ -538,6 +1132,7 @@
       Object.keys(POOL_BY_ID).map(Number).forEach(serviceId => {
         if (!idsAtuais.has(serviceId)) {
           delete POOL_BY_ID[serviceId];
+          SELECIONADOS.delete(serviceId);
           const li = listaPool.querySelector(`.item-parada[data-service-id="${serviceId}"]`);
           if (li) li.remove();
         }
@@ -545,6 +1140,16 @@
 
       document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
       document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo
+      aplicarFiltroFlag();  // idem pro filtro de "precisa sair no dia"
+      aplicarFiltroCep();   // idem pro filtro de CEP (e preview no mapa dos itens novos/removidos)
+      atualizarBarraSelecao();
+
+      // resumo do futuro (agendados por dia/região) vem já renderizado
+      // do servidor -- mesmo partial do load da página, só troca o HTML
+      if (dados.resumo_html !== undefined) {
+        const containerResumo = document.getElementById("resumo-futuro-container");
+        if (containerResumo) containerResumo.innerHTML = dados.resumo_html;
+      }
 
       botao.textContent = novos > 0 ? `${novos} pedido(s) novo(s) encontrado(s)` : "Nenhum pedido novo";
     } catch (e) {
@@ -597,6 +1202,34 @@
     const listaPool = document.getElementById("lista-pool");
     POOL.forEach(p => listaPool.appendChild(criarLiParada({ ...p, remetente_nome: p.remetente_nome })));
     iniciarSortable(listaPool);
+    document.getElementById("flag-precisa-sair").addEventListener("change", () => {
+      aplicarFiltroFlag();
+      atualizarPreviewPool();  // visibilidade mudou -- preview acompanha
+    });
+    aplicarFiltroFlag();  // inicializa o contador de "precisa sair no dia"
+    criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)
+
+    // clique (sem drag) num card do pool = (des)seleciona pra rota nova
+    listaPool.addEventListener("click", (e) => {
+      if (dragRecente) return;
+      const li = e.target.closest(".item-parada");
+      if (li) alternarSelecao(Number(li.dataset.serviceId));
+    });
+
+    // filtro por faixa de CEP: aplica na hora e, depois de uma pausa na
+    // digitação, enquadra o mapa nos pedidos da faixa (a pré-visualização)
+    let timerEnquadrar = null;
+    ["cep-de", "cep-ate"].forEach(id => {
+      document.getElementById(id).addEventListener("input", () => {
+        aplicarFiltroCep();
+        clearTimeout(timerEnquadrar);
+        if (filtroCepAtivo()) timerEnquadrar = setTimeout(enquadrarPreview, 400);
+      });
+    });
+
+    document.getElementById("botao-selecionar-visiveis").addEventListener("click", selecionarVisiveis);
+    document.getElementById("botao-limpar-selecao").addEventListener("click", limparSelecao);
+    document.getElementById("botao-criar-rota-selecao").addEventListener("click", (e) => criarRotaComSelecionados(e.target));
 
     const listaRotas = document.getElementById("lista-rotas");
     RASCUNHOS.forEach((rascunho, i) => {
@@ -653,6 +1286,7 @@
       document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
         li.classList.toggle("busca-oculta", !!texto && !li.dataset.busca.includes(texto));
       });
+      atualizarPreviewPool();  // visibilidade mudou -- preview acompanha
     });
 
     document.getElementById("busca-rotas").addEventListener("input", (e) => {
@@ -680,7 +1314,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script async
-  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&libraries=drawing,geometry&callback=initMap">
 </script>
 {% endif %}
 {% endblock %}

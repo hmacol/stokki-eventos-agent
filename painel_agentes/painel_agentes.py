@@ -54,10 +54,11 @@ from executor import (
 )
 from mapa_rotas import buscar_rotas_para_mapa
 from planejamento_rotas import (
-    buscar_dados_planejamento, buscar_pool_nao_alocados, gerar_romaneio_pdf,
+    buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho,
 )
 import rascunhos_rota
+import torre_controle
 
 app = Flask(__name__)
 
@@ -245,18 +246,111 @@ def planejamento():
     )
 
 
+@app.route("/torre")
+@requer_auth
+def torre():
+    """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
+    sobe só com a casca; os dados chegam por /api/torre/* via JS (a
+    coleta na VUUPT leva alguns segundos e não deve segurar o load)."""
+    data_alvo = _parse_data_param()
+    gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
+    return render_template("torre_controle.html", data_alvo_input=data_alvo.isoformat(),
+                           google_maps_key=gmaps_key)
+
+
+@app.route("/api/torre/dados")
+@requer_auth
+def api_torre_dados():
+    data_alvo = _parse_data_param()
+    try:
+        return jsonify(torre_controle.buscar_dados_torre(data_alvo))
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados da torre")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/torre/stokki")
+@requer_auth
+def api_torre_stokki():
+    """Funil outbound da Stokki -- endpoint separado do resto porque tem
+    cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
+    com agente rodando)."""
+    return jsonify(torre_controle.buscar_funil_stokki())
+
+
+@app.route("/api/torre/etapas")
+@requer_auth
+def api_torre_etapas():
+    """Só o estado das etapas do stepper (leitura barata no SQLite) --
+    o front consulta com frequência maior pra dar feedback rápido
+    depois de um clique em 'rodar'."""
+    return jsonify({"etapas": torre_controle.montar_etapas_pipeline()})
+
+
+@app.route("/api/torre/rodar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_torre_rodar():
+    """Versão JSON do /rodar/<agente_id> pros botões da torre -- mesma
+    iniciar_execucao, mas sem redirect (o cockpit continua na própria
+    tela acompanhando pelo stepper)."""
+    body = request.get_json(force=True)
+    agente_id = body.get("agente_id", "")
+    agente = buscar_agente(agente_id)
+    if not agente:
+        return jsonify({"erro": "Agente não encontrado."}), 404
+    if ha_execucao_rodando(agente_id):
+        return jsonify({"erro": "Esse agente já está rodando -- espera terminar antes de rodar de novo."}), 409
+    execucao_id = iniciar_execucao(agente, modo_teste=False)
+    return jsonify({"ok": True, "execucao_id": execucao_id})
+
+
+@app.route("/api/torre/tratar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_torre_tratar():
+    """Marca uma exceção da fila como tratada (com motivo) -- ela sai
+    da fila ativa e vai pro histórico de tratadas (padrão OCC)."""
+    body = request.get_json(force=True)
+    try:
+        torre_controle.marcar_excecao_tratada(
+            body["id"], body.get("data_alvo", ""), body.get("tipo", ""),
+            body.get("descricao", ""), body.get("motivo", ""),
+        )
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/torre/destratar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_torre_destratar():
+    body = request.get_json(force=True)
+    try:
+        desfez = torre_controle.desfazer_excecao_tratada(body["id"])
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    return jsonify({"ok": True, "desfeito": desfez})
+
+
 @app.route("/api/planejamento/pool")
 @requer_auth
 def api_pool():
-    """Busca ao vivo na VUUPT só o pool de não alocados (botão
-    'Atualizar' da tela) -- não mexe nos rascunhos/mapa já carregados,
-    pra não perder o estado de edição em andamento."""
+    """Busca ao vivo na VUUPT o pool de não alocados + resumo do futuro
+    (botão 'Atualizar' da tela) -- não mexe nos rascunhos/mapa já
+    carregados, pra não perder o estado de edição em andamento. O resumo
+    volta já renderizado (mesmo partial _resumo_futuro.html do load da
+    página), a tela só troca o innerHTML do container."""
     data_alvo = _parse_data_param()
     try:
-        pool = buscar_pool_nao_alocados(data_alvo)
+        resultado = buscar_pool_e_agendados(data_alvo)
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
-    return jsonify({"pool": pool})
+    return jsonify({
+        "pool": resultado["pool"],
+        "resumo_html": render_template("_resumo_futuro.html", resumo_futuro=resultado["resumo_futuro"]),
+    })
 
 
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
@@ -394,6 +488,34 @@ def api_nova_rota():
             body.get("tipo_rota") or referencia["tipo_rota"],
             referencia["start_location_base_id"], referencia["end_location_base_id"],
             referencia["start_at"],
+        )
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
+
+
+@app.route("/api/planejamento/criar-rota-com-paradas", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_criar_rota_com_paradas():
+    """Rascunho novo já com as paradas selecionadas no pool (seleção
+    múltipla da tela, Hugo 12/08) -- mesma exigência de lote ativo da
+    nova-rota (herda partição/tipo/bases/start_at do lote), só que sem
+    o vaivém de criar vazia e arrastar parada por parada."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        paradas = body["paradas"]
+        if not paradas:
+            return jsonify({"erro": "Nenhum pedido selecionado."}), 400
+        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+        if not rascunhos_do_dia:
+            return jsonify({"erro": "Nenhum lote ativo para essa data -- rode o pipeline em modo rascunho primeiro."}), 400
+        referencia = rascunhos_do_dia[0]
+        rascunho_id = rascunhos_rota.criar_rascunho_com_paradas(
+            data_alvo, referencia["lote_id"], referencia["particao"], referencia["tipo_rota"],
+            referencia["start_location_base_id"], referencia["end_location_base_id"],
+            referencia["start_at"], paradas,
         )
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400

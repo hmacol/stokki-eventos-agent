@@ -485,6 +485,50 @@ def criar_rascunho_vazio(data_alvo: date, lote_id: str, particao: str, tipo_rota
         conn.close()
 
 
+def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tipo_rota: str,
+                               start_location_base_id: int, end_location_base_id: int | None,
+                               start_at: str, paradas: list[dict]) -> int:
+    """criar_rascunho_vazio + paradas já dentro, numa transação só --
+    botão 'Criar rota' da seleção múltipla do pool (Hugo, 12/08):
+    selecionar vários cards e virar rascunho direto, sem criar rota
+    vazia e arrastar um por um. `paradas` no mesmo formato processado
+    de adicionar_parada (itens do pool, tal como carregados no GET)."""
+    conn = _conectar()
+    try:
+        nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - manual-{uuid.uuid4().hex[:6]}"
+        cursor = conn.execute("""
+            INSERT INTO rascunhos_rota (
+                data_alvo, lote_id, nome, particao, tipo_rota,
+                start_location_base_id, end_location_base_id, start_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data_alvo.isoformat(), lote_id, nome, particao, tipo_rota,
+            start_location_base_id, end_location_base_id, start_at, STATUS_RASCUNHO,
+        ))
+        rascunho_id = cursor.lastrowid
+        for ordem, parada in enumerate(paradas):
+            conn.execute("""
+                INSERT INTO rascunhos_parada (
+                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
+                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
+                    nivel_dificuldade, volume_caixas
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
+                parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
+                parada["remetente_nome"], parada.get("destinatario_nome", ""),
+                parada["nivel_dificuldade"], parada["volume_caixas"],
+            ))
+        _recalcular_km_silencioso(conn, rascunho_id)
+        conn.commit()
+        return rascunho_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def descartar_rascunho(rascunho_id: int):
     """As paradas não são apagadas fisicamente aqui de propósito: o
     rascunho passa a status=DESCARTADO, e como o pool de não alocados é

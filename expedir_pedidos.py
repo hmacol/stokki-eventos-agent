@@ -369,7 +369,11 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
         novo_servico = vuupt.criar_servico(payload)
         logger.info(f"  Serviço duplicado: {servico_original.get('code')} -> {novo_code} "
                    f"(motivo do insucesso: {texto_do_motivo(servico_original.get('failed_reason_id'))})")
-        return novo_servico
+        # Garante o code no retorno: a resposta de criação do VUUPT não
+        # ecoa 'code' na raiz (achado 12/08 na torre: fingerprints de
+        # duplicação todos com novo_code vazio) -- o code correto é o
+        # que acabou de ir no payload.
+        return {**(novo_servico or {}), "code": novo_code}
     except Exception as e:
         logger.error(f"  Falha ao duplicar {servico_original.get('code')}: {e}")
         return None

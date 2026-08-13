@@ -1,0 +1,795 @@
+{% extends "base.html" %}
+{% block titulo %}Torre de Controle{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; }
+
+  /* Paleta de status dos gráficos -- validada (CVD + contraste) em
+     12/08 com o validador do método de dataviz, na ordem exata em que
+     os segmentos se tocam no empilhado: sucesso | em rota | aceito |
+     atenção | falha. O âmbar (#eda100) fica abaixo de 3:1 no fundo
+     branco: por regra, sempre acompanhado de rótulo/contagem visível
+     (legendas com número ao lado). */
+  :root {
+    --st-sucesso: #0ca30c;
+    --st-rota:    #2a78d6;
+    --st-aceito:  #4a3aa7;
+    --st-atencao: #eda100;
+    --st-falha:   #d03b3b;
+    --st-neutro:  #8A8F98;
+    --trilha:     #ECEEF1;
+    --enfase-fora:#C7CCD4;
+    --trilha-verde:#DFF3DF;
+  }
+
+  .card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .card h3 {
+    margin: 0 0 12px;
+    font-size: 12.5px;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .card h3 a { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--acento); text-decoration: none; }
+  .card h3 a:hover { text-decoration: underline; }
+  .carregando { color: var(--texto-suave); font-size: 13px; padding: 8px 0; }
+  .atualizando { opacity: 0.55; transition: opacity 0.2s; }
+
+  /* ── Faixa 1: barra do dia ── */
+  .barra-dia {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 12px 18px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .barra-dia input[type=date] { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .semaforo { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; }
+  .semaforo .luz { width: 11px; height: 11px; border-radius: 100px; background: var(--texto-suave); }
+  .semaforo.ok .luz { background: var(--st-sucesso); }
+  .semaforo.atencao .luz { background: var(--st-atencao); }
+  .semaforo.critico .luz { background: var(--st-falha); }
+  .semaforo.critico { color: var(--st-falha); }
+  .carimbo { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
+  .carimbo.erro { color: var(--erro); font-weight: 600; }
+  .botao-refresh {
+    background: none; border: 1px solid var(--borda); border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--texto);
+  }
+  .botao-refresh:hover { border-color: var(--acento); color: var(--acento); }
+
+  /* ── Stepper do pipeline ── */
+  .stepper {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr) auto;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .etapa {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    position: relative;
+  }
+  .etapa .topo { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .etapa .titulo { font-weight: 700; font-size: 12.5px; }
+  .etapa .detalhe { color: var(--texto-suave); font-size: 11px; }
+  .etapa .quando { color: var(--texto-suave); font-size: 11px; margin-top: 5px; }
+  .etapa .quando a { color: var(--texto-suave); }
+  .etapa .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa.sucesso .estado { background: var(--st-sucesso); }
+  .etapa.erro .estado { background: var(--st-falha); }
+  .etapa.erro { border-color: #F2C4C0; }
+  .etapa.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .etapa button.rodar {
+    position: absolute; top: 8px; right: 8px;
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 11px; padding: 3px 8px; cursor: pointer; color: var(--texto);
+  }
+  .etapa button.rodar:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+  .etapa button.rodar:disabled { opacity: 0.4; cursor: not-allowed; }
+  .etapa-tudo {
+    display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    padding: 10px 12px;
+  }
+  .etapa-tudo button {
+    background: var(--primaria); color: #fff; border: none; border-radius: 7px;
+    padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .etapa-tudo button:hover:not(:disabled) { background: var(--primaria-clara); }
+  .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── Faixa 2: KPIs ── */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
+  .kpi {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .kpi .rotulo { font-size: 11px; font-weight: 600; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
+  .kpi .valor { font-size: 30px; font-weight: 700; color: var(--texto); line-height: 1.1; }
+  .kpi .valor .contexto { font-size: 15px; font-weight: 600; color: var(--texto-suave); }
+  .kpi .sub { font-size: 11.5px; margin-top: 6px; color: var(--texto-suave); }
+  .kpi .sub.bom { color: var(--st-sucesso); font-weight: 600; }
+  .kpi .sub.alerta { color: #A36F00; font-weight: 600; }
+  .kpi .sub.ruim { color: var(--st-falha); font-weight: 600; }
+  .kpi .micro-trilha { height: 5px; background: var(--trilha-verde); border-radius: 4px; margin-top: 8px; overflow: hidden; }
+  .kpi .micro-fill { height: 100%; background: var(--st-sucesso); border-radius: 4px; }
+
+  /* ── Faixa 3 ── */
+  .corpo { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+
+  .legenda { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--texto); margin-bottom: 10px; }
+  .legenda .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legenda .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+  .legenda .qtd { color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+
+  /* Barras de rota */
+  .linha-rota { display: grid; grid-template-columns: 240px 1fr 74px; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--fundo); }
+  .linha-rota:last-child { border-bottom: none; }
+  .linha-rota .ident { min-width: 0; }
+  .linha-rota .nome { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .linha-rota .motorista { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .linha-rota .motorista.faltando { color: #A36F00; font-weight: 600; }
+  .barra-progresso { display: flex; gap: 2px; height: 16px; }
+  .barra-progresso .seg { min-width: 4px; }
+  .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-progresso .seg:only-child { border-radius: 4px; }
+  .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
+  .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+  .estado-rota.em_andamento { color: var(--st-rota); }
+  .estado-rota.concluida { color: var(--st-sucesso); }
+  .estado-rota.nao_iniciada { color: var(--texto-suave); }
+  .estado-rota.vazia { color: var(--texto-suave); }
+
+  /* Pedidos do dia: barra única empilhada + legenda com contagens */
+  .barra-status { display: flex; gap: 2px; height: 22px; margin-bottom: 12px; }
+  .barra-status .seg { min-width: 5px; }
+  .barra-status .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-status .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-status .seg:only-child { border-radius: 4px; }
+  .lista-legenda { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .lista-legenda li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .lista-legenda .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+  .lista-legenda .qtd { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .nota-rodape { font-size: 11.5px; color: var(--texto-suave); margin-top: 10px; }
+
+  /* Funil Stokki: barras horizontais, um matiz só (magnitude) */
+  .linha-funil { display: grid; grid-template-columns: 150px 1fr 36px; gap: 10px; align-items: center; padding: 4px 0; font-size: 12px; }
+  .linha-funil .barra { height: 14px; background: var(--trilha); border-radius: 0 4px 4px 0; overflow: hidden; }
+  .linha-funil .fill { height: 100%; background: var(--st-rota); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .linha-funil .fill.zero { background: transparent; }
+  .linha-funil .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  /* Amanhã */
+  .amanha-numeros { display: flex; gap: 22px; margin-bottom: 8px; }
+  .amanha-numeros .bloco .n { font-size: 24px; font-weight: 700; }
+  .amanha-numeros .bloco .l { font-size: 11px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
+  .aviso-amanha { font-size: 12px; color: #A36F00; font-weight: 600; margin-top: 4px; }
+
+  /* ── Mini mapa expansivo ── */
+  .card-mapa { position: relative; }
+  #mini-mapa { width: 100%; height: 300px; border-radius: 8px; border: 1px solid var(--borda); }
+  .card-mapa.expandido {
+    position: fixed; inset: 24px; z-index: 1000; margin: 0;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+    display: flex; flex-direction: column;
+  }
+  .card-mapa.expandido #mini-mapa { height: 100%; flex: 1; }
+  .fundo-mapa {
+    display: none; position: fixed; inset: 0; z-index: 999; background: rgba(20,20,40,0.45);
+  }
+  .fundo-mapa.visivel { display: block; }
+  .legenda-mapa { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--texto-suave); margin-top: 8px; }
+  .legenda-mapa .item { display: inline-flex; align-items: center; gap: 5px; }
+  .legenda-mapa .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+
+  /* ── Badges de insucesso (fluxo automático de reentrega) ── */
+  .badge-insucesso {
+    display: inline-block; font-size: 10.5px; font-weight: 700;
+    padding: 2px 8px; border-radius: 100px; margin-left: 6px; white-space: nowrap;
+  }
+  .badge-insucesso.duplicado  { background: #E3EDFA; color: #1c5cab; }
+  .badge-insucesso.agendado   { background: #EBE8F8; color: #4a3aa7; }
+  .badge-insucesso.cancelado  { background: #EBEBEF; color: #5A5A6E; }
+  .badge-insucesso.aguardando { background: #FDF3E1; color: #A36F00; }
+  .badge-insucesso.respondido { background: #E5F7EF; color: #0A7D55; }
+  .badge-insucesso.falha      { background: #FDEBEA; color: var(--st-falha); }
+
+  /* ── Faixa 4: exceções ── */
+  .excecao-vazia { display: flex; align-items: center; gap: 10px; color: var(--st-sucesso); font-size: 13.5px; font-weight: 600; padding: 6px 0; }
+  table.tabela-excecoes { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.tabela-excecoes td { padding: 8px 10px; border-bottom: 1px solid var(--fundo); vertical-align: middle; }
+  table.tabela-excecoes tr:last-child td { border-bottom: none; }
+  .pill-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
+  .pill-sev.critico { background: #FDEBEA; color: var(--st-falha); }
+  .pill-sev.atencao { background: #FDF3E1; color: #A36F00; }
+  .td-tipo { color: var(--texto-suave); font-weight: 600; white-space: nowrap; }
+  .td-acao { text-align: right; white-space: nowrap; }
+  .td-acao a, .td-acao button {
+    font-size: 11.5px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda);
+    background: var(--superficie); color: var(--texto); cursor: pointer; text-decoration: none;
+  }
+  .td-acao a:hover, .td-acao button:hover { border-color: var(--acento); color: var(--acento); }
+  .td-acao button.tratar { color: var(--texto-suave); }
+  details.tratadas { margin-top: 12px; font-size: 12.5px; }
+  details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
+  details.tratadas table td { color: var(--texto-suave); }
+  details.tratadas .motivo { font-style: italic; }
+
+  /* ── Faixa 5: tendência ── */
+  .tendencia { display: flex; align-items: flex-end; gap: 14px; height: 130px; padding-top: 18px; }
+  .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto); }
+  .col-dia .col { width: 100%; max-width: 24px; background: var(--enfase-fora); border-radius: 4px 4px 0 0; }
+  .col-dia.destaque .col { background: var(--st-rota); }
+  .col-dia .rotulo-dia { font-size: 11px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .base-tendencia { border-top: 1px solid var(--borda); margin-top: 0; }
+
+  @media (max-width: 1100px) {
+    .stepper { grid-template-columns: repeat(3, 1fr); }
+    .kpis { grid-template-columns: repeat(3, 1fr); }
+    .corpo { grid-template-columns: 1fr; }
+    .linha-rota { grid-template-columns: 150px 1fr 70px; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="barra-dia">
+  <strong>Torre de Controle</strong>
+  <form method="get" action="{{ url_for('torre') }}" style="display:inline-flex;gap:8px;align-items:center;">
+    <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
+  </form>
+  <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
+  <span class="carimbo" id="carimbo">Carregando dados…</span>
+  <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
+</div>
+
+<div class="stepper" id="stepper">
+  <div class="carregando">Carregando etapas…</div>
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="corpo">
+  <div>
+    <div class="card" id="card-rotas">
+      <h3><span>Andamento das rotas</span><a href="#" id="link-mapa">ver no mapa</a></h3>
+      <div class="legenda">
+        <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues</span>
+        <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucessos</span>
+        <span class="item"><span class="ponto" style="background:var(--trilha);border:1px solid var(--borda)"></span>Restantes</span>
+      </div>
+      <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
+    </div>
+
+    <div class="card" id="card-excecoes">
+      <h3>Fila de exceções</h3>
+      <div id="excecoes"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Entregas finalizadas — últimos 7 dias úteis</h3>
+      <div class="tendencia base-tendencia" id="tendencia"><div class="carregando">Carregando…</div></div>
+    </div>
+  </div>
+
+  <div>
+    {% if google_maps_key %}
+    <div class="fundo-mapa" id="fundo-mapa" onclick="alternarMapa(false)"></div>
+    <div class="card card-mapa" id="card-mapa">
+      <h3><span>Mapa do dia</span><a href="#" id="botao-expandir" onclick="alternarMapa(); return false;">expandir</a></h3>
+      <div id="mini-mapa"></div>
+      <div class="legenda-mapa">
+        <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregue</span>
+        <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucesso</span>
+        <span class="item"><span class="ponto" style="background:var(--st-rota)"></span>Em rota</span>
+        <span class="item"><span class="ponto" style="background:#8A8F98"></span>Pendente</span>
+        <span class="item"><span class="ponto" style="background:var(--primaria)"></span>Base</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>Pedidos do dia por status</h3>
+      <div id="pedidos-status"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span>A caminho (Stokki)</span></h3>
+      <div id="funil-stokki"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento">abrir planejamento</a></h3>
+      <div id="amanha"><div class="carregando">Carregando…</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA_ALVO = {{ data_alvo_input | tojson }};
+
+// Rótulos/cores dos status de pedido -- MESMA ordem em que os
+// segmentos se tocam na barra empilhada (ordem validada contra CVD).
+const STATUS_PEDIDO = [
+  { chave: "sucesso",      rotulo: "Entregues",              cor: "var(--st-sucesso)" },
+  { chave: "on_route",     rotulo: "Em rota",                cor: "var(--st-rota)" },
+  { chave: "accepted",     rotulo: "Aceitos (atribuídos)",   cor: "var(--st-aceito)" },
+  { chave: "not_assigned", rotulo: "Sem rota (atrasados)",   cor: "var(--st-atencao)" },
+  { chave: "falha",        rotulo: "Insucessos",             cor: "var(--st-falha)" },
+];
+
+const ROTULO_ESTADO_ROTA = {
+  em_andamento: "Em andamento", concluida: "Concluída",
+  nao_iniciada: "Não iniciada", vazia: "Vazia",
+};
+
+let ultimoOk = null;        // Date do último carregamento com sucesso
+let houveErro = false;
+let algumaEtapaRodando = false;
+let dadosAtuais = null;     // última resposta boa de /api/torre/dados
+
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ── Renderização ────────────────────────────────────────────────────
+
+function renderStepper(etapas) {
+  algumaEtapaRodando = etapas.some(e => e.rodando);
+  const cards = etapas.map(e => {
+    let classe = "", tituloEstado = "nunca rodou";
+    if (e.rodando) { classe = "rodando"; tituloEstado = "rodando agora"; }
+    else if (e.status === "SUCESSO") { classe = "sucesso"; tituloEstado = "última execução OK"; }
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; tituloEstado = "última execução falhou (" + e.status + ")"; }
+    else if (e.status) { tituloEstado = "última execução: " + e.status; }
+
+    const quando = e.quando
+      ? `<a href="/execucao/${e.execucao_id}" title="abrir log">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
+      : "nunca rodou";
+    return `
+      <div class="etapa ${classe}" title="${esc(tituloEstado)}">
+        <button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')"
+                ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>
+        <div class="topo"><span class="estado"></span><span class="titulo">${esc(e.titulo)}</span></div>
+        <div class="detalhe">${esc(e.detalhe)}</div>
+        <div class="quando">${quando}</div>
+      </div>`;
+  }).join("");
+
+  document.getElementById("stepper").innerHTML = cards + `
+    <div class="etapa etapa-tudo">
+      <button onclick="rodarAgente('executar_tudo', 'Executar Tudo')"
+              ${algumaEtapaRodando ? "disabled" : ""}>▶ Executar tudo</button>
+    </div>`;
+}
+
+function renderKpis(d) {
+  const p = d.pedidos;
+  const finalizadas = p.sucesso + p.falha;
+  const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+  const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
+  const r = d.rotas_resumo;
+
+  let subTaxa = `<div class="sub">sem entregas finalizadas ainda</div>`;
+  if (taxa !== null) {
+    const classe = taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim");
+    const icone = taxa >= 95 ? "✓" : "▲";
+    subTaxa = `<div class="sub ${classe}">${icone} meta 95% · ${p.sucesso} de ${finalizadas}</div>`;
+  }
+
+  const tiles = [
+    `<div class="kpi"><div class="rotulo">Entregues hoje</div>
+       <div class="valor">${p.sucesso}<span class="contexto"> / ${p.total}</span></div>
+       <div class="micro-trilha"><div class="micro-fill" style="width:${pctEntregue}%"></div></div>
+       <div class="sub">${pctEntregue}% do dia</div></div>`,
+    `<div class="kpi"><div class="rotulo">Taxa de sucesso</div>
+       <div class="valor">${taxa === null ? "–" : taxa + '<span class="contexto">%</span>'}</div>${subTaxa}</div>`,
+    `<div class="kpi"><div class="rotulo">Em rota agora</div>
+       <div class="valor">${p.contagem.on_route || 0}</div>
+       <div class="sub">${p.contagem.accepted || 0} aceito(s) aguardando saída</div></div>`,
+    `<div class="kpi"><div class="rotulo">Sem rota (atrasados)</div>
+       <div class="valor">${p.qtd_nao_atribuidos}</div>
+       <div class="sub ${p.qtd_nao_atribuidos ? "alerta" : "bom"}">${p.qtd_nao_atribuidos ? "▲ agendamento vencido" : "✓ nada atrasado"}</div>
+       <div class="sub">pool p/ próximas rotas: ${p.backlog_pool}</div></div>`,
+    `<div class="kpi"><div class="rotulo">Insucessos hoje</div>
+       <div class="valor">${p.falha}</div>
+       <div class="sub ${p.falha ? "ruim" : "bom"}">${p.falha ? "✗ ver fila de exceções" : "✓ nenhum"}</div></div>`,
+    `<div class="kpi"><div class="rotulo">Rotas</div>
+       <div class="valor">${r.concluidas}<span class="contexto"> / ${d.rotas.length}</span></div>
+       <div class="sub">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</div></div>`,
+  ];
+  document.getElementById("kpis").innerHTML = tiles.join("");
+}
+
+function renderRotas(d) {
+  const alvo = document.getElementById("rotas");
+  if (!d.rotas.length) {
+    alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
+    return;
+  }
+  alvo.innerHTML = d.rotas.map(r => {
+    const finalizados = r.entregues + r.insucessos;
+    const segmentos = [];
+    if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)" title="${r.entregues} entregue(s)"></div>`);
+    if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)" title="${r.insucessos} insucesso(s)"></div>`);
+    if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)" title="${r.restantes} restante(s)"></div>`);
+    const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+    const motorista = r.motorista
+      ? `<div class="motorista" title="${esc(r.motorista)}">${esc(r.motorista)}</div>`
+      : `<div class="motorista faltando">sem motorista</div>`;
+    return `
+      <div class="linha-rota">
+        <div class="ident">
+          <div class="nome" title="${esc(r.nome)}">${esc(r.nome)}</div>
+          ${motorista}
+        </div>
+        <div class="barra-progresso">${barra}</div>
+        <div class="contagem">${finalizados}/${r.total}
+          <span class="estado-rota ${r.estado}">${ROTULO_ESTADO_ROTA[r.estado] || r.estado}</span>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function renderPedidosStatus(d) {
+  const p = d.pedidos;
+  const valores = {
+    sucesso: p.sucesso,
+    on_route: p.contagem.on_route || 0,
+    accepted: p.contagem.accepted || 0,
+    not_assigned: p.contagem.not_assigned || 0,
+    falha: p.falha,
+  };
+  const soma = Object.values(valores).reduce((a, b) => a + b, 0);
+
+  let html;
+  if (!soma) {
+    html = `<div class="carregando">Nenhum pedido agendado para ${esc(d.data_alvo)}.</div>`;
+  } else {
+    const segs = STATUS_PEDIDO
+      .filter(s => valores[s.chave] > 0)
+      .map(s => `<div class="seg" style="flex:${valores[s.chave]};background:${s.cor}"
+                      title="${esc(s.rotulo)}: ${valores[s.chave]}"></div>`)
+      .join("");
+    const legenda = STATUS_PEDIDO.map(s => `
+      <li><span class="ponto" style="background:${s.cor}"></span>${esc(s.rotulo)}
+          <span class="qtd">${valores[s.chave]}</span></li>`).join("");
+    const notas = [];
+    if (p.contagem.canceled) notas.push(`${p.contagem.canceled} cancelado(s) nas rotas do dia`);
+    if (p.backlog_pool) notas.push(`${p.backlog_pool} no pool p/ próximas rotas`);
+    if (p.backlog_futuros) notas.push(`${p.backlog_futuros} agendado(s) pra frente`);
+    const rodape = notas.length ? `<div class="nota-rodape">Fora da barra: ${notas.join(" · ")}.</div>` : "";
+    html = `<div class="barra-status">${segs}</div><ul class="lista-legenda">${legenda}</ul>${rodape}`;
+  }
+  document.getElementById("pedidos-status").innerHTML = html;
+}
+
+function badgesHtml(badges) {
+  return (badges || []).map(b =>
+    `<span class="badge-insucesso ${esc(b.tipo)}">${esc(b.texto)}</span>`).join("");
+}
+
+function renderExcecoes(d) {
+  const alvo = document.getElementById("excecoes");
+  const partes = [];
+
+  if (!d.excecoes.length) {
+    partes.push(`<div class="excecao-vazia">✓ Nenhuma exceção — operação normal.</div>`);
+  } else {
+    const linhas = d.excecoes.map(x => {
+      let acao = "";
+      if (x.acao && x.acao.tipo === "link") {
+        acao = `<a href="${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
+      } else if (x.acao && x.acao.tipo === "rodar") {
+        acao = `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
+      }
+      if (x.link_log) acao += ` <a href="${esc(x.link_log)}">Log</a>`;
+      acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
+                        onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      const icone = x.severidade === "critico" ? "✗" : "▲";
+      return `<tr>
+        <td><span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span></td>
+        <td class="td-tipo">${esc(x.tipo)}</td>
+        <td>${esc(x.descricao)}${badgesHtml(x.badges)}</td>
+        <td class="td-acao">${acao}</td>
+      </tr>`;
+    }).join("");
+    partes.push(`<table class="tabela-excecoes"><tbody>${linhas}</tbody></table>`);
+  }
+
+  if (d.tratadas && d.tratadas.length) {
+    const linhasTratadas = d.tratadas.map(x => `<tr>
+      <td class="td-tipo">${esc(x.tipo)}</td>
+      <td>${esc(x.descricao)}${badgesHtml(x.badges)}
+          <div class="motivo">“${esc(x.motivo)}” — ${esc(x.tratado_em)}</div></td>
+      <td class="td-acao"><button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button></td>
+    </tr>`).join("");
+    partes.push(`<details class="tratadas">
+      <summary>${d.tratadas.length} exceção(ões) tratada(s)</summary>
+      <table class="tabela-excecoes"><tbody>${linhasTratadas}</tbody></table>
+    </details>`);
+  }
+
+  alvo.innerHTML = partes.join("");
+}
+
+async function tratarExcecao(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  const motivo = prompt(`Marcar como tratada:\n${x ? x.descricao : id}\n\nMotivo / o que foi feito (obrigatório):`);
+  if (motivo === null) return;
+  if (!motivo.trim()) { alert("Informe o motivo — é ele que vira o histórico."); return; }
+  try {
+    const resp = await fetch(`/api/torre/tratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id, motivo: motivo.trim(),
+        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : DATA_ALVO,
+        tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
+      }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao marcar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao marcar: " + e); }
+}
+
+async function destratarExcecao(id) {
+  try {
+    const resp = await fetch(`/api/torre/destratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao desfazer."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao desfazer: " + e); }
+}
+
+function renderTendencia(d) {
+  const alvo = document.getElementById("tendencia");
+  if (!d.tendencia.length) { alvo.innerHTML = ""; return; }
+  const maior = Math.max(...d.tendencia.map(t => t.total), 1);
+  alvo.innerHTML = d.tendencia.map(t => {
+    const destaque = t.data === d.data_alvo_iso;
+    const altura = Math.max(2, Math.round(88 * t.total / maior));
+    // Rótulo direto só na coluna em destaque (o hover cobre o resto).
+    return `<div class="col-dia ${destaque ? "destaque" : ""}" title="${esc(t.rotulo)}: ${t.total} pedido(s)">
+      ${destaque ? `<div class="valor-col">${t.total}</div>` : ""}
+      <div class="col" style="height:${altura}px"></div>
+      <div class="rotulo-dia">${esc(t.rotulo)}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderAmanha(d) {
+  const a = d.amanha;
+  const avisos = [];
+  if (a.qtd_rotas && a.sem_motorista) avisos.push(`▲ ${a.sem_motorista} rota(s) sem motorista`);
+  if (a.qtd_travas) avisos.push(`▲ ${a.qtd_travas} rascunho(s) com trava estourada`);
+  let corpo;
+  if (a.qtd_rotas) {
+    corpo = `<div class="amanha-numeros">
+         <div class="bloco"><div class="n">${a.qtd_rotas}</div><div class="l">rascunhos</div></div>
+         <div class="bloco"><div class="n">${a.qtd_paradas}</div><div class="l">paradas</div></div>
+         ${a.rotas_vuupt ? `<div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">já na VUUPT</div></div>` : ""}
+       </div>
+       ${avisos.map(t => `<div class="aviso-amanha">${t}</div>`).join("")}`;
+  } else if (a.rotas_vuupt) {
+    corpo = `<div class="amanha-numeros">
+         <div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">rotas na VUUPT</div></div>
+       </div>
+       <div class="nota-rodape">Criadas direto na VUUPT (job automático das 13h) para ${esc(a.data_rotulo)} —
+       <a href="/mapa-rotas?data=${a.data_iso}">ver no mapa</a>.</div>`;
+  } else {
+    corpo = `<div class="carregando">Nenhum rascunho para ${esc(a.data_rotulo)} ainda — rode a etapa
+       <strong>Roteirização</strong> no topo pra gerar.</div>`;
+  }
+  document.getElementById("amanha").innerHTML = corpo;
+  document.getElementById("link-planejamento").href = `/planejamento?data=${a.data_iso}`;
+}
+
+function renderFunilStokki(f) {
+  const alvo = document.getElementById("funil-stokki");
+  if (!f.ok && !f.estagios.length) {
+    alvo.innerHTML = `<div class="carregando">${esc(f.erro || "Contagem indisponível.")}</div>`;
+    return;
+  }
+  const maior = Math.max(...f.estagios.map(e => e.total), 1);
+  const linhas = f.estagios.map(e => `
+    <div class="linha-funil">
+      <span>${esc(e.rotulo)}</span>
+      <div class="barra"><div class="fill ${e.total ? "" : "zero"}" style="width:${Math.round(100 * e.total / maior)}%"></div></div>
+      <span class="num">${e.total}</span>
+    </div>`).join("");
+  const nota = f.adiado
+    ? `<div class="nota-rodape">▲ Consulta adiada (agente rodando) — mostrando última leitura.</div>`
+    : `<div class="nota-rodape">Pedidos ainda na Stokki (antes da importação). Atualizado ${esc(f.atualizado_em || "")}.</div>`;
+  alvo.innerHTML = linhas + nota;
+}
+
+// ── Mini mapa (Google Maps, mesmo padrão do mapa_rotas) ─────────────
+
+let mapa = null, infoWindow = null, marcadoresMapa = [], gmapsPronto = false;
+const COR_SITUACAO = { entregue: "#0ca30c", insucesso: "#d03b3b", em_rota: "#2a78d6", pendente: "#8A8F98" };
+const ROTULO_SITUACAO = { entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente" };
+
+function torreMapaPronto() {   // callback global do script do Google Maps
+  gmapsPronto = true;
+  if (dadosAtuais) renderMapa(dadosAtuais);
+}
+
+function renderMapa(d) {
+  const el = document.getElementById("mini-mapa");
+  if (!el || !gmapsPronto) return;
+
+  if (!mapa) {
+    const primeira = (d.rotas.find(r => (r.paradas || []).length) || { paradas: [{ lat: -23.55, lng: -46.63 }] }).paradas[0];
+    mapa = new google.maps.Map(el, {
+      center: d.base || primeira, zoom: 11,
+      mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
+    });
+    infoWindow = new google.maps.InfoWindow();
+    if (d.base) {
+      new google.maps.Marker({
+        position: d.base, map: mapa, title: "Base",
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+      });
+    }
+  }
+
+  marcadoresMapa.forEach(m => m.setMap(null));
+  marcadoresMapa = [];
+  d.rotas.forEach(r => (r.paradas || []).forEach(p => {
+    const cor = COR_SITUACAO[p.situacao] || "#8A8F98";
+    const marcador = new google.maps.Marker({
+      position: { lat: p.lat, lng: p.lng }, map: mapa, title: p.codigo,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: cor, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+    marcador.addListener("click", () => {
+      infoWindow.setContent(`<div style="font:12px 'Segoe UI',sans-serif;max-width:260px;">
+        <strong>${esc(p.codigo)}</strong> · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
+        ${esc(p.titulo)}<br>
+        <span style="color:#6B7280;">${esc(r.nome)}${r.motorista ? " · " + esc(r.motorista) : ""}</span>
+      </div>`);
+      infoWindow.open(mapa, marcador);
+    });
+    marcadoresMapa.push(marcador);
+  }));
+}
+
+function alternarMapa(forcar) {
+  const card = document.getElementById("card-mapa");
+  const fundo = document.getElementById("fundo-mapa");
+  if (!card) return;
+  const expandir = forcar !== undefined ? forcar : !card.classList.contains("expandido");
+  card.classList.toggle("expandido", expandir);
+  fundo.classList.toggle("visivel", expandir);
+  document.getElementById("botao-expandir").textContent = expandir ? "✕ fechar" : "expandir";
+  if (mapa) {
+    const centro = mapa.getCenter();
+    google.maps.event.trigger(mapa, "resize");
+    mapa.setCenter(centro);
+  }
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") alternarMapa(false); });
+
+function renderSemaforo(d) {
+  const el = document.getElementById("semaforo");
+  el.className = "semaforo " + d.semaforo;
+  const rotulos = { ok: "Operação normal", atencao: "Atenção", critico: "Ação necessária" };
+  document.getElementById("semaforo-texto").textContent = rotulos[d.semaforo] || d.semaforo;
+}
+
+// ── Carga e ciclo de atualização ────────────────────────────────────
+
+async function carregarDados() {
+  const corpo = document.querySelector(".corpo");
+  corpo.classList.add("atualizando");
+  try {
+    const resp = await fetch(`/api/torre/dados?data=${DATA_ALVO}`);
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.erro || resp.statusText);
+    dadosAtuais = d;
+    renderSemaforo(d);
+    renderMapa(d);
+    renderStepper(d.etapas);
+    renderKpis(d);
+    renderRotas(d);
+    renderPedidosStatus(d);
+    renderExcecoes(d);
+    renderTendencia(d);
+    renderAmanha(d);
+    document.getElementById("link-mapa").href = `/mapa-rotas?data=${d.data_alvo_iso}`;
+    ultimoOk = new Date();
+    houveErro = false;
+  } catch (e) {
+    houveErro = true;
+    console.error("torre: falha ao carregar dados", e);
+  } finally {
+    corpo.classList.remove("atualizando");
+    atualizarCarimbo();
+  }
+}
+
+async function carregarStokki() {
+  try {
+    const resp = await fetch(`/api/torre/stokki`);
+    if (resp.ok) renderFunilStokki(await resp.json());
+  } catch (e) { console.error("torre: falha no funil Stokki", e); }
+}
+
+async function carregarEtapas() {
+  try {
+    const resp = await fetch(`/api/torre/etapas`);
+    if (resp.ok) renderStepper((await resp.json()).etapas);
+  } catch (e) { /* o ciclo principal recupera */ }
+  // Cadência dinâmica: rápida com algo rodando, lenta em repouso.
+  setTimeout(carregarEtapas, algumaEtapaRodando ? 5000 : 30000);
+}
+
+function atualizarCarimbo() {
+  const el = document.getElementById("carimbo");
+  if (!ultimoOk) {
+    el.textContent = houveErro ? "Falha ao carregar — tentando de novo…" : "Carregando dados…";
+    el.className = houveErro ? "carimbo erro" : "carimbo";
+    return;
+  }
+  const seg = Math.round((Date.now() - ultimoOk.getTime()) / 1000);
+  el.textContent = `Atualizado há ${seg < 60 ? seg + "s" : Math.floor(seg / 60) + "min"}` +
+                   (houveErro ? " · última tentativa falhou" : "");
+  el.className = houveErro ? "carimbo erro" : "carimbo";
+}
+
+async function rodarAgente(agenteId, titulo) {
+  if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+  try {
+    const resp = await fetch(`/api/torre/rodar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agente_id: agenteId }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { alert(d.erro || "Falha ao iniciar."); return; }
+    algumaEtapaRodando = true;
+    // Feedback imediato no stepper, sem esperar o próximo ciclo.
+    fetch(`/api/torre/etapas`).then(r => r.json()).then(j => renderStepper(j.etapas));
+  } catch (e) {
+    alert("Falha ao iniciar: " + e);
+  }
+}
+
+function carregarTudo() { carregarDados(); carregarStokki(); }
+
+carregarTudo();
+carregarEtapas();
+setInterval(carregarDados, 60000);
+setInterval(carregarStokki, 120000);
+setInterval(atualizarCarimbo, 1000);
+</script>
+{% if google_maps_key %}
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=torreMapaPronto">
+</script>
+{% endif %}
+{% endblock %}

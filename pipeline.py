@@ -715,7 +715,8 @@ def processar_pedido(
 
 # ── Orquestrador principal ─────────────────────────────────────────────────────
 
-def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = ""):
+def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
+         filtro_statuses: list[str] | None = None):
     inicio_execucao = time.monotonic()
     logger.info(
         f"{'[MODO TESTE] ' if modo_teste else ''}Pipeline iniciado."
@@ -804,10 +805,12 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                    "destination": "", "carrier": "", "client": "",
                    "_codigo_ps": codigo}]
     elif filtro_embarcador:
-        # Modo embarcador específico: busca todos os status abertos para esse embarcador
+        # Modo embarcador específico: busca os status abertos para esse embarcador
+        # (todos os 5 por padrão, ou só os informados via filtro_statuses)
+        statuses_busca = filtro_statuses or STATUSES_EM_ABERTO
         linhas_ids_vistos: set[int] = set()
         linhas: list = []
-        for status in STATUSES_EM_ABERTO:
+        for status in statuses_busca:
             try:
                 for linha in stokki_pedidos.iterar_todos_pedidos(
                     sess_stokki, status=status, cliente=filtro_cliente_api, pausa_entre_paginas=0.3
@@ -989,7 +992,12 @@ if __name__ == "__main__":
                         help="Processa somente um pedido específico")
     parser.add_argument("--embarcador", metavar="ID_OU_NOME",
                         help="Processa somente pedidos de um embarcador (stkkc_id ou parte do nome)")
+    parser.add_argument("--status", action="append", metavar="STATUS",
+                        choices=STATUSES_EM_ABERTO,
+                        help="Restringe a busca (só com --embarcador) a status específico(s) do "
+                             "Stokki. Repita a flag para vários. Padrão: todos os 5 status abertos. "
+                             f"Valores válidos: {', '.join(STATUSES_EM_ABERTO)}")
     args = parser.parse_args()
 
     main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
-         filtro_embarcador=args.embarcador or "")
+         filtro_embarcador=args.embarcador or "", filtro_statuses=args.status)
