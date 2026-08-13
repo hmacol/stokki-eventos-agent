@@ -1,0 +1,79 @@
+# Chatwoot auto-hospedado — FreshLog Atendimento (Fase 0)
+# Baseado no docker-compose.production.yaml oficial do Chatwoot,
+# com Caddy na frente para HTTPS automático (Let's Encrypt).
+#
+# Primeira subida (na VPS):
+#   docker compose run --rm rails bundle exec rails db:chatwoot_prepare
+#   docker compose up -d
+#
+# Atualização de versão:
+#   trocar a tag da imagem abaixo -> docker compose pull
+#   -> docker compose run --rm rails bundle exec rails db:chatwoot_prepare
+#   -> docker compose up -d
+
+x-base: &base
+  image: chatwoot/chatwoot:latest   # apos instalar, fixar na versao corrente (ex.: v4.x)
+  env_file: .env
+  volumes:
+    - storage_data:/app/storage
+  restart: always
+  environment:
+    - NODE_ENV=production
+    - RAILS_ENV=production
+    - INSTALLATION_ENV=docker
+
+services:
+  rails:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "127.0.0.1:3000:3000"   # so localhost; o acesso externo e via Caddy
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+
+  sidekiq:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=chatwoot
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+  redis:
+    image: redis:alpine
+    restart: always
+    command: ["sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\""]
+    env_file: .env
+    volumes:
+      - redis_data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - rails
+
+volumes:
+  storage_data:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
