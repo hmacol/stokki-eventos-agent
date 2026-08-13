@@ -13,6 +13,7 @@ mesma estrutura já validada em mensagens anteriores desta conversa.
 """
 
 import logging
+import re
 
 import requests
 
@@ -329,23 +330,46 @@ class VuuptClient:
         Busca um contato existente pelo campo 'code' (CNPJ/CPF do
         destinatário). Retorna o dict do contato mais recente com esse
         código, ou None se não existir.
+
+        Tenta o code EXATO como veio e também as variantes de formatação
+        (só dígitos e CNPJ/CPF pontuado). Confirmado em produção (12/08,
+        caso PS-36413/TORRE DI PIZZA): existem contatos com code só
+        dígitos ('19106751000115', era antiga) e contatos com code
+        formatado ('19.106.751/0001-15', vindos do documento como a
+        Stokki manda) -- uma busca 'eq' exata só acha um dos formatos,
+        então o pipeline concluía "não existe" e criava um contato
+        DUPLICADO pro mesmo CNPJ. Mesmo padrão da variante com/sem '#'
+        de buscar_servico_por_code.
         """
-        resp = chamar_com_retry(
-            self.session.get,
-            f"{BASE_URL}/customers",
-            params={
-                "filter[0][field]": "code",
-                "filter[0][operator]": "eq",
-                "filter[0][value]": code,
-                "per_page": 5,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        contatos = resp.json().get("data", [])
-        if not contatos:
+        variantes = {code}
+        digitos = re.sub(r"\D", "", code or "")
+        if digitos:
+            variantes.add(digitos)
+            if len(digitos) == 14:      # CNPJ
+                variantes.add(f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}")
+            elif len(digitos) == 11:    # CPF
+                variantes.add(f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}")
+
+        contatos_por_id: dict = {}
+        for variante in variantes:
+            resp = chamar_com_retry(
+                self.session.get,
+                f"{BASE_URL}/customers",
+                params={
+                    "filter[0][field]": "code",
+                    "filter[0][operator]": "eq",
+                    "filter[0][value]": variante,
+                    "per_page": 5,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            for contato in resp.json().get("data", []):
+                contatos_por_id[contato.get("id")] = contato
+        if not contatos_por_id:
             return None
-        contatos_ordenados = sorted(contatos, key=lambda c: c.get("created_at", ""), reverse=True)
+        contatos_ordenados = sorted(contatos_por_id.values(),
+                                    key=lambda c: c.get("created_at", ""), reverse=True)
         return contatos_ordenados[0]
 
     def atualizar_customer(self, customer_id: int, dados: dict) -> dict:
@@ -401,7 +425,14 @@ class VuuptClient:
         if not code:
             return None
 
-        dados_customer = {"name": nome, "address": endereco, "code": code}
+        # Code canônico só com dígitos: a Stokki manda o documento
+        # formatado ('19.106.751/0001-15') e eras antigas do cadastro
+        # usavam só dígitos -- gravar sempre normalizado evita novos
+        # contatos duplicados por diferença de formatação (caso
+        # PS-36413/TORRE DI PIZZA, 12/08). A busca abaixo já cobre os
+        # dois formatos (ver buscar_customer_por_code).
+        code_canonico = re.sub(r"\D", "", code) or code
+        dados_customer = {"name": nome, "address": endereco, "code": code_canonico}
         if telefone:
             dados_customer["phone_number"] = telefone
         if horario_inicio:

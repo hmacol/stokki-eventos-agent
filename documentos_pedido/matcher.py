@@ -222,7 +222,8 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
         for termo, cnpj_obrigatorio in termos:
             try:
                 servicos_ref = vuupt.listar_servicos(
-                    [{"field": "title", "operator": "contains", "value": termo}], per_page=5
+                    [{"field": "title", "operator": "contains", "value": termo}],
+                    per_page=5, include=["customer"],
                 )
             except Exception as e:
                 logger.warning(f"  Falha na busca por referência {termo!r} no VUUPT: {e}")
@@ -236,12 +237,23 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
             codigo_ref = next(iter(codigos))
 
             if cnpj_doc:
-                try:
-                    cliente_doc = vuupt.buscar_customer_por_code(cnpj_doc)
-                except Exception:
-                    cliente_doc = None
-                ids_customers = {s.get("customer_id") for s in servicos_ref}
-                if cliente_doc and cliente_doc.get("id") in ids_customers:
+                # A verificação é por CNPJ (campo 'code' do contato do
+                # serviço), NÃO por customer_id: o VUUPT tem contatos
+                # duplicados pro mesmo CNPJ (um com code só dígitos,
+                # outro formatado "XX.XXX.XXX/XXXX-XX") e o id devolvido
+                # por buscar_customer_por_code podia ser o do cadastro
+                # que o serviço não usa -- falso conflito visto em
+                # produção (PS-36413/TORRE DI PIZZA, 12/08).
+                digitos_doc = re.sub(r"\D", "", cnpj_doc)
+                codes_servico = set()
+                for s in servicos_ref:
+                    code_cust = ((s.get("customer") or {}).get("code")) or ""
+                    if not code_cust and s.get("customer_id"):
+                        cust = vuupt.buscar_customer_por_id(s["customer_id"]) or {}
+                        code_cust = (cust.get("customer") or cust).get("code") or ""
+                    codes_servico.add(re.sub(r"\D", "", code_cust))
+                codes_servico.discard("")
+                if digitos_doc and digitos_doc in codes_servico:
                     return {"codigo_pedido": codigo_ref,
                             "metodo": "nf_referencia_titulo", "motivo_falha": None}
                 break       # CNPJ do documento não é o cliente do serviço -- conflito

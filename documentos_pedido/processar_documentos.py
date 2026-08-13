@@ -26,6 +26,7 @@ COMO USAR:
 """
 import argparse
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,64 @@ def _extrair_texto_pdf_completo(caminho_pdf: Path) -> str:
             return "\n".join(p.extract_text() or "" for p in pdf.pages)
     except Exception:
         return ""
+
+
+def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
+                             cnpj_destinatario: str | None) -> str | None:
+    """
+    XML errado anexado no pedido da Stokki gera uma DANFE de OUTRA
+    entrega -- caso real PS-36413, 12/08: o pedido da NF 35888 (TORRE DI
+    PIZZA) estava com o XML da NF 35889 (NOR-IMPORT) anexado. A DANFE
+    errada envenenava o índice NF->pedido (o boleto certo não casava
+    mais) e ia impressa no romaneio.
+
+    Antes de confiar na DANFE vinda da Stokki, confere contra o serviço
+    do VUUPT:
+      - referência do título ("#PS-36413 - 035888 / ...") numérica de 6
+        dígitos batendo com a NF -> ok (nesses embarcadores a referência
+        É o nº da NF);
+      - referência diferente mas destinatário da DANFE == contato do
+        serviço -> ok (referência pode ser outro número, ex. pedido de
+        venda: PS-36419 ref 040087 / NF 35147);
+      - referência diferente E destinatário diferente -> suspeito
+        demais: devolve o motivo pra mandar pra REVISAO_MANUAL.
+    Retorna None quando está ok ou quando não dá pra verificar.
+    """
+    if not numero_nf or not str(numero_nf).strip().isdigit():
+        return None
+    try:
+        servico = vuupt.buscar_servico_por_code(codigo_pedido)
+    except Exception as e:
+        logger.warning(f"  Falha ao buscar serviço {codigo_pedido} pra validar DANFE: {e}")
+        return None
+    if not servico:
+        return None
+
+    titulo = (servico.get("title") or "").strip()
+    referencia = re.sub(rf"^#?{re.escape(codigo_pedido)}\s*-\s*", "", titulo).split("/")[0].strip()
+    if not re.fullmatch(r"\d{6}", referencia):
+        return None
+    if int(referencia) == int(numero_nf):
+        return None
+
+    digitos_danfe = re.sub(r"\D", "", cnpj_destinatario or "")
+    code_cliente = ""
+    if servico.get("customer_id"):
+        cust = vuupt.buscar_customer_por_id(servico["customer_id"]) or {}
+        code_cliente = re.sub(r"\D", "", (cust.get("customer") or cust).get("code") or "")
+    if not (digitos_danfe and code_cliente):
+        # Sem os DOIS CNPJs não dá pra afirmar que o XML é de outra
+        # entrega -- referência divergente sozinha é normal (pedido de
+        # venda como referência: PS-36419 ref 040087 / NF 35147, cuja
+        # DANFE nem tem o CNPJ do destinatário extraível). Não acusa.
+        return None
+    if digitos_danfe == code_cliente:
+        return None
+
+    return (f"DANFE gerada do XML anexado na Stokki é da NF {numero_nf}, mas a referência do "
+            f"pedido é {referencia} e o destinatário da DANFE ({cnpj_destinatario or '?'}) não é "
+            f"o contato do serviço no VUUPT ({code_cliente or '?'}) -- provável XML errado "
+            f"anexado no pedido. Conferir na Stokki qual NF pertence a esse pedido.")
 
 
 def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
@@ -143,6 +202,20 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
                              numero_nf=numero_nf, numero_parcela=numero_parcela,
                              total_parcelas=total_parcelas, cnpj_contraparte=cnpj_contraparte)
         return "REVISAO_MANUAL"
+
+    # DANFE da Stokki casada pelo nome do arquivo (PS-XXXXX_...): a
+    # associação veio do próprio pedido na Stokki, mas o XML anexado lá
+    # pode ser de OUTRA entrega -- valida antes de indexar/enviar.
+    if (classificacao["tipo"] == "Nota Fiscal" and assunto_email is None
+            and correspondencia["metodo"] == "nome_arquivo"):
+        motivo_suspeita = _validar_danfe_do_stokki(vuupt, codigo_pedido, numero_nf, cnpj_contraparte)
+        if motivo_suspeita:
+            logger.warning(f"  {nome_arquivo}: {motivo_suspeita}")
+            if not modo_teste:
+                marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], None,
+                                 "REVISAO_MANUAL", motivo=motivo_suspeita,
+                                 numero_nf=numero_nf, cnpj_contraparte=cnpj_contraparte)
+            return "REVISAO_MANUAL"
 
     info_parcela = (f", parcela {numero_parcela}/{total_parcelas or '?'}"
                     if numero_parcela is not None else "")
