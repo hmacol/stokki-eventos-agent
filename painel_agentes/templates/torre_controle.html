@@ -243,6 +243,12 @@
   .badge-insucesso.respondido { background: #E5F7EF; color: #0A7D55; }
   .badge-insucesso.falha      { background: #FDEBEA; color: var(--st-falha); }
 
+  /* Motorista responsável pela atualização (insucesso vem do app dele) */
+  .quem-atualizou {
+    display: inline-block; margin-left: 8px; white-space: nowrap;
+    font-size: 11.5px; font-weight: 600; color: var(--texto-suave);
+  }
+
   /* ── Faixa 4: exceções ── */
   .excecao-vazia { display: flex; align-items: center; gap: 10px; color: var(--st-sucesso); font-size: 13.5px; font-weight: 600; padding: 6px 0; }
   table.tabela-excecoes { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -359,6 +365,7 @@
 
 <script>
 const DATA_ALVO = {{ data_alvo_input | tojson }};
+const PODE_EDITAR = {{ pode_editar | tojson }};
 
 // Rótulos/cores dos status de pedido -- MESMA ordem em que os
 // segmentos se tocam na barra empilhada (ordem validada contra CVD).
@@ -427,21 +434,25 @@ function renderStepper(etapas) {
     const quando = e.quando
       ? `<a href="/execucao/${e.execucao_id}" title="abrir log">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
       : "nunca rodou";
+    const botaoRodar = PODE_EDITAR
+      ? `<button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')"
+                ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+      : "";
     return `
       <div class="etapa ${classe}" title="${esc(tituloEstado)}">
-        <button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')"
-                ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>
+        ${botaoRodar}
         <div class="topo"><span class="estado"></span><span class="titulo">${esc(e.titulo)}</span></div>
         <div class="detalhe">${esc(e.detalhe)}</div>
         <div class="quando">${quando}</div>
       </div>`;
   }).join("");
 
-  document.getElementById("stepper").innerHTML = cards + `
+  const etapaTudo = PODE_EDITAR ? `
     <div class="etapa etapa-tudo">
       <button onclick="rodarAgente('executar_tudo', 'Executar Tudo')"
               ${algumaEtapaRodando ? "disabled" : ""}>▶ Executar tudo</button>
-    </div>`;
+    </div>` : "";
+  document.getElementById("stepper").innerHTML = cards + etapaTudo;
 }
 
 function renderKpis(d) {
@@ -540,6 +551,14 @@ function badgesHtml(badges) {
     `<span class="badge-insucesso ${esc(b.tipo)}">${esc(b.texto)}</span>`).join("");
 }
 
+// Motorista da rota = quem registrou a atualização no app. Rota sem
+// motorista atribuído cai no nome da rota, pra dar onde procurar.
+function quemAtualizou(x) {
+  if (x.motorista) return ` <span class="quem-atualizou" title="Motorista da rota — responsável pela atualização">🚚 ${esc(x.motorista)}</span>`;
+  if (x.rota) return ` <span class="quem-atualizou" title="Rota sem motorista atribuído na VUUPT">🚚 rota ${esc(x.rota)}</span>`;
+  return "";
+}
+
 function renderExcecoes(d) {
   const alvo = document.getElementById("excecoes");
   const partes = [];
@@ -554,17 +573,19 @@ function renderExcecoes(d) {
       let acao = "";
       if (x.acao && x.acao.tipo === "link") {
         acao = `<a href="${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
-      } else if (x.acao && x.acao.tipo === "rodar") {
+      } else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) {
         acao = `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
       }
       if (x.link_log) acao += ` <a href="${esc(x.link_log)}">Log</a>`;
-      acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
-                        onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      if (PODE_EDITAR) {
+        acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
+                          onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      }
       const icone = x.severidade === "critico" ? "✗" : "▲";
       return `<tr>
         <td><span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span></td>
         <td class="td-tipo">${esc(x.tipo)}</td>
-        <td>${esc(x.descricao)}${badgesHtml(x.badges)}</td>
+        <td>${esc(x.descricao)}${quemAtualizou(x)}${badgesHtml(x.badges)}</td>
         <td class="td-acao">${acao}</td>
       </tr>`;
     }).join("");
@@ -574,9 +595,9 @@ function renderExcecoes(d) {
   if (d.tratadas && d.tratadas.length) {
     const linhasTratadas = d.tratadas.map(x => `<tr>
       <td class="td-tipo">${esc(x.tipo)}</td>
-      <td>${esc(x.descricao)}${badgesHtml(x.badges)}
+      <td>${esc(x.descricao)}${quemAtualizou(x)}${badgesHtml(x.badges)}
           <div class="motivo">“${esc(x.motivo)}” — ${esc(x.tratado_em)}</div></td>
-      <td class="td-acao"><button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button></td>
+      <td class="td-acao">${PODE_EDITAR ? `<button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button>` : ""}</td>
     </tr>`).join("");
     partes.push(`<details class="tratadas">
       <summary>${d.tratadas.length} exceção(ões) tratada(s)</summary>

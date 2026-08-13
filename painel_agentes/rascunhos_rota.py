@@ -25,6 +25,7 @@ com o lote mais recente, ainda não DESCARTADO, de uma data_alvo --
 `_lote_ativo_id` centraliza esse critério.
 """
 import logging
+import re
 import sqlite3
 import sys
 import uuid
@@ -563,6 +564,99 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
         _recalcular_km_silencioso(conn, rascunho_id)
         conn.commit()
         return rascunho_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+_PADRAO_COPIA = re.compile(r"\s*\(c[oó]pia(?:\s+\d+)?\)\s*$", re.IGNORECASE)
+
+
+def _nome_copia(conn: sqlite3.Connection, nome_original: str, lote_id: str) -> str:
+    """'Rota X' -> 'Rota X (cópia)', incrementando se já existir uma
+    cópia com esse nome no lote (e sem empilhar sufixo em cópia de
+    cópia -- primeiro tira um '(cópia)'/'(cópia N)' que já esteja no
+    fim do nome original)."""
+    base = _PADRAO_COPIA.sub("", nome_original).rstrip() or nome_original
+    nomes_existentes = {
+        row["nome"] for row in conn.execute(
+            "SELECT nome FROM rascunhos_rota WHERE lote_id = ? AND status != ?",
+            (lote_id, STATUS_DESCARTADO),
+        ).fetchall()
+    }
+    candidato = f"{base} (cópia)"
+    n = 2
+    while candidato in nomes_existentes:
+        candidato = f"{base} (cópia {n})"
+        n += 1
+    return candidato
+
+
+def duplicar_rascunho(rascunho_id: int) -> int:
+    """
+    Duplica um rascunho -- inclusive um já ENVIADO (pedido do Hugo,
+    13/08: "duplicar tanto as que não foram quanto as que foram
+    enviadas"). rascunhos_parada continua guardando as paradas de uma
+    rota ENVIADA mesmo depois do envio (enviar_rascunho só as apaga se
+    removidas por conflito), então a cópia é sempre um snapshot fiel do
+    que está no card no momento do clique.
+
+    A cópia nasce SEMPRE em status RASCUNHO, no MESMO lote da origem --
+    e por nascer assim, cai automaticamente na mesma trava de edição do
+    resto da tela (só RASCUNHO é editável), mesmo quando a origem já
+    virou ENVIADO e está travada. Motorista/base/horário são herdados
+    tal como estão na origem (ponto de partida pra ajuste manual, não
+    uma rota vazia); vuupt_route_id/erro_envio/enviado_em NÃO são
+    herdados (INSERT novo, ficam NULL).
+
+    Pedido com o mesmo service_id em dois rascunhos do lote (origem e
+    cópia) não é impedido aqui: se ambos forem enviados sem que a
+    sobreposição seja editada antes, o segundo envio esbarra na MESMA
+    checagem de conflito ao vivo contra a VUUPT que enviar_rascunho já
+    faz pra qualquer dado desatualizado (criar_rota_removendo_conflitos)
+    -- não é um risco novo introduzido aqui.
+
+    Retorna o id do novo rascunho.
+    """
+    origem = buscar_rascunho(rascunho_id)
+    if not origem:
+        raise ValueError(f"Rascunho {rascunho_id} não encontrado.")
+
+    conn = _conectar()
+    try:
+        nome_copia = _nome_copia(conn, origem["nome"], origem["lote_id"])
+        cursor = conn.execute("""
+            INSERT INTO rascunhos_rota (
+                data_alvo, lote_id, nome, particao, tipo_rota, zona,
+                agent_id, vehicle_id, motorista_nome,
+                start_location_base_id, end_location_base_id,
+                start_at, km_estimado, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
+            origem["tipo_rota"], origem["zona"], origem["agent_id"], origem["vehicle_id"],
+            origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
+            origem["start_at"], origem["km_estimado"], STATUS_RASCUNHO,
+        ))
+        novo_id = cursor.lastrowid
+        for p in origem["paradas"]:
+            conn.execute("""
+                INSERT INTO rascunhos_parada (
+                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
+                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
+                    nivel_dificuldade, volume_caixas
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                novo_id, p["ordem"], p["service_id"], p["codigo"], p["titulo"],
+                p["endereco"], p["latitude"], p["longitude"], p["sender_id"],
+                p["remetente_nome"], p["destinatario_nome"],
+                p["nivel_dificuldade"], p["volume_caixas"],
+            ))
+        conn.commit()
+        logger.info(f"Rascunho {rascunho_id} duplicado -> {novo_id} ('{nome_copia}').")
+        return novo_id
     except Exception:
         conn.rollback()
         raise

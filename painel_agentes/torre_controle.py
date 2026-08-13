@@ -322,6 +322,11 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
     for rota in rotas_brutas:
         if rota.get("status") == "canceled":
             continue
+        # Motorista resolvido antes do loop de paradas: é ele quem
+        # registra a atualização de status no app -- cada insucesso da
+        # fila de ação carrega o responsável (pedido do Hugo, 13/08).
+        agent_id = rota.get("agent_id")
+        motorista = nomes_motoristas.get(agent_id) if agent_id else None
         servicos = extrair_servicos_da_rota(rota)
         agregado["cancelados"] += sum(1 for s in servicos if s.get("status") == "canceled")
         validos = [s for s in servicos if s.get("status") != "canceled"]
@@ -333,7 +338,11 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
             if status == "done":
                 if s.get("status_done") == "failed":
                     insucessos += 1
-                    agregado["insucessos_lista"].append(_resumir_servico(s))
+                    agregado["insucessos_lista"].append({
+                        **_resumir_servico(s),
+                        "motorista": motorista,
+                        "rota": rota.get("name", ""),
+                    })
                     situacao = "insucesso"
                 else:
                     entregues += 1
@@ -375,11 +384,10 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
         else:
             estado = "nao_iniciada"
 
-        agent_id = rota.get("agent_id")
         rotas.append({
             "id": rota.get("id"),
             "nome": rota.get("name", ""),
-            "motorista": nomes_motoristas.get(agent_id) if agent_id else None,
+            "motorista": motorista,
             "total": total,
             "entregues": entregues,
             "insucessos": insucessos,
@@ -540,6 +548,11 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "severidade": "critico",
             "tipo": "Insucesso",
             "descricao": f"{i['codigo']} — {i['titulo']}",
+            # Quem registrou a atualização: o motorista da rota (é ele
+            # que marca o insucesso no app). 'rota' é o fallback pra
+            # rota sem motorista atribuído.
+            "motorista": i.get("motorista"),
+            "rota": i.get("rota"),
             "badges": i.get("badges", []),
             "acao": None,
         })

@@ -44,7 +44,7 @@ logging.basicConfig(
 from urllib.parse import urlparse
 
 import yaml
-from flask import Flask, Response, abort, redirect, render_template, request, url_for, jsonify, send_file
+from flask import Flask, Response, abort, g, redirect, render_template, request, url_for, jsonify, send_file
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
@@ -75,29 +75,56 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def requer_auth(f):
-    @wraps(f)
-    def decorado(*args, **kwargs):
-        config = _carregar_config()
-        cfg_painel = config.get("painel_agentes", {})
-        usuario_esperado = cfg_painel.get("usuario")
-        senha_esperada = cfg_painel.get("senha")
-        if not usuario_esperado or not senha_esperada:
-            return (
-                "Painel de agentes desabilitado: configure painel_agentes.usuario "
-                "e painel_agentes.senha no config.yaml antes de subir.", 500,
-            )
-        auth = request.authorization
-        if not auth or not (
-            hmac.compare_digest(auth.username, usuario_esperado)
-            and hmac.compare_digest(auth.password, senha_esperada)
-        ):
-            return Response(
-                "Autenticação necessária", 401,
-                {"WWW-Authenticate": 'Basic realm="Painel de Agentes"'},
-            )
-        return f(*args, **kwargs)
-    return decorado
+def _nivel_das_credenciais(auth, cfg_painel):
+    """Confere as credenciais contra os dois pares possíveis e devolve o
+    nível de acesso correspondente ("total" ou "leitura"), ou None se não
+    bateram com nenhum dos dois."""
+    if not auth:
+        return None
+    usuario_total = cfg_painel.get("usuario")
+    senha_total = cfg_painel.get("senha")
+    if usuario_total and senha_total and hmac.compare_digest(auth.username, usuario_total) \
+            and hmac.compare_digest(auth.password, senha_total):
+        return "total"
+    usuario_leitura = cfg_painel.get("usuario_leitura")
+    senha_leitura = cfg_painel.get("senha_leitura")
+    if usuario_leitura and senha_leitura and hmac.compare_digest(auth.username, usuario_leitura) \
+            and hmac.compare_digest(auth.password, senha_leitura):
+        return "leitura"
+    return None
+
+
+def requer_auth(f=None, *, niveis=("total",)):
+    """Basic Auth com dois níveis: "total" (usuario/senha, acesso
+    irrestrito) e "leitura" (usuario_leitura/senha_leitura, só as telas e
+    APIs marcadas com niveis=("total", "leitura")). Rota sem `niveis`
+    exige nível total. Pedido do Hugo, 13/08: time acompanha Torre e
+    Planejamento sem poder disparar ações."""
+    if f is not None:
+        return requer_auth(niveis=niveis)(f)
+
+    def decorator(func):
+        @wraps(func)
+        def decorado(*args, **kwargs):
+            config = _carregar_config()
+            cfg_painel = config.get("painel_agentes", {})
+            if not cfg_painel.get("usuario") or not cfg_painel.get("senha"):
+                return (
+                    "Painel de agentes desabilitado: configure painel_agentes.usuario "
+                    "e painel_agentes.senha no config.yaml antes de subir.", 500,
+                )
+            nivel = _nivel_das_credenciais(request.authorization, cfg_painel)
+            if nivel is None:
+                return Response(
+                    "Autenticação necessária", 401,
+                    {"WWW-Authenticate": 'Basic realm="Painel de Agentes"'},
+                )
+            if nivel not in niveis:
+                abort(403, "Seu usuário só tem acesso de leitura -- essa ação exige o login completo.")
+            g.nivel_acesso = nivel
+            return func(*args, **kwargs)
+        return decorado
+    return decorator
 
 
 def exige_mesma_origem(f):
@@ -194,7 +221,7 @@ def historico():
 
 
 @app.route("/mapa-rotas")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def mapa_rotas():
     data_param = request.args.get("data")
     if data_param:
@@ -230,7 +257,7 @@ def _parse_data_param(padrao_amanha: bool = False) -> date:
 
 
 @app.route("/planejamento")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def planejamento():
     data_alvo = _parse_data_param()
     try:
@@ -243,12 +270,12 @@ def planejamento():
 
     return render_template(
         "planejamento_rotas.html", dados=dados, erro=erro,
-        data_alvo_input=data_alvo.isoformat(),
+        data_alvo_input=data_alvo.isoformat(), pode_editar=g.nivel_acesso == "total",
     )
 
 
 @app.route("/torre")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def torre():
     """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
     sobe só com a casca; os dados chegam por /api/torre/* via JS (a
@@ -256,11 +283,11 @@ def torre():
     data_alvo = _parse_data_param()
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
     return render_template("torre_controle.html", data_alvo_input=data_alvo.isoformat(),
-                           google_maps_key=gmaps_key)
+                           google_maps_key=gmaps_key, pode_editar=g.nivel_acesso == "total")
 
 
 @app.route("/api/torre/dados")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def api_torre_dados():
     data_alvo = _parse_data_param()
     try:
@@ -271,7 +298,7 @@ def api_torre_dados():
 
 
 @app.route("/api/torre/stokki")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def api_torre_stokki():
     """Funil outbound da Stokki -- endpoint separado do resto porque tem
     cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
@@ -280,7 +307,7 @@ def api_torre_stokki():
 
 
 @app.route("/api/torre/etapas")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def api_torre_etapas():
     """Só o estado das etapas do stepper (leitura barata no SQLite) --
     o front consulta com frequência maior pra dar feedback rápido
@@ -336,7 +363,7 @@ def api_torre_destratar():
 
 
 @app.route("/api/planejamento/pool")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def api_pool():
     """Busca ao vivo na VUUPT o pool de não alocados + resumo dos
     pedidos agendados (botão 'Atualizar' da tela) -- não mexe nos
@@ -356,7 +383,7 @@ def api_pool():
 
 
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
-@requer_auth
+@requer_auth(niveis=("total", "leitura"))
 def api_romaneio(rascunho_id):
     """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
     o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
@@ -572,6 +599,21 @@ def api_otimizar_sequencia():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/duplicar-rota", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_duplicar_rota():
+    """Duplica uma rota do card -- funciona tanto em RASCUNHO quanto em
+    ENVIADO (Hugo, 13/08): a cópia nasce sempre em RASCUNHO, editável,
+    no mesmo lote da origem."""
+    body = request.get_json(force=True)
+    try:
+        novo_id = rascunhos_rota.duplicar_rascunho(body["rascunho_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(novo_id)})
 
 
 @app.route("/api/planejamento/descartar-rota", methods=["POST"])

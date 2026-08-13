@@ -545,6 +545,7 @@
 </div>
 
 <script>
+  const PODE_EDITAR = {{ pode_editar | tojson }};
   const RASCUNHOS = {{ dados.rascunhos | tojson }};
   const POOL = {{ dados.pool | tojson }};
   const BASE = {{ dados.base | tojson }};
@@ -738,7 +739,7 @@
       li.dataset.numero = i + 1;
       const el = li.querySelector(".numero");
       if (!el) return;
-      if (modoOrdenacao === "numero" && !enviada) {
+      if (modoOrdenacao === "numero" && !enviada && PODE_EDITAR) {
         el.classList.add("como-input");
         el.innerHTML = `<input class="numero-input" type="number" min="1" max="${lis.length}"
           value="${i + 1}" style="border-color:${cor}" title="Digite a nova posição e saia do campo (ou Enter)">`;
@@ -806,13 +807,14 @@
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
-      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${enviada ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
+      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(enviada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
       <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
       <div class="acoes">
-        ${enviada ? "" : `
+        ${(enviada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
+        ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>`;
     const ul = div.querySelector(".lista-paradas");
@@ -1549,6 +1551,7 @@
   let dragRecente = false;
 
   function iniciarSortable(ul) {
+    if (!PODE_EDITAR) return;  // leitura: sem arrastar-e-soltar
     new Sortable(ul, {
       group: "paradas", animation: 150,
       // clicar no campo de posição (modo "digitando a posição") não pode
@@ -1582,6 +1585,19 @@
       location.reload();
     } catch (e) {
       alert(`Falha ao descartar: ${e.message}`);
+    }
+  }
+
+  async function duplicarRota(rascunhoId) {
+    // cria a cópia (sempre RASCUNHO, editável, mesmo a partir de uma
+    // rota já ENVIADA) e recarrega -- mesmo padrão de criarNovaRota/
+    // descartarRota pra card novo entrar já com Sortable, select de
+    // motorista etc. inicializados certo.
+    try {
+      await postJSON("/api/planejamento/duplicar-rota", { rascunho_id: rascunhoId });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao duplicar: ${e.message}`);
     }
   }
 
@@ -1751,6 +1767,20 @@
   }
 
   function initMap() {
+    if (!PODE_EDITAR) {
+      // leitura: some tudo que dispara ação no servidor -- Sortable,
+      // select de motorista e botões de card já são tratados nos
+      // próprios pontos de criação; aqui só os controles fixos da tela.
+      ["botao-nova-rota", "botao-alocar-motoristas", "botao-enviar-todas"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+      });
+      const barraSelecao = document.querySelector(".barra-selecao");
+      if (barraSelecao) barraSelecao.style.display = "none";
+      const modoOrdenacaoEl = document.querySelector(".modo-ordenacao");
+      if (modoOrdenacaoEl) modoOrdenacaoEl.style.display = "none";
+    }
+
     map = new google.maps.Map(document.getElementById("map"), { center: BASE, zoom: 11 });
     infoWindow = new google.maps.InfoWindow();
 
@@ -1872,6 +1902,8 @@
         confirmarEnvio([Number(e.target.dataset.rascunhoId)], e.target);
       } else if (e.target.classList.contains("botao-imprimir")) {
         imprimirRota(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-duplicar")) {
+        duplicarRota(Number(e.target.dataset.rascunhoId));
       }
     });
 
