@@ -32,7 +32,10 @@
     font-size: 13px;
     margin-bottom: 16px;
   }
-  .layout-planejamento { display: grid; grid-template-columns: 260px 380px 1fr; gap: 16px; align-items: start; }
+  /* 5 faixas: pool | divisor | rotas | divisor | mapa. As larguras das
+     colunas são ajustáveis arrastando o divisor (o JS grava no
+     gridTemplateColumns inline e persiste); o mapa fica com o resto. */
+  .layout-planejamento { display: grid; grid-template-columns: 260px 6px 380px 6px minmax(0, 1fr); gap: 5px; align-items: start; }
   .coluna {
     background: var(--superficie);
     border: 1px solid var(--borda);
@@ -41,6 +44,33 @@
     max-height: 78vh;
     overflow-y: auto;
   }
+  .divisor { align-self: stretch; width: 6px; border-radius: 3px; cursor: col-resize; }
+  .divisor:hover, .divisor.arrastando { background: var(--borda); }
+  /* Coluna colapsada: vira uma faixa estreita com o título na vertical,
+     na mesma altura do mapa; clique na faixa (ou arrastar um pedido por
+     cima) reabre. O conteúdo continua no DOM, só escondido. */
+  .coluna .rotulo-vertical { display: none; }
+  .coluna.colapsada {
+    box-sizing: border-box;
+    height: 78vh;
+    padding: 12px 6px;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .coluna.colapsada > *:not(.rotulo-vertical) { display: none; }
+  .coluna.colapsada > .rotulo-vertical {
+    display: block;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    margin: 0 auto;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+  }
+  .botoes-h3 { display: inline-flex; gap: 4px; }
   .coluna h3 {
     margin: 0 0 10px;
     font-size: 13px;
@@ -245,6 +275,110 @@
   .card-rota .acoes button:hover { background: var(--fundo); }
   .card-rota .acoes button.perigo { color: var(--erro); }
   .card-rota.enviada { opacity: 0.75; background: var(--fundo); }
+  /* Rota colapsada: cabeçalho + métricas + ocupação ficam (a leitura
+     de "quanto cabe" continua à vista); lista de paradas, motorista e
+     ações somem. A busca de rotas reabre a lista só visualmente
+     (classe .buscando no container) pra resultado de busca nunca ficar
+     escondido; arrastar um pedido sobre um card colapsado expande na
+     hora -- senão não teria onde soltar. */
+  .card-rota .cabecalho { cursor: pointer; user-select: none; }
+  .card-rota .titulo-rota { min-width: 0; }
+  .card-rota .botao-colapsar {
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--texto-suave);
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .card-rota.colapsada .lista-paradas,
+  .card-rota.colapsada .select-motorista,
+  .card-rota.colapsada .acoes { display: none; }
+  #lista-rotas.buscando .card-rota.colapsada .lista-paradas { display: block; }
+  .coluna h3 .botao-mini {
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    color: inherit;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .coluna h3 .botao-mini:hover { background: var(--fundo); }
+
+  /* Cards compactos (toggle na barra de cima): pedido vira 1 linha
+     (número + código + badges) pra caber mais na tela e agilizar o
+     arrasta-e-solta entre pool e rotas; o restante aparece no tooltip
+     ao passar o mouse. As infos completas continuam no DOM (só
+     escondidas) -- busca, filtros e tooltip dependem delas. */
+  .toggle-compacto {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+  body.cards-compactos .item-parada {
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  body.cards-compactos .item-parada br,
+  body.cards-compactos .item-parada .remetente,
+  body.cards-compactos .item-parada .destinatario,
+  body.cards-compactos .item-parada .endereco { display: none; }
+  body.cards-compactos .item-parada .agendamento,
+  body.cards-compactos .item-parada .badge-caixas { margin-top: 0; margin-left: 4px; }
+
+  /* "Só número": o pedido vira um chip só com o número (o mesmo do
+     ponto no mapa), vários por linha -- densidade máxima pra realocar
+     arrastando. A urgência não pode sumir junto com os badges: borda
+     vermelha = agendado atrasado, azul = agendado pro dia. O resto
+     (código, endereço...) fica no tooltip. */
+  body.cards-numeros .lista-paradas { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; }
+  body.cards-numeros .item-parada { padding: 3px 4px; margin-bottom: 0; }
+  body.cards-numeros .item-parada br,
+  body.cards-numeros .item-parada .codigo,
+  body.cards-numeros .item-parada .remetente,
+  body.cards-numeros .item-parada .destinatario,
+  body.cards-numeros .item-parada .endereco,
+  body.cards-numeros .item-parada .agendamento,
+  body.cards-numeros .item-parada .badge-caixas { display: none; }
+  body.cards-numeros .item-parada .numero { margin-right: 0; }
+  body.cards-numeros .item-parada[data-urgencia="dia"] { border-color: #2C5FC4; box-shadow: inset 0 0 0 1px #2C5FC4; }
+  body.cards-numeros .item-parada[data-urgencia="atrasado"] { border-color: var(--erro); box-shadow: inset 0 0 0 1px var(--erro); }
+
+  .toggle-compacto select {
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 12.5px;
+  }
+
+  .tooltip-parada {
+    position: fixed;
+    z-index: 10000;
+    display: none;
+    pointer-events: none;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    max-width: 300px;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .tooltip-parada .titulo { font-weight: 700; margin-bottom: 2px; }
+  .tooltip-parada .remetente { color: #4F86F7; font-weight: 600; }
+  .tooltip-parada .destinatario { color: #8A5A0C; }
+  .tooltip-parada .endereco { color: var(--texto-suave); font-size: 11.5px; margin-top: 3px; }
+  .tooltip-parada .extras { margin-top: 5px; color: var(--texto-suave); font-size: 11px; }
   .status-envio { font-size: 11px; padding: 5px 8px; border-radius: 5px; margin-bottom: 6px; }
   .status-envio.ok { background: #E5F7EF; color: var(--sucesso); }
   .status-envio.erro { background: #FDEBEA; color: var(--erro); }
@@ -319,6 +453,15 @@
   <button type="submit" class="botao">Buscar</button>
   {% if dados %}
   <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool{% if dados.resumo_agendados %} — {{ dados.resumo_agendados | sum(attribute='total_pedidos') }} agendado(s) não finalizado(s){% endif %}</span>
+  {# sem name= de propósito: o seletor não pode ir junto no GET do Buscar #}
+  <label class="toggle-compacto" title="Tamanho dos cards de pedido: compactos = 1 linha (número + código + badges); só número = chips numerados, vários por linha. Nos dois, as informações completas aparecem ao passar o mouse por cima.">
+    Cards:
+    <select id="densidade-cards">
+      <option value="normal">normais</option>
+      <option value="compacto">compactos</option>
+      <option value="numeros">só número</option>
+    </select>
+  </label>
   {% endif %}
 </form>
 
@@ -340,9 +483,13 @@
 {% elif not dados.google_maps_key %}
 <div class="aviso">Falta a chave do Google Maps (google_maps.api_key) no config.yaml -- sem ela não dá pra desenhar o mapa.</div>
 {% else %}
-<div class="layout-planejamento">
-  <div class="coluna">
-    <h3>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></h3>
+<div class="layout-planejamento" id="layout-planejamento">
+  <div class="coluna" id="coluna-pool">
+    <div class="rotulo-vertical">Pool — não alocados</div>
+    <h3>
+      <span>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></span>
+      <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+    </h3>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <label class="filtro-flag" title="Mostrar só os pedidos com agendamento pra essa data (ou atrasado) — o que não pode ficar de fora das rotas do dia">
       <input type="checkbox" id="flag-precisa-sair">
@@ -363,12 +510,21 @@
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: agrupa por região (Seco separado de Refrigerado/Congelado), compara os 3 modelos, otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
     </div>
-    <div class="dica-selecao">Clique num pedido (ou no ponto dele no mapa) pra selecionar; clique de novo pra desmarcar. No mapa: "Não alocados" mostra o pool em vermelho e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.</div>
+    <div class="dica-selecao">Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. No mapa: "Não alocados" mostra o pool em vermelho e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.</div>
     <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
   </div>
 
-  <div class="coluna">
-    <h3>Rotas (rascunho)</h3>
+  <div class="divisor" data-coluna="pool" title="Arraste pra ajustar a largura do pool; duplo clique volta pro padrão"></div>
+
+  <div class="coluna" id="coluna-rotas">
+    <div class="rotulo-vertical">Rotas (rascunho)</div>
+    <h3>
+      <span>Rotas (rascunho)</span>
+      <span class="botoes-h3">
+        <button type="button" id="botao-colapsar-todas" class="botao-mini" title="Colapsa (ou expande) todos os cards de rota de uma vez — cada card também colapsa individualmente clicando no cabeçalho">Colapsar todas</button>
+        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="rotas" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+      </span>
+    </h3>
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
     <button id="botao-alocar-motoristas" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
@@ -382,6 +538,8 @@
     </label>
     <div id="lista-rotas"></div>
   </div>
+
+  <div class="divisor" data-coluna="rotas" title="Arraste pra ajustar a largura das rotas; duplo clique volta pro padrão"></div>
 
   <div id="map"></div>
 </div>
@@ -403,6 +561,7 @@
   const COR_NAO_ALOCADO = "#E1483D";
   const COR_SELECIONADO = "#0EA575";
   const ICONES_NUMERADOS = {};
+  const ICONES_DESTAQUE = {};
   const POOL_BY_ID = {};
   POOL.forEach(p => POOL_BY_ID[p.service_id] = p);
 
@@ -430,6 +589,25 @@
       anchor: new google.maps.Point(14, 14),
     };
     ICONES_NUMERADOS[chave] = icone;
+    return icone;
+  }
+
+  function iconeDestaque(numero, cor) {
+    // versão maior do ícone numerado, com halo translúcido em volta --
+    // usada só pra destacar no mapa o ponto do card sob o mouse
+    const chave = `${numero}-${cor}`;
+    if (ICONES_DESTAQUE[chave]) return ICONES_DESTAQUE[chave];
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44">
+      <circle cx="22" cy="22" r="21" fill="${cor}" fill-opacity="0.25"/>
+      <circle cx="22" cy="22" r="14" fill="${cor}" stroke="#fff" stroke-width="2.5"/>
+      <text x="22" y="27" font-size="13" font-weight="700" text-anchor="middle" fill="#fff" font-family="Arial">${numero}</text>
+    </svg>`;
+    const icone = {
+      url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+      scaledSize: new google.maps.Size(44, 44),
+      anchor: new google.maps.Point(22, 22),
+    };
+    ICONES_DESTAQUE[chave] = icone;
     return icone;
   }
 
@@ -499,6 +677,10 @@
     li.dataset.lat = p.latitude ?? "";
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
+    // urgência do agendamento pro CSS do modo "só número" (borda do chip:
+    // vermelho = atrasado, azul = agendado pra data em edição)
+    li.dataset.urgencia = !p.agendado_para ? "" :
+      (p.agendado_para < DATA_ALVO_ISO ? "atrasado" : (p.agendado_para === DATA_ALVO_ISO ? "dia" : ""));
     li.dataset.cep = cepDoEndereco(p.endereco);
     // fallback de 1 caixa pra pedido sem volume -- mesma convenção das
     // travas do servidor e do totalizador da rota
@@ -605,16 +787,20 @@
 
   function criarCardRota(rascunho, cor) {
     const enviada = rascunho.status === "ENVIADO";
+    const colapsada = rotasColapsadas.has(rascunho.id);
     const div = document.createElement("div");
-    div.className = "card-rota" + (enviada ? " enviada" : "");
+    div.className = "card-rota" + (enviada ? " enviada" : "") + (colapsada ? " colapsada" : "");
     div.id = `card-rota-${rascunho.id}`;
     div.style.setProperty("--cor-rota", cor);
     // texto usado pela busca client-side, junto do nome da rota
     div.dataset.busca = rascunho.nome.toLowerCase();
     div.innerHTML = `
-      <div class="cabecalho">
-        <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
-        <span class="nome">${escaparHtml(rascunho.nome)}</span>
+      <div class="cabecalho" title="Clique pra colapsar/expandir a rota">
+        <span class="titulo-rota">
+          <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
+          <span class="nome">${escaparHtml(rascunho.nome)}</span>
+        </span>
+        <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
       </div>
       <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
@@ -633,6 +819,113 @@
     rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p)));
     renumerarRotaEl(ul, rascunho.id);
     return div;
+  }
+
+  function definirColapso(card, colapsar) {
+    card.classList.toggle("colapsada", colapsar);
+    const botao = card.querySelector(".botao-colapsar");
+    if (botao) botao.textContent = colapsar ? "▸" : "▾";
+    const id = Number(card.id.replace("card-rota-", ""));
+    if (colapsar) rotasColapsadas.add(id); else rotasColapsadas.delete(id);
+    localStorage.setItem("planejamento.rotasColapsadas", JSON.stringify([...rotasColapsadas]));
+    atualizarBotaoColapsarTodas();
+  }
+
+  function atualizarBotaoColapsarTodas() {
+    const botao = document.getElementById("botao-colapsar-todas");
+    if (!botao) return;
+    const cards = document.querySelectorAll("#lista-rotas .card-rota");
+    const algumaExpandida = Array.from(cards).some(c => !c.classList.contains("colapsada"));
+    botao.textContent = algumaExpandida ? "Colapsar todas" : "Expandir todas";
+    botao.disabled = cards.length === 0;
+  }
+
+  // ---- Tooltip do modo compacto ----
+  // As infos completas do pedido continuam no DOM do card (só escondidas
+  // pelo CSS do modo compacto), então o tooltip é montado lendo os spans
+  // do próprio li -- funciona igual pra pool e pra parada de rota, sem
+  // depender do POOL_BY_ID (que só tem os itens do pool).
+  function montarTooltipParada(li) {
+    const texto = sel => {
+      const el = li.querySelector(sel);
+      return el ? el.textContent.trim() : "";
+    };
+    const partes = [`<div class="titulo">${escaparHtml(texto(".codigo"))}</div>`];
+    const remetente = texto(".remetente");
+    if (remetente) partes.push(`<div class="remetente">${escaparHtml(remetente)}</div>`);
+    const destinatario = texto(".destinatario");
+    if (destinatario) partes.push(`<div class="destinatario">${escaparHtml(destinatario)}</div>`);
+    const endereco = texto(".endereco");
+    if (endereco) partes.push(`<div class="endereco">${escaparHtml(endereco)}</div>`);
+    // caixas do data-caixas (fallback de 1 já aplicado no criarLiParada);
+    // agendamento reaproveita o texto do badge, que já diz se está atrasado
+    const caixas = Number(li.dataset.caixas || 1);
+    const extras = [`${caixas} caixa${caixas === 1 ? "" : "s"}`];
+    const agendamento = texto(".agendamento");
+    if (agendamento) extras.push(agendamento);
+    partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
+    return partes.join("");
+  }
+
+  function mostrarTooltipParada(li) {
+    if (!tooltipParada) return;
+    liTooltip = li;
+    tooltipParada.innerHTML = montarTooltipParada(li);
+    tooltipParada.style.display = "block";
+    // posiciona à direita do card (o tooltip cai sobre a coluna vizinha /
+    // mapa, que são só leitura); se não couber, vai pra esquerda
+    const rect = li.getBoundingClientRect();
+    const largura = tooltipParada.offsetWidth;
+    const altura = tooltipParada.offsetHeight;
+    let x = rect.right + 10;
+    if (x + largura > window.innerWidth - 8) x = Math.max(8, rect.left - largura - 10);
+    let y = rect.top;
+    if (y + altura > window.innerHeight - 8) y = Math.max(8, window.innerHeight - altura - 8);
+    tooltipParada.style.left = `${x}px`;
+    tooltipParada.style.top = `${y}px`;
+  }
+
+  function esconderTooltipParada() {
+    liTooltip = null;
+    if (tooltipParada) tooltipParada.style.display = "none";
+  }
+
+  // ---- Destaque no mapa do card sob o mouse ----
+  // Marcador próprio (maior, com halo) em vez de mexer no ícone do
+  // marcador existente: pedido do pool muitas vezes nem está desenhado
+  // no mapa (toggle/filtros desligados), e assim o destaque funciona
+  // igual pra pool e rota, sem salvar/restaurar estado de ninguém.
+  function corDoCard(li) {
+    const ul = li.closest(".lista-paradas");
+    if (ul && ul.dataset.listId !== "pool") {
+      return coresPorRascunho[Number(ul.dataset.listId)] || "#6B7280";
+    }
+    return SELECIONADOS.has(Number(li.dataset.serviceId)) ? COR_SELECIONADO : COR_NAO_ALOCADO;
+  }
+
+  function destacarNoMapa(li) {
+    removerDestaqueMapa();
+    if (!map) return;
+    const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+    if (isNaN(lat) || isNaN(lng)) return;
+    liDestaque = li;
+    marcadorDestaque = new google.maps.Marker({
+      position: { lat, lng }, map: map,
+      icon: iconeDestaque(li.dataset.numero || "", corDoCard(li)),
+      zIndex: 9999,
+      clickable: false,
+    });
+  }
+
+  function removerDestaqueMapa() {
+    liDestaque = null;
+    if (marcadorDestaque) { marcadorDestaque.setMap(null); marcadorDestaque = null; }
+  }
+
+  function centralizarNoMapa(li) {
+    const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+    if (!map || isNaN(lat) || isNaN(lng)) return;
+    map.panTo({ lat, lng });
   }
 
   function atualizarCardComResposta(rascunho) {
@@ -756,6 +1049,135 @@
   // "numero" (digitar a posição no campo do card) -- escolha do usuário,
   // persistida (Hugo, 12/08: formato mais dinâmico pra alterar ordens).
   let modoOrdenacao = localStorage.getItem("planejamento.modoOrdenacao") || "arrastar";
+
+  // Rotas colapsadas (Set de rascunho_ids) -- persiste porque criar
+  // rota/descartar/enviar recarregam a página; ids que não estão mais
+  // no lote da tela são descartados pra chave não crescer pra sempre.
+  let rotasColapsadas;
+  try {
+    rotasColapsadas = new Set(JSON.parse(localStorage.getItem("planejamento.rotasColapsadas") || "[]"));
+  } catch (e) {
+    rotasColapsadas = new Set();
+  }
+  {
+    const idsDoLote = new Set(RASCUNHOS.map(r => r.id));
+    rotasColapsadas = new Set([...rotasColapsadas].filter(id => idsDoLote.has(id)));
+  }
+
+  // Densidade dos cards de pedido: "normal" (tudo à vista), "compacto"
+  // (1 linha) ou "numeros" (só o número, chips em fileira -- o máximo de
+  // pedidos na tela; código/endereço ficam no tooltip). Classe no body
+  // aplicada já na carga pra não piscar os cards grandes; a chave antiga
+  // planejamento.cardsCompactos (checkbox de 13/08) vale como migração.
+  let densidadeCards = localStorage.getItem("planejamento.densidadeCards") ||
+    (localStorage.getItem("planejamento.cardsCompactos") === "1" ? "compacto" : "normal");
+
+  function aplicarDensidade() {
+    document.body.classList.toggle("cards-compactos", densidadeCards === "compacto");
+    document.body.classList.toggle("cards-numeros", densidadeCards === "numeros");
+  }
+  aplicarDensidade();
+
+  // ---- Colunas com largura ajustável e colapsáveis ----
+  // Larguras em px persistidas por coluna; o mapa fica com o resto
+  // (minmax(0,1fr)). Colapsada, a coluna vira a faixa de 36px com o
+  // título na vertical. Este bloco roda já na carga (o layout existe
+  // antes do <script>) pra não piscar o grid padrão antes do initMap.
+  const LARGURAS_PADRAO = { pool: 260, rotas: 380 };
+  const LARGURA_MIN = 150, LARGURA_MAX = 800;
+  let layoutColunas;
+  try {
+    layoutColunas = JSON.parse(localStorage.getItem("planejamento.layoutColunas")) || {};
+  } catch (e) {
+    layoutColunas = {};
+  }
+  ["pool", "rotas"].forEach(c => {
+    const salvo = layoutColunas[c] || {};
+    layoutColunas[c] = {
+      largura: Math.max(LARGURA_MIN, Math.min(LARGURA_MAX, Number(salvo.largura) || LARGURAS_PADRAO[c])),
+      colapsada: !!salvo.colapsada,
+    };
+  });
+
+  function salvarLayoutColunas() {
+    localStorage.setItem("planejamento.layoutColunas", JSON.stringify(layoutColunas));
+  }
+
+  function aplicarLayoutColunas() {
+    const faixa = c => layoutColunas[c].colapsada ? "36px" : `${layoutColunas[c].largura}px`;
+    document.getElementById("layout-planejamento").style.gridTemplateColumns =
+      `${faixa("pool")} 6px ${faixa("rotas")} 6px minmax(0, 1fr)`;
+    ["pool", "rotas"].forEach(c => {
+      document.getElementById(`coluna-${c}`).classList.toggle("colapsada", layoutColunas[c].colapsada);
+    });
+    // a área do mapa muda junto -- avisa o Maps pra não ficar tile cinza
+    if (typeof google !== "undefined" && map) google.maps.event.trigger(map, "resize");
+  }
+
+  function alternarColuna(c, colapsar) {
+    layoutColunas[c].colapsada = colapsar;
+    salvarLayoutColunas();
+    aplicarLayoutColunas();
+  }
+
+  document.querySelectorAll(".divisor").forEach(divisor => {
+    const c = divisor.dataset.coluna;
+    divisor.addEventListener("mousedown", (e) => {
+      if (layoutColunas[c].colapsada) return;
+      e.preventDefault();
+      const inicioX = e.clientX;
+      const larguraInicial = layoutColunas[c].largura;
+      divisor.classList.add("arrastando");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      const aoMover = (ev) => {
+        layoutColunas[c].largura = Math.max(LARGURA_MIN, Math.min(LARGURA_MAX, larguraInicial + ev.clientX - inicioX));
+        aplicarLayoutColunas();
+      };
+      const aoSoltar = () => {
+        document.removeEventListener("mousemove", aoMover);
+        document.removeEventListener("mouseup", aoSoltar);
+        divisor.classList.remove("arrastando");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        salvarLayoutColunas();
+      };
+      document.addEventListener("mousemove", aoMover);
+      document.addEventListener("mouseup", aoSoltar);
+    });
+    divisor.addEventListener("dblclick", () => {
+      layoutColunas[c].largura = LARGURAS_PADRAO[c];
+      layoutColunas[c].colapsada = false;
+      salvarLayoutColunas();
+      aplicarLayoutColunas();
+    });
+  });
+
+  document.querySelectorAll(".botao-colapsar-coluna").forEach(botao => {
+    botao.addEventListener("click", (e) => {
+      e.stopPropagation();  // sem isso o clique borbulha pra coluna recém-colapsada e reabre na hora
+      alternarColuna(botao.dataset.coluna, true);
+    });
+  });
+  ["pool", "rotas"].forEach(c => {
+    const coluna = document.getElementById(`coluna-${c}`);
+    coluna.addEventListener("click", () => {
+      if (layoutColunas[c].colapsada) alternarColuna(c, false);
+    });
+    // arrastar um pedido até uma coluna colapsada reabre ela (mesma
+    // lógica do card de rota colapsado: precisa de um lugar pra soltar)
+    const aoArrastarSobre = () => {
+      if (dragRecente && layoutColunas[c].colapsada) alternarColuna(c, false);
+    };
+    coluna.addEventListener("dragover", aoArrastarSobre);
+    coluna.addEventListener("mousemove", aoArrastarSobre);
+  });
+  aplicarLayoutColunas();
+
+  let tooltipParada = null;      // div única, criada no initMap
+  let liTooltip = null;          // .item-parada atualmente com tooltip aberto
+  let marcadorDestaque = null;   // marcador de destaque do card sob o mouse
+  let liDestaque = null;         // .item-parada atualmente destacado no mapa
 
   function liVisivelNoPool(li) {
     return !li.classList.contains("busca-oculta") &&
@@ -1132,7 +1554,7 @@
       // clicar no campo de posição (modo "digitando a posição") não pode
       // iniciar um drag -- preventOnFilter:false deixa o input funcionar
       filter: "input", preventOnFilter: false,
-      onStart: () => { dragRecente = true; },
+      onStart: () => { dragRecente = true; esconderTooltipParada(); removerDestaqueMapa(); },
       onEnd: (evt) => { onDragEnd(evt); setTimeout(() => { dragRecente = false; }, 0); },
     });
   }
@@ -1348,10 +1770,13 @@
     criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)
 
     // clique (sem drag) num card do pool = (des)seleciona pra rota nova
+    // e centraliza o mapa no ponto do pedido
     listaPool.addEventListener("click", (e) => {
       if (dragRecente) return;
       const li = e.target.closest(".item-parada");
-      if (li) alternarSelecao(Number(li.dataset.serviceId));
+      if (!li) return;
+      alternarSelecao(Number(li.dataset.serviceId));
+      centralizarNoMapa(li);
     });
 
     // filtro por faixa de CEP: aplica na hora e, depois de uma pausa na
@@ -1404,7 +1829,41 @@
       redesenharRota(rascunho.id);
     });
 
+    atualizarBotaoColapsarTodas();
+    document.getElementById("botao-colapsar-todas").addEventListener("click", () => {
+      const cards = Array.from(document.querySelectorAll("#lista-rotas .card-rota"));
+      const colapsar = cards.some(c => !c.classList.contains("colapsada"));
+      cards.forEach(c => definirColapso(c, colapsar));
+    });
+
+    // arrastar um pedido por cima de um card colapsado expande ele na
+    // hora (senão a lista escondida não teria onde receber o drop) --
+    // "dragover" cobre o drag nativo do SortableJS no desktop e
+    // "mousemove" o modo fallback; dragRecente diz se tem drag em curso
+    const expandirSobArrasto = (e) => {
+      if (!dragRecente) return;
+      const card = e.target.closest && e.target.closest(".card-rota.colapsada");
+      if (card) definirColapso(card, false);
+    };
+    listaRotas.addEventListener("dragover", expandirSobArrasto);
+    listaRotas.addEventListener("mousemove", expandirSobArrasto);
+
     listaRotas.addEventListener("click", (e) => {
+      // clique numa parada centraliza o ponto dela no mapa (em qualquer
+      // densidade); o campo de posição (modo "digitando") fica de fora
+      // pra focar o input não sacudir o mapa
+      const liParada = e.target.closest(".item-parada");
+      if (liParada) {
+        if (!dragRecente && e.target.tagName !== "INPUT") centralizarNoMapa(liParada);
+        return;
+      }
+      // clique no cabeçalho (nome/swatch/chevron) colapsa ou expande
+      const cabecalho = e.target.closest(".cabecalho");
+      if (cabecalho) {
+        const card = cabecalho.closest(".card-rota");
+        if (card) definirColapso(card, !card.classList.contains("colapsada"));
+        return;
+      }
       if (e.target.classList.contains("botao-otimizar")) {
         otimizarSequencia(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-descartar")) {
@@ -1457,6 +1916,10 @@
 
     document.getElementById("busca-rotas").addEventListener("input", (e) => {
       const texto = e.target.value.trim().toLowerCase();
+      // durante a busca as rotas colapsadas mostram a lista de paradas
+      // (só visual, o estado de colapso não muda) -- resultado de busca
+      // escondido atrás de um colapso pareceria "não achou"
+      listaRotas.classList.toggle("buscando", !!texto);
       document.querySelectorAll(".card-rota").forEach(card => {
         if (!texto) {
           card.classList.remove("busca-oculta");
@@ -1476,6 +1939,40 @@
         card.classList.toggle("busca-oculta", !nomeRotaBate && !algumaParadaBate);
       });
     });
+
+    // ---- Densidade dos cards + tooltip ----
+    const seletorDensidade = document.getElementById("densidade-cards");
+    seletorDensidade.value = densidadeCards;
+    seletorDensidade.addEventListener("change", () => {
+      densidadeCards = seletorDensidade.value;
+      localStorage.setItem("planejamento.densidadeCards", densidadeCards);
+      aplicarDensidade();
+      esconderTooltipParada();
+    });
+
+    tooltipParada = document.createElement("div");
+    tooltipParada.className = "tooltip-parada";
+    document.body.appendChild(tooltipParada);
+
+    // hover num card: destaca o ponto no mapa em QUALQUER modo (é o
+    // "cadê esse pedido?") e abre o tooltip só nos modos compacto e
+    // "só número" (no normal o card já mostra tudo). Nada disso roda
+    // durante um drag; pointer-events:none no tooltip garante que ele
+    // não rouba o mouse do card embaixo.
+    document.addEventListener("mouseover", (e) => {
+      const li = e.target.closest ? e.target.closest(".item-parada") : null;
+      if (!li || dragRecente) removerDestaqueMapa();
+      else if (li !== liDestaque) destacarNoMapa(li);
+      if (!li || densidadeCards === "normal" || dragRecente) {
+        if (liTooltip && li !== liTooltip) esconderTooltipParada();
+        return;
+      }
+      if (li !== liTooltip) mostrarTooltipParada(li);
+    });
+    // capture pega o scroll das colunas (que não borbulha) -- o card
+    // saiu do lugar, tooltip e destaque fechariam desalinhados
+    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueMapa(); }, true);
+    document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueMapa(); });
   }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
