@@ -323,6 +323,11 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
         "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,
+        # Limites das travas pro card de rota mostrar a ocupação como
+        # barra ANTES de estourar (redesenho 13/08) -- os badges de
+        # trava continuam sendo a palavra final (nível/distância não
+        # viram barra).
+        "travas": {"max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA},
     }
 
 

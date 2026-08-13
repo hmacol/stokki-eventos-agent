@@ -200,6 +200,20 @@
   .card-rota .cabecalho { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
   .card-rota .nome { font-weight: 700; font-size: 12.5px; }
   .card-rota .metricas { font-size: 11px; color: var(--texto-suave); margin: 2px 0 6px; }
+  /* Ocupação da rota vs travas do servidor (redesenho 13/08): a
+     lotação aparece ANTES de estourar -- verde, âmbar >= 90%, vermelho
+     estourado. Badge de trava segue existindo (nível/distância). */
+  .capacidade { display: flex; gap: 10px; margin: 0 0 8px; }
+  .capacidade .trilha-cap { flex: 1; min-width: 0; }
+  .capacidade .rotulo-cap {
+    display: flex; justify-content: space-between; gap: 6px;
+    font-size: 10px; color: var(--texto-suave); margin-bottom: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .capacidade .barra-cap { height: 4px; border-radius: 4px; background: #ECEEF1; overflow: hidden; }
+  .capacidade .fill-cap { height: 100%; border-radius: 4px; background: var(--acento); }
+  .capacidade .fill-cap.alerta { background: #E8A33D; }
+  .capacidade .fill-cap.estouro { background: var(--erro); }
   .card-rota select {
     width: 100%;
     font-size: 12px;
@@ -378,6 +392,7 @@
   const MOTORISTAS = {{ dados.motoristas | tojson }};
   const DATA_ALVO_ISO = {{ dados.data_alvo_iso | tojson }};
   const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
+  const TRAVAS = {{ dados.travas | tojson }};
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
   // 12/08): vermelho é reservado pros pedidos NÃO ALOCADOS no mapa --
   // rota vermelha confundiria com pool. O verde acento também fica de
@@ -502,11 +517,27 @@
   }
 
   function metricasTexto(rascunho) {
-    // totalizador da rota: paradas, caixas (mesmo fallback de 1 caixa
-    // por pedido sem volume usado nas travas do servidor) e km estimado
-    const km = rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km` : "km ?";
+    // só o km estimado -- paradas e caixas moram nas barras de
+    // capacidade (capacidadeHtml), já comparadas com as travas
+    return rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km estimado` : "km ?";
+  }
+
+  function barraCapacidadeHtml(rotulo, valor, maximo) {
+    const pct = Math.min(100, Math.round(100 * valor / maximo));
+    const classe = valor > maximo ? "estouro" : (valor >= 0.9 * maximo ? "alerta" : "");
+    return `<div class="trilha-cap" title="trava do servidor: ${maximo} ${rotulo} por rota — âmbar a partir de 90%">
+      <div class="rotulo-cap"><span>${rotulo}</span><span>${valor}/${maximo}</span></div>
+      <div class="barra-cap"><div class="fill-cap ${classe}" style="width:${pct}%"></div></div>
+    </div>`;
+  }
+
+  function capacidadeHtml(rascunho) {
+    // ocupação vs travas (mesmo fallback de 1 caixa por pedido sem
+    // volume das travas do servidor) -- nível/distância continuam só
+    // como badge, não têm leitura de "lotação"
     const caixas = rascunho.paradas.reduce((soma, p) => soma + (p.volume_caixas || 1), 0);
-    return `${rascunho.paradas.length} parada(s) — ${caixas} caixa(s) — ${km}`;
+    return barraCapacidadeHtml("caixas", caixas, TRAVAS.max_caixas) +
+           barraCapacidadeHtml("paradas", rascunho.paradas.length, TRAVAS.max_paradas);
   }
 
   function badgesHtml(badges) {
@@ -585,6 +616,7 @@
         <span class="nome">${escaparHtml(rascunho.nome)}</span>
       </div>
       <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
+      <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${enviada ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
@@ -608,6 +640,8 @@
     if (metricasEl) {
       metricasEl.textContent = metricasTexto(rascunho);
     }
+    const capacidadeEl = document.getElementById(`capacidade-${rascunho.id}`);
+    if (capacidadeEl) capacidadeEl.innerHTML = capacidadeHtml(rascunho);
     const badgesEl = document.getElementById(`badges-${rascunho.id}`);
     if (badgesEl) badgesEl.innerHTML = badgesHtml(rascunho.badges);
     renumerarRota(rascunho.id);
