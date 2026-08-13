@@ -131,6 +131,37 @@ def baixar_documento(page, url_documento: str, nome_arquivo: str) -> Path | None
         return None
 
 
+def localizar_link_xml_nfe(page) -> str | None:
+    """
+    Acha o link do XML da NF-e (href contendo "/xml/nfe/") na aba
+    Documentos do pedido -- mesma varredura de listar_documentos_da_aba(),
+    mas devolvendo esse link em vez de descartá-lo (usado pela notificação
+    de transportadoras, que precisa do XML cru, não do DANFE em PDF --
+    pedido do Hugo, 13/08, ver notificacao_transportadoras/). A page já
+    precisa estar na tela /provider/.../show/{id} (ver buscar_documentos_do_pedido).
+    """
+    if not page.query_selector("#document"):
+        return None
+    for callout in page.query_selector_all("#document .callout"):
+        link_el = callout.query_selector("a.btn")
+        if not link_el:
+            continue
+        href = link_el.get_attribute("href") or ""
+        if href and "/xml/nfe/" in href:
+            return href
+    return None
+
+
+def baixar_xml_nfe(page, codigo_ps: str) -> Path | None:
+    """Baixa o XML cru da NF-e do pedido (a page já precisa estar na tela
+    /provider/.../show/{id} desse pedido). Retorna None se o pedido não
+    tem XML anexado -- não é erro, só não tem o que baixar."""
+    href = localizar_link_xml_nfe(page)
+    if not href:
+        return None
+    return baixar_documento(page, href, f"{codigo_ps}_NFe.xml")
+
+
 def gerar_danfe(page, codigo_ps: str) -> Path | None:
     """
     Gera o PDF do DANFE pro pedido (a page já precisa estar na tela

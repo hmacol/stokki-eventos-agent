@@ -16,6 +16,7 @@ Uso:
 """
 import logging
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -85,19 +86,26 @@ def envelope_html(conteudo: str, rodape: str = "Esta e uma mensagem automatica d
 </body></html>"""
 
 
-def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config_email: dict) -> bool:
+def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config_email: dict,
+                 cc: list[str] | None = None, anexos: list[tuple[Path, str]] | None = None) -> bool:
     """
     Envia um e-mail HTML via SMTP (mesmo padrão de notificar_pedidos_em_espera.py).
 
     config_email: a seção `email:` do config.yaml (remetente, senha_app/senha,
-    smtp_host, smtp_port). Retorna True em sucesso, False em falha (logada,
-    nunca levanta exceção — quem chama decide o que fazer com o retorno).
+    smtp_host, smtp_port). cc: e-mails em cópia (opcional). anexos: lista de
+    (caminho_arquivo, nome_arquivo) pra anexar como MIMEApplication (opcional
+    -- pedido do Hugo, 13/08, pra notificação de transportadoras com XML da
+    NF-e, ver notificacao_transportadoras/). Retorna True em sucesso, False
+    em falha (logada, nunca levanta exceção — quem chama decide o que fazer
+    com o retorno).
     """
     try:
         msg = MIMEMultipart("related")
         msg["Subject"] = sanitizar_cabecalho(assunto)
         msg["From"]    = config_email.get("remetente", "hugo@freshlogbr.com")
         msg["To"]      = ", ".join(destinatarios)
+        if cc:
+            msg["Cc"] = ", ".join(cc)
 
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(corpo_html, "html", "utf-8"))
@@ -110,6 +118,13 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
             img.add_header("Content-Disposition", "inline", filename="logo_freshlog.png")
             msg.attach(img)
 
+        for caminho, nome_arquivo in (anexos or []):
+            subtipo = Path(nome_arquivo).suffix.lstrip(".").lower() or "octet-stream"
+            with open(caminho, "rb") as f:
+                anexo = MIMEApplication(f.read(), _subtype=subtipo)
+            anexo.add_header("Content-Disposition", "attachment", filename=nome_arquivo)
+            msg.attach(anexo)
+
         usuario = config_email.get("remetente", "hugo@freshlogbr.com")
         senha   = config_email.get("senha_app") or config_email.get("senha", "")
         host    = config_email.get("smtp_host", "smtp.gmail.com")
@@ -118,8 +133,9 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
         with smtplib.SMTP(host, port, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(usuario, senha)
-            smtp.send_message(msg)
-        logger.info(f"E-mail enviado para {destinatarios}: {assunto!r}")
+            smtp.send_message(msg, to_addrs=list(destinatarios) + list(cc or []))
+        logger.info(f"E-mail enviado para {destinatarios}"
+                   f"{f' (cc: {cc})' if cc else ''}: {assunto!r}")
         return True
     except Exception as e:
         logger.error(f"Falha ao enviar e-mail para {destinatarios}: {e}")

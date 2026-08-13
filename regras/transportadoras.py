@@ -6,17 +6,20 @@ Resolução de transportadoras: dado o nome de uma transportadora vindo
 do Stokki, determina seu Tipo (ENTREGA / RETIRADA / TERCEIROS) e, se
 for TERCEIROS, retorna o endereço fixo de redespacho.
 
-Fonte de verdade: BD_TRANSPORTADORAS.xlsx (colunas A-I).
+Fonte de verdade: BD_TRANSPORTADORAS.xlsx (colunas A-I, S, T).
   A: TRANSPORTADORA (nome, pode ter variações de grafia)
   B: Tipo (ENTREGA | RETIRADA | TERCEIROS)
   C-I: Destinatário - UF, Municipio, Bairro, Endereço, Numero, Complemento, CEP
+  S: CNPJ (posição dinâmica, ver varredura em carregar())
+  T: E-mail (pedido do Hugo, 13/08 -- notificação de transportadoras com
+     XML da NF-e, ver notificacao_transportadoras/)
 
-Limitação conhecida: a planilha não tem coluna de CNPJ ainda.
 Enquanto isso, o matching é feito por nome normalizado (sem acentos,
-sem maiúsculas, sem sufixos jurídicos). Quando o mesmo nome normalizado
-aparecer com tipos diferentes (conflito real, ex: TRANSFRIOS e LOGGI),
-o método resolve() retorna um TipoDesconhecido com detalhe do conflito
-— não escolhe silenciosamente um dos dois.
+sem maiúsculas, sem sufixos jurídicos) quando o CNPJ não está preenchido.
+Quando o mesmo nome normalizado aparecer com tipos diferentes (conflito
+real, ex: TRANSFRIOS e LOGGI), o método resolve() retorna um
+TipoDesconhecido com detalhe do conflito — não escolhe silenciosamente
+um dos dois.
 
 Uso:
     from regras.transportadoras import CatalogoTransportadoras
@@ -72,6 +75,7 @@ class ResultadoResolucao:
     tipo:                ENTREGA | RETIRADA | TERCEIROS | None
     nome_normalizado:    nome após normalização (para debug)
     endereco_redespacho: preenchido só se tipo == "TERCEIROS"
+    email:               e-mail de contato da transportadora (planilha, coluna T) -- "" se não cadastrado
     desconhecida:        True quando a transportadora não foi encontrada
     conflito:            True quando há ambiguidade irresolvível no catálogo
     motivo:              descrição do problema (quando desconhecida ou conflito)
@@ -80,6 +84,7 @@ class ResultadoResolucao:
     nome_original: str
     nome_normalizado: str
     endereco_redespacho: EnderecoRedespacho | None = None
+    email: str = ""
     desconhecida: bool = False
     conflito: bool = False
     motivo: str = ""
@@ -93,6 +98,7 @@ class _Entrada:
     cnpj: str
     tipo: str
     endereco: EnderecoRedespacho | None
+    email: str = ""
 
 
 class CatalogoTransportadoras:
@@ -167,6 +173,13 @@ class CatalogoTransportadoras:
                     cnpj = val_str
                     break
 
+            # E-mail -- coluna T (índice 19), logo após o CNPJ. Posição fixa
+            # (diferente do CNPJ, que varre um intervalo): não colide com a
+            # varredura de CNPJ acima porque e-mail nunca é só-dígitos.
+            email = ""
+            if len(row) > 19 and row[19]:
+                email = str(row[19]).strip()
+
             endereco = None
             if tipo == "TERCEIROS":
                 uf  = str(row[2] or "").strip()
@@ -187,6 +200,7 @@ class CatalogoTransportadoras:
                 cnpj=cnpj,
                 tipo=tipo,
                 endereco=endereco,
+                email=email,
             ))
 
         wb.close()
@@ -230,6 +244,7 @@ class CatalogoTransportadoras:
                 nome_original=nome_transportadora or entrada.nome_original,
                 nome_normalizado=entrada.nome_normalizado,
                 endereco_redespacho=entrada.endereco if entrada.tipo == "TERCEIROS" else None,
+                email=entrada.email,
             )
 
         # Prioridade 2: nome normalizado
@@ -275,12 +290,14 @@ class CatalogoTransportadoras:
 
         # Para TERCEIROS, pega o endereço da primeira entrada com endereço preenchido
         endereco = next((e.endereco for e in candidatos if e.endereco), None)
+        email = next((e.email for e in candidatos if e.email), "")
 
         return ResultadoResolucao(
             tipo=tipo,
             nome_original=nome_transportadora,
             nome_normalizado=nome_norm,
             endereco_redespacho=endereco if tipo == "TERCEIROS" else None,
+            email=email,
         )
 
     def listar_conflitos(self) -> list[str]:
