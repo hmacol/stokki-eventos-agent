@@ -18,6 +18,13 @@
 # atrasa o aviso ao cliente). Os incrementos de hora em hora à noite
 # (task StokkiEventos_SequenciaNoite, 22:00) já encontram as rotas
 # criadas aqui -- pode ser rodado manualmente também, pra testar.
+#
+# CriarRotasDiarias roda com --gerar-rascunho (pedido do Hugo, 13/08):
+# as rotas do dia não vão mais direto pra VUUPT, ficam paradas em
+# /planejamento pra revisão manual até alguém clicar "Confirmar e
+# Enviar". Ver rodar_sequencial_noite.ps1 (EnviarRascunhosPendentes) --
+# rede de segurança que envia o que não foi confirmado a tempo, pra
+# IncrementarRotas (22h) sempre achar as rotas de hoje na VUUPT.
 
 $Raiz = "C:\agente_stokki_eventos"
 # Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem
@@ -30,7 +37,7 @@ $LogDir = "$Raiz\dados"
 $passos = @(
     @{ Nome = "ExecutarTudo"; Script = "$Raiz\executar_tudo.py"; Cwd = $Raiz }
     @{ Nome = "VerificarDuplicadosVuupt"; Script = "$Raiz\verificar_pedidos_duplicados_vuupt.py"; Cwd = $Raiz }
-    @{ Nome = "CriarRotasDiarias"; Script = "$Raiz\roteirizacao\criar_rotas_diarias.py"; Cwd = "$Raiz\roteirizacao" }
+    @{ Nome = "CriarRotasDiarias"; Script = "$Raiz\roteirizacao\criar_rotas_diarias.py"; Args = @("--gerar-rascunho"); Cwd = "$Raiz\roteirizacao" }
     @{ Nome = "Notificador"; Script = "$Raiz\notificar_pedidos_em_espera.py"; Cwd = $Raiz }
     @{ Nome = "ProcessarDocumentos"; Script = "$Raiz\documentos_pedido\processar_documentos.py"; Cwd = "$Raiz\documentos_pedido" }
 )
@@ -48,7 +55,8 @@ foreach ($passo in $passos) {
     # -Wait garante que só volta quando o processo TERMINOU de verdade
     # (sucesso ou erro) -- é isso que faz o próximo passo só começar
     # depois que esse encerrou, sem depender de horário nenhum.
-    $processo = Start-Process -FilePath $Python -ArgumentList @("-3.11", $passo.Script) `
+    $argumentos = @("-3.11", $passo.Script) + $(if ($passo.Args) { $passo.Args } else { @() })
+    $processo = Start-Process -FilePath $Python -ArgumentList $argumentos `
         -WorkingDirectory $passo.Cwd -NoNewWindow -Wait -PassThru `
         -RedirectStandardOutput "$LogDir\$($passo.Nome)_sequencia_stdout.log" `
         -RedirectStandardError "$LogDir\$($passo.Nome)_sequencia_stderr.log"

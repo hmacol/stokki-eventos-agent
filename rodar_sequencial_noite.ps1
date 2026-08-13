@@ -8,9 +8,14 @@
 # StokkiEventos_SequenciaNoite, 22:00): ExecutarTudo faz a última
 # correção de pedidos do dia (agendamento/insucesso/impressão/
 # importação), VerificarDuplicadosVuupt limpa cópias sobressalentes
-# antes do incremento, e IncrementarRotas aloca na rota do dia
-# qualquer pedido novo que tenha entrado depois da CriarRotasDiarias
-# da tarde -- pode ser rodado manualmente também, pra testar.
+# antes do incremento, EnviarRascunhosPendentes confirma pra VUUPT
+# qualquer rascunho de /planejamento que o Hugo não tenha enviado a
+# tempo (pedido do Hugo, 13/08 -- desde que CriarRotasDiarias das 18h
+# passou a gerar rascunho em vez de criar direto, IncrementarRotas só
+# encontra rota "de hoje" se ela já tiver sido confirmada), e por
+# último IncrementarRotas aloca na rota do dia qualquer pedido novo
+# que tenha entrado depois da CriarRotasDiarias da tarde -- pode ser
+# rodado manualmente também, pra testar.
 
 $Raiz = "C:\agente_stokki_eventos"
 # Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem
@@ -23,6 +28,7 @@ $LogDir = "$Raiz\dados"
 $passos = @(
     @{ Nome = "ExecutarTudo"; Script = "$Raiz\executar_tudo.py"; Cwd = $Raiz }
     @{ Nome = "VerificarDuplicadosVuupt"; Script = "$Raiz\verificar_pedidos_duplicados_vuupt.py"; Cwd = $Raiz }
+    @{ Nome = "EnviarRascunhosPendentes"; Script = "$Raiz\roteirizacao\enviar_rascunhos_pendentes.py"; Cwd = "$Raiz\roteirizacao" }
     @{ Nome = "IncrementarRotas"; Script = "$Raiz\roteirizacao\incrementar_rotas.py"; Cwd = "$Raiz\roteirizacao" }
 )
 
