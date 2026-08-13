@@ -33,8 +33,57 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from geocodificacao import geocodificar
+from regioes_dia_fixo import RAIO_GRANDE_SP_KM, extrair_cidade, regiao_externa_da_cidade
 
 logger = logging.getLogger(__name__)
+
+# Coordenada de referência do centro de São Paulo (Praça da Sé) -- a
+# mesma já usada em alocacao_motoristas.py (COORD_BASE_SP) e zonas_sp.py
+# (COORD_CENTRO_SP) como origem do raio da Grande SP.
+COORD_CENTRO_SP = (-23.550520, -46.633309)
+
+# Macro-regiões (pedido do Hugo, 12/08: "limitador dentro da Grande São
+# Paulo... pedidos de Sorocaba não se misturariam com pedidos de Barueri
+# automaticamente"): TRAVA RÍGIDA de partição -- nenhuma rota mistura
+# pedidos de macro-regiões diferentes. As macros são: GRANDE_SP (dentro
+# do raio de 70km e fora de região externa), o NOME de cada região
+# externa de dia fixo (Sorocaba, Campinas, Vale do Paraíba, Baixada
+# Santista, Piracicaba -- cada uma é uma direção/estrada diferente,
+# também não se misturam ENTRE SI), e VIAGEM pra pedido a mais de 70km
+# sem região externa cadastrada.
+MACRO_GRANDE_SP = "GRANDE_SP"
+MACRO_VIAGEM_GENERICA = "VIAGEM"
+
+
+def macro_regiao_do_servico(servico: dict, api_key: str | None = None) -> str:
+    """
+    Macro-região de UM serviço: nome da região externa (pela cidade do
+    endereço), VIAGEM se a coordenada está a mais de RAIO_GRANDE_SP_KM
+    do centro de SP sem região externa cadastrada, senão GRANDE_SP.
+    Sem cidade E sem coordenada reconhecível: GRANDE_SP (mesmo padrão
+    seguro do resto do módulo -- dado ausente não muda comportamento,
+    o pedido segue no fluxo urbano normal).
+    """
+    cidade = extrair_cidade(servico)
+    if cidade:
+        externa = regiao_externa_da_cidade(cidade)
+        if externa:
+            return externa
+
+    coords = obter_coordenadas(servico, api_key)
+    if coords and _distancia_km(*coords, *COORD_CENTRO_SP) > RAIO_GRANDE_SP_KM:
+        return MACRO_VIAGEM_GENERICA
+    return MACRO_GRANDE_SP
+
+
+def particionar_por_macro_regiao(servicos: list[dict], api_key: str | None = None) -> dict[str, list[dict]]:
+    """Particiona os serviços por macro-região (ver macro_regiao_do_servico)
+    -- quem roteiriza deve rodar o agrupamento SEPARADO por partição, pra
+    nenhuma rota cruzar a fronteira Grande SP x regiões externas."""
+    particoes: dict[str, list[dict]] = defaultdict(list)
+    for s in servicos:
+        particoes[macro_regiao_do_servico(s, api_key)].append(s)
+    return dict(particoes)
 
 
 def elegivel_para_data(servico: dict, data_alvo) -> bool:
@@ -191,6 +240,12 @@ def agrupar_por_regiao(servicos: list[dict], api_key: str | None = None,
     proxy. Sem coordenada, cai pro prefixo do CEP (2 dígitos por
     padrão) como reserva; sem CEP nenhum, vai pro grupo "sem_localizacao".
 
+    A chave de cada região vem PREFIXADA com a macro-região
+    ("GRANDE_SP|-23.55,-46.63", "Sorocaba|-23.47,-47.45"...) -- pedido
+    do Hugo, 12/08: consolidar_regioes_pequenas só funde regiões da
+    MESMA macro, então nenhuma rota mistura Grande SP com região
+    externa, nem duas regiões externas entre si.
+
     Este agrupamento inicial é intencionalmente fino (regiões pequenas)
     -- quem chama deve usar consolidar_regioes_pequenas() em seguida
     pra fundir até o volume mínimo desejado por rota.
@@ -206,8 +261,16 @@ def agrupar_por_regiao(servicos: list[dict], api_key: str | None = None,
         else:
             cep = extrair_cep(s)
             regiao = cep[:digitos_prefixo] if cep else "sem_localizacao"
-        grupos[regiao].append(s)
+        macro = macro_regiao_do_servico(s, api_key)
+        grupos[f"{macro}|{regiao}"].append(s)
     return dict(grupos)
+
+
+def _macro_da_chave(chave_regiao: str) -> str:
+    """Macro-região embutida na chave de agrupar_por_regiao ("Macro|célula").
+    Chave sem prefixo (chamador antigo/externo): macro vazia -- todas as
+    regiões sem prefixo continuam podendo se fundir entre si, como antes."""
+    return chave_regiao.split("|", 1)[0] if "|" in chave_regiao else ""
 
 
 def _centroide_coords(servicos: list[dict], api_key: str | None) -> tuple[float, float] | None:
@@ -242,19 +305,28 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
     otimização exige mínimo de 2 atividades) -- com minimo>=2 (padrão
     é 10), isso sempre é resolvido no caminho.
 
+    Só funde regiões da MESMA macro-região (prefixo da chave, ver
+    agrupar_por_regiao -- pedido do Hugo, 12/08): região pequena sem
+    vizinha na própria macro fica pequena mesmo (uma rota de Sorocaba
+    com 3 pedidos é melhor que Sorocaba fundida com Barueri).
+
     Proximidade pelo CENTROIDE de coordenadas reais quando disponível
     (mesma lógica geográfica do resto do módulo); cai pro CEP médio
     como reserva. Nunca deixa nenhum pedido de fora.
     """
     atual = {regiao: list(servicos) for regiao, servicos in grupos.items()}
+    sem_vizinha: set[str] = set()  # pequenas sem candidata na própria macro -- não readressáveis
 
     while len(atual) > 1:
-        pequenas = [r for r, s in atual.items() if len(s) < minimo]
+        pequenas = [r for r, s in atual.items() if len(s) < minimo and r not in sem_vizinha]
         if not pequenas:
             break
 
         menor = min(pequenas, key=lambda r: len(atual[r]))
-        candidatas = [r for r in atual if r != menor]
+        candidatas = [r for r in atual if r != menor and _macro_da_chave(r) == _macro_da_chave(menor)]
+        if not candidatas:
+            sem_vizinha.add(menor)
+            continue
 
         centroide_menor = _centroide_coords(atual[menor], api_key)
         candidatas_com_coords = [c for c in candidatas if _centroide_coords(atual[c], api_key)]

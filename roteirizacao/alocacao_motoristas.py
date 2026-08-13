@@ -8,48 +8,39 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 
 Reaproveita a infraestrutura já existente do módulo de roteirização em
 vez de duplicar:
-  - regioes_dia_fixo.py: RAIO_GRANDE_SP_KM (70km) e a lista de cidades
-    das regiões externas (Vale do Paraíba, Baixada Santista, Sorocaba,
-    Campinas, Piracicaba) já cadastradas ali como regiões de dia fixo
-    -- são exatamente as "regiões externas" citadas na especificação.
-  - roteirizacao_dados.py: obter_coordenadas/_distancia_km, com o mesmo
-    cache de geocodificação já usado no resto do agrupamento de rotas.
+  - roteirizacao_dados.py: macro_regiao_do_servico (12/08 -- a mesma
+    classificação Grande SP x região externa x Viagem que particiona as
+    rotas por macro-região), com o mesmo cache de geocodificação já
+    usado no resto do agrupamento de rotas.
 """
 import logging
 from datetime import date
 
-from regioes_dia_fixo import RAIO_GRANDE_SP_KM, extrair_cidade, regiao_da_cidade
-from roteirizacao_dados import obter_coordenadas, _distancia_km
+from roteirizacao_dados import macro_regiao_do_servico, MACRO_GRANDE_SP
 from zonas_sp import classificar_rota_zona
 from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
 
 logger = logging.getLogger(__name__)
 
-# Coordenada de referência de São Paulo (centro), mesma usada como base
-# do raio da Grande SP em regioes_dia_fixo.py (ENDERECO_REFERENCIA_SP).
-COORD_BASE_SP = (-23.550520, -46.633309)
-
 
 def classificar_rota_viagem(sublote: list[dict], api_key: str | None = None) -> bool:
     """
     Retorna True se ao menos 1 entrega do sublote for "Viagem": cidade
-    pertencente a uma das regiões externas (Vale do Paraíba, Baixada
+    pertencente a uma das regiões EXTERNAS (Vale do Paraíba, Baixada
     Santista, Sorocaba, Campinas, Piracicaba) OU distância > 70km do
-    centro de São Paulo. Serviço sem cidade/coordenada reconhecível não
-    conta como viagem por falta de dado (mesmo padrão seguro do resto
-    do módulo -- não bloqueia por dado ausente).
+    centro de São Paulo -- delega pra macro_regiao_do_servico
+    (roteirizacao_dados.py), a mesma classificação que particiona as
+    rotas por macro-região. Barueri e ABCD (regiões de dia fixo DENTRO
+    da Grande SP, adicionadas em 12/08) NÃO contam como Viagem --
+    contavam por efeito colateral entre 12/08 e esta correção. Serviço
+    sem cidade/coordenada reconhecível não conta como viagem por falta
+    de dado (mesmo padrão seguro do resto do módulo).
     """
-    for servico in sublote:
-        cidade = extrair_cidade(servico)
-        if cidade and regiao_da_cidade(cidade):
-            return True
-
-        coords = obter_coordenadas(servico, api_key)
-        if coords and _distancia_km(*COORD_BASE_SP, *coords) > RAIO_GRANDE_SP_KM:
-            return True
-
-    return False
+    return any(
+        macro_regiao_do_servico(servico, api_key) != MACRO_GRANDE_SP
+        for servico in sublote
+    )
 
 
 def selecionar_motorista_equitativo(

@@ -44,6 +44,7 @@ import logging
 import re
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
@@ -74,7 +75,7 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km, agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, ordenar_por_distancia_base
+from roteirizacao_dados import obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km, agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, ordenar_por_distancia_base, macro_regiao_do_servico
 from rotas_client import listar_rotas, criar_rota, adicionar_atividades, atualizar_rota
 from criar_rotas_diarias import (
     BASE_LOCATION_ID, ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
@@ -469,6 +470,13 @@ def main(modo_teste: bool = False):
             servicos_rota = _extrair_servicos_da_rota(r)
             for s in servicos_rota:
                 todos_servicos_por_id[s["id"]] = s
+            # Macro-região da rota (trava de macro, pedido do Hugo,
+            # 12/08): a mais FREQUENTE entre as entregas (moda) -- rotas
+            # criadas depois da trava são de macro única por construção;
+            # a moda cobre rota antiga/manual eventualmente mista. Rota
+            # sem serviço classificável: None (não restringe).
+            macros_rota = [macro_regiao_do_servico(s, gmaps_key) for s in servicos_rota]
+            macro_rota = Counter(macros_rota).most_common(1)[0][0] if macros_rota else None
             info_rotas.append({
                 "id": r["id"], "nome": r["name"],
                 "centroide": _centroide_rota(r, gmaps_key), "qtd": len(servicos_rota),
@@ -476,6 +484,7 @@ def main(modo_teste: bool = False):
                 "service_ids": [s["id"] for s in servicos_rota],
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
+                "macro": macro_rota,
             })
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
@@ -512,6 +521,15 @@ def main(modo_teste: bool = False):
             # permissão está sendo violada nesse caso.
             pedido_eh_viagem = classificar_rota_viagem([pedido], gmaps_key)
 
+            # Trava de MACRO-REGIÃO (pedido do Hugo, 12/08: "pedidos de
+            # Sorocaba não se misturariam com pedidos de Barueri"):
+            # pedido só entra em rota existente da MESMA macro-região
+            # (Grande SP x cada região externa). A trava de distância de
+            # 20km no centroide (abaixo) já barra a maioria dos casos,
+            # mas não todos -- ex: rota só de Suzano (Vale do Paraíba)
+            # tem centroide a ~14km de Itaquera, dentro do raio.
+            pedido_macro = macro_regiao_do_servico(pedido, gmaps_key)
+
             # Trava de Zona (pedido do Hugo, 10/08): mesma lógica, mas
             # pra preferência de área dentro da Grande SP -- só se
             # aplica quando o pedido NÃO é viagem (zona não importa pra
@@ -543,6 +561,7 @@ def main(modo_teste: bool = False):
                 candidatas_com_espaco = [
                     r for r in info_rotas
                     if r["qtd"] < TAMANHO_MAXIMO_ROTA and r["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+                    and (r["macro"] is None or r["macro"] == pedido_macro)
                     and (
                         not pedido_eh_viagem
                         or r["agent_id"] is None
@@ -575,9 +594,15 @@ def main(modo_teste: bool = False):
                         rota_escolhida = min(
                             candidatas_no_raio, key=lambda r: _distancia_km(*coords_pedido, *r["centroide"])
                         )
-                elif candidatas_com_espaco:
+                elif not pedido_eh_viagem and candidatas_com_espaco:
                     # sem coordenada do pedido (ou nenhuma rota com centroide
-                    # disponível) -- pega a rota com mais espaço livre, último recurso
+                    # disponível) -- pega a rota com mais espaço livre, último
+                    # recurso. Pedido de VIAGEM nunca usa esse caminho (trava
+                    # de macro-região, pedido do Hugo, 12/08): sem coordenada
+                    # não dá pra verificar proximidade, mas a CIDADE já diz
+                    # que ele é fora da Grande SP -- entrar na rota "com mais
+                    # espaço" misturaria Sorocaba com rota urbana. Vira órfão
+                    # e se agrupa com a própria macro-região logo abaixo.
                     rota_escolhida = max(candidatas_com_espaco, key=lambda r: TAMANHO_MAXIMO_ROTA - r["qtd"])
 
                 if not rota_escolhida:
@@ -685,6 +710,8 @@ def main(modo_teste: bool = False):
                                 "caixas": sum(extrair_volume_caixas(s) for s in sublote),
                                 "service_ids": service_ids,
                                 "agent_id": agent_id, "vehicle_id": vehicle_id,
+                                # rota nova é de macro única por construção (trava 12/08)
+                                "macro": macro_regiao_do_servico(sublote[0], gmaps_key),
                             })
                             rotas_afetadas.add(rota["id"])
                         except Exception as e:

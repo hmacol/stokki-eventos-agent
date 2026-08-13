@@ -55,20 +55,29 @@ DIAS_NOMES = {SEGUNDA: "Segunda", TERCA: "Terça", QUARTA: "Quarta",
 # recebem em mais de um dia) e lista de cidades. Biritiba Mirim
 # incluída em 12/08 (estava no comentário do topo desde 02/08, mas
 # faltava na lista efetiva).
+#
+# "externa" (12/08, pedido do Hugo: "pedidos de Sorocaba não se
+# misturariam com pedidos de Barueri"): True = região FORA da Grande SP
+# (rota de Viagem, sem limite de distância entre pedidos, motorista que
+# aceita viagem); False = região DENTRO da Grande SP que só está aqui
+# pelo dia fixo (Barueri, ABCD) -- entrega urbana normal. Quando Barueri
+# e ABCD entraram nesta lista (12/08), classificar_rota_viagem passou a
+# tratá-los como Viagem por efeito colateral (ela considerava Viagem
+# qualquer cidade de REGIOES) -- este flag desfaz isso.
 REGIOES: list[dict] = [
-    {"nome": "Vale do Paraíba", "dias": [SEGUNDA],
+    {"nome": "Vale do Paraíba", "dias": [SEGUNDA], "externa": True,
      "cidades": ["SUZANO", "MOGI DAS CRUZES", "BIRITIBA MIRIM", "JACAREI", "SAO JOSE DOS CAMPOS"]},
-    {"nome": "Baixada Santista", "dias": [TERCA],
+    {"nome": "Baixada Santista", "dias": [TERCA], "externa": True,
      "cidades": ["CUBATAO", "SAO VICENTE", "SANTOS", "GUARUJA", "PRAIA GRANDE"]},
-    {"nome": "Sorocaba", "dias": [TERCA],
+    {"nome": "Sorocaba", "dias": [TERCA], "externa": True,
      "cidades": ["SOROCABA", "VOTORANTIM", "SAO ROQUE", "ITU", "SALTO"]},
-    {"nome": "Campinas", "dias": [QUARTA],
+    {"nome": "Campinas", "dias": [QUARTA], "externa": True,
      "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA"]},
-    {"nome": "Piracicaba", "dias": [QUARTA],
+    {"nome": "Piracicaba", "dias": [QUARTA], "externa": True,
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
-    {"nome": "Barueri", "dias": [TERCA, QUINTA],
+    {"nome": "Barueri", "dias": [TERCA, QUINTA], "externa": False,
      "cidades": ["BARUERI", "SANTANA DO PARNAIBA", "JANDIRA"]},
-    {"nome": "ABCD", "dias": [SEGUNDA, QUARTA, SEXTA],
+    {"nome": "ABCD", "dias": [SEGUNDA, QUARTA, SEXTA], "externa": False,
      "cidades": ["SANTO ANDRE", "SAO BERNARDO DO CAMPO", "SAO CAETANO DO SUL",
                  "DIADEMA", "RIBEIRAO PIRES", "MAUA"]},
 ]
@@ -115,12 +124,15 @@ def _normalizar_texto(s) -> str:
 
 
 def _montar_indice() -> dict[str, dict]:
-    """Índice invertido (cidade normalizada -> {"dias", "regiao"}),
-    montado uma vez a partir de REGIOES."""
+    """Índice invertido (cidade normalizada -> {"dias", "regiao",
+    "externa"}), montado uma vez a partir de REGIOES."""
     indice = {}
     for regiao in REGIOES:
         for cidade in regiao["cidades"]:
-            indice[_normalizar_texto(cidade)] = {"dias": regiao["dias"], "regiao": regiao["nome"]}
+            indice[_normalizar_texto(cidade)] = {
+                "dias": regiao["dias"], "regiao": regiao["nome"],
+                "externa": regiao.get("externa", False),
+            }
     return indice
 
 
@@ -174,6 +186,17 @@ def regiao_da_cidade(cidade: str) -> str | None:
     None se não estiver em nenhuma região com dia fixo."""
     info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
     return info["regiao"] if info else None
+
+
+def regiao_externa_da_cidade(cidade: str) -> str | None:
+    """Nome da região EXTERNA (fora da Grande SP -- Sorocaba, Campinas,
+    Vale do Paraíba, Baixada Santista, Piracicaba) dessa cidade, ou None
+    se a cidade não está em região nenhuma OU está numa região interna
+    de dia fixo (Barueri, ABCD -- dentro da Grande SP). É a função certa
+    pra decidir Viagem x Grande SP; regiao_da_cidade serve pra dia fixo
+    e mensagens."""
+    info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
+    return info["regiao"] if info and info["externa"] else None
 
 
 def regra_dia_fixo_do_servico(servico: dict) -> dict | None:

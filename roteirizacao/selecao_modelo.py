@@ -36,7 +36,7 @@ from pathlib import Path
 
 from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
-    calcular_km_estimado, extrair_volume_caixas,
+    calcular_km_estimado, extrair_volume_caixas, particionar_por_macro_regiao,
 )
 from otimizacao_rotas import agrupar_por_sweep, agrupar_por_savings, ordenar_2opt
 from alocacao_motoristas import classificar_rota_viagem
@@ -108,23 +108,39 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     (nome_do_vencedor, sublotes_já_sequenciados_com_2opt), prontos pra
     virar rotas de verdade. Critério: menos rotas; empate decidido
     pelo menor KM total estimado.
+
+    Trava de macro-região (pedido do Hugo, 12/08): os pedidos são
+    particionados por macro-região (Grande SP x cada região externa x
+    Viagem genérica) ANTES de qualquer modelo rodar, e cada candidato
+    agrupa cada partição em separado -- nenhum modelo tem como produzir
+    rota misturando Sorocaba com Barueri, por exemplo. A comparação e o
+    vencedor continuam GLOBAIS (soma das partições), uma linha de
+    histórico por partição de carga, como antes.
     """
     eh_viagem_fn = lambda sub: classificar_rota_viagem(sub, gmaps_key)
 
+    particoes_macro = particionar_por_macro_regiao(servicos, gmaps_key)
+    if len(particoes_macro) > 1:
+        resumo = ", ".join(f"{macro}: {len(svcs)}" for macro, svcs in sorted(particoes_macro.items()))
+        logger.info(f"[{label}] Macro-regiões do dia (roteirizadas em separado) -- {resumo}.")
+
+    def _por_macro(agrupar_uma_particao) -> list[list[dict]]:
+        return [sub for svcs in particoes_macro.values() for sub in agrupar_uma_particao(svcs)]
+
     candidatos = {
-        "Atual (Grade+Greedy)": lambda: _agrupar_atual(
-            servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
-            volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km),
-        "Sweep Polar": lambda: agrupar_por_sweep(
-            servicos, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
+        "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: _agrupar_atual(
+            svcs, gmaps_key, tamanho_minimo, tamanho_maximo,
+            volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km)),
+        "Sweep Polar": lambda: _por_macro(lambda svcs: agrupar_por_sweep(
+            svcs, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
             volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,
             api_key=gmaps_key, distancia_maxima_viagem_km=distancia_maxima_viagem_km,
-            eh_viagem_fn=eh_viagem_fn),
-        "Clarke-Wright": lambda: agrupar_por_savings(
-            servicos, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
+            eh_viagem_fn=eh_viagem_fn)),
+        "Clarke-Wright": lambda: _por_macro(lambda svcs: agrupar_por_savings(
+            svcs, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
             volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,
             api_key=gmaps_key, distancia_maxima_viagem_km=distancia_maxima_viagem_km,
-            eh_viagem_fn=eh_viagem_fn),
+            eh_viagem_fn=eh_viagem_fn)),
     }
 
     avaliacoes: dict[str, dict] = {}
