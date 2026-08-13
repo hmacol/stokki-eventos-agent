@@ -17,7 +17,8 @@ documentos_pedido/dados/ (ver documentos_pedido/localizar_arquivos.py)
 Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras entre
 os documentos):
   1. CAPA com logo Freshlog: tabela com 1 linha por pedido na ordem de
-     visita (pedido, embarcador, cliente, status NF/BOL com check/x).
+     visita (pedido + nº da NF, embarcador, cliente, status NF/BOL com
+     check/x).
   2. Documentos emendados direto: NFs e depois boletos, pedido a pedido.
   3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
@@ -336,10 +337,11 @@ def _marca(draw: ImageDraw.ImageDraw, cx: int, cy: int, ok: bool):
         draw.line([(cx - 9, cy + 9), (cx + 9, cy - 9)], fill=VERMELHO, width=5)
 
 
-# Colunas da tabela da capa (x em px)
-_COL_N, _COL_PEDIDO, _COL_EMB, _COL_CLI = 118, 165, 345, 660
+# Colunas da tabela da capa (x em px). A coluna PEDIDO é larga porque a
+# célula mostra código + nº da NF ('PS-36008 · NF 24746').
+_COL_N, _COL_PEDIDO, _COL_EMB, _COL_CLI = 118, 165, 460, 700
 _COL_NF_CX, _COL_BOL_CX = 1030, 1110
-_LARG_EMB, _LARG_CLI = 295, 350
+_LARG_EMB, _LARG_CLI = 225, 300
 
 
 def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
@@ -380,7 +382,7 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
 
     paginas = [img]
     y = _tabela_header_capa(draw, y)
-    fonte_ped, fonte_txt = _fonte(23, True), _fonte(22)
+    fonte_ped, fonte_txt, fonte_nf = _fonte(23, True), _fonte(22), _fonte(20)
     altura_linha, limite_y = 46, A4_PX[1] - 130
 
     for item in itens:
@@ -398,6 +400,12 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                   fill=CINZA_TXT, anchor="lm")
         draw.text((_COL_PEDIDO, meio), item["codigo"], font=fonte_ped,
                   fill=NAVY, anchor="lm")
+        if item["nfs"]:
+            x_nf = _COL_PEDIDO + draw.textlength(item["codigo"], font=fonte_ped) + 14
+            larg_nf = _COL_EMB - 18 - x_nf
+            if larg_nf > 40:
+                draw.text((x_nf, meio), _truncar(draw, f"NF {item['nfs']}", fonte_nf, larg_nf),
+                          font=fonte_nf, fill=CINZA_TXT, anchor="lm")
         draw.text((_COL_EMB, meio), _truncar(draw, item["embarcador"], fonte_txt, _LARG_EMB),
                   font=fonte_txt, fill=NAVY, anchor="lm")
         draw.text((_COL_CLI, meio), _truncar(draw, item["cliente"], fonte_txt, _LARG_CLI),
