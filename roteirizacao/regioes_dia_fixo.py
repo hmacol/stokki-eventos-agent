@@ -250,6 +250,26 @@ def nomes_dias(dias_semana: list[int]) -> str:
     return ", ".join(nomes[:-1]) + " e " + nomes[-1]
 
 
+def ajustar_data_por_dia_fixo(servico: dict, data: date) -> tuple[date, dict | None]:
+    """
+    Valida uma data de entrega JÁ ESCOLHIDA (planilha, confirmação por
+    e-mail, mensagem da Stokki, reagendamento...) contra a regra de dia
+    fixo do serviço: se a data cai num dia em que a região/galpão não
+    recebe, empurra pra próxima data válida a partir dela (13/08 --
+    antes só o reagendamento de insucesso fazia isso, cada fluxo por
+    conta própria).
+
+    Retorna (data_final, regra) -- regra é None quando nada mudou (sem
+    regra pro endereço, ou a data já era um dia válido); quando mudou,
+    é o dict de regra_dia_fixo_do_servico ({"nome", "dias", "origem"}),
+    que quem chama usa pra logar/notificar o remetente.
+    """
+    regra = regra_dia_fixo_do_servico(servico)
+    if not regra or data.weekday() in regra["dias"]:
+        return data, None
+    return proxima_data_dias_semana(regra["dias"], data), regra
+
+
 def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None) -> list[dict]:
     """
     Pra cada serviço SEM scheduled_start ainda, que caia numa regra de

@@ -27,6 +27,7 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -674,6 +675,47 @@ def processar_pedido(
         resultado["fonte_telefone"] = payload.pop("_fonte_telefone", "stokki")
         resultado["volume_dimension_3"] = payload.get("dimension_3")
 
+        # Regras de dia fixo de entrega (regioes_dia_fixo.py) valem também
+        # pra data que já chega PRONTA na criação -- horário das mensagens
+        # da Stokki ou confirmação por e-mail (pedido do Hugo, 13/08:
+        # antes essas datas entravam às cegas; um pedido de Sorocaba
+        # confirmado pra sexta ficava pra sexta, e Sorocaba só recebe às
+        # terças). Se a data cai num dia sem entrega na região/galpão,
+        # empurra pra próxima válida; o main() avisa o remetente no mesmo
+        # e-mail do agendamento por dia fixo. Só notifica quando o VUUPT
+        # ainda não tem essa data (servico_existente) -- o pipeline
+        # reprocessa pedidos not_assigned toda rodada, e sem essa checagem
+        # o remetente receberia o mesmo aviso em toda execução.
+        if payload.get("scheduled_start"):
+            try:
+                from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
+                data_original = date.fromisoformat(payload["scheduled_start"][:10])
+                data_final, regra = ajustar_data_por_dia_fixo(
+                    {"address": payload.get("customer", {}).get("address", "")}, data_original)
+                if regra:
+                    payload["scheduled_start"] = data_final.isoformat() + payload["scheduled_start"][10:]
+                    if payload.get("scheduled_end"):
+                        payload["scheduled_end"] = data_final.isoformat() + payload["scheduled_end"][10:]
+                    logger.info(
+                        f"  {codigo_ps}: agendamento {data_original.strftime('%d/%m')} cai fora dos dias de "
+                        f"'{regra['nome']}' ({nomes_dias(regra['dias'])}) — ajustado pra "
+                        f"{data_final.strftime('%d/%m/%Y')}."
+                    )
+                    data_ja_no_vuupt = ((servico_existente or {}).get("scheduled_start") or "")[:10]
+                    if data_ja_no_vuupt != data_final.isoformat():
+                        resultado["ajuste_dia_fixo"] = {
+                            "code":  codigo_ps,
+                            "title": payload.get("title", ""),
+                            "sender_id": payload.get("sender_id"),
+                            "regiao": regra["nome"],
+                            "dias":  regra["dias"],
+                            "data":  data_final.isoformat(),
+                            "data_original": data_original.isoformat(),
+                        }
+            except Exception as e:
+                logger.warning(f"  {codigo_ps}: falha ao validar dia fixo do agendamento "
+                               f"(segue com a data original): {e}")
+
         # 3b. Geocodificação do endereço de entrega — lat/long entram em
         # DOIS níveis do payload (confirmado via debug/testar_coords_servico):
         #   - no serviço (topo): o pino do mapa usa a coordenada própria do
@@ -976,6 +1018,26 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         logger.warning(f"Pedidos que requerem revisão manual:")
         for r in revisao:
             logger.warning(f"  {r['codigo_ps']}: {r['observacao'][:80]}")
+
+    # Datas movidas pelo dia fixo na criação (pedido do Hugo, 13/08):
+    # avisa os remetentes no mesmo e-mail do agendamento por dia fixo
+    # (1 e-mail por remetente, com data original e data ajustada).
+    ajustes_dia_fixo = [r["ajuste_dia_fixo"] for r in resultados if r.get("ajuste_dia_fixo")]
+    if ajustes_dia_fixo:
+        try:
+            from roteirizacao.notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
+            itens = [{
+                "servico": {"code": a["code"], "title": a["title"], "sender_id": a["sender_id"]},
+                "regiao": a["regiao"],
+                "dias":   a["dias"],
+                "data":   date.fromisoformat(a["data"]),
+                "data_original": date.fromisoformat(a["data_original"]),
+            } for a in ajustes_dia_fixo]
+            resultado_aviso = notificar_agendamentos_dia_fixo(
+                itens, config.get("email", {}), modo_teste=modo_teste)
+            logger.info(f"Notificação de ajuste por dia fixo: {resultado_aviso}")
+        except Exception as e:
+            logger.warning(f"Falha ao notificar ajustes de dia fixo (não afeta a importação): {e}")
 
     # Auditoria da execução: JSONL + CSV por pedido + STATUS_IMPORTACAO.md
     registrar_execucao(

@@ -8,12 +8,21 @@ Hugo, 12/08: "quando houver esse processamento de ajuste de datas,
 precisamos criar uma notificação aos clientes que o pedido deles foi
 agendado para a data correta").
 
-Recebe a lista que aplicar_regioes_dia_fixo() retorna (cada item:
-{"servico", "regiao", "dias", "data"}), agrupa por remetente e manda
-1 e-mail por remetente com a tabela pedido -> região -> data. Sem
-fingerprint próprio: aplicar_regioes_dia_fixo só agenda serviço que
-ainda não tinha scheduled_start, então cada pedido passa por aqui no
-máximo uma vez.
+Recebe uma lista de itens {"servico", "regiao", "dias", "data"} (e
+opcionalmente "data_original", quando já havia uma data e ela foi
+MOVIDA pelo dia fixo), agrupa por remetente e manda 1 e-mail por
+remetente com a tabela pedido -> região -> data. Quem chama (13/08 --
+antes só aplicar_regioes_dia_fixo):
+  - aplicar_regioes_dia_fixo (criar_rotas_diarias/incrementar_rotas):
+    pedido sem data nenhuma agendado pro dia da região;
+  - pipeline.py: data que chega pronta na criação (mensagem da Stokki/
+    confirmação) caindo em dia sem entrega -- vem com "data_original";
+  - atualizar_agendamentos_confirmados.py: data confirmada por e-mail
+    caindo em dia sem entrega -- idem.
+Sem fingerprint próprio: cada fluxo garante que o mesmo pedido não é
+notificado duas vezes (aplicar_regioes_dia_fixo só agenda quem não
+tinha scheduled_start; o pipeline compara com a data já no VUUPT; o
+agente de confirmados marca aplicado_vuupt_em).
 
 Mesmo padrão de notificar_agendamento_pendente.py (agrupamento por
 sender_id + e-mails do BD Interno + envelope visual da Freshlog).
@@ -59,13 +68,31 @@ def _carregar_embarcadores_por_sender_id() -> dict:
 
 
 def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
+    def _celula_data(i: dict) -> str:
+        # Itens com "data_original" (13/08): a data NÃO nasceu em branco --
+        # já existia (planilha/confirmação/mensagem) mas caía num dia sem
+        # entrega na região, e foi movida. Mostra as duas pra ficar claro.
+        celula = f"<strong>{i['data'].strftime('%d/%m/%Y')}</strong>"
+        if i.get("data_original"):
+            celula += (f"<br><span style=\"font-size:11px;color:{COR_TEXTO};\">"
+                       f"no lugar de {i['data_original'].strftime('%d/%m')} "
+                       f"(dia sem entrega na região)</span>")
+        return celula
+
     linhas = "".join(f"""
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (i['servico'].get('code', '') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((i['servico'].get('title') or '')[:50])}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(i['regiao'])} ({nomes_dias(i['dias'])})</td>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};"><strong>{i['data'].strftime('%d/%m/%Y')}</strong></td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{_celula_data(i)}</td>
     </tr>""" for i in itens)
+
+    obs_ajuste = ""
+    if any(i.get("data_original") for i in itens):
+        obs_ajuste = (
+            " Um ou mais pedidos tinham uma <strong>data prevista</strong> que cai num dia em que a "
+            "região não recebe — nesses casos, o agendamento foi movido para a próxima data válida."
+        )
 
     return f"""
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ACENTO};letter-spacing:0.5px;">
@@ -78,7 +105,7 @@ def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
   Olá, {html.escape(nome_remetente or '')}.<br>
   Os pedidos abaixo têm destino em regiões (ou pontos de entrega) atendidos em
   <strong>dias fixos da semana</strong>, e por isso foram agendados automaticamente
-  para a <strong>próxima data de entrega</strong> da região, conforme a tabela.
+  para a <strong>próxima data de entrega</strong> da região, conforme a tabela.{obs_ajuste}
 </p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
       style="border:1px solid {COR_BORDA};border-radius:8px;overflow:hidden;">

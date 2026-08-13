@@ -82,7 +82,7 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     return embs
 
 
-def _dias_fixos_do_grupo(pedidos: list[dict]) -> dict[str, str]:
+def _dias_fixos_do_grupo(pedidos: list[dict]) -> tuple[dict[str, str], bool]:
     """
     Regras de dia fixo de entrega que se aplicam aos pedidos deste
     grupo (regioes_dia_fixo.py -- cidade da região, ex.: Sorocaba só
@@ -92,15 +92,22 @@ def _dias_fixos_do_grupo(pedidos: list[dict]) -> dict[str, str]:
     (pedido do Hugo, 12/08: "dependendo do pedido a duplicação ou
     reagendamento só pode ser em dias específicos"). Pedido sem
     'address' (ou fora de todas as regras) fica de fora.
+
+    Retorna (dias, todos): `todos` diz se TODOS os pedidos do grupo
+    caem em regra de dia fixo -- quando sim, o texto do prazo não pode
+    falar em "próximo dia útil" (pedido do Hugo, 13/08).
     """
     from roteirizacao.regioes_dia_fixo import regra_dia_fixo_do_servico, nomes_dias
 
     dias = {}
+    todos = bool(pedidos)
     for p in pedidos:
         regra = regra_dia_fixo_do_servico(p)
         if regra:
             dias[regra["nome"]] = nomes_dias(regra["dias"])
-    return dias
+        else:
+            todos = False
+    return dias, todos
 
 
 def _botoes_resposta(email_resposta: str, assunto_original: str, pedidos: list[dict],
@@ -183,21 +190,34 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
-    if dias_uteis_atraso:
+    # Cidades/galpões com dia fixo de entrega (regioes_dia_fixo.py): a
+    # reentrega (e qualquer reagendamento) cai no dia da região, então o
+    # prazo NÃO pode prometer "próximo dia útil" pra esses pedidos
+    # (pedido do Hugo, 13/08: "o e-mail tá falando sempre que a entrega
+    # ocorrerá no próximo dia útil").
+    dias_fixos, todos_dia_fixo = _dias_fixos_do_grupo(pedidos)
+
+    if dias_uteis_atraso and todos_dia_fixo:
+        prazo = (f"A nova tentativa será agendada a partir de "
+                 f"<strong>{dias_uteis_atraso} dia(s) útil(eis)</strong> após a ocorrência, "
+                 "na <strong>próxima data de entrega da região</strong> (dia fixo — veja abaixo).")
+    elif dias_uteis_atraso:
         prazo = (f"A nova tentativa está programada para "
                  f"<strong>{dias_uteis_atraso} dia(s) útil(eis)</strong> após a ocorrência.")
+    elif todos_dia_fixo:
+        prazo = ("A nova tentativa será agendada para a <strong>próxima data de entrega "
+                 "da região</strong> (dia fixo — veja abaixo).")
+    elif dias_fixos:
+        prazo = ("A nova tentativa está programada para o <strong>próximo dia útil</strong> — "
+                 "exceto os pedidos de regiões com dia fixo de entrega, que caem na "
+                 "<strong>próxima data de entrega da região</strong> (veja abaixo).")
     else:
         prazo = "A nova tentativa está programada para o <strong>próximo dia útil</strong>."
 
-    # Cidades com dia fixo de entrega (regioes_dia_fixo.py): o prazo
-    # acima não vale pra elas -- a reentrega (e qualquer reagendamento)
-    # cai no dia da região (pedido do Hugo, 12/08).
-    dias_fixos = _dias_fixos_do_grupo(pedidos)
     if dias_fixos:
         prazo += " " + " ".join(
             f"Atenção: entregas para <strong>{html.escape(rotulo)}</strong> ocorrem "
-            f"somente às <strong>{dias_texto}</strong> (dia fixo da região) — reentregas e "
-            f"reagendamentos caem na próxima data de entrega da região."
+            f"somente às <strong>{dias_texto}</strong> (dia fixo da região)."
             for rotulo, dias_texto in sorted(dias_fixos.items())
         )
 

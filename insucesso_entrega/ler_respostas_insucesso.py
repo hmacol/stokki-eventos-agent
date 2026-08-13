@@ -286,20 +286,22 @@ def _ajustar_data_por_dia_fixo(servico: dict, nova_data: date) -> tuple[date, st
     segundas/quartas) valem também pro reagendamento pedido pelo
     remetente (pedido do Hugo, 12/08): se a data pedida cai num dia
     fora da regra, empurra pra PRÓXIMA data válida a partir dela.
+    (13/08: o cálculo em si virou o helper central
+    regioes_dia_fixo.ajustar_data_por_dia_fixo, compartilhado com o
+    pipeline e o agente de agendamentos confirmados -- aqui só resta
+    montar o texto do aviso.)
 
     Retorna (data_final, aviso) -- aviso é None quando nada mudou.
     """
-    from roteirizacao.regioes_dia_fixo import (
-        regra_dia_fixo_do_servico, proxima_data_dias_semana, nomes_dias,
-    )
-    regra = regra_dia_fixo_do_servico(servico)
-    if not regra or nova_data.weekday() in regra["dias"]:
+    from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
+
+    data_final, regra = ajustar_data_por_dia_fixo(servico, nova_data)
+    if not regra:
         return nova_data, None
-    ajustada = proxima_data_dias_semana(regra["dias"], nova_data)
     aviso = (f"{regra['nome']} só recebe às {nomes_dias(regra['dias'])} -- "
              f"data pedida {nova_data.strftime('%d/%m')} ajustada pra "
-             f"{ajustada.strftime('%d/%m/%Y')}")
-    return ajustada, aviso
+             f"{data_final.strftime('%d/%m/%Y')}")
+    return data_final, aviso
 
 
 def _reagendar_reentrega(pendente: dict, nova_data: date, vuupt: "VuuptClient") -> date | None:
