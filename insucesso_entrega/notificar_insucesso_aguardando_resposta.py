@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 EMAIL_TESTE = "hugo@freshlogbr.com"
 
+# Pedido do Hugo (13/08): os botões de resposta sempre abrem o rascunho
+# endereçado ao e-mail de atendimento, independente da conta remetente.
+EMAIL_RESPOSTA_BOTOES = "entregas@freshlogbr.com"
+
 
 def identificar_aguardando_resposta(insucessos: list[dict]) -> list[dict]:
     """
@@ -265,7 +269,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                                     failed_reason_id,
                                     dias_uteis_atraso=duplicar_com_atraso(failed_reason_id),
                                     assunto_original=assunto,
-                                    email_resposta=config_email.get("remetente", ""))
+                                    email_resposta=EMAIL_RESPOSTA_BOTOES)
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
         destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
 
