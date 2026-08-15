@@ -6,6 +6,12 @@ Audita os serviços recentes no VUUPT em busca de duplicidades (mesmo
 pedido re-importado com pequenas variações no 'code') e, quando
 configurado, cancela as cópias sobressalentes que ainda estejam
 'not_assigned' -- nunca mexe em serviços já atribuídos/concluídos.
+
+Caso especial 'done': só cancela o 'not_assigned' sobressalente quando a
+instância mantida terminou com status_done == 'success'. Se o 'done'
+mantido foi insucesso (status_done == 'failed'/ausente), o 'not_assigned'
+pode ser uma reentrega legítima gerada pelo fluxo de insucesso -- nesse
+caso vira aviso de intervenção manual em vez de cancelamento automático.
 """
 import argparse
 import logging
@@ -143,6 +149,17 @@ def main(modo_teste: bool = True, cancelar_duplicados: bool = False, dias: int =
 
             if st != "not_assigned":
                 aviso = f"Pedido '{code_raiz}': serviço ID {s_id} (Code: {s_code}) em status '{st}' não pode ser cancelado automaticamente -- intervenção manual necessária."
+                logger.warning(f"  [ATENÇÃO] {aviso}")
+                avisos_manuais.append(aviso)
+                continue
+
+            if manter.get("status") == "done" and manter.get("status_done") != "success":
+                aviso = (
+                    f"Pedido '{code_raiz}': serviço ID {s_id} (Code: {s_code}) está 'not_assigned', mas a "
+                    f"instância mantida (ID {manter.get('id')}) terminou em insucesso "
+                    f"(status_done: '{manter.get('status_done')}') -- pode ser uma reentrega legítima, "
+                    f"intervenção manual necessária."
+                )
                 logger.warning(f"  [ATENÇÃO] {aviso}")
                 avisos_manuais.append(aviso)
                 continue
