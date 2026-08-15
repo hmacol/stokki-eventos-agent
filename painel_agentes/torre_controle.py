@@ -55,6 +55,7 @@ from pathlib import Path
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "roteirizacao"))
+sys.path.insert(0, str(_RAIZ / "insucesso_entrega"))
 
 import yaml
 
@@ -63,7 +64,9 @@ from rotas_client import listar_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas
 from mapa_util import extrair_servicos_da_rota
 from executor import buscar_ultima_execucao
+from motivos_falha import texto_do_motivo
 import rascunhos_rota
+import tratativas
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +345,15 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
                         **_resumir_servico(s),
                         "motorista": motorista,
                         "rota": rota.get("name", ""),
+                        "motivo_insucesso": texto_do_motivo(s.get("failed_reason_id")),
                     })
+                    # Preenche motorista das tratativas já registradas pra
+                    # este pedido, se ainda não tinha (pedido do Hugo,
+                    # 14/08: "capturar motorista daqui pra frente") --
+                    # aproveita o que a Torre já resolveu (agent_id->nome)
+                    # sem nenhuma chamada nova à VUUPT.
+                    if s.get("code") and motorista:
+                        tratativas.enriquecer_motorista(s["code"], motorista, rota.get("name", ""))
                     situacao = "insucesso"
                 else:
                     entregues += 1
@@ -472,8 +483,19 @@ def _conectar_tratadas():
     return conn
 
 
+def _pedido_code_da_excecao(excecao_id: str) -> str | None:
+    """Só exceções do tipo 'Insucesso' (id = 'insucesso:<code>') se
+    referem a um pedido -- as outras ('semrota:', 'semmotorista:',
+    'travas:', 'pipeline:') não têm um pedido único por trás e ficam de
+    fora do histórico de tratativas por pedido."""
+    if excecao_id and excecao_id.startswith("insucesso:"):
+        return excecao_id.split(":", 1)[1]
+    return None
+
+
 def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
-                           descricao: str, motivo: str):
+                           descricao: str, motivo: str,
+                           motorista_nome: str | None = None, rota_nome: str | None = None):
     conn = _conectar_tratadas()
     conn.execute("""
         INSERT INTO torre_excecoes_tratadas (id, data_alvo, tipo, descricao, motivo, tratado_em)
@@ -484,14 +506,27 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
     conn.commit()
     conn.close()
 
+    pedido_code = _pedido_code_da_excecao(excecao_id)
+    if pedido_code:
+        tratativas.registrar_evento(
+            pedido_code, "TORRE", "EXCECAO_TRATADA",
+            motorista_nome=motorista_nome, rota_nome=rota_nome, texto=motivo,
+        )
+
 
 def desfazer_excecao_tratada(excecao_id: str) -> bool:
     """Desfaz um 'tratado' (clique errado) -- a linha some do histórico
-    de propósito: tratado desfeito nunca aconteceu."""
+    de propósito: tratado desfeito nunca aconteceu. O log de tratativas
+    (append-only, auditoria) recebe um evento novo em vez de apagar."""
     conn = _conectar_tratadas()
     cur = conn.execute("DELETE FROM torre_excecoes_tratadas WHERE id = ?", (excecao_id,))
     conn.commit()
     conn.close()
+
+    pedido_code = _pedido_code_da_excecao(excecao_id)
+    if pedido_code:
+        tratativas.registrar_evento(pedido_code, "TORRE", "EXCECAO_DESTRATADA", texto="(desfeito)")
+
     return cur.rowcount > 0
 
 
@@ -547,7 +582,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "id": f"insucesso:{i['codigo']}",
             "severidade": "critico",
             "tipo": "Insucesso",
-            "descricao": f"{i['codigo']} — {i['titulo']}",
+            "descricao": f"{i['codigo']} — {i['titulo']} ({i.get('motivo_insucesso') or 'Motivo não informado'})",
             # Quem registrou a atualização: o motorista da rota (é ele
             # que marca o insucesso no app). 'rota' é o fallback pra
             # rota sem motorista atribuído.

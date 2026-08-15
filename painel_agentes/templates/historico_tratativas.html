@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block titulo %}Histórico de Tratativas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; }
+  h1 { font-size: 20px; margin: 0 0 18px; }
+  form.filtros {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    background: var(--superficie); border: 1px solid var(--borda);
+    border-radius: 10px; padding: 14px 16px; margin: 0 0 20px;
+  }
+  form.filtros .campo { display: flex; flex-direction: column; gap: 4px; }
+  form.filtros label { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  form.filtros input, form.filtros select {
+    padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; min-width: 150px;
+  }
+  form.filtros input[type="text"] { min-width: 260px; }
+  form.filtros .campo-busca { flex-grow: 1; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 1000px; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #FAFAFB; }
+  .mono { font-size: 12px; }
+  .evento { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; background: #EDEBFB; color: #6D5BD0; white-space: nowrap; }
+  .sem-dado { color: var(--texto-suave); }
+  details.tratativa summary { cursor: pointer; color: var(--primaria); font-weight: 600; font-size: 12px; }
+  details.tratativa p { margin: 8px 0 0; white-space: pre-wrap; font-size: 12px; color: var(--texto); max-width: 360px; }
+  .paginacao { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 13px; color: var(--texto-suave); }
+  .paginacao a { color: var(--primaria); text-decoration: none; font-weight: 600; }
+  .paginacao a.desabilitado { pointer-events: none; opacity: 0.4; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Histórico de tratativas</h1>
+
+<form class="filtros" method="GET" action="{{ url_for('historico_tratativas') }}">
+  <div class="campo campo-busca">
+    <label for="busca">Buscar</label>
+    <input type="text" id="busca" name="busca" value="{{ filtros.busca }}"
+           placeholder="PS, NF, embarcador, cliente, motorista, motivo, texto da tratativa...">
+  </div>
+  <div class="campo">
+    <label for="motorista">Motorista</label>
+    <select id="motorista" name="motorista">
+      <option value="">Todos</option>
+      {% for m in motoristas %}
+      <option value="{{ m }}" {% if filtros.motorista == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label for="motivo">Motivo</label>
+    <select id="motivo" name="motivo">
+      <option value="">Todos</option>
+      {% for m in motivos %}
+      <option value="{{ m }}" {% if filtros.motivo == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label for="evento">Evento</label>
+    <select id="evento" name="evento">
+      <option value="">Todos</option>
+      {% for e in eventos %}
+      <option value="{{ e }}" {% if filtros.evento == e %}selected{% endif %}>{{ e.replace('_', ' ').title() }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label for="data_de">De</label>
+    <input type="date" id="data_de" name="data_de" value="{{ filtros.data_de }}">
+  </div>
+  <div class="campo">
+    <label for="data_ate">Até</label>
+    <input type="date" id="data_ate" name="data_ate" value="{{ filtros.data_ate }}">
+  </div>
+  <div class="campo">
+    <button type="submit" class="botao">Filtrar</button>
+  </div>
+  {% if filtros.busca or filtros.motorista or filtros.motivo or filtros.evento or filtros.data_de or filtros.data_ate %}
+  <div class="campo">
+    <a class="botao" style="background:var(--texto-suave);" href="{{ url_for('historico_tratativas') }}">Limpar</a>
+  </div>
+  {% endif %}
+</form>
+
+{% if erro %}
+<p style="color:var(--erro);">Falha ao buscar o histórico: {{ erro }}</p>
+{% endif %}
+
+<div class="tabela-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Quando</th>
+      <th>Pedido</th>
+      <th>NF</th>
+      <th>Embarcador</th>
+      <th>Destinatário</th>
+      <th>Motivo</th>
+      <th>Evento</th>
+      <th>Motorista</th>
+      <th>Tratativa</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in resultado.linhas %}
+    <tr>
+      <td class="mono">{{ t.criado_em }}</td>
+      <td class="mono">#{{ t.pedido_code }}</td>
+      <td class="mono">{{ t.numero_nfe or '—' }}</td>
+      <td>{{ t.embarcador or '—' }}</td>
+      <td>{{ t.destinatario_nome or '—' }}</td>
+      <td>{{ t.motivo_texto or '—' }}</td>
+      <td><span class="evento">{{ t.evento.replace('_', ' ') }}</span></td>
+      <td>{{ t.motorista_nome or '—' }}</td>
+      <td>
+        {% if t.texto %}
+        <details class="tratativa"><summary>ver</summary><p>{{ t.texto }}</p></details>
+        {% else %}
+        <span class="sem-dado">—</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9" style="color:var(--texto-suave);">Nenhuma tratativa encontrada com esses filtros.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="paginacao">
+  <span>{{ resultado.total }} tratativa(s) — página {{ resultado.pagina }} de {{ resultado.total_paginas }}</span>
+  <span>
+    {% set base_args = filtros.copy() %}
+    {% if resultado.pagina > 1 %}
+      {% set _ = base_args.update({'pagina': resultado.pagina - 1}) %}
+      <a href="{{ url_for('historico_tratativas', **base_args) }}">&larr; Anterior</a>
+    {% else %}
+      <a class="desabilitado">&larr; Anterior</a>
+    {% endif %}
+    &nbsp;&nbsp;
+    {% if resultado.pagina < resultado.total_paginas %}
+      {% set _ = base_args.update({'pagina': resultado.pagina + 1}) %}
+      <a href="{{ url_for('historico_tratativas', **base_args) }}">Próxima &rarr;</a>
+    {% else %}
+      <a class="desabilitado">Próxima &rarr;</a>
+    {% endif %}
+  </span>
+</div>
+{% endblock %}

@@ -48,18 +48,20 @@ from flask import Flask, Response, abort, g, redirect, render_template, request,
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
-    iniciar_execucao, buscar_execucao, buscar_ultima_execucao,
+    iniciar_execucao, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
     listar_execucoes_recentes, ha_execucao_rodando, ler_log, limpar_execucoes_travadas,
     encerrar_todas_execucoes,
 )
 from mapa_rotas import buscar_rotas_para_mapa
+from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
-    alocar_motoristas_rascunhos,
+    alocar_motoristas_rascunhos, ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 import rascunhos_rota
 import torre_controle
+import tratativas
 
 app = Flask(__name__)
 
@@ -274,6 +276,128 @@ def planejamento():
     )
 
 
+# IDs dos agentes acionáveis pela barra de botões do planejamento --
+# usada tanto pra validar o agente_id recebido em /rodar (não deixa
+# essa tela disparar qualquer agente do sistema, só os 4 dela) quanto
+# como ordem de execução do "Executar tudo".
+AGENTES_PLANEJAMENTO_IDS = tuple(e["agente_id"] for e in ETAPAS_AGENTES_PLANEJAMENTO)
+
+
+@app.route("/api/planejamento/agentes/etapas")
+@requer_auth(niveis=("total", "leitura"))
+def api_planejamento_agentes_etapas():
+    """Estado da barra de agentes do planejamento (leitura barata no
+    SQLite) -- mesmo padrão de /api/torre/etapas, só que restrito aos
+    4 agentes relevantes pra essa tela."""
+    return jsonify({"etapas": montar_etapas_agentes_planejamento()})
+
+
+@app.route("/api/planejamento/agentes/rodar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_planejamento_agentes_rodar():
+    """Dispara um agente da barra do planejamento. Só a Importação
+    aceita filtro (pedido/embarcador) -- vira argv extra pro
+    pipeline.py (--pedido/--embarcador), sem precisar de uma entrada
+    nova em agentes.py pra cada combinação de filtro possível."""
+    body = request.get_json(force=True)
+    agente_id = body.get("agente_id", "")
+    if agente_id not in AGENTES_PLANEJAMENTO_IDS:
+        return jsonify({"erro": "Esse agente não faz parte da barra do planejamento."}), 400
+    agente = buscar_agente(agente_id)
+    if not agente:
+        return jsonify({"erro": "Agente não encontrado."}), 404
+    if ha_execucao_rodando(agente_id):
+        return jsonify({"erro": "Esse agente já está rodando -- espera terminar antes de rodar de novo."}), 409
+
+    args_extra = None
+    if agente_id == "somente_importacao":
+        pedido = (body.get("pedido") or "").strip()
+        embarcador = (body.get("embarcador") or "").strip()
+        args_extra = []
+        if pedido:
+            args_extra += ["--pedido", pedido]
+        if embarcador:
+            args_extra += ["--embarcador", embarcador]
+        args_extra = args_extra or None
+
+    execucao_id = iniciar_execucao(agente, modo_teste=False, args_extra=args_extra)
+    return jsonify({"ok": True, "execucao_id": execucao_id})
+
+
+@app.route("/api/planejamento/agentes/rodar-tudo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_planejamento_agentes_rodar_tudo():
+    """Botão "Executar tudo" da barra do planejamento: os 4 agentes em
+    sequência (Importação sem filtro → Criar Rotas Diárias Rascunho →
+    Incrementar Rotas → Gerar Romaneios), cada um esperando o anterior
+    terminar (iniciar_sequencia)."""
+    if any(ha_execucao_rodando(agente_id) for agente_id in AGENTES_PLANEJAMENTO_IDS):
+        return jsonify({"erro": "Já tem uma etapa rodando -- espera terminar antes de rodar tudo."}), 409
+    passos = [{"agente": buscar_agente(agente_id)} for agente_id in AGENTES_PLANEJAMENTO_IDS]
+    iniciar_sequencia(passos)
+    return jsonify({"ok": True})
+
+
+@app.route("/laboratorio-rotas")
+@requer_auth(niveis=("total", "leitura"))
+def laboratorio_rotas():
+    """Laboratório de comparação visual de esquemas de roteirização --
+    pedido do Hugo, 14/08. 100% leitura (ver laboratorio_rotas.py)."""
+    data_alvo = _parse_data_param()
+    particao = request.args.get("particao", "Seco")
+    usar_teste = request.args.get("teste") == "1"
+    try:
+        dados = buscar_dados_laboratorio(data_alvo, particao, usar_teste=usar_teste)
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados do laboratório de roteirização")
+        dados = None
+        erro = str(e)
+
+    return render_template(
+        "laboratorio_rotas.html", dados=dados, erro=erro,
+        data_alvo_input=data_alvo.isoformat(), particao_input=particao, teste_input=usar_teste,
+    )
+
+
+@app.route("/historico-tratativas")
+@requer_auth(niveis=("total", "leitura"))
+def historico_tratativas():
+    """Histórico de tratativas pesquisável por NF, PS, embarcador, cliente,
+    motorista ou motivo -- pedido do Hugo, 14/08. 100% leitura (ver
+    tratativas.py -- log de eventos alimentado pelo fluxo de insucesso e
+    pela Torre de Controle)."""
+    try:
+        pagina = max(1, int(request.args.get("pagina", "1")))
+    except ValueError:
+        pagina = 1
+    filtros = {
+        "busca": request.args.get("busca", ""),
+        "motorista": request.args.get("motorista", ""),
+        "motivo": request.args.get("motivo", ""),
+        "origem": request.args.get("origem", ""),
+        "evento": request.args.get("evento", ""),
+        "data_de": request.args.get("data_de", ""),
+        "data_ate": request.args.get("data_ate", ""),
+    }
+    try:
+        resultado = tratativas.buscar(filtros, pagina=pagina)
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao buscar histórico de tratativas")
+        resultado = {"linhas": [], "total": 0, "pagina": 1, "total_paginas": 1}
+        erro = str(e)
+
+    return render_template(
+        "historico_tratativas.html", resultado=resultado, erro=erro, filtros=filtros,
+        motoristas=tratativas.valores_distintos("motorista_nome"),
+        motivos=tratativas.valores_distintos("motivo_texto"),
+        eventos=tratativas.EVENTOS_POR_PEDIDO,
+    )
+
+
 @app.route("/torre")
 @requer_auth(niveis=("total", "leitura"))
 def torre():
@@ -344,6 +468,7 @@ def api_torre_tratar():
         torre_controle.marcar_excecao_tratada(
             body["id"], body.get("data_alvo", ""), body.get("tipo", ""),
             body.get("descricao", ""), body.get("motivo", ""),
+            motorista_nome=body.get("motorista"), rota_nome=body.get("rota"),
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
@@ -644,6 +769,27 @@ def api_confirmar_envio():
 
     token = _carregar_config().get("vuupt_api", {}).get("token", "")
     resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
+    return jsonify({"ok": True, "resultados": resultados})
+
+
+@app.route("/api/planejamento/cancelar-rota", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_cancelar_rota():
+    """Cancela na VUUPT a(s) rota(s) já enviada(s) indicada(s) -- botão
+    "Cancelar rota"/"Cancelar todas as rotas" da tela. Só funciona pra
+    rota que ainda não iniciou deslocamento (checado ao vivo contra a
+    API dentro de cancelar_rota_enviada). Mesmo padrão de
+    api_confirmar_envio: cada id é processado independentemente, falha
+    em um não impede os outros."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_ids = body["rascunho_ids"]
+    except KeyError as e:
+        return jsonify({"erro": str(e)}), 400
+
+    token = _carregar_config().get("vuupt_api", {}).get("token", "")
+    resultados = [rascunhos_rota.cancelar_rota_enviada(rid, token) for rid in rascunho_ids]
     return jsonify({"ok": True, "resultados": resultados})
 
 

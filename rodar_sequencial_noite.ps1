@@ -8,14 +8,20 @@
 # StokkiEventos_SequenciaNoite, 22:00): ExecutarTudo faz a última
 # correção de pedidos do dia (agendamento/insucesso/impressão/
 # importação), VerificarDuplicadosVuupt limpa cópias sobressalentes
-# antes do incremento, EnviarRascunhosPendentes confirma pra VUUPT
-# qualquer rascunho de /planejamento que o Hugo não tenha enviado a
-# tempo (pedido do Hugo, 13/08 -- desde que CriarRotasDiarias das 18h
-# passou a gerar rascunho em vez de criar direto, IncrementarRotas só
-# encontra rota "de hoje" se ela já tiver sido confirmada), e por
-# último IncrementarRotas aloca na rota do dia qualquer pedido novo
-# que tenha entrado depois da CriarRotasDiarias da tarde -- pode ser
-# rodado manualmente também, pra testar.
+# antes do incremento, e por último IncrementarRotas aloca na rota do
+# dia qualquer pedido novo que tenha entrado depois da
+# CriarRotasDiarias da tarde -- pode ser rodado manualmente também,
+# pra testar.
+#
+# O envio automático de rascunho pendente (EnviarRascunhosPendentes)
+# foi CANCELADO daqui (pedido do Hugo, 14/08): desde que
+# CriarRotasDiarias das 18h passou a gerar rascunho em vez de criar
+# direto (13/08), IncrementarRotas só encontra rota "de hoje" na
+# VUUPT se alguém tiver confirmado o rascunho em /planejamento antes
+# das 22h. Sem confirmação, IncrementarRotas agora FALHA de propósito
+# (e-mail de alerta) em vez de criar rota nova do zero em cima do que
+# já estava no rascunho -- é o comportamento que o Hugo quer: forçar
+# a confirmação manual em vez de mascarar o esquecimento.
 
 $Raiz = "C:\agente_stokki_eventos"
 # Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem
@@ -28,7 +34,6 @@ $LogDir = "$Raiz\dados"
 $passos = @(
     @{ Nome = "ExecutarTudo"; Script = "$Raiz\executar_tudo.py"; Cwd = $Raiz }
     @{ Nome = "VerificarDuplicadosVuupt"; Script = "$Raiz\verificar_pedidos_duplicados_vuupt.py"; Cwd = $Raiz }
-    @{ Nome = "EnviarRascunhosPendentes"; Script = "$Raiz\roteirizacao\enviar_rascunhos_pendentes.py"; Cwd = "$Raiz\roteirizacao" }
     @{ Nome = "IncrementarRotas"; Script = "$Raiz\roteirizacao\incrementar_rotas.py"; Cwd = "$Raiz\roteirizacao" }
 )
 

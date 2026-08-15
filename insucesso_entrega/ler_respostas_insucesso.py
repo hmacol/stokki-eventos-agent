@@ -71,6 +71,7 @@ from email_leitura_utils import (
 from vuupt_client import VuuptClient
 from motivos_falha import texto_do_motivo
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo, marcar_respondido
+import tratativas
 
 logger = logging.getLogger(__name__)
 
@@ -720,6 +721,13 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
             for p in pendentes:
                 marcar_respondido(p["service_id"], corpo_sem_citacao, acao != "cancelar")
                 grupos_atualizados += 1
+                if p.get("code"):
+                    tratativas.registrar_evento(
+                        p["code"], "INSUCESSO_ENTREGA", "RESPOSTA_RECEBIDA",
+                        service_id=p.get("service_id"), motivo_id=failed_reason_id,
+                        motivo_texto=motivo_texto, decisao=acao,
+                        remetente_email=remetente_email, texto=corpo_sem_citacao[:2000],
+                    )
 
                 if acao == "cancelar":
                     ok = _cancelar_reentrega(p, vuupt)

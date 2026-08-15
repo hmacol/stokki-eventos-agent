@@ -46,6 +46,7 @@ from notificar_insucesso_aguardando_resposta import (
     identificar_aguardando_resposta, notificar_remetentes as notificar_insucesso_aguardando_resposta,
 )
 from vuupt_client import VuuptClient
+import tratativas
 
 
 (_RAIZ / "dados").mkdir(parents=True, exist_ok=True)
@@ -860,6 +861,15 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             logger.info(f"Insucesso na entrega (nao serao expedidos): {codigos_insucesso}")
 
             for s in insucessos:
+                motivo_texto_s = texto_do_motivo(s.get("failed_reason_id"))
+                if s.get("code") and not tratativas.ja_registrado(s["code"], "INSUCESSO_DETECTADO"):
+                    tratativas.registrar_evento(
+                        s["code"], "INSUCESSO_ENTREGA", "INSUCESSO_DETECTADO",
+                        service_id=s.get("id"), motivo_id=s.get("failed_reason_id"),
+                        motivo_texto=motivo_texto_s,
+                    )
+
+            for s in insucessos:
                 if deve_duplicar(s.get("failed_reason_id")) and not fingerprint_duplicacao_insucesso.ja_duplicado(s.get("id")):
                     motivo_texto = texto_do_motivo(s.get("failed_reason_id"))
                     if modo_teste:
@@ -868,6 +878,12 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         novo = duplicar_servico_por_insucesso(VuuptClient(vuupt_token), s)
                         if novo:
                             fingerprint_duplicacao_insucesso.marcar_duplicado(s.get("id"), novo.get("code", ""))
+                            tratativas.registrar_evento(
+                                s["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                                service_id=s.get("id"), motivo_id=s.get("failed_reason_id"),
+                                motivo_texto=motivo_texto,
+                                texto=f"Reentrega criada automaticamente (novo código: {novo.get('code', '')}).",
+                            )
 
             # Motivos de duplicação AGENDADA (duplicar_apos_dias_uteis,
             # pedido do Hugo 06/08 e mantido em 11/08 -- "mantém os 3
@@ -887,6 +903,13 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         )
                         logger.info(f"  Duplicação de {s.get('code')} agendada pra {data_agendada} "
                                    f"({dias_uteis} dia(s) útil(eis)).")
+                        tratativas.registrar_evento(
+                            s["code"], "INSUCESSO_ENTREGA", "REENVIO_AGENDADO",
+                            service_id=s.get("id"), motivo_id=s.get("failed_reason_id"),
+                            motivo_texto=texto_do_motivo(s.get("failed_reason_id")),
+                            texto=f"Reentrega agendada para {data_agendada.strftime('%d/%m/%Y')} "
+                                  f"({dias_uteis} dia(s) útil(eis)).",
+                        )
 
             # Aviso de duplicação pra TODOS os insucessos (rate-limit de
             # 1 e-mail/dia por pedido via fingerprint): "já duplicamos,
@@ -934,6 +957,12 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_duplicacao_agendada.marcar_executada(pendente["service_id"], novo.get("code", ""))
                     fingerprint_duplicacao_insucesso.marcar_duplicado(pendente["service_id"], novo.get("code", ""))
                     logger.info(f"  Duplicação agendada executada: {pendente['code']} -> {novo.get('code')}")
+                    tratativas.registrar_evento(
+                        pendente["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                        service_id=pendente.get("service_id"), motivo_id=pendente.get("failed_reason_id"),
+                        motivo_texto=texto_do_motivo(pendente.get("failed_reason_id")),
+                        texto=f"Reentrega agendada executada (novo código: {novo.get('code', '')}).",
+                    )
                 else:
                     fingerprint_duplicacao_agendada.marcar_falha(pendente["service_id"], "Falha ao criar o novo serviço")
 

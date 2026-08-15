@@ -14,13 +14,18 @@ rascunho ainda não foi confirmado manualmente até lá, ele fica
 invisível pro incremento, que cria rotas novas do zero em cima do que
 já está desenhado no rascunho (duplicidade).
 
-Esse script cobre esse buraco: roda como PRIMEIRO passo da sequência
-da noite, antes do incrementar_rotas.py, e envia pra VUUPT de verdade
-qualquer rascunho que ainda esteja pendente (status RASCUNHO) na data
-alvo do dia -- mesma enviar_rascunho() que o botão "Confirmar e
-Enviar" da tela usa. Rascunho que o Hugo já confirmou manualmente
-antes das 22h é pulado (enviar_rascunho é idempotente, só processa
-status RASCUNHO).
+Esse script cobria esse buraco rodando como PRIMEIRO passo da
+sequência da noite, antes do incrementar_rotas.py, e enviava pra
+VUUPT de verdade qualquer rascunho que ainda estivesse pendente
+(status RASCUNHO) na data alvo do dia -- mesma enviar_rascunho() que
+o botão "Confirmar e Enviar" da tela usa.
+
+CANCELADO da sequência automática (pedido do Hugo, 14/08): não roda
+mais sozinho às 22h (ver rodar_sequencial_noite.ps1). Rascunho não
+confirmado a tempo em /planejamento agora faz incrementar_rotas.py
+FALHAR de propósito (e-mail de alerta), em vez de duplicar a rota por
+cima do rascunho como antes. Esse script continua funcional pra rodar
+manualmente se algum dia fizer sentido de novo.
 
 COMO USAR:
     py -3.11 enviar_rascunhos_pendentes.py                # execução normal

@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -69,10 +70,12 @@ def _raiz_do_agente(agente: dict) -> Path:
     return _RAIZ
 
 
-def _montar_comando(agente: dict, modo_teste: bool) -> list[str]:
+def _montar_comando(agente: dict, modo_teste: bool, args_extra: list[str] | None = None) -> list[str]:
     script_path = _raiz_do_agente(agente) / agente["script"]
     comando = [sys.executable, str(script_path)]
     comando.extend(agente.get("args_fixos", []))
+    if args_extra:
+        comando.extend(args_extra)
     if modo_teste and agente.get("suporta_teste") and agente.get("flag_teste"):
         comando.append(agente["flag_teste"])
     return comando
@@ -102,8 +105,9 @@ def _matar_arvore_processo(processo: subprocess.Popen):
                        f"filhos (ex: navegador do Playwright) podem ter ficado órfãos.")
 
 
-def _rodar_processo(agente: dict, modo_teste: bool, execucao_id: int, log_path: Path):
-    comando = _montar_comando(agente, modo_teste)
+def _rodar_processo(agente: dict, modo_teste: bool, execucao_id: int, log_path: Path,
+                    args_extra: list[str] | None = None):
+    comando = _montar_comando(agente, modo_teste, args_extra)
     cwd = _raiz_do_agente(agente) / agente.get("cwd", ".")
     timeout_minutos = agente.get("timeout_minutos", TIMEOUT_PADRAO_MINUTOS)
     timeout_segundos = timeout_minutos * 60
@@ -164,9 +168,13 @@ def _rodar_processo(agente: dict, modo_teste: bool, execucao_id: int, log_path: 
     conn.close()
 
 
-def iniciar_execucao(agente: dict, modo_teste: bool) -> int:
+def iniciar_execucao(agente: dict, modo_teste: bool, args_extra: list[str] | None = None) -> int:
     """Inicia o agente em background (thread própria) e retorna o ID
-    da execução pra acompanhar depois."""
+    da execução pra acompanhar depois. args_extra vai pro final do
+    comando (depois de args_fixos) -- pedido do Hugo, 14/08: a barra de
+    agentes do planejamento deixa filtrar a Importação por pedido/
+    embarcador na hora, sem precisar de uma entrada nova em agentes.py
+    pra cada combinação possível de filtro."""
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOGS_DIR / f"{agente['id']}_{carimbo}.log"
@@ -181,10 +189,38 @@ def iniciar_execucao(agente: dict, modo_teste: bool) -> int:
     conn.close()
 
     thread = threading.Thread(
-        target=_rodar_processo, args=(agente, modo_teste, execucao_id, log_path), daemon=True
+        target=_rodar_processo, args=(agente, modo_teste, execucao_id, log_path, args_extra), daemon=True
     )
     thread.start()
     return execucao_id
+
+
+def iniciar_sequencia(passos: list[dict]):
+    """Roda uma lista de agentes em sequência, cada um esperando o
+    anterior terminar de verdade antes do próximo começar -- pedido do
+    Hugo, 14/08 ("Executar tudo" da barra de agentes do planejamento:
+    Importação → Criar Rotas Diárias Rascunho → Incrementar Rotas →
+    Gerar Romaneios). Mesmo motivo do -Wait do rodar_sequencial.ps1:
+    evitar concorrência no SQLite/sessão Stokki entre etapas.
+
+    Cada passo já vira uma execução normal em painel_execucoes, então o
+    front acompanha pelo /etapas de sempre (buscar_ultima_execucao por
+    agente_id) -- não precisa de um status de sequência à parte.
+
+    passos: [{"agente": <dict de agentes.py>, "args_extra": [...] | None}, ...]
+    """
+    thread = threading.Thread(target=_rodar_sequencia, args=(passos,), daemon=True)
+    thread.start()
+
+
+def _rodar_sequencia(passos: list[dict]):
+    for passo in passos:
+        execucao_id = iniciar_execucao(passo["agente"], modo_teste=False, args_extra=passo.get("args_extra"))
+        while True:
+            execucao = buscar_execucao(execucao_id)
+            if not execucao or execucao["status"] != "RODANDO":
+                break
+            time.sleep(2)
 
 
 def buscar_execucao(execucao_id: int) -> dict | None:

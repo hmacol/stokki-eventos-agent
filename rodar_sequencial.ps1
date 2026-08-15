@@ -22,9 +22,12 @@
 # CriarRotasDiarias roda com --gerar-rascunho (pedido do Hugo, 13/08):
 # as rotas do dia não vão mais direto pra VUUPT, ficam paradas em
 # /planejamento pra revisão manual até alguém clicar "Confirmar e
-# Enviar". Ver rodar_sequencial_noite.ps1 (EnviarRascunhosPendentes) --
-# rede de segurança que envia o que não foi confirmado a tempo, pra
-# IncrementarRotas (22h) sempre achar as rotas de hoje na VUUPT.
+# Enviar". Sem confirmação manual até lá, IncrementarRotas
+# (rodar_sequencial_noite.ps1, 22h) não acha nenhuma rota de hoje na
+# VUUPT e FALHA de propósito, em vez de criar rota nova por cima do
+# que já está no rascunho -- o envio automático de rascunho pendente
+# que cobria esse buraco foi cancelado (pedido do Hugo, 14/08),
+# confirmar em /planejamento agora é obrigatório.
 
 $Raiz = "C:\agente_stokki_eventos"
 # Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem

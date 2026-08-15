@@ -120,7 +120,7 @@
     box-shadow: inset 0 0 0 1px var(--acento);
     background: #E5F7EF;
   }
-  .controle-mapa { display: flex; gap: 8px; margin: 10px; }
+  .controle-mapa { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px; max-width: 90vw; }
   .controle-mapa button {
     background: #fff;
     border: 1px solid var(--borda);
@@ -171,7 +171,6 @@
   }
   .filtro-cep, .filtro-caixas { display: flex; gap: 6px; }
   .filtro-cep input, .filtro-caixas input { flex: 1; min-width: 0; }
-  .dica-selecao { font-size: 10.5px; color: var(--texto-suave); margin: 0 0 8px; }
   .barra-selecao { display: flex; gap: 6px; margin-bottom: 10px; }
   .barra-selecao button {
     flex: 1 1 auto;
@@ -208,6 +207,7 @@
     color: #2C5FC4;
   }
   .item-parada .agendamento.atrasado { background: #FDEBEA; color: var(--erro); }
+  .item-parada .agendamento.futuro { background: #F0F0F3; color: var(--texto-suave); }
   .item-parada .badge-caixas {
     display: inline-block;
     font-size: 10.5px;
@@ -218,6 +218,7 @@
     background: #FDEBEA;
     color: var(--erro);
   }
+  .item-parada .nf-pedido { font-size: 10.5px; color: var(--texto-suave); }
 
   .card-rota {
     border: 1px solid var(--borda);
@@ -275,6 +276,21 @@
   .card-rota .acoes button:hover { background: var(--fundo); }
   .card-rota .acoes button.perigo { color: var(--erro); }
   .card-rota.enviada { opacity: 0.75; background: var(--fundo); }
+  /* variante "perigo" do .botao sólido (base.html só define a cor
+     primária) -- usada no botão fixo "Cancelar todas as rotas" */
+  button.botao.perigo { background: var(--erro); }
+  button.botao.perigo:hover { background: #c93c32; }
+  .divisor-grupo-rotas {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin: 16px 0 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--borda);
+  }
+  .divisor-grupo-rotas:first-child { margin-top: 0; padding-top: 0; border-top: none; }
   /* Rota colapsada: cabeçalho + métricas + ocupação ficam (a leitura
      de "quanto cabe" continua à vista); lista de paradas, motorista e
      ações somem. A busca de rotas reabre a lista só visualmente
@@ -337,21 +353,100 @@
 
   /* "Só número": o pedido vira um chip só com o número (o mesmo do
      ponto no mapa), vários por linha -- densidade máxima pra realocar
-     arrastando. A urgência não pode sumir junto com os badges: borda
-     vermelha = agendado atrasado, azul = agendado pro dia. O resto
-     (código, endereço...) fica no tooltip. */
-  body.cards-numeros .lista-paradas { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; }
-  body.cards-numeros .item-parada { padding: 3px 4px; margin-bottom: 0; }
+     arrastando. O resto (código, endereço...) fica no tooltip.
+
+     O preenchimento do chip (.numero) já tem dono -- vermelho
+     "não alocado"/verde "selecionado" no pool, cor da própria rota
+     dentro de um rascunho (renumerarPool/renumerarRotaEl) -- então não
+     dá pra também usá-lo pra urgência (um atrasado, também vermelho,
+     ficaria idêntico a um simples não-alocado). Urgência, reentrega e
+     tipo de carga entram como selos de canto com anel/fundo da
+     superfície, que garantem contraste em qualquer cor de preenchimento
+     por baixo (Hugo, 14/08). */
+  body.cards-numeros .lista-paradas { display: flex; flex-wrap: wrap; gap: 11px; align-content: flex-start; }
+  body.cards-numeros .item-parada {
+    position: relative;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    margin: 0 0 6px;
+    background: none;
+    border: none;
+  }
+  body.cards-numeros .item-parada.selecionada { background: none; border-color: transparent; box-shadow: none; }
   body.cards-numeros .item-parada br,
   body.cards-numeros .item-parada .codigo,
   body.cards-numeros .item-parada .remetente,
   body.cards-numeros .item-parada .destinatario,
   body.cards-numeros .item-parada .endereco,
   body.cards-numeros .item-parada .agendamento,
-  body.cards-numeros .item-parada .badge-caixas { display: none; }
-  body.cards-numeros .item-parada .numero { margin-right: 0; }
-  body.cards-numeros .item-parada[data-urgencia="dia"] { border-color: #2C5FC4; box-shadow: inset 0 0 0 1px #2C5FC4; }
-  body.cards-numeros .item-parada[data-urgencia="atrasado"] { border-color: var(--erro); box-shadow: inset 0 0 0 1px var(--erro); }
+  body.cards-numeros .item-parada .badge-caixas,
+  body.cards-numeros .item-parada .nf-pedido { display: none; }
+  body.cards-numeros .item-parada .numero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    margin: 0;
+    border-radius: 6px 6px 3px 3px;
+    font-size: 11px;
+  }
+  /* urgência do agendamento: bolinha no canto superior direito */
+  body.cards-numeros .item-parada[data-urgencia="dia"]::after,
+  body.cards-numeros .item-parada[data-urgencia="atrasado"]::after,
+  body.cards-numeros .item-parada[data-urgencia="futuro"]::after {
+    content: "";
+    position: absolute;
+    top: -4px; right: -4px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--superficie);
+    z-index: 1;
+  }
+  body.cards-numeros .item-parada[data-urgencia="dia"]::after { background: #2C5FC4; }
+  body.cards-numeros .item-parada[data-urgencia="atrasado"]::after { background: var(--erro); }
+  body.cards-numeros .item-parada[data-urgencia="futuro"]::after { background: var(--texto-suave); }
+  /* reentrega (código com sufixo -R1, -R2...): selo no canto superior esquerdo */
+  body.cards-numeros .item-parada[data-reentrega="1"]::before {
+    content: "↻";
+    position: absolute;
+    top: -4px; left: -4px;
+    width: 13px; height: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--superficie);
+    border: 1.5px solid var(--borda);
+    font-size: 8px;
+    line-height: 1;
+    color: var(--texto-suave);
+    z-index: 1;
+  }
+  /* tipo de carga: faixa pendurada embaixo do chip, sempre visível
+     (Seco é o padrão -- ver regras/tipo_carga_embarcador.py) */
+  body.cards-numeros .item-parada .numero::after {
+    content: "";
+    position: absolute;
+    left: 2px; right: 2px;
+    bottom: -6px;
+    height: 4px;
+    border-radius: 0 0 3px 3px;
+    background: #C4901E;
+  }
+  body.cards-numeros .item-parada[data-carga="Refrigerado"] .numero::after { background: #0FA3B1; }
+  body.cards-numeros .item-parada[data-carga="Congelado"] .numero::after { background: #234C6A; }
+  /* modo "digitar posição" (reorder por número): o <input> não pode
+     ficar preso no tamanho fixo do chip -- volta a crescer livre */
+  body.cards-numeros .item-parada .numero.como-input {
+    width: auto;
+    height: auto;
+    min-width: 0;
+  }
+  body.cards-numeros .item-parada .numero.como-input::after { content: none; }
 
   .toggle-compacto select {
     border: 1px solid var(--borda);
@@ -441,6 +536,54 @@
   .card-dia-agendado li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.6; }
   .card-dia-agendado .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
   .card-dia-agendado .alerta-caixas { color: var(--erro); font-weight: 700; cursor: help; }
+
+  /* Barra de agentes (Importação, Criar Rotas Diárias Rascunho,
+     Incrementar Rotas, Gerar Romaneios + Executar tudo) -- mesmo
+     padrão visual do stepper da Torre de Controle (torre_controle.html). */
+  .barra-agentes-planejamento { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .barra-agentes-planejamento .etapa {
+    flex: 1 1 200px; min-width: 180px;
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; position: relative;
+  }
+  .barra-agentes-planejamento .etapa .topo { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .barra-agentes-planejamento .etapa .titulo { font-weight: 700; font-size: 12.5px; }
+  .barra-agentes-planejamento .etapa .detalhe { color: var(--texto-suave); font-size: 11px; }
+  .barra-agentes-planejamento .etapa .quando { color: var(--texto-suave); font-size: 11px; margin-top: 5px; }
+  .barra-agentes-planejamento .etapa .quando a { color: var(--texto-suave); }
+  .barra-agentes-planejamento .etapa .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .barra-agentes-planejamento .etapa.sucesso .estado { background: var(--sucesso); }
+  .barra-agentes-planejamento .etapa.erro .estado { background: var(--erro); }
+  .barra-agentes-planejamento .etapa.erro { border-color: #F2C4C0; }
+  .barra-agentes-planejamento .etapa.rodando .estado { background: var(--rodando); animation: pulso-agente 1.2s ease-in-out infinite; }
+  @keyframes pulso-agente { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .barra-agentes-planejamento .etapa button.rodar {
+    position: absolute; top: 8px; right: 8px;
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 11px; padding: 3px 8px; cursor: pointer; color: var(--texto);
+  }
+  .barra-agentes-planejamento .etapa button.rodar:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+  .barra-agentes-planejamento .etapa button.rodar:disabled { opacity: 0.4; cursor: not-allowed; }
+  .barra-agentes-planejamento .etapa-tudo {
+    flex: 0 0 160px; display: flex; flex-direction: column; justify-content: center; padding: 10px 12px;
+  }
+  .barra-agentes-planejamento .etapa-tudo button {
+    background: var(--primaria); color: #fff; border: none; border-radius: 7px;
+    padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .barra-agentes-planejamento .etapa-tudo button:hover:not(:disabled) { background: var(--primaria-clara); }
+  .barra-agentes-planejamento .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .painel-importacao-filtro {
+    display: none; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 10px 14px; margin: -8px 0 16px; font-size: 12px;
+  }
+  .painel-importacao-filtro.aberto { display: flex; }
+  .painel-importacao-filtro strong { flex: none; }
+  .painel-importacao-filtro label { display: flex; flex-direction: column; gap: 3px; color: var(--texto-suave); font-size: 11px; }
+  .painel-importacao-filtro input { padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; }
+  .painel-importacao-filtro .acoes { display: flex; gap: 8px; margin-left: auto; }
 </style>
 {% endblock %}
 
@@ -452,7 +595,8 @@
   <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
   <button type="submit" class="botao">Buscar</button>
   {% if dados %}
-  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — {{ dados.pool|length }} pedido(s) no pool{% if dados.resumo_agendados %} — {{ dados.resumo_agendados | sum(attribute='total_pedidos') }} agendado(s) não finalizado(s){% endif %}</span>
+  {% set total_alocados = dados.rascunhos | map(attribute='paradas') | map('length') | sum %}
+  <span class="status-lote">{{ dados.rascunhos|length }} rascunho(s) — <span id="contagem-alocados">{{ total_alocados }}</span> pedido(s) alocado(s) — {{ dados.pool|length }} pedido(s) no pool — <span id="contagem-total-pedidos">{{ total_alocados + dados.pool|length }}</span> pedido(s) no total{% if dados.resumo_agendados %} — {{ dados.resumo_agendados | sum(attribute='total_pedidos') }} agendado(s) não finalizado(s){% endif %}</span>
   {# sem name= de propósito: o seletor não pode ir junto no GET do Buscar #}
   <label class="toggle-compacto" title="Tamanho dos cards de pedido: compactos = 1 linha (número + código + badges); só número = chips numerados, vários por linha. Nos dois, as informações completas aparecem ao passar o mouse por cima.">
     Cards:
@@ -464,6 +608,144 @@
   </label>
   {% endif %}
 </form>
+
+<div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
+
+<div class="painel-importacao-filtro" id="painel-importacao-filtro">
+  <strong>Importação com filtro</strong>
+  <label>Pedido
+    <input type="text" id="filtro-importacao-pedido" placeholder="PS-34345">
+  </label>
+  <label>Embarcador
+    <input type="text" id="filtro-importacao-embarcador" placeholder="id ou nome">
+  </label>
+  <div class="acoes">
+    <button type="button" class="botao" onclick="rodarImportacaoComFiltro()">Rodar importação</button>
+    <button type="button" onclick="fecharPainelImportacao()">Cancelar</button>
+  </div>
+</div>
+
+<script>
+  // Barra de agentes (Importação/Criar Rotas Diárias Rascunho/
+  // Incrementar Rotas/Gerar Romaneios/Executar tudo) -- pedido do
+  // Hugo, 14/08. Bloco à parte, FORA do if/elif principal da tela
+  // (roda mesmo sem rascunho/pool pra essa data -- é justamente esse o
+  // caso em que o botão "Criar Rotas Diárias (Rascunho)" mais faz
+  // falta aqui). Nomes com sufixo "Agentes"/"AgentesPlanejamento" de
+  // propósito: evita colidir com PODE_EDITAR/postJSON/escaparHtml do
+  // script principal, que só existe quando há dados pra essa data.
+  const PODE_EDITAR_AGENTES = {{ pode_editar | tojson }};
+  let algumaEtapaAgentePlanejamentoRodando = false;
+
+  function escaparHtmlAgentes(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto == null ? '' : String(texto);
+    return div.innerHTML;
+  }
+
+  async function postJSONAgentesPlanejamento(url, body) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || `Falha em ${url}`);
+    return dados;
+  }
+
+  function renderAgentesPlanejamento(etapas) {
+    algumaEtapaAgentePlanejamentoRodando = etapas.some(e => e.rodando);
+
+    const cards = etapas.map(e => {
+      let classe = "", tituloEstado = "nunca rodou";
+      if (e.rodando) { classe = "rodando"; tituloEstado = "rodando agora"; }
+      else if (e.status === "SUCESSO") { classe = "sucesso"; tituloEstado = "última execução OK"; }
+      else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; tituloEstado = "última execução falhou (" + e.status + ")"; }
+      else if (e.status) { tituloEstado = "última execução: " + e.status; }
+
+      const quando = e.quando
+        ? `<a href="/execucao/${e.execucao_id}" target="_blank" title="abrir log">${escaparHtmlAgentes(e.quando.slice(5, 16))}</a>`
+        : "nunca rodou";
+      const aoClicar = e.agente_id === "somente_importacao"
+        ? "abrirPainelImportacao()"
+        : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
+      const botaoRodar = PODE_EDITAR_AGENTES
+        ? `<button class="rodar" onclick="${aoClicar}" ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+        : "";
+      return `<div class="etapa ${classe}" title="${escaparHtmlAgentes(tituloEstado)}">
+        ${botaoRodar}
+        <div class="topo"><span class="estado"></span><span class="titulo">${escaparHtmlAgentes(e.titulo)}</span></div>
+        <div class="detalhe">${escaparHtmlAgentes(e.detalhe)}</div>
+        <div class="quando">${quando}</div>
+      </div>`;
+    }).join("");
+
+    const etapaTudo = PODE_EDITAR_AGENTES ? `
+      <div class="etapa etapa-tudo">
+        <button onclick="rodarTudoPlanejamento()" ${algumaEtapaAgentePlanejamentoRodando ? "disabled" : ""}>▶ Executar tudo</button>
+      </div>` : "";
+
+    document.getElementById("barra-agentes-planejamento").innerHTML = cards + etapaTudo;
+  }
+
+  async function carregarAgentesPlanejamento() {
+    try {
+      const resp = await fetch("/api/planejamento/agentes/etapas");
+      if (resp.ok) renderAgentesPlanejamento((await resp.json()).etapas);
+    } catch (e) { /* próximo ciclo tenta de novo */ }
+    // Cadência dinâmica: rápida com algo rodando, lenta em repouso (mesmo padrão da torre).
+    setTimeout(carregarAgentesPlanejamento, algumaEtapaAgentePlanejamentoRodando ? 5000 : 30000);
+  }
+
+  async function iniciarExecucaoAgentePlanejamento(agenteId, extra) {
+    await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar", { agente_id: agenteId, ...(extra || {}) });
+    algumaEtapaAgentePlanejamentoRodando = true;
+    // feedback imediato na barra, sem esperar o próximo ciclo
+    fetch("/api/planejamento/agentes/etapas").then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+  }
+
+  async function rodarAgentePlanejamento(agenteId, titulo) {
+    if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+    try {
+      await iniciarExecucaoAgentePlanejamento(agenteId);
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  function abrirPainelImportacao() {
+    document.getElementById("painel-importacao-filtro").classList.add("aberto");
+  }
+  function fecharPainelImportacao() {
+    document.getElementById("painel-importacao-filtro").classList.remove("aberto");
+    document.getElementById("filtro-importacao-pedido").value = "";
+    document.getElementById("filtro-importacao-embarcador").value = "";
+  }
+  async function rodarImportacaoComFiltro() {
+    const pedido = document.getElementById("filtro-importacao-pedido").value.trim();
+    const embarcador = document.getElementById("filtro-importacao-embarcador").value.trim();
+    fecharPainelImportacao();
+    try {
+      await iniciarExecucaoAgentePlanejamento("somente_importacao", { pedido, embarcador });
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  async function rodarTudoPlanejamento() {
+    if (!confirm("Rodar tudo agora: Importação (sem filtro) → Criar Rotas Diárias (Rascunho) → Incrementar Rotas → Gerar PDFs de Romaneio, em sequência?")) return;
+    try {
+      await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar-tudo", {});
+      algumaEtapaAgentePlanejamentoRodando = true;
+      fetch("/api/planejamento/agentes/etapas").then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  carregarAgentesPlanejamento();
+</script>
 
 {# fora do if/elif principal de propósito: o resumo dos agendados
    aparece mesmo quando a data em edição não tem rascunho nem pool (é
@@ -488,14 +770,17 @@
     <div class="rotulo-vertical">Pool — não alocados</div>
     <h3>
       <span>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></span>
-      <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+      <span class="botoes-h3">
+        <button type="button" class="botao-mini" title='Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. O pool mostra TODO pedido não alocado, inclusive agendado pra depois da data em edição (badge cinza "Agendado dd/mm") -- pode arrastar pra uma rota normalmente, pra adiantar a entrega. No mapa: "Não alocados" mostra o pool em vermelho, "Alocados" mostra/oculta os pontos e trajetos das rotas já montadas, "Agendados (futuro)" mostra/oculta especificamente os agendados pra depois (ficam ocultos por padrão pra não poluir o mapa), "Enviadas" mostra/oculta as rotas já enviadas à VUUPT, e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.'>?</button>
+        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+      </span>
     </h3>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <label class="filtro-flag" title="Mostrar só os pedidos com agendamento pra essa data (ou atrasado) — o que não pode ficar de fora das rotas do dia">
       <input type="checkbox" id="flag-precisa-sair">
       Só o que precisa sair no dia (<span id="contagem-flag">0</span>)
     </label>
-    <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, remetente, destinatário ou endereço...">
+    <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
     <div class="filtro-cep" title="Faixa de CEP: aceita prefixo (ex: 01310) ou CEP completo. Os pedidos na faixa aparecem no mapa antes de virar rota.">
       <input type="text" id="cep-de" class="campo-busca" placeholder="CEP de (ex: 01000)">
       <input type="text" id="cep-ate" class="campo-busca" placeholder="CEP até (ex: 05999)">
@@ -510,7 +795,6 @@
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: agrupa por região (Seco separado de Refrigerado/Congelado), compara os 3 modelos, otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
     </div>
-    <div class="dica-selecao">Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. No mapa: "Não alocados" mostra o pool em vermelho e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.</div>
     <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
   </div>
 
@@ -528,7 +812,8 @@
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
     <button id="botao-alocar-motoristas" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
-    <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, remetente ou destinatário...">
+    <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- os pedidos delas voltam pro pool">Cancelar todas as rotas</button>
+    <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, NF, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
       Reordenar:
       <select id="modo-ordenacao">
@@ -553,6 +838,9 @@
   const DATA_ALVO_ISO = {{ dados.data_alvo_iso | tojson }};
   const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
   const TRAVAS = {{ dados.travas | tojson }};
+  const TIPOS_CARGA_POR_SENDER = {{ dados.tipos_carga_por_sender | tojson }};
+  const TIPO_CARGA_PADRAO = "Seco";
+  const PADRAO_SUFIXO_REENTREGA = /-R\d+$/;
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
   // 12/08): vermelho é reservado pros pedidos NÃO ALOCADOS no mapa --
   // rota vermelha confundiria com pool. O verde acento também fica de
@@ -642,7 +930,10 @@
       } else if (p.agendado_para === DATA_ALVO_ISO) {
         partes.push(`<span class="agendamento">Agendado pro dia</span>`);
       } else {
-        partes.push(`<span class="agendamento">Agendado ${dia}/${mes}</span>`);
+        // agendado pra depois de hoje -- pool passou a mostrar (Hugo,
+        // 14/08), marcação neutra pra não competir visualmente com o
+        // que precisa sair hoje; segue alocável normalmente
+        partes.push(`<span class="agendamento futuro">Agendado ${dia}/${mes}</span>`);
       }
     }
     if ((p.volume_caixas || 0) > LIMITE_ALERTA_CAIXAS) {
@@ -655,9 +946,12 @@
     const destinatario = p.destinatario_nome
       ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>`
       : "";
+    // NF já casada (documentos_processados) -- Hugo, 14/08: mostrar
+    // pra confirmar visualmente que achou o pedido certo ao buscar por NF
+    const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
-    return `<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span><br>
+    return `<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
       <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
   }
@@ -671,6 +965,10 @@
     return ocorrencias[ocorrencias.length - 1].replace("-", "");
   }
 
+  function tipoCargaDoPedido(p) {
+    return TIPOS_CARGA_POR_SENDER[p.sender_id] || TIPO_CARGA_PADRAO;
+  }
+
   function criarLiParada(p) {
     const li = document.createElement("li");
     li.className = "item-parada";
@@ -678,16 +976,21 @@
     li.dataset.lat = p.latitude ?? "";
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
-    // urgência do agendamento pro CSS do modo "só número" (borda do chip:
-    // vermelho = atrasado, azul = agendado pra data em edição)
+    // urgência do agendamento pro CSS do modo "só número" (selo do chip:
+    // vermelho = atrasado, azul = agendado pra data em edição, cinza =
+    // agendado pra depois -- Hugo, 14/08)
     li.dataset.urgencia = !p.agendado_para ? "" :
-      (p.agendado_para < DATA_ALVO_ISO ? "atrasado" : (p.agendado_para === DATA_ALVO_ISO ? "dia" : ""));
+      (p.agendado_para < DATA_ALVO_ISO ? "atrasado" : (p.agendado_para === DATA_ALVO_ISO ? "dia" : "futuro"));
+    // reentrega (código com sufixo -R1, -R2...) e tipo de carga
+    // (Seco/Refrigerado/Congelado por sender_id) pro CSS do modo "só número"
+    li.dataset.reentrega = PADRAO_SUFIXO_REENTREGA.test(p.codigo || "") ? "1" : "";
+    li.dataset.carga = tipoCargaDoPedido(p);
     li.dataset.cep = cepDoEndereco(p.endereco);
     // fallback de 1 caixa pra pedido sem volume -- mesma convenção das
     // travas do servidor e do totalizador da rota
     li.dataset.caixas = p.volume_caixas || 1;
-    // texto usado pela busca client-side (código, remetente, destinatário, endereço)
-    li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco]
+    // texto usado pela busca client-side (código, remetente, destinatário, endereço, NF)
+    li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco, p.numero_nf]
       .filter(Boolean).join(" ").toLowerCase();
     li.innerHTML = itemParadaHtml({ ...p, remetente: p.remetente_nome || p.remetente });
     return li;
@@ -814,6 +1117,7 @@
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
+        ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; os pedidos voltam pro pool">Cancelar rota</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>`;
@@ -952,6 +1256,16 @@
     delete gruposMapa[rascunhoId];
   }
 
+  function grupoVisivelNoMapa(rascunhoId) {
+    // "Alocados: no mapa" manda no geral; dentro disso, rota já
+    // ENVIADA (motorista a caminho, card marcado ".enviada") só some
+    // se o toggle "Enviadas: no mapa" estiver desligado (Hugo, 14/08)
+    if (!mostrarAlocadosNoMapa) return false;
+    const card = document.getElementById(`card-rota-${rascunhoId}`);
+    const enviada = !!card && card.classList.contains("enviada");
+    return !enviada || mostrarEnviadasNoMapa;
+  }
+
   function redesenharRota(rascunhoId) {
     limparGrupoMapa(rascunhoId);
     const ul = document.getElementById(`lista-parada-${rascunhoId}`);
@@ -968,10 +1282,11 @@
 
     const cor = coresPorRascunho[rascunhoId] || CORES[Object.keys(coresPorRascunho).length % CORES.length];
     coresPorRascunho[rascunhoId] = cor;
+    const visivel = grupoVisivelNoMapa(rascunhoId);
 
     const markers = paradas.map((p, idx) => {
       const marker = new google.maps.Marker({
-        position: { lat: p.lat, lng: p.lng }, map: map,
+        position: { lat: p.lat, lng: p.lng }, map: visivel ? map : null,
         icon: iconeNumerado(idx + 1, cor), title: p.codigo,
       });
       marker.addListener("click", () => {
@@ -982,7 +1297,7 @@
     });
 
     const renderer = new google.maps.DirectionsRenderer({
-      map: map, suppressMarkers: true,
+      map: visivel ? map : null, suppressMarkers: true,
       polylineOptions: { strokeColor: cor, strokeWeight: 4 },
     });
 
@@ -1001,6 +1316,17 @@
         gruposMapa[rascunhoId].renderer.setDirections(result);
       }
     });
+  }
+
+  function atualizarContagensTotais() {
+    // recontagem via DOM (não via RASCUNHOS/POOL_BY_ID) pra ficar sempre
+    // certo mesmo depois de drag-and-drop entre pool/rota e entre rotas
+    const alocados = document.querySelectorAll("#lista-rotas .lista-paradas .item-parada").length;
+    const pool = Object.keys(POOL_BY_ID).length;
+    const elAlocados = document.getElementById("contagem-alocados");
+    const elTotal = document.getElementById("contagem-total-pedidos");
+    if (elAlocados) elAlocados.textContent = alocados;
+    if (elTotal) elTotal.textContent = alocados + pool;
   }
 
   function removerLiDoDom(serviceId) {
@@ -1037,6 +1363,28 @@
   let mostrarPoolNoMapa = localStorage.getItem("planejamento.mostrarPoolNoMapa") === "1";
   let botaoPoolMapa = null;
   let botaoPoligono = null;
+  // pontos/trajetos das rotas já alocadas somem do mapa mas continuam
+  // nos cards -- só a exibição no mapa é afetada; default ligado (era o
+  // único comportamento antes desse toggle existir)
+  let mostrarAlocadosNoMapa = localStorage.getItem("planejamento.mostrarAlocadosNoMapa") !== "0";
+  let botaoAlocadosMapa = null;
+
+  // Toggle "agendados (futuro) no mapa" -- pool passou a mostrar TODO
+  // not_assigned, inclusive agendado pra depois da data em edição
+  // (Hugo, 14/08); por padrão eles ficam de fora do MAPA (a lista
+  // continua mostrando todos, só com o badge cinza) pra não poluir o
+  // mapa do dia com pontos que ainda não precisam sair -- este toggle
+  // liga a exibição deles quando for útil enxergar tudo de uma vez.
+  let mostrarFuturosNoMapa = localStorage.getItem("planejamento.mostrarFuturosNoMapa") === "1";
+  let botaoFuturosMapa = null;
+
+  // Toggle "rotas enviadas no mapa" -- rota já enviada à VUUPT (motorista
+  // a caminho) continua aparecendo no card, mas por padrão segue no mapa
+  // junto dos rascunhos em edição (mesmo comportamento de sempre); este
+  // toggle deixa esconder as enviadas quando o mapa fica poluído com
+  // rota que já não precisa mais de edição (Hugo, 14/08).
+  let mostrarEnviadasNoMapa = localStorage.getItem("planejamento.mostrarEnviadasNoMapa") !== "0";
+  let botaoEnviadasMapa = null;
 
   // Desenho de polígono FEITO À MÃO (clique = vértice, duplo clique
   // conclui) em vez da lib "drawing" do Maps -- a lib não carregou/rodou
@@ -1223,8 +1571,12 @@
       const id = Number(li.dataset.serviceId);
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
       const selecionado = SELECIONADOS.has(id);
+      // agendado pra depois de hoje só entra no mapa se o toggle
+      // "Agendados (futuro): no mapa" estiver ligado, ou se já estiver
+      // selecionado (seleção explícita sempre aparece, mesmo filtrada)
+      const ocultoPorFuturo = li.dataset.urgencia === "futuro" && !mostrarFuturosNoMapa;
       const mostrar = !isNaN(lat) && !isNaN(lng) &&
-        (selecionado || (mostrarPool && liVisivelNoPool(li)));
+        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo));
       const existente = marcadoresPreview[id];
       if (!mostrar) {
         if (existente) { existente.setMap(null); delete marcadoresPreview[id]; }
@@ -1348,6 +1700,45 @@
     atualizarPreviewPool();
   }
 
+  function aplicarVisibilidadeGrupos() {
+    Object.keys(gruposMapa).forEach(id => {
+      const g = gruposMapa[id];
+      const visivel = grupoVisivelNoMapa(id);
+      if (g.renderer) g.renderer.setMap(visivel ? map : null);
+      g.markers.forEach(m => m.setMap(visivel ? map : null));
+    });
+  }
+
+  function definirMostrarAlocadosNoMapa(valor) {
+    mostrarAlocadosNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarAlocadosNoMapa", valor ? "1" : "0");
+    if (botaoAlocadosMapa) {
+      botaoAlocadosMapa.textContent = valor ? "● Alocados: no mapa" : "○ Alocados: ocultos";
+      botaoAlocadosMapa.classList.toggle("ativo", valor);
+    }
+    aplicarVisibilidadeGrupos();
+  }
+
+  function definirMostrarFuturosNoMapa(valor) {
+    mostrarFuturosNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarFuturosNoMapa", valor ? "1" : "0");
+    if (botaoFuturosMapa) {
+      botaoFuturosMapa.textContent = valor ? "● Agendados (futuro): no mapa" : "○ Agendados (futuro): ocultos";
+      botaoFuturosMapa.classList.toggle("ativo", valor);
+    }
+    atualizarPreviewPool();
+  }
+
+  function definirMostrarEnviadasNoMapa(valor) {
+    mostrarEnviadasNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarEnviadasNoMapa", valor ? "1" : "0");
+    if (botaoEnviadasMapa) {
+      botaoEnviadasMapa.textContent = valor ? "● Enviadas: no mapa" : "○ Enviadas: ocultas";
+      botaoEnviadasMapa.classList.toggle("ativo", valor);
+    }
+    aplicarVisibilidadeGrupos();
+  }
+
   function definirCliqueNosMarcadores(clicavel) {
     // durante o desenho do polígono, clique tem que virar vértice mesmo
     // em cima de um ponto -- senão o marcador engole o clique
@@ -1433,16 +1824,37 @@
     botaoPoolMapa.title = "Mostrar/ocultar os pedidos não alocados (pool) como pontos vermelhos numerados no mapa";
     botaoPoolMapa.addEventListener("click", () => definirMostrarPoolNoMapa(!mostrarPoolNoMapa));
 
+    botaoAlocadosMapa = document.createElement("button");
+    botaoAlocadosMapa.type = "button";
+    botaoAlocadosMapa.title = "Mostrar/ocultar os pontos e trajetos das rotas já alocadas no mapa -- os cards continuam intactos, só a exibição no mapa muda";
+    botaoAlocadosMapa.addEventListener("click", () => definirMostrarAlocadosNoMapa(!mostrarAlocadosNoMapa));
+
+    botaoFuturosMapa = document.createElement("button");
+    botaoFuturosMapa.type = "button";
+    botaoFuturosMapa.title = "Mostrar/ocultar no mapa os pedidos do pool agendados pra depois da data em edição -- eles continuam na lista (badge cinza) e dá pra alocar em rota normalmente, só a exibição no mapa muda";
+    botaoFuturosMapa.addEventListener("click", () => definirMostrarFuturosNoMapa(!mostrarFuturosNoMapa));
+
+    botaoEnviadasMapa = document.createElement("button");
+    botaoEnviadasMapa.type = "button";
+    botaoEnviadasMapa.title = "Mostrar/ocultar no mapa os pontos e trajetos das rotas já ENVIADAS à VUUPT -- os cards continuam intactos, só a exibição no mapa muda";
+    botaoEnviadasMapa.addEventListener("click", () => definirMostrarEnviadasNoMapa(!mostrarEnviadasNoMapa));
+
     botaoPoligono = document.createElement("button");
     botaoPoligono.type = "button";
     botaoPoligono.title = "Selecionar por área: cada clique no mapa é um vértice do polígono; duplo clique (ou este botão) conclui, Esc cancela";
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
 
     container.appendChild(botaoPoolMapa);
+    container.appendChild(botaoAlocadosMapa);
+    container.appendChild(botaoFuturosMapa);
+    container.appendChild(botaoEnviadasMapa);
     container.appendChild(botaoPoligono);
     map.controls[google.maps.ControlPosition.TOP_CENTER].push(container);
 
     definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
+    definirMostrarAlocadosNoMapa(mostrarAlocadosNoMapa);  // idem pro toggle dos alocados
+    definirMostrarFuturosNoMapa(mostrarFuturosNoMapa);  // idem pro toggle dos agendados futuros
+    definirMostrarEnviadasNoMapa(mostrarEnviadasNoMapa);  // idem pro toggle das rotas enviadas
     pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
 
     document.addEventListener("keydown", (e) => {
@@ -1542,6 +1954,7 @@
     aplicarFiltroCep();     // idem pro filtro de CEP
     aplicarFiltroCaixas();  // idem pro filtro de caixas (e o preview no mapa junto)
     atualizarBarraSelecao();
+    atualizarContagensTotais();
   }
 
   // Distingue arrastar de clicar no pool: o click de seleção só vale
@@ -1681,6 +2094,32 @@
     }
   }
 
+  async function cancelarRota(rascunhoIds, botaoOrigem) {
+    if (!rascunhoIds.length) { alert("Nenhuma rota enviada pra cancelar."); return; }
+    const confirmMsg = rascunhoIds.length === 1
+      ? "Cancelar essa rota na VUUPT? Só funciona se o motorista ainda não iniciou o deslocamento -- os pedidos dela voltam pro pool."
+      : `Cancelar ${rascunhoIds.length} rota(s) na VUUPT? Só as que o motorista ainda não iniciou o deslocamento são canceladas -- os pedidos delas voltam pro pool.`;
+    if (!confirm(confirmMsg)) return;
+    const textoOriginal = botaoOrigem ? botaoOrigem.textContent : "";
+    if (botaoOrigem) { botaoOrigem.disabled = true; botaoOrigem.textContent = "Cancelando..."; }
+    try {
+      const resp = await postJSON("/api/planejamento/cancelar-rota", { rascunho_ids: rascunhoIds });
+      const falhas = resp.resultados.filter(r => !r.ok);
+      if (falhas.length) {
+        const linhas = falhas.map(r => {
+          const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
+          return `• ${nome}: ${r.erro}`;
+        });
+        alert(`${falhas.length} de ${rascunhoIds.length} rota(s) não puderam ser canceladas:\n${linhas.join("\n")}`);
+      }
+      // recarrega pra sumir os cards cancelados e refletir o pool com os pedidos de volta
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao cancelar: ${e.message}`);
+      if (botaoOrigem) { botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal; }
+    }
+  }
+
   async function atualizarPool(botao) {
     const original = botao.textContent;
     botao.disabled = true;
@@ -1719,6 +2158,7 @@
       aplicarFiltroCep();     // idem pro filtro de CEP
       aplicarFiltroCaixas();  // idem pro filtro de caixas (e preview no mapa dos itens novos/removidos)
       atualizarBarraSelecao();
+      atualizarContagensTotais();
 
       // resumo dos agendados (por dia/região) vem já renderizado
       // do servidor -- mesmo partial do load da página, só troca o HTML
@@ -1771,7 +2211,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-alocar-motoristas", "botao-enviar-todas"].forEach(id => {
+      ["botao-nova-rota", "botao-alocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -1846,17 +2286,30 @@
     });
 
     const listaRotas = document.getElementById("lista-rotas");
-    RASCUNHOS.forEach((rascunho, i) => {
-      coresPorRascunho[rascunho.id] = CORES[i % CORES.length];
-      const card = criarCardRota(rascunho, coresPorRascunho[rascunho.id]);
-      listaRotas.appendChild(card);
-      // rota já ENVIADA não recebe Sortable -- fica travada, sem
-      // aceitar arrastar pra dentro/fora dela (já virou rota de
-      // verdade na VUUPT, editar aqui só mudaria o rascunho local)
-      if (rascunho.status !== "ENVIADO") {
-        iniciarSortable(card.querySelector(".lista-paradas"));
-      }
-      redesenharRota(rascunho.id);
+    // cores mantêm a ordem original (por nome) mesmo com os cards
+    // reagrupados abaixo em pendentes/enviadas
+    RASCUNHOS.forEach((rascunho, i) => { coresPorRascunho[rascunho.id] = CORES[i % CORES.length]; });
+    const gruposRotas = [
+      { rotulo: "Pendentes de envio", itens: RASCUNHOS.filter(r => r.status !== "ENVIADO") },
+      { rotulo: "Enviadas", itens: RASCUNHOS.filter(r => r.status === "ENVIADO") },
+    ];
+    gruposRotas.forEach(({ rotulo, itens }) => {
+      if (!itens.length) return;
+      const divisorGrupo = document.createElement("div");
+      divisorGrupo.className = "divisor-grupo-rotas";
+      divisorGrupo.textContent = `${rotulo} (${itens.length})`;
+      listaRotas.appendChild(divisorGrupo);
+      itens.forEach(rascunho => {
+        const card = criarCardRota(rascunho, coresPorRascunho[rascunho.id]);
+        listaRotas.appendChild(card);
+        // rota já ENVIADA não recebe Sortable -- fica travada, sem
+        // aceitar arrastar pra dentro/fora dela (já virou rota de
+        // verdade na VUUPT, editar aqui só mudaria o rascunho local)
+        if (rascunho.status !== "ENVIADO") {
+          iniciarSortable(card.querySelector(".lista-paradas"));
+        }
+        redesenharRota(rascunho.id);
+      });
     });
 
     atualizarBotaoColapsarTodas();
@@ -1904,6 +2357,8 @@
         imprimirRota(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-duplicar")) {
         duplicarRota(Number(e.target.dataset.rascunhoId));
+      } else if (e.target.classList.contains("botao-cancelar-rota")) {
+        cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
       }
     });
 
@@ -1934,6 +2389,10 @@
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);
+    });
+    document.getElementById("botao-cancelar-todas").addEventListener("click", (e) => {
+      const idsEnviados = RASCUNHOS.filter(r => r.status === "ENVIADO").map(r => r.id);
+      cancelarRota(idsEnviados, e.target);
     });
 
     document.getElementById("botao-atualizar-pool").addEventListener("click", (e) => atualizarPool(e.target));

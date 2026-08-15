@@ -157,13 +157,15 @@ def _data_inicio_rota(rota: dict) -> date | None:
 # Status de rota que ainda não estão na rua (confirmados contra dado real
 # da API, 11/08): "not_started", "assigned", "accepted" e "not_assigned"
 # -- pedido do Hugo, permitir incrementar rota de HOJE nesses casos, já
-# que o motorista ainda não começou a rodar. "started" continua bloqueado
-# (rota em execução -- é exatamente o caso que motivou a trava original,
-# 06/08: motorista reclamou de pedido aparecendo do nada numa rota já na
-# rua). Qualquer status não reconhecido (novo/desconhecido) também
-# bloqueia, por segurança -- só libera pros valores explicitamente
+# que o motorista ainda não começou a rodar. "scheduled" (14/08, também
+# confirmado contra a API: rota com start_at futuro e sem agent_id --
+# mesmo perfil de "not_assigned") entra no mesmo grupo. "started" continua
+# bloqueado (rota em execução -- é exatamente o caso que motivou a trava
+# original, 06/08: motorista reclamou de pedido aparecendo do nada numa
+# rota já na rua). Qualquer status não reconhecido (novo/desconhecido)
+# também bloqueia, por segurança -- só libera pros valores explicitamente
 # confirmados como seguros.
-STATUS_ROTA_HOJE_LIBERADOS = {"not_started", "assigned", "accepted", "not_assigned"}
+STATUS_ROTA_HOJE_LIBERADOS = {"not_started", "assigned", "accepted", "not_assigned", "scheduled"}
 
 
 def _rota_e_de_hoje_ou_passada(rota: dict) -> bool:
@@ -443,6 +445,24 @@ def main(modo_teste: bool = False):
             logger.warning(f"Não consegui geocodificar a base pra ordenar as rotas: {e}")
 
         rotas_hoje = [r for r in todas_rotas if r.get("name", "").startswith(prefixo_hoje)]
+
+        # TRAVA DE ROTA CONFIRMADA (14/08, pedido do Hugo): desde que
+        # criar_rotas_diarias.py passou a gerar rascunho em vez de
+        # criar direto (13/08), o envio automático do rascunho pendente
+        # (enviar_rascunhos_pendentes.py, rede de segurança da
+        # sequência da noite) foi CANCELADO -- se ninguém confirmar o
+        # rascunho em /planejamento até o incremento rodar, não existe
+        # nenhuma rota "{prefixo_hoje}*" na VUUPT ainda. Antes, esse
+        # caso caía direto na criação de rota nova do zero, duplicando
+        # o que já estava desenhado no rascunho. Agora falha explícito
+        # (status erro + e-mail de alerta) em vez de mascarar o
+        # esquecimento com uma duplicidade silenciosa.
+        if not rotas_hoje:
+            raise RuntimeError(
+                f"Nenhuma rota de hoje ('{prefixo_hoje}*') encontrada na VUUPT -- rascunho de "
+                f"{data_alvo_br} não foi confirmado em /planejamento. {len(novos)} pedido(s) novo(s) "
+                f"ficaram sem alocar; confirme o rascunho e rode o incremento de novo."
+            )
 
         # TRAVA DE SEGURANÇA (06/08, pedido do Hugo -- crítico): motorista
         # reclamou de pedido aparecendo do nada numa rota que já estava

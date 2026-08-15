@@ -6,6 +6,10 @@ Modelos de otimização de roteirização (doc DOC_EXECUCAO_CLAUDE_OTIMIZACAO_RO
   - Modelo 1: Sweep Polar (agrupar_por_sweep)
   - Modelo 2: Clarke-Wright Savings (agrupar_por_savings)
   - Modelo 3: Sequenciamento 2-Opt (ordenar_2opt)
+  - Modelo 4: CEP real (agrupar_por_cep) -- pedido do Hugo, 14/08, ver
+    laboratório de roteirização (painel_agentes/laboratorio_rotas.py)
+  - Modelo 5: Clustering geográfico K-means (agrupar_por_kmeans) --
+    mesmo pedido, 14/08
 
 Módulo ISOLADO da produção: roteirizacao_dados.py / criar_rotas_diarias.py
 não são alterados -- os modelos daqui rodam lado a lado no benchmark
@@ -35,10 +39,12 @@ do limite urbano. Sem `eh_viagem_fn`, vale sempre `distancia_maxima_km`.
 """
 import logging
 import math
+from collections.abc import Callable
 
 from roteirizacao_dados import (
     obter_coordenadas, _distancia_km, extrair_cep,
     extrair_volume_caixas, extrair_nivel_dificuldade,
+    calcular_km_estimado,
     NIVEL_3_TAMANHO_MAXIMO_ROTA, NIVEL_ROTA_EXCLUSIVA,
 )
 
@@ -319,13 +325,209 @@ def ordenar_2opt(servicos: list[dict], base_lat: float, base_lng: float,
         iteracoes += 1
         for i in range(1, len(rota) - 1):
             for j in range(i + 1, len(rota)):
-                # todo o segmento (e os vizinhos das arestas trocadas)
+                # todo o segmento (e os vizinhos das arestas trocadas,
+                # i-1 e j+1 -- é ISSO que _delta_2opt lê de verdade)
                 # precisa de coordenada -- serviço sem coordenada nunca
-                # participa de reversão
-                if any(coords[rota[k]] is None for k in range(i, j + 1)):
+                # participa de reversão. BUG corrigido 14/08: o range
+                # checado era só (i, j+1) -- não cobria i-1 nem j+1,
+                # que _delta_2opt acessa via _ponto(); quando a posição
+                # j+1 (dentro dos limites da rota) não tinha coordenada,
+                # _distancia_km(*d) estourava TypeError ("Value after *
+                # must be an iterable, not NoneType") -- descoberto pelo
+                # teste isolado dos modelos novos (agrupar_por_cep/
+                # agrupar_por_kmeans), mas o bug já existia nos 3
+                # modelos originais (afeta qualquer rota cujo pedido
+                # mais PRÓXIMO da base -- último da ordem farthest-first
+                # -- não tenha coordenada geocodificada).
+                vizinhos = [k for k in (i - 1, j + 1) if 0 <= k < len(rota)]
+                if any(coords[rota[k]] is None for k in range(i, j + 1)) or \
+                   any(coords[rota[k]] is None for k in vizinhos):
                     continue
                 if _delta_2opt(rota, i, j) < -0.01:  # melhoria significativa (> 10m)
                     rota[i:j + 1] = reversed(rota[i:j + 1])
                     melhorou = True
 
     return [ordem_inicial[idx] for idx in rota]
+
+
+def agrupar_por_cep(servicos: list[dict], base_lat: float, base_lng: float,
+                    tamanho_maximo: int = 18, volume_maximo: int = 100,
+                    distancia_maxima_km: float | None = 20, api_key: str | None = None,
+                    distancia_maxima_viagem_km: float | None = None,
+                    eh_viagem_fn=None, digitos_cep: int = 5) -> list[list[dict]]:
+    """
+    Modelo 4: agrupamento por CEP real -- ordena os pedidos pelo CEP
+    (prefixo de `digitos_cep` dígitos primeiro, 5 por padrão -- nível de
+    bairro dos Correios; CEP completo como desempate dentro do mesmo
+    prefixo) e preenche rotas sequencialmente com o MESMO empacotamento
+    ganancioso (e as mesmas 4 travas) dos outros modelos deste módulo --
+    a diferença é só a ORDENAÇÃO de entrada. `base_lat`/`base_lng` não
+    entram na ordenação (fazem parte da assinatura só pra manter a MESMA
+    interface dos outros modelos, que quem chama usa de forma uniforme).
+
+    Serviços sem CEP reconhecível (extrair_cep retorna None): vão pro
+    final da ordenação -- nunca perde um pedido.
+    """
+    def _chave_cep(servico: dict):
+        cep = extrair_cep(servico)
+        if not cep:
+            return (1, float("inf"), float("inf"))
+        return (0, int(cep[:digitos_cep]), int(cep))
+
+    ordenados = sorted(servicos, key=_chave_cep)
+    sublotes = _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
+                                     distancia_maxima_km, api_key,
+                                     distancia_maxima_viagem_km, eh_viagem_fn)
+    _verificar_travas(sublotes, tamanho_maximo, volume_maximo)
+    return sublotes
+
+
+def agrupar_por_kmeans(servicos: list[dict], base_lat: float, base_lng: float,
+                       tamanho_maximo: int = 18, volume_maximo: int = 100,
+                       distancia_maxima_km: float | None = 20, api_key: str | None = None,
+                       distancia_maxima_viagem_km: float | None = None,
+                       eh_viagem_fn=None, tamanho_alvo_cluster: int = 14,
+                       max_iteracoes: int = 50) -> list[list[dict]]:
+    """
+    Modelo 5: clustering geográfico K-means (Lloyd's, distância
+    haversine, puro Python -- sem numpy/scikit-learn, dá conta tranquilo
+    do volume diário, sempre <200 pedidos). Agrupa por proximidade REAL
+    minimizando a dispersão dentro de cada cluster -- diferente da grade
+    fixa de 0.1° do modelo Atual (agrupar_por_regiao), que corta/junta
+    pontos arbitrariamente na borda da célula.
+
+    K (número de clusters) é derivado do total de pedidos geolocalizados
+    dividido por `tamanho_alvo_cluster` (14 por padrão -- abaixo do
+    tamanho_maximo de 18, dá folga pro empacotamento final ajustar sem
+    estourar a trava). Sementes iniciais determinísticas (farthest-point
+    a partir da base, sem RNG) -- a mesma execução sempre produz o mesmo
+    resultado, importante pra tela do laboratório não mudar a cada reload.
+
+    Depois de convergir (ou atingir `max_iteracoes`), ordena os pedidos
+    por (cluster, distância ao centroide) e alimenta o MESMO
+    empacotamento ganancioso (e as mesmas 4 travas) dos outros modelos --
+    cluster maior que tamanho_maximo/volume_maximo é subdividido pelo
+    empacotador, sem caminho de código novo.
+
+    Serviços sem coordenada: ficam de fora do clustering e vão pro final
+    da ordenação (por CEP, mesmo padrão dos outros modelos) -- nunca
+    perde um pedido.
+    """
+    com_coords: list[dict] = []
+    pontos: list[tuple[float, float]] = []
+    sem_coords: list[dict] = []
+    for s in servicos:
+        c = obter_coordenadas(s, api_key)
+        if c:
+            com_coords.append(s)
+            pontos.append(c)
+        else:
+            sem_coords.append(s)
+
+    def _chave_cep(servico: dict):
+        cep = extrair_cep(servico)
+        return int(cep) if cep else float("inf")
+
+    if not pontos:
+        ordenados = sorted(sem_coords, key=_chave_cep)
+    else:
+        k = max(1, round(len(pontos) / tamanho_alvo_cluster))
+
+        # Sementes determinísticas (farthest-point a partir da base) --
+        # sem RNG, mesma execução sempre produz o mesmo resultado.
+        centroides = [max(pontos, key=lambda p: _distancia_km(*p, base_lat, base_lng))]
+        while len(centroides) < k:
+            candidato = max(pontos, key=lambda p: min(_distancia_km(*p, *c) for c in centroides))
+            centroides.append(candidato)
+
+        atribuicao = [-1] * len(pontos)  # -1 força a 1ª rodada a "mudar"
+        for _iteracao in range(max_iteracoes):
+            nova_atribuicao = [
+                min(range(len(centroides)), key=lambda j: _distancia_km(*ponto, *centroides[j]))
+                for ponto in pontos
+            ]
+            if nova_atribuicao == atribuicao:
+                break
+            atribuicao = nova_atribuicao
+
+            novos_centroides = []
+            for j in range(k):
+                membros = [pontos[i] for i in range(len(pontos)) if atribuicao[i] == j]
+                if membros:
+                    novos_centroides.append((
+                        sum(p[0] for p in membros) / len(membros),
+                        sum(p[1] for p in membros) / len(membros),
+                    ))
+                else:
+                    novos_centroides.append(centroides[j])  # cluster vazio -- mantém a semente
+            centroides = novos_centroides
+
+        indices_ordenados = sorted(
+            range(len(pontos)),
+            key=lambda i: (atribuicao[i], _distancia_km(*pontos[i], *centroides[atribuicao[i]])),
+        )
+        ordenados = [com_coords[i] for i in indices_ordenados]
+        ordenados.extend(sorted(sem_coords, key=_chave_cep))
+
+    sublotes = _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
+                                     distancia_maxima_km, api_key,
+                                     distancia_maxima_viagem_km, eh_viagem_fn)
+    _verificar_travas(sublotes, tamanho_maximo, volume_maximo)
+    return sublotes
+
+
+def avaliar_candidatos(servicos: list[dict], candidatos: dict[str, Callable[[], list[list[dict]]]],
+                       base_lat: float, base_lng: float, api_key: str | None,
+                       tamanho_maximo: int, volume_maximo: int, label: str = "") -> dict[str, dict]:
+    """
+    Roda TODOS os candidatos de agrupamento (cada um uma função sem
+    argumentos, com os pedidos/parâmetros já capturados no closure de
+    quem chama -- mesmo padrão de selecao_modelo.py::escolher_melhor_
+    modelo), sequencia cada um com ordenar_2opt, valida as 4 travas +
+    cobertura total de pedidos, e devolve as métricas de TODOS os
+    candidatos que sobreviverem -- diferente de escolher_melhor_modelo,
+    que só devolve 1 vencedor. Generalização do loop que já existia em
+    selecao_modelo.py, pensada pro laboratório de roteirização
+    (painel_agentes/laboratorio_rotas.py), que precisa mostrar TODOS os
+    esquemas lado a lado pro Hugo comparar, não escolher sozinho.
+
+    NÃO é chamada por selecao_modelo.py nem por nenhum fluxo de
+    produção -- o dict de candidatos de lá continua próprio e intocado.
+
+    Candidato que estourar exceção ou falhar validação é DESCARTADO
+    (logado, nunca propaga) -- mesma filosofia de segurança de
+    escolher_melhor_modelo: um esquema ruim não derruba a comparação
+    inteira.
+
+    Retorna {nome: {"sublotes", "rotas", "entregas", "caixas", "km_total",
+    "km_medio"}} só com os candidatos que sobreviveram.
+    """
+    ids_originais = {s["id"] for s in servicos}
+    avaliacoes: dict[str, dict] = {}
+    for nome, fn in candidatos.items():
+        try:
+            sublotes = fn()
+            sublotes = [ordenar_2opt(s, base_lat, base_lng, api_key) for s in sublotes]
+
+            for sublote in sublotes:
+                assert len(sublote) <= tamanho_maximo, f"sublote com {len(sublote)} entregas (máx {tamanho_maximo})"
+                caixas_sublote = sum(extrair_volume_caixas(s) for s in sublote)
+                assert caixas_sublote <= volume_maximo or len(sublote) == 1, \
+                    f"sublote com {caixas_sublote} caixas (máx {volume_maximo})"
+            ids_alocados = [s["id"] for sub in sublotes for s in sub]
+            assert len(ids_alocados) == len(set(ids_alocados)), "pedido duplicado entre sublotes"
+            assert ids_originais == set(ids_alocados), "pedido perdido no agrupamento"
+
+            total_rotas = len(sublotes)
+            total_km = sum(calcular_km_estimado(s, base_lat, base_lng, api_key) for s in sublotes)
+            avaliacoes[nome] = {
+                "sublotes": sublotes,
+                "rotas": total_rotas,
+                "entregas": len(ids_alocados),
+                "caixas": sum(extrair_volume_caixas(s) for sub in sublotes for s in sub),
+                "km_total": total_km,
+                "km_medio": total_km / total_rotas if total_rotas else 0.0,
+            }
+        except Exception as e:
+            logger.error(f"[{label}] Modelo '{nome}' descartado da comparação: {e}")
+    return avaliacoes

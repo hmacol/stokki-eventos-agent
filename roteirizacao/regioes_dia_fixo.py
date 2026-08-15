@@ -13,7 +13,8 @@ identificados por trechos de rua/CEP, ver ENDERECOS_DIA_FIXO):
   Baixada Santista (Cubatão, São Vicente, Santos, Guarujá, Praia
   Grande) -- Terça
   Sorocaba (Sorocaba, Votorantim, São Roque, Itu, Salto) -- Terça
-  Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva) -- Quarta
+  Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva, Caieiras,
+  Cajamar, Franco da Rocha, Francisco Morato, Louveira) -- Quarta
   Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta
   Barueri (Barueri, Santana do Parnaíba, Jandira) -- Terça e Quinta
   ABCD (Santo André, São Bernardo do Campo, São Caetano do Sul,
@@ -72,7 +73,9 @@ REGIOES: list[dict] = [
     {"nome": "Sorocaba", "dias": [TERCA], "externa": True,
      "cidades": ["SOROCABA", "VOTORANTIM", "SAO ROQUE", "ITU", "SALTO"]},
     {"nome": "Campinas", "dias": [QUARTA], "externa": True,
-     "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA"]},
+     "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA",
+                 "CAIEIRAS", "CAJAMAR", "FRANCO DA ROCHA", "FRANCISCO MORATO",
+                 "LOUVEIRA"]},
     {"nome": "Piracicaba", "dias": [QUARTA], "externa": True,
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
     {"nome": "Barueri", "dias": [TERCA, QUINTA], "externa": False,

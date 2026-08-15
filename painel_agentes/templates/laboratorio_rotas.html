@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+{% block titulo %}Laboratório de Roteirização{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .barra-controle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .barra-controle input[type=date], .barra-controle select {
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .barra-controle label { display: flex; align-items: center; gap: 6px; }
+  .banner-teste {
+    background: #EDEBFB;
+    border: 2px solid #6D5BD0;
+    color: #4A3B9E;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .aviso {
+    background: #FDF3E1;
+    border: 1px solid #F0D9A8;
+    color: #8A5A0C;
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .tabela-metricas {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+  .tabela-metricas table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .tabela-metricas th, .tabela-metricas td { padding: 7px 12px; text-align: right; white-space: nowrap; }
+  .tabela-metricas th:first-child, .tabela-metricas td:first-child { text-align: left; }
+  .tabela-metricas th { color: var(--texto-suave); font-weight: 600; border-bottom: 1px solid var(--borda); }
+  .tabela-metricas tbody tr { border-bottom: 1px solid var(--borda); }
+  .tabela-metricas tbody tr.ativo { background: var(--fundo); font-weight: 600; }
+  .tabela-metricas .pendente { color: var(--texto-suave); }
+  .layout-mapa { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+  .legenda {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px;
+    max-height: 72vh;
+    overflow-y: auto;
+  }
+  .legenda h3 { margin: 0 0 10px; font-size: 13px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; }
+  .item-rota {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12.5px;
+    transition: opacity 0.15s;
+  }
+  .item-rota:hover { background: var(--fundo); }
+  .item-rota .cor-swatch { width: 12px; height: 12px; border-radius: 3px; margin-top: 2px; flex-shrink: 0; }
+  .item-rota .nome-rota { font-weight: 600; }
+  .item-rota .qtd-paradas { color: var(--texto-suave); }
+  #map { width: 100%; height: 72vh; border-radius: 10px; border: 1px solid var(--borda); }
+  .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
+  .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
+  .info-parada .remetente { color: #4F86F7; font-weight: 600; }
+  .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 4px;">Laboratório de Roteirização</h1>
+<p style="font-size:13px;color:var(--texto-suave);margin:0 0 16px;">
+  Compare esquemas de agrupamento lado a lado, sobre os MESMOS pedidos do dia -- só leitura,
+  nada aqui cria rota na VUUPT nem grava rascunho.
+</p>
+
+<form class="barra-controle" method="GET" action="{{ url_for('laboratorio_rotas') }}">
+  <label for="data">Data:</label>
+  <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
+
+  <label for="particao">Partição:</label>
+  <select id="particao" name="particao">
+    <option value="Seco" {% if particao_input == "Seco" %}selected{% endif %}>Seco</option>
+    <option value="Refrigerado/Congelado" {% if particao_input == "Refrigerado/Congelado" %}selected{% endif %}>Refrigerado/Congelado</option>
+  </select>
+
+  <label for="teste">
+    <input type="checkbox" id="teste" name="teste" value="1" {% if teste_input %}checked{% endif %}>
+    Usar massa de teste (52 pedidos fictícios, não consulta o VUUPT)
+  </label>
+
+  <button type="submit" class="botao">Buscar</button>
+</form>
+
+{% if dados and dados.teste %}
+<div class="banner-teste">
+  ⚠ MODO TESTE -- estes {{ dados.total_pedidos }} pedido(s) são FICTÍCIOS (código "TESTE-XXX"), gerados localmente.
+  Nenhuma chamada foi feita à VUUPT, nada aqui existe de verdade.
+</div>
+{% endif %}
+
+{% if erro %}
+<div class="aviso">Não consegui montar o laboratório: {{ erro }}</div>
+{% elif not dados or not dados.total_pedidos %}
+<div class="aviso">Nenhum pedido not_assigned elegível pra essa data/partição.</div>
+{% elif not dados.google_maps_key %}
+<div class="aviso">Falta a chave do Google Maps (google_maps.api_key) no config.yaml -- sem ela não dá pra desenhar o mapa.</div>
+{% elif not dados.esquemas %}
+<div class="aviso">Nenhum esquema de agrupamento sobreviveu à validação pra esses {{ dados.total_pedidos }} pedido(s) -- algo está muito errado, ver log do painel.</div>
+{% else %}
+
+{% if dados.esquemas_com_falha %}
+<div class="aviso">Esquema(s) descartado(s) da comparação (falharam validação de travas/cobertura): {{ dados.esquemas_com_falha | join(", ") }}.</div>
+{% endif %}
+
+<div class="tabela-metricas">
+  <table id="tabela-esquemas">
+    <thead>
+      <tr>
+        <th>Esquema</th>
+        <th>Rotas</th>
+        <th>Entregas</th>
+        <th>Caixas</th>
+        <th>KM (linha reta)</th>
+        <th>KM real (viário)</th>
+        <th>Tempo estimado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for nome, esquema in dados.esquemas.items() %}
+      <tr data-esquema="{{ nome }}">
+        <td>{{ nome }}</td>
+        <td>{{ esquema.metricas.rotas }}</td>
+        <td>{{ esquema.metricas.entregas }}</td>
+        <td>{{ esquema.metricas.caixas }}</td>
+        <td>{{ esquema.metricas.km_total }} km</td>
+        <td class="km-real pendente">—</td>
+        <td class="tempo-real pendente">—</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="layout-mapa">
+  <div class="legenda">
+    <h3 id="titulo-legenda">Rotas</h3>
+    <label for="filtro-esquema" style="display:block;font-size:12px;color:var(--texto-suave);margin-bottom:6px;">Esquema no mapa:</label>
+    <select id="filtro-esquema" style="width:100%;margin-bottom:12px;">
+      {% for nome in dados.esquemas.keys() %}
+      <option value="{{ nome }}">{{ nome }}</option>
+      {% endfor %}
+    </select>
+    <div id="lista-rotas"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script>
+  const DADOS_ESQUEMAS = {{ dados.esquemas | tojson }};
+  const BASE = {{ dados.base | tojson }};
+  const CORES = ["#0EA575", "#4F86F7", "#E1483D", "#B24FE0", "#E8A33D",
+                "#14A6A6", "#D0479A", "#6B7CE0", "#8FBF3F", "#E06B4F"];
+  const ICONES_NUMERADOS = {};
+
+  let map;
+  let esquemaAtual = null;
+  const desenhosPorEsquema = {};  // nome -> { grupos: [{rota,cor,renderer,markers,itemLegenda}] }
+  let infoWindow;
+
+  function iconeNumerado(numero, cor) {
+    const chave = `${numero}-${cor}`;
+    if (ICONES_NUMERADOS[chave]) return ICONES_NUMERADOS[chave];
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
+      <circle cx="14" cy="14" r="12" fill="${cor}" stroke="#fff" stroke-width="2"/>
+      <text x="14" y="19" font-size="12" font-weight="700" text-anchor="middle" fill="#fff" font-family="Arial">${numero}</text>
+    </svg>`;
+    const icone = {
+      url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+      scaledSize: new google.maps.Size(28, 28),
+      anchor: new google.maps.Point(14, 14),
+    };
+    ICONES_NUMERADOS[chave] = icone;
+    return icone;
+  }
+
+  function escaparHtml(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto == null ? '' : String(texto);
+    return div.innerHTML;
+  }
+
+  function montarInfoHtml(parada) {
+    return `<div class="info-parada">
+      <div class="titulo">${escaparHtml(parada.nome)}</div>
+      <div class="remetente">${escaparHtml(parada.remetente)}</div>
+      <div>${escaparHtml(parada.titulo)}</div>
+      <div class="endereco">${escaparHtml(parada.endereco)}</div>
+    </div>`;
+  }
+
+  function formatarTempo(segundos) {
+    const horas = Math.floor(segundos / 3600);
+    const minutos = Math.round((segundos % 3600) / 60);
+    return horas > 0 ? `${horas}h${String(minutos).padStart(2, "0")}` : `${minutos}min`;
+  }
+
+  function atualizarLinhaTabela(nome, kmReal, tempoSegundos) {
+    const linha = document.querySelector(`#tabela-esquemas tr[data-esquema="${CSS.escape(nome)}"]`);
+    if (!linha) return;
+    const celKm = linha.querySelector(".km-real");
+    const celTempo = linha.querySelector(".tempo-real");
+    celKm.textContent = `${(kmReal / 1000).toFixed(1)} km`;
+    celKm.classList.remove("pendente");
+    celTempo.textContent = formatarTempo(tempoSegundos);
+    celTempo.classList.remove("pendente");
+  }
+
+  function destacarLinhaAtiva(nome) {
+    document.querySelectorAll("#tabela-esquemas tbody tr").forEach(tr => {
+      tr.classList.toggle("ativo", tr.dataset.esquema === nome);
+    });
+  }
+
+  function esconderEsquema(nome) {
+    const desenho = desenhosPorEsquema[nome];
+    if (!desenho) return;
+    desenho.grupos.forEach(g => {
+      g.renderer.setMap(null);
+      g.markers.forEach(m => m.setMap(null));
+    });
+  }
+
+  function construirEsquema(nome) {
+    const rotas = DADOS_ESQUEMAS[nome].rotas;
+    const directionsService = new google.maps.DirectionsService();
+    const grupos = [];
+    let pendentes = rotas.length;
+    let kmRealTotal = 0;
+    let tempoTotalSegundos = 0;
+    let algumFalhou = false;
+
+    rotas.forEach((rota, i) => {
+      const cor = CORES[i % CORES.length];
+
+      const renderer = new google.maps.DirectionsRenderer({
+        map: map,
+        suppressMarkers: true,
+        polylineOptions: { strokeColor: cor, strokeWeight: 4 },
+      });
+
+      const markers = rota.paradas.map((parada, idx) => {
+        const marker = new google.maps.Marker({
+          position: { lat: parada.lat, lng: parada.lng },
+          map: map,
+          icon: iconeNumerado(idx + 1, cor),
+          title: parada.nome,
+        });
+        marker.addListener("click", () => {
+          infoWindow.setContent(montarInfoHtml(parada));
+          infoWindow.open(map, marker);
+        });
+        return marker;
+      });
+
+      const item = document.createElement("div");
+      item.className = "item-rota";
+      item.innerHTML = `
+        <span class="cor-swatch" style="background:${cor}"></span>
+        <div>
+          <div class="nome-rota">${escaparHtml(rota.nome)}</div>
+          <div class="qtd-paradas">${rota.paradas.length} parada(s)</div>
+        </div>`;
+      item.addEventListener("click", () => {
+        const escondendo = renderer.getMap() !== null;
+        renderer.setMap(escondendo ? null : map);
+        markers.forEach(m => m.setMap(escondendo ? null : map));
+        item.style.opacity = escondendo ? "0.4" : "1";
+      });
+
+      grupos.push({ rota, cor, renderer, markers, itemLegenda: item });
+
+      const waypoints = rota.paradas.slice(0, -1).map(p => ({
+        location: { lat: p.lat, lng: p.lng }, stopover: true,
+      }));
+      const ultimaParada = rota.paradas[rota.paradas.length - 1];
+
+      directionsService.route({
+        origin: BASE,
+        destination: { lat: ultimaParada.lat, lng: ultimaParada.lng },
+        waypoints: waypoints,
+        optimizeWaypoints: false,
+        travelMode: google.maps.TravelMode.DRIVING,
+      }, (result, status) => {
+        if (status === "OK") {
+          renderer.setDirections(result);
+          result.routes[0].legs.forEach(leg => {
+            kmRealTotal += leg.distance ? leg.distance.value : 0;
+            tempoTotalSegundos += leg.duration ? leg.duration.value : 0;
+          });
+        } else {
+          algumFalhou = true;
+          console.warn(`[${nome}] Não consegui traçar "${rota.nome}": ${status}`);
+        }
+        pendentes -= 1;
+        if (pendentes === 0 && !algumFalhou) {
+          atualizarLinhaTabela(nome, kmRealTotal, tempoTotalSegundos);
+        }
+      });
+    });
+
+    desenhosPorEsquema[nome] = { grupos };
+  }
+
+  function mostrarEsquema(nome) {
+    if (esquemaAtual && esquemaAtual !== nome) {
+      esconderEsquema(esquemaAtual);
+    }
+    esquemaAtual = nome;
+    destacarLinhaAtiva(nome);
+
+    document.getElementById("titulo-legenda").textContent =
+      `${DADOS_ESQUEMAS[nome].rotas.length} rota(s) — ${nome}`;
+
+    const listaEl = document.getElementById("lista-rotas");
+    listaEl.innerHTML = "";
+
+    if (!desenhosPorEsquema[nome]) {
+      construirEsquema(nome);
+    } else {
+      desenhosPorEsquema[nome].grupos.forEach(g => {
+        g.renderer.setMap(map);
+        g.markers.forEach(m => m.setMap(map));
+      });
+    }
+    desenhosPorEsquema[nome].grupos.forEach(g => listaEl.appendChild(g.itemLegenda));
+  }
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById("map"), {
+      center: BASE, zoom: 11,
+    });
+    infoWindow = new google.maps.InfoWindow();
+
+    new google.maps.Marker({
+      position: BASE, map: map, title: "Base",
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+
+    const seletor = document.getElementById("filtro-esquema");
+    mostrarEsquema(seletor.value);
+
+    seletor.addEventListener("change", (e) => mostrarEsquema(e.target.value));
+  }
+</script>
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
+</script>
+{% endif %}
+{% endblock %}

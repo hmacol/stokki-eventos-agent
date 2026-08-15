@@ -32,15 +32,56 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 import yaml
 
 from vuupt_client import VuuptClient
-from roteirizacao_dados import elegivel_para_data, extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
+from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from alocacao_motoristas import selecionar_motorista_equitativo
 from mapa_util import carregar_remetentes_por_sender_id
+from executor import buscar_ultima_execucao
 
 import rascunhos_rota
 
 logger = logging.getLogger(__name__)
+
+# Agentes acionáveis pela barra de botões da tela de planejamento --
+# pedido do Hugo, 14/08: "Executar tudo, Importação (com filtro de
+# embarcador/pedido), Criar Rotas Diárias (Rascunho), Incrementar
+# Rotas, Gerar PDFs de Romaneio" direto na tela, sem precisar ir no
+# painel de agentes. Ordem = ordem operacional (e também a ordem em
+# que "Executar tudo" roda cada um). Mesmo padrão de torre_controle.
+# ETAPAS_PIPELINE/montar_etapas_pipeline, só que restrito aos 4
+# agentes relevantes pra essa tela (não inclui, por exemplo,
+# Expedição/Documentos/Relatório, que são da torre).
+ETAPAS_AGENTES_PLANEJAMENTO = [
+    {"agente_id": "somente_importacao",           "titulo": "Importação",
+     "detalhe": "Stokki → VUUPT (todos, ou filtrado por pedido/embarcador)"},
+    {"agente_id": "criar_rotas_diarias_rascunho",  "titulo": "Criar Rotas Diárias (Rascunho)",
+     "detalhe": "gera rascunhos locais pra revisão nessa tela"},
+    {"agente_id": "incrementar_rotas",             "titulo": "Incrementar Rotas",
+     "detalhe": "aloca pedidos novos nas rotas do dia já criadas"},
+    {"agente_id": "gerar_romaneios",               "titulo": "Gerar PDFs de Romaneio",
+     "detalhe": "1 PDF por rota do dia, na ordem de visita"},
+]
+
+
+def montar_etapas_agentes_planejamento() -> list[dict]:
+    """Última execução de cada agente da barra de planejamento (leitura
+    barata, só o SQLite do painel) -- mesmo formato de
+    torre_controle.montar_etapas_pipeline."""
+    etapas = []
+    for etapa in ETAPAS_AGENTES_PLANEJAMENTO:
+        ultima = buscar_ultima_execucao(etapa["agente_id"])
+        etapas.append({
+            **etapa,
+            "status": ultima["status"] if ultima else None,
+            "quando": (ultima.get("finalizado_em") or ultima.get("iniciado_em")) if ultima else None,
+            "execucao_id": ultima["id"] if ultima else None,
+            "rodando": bool(ultima and ultima["status"] == "RODANDO"),
+        })
+    return etapas
+
+_DB_PATH = _RAIZ / "dados" / "dados.db"
 
 _PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
 
@@ -120,13 +161,15 @@ def _data_agendada(servico: dict) -> date | None:
         return None
 
 
-def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str]) -> dict:
+def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
+                        nf_por_codigo: dict[str, str] | None = None) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
     agendado = _data_agendada(servico)
+    codigo = servico.get("code", "")
     return {
         "agendado_para": agendado.isoformat() if agendado else None,
         "service_id": servico["id"],
-        "codigo": servico.get("code", ""),
+        "codigo": codigo,
         "titulo": servico.get("title", ""),
         "endereco": servico.get("address", ""),
         "latitude": float(lat) if lat not in (None, "") else None,
@@ -136,6 +179,9 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str]) -> dict
         "destinatario_nome": (servico.get("customer") or {}).get("name") or "",
         "nivel_dificuldade": extrair_nivel_dificuldade(servico),
         "volume_caixas": extrair_volume_caixas(servico),
+        # NF já casada (documentos_processados) pro pedido, se houver --
+        # Hugo, 14/08: buscar/adicionar pedido à rota pelo número da NF
+        "numero_nf": (nf_por_codigo or {}).get(_codigo_base(codigo), ""),
     }
 
 
@@ -213,12 +259,27 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     """
     Busca ao vivo na VUUPT os pedidos e separa em:
 
-      - "pool": not_assigned elegíveis pra essa data que ainda não estão
-        em nenhum rascunho ATIVO (a coluna arrastável da tela) --
-        extraída de buscar_dados_planejamento() pra ser reaproveitada
-        pelo botão "Atualizar" (Hugo, 12/08: verificar pedido novo
-        chegando na VUUPT sem recarregar a página, perdendo a edição em
-        andamento);
+      - "pool": TODO not_assigned que ainda não está em nenhum rascunho
+        ATIVO (a coluna arrastável da tela) -- extraída de
+        buscar_dados_planejamento() pra ser reaproveitada pelo botão
+        "Atualizar" (Hugo, 12/08: verificar pedido novo chegando na
+        VUUPT sem recarregar a página, perdendo a edição em andamento).
+        Inclui também pedido agendado pra data FUTURA (pedido do Hugo,
+        14/08: "sempre mostrar todos os pedidos, inclusive os
+        agendados, com marcação visual diferente, mas permitindo
+        alocação em rotas" -- antes esses ficavam de fora, via
+        elegivel_para_data, e não tinha como adiantar uma entrega
+        manualmente nem achar o pedido pela busca). O front marca esse
+        caso (badge "Agendado dd/mm" cinza + urgência "futuro") e tem
+        um filtro próprio pra ocultá-los do MAPA (não da lista) --
+        ver "Agendados (futuro): no mapa" em planejamento_rotas.html.
+        O pipeline automático (criar_rotas_diarias.py/incrementar_
+        rotas.py) continua respeitando elegivel_para_data normalmente;
+        só a tela manual de planejamento passou a mostrar tudo. Cada
+        item do pool também traz "numero_nf" (rascunhos_rota.
+        carregar_nf_por_codigo_pedido, casado pelo código BASE) quando
+        já existe NF processada pro pedido -- entra na busca do front
+        junto de código/remetente/destinatário/endereço (Hugo, 14/08);
       - "resumo_agendados": TODO agendado não finalizado, independente
         da data, agregado por dia e região (_resumo_pedidos_agendados;
         pedido do Hugo, 12/08 -- substitui o antigo "resumo do futuro").
@@ -243,10 +304,12 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     vuupt = VuuptClient(token)
     filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
     servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+    nf_por_codigo = rascunhos_rota.carregar_nf_por_codigo_pedido(
+        {_codigo_base(s.get("code", "")) for s in servicos_brutos})
     pool = [
-        _servico_para_pool(s, remetentes_por_id)
+        _servico_para_pool(s, remetentes_por_id, nf_por_codigo)
         for s in servicos_brutos
-        if s["id"] not in ids_em_rascunho and elegivel_para_data(s, data_alvo)
+        if s["id"] not in ids_em_rascunho
     ]
     pool.sort(key=lambda p: p["codigo"])
 
@@ -281,9 +344,10 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     "motoristas": [...]} pra tela de planejamento.
 
     Cada rascunho vem com "badges" (avisos de trava estourada) já
-    calculados. O pool é o not_assigned elegível pra essa data que
-    ainda não está em nenhum rascunho do lote ativo; resumo_agendados é
-    todo pedido agendado não finalizado, por dia e região.
+    calculados. O pool é TODO not_assigned que ainda não está em nenhum
+    rascunho do lote ativo (inclusive agendado pra data futura, Hugo
+    14/08 -- ver buscar_pool_e_agendados); resumo_agendados é todo
+    pedido agendado não finalizado, por dia e região.
     """
     data_alvo = data_alvo or date.today()
     config = _carregar_config()
@@ -303,9 +367,15 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     # (elas continuam not_assigned na VUUPT até o envio) -- pedido do
     # Hugo, 12/08: mostrar o agendamento também nos cards das rotas
     agendamentos = pool_e_agendados["agendamentos_por_service_id"]
+    # NF: mesmo princípio, mas casada pelo código do pedido (não muda
+    # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
+    # também dentro de rotas já montadas, não só no pool
+    nf_por_codigo_rascunho = rascunhos_rota.carregar_nf_por_codigo_pedido(
+        {_codigo_base(p["codigo"]) for r in rascunhos for p in r["paradas"]})
     for r in rascunhos:
         for p in r["paradas"]:
             p["agendado_para"] = agendamentos.get(p["service_id"])
+            p["numero_nf"] = nf_por_codigo_rascunho.get(_codigo_base(p["codigo"]), "")
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -329,6 +399,11 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # trava continuam sendo a palavra final (nível/distância não
         # viram barra).
         "travas": {"max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA},
+        # {sender_id: "Seco"|"Refrigerado"|"Congelado"} pro chip do modo "só
+        # número" mostrar a faixa de carga (Hugo, 14/08) -- sender_id sem
+        # entrada aqui é tratado como Seco no cliente (mesmo padrão de
+        # classificar_tipo_carga).
+        "tipos_carga_por_sender": carregar_tipos_carga_por_sender(_DB_PATH),
     }
 
 

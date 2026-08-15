@@ -109,6 +109,52 @@ def _conectar() -> sqlite3.Connection:
     return conn
 
 
+def carregar_nf_por_codigo_pedido(codigos_base: set[str]) -> dict[str, str]:
+    """
+    {codigo_pedido BASE: "12345, 67890"} das Notas Fiscais já casadas e
+    ENVIADAS na tabela documentos_processados (mesmo banco dados.db,
+    populada por documentos_pedido/processar_documentos.py) -- pedido
+    do Hugo, 14/08: achar/adicionar um pedido a uma rota pelo número da
+    NF, na busca do pool/rotas.
+
+    Reimplementado com sqlite3 puro (em vez de reaproveitar
+    roteirizacao/gerar_pdf_romaneios.py::carregar_documentos_por_pedido)
+    porque esse módulo importa PIL/pypdf/avisar_motoristas_rotas -- peso
+    desnecessário num caminho chamado a cada carga da tela de
+    planejamento, não só na hora de gerar 1 romaneio.
+
+    codigos_base já deve vir normalizado (sem sufixo -R1/-R2 de
+    reentrega, ver planejamento_rotas.py::_codigo_base) -- é sob o
+    código BASE que o documento é casado (mesma convenção do
+    romaneio). Pedido sem NF processada ainda (comum pra pedido muito
+    novo, que acabou de entrar) simplesmente não entra no dict --
+    ausência aqui não é erro.
+    """
+    if not codigos_base:
+        return {}
+    try:
+        con = _conectar()
+        try:
+            nf_por_codigo: dict[str, set[str]] = {}
+            lista = sorted(codigos_base)
+            # SQLite limita em 999 variáveis por statement -- lotes de 900.
+            for i in range(0, len(lista), 900):
+                lote = lista[i:i + 900]
+                marcadores = ",".join("?" * len(lote))
+                for row in con.execute(
+                        f"SELECT codigo_pedido, numero_nf FROM documentos_processados "
+                        f"WHERE status='ENVIADO' AND tipo='Nota Fiscal' AND numero_nf IS NOT NULL "
+                        f"AND codigo_pedido IN ({marcadores})", lote):
+                    if row["numero_nf"]:
+                        nf_por_codigo.setdefault(row["codigo_pedido"], set()).add(row["numero_nf"])
+            return {codigo: ", ".join(sorted(numeros)) for codigo, numeros in nf_por_codigo.items()}
+        finally:
+            con.close()
+    except Exception as e:
+        logger.warning(f"Falha ao carregar NF por código de pedido: {e}")
+        return {}
+
+
 def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict:
     """Extrai de um dict de serviço (formato bruto da VUUPT, já com
     '_nivel_dificuldade' injetado por criar_rotas_diarias.py) os campos
@@ -768,3 +814,85 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
 
     marcar_enviado(rascunho_id, rota["id"])
     return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+
+
+# Espelho de roteirizacao/incrementar_rotas.py::STATUS_ROTA_HOJE_LIBERADOS
+# (status que indicam que o motorista ainda não começou a rodar) --
+# importar aquele módulo aqui puxaria o pipeline inteiro (selecao_modelo,
+# alocacao_motoristas...) só pra ler uma constante.
+STATUS_ROTA_NAO_INICIADA = {"not_started", "assigned", "accepted", "not_assigned", "scheduled"}
+
+
+def _rota_do_corpo(dados_rota) -> dict:
+    """Extrai o dict da rota do corpo de GET /routes/{id} -- lida com
+    qualquer um dos envelopes já vistos na API da VUUPT ({"route": {...}},
+    {"data": {...}}, ou o objeto sem envelope nenhum) em vez de travar
+    num formato só: buscar_rota() nunca tinha sido exercitada contra uma
+    resposta real antes deste botão, então o formato exato não estava
+    confirmado."""
+    if not isinstance(dados_rota, dict):
+        return {}
+    for chave in ("route", "data"):
+        valor = dados_rota.get(chave)
+        if isinstance(valor, dict):
+            return valor
+    return dados_rota
+
+
+def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
+    """
+    Cancela de verdade na VUUPT uma rota já enviada (rascunho status ==
+    ENVIADO) -- botão "Cancelar rota" da tela de planejamento (Hugo,
+    14/08). Só é permitido se o status ATUAL da rota, buscado AO VIVO
+    contra a API (não o que está gravado localmente, que nunca é
+    atualizado depois do envio), ainda indica que o motorista não
+    começou a rodar -- ver STATUS_ROTA_NAO_INICIADA. Rota já em
+    deslocamento (ou em qualquer status não reconhecido) é recusada.
+
+    services_action="unassign" (mesma convenção de reprocessar_rotas.py):
+    os pedidos da rota voltam pra not_assigned na VUUPT. O rascunho
+    local passa por descartar_rascunho -- mesmo mecanismo que já faz as
+    paradas reaparecerem no pool sem nenhuma limpeza extra.
+
+    Retorna {"rascunho_id", "ok", "erro"?}.
+    """
+    from rotas_client import buscar_rota, cancelar_rota
+
+    rascunho = buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
+    if rascunho["status"] != STATUS_ENVIADO or not rascunho["vuupt_route_id"]:
+        return {"rascunho_id": rascunho_id, "ok": False,
+                "erro": f"Rascunho não está enviado à VUUPT (status={rascunho['status']})."}
+
+    route_id = rascunho["vuupt_route_id"]
+    try:
+        dados_rota = buscar_rota(token, route_id)
+    except Exception as e:
+        resposta = getattr(e, "response", None)
+        if resposta is not None and resposta.status_code == 404:
+            # rota não existe mais na VUUPT (excluída de vez, não só
+            # cancelada) -- mesmo tratamento de "já cancelada por outra
+            # via" abaixo: nada pra cancelar lá, só sincroniza o local.
+            descartar_rascunho(rascunho_id)
+            return {"rascunho_id": rascunho_id, "ok": True}
+        return {"rascunho_id": rascunho_id, "ok": False,
+                "erro": f"Falha ao consultar a rota #{route_id} na VUUPT: {e}"}
+
+    status_atual = _rota_do_corpo(dados_rota).get("status")
+    if status_atual == "canceled":
+        # já cancelada na VUUPT por outra via -- só sincroniza o local
+        descartar_rascunho(rascunho_id)
+        return {"rascunho_id": rascunho_id, "ok": True}
+    if status_atual not in STATUS_ROTA_NAO_INICIADA:
+        return {"rascunho_id": rascunho_id, "ok": False,
+                "erro": f"Rota #{route_id} não pode ser cancelada por aqui (status atual na VUUPT: "
+                        f"'{status_atual}') -- só rotas que ainda não iniciaram deslocamento."}
+
+    try:
+        cancelar_rota(token, route_id, services_action="unassign")
+    except Exception as e:
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
+
+    descartar_rascunho(rascunho_id)
+    return {"rascunho_id": rascunho_id, "ok": True}

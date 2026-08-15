@@ -620,6 +620,7 @@ async function tratarExcecao(id) {
         id, motivo: motivo.trim(),
         data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : DATA_ALVO,
         tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
+        motorista: x ? x.motorista : null, rota: x ? x.rota : null,
       }),
     });
     if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao marcar."); return; }

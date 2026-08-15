@@ -40,6 +40,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
     COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
 )
+import tratativas
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,13 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
             if not modo_teste:
                 for p in pedidos:
                     marcar_notificado(p["id"], failed_reason_id, sender_id=sender_id, code=p.get("code"))
+                    if p.get("code"):
+                        tratativas.registrar_evento(
+                            p["code"], "INSUCESSO_ENTREGA", "AVISO_ENVIADO",
+                            service_id=p.get("id"), motivo_id=failed_reason_id,
+                            motivo_texto=motivo_texto, remetente_email=", ".join(emb["emails"]),
+                            texto=f"Aviso enviado a {emb['nome']} ({', '.join(emb['emails'])}) sobre {motivo_texto}.",
+                        )
         else:
             falhas += 1
 
