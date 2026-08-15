@@ -2,15 +2,19 @@
 """
 notificar_insucesso_aguardando_resposta.py
 
-NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso é duplicado
-imediatamente (ver motivos_falha.py::deve_duplicar) e este módulo
-manda o AVISO ao remetente: "seus pedidos foram duplicados pra
-reentrega no próximo dia útil; responda se quiser cancelar". A
-resposta é lida por ler_respostas_insucesso.py, que cancela a
-reentrega no VUUPT quando o remetente pedir.
-(Regra anterior, 03/08: alguns motivos perguntavam ANTES de duplicar
-e aguardavam resposta -- o esqueleto de agrupamento/fingerprint/
-marcador é o mesmo, só o texto e o momento da duplicação mudaram.)
+REGRA ATUAL (pedido do Hugo, 15/08: "quero que as tratativas definam
+se vamos ou não duplicar um pedido, não quero mais duplicar
+automaticamente; no caso do cliente responder, prevalece o que ele
+solicitar"): NENHUM insucesso é duplicado antes de perguntar. Este
+módulo manda a PERGUNTA ao remetente -- "houve insucesso, deseja o
+reenvio?" -- com botões pra confirmar, recusar ou pedir outra data. A
+reentrega só é criada quando a resposta chega e confirma (ou pede
+reagendamento), lida por ler_respostas_insucesso.py. Sem resposta,
+sem ação -- revoga a regra de 11/08 (duplicava tudo na hora e só
+perguntava depois, "responda se quiser cancelar"), que por sua vez já
+tinha revogado esta mesma regra de perguntar antes (03/08) -- o
+esqueleto de agrupamento/fingerprint/marcador nunca mudou, só o texto
+e o momento em que a reentrega é criada.
 
 Agrupa por (remetente, motivo) -- cada motivo tem uma pergunta
 diferente, então viram e-mails separados mesmo pro mesmo remetente.
@@ -53,11 +57,11 @@ EMAIL_RESPOSTA_BOTOES = "entregas@freshlogbr.com"
 
 def identificar_aguardando_resposta(insucessos: list[dict]) -> list[dict]:
     """
-    NOVA REGRA (pedido do Hugo, 11/08): TODOS os insucessos geram o
-    aviso de duplicação ao remetente (não só os motivos marcados com
-    aguarda_resposta, que era a regra de 03/08). O filtro que fica é o
-    rate-limit do fingerprint (pode_notificar): 1 e-mail por dia por
-    pedido, até chegar resposta.
+    TODOS os insucessos geram a pergunta de reenvio ao remetente (não
+    só os motivos com "aguarda_resposta" em motivos_falha.py -- esses
+    só ganham uma pergunta mais específica, ver _montar_conteudo). O
+    filtro que fica é o rate-limit do fingerprint (pode_notificar): 1
+    e-mail por dia por pedido, até chegar resposta.
     """
     from fingerprint_aguardando_resposta import pode_notificar
 
@@ -113,14 +117,17 @@ def _dias_fixos_do_grupo(pedidos: list[dict]) -> tuple[dict[str, str], bool]:
 
 def _botoes_resposta(email_resposta: str, assunto_original: str, pedidos: list[dict],
                      sender_id, failed_reason_id, dias_fixos: dict[str, str]) -> str:
-    """Dois botões de ação (pedido do Hugo, 12/08: "facilitar a resposta").
+    """Três botões de ação (pedido do Hugo, 12/08: "facilitar a resposta";
+    ganhou o terceiro em 15/08 quando o e-mail virou pergunta em vez de
+    aviso -- antes só existia "cancelar" porque o reenvio já tinha sido
+    criado; agora precisa de um jeito de CONFIRMAR também).
 
     São links mailto: -- o painel não tem URL pública, então botão com
     link HTTP não funcionaria pro embarcador; o que já existe é a
     leitura de respostas via IMAP (ler_respostas_insucesso.py). Cada
     botão abre no cliente de e-mail do remetente um RASCUNHO de resposta
-    já preenchido (cancelar / reagendar com campo de data), que ao ser
-    enviado cai no fluxo normal de leitura.
+    já preenchido (confirmar / recusar / reagendar com campo de data),
+    que ao ser enviado cai no fluxo normal de leitura.
 
     O marcador [[INSUCESSO_GRUPO:...]] vai DENTRO do corpo do rascunho:
     um compose via mailto NÃO cita o e-mail original, então o marcador
@@ -131,9 +138,13 @@ def _botoes_resposta(email_resposta: str, assunto_original: str, pedidos: list[d
     rodape_marcador = ("--- nao apague a linha abaixo (identificacao automatica dos pedidos) ---\r\n"
                        f"{marcador}")
 
-    corpo_cancelar = ("CANCELAR o reenvio dos pedidos: " + codigos + "\r\n\r\n"
-                      "Solicito o cancelamento da nova tentativa de entrega.\r\n\r\n"
-                      + rodape_marcador)
+    corpo_confirmar = ("CONFIRMAR o reenvio dos pedidos: " + codigos + "\r\n\r\n"
+                       "Solicito o reenvio para nova tentativa de entrega.\r\n\r\n"
+                       + rodape_marcador)
+
+    corpo_nao_reenviar = ("NAO REENVIAR os pedidos: " + codigos + "\r\n\r\n"
+                          "Nao desejo o reenvio para nova tentativa de entrega.\r\n\r\n"
+                          + rodape_marcador)
 
     # Cidades com dia fixo: avisa no próprio rascunho, pra data pedida
     # já vir num dia válido (se vier em outro dia, a leitura ajusta pra
@@ -154,66 +165,65 @@ def _botoes_resposta(email_resposta: str, assunto_original: str, pedidos: list[d
                 f"?subject={quote('Re: ' + assunto_original)}"
                 f"&body={quote(corpo)}")
 
-    estilo_botao = ("display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;"
+    estilo_botao = ("display:inline-block;padding:12px 18px;font-size:13px;font-weight:700;"
                     "color:#FFFFFF;text-decoration:none;border-radius:8px;")
     return f"""
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto 0 auto;">
   <tr>
-    <td style="border-radius:8px;background:{COR_ERRO};">
-      <a href="{html.escape(_mailto(corpo_cancelar))}" style="{estilo_botao}">Cancelar reenvio</a>
-    </td>
-    <td style="width:16px;font-size:0;">&nbsp;</td>
     <td style="border-radius:8px;background:{COR_ACENTO};">
+      <a href="{html.escape(_mailto(corpo_confirmar))}" style="{estilo_botao}">Sim, reenviar</a>
+    </td>
+    <td style="width:12px;font-size:0;">&nbsp;</td>
+    <td style="border-radius:8px;background:{COR_PRIMARIA};">
       <a href="{html.escape(_mailto(corpo_reagendar))}" style="{estilo_botao}">Reagendar para outra data</a>
+    </td>
+    <td style="width:12px;font-size:0;">&nbsp;</td>
+    <td style="border-radius:8px;background:{COR_ERRO};">
+      <a href="{html.escape(_mailto(corpo_nao_reenviar))}" style="{estilo_botao}">Não reenviar</a>
     </td>
   </tr>
 </table>
 <p style="margin:12px 0 0 0;font-size:12px;color:{COR_TEXTO_SUAVE};line-height:1.6;text-align:center;">
   Os botões abrem uma resposta pronta no seu e-mail — é só enviar.
   No reagendamento, preencha a data desejada antes de enviar.
-  Se preferir, responda este e-mail normalmente.
+  Se preferir, responda este e-mail normalmente -- sem resposta, o
+  pedido não é reenviado.
 </p>"""
 
 
 def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict],
-                     sender_id, failed_reason_id, dias_uteis_atraso: int | None = None,
+                     sender_id, failed_reason_id,
                      assunto_original: str = "", email_resposta: str = "") -> str:
-    """Só o CONTEÚDO (título, aviso de duplicação, tabela) -- o envelope
-    (logo, cores, rodapé) vem de email_utils.envelope_html().
+    """Só o CONTEÚDO (título, pergunta, tabela) -- o envelope (logo,
+    cores, rodapé) vem de email_utils.envelope_html().
 
-    Nova regra (Hugo, 11/08): o e-mail deixou de ser uma PERGUNTA
-    ("podemos reenviar?") e virou um AVISO ("já duplicamos; responda
-    se quiser cancelar"). Pra motivos de duplicação agendada
-    (dias_uteis_atraso), o texto informa o prazo em dias úteis."""
+    Regra atual (Hugo, 15/08): o e-mail é uma PERGUNTA -- "houve
+    insucesso, deseja o reenvio?" -- e NADA é duplicado até a resposta
+    confirmar. Motivo com pergunta própria cadastrada (motivos_falha.py
+    -- aguarda_resposta/pergunta) usa esse texto mais específico; os
+    demais usam um texto genérico."""
+    from motivos_falha import aguarda_resposta, pergunta_do_motivo
+
     linhas = "".join(f"""
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
-    # Cidades/galpões com dia fixo de entrega (regioes_dia_fixo.py): a
-    # reentrega (e qualquer reagendamento) cai no dia da região, então o
-    # prazo NÃO pode prometer "próximo dia útil" pra esses pedidos
-    # (pedido do Hugo, 13/08: "o e-mail tá falando sempre que a entrega
-    # ocorrerá no próximo dia útil").
+    # Cidades/galpões com dia fixo de entrega (regioes_dia_fixo.py): se
+    # o reenvio for confirmado, cai no dia da região -- avisa aqui pra
+    # não pegar o embarcador de surpresa (pedido do Hugo, 13/08).
     dias_fixos, todos_dia_fixo = _dias_fixos_do_grupo(pedidos)
 
-    if dias_uteis_atraso and todos_dia_fixo:
-        prazo = (f"A nova tentativa será agendada a partir de "
-                 f"<strong>{dias_uteis_atraso} dia(s) útil(eis)</strong> após a ocorrência, "
-                 "na <strong>próxima data de entrega da região</strong> (dia fixo — veja abaixo).")
-    elif dias_uteis_atraso:
-        prazo = (f"A nova tentativa está programada para "
-                 f"<strong>{dias_uteis_atraso} dia(s) útil(eis)</strong> após a ocorrência.")
-    elif todos_dia_fixo:
-        prazo = ("A nova tentativa será agendada para a <strong>próxima data de entrega "
-                 "da região</strong> (dia fixo — veja abaixo).")
+    if todos_dia_fixo:
+        prazo = ("Se confirmado, o reenvio é agendado para a <strong>próxima data de "
+                 "entrega da região</strong> (dia fixo — veja abaixo).")
     elif dias_fixos:
-        prazo = ("A nova tentativa está programada para o <strong>próximo dia útil</strong> — "
+        prazo = ("Se confirmado, o reenvio segue para o <strong>próximo dia útil</strong> — "
                  "exceto os pedidos de regiões com dia fixo de entrega, que caem na "
                  "<strong>próxima data de entrega da região</strong> (veja abaixo).")
     else:
-        prazo = "A nova tentativa está programada para o <strong>próximo dia útil</strong>."
+        prazo = "Se confirmado, o reenvio segue para o <strong>próximo dia útil</strong>."
 
     if dias_fixos:
         prazo += " " + " ".join(
@@ -222,13 +232,16 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
             for rotulo, dias_texto in sorted(dias_fixos.items())
         )
 
+    pergunta = (pergunta_do_motivo(failed_reason_id) if aguarda_resposta(failed_reason_id)
+               else f"Não foi possível concluir a entrega dos pedidos abaixo (motivo: "
+                    f"{html.escape(motivo_texto)}).")
+
     aviso = (
-        f"Os pedidos abaixo tiveram <strong>insucesso na entrega</strong> "
-        f"(motivo: {html.escape(motivo_texto)}) e <strong>já foram duplicados</strong> "
-        f"para uma nova tentativa. {prazo}<br><br>"
-        "Caso <strong>não</strong> deseje o reenvio, ou prefira a reentrega em "
-        "<strong>outra data</strong>, use os botões abaixo da lista de pedidos "
-        "(ou responda este e-mail). Sem resposta, a reentrega segue normalmente."
+        f"{pergunta} <strong>Deseja que reenviemos para uma nova tentativa?</strong> "
+        f"{prazo}<br><br>"
+        "Responda com um dos botões abaixo da lista de pedidos (ou escreva livremente) "
+        "confirmando o reenvio, pedindo outra data, ou dizendo que não quer o reenvio. "
+        "<strong>Sem resposta, o pedido não será reenviado.</strong>"
     )
 
     botoes = _botoes_resposta(email_resposta, assunto_original, pedidos,
@@ -239,7 +252,7 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
   INSUCESSO NA ENTREGA — {html.escape(motivo_texto.upper())}
 </p>
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
-  Pedidos duplicados para reentrega
+  Deseja o reenvio deste(s) pedido(s)?
 </p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
   Olá, {html.escape(nome_remetente or '')}.<br>{aviso}
@@ -265,7 +278,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
     como notificado (fingerprint_aguardando_resposta.py), mesmo em
     modo_teste NÃO marca (deixa livre pra testar de novo).
     """
-    from motivos_falha import texto_do_motivo, duplicar_com_atraso
+    from motivos_falha import texto_do_motivo
     from fingerprint_aguardando_resposta import marcar_notificado
 
     embarcadores = _carregar_embarcadores_por_sender_id()
@@ -284,11 +297,10 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
         motivo_texto = texto_do_motivo(failed_reason_id)
         # "aguardando retorno" segue no assunto de propósito: é o que o
         # ler_respostas_insucesso.py usa pra filtrar as respostas no IMAP.
-        assunto = (f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s) "
-                   f"duplicado(s) para reentrega, aguardando retorno")
+        assunto = (f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s) com "
+                   f"insucesso na entrega, aguardando retorno")
         conteudo = _montar_conteudo(emb["nome"], motivo_texto, pedidos, sender_id,
                                     failed_reason_id,
-                                    dias_uteis_atraso=duplicar_com_atraso(failed_reason_id),
                                     assunto_original=assunto,
                                     email_resposta=EMAIL_RESPOSTA_BOTOES)
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
@@ -309,7 +321,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                             p["code"], "INSUCESSO_ENTREGA", "AVISO_ENVIADO",
                             service_id=p.get("id"), motivo_id=failed_reason_id,
                             motivo_texto=motivo_texto, remetente_email=", ".join(emb["emails"]),
-                            texto=f"Aviso enviado a {emb['nome']} ({', '.join(emb['emails'])}) sobre {motivo_texto}.",
+                            texto=f"Pergunta de reenvio enviada a {emb['nome']} ({', '.join(emb['emails'])}) sobre {motivo_texto}.",
                         )
         else:
             falhas += 1

@@ -4,39 +4,38 @@ motivos_falha.py
 
 De-para dos motivos de insucesso na entrega (failed_reason_id do VUUPT)
 — pedido do Hugo, 03/08: "criar um de-para para a notificação chegar
-correta no e-mail com o motivo compreensível" + "duplicar dependendo
-do motivo do insucesso" (sem gate de validated_by_agent, que nunca é
-preenchido — confirmado com dado real, 155 de 155 insucessos sem esse
-campo).
+correta no e-mail com o motivo compreensível".
 
-Pra ALGUNS motivos (pedido do Hugo, 03/08), em vez de duplicar direto,
-o sistema deve NOTIFICAR o remetente com uma pergunta específica e
-AGUARDAR RESPOSTA antes de agir -- esses têm "aguarda_resposta": True
-e uma "pergunta" própria. Nesses casos, "duplicar" fica None (a
-decisão de duplicar, se houver, depende da resposta -- ainda não
-temos o mecanismo de leitura/decisão automática da resposta, só o
-envio da pergunta por enquanto, ver notificar_insucesso_aguardando_
-resposta.py).
+REGRA ATUAL (pedido do Hugo, 15/08: "quero que as tratativas definam
+se vamos ou não duplicar um pedido, não quero mais duplicar
+automaticamente; no caso do cliente responder, prevalece o que ele
+solicitar"): NENHUM motivo duplica sozinho -- nem na hora, nem depois
+de alguns dias. TODO insucesso vira uma PERGUNTA ao embarcador
+("houve insucesso, deseja o reenvio?") e só duplica se a resposta
+confirmar (ver notificar_insucesso_aguardando_resposta.py e
+ler_respostas_insucesso.py). Isso revoga a regra de 11/08 ("duplica
+tudo na hora, avisa depois") e a de 06/08 (duplicação agendada pra
+Loja/Câmara em Manutenção) -- ambas descritas como histórico abaixo,
+mantidas só pelo comentário porque explicam o "porquê" de campos como
+"duplicar" no dicionário, que não são mais consultados por código
+nenhum.
 
-Pra 1 motivo específico (Loja/Câmara em Manutenção, pedido do Hugo,
-06/08), a duplicação é automática mas ATRASADA -- "duplicar_apos_
-dias_uteis": N -- não duplica na hora nem espera resposta, só
-AGENDA a duplicação pra N dias úteis depois da detecção do
-insucesso. Ver fingerprint_duplicacao_agendada.py.
+Alguns motivos (pedido do Hugo, 03/08) têm uma pergunta PRÓPRIA, mais
+específica que o texto genérico -- "aguarda_resposta": True e
+"pergunta": "...". Usada por notificar_insucesso_aguardando_resposta.py
+pra deixar o e-mail mais claro; motivo sem pergunta própria usa o
+texto genérico.
 
 MOTIVOS_FALHA: cada failed_reason_id do VUUPT mapeado pra um texto
-compreensível + se deve duplicar automaticamente o serviço ou não (ou
-aguardar resposta, ou duplicar com atraso, pra alguns). Motivo NÃO
-cadastrado aqui: notifica normalmente mas NÃO duplica nem aguarda
-resposta (mais seguro por padrão).
+compreensível (e, pra alguns, uma pergunta específica). Os campos
+"duplicar" e "duplicar_apos_dias_uteis" são histórico das regras
+antigas (03/08-11/08) e não influenciam mais nada.
 
 Motivos NOVOS (pedido do Hugo, 11/08): quando um failed_reason_id
 aparece sem estar neste de-para, a DESCRIÇÃO oficial é registrada
 automaticamente a partir do próprio VUUPT (include=failedReason na
 busca de insucessos -> aprender_motivos), num cache persistente em
-dados/motivos_vuupt_auto.json. Só o TEXTO é automático -- a regra
-(duplicar / aguardar resposta / atraso) continua sendo decisão
-manual aqui no dicionário; motivo aprendido nunca duplica sozinho.
+dados/motivos_vuupt_auto.json. Só o TEXTO é automático.
 """
 import json
 import logging
@@ -166,26 +165,6 @@ def texto_do_motivo(failed_reason_id) -> str:
     return f"Motivo #{failed_reason_id} (ainda não cadastrado no de-para)"
 
 
-def deve_duplicar(failed_reason_id) -> bool:
-    """
-    NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso duplica
-    IMEDIATAMENTE -- motivo conhecido, aprendido ou desconhecido --
-    exceto os motivos com duplicação AGENDADA (duplicar_apos_dias_
-    uteis, ex: Loja/Câmara em Manutenção), que continuam esperando os
-    N dias úteis ("mantém os 3 dias para câmara quebrada").
-
-    O controle passou a ser DEPOIS do fato: o remetente recebe um
-    aviso de que o pedido foi duplicado pra reentrega no dia seguinte
-    e, se responder pedindo cancelamento, a reentrega é cancelada no
-    VUUPT (ler_respostas_insucesso.py). Os campos "duplicar" do
-    dicionário acima NÃO são mais consultados aqui -- ficam como
-    histórico da regra antiga (03/08-11/08, duplicação por motivo).
-    """
-    if duplicar_com_atraso(failed_reason_id):
-        return False
-    return True
-
-
 def aguarda_resposta(failed_reason_id) -> bool:
     """True se esse motivo precisa de uma notificação com pergunta e
     aguardar resposta do remetente antes de qualquer ação automática
@@ -204,17 +183,3 @@ def pergunta_do_motivo(failed_reason_id) -> str:
     if info is None or "pergunta" not in info:
         return "Solicitamos mais informações sobre a situação deste insucesso de entrega."
     return info["pergunta"]
-
-
-def duplicar_com_atraso(failed_reason_id) -> int | None:
-    """
-    Retorna quantos DIAS ÚTEIS depois da detecção do insucesso a
-    duplicação automática deve acontecer, ou None se esse motivo não
-    usa duplicação atrasada (pedido do Hugo, 06/08 -- Loja/Câmara em
-    Manutenção: duplica sozinho, mas só 3 dias úteis depois, dando
-    tempo da manutenção terminar, sem precisar de resposta de ninguém).
-    """
-    info = MOTIVOS_FALHA.get(failed_reason_id)
-    if info is None:
-        return None
-    return info.get("duplicar_apos_dias_uteis")

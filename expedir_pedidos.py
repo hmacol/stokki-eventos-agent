@@ -41,7 +41,7 @@ import fingerprint_expedicao
 import fingerprint_duplicacao_insucesso
 import fingerprint_duplicacao_agendada
 import fingerprint_notificacao_interna
-from motivos_falha import texto_do_motivo, deve_duplicar, aprender_motivos, duplicar_com_atraso
+from motivos_falha import texto_do_motivo, aprender_motivos
 from notificar_insucesso_aguardando_resposta import (
     identificar_aguardando_resposta, notificar_remetentes as notificar_insucesso_aguardando_resposta,
 )
@@ -322,13 +322,6 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
         logger.warning(f"  Falha ao enviar notificacao: {e}")
         for s in pendentes:
             logger.warning(f"  Pendente: {s.get('code')}")
-
-
-def texto_do_motivo_e_deve_duplicar(servico: dict) -> tuple[str, bool]:
-    """Atalho: texto compreensível + se deve duplicar, a partir do
-    failed_reason_id do serviço."""
-    rid = servico.get("failed_reason_id")
-    return texto_do_motivo(rid), deve_duplicar(rid)
 
 
 def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None:
@@ -830,21 +823,22 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # então esse gate deixava a notificação (e a duplicação) presas
         # pra sempre. NÃO expedidos na Stokki.
         #
-        # NOVA REGRA (pedido do Hugo, 11/08): TODO insucesso é duplicado
-        # IMEDIATAMENTE (deve_duplicar só exclui os motivos de duplicação
-        # agendada, ex. Loja/Câmara em Manutenção = 3 dias úteis). O
-        # remetente recebe um AVISO de que a reentrega já foi criada pro
-        # próximo dia útil e pode responder pedindo cancelamento -- a
-        # resposta é lida por ler_respostas_insucesso.py, que cancela a
-        # reentrega no VUUPT. (Regra anterior, 03/08: duplicava só por
-        # motivo, e alguns motivos perguntavam ANTES de duplicar.)
-        # 3a. Lê respostas aos avisos de insucesso ANTES de duplicar os
+        # REGRA ATUAL (pedido do Hugo, 15/08): NENHUM insucesso duplica
+        # sozinho. O remetente recebe uma PERGUNTA ("houve insucesso,
+        # deseja o reenvio?") e só duplicamos se a resposta confirmar --
+        # a resposta é lida por ler_respostas_insucesso.py, que cria a
+        # reentrega no VUUPT quando o embarcador confirma ou pede outra
+        # data, e só registra a recusa quando ele não quer o reenvio.
+        # (Revoga a regra de 11/08 -- duplicava tudo na hora e só
+        # perguntava depois -- que por sua vez tinha revogado a regra
+        # original de 03/08 de perguntar antes.)
+        # 3a. Lê respostas aos e-mails de insucesso ANTES de processar os
         # novos (pedido do Hugo, 11/08: "vamos colocar na tarefa de 30
-        # em 30") -- um pedido de cancelamento do remetente é aplicado
-        # em no máximo ~30 min, sem esperar o executar_tudo (que também
-        # segue rodando a leitura, pra cobrir as respostas da noite; a
-        # trava interna do módulo impede os dois de processarem o mesmo
-        # e-mail ao mesmo tempo).
+        # em 30") -- uma resposta do remetente é aplicada em no máximo
+        # ~30 min, sem esperar o executar_tudo (que também segue rodando
+        # a leitura, pra cobrir as respostas da noite; a trava interna
+        # do módulo impede os dois de processarem o mesmo e-mail ao
+        # mesmo tempo).
         if modo_teste:
             logger.info("[TESTE] Leitura de respostas de insucesso pulada.")
         else:
@@ -869,57 +863,25 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         motivo_texto=motivo_texto_s,
                     )
 
-            for s in insucessos:
-                if deve_duplicar(s.get("failed_reason_id")) and not fingerprint_duplicacao_insucesso.ja_duplicado(s.get("id")):
-                    motivo_texto = texto_do_motivo(s.get("failed_reason_id"))
-                    if modo_teste:
-                        logger.info(f"  [TESTE] Duplicaria {s.get('code')} (motivo: {motivo_texto})")
-                    else:
-                        novo = duplicar_servico_por_insucesso(VuuptClient(vuupt_token), s)
-                        if novo:
-                            fingerprint_duplicacao_insucesso.marcar_duplicado(s.get("id"), novo.get("code", ""))
-                            tratativas.registrar_evento(
-                                s["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
-                                service_id=s.get("id"), motivo_id=s.get("failed_reason_id"),
-                                motivo_texto=motivo_texto,
-                                texto=f"Reentrega criada automaticamente (novo código: {novo.get('code', '')}).",
-                            )
-
-            # Motivos de duplicação AGENDADA (duplicar_apos_dias_uteis,
-            # pedido do Hugo 06/08 e mantido em 11/08 -- "mantém os 3
-            # dias para câmara quebrada"): agenda pra N dias úteis.
-            # Bloco portado em 11/08 da cópia antiga insucesso_entrega/
-            # expedir_pedidos.py (que nada executa -- o agendamento
-            # nunca chegou a rodar de verdade até aqui).
-            for s in insucessos:
-                dias_uteis = duplicar_com_atraso(s.get("failed_reason_id"))
-                if dias_uteis and not fingerprint_duplicacao_agendada.ja_agendado(s.get("id")):
-                    if modo_teste:
-                        logger.info(f"  [TESTE] Agendaria duplicação de {s.get('code')} pra "
-                                   f"{dias_uteis} dia(s) útil(eis) a partir de hoje.")
-                    else:
-                        data_agendada = fingerprint_duplicacao_agendada.agendar(
-                            s.get("id"), s.get("code", ""), s.get("failed_reason_id"), dias_uteis,
-                        )
-                        logger.info(f"  Duplicação de {s.get('code')} agendada pra {data_agendada} "
-                                   f"({dias_uteis} dia(s) útil(eis)).")
-                        tratativas.registrar_evento(
-                            s["code"], "INSUCESSO_ENTREGA", "REENVIO_AGENDADO",
-                            service_id=s.get("id"), motivo_id=s.get("failed_reason_id"),
-                            motivo_texto=texto_do_motivo(s.get("failed_reason_id")),
-                            texto=f"Reentrega agendada para {data_agendada.strftime('%d/%m/%Y')} "
-                                  f"({dias_uteis} dia(s) útil(eis)).",
-                        )
-
-            # Aviso de duplicação pra TODOS os insucessos (rate-limit de
-            # 1 e-mail/dia por pedido via fingerprint): "já duplicamos,
-            # reenvio no próximo dia útil; responda pra cancelar".
+            # SEM duplicação automática (pedido do Hugo, 15/08: "quero
+            # que as tratativas definam se vamos ou não duplicar um
+            # pedido, não quero mais duplicar automaticamente" -- revoga
+            # a regra de 11/08 abaixo). A ÚNICA coisa que cria uma
+            # reentrega agora é a resposta do embarcador ao e-mail de
+            # "aguardando retorno" (ler_respostas_insucesso.py::
+            # _cancelar_reentrega/_reagendar_reentrega/branch "manter" --
+            # essas três funções já sabem duplicar na hora quando ainda
+            # não existe nada duplicado/agendado pra esse pedido, era o
+            # caminho de transição do fluxo antigo e virou o caminho
+            # principal). Se o embarcador não responder, nada acontece:
+            # "no caso do cliente responder, prevalece o que ele
+            # solicitar" -- sem resposta, sem ação.
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
             if pendentes_resposta:
                 resultado_espera = notificar_insucesso_aguardando_resposta(
                     pendentes_resposta, config_email, modo_teste
                 )
-                logger.info(f"Aviso de duplicação aos remetentes: {resultado_espera}")
+                logger.info(f"Pergunta de reenvio aos remetentes: {resultado_espera}")
 
             notificar_insucesso_entrega(insucessos, config_email, modo_teste)
 
@@ -934,9 +896,9 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         if not teve_insucesso_hoje:
             notificar_sem_insucesso_hoje(config_email, modo_teste)
 
-        # Duplicações agendadas que já venceram (independente de ter
-        # insucesso NOVO nesta execução -- uma agendada há dias pode
-        # vencer num dia sem nenhum insucesso novo).
+        # Drena duplicações agendadas ANTES de 15/08 (regra revogada --
+        # nada novo entra aqui, ver comentário acima; isto só escoa o
+        # que já estava agendado quando a regra mudou, até esvaziar).
         vencidas = fingerprint_duplicacao_agendada.buscar_pendentes_vencidas()
         if vencidas:
             logger.info(f"{len(vencidas)} duplicação(ões) agendada(s) vencida(s) -- processando.")

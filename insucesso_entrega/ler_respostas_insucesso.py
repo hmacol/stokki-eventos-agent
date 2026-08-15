@@ -7,26 +7,32 @@ e-mails de "insucesso na entrega -- aguardando retorno" (ver
 notificar_insucesso_aguardando_resposta.py) e usa a API da Anthropic
 (Claude) pra decidir, a partir do texto livre da resposta, o que fazer.
 
-NOVA REGRA (pedido do Hugo, 11/08): como TODO insucesso agora é
-duplicado NA HORA e o e-mail é um AVISO ("já duplicamos; responda se
-quiser cancelar"), a decisão aqui virou CANCELAR, REAGENDAR ou MANTER
-(12/08: o e-mail ganhou botões mailto: de "Cancelar reenvio" e
-"Reagendar para outra data" que abrem uma resposta pré-preenchida --
-ver notificar_insucesso_aguardando_resposta.py::_botoes_resposta; a
-resposta cai aqui no fluxo normal):
-  - Remetente pediu cancelamento -> cancela a reentrega no VUUPT
-    (serviço duplicado, ou o agendamento se ainda não venceu), marca
-    no fingerprint -- o insucesso nunca mais é duplicado -- e avisa o
-    ATENDIMENTO por e-mail (config email.email_atendimento).
-  - Remetente pediu REAGENDAMENTO com data -> agenda a reentrega pra
-    data pedida (scheduled_start no VUUPT; duplica na hora se ainda não
-    existia) -- a roteirização só pega o pedido no dia certo
-    (roteirizacao_dados.py::elegivel_para_data). Cidade com dia fixo de
-    entrega (regioes_dia_fixo.py, ex.: Sorocaba = terça) tem a data
-    ajustada pra próxima ocorrência do dia da região.
-  - Remetente confirmou/aceitou o reenvio -> mantém a reentrega.
-    (Transição: se for pendência do fluxo antigo de pergunta, em que
-    nada foi duplicado ainda, duplica agora.)
+REGRA ATUAL (pedido do Hugo, 15/08): NENHUM insucesso duplica antes de
+perguntar -- o e-mail é uma PERGUNTA ("houve insucesso, deseja o
+reenvio?"), com botões mailto: de "Sim, reenviar", "Reagendar para
+outra data" e "Não reenviar" (ver notificar_insucesso_aguardando_
+resposta.py::_botoes_resposta). A decisão aqui é CANCELAR, REAGENDAR
+ou MANTER (nome interno mantido por conveniência -- "manter" aqui
+significa "confirmar o reenvio", já que como regra agora nada é
+duplicado antes da resposta, não há mais nada "a manter" no sentido
+literal):
+  - Remetente respondeu "Não reenviar" -> registra no fingerprint que
+    este insucesso NUNCA será duplicado (nada existe ainda pra
+    cancelar no VUUPT -- só marca) e avisa o ATENDIMENTO por e-mail
+    (config email.email_atendimento).
+  - Remetente pediu REAGENDAMENTO com data -> DUPLICA AGORA já com
+    scheduled_start na data pedida (VUUPT) -- a roteirização só pega o
+    pedido no dia certo (roteirizacao_dados.py::elegivel_para_data).
+    Cidade com dia fixo de entrega (regioes_dia_fixo.py, ex.: Sorocaba
+    = terça) tem a data ajustada pra próxima ocorrência do dia da
+    região.
+  - Remetente respondeu "Sim, reenviar" -> DUPLICA AGORA (próximo dia
+    útil).
+
+Revoga a regra de 11/08 ("duplica tudo na hora, e-mail é só aviso com
+opção de cancelar depois") -- essas três ações já sabiam lidar com
+"nada foi duplicado ainda" desde a regra de transição do fluxo antigo
+(03/08), que virou o caminho principal de novo.
 
 Portado de ler_respostas_agendamento.py (mesmo padrão: IMAP + marcador
 oculto + Claude) -- só a extração e a ação final são diferentes (aqui
@@ -155,8 +161,9 @@ def _extrair_decisao_via_claude(texto_resposta: str, motivo_texto: str,
     """
     Usa a API da Anthropic pra decidir, a partir da resposta em texto
     livre do remetente (ou do rascunho pré-preenchido dos botões do
-    e-mail), o que fazer com a REENTREGA já criada/agendada: cancelar,
-    reagendar pra uma data específica, ou manter.
+    e-mail), se a REENTREGA deve ser criada: confirmar (cria pro
+    próximo dia útil), reagendar (cria numa data específica), ou não
+    reenviar.
 
     Retorna dict: {"acao": "cancelar"|"reagendar"|"manter",
                    "data": "YYYY-MM-DD"|None, "resumo": str,
@@ -169,24 +176,27 @@ Motivo do insucesso: "{motivo_texto}"
 Pedido(s) afetado(s): {", ".join(codigos)}
 Hoje é {_DIAS_SEMANA_PT[hoje.weekday()]}, {hoje.strftime("%d/%m/%Y")}.
 
-O e-mail original AVISOU o embarcador de que esses pedidos JÁ FORAM DUPLICADOS para uma nova
-tentativa de entrega (reentrega) no próximo dia útil, e ofereceu dois botões de resposta rápida:
-"CANCELAR o reenvio" e "REAGENDAR o reenvio" (com um campo de data pra preencher). O embarcador
-pode ter usado um dos botões ou escrito livremente.
+O e-mail original PERGUNTOU ao embarcador se deseja o REENVIO desses pedidos pra uma nova
+tentativa de entrega (reentrega) -- NENHUM reenvio foi criado ainda, depende da resposta.
+Ofereceu três botões de resposta rápida: "Sim, reenviar", "Reagendar para outra data" (com um
+campo de data pra preencher) e "Não reenviar". O embarcador pode ter usado um dos botões ou
+escrito livremente.
 
 Resposta do embarcador:
 \"\"\"
 {texto_resposta.strip()[:2000]}
 \"\"\"
 
-Decida a ação sobre a reentrega:
-- "cancelar": ele pediu pra não reenviar, disse que o pedido foi cancelado, que vai resolver
-  por outro meio, ou recusou a nova tentativa de qualquer forma.
-- "reagendar": ele pediu que a nova tentativa aconteça em uma DATA específica. Preencha "data"
-  no formato YYYY-MM-DD, resolvendo datas relativas ("sexta que vem", "semana que vem") a partir
-  de hoje. Se ele pediu reagendamento mas NÃO deu a data (ex.: mandou o modelo ___/___/______
-  sem preencher), retorne nao_entendido=true.
-- "manter": ele confirmou/agradeceu o reenvio, deu aval, ou não pediu mudança nenhuma.
+Decida a ação sobre o reenvio:
+- "cancelar": ele NÃO quer o reenvio -- disse que não precisa, que vai resolver por outro meio,
+  ou recusou a nova tentativa de qualquer forma. (Nome interno "cancelar" por conveniência --
+  como nada foi criado ainda, na prática significa "não reenviar".)
+- "reagendar": ele quer o reenvio, mas numa DATA específica. Preencha "data" no formato
+  YYYY-MM-DD, resolvendo datas relativas ("sexta que vem", "semana que vem") a partir de hoje.
+  Se ele pediu reagendamento mas NÃO deu a data (ex.: mandou o modelo ___/___/______ sem
+  preencher), retorne nao_entendido=true.
+- "manter": ele CONFIRMOU que quer o reenvio (aval, "sim", "pode reenviar") sem pedir data
+  específica.
 
 Responda APENAS com um JSON válido neste formato exato, sem texto antes ou depois:
 {{"acao": "cancelar", "data": null, "resumo": "breve resumo de 1 frase da resposta", "nao_entendido": false}}
@@ -221,17 +231,21 @@ Se não conseguir entender a resposta o suficiente pra decidir, retorne:
 
 def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
     """
-    Cancela a reentrega de um insucesso cujo remetente respondeu
-    pedindo cancelamento (pedido do Hugo, 11/08):
+    Aplica a resposta "não reenviar" do remetente. Desde 15/08 (regra
+    atual: nada duplica antes da resposta), o caso comum é o terceiro
+    bloco abaixo -- nada existe ainda, só marca no fingerprint pra
+    nunca ser duplicado. Os dois primeiros blocos cobrem pendências
+    antigas (criadas antes da regra mudar, ou por uma corrida rara
+    entre duas leituras) que já tinham algo duplicado/agendado:
 
       - Se o serviço duplicado JÁ existe no VUUPT: DELETE nele
         (cancelar_servico) e marca cancelado_em no fingerprint de
         duplicação -- a linha fica lá, então ja_duplicado() continua
         True e o insucesso nunca é duplicado/importado de novo.
-      - Se a duplicação estava só AGENDADA (motivo com atraso, ainda
-        não venceu): cancela o agendamento.
+      - Se a duplicação estava só AGENDADA (resquício da regra de
+        06/08, revogada): cancela o agendamento.
 
-    Retorna True se cancelou algo (serviço ou agendamento).
+    Retorna True se cancelou algo (ou registrou a recusa).
     """
     import fingerprint_duplicacao_insucesso
     import fingerprint_duplicacao_agendada
@@ -260,22 +274,23 @@ def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
             return False
 
     if fingerprint_duplicacao_agendada.cancelar_agendamento(service_id):
-        # Bloqueia também a duplicação imediata futura: com a regra nova
-        # ("todo insucesso duplica"), sem esta marca o insucesso ainda
-        # na janela de busca seria duplicado na próxima execução.
+        # Marca duplicado+cancelado mesmo sem nada duplicado de fato --
+        # é esse par que faz ja_duplicado() ficar True permanentemente,
+        # a trava que garante que este insucesso nunca mais é oferecido
+        # pra reenvio.
         fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, "")
         fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
         logger.info(f"  Duplicação agendada de {code} cancelada antes de vencer.")
         return True
 
-    # Nada duplicado nem agendado (pendência do fluxo antigo de
-    # pergunta). Registra como duplicado+cancelado no fingerprint pra
-    # que a regra nova ("todo insucesso duplica") NÃO crie a reentrega
-    # que o remetente acabou de recusar.
+    # Caso comum desde 15/08: nada foi duplicado nem agendado ainda (a
+    # regra atual só cria a reentrega se a resposta confirmar). Marca
+    # duplicado+cancelado no fingerprint mesmo assim -- é o par que
+    # trava ja_duplicado() em True pra sempre, garantindo que este
+    # insucesso nunca será oferecido de novo pra reenvio.
     fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, "")
     fingerprint_duplicacao_insucesso.marcar_cancelado(service_id)
-    logger.info(f"  {code}: nada a cancelar (sem duplicado nem agendamento) -- "
-                "registrado no fingerprint pra nunca ser duplicado.")
+    logger.info(f"  {code}: reenvio recusado -- registrado no fingerprint pra nunca ser duplicado.")
     return True
 
 
@@ -393,24 +408,25 @@ def _notificar_atendimento_cancelamento(config_email: dict, motivo_texto: str,
                                         itens: list[tuple[str, bool]],
                                         resumo: str, remetente_email: str):
     """
-    Avisa o ATENDIMENTO que um embarcador pediu o cancelamento do
-    reenvio (botão 'Cancelar reenvio' -- pedido do Hugo, 12/08).
-    `itens`: [(code, cancelou_ok)] -- itens com falha aparecem
-    destacados pra tratamento manual. Destinatário: config
-    email.email_atendimento (fallback: email_responsavel, remetente).
+    Avisa o ATENDIMENTO que um embarcador respondeu que NÃO quer o
+    reenvio (botão 'Não reenviar' -- pedido do Hugo, 12/08, texto do
+    botão atualizado em 15/08). `itens`: [(code, registrou_ok)] --
+    itens com falha aparecem destacados pra tratamento manual.
+    Destinatário: config email.email_atendimento (fallback:
+    email_responsavel, remetente).
     """
     destino = (config_email.get("email_atendimento")
                or config_email.get("email_responsavel")
                or config_email.get("remetente"))
     if not destino:
-        logger.warning("Sem destinatário de atendimento configurado -- notificação de cancelamento não enviada.")
+        logger.warning("Sem destinatário de atendimento configurado -- notificação de recusa não enviada.")
         return
 
     import html as _html
     linhas = ""
     for code, ok in itens:
-        status = ("Reentrega cancelada no Vuupt" if ok
-                  else "FALHA ao cancelar — verificar manualmente no Vuupt")
+        status = ("Reenvio não será feito" if ok
+                  else "FALHA ao registrar a recusa — verificar manualmente")
         cor = COR_TEXTO if ok else COR_ERRO
         linhas += f"""
     <tr>
@@ -420,14 +436,14 @@ def _notificar_atendimento_cancelamento(config_email: dict, motivo_texto: str,
 
     conteudo = f"""
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">
-  ATENDIMENTO — CANCELAMENTO DE REENVIO
+  ATENDIMENTO — REENVIO RECUSADO
 </p>
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
-  Embarcador pediu o cancelamento da reentrega
+  Embarcador não quer o reenvio
 </p>
 <p style="margin:0 0 20px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
-  O remetente <strong>{_html.escape(remetente_email)}</strong> respondeu ao aviso de insucesso
-  (motivo: {_html.escape(motivo_texto)}) pedindo o <strong>cancelamento do reenvio</strong>.<br>
+  O remetente <strong>{_html.escape(remetente_email)}</strong> respondeu à pergunta de insucesso
+  (motivo: {_html.escape(motivo_texto)}) dizendo que <strong>não quer o reenvio</strong>.<br>
   Resumo da resposta: {_html.escape(resumo or '(sem resumo)')}
 </p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -438,7 +454,7 @@ def _notificar_atendimento_cancelamento(config_email: dict, motivo_texto: str,
 </tr></thead><tbody>{linhas}</tbody></table>
 """
     falhas = sum(1 for _, ok in itens if not ok)
-    assunto = f"[Freshlog] Atendimento: cancelamento de reenvio — {len(itens)} pedido(s)"
+    assunto = f"[Freshlog] Atendimento: reenvio recusado — {len(itens)} pedido(s)"
     if falhas:
         assunto += f" ({falhas} com FALHA)"
     corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
@@ -740,10 +756,12 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
                         reagendados += 1
                     itens_reagendamento.append((p.get("code") or str(p["service_id"]), data_final))
                 else:
-                    # Mantém a reentrega já criada. Transição do fluxo
-                    # antigo (pergunta antes de duplicar): se nada foi
-                    # duplicado nem agendado pra este insucesso ainda,
-                    # a resposta positiva duplica agora.
+                    # Remetente confirmou o reenvio -- como regra (desde
+                    # 15/08) nada é duplicado antes da resposta, isso
+                    # SEMPRE duplica agora (a checagem abaixo só evita
+                    # duplicar de novo se esta mesma resposta for lida
+                    # duas vezes, ou se for uma pendência antiga que já
+                    # tinha sido duplicada/agendada antes da regra mudar).
                     if (p.get("code")
                             and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"])
                             and not fingerprint_duplicacao_agendada.ja_agendado(p["service_id"])):
@@ -753,6 +771,12 @@ def _processar_respostas_insucesso_travado(config: dict) -> dict:
                             if novo:
                                 fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], novo.get("code", ""))
                                 duplicados += 1
+                                tratativas.registrar_evento(
+                                    p["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                                    service_id=p.get("service_id"), motivo_id=failed_reason_id,
+                                    motivo_texto=motivo_texto,
+                                    texto=f"Reenvio confirmado pelo embarcador (novo código: {novo.get('code', '')}).",
+                                )
                         else:
                             logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
 
