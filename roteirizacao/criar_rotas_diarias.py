@@ -83,8 +83,8 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao
-from selecao_modelo import escolher_melhor_modelo
+from roteirizacao_dados import elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao
+from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
@@ -272,19 +272,20 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
             )
         else:
-            # mesmo fluxo de reserva do main() quando a base não geocodifica
-            sublotes = []
-            grupos_iniciais = agrupar_por_regiao(servicos_particao, api_key=gmaps_key)
-            grupos_validos = consolidar_regioes_pequenas(grupos_iniciais, minimo=TAMANHO_MINIMO_ROTA, api_key=gmaps_key)
-            for servicos_regiao in grupos_validos.values():
-                distancia_maxima_da_regiao = (
-                    DISTANCIA_MAXIMA_VIAGEM_KM if classificar_rota_viagem(servicos_regiao, gmaps_key)
-                    else DISTANCIA_MAXIMA_ROTA_KM
-                )
-                sublotes.extend(dividir_em_sublotes(
-                    servicos_regiao, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                    tamanho_maximo=TAMANHO_MAXIMO_ROTA, volume_maximo=VOLUME_MAXIMO_ROTA,
-                    distancia_maxima_km=distancia_maxima_da_regiao, api_key=gmaps_key))
+            # Fluxo de reserva do main() quando a base não geocodifica --
+            # mesmo esquema "Atual", reaproveitado de selecao_modelo.py
+            # (pedido do Hugo, 15/08: esse fluxo reimplementava a mesma
+            # lógica sem a fusão de macro-região nem a consolidação
+            # consciente de distância -- agora ganha as duas de graça).
+            particoes_macro = particionar_por_macro_regiao(
+                servicos_particao, gmaps_key, tamanho_minimo=TAMANHO_MINIMO_ROTA,
+                distancia_maxima_fusao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+            )
+            sublotes = [
+                sub for svcs in particoes_macro.values()
+                for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
+                                         VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
+            ]
 
         for sublote in sublotes:
             nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
@@ -508,24 +509,21 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 )
                 modelos_vencedores[label] = modelo_vencedor
             else:
-                sublotes_do_dia = []
-                grupos_iniciais = agrupar_por_regiao(servicos_particao, api_key=gmaps_key)
-                logger.info(f"[{label}] {len(grupos_iniciais)} região(ões) geográfica(s) inicial(is).")
-                grupos_validos = consolidar_regioes_pequenas(grupos_iniciais, minimo=TAMANHO_MINIMO_ROTA, api_key=gmaps_key)
-                logger.info(f"[{label}] Após consolidar regiões pequenas: {len(grupos_validos)} região(ões) final(is).")
-
-                for servicos_regiao in grupos_validos.values():
-                    # A trava de distância só vale DENTRO da Grande SP --
-                    # região de Viagem (>=1 entrega fora da Grande SP) não
-                    # tem limite (ver DISTANCIA_MAXIMA_VIAGEM_KM acima).
-                    distancia_maxima_da_regiao = (
-                        DISTANCIA_MAXIMA_VIAGEM_KM if classificar_rota_viagem(servicos_regiao, gmaps_key)
-                        else DISTANCIA_MAXIMA_ROTA_KM
-                    )
-                    sublotes_do_dia.extend(dividir_em_sublotes(
-                        servicos_regiao, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                        tamanho_maximo=TAMANHO_MAXIMO_ROTA, volume_maximo=VOLUME_MAXIMO_ROTA,
-                        distancia_maxima_km=distancia_maxima_da_regiao, api_key=gmaps_key))
+                # Fluxo de reserva -- mesmo esquema "Atual", reaproveitado
+                # de selecao_modelo.py (pedido do Hugo, 15/08: esse fluxo
+                # reimplementava a mesma lógica sem a fusão de
+                # macro-região nem a consolidação consciente de
+                # distância -- agora ganha as duas de graça).
+                particoes_macro = particionar_por_macro_regiao(
+                    servicos_particao, gmaps_key, tamanho_minimo=TAMANHO_MINIMO_ROTA,
+                    distancia_maxima_fusao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+                )
+                logger.info(f"[{label}] {len(particoes_macro)} macro-região(ões).")
+                sublotes_do_dia = [
+                    sub for svcs in particoes_macro.values()
+                    for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
+                                             VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
+                ]
 
             for sublote in sublotes_do_dia:
                 nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice_global}"

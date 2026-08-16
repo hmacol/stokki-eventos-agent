@@ -73,14 +73,24 @@ def _validar(servicos, sublotes, tamanho_maximo, volume_maximo):
     assert ids_originais == set(ids_alocados), "pedido perdido no agrupamento"
 
 
-def _agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
-                   volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km):
+def agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
+                  volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km):
     """Agrupamento de produção de sempre, região a região, com o limite
     de distância decidido pelo tipo da região (Grande SP x Viagem) --
     mesma lógica que vivia em criar_rotas_diarias._rotear_particao.
 
+    Função PÚBLICA (sem "_", 15/08): além de ser um dos 5 candidatos de
+    escolher_melhor_modelo (via _por_macro, abaixo), também é chamada
+    DIRETO por criar_rotas_diarias.py no fluxo de reserva (quando a
+    geocodificação da base falha e não dá pra comparar os 5 esquemas --
+    esta é a única que não depende de base_lat/base_lng). Antes esse
+    fluxo de reserva reimplementava a mesma lógica sem a fusão de
+    macro-região nem a consolidação consciente de distância -- agora
+    reaproveita esta função e ganha as duas de graça.
+
     `servicos` já chega filtrado numa ÚNICA macro-região (quem chama é
-    sempre _por_macro, abaixo) -- então classificar_rota_viagem sobre o
+    sempre _por_macro ou o fluxo de reserva, cada um já particionando
+    por macro-região antes) -- então classificar_rota_viagem sobre o
     lote inteiro, uma vez só, já vale pra decidir o teto de distância
     da CONSOLIDAÇÃO (ver distancia_maxima_km de consolidar_regioes_
     pequenas, pedido do Hugo, 15/08: sem isso a fusão por contagem
@@ -167,7 +177,7 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
         return [sub for svcs in particoes_macro.values() for sub in agrupar_uma_particao(svcs)]
 
     candidatos = {
-        "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: _agrupar_atual(
+        "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: agrupar_atual(
             svcs, gmaps_key, tamanho_minimo, tamanho_maximo,
             volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km)),
         "Sweep Polar": lambda: _por_macro(lambda svcs: agrupar_por_sweep(
