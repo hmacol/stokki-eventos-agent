@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from geocodificacao import geocodificar
 from regioes_dia_fixo import RAIO_GRANDE_SP_KM, extrair_cidade, regiao_externa_da_cidade
+from regras.tipo_veiculo import classificar_tipo_veiculo, teto_caixas_para_enderecos
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,22 @@ def extrair_volume_caixas(servico: dict) -> int:
         except (ValueError, TypeError):
             pass
     return 1
+
+
+def caixas_e_enderecos(sublote: list[dict]) -> tuple[int, int]:
+    """
+    (soma de caixas, nº de endereços distintos) de um sublote -- usado
+    por regras.tipo_veiculo.classificar_tipo_veiculo, tanto no
+    empacotamento (separar_pedidos_exclusivos, abaixo) quanto na
+    alocação de motorista (alocacao_motoristas.py) e na tag exibida nos
+    rascunhos (criar_rotas_diarias.py). Endereço vem do campo 'address'
+    do serviço VUUPT (mesmo campo lido por extrair_cep); pedido sem
+    endereço reconhecível (None) conta como 1 endereço próprio, nunca é
+    descartado da contagem.
+    """
+    caixas = sum(extrair_volume_caixas(s) for s in sublote)
+    enderecos = {s.get("address") for s in sublote}
+    return caixas, len(enderecos)
 
 
 def extrair_nivel_dificuldade(servico: dict) -> int:
@@ -523,10 +540,19 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
         modelos deste pacote) -- pedido do Hugo, 15/08: achado real, 15
         pedidos de lojas diferentes da rede Hirota, cada endereço com
         CNPJ próprio, viravam 15 rotas de 1 pedido cada mesmo todas
-        agendadas pro mesmo dia.
+        agendadas pro mesmo dia;
+      - grupo de até 4 endereços diferentes (ou até 2, quando o volume
+        já exige Truck -- ver regras/tipo_veiculo.py) cujo volume
+        COMBINADO já justifica um veículo maior que o de última milha
+        (pedido do Hugo, 15/08: "se tivermos 4 pedidos que juntos
+        ultrapassem a quantidade mínima de caixas do veículo, vale mais
+        a pena usar um carro maior") -- ver _extrair_grupos_veiculo_grande,
+        abaixo. Mesmo endereço nunca conta mais de 1 vez contra esse
+        limite (pode ter qualquer quantidade de pedidos).
 
-    Devolve (sublotes_prontos, demais) -- `demais` (nível 1/2/3) é o
-    que quem chama deve agrupar com o algoritmo próprio de cada esquema.
+    Devolve (sublotes_prontos, demais) -- `demais` (nível 1/2/3, fora de
+    qualquer grupo de veículo grande) é o que quem chama deve agrupar
+    com o algoritmo próprio de cada esquema.
 
     Compartilhada por TODOS os esquemas de roteirização (pedido do
     Hugo, 15/08: a junção de nível 4 por rede vale igual pros 5, não só
@@ -578,6 +604,101 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
             sublotes_grupo.append(atual)
         return sublotes_grupo
 
+    def _agrupar_por_endereco(candidatos: list[dict]) -> list[dict]:
+        """Agrupa `candidatos` por endereço (campo 'address') -- cada
+        grupo é 1 'unidade' pro empacotamento de veículo grande abaixo
+        (mesmo endereço nunca conta mais de 1 vez, não importa quantos
+        pedidos tenha). Ordenado por caixas DECRESCENTE: a semente de
+        cada cluster é sempre o maior endereço ainda não usado, o mais
+        provável de precisar de um veículo maior."""
+        por_endereco: dict[object, list[dict]] = defaultdict(list)
+        for s in candidatos:
+            por_endereco[s.get("address")].append(s)
+        grupos = [
+            {"pedidos": pedidos, "caixas": sum(extrair_volume_caixas(s) for s in pedidos)}
+            for pedidos in por_endereco.values()
+        ]
+        grupos.sort(key=lambda g: -g["caixas"])
+        return grupos
+
+    def _distancia_para_cluster(pedidos_cluster: list[dict], grupo_candidato: dict) -> float:
+        centroide = _centroide_coords(pedidos_cluster, api_key)
+        coords_candidato = obter_coordenadas(grupo_candidato["pedidos"][0], api_key)
+        if centroide and coords_candidato:
+            return _distancia_km(*centroide, *coords_candidato)
+        return 0.0  # sem coordenada -- não dá pra medir, mantém a ordem por caixas (não bloqueia)
+
+    def _extrair_grupos_veiculo_grande(candidatos: list[dict]) -> tuple[list[list[dict]], list[dict]]:
+        """
+        Consolida pedidos de até 4 endereços diferentes (ou até 2, se o
+        volume só couber em Truck) cujo volume COMBINADO já classifica
+        em algum tipo de veículo grande (regras.tipo_veiculo.
+        classificar_tipo_veiculo) -- ver docstring de
+        separar_pedidos_exclusivos.
+
+        Guloso: parte do endereço com mais caixas ainda não usado e vai
+        anexando o endereço geograficamente mais próximo ainda não
+        usado, enquanto o total ainda couber em ALGUM tipo (teto que
+        ENCOLHE conforme mais endereços entram -- com 3+ endereços,
+        Truck deixa de ser alcançável e o teto cai de 2500 pra 1200, ver
+        regras.tipo_veiculo.teto_caixas_para_enderecos) e a distância
+        pro cluster continuar dentro da mesma trava de sempre
+        (`_cabe_na_distancia`, Grande SP x Viagem).
+
+        Guarda o ÚLTIMO estado em que o cluster classificou em algum
+        tipo (`melhor`) -- crescer mais um endereço pode "estourar" o
+        cluster pra fora de qualquer faixa válida (ex: 3 endereços/
+        1200cx cabe em 3/4, mas o 4º endereço empurra pra 1250cx, que
+        não cabe nem em 3/4 nem em Truck com 4 endereços); nesse caso
+        o cluster extraído é o último válido, não o final.
+
+        Extrai o cluster (`melhor`) ao final se ele classificou em
+        algum momento -- inclusive com 1 endereço só (vários pedidos
+        pro MESMO endereço somando volume de veículo grande, nenhum
+        deles "gigante" individualmente). Endereço(s) que nunca entram
+        em nenhum cluster válido voltam pro pool comum (`sobras`).
+        """
+        grupos = _agrupar_por_endereco(candidatos)
+        usados: set[int] = set()
+        extraidos: list[list[dict]] = []
+
+        for i, semente in enumerate(grupos):
+            if i in usados:
+                continue
+            indices_cluster = [i]
+            pedidos_cluster = list(semente["pedidos"])
+            caixas_cluster = semente["caixas"]
+            melhor = None
+            if classificar_tipo_veiculo(caixas_cluster, 1) is not None:
+                melhor = (list(indices_cluster), list(pedidos_cluster))
+
+            while True:
+                teto = teto_caixas_para_enderecos(len(indices_cluster) + 1)
+                if teto == 0 or caixas_cluster >= teto:
+                    break
+                candidatas = [
+                    (j, g) for j, g in enumerate(grupos)
+                    if j not in usados and j not in indices_cluster
+                    and caixas_cluster + g["caixas"] <= teto
+                    and all(_cabe_na_distancia(s, pedidos_cluster) for s in g["pedidos"])
+                ]
+                if not candidatas:
+                    break
+                proximo_j, proximo = min(candidatas, key=lambda par: _distancia_para_cluster(pedidos_cluster, par[1]))
+                indices_cluster.append(proximo_j)
+                pedidos_cluster = pedidos_cluster + proximo["pedidos"]
+                caixas_cluster += proximo["caixas"]
+                if classificar_tipo_veiculo(caixas_cluster, len(indices_cluster)) is not None:
+                    melhor = (list(indices_cluster), list(pedidos_cluster))
+
+            if melhor is not None:
+                indices_finais, pedidos_finais = melhor
+                usados.update(indices_finais)
+                extraidos.append(pedidos_finais)
+
+        sobras = [s for j, g in enumerate(grupos) if j not in usados for s in g["pedidos"]]
+        return extraidos, sobras
+
     gigantes: list[dict] = []
     grupos_nivel4: dict[tuple[str, object], list[dict]] = {}
     nivel4_isolados: list[dict] = []
@@ -597,10 +718,13 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
             continue
         demais.append(servico)
 
+    grupos_veiculo_grande, demais = _extrair_grupos_veiculo_grande(demais)
+
     sublotes_prontos: list[list[dict]] = [[s] for s in gigantes]
     for grupo in grupos_nivel4.values():
         sublotes_prontos.extend(_empacotar_grupo(grupo))
     sublotes_prontos.extend([s] for s in nivel4_isolados)
+    sublotes_prontos.extend(grupos_veiculo_grande)
 
     return sublotes_prontos, demais
 

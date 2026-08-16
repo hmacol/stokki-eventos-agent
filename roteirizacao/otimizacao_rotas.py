@@ -51,17 +51,28 @@ from collections.abc import Callable
 from roteirizacao_dados import (
     obter_coordenadas, _distancia_km, extrair_cep,
     extrair_volume_caixas, extrair_nivel_dificuldade,
-    calcular_km_estimado, separar_pedidos_exclusivos,
+    calcular_km_estimado, separar_pedidos_exclusivos, caixas_e_enderecos,
     NIVEL_3_TAMANHO_MAXIMO_ROTA,
 )
+from regras.tipo_veiculo import classificar_tipo_veiculo
 
 logger = logging.getLogger(__name__)
 
 
 def _verificar_travas(sublotes: list[list[dict]], tamanho_maximo: int, volume_maximo: int) -> None:
     """Assertions de segurança do doc (seção 6.2) -- rodam ao final de
-    cada modelo de agrupamento, pra nenhum sublote sair estourando trava."""
+    cada modelo de agrupamento, pra nenhum sublote sair estourando trava.
+
+    Sublote classificado como veículo grande (regras/tipo_veiculo.py --
+    pedido do Hugo, 15/08) é a outra exceção legítima, além do pedido
+    "gigante" sozinho: pode ter bem mais que `tamanho_maximo` entregas
+    (várias pro MESMO endereço) e `volume_maximo` caixas de propósito --
+    as travas que valem pra ele são as do PRÓPRIO tipo (ver
+    _extrair_grupos_veiculo_grande em roteirizacao_dados.py), não as de
+    última milha."""
     for sublote in sublotes:
+        if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
+            continue
         assert len(sublote) <= tamanho_maximo, f"Sublote excede {tamanho_maximo} entregas"
         caixas = sum(extrair_volume_caixas(s) for s in sublote)
         # Pedido gigante sozinho (rota exclusiva) é a única exceção legítima.
@@ -546,6 +557,8 @@ def avaliar_candidatos(servicos: list[dict], candidatos: dict[str, Callable[[], 
             sublotes = [ordenar_2opt(s, base_lat, base_lng, api_key) for s in sublotes]
 
             for sublote in sublotes:
+                if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
+                    continue  # veículo grande (regras/tipo_veiculo.py) -- travas de última milha não valem
                 assert len(sublote) <= tamanho_maximo, f"sublote com {len(sublote)} entregas (máx {tamanho_maximo})"
                 caixas_sublote = sum(extrair_volume_caixas(s) for s in sublote)
                 assert caixas_sublote <= volume_maximo or len(sublote) == 1, \

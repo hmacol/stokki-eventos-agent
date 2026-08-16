@@ -30,15 +30,16 @@ import yaml
 
 from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
-from roteirizacao_dados import elegivel_para_data, particionar_por_macro_regiao, _cache_coordenadas
+from roteirizacao_dados import elegivel_para_data, particionar_por_macro_regiao, _cache_coordenadas, caixas_e_enderecos
 from otimizacao_rotas import (
     agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans,
     avaliar_candidatos,
 )
-from selecao_modelo import _agrupar_atual
+from selecao_modelo import agrupar_atual
 from alocacao_motoristas import classificar_rota_viagem
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
+from regras.tipo_veiculo import classificar_tipo_veiculo
 from mapa_util import carregar_remetentes_por_sender_id
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ def _gerar_massa_de_teste(gmaps_key: str | None) -> list[dict]:
     deles filtra por remetente/código -- ver incrementar_rotas.py, que
     aloca pedido novo direto numa rota JÁ ENVIADA, sem revisão manual).
 
-    Design (52 pedidos, mesma ordem de grandeza de um dia real):
+    Design (56 pedidos, mesma ordem de grandeza de um dia real):
       - 5 clusters geográficos (testam se o agrupamento fica compacto);
       - 6 pontos espalhados sem padrão (testam o cenário "difícil" que
         motivou o laboratório -- rotas espalhadas);
@@ -89,7 +90,14 @@ def _gerar_massa_de_teste(gmaps_key: str | None) -> list[dict]:
         fallbacks);
       - casos de trava de negócio embutidos: 1 nível 4 (rota
         exclusiva), 2 nível 3 (limita a rota a 4 entregas), 1 pedido
-        "gigante" de caixas (também rota exclusiva).
+        "gigante" de caixas (também rota exclusiva, e também já
+        classifica sozinho como veículo grande -- ver regras/
+        tipo_veiculo.py);
+      - 4 pedidos moderados em 4 endereços diferentes e próximos, que
+        somados cruzam o piso de veículo grande sem nenhum ser
+        "gigante" individualmente (testa a consolidação em 1 rota
+        exclusiva de VAN/HR, ver separar_pedidos_exclusivos::
+        _extrair_grupos_veiculo_grande).
 
     Tudo com "[TESTE]" no código/título/endereço -- impossível
     confundir com pedido de verdade em qualquer tela do painel.
@@ -170,7 +178,20 @@ def _gerar_massa_de_teste(gmaps_key: str | None) -> list[dict]:
     servicos[0]["_nivel_dificuldade"] = 4    # Casa Verde #1 -- rota exclusiva
     servicos[10]["_nivel_dificuldade"] = 3   # Santo Amaro #1 -- limita a 4 entregas/rota
     servicos[11]["_nivel_dificuldade"] = 3   # Santo Amaro #2
-    servicos[28]["dimension_3"] = 150        # Pinheiros #1 -- "pedido gigante", rota exclusiva
+    servicos[28]["dimension_3"] = 150        # Pinheiros #1 -- "pedido gigante", rota exclusiva (e também
+                                              # já classifica sozinho como veículo VAN/HR, ver abaixo)
+
+    # Grupo de veículo grande (pedido do Hugo, 15/08 -- ver
+    # regras/tipo_veiculo.py): 4 endereços diferentes e próximos, cada
+    # um com um pedido moderado (nenhum "gigante" sozinho -- todos bem
+    # abaixo de VOLUME_MAXIMO_ROTA) que somados já cruzam o piso de 150
+    # caixas da menor categoria (VAN/HR) -- testa se separar_pedidos_
+    # exclusivos::_extrair_grupos_veiculo_grande consolida os 4 numa
+    # rota exclusiva só (170 caixas, 4 endereços), em vez de espalhar
+    # entre rotas comuns de última milha.
+    for i, cx in enumerate((50, 45, 40, 35)):
+        _novo(-23.610 + i * 0.01, -46.480 + i * 0.01, f"{4200 + i:05d}", "Sao Paulo", "Seco",
+             caixas=cx, bairro="Vila Prudente")
 
     return servicos
 
@@ -270,7 +291,7 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste
         return [sub for svcs in particoes_macro.values() for sub in agrupar_uma_particao(svcs)]
 
     candidatos = {
-        "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: _agrupar_atual(
+        "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: agrupar_atual(
             svcs, gmaps_key, crd.TAMANHO_MINIMO_ROTA, crd.TAMANHO_MAXIMO_ROTA,
             crd.VOLUME_MAXIMO_ROTA, crd.DISTANCIA_MAXIMA_ROTA_KM, crd.DISTANCIA_MAXIMA_VIAGEM_KM)),
         "Sweep Polar": lambda: _por_macro(lambda svcs: agrupar_por_sweep(
@@ -310,9 +331,14 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste
             paradas = _sublote_para_mapa(sublote, remetentes_por_id)
             if not paradas:
                 continue
+            tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+            nome_rota = f"Rota {i + 1} ({len(sublote)} entregas)"
+            if tipo_veiculo:
+                nome_rota += f" [veículo: {tipo_veiculo.nome}]"
             rotas_mapa.append({
                 "id": f"{nome}__{i}",
-                "nome": f"Rota {i + 1} ({len(sublote)} entregas)",
+                "nome": nome_rota,
+                "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
                 "paradas": paradas,
             })
         resultado["esquemas"][nome] = {

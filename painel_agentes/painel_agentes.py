@@ -57,7 +57,8 @@ from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
-    alocar_motoristas_rascunhos, ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
+    alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido,
+    ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 import rascunhos_rota
 import torre_controle
@@ -645,6 +646,25 @@ def api_alocar_motoristas():
     return jsonify({"ok": True, **resultado})
 
 
+@app.route("/api/planejamento/desalocar-motoristas", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_desalocar_motoristas():
+    """Limpa o motorista de todo rascunho (ainda não enviado) do lote
+    ativo -- botão "Desalocar motoristas" da tela, oposto do "Alocar
+    motoristas" (Hugo, 15/08)."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        resultado = desalocar_motoristas_rascunhos(data_alvo)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao desalocar motoristas dos rascunhos")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
 @requer_auth
 @exige_mesma_origem
@@ -698,14 +718,26 @@ def api_roteirizar_selecionados():
     Seco/Frio, seleção de modelo + 2-opt, motorista sugerido) só com os
     pedidos selecionados na tela (Hugo, 12/08) -- os rascunhos gerados
     entram no lote ativo da data. Pode levar alguns segundos
-    (geocodificação + comparação dos 3 modelos)."""
+    (geocodificação + comparação dos modelos, ou só 1 se `modelo_forcado`
+    vier no corpo -- escolha manual do tipo de roteirização, Hugo, 15/08).
+
+    `max_paradas_por_rota` (Hugo, 15/08): teto de pedidos por rota --
+    campo ausente no corpo mantém o padrão do pipeline (18); presente
+    com um número usa esse teto; presente com `null`/`0` remove o
+    limite."""
     body = request.get_json(force=True)
     try:
         data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
         service_ids = [int(sid) for sid in body["service_ids"]]
+        modelo_forcado = body.get("modelo_forcado") or None
         if not service_ids:
             return jsonify({"erro": "Nenhum pedido selecionado."}), 400
-        resultado = roteirizar_selecionados(data_alvo, service_ids)
+        kwargs_roteirizacao = {}
+        if "max_paradas_por_rota" in body:
+            valor_limite = body["max_paradas_por_rota"]
+            kwargs_roteirizacao["max_paradas_por_rota"] = int(valor_limite) if valor_limite else None
+        resultado = roteirizar_selecionados(data_alvo, service_ids, modelo_forcado=modelo_forcado,
+                                            **kwargs_roteirizacao)
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
@@ -745,11 +777,19 @@ def api_duplicar_rota():
 @requer_auth
 @exige_mesma_origem
 def api_descartar_rota():
+    """Descarta um rascunho (botão do card, rascunho_id) ou vários de
+    uma vez (botão "Descartar todos os rascunhos", rascunho_ids) --
+    mesmo padrão de api_confirmar_envio/api_cancelar_rota."""
     body = request.get_json(force=True)
-    try:
-        rascunhos_rota.descartar_rascunho(body["rascunho_id"])
-    except (KeyError, ValueError) as e:
-        return jsonify({"erro": str(e)}), 400
+    rascunho_ids = body.get("rascunho_ids")
+    if rascunho_ids is None:
+        try:
+            rascunho_ids = [body["rascunho_id"]]
+        except KeyError as e:
+            return jsonify({"erro": str(e)}), 400
+
+    for rascunho_id in rascunho_ids:
+        rascunhos_rota.descartar_rascunho(rascunho_id)
     return jsonify({"ok": True})
 
 
@@ -791,6 +831,28 @@ def api_cancelar_rota():
     token = _carregar_config().get("vuupt_api", {}).get("token", "")
     resultados = [rascunhos_rota.cancelar_rota_enviada(rid, token) for rid in rascunho_ids]
     return jsonify({"ok": True, "resultados": resultados})
+
+
+@app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_cancelar_pedido():
+    """Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id}) --
+    botão "Cancelar pedido" da tela, em qualquer lugar onde ele esteja
+    (pool, rascunho ainda não enviado, ou rota já enviada -- ver
+    planejamento_rotas.cancelar_pedido)."""
+    body = request.get_json(force=True)
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    rascunho_id = body.get("rascunho_id")
+    rascunho_id = int(rascunho_id) if rascunho_id is not None else None
+
+    resultado = cancelar_pedido(service_id, rascunho_id)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

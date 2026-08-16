@@ -9,7 +9,7 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
     DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
-    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA
+    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO
 
 PLACA (pedido do Hugo, 11/08): placa do veículo do motorista, usada
 pela trava de rodízio municipal de SP (ver roteirizacao/rodizio_sp.py
@@ -21,6 +21,20 @@ vinculado ao agente lá; confirmado em 11/08 que a maioria NÃO tem),
 com preenchimento manual pra quem a API não resolve. Motorista sem
 PLACA cadastrada: nunca é bloqueado por rodízio (dado ausente não
 bloqueia -- mesmo padrão do resto do módulo).
+
+TIPO_VEICULO (pedido do Hugo, 15/08): porte do veículo do motorista --
+um dos códigos de regras/tipo_veiculo.py (VAN_HR, VUC, TRES_QUARTOS,
+TRUCK), usado pela trava de veículo grande em
+roteirizacao/alocacao_motoristas.py::selecionar_motorista_equitativo
+(ver regras.tipo_veiculo.veiculo_comporta -- veículo de capacidade
+maior também serve rota de tipo menor, ex: motorista de Truck serve
+rota classificada VUC). A VUUPT não expõe esse dado de forma confiável
+(mesmo problema já visto com PLACA), então é 100% preenchimento manual
+na planilha -- sem sincronização automática. Motorista sem TIPO_VEICULO
+cadastrado, ou com valor não reconhecido: `tipo_veiculo=None`, nunca é
+bloqueado de rota comum (última milha), mas também nunca é elegível
+pra rota classificada como veículo grande (dado ausente não deve virar
+elegibilidade "universal" pra um porte que não sabemos se ele tem).
 
 TELEFONE_MOTORISTA / EMAIL_MOTORISTA (doc de origem:
 DOC_EXECUCAO_CLAUDE_NOTIFICACAO_MOTORISTAS.md): contato usado por
@@ -70,6 +84,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from regras.tipo_veiculo import tipo_por_codigo
+
 logger = logging.getLogger(__name__)
 
 # dia da semana no formato de date.weekday() (segunda=0 ... domingo=6)
@@ -99,6 +115,7 @@ class MotoristaPreferencias:
     telefone: str | None = None  # coluna TELEFONE_MOTORISTA -- usado em avisar_motoristas_rotas.py (WhatsApp)
     email: str | None = None  # coluna EMAIL_MOTORISTA -- usado em avisar_motoristas_rotas.py (e-mail de aviso)
     placa: str | None = None  # coluna PLACA -- usado pela trava de rodízio (ver roteirizacao/rodizio_sp.py)
+    tipo_veiculo: str | None = None  # coluna TIPO_VEICULO -- código de regras/tipo_veiculo.py, usado pela trava de veículo grande
 
 
 def _normalizar_texto(s) -> str:
@@ -167,6 +184,15 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     else:
         placa = re.sub(r"[^A-Z0-9]", "", _normalizar_texto(placa_bruta)) or None
 
+    tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
+    codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
+    tipo_veiculo = tipo_por_codigo(codigo_tipo_veiculo)
+    if codigo_tipo_veiculo and tipo_veiculo is None:
+        logger.warning(
+            f"TIPO_VEICULO '{tipo_veiculo_bruto}' não reconhecido pro motorista {agent_id} -- "
+            f"tratado como sem tipo de veículo cadastrado (não elegível pra rota de veículo grande)."
+        )
+
     return MotoristaPreferencias(
         agent_id=agent_id,
         vehicle_id=_parse_int_opcional(registro.get("VEHICLE_ID_VUUPT")),
@@ -179,6 +205,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         telefone=telefone,
         email=email,
         placa=placa,
+        tipo_veiculo=tipo_veiculo.codigo if tipo_veiculo else None,
     )
 
 

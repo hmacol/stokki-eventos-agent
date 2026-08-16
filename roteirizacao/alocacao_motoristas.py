@@ -16,10 +16,11 @@ vez de duplicar:
 import logging
 from datetime import date
 
-from roteirizacao_dados import macro_regiao_do_servico, MACRO_GRANDE_SP
+from roteirizacao_dados import macro_regiao_do_servico, MACRO_GRANDE_SP, caixas_e_enderecos
 from zonas_sp import classificar_rota_zona
 from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
+from regras.tipo_veiculo import classificar_tipo_veiculo, veiculo_comporta
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,18 @@ def selecionar_motorista_equitativo(
         está restrita nesse dia NUNCA é considerado pra essa rota --
         trava igualmente rígida, independente de Viagem/Zona. Motorista
         sem PLACA cadastrada não é afetado por essa trava.
+      - veículo grande (pedido do Hugo, 15/08, ver regras/tipo_veiculo.py):
+        se o sublote classifica como VAN/HR, VUC, 3/4 ou Truck (ver
+        classificar_tipo_veiculo, a partir do volume/nº de endereços do
+        próprio sublote -- mesma classificação usada no empacotamento,
+        roteirizacao_dados.py::separar_pedidos_exclusivos), só motorista
+        com TIPO_VEICULO cadastrado de capacidade igual ou maior é
+        elegível (veiculo_comporta -- ex: motorista de Truck também
+        serve rota classificada VUC). Motorista sem TIPO_VEICULO
+        cadastrado nunca é elegível pra essa rota (dado ausente não
+        deve virar elegibilidade "universal" pra veículo grande). Rota
+        fora da faixa de veículo grande (classificação None) não é
+        afetada por essa trava, igual a hoje.
 
     `contagem_alocacoes_dia` é lida mas NÃO é alterada aqui -- quem
     chama incrementa depois de confirmar que a rota foi criada de
@@ -82,6 +95,9 @@ def selecionar_motorista_equitativo(
     eh_viagem = classificar_rota_viagem(sublote, api_key)
     zona = None if eh_viagem else classificar_rota_zona(sublote, api_key)
     dia_semana = data_rota.weekday()
+
+    tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+    tipo_veiculo_necessario = tipo_veiculo.codigo if tipo_veiculo else None
 
     # Rodízio de placas de SP: só vale a pena checar a área do sublote
     # 1 vez (não por motorista) se o dia da semana sequer tem alguma
@@ -96,13 +112,15 @@ def selecionar_motorista_equitativo(
         and (m.aceita_viagens if eh_viagem else True)
         and (zona is None or zona in m.zonas_preferidas)
         and not (rota_em_rodizio and placa_restrita_no_dia(m.placa, dia_semana))
+        and veiculo_comporta(m.tipo_veiculo, tipo_veiculo_necessario)
     ]
 
     if not elegiveis:
         tipo_str = "VIAGEM" if eh_viagem else f"Grande SP/{zona or 'zona desconhecida'}"
         rodizio_str = " [dentro do Centro Expandido -- rodízio pode ter reduzido os elegíveis]" if rota_em_rodizio else ""
+        veiculo_str = f" [veículo grande: {tipo_veiculo_necessario}]" if tipo_veiculo_necessario else ""
         logger.warning(
-            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}]{rodizio_str} em "
+            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}]{rodizio_str}{veiculo_str} em "
             f"{data_rota.isoformat()} -- rota será criada sem motorista."
         )
         return None

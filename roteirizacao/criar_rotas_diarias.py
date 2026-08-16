@@ -83,7 +83,7 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao
+from roteirizacao_dados import elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao, caixas_e_enderecos
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
@@ -100,12 +100,13 @@ from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
 from zonas_sp import classificar_rota_zona
+from regras.tipo_veiculo import classificar_tipo_veiculo
 
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
-TAMANHO_MAXIMO_ROTA = 18  # Aumentado de 15 para 18 entregas por rota (pedido do Hugo, 09/08)
+TAMANHO_MAXIMO_ROTA = 16  # Ajustado de 18 para 16 entregas por rota (pedido do Hugo, 15/08)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
 DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo, 09/08 -- ajustado 10/08)
 # Rotas de Viagem (fora da Grande SP) NÃO têm limite de distância entre
@@ -125,6 +126,13 @@ DISTANCIA_MAXIMA_VIAGEM_KM = None
 # direções opostas mesmo caindo no mesmo dia fixo -- não funde).
 DISTANCIA_MAXIMA_FUSAO_REGIAO_KM = 50
 PREFIXO_NOME_ROTA = "Planejamento"
+# Sentinela pro botão "Roteirizar" de Planejamento oferecer "sem limite"
+# de pedidos por rota (Hugo, 15/08) -- as travas internas (dividir_em_
+# sublotes, agrupar_por_*) sempre comparam contra um int, então "sem
+# limite" vira esse teto folgado (nunca vai bater na prática: volume_
+# maximo/distância/nível continuam valendo normalmente) em vez de um
+# caminho de código à parte.
+SEM_LIMITE_PARADAS = 10_000
 
 
 def _carregar_config() -> dict:
@@ -202,7 +210,8 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                               indice_inicial: int = 1,
                               contagem_alocacoes_dia: dict[int, int] | None = None,
                               sufixo_label: str = "",
-                              modelo_forcado: str | None = None) -> list[dict]:
+                              modelo_forcado: str | None = None,
+                              tamanho_maximo: int | None = TAMANHO_MAXIMO_ROTA) -> list[dict]:
     """
     Miolo do criador de rotas (classificação de nível/tipo de carga,
     partição Seco x Refrigerado/Congelado, seleção de modelo + 2-opt,
@@ -221,9 +230,17 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     do lote já existente do dia (a contagem é MUTADA aqui, +1 por rota
     gerada). `sufixo_label` distingue as linhas do histórico de seleção
     de modelo das do job diário.
+
+    `tamanho_maximo` (Hugo, 15/08): teto de pedidos por rota pro botão
+    "Roteirizar" da tela de Planejamento -- padrão é o mesmo
+    TAMANHO_MAXIMO_ROTA do pipeline automático (18), mas o usuário pode
+    apertar (rotas menores) ou passar `None` explicitamente pra "sem
+    limite" (vira SEM_LIMITE_PARADAS por baixo -- as outras travas,
+    volume/distância/nível, continuam valendo do mesmo jeito).
     """
     config = config or _carregar_config()
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
+    tamanho_maximo_efetivo = tamanho_maximo if tamanho_maximo is not None else SEM_LIMITE_PARADAS
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo_motoristas = CatalogoMotoristas.carregar(
@@ -264,7 +281,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             _modelo, sublotes = escolher_melhor_modelo(
                 servicos_particao, coords_base[0], coords_base[1], gmaps_key,
                 data_alvo=data_alvo, label=f"{label}{sufixo_label}",
-                tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=TAMANHO_MAXIMO_ROTA,
+                tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=tamanho_maximo_efetivo,
                 volume_maximo=VOLUME_MAXIMO_ROTA,
                 distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
                 distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
@@ -283,7 +300,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             )
             sublotes = [
                 sub for svcs in particoes_macro.values()
-                for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
+                for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, tamanho_maximo_efetivo,
                                          VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
             ]
 
@@ -292,6 +309,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             indice += 1
             eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
             zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
+            tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
             motorista = selecionar_motorista_equitativo(
                 sublote, data_alvo, catalogo_motoristas.motoristas, contagem, gmaps_key,
             )
@@ -306,6 +324,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 "particao": label,
                 "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
                 "zona": zona,
+                "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
                 "agent_id": motorista.agent_id if motorista else None,
                 "vehicle_id": motorista.vehicle_id if motorista else None,
                 "motorista_nome": motorista.nome if motorista else None,
@@ -315,7 +334,8 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 "km_estimado": km_estimado,
                 "sublote": sublote,
             })
-            logger.info(f"[SELEÇÃO] [{label}] '{nome_rota}' [{'VIAGEM' if eh_viagem else 'GRANDE_SP'}] "
+            veiculo_str = f" [veículo: {tipo_veiculo.nome}]" if tipo_veiculo else ""
+            logger.info(f"[SELEÇÃO] [{label}] '{nome_rota}' [{'VIAGEM' if eh_viagem else 'GRANDE_SP'}]{veiculo_str} "
                        f"com {len(sublote)} pedido(s) -- motorista sugerido: "
                        f"{motorista.nome if motorista else 'SEM MOTORISTA [ALERTA_ALOCACAO]'}: "
                        f"{[s.get('code') for s in sublote]}")
@@ -539,6 +559,9 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 # de verdade (não conta alocação de rota que falhou).
                 eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
                 tipo_rota_str = "VIAGEM" if eh_viagem else f"Grande SP/{classificar_rota_zona(sublote, gmaps_key) or '?'}"
+                tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+                if tipo_veiculo:
+                    tipo_rota_str += f" [veículo: {tipo_veiculo.nome}]"
                 motorista = selecionar_motorista_equitativo(
                     sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
                 )
@@ -557,6 +580,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         "particao": label,
                         "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
                         "zona": zona,
+                        "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
                         "agent_id": agent_id,
                         "vehicle_id": vehicle_id,
                         "motorista_nome": motorista.nome if motorista else None,

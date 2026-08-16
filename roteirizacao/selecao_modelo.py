@@ -44,11 +44,13 @@ from pathlib import Path
 from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
     calcular_km_estimado, extrair_volume_caixas, particionar_por_macro_regiao,
+    caixas_e_enderecos,
 )
 from otimizacao_rotas import (
     agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans, ordenar_2opt,
 )
 from alocacao_motoristas import classificar_rota_viagem
+from regras.tipo_veiculo import classificar_tipo_veiculo
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +64,16 @@ def _km_total(sublotes, base_lat, base_lng, api_key):
 
 
 def _validar(servicos, sublotes, tamanho_maximo, volume_maximo):
-    """Travas + cobertura -- candidato que falhar aqui sai do páreo."""
+    """Travas + cobertura -- candidato que falhar aqui sai do páreo.
+
+    Sublote classificado como veículo grande (regras/tipo_veiculo.py --
+    pedido do Hugo, 15/08) fica de fora das travas de entregas/caixas
+    de última milha (as travas que valem pra ele são as do PRÓPRIO
+    tipo, já garantidas na hora do empacotamento -- ver
+    roteirizacao_dados.py::_extrair_grupos_veiculo_grande)."""
     for sublote in sublotes:
+        if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
+            continue
         assert len(sublote) <= tamanho_maximo, f"sublote com {len(sublote)} entregas (máx {tamanho_maximo})"
         caixas = sum(extrair_volume_caixas(s) for s in sublote)
         assert caixas <= volume_maximo or len(sublote) == 1, f"sublote com {caixas} caixas (máx {volume_maximo})"

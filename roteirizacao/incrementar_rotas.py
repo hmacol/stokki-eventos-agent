@@ -90,6 +90,7 @@ from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar
 from regras.preferencias_motoristas import CatalogoMotoristas
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
 from zonas_sp import classificar_rota_zona, classificar_zona
+from regras.tipo_veiculo import classificar_tipo_veiculo
 
 
 def _carregar_config() -> dict:
@@ -256,6 +257,27 @@ def _proximo_indice_disponivel(rotas_hoje: list[dict]) -> int:
         if match:
             maior = max(maior, int(match.group(1)))
     return maior + 1
+
+
+def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
+    """
+    True se `cx_pedido` (do endereço `endereco_pedido`) ainda cabe na
+    rota EXISTENTE `rota` (dict de info_rotas, ver main()).
+
+    Rota já classificada como veículo grande (`rota["tipo_veiculo"]`,
+    ver regras/tipo_veiculo.py) respeita o teto de caixas E de
+    endereços diferentes do PRÓPRIO tipo -- em vez do teto genérico de
+    última milha (`TAMANHO_MAXIMO_ROTA`/`VOLUME_MAXIMO_ROTA`), que não
+    faz sentido pra uma rota dessas (pode ter dezenas de pedidos pro
+    MESMO endereço, e cabe bem mais que 100 caixas). Rota comum segue a
+    trava genérica de sempre, sem mudança nenhuma.
+    """
+    tipo = rota["tipo_veiculo"]
+    if tipo is not None:
+        caixas_cabe = rota["caixas"] + cx_pedido <= tipo.volume_maximo_cx
+        enderecos_cabe = len(rota["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos
+        return caixas_cabe and enderecos_cabe
+    return rota["qtd"] < TAMANHO_MAXIMO_ROTA and rota["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
 
 
 def main(modo_teste: bool = False):
@@ -497,10 +519,22 @@ def main(modo_teste: bool = False):
             # sem serviço classificável: None (não restringe).
             macros_rota = [macro_regiao_do_servico(s, gmaps_key) for s in servicos_rota]
             macro_rota = Counter(macros_rota).most_common(1)[0][0] if macros_rota else None
+            enderecos_rota = {s.get("address") for s in servicos_rota}
+            caixas_rota = sum(extrair_volume_caixas(s) for s in servicos_rota)
             info_rotas.append({
                 "id": r["id"], "nome": r["name"],
                 "centroide": _centroide_rota(r, gmaps_key), "qtd": len(servicos_rota),
-                "caixas": sum(extrair_volume_caixas(s) for s in servicos_rota),
+                "caixas": caixas_rota,
+                # Endereços distintos + tipo de veículo grande já
+                # classificado pra essa rota (regras/tipo_veiculo.py,
+                # pedido do Hugo, 15/08) -- None pra rota comum de
+                # última milha, mantém as travas de sempre (ver
+                # _cabe_na_rota, abaixo). Rota que NASCEU classificada
+                # (criar_rotas_diarias.py) continua respeitando o teto
+                # do PRÓPRIO tipo ao receber pedido novo por hora, em
+                # vez do teto genérico de 100 caixas/16 paradas.
+                "enderecos": enderecos_rota,
+                "tipo_veiculo": classificar_tipo_veiculo(caixas_rota, len(enderecos_rota)),
                 "service_ids": [s["id"] for s in servicos_rota],
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
@@ -580,7 +614,7 @@ def main(modo_teste: bool = False):
                 # centroide -- então usa a lista mais ampla.
                 candidatas_com_espaco = [
                     r for r in info_rotas
-                    if r["qtd"] < TAMANHO_MAXIMO_ROTA and r["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+                    if _cabe_na_rota(r, cx_pedido, pedido.get("address"))
                     and (r["macro"] is None or r["macro"] == pedido_macro)
                     and (
                         not pedido_eh_viagem
@@ -661,6 +695,7 @@ def main(modo_teste: bool = False):
             if alocado_em_existente:
                 rota_escolhida["qtd"] += 1
                 rota_escolhida["caixas"] += cx_pedido
+                rota_escolhida["enderecos"].add(pedido.get("address"))
                 rota_escolhida["service_ids"].append(pedido["id"])
                 todos_servicos_por_id[pedido["id"]] = pedido
                 rotas_afetadas.add(rota_escolhida["id"])

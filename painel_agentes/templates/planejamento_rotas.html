@@ -84,8 +84,34 @@
   #map { width: 100%; height: 78vh; border-radius: 10px; border: 1px solid var(--borda); }
 
   .lista-paradas { list-style: none; margin: 0; padding: 0; min-height: 24px; }
-  .lista-paradas.pool { min-height: 200px; }
+  .lista-paradas.pool { min-height: 60px; }
+  /* Pool dividido em 2 blocos colapsáveis (Hugo, 15/08): "pra rotear
+     hoje" (agendado pro dia, atrasado ou sem agendamento -- tudo que
+     PODE sair hoje) e "agendados pra depois" (urgência "futuro"), pra
+     não misturar o que é demanda do dia com o que só está passando
+     pela tela. Mesmo padrão visual/comportamental do colapso de
+     .card-rota (classe .colapsada escondendo o miolo, seta ▾/▸, drag
+     por cima reabre) -- ver definirColapsoSecaoPool. */
+  .secao-pool { margin-bottom: 4px; }
+  .secao-pool + .secao-pool { border-top: 1px solid var(--borda); padding-top: 6px; }
+  .cabecalho-secao-pool {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 4px 0 6px;
+  }
+  .cabecalho-secao-pool .titulo-secao-pool { flex: 1; }
+  .cabecalho-secao-pool .seta-secao { font-size: 10px; }
+  .secao-pool.colapsada .lista-paradas { display: none; }
   .item-parada {
+    position: relative;
     background: var(--fundo);
     border: 1px solid var(--borda);
     border-radius: 6px;
@@ -101,6 +127,32 @@
   .item-parada .endereco { color: var(--texto-suave); font-size: 11px; }
   .item-parada.sortable-ghost { opacity: 0.3; }
   .item-parada.sortable-chosen { box-shadow: 0 0 0 2px var(--acento); }
+  /* "x" de cancelar pedido: canto superior direito, fora do fluxo do
+     texto -- não empurra código/endereço nem quebra em modo compacto
+     (que corta o texto com ellipsis) */
+  .botao-cancelar-pedido {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 16px;
+    height: 16px;
+    line-height: 14px;
+    padding: 0;
+    border: 1px solid var(--borda);
+    border-radius: 50%;
+    background: var(--superficie);
+    color: var(--erro);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+    cursor: pointer;
+    z-index: 2;
+  }
+  .botao-cancelar-pedido:hover { background: var(--erro); border-color: var(--erro); color: #fff; }
+  /* "só número": sem espaço pro selo de cancelar num chip de 26px --
+     cancelamento nessa densidade continua disponível trocando pro
+     modo normal/compacto */
+  body.cards-numeros .item-parada .botao-cancelar-pedido { display: none; }
 
   .campo-busca {
     width: 100%;
@@ -312,7 +364,7 @@
   .card-rota.colapsada .select-motorista,
   .card-rota.colapsada .acoes { display: none; }
   #lista-rotas.buscando .card-rota.colapsada .lista-paradas { display: block; }
-  .coluna h3 .botao-mini {
+  .coluna h3 .botao-mini, .botao-mini {
     font-size: 10.5px;
     padding: 3px 8px;
     border-radius: 5px;
@@ -323,7 +375,7 @@
     text-transform: none;
     letter-spacing: 0;
   }
-  .coluna h3 .botao-mini:hover { background: var(--fundo); }
+  .coluna h3 .botao-mini:hover, .botao-mini:hover { background: var(--fundo); }
 
   /* Cards compactos (toggle na barra de cima): pedido vira 1 linha
      (número + código + badges) pra caber mais na tela e agilizar o
@@ -363,13 +415,16 @@
      tipo de carga entram como selos de canto com anel/fundo da
      superfície, que garantem contraste em qualquer cor de preenchimento
      por baixo (Hugo, 14/08). */
-  body.cards-numeros .lista-paradas { display: flex; flex-wrap: wrap; gap: 11px; align-content: flex-start; }
+  body.cards-numeros .lista-paradas { display: flex; flex-wrap: wrap; gap: 13px; align-content: flex-start; }
+  /* 34px, não 26px: abaixo disso o chip vira um alvo de arrastar menor
+     que o mínimo prático de clique/toque (Fitts's Law + guias de alvo
+     de NN/g ~38px, Material 48dp, Apple 44pt, Windows 40px). */
   body.cards-numeros .item-parada {
     position: relative;
-    width: 26px;
-    height: 26px;
+    width: 34px;
+    height: 34px;
     padding: 0;
-    margin: 0 0 6px;
+    margin: 0 0 7px;
     background: none;
     border: none;
   }
@@ -474,6 +529,66 @@
   .tooltip-parada .destinatario { color: #8A5A0C; }
   .tooltip-parada .endereco { color: var(--texto-suave); font-size: 11.5px; margin-top: 3px; }
   .tooltip-parada .extras { margin-top: 5px; color: var(--texto-suave); font-size: 11px; }
+  /* menu de contexto (botão direito) de um pedido -- mesmo menu em
+     qualquer densidade de card e tanto no pool quanto numa rota */
+  .menu-contexto {
+    position: fixed;
+    z-index: 10001;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 4px;
+    min-width: 170px;
+    font-size: 12.5px;
+  }
+  .menu-contexto button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    background: none;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--texto);
+    font-size: inherit;
+  }
+  .menu-contexto button:hover { background: var(--fundo); }
+  .menu-contexto button.perigo { color: var(--erro); }
+  .menu-contexto button.perigo:hover { background: #FDEBEA; }
+  .menu-contexto hr { border: none; border-top: 1px solid var(--borda); margin: 4px 2px; }
+  /* popup de "Ver detalhes" -- igual ao tooltip de hover, mas fica
+     aberto (não some ao tirar o mouse) até fechar no X, Esc ou clique fora */
+  .popup-detalhes-parada {
+    position: fixed;
+    z-index: 10001;
+    display: none;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 10px 26px 10px 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    max-width: 300px;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .popup-detalhes-parada .fechar {
+    position: absolute;
+    top: 4px; right: 6px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--texto-suave);
+    padding: 4px;
+  }
+  .popup-detalhes-parada .titulo { font-weight: 700; margin-bottom: 2px; }
+  .popup-detalhes-parada .remetente { color: #4F86F7; font-weight: 600; }
+  .popup-detalhes-parada .destinatario { color: #8A5A0C; }
+  .popup-detalhes-parada .endereco { color: var(--texto-suave); font-size: 11.5px; margin-top: 3px; }
+  .popup-detalhes-parada .extras { margin-top: 5px; color: var(--texto-suave); font-size: 11px; }
   .status-envio { font-size: 11px; padding: 5px 8px; border-radius: 5px; margin-bottom: 6px; }
   .status-envio.ok { background: #E5F7EF; color: var(--sucesso); }
   .status-envio.erro { background: #FDEBEA; color: var(--erro); }
@@ -584,6 +699,44 @@
   .painel-importacao-filtro label { display: flex; flex-direction: column; gap: 3px; color: var(--texto-suave); font-size: 11px; }
   .painel-importacao-filtro input { padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; }
   .painel-importacao-filtro .acoes { display: flex; gap: 8px; margin-left: auto; }
+
+  /* Modal "Qual tipo de roteirização?" do botão Roteirizar (Hugo, 15/08)
+     -- mesmas opções do Laboratório de Roteirização (/laboratorio-rotas). */
+  .modal-overlay-tipo-roteirizacao {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-tipo-roteirizacao.aberto { display: flex; }
+  .modal-tipo-roteirizacao {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 420px; max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px); overflow-y: auto;
+  }
+  .modal-tipo-roteirizacao h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-tipo-roteirizacao .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-tipo-roteirizacao .opcao-esquema {
+    display: block; border: 1px solid var(--borda); border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 8px; cursor: pointer;
+  }
+  .modal-tipo-roteirizacao .opcao-esquema:hover { background: var(--fundo); }
+  .modal-tipo-roteirizacao .opcao-esquema input { margin-right: 6px; }
+  .modal-tipo-roteirizacao .opcao-esquema .nome-esquema { font-weight: 700; font-size: 12.5px; }
+  .modal-tipo-roteirizacao .opcao-esquema .descricao-esquema { font-size: 11px; color: var(--texto-suave); margin: 3px 0 0 20px; }
+  .limite-paradas-roteirizacao { border-top: 1px solid var(--borda); margin-top: 12px; padding-top: 12px; }
+  .limite-paradas-roteirizacao > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+  .linha-limite-paradas { display: flex; align-items: center; gap: 12px; }
+  .linha-limite-paradas input[type="number"] { width: 70px; padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; }
+  .linha-limite-paradas input[type="number"]:disabled { opacity: 0.5; }
+  .check-sem-limite { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--texto-suave); cursor: pointer; }
+  .modal-tipo-roteirizacao .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-tipo-roteirizacao .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-tipo-roteirizacao .acoes button.confirmar { background: var(--primaria); color: #fff; border: none; font-weight: 600; }
+  .modal-tipo-roteirizacao .acoes button.confirmar:hover { background: var(--primaria-clara); }
+  .modal-tipo-roteirizacao .acoes button.cancelar { background: var(--superficie); border: 1px solid var(--borda); }
+  .modal-tipo-roteirizacao .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -622,6 +775,57 @@
   <div class="acoes">
     <button type="button" class="botao" onclick="rodarImportacaoComFiltro()">Rodar importação</button>
     <button type="button" onclick="fecharPainelImportacao()">Cancelar</button>
+  </div>
+</div>
+
+<div class="modal-overlay-tipo-roteirizacao" id="modal-tipo-roteirizacao">
+  <div class="modal-tipo-roteirizacao" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tipo-roteirizacao">
+    <h2 id="titulo-modal-tipo-roteirizacao">Qual tipo de roteirização?</h2>
+    <p class="subtitulo">Roda só com os pedidos selecionados no pool — mesmas opções do Laboratório de Roteirização.</p>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="automatico" checked>
+      <span class="nome-esquema">Automático (recomendado)</span>
+      <div class="descricao-esquema">Compara os modelos entre si e escolhe o que gerar menos rotas (empate por menor km) — comportamento de sempre do botão.</div>
+    </label>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="Atual (Grade+Greedy)">
+      <span class="nome-esquema">Atual (Grade+Greedy)</span>
+      <div class="descricao-esquema">Fluxo de produção padrão: agrupa por região/grade e distribui com empacotamento guloso.</div>
+    </label>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="Sweep Polar">
+      <span class="nome-esquema">Sweep Polar</span>
+      <div class="descricao-esquema">Varredura angular a partir da base, preenche rotas em sequência pela posição angular.</div>
+    </label>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="Clarke-Wright">
+      <span class="nome-esquema">Clarke-Wright</span>
+      <div class="descricao-esquema">Funde entregas em pares pela maior economia de trajeto (algoritmo clássico de roteirização de veículos).</div>
+    </label>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="CEP real">
+      <span class="nome-esquema">CEP real</span>
+      <div class="descricao-esquema">Agrupa pela vizinhança postal (prefixo do CEP).</div>
+    </label>
+    <label class="opcao-esquema">
+      <input type="radio" name="tipo-roteirizacao" value="K-means geográfico">
+      <span class="nome-esquema">K-means geográfico</span>
+      <div class="descricao-esquema">Agrupa por proximidade real (clustering), minimizando dispersão dentro de cada rota.</div>
+    </label>
+    <div class="limite-paradas-roteirizacao">
+      <label for="campo-limite-paradas">Limite de pedidos por rota</label>
+      <div class="linha-limite-paradas">
+        <input type="number" id="campo-limite-paradas" min="1" step="1">
+        <label class="check-sem-limite">
+          <input type="checkbox" id="check-sem-limite-paradas">
+          Sem limite
+        </label>
+      </div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-tipo-roteirizacao">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-tipo-roteirizacao">Roteirizar</button>
+    </div>
   </div>
 </div>
 
@@ -771,7 +975,7 @@
     <h3>
       <span>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></span>
       <span class="botoes-h3">
-        <button type="button" class="botao-mini" title='Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. O pool mostra TODO pedido não alocado, inclusive agendado pra depois da data em edição (badge cinza "Agendado dd/mm") -- pode arrastar pra uma rota normalmente, pra adiantar a entrega. No mapa: "Não alocados" mostra o pool em vermelho, "Alocados" mostra/oculta os pontos e trajetos das rotas já montadas, "Agendados (futuro)" mostra/oculta especificamente os agendados pra depois (ficam ocultos por padrão pra não poluir o mapa), "Enviadas" mostra/oculta as rotas já enviadas à VUUPT, e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.'>?</button>
+        <button type="button" class="botao-mini" title='Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. O pool mostra TODO pedido não alocado, inclusive agendado pra depois da data em edição (badge cinza "Agendado dd/mm") -- pode arrastar pra uma rota normalmente, pra adiantar a entrega. Os pedidos ficam divididos em 2 blocos: "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro) -- cada bloco colapsa e tem seu próprio botão "Selecionar". No mapa: "Não alocados" mostra o pool em vermelho, "Alocados" mostra/oculta os pontos e trajetos das rotas já montadas, "Agendados (futuro)" mostra/oculta especificamente os agendados pra depois (ficam ocultos por padrão pra não poluir o mapa), "Enviadas" mostra/oculta as rotas já enviadas à VUUPT, e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.'>?</button>
         <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
       </span>
     </h3>
@@ -790,12 +994,29 @@
       <input type="number" id="caixas-ate" class="campo-busca" min="0" placeholder="Caixas: máx">
     </div>
     <div class="barra-selecao">
-      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
+      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis (das 2 seções) com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
-      <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: agrupa por região (Seco separado de Refrigerado/Congelado), compara os 3 modelos, otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
+      <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
     </div>
-    <ul class="lista-paradas pool" id="lista-pool" data-list-id="pool"></ul>
+    <div id="lista-pool">
+      <div class="secao-pool" data-secao="hoje" id="secao-pool-hoje">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Pra rotear hoje (<span id="contagem-secao-hoje">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
+      </div>
+      <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▸</span>
+          <span class="titulo-secao-pool">Agendados pra depois (<span id="contagem-secao-futuro">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="futuro" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-futuro" data-list-id="pool"></ul>
+      </div>
+    </div>
   </div>
 
   <div class="divisor" data-coluna="pool" title="Arraste pra ajustar a largura do pool; duplo clique volta pro padrão"></div>
@@ -810,9 +1031,13 @@
       </span>
     </h3>
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
-    <button id="botao-alocar-motoristas" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button id="botao-alocar-motoristas" type="button" class="botao" style="flex:1;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
+      <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
+    </div>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
     <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- os pedidos delas voltam pro pool">Cancelar todas as rotas</button>
+    <button id="botao-descartar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Descarta todos os rascunhos ainda não enviados -- os pedidos deles voltam pro pool. Rotas já enviadas não são afetadas (use Cancelar todas as rotas pra essas).">Descartar todos os rascunhos</button>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, NF, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
       Reordenar:
@@ -949,9 +1174,14 @@
     // NF já casada (documentos_processados) -- Hugo, 14/08: mostrar
     // pra confirmar visualmente que achou o pedido certo ao buscar por NF
     const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+    // cancela o pedido de verdade na VUUPT (Hugo, 15/08) -- leitura não
+    // recebe o botão (mesma trava dos demais controles de ação)
+    const botaoCancelar = PODE_EDITAR
+      ? `<button type="button" class="botao-cancelar-pedido" title="Cancelar esse pedido na VUUPT -- não pode ser desfeito">×</button>`
+      : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
-    return `<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+    return `${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
       <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
   }
@@ -1023,6 +1253,16 @@
     // volume das travas do servidor) -- nível/distância continuam só
     // como badge, não têm leitura de "lotação"
     const caixas = rascunho.paradas.reduce((soma, p) => soma + (p.volume_caixas || 1), 0);
+    // Rota classificada como veículo grande (ver regras/tipo_veiculo.py):
+    // a barra de "paradas" genérica não faz sentido aqui (uma rota
+    // dessas pode ter dezenas de paradas pro MESMO endereço) -- troca
+    // pra caixas/endereços-diferentes contra o teto do PRÓPRIO tipo.
+    const infoVeiculo = rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo];
+    if (infoVeiculo) {
+      const enderecos = new Set(rascunho.paradas.map(p => p.endereco)).size;
+      return barraCapacidadeHtml("caixas", caixas, infoVeiculo.volume_maximo_cx) +
+             barraCapacidadeHtml("endereços", enderecos, infoVeiculo.max_enderecos_distintos);
+    }
     return barraCapacidadeHtml("caixas", caixas, TRAVAS.max_caixas) +
            barraCapacidadeHtml("paradas", rascunho.paradas.length, TRAVAS.max_paradas);
   }
@@ -1103,6 +1343,7 @@
         <span class="titulo-rota">
           <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
           <span class="nome">${escaparHtml(rascunho.nome)}</span>
+          ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
       </div>
@@ -1156,7 +1397,8 @@
       const el = li.querySelector(sel);
       return el ? el.textContent.trim() : "";
     };
-    const partes = [`<div class="titulo">${escaparHtml(texto(".codigo"))}</div>`];
+    const nf = texto(".nf-pedido");
+    const partes = [`<div class="titulo">${escaparHtml(texto(".codigo"))}${nf ? " — " + escaparHtml(nf) : ""}</div>`];
     const remetente = texto(".remetente");
     if (remetente) partes.push(`<div class="remetente">${escaparHtml(remetente)}</div>`);
     const destinatario = texto(".destinatario");
@@ -1690,6 +1932,78 @@
     atualizarPreviewPool();
   }
 
+  // ---- Pool dividido em "Pra rotear hoje" / "Agendados pra depois" (Hugo, 15/08) ----
+  // A seção é sempre uma função da urgência do PRÓPRIO pedido
+  // (li.dataset.urgencia, calculada em criarLiParada a partir do
+  // agendado_para real) -- nunca de onde o usuário soltou o card, pra
+  // não virar uma categorização manual que destoa do agendamento real.
+  function selecionarSecao(secaoEl) {
+    // "Selecionar" do cabeçalho de cada bloco -- respeita os mesmos
+    // filtros (busca/flag/CEP/caixas) de "Selecionar visíveis", só que
+    // escopado à seção: no bloco "Pra rotear hoje" nunca pega agendamento
+    // futuro, porque esses pedidos nem estão nesse bloco.
+    secaoEl.querySelectorAll(".item-parada").forEach(li => {
+      if (!liVisivelNoPool(li)) return;
+      SELECIONADOS.add(Number(li.dataset.serviceId));
+      li.classList.add("selecionada");
+    });
+    atualizarBarraSelecao();
+    atualizarPreviewPool();
+  }
+
+  function reencaixarNaSecaoCorreta(li) {
+    const destino = document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+    if (destino && li.parentElement !== destino) destino.appendChild(li);
+  }
+
+  function atualizarContagensSecoesPool() {
+    const elHoje = document.getElementById("contagem-secao-hoje");
+    const elFuturo = document.getElementById("contagem-secao-futuro");
+    if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
+    if (elFuturo) elFuturo.textContent = document.getElementById("lista-pool-futuro").children.length;
+  }
+
+  // Colapso persistido por seção (mesmo padrão de rotasColapsadas/
+  // layoutColunas) -- "futuro" começa colapsado (é o bloco que menos
+  // importa pro trabalho do dia), "hoje" começa aberto.
+  let secoesPoolColapsadas;
+  try {
+    secoesPoolColapsadas = JSON.parse(localStorage.getItem("planejamento.secoesPoolColapsadas")) || {};
+  } catch (e) {
+    secoesPoolColapsadas = {};
+  }
+  if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
+
+  function definirColapsoSecaoPool(secaoEl, colapsar) {
+    secaoEl.classList.toggle("colapsada", colapsar);
+    const seta = secaoEl.querySelector(".seta-secao");
+    if (seta) seta.textContent = colapsar ? "▸" : "▾";
+    secoesPoolColapsadas[secaoEl.dataset.secao] = colapsar;
+    localStorage.setItem("planejamento.secoesPoolColapsadas", JSON.stringify(secoesPoolColapsadas));
+  }
+
+  function inicializarSecoesPool() {
+    document.querySelectorAll(".secao-pool").forEach(secaoEl => {
+      definirColapsoSecaoPool(secaoEl, !!secoesPoolColapsadas[secaoEl.dataset.secao]);
+      secaoEl.querySelector(".cabecalho-secao-pool").addEventListener("click", (e) => {
+        if (e.target.closest(".botao-selecionar-secao")) return;
+        definirColapsoSecaoPool(secaoEl, !secaoEl.classList.contains("colapsada"));
+      });
+      secaoEl.querySelector(".botao-selecionar-secao").addEventListener("click", (e) => {
+        e.stopPropagation();
+        selecionarSecao(secaoEl);
+      });
+      // arrastar um pedido por cima de uma seção colapsada reabre ela --
+      // mesma lógica de alternarColuna (senão não teria onde soltar)
+      const aoArrastarSobre = () => {
+        if (dragRecente && secaoEl.classList.contains("colapsada")) definirColapsoSecaoPool(secaoEl, false);
+      };
+      secaoEl.addEventListener("dragover", aoArrastarSobre);
+      secaoEl.addEventListener("mousemove", aoArrastarSobre);
+    });
+  }
+
   function definirMostrarPoolNoMapa(valor) {
     mostrarPoolNoMapa = valor;
     localStorage.setItem("planejamento.mostrarPoolNoMapa", valor ? "1" : "0");
@@ -1882,7 +2196,33 @@
     }
   }
 
-  async function roteirizarSelecionados(botao) {
+  // botão que abriu o modal, pra roteirizarSelecionados saber quem
+  // reativar/reescrever ao terminar -- os listeners de Confirmar/Cancelar
+  // são fixos (registrados 1x no DOMContentLoaded), então não empilham a
+  // cada clique em "Roteirizar" (o que disparava a roteirização em
+  // dobro se o modal fosse cancelado e reaberto antes).
+  let botaoRoteirizarPendente = null;
+
+  function abrirModalTipoRoteirizacao(botao) {
+    // pergunta qual esquema de roteirização rodar (mesmas opções do
+    // Laboratório de Roteirização) antes de disparar roteirizarSelecionados
+    // -- pedido do Hugo, 15/08.
+    const ids = Array.from(SELECIONADOS);
+    const modal = document.getElementById("modal-tipo-roteirizacao");
+    if (!ids.length || modal.classList.contains("aberto")) return;
+    modal.querySelector('input[value="automatico"]').checked = true;
+    // limite de pedidos por rota (Hugo, 15/08): reabre sempre com a
+    // mesma trava do pipeline automático (TRAVAS.max_paradas), sem
+    // "sem limite" marcado -- o usuário decide apertar ou soltar a cada
+    // clique, não fica um estado escondido de uma rodada pra outra.
+    document.getElementById("campo-limite-paradas").value = TRAVAS.max_paradas;
+    document.getElementById("campo-limite-paradas").disabled = false;
+    document.getElementById("check-sem-limite-paradas").checked = false;
+    botaoRoteirizarPendente = botao;
+    modal.classList.add("aberto");
+  }
+
+  async function roteirizarSelecionados(botao, modeloForcado, maxParadasPorRota) {
     // diferente do "Criar rota" (1 rascunho com a seleção como está):
     // roda o MESMO criador de rotas do job diário, escopado à seleção
     // -- pode gerar mais de uma rota; os rascunhos entram no lote ativo
@@ -1894,7 +2234,8 @@
     botao.textContent = "Roteirizando...";
     try {
       const resp = await postJSON("/api/planejamento/roteirizar-selecionados",
-        { data_alvo: DATA_ALVO_ISO, service_ids: ids });
+        { data_alvo: DATA_ALVO_ISO, service_ids: ids, modelo_forcado: modeloForcado || null,
+          max_paradas_por_rota: maxParadasPorRota });
       if (resp.pedidos_indisponiveis) {
         alert(`${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s). ` +
           `${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão ` +
@@ -1919,6 +2260,10 @@
           const resp = await postJSON("/api/planejamento/reordenar", { rascunho_id: Number(fromId), ordem_service_ids: ordem });
           atualizarCardComResposta(resp.rascunho);
         } else {
+          // pode ter cruzado do bloco "hoje" pro "futuro" (ou vice-versa)
+          // arrastando -- a divisão é sempre pela data real do pedido, não
+          // por onde o usuário soltou, então reencaixa na seção certa
+          reencaixarNaSecaoCorreta(evt.item);
           atualizarPreviewPool();  // reordenou o pool -- números dos cards/pontos acompanham
         }
         return;
@@ -1938,6 +2283,7 @@
         // nenhum estado antigo guardado no front, funciona mesmo depois de vários
         // saltos (pool -> rota -> pool -> outra rota) na mesma sessão sem reload
         if (resp.parada_removida) POOL_BY_ID[serviceId] = resp.parada_removida;
+        reencaixarNaSecaoCorreta(evt.item);  // volta pra seção "hoje" ou "futuro" conforme o agendamento
         document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
         atualizarCardComResposta(resp.rascunho);
       } else {
@@ -1953,6 +2299,7 @@
     aplicarFiltroFlag();    // item saiu/voltou do pool -- contador e filtro acompanham
     aplicarFiltroCep();     // idem pro filtro de CEP
     aplicarFiltroCaixas();  // idem pro filtro de caixas (e o preview no mapa junto)
+    atualizarContagensSecoesPool();
     atualizarBarraSelecao();
     atualizarContagensTotais();
   }
@@ -1967,9 +2314,10 @@
     if (!PODE_EDITAR) return;  // leitura: sem arrastar-e-soltar
     new Sortable(ul, {
       group: "paradas", animation: 150,
-      // clicar no campo de posição (modo "digitando a posição") não pode
-      // iniciar um drag -- preventOnFilter:false deixa o input funcionar
-      filter: "input", preventOnFilter: false,
+      // clicar no campo de posição (modo "digitando a posição") ou no
+      // "x" de cancelar não pode iniciar um drag -- preventOnFilter:false
+      // deixa o clique neles funcionar normalmente
+      filter: "input, .botao-cancelar-pedido", preventOnFilter: false,
       onStart: () => { dragRecente = true; esconderTooltipParada(); removerDestaqueMapa(); },
       onEnd: (evt) => { onDragEnd(evt); setTimeout(() => { dragRecente = false; }, 0); },
     });
@@ -1998,6 +2346,20 @@
       location.reload();
     } catch (e) {
       alert(`Falha ao descartar: ${e.message}`);
+    }
+  }
+
+  async function descartarTodosRascunhos(rascunhoIds, botaoOrigem) {
+    if (!rascunhoIds.length) { alert("Nenhum rascunho pendente pra descartar."); return; }
+    if (!confirm(`Descartar ${rascunhoIds.length} rascunho(s)? As paradas voltam pro pool.`)) return;
+    const textoOriginal = botaoOrigem ? botaoOrigem.textContent : "";
+    if (botaoOrigem) { botaoOrigem.disabled = true; botaoOrigem.textContent = "Descartando..."; }
+    try {
+      await postJSON("/api/planejamento/descartar-rota", { rascunho_ids: rascunhoIds });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao descartar: ${e.message}`);
+      if (botaoOrigem) { botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal; }
     }
   }
 
@@ -2053,6 +2415,36 @@
       alert(linhas.join("\n"));
     } catch (e) {
       alert(`Falha ao alocar motoristas: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function desalocarMotoristas(botao) {
+    // remove o motorista de toda rota ainda em RASCUNHO (enviada não é
+    // tocada) e reflete o resultado nos selects dos cards sem recarregar
+    if (!confirm("Desalocar o motorista de todas as rotas ainda não enviadas?")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Desalocando...";
+    try {
+      const resp = await postJSON("/api/planejamento/desalocar-motoristas", { data_alvo: DATA_ALVO_ISO });
+      (resp.desalocados || []).forEach(d => {
+        const select = document.querySelector(`.select-motorista[data-rascunho-id="${d.rascunho_id}"]`);
+        if (select) select.value = "";
+        const r = RASCUNHOS.find(x => x.id === d.rascunho_id);
+        if (r) { r.agent_id = null; r.vehicle_id = null; r.motorista_nome = null; }
+      });
+      const linhas = [];
+      if (resp.desalocados && resp.desalocados.length) {
+        linhas.push(`${resp.desalocados.length} rota(s) ficaram sem motorista.`);
+      } else {
+        linhas.push("Nenhuma rota tinha motorista pra remover.");
+      }
+      alert(linhas.join("\n"));
+    } catch (e) {
+      alert(`Falha ao desalocar motoristas: ${e.message}`);
     } finally {
       botao.disabled = false;
       botao.textContent = original;
@@ -2120,6 +2512,133 @@
     }
   }
 
+  async function cancelarPedido(serviceId, rascunhoId, botaoOrigem) {
+    // rascunhoId é null pro pool; pra parada em rota (rascunho ainda
+    // não enviado OU rota já enviada -- ver planejamento_rotas.
+    // cancelar_pedido) o servidor decide como sincronizar sozinho.
+    if (!confirm("Cancelar esse pedido na VUUPT? Essa ação não pode ser desfeita.")) return;
+    if (botaoOrigem) botaoOrigem.disabled = true;
+    try {
+      await postJSON("/api/planejamento/cancelar-pedido", { service_id: serviceId, rascunho_id: rascunhoId });
+      // recarrega -- cobre tanto o caso simples (sai do pool/rascunho)
+      // quanto o de rota já enviada, que pode ter cancelado a rota
+      // inteira (mesmo padrão de cancelarRota/descartarRota/duplicarRota)
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao cancelar: ${e.message}`);
+      if (botaoOrigem) botaoOrigem.disabled = false;
+    }
+  }
+
+  // devolve uma parada de rota pro pool sem cancelar na VUUPT -- mesmo
+  // endpoint e mesma sequência de atualização do drag-and-drop pro pool
+  // (onDragEnd, toId === "pool"), só que disparado pelo menu de contexto
+  // em vez de um arrasto
+  async function removerDaRota(serviceId, rascunhoId, li) {
+    try {
+      const resp = await postJSON("/api/planejamento/remover-parada", { rascunho_id: rascunhoId, service_id: serviceId });
+      if (resp.parada_removida) POOL_BY_ID[serviceId] = resp.parada_removida;
+      reencaixarNaSecaoCorreta(li);
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      atualizarCardComResposta(resp.rascunho);
+    } catch (e) {
+      alert(`Falha ao remover da rota: ${e.message}`);
+      return;
+    }
+    aplicarFiltroFlag();
+    aplicarFiltroCep();
+    aplicarFiltroCaixas();
+    atualizarContagensSecoesPool();
+    atualizarBarraSelecao();
+    atualizarContagensTotais();
+  }
+
+  function copiarCodigoParada(li) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || "";
+    if (!codigo) return;
+    navigator.clipboard?.writeText(codigo).catch(() => {});
+  }
+
+  let popupDetalhesParada = null;
+
+  function esconderDetalhesParada() {
+    if (popupDetalhesParada) popupDetalhesParada.style.display = "none";
+  }
+
+  // "Ver detalhes" do menu de contexto -- mesmo conteúdo do tooltip de
+  // hover (montarTooltipParada), mas fica aberto até fechar (não some
+  // ao tirar o mouse), útil pra copiar/conferir com calma
+  function mostrarDetalhesParada(li, x, y) {
+    if (!popupDetalhesParada) {
+      popupDetalhesParada = document.createElement("div");
+      popupDetalhesParada.className = "popup-detalhes-parada";
+      popupDetalhesParada.innerHTML = '<button type="button" class="fechar" aria-label="Fechar">×</button>';
+      popupDetalhesParada.appendChild(document.createElement("div"));
+      document.body.appendChild(popupDetalhesParada);
+      popupDetalhesParada.querySelector(".fechar").addEventListener("click", esconderDetalhesParada);
+    }
+    popupDetalhesParada.lastElementChild.innerHTML = montarTooltipParada(li);
+    popupDetalhesParada.style.display = "block";
+    const largura = popupDetalhesParada.offsetWidth;
+    const altura = popupDetalhesParada.offsetHeight;
+    let px = x, py = y;
+    if (px + largura > window.innerWidth - 8) px = Math.max(8, window.innerWidth - largura - 8);
+    if (py + altura > window.innerHeight - 8) py = Math.max(8, window.innerHeight - altura - 8);
+    popupDetalhesParada.style.left = `${px}px`;
+    popupDetalhesParada.style.top = `${py}px`;
+  }
+
+  let menuContexto = null;
+
+  function fecharMenuContexto() {
+    if (menuContexto) { menuContexto.remove(); menuContexto = null; }
+  }
+
+  // menu de contexto (botão direito) de um pedido -- mesmas opções em
+  // qualquer densidade de card (normal/compacto/só número) e tanto no
+  // pool quanto numa rota (Hugo, 15/08)
+  function abrirMenuContexto(li, x, y) {
+    fecharMenuContexto();
+    esconderTooltipParada();
+    const serviceId = Number(li.dataset.serviceId);
+    const ul = li.closest(".lista-paradas");
+    const rascunhoId = ul && ul.dataset.listId !== "pool" ? Number(ul.dataset.listId) : null;
+    // rota já ENVIADA não aceita tirar parada por aqui -- mesma trava do
+    // drag-and-drop (Sortable nem é criado pra ela, ver initMap)
+    const cardRota = rascunhoId !== null ? document.getElementById(`card-rota-${rascunhoId}`) : null;
+    const rotaTravada = !!cardRota && cardRota.classList.contains("enviada");
+
+    const itens = [
+      { rotulo: "Ver detalhes", acao: () => mostrarDetalhesParada(li, x, y) },
+      { rotulo: "Copiar código", acao: () => copiarCodigoParada(li) },
+    ];
+    if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
+      itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
+    }
+    if (PODE_EDITAR) {
+      itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });
+    }
+
+    menuContexto = document.createElement("div");
+    menuContexto.className = "menu-contexto";
+    menuContexto.innerHTML = itens.map((it, i) =>
+      `<button type="button" class="${it.classe || ""}" data-i="${i}">${escaparHtml(it.rotulo)}</button>`).join("");
+    menuContexto.addEventListener("click", (e) => {
+      const botao = e.target.closest("button");
+      if (!botao) return;
+      itens[Number(botao.dataset.i)].acao();
+      fecharMenuContexto();
+    });
+    document.body.appendChild(menuContexto);
+
+    const largura = menuContexto.offsetWidth, altura = menuContexto.offsetHeight;
+    let px = x, py = y;
+    if (px + largura > window.innerWidth - 8) px = Math.max(8, window.innerWidth - largura - 8);
+    if (py + altura > window.innerHeight - 8) py = Math.max(8, window.innerHeight - altura - 8);
+    menuContexto.style.left = `${px}px`;
+    menuContexto.style.top = `${py}px`;
+  }
+
   async function atualizarPool(botao) {
     const original = botao.textContent;
     botao.disabled = true;
@@ -2130,11 +2649,14 @@
       if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar o pool.");
 
       const listaPool = document.getElementById("lista-pool");
+      const listaPoolHoje = document.getElementById("lista-pool-hoje");
+      const listaPoolFuturo = document.getElementById("lista-pool-futuro");
       let novos = 0;
       dados.pool.forEach(p => {
         if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
         POOL_BY_ID[p.service_id] = p;
-        listaPool.appendChild(criarLiParada(p));
+        const li = criarLiParada(p);
+        (li.dataset.urgencia === "futuro" ? listaPoolFuturo : listaPoolHoje).appendChild(li);
         novos++;
       });
 
@@ -2159,6 +2681,7 @@
       aplicarFiltroCaixas();  // idem pro filtro de caixas (e preview no mapa dos itens novos/removidos)
       atualizarBarraSelecao();
       atualizarContagensTotais();
+      atualizarContagensSecoesPool();
 
       // resumo dos agendados (por dia/região) vem já renderizado
       // do servidor -- mesmo partial do load da página, só troca o HTML
@@ -2211,7 +2734,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-alocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas"].forEach(id => {
+      ["botao-nova-rota", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -2230,8 +2753,16 @@
     });
 
     const listaPool = document.getElementById("lista-pool");
-    POOL.forEach(p => listaPool.appendChild(criarLiParada({ ...p, remetente_nome: p.remetente_nome })));
-    iniciarSortable(listaPool);
+    const listaPoolHoje = document.getElementById("lista-pool-hoje");
+    const listaPoolFuturo = document.getElementById("lista-pool-futuro");
+    POOL.forEach(p => {
+      const li = criarLiParada({ ...p, remetente_nome: p.remetente_nome });
+      (li.dataset.urgencia === "futuro" ? listaPoolFuturo : listaPoolHoje).appendChild(li);
+    });
+    iniciarSortable(listaPoolHoje);
+    iniciarSortable(listaPoolFuturo);
+    inicializarSecoesPool();
+    atualizarContagensSecoesPool();
     document.getElementById("flag-precisa-sair").addEventListener("change", () => {
       aplicarFiltroFlag();
       atualizarPreviewPool();  // visibilidade mudou -- preview acompanha
@@ -2243,6 +2774,11 @@
     // e centraliza o mapa no ponto do pedido
     listaPool.addEventListener("click", (e) => {
       if (dragRecente) return;
+      if (e.target.classList.contains("botao-cancelar-pedido")) {
+        const li = e.target.closest(".item-parada");
+        if (li) cancelarPedido(Number(li.dataset.serviceId), null, e.target);
+        return;
+      }
       const li = e.target.closest(".item-parada");
       if (!li) return;
       alternarSelecao(Number(li.dataset.serviceId));
@@ -2273,7 +2809,25 @@
     document.getElementById("botao-selecionar-visiveis").addEventListener("click", selecionarVisiveis);
     document.getElementById("botao-limpar-selecao").addEventListener("click", limparSelecao);
     document.getElementById("botao-criar-rota-selecao").addEventListener("click", (e) => criarRotaComSelecionados(e.target));
-    document.getElementById("botao-roteirizar-selecao").addEventListener("click", (e) => roteirizarSelecionados(e.target));
+    document.getElementById("botao-roteirizar-selecao").addEventListener("click", (e) => abrirModalTipoRoteirizacao(e.target));
+    document.getElementById("botao-cancelar-tipo-roteirizacao").addEventListener("click", () => {
+      document.getElementById("modal-tipo-roteirizacao").classList.remove("aberto");
+      botaoRoteirizarPendente = null;
+    });
+    document.getElementById("check-sem-limite-paradas").addEventListener("change", (e) => {
+      document.getElementById("campo-limite-paradas").disabled = e.target.checked;
+    });
+    document.getElementById("botao-confirmar-tipo-roteirizacao").addEventListener("click", () => {
+      const modal = document.getElementById("modal-tipo-roteirizacao");
+      modal.classList.remove("aberto");
+      const escolhido = modal.querySelector('input[name="tipo-roteirizacao"]:checked').value;
+      const semLimite = document.getElementById("check-sem-limite-paradas").checked;
+      const limiteDigitado = Number(document.getElementById("campo-limite-paradas").value);
+      const maxParadasPorRota = semLimite ? null : (limiteDigitado > 0 ? limiteDigitado : TRAVAS.max_paradas);
+      const botao = botaoRoteirizarPendente;
+      botaoRoteirizarPendente = null;
+      if (botao) roteirizarSelecionados(botao, escolhido === "automatico" ? null : escolhido, maxParadasPorRota);
+    });
 
     // modo de reordenação (arrastar x digitar posição) -- persistido,
     // e a troca re-renderiza os números de todas as rotas na hora
@@ -2332,6 +2886,12 @@
     listaRotas.addEventListener("mousemove", expandirSobArrasto);
 
     listaRotas.addEventListener("click", (e) => {
+      if (e.target.classList.contains("botao-cancelar-pedido")) {
+        const li = e.target.closest(".item-parada");
+        const ul = e.target.closest(".lista-paradas");
+        if (li && ul) cancelarPedido(Number(li.dataset.serviceId), Number(ul.dataset.listId), e.target);
+        return;
+      }
       // clique numa parada centraliza o ponto dela no mapa (em qualquer
       // densidade); o campo de posição (modo "digitando") fica de fora
       // pra focar o input não sacudir o mapa
@@ -2386,6 +2946,7 @@
 
     document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
     document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
+    document.getElementById("botao-desalocar-motoristas").addEventListener("click", (e) => desalocarMotoristas(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);
@@ -2393,6 +2954,10 @@
     document.getElementById("botao-cancelar-todas").addEventListener("click", (e) => {
       const idsEnviados = RASCUNHOS.filter(r => r.status === "ENVIADO").map(r => r.id);
       cancelarRota(idsEnviados, e.target);
+    });
+    document.getElementById("botao-descartar-todas").addEventListener("click", (e) => {
+      const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
+      descartarTodosRascunhos(idsPendentes, e.target);
     });
 
     document.getElementById("botao-atualizar-pool").addEventListener("click", (e) => atualizarPool(e.target));
@@ -2462,8 +3027,26 @@
     });
     // capture pega o scroll das colunas (que não borbulha) -- o card
     // saiu do lugar, tooltip e destaque fechariam desalinhados
-    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueMapa(); }, true);
+    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueMapa(); fecharMenuContexto(); }, true);
     document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueMapa(); });
+
+    // menu de contexto (botão direito) num pedido -- em qualquer
+    // densidade de card e tanto no pool quanto numa rota
+    document.addEventListener("contextmenu", (e) => {
+      const li = e.target.closest ? e.target.closest(".item-parada") : null;
+      if (!li) return;
+      e.preventDefault();
+      abrirMenuContexto(li, e.clientX, e.clientY);
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (menuContexto && !menuContexto.contains(e.target)) fecharMenuContexto();
+      if (popupDetalhesParada && popupDetalhesParada.style.display !== "none" && !popupDetalhesParada.contains(e.target)) esconderDetalhesParada();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      fecharMenuContexto();
+      esconderDetalhesParada();
+    });
   }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>

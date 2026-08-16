@@ -62,10 +62,11 @@ from geocodificacao import geocodificar
 from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
     ordenar_por_distancia_base, elegivel_para_data,
-    obter_coordenadas, _distancia_km, extrair_volume_caixas,
+    obter_coordenadas, _distancia_km, extrair_volume_caixas, caixas_e_enderecos,
 )
 from otimizacao_rotas import agrupar_por_sweep, agrupar_por_savings, ordenar_2opt
 from alocacao_motoristas import classificar_rota_viagem
+from regras.tipo_veiculo import classificar_tipo_veiculo
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from criar_rotas_diarias import (
@@ -124,8 +125,14 @@ def _metricas_modelo(sublotes: list[list[dict]], base_lat: float, base_lng: floa
 
 def _validar_integridade(nome_modelo: str, servicos: list[dict], sublotes: list[list[dict]]) -> None:
     """Testes do doc (seções 6.2 e 6.3): travas de tamanho/volume e
-    cobertura total de pedidos (nenhum perdido, nenhum duplicado)."""
+    cobertura total de pedidos (nenhum perdido, nenhum duplicado).
+
+    Sublote classificado como veículo grande (regras/tipo_veiculo.py --
+    pedido do Hugo, 15/08) fica de fora dessas duas travas de última
+    milha, mesma exceção de _validar em selecao_modelo.py."""
     for sublote in sublotes:
+        if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
+            continue
         assert len(sublote) <= TAMANHO_MAXIMO_ROTA, \
             f"[{nome_modelo}] Sublote excede {TAMANHO_MAXIMO_ROTA} entregas"
         caixas = sum(extrair_volume_caixas(s) for s in sublote)

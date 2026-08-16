@@ -60,6 +60,7 @@ def _conectar() -> sqlite3.Connection:
             particao                TEXT,
             tipo_rota               TEXT,
             zona                    TEXT,
+            tipo_veiculo            TEXT,
             agent_id                INTEGER,
             vehicle_id              INTEGER,
             motorista_nome          TEXT,
@@ -104,6 +105,12 @@ def _conectar() -> sqlite3.Connection:
     colunas = {row["name"] for row in conn.execute("PRAGMA table_info(rascunhos_parada)")}
     if "destinatario_nome" not in colunas:
         conn.execute("ALTER TABLE rascunhos_parada ADD COLUMN destinatario_nome TEXT")
+
+    # Migração pra banco criado antes de 15/08 (tipo de veículo grande,
+    # ver regras/tipo_veiculo.py).
+    colunas_rota = {row["name"] for row in conn.execute("PRAGMA table_info(rascunhos_rota)")}
+    if "tipo_veiculo" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN tipo_veiculo TEXT")
 
     conn.commit()
     return conn
@@ -183,7 +190,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     Grava um lote novo de rascunhos numa única transação.
 
     `rascunhos` é uma lista de dicts com as chaves: nome, particao,
-    tipo_rota, zona, agent_id, vehicle_id, motorista_nome,
+    tipo_rota, zona, tipo_veiculo, agent_id, vehicle_id, motorista_nome,
     start_location_base_id, end_location_base_id, start_at,
     km_estimado, sublote (lista de serviços brutos da VUUPT).
 
@@ -205,14 +212,14 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
         for r in rascunhos:
             cursor = conn.execute("""
                 INSERT INTO rascunhos_rota (
-                    data_alvo, lote_id, nome, particao, tipo_rota, zona,
+                    data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                     agent_id, vehicle_id, motorista_nome,
                     start_location_base_id, end_location_base_id,
                     start_at, km_estimado, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data_alvo.isoformat(), lote_id, r["nome"], r.get("particao"),
-                r.get("tipo_rota"), r.get("zona"), r.get("agent_id"), r.get("vehicle_id"),
+                r.get("tipo_rota"), r.get("zona"), r.get("tipo_veiculo"), r.get("agent_id"), r.get("vehicle_id"),
                 r.get("motorista_nome"), r["start_location_base_id"], r.get("end_location_base_id"),
                 r["start_at"], r.get("km_estimado"), STATUS_RASCUNHO,
             ))
@@ -675,14 +682,14 @@ def duplicar_rascunho(rascunho_id: int) -> int:
         nome_copia = _nome_copia(conn, origem["nome"], origem["lote_id"])
         cursor = conn.execute("""
             INSERT INTO rascunhos_rota (
-                data_alvo, lote_id, nome, particao, tipo_rota, zona,
+                data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                 agent_id, vehicle_id, motorista_nome,
                 start_location_base_id, end_location_base_id,
                 start_at, km_estimado, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
-            origem["tipo_rota"], origem["zona"], origem["agent_id"], origem["vehicle_id"],
+            origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
             origem["start_at"], origem["km_estimado"], STATUS_RASCUNHO,
         ))
@@ -896,3 +903,79 @@ def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
 
     descartar_rascunho(rascunho_id)
     return {"rascunho_id": rascunho_id, "ok": True}
+
+
+def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: str) -> dict:
+    """
+    Passo prévio ao cancelamento de verdade de um pedido (VuuptClient.
+    cancelar_servico, chamado por quem invoca esta função -- ver
+    planejamento_rotas.cancelar_pedido) quando ele está numa rota JÁ
+    ENVIADA -- botão "Cancelar pedido" da tela de planejamento (Hugo,
+    15/08), estendendo cancelar_rota_enviada pra cancelar 1 PARADA em
+    vez da rota inteira.
+
+    Por quê: a rota de verdade na VUUPT (api.vuupt.com/routes) ainda
+    referencia o service_id mesmo depois de cancelado via DELETE
+    /services/{id} (domínio separado, app.vuupt.com) -- sem tirar a
+    referência antes, a rota fica com uma parada fantasma. Mesma trava
+    de cancelar_rota_enviada: só mexe se a rota, checada AO VIVO contra
+    a API (não o status gravado localmente, nunca atualizado depois do
+    envio), ainda não iniciou deslocamento (STATUS_ROTA_NAO_INICIADA).
+
+      - Pedido é a ÚLTIMA parada da rota: não dá pra ter rota com 0
+        paradas -- cancela a ROTA INTEIRA (services_action="unassign",
+        mesmo mecanismo de cancelar_rota_enviada) e descarta o
+        rascunho local.
+      - Rota com mais paradas: tira só essa parada via atualizar_rota
+        (PUT /routes/{id} com o restante, na mesma ordem) -- a rota
+        segue ENVIADA, só com 1 parada a menos (mesmo padrão que
+        enviar_rascunho já usa pra pedido em conflito) -- e remove a
+        parada do rascunho local (remover_parada).
+
+    Se o rascunho não estiver ENVIADO (ainda em RASCUNHO, ERRO_ENVIO ou
+    já DESCARTADO), não faz nada -- quem chama já sabe que cancelar o
+    serviço sozinho (+ remover_parada, se for o caso) resolve.
+
+    Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
+    """
+    rascunho = buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return {"ok": False, "erro": f"Rascunho {rascunho_id} não encontrado."}
+    if rascunho["status"] != STATUS_ENVIADO:
+        return {"ok": True}
+
+    from rotas_client import atualizar_rota, buscar_rota, cancelar_rota
+
+    route_id = rascunho["vuupt_route_id"]
+    try:
+        dados_rota = buscar_rota(token, route_id)
+    except Exception as e:
+        resposta = getattr(e, "response", None)
+        if resposta is not None and resposta.status_code == 404:
+            # rota não existe mais na VUUPT -- nada pra tirar de lá,
+            # só sincroniza o local (mesmo tratamento de cancelar_rota_enviada)
+            descartar_rascunho(rascunho_id)
+            return {"ok": True}
+        return {"ok": False, "erro": f"Falha ao consultar a rota #{route_id} na VUUPT: {e}"}
+
+    status_atual = _rota_do_corpo(dados_rota).get("status")
+    if status_atual == "canceled":
+        descartar_rascunho(rascunho_id)
+        return {"ok": True}
+    if status_atual not in STATUS_ROTA_NAO_INICIADA:
+        return {"ok": False,
+                "erro": f"Rota #{route_id} não pode ser alterada por aqui (status atual na VUUPT: "
+                        f"'{status_atual}') -- só rotas que ainda não iniciaram deslocamento."}
+
+    ids_restantes = [p["service_id"] for p in rascunho["paradas"] if p["service_id"] != service_id]
+    try:
+        if not ids_restantes:
+            cancelar_rota(token, route_id, services_action="unassign")
+            descartar_rascunho(rascunho_id)
+            return {"ok": True}
+        atualizar_rota(token, route_id, ids_restantes)
+    except Exception as e:
+        return {"ok": False, "erro": str(e)}
+
+    remover_parada(rascunho_id, service_id)
+    return {"ok": True}

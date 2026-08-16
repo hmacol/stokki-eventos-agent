@@ -31,11 +31,12 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 
 import yaml
 
-from vuupt_client import VuuptClient
+from vuupt_client import VuuptClient, VuuptAPIError
 from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
+from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from alocacao_motoristas import selecionar_motorista_equitativo
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao
@@ -97,7 +98,7 @@ def _codigo_base(codigo: str) -> str:
     return _PADRAO_SUFIXO_REENTREGA.sub("", codigo or "")
 
 
-TAMANHO_MAXIMO_ROTA = 18
+TAMANHO_MAXIMO_ROTA = 16  # Ajustado de 18 para 16 entregas por rota (pedido do Hugo, 15/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 20
@@ -117,21 +118,39 @@ def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
     dividir_em_sublotes -- mesmos limites, só que como aviso em vez de
-    impedimento (a edição manual pode ter motivo legítimo pra furar)."""
+    impedimento (a edição manual pode ter motivo legítimo pra furar).
+
+    Rascunho classificado como veículo grande (`tipo_veiculo`, ver
+    regras/tipo_veiculo.py) troca as travas de paradas/caixas de última
+    milha pelas do PRÓPRIO tipo (caixas máx e endereços diferentes máx)
+    -- as travas de nível 3/4 não se aplicam a essas rotas (só entram
+    nelas pedido nível 1/2/3, nunca nível 4, e o teto de nível 3 foi
+    pensado pro contexto de última milha)."""
     paradas = rascunho["paradas"]
     badges = []
-    if len(paradas) > TAMANHO_MAXIMO_ROTA:
-        badges.append(f"{len(paradas)} paradas (máx {TAMANHO_MAXIMO_ROTA})")
-
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
-    if caixas > VOLUME_MAXIMO_ROTA:
-        badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
+    tipo_veiculo = tipo_por_codigo(rascunho.get("tipo_veiculo"))
 
-    niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
-    if len(paradas) > 1 and any(n >= 4 for n in niveis):
-        badges.append("entrega nível 4 dividindo rota com outras")
-    elif any(n == 3 for n in niveis) and len(paradas) > NIVEL_3_TAMANHO_MAXIMO_ROTA:
-        badges.append(f"entrega nível 3 com mais de {NIVEL_3_TAMANHO_MAXIMO_ROTA} paradas na rota")
+    if tipo_veiculo:
+        enderecos_distintos = {p["endereco"] for p in paradas}
+        if caixas > tipo_veiculo.volume_maximo_cx:
+            badges.append(f"{caixas} caixa(s) (máx {tipo_veiculo.volume_maximo_cx} p/ {tipo_veiculo.nome})")
+        if len(enderecos_distintos) > tipo_veiculo.max_enderecos_distintos:
+            badges.append(
+                f"{len(enderecos_distintos)} endereços diferentes "
+                f"(máx {tipo_veiculo.max_enderecos_distintos} p/ {tipo_veiculo.nome})"
+            )
+    else:
+        if len(paradas) > TAMANHO_MAXIMO_ROTA:
+            badges.append(f"{len(paradas)} paradas (máx {TAMANHO_MAXIMO_ROTA})")
+        if caixas > VOLUME_MAXIMO_ROTA:
+            badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
+
+        niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
+        if len(paradas) > 1 and any(n >= 4 for n in niveis):
+            badges.append("entrega nível 4 dividindo rota com outras")
+        elif any(n == 3 for n in niveis) and len(paradas) > NIVEL_3_TAMANHO_MAXIMO_ROTA:
+            badges.append(f"entrega nível 3 com mais de {NIVEL_3_TAMANHO_MAXIMO_ROTA} paradas na rota")
 
     if rascunho.get("tipo_rota") != "VIAGEM":
         coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]
@@ -380,7 +399,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
     motoristas = [
-        {"agent_id": m.agent_id, "vehicle_id": m.vehicle_id, "nome": m.nome}
+        {"agent_id": m.agent_id, "vehicle_id": m.vehicle_id, "nome": m.nome, "tipo_veiculo": m.tipo_veiculo}
         for m in catalogo.motoristas
     ]
 
@@ -398,7 +417,17 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # barra ANTES de estourar (redesenho 13/08) -- os badges de
         # trava continuam sendo a palavra final (nível/distância não
         # viram barra).
-        "travas": {"max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA},
+        "travas": {
+            "max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA,
+            # Limites por tipo de veículo grande (ver regras/tipo_veiculo.py)
+            # -- o card de uma rota classificada troca a barra de
+            # paradas/caixas genérica pela capacidade do PRÓPRIO tipo.
+            "tipos_veiculo": {
+                t.codigo: {"nome": t.nome, "volume_maximo_cx": t.volume_maximo_cx,
+                          "max_enderecos_distintos": t.max_enderecos_distintos}
+                for t in TIPOS_VEICULO
+            },
+        },
         # {sender_id: "Seco"|"Refrigerado"|"Congelado"} pro chip do modo "só
         # número" mostrar a faixa de carga (Hugo, 14/08) -- sender_id sem
         # entrada aqui é tratado como Seco no cliente (mesmo padrão de
@@ -410,7 +439,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
 _PADRAO_INDICE_ROTA = re.compile(r"#(\d+)\s*$")
 
 
-def roteirizar_selecionados(data_alvo: date, service_ids: list[int]) -> dict:
+def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
+                            modelo_forcado: str | None = None,
+                            max_paradas_por_rota: int | None = TAMANHO_MAXIMO_ROTA) -> dict:
     """
     Roda o criador de rotas (criar_rotas_diarias.roteirizar_para_
     rascunhos: partição Seco/Frio, seleção de modelo + 2-opt, motorista
@@ -419,6 +450,18 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int]) -> dict:
     entram no lote ATIVO da data (não num lote novo, que esconderia os
     rascunhos já em edição -- a tela mostra sempre só o lote mais
     recente).
+
+    `modelo_forcado` (Hugo, 15/08): nome de um esquema específico do
+    Laboratório de Roteirização (ex. "CEP real") pra rodar em vez da
+    comparação automática entre modelos -- ver selecao_modelo.
+    escolher_melhor_modelo. `None` mantém o comportamento automático.
+
+    `max_paradas_por_rota` (Hugo, 15/08): teto de pedidos por rota pra
+    essa roteirização -- padrão é a mesma trava do pipeline automático
+    (TAMANHO_MAXIMO_ROTA, 18); `None` remove o limite (repassado como
+    está pra criar_rotas_diarias.roteirizar_para_rascunhos, que troca
+    por um teto bem folgado -- as travas de volume/distância/nível
+    continuam valendo do mesmo jeito).
 
     Os serviços são rebuscados AO VIVO na VUUPT (o pool da tela não
     carrega o customer.code, que a classificação de nível exige) --
@@ -468,6 +511,8 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int]) -> dict:
         indice_inicial=indice_inicial,
         contagem_alocacoes_dia=contagem_alocacoes_dia,
         sufixo_label=" (seleção manual)",
+        modelo_forcado=modelo_forcado,
+        tamanho_maximo=max_paradas_por_rota,
     )
     if not rascunhos_novos:
         raise ValueError("O criador de rotas não gerou nenhuma rota pra essa seleção.")
@@ -527,11 +572,15 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         if not r["paradas"]:
             sem_paradas += 1
             continue
-        # Formato bruto que os classificadores (zona/viagem/rodízio)
-        # esperam: campo 'address' -- obter_coordenadas geocodifica por
-        # ele, com cache já quente (as paradas foram geocodificadas
-        # desses mesmos endereços ao entrar no rascunho).
-        sublote = [{"address": p["endereco"]} for p in r["paradas"]]
+        # Formato bruto que os classificadores (zona/viagem/rodízio,
+        # veículo grande) esperam: campo 'address' -- obter_coordenadas
+        # geocodifica por ele, com cache já quente (as paradas foram
+        # geocodificadas desses mesmos endereços ao entrar no rascunho).
+        # 'dimension_3' precisa vir junto (classificar_tipo_veiculo lê o
+        # volume real de cada parada -- sem isso, extrair_volume_caixas
+        # cairia no fallback de 1 caixa por parada e classificaria
+        # errado o tipo de veículo necessário).
+        sublote = [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in r["paradas"]]
         motorista = selecionar_motorista_equitativo(
             sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
         )
@@ -547,6 +596,78 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
 
     return {"alocados": alocados, "sem_elegivel": sem_elegivel,
             "ja_tinham": ja_tinham, "sem_paradas": sem_paradas}
+
+
+def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
+    """
+    Botão "Desalocar motoristas" da tela (Hugo, 15\08): oposto do
+    "Alocar motoristas" -- limpa o motorista de todo rascunho do lote
+    ativo que ainda está em RASCUNHO (não toca ENVIADO, que já saiu
+    pra VUUPT com aquele motorista -- use "Cancelar todas as rotas"
+    pra essas). Serve pra descartar de uma vez a sugestão automática
+    e realocar do zero.
+
+    Retorna {"desalocados": [{rascunho_id, nome}], "sem_motorista": N}.
+    """
+    rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    desalocados: list[dict] = []
+    sem_motorista = 0
+    for r in rascunhos:
+        if r["status"] != rascunhos_rota.STATUS_RASCUNHO:
+            continue
+        if not r.get("agent_id"):
+            sem_motorista += 1
+            continue
+        rascunhos_rota.trocar_motorista(r["id"], None, None, None)
+        desalocados.append({"rascunho_id": r["id"], "nome": r["nome"]})
+
+    return {"desalocados": desalocados, "sem_motorista": sem_motorista}
+
+
+def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
+    """
+    Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id} --
+    VuuptClient.cancelar_servico) direto da tela de planejamento --
+    botão "Cancelar pedido" (Hugo, 15/08). Cobre os 3 lugares onde um
+    pedido pode estar quando o usuário clica:
+
+      - No pool (not_assigned, fora de rascunho): cancela direto.
+      - Numa rota ainda não enviada (rascunho RASCUNHO/ERRO_ENVIO):
+        cancela e tira a parada do rascunho local (remover_parada).
+      - Numa rota já enviada (rascunho ENVIADO, rota de verdade na
+        VUUPT): rascunhos_rota.preparar_cancelamento_de_parada tira o
+        serviço da rota de verdade primeiro (ou cancela a rota inteira,
+        se for a última parada) -- só quando ela ainda não iniciou
+        deslocamento (checado ao vivo); só então o serviço é cancelado
+        de fato.
+
+    NÃO mexe em nada na Stokki -- só cancela na VUUPT (roteirização).
+    Cancelar o pedido na Stokki de verdade continua manual, fora dessa
+    tela (não existe endpoint mapeado pra isso).
+
+    Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
+    """
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+
+    rascunho = rascunhos_rota.buscar_rascunho(rascunho_id) if rascunho_id else None
+    if rascunho_id and not rascunho:
+        return {"ok": False, "erro": f"Rascunho {rascunho_id} não encontrado."}
+
+    if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+        preparo = rascunhos_rota.preparar_cancelamento_de_parada(rascunho_id, service_id, token)
+        if not preparo["ok"]:
+            return preparo
+
+    try:
+        VuuptClient(token).cancelar_servico(service_id)
+    except VuuptAPIError as e:
+        return {"ok": False, "erro": str(e)}
+
+    if rascunho and rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
+        rascunhos_rota.remover_parada(rascunho_id, service_id)
+
+    return {"ok": True}
 
 
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"
