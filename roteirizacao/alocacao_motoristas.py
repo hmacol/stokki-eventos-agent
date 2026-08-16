@@ -50,6 +50,7 @@ def selecionar_motorista_equitativo(
     motoristas: list[MotoristaPreferencias],
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
+    ajustes_disponibilidade: dict[int, dict] | None = None,
 ) -> "MotoristaPreferencias | None":
     """
     Seleciona o motorista elegível com a menor carga do dia (Least-
@@ -84,6 +85,16 @@ def selecionar_motorista_equitativo(
         fora da faixa de veículo grande (classificação None) não é
         afetada por essa trava, igual a hoje.
 
+    `ajustes_disponibilidade` (pedido do Hugo, 16/08, ver
+    regras/disponibilidade_motoristas.py): ajustes pontuais de
+    disponibilidade pra `data_rota`, {agent_id: {"disponivel": bool,
+    ...}} -- quando presente pra um motorista, SUBSTITUI o padrão
+    semanal (DIAS_DISPONIVEIS) só pra essa data: disponivel=False
+    bloqueia mesmo em dia do padrão, disponivel=True libera mesmo fora
+    dele. Motorista sem ajuste nessa data segue 100% pelo padrão
+    semanal, mesmo comportamento de sempre. `None` (default) preserva
+    o comportamento anterior a essa feature.
+
     `contagem_alocacoes_dia` é lida mas NÃO é alterada aqui -- quem
     chama incrementa depois de confirmar que a rota foi criada de
     verdade (evita contar uma alocação que falhou na API).
@@ -104,10 +115,16 @@ def selecionar_motorista_equitativo(
     # restrição de dígito (segunda-sexta) -- sábado/domingo pula direto.
     rota_em_rodizio = dia_semana in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, api_key)
 
+    def _disponivel_no_dia(m: MotoristaPreferencias) -> bool:
+        ajuste = ajustes_disponibilidade.get(m.agent_id) if ajustes_disponibilidade else None
+        if ajuste is not None:
+            return ajuste["disponivel"]
+        return dia_semana in m.dias_disponiveis
+
     elegiveis = [
         m for m in motoristas
         if m.ativo
-        and dia_semana in m.dias_disponiveis
+        and _disponivel_no_dia(m)
         and contagem_alocacoes_dia.get(m.agent_id, 0) < m.max_rotas_dia
         and (m.aceita_viagens if eh_viagem else True)
         and (zona is None or zona in m.zonas_preferidas)

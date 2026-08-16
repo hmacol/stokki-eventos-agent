@@ -1,0 +1,15 @@
+[Unit]
+Description=Confirmacao de rota para motoristas - Freshlog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/confirmacao-motoristas
+EnvironmentFile=/opt/confirmacao-motoristas/infra/.env
+ExecStart=/opt/confirmacao-motoristas/venv/bin/waitress-serve --host=127.0.0.1 --port=8090 app:app
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

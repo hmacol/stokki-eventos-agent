@@ -509,6 +509,26 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
         conn.close()
 
 
+def renomear_rascunho(rascunho_id: int, novo_nome: str):
+    """Renomeia um rascunho -- botão de editar nome na tela de
+    planejamento (Hugo, 16/08). Só edita o registro local; o front
+    trava o botão pra rota já ENVIADA (o nome de verdade passa a ser o
+    que está gravado na rota da VUUPT, renomear só aqui divergiria sem
+    refletir lá)."""
+    novo_nome = (novo_nome or "").strip()
+    if not novo_nome:
+        raise ValueError("Nome da rota não pode ficar vazio.")
+    conn = _conectar()
+    try:
+        conn.execute(
+            "UPDATE rascunhos_rota SET nome = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
+            (novo_nome, rascunho_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | None, motorista_nome: str | None):
     conn = _conectar()
     try:

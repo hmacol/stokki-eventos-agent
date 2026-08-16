@@ -96,6 +96,7 @@ from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
 from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras.disponibilidade_motoristas import carregar_ajustes_dia
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
@@ -246,6 +247,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     catalogo_motoristas = CatalogoMotoristas.carregar(
         cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
     )
+    ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
     contagem = contagem_alocacoes_dia if contagem_alocacoes_dia is not None else {}
 
     data_alvo_br = data_alvo.strftime("%d/%m/%Y")
@@ -312,6 +314,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
             motorista = selecionar_motorista_equitativo(
                 sublote, data_alvo, catalogo_motoristas.motoristas, contagem, gmaps_key,
+                ajustes_disponibilidade=ajustes_disponibilidade,
             )
             if motorista:
                 contagem[motorista.agent_id] = contagem.get(motorista.agent_id, 0) + 1
@@ -368,6 +371,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         data_alvo = _data_alvo_rotas(agora_brasilia)
         data_alvo_str = data_alvo.strftime("%Y-%m-%d")
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
+        ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
         logger.info(
             f"Processamento às {agora_brasilia.strftime('%H:%M')} (Brasília) -- "
             f"rotas para {data_alvo_br} "
@@ -564,6 +568,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     tipo_rota_str += f" [veículo: {tipo_veiculo.nome}]"
                 motorista = selecionar_motorista_equitativo(
                     sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
+                    ajustes_disponibilidade=ajustes_disponibilidade,
                 )
                 agent_id = motorista.agent_id if motorista else None
                 vehicle_id = motorista.vehicle_id if motorista else None

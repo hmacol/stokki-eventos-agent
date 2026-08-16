@@ -11,7 +11,16 @@ copiar/colar (individual por motorista + escala geral de grupo),
 salvas em roteirizacao/dados/mensagens_whatsapp_amanha.txt, e envio
 opcional de e-mail para quem tem EMAIL_MOTORISTA cadastrado (ver
 regras/preferencias_motoristas.py). Não integra com nenhuma API de
-WhatsApp -- isso fica para a Fase 2, fora do escopo deste script.
+WhatsApp -- continua manual (copiar/colar).
+
+Fase 2 (16/08, pedido do Hugo): com --gerar-confirmacoes, cada
+mensagem (WhatsApp e e-mail) ganha um link de confirmação assinado
+pra uma página pública (VPS, ver confirmacao_motoristas/app.py) onde o
+motorista confirma ou recusa a rota, sem precisar login -- só os 4
+últimos dígitos do telefone cadastrado como checagem leve. O estado
+fica em regras/confirmacao_rotas.py (local) sincronizado por
+push/pull com a VPS (a máquina local não tem entrada de internet, só
+consegue empurrar/puxar).
 
 Fonte dos dados: rotas já criadas no VUUPT (POST /routes, ver
 criar_rotas_diarias.py / incrementar_rotas.py), NÃO os serviços
@@ -21,7 +30,7 @@ status='canceled') já usado em incrementar_rotas.py.
 
 COMO USAR:
     py -3.11 roteirizacao/avisar_motoristas_rotas.py --modo-teste --data amanhã
-    py -3.11 roteirizacao/avisar_motoristas_rotas.py --data amanhã --enviar-emails
+    py -3.11 roteirizacao/avisar_motoristas_rotas.py --data amanhã --enviar-emails --gerar-confirmacoes
 """
 import argparse
 import logging
@@ -53,9 +62,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("avisar_motoristas_rotas")
 
+import requests
 import yaml
+from itsdangerous import URLSafeTimedSerializer
 
-from email_utils import enviar_email, envelope_html
+from email_utils import COR_ACENTO, enviar_email, envelope_html
+from regras import confirmacao_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas, MotoristaPreferencias
 from rotas_client import listar_rotas
 from regioes_dia_fixo import extrair_cidade
@@ -150,7 +162,8 @@ def agrupar_por_motorista(rotas: list[dict], api_key: str | None) -> dict:
     Rota sem agent_id (motorista ainda não atribuído manualmente) é
     ignorada -- não há para quem avisar.
     """
-    por_motorista = defaultdict(lambda: {"rotas": 0, "entregas": 0, "zonas": [], "inicio": None})
+    por_motorista = defaultdict(lambda: {"rotas": 0, "entregas": 0, "zonas": [], "inicio": None,
+                                         "rota_id_referencia": None})
     for rota in rotas:
         agent_id = rota.get("agent_id")
         if agent_id is None:
@@ -169,6 +182,10 @@ def agrupar_por_motorista(rotas: list[dict], api_key: str | None) -> dict:
         start_at = rota.get("start_at")
         if start_at and (info["inicio"] is None or start_at < info["inicio"]):
             info["inicio"] = start_at
+            # rota de referência pra confirmação = a de início mais cedo no
+            # dia (motorista quase sempre tem só 1, MAX_ROTAS_DIA normalmente
+            # limita a isso -- ver regras/preferencias_motoristas.py)
+            info["rota_id_referencia"] = rota.get("id")
 
     return dict(por_motorista)
 
@@ -180,7 +197,12 @@ def _formatar_horario(start_at: str | None) -> str:
     return f"{match.group(1)}:{match.group(2)}" if match else "a confirmar"
 
 
-def _mensagem_individual(nome: str, info: dict, data_alvo_br: str) -> str:
+def _mensagem_individual(nome: str, info: dict, data_alvo_br: str, link_confirmacao: str | None = None) -> str:
+    linha_confirmacao = f"✅ *Confirme sua participação:* {link_confirmacao}\n\n" if link_confirmacao else ""
+    pedido_final = (
+        "Por gentileza, confirme sua participação pelo link acima!" if link_confirmacao
+        else "Por gentileza, responda a esta mensagem confirmando o recebimento!"
+    )
     return (
         "🚚 *AVISO DE ROTA - FRESHLOG*\n"
         f"Olá, *{nome}*!\n"
@@ -189,8 +211,77 @@ def _mensagem_individual(nome: str, info: dict, data_alvo_br: str) -> str:
         f"⏱️ *Previsão Primeira Parada:* {_formatar_horario(info['inicio'])}\n"
         f"📦 *Total de Clientes:* {info['entregas']} entregas\n"
         "🔗 *Acesse o app da VUUPT para visualizar o roteiro completo.*\n\n"
-        "Por gentileza, responda a esta mensagem confirmando o recebimento!"
+        f"{linha_confirmacao}"
+        f"{pedido_final}"
     )
+
+
+def preparar_confirmacoes(por_motorista: dict, catalogo: CatalogoMotoristas, data_alvo: date,
+                          config_confirmacao: dict) -> dict[int, str]:
+    """Gera (ou reaproveita) o token de confirmação de cada motorista do
+    dia e grava/atualiza a linha correspondente em
+    regras/confirmacao_rotas.py. Retorna {agent_id: link_completo} --
+    motorista sem cadastro no catálogo (agent_id não encontrado) ou sem
+    rota_id_referencia (sem serviço/horário válido) não recebe link.
+    """
+    secret = config_confirmacao.get("token_secret")
+    url_base = (config_confirmacao.get("url_base") or "").rstrip("/")
+    if not secret or not url_base:
+        logger.warning(
+            "confirmacao_rotas.token_secret/url_base não configurados em config.yaml -- "
+            "avisos sairão sem link de confirmação."
+        )
+        return {}
+
+    serializer = URLSafeTimedSerializer(secret, salt="confirmacao-rota")
+    motoristas_por_id = {m.agent_id: m for m in catalogo.motoristas}
+    links = {}
+    for agent_id, info in por_motorista.items():
+        motorista = motoristas_por_id.get(agent_id)
+        rota_id = info.get("rota_id_referencia")
+        if motorista is None or rota_id is None:
+            continue
+        token = serializer.dumps({"route_id": rota_id, "agent_id": agent_id})
+        digitos_telefone = re.sub(r"\D", "", motorista.telefone or "")
+        confirmacao_rotas.criar_ou_atualizar(
+            vuupt_route_id=rota_id, agent_id=agent_id, data_rota=data_alvo, token=token,
+            nome_motorista=motorista.nome, zona=", ".join(info["zonas"]),
+            horario_previsto=_formatar_horario(info["inicio"]), qtd_entregas=info["entregas"],
+            telefone_ultimos4=digitos_telefone[-4:] if len(digitos_telefone) >= 4 else None,
+        )
+        links[agent_id] = f"{url_base}/r/{token}"
+    return links
+
+
+def push_confirmacoes_vps(config_confirmacao: dict) -> dict:
+    """Empurra pra VPS as confirmações locais ainda não sincronizadas
+    (novas ou reenviadas). Não levanta exceção em falha de rede -- só
+    loga e deixa pendente pro próximo run (o pull de respostas roda
+    solto, então uma falha de push aqui não trava mais nada)."""
+    url_base = (config_confirmacao.get("url_base") or "").rstrip("/")
+    sync_secret = config_confirmacao.get("sync_secret")
+    pendentes = confirmacao_rotas.listar_pendentes_de_envio()
+    if not pendentes:
+        return {"enviadas": 0, "falha": False}
+    if not url_base or not sync_secret:
+        logger.warning(f"{len(pendentes)} confirmação(ões) pendente(s) de push, mas VPS não configurada.")
+        return {"enviadas": 0, "falha": True}
+
+    try:
+        resp = requests.post(
+            f"{url_base}/api/sync/upsert",
+            json={"confirmacoes": pendentes},
+            headers={"X-Sync-Secret": sync_secret},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao empurrar confirmações pra VPS ({len(pendentes)} pendente(s)): {exc}")
+        return {"enviadas": 0, "falha": True}
+
+    confirmacao_rotas.marcar_sincronizadas([linha["id"] for linha in pendentes])
+    logger.info(f"{len(pendentes)} confirmação(ões) sincronizada(s) com a VPS.")
+    return {"enviadas": len(pendentes), "falha": False}
 
 
 def _mensagem_grupo(data_alvo: date, motoristas_info: list[tuple[str, dict]]) -> str:
@@ -206,11 +297,15 @@ def _mensagem_grupo(data_alvo: date, motoristas_info: list[tuple[str, dict]]) ->
     )
 
 
-def gerar_mensagens(por_motorista: dict, catalogo: CatalogoMotoristas, data_alvo: date) -> tuple[str, list[tuple[MotoristaPreferencias | None, dict, str]]]:
+def gerar_mensagens(por_motorista: dict, catalogo: CatalogoMotoristas, data_alvo: date,
+                    links: dict[int, str] | None = None) -> tuple[str, list[tuple[MotoristaPreferencias | None, dict, str, str | None]]]:
     """
     Monta o texto individual de cada motorista + a mensagem de grupo.
-    Retorna (texto_completo_do_arquivo, lista de (motorista_ou_None, info, mensagem_individual))
-    -- essa lista é reaproveitada por enviar_emails() sem duplicar a
+    `links` é opcional -- {agent_id: link_de_confirmacao} gerado por
+    preparar_confirmacoes(); sem ele, as mensagens saem no formato
+    antigo (sem link). Retorna (texto_completo_do_arquivo, lista de
+    (motorista_ou_None, info, mensagem_individual, link_ou_None)) --
+    essa lista é reaproveitada por enviar_emails() sem duplicar a
     montagem das mensagens.
     """
     motoristas_por_id = {m.agent_id: m for m in catalogo.motoristas}
@@ -220,20 +315,21 @@ def gerar_mensagens(por_motorista: dict, catalogo: CatalogoMotoristas, data_alvo
     for agent_id, info in por_motorista.items():
         motorista = motoristas_por_id.get(agent_id)
         nome = motorista.nome if motorista else f"Motorista {agent_id}"
-        mensagem = _mensagem_individual(nome, info, data_alvo_br)
-        linhas.append((nome, motorista, info, mensagem))
+        link = (links or {}).get(agent_id)
+        mensagem = _mensagem_individual(nome, info, data_alvo_br, link)
+        linhas.append((nome, motorista, info, mensagem, link))
 
     linhas.sort(key=lambda linha: linha[0])
 
     blocos_individuais = "\n\n".join(
         f"--- {nome} ({motorista.telefone if motorista and motorista.telefone else 'sem telefone cadastrado'}) ---\n{mensagem}"
-        for nome, motorista, _info, mensagem in linhas
+        for nome, motorista, _info, mensagem, _link in linhas
     )
 
-    motoristas_info_grupo = [(nome, info) for nome, _motorista, info, _mensagem in linhas]
+    motoristas_info_grupo = [(nome, info) for nome, _motorista, info, _mensagem, _link in linhas]
     mensagem_grupo = _mensagem_grupo(data_alvo, motoristas_info_grupo)
 
-    itens = [(motorista, info, mensagem) for _nome, motorista, info, mensagem in linhas]
+    itens = [(motorista, info, mensagem, link) for _nome, motorista, info, mensagem, link in linhas]
 
     texto_completo = (
         f"MENSAGENS DE AVISO DE ROTA -- {data_alvo_br}\n"
@@ -249,21 +345,30 @@ def gerar_mensagens(por_motorista: dict, catalogo: CatalogoMotoristas, data_alvo
     return texto_completo, itens
 
 
-def enviar_emails(itens: list[tuple[MotoristaPreferencias | None, dict, str]],
+def enviar_emails(itens: list[tuple[MotoristaPreferencias | None, dict, str, str | None]],
                   data_alvo: date, config_email: dict) -> dict:
     """Envia 1 e-mail por motorista com EMAIL_MOTORISTA cadastrado, com
     a mesma mensagem individual gerada para o WhatsApp (convertida para
-    HTML simples). Retorna contagem de enviados/falhas/sem_email."""
+    HTML simples) + um botão de confirmação quando houver link. Retorna
+    contagem de enviados/falhas/sem_email."""
     data_alvo_br = data_alvo.strftime("%d/%m/%Y")
     enviados = falhas = sem_email = 0
 
-    for motorista, _info, mensagem in itens:
+    for motorista, _info, mensagem, link in itens:
         if not motorista or not motorista.email:
             sem_email += 1
             continue
 
+        botao_html = ""
+        if link:
+            botao_html = (
+                "<p style='margin-top:20px;'>"
+                f"<a href='{link}' style='background:{COR_ACENTO};color:#FFFFFF;padding:12px 24px;"
+                "border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;'>"
+                "Confirmar participação</a></p>"
+            )
         corpo_html = "<p style='white-space:pre-line;font-size:14px;line-height:1.6;'>" \
-                    + mensagem.replace("*", "").replace("\n", "<br>") + "</p>"
+                    + mensagem.replace("*", "").replace("\n", "<br>") + "</p>" + botao_html
         corpo = envelope_html(corpo_html, rodape="Mensagem automática — Agente Stokki Eventos.")
         assunto = f"[Freshlog] Aviso de rota — {data_alvo_br}"
 
@@ -275,7 +380,7 @@ def enviar_emails(itens: list[tuple[MotoristaPreferencias | None, dict, str]],
     return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email}
 
 
-def main(modo_teste: bool, data_str: str, enviar_emails_flag: bool):
+def main(modo_teste: bool, data_str: str, enviar_emails_flag: bool, gerar_confirmacoes_flag: bool):
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
@@ -300,7 +405,12 @@ def main(modo_teste: bool, data_str: str, enviar_emails_flag: bool):
         logger.info("Nenhum motorista com rota alocada para essa data -- nada a avisar.")
         return
 
-    texto_completo, itens = gerar_mensagens(por_motorista, catalogo, data_alvo)
+    links = {}
+    if gerar_confirmacoes_flag:
+        links = preparar_confirmacoes(por_motorista, catalogo, data_alvo, config.get("confirmacao_rotas", {}))
+        logger.info(f"{len(links)} link(s) de confirmação gerado(s)/atualizado(s).")
+
+    texto_completo, itens = gerar_mensagens(por_motorista, catalogo, data_alvo, links)
     ARQUIVO_SAIDA.write_text(texto_completo, encoding="utf-8")
     logger.info(f"{len(itens)} motorista(s) com aviso gerado -- mensagens salvas em {ARQUIVO_SAIDA}.")
 
@@ -311,11 +421,19 @@ def main(modo_teste: bool, data_str: str, enviar_emails_flag: bool):
     elif enviar_emails_flag and modo_teste:
         logger.info("[MODO TESTE] --enviar-emails ignorado (nenhum e-mail real é enviado em modo teste).")
 
+    resultado_push = {"enviadas": 0, "falha": False}
+    if gerar_confirmacoes_flag and not modo_teste:
+        resultado_push = push_confirmacoes_vps(config.get("confirmacao_rotas", {}))
+    elif gerar_confirmacoes_flag and modo_teste:
+        logger.info("[MODO TESTE] --gerar-confirmacoes não empurra pra VPS (só grava local, pra conferência).")
+
     total_entregas = sum(info["entregas"] for info in por_motorista.values())
     logger.info(
         f"Resumo: {len(itens)} motorista(s), {total_entregas} entrega(s) no total"
         + (f", e-mails: {resultado_email['enviados']} enviado(s)/{resultado_email['falhas']} falha(s)/"
            f"{resultado_email['sem_email']} sem e-mail cadastrado" if enviar_emails_flag and not modo_teste else "")
+        + (f", confirmações sincronizadas com a VPS: {resultado_push['enviadas']}"
+           if gerar_confirmacoes_flag and not modo_teste else "")
         + "."
     )
 
@@ -323,10 +441,13 @@ def main(modo_teste: bool, data_str: str, enviar_emails_flag: bool):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gera avisos de rota (WhatsApp + e-mail) para os motoristas escalados numa data")
     parser.add_argument("--modo-teste", action="store_true",
-                        help="Gera as mensagens e loga o resumo, sem enviar e-mail de verdade")
+                        help="Gera as mensagens e loga o resumo, sem enviar e-mail real nem empurrar pra VPS")
     parser.add_argument("--data", default="amanhã",
                         help="Data alvo: 'amanhã' (padrão), 'hoje' ou DD/MM/AAAA")
     parser.add_argument("--enviar-emails", action="store_true",
                         help="Envia e-mail de aviso para motoristas com EMAIL_MOTORISTA cadastrado")
+    parser.add_argument("--gerar-confirmacoes", action="store_true",
+                        help="Gera link de confirmação por motorista (WhatsApp + e-mail) e sincroniza com a VPS")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste, data_str=args.data, enviar_emails_flag=args.enviar_emails)
+    main(modo_teste=args.modo_teste, data_str=args.data, enviar_emails_flag=args.enviar_emails,
+         gerar_confirmacoes_flag=args.gerar_confirmacoes)

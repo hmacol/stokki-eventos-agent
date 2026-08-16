@@ -88,6 +88,7 @@ from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
 from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras.disponibilidade_motoristas import carregar_ajustes_dia
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
 from zonas_sp import classificar_rota_zona, classificar_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
@@ -311,6 +312,7 @@ def main(modo_teste: bool = False):
         data_alvo = _data_alvo_rotas(datetime.now(TZ_BRASILIA))
         data_alvo_str = data_alvo.strftime("%Y-%m-%d")
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
+        ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
 
         filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
         servicos = vuupt.listar_servicos(filtro, per_page=100)
@@ -743,6 +745,7 @@ def main(modo_teste: bool = False):
                     tipo_rota_str = "VIAGEM" if eh_viagem else f"Grande SP/{classificar_rota_zona(sublote, gmaps_key) or '?'}"
                     motorista = selecionar_motorista_equitativo(
                         sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
+                        ajustes_disponibilidade=ajustes_disponibilidade,
                     )
                     agent_id = motorista.agent_id if motorista else None
                     vehicle_id = motorista.vehicle_id if motorista else None

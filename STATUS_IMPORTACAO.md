@@ -4,23 +4,23 @@
 
 ## Última execução
 
-- **Quando:** 15/08/2026 22:12:42
+- **Quando:** 16/08/2026 18:13:00
 - **Modo:** REAL
-- **Duração:** 716s
+- **Duração:** 709s
 - **Pedidos processados:** 341
 - **Resultado:** OK
 
 | Resultado | Qtde |
 |---|---|
 | Criados | 0 |
-| Atualizados | 17 |
-| Sem alteração (fingerprint) | 132 |
+| Atualizados | 0 |
+| Sem alteração (fingerprint) | 149 |
 | Pulados (já atribuídos/concluídos) | 0 |
 | Ignorados (RETIRADA) | 75 |
 | Revisão manual | 31 |
 | pulado_ja_atribuido | 117 |
 
-Detalhe por pedido: `dados\logs\importacoes\importacao_20260815_221242.csv`
+Detalhe por pedido: `dados\logs\importacoes\importacao_20260816_181300.csv`
 
 ### Revisão manual
 
@@ -50,6 +50,7 @@ Detalhe por pedido: `dados\logs\importacoes\importacao_20260815_221242.csv`
 
 | Quando | Modo | Total | Criados | Atualizados | Sem alt. | Ignorados | Erros |
 |---|---|---|---|---|---|---|---|
+| 16/08/2026 18:13:00 | real | 341 | 0 | 0 | 149 | 75 | 0 |
 | 15/08/2026 22:12:42 | real | 341 | 0 | 17 | 132 | 75 | 0 |
 | 15/08/2026 18:52:42 | real | 341 | 0 | 0 | 149 | 75 | 0 |
 | 14/08/2026 23:01:58 | real | 341 | 54 | 10 | 105 | 75 | 0 |
@@ -59,4 +60,3 @@ Detalhe por pedido: `dados\logs\importacoes\importacao_20260815_221242.csv`
 | 14/08/2026 11:01:08 | real | 338 | 47 | 0 | 13 | 61 | 0 |
 | 13/08/2026 22:11:51 | real | 308 | 0 | 0 | 71 | 59 | 0 |
 | 13/08/2026 19:49:41 | real | 308 | 18 | 0 | 53 | 59 | 0 |
-| 13/08/2026 19:28:48 | real | 290 | 1 | 0 | 52 | 59 | 0 |

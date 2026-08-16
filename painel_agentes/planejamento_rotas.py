@@ -35,6 +35,10 @@ from vuupt_client import VuuptClient, VuuptAPIError
 from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
+from regras.disponibilidade_motoristas import (
+    carregar_ajustes_dia, definir_disponibilidade_dia, definir_disponibilidade_periodo, limpar_ajuste,
+)
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from alocacao_motoristas import selecionar_motorista_equitativo
@@ -377,8 +381,17 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
 
     rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    confirmacoes_dia = listar_confirmacoes_do_dia(data_alvo)
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
+        # confirmação do motorista (página pública na VPS, ver
+        # confirmacao_motoristas/) só existe pra rota já enviada à
+        # VUUPT -- rascunho ainda pode trocar de motorista até lá.
+        r["confirmacao_motorista"] = (
+            confirmacoes_dia.get(r["agent_id"])
+            if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["agent_id"] is not None
+            else None
+        )
 
     pool_e_agendados = buscar_pool_e_agendados(data_alvo, config)
 
@@ -399,9 +412,11 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
     motoristas = [
-        {"agent_id": m.agent_id, "vehicle_id": m.vehicle_id, "nome": m.nome, "tipo_veiculo": m.tipo_veiculo}
+        {"agent_id": m.agent_id, "vehicle_id": m.vehicle_id, "nome": m.nome, "tipo_veiculo": m.tipo_veiculo,
+         "ativo": m.ativo, "dias_disponiveis": m.dias_disponiveis}
         for m in catalogo.motoristas
     ]
+    disponibilidade_ajustes = carregar_ajustes_dia(data_alvo)
 
     return {
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
@@ -412,6 +427,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
+        "disponibilidade_ajustes": disponibilidade_ajustes,
         "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,
         # Limites das travas pro card de rota mostrar a ocupação como
         # barra ANTES de estourar (redesenho 13/08) -- os badges de
@@ -553,6 +569,7 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+    ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
 
     rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
     contagem_alocacoes_dia: dict[int, int] = {}
@@ -583,6 +600,7 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         sublote = [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in r["paradas"]]
         motorista = selecionar_motorista_equitativo(
             sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
+            ajustes_disponibilidade=ajustes_disponibilidade,
         )
         if not motorista:
             sem_elegivel.append(r["nome"])
@@ -622,6 +640,40 @@ def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
         desalocados.append({"rascunho_id": r["id"], "nome": r["nome"]})
 
     return {"desalocados": desalocados, "sem_motorista": sem_motorista}
+
+
+def salvar_disponibilidade_dia(data_alvo: date, ajustes_brutos: dict) -> dict:
+    """
+    Tela "Disponibilidade de motoristas" (Hugo, 16/08): grava o
+    snapshot completo dos checkboxes marcados/desmarcados naquele dia
+    -- `ajustes_brutos` = {agent_id (str ou int): {"disponivel": bool,
+    "motivo": str|None}}, exatamente como a tela envia. Essa tabela é a
+    fonte que "Alocar motoristas" (e os jobs agendados) sempre
+    respeitam (regras/disponibilidade_motoristas.py).
+    """
+    ajustes = {
+        int(agent_id): (bool(v.get("disponivel")), (v.get("motivo") or None))
+        for agent_id, v in ajustes_brutos.items()
+    }
+    definir_disponibilidade_dia(data_alvo, ajustes)
+    return {"quantidade": len(ajustes)}
+
+
+def marcar_disponibilidade_periodo(agent_id: int, data_inicio: date, data_fim: date,
+                                   disponivel: bool, motivo: str | None) -> dict:
+    """Mini-formulário "Marcar período" da tela de disponibilidade --
+    ex. lançar férias/atestado de um motorista de uma vez em vários
+    dias (Hugo, 16/08)."""
+    quantidade = definir_disponibilidade_periodo(agent_id, data_inicio, data_fim, disponivel, motivo)
+    return {"quantidade": quantidade}
+
+
+def limpar_disponibilidade_dia(agent_id: int, data_alvo: date) -> dict:
+    """Botão "Redefinir" de uma linha da tela de disponibilidade --
+    remove o ajuste daquele motorista naquele dia, volta a valer o
+    padrão semanal (DIAS_DISPONIVEIS)."""
+    removido = limpar_ajuste(agent_id, data_alvo)
+    return {"removido": removido}
 
 
 def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:

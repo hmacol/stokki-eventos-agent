@@ -58,6 +58,7 @@ from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido,
+    salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 import rascunhos_rota
@@ -626,6 +627,18 @@ def api_trocar_motorista():
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
 
 
+@app.route("/api/planejamento/renomear-rota", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_renomear_rota():
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.renomear_rascunho(body["rascunho_id"], body["nome"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
 @app.route("/api/planejamento/alocar-motoristas", methods=["POST"])
 @requer_auth
 @exige_mesma_origem
@@ -661,6 +674,66 @@ def api_desalocar_motoristas():
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao desalocar motoristas dos rascunhos")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/planejamento/disponibilidade-motoristas", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_salvar_disponibilidade_motoristas():
+    """Tela "Disponibilidade de motoristas" (Hugo, 16/08): grava o
+    snapshot dos checkboxes marcados/desmarcados pro dia -- fonte que
+    "Alocar motoristas" (e os jobs agendados) sempre respeitam."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        resultado = salvar_disponibilidade_dia(data_alvo, body.get("ajustes") or {})
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao salvar disponibilidade de motoristas")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/planejamento/disponibilidade-motoristas/periodo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_marcar_disponibilidade_periodo():
+    """Mini-formulário "Marcar período" da tela de disponibilidade --
+    lança férias/atestado de um motorista em várias datas de uma vez."""
+    body = request.get_json(force=True)
+    try:
+        agent_id = int(body["agent_id"])
+        data_inicio = datetime.strptime(body["data_inicio"], "%Y-%m-%d").date()
+        data_fim = datetime.strptime(body["data_fim"], "%Y-%m-%d").date()
+        disponivel = bool(body.get("disponivel"))
+        motivo = (body.get("motivo") or "").strip() or None
+        resultado = marcar_disponibilidade_periodo(agent_id, data_inicio, data_fim, disponivel, motivo)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao marcar disponibilidade por período")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/planejamento/disponibilidade-motoristas/limpar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_limpar_disponibilidade_motoristas():
+    """Botão "Redefinir" de uma linha da tela de disponibilidade --
+    volta o motorista pro padrão semanal (DIAS_DISPONIVEIS) naquele dia."""
+    body = request.get_json(force=True)
+    try:
+        agent_id = int(body["agent_id"])
+        data_alvo = datetime.strptime(body["data"], "%Y-%m-%d").date()
+        resultado = limpar_disponibilidade_dia(agent_id, data_alvo)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao limpar ajuste de disponibilidade")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, **resultado})
 

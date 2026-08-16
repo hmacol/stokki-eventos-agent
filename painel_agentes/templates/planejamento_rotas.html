@@ -367,6 +367,28 @@
   .card-rota.busca-oculta { display: none; }
   .card-rota .cabecalho { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
   .card-rota .nome { font-weight: 700; font-size: 12.5px; }
+  .card-rota .botao-editar-nome {
+    border: none;
+    background: none;
+    color: var(--texto-suave);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 2px;
+    line-height: 1;
+    opacity: 0.6;
+  }
+  .card-rota .botao-editar-nome:hover { opacity: 1; color: var(--texto); }
+  .card-rota .input-nome-rota {
+    font-weight: 700;
+    font-size: 12.5px;
+    font-family: inherit;
+    padding: 1px 4px;
+    border-radius: 4px;
+    border: 1px solid var(--acento);
+    background: var(--fundo);
+    color: var(--texto);
+    min-width: 120px;
+  }
   .card-rota .metricas { font-size: 11px; color: var(--texto-suave); margin: 2px 0 6px; }
   /* Ocupação da rota vs travas do servidor (redesenho 13/08): a
      lotação aparece ANTES de estourar -- verde, âmbar >= 90%, vermelho
@@ -693,6 +715,10 @@
   .status-envio { font-size: 11px; padding: 5px 8px; border-radius: 5px; margin-bottom: 6px; }
   .status-envio.ok { background: rgba(47,217,174,0.16); color: var(--sucesso); }
   .status-envio.erro { background: rgba(255,92,80,0.16); color: var(--erro); }
+  .badge-confirmacao { font-size: 11px; padding: 5px 8px; border-radius: 5px; margin-bottom: 6px; }
+  .badge-confirmacao.ok { background: rgba(47,217,174,0.16); color: var(--sucesso); }
+  .badge-confirmacao.recusado { background: rgba(255,92,80,0.16); color: var(--erro); }
+  .badge-confirmacao.pendente { background: rgba(245,166,35,0.16); color: #F5A623; }
   #botao-nova-rota {
     width: 100%;
     min-height: 40px;
@@ -853,6 +879,49 @@
   .modal-tipo-roteirizacao .acoes button.confirmar:hover { background: #26C49A; }
   .modal-tipo-roteirizacao .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-tipo-roteirizacao .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Modal "Disponibilidade de motoristas" (Hugo, 16/08): seleção de quem
+     está disponível pra rota no dia -- "Alocar motoristas" sempre parte
+     dessa seleção. Mesmo esqueleto visual do modal de tipo de roteirização. */
+  .modal-overlay-disponibilidade {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-disponibilidade.aberto { display: flex; }
+  .modal-disponibilidade {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 480px; max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px); overflow-y: auto;
+  }
+  .modal-disponibilidade h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-disponibilidade .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .tabela-disponibilidade { border: 1px solid var(--borda); border-radius: 8px; max-height: 260px; overflow-y: auto; }
+  .linha-disponibilidade {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-bottom: 1px solid var(--borda); cursor: pointer; font-size: 12.5px;
+  }
+  .linha-disponibilidade:last-child { border-bottom: none; }
+  .linha-disponibilidade:hover { background: var(--fundo); }
+  .linha-disponibilidade .nome-motorista { flex: 1; }
+  .linha-disponibilidade .ajuste-badge { font-size: 11px; color: var(--texto-suave); }
+  .linha-disponibilidade .ajuste-badge a { margin-left: 4px; }
+  .periodo-disponibilidade { border-top: 1px solid var(--borda); margin-top: 14px; padding-top: 12px; }
+  .periodo-disponibilidade > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+  .linha-periodo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .linha-periodo select, .linha-periodo input[type="date"], .linha-periodo input[type="text"] {
+    padding: 5px 8px; min-height: 30px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12px; background: var(--fundo); color: var(--texto);
+  }
+  .linha-periodo input[type="text"] { flex: 1 1 140px; min-width: 100px; }
+  .modal-disponibilidade .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-disponibilidade .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-disponibilidade .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-disponibilidade .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-disponibilidade .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-disponibilidade .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -954,6 +1023,33 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-tipo-roteirizacao">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-tipo-roteirizacao">Roteirizar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-disponibilidade" id="modal-disponibilidade-motoristas">
+  <div class="modal-disponibilidade" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-disponibilidade">
+    <h2 id="titulo-modal-disponibilidade">Disponibilidade de motoristas</h2>
+    <p class="subtitulo">Quem está disponível pra rota em <strong id="disponibilidade-data-formatada"></strong> — "Alocar motoristas" só considera quem estiver marcado aqui.</p>
+    <div class="tabela-disponibilidade" id="tabela-disponibilidade-motoristas"></div>
+    <div class="periodo-disponibilidade">
+      <label for="periodo-motorista">Marcar período (férias, atestado...)</label>
+      <div class="linha-periodo">
+        <select id="periodo-motorista"></select>
+        <select id="periodo-status">
+          <option value="indisponivel">Indisponível</option>
+          <option value="disponivel">Disponível</option>
+        </select>
+        <input type="date" id="periodo-data-inicio" title="Data de início">
+        <span>até</span>
+        <input type="date" id="periodo-data-fim" title="Data de fim">
+        <input type="text" id="periodo-motivo" placeholder="Motivo (opcional)">
+        <button type="button" id="botao-aplicar-periodo" class="botao-mini">Aplicar</button>
+      </div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-disponibilidade">Fechar</button>
+      <button type="button" class="confirmar" id="botao-salvar-disponibilidade">Salvar</button>
     </div>
   </div>
 </div>
@@ -1160,6 +1256,7 @@
       </span>
     </h3>
     <button id="botao-nova-rota" type="button">+ Nova rota</button>
+    <button id="botao-disponibilidade-motoristas" type="button" class="botao" style="width:100%;margin-bottom:8px;" title="Marca quem está disponível pra rota nesse dia (folga, férias, atestado) -- Alocar motoristas sempre respeita essa seleção.">Disponibilidade de motoristas</button>
     <div style="display:flex;gap:8px;margin-bottom:12px;">
       <button id="botao-alocar-motoristas" type="button" class="botao" style="flex:1;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
       <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
@@ -1190,6 +1287,7 @@
   const POOL = {{ dados.pool | tojson }};
   const BASE = {{ dados.base | tojson }};
   const MOTORISTAS = {{ dados.motoristas | tojson }};
+  const DISPONIBILIDADE_AJUSTES = {{ dados.disponibilidade_ajustes | tojson }};
   const DATA_ALVO_ISO = {{ dados.data_alvo_iso | tojson }};
   const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
   const TRAVAS = {{ dados.travas | tojson }};
@@ -1459,6 +1557,22 @@
     return "";
   }
 
+  function confirmacaoMotoristaHtml(rascunho) {
+    // Confirmação do motorista pela página pública (VPS) -- só existe
+    // pra rota já enviada, ver painel_agentes/planejamento_rotas.py
+    // (buscar_dados_planejamento) e regras/confirmacao_rotas.py.
+    const c = rascunho.confirmacao_motorista;
+    if (!c) return "";
+    if (c.status === "CONFIRMADO") {
+      return `<div class="badge-confirmacao ok" title="Respondido em ${escaparHtml(c.respondido_em || "")}">✅ Motorista confirmou participação</div>`;
+    }
+    if (c.status === "RECUSADO") {
+      const motivo = c.motivo_recusa ? `: ${escaparHtml(c.motivo_recusa)}` : "";
+      return `<div class="badge-confirmacao recusado" title="Respondido em ${escaparHtml(c.respondido_em || "")}">❌ Motorista não vai poder${motivo}</div>`;
+    }
+    return `<div class="badge-confirmacao pendente">⏳ Aguardando confirmação do motorista</div>`;
+  }
+
   function criarCardRota(rascunho, cor) {
     const enviada = rascunho.status === "ENVIADO";
     const colapsada = rotasColapsadas.has(rascunho.id);
@@ -1473,6 +1587,7 @@
         <span class="titulo-rota">
           <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
           <span class="nome">${escaparHtml(rascunho.nome)}</span>
+          ${(enviada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
           ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
@@ -1481,6 +1596,7 @@
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
+      <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(enviada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
       <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
       <div class="acoes">
@@ -2493,6 +2609,57 @@
     }
   }
 
+  function iniciarEdicaoNome(rascunhoId) {
+    const card = document.getElementById(`card-rota-${rascunhoId}`);
+    const span = card && card.querySelector(".nome");
+    if (!span) return;
+    const nomeAtual = (RASCUNHOS.find(r => r.id === rascunhoId) || {}).nome || span.textContent;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "input-nome-rota";
+    input.value = nomeAtual;
+    input.dataset.rascunhoId = rascunhoId;
+    input.dataset.original = nomeAtual;
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  function encerrarEdicaoNome(input, { cancelar = false } = {}) {
+    // remover o input do DOM (replaceWith) dispara blur/focusout nele --
+    // sem essa trava, Escape (chamada direta) e o focusout resultante
+    // chamariam isso 2x, a segunda vez sem cancelar=true (salvaria de
+    // volta o que devia ter sido descartado)
+    if (input.dataset.encerrado) return;
+    input.dataset.encerrado = "1";
+    const rascunhoId = Number(input.dataset.rascunhoId);
+    const original = input.dataset.original;
+    const novoNome = input.value.trim();
+    const span = document.createElement("span");
+    span.className = "nome";
+    if (cancelar || !novoNome || novoNome === original) {
+      span.textContent = original;
+      input.replaceWith(span);
+      return;
+    }
+    span.textContent = novoNome;  // otimista: já reflete a edição, reverte se o salvamento falhar
+    input.replaceWith(span);
+    renomearRota(rascunhoId, novoNome, original, span);
+  }
+
+  async function renomearRota(rascunhoId, novoNome, nomeAnterior, span) {
+    try {
+      await postJSON("/api/planejamento/renomear-rota", { rascunho_id: rascunhoId, nome: novoNome });
+      const r = RASCUNHOS.find(x => x.id === rascunhoId);
+      if (r) r.nome = novoNome;
+      const card = document.getElementById(`card-rota-${rascunhoId}`);
+      if (card) card.dataset.busca = novoNome.toLowerCase();
+    } catch (e) {
+      alert(`Falha ao renomear: ${e.message}`);
+      span.textContent = nomeAnterior;
+    }
+  }
+
   async function duplicarRota(rascunhoId) {
     // cria a cópia (sempre RASCUNHO, editável, mesmo a partir de uma
     // rota já ENVIADA) e recarrega -- mesmo padrão de criarNovaRota/
@@ -2575,6 +2742,123 @@
       alert(linhas.join("\n"));
     } catch (e) {
       alert(`Falha ao desalocar motoristas: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  // Disponibilidade de motoristas (Hugo, 16/08): toggle diário + marcação
+  // por período (férias/atestado). "Alocar motoristas" sempre lê essa
+  // seleção no servidor (regras/disponibilidade_motoristas.py) -- aqui é
+  // só a tela de edição.
+  function diaDaSemanaIso(dataIso) {
+    // date.weekday() do Python: 0=segunda...6=domingo. Date.getDay() do
+    // JS: 0=domingo...6=sábado -- converte pro mesmo referencial.
+    const d = new Date(`${dataIso}T00:00:00`);
+    return (d.getDay() + 6) % 7;
+  }
+
+  function motoristasAtivosOrdenados() {
+    return MOTORISTAS.filter(m => m.ativo).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  }
+
+  function renderizarTabelaDisponibilidade() {
+    const dia = diaDaSemanaIso(DATA_ALVO_ISO);
+    const container = document.getElementById("tabela-disponibilidade-motoristas");
+    container.innerHTML = motoristasAtivosOrdenados().map(m => {
+      const ajuste = DISPONIBILIDADE_AJUSTES[m.agent_id];
+      const padrao = (m.dias_disponiveis || []).includes(dia);
+      const disponivel = ajuste ? ajuste.disponivel : padrao;
+      const badge = ajuste
+        ? `<span class="ajuste-badge">${ajuste.motivo ? escaparHtml(ajuste.motivo) + " — " : ""}ajustado <a href="#" class="link-redefinir" data-agent-id="${m.agent_id}">redefinir</a></span>`
+        : "";
+      return `<label class="linha-disponibilidade">
+        <input type="checkbox" data-agent-id="${m.agent_id}" ${disponivel ? "checked" : ""}>
+        <span class="nome-motorista">${escaparHtml(m.nome)}</span>
+        ${badge}
+      </label>`;
+    }).join("");
+    container.querySelectorAll(".link-redefinir").forEach(a => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        redefinirDisponibilidade(Number(a.dataset.agentId));
+      });
+    });
+  }
+
+  function popularSelectPeriodoMotorista() {
+    const select = document.getElementById("periodo-motorista");
+    select.innerHTML = motoristasAtivosOrdenados()
+      .map(m => `<option value="${m.agent_id}">${escaparHtml(m.nome)}</option>`).join("");
+  }
+
+  function abrirModalDisponibilidade() {
+    const [ano, mes, dia] = DATA_ALVO_ISO.split("-");
+    document.getElementById("disponibilidade-data-formatada").textContent = `${dia}/${mes}/${ano}`;
+    renderizarTabelaDisponibilidade();
+    popularSelectPeriodoMotorista();
+    document.getElementById("periodo-data-inicio").value = DATA_ALVO_ISO;
+    document.getElementById("periodo-data-fim").value = DATA_ALVO_ISO;
+    document.getElementById("periodo-status").value = "indisponivel";
+    document.getElementById("periodo-motivo").value = "";
+    document.getElementById("modal-disponibilidade-motoristas").classList.add("aberto");
+  }
+
+  async function redefinirDisponibilidade(agentId) {
+    try {
+      await postJSON("/api/planejamento/disponibilidade-motoristas/limpar", { agent_id: agentId, data: DATA_ALVO_ISO });
+      delete DISPONIBILIDADE_AJUSTES[agentId];
+      renderizarTabelaDisponibilidade();
+    } catch (e) {
+      alert(`Falha ao redefinir: ${e.message}`);
+    }
+  }
+
+  async function salvarDisponibilidade(botao) {
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      const ajustes = {};
+      document.querySelectorAll("#tabela-disponibilidade-motoristas input[type=checkbox]").forEach(chk => {
+        const agentId = chk.dataset.agentId;
+        const motivoAtual = (DISPONIBILIDADE_AJUSTES[agentId] || {}).motivo || null;
+        ajustes[agentId] = { disponivel: chk.checked, motivo: motivoAtual };
+      });
+      await postJSON("/api/planejamento/disponibilidade-motoristas", { data_alvo: DATA_ALVO_ISO, ajustes });
+      Object.keys(ajustes).forEach(agentId => { DISPONIBILIDADE_AJUSTES[agentId] = ajustes[agentId]; });
+      document.getElementById("modal-disponibilidade-motoristas").classList.remove("aberto");
+    } catch (e) {
+      alert(`Falha ao salvar disponibilidade: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function aplicarPeriodoDisponibilidade(botao) {
+    const agentId = Number(document.getElementById("periodo-motorista").value);
+    const dataInicio = document.getElementById("periodo-data-inicio").value;
+    const dataFim = document.getElementById("periodo-data-fim").value;
+    const status = document.getElementById("periodo-status").value;
+    const motivo = document.getElementById("periodo-motivo").value.trim() || null;
+    if (!agentId || !dataInicio || !dataFim) { alert("Preencha motorista e as duas datas."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Aplicando...";
+    try {
+      const disponivel = status === "disponivel";
+      const resp = await postJSON("/api/planejamento/disponibilidade-motoristas/periodo", {
+        agent_id: agentId, data_inicio: dataInicio, data_fim: dataFim, disponivel, motivo,
+      });
+      if (dataInicio <= DATA_ALVO_ISO && DATA_ALVO_ISO <= dataFim) {
+        DISPONIBILIDADE_AJUSTES[agentId] = { disponivel, motivo };
+        renderizarTabelaDisponibilidade();
+      }
+      alert(`${resp.quantidade} dia(s) atualizado(s).`);
+    } catch (e) {
+      alert(`Falha ao marcar período: ${e.message}`);
     } finally {
       botao.disabled = false;
       botao.textContent = original;
@@ -2864,7 +3148,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas"].forEach(id => {
+      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -3034,6 +3318,13 @@
     listaRotas.addEventListener("mousemove", expandirSobArrasto);
 
     listaRotas.addEventListener("click", (e) => {
+      if (e.target.classList.contains("botao-editar-nome")) {
+        iniciarEdicaoNome(Number(e.target.dataset.rascunhoId));
+        return;
+      }
+      if (e.target.classList.contains("input-nome-rota")) {
+        return;  // clique dentro do campo só posiciona o cursor -- não colapsa o card
+      }
       if (e.target.classList.contains("botao-cancelar-pedido")) {
         const li = e.target.closest(".item-parada");
         const ul = e.target.closest(".lista-paradas");
@@ -3070,6 +3361,17 @@
       }
     });
 
+    listaRotas.addEventListener("keydown", (e) => {
+      if (!e.target.classList.contains("input-nome-rota")) return;
+      if (e.key === "Enter") { e.target.blur(); }
+      else if (e.key === "Escape") { encerrarEdicaoNome(e.target, { cancelar: true }); }
+    });
+
+    listaRotas.addEventListener("focusout", (e) => {
+      if (!e.target.classList.contains("input-nome-rota")) return;
+      encerrarEdicaoNome(e.target);
+    });
+
     listaRotas.addEventListener("change", async (e) => {
       if (e.target.classList.contains("numero-input")) {
         const li = e.target.closest(".item-parada");
@@ -3095,6 +3397,12 @@
     document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
     document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
     document.getElementById("botao-desalocar-motoristas").addEventListener("click", (e) => desalocarMotoristas(e.target));
+    document.getElementById("botao-disponibilidade-motoristas").addEventListener("click", abrirModalDisponibilidade);
+    document.getElementById("botao-cancelar-disponibilidade").addEventListener("click", () => {
+      document.getElementById("modal-disponibilidade-motoristas").classList.remove("aberto");
+    });
+    document.getElementById("botao-salvar-disponibilidade").addEventListener("click", (e) => salvarDisponibilidade(e.target));
+    document.getElementById("botao-aplicar-periodo").addEventListener("click", (e) => aplicarPeriodoDisponibilidade(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);

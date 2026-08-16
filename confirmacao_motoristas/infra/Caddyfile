@@ -1,0 +1,7 @@
+# HTTPS automatico via Let's Encrypt.
+# Requisito: o DNS de confirmacao.freshhub.com.br ja deve apontar para o IP da VPS
+# ANTES de instalar (senao a emissao do certificado falha).
+
+confirmacao.freshhub.com.br {
+	reverse_proxy 127.0.0.1:8090
+}
