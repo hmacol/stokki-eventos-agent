@@ -432,7 +432,7 @@ function renderStepper(etapas) {
     else if (e.status) { tituloEstado = "última execução: " + e.status; }
 
     const quando = e.quando
-      ? `<a href="/execucao/${e.execucao_id}" title="abrir log">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
+      ? `<a href="${BASE_PATH}/execucao/${e.execucao_id}" title="abrir log">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
       : "nunca rodou";
     const botaoRodar = PODE_EDITAR
       ? `<button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')"
@@ -614,7 +614,7 @@ async function tratarExcecao(id) {
   if (motivo === null) return;
   if (!motivo.trim()) { alert("Informe o motivo — é ele que vira o histórico."); return; }
   try {
-    const resp = await fetch(`/api/torre/tratar`, {
+    const resp = await fetch(`${BASE_PATH}/api/torre/tratar`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id, motivo: motivo.trim(),
@@ -630,7 +630,7 @@ async function tratarExcecao(id) {
 
 async function destratarExcecao(id) {
   try {
-    const resp = await fetch(`/api/torre/destratar`, {
+    const resp = await fetch(`${BASE_PATH}/api/torre/destratar`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
     });
@@ -673,13 +673,13 @@ function renderAmanha(d) {
          <div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">rotas na VUUPT</div></div>
        </div>
        <div class="nota-rodape">Criadas direto na VUUPT (job automático das 13h) para ${esc(a.data_rotulo)} —
-       <a href="/mapa-rotas?data=${a.data_iso}">ver no mapa</a>.</div>`;
+       <a href="${BASE_PATH}/mapa-rotas?data=${a.data_iso}">ver no mapa</a>.</div>`;
   } else {
     corpo = `<div class="carregando">Nenhum rascunho para ${esc(a.data_rotulo)} ainda — rode a etapa
        <strong>Roteirização</strong> no topo pra gerar.</div>`;
   }
   document.getElementById("amanha").innerHTML = corpo;
-  document.getElementById("link-planejamento").href = `/planejamento?data=${a.data_iso}`;
+  document.getElementById("link-planejamento").href = `${BASE_PATH}/planejamento?data=${a.data_iso}`;
 }
 
 function renderFunilStokki(f) {
@@ -786,7 +786,7 @@ async function carregarDados() {
   const corpo = document.querySelector(".corpo");
   corpo.classList.add("atualizando");
   try {
-    const resp = await fetch(`/api/torre/dados?data=${DATA_ALVO}`);
+    const resp = await fetch(`${BASE_PATH}/api/torre/dados?data=${DATA_ALVO}`);
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;
@@ -799,7 +799,7 @@ async function carregarDados() {
     renderExcecoes(d);
     renderTendencia(d);
     renderAmanha(d);
-    document.getElementById("link-mapa").href = `/mapa-rotas?data=${d.data_alvo_iso}`;
+    document.getElementById("link-mapa").href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
     ultimoOk = new Date();
     houveErro = false;
   } catch (e) {
@@ -813,14 +813,14 @@ async function carregarDados() {
 
 async function carregarStokki() {
   try {
-    const resp = await fetch(`/api/torre/stokki`);
+    const resp = await fetch(`${BASE_PATH}/api/torre/stokki`);
     if (resp.ok) renderFunilStokki(await resp.json());
   } catch (e) { console.error("torre: falha no funil Stokki", e); }
 }
 
 async function carregarEtapas() {
   try {
-    const resp = await fetch(`/api/torre/etapas`);
+    const resp = await fetch(`${BASE_PATH}/api/torre/etapas`);
     if (resp.ok) renderStepper((await resp.json()).etapas);
   } catch (e) { /* o ciclo principal recupera */ }
   // Cadência dinâmica: rápida com algo rodando, lenta em repouso.
@@ -843,7 +843,7 @@ function atualizarCarimbo() {
 async function rodarAgente(agenteId, titulo) {
   if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
   try {
-    const resp = await fetch(`/api/torre/rodar`, {
+    const resp = await fetch(`${BASE_PATH}/api/torre/rodar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agente_id: agenteId }),
@@ -852,7 +852,7 @@ async function rodarAgente(agenteId, titulo) {
     if (!resp.ok) { alert(d.erro || "Falha ao iniciar."); return; }
     algumaEtapaRodando = true;
     // Feedback imediato no stepper, sem esperar o próximo ciclo.
-    fetch(`/api/torre/etapas`).then(r => r.json()).then(j => renderStepper(j.etapas));
+    fetch(`${BASE_PATH}/api/torre/etapas`).then(r => r.json()).then(j => renderStepper(j.etapas));
   } catch (e) {
     alert("Falha ao iniciar: " + e);
   }

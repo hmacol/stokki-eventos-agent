@@ -1073,7 +1073,7 @@
   }
 
   async function postJSONAgentesPlanejamento(url, body) {
-    const resp = await fetch(url, {
+    const resp = await fetch(BASE_PATH + url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1094,7 +1094,7 @@
       else if (e.status) { tituloEstado = "última execução: " + e.status; }
 
       const quando = e.quando
-        ? `<a href="/execucao/${e.execucao_id}" target="_blank" title="abrir log">${escaparHtmlAgentes(e.quando.slice(5, 16))}</a>`
+        ? `<a href="${BASE_PATH}/execucao/${e.execucao_id}" target="_blank" title="abrir log">${escaparHtmlAgentes(e.quando.slice(5, 16))}</a>`
         : "nunca rodou";
       const aoClicar = e.agente_id === "somente_importacao"
         ? "abrirPainelImportacao()"
@@ -1120,7 +1120,7 @@
 
   async function carregarAgentesPlanejamento() {
     try {
-      const resp = await fetch("/api/planejamento/agentes/etapas");
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
       if (resp.ok) renderAgentesPlanejamento((await resp.json()).etapas);
     } catch (e) { /* próximo ciclo tenta de novo */ }
     // Cadência dinâmica: rápida com algo rodando, lenta em repouso (mesmo padrão da torre).
@@ -1131,7 +1131,7 @@
     await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar", { agente_id: agenteId, ...(extra || {}) });
     algumaEtapaAgentePlanejamentoRodando = true;
     // feedback imediato na barra, sem esperar o próximo ciclo
-    fetch("/api/planejamento/agentes/etapas").then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+    fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
   }
 
   async function rodarAgentePlanejamento(agenteId, titulo) {
@@ -1167,7 +1167,7 @@
     try {
       await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar-tudo", {});
       algumaEtapaAgentePlanejamentoRodando = true;
-      fetch("/api/planejamento/agentes/etapas").then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+      fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
     } catch (e) {
       alert(`Falha ao iniciar: ${e.message}`);
     }
@@ -1363,7 +1363,7 @@
   }
 
   async function postJSON(url, body) {
-    const resp = await fetch(url, {
+    const resp = await fetch(BASE_PATH + url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3058,7 +3058,7 @@
     botao.disabled = true;
     botao.textContent = "Buscando...";
     try {
-      const resp = await fetch(`/api/planejamento/pool?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/pool?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar o pool.");
 
@@ -3136,7 +3136,7 @@
     } catch (e) {
       console.warn(`Falha ao carregar documentos (abrindo romaneio com o que já tinha indexado): ${e.message}`);
     } finally {
-      const url = `/api/planejamento/romaneio/${rascunhoId}`;
+      const url = `${BASE_PATH}/api/planejamento/romaneio/${rascunhoId}`;
       if (aba && !aba.closed) aba.location.href = url; else window.open(url, "_blank");
       botao.disabled = false;
       botao.textContent = original;

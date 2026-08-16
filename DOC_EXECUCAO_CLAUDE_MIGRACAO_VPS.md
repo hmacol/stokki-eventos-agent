@@ -156,6 +156,14 @@ geração de PDF + jobs em lote é outra ordem de I/O, não só de RAM).
 
 ## 4. Arquitetura-Alvo
 
+**Domínio único (pedido do Hugo, 16/08):** serviços novos entram sob
+`app.freshhub.com.br/<serviço>` (ex: `/painel`), não um subdomínio por
+serviço. `confirmacao_motoristas` é a exceção por ora (fica em
+`confirmacao.freshhub.com.br` até migrar, ver Fase 1). Cada serviço Flask
+precisa de `ProxyFix(x_prefix=1)` + Caddy `handle_path /<serviço>/*` com
+`header_up X-Forwarded-Prefix /<serviço>` pra `url_for()`/links internos
+funcionarem sob o prefixo — ver Fase 1 pro padrão completo já validado.
+
 - **VPS (mesma atual) recebe tudo, exceto o print-agent.** Deploy via
   `git clone` do repo já existente no GitHub (não scp manual como foi feito
   pra `confirmacao_motoristas` — esse projeto já tem remoto, aproveitar).
@@ -194,11 +202,66 @@ geração de PDF + jobs em lote é outra ordem de I/O, não só de RAM).
 
 **Achado extra (16/08):** `config.yaml` tem duas seções `gcs:` (uma com `bucket`/`service_account_json`, outra com `bucket_name`/`credenciais_json`) — em YAML, chave duplicada faz a segunda sobrescrever a primeira, então só `bucket_name`/`credenciais_json` (a que `storage_gcs.py` e `backup_dados_gcs.py` realmente leem) tem efeito; a primeira seção é morta. Não mexi no `config.yaml` (é o arquivo de segredos do Hugo) — só registrando pra limpar quando ele quiser.
 
-⏳ **Fase 1 — Painel web (`painel_agentes`)**
-Candidato natural pra ir primeiro: já roda via `waitress` (produção-ready), já é acessado remotamente em conceito (equipe via navegador), menor acoplamento com o Agendador. Critério de aceite: equipe acessa o painel pela VPS, dado bate 1:1 com o que aparecia local.
+✅ **Fase 1 — Painel web (`painel_agentes`)** — **concluída 16/08**, no ar em `https://app.freshhub.com.br/painel`
 
-⏳ **Fase 2 — `dados.db` + planilhas como fonte única na VPS**
-Ponto de corte real (ver risco #5). A partir daqui o banco "mora" na VPS; qualquer job que ainda roda local precisa ler/escrever via rede em vez de arquivo direto, OU migrar junto nesta mesma fase — provavelmente mais simples puxar todos os jobs que tocam `dados.db` numa fase só, pra nunca ter dois donos do mesmo arquivo ao mesmo tempo.
+**Mudança de arquitetura durante a fase (pedido do Hugo, 16/08):** em vez de cada serviço ganhar seu próprio subdomínio (como `confirmacao.freshhub.com.br`), tudo passa a morar sob um domínio guarda-chuva único, `app.freshhub.com.br`, com um caminho por serviço (`/painel`, e assim por diante conforme mais fases entrarem). `confirmacao_motoristas` **não** migrou pra esse esquema ainda — decisão do Hugo (16/08) de não mexer nela às vésperas da 1ª rodada real com motoristas (17/08); fica em `confirmacao.freshhub.com.br` por enquanto, migra depois.
+
+**Implementação:**
+- Deploy em `/opt/stokki-eventos` na VPS (mesma, `187.127.52.197`) via `git clone` com deploy key própria (só leitura) — não mais `scp` manual como o `confirmacao_motoristas`. Python 3.12 (não tem 3.11 disponível no Ubuntu 24.04 e não foi necessário instalar via PPA -- `pip install -r requirements.txt` e o import completo do `painel_agentes` funcionaram sem ajuste).
+- **Modo somente leitura, reforçado em duas camadas independentes:**
+  1. `config.yaml` da VPS (fora do git, só na VPS) tem `painel_agentes.usuario`/`senha` preenchidos com uma string aleatória descartável, nunca divulgada — o código exige essas duas chaves não-vazias pra qualquer rota funcionar, mas como ninguém sabe o valor, a camada "total" (ações de escrita) fica inacessível de fato. Só `usuario_leitura`/`senha_leitura` (mesmas credenciais já usadas localmente, `equipe`/...) são reais.
+  2. Confirmado nos testes: rota de escrita (`POST /api/torre/rodar`) devolve `403` mesmo autenticado como leitura.
+  3. Segredos de escrita (`stokki`, `email`, `gcs`, `clientes_agendamento`, `confirmacao_rotas`, `anthropic`) foram **excluídos** do `config.yaml` da VPS -- não são usados por nenhuma rota de leitura (levantamento completo por sub-agente, ver seção 2.2 do histórico da sessão). Único trade-off: o widget "Funil Stokki" da Torre fica sem dado nessa VPS (login Stokki de propósito fora).
+- **Réplica de dados, não fonte da verdade:** `dados/dados.db` (snapshot consistente via `VACUUM INTO`) + `BD_MOTORISTAS.xlsx` + `BD_CLIENTES.xlsx` sincronizados da máquina local pra VPS a cada 15 min (`sincronizar_painel_vps.py` + tarefa `StokkiEventos_SincronizarPainelVPS`, one-way, só EMPURRA). A cópia local continua sendo a única escrita pelos jobs do Agendador. **Nota:** tentei também travar o arquivo `dados.db` como read-only (chmod 444) na VPS como camada extra de defesa, mas isso quebra uma rotina legítima de startup (`limpar_execucoes_travadas()`, grava no banco assim que o processo sobe) -- reduzido pra 644 (gravável), já que a proteção real é a camada 1 acima e essa cópia é descartável/sobrescrita a cada sync de qualquer jeito.
+- **Prefixo `/painel` via Caddy `handle_path` + Flask `ProxyFix`:** Caddy tira o prefixo antes de repassar pro backend (`header_up X-Forwarded-Prefix /painel`); `painel_agentes.py` usa `werkzeug.middleware.proxy_fix.ProxyFix(x_prefix=1, ...)` pra que `url_for()`/`redirect()` gerem link já com `/painel` na frente. Sem proxy na frente (uso local direto, LAN, porta 8070), os cabeçalhos `X-Forwarded-*` não existem e isso é um no-op -- **zero mudança de comportamento no painel local em produção**, validado com teste antes/depois do cabeçalho.
+- **15 ocorrências de caminho absoluto fixo** (`fetch("/api/...")`, `href="/execucao/..."` etc., em `execucao.html`, `planejamento_rotas.html`, `torre_controle.html`) não se beneficiam do `url_for()`/`ProxyFix` automaticamente -- corrigidas manualmente pra usar um `BASE_PATH` JS injetado em `base.html` (`{{ request.script_root }}`, vazio quando não há prefixo).
+- Testado ponta a ponta via HTTPS real: certificado emitido, login leitura funciona (`200`), sem login bloqueia (`401`), ação de escrita bloqueada (`403`), navegação interna com link `/painel/...` correto, `confirmacao.freshhub.com.br` sem regressão.
+
+**Bug encontrado e corrigido depois do ar (16/08, teste real do Hugo -- botão "Imprimir rota"):** o romaneio em PDF gerava, mas quebrado de duas formas:
+1. `roteirizacao/gerar_pdf_romaneios.py::_fonte()` só tentava fontes do Windows (`C:/Windows/Fonts/arial.ttf` etc.) -- na VPS caía pro bitmap padrão do PIL, que não tem os acentos do português. Corrigido: instalado `fonts-liberation` na VPS (Liberation Sans, métrica compatível com Arial) e adicionado como candidato antes do fallback genérico.
+2. Os PDFs físicos de NF/boleto vivem em pastas locais (`documentos_pedido/dados/{downloads_stokki_temp,boletos_separados,nfs_separadas,anexos_temp}/`, NUNCA apagadas depois do upload pro GCS -- ver `documentos_pedido/localizar_arquivos.py`) que eu não tinha sincronizado pra VPS -- todo pedido saía com NF/boleto "não localizado". Corrigido: `sincronizar_painel_vps.py` agora também sincroniza essas 4 pastas (delta só dos arquivos novos, comparando por nome via `find` remoto + tar -- sem rsync, que não está disponível neste Windows; ~318MB no bootstrap inicial, incremental depois).
+
+**Lembrete pra próxima vez:** depois de fazer scp de um `.py` novo pra VPS, sempre `systemctl restart painel-agentes` -- o processo já tinha o módulo velho importado em memória (`sys.modules`), copiar o arquivo no disco sozinho não basta.
+
+**2º bug encontrado depois do primeiro "corrigido" (16/08, Hugo continuou vendo tela branca):** a varredura original dos 15 caminhos absolutos fixos só procurou por `fetch(` e `href=` literais -- passou batido em `postJSON(url, ...)` e `postJSONAgentesPlanejamento(url, ...)`, dois helpers que `planejamento_rotas.html` usa pra TODAS as ~24 chamadas de ação (rodar agente, reordenar, criar rota, alocar motorista etc.), incluindo o próprio botão "Imprimir rota". Corrigido na raiz: os dois helpers agora fazem `fetch(BASE_PATH + url, ...)` em vez de `fetch(url, ...)` -- um ajuste só resolve as ~24 chamadas de uma vez, em vez de editar cada uma. Mais 3 ocorrências pontuais também tinham escapado (`torre_controle.html`: link pro mapa e pro planejamento; `planejamento_rotas.html`: URL do romaneio no botão de imprimir). **Lição:** ao caçar caminho absoluto fixo em JS, procurar por QUALQUER string começando com `/` entre aspas (`grep -oE "[\"'\`][/][a-zA-Z][^\"'\`]*"`), não só pelos nomes de função óbvios (`fetch`/`href`) -- helpers customizados escondem o padrão.
+
+**Validado pelo Hugo em produção (16/08):** botão "Imprimir rota" testado de verdade em `app.freshhub.com.br/painel/planejamento` -- confirmado funcionando.
+
+**Pendente:** Hugo commitar as mudanças (`painel_agentes.py`, 5 templates, `painel_agentes/infra/`, `roteirizacao/gerar_pdf_romaneios.py`, `sincronizar_painel_vps.py`, `criar_tarefa_sincronizar_painel_vps.ps1`) -- por ora só estão no working tree local + copiadas direto pra VPS via scp (não passaram pelo git ainda).
+
+🔶 **Fase 2 — `dados.db` + planilhas como fonte única na VPS** — **iniciada 16/08**
+Ponto de corte real (ver risco #5). A partir daqui o banco "mora" na VPS; qualquer job que ainda roda local precisa ler/escrever via rede em vez de arquivo direto, OU migrar junto nesta mesma fase — confirmado no levantamento abaixo: **precisa mesmo migrar os jobs junto**, não dá pra só mover o banco sozinho.
+
+**Levantamento de dependências dos 10 jobs em lote (16/08, sub-agente):**
+
+| Script | Playwright | Config necessário | Risco/criticidade |
+|---|---|---|---|
+| `validacao_checklists/validar_checklists.py` | Não | `vuupt_api`, `anthropic`, `email` | Baixo -- **melhor piloto**: zero Playwright, e a tarefa nem existe hoje no Agendador (nada em produção pra quebrar) |
+| `verificar_pedidos_duplicados_vuupt.py` | Não | `vuupt_api`, `email` | Baixo -- 2º piloto natural, já roda em produção 2x/dia (dá pra comparar local x VPS) |
+| `roteirizacao/criar_rotas_diarias.py` | Não | `vuupt_api`, `google_maps`, `motoristas`, `complexidade_entrega`, `clientes_agendamento`, `email` | Alto (desenha as rotas do dia seguinte) |
+| `roteirizacao/incrementar_rotas.py` | Não | `vuupt_api`, `google_maps`, `motoristas`, `clientes_agendamento`, `email` | Alto (roda de hora em hora à noite) |
+| `roteirizacao/gerar_pdf_romaneios.py` | Não | `vuupt_api`, `motoristas` | Médio-alto -- **já validado rodando na VPS** (Fase 1, botão Imprimir), só falta o timer das 4h |
+| `expedir_pedidos.py` | **Sim, direto** | `vuupt_api`, `stokki`, `email` | **Muito alto** -- mais frequente (30/30min) e já causou incidente real (5 dias parado, ~570 pedidos represados) |
+| `documentos_pedido/processar_documentos.py` | **Sim, direto** | `vuupt_api`, `gcs`, `email` | Médio |
+| `notificacao_transportadoras/notificar_transportadoras.py` | **Sim, direto** | `vuupt_api`, `email`, `stokki` | Médio |
+| `executar_tudo.py` | **Sim, indireto** (via `stokki/auth.py` fallback + `stokki/estacao_impressao.py`) | `stokki`, `email`, `vuupt_api`, `anthropic`, `google_maps`, `clientes_agendamento`, `complexidade_entrega`, `importacao_email`, `notificacao_execucao` | **Alto** -- espinha dorsal do pipeline, 2x/dia |
+| `notificar_pedidos_em_espera.py` | **Sim, indireto** (mesma cadeia) | `email`, `stokki` | Médio-alto |
+
+**Achado importante: nenhum dos 10 scripts mexe com impressora física.** "Estação de Impressão" é só uma tela do Stokki que muda status de pedido (`/provider/operation/order/printing`), não hardware -- a impressão física do romaneio já é manual hoje (alguém imprime o PDF que `gerar_pdf_romaneios.py` gera). **Ou seja, a Fase 2/5 não precisa esperar o desenho do print-agent (Fase 7)** -- são questões independentes.
+
+**Achados extras a confirmar com o Hugo (não bloqueiam, só registrar):**
+- `StokkiEventos_ValidacaoChecklists` não existe no Agendador hoje (nem `Ready` nem `Disabled`) -- o `.ps1` e o script existem e já rodou manualmente em produção (13/08), mas a tarefa em si nunca foi registrada ou foi removida. Perguntar se é intencional.
+- `insucesso_entrega/expedir_pedidos.py` é uma cópia desatualizada (12/08) do `expedir_pedidos.py` real da raiz (15/08) -- como `executar_tudo.py` insere `insucesso_entrega/` NO INÍCIO do `sys.path`, um import feito de dentro de `insucesso_entrega/ler_respostas_insucesso.py` pode estar resolvendo pro arquivo antigo por engano. Não investigado a fundo (fora do escopo do levantamento) -- candidato a limpeza antes de comparar resultado local x VPS.
+
+**Pré-requisito antes de qualquer script com Playwright ir pra VPS:** `playwright install` (baixa o Chromium, ~300MB) -- só a lib Python foi instalada até agora (`pip install -r requirements.txt`), sem os binários de navegador.
+
+**Ordem de migração (piloto → maior risco):** validar_checklists → verificar_pedidos_duplicados_vuupt → criar_rotas_diarias/incrementar_rotas → gerar_pdf_romaneios (timer) → [instalar Playwright+Chromium] → expedir_pedidos → processar_documentos/notificar_transportadoras → executar_tudo/notificar_pedidos_em_espera.
+
+**Pilotos 1 e 2 validados na VPS (16/08), rodando de verdade (não só import):**
+- `verificar_pedidos_duplicados_vuupt.py --modo-teste` -- consultou VUUPT de verdade (184 serviços, 2 dias), achou 2 grupos de duplicados reais, simulou cancelamento corretamente, notificação por e-mail de execução enviada com sucesso.
+- `validacao_checklists/validar_checklists.py --modo-teste --limite 5` -- baixou 5 PDFs de canhoto reais da VUUPT, extraiu foto em alta resolução, classificou via Claude (5/5 aprovados com justificativa coerente) -- pipeline completo (VUUPT + Anthropic + processamento de PDF/imagem) validado rodando nativamente em Python 3.12/Linux.
+- `config.yaml` da VPS ganhou `email` (SMTP) e `anthropic` (API) pra viabilizar isso -- `stokki` e `gcs` continuam de fora (só entram com os scripts que dependem de Playwright).
+- **Conclusão prática:** ambiente Linux/VPS está validado pra qualquer script SEM Playwright. Próximo passo natural: `criar_rotas_diarias.py`/`incrementar_rotas.py` (mais lógica de negócio, ainda sem Playwright) ou já partir pra instalar Playwright+Chromium (`playwright install`) e destravar o grupo de maior risco/criticidade.
 
 ⏳ **Fase 3 — Sequência da tarde** (ExecutarTudo → VerificarDuplicados → CriarRotasDiarias → Notificador → ProcessarDocumentos), systemd timer 18:00.
 

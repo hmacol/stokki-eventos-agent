@@ -1,0 +1,32 @@
+# Bloco do painel_agentes dentro do guarda-chuva app.freshhub.com.br
+# (pedido do Hugo, 16/08: tudo sob um dominio so, um caminho por servico).
+#
+# Requisito: o DNS de app.freshhub.com.br ja deve apontar para o IP da VPS
+# ANTES do Caddy conseguir emitir o certificado.
+#
+# `handle_path` tira o prefixo /painel antes de repassar pro backend --
+# o Flask nunca ve o prefixo na URL. `header_up X-Forwarded-Prefix /painel`
+# avisa o Flask (via ProxyFix, ver painel_agentes.py) que ele esta atras
+# desse prefixo, pra url_for()/redirect() gerarem link com /painel na
+# frente -- sem isso os links internos apontariam pra raiz do dominio.
+#
+# Este bloco entra em /etc/caddy/Caddyfile DENTRO do site app.freshhub.com.br
+# (junto de outros `handle_path /<servico>/*` que entrarem no futuro), NAO
+# como um site novo -- so confirmacao.freshhub.com.br continua como
+# subdominio proprio por enquanto.
+
+app.freshhub.com.br {
+	# /painel (sem barra) e /painel/ (raiz, tela "Agentes") nao servem pro
+	# login de leitura (exige acesso total, 403) -- manda direto pra Torre
+	# de Controle, que e o destino real desta VPS somente-leitura. Sem o
+	# redirect de "/painel" (sem barra), o handle_path abaixo nao bate
+	# (exige a barra) e a Caddy devolve 200 vazio -- pagina em branco.
+	redir /painel /painel/torre permanent
+	redir /painel/ /painel/torre permanent
+
+	handle_path /painel/* {
+		reverse_proxy 127.0.0.1:8071 {
+			header_up X-Forwarded-Prefix /painel
+		}
+	}
+}

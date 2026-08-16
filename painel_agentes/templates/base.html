@@ -107,6 +107,12 @@
 {% block estilo_extra %}{% endblock %}
 </head>
 <body>
+<script>
+  // Prefixo do painel quando servido atrás de proxy sob um caminho (ex:
+  // app.freshhub.com.br/painel) -- vazio no acesso direto (LAN/porta 8070).
+  // Usar pra montar chamadas fetch()/href com caminho absoluto fixo.
+  const BASE_PATH = "{{ request.script_root }}";
+</script>
 <header>
   <div class="marca">
     <span class="nome">Painel de Agentes</span>

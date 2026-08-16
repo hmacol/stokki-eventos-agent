@@ -151,7 +151,7 @@
   }
 
   function atualizar() {
-    fetch(`/execucao/${execucaoId}/status`)
+    fetch(`${BASE_PATH}/execucao/${execucaoId}/status`)
       .then(r => r.json())
       .then(dados => {
         const jaEstavaNoFim = logBox.scrollHeight - logBox.scrollTop <= logBox.clientHeight + 30;

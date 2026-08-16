@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 
 import yaml
 from flask import Flask, Response, abort, g, redirect, render_template, request, url_for, jsonify, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
@@ -66,6 +67,13 @@ import torre_controle
 import tratativas
 
 app = Flask(__name__)
+# Permite o painel morar sob um prefixo (ex: app.freshhub.com.br/painel,
+# atrás do Caddy com `handle_path` + `header_up X-Forwarded-Prefix`) --
+# sem isso, url_for()/redirect() gerariam link pra raiz do domínio, não
+# pro prefixo. x_for/x_proto/x_host: 1 hop de proxy confiável (Caddy).
+# Sem proxy na frente (uso local direto, LAN), os cabeçalhos X-Forwarded-*
+# não existem e isso vira um no-op -- não muda o comportamento atual.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1, x_for=1, x_host=1)
 
 # Roda uma vez, assim que o painel sobe -- destrava qualquer execução
 # que ficou presa em RODANDO por causa de um encerramento à força do

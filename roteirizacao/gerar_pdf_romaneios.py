@@ -372,8 +372,14 @@ def _fmt_peso(peso: float | None) -> str:
 # ---------------------------------------------------------------------------
 
 def _fonte(tamanho_px: int, negrito: bool = False) -> ImageFont.FreeTypeFont:
-    candidatos = (["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf"] if negrito
-                  else ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf"])
+    # Windows primeiro (máquina local); Liberation Sans depois (VPS/Linux
+    # -- métrica compatível com Arial, `apt install fonts-liberation`) --
+    # sem nenhuma das duas, cai pro bitmap padrão do PIL, que não tem os
+    # acentos do português (pt-BR) direito.
+    candidatos = (["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf",
+                   "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"] if negrito
+                  else ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf",
+                        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"])
     for caminho in candidatos:
         try:
             return ImageFont.truetype(caminho, tamanho_px)
