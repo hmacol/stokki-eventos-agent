@@ -26,9 +26,16 @@ de produção:
   - até `volume_maximo` caixas por sublote (100);
   - nenhum par de pedidos do mesmo sublote a mais de
     `distancia_maxima_km` (quando ambos têm coordenada; None desliga);
-  - nível de dificuldade: nível 3 limita o sublote a
-    NIVEL_3_TAMANHO_MAXIMO_ROTA (4) entregas; nível 4 (ou pedido
-    "gigante" com mais caixas que o limite) fica em rota exclusiva.
+  - nível de dificuldade: nível 3 mistura livremente com nível 1/2 (que
+    preenchem a rota normalmente) -- só a QUANTIDADE de pedidos nível 3
+    na mesma rota é limitada a NIVEL_3_TAMANHO_MAXIMO_ROTA (4), o
+    tamanho total do sublote continua até `tamanho_maximo` (ajustado
+    15/08); pedido "gigante" (mais caixas que o limite) fica em rota
+    exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando junta com
+    outro nível 4 da mesma rede (mesma raiz de CNPJ) agendado pro mesmo
+    dia (pedido do Hugo, 15/08) -- os 5 modelos usam a MESMA
+    pré-separação (roteirizacao_dados.separar_pedidos_exclusivos) pra
+    essa regra não divergir entre eles.
 
 Diferenciação Grande SP x Viagem (regra 3 do doc): quem chama pode
 passar `eh_viagem_fn` (normalmente alocacao_motoristas.
@@ -44,8 +51,8 @@ from collections.abc import Callable
 from roteirizacao_dados import (
     obter_coordenadas, _distancia_km, extrair_cep,
     extrair_volume_caixas, extrair_nivel_dificuldade,
-    calcular_km_estimado,
-    NIVEL_3_TAMANHO_MAXIMO_ROTA, NIVEL_ROTA_EXCLUSIVA,
+    calcular_km_estimado, separar_pedidos_exclusivos,
+    NIVEL_3_TAMANHO_MAXIMO_ROTA,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,9 +101,12 @@ def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_max
                           eh_viagem_fn=None) -> list[list[dict]]:
     """
     Empacotamento ganancioso IDÊNTICO ao de dividir_em_sublotes
-    (roteirizacao_dados.py) -- inclusive travas de nível 3/4, pedido
-    gigante e distância entre pares. A ÚNICA diferença dos modelos que
-    usam isto é a ORDENAÇÃO de entrada (grade 1D -> theta polar etc.).
+    (roteirizacao_dados.py) -- inclusive trava de nível 3 e distância
+    entre pares. A ÚNICA diferença dos modelos que usam isto é a
+    ORDENAÇÃO de entrada (grade 1D -> theta polar etc.). Pedido
+    "gigante" e nível 4 já vêm PRÉ-SEPARADOS por quem chama (ver
+    roteirizacao_dados.separar_pedidos_exclusivos) -- `ordenados` aqui
+    só contém nível 1/2/3.
     """
     sublotes: list[list[dict]] = []
     sublote_atual: list[dict] = []
@@ -106,23 +116,15 @@ def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_max
         cx_pedido = extrair_volume_caixas(servico)
         nivel_pedido = extrair_nivel_dificuldade(servico)
 
-        if cx_pedido > volume_maximo or nivel_pedido == NIVEL_ROTA_EXCLUSIVA:
-            if sublote_atual:
-                sublotes.append(sublote_atual)
-                sublote_atual = []
-                caixas_atual = 0
-            sublotes.append([servico])
-            continue
+        qtd_nivel3_atual = sum(1 for s in sublote_atual if extrair_nivel_dificuldade(s) == 3)
+        cabe_nivel3 = qtd_nivel3_atual + (1 if nivel_pedido == 3 else 0) <= NIVEL_3_TAMANHO_MAXIMO_ROTA
 
-        tem_nivel_3 = nivel_pedido == 3 or any(extrair_nivel_dificuldade(s) == 3 for s in sublote_atual)
-        tamanho_maximo_efetivo = NIVEL_3_TAMANHO_MAXIMO_ROTA if tem_nivel_3 else tamanho_maximo
-
-        cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo_efetivo
+        cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
         cabe_distancia = _cabe_na_distancia(servico, sublote_atual, distancia_maxima_km, api_key,
                                             distancia_maxima_viagem_km, eh_viagem_fn)
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_nivel3):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0
@@ -151,7 +153,17 @@ def agrupar_por_sweep(servicos: list[dict], base_lat: float, base_lng: float,
     Serviços sem coordenada: theta = +inf, vão pro final da varredura e
     são agrupados entre si (desempate por CEP, pra manter vizinhança
     postal) -- nunca perde um pedido.
+
+    Pedido "gigante" e nível 4 são pré-separados por
+    separar_pedidos_exclusivos ANTES da varredura -- só nível 1/2/3
+    participa do sweep (pedido do Hugo, 15/08: junção de nível 4 por
+    rede vale igual pros 5 esquemas).
     """
+    sublotes_prontos, demais = separar_pedidos_exclusivos(
+        servicos, volume_maximo, distancia_maxima_km, api_key,
+        distancia_maxima_viagem_km=distancia_maxima_viagem_km, eh_viagem_fn=eh_viagem_fn,
+    )
+
     def _theta(servico: dict):
         coords = obter_coordenadas(servico, api_key)
         if not coords:
@@ -159,8 +171,8 @@ def agrupar_por_sweep(servicos: list[dict], base_lat: float, base_lng: float,
             return (1, float("inf"), int(cep) if cep else float("inf"))
         return (0, math.atan2(coords[0] - base_lat, coords[1] - base_lng), 0.0)
 
-    ordenados = sorted(servicos, key=_theta)
-    sublotes = _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
+    ordenados = sorted(demais, key=_theta)
+    sublotes = sublotes_prontos + _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
                                      distancia_maxima_km, api_key,
                                      distancia_maxima_viagem_km, eh_viagem_fn)
     _verificar_travas(sublotes, tamanho_maximo, volume_maximo)
@@ -182,12 +194,23 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
 
     Pedidos sem coordenada: d_0i = 0 (savings zero, ficam por último
     nas fusões) -- nunca perde um pedido.
-    """
-    n = len(servicos)
-    if n == 0:
-        return []
 
-    coords = [obter_coordenadas(s, api_key) for s in servicos]
+    Pedido "gigante" e nível 4 são pré-separados por
+    separar_pedidos_exclusivos ANTES da fusão -- só nível 1/2/3 entra
+    no algoritmo de savings (pedido do Hugo, 15/08: junção de nível 4
+    por rede vale igual pros 5 esquemas).
+    """
+    sublotes_prontos, demais = separar_pedidos_exclusivos(
+        servicos, volume_maximo, distancia_maxima_km, api_key,
+        distancia_maxima_viagem_km=distancia_maxima_viagem_km, eh_viagem_fn=eh_viagem_fn,
+    )
+
+    n = len(demais)
+    if n == 0:
+        _verificar_travas(sublotes_prontos, tamanho_maximo, volume_maximo)
+        return sublotes_prontos
+
+    coords = [obter_coordenadas(s, api_key) for s in demais]
     d0 = [
         _distancia_km(base_lat, base_lng, *c) if c else 0.0
         for c in coords
@@ -203,24 +226,19 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
             savings.append((s_ij, i, j))
     savings.sort(key=lambda t: t[0], reverse=True)
 
-    # Rotas iniciais: 1 pedido cada. Nível 4 e pedido gigante nunca
-    # fundem com ninguém (rota exclusiva, mesma regra da produção).
+    # Rotas iniciais: 1 pedido cada.
     rota_de = list(range(n))  # índice do pedido -> id da rota
     rotas: dict[int, list[int]] = {i: [i] for i in range(n)}
-    caixas: dict[int, int] = {i: extrair_volume_caixas(servicos[i]) for i in range(n)}
-    exclusiva = {
-        i: (extrair_nivel_dificuldade(servicos[i]) == NIVEL_ROTA_EXCLUSIVA
-            or caixas[i] > volume_maximo)
-        for i in range(n)
-    }
+    caixas: dict[int, int] = {i: extrair_volume_caixas(demais[i]) for i in range(n)}
 
     def _fusao_valida(indices: list[int]) -> bool:
-        sublote = [servicos[k] for k in indices]
+        sublote = [demais[k] for k in indices]
         if sum(caixas[k] for k in indices) > volume_maximo:
             return False
-        tem_nivel_3 = any(extrair_nivel_dificuldade(s) == 3 for s in sublote)
-        limite_tamanho = NIVEL_3_TAMANHO_MAXIMO_ROTA if tem_nivel_3 else tamanho_maximo
-        if len(sublote) > limite_tamanho:
+        if len(sublote) > tamanho_maximo:
+            return False
+        qtd_nivel3 = sum(1 for s in sublote if extrair_nivel_dificuldade(s) == 3)
+        if qtd_nivel3 > NIVEL_3_TAMANHO_MAXIMO_ROTA:
             return False
         limite_dist = _limite_distancia(sublote, distancia_maxima_km,
                                         distancia_maxima_viagem_km, eh_viagem_fn)
@@ -236,8 +254,6 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
         ra, rb = rota_de[i], rota_de[j]
         if ra == rb:
             continue
-        if any(exclusiva[k] for k in rotas[ra] + rotas[rb]):
-            continue
         combinada = rotas[ra] + rotas[rb]
         if not _fusao_valida(combinada):
             continue
@@ -246,7 +262,7 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
         rotas[ra] = combinada
         del rotas[rb]
 
-    sublotes = [[servicos[k] for k in indices] for indices in rotas.values()]
+    sublotes = sublotes_prontos + [[demais[k] for k in indices] for indices in rotas.values()]
     _verificar_travas(sublotes, tamanho_maximo, volume_maximo)
     return sublotes
 
@@ -367,15 +383,25 @@ def agrupar_por_cep(servicos: list[dict], base_lat: float, base_lng: float,
 
     Serviços sem CEP reconhecível (extrair_cep retorna None): vão pro
     final da ordenação -- nunca perde um pedido.
+
+    Pedido "gigante" e nível 4 são pré-separados por
+    separar_pedidos_exclusivos ANTES da ordenação por CEP -- só nível
+    1/2/3 participa (pedido do Hugo, 15/08: junção de nível 4 por rede
+    vale igual pros 5 esquemas).
     """
+    sublotes_prontos, demais = separar_pedidos_exclusivos(
+        servicos, volume_maximo, distancia_maxima_km, api_key,
+        distancia_maxima_viagem_km=distancia_maxima_viagem_km, eh_viagem_fn=eh_viagem_fn,
+    )
+
     def _chave_cep(servico: dict):
         cep = extrair_cep(servico)
         if not cep:
             return (1, float("inf"), float("inf"))
         return (0, int(cep[:digitos_cep]), int(cep))
 
-    ordenados = sorted(servicos, key=_chave_cep)
-    sublotes = _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
+    ordenados = sorted(demais, key=_chave_cep)
+    sublotes = sublotes_prontos + _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
                                      distancia_maxima_km, api_key,
                                      distancia_maxima_viagem_km, eh_viagem_fn)
     _verificar_travas(sublotes, tamanho_maximo, volume_maximo)
@@ -412,11 +438,21 @@ def agrupar_por_kmeans(servicos: list[dict], base_lat: float, base_lng: float,
     Serviços sem coordenada: ficam de fora do clustering e vão pro final
     da ordenação (por CEP, mesmo padrão dos outros modelos) -- nunca
     perde um pedido.
+
+    Pedido "gigante" e nível 4 são pré-separados por
+    separar_pedidos_exclusivos ANTES do clustering -- só nível 1/2/3
+    participa (pedido do Hugo, 15/08: junção de nível 4 por rede vale
+    igual pros 5 esquemas).
     """
+    sublotes_prontos, demais = separar_pedidos_exclusivos(
+        servicos, volume_maximo, distancia_maxima_km, api_key,
+        distancia_maxima_viagem_km=distancia_maxima_viagem_km, eh_viagem_fn=eh_viagem_fn,
+    )
+
     com_coords: list[dict] = []
     pontos: list[tuple[float, float]] = []
     sem_coords: list[dict] = []
-    for s in servicos:
+    for s in demais:
         c = obter_coordenadas(s, api_key)
         if c:
             com_coords.append(s)
@@ -469,7 +505,7 @@ def agrupar_por_kmeans(servicos: list[dict], base_lat: float, base_lng: float,
         ordenados = [com_coords[i] for i in indices_ordenados]
         ordenados.extend(sorted(sem_coords, key=_chave_cep))
 
-    sublotes = _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
+    sublotes = sublotes_prontos + _empacotar_ganancioso(ordenados, tamanho_maximo, volume_maximo,
                                      distancia_maxima_km, api_key,
                                      distancia_maxima_viagem_km, eh_viagem_fn)
     _verificar_travas(sublotes, tamanho_maximo, volume_maximo)

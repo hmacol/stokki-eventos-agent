@@ -76,14 +76,66 @@ def macro_regiao_do_servico(servico: dict, api_key: str | None = None) -> str:
     return MACRO_GRANDE_SP
 
 
-def particionar_por_macro_regiao(servicos: list[dict], api_key: str | None = None) -> dict[str, list[dict]]:
-    """Particiona os serviços por macro-região (ver macro_regiao_do_servico)
+def particionar_por_macro_regiao(servicos: list[dict], api_key: str | None = None,
+                                 tamanho_minimo: int = 1,
+                                 distancia_maxima_fusao_km: float | None = None) -> dict[str, list[dict]]:
+    """
+    Particiona os serviços por macro-região (ver macro_regiao_do_servico)
     -- quem roteiriza deve rodar o agrupamento SEPARADO por partição, pra
-    nenhuma rota cruzar a fronteira Grande SP x regiões externas."""
+    nenhuma rota cruzar a fronteira Grande SP x regiões externas.
+
+    Fusão entre macro-regiões vizinhas, como ÚLTIMO RECURSO (pedido do
+    Hugo, 15/08): quando `distancia_maxima_fusao_km` é informado, toda
+    macro-região com menos de `tamanho_minimo` pedidos tenta se fundir
+    na OUTRA macro-região mais PRÓXIMA (centroide real, mesma lógica de
+    consolidar_regioes_pequenas) -- mas só se a distância entre os
+    centroides ficar até esse teto; do contrário, permanece isolada
+    (mais seguro que forçar uma rota gigante sem sentido). Achado real,
+    15/08: Sorocaba e Baixada Santista caem no MESMO dia fixo da semana
+    mas são direções opostas (128km entre si) -- corretamente NÃO se
+    fundem; Campinas e Piracicaba, mesmo dia fixo E mesmo corredor
+    (44km) -- se fundem. Sem esse parâmetro (None, padrão): comportamento
+    de sempre, macro-regiões 100% isoladas.
+    """
     particoes: dict[str, list[dict]] = defaultdict(list)
     for s in servicos:
         particoes[macro_regiao_do_servico(s, api_key)].append(s)
-    return dict(particoes)
+    particoes = dict(particoes)
+
+    if distancia_maxima_fusao_km is None:
+        return particoes
+
+    sem_vizinha: set[str] = set()
+    while len(particoes) > 1:
+        pequenas = [r for r, s in particoes.items() if len(s) < tamanho_minimo and r not in sem_vizinha]
+        if not pequenas:
+            break
+        menor = min(pequenas, key=lambda r: len(particoes[r]))
+
+        candidatas = [r for r in particoes if r != menor]
+        centroide_menor = _centroide_coords(particoes[menor], api_key)
+        candidatas_com_coords = [c for c in candidatas if _centroide_coords(particoes[c], api_key)]
+        if not centroide_menor or not candidatas_com_coords:
+            sem_vizinha.add(menor)
+            continue
+
+        vizinha, distancia = min(
+            ((c, _distancia_km(*centroide_menor, *_centroide_coords(particoes[c], api_key)))
+             for c in candidatas_com_coords),
+            key=lambda t: t[1],
+        )
+        if distancia > distancia_maxima_fusao_km:
+            sem_vizinha.add(menor)
+            continue
+
+        logger.info(
+            f"  Fusão entre macro-regiões: '{menor}' ({len(particoes[menor])} pedido(s)) "
+            f"fundida em '{vizinha}' ({len(particoes[vizinha])} pedido(s)) -- {distancia:.1f} km."
+        )
+        particoes[vizinha].extend(particoes[menor])
+        del particoes[menor]
+
+    return particoes
 
 
 def elegivel_para_data(servico: dict, data_alvo) -> bool:
@@ -144,6 +196,41 @@ def extrair_nivel_dificuldade(servico: dict) -> int:
     agrupamento por falta dela.
     """
     return servico.get("_nivel_dificuldade") or 1
+
+
+def extrair_documento_destinatario(servico: dict) -> str:
+    """CNPJ/CPF do destinatário (campo 'customer.code' do serviço VUUPT,
+    o mesmo usado por classificar_nivel) -- extraído aqui pra ser
+    reaproveitado no agrupamento de nível 4 por rede (ver _raiz_cnpj)."""
+    return (servico.get("customer") or {}).get("code", "")
+
+
+def _raiz_cnpj(documento: str) -> str:
+    """
+    "Raiz" do CNPJ -- 8 primeiros dígitos, identifica a EMPRESA/rede
+    independente da filial (ex: matriz e várias lojas de uma rede de
+    supermercado têm a mesma raiz, cada uma com dígitos de filial e
+    verificadores diferentes). Usada pra permitir que pedidos nível 4
+    da MESMA rede dividam rota entre si (pedido do Hugo, 15/08 -- ver
+    dividir_em_sublotes). CPF (11 dígitos) ou documento fora do padrão
+    CNPJ: usa o documento inteiro (só "junta" com o documento idêntico,
+    já que CPF não tem conceito de matriz/filial).
+    """
+    digitos = "".join(c for c in str(documento or "") if c.isdigit())
+    return digitos[:8] if len(digitos) == 14 else digitos
+
+
+def _dia_agendamento(servico: dict):
+    """Data (sem hora) do agendamento do serviço (campo scheduled_start),
+    ou None se não tiver agendamento ou vier num formato não parseável
+    -- mesma tolerância de elegivel_para_data."""
+    scheduled_start = servico.get("scheduled_start")
+    if not scheduled_start:
+        return None
+    try:
+        return datetime.fromisoformat(scheduled_start).date()
+    except (ValueError, TypeError):
+        return None
 
 
 def extrair_cep(servico: dict) -> str | None:
@@ -290,8 +377,21 @@ def _centroide_cep(servicos: list[dict]) -> float | None:
     return sum(ceps) / len(ceps)
 
 
+def _espalhamento_maximo(servicos: list[dict], api_key: str | None) -> float:
+    """Maior distância par a par entre os pedidos com coordenada
+    disponível (0.0 se não houver pelo menos 2 com coordenada -- não dá
+    pra medir, não bloqueia)."""
+    coords = [c for c in (obter_coordenadas(s, api_key) for s in servicos) if c]
+    maior = 0.0
+    for i in range(len(coords)):
+        for j in range(i + 1, len(coords)):
+            maior = max(maior, _distancia_km(*coords[i], *coords[j]))
+    return maior
+
+
 def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
-                                api_key: str | None = None) -> dict[str, list[dict]]:
+                                api_key: str | None = None,
+                                distancia_maxima_km: float | None = None) -> dict[str, list[dict]]:
     """
     Funde regiões pequenas (menos de `minimo` pedidos — pedido do
     Hugo, 01/08: "mínimo de 10 pedidos em cada rota") com a região
@@ -313,9 +413,24 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
     Proximidade pelo CENTROIDE de coordenadas reais quando disponível
     (mesma lógica geográfica do resto do módulo); cai pro CEP médio
     como reserva. Nunca deixa nenhum pedido de fora.
+
+    `distancia_maxima_km` (Hugo, 15/08): quando informado, só aceita
+    fundir com uma vizinha se o ESPALHAMENTO resultante (maior par a
+    par, ver _espalhamento_maximo) ficar dentro desse teto -- a MESMA
+    trava que dividir_em_sublotes vai aplicar depois. Sem isso, a fusão
+    podia perseguir a vizinha mais próxima só pra bater o mínimo de
+    CONTAGEM mesmo estando longe, e dividir_em_sublotes quebrava esse
+    grupo de novo por DISTÂNCIA -- desperdiçando a consolidação e ainda
+    deixando sobra pequena (achado real, 15/08: região de 46 pedidos
+    com 29km de espalhamento virava [1, 9, 18, 18] em vez de aproveitar
+    melhor o volume). Quando a vizinha mais próxima estoura o teto,
+    tenta a PRÓXIMA mais próxima -- só marca sem_vizinha quando
+    NENHUMA candidata (de qualquer distância) serve. Sem esse parâmetro
+    (None, padrão): comportamento de sempre, sempre funde com a mais
+    próxima.
     """
     atual = {regiao: list(servicos) for regiao, servicos in grupos.items()}
-    sem_vizinha: set[str] = set()  # pequenas sem candidata na própria macro -- não readressáveis
+    sem_vizinha: set[str] = set()  # pequenas sem candidata (na macro, ou dentro do teto) -- não readressáveis
 
     while len(atual) > 1:
         pequenas = [r for r, s in atual.items() if len(s) < minimo and r not in sem_vizinha]
@@ -331,7 +446,7 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
         centroide_menor = _centroide_coords(atual[menor], api_key)
         candidatas_com_coords = [c for c in candidatas if _centroide_coords(atual[c], api_key)]
         if centroide_menor and candidatas_com_coords:
-            vizinha = min(
+            ordenadas = sorted(
                 candidatas_com_coords,
                 key=lambda r: _distancia_km(*centroide_menor, *_centroide_coords(atual[r], api_key)),
             )
@@ -339,9 +454,22 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
             cep_menor = _centroide_cep(atual[menor])
             candidatas_com_cep = [c for c in candidatas if _centroide_cep(atual[c]) is not None]
             if cep_menor is not None and candidatas_com_cep:
-                vizinha = min(candidatas_com_cep, key=lambda r: abs(cep_menor - _centroide_cep(atual[r])))
+                ordenadas = sorted(candidatas_com_cep, key=lambda r: abs(cep_menor - _centroide_cep(atual[r])))
             else:
-                vizinha = max(candidatas, key=lambda r: len(atual[r]))  # último recurso
+                ordenadas = sorted(candidatas, key=lambda r: -len(atual[r]))  # último recurso
+
+        vizinha = None
+        for candidata in ordenadas:
+            if distancia_maxima_km is not None:
+                espalhamento = _espalhamento_maximo(atual[menor] + atual[candidata], api_key)
+                if espalhamento > distancia_maxima_km:
+                    continue
+            vizinha = candidata
+            break
+
+        if vizinha is None:
+            sem_vizinha.add(menor)
+            continue
 
         logger.info(
             f"  Consolidando: região '{menor}' ({len(atual[menor])} pedido(s)) "
@@ -353,12 +481,128 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
     return atual
 
 
-# Nível de dificuldade 3: pode misturar com níveis 1/2, mas a rota
-# inteira fica limitada a este tamanho assim que QUALQUER entrega
-# nível 3 entra nela (pedido do Hugo, 10/08). Nível 4 é mais estrito
-# ainda: nunca divide rota com nenhum outro pedido (ver NIVEL_ROTA_EXCLUSIVA).
+# Nível de dificuldade 3: pode misturar livremente com níveis 1/2 (que
+# PREENCHEM a rota normalmente, até `tamanho_maximo`/`volume_maximo`) --
+# só a QUANTIDADE de pedidos nível 3 dentro da mesma rota é que fica
+# limitada a este teto (pedido do Hugo, 10/08 -- ajustado 15/08: antes
+# a rota INTEIRA caía pra esse tamanho assim que 1 nível-3 entrava,
+# mesmo sobrando nível 1/2 fácil pra preencher; achado real, 15/08: 24
+# das 36 rotas do dia (67%) saíam travadas em 4 por causa disso, muitas
+# com só 1 pedido nível-3 "puxando" e descartando o resto da vizinhança
+# geográfica fácil). Nível 4 nunca divide rota com nenhum pedido de
+# nível 1/2/3 (ver NIVEL_ROTA_EXCLUSIVA) -- mas PODE dividir rota com
+# OUTRO nível 4 da MESMA rede (mesma raiz de CNPJ) agendado pro MESMO
+# DIA, até este mesmo teto (pedido do Hugo, 15/08 -- achado real: 15
+# pedidos de lojas diferentes da rede Hirota, cada endereço com CNPJ
+# próprio, viravam 15 rotas de 1 pedido cada mesmo todas agendadas pro
+# mesmo dia).
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
 NIVEL_ROTA_EXCLUSIVA = 4
+NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
+
+
+def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
+                               distancia_maxima_km: float | None, api_key: str | None,
+                               tamanho_maximo_nivel4: int = NIVEL_4_TAMANHO_MAXIMO_ROTA,
+                               distancia_maxima_viagem_km: float | None = None,
+                               eh_viagem_fn=None) -> tuple[list[list[dict]], list[dict]]:
+    """
+    Pré-separa, ANTES do agrupamento geográfico específico de cada
+    esquema de roteirização (grade, sweep, savings, cep, kmeans -- ver
+    otimizacao_rotas.py), os pedidos que sempre saem "prontos" e não
+    participam da comparação de proximidade de quem chama:
+      - pedido "gigante" (mais caixas que `volume_maximo`): sempre
+        isolado;
+      - nível 4 sem par possível (sem agendamento, ou sem outro nível 4
+        da mesma rede no lote): isolado, como sempre foi;
+      - nível 4 da MESMA rede (mesma raiz de CNPJ -- ver _raiz_cnpj) +
+        MESMO DIA de agendamento (`scheduled_start`): agrupados entre
+        si até `tamanho_maximo_nivel4`, respeitando a mesma trava de
+        distância dos demais sublotes (Grande SP x Viagem, via
+        `eh_viagem_fn`/`distancia_maxima_viagem_km`, igual aos outros
+        modelos deste pacote) -- pedido do Hugo, 15/08: achado real, 15
+        pedidos de lojas diferentes da rede Hirota, cada endereço com
+        CNPJ próprio, viravam 15 rotas de 1 pedido cada mesmo todas
+        agendadas pro mesmo dia.
+
+    Devolve (sublotes_prontos, demais) -- `demais` (nível 1/2/3) é o
+    que quem chama deve agrupar com o algoritmo próprio de cada esquema.
+
+    Compartilhada por TODOS os esquemas de roteirização (pedido do
+    Hugo, 15/08: a junção de nível 4 por rede vale igual pros 5, não só
+    pro modelo Atual -- evita 5 implementações divergentes da mesma
+    regra de negócio).
+    """
+    def _limite(sublote_candidato: list[dict]) -> float | None:
+        if eh_viagem_fn is not None and eh_viagem_fn(sublote_candidato):
+            return distancia_maxima_viagem_km
+        return distancia_maxima_km
+
+    def _cabe_na_distancia(servico: dict, sublote_atual: list[dict]) -> bool:
+        limite = _limite(sublote_atual + [servico])
+        if limite is None:
+            return True
+        coords_novo = obter_coordenadas(servico, api_key)
+        if not coords_novo:
+            return True
+        for outro in sublote_atual:
+            coords_outro = obter_coordenadas(outro, api_key)
+            if coords_outro and _distancia_km(*coords_novo, *coords_outro) > limite:
+                return False
+        return True
+
+    def _chave_ordenacao(servico: dict):
+        coords = obter_coordenadas(servico, api_key)
+        if coords:
+            return (0, coords[0], coords[1])
+        cep = extrair_cep(servico)
+        return (1, int(cep) if cep else float("inf"), 0.0)
+
+    def _empacotar_grupo(servicos_grupo: list[dict]) -> list[list[dict]]:
+        ordenados_grupo = sorted(servicos_grupo, key=_chave_ordenacao)
+        sublotes_grupo: list[list[dict]] = []
+        atual: list[dict] = []
+        caixas = 0
+        for servico in ordenados_grupo:
+            cx_pedido = extrair_volume_caixas(servico)
+            cabe_entregas = len(atual) + 1 <= tamanho_maximo_nivel4
+            cabe_caixas = caixas + cx_pedido <= volume_maximo
+            cabe_distancia = _cabe_na_distancia(servico, atual)
+            if atual and not (cabe_entregas and cabe_caixas and cabe_distancia):
+                sublotes_grupo.append(atual)
+                atual = []
+                caixas = 0
+            atual.append(servico)
+            caixas += cx_pedido
+        if atual:
+            sublotes_grupo.append(atual)
+        return sublotes_grupo
+
+    gigantes: list[dict] = []
+    grupos_nivel4: dict[tuple[str, object], list[dict]] = {}
+    nivel4_isolados: list[dict] = []
+    demais: list[dict] = []
+
+    for servico in servicos:
+        if extrair_volume_caixas(servico) > volume_maximo:
+            gigantes.append(servico)
+            continue
+        if extrair_nivel_dificuldade(servico) == NIVEL_ROTA_EXCLUSIVA:
+            dia = _dia_agendamento(servico)
+            if dia is None:
+                nivel4_isolados.append(servico)
+            else:
+                chave = (_raiz_cnpj(extrair_documento_destinatario(servico)), dia)
+                grupos_nivel4.setdefault(chave, []).append(servico)
+            continue
+        demais.append(servico)
+
+    sublotes_prontos: list[list[dict]] = [[s] for s in gigantes]
+    for grupo in grupos_nivel4.values():
+        sublotes_prontos.extend(_empacotar_grupo(grupo))
+    sublotes_prontos.extend([s] for s in nivel4_isolados)
+
+    return sublotes_prontos, demais
 
 
 def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_maximo: int = 18,
@@ -373,11 +617,14 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     junto com pedidos de São Paulo por ser "a rota mais próxima com
     espaço", mesmo estando a mais de 300km; e 10/08: nível de
     dificuldade da entrega, ver extrair_nivel_dificuldade):
-      - até `tamanho_maximo` entregas por sublote (18 por padrão) --
-        reduzido para NIVEL_3_TAMANHO_MAXIMO_ROTA (4) assim que o
-        sublote contém alguma entrega nível 3; entrega nível 4 nunca
-        divide sublote com mais ninguém (rota exclusiva, mesmo
-        tratamento do pedido "gigante" de caixas, abaixo);
+      - até `tamanho_maximo` entregas por sublote (18 por padrão),
+        preenchido normalmente por nível 1/2/3 -- mas no máximo
+        NIVEL_3_TAMANHO_MAXIMO_ROTA (4) dessas entregas podem ser nível
+        3 (ajustado 15/08: antes a rota INTEIRA caía pra esse tamanho,
+        agora só a quantidade de nível 3 é limitada, nível 1/2 preenche
+        o resto normalmente); entrega nível 4 nunca divide sublote com
+        mais ninguém (rota exclusiva, mesmo tratamento do pedido
+        "gigante" de caixas, abaixo);
       - até `volume_maximo` caixas (soma de extrair_volume_caixas) por
         sublote;
       - nenhum par de pedidos do MESMO sublote pode estar a mais de
@@ -397,9 +644,15 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     tende a aproximar cada rota do limite (18 ou 100), sem nunca
     estourar nenhuma das travas.
 
-    Exceção de pedido gigante ou nível 4: um único pedido com mais de
-    `volume_maximo` caixas, ou com nível de dificuldade 4, nunca cabe
-    junto com nenhum outro -- aloca uma rota exclusiva isolada só pra ele.
+    Exceção de pedido gigante: um único pedido com mais de
+    `volume_maximo` caixas nunca cabe junto com nenhum outro -- aloca
+    uma rota exclusiva isolada só pra ele.
+
+    Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08): nunca divide
+    rota com pedido de nível 1/2/3. Mas PODE dividir rota com OUTRO
+    nível 4 da MESMA rede + MESMO DIA de agendamento -- ver
+    separar_pedidos_exclusivos, chamada abaixo, compartilhada por TODOS
+    os esquemas de roteirização (não só este).
     """
     def _chave_ordenacao(servico: dict):
         coords = obter_coordenadas(servico, api_key)
@@ -420,7 +673,11 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
                 return False
         return True
 
-    ordenados = sorted(servicos, key=_chave_ordenacao)
+    sublotes_prontos, demais = separar_pedidos_exclusivos(
+        servicos, volume_maximo, distancia_maxima_km, api_key,
+    )
+
+    ordenados = sorted(demais, key=_chave_ordenacao)
 
     sublotes: list[list[dict]] = []
     sublote_atual: list[dict] = []
@@ -430,22 +687,14 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         cx_pedido = extrair_volume_caixas(servico)
         nivel_pedido = extrair_nivel_dificuldade(servico)
 
-        if cx_pedido > volume_maximo or nivel_pedido == NIVEL_ROTA_EXCLUSIVA:
-            if sublote_atual:
-                sublotes.append(sublote_atual)
-                sublote_atual = []
-                caixas_atual = 0
-            sublotes.append([servico])
-            continue
+        qtd_nivel3_atual = sum(1 for s in sublote_atual if extrair_nivel_dificuldade(s) == 3)
+        cabe_nivel3 = qtd_nivel3_atual + (1 if nivel_pedido == 3 else 0) <= NIVEL_3_TAMANHO_MAXIMO_ROTA
 
-        tem_nivel_3 = nivel_pedido == 3 or any(extrair_nivel_dificuldade(s) == 3 for s in sublote_atual)
-        tamanho_maximo_efetivo = NIVEL_3_TAMANHO_MAXIMO_ROTA if tem_nivel_3 else tamanho_maximo
-
-        cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo_efetivo
+        cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
         cabe_distancia = _cabe_na_distancia(servico, sublote_atual)
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_nivel3):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0
@@ -455,6 +704,8 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
 
     if sublote_atual:
         sublotes.append(sublote_atual)
+
+    sublotes.extend(sublotes_prontos)
 
     return sublotes
 

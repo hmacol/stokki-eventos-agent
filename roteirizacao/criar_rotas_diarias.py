@@ -83,7 +83,7 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, elegivel_para_data, calcular_km_estimado
+from roteirizacao_dados import agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao
 from selecao_modelo import escolher_melhor_modelo
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
@@ -115,6 +115,15 @@ DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da G
 # urbano lá só fracionava a região inteira em várias rotas pequenas
 # sem necessidade, já que é deslocamento longo de qualquer forma.
 DISTANCIA_MAXIMA_VIAGEM_KM = None
+# Fusão entre macro-regiões externas vizinhas, como ÚLTIMO RECURSO
+# (pedido do Hugo, 15/08): quando uma região não junta o mínimo de
+# pedidos nem somando os dois tipos de carga (ver
+# _particionar_carga_com_fusao), tenta fundir com a OUTRA macro-região
+# mais próxima -- só até este teto de distância entre centroides, senão
+# fica isolada mesmo (medido em dado real, 15/08: Campinas<->Piracicaba
+# 44km, mesmo corredor -- funde; Sorocaba<->Baixada Santista 128km,
+# direções opostas mesmo caindo no mesmo dia fixo -- não funde).
+DISTANCIA_MAXIMA_FUSAO_REGIAO_KM = 50
 PREFIXO_NOME_ROTA = "Planejamento"
 
 
@@ -150,10 +159,50 @@ def _data_alvo_rotas(agora: datetime) -> date:
     return _proximo_dia_util(base)
 
 
+def _particionar_carga_com_fusao(servicos: list[dict], tamanho_minimo: int,
+                                 gmaps_key: str | None) -> list[tuple[str, list[dict]]]:
+    """
+    Parte os serviços (já com '_tipo_carga' classificado) em até 3
+    grupos -- Seco / Refrigerado-Congelado / Misto -- pra rotear em
+    escolher_melhor_modelo (pedido do Hugo, 15/08: a frota tem baú com
+    compartimento térmico, então dentro da MESMA macro-região, quando
+    um dos dois tipos de carga não junta `tamanho_minimo` pedidos
+    sozinho E o outro tipo também está presente ali, os dois entram
+    juntos em "Misto (Seco+Refrigerado)" só NAQUELA macro -- em vez de
+    2 rotas pequenas isoladas, 1 rota com volume suficiente. Achado
+    real, 15/08: Campinas (Seco 5 + Refrigerado 6) vira 1 rota de 11
+    em vez de 2 rotas pequenas.
+
+    Macro-região com pedido suficiente de UM tipo (ou só um dos tipos
+    presente ali) continua 100% separada, como sempre -- a fusão só
+    entra quando ela realmente resolve uma rota pequena.
+    """
+    macros = particionar_por_macro_regiao(servicos, api_key=gmaps_key)
+
+    seco: list[dict] = []
+    frio: list[dict] = []
+    misto: list[dict] = []
+    for lista in macros.values():
+        lista_seco = [s for s in lista if s["_tipo_carga"] not in TIPOS_CARGA_FRIA]
+        lista_frio = [s for s in lista if s["_tipo_carga"] in TIPOS_CARGA_FRIA]
+        if lista_seco and lista_frio and (len(lista_seco) < tamanho_minimo or len(lista_frio) < tamanho_minimo):
+            misto.extend(lista_seco)
+            misto.extend(lista_frio)
+        else:
+            seco.extend(lista_seco)
+            frio.extend(lista_frio)
+
+    particoes = [("Seco", seco), ("Refrigerado/Congelado", frio)]
+    if misto:
+        particoes.append(("Misto (Seco+Refrigerado)", misto))
+    return particoes
+
+
 def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
                               indice_inicial: int = 1,
                               contagem_alocacoes_dia: dict[int, int] | None = None,
-                              sufixo_label: str = "") -> list[dict]:
+                              sufixo_label: str = "",
+                              modelo_forcado: str | None = None) -> list[dict]:
     """
     Miolo do criador de rotas (classificação de nível/tipo de carga,
     partição Seco x Refrigerado/Congelado, seleção de modelo + 2-opt,
@@ -197,10 +246,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
         tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
         s["_tipo_carga"] = tipo_carga
 
-    particoes = [
-        ("Seco", [s for s in servicos if s["_tipo_carga"] not in TIPOS_CARGA_FRIA]),
-        ("Refrigerado/Congelado", [s for s in servicos if s["_tipo_carga"] in TIPOS_CARGA_FRIA]),
-    ]
+    particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
 
     coords_base = None
     try:
@@ -222,6 +268,8 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 volume_maximo=VOLUME_MAXIMO_ROTA,
                 distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
                 distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                modelo_forcado=modelo_forcado,
+                distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
             )
         else:
             # mesmo fluxo de reserva do main() quando a base não geocodifica
@@ -404,15 +452,15 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
 
         # Partição por tipo de carga (pedido do Hugo, 10/08: "as entregas
         # Secas deveriam ser roteirizadas separadas das refrigeradas e
-        # congeladas") -- Seco de um lado, Refrigerado+Congelado do outro
-        # (esses dois JUNTOS entre si, só separados de Seco), cada partição
-        # passando pelo MESMO fluxo de agrupamento geográfico/divisão em
-        # sublotes de forma independente, então nenhuma rota mistura os dois
-        # grupos.
-        particoes = [
-            ("Seco", [s for s in servicos if s["_tipo_carga"] not in TIPOS_CARGA_FRIA]),
-            ("Refrigerado/Congelado", [s for s in servicos if s["_tipo_carga"] in TIPOS_CARGA_FRIA]),
-        ]
+        # congeladas") -- Seco de um lado, Refrigerado+Congelado do outro,
+        # cada partição passando pelo MESMO fluxo de agrupamento
+        # geográfico/divisão em sublotes de forma independente. Ajustado
+        # 15/08: dentro da MESMA macro-região, quando um dos dois tipos
+        # não junta o mínimo sozinho (frota tem baú com compartimento
+        # térmico -- pedido do Hugo), os dois entram juntos numa 3ª
+        # partição "Misto" só naquela região -- ver
+        # _particionar_carga_com_fusao.
+        particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
         for label, servicos_particao in particoes:
             logger.info(f"Partição '{label}': {len(servicos_particao)} pedido(s).")
 
@@ -456,6 +504,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     volume_maximo=VOLUME_MAXIMO_ROTA,
                     distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
                     distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                    distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
                 )
                 modelos_vencedores[label] = modelo_vencedor
             else:

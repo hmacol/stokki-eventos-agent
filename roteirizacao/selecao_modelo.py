@@ -6,12 +6,15 @@ Seleção diária do melhor modelo de roteirização (pedido do Hugo,
 10/08: "para cada dia fazer uma análise e verificar qual seria a
 melhor opção para o dia em questão e aí sim liberar as rotas").
 
-Em vez de fixar UM algoritmo de agrupamento, roda os 3 candidatos
+Em vez de fixar UM algoritmo de agrupamento, roda os 5 candidatos
+(os mesmos esquemas do Laboratório de Roteirização, /laboratorio-rotas)
 sobre os pedidos do dia:
   - Atual (Grade+Greedy): agrupar_por_regiao -> consolidar_regioes_
     pequenas -> dividir_em_sublotes (o fluxo de produção de sempre);
   - Sweep Polar (otimizacao_rotas.agrupar_por_sweep);
   - Clarke-Wright Savings (otimizacao_rotas.agrupar_por_savings);
+  - CEP real (otimizacao_rotas.agrupar_por_cep);
+  - K-means geográfico (otimizacao_rotas.agrupar_por_kmeans);
 
 sequencia TODOS com 2-opt (otimizacao_rotas.ordenar_2opt -- parte do
 farthest-first de produção e só aceita trocas que reduzem o trajeto,
@@ -26,6 +29,10 @@ Candidato que falhar validação ou estourar exceção é DESCARTADO do
 páreo (com log de erro) -- o modelo Atual é o piso de segurança: se
 só ele sobreviver, o dia sai exatamente como saía antes.
 
+O botão "Roteirizar" da tela de Planejamento (Hugo, 15/08) deixa o
+usuário escolher um esquema específico em vez do automático -- ver
+parâmetro `modelo_forcado` de `escolher_melhor_modelo`.
+
 Cada decisão é registrada em dados/selecao_modelo_historico.txt
 (uma linha por partição por dia) pra auditoria de qual modelo vem
 ganhando ao longo do tempo.
@@ -38,7 +45,9 @@ from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
     calcular_km_estimado, extrair_volume_caixas, particionar_por_macro_regiao,
 )
-from otimizacao_rotas import agrupar_por_sweep, agrupar_por_savings, ordenar_2opt
+from otimizacao_rotas import (
+    agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans, ordenar_2opt,
+)
 from alocacao_motoristas import classificar_rota_viagem
 
 logger = logging.getLogger(__name__)
@@ -68,9 +77,21 @@ def _agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
                    volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km):
     """Agrupamento de produção de sempre, região a região, com o limite
     de distância decidido pelo tipo da região (Grande SP x Viagem) --
-    mesma lógica que vivia em criar_rotas_diarias._rotear_particao."""
+    mesma lógica que vivia em criar_rotas_diarias._rotear_particao.
+
+    `servicos` já chega filtrado numa ÚNICA macro-região (quem chama é
+    sempre _por_macro, abaixo) -- então classificar_rota_viagem sobre o
+    lote inteiro, uma vez só, já vale pra decidir o teto de distância
+    da CONSOLIDAÇÃO (ver distancia_maxima_km de consolidar_regioes_
+    pequenas, pedido do Hugo, 15/08: sem isso a fusão por contagem
+    perseguia vizinha distante demais, e dividir_em_sublotes quebrava
+    de novo por distância -- desperdiçando o esforço)."""
+    eh_viagem_lote = classificar_rota_viagem(servicos, gmaps_key)
+    distancia_maxima_consolidacao = distancia_maxima_viagem_km if eh_viagem_lote else distancia_maxima_km
+
     grupos = agrupar_por_regiao(servicos, api_key=gmaps_key)
-    grupos = consolidar_regioes_pequenas(grupos, minimo=tamanho_minimo, api_key=gmaps_key)
+    grupos = consolidar_regioes_pequenas(grupos, minimo=tamanho_minimo, api_key=gmaps_key,
+                                         distancia_maxima_km=distancia_maxima_consolidacao)
     sublotes = []
     for servicos_regiao in grupos.values():
         distancia_regiao = (
@@ -102,12 +123,20 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
                            tamanho_minimo: int = 10, tamanho_maximo: int = 18,
                            volume_maximo: int = 100, distancia_maxima_km: float | None = 20,
                            distancia_maxima_viagem_km: float | None = None,
+                           modelo_forcado: str | None = None,
+                           distancia_maxima_fusao_regiao_km: float | None = None,
                            ) -> tuple[str, list[list[dict]]]:
     """
-    Avalia os 3 agrupamentos sobre os pedidos do dia e retorna
+    Avalia os 5 agrupamentos sobre os pedidos do dia e retorna
     (nome_do_vencedor, sublotes_já_sequenciados_com_2opt), prontos pra
     virar rotas de verdade. Critério: menos rotas; empate decidido
     pelo menor KM total estimado.
+
+    `modelo_forcado` (Hugo, 15/08 -- escolha manual no botão
+    "Roteirizar" de Planejamento): se informado, roda só esse esquema
+    em vez de comparar os 5 -- precisa bater com uma das chaves do
+    dict `candidatos` abaixo (as mesmas do Laboratório de
+    Roteirização), senão levanta ValueError.
 
     Trava de macro-região (pedido do Hugo, 12/08): os pedidos são
     particionados por macro-região (Grande SP x cada região externa x
@@ -116,10 +145,20 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     rota misturando Sorocaba com Barueri, por exemplo. A comparação e o
     vencedor continuam GLOBAIS (soma das partições), uma linha de
     histórico por partição de carga, como antes.
+
+    `distancia_maxima_fusao_regiao_km` (Hugo, 15/08): quando informado,
+    macro-região com menos que `tamanho_minimo` pedidos funde com a
+    OUTRA macro-região mais próxima (centroide real), como último
+    recurso, mas só até esse teto de distância -- ver
+    roteirizacao_dados.particionar_por_macro_regiao. Sem isso (None,
+    padrão): macro-regiões sempre 100% isoladas, como antes.
     """
     eh_viagem_fn = lambda sub: classificar_rota_viagem(sub, gmaps_key)
 
-    particoes_macro = particionar_por_macro_regiao(servicos, gmaps_key)
+    particoes_macro = particionar_por_macro_regiao(
+        servicos, gmaps_key, tamanho_minimo=tamanho_minimo,
+        distancia_maxima_fusao_km=distancia_maxima_fusao_regiao_km,
+    )
     if len(particoes_macro) > 1:
         resumo = ", ".join(f"{macro}: {len(svcs)}" for macro, svcs in sorted(particoes_macro.items()))
         logger.info(f"[{label}] Macro-regiões do dia (roteirizadas em separado) -- {resumo}.")
@@ -141,7 +180,25 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
             volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,
             api_key=gmaps_key, distancia_maxima_viagem_km=distancia_maxima_viagem_km,
             eh_viagem_fn=eh_viagem_fn)),
+        "CEP real": lambda: _por_macro(lambda svcs: agrupar_por_cep(
+            svcs, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
+            volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,
+            api_key=gmaps_key, distancia_maxima_viagem_km=distancia_maxima_viagem_km,
+            eh_viagem_fn=eh_viagem_fn)),
+        "K-means geográfico": lambda: _por_macro(lambda svcs: agrupar_por_kmeans(
+            svcs, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
+            volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,
+            api_key=gmaps_key, distancia_maxima_viagem_km=distancia_maxima_viagem_km,
+            eh_viagem_fn=eh_viagem_fn)),
     }
+
+    if modelo_forcado is not None:
+        if modelo_forcado not in candidatos:
+            raise ValueError(
+                f"Esquema de roteirização desconhecido: {modelo_forcado!r}. "
+                f"Opções: {', '.join(candidatos)}."
+            )
+        candidatos = {modelo_forcado: candidatos[modelo_forcado]}
 
     avaliacoes: dict[str, dict] = {}
     for nome, fn in candidatos.items():
