@@ -742,8 +742,11 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
 
     Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
     """
-    scheduled_start = _converter_data_para_iso(f"{data} {hora_inicio}")
-    scheduled_end = _converter_data_para_iso(f"{data} {hora_fim}")
+    # _converter_data_para_iso só aceita "%Y-%m-%d %H:%M:%S" (com
+    # segundos) pro formato com espaço -- o <input type="time"> manda
+    # "HH:MM" sem segundos, por isso completa aqui antes de converter.
+    scheduled_start = _converter_data_para_iso(f"{data} {hora_inicio}:00")
+    scheduled_end = _converter_data_para_iso(f"{data} {hora_fim}:00")
     if not scheduled_start or not scheduled_end:
         return {"ok": False, "erro": f"Data/horário inválidos: {data} {hora_inicio}-{hora_fim}"}
 
