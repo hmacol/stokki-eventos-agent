@@ -322,19 +322,19 @@ Decisão do Hugo: corte imediato (janela de madrugada, antes do RomaneiosManha 0
 
 **Lição de deploy (17/08):** depois desse commit grande, tentei `git pull` na VPS pela primeira vez (em vez de `scp` arquivo por arquivo) e deu conflito -- a VPS tinha arquivos "sujos" (deployados via scp direto, sem commit) que colidiam com o que o pull ia trazer. Resolvido descartando as edições locais da VPS (`git checkout --`) já que eram só cópias do que eu mesmo tinha scp'ado, sempre superadas pelo commit real. **Daqui pra frente, preferir `git pull` na VPS em vez de `scp` arquivo por arquivo** -- mais simples e menos propenso a esquecer algum arquivo, desde que a VPS não acumule edição solta entre um pull e outro.
 
-⏳ **Fase 3 — Sequência da tarde** (ExecutarTudo → VerificarDuplicados → CriarRotasDiarias → Notificador → ProcessarDocumentos), systemd timer 18:00.
+✅ **Fase 3 — Sequência da tarde** (ExecutarTudo → VerificarDuplicados → CriarRotasDiarias → Notificador → ProcessarDocumentos), systemd timer 18:00 -- **feita junto com o corte do banco** (madrugada 17/08), `stokki-sequencia-tarde.timer` ativo. Ainda não passou pelo 1º ciclo real (18:00 já passou hoje antes do corte -- primeira execução de verdade será amanhã, 17/08 às 18:00).
 
-⏳ **Fase 4 — Sequência da noite** (ExecutarTudo → VerificarDuplicados → IncrementarRotas), systemd timer 22:00.
+✅ **Fase 4 — Sequência da noite** (ExecutarTudo → VerificarDuplicados → IncrementarRotas), systemd timer 22:00 -- **feita e já validada em produção**: 1ª execução real rodou 22:00-22:14 (16/08→17/08) com sucesso (ver seção do corte, acima).
 
-⏳ **Fase 5 — Tarefas avulsas** (expedição frequente, romaneios de manhã, notificar transportadoras, validação de checklists).
+✅ **Fase 5 — Tarefas avulsas** (expedição frequente, romaneios de manhã, notificar transportadoras) -- **feita junto com o corte**, os 3 timers ativos (`stokki-expedicao-frequente`, `stokki-romaneios-manha`, `stokki-notificar-transportadoras`). `validação de checklists` fica de fora -- nunca teve tarefa ativa nem local (achado da Fase 2).
 
-⏳ **Fase 6 — `agente_importacao_stokki`** (e-mail → XML → Stokki), 18:30.
+⏳ **Fase 6 — `agente_importacao_stokki`** (e-mail → XML → Stokki), 18:30. **Ainda não iniciada** -- projeto separado (`c:\agente_importacao_stokki`), banco próprio, git já configurado na Fase 0 mas nunca migrado pra VPS.
 
-⏳ **Fase 7 — Print-agent** (impressão remota) + desligamento definitivo do Agendador do Windows local.
+⏳ **Fase 7 — Print-agent** (impressão remota) + desligamento definitivo do Agendador do Windows local. **Ainda não iniciada** -- decisão de desenho do print-agent pendente do Hugo.
 
-⏳ **Fase 8 — Ativar as 2 tarefas de confirmação de rotas** hoje manuais (aviso diário + sync 30min) — só depois do Hugo validar a 1ª rodada real (17/08), como já combinado em [[project_confirmacao_rotas_motoristas]].
+⏳ **Fase 8 — Ativar as 2 tarefas de confirmação de rotas** hoje manuais (aviso diário + sync 30min) — só depois do Hugo validar a 1ª rodada real (17/08), como já combinado em [[project_confirmacao_rotas_motoristas]]. **Ainda não iniciada.**
 
-Cada fase: roda em paralelo (local ainda ativo, VPS já ativo mas só um lado é "fonte da verdade" por vez) por alguns dias, compara resultado, só então desliga a tarefa local equivalente no Agendador do Windows.
+**Nota sobre a estratégia original ("roda em paralelo, compara, só então desliga local"):** na prática, o corte das Fases 2-5 foi feito de uma vez só (big bang), não gradual -- decisão do Hugo (16/08, ver seção 1), não o plano original desta seção. As tarefas locais equivalentes já foram desativadas no Agendador do Windows, não há mais período de comparação paralela pra essas 4 fases.
 
 ---
 
