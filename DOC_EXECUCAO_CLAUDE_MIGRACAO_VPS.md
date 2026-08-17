@@ -348,7 +348,11 @@ Minha contribuição: recriei o venv (Python 3.12, só 2 dependências reais -- 
 
 **✅ Tarefa `StokkiEventos_PrintAgent` registrada e confirmada** (17/08) -- `Ready`, dispara 04:05 repetindo a cada 10min até ~07:00. Fase 7 completa. Validação real (o print-agent realmente pegando um romaneio novo sozinho, sem teste manual) fica pro ciclo de amanhã (18/08).
 
-⏳ **Fase 8 — Ativar as 2 tarefas de confirmação de rotas** hoje manuais (aviso diário + sync 30min) — só depois do Hugo validar a 1ª rodada real (17/08), como já combinado em [[project_confirmacao_rotas_motoristas]]. **Ainda não iniciada.**
+🔶 **Fase 8 — Ativar as tarefas de confirmação de rotas** -- **parcialmente feita (17/08)**. Decisão do Hugo: só a sincronização de respostas (30 min) vira automática; o aviso diário (`avisar_motoristas_rotas.py --enviar-emails --gerar-confirmacoes`) **continua manual, sob pedido dele** (depende do rascunho do dia já estar confirmado na VUUPT, horário não é previsível o suficiente pra automatizar com segurança).
+
+- ✅ `confirmacao_rotas` (url_base/token_secret/sync_secret) adicionado ao `config.yaml` da VPS -- não estava lá desde a Fase 1 (excluído de propósito, por ser segredo de escrita).
+- ✅ `stokki-sincronizar-confirmacoes.timer` criado e ativo (a cada 30 min, `roteirizacao/sincronizar_respostas_confirmacao.py`) -- testado rodando de verdade na VPS, conectou na API do `confirmacao_motoristas` (mesma VPS, domínio público) sem erro, 0 respostas pendentes no momento do teste.
+- ⏳ Aviso diário continua manual -- rodar `py -3.11 roteirizacao/avisar_motoristas_rotas.py --data amanhã --enviar-emails --gerar-confirmacoes` (agora a partir da VPS, não mais local) quando o Hugo pedir.
 
 **Nota sobre a estratégia original ("roda em paralelo, compara, só então desliga local"):** na prática, o corte das Fases 2-5 foi feito de uma vez só (big bang), não gradual -- decisão do Hugo (16/08, ver seção 1), não o plano original desta seção. As tarefas locais equivalentes já foram desativadas no Agendador do Windows, não há mais período de comparação paralela pra essas 4 fases.
 

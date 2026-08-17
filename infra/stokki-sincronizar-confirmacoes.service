@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Sincroniza respostas de confirmacao de rota dos motoristas
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/roteirizacao
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/roteirizacao/sincronizar_respostas_confirmacao.py
