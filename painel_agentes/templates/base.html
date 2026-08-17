@@ -29,48 +29,92 @@
     background: var(--fundo);
     color: var(--texto);
   }
-  header {
+  .shell {
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+  }
+  .sidebar {
+    flex: none;
+    width: 240px;
     background: var(--primaria);
     color: #fff;
-    padding: 18px 32px;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
   }
-  header .marca {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
+  .sidebar .marca {
+    padding: 24px 22px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
   }
-  header .marca .nome {
-    font-size: 18px;
+  .sidebar .marca .nome {
+    display: block;
+    font-size: 17px;
     font-weight: 800;
     letter-spacing: 0.3px;
   }
-  header .marca .subtitulo {
-    font-size: 13px;
+  .sidebar .marca .subtitulo {
+    display: block;
+    font-size: 12px;
     color: #A3A3C2;
+    margin-top: 4px;
   }
-  header nav a {
+  .sidebar nav {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 0;
+  }
+  .sidebar nav a {
     color: #C7C7E0;
     text-decoration: none;
     font-size: 14px;
-    margin-left: 24px;
-    transition: color 0.15s;
+    padding: 11px 22px;
+    border-left: 3px solid transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
   }
-  header nav a:hover { color: #fff; }
-  header .sair-form { display: inline; margin-left: 24px; }
-  header button.sair {
+  .sidebar nav a:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .sidebar nav a.ativo {
+    color: #fff;
+    font-weight: 600;
+    background: rgba(14,165,117,0.15);
+    border-left-color: var(--acento);
+  }
+  .sidebar .rodape {
+    padding: 16px 22px 20px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .sidebar .rodape .usuario {
+    font-size: 12px;
+    color: #A3A3C2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sidebar .sair-form { flex: none; }
+  .sidebar button.sair {
     background: none;
     border: 1px solid #3A3A5C;
     color: #C7C7E0;
-    font-size: 13px;
-    padding: 6px 14px;
+    font-size: 12px;
+    padding: 6px 12px;
     border-radius: 6px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s;
   }
-  header button.sair:hover { color: #fff; border-color: #C7C7E0; }
+  .sidebar button.sair:hover { color: #fff; border-color: #C7C7E0; }
+  .area-conteudo {
+    flex: 1;
+    min-width: 0;
+  }
   main {
     max-width: 1100px;
     margin: 0 auto;
@@ -125,28 +169,40 @@
   // Usar pra montar chamadas fetch()/href com caminho absoluto fixo.
   const BASE_PATH = "{{ request.script_root }}";
 </script>
-<header>
-  <div class="marca">
-    <span class="nome">Painel de Agentes</span>
-    <span class="subtitulo">Agente Stokki Freshlog</span>
-  </div>
-  <nav>
-    <a href="{{ url_for('index') }}">Agentes</a>
-    <a href="{{ url_for('torre') }}">Torre de Controle</a>
-    <a href="{{ url_for('planejamento') }}">Planejamento de Rotas</a>
-    <a href="{{ url_for('mapa_rotas') }}">Mapa de Rotas</a>
-    <a href="{{ url_for('laboratorio_rotas') }}">Laboratório de Roteirização</a>
-    <a href="{{ url_for('historico_tratativas') }}">Histórico de Tratativas</a>
-    <a href="{{ url_for('historico') }}">Histórico</a>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="marca">
+      <span class="nome">Painel de Agentes</span>
+      <span class="subtitulo">Agente Stokki Freshlog</span>
+    </div>
+    <nav>
+      {% if session.get('nivel_acesso') == 'total' %}
+      <a href="{{ url_for('index') }}" class="{{ 'ativo' if request.endpoint == 'index' else '' }}">Agentes</a>
+      {% endif %}
+      <a href="{{ url_for('torre') }}" class="{{ 'ativo' if request.endpoint == 'torre' else '' }}">Torre de Controle</a>
+      <a href="{{ url_for('planejamento') }}" class="{{ 'ativo' if request.endpoint == 'planejamento' else '' }}">Planejamento de Rotas</a>
+      <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}">Motoristas</a>
+      <a href="{{ url_for('mapa_rotas') }}" class="{{ 'ativo' if request.endpoint == 'mapa_rotas' else '' }}">Mapa de Rotas</a>
+      <a href="{{ url_for('laboratorio_rotas') }}" class="{{ 'ativo' if request.endpoint == 'laboratorio_rotas' else '' }}">Laboratório de Roteirização</a>
+      <a href="{{ url_for('historico_tratativas') }}" class="{{ 'ativo' if request.endpoint == 'historico_tratativas' else '' }}">Histórico de Tratativas</a>
+      {% if session.get('nivel_acesso') == 'total' %}
+      <a href="{{ url_for('historico') }}" class="{{ 'ativo' if request.endpoint == 'historico' else '' }}">Histórico</a>
+      {% endif %}
+    </nav>
     {% if session.get('nivel_acesso') %}
-    <form class="sair-form" method="post" action="{{ url_for('logout') }}">
-      <button type="submit" class="sair" title="{{ session.get('usuario', '') }}">Sair</button>
-    </form>
+    <div class="rodape">
+      <span class="usuario" title="{{ session.get('usuario', '') }}">{{ session.get('usuario', '') }}</span>
+      <form class="sair-form" method="post" action="{{ url_for('logout') }}">
+        <button type="submit" class="sair">Sair</button>
+      </form>
+    </div>
     {% endif %}
-  </nav>
-</header>
-<main>
-{% block conteudo %}{% endblock %}
-</main>
+  </aside>
+  <div class="area-conteudo">
+    <main>
+    {% block conteudo %}{% endblock %}
+    </main>
+  </div>
+</div>
 </body>
 </html>

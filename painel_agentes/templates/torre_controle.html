@@ -297,6 +297,7 @@
   <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
   <div class="kpis-linha" id="kpis"></div>
   <span class="carimbo" id="carimbo">Carregando dados…</span>
+  <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
 </div>
 
@@ -386,6 +387,56 @@ let ultimoOk = null;        // Date do último carregamento com sucesso
 let houveErro = false;
 let algumaEtapaRodando = false;
 let dadosAtuais = null;     // última resposta boa de /api/torre/dados
+
+// ── Alarme sonoro de novas ações na fila ────────────────────────────
+let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
+let idsExcecoesConhecidas = null; // null até o 1º carregamento — não alarma na abertura da página
+let audioCtx = null;
+
+function obterAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+// Navegador só libera áudio depois de uma interação — deixa o contexto pronto assim que possível.
+document.addEventListener("click", () => obterAudioCtx(), { once: true });
+
+function tocarAlarme() {
+  if (alarmeMutado) return;
+  try {
+    const ctx = obterAudioCtx();
+    [0, 0.22].forEach(atraso => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      const t0 = ctx.currentTime + atraso;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.2);
+    });
+  } catch (e) { console.error("torre: falha ao tocar alarme", e); }
+}
+
+function atualizarBotaoAlarme() {
+  const btn = document.getElementById("botao-alarme");
+  if (!btn) return;
+  btn.textContent = alarmeMutado ? "🔕" : "🔔";
+  btn.title = alarmeMutado
+    ? "Alarme sonoro desativado — clique pra ativar"
+    : "Alarme sonoro ativado — toca quando surge ação nova na fila";
+}
+
+function alternarAlarme() {
+  alarmeMutado = !alarmeMutado;
+  localStorage.setItem("torre_alarme_mutado", alarmeMutado ? "1" : "0");
+  atualizarBotaoAlarme();
+  if (!alarmeMutado) obterAudioCtx();
+}
+atualizarBotaoAlarme();
 
 function esc(t) {
   return String(t ?? "").replace(/[&<>"']/g, c =>
@@ -562,6 +613,12 @@ function quemAtualizou(x) {
 function renderExcecoes(d) {
   const alvo = document.getElementById("excecoes");
   const partes = [];
+
+  const idsAtuais = new Set(d.excecoes.map(x => x.id));
+  if (idsExcecoesConhecidas && [...idsAtuais].some(id => !idsExcecoesConhecidas.has(id))) {
+    tocarAlarme();
+  }
+  idsExcecoesConhecidas = idsAtuais;
 
   const contagem = document.getElementById("contagem-acoes");
   if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";

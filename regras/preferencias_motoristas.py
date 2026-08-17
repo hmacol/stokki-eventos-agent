@@ -162,6 +162,22 @@ def _parse_int_opcional(valor) -> int | None:
         return None
 
 
+def _parse_texto_numerico(valor) -> str | None:
+    """TELEFONE_MOTORISTA precisa continuar como string mesmo quando
+    parece puramente numérico -- mas se a coluna inteira estava vazia
+    até essa linha (dtype float64 do pandas), read_excel devolve um
+    float pro único valor preenchido (11999998888 -> 11999998888.0),
+    e str(valor) carregaria o '.0' junto. Detecta e corta esse
+    artefato -- mesmo problema que _parse_int_opcional já resolve pra
+    coluna de ID, só que aqui o resultado precisa continuar string."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return None
+    texto = str(valor).strip()
+    if re.fullmatch(r"-?\d+\.0", texto):
+        texto = texto[:-2]
+    return texto or None
+
+
 def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     """Constrói um MotoristaPreferencias a partir de um dict com as
     colunas da planilha/JSON (chaves já em maiúsculo). Retorna None
@@ -175,7 +191,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     nome = str(registro.get("NOME_MOTORISTA") or "").strip() or f"Motorista {agent_id}"
     max_rotas_dia = _parse_int_opcional(registro.get("MAX_ROTAS_DIA")) or 1
 
-    telefone = str(registro.get("TELEFONE_MOTORISTA") or "").strip() or None
+    telefone = _parse_texto_numerico(registro.get("TELEFONE_MOTORISTA"))
     email = str(registro.get("EMAIL_MOTORISTA") or "").strip() or None
 
     placa_bruta = registro.get("PLACA")

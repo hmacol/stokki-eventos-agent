@@ -65,6 +65,7 @@ from planejamento_rotas import (
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
+from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
 import rascunhos_rota
 import torre_controle
 import tratativas
@@ -798,6 +799,52 @@ def api_limpar_disponibilidade_motoristas():
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao limpar ajuste de disponibilidade")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
+@app.route("/motoristas")
+@requer_auth(niveis=("total", "leitura"))
+def motoristas():
+    """Tela "Motoristas" (Hugo, 16/08): lista quem está em
+    BD_MOTORISTAS.xlsx e, pra quem tem login total, o cadastro de
+    motorista novo (regras/cadastro_motoristas.py)."""
+    try:
+        dados = dados_pagina_motoristas()
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados da tela de motoristas")
+        dados = None
+        erro = str(e)
+    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso == "total")
+
+
+@app.route("/api/motoristas/vuupt-disponiveis")
+@requer_auth
+def api_motoristas_vuupt_disponiveis():
+    """Dropdown "Motorista (VUUPT)" do formulário de cadastro -- agentes
+    do VUUPT que ainda não têm linha na planilha."""
+    try:
+        agentes = listar_agentes_vuupt_nao_cadastrados(_carregar_config())
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar agentes do VUUPT sem cadastro")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"agentes": agentes})
+
+
+@app.route("/api/motoristas", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_cadastrar_motorista():
+    body = request.get_json(force=True)
+    try:
+        resultado = cadastrar_motorista(_carregar_config(), body)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"erro": str(e)}), 409
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao cadastrar motorista")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, **resultado})
 

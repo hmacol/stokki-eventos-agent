@@ -317,7 +317,8 @@ Decisão do Hugo: corte imediato (janela de madrugada, antes do RomaneiosManha 0
 **Follow-ups ainda pendentes:**
 - A tarefa local `StokkiEventos_BackupGCS` (backup do `dados.db` local, agora redundante) continua `Ready` no Agendador do Windows -- não desativei ainda (precisa do Hugo rodar como admin; baixa urgência, só desperdiça um backup inútil às 3h se ninguém desativar antes).
 - Nenhuma tarefa equivalente à `StokkiEventos_ValidacaoChecklists` foi criada na VPS (ela já não existia no Agendador local -- ver achado da Fase 2, seção acima).
-- Muita coisa de hoje (Fase 2 inteira + login/logout + scripts de corte) ainda não foi commitada no git.
+
+**Commitado e deployado (17/08, madrugada):** tudo de hoje (Fase 2 inteira, login/logout, scripts de corte, backup na VPS) commitado em `b1fe48c` + `6faa11d` e já no GitHub. Hugo também aproveitou pra adicionar direto no painel um menu "Agendar/reagendar" em Planejamento de Rotas (PUT direto na VUUPT pra mudar `scheduled_start`/`scheduled_end` de um pedido) -- deployado na VPS e testado que a tela carrega sem erro; teste funcional de verdade (reagendar um pedido de verdade) ainda não foi feito, fica para o Hugo validar.
 
 ⏳ **Fase 3 — Sequência da tarde** (ExecutarTudo → VerificarDuplicados → CriarRotasDiarias → Notificador → ProcessarDocumentos), systemd timer 18:00.
 

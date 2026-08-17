@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block titulo %}Motoristas{% endblock %}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  table.tabela-motoristas { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  table.tabela-motoristas th, table.tabela-motoristas td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); }
+  table.tabela-motoristas th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-motoristas tr:last-child td { border-bottom: none; }
+  .zona-chip { display: inline-block; background: var(--fundo); border: 1px solid var(--borda); border-radius: 100px; padding: 2px 8px; font-size: 11px; margin: 1px; }
+  .erro-caixa { background: #FDEBEA; color: var(--erro); border: 1px solid #F3C9C5; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+
+  /* Modal de cadastro -- mesmo padrão visual do modal de disponibilidade
+     de motoristas em planejamento_rotas.html, classes renomeadas pra
+     não colidir (páginas diferentes, sem CSS compartilhado). */
+  .modal-overlay-motorista { display: none; position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.35); align-items: center; justify-content: center; }
+  .modal-overlay-motorista.aberto { display: flex; }
+  .modal-motorista { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 20px 22px; width: 520px; max-width: calc(100vw - 32px); max-height: calc(100vh - 64px); overflow-y: auto; }
+  .modal-motorista h2 { margin: 0 0 4px; font-size: 17px; }
+  .modal-motorista .subtitulo { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 16px; }
+  .campo-motorista { margin-bottom: 12px; }
+  .campo-motorista label { display: block; font-size: 12px; font-weight: 600; color: var(--texto-suave); margin-bottom: 4px; }
+  .campo-motorista select, .campo-motorista input[type="text"], .campo-motorista input[type="number"], .campo-motorista input[type="email"] {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; background: var(--fundo); color: var(--texto);
+  }
+  .linha-dois-campos { display: flex; gap: 10px; }
+  .linha-dois-campos .campo-motorista { flex: 1; }
+  .grade-checkbox { display: flex; flex-wrap: wrap; gap: 8px; }
+  .grade-checkbox label { display: flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 400; background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+  .modal-motorista .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .modal-motorista .acoes button { padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .modal-motorista .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-motorista .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-motorista .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-motorista .acoes button.cancelar:hover { background: var(--fundo); }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Motoristas</h1>
+  {% if pode_editar %}
+  <button type="button" class="botao" id="botao-novo-motorista">+ Novo motorista</button>
+  {% endif %}
+</div>
+
+{% if erro %}
+<div class="erro-caixa">Falha ao carregar motoristas: {{ erro }}</div>
+{% elif dados %}
+<table class="tabela-motoristas">
+  <thead>
+    <tr>
+      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in dados.motoristas %}
+    <tr>
+      <td>{{ m.nome }}</td>
+      <td class="mono">{{ m.agent_id }}</td>
+      <td>{% if m.ativo %}<span class="badge badge-sucesso">Ativo</span>{% else %}<span class="badge badge-erro">Inativo</span>{% endif %}</td>
+      <td>{{ m.dias_disponiveis or "—" }}</td>
+      <td>{% for z in m.zonas_preferidas %}<span class="zona-chip">{{ z }}</span>{% else %}—{% endfor %}</td>
+      <td>{{ m.tipo_veiculo or "—" }}</td>
+      <td>{{ m.telefone or "—" }}</td>
+      <td>{{ m.placa or "—" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8">Nenhum motorista cadastrado.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if pode_editar and dados %}
+<div class="modal-overlay-motorista" id="modal-novo-motorista">
+  <div class="modal-motorista" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-motorista">
+    <h2 id="titulo-modal-motorista">Novo motorista</h2>
+    <p class="subtitulo">O motorista precisa já existir como agente no VUUPT — essa lista só mostra quem ainda não está cadastrado aqui.</p>
+
+    <div class="campo-motorista">
+      <label for="motorista-agente-vuupt">Motorista (VUUPT)</label>
+      <select id="motorista-agente-vuupt"><option value="">Carregando...</option></select>
+    </div>
+    <div class="campo-motorista">
+      <label for="motorista-nome">Nome</label>
+      <input type="text" id="motorista-nome" placeholder="Nome do motorista">
+    </div>
+    <div class="linha-dois-campos">
+      <div class="campo-motorista">
+        <label for="motorista-max-rotas">Máx. rotas/dia</label>
+        <input type="number" id="motorista-max-rotas" value="1" min="1">
+      </div>
+      <div class="campo-motorista">
+        <label for="motorista-tipo-veiculo">Tipo de veículo</label>
+        <select id="motorista-tipo-veiculo">
+          <option value="">Nenhum</option>
+          {% for t in dados.tipos_veiculo %}
+          <option value="{{ t.codigo }}">{{ t.nome }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label>Dias disponíveis</label>
+      <div class="grade-checkbox">
+        {% for codigo, rotulo in dados.dias_semana %}
+        <label><input type="checkbox" class="motorista-dia" value="{{ codigo }}" {% if codigo not in ("SABADO", "DOMINGO") %}checked{% endif %}> {{ rotulo }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label>Zonas preferidas</label>
+      <div class="grade-checkbox">
+        {% for zona in dados.zonas_disponiveis %}
+        <label><input type="checkbox" class="motorista-zona" value="{{ zona }}"> {{ zona }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" id="motorista-aceita-viagens"> Aceita viagens</label>
+    </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" id="motorista-ativo" checked> Ativo</label>
+    </div>
+    <div class="linha-dois-campos">
+      <div class="campo-motorista">
+        <label for="motorista-telefone">Telefone</label>
+        <input type="text" id="motorista-telefone" placeholder="(11) 90000-0000">
+      </div>
+      <div class="campo-motorista">
+        <label for="motorista-email">E-mail</label>
+        <input type="email" id="motorista-email" placeholder="opcional">
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label for="motorista-placa">Placa</label>
+      <input type="text" id="motorista-placa" placeholder="opcional">
+    </div>
+
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-motorista">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-salvar-motorista">Cadastrar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PODE_EDITAR = {{ pode_editar | tojson }};
+
+async function postJSON(url, body) {
+  const resp = await fetch(BASE_PATH + url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const dados = await resp.json();
+  if (!resp.ok) throw new Error(dados.erro || `Falha em ${url}`);
+  return dados;
+}
+
+(function () {
+  const overlay = document.getElementById("modal-novo-motorista");
+  const selectAgente = document.getElementById("motorista-agente-vuupt");
+  const campoNome = document.getElementById("motorista-nome");
+
+  function popularSelectAgentes(agentes) {
+    selectAgente.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = agentes.length ? "Selecione..." : "Nenhum agente novo encontrado — cadastre no VUUPT primeiro";
+    selectAgente.appendChild(placeholder);
+    for (const a of agentes) {
+      const opt = document.createElement("option");
+      opt.value = String(a.agent_id);
+      opt.textContent = `${a.nome} (#${a.agent_id})`;
+      opt.dataset.nome = a.nome;
+      selectAgente.appendChild(opt);
+    }
+  }
+
+  async function abrirModalMotorista() {
+    overlay.classList.add("aberto");
+    selectAgente.innerHTML = '<option value="">Carregando...</option>';
+    campoNome.value = "";
+    try {
+      const resp = await fetch(BASE_PATH + "/api/motoristas/vuupt-disponiveis");
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar agentes do VUUPT");
+      popularSelectAgentes(dados.agentes || []);
+    } catch (e) {
+      selectAgente.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = `Falha ao carregar: ${e.message}`;
+      selectAgente.appendChild(opt);
+    }
+  }
+
+  function fecharModalMotorista() {
+    overlay.classList.remove("aberto");
+  }
+
+  selectAgente.addEventListener("change", () => {
+    const opcao = selectAgente.selectedOptions[0];
+    if (opcao && opcao.dataset.nome) campoNome.value = opcao.dataset.nome;
+  });
+
+  document.getElementById("botao-novo-motorista").addEventListener("click", abrirModalMotorista);
+  document.getElementById("botao-cancelar-motorista").addEventListener("click", fecharModalMotorista);
+
+  document.getElementById("botao-salvar-motorista").addEventListener("click", async (ev) => {
+    const botao = ev.currentTarget;
+    const agentId = Number(selectAgente.value);
+    const nome = campoNome.value.trim();
+    if (!agentId || !nome) { alert("Selecione o motorista do VUUPT e confirme o nome."); return; }
+
+    const dias = Array.from(document.querySelectorAll(".motorista-dia:checked")).map(c => c.value);
+    const zonas = Array.from(document.querySelectorAll(".motorista-zona:checked")).map(c => c.value);
+
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Cadastrando...";
+    try {
+      await postJSON("/api/motoristas", {
+        agent_id: agentId,
+        nome: nome,
+        aceita_viagens: document.getElementById("motorista-aceita-viagens").checked,
+        ativo: document.getElementById("motorista-ativo").checked,
+        max_rotas_dia: Number(document.getElementById("motorista-max-rotas").value) || 1,
+        dias_disponiveis: dias,
+        zonas_preferidas: zonas,
+        tipo_veiculo: document.getElementById("motorista-tipo-veiculo").value,
+        telefone: document.getElementById("motorista-telefone").value.trim(),
+        email: document.getElementById("motorista-email").value.trim(),
+        placa: document.getElementById("motorista-placa").value.trim(),
+      });
+      alert(`Motorista "${nome}" cadastrado.`);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao cadastrar motorista: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
