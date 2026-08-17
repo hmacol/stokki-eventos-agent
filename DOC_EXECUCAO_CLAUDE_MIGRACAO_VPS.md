@@ -346,7 +346,7 @@ Minha contribuição: recriei o venv (Python 3.12, só 2 dependências reais -- 
 
 **Descoberta importante: o Hugo construiu a própria versão do print-agent em paralelo, na mesma janela de tempo, no MESMO diretório de trabalho** (commit `3d169b7`, 07:52 -- 2 min antes de eu começar a testar o meu). Isso só foi percebido depois, ao dar `git pull` e ver o histórico. Como as duas versões nasceram do mesmo arquivo em disco (mesma máquina, mesma pasta), não houve conflito de verdade pra resolver -- só reconciliar quem tinha a versão mais recente de cada trecho. **Lição pra próximas fases: antes de editar um arquivo que o Hugo também pode estar mexendo ao vivo, checar `git status`/`git log -1` primeiro.** Ele também aproveitou a mesma sessão pra adicionar sidebar recolhível e botão "Duplicar pedido" na Torre -- nada relacionado à migração, não mexi nisso.
 
-**Pendente:** rodar `print_agent/criar_tarefa_print_agent.ps1` como Administrador (registra `StokkiEventos_PrintAgent`, tarefa local) -- ainda não rodado.
+**✅ Tarefa `StokkiEventos_PrintAgent` registrada e confirmada** (17/08) -- `Ready`, dispara 04:05 repetindo a cada 10min até ~07:00. Fase 7 completa. Validação real (o print-agent realmente pegando um romaneio novo sozinho, sem teste manual) fica pro ciclo de amanhã (18/08).
 
 ⏳ **Fase 8 — Ativar as 2 tarefas de confirmação de rotas** hoje manuais (aviso diário + sync 30min) — só depois do Hugo validar a 1ª rodada real (17/08), como já combinado em [[project_confirmacao_rotas_motoristas]]. **Ainda não iniciada.**
 
