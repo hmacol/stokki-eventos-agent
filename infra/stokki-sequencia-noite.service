@@ -1,0 +1,7 @@
+[Unit]
+Description=Stokki Eventos - Sequencia da noite (ExecutarTudo, VerificarDuplicados, IncrementarRotas)
+
+[Service]
+Type=oneshot
+User=www-data
+ExecStart=/bin/bash /opt/stokki-eventos/infra/sequencia_noite.sh

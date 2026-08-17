@@ -922,6 +922,37 @@
   .modal-disponibilidade .acoes button.confirmar:hover { background: #26C49A; }
   .modal-disponibilidade .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-disponibilidade .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Modal "Agendar / reagendar pedido" do menu de contexto (Hugo, 16/08)
+     -- mesmo esqueleto visual dos outros modais, só que compacto. */
+  .modal-overlay-reagendar {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-reagendar.aberto { display: flex; }
+  .modal-reagendar {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  .modal-reagendar h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-reagendar .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-reagendar .campo-reagendar { margin-bottom: 10px; }
+  .modal-reagendar .campo-reagendar > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-reagendar .linha-horarios { display: flex; align-items: center; gap: 8px; }
+  .modal-reagendar .linha-horarios label { font-size: 12px; font-weight: 400; margin: 0; }
+  .modal-reagendar input[type="date"], .modal-reagendar input[type="time"] {
+    padding: 5px 8px; min-height: 30px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; background: var(--fundo); color: var(--texto);
+  }
+  .modal-reagendar .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-reagendar .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-reagendar .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-reagendar .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-reagendar .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-reagendar .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -1050,6 +1081,30 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-disponibilidade">Fechar</button>
       <button type="button" class="confirmar" id="botao-salvar-disponibilidade">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-reagendar" id="modal-reagendar">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-reagendar">
+    <h2 id="titulo-modal-reagendar">Agendar / reagendar pedido</h2>
+    <p class="subtitulo">Pedido <strong id="reagendar-codigo"></strong> — atualiza o agendamento direto na VUUPT.</p>
+    <div class="campo-reagendar">
+      <label for="reagendar-data">Data</label>
+      <input type="date" id="reagendar-data" style="width:100%;">
+    </div>
+    <div class="campo-reagendar">
+      <label>Janela de horário</label>
+      <div class="linha-horarios">
+        <label for="reagendar-hora-inicio">Das</label>
+        <input type="time" id="reagendar-hora-inicio">
+        <label for="reagendar-hora-fim">até</label>
+        <input type="time" id="reagendar-hora-fim">
+      </div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-reagendar">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-reagendar">Salvar agendamento</button>
     </div>
   </div>
 </div>
@@ -2944,6 +2999,51 @@
     }
   }
 
+  // pedido sendo agendado/reagendado pelo modal -- guardado pra
+  // confirmarReagendamento saber quem atualizar (mesmo padrão de
+  // botaoRoteirizarPendente)
+  let reagendarPendente = null;
+
+  // "Agendar / reagendar" do menu de contexto (Hugo, 16/08): abre o
+  // modal com a data já preenchida (o dataset.agendadoPara do card, se
+  // já tiver agendamento, senão o dia em edição) -- o horário sempre
+  // volta pro padrão 08:00-18:00 porque a hora exata do agendamento
+  // atual não fica guardada no card, só a data.
+  function abrirModalReagendar(li, serviceId, rascunhoId) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("reagendar-codigo").textContent = codigo;
+    document.getElementById("reagendar-data").value = li.dataset.agendadoPara || DATA_ALVO_ISO;
+    document.getElementById("reagendar-hora-inicio").value = "08:00";
+    document.getElementById("reagendar-hora-fim").value = "18:00";
+    reagendarPendente = { serviceId, rascunhoId };
+    document.getElementById("modal-reagendar").classList.add("aberto");
+  }
+
+  async function confirmarReagendamento(botao) {
+    const pendente = reagendarPendente;
+    if (!pendente) return;
+    const data = document.getElementById("reagendar-data").value;
+    const horaInicio = document.getElementById("reagendar-hora-inicio").value;
+    const horaFim = document.getElementById("reagendar-hora-fim").value;
+    if (!data || !horaInicio || !horaFim) { alert("Preencha data e a janela de horário."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      await postJSON("/api/planejamento/reagendar-pedido", {
+        service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+      });
+      document.getElementById("modal-reagendar").classList.remove("aberto");
+      // recarrega -- o novo agendado_para pode mudar a seção/urgência
+      // do card (mesmo padrão de cancelarPedido)
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao agendar: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // devolve uma parada de rota pro pool sem cancelar na VUUPT -- mesmo
   // endpoint e mesma sequência de atualização do drag-and-drop pro pool
   // (onDragEnd, toId === "pool"), só que disparado pelo menu de contexto
@@ -3026,6 +3126,9 @@
       { rotulo: "Ver detalhes", acao: () => mostrarDetalhesParada(li, x, y) },
       { rotulo: "Copiar código", acao: () => copiarCodigoParada(li) },
     ];
+    if (PODE_EDITAR) {
+      itens.push({ rotulo: "Agendar / reagendar", acao: () => abrirModalReagendar(li, serviceId, rascunhoId) });
+    }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
     }
@@ -3403,6 +3506,11 @@
     });
     document.getElementById("botao-salvar-disponibilidade").addEventListener("click", (e) => salvarDisponibilidade(e.target));
     document.getElementById("botao-aplicar-periodo").addEventListener("click", (e) => aplicarPeriodoDisponibilidade(e.target));
+    document.getElementById("botao-cancelar-reagendar").addEventListener("click", () => {
+      document.getElementById("modal-reagendar").classList.remove("aberto");
+      reagendarPendente = null;
+    });
+    document.getElementById("botao-confirmar-reagendar").addEventListener("click", (e) => confirmarReagendamento(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);

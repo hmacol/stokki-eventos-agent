@@ -59,6 +59,18 @@
     transition: color 0.15s;
   }
   header nav a:hover { color: #fff; }
+  header .sair-form { display: inline; margin-left: 24px; }
+  header button.sair {
+    background: none;
+    border: 1px solid #3A3A5C;
+    color: #C7C7E0;
+    font-size: 13px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  header button.sair:hover { color: #fff; border-color: #C7C7E0; }
   main {
     max-width: 1100px;
     margin: 0 auto;
@@ -126,6 +138,11 @@
     <a href="{{ url_for('laboratorio_rotas') }}">Laboratório de Roteirização</a>
     <a href="{{ url_for('historico_tratativas') }}">Histórico de Tratativas</a>
     <a href="{{ url_for('historico') }}">Histórico</a>
+    {% if session.get('nivel_acesso') %}
+    <form class="sair-form" method="post" action="{{ url_for('logout') }}">
+      <button type="submit" class="sair" title="{{ session.get('usuario', '') }}">Sair</button>
+    </form>
+    {% endif %}
   </nav>
 </header>
 <main>

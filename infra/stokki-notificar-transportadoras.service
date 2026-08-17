@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Notificar transportadoras (notificar_transportadoras.py --data hoje)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/notificacao_transportadoras
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/notificacao_transportadoras/notificar_transportadoras.py --data hoje

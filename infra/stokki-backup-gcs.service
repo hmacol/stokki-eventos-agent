@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Backup diario de dados.db + planilhas pro GCS
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/backup_dados_gcs.py

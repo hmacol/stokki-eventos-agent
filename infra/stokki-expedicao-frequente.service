@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Expedicao (expedir_pedidos.py)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/expedir_pedidos.py

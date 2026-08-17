@@ -16,13 +16,12 @@
 # subdominio proprio por enquanto.
 
 app.freshhub.com.br {
-	# /painel (sem barra) e /painel/ (raiz, tela "Agentes") nao servem pro
-	# login de leitura (exige acesso total, 403) -- manda direto pra Torre
-	# de Controle, que e o destino real desta VPS somente-leitura. Sem o
-	# redirect de "/painel" (sem barra), o handle_path abaixo nao bate
-	# (exige a barra) e a Caddy devolve 200 vazio -- pagina em branco.
-	redir /painel /painel/torre permanent
-	redir /painel/ /painel/torre permanent
+	# so normaliza a barra final -- sem isso, "/painel" (sem barra) nao
+	# bate com o handle_path abaixo (exige a barra) e a Caddy devolve 200
+	# vazio (pagina em branco). Depois de normalizada, a barra cai direto
+	# no Flask (tela "Agentes", index()) -- ele proprio decide quem pode
+	# ver o que (login de leitura x total), não o Caddy.
+	redir /painel /painel/ permanent
 
 	handle_path /painel/* {
 		reverse_proxy 127.0.0.1:8071 {

@@ -44,7 +44,10 @@ logging.basicConfig(
 from urllib.parse import urlparse
 
 import yaml
-from flask import Flask, Response, abort, g, redirect, render_template, request, url_for, jsonify, send_file
+from flask import (
+    Flask, abort, g, redirect, render_template, request, url_for,
+    jsonify, send_file, session,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
@@ -58,13 +61,18 @@ from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
-    alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido,
+    alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 import rascunhos_rota
 import torre_controle
 import tratativas
+
+def _carregar_config() -> dict:
+    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
 
 app = Flask(__name__)
 # Permite o painel morar sob um prefixo (ex: app.freshhub.com.br/painel,
@@ -75,6 +83,25 @@ app = Flask(__name__)
 # não existem e isso vira um no-op -- não muda o comportamento atual.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1, x_for=1, x_host=1)
 
+# Sessão de login (substitui o Basic Auth do navegador, 17/08 -- pedido do
+# Hugo por uma tela de login de verdade + botão de sair). secret_key
+# assina o cookie de sessão -- sem ele, a sessão não é criptograficamente
+# segura contra forjar/adulterar. 14 dias: painel de uso operacional
+# diário, não precisa logar de novo toda hora.
+_cfg_inicial = _carregar_config()
+_secret_key = _cfg_inicial.get("painel_agentes", {}).get("secret_key", "")
+if not _secret_key:
+    raise RuntimeError(
+        "painel_agentes.secret_key ausente no config.yaml -- gere uma string "
+        "aleatória forte (ex: python -c \"import secrets; print(secrets.token_hex(32))\") "
+        "antes de subir o painel."
+    )
+app.secret_key = _secret_key
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 # Roda uma vez, assim que o painel sobe -- destrava qualquer execução
 # que ficou presa em RODANDO por causa de um encerramento à força do
 # processo anterior (ex: Ctrl+C no meio de uma execução, pedido do
@@ -82,36 +109,34 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1, x_for=1, x_host=1)
 limpar_execucoes_travadas()
 
 
-def _carregar_config() -> dict:
-    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def _nivel_das_credenciais(auth, cfg_painel):
-    """Confere as credenciais contra os dois pares possíveis e devolve o
+def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
+    """Confere usuário/senha contra os dois pares possíveis e devolve o
     nível de acesso correspondente ("total" ou "leitura"), ou None se não
     bateram com nenhum dos dois."""
-    if not auth:
+    if not usuario or not senha:
         return None
     usuario_total = cfg_painel.get("usuario")
     senha_total = cfg_painel.get("senha")
-    if usuario_total and senha_total and hmac.compare_digest(auth.username, usuario_total) \
-            and hmac.compare_digest(auth.password, senha_total):
+    if usuario_total and senha_total and hmac.compare_digest(usuario, usuario_total) \
+            and hmac.compare_digest(senha, senha_total):
         return "total"
     usuario_leitura = cfg_painel.get("usuario_leitura")
     senha_leitura = cfg_painel.get("senha_leitura")
-    if usuario_leitura and senha_leitura and hmac.compare_digest(auth.username, usuario_leitura) \
-            and hmac.compare_digest(auth.password, senha_leitura):
+    if usuario_leitura and senha_leitura and hmac.compare_digest(usuario, usuario_leitura) \
+            and hmac.compare_digest(senha, senha_leitura):
         return "leitura"
     return None
 
 
 def requer_auth(f=None, *, niveis=("total",)):
-    """Basic Auth com dois níveis: "total" (usuario/senha, acesso
-    irrestrito) e "leitura" (usuario_leitura/senha_leitura, só as telas e
-    APIs marcadas com niveis=("total", "leitura")). Rota sem `niveis`
-    exige nível total. Pedido do Hugo, 13/08: time acompanha Torre e
-    Planejamento sem poder disparar ações."""
+    """Login por sessão (cookie assinado) com dois níveis: "total"
+    (usuario/senha, acesso irrestrito) e "leitura" (usuario_leitura/
+    senha_leitura, só as telas e APIs marcadas com
+    niveis=("total", "leitura")). Rota sem `niveis` exige nível total.
+    Pedido do Hugo, 13/08: time acompanha Torre e Planejamento sem poder
+    disparar ações. Trocado de Basic Auth pra tela de login de verdade +
+    botão de sair, 17/08 -- Basic Auth não tem um jeito confiável de
+    "deslogar" (o navegador guarda a senha até fechar/limpar cache)."""
     if f is not None:
         return requer_auth(niveis=niveis)(f)
 
@@ -125,12 +150,11 @@ def requer_auth(f=None, *, niveis=("total",)):
                     "Painel de agentes desabilitado: configure painel_agentes.usuario "
                     "e painel_agentes.senha no config.yaml antes de subir.", 500,
                 )
-            nivel = _nivel_das_credenciais(request.authorization, cfg_painel)
+            nivel = session.get("nivel_acesso")
             if nivel is None:
-                return Response(
-                    "Autenticação necessária", 401,
-                    {"WWW-Authenticate": 'Basic realm="Painel de Agentes"'},
-                )
+                if request.path.startswith(f"{request.script_root}/api/"):
+                    return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
+                return redirect(url_for("login", proximo=request.script_root + request.full_path))
             if nivel not in niveis:
                 abort(403, "Seu usuário só tem acesso de leitura -- essa ação exige o login completo.")
             g.nivel_acesso = nivel
@@ -156,6 +180,38 @@ def exige_mesma_origem(f):
             abort(403, "Origem da requisição não confere (proteção CSRF).")
         return f(*args, **kwargs)
     return decorado
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    erro = None
+    if request.method == "POST":
+        config = _carregar_config()
+        cfg_painel = config.get("painel_agentes", {})
+        usuario = request.form.get("usuario", "")
+        senha = request.form.get("senha", "")
+        nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
+        if nivel is None:
+            erro = "Usuário ou senha incorretos."
+        else:
+            session.clear()
+            session.permanent = True
+            session["nivel_acesso"] = nivel
+            session["usuario"] = usuario
+            proximo = request.form.get("proximo") or url_for("torre")
+            # Só aceita redirecionar pra caminho relativo deste próprio
+            # painel -- nunca pra outro domínio (open redirect).
+            raiz = request.script_root or ""
+            if not (proximo == raiz or proximo.startswith(raiz + "/")):
+                proximo = url_for("torre")
+            return redirect(proximo)
+    return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.route("/")
@@ -931,6 +987,28 @@ def api_cancelar_pedido():
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
     resultado = cancelar_pedido(service_id, rascunho_id)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/planejamento/reagendar-pedido", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_reagendar_pedido():
+    """Agenda/reagenda um pedido na VUUPT (scheduled_start/scheduled_end)
+    -- opção "Agendar / reagendar" do menu de contexto (ver
+    planejamento_rotas.reagendar_pedido)."""
+    body = request.get_json(force=True)
+    try:
+        service_id = int(body["service_id"])
+        data = body["data"]
+        hora_inicio = body["hora_inicio"]
+        hora_fim = body["hora_fim"]
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = reagendar_pedido(service_id, data, hora_inicio, hora_fim)
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})

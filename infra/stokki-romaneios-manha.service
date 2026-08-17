@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Geracao de romaneios da manha (gerar_pdf_romaneios.py --data hoje)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/roteirizacao
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/roteirizacao/gerar_pdf_romaneios.py --data hoje

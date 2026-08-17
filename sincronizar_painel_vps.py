@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 VPS_HOST = "root@187.127.52.197"
 VPS_CHAVE = str(Path.home() / ".ssh" / "freshlog_confirmacao_vps")
 VPS_DESTINO_DADOS = "/opt/stokki-eventos/dados"
-ARQUIVOS_PLANILHA = ["BD_MOTORISTAS.xlsx", "BD_CLIENTES.xlsx"]
+ARQUIVOS_PLANILHA = ["BD_MOTORISTAS.xlsx", "BD_CLIENTES.xlsx", "BD_TRANSPORTADORAS.xlsx"]
 
 # Onde roteirizacao/gerar_pdf_romaneios.py busca os PDFs físicos de NF/
 # boleto pra montar o romaneio (ver documentos_pedido/localizar_arquivos.py)
@@ -120,12 +120,8 @@ def main():
     # www-data precisa ser dono (o serviço systemd roda como www-data);
     # 644 (não 444) -- painel_agentes.py grava em dados.db no startup
     # (limpar_execucoes_travadas), e essa réplica é descartável mesmo.
-    ssh(
-        f"chown www-data:www-data {VPS_DESTINO_DADOS}/dados.db "
-        f"{VPS_DESTINO_DADOS}/BD_MOTORISTAS.xlsx {VPS_DESTINO_DADOS}/BD_CLIENTES.xlsx "
-        f"&& chmod 644 {VPS_DESTINO_DADOS}/dados.db "
-        f"{VPS_DESTINO_DADOS}/BD_MOTORISTAS.xlsx {VPS_DESTINO_DADOS}/BD_CLIENTES.xlsx"
-    )
+    alvos = " ".join(f"{VPS_DESTINO_DADOS}/{nome}" for nome in ["dados.db"] + ARQUIVOS_PLANILHA)
+    ssh(f"chown www-data:www-data {alvos} && chmod 644 {alvos}")
     logger.info("  Permissões ajustadas na VPS.")
 
     logger.info("Sincronizando documentos (NF/boleto) novos...")

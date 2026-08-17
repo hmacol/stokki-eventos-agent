@@ -31,7 +31,7 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 
 import yaml
 
-from vuupt_client import VuuptClient, VuuptAPIError
+from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.preferencias_motoristas import CatalogoMotoristas
@@ -718,6 +718,44 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
 
     if rascunho and rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
         rascunhos_rota.remover_parada(rascunho_id, service_id)
+
+    return {"ok": True}
+
+
+def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str) -> dict:
+    """
+    Agenda/reagenda um pedido na VUUPT (PUT /services/{id}, campos
+    scheduled_start/scheduled_end) -- opção "Agendar / reagendar" do
+    menu de contexto da tela de planejamento (Hugo, 16/08).
+
+    `data` no formato "YYYY-MM-DD" (input type=date), `hora_inicio`/
+    `hora_fim` no formato "HH:MM" (input type=time) -- convertidos pro
+    ISO8601 com offset de Brasília pelo mesmo conversor do reagendamento
+    automático por e-mail (vuupt_client._converter_data_para_iso), pra
+    não repetir o bug de fuso (sem offset explícito a API entende UTC e
+    adianta o horário em 3h).
+
+    NÃO mexe em nada na Stokki, só no agendamento da VUUPT -- e não
+    reaplica as regras de dia fixo por região (essas são só pro
+    reagendamento automático via e-mail); aqui é uma escolha manual do
+    usuário, vai pra VUUPT como digitada.
+
+    Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
+    """
+    scheduled_start = _converter_data_para_iso(f"{data} {hora_inicio}")
+    scheduled_end = _converter_data_para_iso(f"{data} {hora_fim}")
+    if not scheduled_start or not scheduled_end:
+        return {"ok": False, "erro": f"Data/horário inválidos: {data} {hora_inicio}-{hora_fim}"}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    try:
+        VuuptClient(token).atualizar_servico(service_id, {
+            "scheduled_start": scheduled_start,
+            "scheduled_end": scheduled_end,
+        })
+    except VuuptAPIError as e:
+        return {"ok": False, "erro": str(e)}
 
     return {"ok": True}
 
