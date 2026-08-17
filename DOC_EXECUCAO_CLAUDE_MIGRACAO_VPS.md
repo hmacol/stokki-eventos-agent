@@ -336,7 +336,17 @@ Decisão do Hugo: corte imediato (janela de madrugada, antes do RomaneiosManha 0
 
 Minha contribuição: recriei o venv (Python 3.12, só 2 dependências reais -- `playwright`+`pyyaml`, resto é stdlib), subi os `config.yaml` dos dois clientes com credenciais reais, sincronizei `dados/` (estado de já-importado, ZIPs, XMLs processados) que só existia local -- sem isso os timers do Hugo rodariam sem saber o que já tinha sido processado. Testado `--modo-teste` nos dois clientes na VPS antes do 1º disparo real. **Achado de risco (não efetivado):** o download de e-mail não marca nada como lido/movido -- rodar local e VPS em paralelo arriscaria importar o mesmo pedido 2x na Stokki; a tarefa local (`AgenteImportacaoStokki_EmporioQuatroEstrelas`) já estava desativada antes de eu chegar nela, então não houve colisão de verdade.
 
-⏳ **Fase 7 — Print-agent** (impressão remota) + desligamento definitivo do Agendador do Windows local. **Ainda não iniciada** -- decisão de desenho do print-agent pendente do Hugo.
+✅ **Fase 7 — Print-agent** -- **feita 17/08, madrugada**. Decisão do Hugo: Windows local enxuto (reaproveita a máquina atual), não mini-PC dedicado.
+
+**Arquitetura:** `print_agent/print_agent.py` (máquina local) pergunta pra VPS a cada 10min (04h05-07h00) se tem romaneio novo (`GET /api/romaneios/pendentes`, autenticado por `X-Token-Impressao` -- token dedicado, não é a sessão de login), baixa o PDF (`GET /api/romaneios/<data>/<arquivo>`) e manda pra impressora via SumatraPDF (`-print-to-default -silent`). Controle do que já foi impresso fica só local (`print_agent/dados/romaneios_impressos.json`) -- a VPS nunca sabe o que saiu fisicamente.
+
+**Achado no meio do caminho:** `os.startfile(caminho, "print")` (primeira tentativa) dava erro -- o Adobe Acrobat é o handler padrão de `.pdf` nesta máquina mas não tem o verbo "print" registrado direito. Resolvido instalando SumatraPDF via `winget install SumatraPDF.SumatraPDF` e chamando via linha de comando.
+
+**⚠️ Efeito colateral do teste:** o primeiro teste do script (sem `--modo-teste`, que não existia ainda) **imprimiu de verdade os 11 romaneios reais da manhã** na impressora do Hugo -- não intencional, mas era trabalho que precisava ser feito de qualquer jeito hoje. `--modo-teste` foi adicionado ao script logo em seguida pra isso nunca mais pegar ninguém de surpresa.
+
+**Descoberta importante: o Hugo construiu a própria versão do print-agent em paralelo, na mesma janela de tempo, no MESMO diretório de trabalho** (commit `3d169b7`, 07:52 -- 2 min antes de eu começar a testar o meu). Isso só foi percebido depois, ao dar `git pull` e ver o histórico. Como as duas versões nasceram do mesmo arquivo em disco (mesma máquina, mesma pasta), não houve conflito de verdade pra resolver -- só reconciliar quem tinha a versão mais recente de cada trecho. **Lição pra próximas fases: antes de editar um arquivo que o Hugo também pode estar mexendo ao vivo, checar `git status`/`git log -1` primeiro.** Ele também aproveitou a mesma sessão pra adicionar sidebar recolhível e botão "Duplicar pedido" na Torre -- nada relacionado à migração, não mexi nisso.
+
+**Pendente:** rodar `print_agent/criar_tarefa_print_agent.ps1` como Administrador (registra `StokkiEventos_PrintAgent`, tarefa local) -- ainda não rodado.
 
 ⏳ **Fase 8 — Ativar as 2 tarefas de confirmação de rotas** hoje manuais (aviso diário + sync 30min) — só depois do Hugo validar a 1ª rodada real (17/08), como já combinado em [[project_confirmacao_rotas_motoristas]]. **Ainda não iniciada.**
 
