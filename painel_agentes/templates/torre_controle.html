@@ -252,12 +252,19 @@
   /* ── Faixa 4: exceções ── */
   .excecao-vazia { display: flex; align-items: center; gap: 10px; color: var(--st-sucesso); font-size: 13.5px; font-weight: 600; padding: 6px 0; }
   table.tabela-excecoes { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.tabela-excecoes th {
+    padding: 0 10px 6px; text-align: left; font-size: 10.5px; font-weight: 700;
+    color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  table.tabela-excecoes th.th-acao { text-align: right; }
   table.tabela-excecoes td { padding: 8px 10px; border-bottom: 1px solid var(--fundo); vertical-align: middle; }
   table.tabela-excecoes tr:last-child td { border-bottom: none; }
   .pill-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
   .pill-sev.critico { background: #FDEBEA; color: var(--st-falha); }
   .pill-sev.atencao { background: #FDF3E1; color: #A36F00; }
+  .td-quando { color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .td-tipo { color: var(--texto-suave); font-weight: 600; white-space: nowrap; }
+  .td-motivo { color: var(--st-falha); font-weight: 700; white-space: nowrap; }
   .td-acao { text-align: right; white-space: nowrap; }
   .td-acao a, .td-acao button {
     font-size: 11.5px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda);
@@ -265,6 +272,8 @@
   }
   .td-acao a:hover, .td-acao button:hover { border-color: var(--acento); color: var(--acento); }
   .td-acao button.tratar { color: var(--texto-suave); }
+  .td-acao button.duplicar { color: #1c5cab; border-color: #C7D9F0; }
+  .td-acao button.duplicar:hover { border-color: #1c5cab; }
   details.tratadas { margin-top: 12px; font-size: 12.5px; }
   details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
   details.tratadas table td { color: var(--texto-suave); }
@@ -634,6 +643,10 @@ function renderExcecoes(d) {
         acao = `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
       }
       if (x.link_log) acao += ` <a href="${esc(x.link_log)}">Log</a>`;
+      if (x.pode_duplicar && PODE_EDITAR) {
+        acao += ` <button class="duplicar" title="Cria a reentrega no VUUPT agora, sem esperar resposta do remetente"
+                          onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
+      }
       if (PODE_EDITAR) {
         acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
                           onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
@@ -641,12 +654,19 @@ function renderExcecoes(d) {
       const icone = x.severidade === "critico" ? "✗" : "▲";
       return `<tr>
         <td><span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span></td>
+        <td class="td-quando">${x.quando ? esc(x.quando) : "—"}</td>
         <td class="td-tipo">${esc(x.tipo)}</td>
         <td>${esc(x.descricao)}${quemAtualizou(x)}${badgesHtml(x.badges)}</td>
+        <td class="td-motivo">${x.motivo_insucesso ? esc(x.motivo_insucesso) : ""}</td>
         <td class="td-acao">${acao}</td>
       </tr>`;
     }).join("");
-    partes.push(`<table class="tabela-excecoes"><tbody>${linhas}</tbody></table>`);
+    partes.push(`<table class="tabela-excecoes">
+      <thead><tr>
+        <th>Severidade</th><th>Quando</th><th>Tipo</th><th>Descrição</th><th>Motivo</th><th class="th-acao">Ação</th>
+      </tr></thead>
+      <tbody>${linhas}</tbody>
+    </table>`);
   }
 
   if (d.tratadas && d.tratadas.length) {
@@ -694,6 +714,25 @@ async function destratarExcecao(id) {
     if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao desfazer."); return; }
     carregarDados();
   } catch (e) { alert("Falha ao desfazer: " + e); }
+}
+
+async function duplicarPedido(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Criar uma reentrega no VUUPT agora para ${x.codigo}?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}\n\nEssa ação cria um pedido novo de verdade -- não dá pra desfazer.`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/duplicar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: x.service_id, codigo: x.codigo,
+        motorista: x.motorista, rota: x.rota,
+      }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao duplicar."); return; }
+    alert(`Reentrega criada: ${j.novo_code}`);
+    carregarDados();
+  } catch (e) { alert("Falha ao duplicar: " + e); }
 }
 
 function renderTendencia(d) {

@@ -43,14 +43,16 @@ algum agente está rodando -- login concorrente na Stokki derruba a
 sessão do processo que estiver no meio de uma execução (401 em massa,
 aprendido em produção).
 """
+import importlib.util
 import logging
 import sqlite3
 import sys
 import threading
 import time
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -98,14 +100,105 @@ FUNIL_STOKKI = [
 TTL_FUNIL_STOKKI_SEG = 300   # 5 min -- funil upstream muda devagar
 TTL_TENDENCIA_SEG    = 600   # 10 min -- 7 chamadas de contagem na VUUPT
 
+FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")
+
 _cache_stokki: dict = {"quando": 0.0, "dados": None}
 _cache_tendencia: dict = {}  # data_iso -> {"quando": monotonic, "dados": [...]}
 _lock_caches = threading.Lock()
+_modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _quando_fila(bruto: str | None, utc: bool = False) -> tuple[str | None, float]:
+    """Converte um timestamp bruto num rótulo 'dd/mm HH:MM' pra fila de
+    ação e um epoch pra ordenar (pedido do Hugo, 17/08: mostrar dia e
+    horário da ocorrência e trazer a mais nova pra cima da fila).
+
+    `utc=True` pro timestamp da VUUPT (completed_at, ISO em UTC);
+    `utc=False` pro timestamp já local e "naive" do próprio painel
+    (execuções do pipeline, formato '%Y-%m-%d %H:%M:%S').
+
+    Sem timestamp = epoch 0.0: o item vai pro fim da própria faixa de
+    severidade -- são condições agregadas (sem rota, sem motorista,
+    travas), não uma ocorrência pontual com hora própria.
+    """
+    if not bruto:
+        return None, 0.0
+    try:
+        if utc:
+            texto = bruto.strip()
+            if texto.endswith("Z"):
+                texto = texto[:-1] + "+00:00"
+            dt = datetime.fromisoformat(texto)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dt_local = dt.astimezone(FUSO_LOCAL)
+        else:
+            dt_local = datetime.strptime(bruto, "%Y-%m-%d %H:%M:%S").replace(tzinfo=FUSO_LOCAL)
+        return dt_local.strftime("%d/%m %H:%M"), dt_local.timestamp()
+    except (ValueError, TypeError):
+        return None, 0.0
+
+
+def _expedir_pedidos_raiz():
+    """Import explícito do expedir_pedidos.py da RAIZ (o que roda de
+    verdade em produção). `import expedir_pedidos` simples resolveria
+    pra cópia dentro de insucesso_entrega/ por causa da ordem do
+    sys.path (essa pasta é inserida por último, ver topo do arquivo --
+    armadilha já vivida em produção com esse mesmo par de arquivos)."""
+    global _modulo_expedir_pedidos
+    if _modulo_expedir_pedidos is None:
+        caminho = _RAIZ / "expedir_pedidos.py"
+        spec = importlib.util.spec_from_file_location("expedir_pedidos_raiz", caminho)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        _modulo_expedir_pedidos = modulo
+    return _modulo_expedir_pedidos
+
+
+def duplicar_pedido_manual(service_id: int, codigo: str,
+                           motorista: str | None = None, rota: str | None = None) -> dict:
+    """
+    Duplica manualmente um pedido com insucesso -- botão 'Duplicar
+    pedido' da fila de ação (pedido do Hugo, 17/08: poder disparar a
+    reentrega na hora, sem esperar a resposta do remetente por e-mail).
+
+    Usa a MESMA duplicar_servico_por_insucesso do fluxo automático e
+    grava no MESMO fingerprint (insucessos_duplicados) -- o badge da
+    fila passa a mostrar 'Duplicado' também pra essa duplicação manual,
+    e o fluxo automático por e-mail não duplica de novo em cima dela.
+    """
+    import fingerprint_duplicacao_insucesso  # já no sys.path (insucesso_entrega/)
+
+    if fingerprint_duplicacao_insucesso.ja_duplicado(service_id):
+        novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(service_id)
+        return {"ok": False, "erro": f"Esse pedido já foi duplicado antes (→ {novo_code})."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    servico_original = vuupt.buscar_servico_por_code(codigo)
+    if not servico_original:
+        return {"ok": False, "erro": f"Pedido {codigo} não encontrado no VUUPT."}
+
+    modulo = _expedir_pedidos_raiz()
+    novo = modulo.duplicar_servico_por_insucesso(vuupt, servico_original)
+    if not novo:
+        return {"ok": False, "erro": "Falha ao criar a reentrega no VUUPT (ver log de expedição)."}
+
+    novo_code = novo.get("code", "")
+    fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo_code)
+    tratativas.registrar_evento(
+        codigo, "TORRE", "REENVIO_MANUAL",
+        service_id=service_id, motorista_nome=motorista, rota_nome=rota,
+        texto=f"Duplicado manualmente pela Torre → {novo_code}",
+    )
+    return {"ok": True, "novo_code": novo_code}
 
 
 # ── Faixa 1: etapas do pipeline ────────────────────────────────────────────────
@@ -153,6 +246,7 @@ def _resumir_servico(s: dict) -> dict:
         "service_id": s.get("id"),
         "codigo": s.get("code", ""),
         "titulo": (s.get("title") or "")[:90],
+        "completed_at": s.get("completed_at"),
     }
 
 
@@ -564,32 +658,45 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
 
     for e in etapas:
         if e["status"] in ("ERRO", "TIMEOUT"):
+            quando, epoch = _quando_fila(e["quando"], utc=False)
             excecoes.append({
                 "id": f"pipeline:{e['agente_id']}:{e['execucao_id']}",
                 "severidade": "critico",
                 "tipo": "Pipeline",
-                "descricao": f"Etapa '{e['titulo']}' terminou em {e['status']} ({e['quando'] or 'sem horário'}).",
+                "descricao": f"Etapa '{e['titulo']}' terminou em {e['status']}.",
+                "quando": quando,
                 "acao": {"tipo": "rodar", "agente_id": e["agente_id"], "rotulo": "Reexecutar",
                          "agente_titulo": e["titulo"]},
                 "link_log": f"/execucao/{e['execucao_id']}" if e["execucao_id"] else None,
+                "_epoch": epoch,
             })
 
     for i in pedidos["insucessos"]:
-        # Sem botão de ação próprio (o tratamento já é automático:
-        # duplicação na hora + respostas por e-mail) -- os badges
-        # mostram em que pé o fluxo automático está.
+        quando, epoch = _quando_fila(i.get("completed_at"), utc=True)
+        badges = i.get("badges", [])
         excecoes.append({
             "id": f"insucesso:{i['codigo']}",
             "severidade": "critico",
             "tipo": "Insucesso",
-            "descricao": f"{i['codigo']} — {i['titulo']} ({i.get('motivo_insucesso') or 'Motivo não informado'})",
+            "descricao": f"{i['codigo']} — {i['titulo']}",
+            "motivo_insucesso": i.get("motivo_insucesso") or "Motivo não informado",
+            "quando": quando,
             # Quem registrou a atualização: o motorista da rota (é ele
             # que marca o insucesso no app). 'rota' é o fallback pra
             # rota sem motorista atribuído.
             "motorista": i.get("motorista"),
             "rota": i.get("rota"),
-            "badges": i.get("badges", []),
+            "badges": badges,
+            "service_id": i.get("service_id"),
+            "codigo": i.get("codigo"),
+            # Botão 'Duplicar pedido' (pedido do Hugo, 17/08): some
+            # quando já existe uma reentrega executada (badge
+            # 'duplicado') -- duplicar de novo criaria uma segunda.
+            # Reentrega só AGENDADA/aguardando resposta ainda pode ser
+            # antecipada na hora por aqui.
+            "pode_duplicar": not any(b.get("tipo") == "duplicado" for b in badges),
             "acao": None,
+            "_epoch": epoch,
         })
 
     if pedidos["qtd_nao_atribuidos"]:
@@ -599,7 +706,9 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "tipo": "Sem rota",
             "descricao": f"{pedidos['qtd_nao_atribuidos']} pedido(s) com agendamento até hoje e ainda sem rota "
                          f"(ex: {', '.join(p['codigo'] for p in pedidos['nao_atribuidos'][:5])}).",
+            "quando": None,
             "acao": {"tipo": "link", "url": f"/planejamento?data={data_iso}", "rotulo": "Planejar"},
+            "_epoch": 0.0,
         })
 
     sem_motorista = [r for r in rotas if not r["motorista"] and r["estado"] not in ("concluida", "vazia")]
@@ -609,7 +718,9 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "severidade": "atencao",
             "tipo": "Sem motorista",
             "descricao": f"Rota '{r['nome']}' ({r['total']} parada(s)) sem motorista atribuído.",
+            "quando": None,
             "acao": {"tipo": "link", "url": f"/mapa-rotas?data={data_iso}", "rotulo": "Ver rota"},
+            "_epoch": 0.0,
         })
 
     if amanha.get("qtd_travas"):
@@ -618,22 +729,30 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "severidade": "atencao",
             "tipo": "Planejamento",
             "descricao": f"{amanha['qtd_travas']} rascunho(s) de amanhã com trava estourada (paradas/caixas/distância).",
+            "quando": None,
             "acao": {"tipo": "link", "url": f"/planejamento?data={amanha['data_iso']}", "rotulo": "Revisar"},
+            "_epoch": 0.0,
         })
 
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []
     for x in excecoes:
+        epoch = x.pop("_epoch")
         registro = tratadas_por_id.get(x["id"])
         if registro:
             tratadas.append({**x, "motivo": registro["motivo"], "tratado_em": registro["tratado_em"]})
         else:
-            ativas.append(x)
+            ativas.append((x, epoch))
 
+    # Severidade primeiro (crítico antes de atenção -- é onde a decisão
+    # é mais urgente), ocorrência mais nova primeiro dentro da mesma
+    # faixa (pedido do Hugo, 17/08: "incluir novas ocorrências sempre
+    # em primeiro lugar" -- sem isso, um insucesso novo podia nascer no
+    # meio da lista, atrás de insucessos antigos do mesmo dia).
     ordem = {"critico": 0, "atencao": 1}
-    ativas.sort(key=lambda x: ordem.get(x["severidade"], 9))
+    ativas.sort(key=lambda par: (ordem.get(par[0]["severidade"], 9), -par[1]))
     tratadas.sort(key=lambda x: x["tratado_em"], reverse=True)
-    return ativas, tratadas
+    return [x for x, _ in ativas], tratadas
 
 
 # ── Planejamento de amanhã (rascunhos) ────────────────────────────────────────

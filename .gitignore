@@ -29,6 +29,7 @@ roteirizacao/dados/
 painel_agentes/dados/
 dashboard_embarcadores/dados/
 notificacao_transportadoras/dados/
+print_agent/dados/
 dashboard_embarcadores/debug/
 output/
 *.log

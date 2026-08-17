@@ -16,6 +16,7 @@ COMO USAR (produção):
 """
 import hmac
 import logging
+import re
 import sys
 from datetime import date, datetime, timedelta
 from functools import wraps
@@ -181,6 +182,64 @@ def exige_mesma_origem(f):
             abort(403, "Origem da requisição não confere (proteção CSRF).")
         return f(*args, **kwargs)
     return decorado
+
+
+def requer_token_impressao(f):
+    """Autenticação por token fixo pro print-agent local (Fase 7, 17/08)
+    -- é máquina-a-máquina (um script rodando via Agendador do Windows,
+    sem navegador/usuário), então não faz sentido usar a sessão de login.
+    Token comparado com hmac.compare_digest (mesmo cuidado contra timing
+    attack já usado em _nivel_das_credenciais)."""
+    @wraps(f)
+    def decorado(*args, **kwargs):
+        config = _carregar_config()
+        token_esperado = config.get("painel_agentes", {}).get("token_impressao", "")
+        token_recebido = request.headers.get("X-Token-Impressao", "")
+        if not token_esperado or not hmac.compare_digest(token_recebido, token_esperado):
+            abort(401, "Token de impressão inválido ou ausente.")
+        return f(*args, **kwargs)
+    return decorado
+
+
+# roteirizacao/gerar_pdf_romaneios.py grava em roteirizacao/dados/romaneios/<AAAA-MM-DD>/*.pdf
+# (PASTA_ROMANEIOS lá) -- essas rotas só SERVEM o que já foi gerado, nunca geram nada.
+PASTA_ROMANEIOS_DIA = _RAIZ / "roteirizacao" / "dados" / "romaneios"
+_PADRAO_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_PADRAO_NOME_PDF = re.compile(r"^[\w\-.]+\.pdf$")
+
+
+@app.route("/api/romaneios/pendentes")
+@requer_token_impressao
+def api_romaneios_pendentes():
+    """Lista os romaneios já gerados HOJE -- o print-agent local pergunta
+    isso periodicamente e decide, do lado dele, o que ainda não imprimiu
+    (o controle do que já foi impresso fica só local, de propósito: essa
+    VPS não sabe nem precisa saber o que já saiu fisicamente na impressora)."""
+    hoje = date.today().isoformat()
+    pasta = PASTA_ROMANEIOS_DIA / hoje
+    romaneios = []
+    if pasta.is_dir():
+        for caminho in sorted(pasta.glob("*.pdf")):
+            romaneios.append({
+                "nome": caminho.name,
+                "url": url_for("api_romaneio_pdf", data=hoje, nome_arquivo=caminho.name),
+            })
+    return jsonify({"data": hoje, "romaneios": romaneios})
+
+
+@app.route("/api/romaneios/<data>/<nome_arquivo>")
+@requer_token_impressao
+def api_romaneio_pdf(data, nome_arquivo):
+    """Serve o PDF de um romaneio já gerado. Valida `data`/`nome_arquivo`
+    contra um padrão fixo antes de tocar no filesystem -- sem isso, um
+    ".." no nome do arquivo vazaria pra fora de PASTA_ROMANEIOS_DIA
+    (path traversal)."""
+    if not _PADRAO_DATA.match(data) or not _PADRAO_NOME_PDF.match(nome_arquivo):
+        abort(400, "Data ou nome de arquivo inválido.")
+    caminho = PASTA_ROMANEIOS_DIA / data / nome_arquivo
+    if not caminho.is_file():
+        abort(404, "Romaneio não encontrado.")
+    return send_file(caminho, mimetype="application/pdf", download_name=nome_arquivo)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -552,6 +611,25 @@ def api_torre_destratar():
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
     return jsonify({"ok": True, "desfeito": desfez})
+
+
+@app.route("/api/torre/duplicar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_torre_duplicar():
+    """Botão 'Duplicar pedido' da fila de ação -- cria a reentrega no
+    VUUPT na hora, mesma lógica do fluxo automático por e-mail."""
+    body = request.get_json(force=True)
+    try:
+        service_id = int(body["service_id"])
+        codigo = body["codigo"]
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id/codigo ausente ou inválido."}), 400
+    resultado = torre_controle.duplicar_pedido_manual(
+        service_id, codigo, motorista=body.get("motorista"), rota=body.get("rota"))
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro", "Falha ao duplicar.")}), 400
+    return jsonify(resultado)
 
 
 @app.route("/api/planejamento/pool")

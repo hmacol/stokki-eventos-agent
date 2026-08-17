@@ -1,0 +1,4 @@
+# Copie pra config.yaml e preencha -- token_impressao precisa ser
+# IDÊNTICO ao painel_agentes.token_impressao no config.yaml da VPS.
+url_base: 'https://app.freshhub.com.br/painel'
+token: 'COLE_AQUI_O_MESMO_TOKEN_DA_VPS'

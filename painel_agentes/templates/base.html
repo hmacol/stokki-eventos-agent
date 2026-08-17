@@ -3,6 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Aplica o estado recolhido da sidebar antes do primeiro paint --
+  // evita o "flash" da sidebar larga que colapsaria um instante depois.
+  if (localStorage.getItem("painel_sidebar_recolhida") === "1") {
+    document.documentElement.classList.add("sidebar-recolhida");
+  }
+</script>
 <title>{% block titulo %}Painel de Agentes{% endblock %} — Freshlog</title>
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
@@ -45,7 +52,9 @@
     top: 0;
     align-self: flex-start;
     height: 100vh;
+    overflow-x: hidden;
     overflow-y: auto;
+    transition: width 0.18s ease;
   }
   .sidebar .marca {
     padding: 24px 22px 20px;
@@ -56,13 +65,47 @@
     font-size: 17px;
     font-weight: 800;
     letter-spacing: 0.3px;
+    white-space: nowrap;
   }
   .sidebar .marca .subtitulo {
     display: block;
     font-size: 12px;
     color: #A3A3C2;
     margin-top: 4px;
+    white-space: nowrap;
   }
+  .sidebar .marca .marca-mini {
+    display: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--acento);
+    color: #fff;
+    font-weight: 800;
+    font-size: 14px;
+    align-items: center;
+    justify-content: center;
+  }
+  .alterna-sidebar {
+    position: absolute;
+    top: 27px;
+    right: -12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--primaria);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #C7C7E0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    z-index: 2;
+    transition: background 0.15s, color 0.15s;
+  }
+  .alterna-sidebar:hover { background: var(--primaria-clara); color: #fff; }
+  .alterna-sidebar svg { width: 13px; height: 13px; transition: transform 0.2s; flex: none; }
   .sidebar nav {
     flex: 1;
     display: flex;
@@ -70,13 +113,19 @@
     padding: 12px 0;
   }
   .sidebar nav a {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     color: #C7C7E0;
     text-decoration: none;
     font-size: 14px;
     padding: 11px 22px;
     border-left: 3px solid transparent;
+    white-space: nowrap;
     transition: color 0.15s, background 0.15s, border-color 0.15s;
   }
+  .sidebar nav a .icone { display: flex; flex: none; }
+  .sidebar nav a .icone svg { width: 18px; height: 18px; }
   .sidebar nav a:hover { color: #fff; background: rgba(255,255,255,0.05); }
   .sidebar nav a.ativo {
     color: #fff;
@@ -101,6 +150,9 @@
   }
   .sidebar .sair-form { flex: none; }
   .sidebar button.sair {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     background: none;
     border: 1px solid #3A3A5C;
     color: #C7C7E0;
@@ -108,9 +160,31 @@
     padding: 6px 12px;
     border-radius: 6px;
     cursor: pointer;
+    white-space: nowrap;
     transition: color 0.15s, border-color 0.15s;
   }
+  .sidebar button.sair svg { width: 14px; height: 14px; flex: none; }
   .sidebar button.sair:hover { color: #fff; border-color: #C7C7E0; }
+
+  /* Sidebar recolhida -- classe fica em <html>, aplicada já no <head>
+     (ver script inline) pra não piscar a versão larga antes de colapsar. */
+  html.sidebar-recolhida .sidebar { width: 68px; }
+  html.sidebar-recolhida .sidebar .marca {
+    display: flex;
+    justify-content: center;
+    padding: 20px 0;
+  }
+  html.sidebar-recolhida .sidebar .marca .nome,
+  html.sidebar-recolhida .sidebar .marca .subtitulo { display: none; }
+  html.sidebar-recolhida .sidebar .marca .marca-mini { display: flex; }
+  html.sidebar-recolhida .alterna-sidebar svg { transform: rotate(180deg); }
+  html.sidebar-recolhida .sidebar nav a { justify-content: center; padding: 11px 0; }
+  html.sidebar-recolhida .sidebar nav a .rotulo { display: none; }
+  html.sidebar-recolhida .sidebar .rodape { flex-direction: column; padding: 16px 8px 20px; }
+  html.sidebar-recolhida .sidebar .rodape .usuario { display: none; }
+  html.sidebar-recolhida .sidebar button.sair { padding: 8px; }
+  html.sidebar-recolhida .sidebar button.sair .rotulo-sair { display: none; }
+
   .area-conteudo {
     flex: 1;
     min-width: 0;
@@ -174,26 +248,57 @@
     <div class="marca">
       <span class="nome">Painel de Agentes</span>
       <span class="subtitulo">Agente Stokki Freshlog</span>
+      <span class="marca-mini">P</span>
     </div>
+    <button type="button" class="alterna-sidebar" id="alterna-sidebar" title="Recolher menu" aria-label="Recolher menu">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 5l-5 5 5 5"/></svg>
+    </button>
     <nav>
       {% if session.get('nivel_acesso') == 'total' %}
-      <a href="{{ url_for('index') }}" class="{{ 'ativo' if request.endpoint == 'index' else '' }}">Agentes</a>
+      <a href="{{ url_for('index') }}" class="{{ 'ativo' if request.endpoint == 'index' else '' }}" title="Agentes">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="6" height="6" rx="1.2"/><rect x="11" y="3" width="6" height="6" rx="1.2"/><rect x="3" y="11" width="6" height="6" rx="1.2"/><rect x="11" y="11" width="6" height="6" rx="1.2"/></svg></span>
+        <span class="rotulo">Agentes</span>
+      </a>
       {% endif %}
-      <a href="{{ url_for('torre') }}" class="{{ 'ativo' if request.endpoint == 'torre' else '' }}">Torre de Controle</a>
-      <a href="{{ url_for('planejamento') }}" class="{{ 'ativo' if request.endpoint == 'planejamento' else '' }}">Planejamento de Rotas</a>
-      <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}">Motoristas</a>
-      <a href="{{ url_for('mapa_rotas') }}" class="{{ 'ativo' if request.endpoint == 'mapa_rotas' else '' }}">Mapa de Rotas</a>
-      <a href="{{ url_for('laboratorio_rotas') }}" class="{{ 'ativo' if request.endpoint == 'laboratorio_rotas' else '' }}">Laboratório de Roteirização</a>
-      <a href="{{ url_for('historico_tratativas') }}" class="{{ 'ativo' if request.endpoint == 'historico_tratativas' else '' }}">Histórico de Tratativas</a>
+      <a href="{{ url_for('torre') }}" class="{{ 'ativo' if request.endpoint == 'torre' else '' }}" title="Torre de Controle">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 8v9M10 8a2 2 0 100-4 2 2 0 000 4z"/><path d="M6.5 6.5a5 5 0 000 7M13.5 6.5a5 5 0 010 7"/><path d="M4 4a8 8 0 000 12M16 4a8 8 0 010 12"/></svg></span>
+        <span class="rotulo">Torre de Controle</span>
+      </a>
+      <a href="{{ url_for('planejamento') }}" class="{{ 'ativo' if request.endpoint == 'planejamento' else '' }}" title="Planejamento de Rotas">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/></svg></span>
+        <span class="rotulo">Planejamento de Rotas</span>
+      </a>
+      <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}" title="Motoristas">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/></svg></span>
+        <span class="rotulo">Motoristas</span>
+      </a>
+      <a href="{{ url_for('mapa_rotas') }}" class="{{ 'ativo' if request.endpoint == 'mapa_rotas' else '' }}" title="Mapa de Rotas">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/></svg></span>
+        <span class="rotulo">Mapa de Rotas</span>
+      </a>
+      <a href="{{ url_for('laboratorio_rotas') }}" class="{{ 'ativo' if request.endpoint == 'laboratorio_rotas' else '' }}" title="Laboratório de Roteirização">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h4M8.5 3v4.2L4.8 14a1.8 1.8 0 001.6 2.6h7.2a1.8 1.8 0 001.6-2.6L11.5 7.2V3"/><path d="M6.8 12h6.4"/></svg></span>
+        <span class="rotulo">Laboratório de Roteirização</span>
+      </a>
+      <a href="{{ url_for('historico_tratativas') }}" class="{{ 'ativo' if request.endpoint == 'historico_tratativas' else '' }}" title="Histórico de Tratativas">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="3.5" width="11" height="14" rx="1.5"/><path d="M7.5 3.2h5a.8.8 0 01.8.8v1H6.7v-1a.8.8 0 01.8-.8z"/><path d="M7.3 10.5l1.8 1.8 3.6-3.8"/></svg></span>
+        <span class="rotulo">Histórico de Tratativas</span>
+      </a>
       {% if session.get('nivel_acesso') == 'total' %}
-      <a href="{{ url_for('historico') }}" class="{{ 'ativo' if request.endpoint == 'historico' else '' }}">Histórico</a>
+      <a href="{{ url_for('historico') }}" class="{{ 'ativo' if request.endpoint == 'historico' else '' }}" title="Histórico">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10.5" r="6.7"/><path d="M10 6.8V10.5l3 1.8"/><path d="M7.5 2.3h5"/></svg></span>
+        <span class="rotulo">Histórico</span>
+      </a>
       {% endif %}
     </nav>
     {% if session.get('nivel_acesso') %}
     <div class="rodape">
       <span class="usuario" title="{{ session.get('usuario', '') }}">{{ session.get('usuario', '') }}</span>
       <form class="sair-form" method="post" action="{{ url_for('logout') }}">
-        <button type="submit" class="sair">Sair</button>
+        <button type="submit" class="sair" title="Sair">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5H5a1.5 1.5 0 00-1.5 1.5v10A1.5 1.5 0 005 16.5h3"/><path d="M13 13.5l3.5-3.5L13 6.5"/><path d="M16.3 10H8"/></svg>
+          <span class="rotulo-sair">Sair</span>
+        </button>
       </form>
     </div>
     {% endif %}
@@ -204,5 +309,23 @@
     </main>
   </div>
 </div>
+<script>
+  (function() {
+    var CHAVE = "painel_sidebar_recolhida";
+    var botao = document.getElementById("alterna-sidebar");
+    if (!botao) return;
+    function aplicar(recolhida) {
+      document.documentElement.classList.toggle("sidebar-recolhida", recolhida);
+      botao.title = recolhida ? "Expandir menu" : "Recolher menu";
+      botao.setAttribute("aria-label", botao.title);
+    }
+    aplicar(document.documentElement.classList.contains("sidebar-recolhida"));
+    botao.addEventListener("click", function() {
+      var recolhida = !document.documentElement.classList.contains("sidebar-recolhida");
+      localStorage.setItem(CHAVE, recolhida ? "1" : "0");
+      aplicar(recolhida);
+    });
+  })();
+</script>
 </body>
 </html>
