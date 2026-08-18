@@ -216,11 +216,19 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
     por email_documentos.py, pra alimentar o mesmo pipeline de
     classificar/casar/enviar depois.
 
-    buscar_nf=False pula SÓ a geração do DANFE -- pedidos de
-    embarcadores cujas entregas não precisam ir acompanhadas de Nota
-    Fiscal (Padrão Puro, Quatro Estrelas, Pedramoura -- pedido do Hugo,
-    13/08; ver EMBARCADORES_SEM_NF em selecionar_pedidos.py). A aba
-    Documentos continua sendo olhada normalmente (boleto etc).
+    buscar_nf=False pula SÓ a geração do DANFE -- por dois motivos
+    diferentes, decididos em selecionar_pedidos.py e combinados pelo
+    chamador (processar_documentos.py):
+      - embarcadores cujas entregas não precisam ir acompanhadas de
+        Nota Fiscal (Padrão Puro, Quatro Estrelas, Pedramoura -- pedido
+        do Hugo, 13/08; ver EMBARCADORES_SEM_NF);
+      - embarcadores que PRECISAM de Nota Fiscal, mas cuja DANFE nunca
+        pode vir do XML anexado na Stokki (Laticínios Dourado, Muai --
+        pedido do Hugo, 17/08, casos reais de XML errado/divergente
+        anexado no pedido; ver EMBARCADORES_DANFE_SOMENTE_EMAIL) -- pra
+        esses, a DANFE só entra pelo fluxo de e-mail.
+    A aba Documentos continua sendo olhada normalmente (boleto etc) nos
+    dois casos.
     """
     page.goto(
         f"{URL_PROVIDER_SHW}/{_extrair_id(codigo_ps)}",

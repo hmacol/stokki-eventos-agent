@@ -15,6 +15,7 @@ só pra pegar 2 constantes. Se a lista de embarcadores prioritários
 mudar lá, precisa mudar aqui também.
 """
 import logging
+import re
 
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
@@ -39,20 +40,72 @@ EMBARCADORES_QUALQUER_STATUS: dict[str, str] = {
     "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
 }
 
+# A listagem de pedidos da Stokki devolve o nome do cliente TRUNCADO
+# em ~15 caracteres no campo 'client' ("LATICINIOS DOUR ...", "COMERCIO
+# DE CER ..."), mas o ID interno vem junto, sem truncar
+# ("<span class="text-muted">#stkkc-18</span>") -- casar por esse ID é
+# a forma correta e à prova de truncamento (achado real, 17/08: ver
+# EMBARCADORES_SEM_NF_IDS e EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS abaixo).
+_PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
+
+
+def _stkkc_id_da_linha(linha) -> str | None:
+    cliente = str(linha.get("client", "")) if isinstance(linha, dict) else ""
+    m = _PADRAO_STKKC_ID.search(cliente)
+    return m.group(1) if m else None
+
+
 # Embarcadores cujas entregas NÃO precisam ir acompanhadas de Nota
 # Fiscal (pedido do Hugo, 13/08): a etapa da Stokki pula a geração do
 # DANFE desses pedidos (a aba Documentos continua sendo olhada -- boleto
 # etc). São os mesmos 3 embarcadores da CANHOTEIRA do romaneio
-# (roteirizacao/gerar_pdf_romaneios.py::SENDERS_CANHOTEIRA). O casamento
-# é pelo NOME do cliente na linha da listagem (normalizado, sem acento),
-# não por ID -- o ID Stokki da Pedramoura não está mapeado.
+# (roteirizacao/gerar_pdf_romaneios.py::SENDERS_CANHOTEIRA).
+#
+# Conferido por ID (ver _stkkc_id_da_linha), não por nome -- achado
+# real, 17/08: "QUATRO ESTRELAS" só aparece no MEIO do nome completo
+# do cliente na Stokki ("COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA"),
+# nunca sobrevive ao truncamento -- checado contra 786 pedidos reais
+# dela, 0 reconhecidos até essa correção (Padrão Puro e Pedramoura
+# "funcionavam" só por coincidência, por serem o COMEÇO do nome
+# completo deles). IDs tirados de interno.stkkc_id (dados.db) --
+# mesmos valores usados em pipeline.py::EMBARCADORES_IMPORTAR_ABERTOS
+# pra Quatro Estrelas. Nome mantido como fallback defensivo.
+EMBARCADORES_SEM_NF_IDS = {"23", "98", "96"}  # Padrão Puro, Quatro Estrelas, Pedramoura
 EMBARCADORES_SEM_NF = ("PADRAO PURO", "QUATRO ESTRELAS", "PEDRAMOURA")
 
 
 def _pedido_sem_nf(linha) -> bool:
+    if _stkkc_id_da_linha(linha) in EMBARCADORES_SEM_NF_IDS:
+        return True
     cliente = str(linha.get("client", "")) if isinstance(linha, dict) else ""
     nome = _normalizar(cliente)
     return bool(nome) and any(n in nome for n in EMBARCADORES_SEM_NF)
+
+
+# Embarcadores cuja DANFE NUNCA pode ser gerada a partir do XML anexado
+# no pedido da Stokki (pedido do Hugo, 17/08): a Dourado e a Muai tiveram
+# caso de XML errado/divergente anexado no pedido -- a DANFE confiável
+# só pode vir por e-mail. Diferente de EMBARCADORES_SEM_NF: esses DOIS
+# continuam PRECISANDO de Nota Fiscal, só não pela Stokki -- a falta
+# dela continua contando como pendência no romaneio (não é tratada como
+# "nf_dispensada" em roteirizacao/gerar_pdf_romaneios.py).
+#
+# A Dourado (id 18, mesmo de EMBARCADORES_QUALQUER_STATUS) é conferida
+# por ID -- checado contra 692 pedidos reais dela, 0 reconhecidos antes
+# da correção pra ID, 692/692 depois. A Muai ainda não tem ID Stokki
+# confirmado (sem pedido real até 17/08 pra conferir) -- fica no
+# fallback por nome, sujeito ao mesmo risco de truncamento até isso
+# ser confirmado com um pedido real dela.
+EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS = {"18"}  # Dourado
+EMBARCADORES_DANFE_SOMENTE_EMAIL = ("MUAI",)   # sem ID mapeado ainda
+
+
+def _pedido_danfe_bloqueada(linha) -> bool:
+    if _stkkc_id_da_linha(linha) in EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS:
+        return True
+    cliente = str(linha.get("client", "")) if isinstance(linha, dict) else ""
+    nome = _normalizar(cliente)
+    return bool(nome) and any(n in nome for n in EMBARCADORES_DANFE_SOMENTE_EMAIL)
 
 
 # Embarcadores que mandam boleto por E-MAIL (ver email_documentos.py::
@@ -74,20 +127,26 @@ def _codigo_da_linha(linha) -> str | None:
     return f"PS-{id_stokki}" if id_stokki else None
 
 
-def descobrir_pedidos(config: dict) -> tuple[list[str], set[str]]:
+def descobrir_pedidos(config: dict) -> tuple[list[str], set[str], set[str]]:
     """
-    Retorna (codigos, codigos_sem_nf):
+    Retorna (codigos, codigos_sem_nf, codigos_danfe_somente_email):
       - codigos: lista de códigos PS-XXXXX a processar nesta execução --
         todos os pedidos em aberto dos embarcadores prioritários +
         todos os pedidos "Aguardando Transportador" do resto;
       - codigos_sem_nf: subconjunto cujos embarcadores não precisam de
         Nota Fiscal (EMBARCADORES_SEM_NF) -- pra etapa da Stokki pular
-        a geração do DANFE desses pedidos.
+        a geração do DANFE desses pedidos;
+      - codigos_danfe_somente_email: subconjunto cujos embarcadores
+        PRECISAM de Nota Fiscal, mas nunca gerada da Stokki
+        (EMBARCADORES_DANFE_SOMENTE_EMAIL) -- a etapa da Stokki também
+        pula a geração do DANFE desses pedidos, mas sem tratar a falta
+        dela como dispensada.
     """
     sessao = StokkiSession(config)
     codigos_vistos: set[str] = set()
     codigos: list[str] = []
     codigos_sem_nf: set[str] = set()
+    codigos_danfe_somente_email: set[str] = set()
 
     def _registrar(linha) -> None:
         codigo = _codigo_da_linha(linha)
@@ -96,6 +155,8 @@ def descobrir_pedidos(config: dict) -> tuple[list[str], set[str]]:
             codigos.append(codigo)
             if _pedido_sem_nf(linha):
                 codigos_sem_nf.add(codigo)
+            if _pedido_danfe_bloqueada(linha):
+                codigos_danfe_somente_email.add(codigo)
 
     for id_emb, nome_emb in EMBARCADORES_QUALQUER_STATUS.items():
         for status in STATUSES_EM_ABERTO:
@@ -115,27 +176,34 @@ def descobrir_pedidos(config: dict) -> tuple[list[str], set[str]]:
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
     n_antes = len(codigos)
-    for codigo in descobrir_expedidos_recentes(sessao):
+    for codigo, danfe_bloqueada in descobrir_expedidos_recentes(sessao):
         if codigo not in codigos_vistos:
             codigos_vistos.add(codigo)
             codigos.append(codigo)
+        if danfe_bloqueada:
+            codigos_danfe_somente_email.add(codigo)
     logger.info(f"Expedidos recentes (embarcadores de boleto por e-mail): "
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
-    return codigos, codigos_sem_nf
+    return codigos, codigos_sem_nf, codigos_danfe_somente_email
 
 
-def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: int = 60) -> list[str]:
+def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: int = 60) -> list[tuple[str, bool]]:
     """
     Os N pedidos "Sent" mais recentes de cada embarcador que manda
     boleto por e-mail (ver EMBARCADORES_BOLETO_EMAIL). Quem já tem a
     Nota Fiscal enviada/indexada é filtrado FORA aqui mesmo -- assim,
     em regime, só os expedidos novos do dia geram visita de página
     (os antigos não custam nada).
+
+    Retorna [(codigo, danfe_bloqueada)] -- danfe_bloqueada indica se o
+    pedido é de um embarcador de EMBARCADORES_DANFE_SOMENTE_EMAIL (a
+    Dourado passa por aqui, não só pelo loop de EMBARCADORES_QUALQUER_
+    STATUS, então essa checagem precisa ser feita de novo aqui).
     """
     from fingerprint_documentos import ja_enviado_para_pedido
 
-    codigos: list[str] = []
+    codigos: list[tuple[str, bool]] = []
     for id_emb, nome_emb in EMBARCADORES_BOLETO_EMAIL.items():
         try:
             pagina = stokki_pedidos.listar_pedidos(
@@ -146,7 +214,7 @@ def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: i
             for linha in pagina.get("aaData", []):
                 codigo = _codigo_da_linha(linha)
                 if codigo and not ja_enviado_para_pedido(codigo, "Nota Fiscal"):
-                    codigos.append(codigo)
+                    codigos.append((codigo, _pedido_danfe_bloqueada(linha)))
         except Exception as e:
             logger.warning(f"Erro ao buscar expedidos recentes de {nome_emb!r}: {e}")
     return codigos

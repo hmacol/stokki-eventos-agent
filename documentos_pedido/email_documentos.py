@@ -35,9 +35,11 @@ a checagem de Message-ID pula o que já tinha sido salvo.
 """
 import email
 import imaplib
+import io
 import logging
 import re
 import sqlite3
+import zipfile
 from datetime import datetime, timedelta
 from email.header import decode_header
 from pathlib import Path
@@ -229,41 +231,84 @@ def _baixar_mensagem(mail, uid: int):
         return None
 
 
+def _sanitizar_nome_anexo(nome: str) -> str:
+    """Nome-base seguro pra salvar em disco. Usa só o nome-base (sem
+    diretórios) -- o nome vem do header Content-Disposition do e-mail
+    (ou do nome interno de um membro do ZIP), que é controlado pelo
+    remetente e pode conter "../" pra tentar escrever fora de
+    PASTA_TEMP_ANEXOS. Header dobrado (RFC 2822) deixa "\\r\\n " no meio
+    do nome (visto em e-mail real da INBOX, 12/08) e o Windows não
+    aceita quebra de linha nem <>:"|?* em nome de arquivo."""
+    nome = Path(nome).name
+    nome = re.sub(r"\s+", " ", nome)
+    return re.sub(r'[<>:"|?*]', "_", nome).strip()
+
+
+def _extrair_pdfs_de_zip(conteudo_zip: bytes, nome_zip: str) -> list[tuple[str, bytes]]:
+    """[(nome_pdf, conteudo)] de cada PDF dentro do ZIP -- a Dourado e a
+    Muai mandam a DANFE/NF real (e a Muai também o boleto) sempre
+    dentro de um ZIP ("PDF.zip", "danfe freshlog DD-MM.zip"), nunca
+    solta no e-mail (pedido do Hugo, 17/08: confirmado direto na caixa
+    real, nenhum PDF de NF solto nos e-mails recentes). ZIP corrompido
+    ou sem PDF dentro -- lista vazia, não é erro (mesmo tratamento de
+    documento ausente usado no resto do módulo)."""
+    resultado = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo_zip)) as zf:
+            for nome_no_zip in zf.namelist():
+                if not nome_no_zip.lower().endswith(".pdf"):
+                    continue
+                nome_pdf = _sanitizar_nome_anexo(nome_no_zip)
+                if not nome_pdf:
+                    continue
+                try:
+                    resultado.append((nome_pdf, zf.read(nome_no_zip)))
+                except Exception as e:
+                    logger.warning(f"  {nome_zip}: falha ao ler {nome_no_zip!r} dentro do ZIP: {e}")
+    except zipfile.BadZipFile:
+        logger.warning(f"  {nome_zip}: ZIP corrompido/inválido, pulando.")
+    return resultado
+
+
 def _extrair_pdfs_anexados(msg, uid: int, message_id: str) -> list[dict]:
     """Salva os PDFs anexados de uma mensagem em PASTA_TEMP_ANEXOS e
-    devolve 1 item por PDF, no formato que o pipeline consome."""
+    devolve 1 item por PDF, no formato que o pipeline consome. PDF
+    solto é salvo direto; ZIP tem cada PDF de dentro extraído (ver
+    _extrair_pdfs_de_zip)."""
     itens = []
     if not msg.is_multipart():
         return itens
     assunto = _decodificar_header(msg.get("Subject", ""))
     remetente = _decodificar_header(msg.get("From", ""))
+
+    def _salvar(nome_arquivo: str, conteudo: bytes):
+        caminho_local = PASTA_TEMP_ANEXOS / f"{uid}_{nome_arquivo}"
+        with open(caminho_local, "wb") as f:
+            f.write(conteudo)
+        itens.append({
+            "caminho_local": caminho_local, "nome_arquivo": nome_arquivo,
+            "assunto_email": assunto, "remetente_email": remetente,
+            "message_id": message_id,
+        })
+
     for parte in msg.walk():
-        nome_anexo = parte.get_filename()
-        if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
+        nome_bruto = parte.get_filename()
+        if not nome_bruto:
             continue
-        # Usa só o nome-base do anexo (sem diretórios) -- o nome vem do
-        # header Content-Disposition do e-mail, que é controlado pelo
-        # remetente e pode conter "../" para tentar escrever fora de
-        # PASTA_TEMP_ANEXOS.
-        nome_anexo = Path(_decodificar_header(nome_anexo)).name
-        # Header dobrado (RFC 2822) deixa "\r\n " no meio do nome (visto
-        # em e-mail real da INBOX, 12/08) e o Windows não aceita quebra
-        # de linha nem <>:"|?* em nome de arquivo.
-        nome_anexo = re.sub(r"\s+", " ", nome_anexo)
-        nome_anexo = re.sub(r'[<>:"|?*]', "_", nome_anexo).strip()
-        if not nome_anexo or not nome_anexo.lower().endswith(".pdf"):
+        nome_anexo = _sanitizar_nome_anexo(_decodificar_header(nome_bruto))
+        if not nome_anexo:
+            continue
+        extensao = nome_anexo.lower()
+        if not extensao.endswith(".pdf") and not extensao.endswith(".zip"):
             continue
         conteudo = parte.get_payload(decode=True)
         if not conteudo:
             continue
-        caminho_local = PASTA_TEMP_ANEXOS / f"{uid}_{nome_anexo}"
-        with open(caminho_local, "wb") as f:
-            f.write(conteudo)
-        itens.append({
-            "caminho_local": caminho_local, "nome_arquivo": nome_anexo,
-            "assunto_email": assunto, "remetente_email": remetente,
-            "message_id": message_id,
-        })
+        if extensao.endswith(".pdf"):
+            _salvar(nome_anexo, conteudo)
+        else:
+            for nome_pdf, conteudo_pdf in _extrair_pdfs_de_zip(conteudo, nome_anexo):
+                _salvar(f"{Path(nome_anexo).stem}__{nome_pdf}", conteudo_pdf)
     return itens
 
 
@@ -363,15 +408,20 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7,
 # time deles manda de vários endereços (adm@, logistica1@..4@, artur.neto@)
 # -- confirmado nos e-mails reais, 11/08.
 # "tipos" é o conjunto de tipos de documento que aquele embarcador manda e
-# que o pipeline deve aproveitar (o resto vira FORA_DE_ESCOPO): Dourado e
-# NUU só mandam Boleto; o De Tommaso manda as NFs do dia (PDF consolidado,
+# que o pipeline deve aproveitar (o resto vira FORA_DE_ESCOPO): a partir de
+# 17/08 a Dourado e a Muai mandam Boleto E Nota Fiscal por e-mail (a DANFE
+# das duas não pode mais vir da Stokki -- pedido do Hugo, ver
+# EMBARCADORES_DANFE_SOMENTE_EMAIL em selecionar_pedidos.py); NUU só manda
+# Boleto; o De Tommaso manda as NFs do dia (PDF consolidado,
 # ver documento_splitter.py) junto com os boletos, em arquivos separados. A
 # Vida Veg manda um único PDF consolidado ("DANFEs_Boletos_DD-MM-AAAA.pdf")
 # que MISTURA NF e boleto no mesmo arquivo -- documento_splitter.py separa
 # os dois corretamente mesmo intercalados.
 REMETENTES_EMBARCADORES: dict[str, dict] = {
     "escritorio@laticiniosdourado.ind.br": {"nome": "Laticínios Dourado",
-                                            "tipos": {"Boleto"}},
+                                            "tipos": {"Boleto", "Nota Fiscal"}},
+    "joao.martins@muai.com.br": {"nome": "Muai",
+                                 "tipos": {"Boleto", "Nota Fiscal"}},
     "faturamento@nuualimentos.com.br": {"nome": "Maria Dolores (NUU)",
                                         "tipos": {"Boleto"}},
     "@detommaso.com.br": {"nome": "De Tommaso",

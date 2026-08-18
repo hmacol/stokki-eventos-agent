@@ -309,17 +309,28 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         # precisam ir acompanhadas de Nota Fiscal (Padrão Puro, Quatro
         # Estrelas, Pedramoura -- pedido do Hugo, 13/08): a visita ao
         # pedido pula a geração do DANFE (a aba Documentos continua).
+        # pedidos_danfe_somente_email: pedidos de embarcadores que
+        # PRECISAM de Nota Fiscal, mas cuja DANFE nunca pode vir do XML
+        # anexado na Stokki (Laticínios Dourado, Muai -- pedido do Hugo,
+        # 17/08: casos reais de XML errado/divergente) -- a visita
+        # também pula a geração do DANFE, mas a falta dela continua
+        # contando como pendência (ver EMBARCADORES_DANFE_SOMENTE_EMAIL
+        # em selecionar_pedidos.py).
         # Na lista manual (--pedidos) não tem como saber o embarcador,
         # então o DANFE é gerado normalmente.
         pedidos_sem_nf: set[str] = set()
+        pedidos_danfe_somente_email: set[str] = set()
         if pedidos_stokki is not None:
             lista_pedidos = pedidos_stokki
         else:
             from selecionar_pedidos import descobrir_pedidos
-            lista_pedidos, pedidos_sem_nf = descobrir_pedidos(config)
+            lista_pedidos, pedidos_sem_nf, pedidos_danfe_somente_email = descobrir_pedidos(config)
             logger.info(f"{len(lista_pedidos)} pedido(s) selecionado(s) automaticamente pra busca na Stokki"
                         + (f" ({len(pedidos_sem_nf)} de embarcador sem NF -- DANFE não será gerada)."
                            if pedidos_sem_nf else "."))
+            if pedidos_danfe_somente_email:
+                logger.info(f"{len(pedidos_danfe_somente_email)} pedido(s) de embarcador com DANFE "
+                            f"somente por e-mail -- geração pela Stokki bloqueada.")
 
         if lista_pedidos:
             from playwright.sync_api import sync_playwright
@@ -340,7 +351,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                 for codigo_ps in lista_pedidos:
                     itens_stokki = buscar_documentos_do_pedido(
                         page, config, codigo_ps,
-                        buscar_nf=codigo_ps not in pedidos_sem_nf)
+                        buscar_nf=codigo_ps not in pedidos_sem_nf
+                                  and codigo_ps not in pedidos_danfe_somente_email)
                     total_stokki += len(itens_stokki)
                     for item in itens_stokki:
                         item["assunto_email"] = None  # marca origem como stokki

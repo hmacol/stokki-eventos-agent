@@ -41,17 +41,30 @@ PADRAO_CODIGO_PEDIDO = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 # boleto) -- falso CNPJ visto em documento real ("NFS SP.pdf", 10/08).
 PADRAO_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
 
-# Número da NF na DANFE. Dois layouts reais: NFePHP (Stokki) imprime
+# Número da NF na DANFE. Layouts reais: NFePHP (Stokki) imprime
 # "Nº. 000.149.747"; o emissor do De Tommaso/CIAO imprime "N. 000035880"
-# (sem o º, mas sempre com o ponto). Um "N" solto sem º nem ponto NÃO
-# casa -- senão qualquer "N 12345678" do texto viraria falso positivo.
-PADRAO_NF_DANFE = re.compile(r"N(?:[ºo°]\.?|\.)\s*([\d.]{6,12})")
+# (sem o º, mas sempre com o ponto); o emissor da Muai imprime "Nº 59857"
+# -- SEM zero-padding (pedido do Hugo, 17/08: nota real de 5 dígitos
+# escapava do mínimo de 6 que os outros dois layouts sempre satisfazem).
+# Um "N" solto sem º nem ponto NÃO casa -- senão qualquer "N 12345678" do
+# texto viraria falso positivo.
+# O quantificador é POSSESSIVO ({1,12}+, Python 3.11+) e a captura
+# barra vírgula logo depois -- sem os dois, o "Nº" do endereço do
+# destinatário no canhoto ("... N°805, SN ...", casos reais PS-36418/
+# PS-36543/PS-36722, 17/08) virava falso positivo assim que o mínimo
+# de dígitos caiu pra 1: sem a versão possessiva, o regex ainda
+# encontrava esse falso positivo encurtando a captura pra evitar a
+# vírgula (ex: "80" em vez de pular pro "Nº" verdadeiro mais adiante).
+PADRAO_NF_DANFE = re.compile(r"N(?:[ºo°]\.?|\.)\s*([\d.]{1,12}+)(?!\s*,)")
 
 # Seção do destinatário na DANFE. Precisa ser o cabeçalho de seção
-# "DESTINATÁRIO / REMETENTE" -- a palavra "DESTINATÁRIO:" também
-# aparece antes, no canhoto ("RECEBEMOS DE ..."), e o CNPJ seguinte
-# àquela ocorrência é o do EMITENTE (erro visto em DANFE real).
-PADRAO_SECAO_DESTINATARIO = re.compile(r"DESTINAT[ÁA]RIO\s*/\s*REMETENTE", re.IGNORECASE)
+# "DESTINATÁRIO / REMETENTE" ou "DESTINATÁRIO REMETENTE" (a barra some
+# em alguns layouts na extração de texto do pdfplumber -- caso real da
+# Muai, 17/08) -- a palavra "DESTINATÁRIO:" também aparece antes, no
+# canhoto ("RECEBEMOS DE ..."), e o CNPJ seguinte àquela ocorrência é o
+# do EMITENTE (erro visto em DANFE real); exigir "REMETENTE" logo depois
+# evita casar com esse canhoto.
+PADRAO_SECAO_DESTINATARIO = re.compile(r"DESTINAT[ÁA]RIO\s*/?\s*REMETENTE", re.IGNORECASE)
 
 
 def _normalizar_codigo(bruto: str) -> str:
