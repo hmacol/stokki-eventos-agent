@@ -113,9 +113,9 @@ limpar_execucoes_travadas()
 
 
 def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
-    """Confere usuário/senha contra os três pares possíveis e devolve o
-    nível de acesso correspondente ("total", "operador" ou "leitura"), ou
-    None se não bateram com nenhum dos três."""
+    """Confere usuário/senha contra os quatro pares possíveis e devolve o
+    nível de acesso correspondente ("total", "operador", "leitura" ou
+    "expedicao"), ou None se não bateram com nenhum deles."""
     if not usuario or not senha:
         return None
     usuario_total = cfg_painel.get("usuario")
@@ -133,22 +133,31 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_leitura and senha_leitura and hmac.compare_digest(usuario, usuario_leitura) \
             and hmac.compare_digest(senha, senha_leitura):
         return "leitura"
+    usuario_expedicao = cfg_painel.get("usuario_expedicao")
+    senha_expedicao = cfg_painel.get("senha_expedicao")
+    if usuario_expedicao and senha_expedicao and hmac.compare_digest(usuario, usuario_expedicao) \
+            and hmac.compare_digest(senha, senha_expedicao):
+        return "expedicao"
     return None
 
 
 def requer_auth(f=None, *, niveis=("total",)):
-    """Login por sessão (cookie assinado) com três níveis: "total"
+    """Login por sessão (cookie assinado) com quatro níveis: "total"
     (usuario/senha, acesso irrestrito), "operador" (usuario_operador/
     senha_operador, opera Torre de Controle, Planejamento de Rotas e
     cadastro de Motoristas, mas não roda agentes avulsos nem vê o
-    Histórico) e "leitura" (usuario_leitura/senha_leitura, só as telas e
-    APIs marcadas com niveis=(..., "leitura"), sem nenhum botão de ação).
+    Histórico), "leitura" (usuario_leitura/senha_leitura, só as telas e
+    APIs marcadas com niveis=(..., "leitura"), sem nenhum botão de ação) e
+    "expedicao" (usuario_expedicao/senha_expedicao, só a tela /expedicao e
+    o PDF de romaneio -- nada mais do painel, nem em modo leitura).
     Rota sem `niveis` exige nível total. Pedido do Hugo, 13/08: time
     acompanha Torre e Planejamento sem poder disparar ações; nível
     "operador" adicionado 17/08 pra quem toca a operação do dia a dia sem
-    precisar de acesso total. Trocado de Basic Auth pra tela de login de
-    verdade + botão de sair, 17/08 -- Basic Auth não tem um jeito confiável
-    de "deslogar" (o navegador guarda a senha até fechar/limpar cache)."""
+    precisar de acesso total; nível "expedicao" adicionado 18/08 pra
+    restringir o time de expedição só à tela de impressão de documentos.
+    Trocado de Basic Auth pra tela de login de verdade + botão de sair,
+    17/08 -- Basic Auth não tem um jeito confiável de "deslogar" (o
+    navegador guarda a senha até fechar/limpar cache)."""
     if f is not None:
         return requer_auth(niveis=niveis)(f)
 
@@ -268,12 +277,15 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            proximo = request.form.get("proximo") or url_for("torre")
+            # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
+            # nela por padrão levaria direto a um 403 pós-login.
+            pagina_padrao = url_for("expedicao") if nivel == "expedicao" else url_for("torre")
+            proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
             raiz = request.script_root or ""
             if not (proximo == raiz or proximo.startswith(raiz + "/")):
-                proximo = url_for("torre")
+                proximo = pagina_padrao
             return redirect(proximo)
     return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
 
@@ -384,7 +396,7 @@ def mapa_rotas():
 
 
 @app.route("/expedicao")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
 def expedicao():
     """Tela de impressão pro time de expedição (Hugo, 18/08): nome da
     rota, motorista e um botão por rota pra imprimir a papelada (NFs +
@@ -403,7 +415,7 @@ def expedicao():
 
 
 @app.route("/api/expedicao/romaneio/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
 def api_expedicao_romaneio(rota_id):
     """Gera (sempre fresco) e serve o PDF de romaneio de uma rota já
     criada na VUUPT -- mesmo padrão do botão 'Imprimir rota' do
