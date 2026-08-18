@@ -21,9 +21,13 @@ mão (ex: remove um pedido de uma rota -- com fingerprint, esse
 pedido ficava travado pra sempre achando que já tinha sido alocado,
 mesmo não estando em rota nenhuma de verdade).
 
-Se a rota mais próxima já estiver cheia, cria uma rota NOVA na mesma
-região (pedido do Hugo) -- essa rota nova pode crescer nos próximos
-incrementos, à medida que mais pedidos da região forem chegando.
+Se nenhuma rota existente tiver espaço/compatibilidade pro pedido,
+ele fica not_assigned e passa pro dia seguinte (pedido do Hugo,
+18/08 -- o incremento NUNCA cria rota nova; antes criava uma rota
+nova por região pros órfãos, mas isso vinha gerando rotas pequenas
+demais e fragmentadas, várias vezes até sem motorista disponível pro
+horário). `criar_rotas_diarias.py` recolhe esses órfãos no rascunho
+do dia seguinte, junto com o resto do lote.
 
 Rotas de "hoje" são identificadas pelo nome (mesmo prefixo e data que
 criar_rotas_diarias.py usa) -- não por um ID salvo em algum lugar, pra
@@ -75,11 +79,11 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km, agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes, ordenar_por_distancia_base, macro_regiao_do_servico
-from rotas_client import listar_rotas, criar_rota, adicionar_atividades, atualizar_rota
+from roteirizacao_dados import obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km, ordenar_por_distancia_base, macro_regiao_do_servico
+from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from criar_rotas_diarias import (
-    BASE_LOCATION_ID, ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, TZ_BRASILIA, _data_alvo_rotas,
+    ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
+    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas,
 )
 from notificar_agendamento_pendente import identificar_pendentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
@@ -88,9 +92,8 @@ from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
 from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
 from regras.preferencias_motoristas import CatalogoMotoristas
-from regras.disponibilidade_motoristas import carregar_ajustes_dia
-from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
-from zonas_sp import classificar_rota_zona, classificar_zona
+from alocacao_motoristas import classificar_rota_viagem
+from zonas_sp import classificar_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
 
 
@@ -244,22 +247,6 @@ def _centroide_rota(rota: dict, api_key: str | None) -> tuple[float, float] | No
     )
 
 
-def _proximo_indice_disponivel(rotas_hoje: list[dict]) -> int:
-    """
-    Acha o próximo índice global disponível pro nome da rota (formato
-    'Planejamento - DD/MM/AAAA - #N', mesma convenção nativa do VUUPT,
-    numeração GLOBAL pro dia -- não mais por região). Extrai o maior
-    #N já usado hoje e soma 1; começa em 1 se não houver nenhuma rota
-    ainda.
-    """
-    maior = 0
-    for r in rotas_hoje:
-        match = re.search(r"#(\d+)\s*$", r.get("name", ""))
-        if match:
-            maior = max(maior, int(match.group(1)))
-    return maior + 1
-
-
 def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
     """
     True se `cx_pedido` (do endereço `endereco_pedido`) ainda cabe na
@@ -294,7 +281,6 @@ def main(modo_teste: bool = False):
         cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
     )
     motoristas_por_id = {m.agent_id: m for m in catalogo_motoristas.motoristas}
-    rotas_sem_motorista = 0
 
     resumo_etapas = {}
 
@@ -310,9 +296,7 @@ def main(modo_teste: bool = False):
         # apontava pro dia SEGUINTE ao das rotas recém-criadas, e na
         # sexta apontava pro sábado (sem rota nenhuma).
         data_alvo = _data_alvo_rotas(datetime.now(TZ_BRASILIA))
-        data_alvo_str = data_alvo.strftime("%Y-%m-%d")
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
-        ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
 
         filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
         servicos = vuupt.listar_servicos(filtro, per_page=100)
@@ -545,22 +529,9 @@ def main(modo_teste: bool = False):
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
 
-        # Semeia a contagem do dia com os motoristas JÁ atribuídos nas
-        # rotas de hoje (fonte: estado real da API, não um contador
-        # zerado a cada execução) -- pra que a distribuição equitativa
-        # de rotas NOVAS (via criar_rota mais abaixo) considere também o
-        # que o job das 13h (criar_rotas_diarias.py) e incrementos
-        # anteriores já alocaram no mesmo dia.
-        contagem_alocacoes_dia: dict[int, int] = {}
-        for info in info_rotas:
-            if info["agent_id"] is not None:
-                contagem_alocacoes_dia[info["agent_id"]] = contagem_alocacoes_dia.get(info["agent_id"], 0) + 1
-
         alocados = 0
-        rotas_novas = 0
         rotas_afetadas: set[int] = set()
         orfaos = []
-        proximo_indice = _proximo_indice_disponivel(rotas_hoje)
 
         for pedido in novos:
             coords_pedido = obter_coordenadas(pedido, gmaps_key)
@@ -705,82 +676,20 @@ def main(modo_teste: bool = False):
             elif pular_pedido:
                 continue  # erro desconhecido -- não tenta órfão, deixa not_assigned pra próxima rodada
             else:
-                # Nenhuma rota existente com espaço -- vira órfão, pra
-                # ser agrupado com outros órfãos antes de criar rota
-                # nova (pedido do Hugo, 02/08: agrupar entre si em vez
-                # de 1 rota por pedido).
+                # Nenhuma rota existente com espaço/compatibilidade --
+                # vira órfão. O incremento NUNCA cria rota nova (pedido
+                # do Hugo, 18/08 -- antes agrupava os órfãos e criava
+                # uma rota nova por região, mas isso vinha saindo
+                # fragmentado demais: várias rotas pequenas, algumas
+                # com só 1 pedido e sem motorista disponível pro
+                # horário). Fica not_assigned; `criar_rotas_diarias.py`
+                # recolhe no rascunho do dia seguinte.
                 orfaos.append(pedido)
 
-        # Agrupa os órfãos entre si (mesma lógica geográfica do job das
-        # 13h: região -> consolida até o mínimo -> divide em sublotes
-        # balanceados de até o máximo) antes de criar rotas novas --
-        # em vez de 1 rota nova por pedido individual.
         if orfaos:
-            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente -- agrupando entre si.")
-            grupos_iniciais_orfaos = agrupar_por_regiao(orfaos, api_key=gmaps_key)
-            grupos_orfaos = consolidar_regioes_pequenas(grupos_iniciais_orfaos, minimo=TAMANHO_MINIMO_ROTA, api_key=gmaps_key)
-
-            for servicos_regiao in grupos_orfaos.values():
-                # Mesmo critério de criar_rotas_diarias.py: região de
-                # Viagem não tem limite de distância entre pedidos.
-                distancia_maxima_da_regiao = (
-                    DISTANCIA_MAXIMA_VIAGEM_KM if classificar_rota_viagem(servicos_regiao, gmaps_key)
-                    else DISTANCIA_MAXIMA_ROTA_KM
-                )
-                sublotes = dividir_em_sublotes(servicos_regiao, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                                              tamanho_maximo=TAMANHO_MAXIMO_ROTA,
-                                              volume_maximo=VOLUME_MAXIMO_ROTA,
-                                              distancia_maxima_km=distancia_maxima_da_regiao, api_key=gmaps_key)
-                for sublote in sublotes:
-                    nome_rota = f"{prefixo_hoje} - #{proximo_indice}"
-                    proximo_indice += 1
-
-                    if coords_base:
-                        sublote = ordenar_por_distancia_base(sublote, coords_base[0], coords_base[1], gmaps_key)
-
-                    codigos = [s.get("code") for s in sublote]
-                    service_ids = [s["id"] for s in sublote]
-
-                    eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
-                    tipo_rota_str = "VIAGEM" if eh_viagem else f"Grande SP/{classificar_rota_zona(sublote, gmaps_key) or '?'}"
-                    motorista = selecionar_motorista_equitativo(
-                        sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
-                        ajustes_disponibilidade=ajustes_disponibilidade,
-                    )
-                    agent_id = motorista.agent_id if motorista else None
-                    vehicle_id = motorista.vehicle_id if motorista else None
-                    motorista_str = motorista.nome if motorista else "SEM MOTORISTA [ALERTA_ALOCACAO]"
-
-                    logger.info(f"  Rota NOVA '{nome_rota}' [{tipo_rota_str}]: {len(sublote)} pedido(s) agrupados "
-                               f"(mais longe -> mais perto da base) -- motorista: {motorista_str}: {codigos}")
-
-                    if not modo_teste:
-                        try:
-                            rota = criar_rota(
-                                token, nome=nome_rota, start_at=f"{data_alvo_str}T13:00:00Z",
-                                start_location_base_id=BASE_LOCATION_ID, service_ids=service_ids,
-                                end_location_base_id=BASE_LOCATION_ID,
-                                agent_id=agent_id, vehicle_id=vehicle_id,
-                            )
-                            info_rotas.append({
-                                "id": rota["id"], "nome": nome_rota,
-                                "centroide": None, "qtd": len(sublote),
-                                "caixas": sum(extrair_volume_caixas(s) for s in sublote),
-                                "service_ids": service_ids,
-                                "agent_id": agent_id, "vehicle_id": vehicle_id,
-                                # rota nova é de macro única por construção (trava 12/08)
-                                "macro": macro_regiao_do_servico(sublote[0], gmaps_key),
-                            })
-                            rotas_afetadas.add(rota["id"])
-                        except Exception as e:
-                            logger.error(f"  Falha ao criar rota nova pro grupo '{nome_rota}': {e}")
-                            continue
-                    if motorista:
-                        contagem_alocacoes_dia[motorista.agent_id] = contagem_alocacoes_dia.get(motorista.agent_id, 0) + 1
-                    else:
-                        rotas_sem_motorista += 1
-                    rotas_novas += 1
-                    alocados += len(sublote)
+            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente -- "
+                       f"ficam not_assigned pro rascunho do dia seguinte: "
+                       f"{[p.get('code') for p in orfaos]}")
 
         # Resequenciamento (pedido do Hugo, 03/08: rotas sempre da mais
         # LONGE pra mais PERTO da base) -- só nas rotas que JÁ
@@ -812,20 +721,10 @@ def main(modo_teste: bool = False):
         prefixo_teste = "[Teste] " if modo_teste else ""
         resumo_etapas["Incremento de rotas"] = {
             "status": "ok",
-            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) ({rotas_novas} rota(s) nova(s) criada(s)).",
+            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente"
+                      + (f", {len(orfaos)} pedido(s) sem rota com espaço/compatibilidade hoje "
+                         f"(ficam pro rascunho do dia seguinte)." if orfaos else "."),
         }
-
-        if rotas_novas:
-            matriz_alocacao = ", ".join(
-                f"{next((m.nome for m in catalogo_motoristas.motoristas if m.agent_id == agent_id), agent_id)}: {qtd}"
-                for agent_id, qtd in sorted(contagem_alocacoes_dia.items(), key=lambda item: -item[1])
-            ) or "nenhuma"
-            resumo_etapas["Alocação de motoristas (rotas novas)"] = {
-                "status": "ok" if rotas_sem_motorista == 0 else "erro",
-                "detalhe": f"{prefixo_teste}Distribuição do dia: {matriz_alocacao}."
-                          + (f" [ALERTA_ALOCACAO] {rotas_sem_motorista} rota(s) nova(s) sem motorista disponível."
-                             if rotas_sem_motorista else ""),
-            }
 
     except Exception as e:
         logger.exception(f"Erro no incremento de rotas: {e}")
