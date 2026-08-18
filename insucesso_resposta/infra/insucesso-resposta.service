@@ -1,0 +1,15 @@
+[Unit]
+Description=Resposta ao insucesso de entrega - Freshlog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/insucesso-resposta
+EnvironmentFile=/opt/insucesso-resposta/infra/.env
+ExecStart=/opt/insucesso-resposta/venv/bin/waitress-serve --host=127.0.0.1 --port=8091 app:app
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

@@ -82,7 +82,7 @@ from stokki.estacao_impressao import imprimir_pedidos_pendentes
 from ler_respostas_agendamento import processar_respostas_agendamento
 from ler_planilha_entregas_nuu import processar_planilhas_entregas
 sys.path.insert(0, str(Path(__file__).parent / "insucesso_entrega"))
-from ler_respostas_insucesso import processar_respostas_insucesso
+from sincronizar_respostas_insucesso import processar_respostas_insucesso
 from notificar_execucao_agente import notificar_execucao
 import historico
 
@@ -160,7 +160,7 @@ def main(modo_teste: bool = False,
         logger.info("\n>>> ETAPA 1a: Leitura da planilha de entregas (NUU) -- PULADA (--sem-agendamento)")
         resumo_etapas["Planilha de entregas (NUU)"] = {"status": "ok", "detalhe": "Pulada (--sem-agendamento)"}
 
-    # ── Etapa 1b: Leitura de respostas de insucesso na entrega (IMAP) ──────────
+    # ── Etapa 1b: Sincronização de respostas de insucesso na entrega ───────────
     if not sem_insucesso_resposta:
         logger.info("\n>>> ETAPA 1b: Leitura de respostas de insucesso na entrega")
         logger.info("-" * 60)

@@ -62,6 +62,7 @@ def _achar_sender_id_de_teste() -> int:
 def main():
     config = _carregar_config()
     config_email = config.get("email", {})
+    config_resposta = config.get("resposta_insucesso", {})
     sender_id_teste = _achar_sender_id_de_teste()
 
     print("=" * 72)
@@ -83,7 +84,7 @@ def main():
 
         print(f"\n[{info['texto']}] (failed_reason_id={failed_reason_id})")
         try:
-            resultado = notificar_remetentes([pedido_fake], config_email, modo_teste=True)
+            resultado = notificar_remetentes([pedido_fake], config_email, config_resposta, modo_teste=True)
             if resultado["enviados"] == 1:
                 print(f"  OK -- e-mail enviado.")
                 enviados += 1

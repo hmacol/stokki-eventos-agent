@@ -826,28 +826,31 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # REGRA ATUAL (pedido do Hugo, 15/08): NENHUM insucesso duplica
         # sozinho. O remetente recebe uma PERGUNTA ("houve insucesso,
         # deseja o reenvio?") e só duplicamos se a resposta confirmar --
-        # a resposta é lida por ler_respostas_insucesso.py, que cria a
-        # reentrega no VUUPT quando o embarcador confirma ou pede outra
-        # data, e só registra a recusa quando ele não quer o reenvio.
-        # (Revoga a regra de 11/08 -- duplicava tudo na hora e só
-        # perguntava depois -- que por sua vez tinha revogado a regra
-        # original de 03/08 de perguntar antes.)
-        # 3a. Lê respostas aos e-mails de insucesso ANTES de processar os
+        # a resposta é dada numa página web (18/08, ver
+        # insucesso_entrega/notificar_insucesso_aguardando_resposta.py e
+        # insucesso_resposta/app.py) e puxada por
+        # sincronizar_respostas_insucesso.py, que cria a reentrega no
+        # VUUPT quando o embarcador confirma ou pede outra data, e só
+        # registra a recusa quando ele não quer o reenvio. (Revoga a
+        # regra de 11/08 -- duplicava tudo na hora e só perguntava
+        # depois -- que por sua vez tinha revogado a regra original de
+        # 03/08 de perguntar antes.)
+        # 3a. Sincroniza respostas de insucesso ANTES de processar os
         # novos (pedido do Hugo, 11/08: "vamos colocar na tarefa de 30
         # em 30") -- uma resposta do remetente é aplicada em no máximo
         # ~30 min, sem esperar o executar_tudo (que também segue rodando
-        # a leitura, pra cobrir as respostas da noite; a trava interna
-        # do módulo impede os dois de processarem o mesmo e-mail ao
-        # mesmo tempo).
+        # a sincronização, pra cobrir as respostas da noite; a trava
+        # interna do módulo impede os dois de processarem o mesmo grupo
+        # ao mesmo tempo).
         if modo_teste:
-            logger.info("[TESTE] Leitura de respostas de insucesso pulada.")
+            logger.info("[TESTE] Sincronização de respostas de insucesso pulada.")
         else:
             try:
-                from ler_respostas_insucesso import processar_respostas_insucesso
+                from sincronizar_respostas_insucesso import processar_respostas_insucesso
                 resultado_respostas = processar_respostas_insucesso(config)
                 logger.info(f"Respostas de insucesso: {resultado_respostas}")
             except Exception as e:
-                logger.warning(f"Falha na leitura de respostas de insucesso (segue sem): {e}")
+                logger.warning(f"Falha na sincronização de respostas de insucesso (segue sem): {e}")
 
         insucessos = buscar_servicos_insucesso(vuupt_token, horas=horas)
         if insucessos:
@@ -868,7 +871,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             # pedido, não quero mais duplicar automaticamente" -- revoga
             # a regra de 11/08 abaixo). A ÚNICA coisa que cria uma
             # reentrega agora é a resposta do embarcador ao e-mail de
-            # "aguardando retorno" (ler_respostas_insucesso.py::
+            # "aguardando retorno" (sincronizar_respostas_insucesso.py::
             # _cancelar_reentrega/_reagendar_reentrega/branch "manter" --
             # essas três funções já sabem duplicar na hora quando ainda
             # não existe nada duplicado/agendado pra esse pedido, era o
@@ -879,7 +882,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
             if pendentes_resposta:
                 resultado_espera = notificar_insucesso_aguardando_resposta(
-                    pendentes_resposta, config_email, modo_teste
+                    pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste
                 )
                 logger.info(f"Pergunta de reenvio aos remetentes: {resultado_espera}")
 
