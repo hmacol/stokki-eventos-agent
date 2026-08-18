@@ -722,7 +722,8 @@ def api_romaneio(rascunho_id):
     if baixar:
         rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
         if rascunho:
-            nome_arquivo = f"Romaneio - {rascunho['nome']}.pdf"
+            motorista = rascunho.get("motorista_nome") or "sem motorista"
+            nome_arquivo = f"Romaneio - {rascunho['nome']} - {motorista}.pdf"
     return send_file(caminho, mimetype="application/pdf", download_name=nome_arquivo, as_attachment=baixar)
 
 
