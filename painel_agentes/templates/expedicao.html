@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block titulo %}Expedição{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .linha-data { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+  .linha-data input[type=date] {
+    font-size: 14px; padding: 9px 12px;
+    border: 1px solid var(--borda); border-radius: 8px;
+    background: var(--superficie); color: var(--texto); font-family: inherit;
+  }
+  .vazio { color: var(--texto-suave); font-size: 14px; padding: 32px 4px; text-align: center; }
+
+  .cartao-rota {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .cartao-rota .info { min-width: 0; }
+  .cartao-rota .nome-rota { font-size: 16px; font-weight: 800; margin-bottom: 4px; }
+  .cartao-rota .motorista { font-size: 14px; color: var(--texto); margin-bottom: 3px; }
+  .cartao-rota .motorista .placa { color: var(--texto-suave); font-weight: 400; }
+  .cartao-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
+  .cartao-rota .meta { font-size: 12.5px; color: var(--texto-suave); }
+  .cartao-rota .meta span + span::before { content: " · "; }
+
+  a.botao-imprimir {
+    display: inline-flex; align-items: center; gap: 8px; flex: none;
+    background: var(--acento); color: #fff; text-decoration: none;
+    font-size: 14px; font-weight: 700; padding: 13px 20px; border-radius: 9px;
+    white-space: nowrap;
+  }
+  a.botao-imprimir:hover { opacity: 0.88; }
+  a.botao-imprimir:active { opacity: 0.75; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 4px;">Expedição</h1>
+<p style="font-size:13px;color:var(--texto-suave);margin:0 0 16px;">
+  Documentos das rotas do dia (NFs, boletos e canhoteira) pra imprimir antes do motorista sair.
+</p>
+
+<form method="get" action="{{ url_for('expedicao') }}" class="linha-data">
+  <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
+</form>
+
+{% if erro %}
+<div class="aviso">Não deu pra carregar as rotas: {{ erro }}</div>
+{% elif not rotas %}
+<div class="vazio">Nenhuma rota criada pra esse dia ainda.</div>
+{% else %}
+  {% for r in rotas %}
+  <div class="cartao-rota">
+    <div class="info">
+      <div class="nome-rota">{{ r.nome }}</div>
+      <div class="motorista {{ 'faltando' if r.motorista == '(sem motorista)' else '' }}">
+        {{ r.motorista }}{% if r.placa %} <span class="placa">· {{ r.placa }}</span>{% endif %}
+      </div>
+      <div class="meta">
+        {% if r.inicio %}<span>saída {{ r.inicio }}</span>{% endif %}
+        <span>{{ r.pedidos }} pedido{{ 's' if r.pedidos != 1 else '' }}</span>
+      </div>
+    </div>
+    <a class="botao-imprimir" href="{{ url_for('api_expedicao_romaneio', rota_id=r.id, data=data_alvo_input) }}" target="_blank" rel="noopener">
+      🖨️ Imprimir documentos
+    </a>
+  </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

@@ -67,6 +67,7 @@ from planejamento_rotas import (
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
+from expedicao import listar_rotas_do_dia, gerar_romaneio_rota
 import rascunhos_rota
 import torre_controle
 import tratativas
@@ -380,6 +381,42 @@ def mapa_rotas():
         "mapa_rotas.html", dados=dados, erro=erro,
         data_alvo_input=data_alvo.strftime("%Y-%m-%d"),
     )
+
+
+@app.route("/expedicao")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def expedicao():
+    """Tela de impressão pro time de expedição (Hugo, 18/08): nome da
+    rota, motorista e um botão por rota pra imprimir a papelada (NFs +
+    boletos + canhoteira)."""
+    data_alvo = _parse_data_param()
+    try:
+        rotas = listar_rotas_do_dia(data_alvo)
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados de expedição")
+        rotas = []
+        erro = str(e)
+    return render_template(
+        "expedicao.html", rotas=rotas, erro=erro, data_alvo_input=data_alvo.isoformat(),
+    )
+
+
+@app.route("/api/expedicao/romaneio/<int:rota_id>")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def api_expedicao_romaneio(rota_id):
+    """Gera (sempre fresco) e serve o PDF de romaneio de uma rota já
+    criada na VUUPT -- mesmo padrão do botão 'Imprimir rota' do
+    planejamento, ver expedicao.py::gerar_romaneio_rota."""
+    data_alvo = _parse_data_param()
+    try:
+        caminho = gerar_romaneio_rota(data_alvo, rota_id)
+    except ValueError as e:
+        return str(e), 404
+    except Exception as e:
+        logging.getLogger(__name__).exception(f"Falha ao gerar romaneio da rota {rota_id}")
+        return f"Falha ao gerar romaneio: {e}", 500
+    return send_file(caminho, mimetype="application/pdf", download_name=caminho.name)
 
 
 def _parse_data_param(padrao_amanha: bool = False) -> date:

@@ -298,6 +298,10 @@
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/></svg></span>
         <span class="rotulo">Planejamento de Rotas</span>
       </a>
+      <a href="{{ url_for('expedicao') }}" class="{{ 'ativo' if request.endpoint == 'expedicao' else '' }}" title="Expedição">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="1.5"/><path d="M7 8h6M7 11.2h6M7 14.4h3.5"/></svg></span>
+        <span class="rotulo">Expedição</span>
+      </a>
       <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}" title="Motoristas">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/></svg></span>
         <span class="rotulo">Motoristas</span>
