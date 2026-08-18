@@ -435,10 +435,11 @@ PASTA_TODOS_OS_EMAILS = '"[Gmail]/Todos os e-mails"'
 def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7,
                                        modo_teste: bool = False) -> list[dict]:
     """
-    Busca PDFs anexados (soltos -- sem ZIP, fora de escopo por
-    enquanto, ver pedido do Hugo 10/08) em e-mails novos (desde o
-    cursor; janela de dias_retroativos só na primeira execução) vindos
-    dos REMETENTES_EMBARCADORES acima. Mesmo formato de retorno de
+    Busca PDFs anexados (soltos ou dentro de ZIP -- ver
+    _extrair_pdfs_de_zip, usado pela Dourado/Muai pra mandar a DANFE,
+    17/08) em e-mails novos (desde o cursor; janela de
+    dias_retroativos só na primeira execução) vindos dos
+    REMETENTES_EMBARCADORES acima. Mesmo formato de retorno de
     buscar_pdfs_por_email(), com um campo extra "tipos_permitidos"
     (os tipos que o embarcador daquele remetente manda) -- alimenta o
     mesmo pipeline depois. modo_teste: ver buscar_pdfs_por_email().

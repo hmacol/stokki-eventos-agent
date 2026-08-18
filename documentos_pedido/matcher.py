@@ -55,6 +55,12 @@ PADRAO_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
 # de dígitos caiu pra 1: sem a versão possessiva, o regex ainda
 # encontrava esse falso positivo encurtando a captura pra evitar a
 # vírgula (ex: "80" em vez de pular pro "Nº" verdadeiro mais adiante).
+# Isso NÃO cobre endereço sem vírgula depois do número da casa (ex:
+# "N°805 SN Bairro Centro") -- extrair_nf_da_danfe() limita a busca
+# desse padrão ao trecho ANTES da seção DESTINATÁRIO/REMETENTE (ver
+# PADRAO_SECAO_DESTINATARIO logo abaixo) como proteção estrutural: o
+# número da NF fica no cabeçalho/canhoto, sempre antes dessa seção: o
+# endereço do destinatário (com o número da casa) fica dentro dela.
 PADRAO_NF_DANFE = re.compile(r"N(?:[ºo°]\.?|\.)\s*([\d.]{1,12}+)(?!\s*,)")
 
 # Seção do destinatário na DANFE. Precisa ser o cabeçalho de seção
@@ -93,14 +99,20 @@ def extrair_nf_da_danfe(texto: str) -> tuple[str | None, str | None]:
     """(numero_nf, cnpj_destinatario) do texto de uma DANFE. O
     destinatário é quem paga o boleto dessa NF -- é o par que o
     IndexadorNF guarda. Retorna (None, None) no que não achar."""
+    texto = texto or ""
+    m_secao = PADRAO_SECAO_DESTINATARIO.search(texto)
+
     numero_nf = None
-    m_nf = PADRAO_NF_DANFE.search(texto or "")
+    # Busca o número da NF só no trecho antes da seção DESTINATÁRIO/
+    # REMETENTE (ver PADRAO_NF_DANFE) -- se a seção não for achada,
+    # cai pro texto inteiro (comportamento antigo).
+    texto_cabecalho = texto[:m_secao.start()] if m_secao else texto
+    m_nf = PADRAO_NF_DANFE.search(texto_cabecalho)
     if m_nf:
         digitos = re.sub(r"\D", "", m_nf.group(1)).lstrip("0")
         numero_nf = digitos or None
 
     cnpj_destinatario = None
-    m_secao = PADRAO_SECAO_DESTINATARIO.search(texto or "")
     if m_secao:
         m_cnpj = PADRAO_CNPJ.search(texto, m_secao.end())
         if m_cnpj:
