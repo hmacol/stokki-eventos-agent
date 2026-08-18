@@ -81,8 +81,6 @@ import pipeline as pipeline_mod
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
 from ler_respostas_agendamento import processar_respostas_agendamento
 from ler_planilha_entregas_nuu import processar_planilhas_entregas
-sys.path.insert(0, str(Path(__file__).parent / "insucesso_entrega"))
-from sincronizar_respostas_insucesso import processar_respostas_insucesso
 from notificar_execucao_agente import notificar_execucao
 import historico
 
@@ -93,7 +91,7 @@ def _carregar_config():
 
 
 def main(modo_teste: bool = False,
-        sem_impressao: bool = False, sem_agendamento: bool = False, sem_insucesso_resposta: bool = False):
+        sem_impressao: bool = False, sem_agendamento: bool = False):
     inicio = time.time()
     logger.info("=" * 60)
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Execucao completa iniciada.")
@@ -160,36 +158,11 @@ def main(modo_teste: bool = False,
         logger.info("\n>>> ETAPA 1a: Leitura da planilha de entregas (NUU) -- PULADA (--sem-agendamento)")
         resumo_etapas["Planilha de entregas (NUU)"] = {"status": "ok", "detalhe": "Pulada (--sem-agendamento)"}
 
-    # ── Etapa 1b: Sincronização de respostas de insucesso na entrega ───────────
-    if not sem_insucesso_resposta:
-        logger.info("\n>>> ETAPA 1b: Leitura de respostas de insucesso na entrega")
-        logger.info("-" * 60)
-        try:
-            resultado_insucesso = processar_respostas_insucesso(config)
-            logger.info(
-                f"Respostas: {resultado_insucesso['processados']} processada(s), "
-                f"{resultado_insucesso['grupos_atualizados']} pedido(s) atualizado(s), "
-                f"{resultado_insucesso['duplicados']} duplicado(s), "
-                f"{resultado_insucesso.get('cancelados', 0)} reentrega(s) cancelada(s), "
-                f"{resultado_insucesso.get('reagendados', 0)} reagendada(s), "
-                f"{resultado_insucesso['nao_entendidos']} nao entendida(s)."
-            )
-            resumo_etapas["Insucesso (respostas)"] = {
-                "status": "ok",
-                "detalhe": f"{resultado_insucesso['processados']} processada(s), "
-                          f"{resultado_insucesso['duplicados']} duplicado(s), "
-                          f"{resultado_insucesso.get('cancelados', 0)} cancelada(s), "
-                          f"{resultado_insucesso.get('reagendados', 0)} reagendada(s)",
-            }
-        except Exception as e:
-            logger.error(f"Erro na leitura de respostas de insucesso: {e}")
-            resumo_etapas["Insucesso (respostas)"] = {"status": "erro", "detalhe": str(e)}
-
-        logger.info("-" * 60)
-        time.sleep(2)
-    else:
-        logger.info("\n>>> ETAPA 1b: Leitura de respostas de insucesso -- PULADA (--sem-insucesso-resposta)")
-        resumo_etapas["Insucesso (respostas)"] = {"status": "ok", "detalhe": "Pulada (--sem-insucesso-resposta)"}
+    # Respostas de insucesso na entrega NÃO entram mais aqui (18/08): a
+    # página pública (app.freshhub.com.br/insucesso, ver
+    # resposta_insucesso/app.py) já aplica a decisão do embarcador na
+    # hora do clique, direto no mesmo dados.db -- não há mais nada pra
+    # sincronizar/ler em lote.
 
     # ── Etapa 2: Impressao (Em espera -> Aguardando Transportador) ────────────
     if not sem_impressao:
@@ -283,9 +256,6 @@ if __name__ == "__main__":
                         help="Pula a etapa de Estacao de Impressao")
     parser.add_argument("--sem-agendamento", action="store_true",
                         help="Pula a leitura de respostas de confirmacao de agendamento")
-    parser.add_argument("--sem-insucesso-resposta", action="store_true",
-                        help="Pula a leitura de respostas de insucesso na entrega")
     args = parser.parse_args()
     main(modo_teste=args.modo_teste,
-        sem_impressao=args.sem_impressao, sem_agendamento=args.sem_agendamento,
-        sem_insucesso_resposta=args.sem_insucesso_resposta)
+        sem_impressao=args.sem_impressao, sem_agendamento=args.sem_agendamento)

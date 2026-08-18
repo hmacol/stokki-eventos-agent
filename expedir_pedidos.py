@@ -826,31 +826,15 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # REGRA ATUAL (pedido do Hugo, 15/08): NENHUM insucesso duplica
         # sozinho. O remetente recebe uma PERGUNTA ("houve insucesso,
         # deseja o reenvio?") e só duplicamos se a resposta confirmar --
-        # a resposta é dada numa página web (18/08, ver
+        # a resposta é dada numa página pública (18/08, ver
         # insucesso_entrega/notificar_insucesso_aguardando_resposta.py e
-        # insucesso_resposta/app.py) e puxada por
-        # sincronizar_respostas_insucesso.py, que cria a reentrega no
-        # VUUPT quando o embarcador confirma ou pede outra data, e só
-        # registra a recusa quando ele não quer o reenvio. (Revoga a
+        # resposta_insucesso/app.py, hospedada na mesma VPS em
+        # app.freshhub.com.br/insucesso) que já aplica a decisão no VUUPT
+        # NA HORA do clique -- não existe mais um passo de sincronização
+        # aqui (a página lê/escreve direto no mesmo dados.db). (Revoga a
         # regra de 11/08 -- duplicava tudo na hora e só perguntava
         # depois -- que por sua vez tinha revogado a regra original de
         # 03/08 de perguntar antes.)
-        # 3a. Sincroniza respostas de insucesso ANTES de processar os
-        # novos (pedido do Hugo, 11/08: "vamos colocar na tarefa de 30
-        # em 30") -- uma resposta do remetente é aplicada em no máximo
-        # ~30 min, sem esperar o executar_tudo (que também segue rodando
-        # a sincronização, pra cobrir as respostas da noite; a trava
-        # interna do módulo impede os dois de processarem o mesmo grupo
-        # ao mesmo tempo).
-        if modo_teste:
-            logger.info("[TESTE] Sincronização de respostas de insucesso pulada.")
-        else:
-            try:
-                from sincronizar_respostas_insucesso import processar_respostas_insucesso
-                resultado_respostas = processar_respostas_insucesso(config)
-                logger.info(f"Respostas de insucesso: {resultado_respostas}")
-            except Exception as e:
-                logger.warning(f"Falha na sincronização de respostas de insucesso (segue sem): {e}")
 
         insucessos = buscar_servicos_insucesso(vuupt_token, horas=horas)
         if insucessos:
@@ -871,7 +855,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             # pedido, não quero mais duplicar automaticamente" -- revoga
             # a regra de 11/08 abaixo). A ÚNICA coisa que cria uma
             # reentrega agora é a resposta do embarcador ao e-mail de
-            # "aguardando retorno" (sincronizar_respostas_insucesso.py::
+            # "aguardando retorno" (aplicar_resposta_insucesso.py::
             # _cancelar_reentrega/_reagendar_reentrega/branch "manter" --
             # essas três funções já sabem duplicar na hora quando ainda
             # não existe nada duplicado/agendado pra esse pedido, era o

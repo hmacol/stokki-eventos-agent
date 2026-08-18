@@ -34,7 +34,7 @@
   .banner.ok { background: #E6FBF5; color: #0A6656; border: 1px solid var(--cor-acento); }
   .banner.erro { background: #FEF2F2; color: #991B1B; border: 1px solid var(--cor-erro); }
   .banner.aviso { background: #FFF8EC; color: #92600A; border: 1px solid var(--cor-destaque); }
-  .pergunta { font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
+  .pergunta { font-size: 15px; line-height: 1.6; margin: 0 0 8px; }
   .prazo { font-size: 13px; color: var(--cor-texto-suave); line-height: 1.5; margin: 0 0 16px; }
   table { width: 100%; border-collapse: collapse; border: 1px solid var(--cor-borda); border-radius: 8px; overflow: hidden; margin-bottom: 20px; font-size: 13px; }
   th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--cor-borda); }
@@ -70,34 +70,45 @@
   {% elif estado == "expirado" %}
     <div class="banner erro">Esse link expirou. Fale com a Freshlog pra tratar esse(s) pedido(s) por outro canal.</div>
 
-  {% elif estado == "nao_encontrado" %}
-    <div class="banner aviso">Não encontramos dados pra esse link -- ele pode ter sido substituído por um aviso mais recente sobre o mesmo assunto, ou os dados ainda estão sendo preparados. Se acabou de clicar, aguarde alguns minutos e tente de novo.</div>
+  {% elif estado == "resolvido" %}
+    <div class="banner aviso">Não encontramos nada pendente pra esse link -- ou já foi respondido antes, ou está sendo processado agora. Se você acabou de responder, pode fechar esta página.</div>
 
-  {% elif estado == "formulario" %}
-    {% if grupo.aplicado_em %}
-      <div class="banner ok">✅ Recebemos e já processamos sua resposta. Obrigado!</div>
-    {% elif grupo.status == "RESPONDIDO" %}
-      <div class="banner ok">✅ Recebemos sua resposta e estamos processando. Mudou de ideia? Responda de novo abaixo.</div>
-    {% endif %}
-
-    {% if erro %}
-      <div class="banner erro">{{ erro }}</div>
-    {% endif %}
-
-    <p class="pergunta">{{ grupo.pergunta_texto or "Não foi possível concluir a entrega do(s) pedido(s) abaixo. Deseja que reenviemos para uma nova tentativa?" }}</p>
-    {% if grupo.prazo_texto %}<p class="prazo">{{ grupo.prazo_texto }}</p>{% endif %}
-    {% if grupo.aviso_dia_fixo_texto %}<p class="prazo">{{ grupo.aviso_dia_fixo_texto }}</p>{% endif %}
-
+  {% elif estado == "aplicado" %}
+    <div class="banner ok">✅ Resposta recebida e aplicada. Obrigado!</div>
     <table>
-      <thead><tr><th>Pedido</th><th>Descrição</th></tr></thead>
+      <thead><tr><th>Pedido</th><th>Resultado</th></tr></thead>
       <tbody>
-        {% for p in grupo.pedidos %}
-        <tr><td>{{ p.code }}</td><td>{{ p.title }}</td></tr>
+        {% for r in resultados %}
+        <tr>
+          <td>{{ r.code }}</td>
+          <td>
+            {% if r.resultado == "reenviado" %}Reenvio confirmado
+            {% elif r.resultado == "cancelado" %}Reenvio não será feito
+            {% elif r.resultado == "reagendado" %}Reagendado{% if r.data %} para {{ r.data.strftime('%d/%m/%Y') }}{% endif %}
+            {% else %}Falha -- nossa equipe vai verificar
+            {% endif %}
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
 
-    {% if not grupo.aplicado_em %}
+  {% elif estado == "formulario" %}
+    {% if erro %}
+      <div class="banner erro">{{ erro }}</div>
+    {% endif %}
+    <p class="pergunta">Não foi possível concluir a entrega do(s) pedido(s) abaixo (motivo: {{ motivo_texto }}). Deseja que reenviemos para uma nova tentativa?</p>
+    <p class="prazo">Se confirmado, o reenvio segue para o próximo dia útil (ou para a data escolhida no reagendamento -- ajustada automaticamente se a região só recebe em dias específicos).</p>
+
+    <table>
+      <thead><tr><th>Pedido</th></tr></thead>
+      <tbody>
+        {% for codigo in codigos %}
+        <tr><td>{{ codigo }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
     <form method="post" id="form-resposta">
       <label for="data_pedida">Se for reagendar, escolha a nova data desejada</label>
       <input type="date" name="data_pedida" id="data_pedida">
@@ -117,7 +128,6 @@
         return true;
       }
     </script>
-    {% endif %}
   {% endif %}
 
     <div class="rodape">Mensagem automática — Freshlog</div>

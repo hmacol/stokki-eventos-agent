@@ -161,17 +161,6 @@ AGENTES = [
         "categoria": "Notificações",
     },
     {
-        "id": "sincronizar_respostas_insucesso",
-        "nome": "Sincronizar Respostas de Insucesso",
-        "descricao": "Puxa da página web as respostas dos embarcadores sobre insucessos de entrega e aplica a decisão (reenviar/reagendar/cancelar).",
-        "script": "insucesso_entrega/sincronizar_respostas_insucesso.py",
-        "cwd": "insucesso_entrega",
-        "suporta_teste": False,
-        "flag_teste": None,
-        "args_fixos": [],
-        "categoria": "Notificações",
-    },
-    {
         "id": "relatorio_diario",
         "nome": "Relatório Operacional Diário",
         "descricao": "Envia o relatório operacional do dia (hoje) por e-mail.",

@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-sincronizar_respostas_insucesso.py
+aplicar_resposta_insucesso.py
 
-Puxa da VPS pública (insucesso_resposta/app.py) as respostas que os
-embarcadores já deram na página web (Sim, reenviar / Reagendar / Não
-reenviar -- ver notificar_insucesso_aguardando_resposta.py::
-publicar_grupo/_botoes_resposta) e aplica no VUUPT -- pedido do Hugo,
-18/08: substitui ler_respostas_insucesso.py (que lia respostas por
-e-mail via IMAP + Claude), removido.
+Aplica no VUUPT a decisão do embarcador sobre um insucesso na entrega
+(cancelar/reagendar/confirmar o reenvio) -- chamado SINCRONAMENTE de
+dentro do POST /r/<token> da página pública `resposta_insucesso/app.py`
+(hospedada na mesma VPS que já roda expedir_pedidos.py, desde a
+migração de 17/08 -- ver DOC_EXECUCAO_CLAUDE_MIGRACAO_VPS.md). O clique
+no botão já aplica a decisão na hora; não existe mais um passo de
+sincronização/leitura em lote (nem por IMAP, nem por HTTP).
 
 REGRA ATUAL (herdada de 15/08, "nenhum insucesso duplica antes de
-perguntar" -- só muda o CANAL da resposta, não a regra): a decisão do
-embarcador é CANCELAR, REAGENDAR ou MANTER (nome interno mantido por
-conveniência -- "manter" aqui significa "confirmar o reenvio", já que
-nada é duplicado antes da resposta):
+perguntar" -- só muda O MOMENTO/CANAL da aplicação, não a regra):
   - "Não reenviar" -> registra no fingerprint que este insucesso NUNCA
     será duplicado e avisa o ATENDIMENTO por e-mail (config
     email.email_atendimento).
@@ -25,19 +23,9 @@ nada é duplicado antes da resposta):
   - "Sim, reenviar" -> DUPLICA AGORA (próximo dia útil).
 
 A ação sempre se aplica aos pedidos ATUALMENTE pendentes pro grupo
-(fingerprint_aguardando_resposta.buscar_pendentes_por_grupo) -- não a
-uma lista congelada no momento em que o e-mail foi mandado, mesmo
-comportamento de antes (o marcador usado no e-mail só carregava a
-chave do grupo, nunca uma lista fixa de pedidos).
-
-Depois de aplicar, confirma pra VPS (POST /api/sync/ack) que o grupo
-foi processado -- fecha aquele ciclo e libera um ciclo novo pro mesmo
-grupo (sender_id, failed_reason_id) numa notificação futura. Sem o ack,
-a VPS reenviaria o mesmo grupo respondido pra sempre, e reaplicar a
-decisão no VUUPT não é seguro (duplicar/cancelar de novo).
-
-COMO USAR (standalone -- normalmente chamado a partir de executar_tudo.py):
-    py -3.11 sincronizar_respostas_insucesso.py
+(fingerprint_aguardando_resposta.buscar_pendentes_por_grupo) -- consulta
+AO VIVO no momento do clique, não uma lista congelada em algum momento
+anterior.
 """
 import logging
 import os
@@ -51,9 +39,6 @@ from pathlib import Path
 _RAIZ = Path(__file__).parent.parent  # sobe de insucesso_entrega/ pra raiz do projeto
 sys.path.insert(0, str(_RAIZ))
 
-import requests
-import yaml
-
 from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ERRO
 from vuupt_client import VuuptClient
 from motivos_falha import texto_do_motivo
@@ -64,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
-# Trava contra execução SIMULTÂNEA (herdada de ler_respostas_insucesso.py,
-# 11/08): a sincronização roda tanto dentro do expedir_pedidos.py (a cada
-# 30 min) quanto do executar_tudo.py (horários fixos) -- sem a trava, os
-# dois processos puxariam a mesma resposta ao mesmo tempo (o ack só é
-# gravado DEPOIS de aplicar) e aplicariam a ação duas vezes.
-_LOCK_PATH = _RAIZ / "dados" / "sincronizar_respostas_insucesso.lock"
-_LOCK_IDADE_MAX_S = 600  # trava mais velha que isso = processo morto, pode roubar
+# Trava contra aplicação SIMULTÂNEA do mesmo grupo -- um clique duplo
+# (duplo-clique, ou duas abas com o mesmo link) não deve duplicar/
+# cancelar duas vezes. Coarse (1 lock global, não por grupo): o volume
+# é baixo (cliques humanos, não um endpoint de alta concorrência) e o
+# tempo de posse é curto (só a duração de aplicar 1 grupo).
+_LOCK_PATH = _RAIZ / "dados" / "aplicar_resposta_insucesso.lock"
+_LOCK_IDADE_MAX_S = 60  # bem menor que o antigo job em lote -- isso aqui roda em segundos, não minutos
 
 
 def _adquirir_trava() -> bool:
@@ -86,8 +71,8 @@ def _adquirir_trava() -> bool:
     except FileExistsError:
         return False
     except Exception as e:
-        logger.debug(f"Trava de sincronização indisponível ({e}) -- seguindo sem trava.")
-        return True  # na dúvida não deixa a sincronização parar pra sempre
+        logger.debug(f"Trava de aplicação indisponível ({e}) -- seguindo sem trava.")
+        return True  # na dúvida não deixa a resposta do embarcador travar pra sempre
 
 
 def _liberar_trava():
@@ -102,7 +87,7 @@ def _email_do_remetente(sender_id) -> str:
     usada pra mandar o aviso original -- ver
     notificar_insucesso_aguardando_resposta.py::_carregar_embarcadores_por_sender_id).
     Usado só pra endereçar os e-mails de confirmação/aviso depois da
-    resposta -- a resposta em si não depende mais de e-mail nenhum."""
+    resposta -- a resposta em si não depende de e-mail nenhum."""
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT email FROM interno WHERE sender_id = ?", (sender_id,)).fetchone()
     conn.close()
@@ -112,51 +97,13 @@ def _email_do_remetente(sender_id) -> str:
     return emails[0] if emails else ""
 
 
-def _buscar_respostas_pendentes(config_resposta: dict) -> list[dict]:
-    url_base = (config_resposta.get("url_base") or "").rstrip("/")
-    sync_secret = config_resposta.get("sync_secret")
-    if not url_base or not sync_secret:
-        logger.warning("resposta_insucesso.url_base/sync_secret não configurados em config.yaml -- nada a sincronizar.")
-        return []
-    try:
-        resp = requests.get(
-            f"{url_base}/api/sync/respostas",
-            headers={"X-Sync-Secret": sync_secret},
-            timeout=15,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"Falha ao consultar respostas na VPS: {e}")
-        return []
-    return resp.json().get("respostas", [])
-
-
-def _confirmar_aplicados(config_resposta: dict, tokens: list[str]) -> None:
-    if not tokens:
-        return
-    url_base = (config_resposta.get("url_base") or "").rstrip("/")
-    sync_secret = config_resposta.get("sync_secret")
-    try:
-        resp = requests.post(
-            f"{url_base}/api/sync/ack",
-            json={"tokens": tokens},
-            headers={"X-Sync-Secret": sync_secret},
-            timeout=15,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"Falha ao confirmar {len(tokens)} grupo(s) aplicado(s) na VPS -- "
-                       f"serão reenviados no próximo pull, sem efeito colateral (os fingerprints "
-                       f"locais já impedem duplicar/cancelar de novo): {e}")
-
-
 def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
     """
     Aplica a resposta "não reenviar" do remetente. O caso comum é o
     terceiro bloco abaixo -- nada existe ainda, só marca no fingerprint
     pra nunca ser duplicado. Os dois primeiros blocos cobrem pendências
     antigas que já tinham algo duplicado/agendado (resquício do fluxo
-    anterior a 15/08, ou uma corrida rara entre duas sincronizações):
+    anterior a 15/08, ou uma corrida rara entre dois cliques).
 
       - Se o serviço duplicado JÁ existe no VUUPT: DELETE nele
         (cancelar_servico) e marca cancelado_em no fingerprint de
@@ -439,190 +386,119 @@ def _notificar_atendimento_falha_reagendamento(config_email: dict, motivo_texto:
     enviar_email([destino], assunto, corpo, config_email)
 
 
-def processar_respostas_insucesso(config: dict) -> dict:
+def aplicar_decisao(sender_id, failed_reason_id, acao: str, nova_data: date | None,
+                    config: dict) -> list[dict]:
     """
-    Puxa da VPS as respostas dadas na página de resposta ao insucesso,
-    aplica no VUUPT (cancelamento/reagendamento/duplicação) e confirma
-    de volta pra VPS (ack) os grupos processados.
+    Aplica a decisão do embarcador a TODOS os pedidos ATUALMENTE
+    pendentes do grupo (sender_id, failed_reason_id) -- consulta
+    buscar_pendentes_por_grupo AO VIVO, não recebe a lista de fora.
+    Chamado direto do POST /r/<token> de resposta_insucesso/app.py.
 
-    Retorna {"processados", "grupos_atualizados", "duplicados",
-    "cancelados", "reagendados", "nao_entendidos"}
+    acao: "cancelar" | "reagendar" | "manter" (nome interno de sempre --
+    "manter" = confirma o reenvio). nova_data só é usada quando
+    acao == "reagendar" (já validada pelo chamador: data ISO >= hoje).
+
+    Retorna [{"code", "resultado": "reenviado"|"cancelado"|"reagendado"|
+    "falha", "data": date|None}] -- lista vazia quando não havia nada
+    pendente pro grupo (já resolvido antes) ou quando a trava não foi
+    conseguida (outro clique aplicando o mesmo grupo agora).
     """
     if not _adquirir_trava():
-        logger.info("Outra sincronização de respostas de insucesso em andamento -- pulando este ciclo.")
-        return {"processados": 0, "grupos_atualizados": 0, "duplicados": 0, "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
-
+        logger.warning(f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}) "
+                       f"já está sendo processado por outro clique -- tente de novo em instantes.")
+        return []
     try:
-        return _processar_respostas_insucesso_travado(config)
+        return _aplicar_decisao_travado(sender_id, failed_reason_id, acao, nova_data, config)
     finally:
         _liberar_trava()
 
 
-def _processar_respostas_insucesso_travado(config: dict) -> dict:
-    """Corpo real de processar_respostas_insucesso -- só roda segurando a trava."""
+def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: date | None,
+                             config: dict) -> list[dict]:
     cfg_email = config.get("email", {})
-    cfg_vuupt = config.get("vuupt_api", {})
-    cfg_resposta = config.get("resposta_insucesso", {})
-    vuupt_token = cfg_vuupt.get("token", "")
-
-    resultado_vazio = {"processados": 0, "grupos_atualizados": 0, "duplicados": 0,
-                       "cancelados": 0, "reagendados": 0, "nao_entendidos": 0}
+    vuupt_token = config.get("vuupt_api", {}).get("token", "")
     if not vuupt_token:
-        logger.warning("Token VUUPT não configurado em config.yaml (seção vuupt_api).")
-        return resultado_vazio
+        raise RuntimeError("Token VUUPT não configurado em config.yaml (seção vuupt_api).")
 
-    respostas = _buscar_respostas_pendentes(cfg_resposta)
-    if not respostas:
-        logger.info("Nenhuma resposta nova na página de resposta de insucesso.")
-        return resultado_vazio
+    pendentes = buscar_pendentes_por_grupo(sender_id, failed_reason_id)
+    if not pendentes:
+        return []
 
     from expedir_pedidos import duplicar_servico_por_insucesso
     import fingerprint_duplicacao_insucesso
     import fingerprint_duplicacao_agendada
 
     vuupt = VuuptClient(vuupt_token)
+    motivo_texto = texto_do_motivo(failed_reason_id)
+    remetente_email = _email_do_remetente(sender_id)
 
-    processados = grupos_atualizados = duplicados = cancelados = reagendados = nao_entendidos = 0
-    tokens_aplicados = []
+    resultados = []
+    itens_cancelamento = []
+    itens_reagendamento = []
 
-    for resposta in respostas:
-        token = resposta.get("token")
-        sender_id = resposta.get("sender_id")
-        failed_reason_id = resposta.get("failed_reason_id")
-        acao = resposta.get("acao") or "manter"
-        processados += 1
-
-        pendentes = buscar_pendentes_por_grupo(sender_id, failed_reason_id)
-        if not pendentes:
-            logger.info(f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}) "
-                       f"sem pedido pendente -- já resolvido localmente, só confirmando na VPS.")
-            tokens_aplicados.append(token)
-            continue
-
-        motivo_texto = texto_do_motivo(failed_reason_id)
-        remetente_email = _email_do_remetente(sender_id)
-
-        nova_data = None
-        if acao == "reagendar":
-            try:
-                nova_data = date.fromisoformat(str(resposta.get("data_pedida") or ""))
-            except ValueError:
-                nova_data = None
-            if not nova_data:
-                # Não deveria acontecer -- a página já exige data válida
-                # antes de aceitar o POST. Defensivo: não aplica nada,
-                # confirma o ack pra não ficar reprocessando pra sempre,
-                # e sinaliza pra verificação manual.
-                logger.error(f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}) "
-                            f"pediu reagendamento sem data válida ({resposta.get('data_pedida')!r}) "
-                            f"-- verificar manualmente.")
-                nao_entendidos += 1
-                tokens_aplicados.append(token)
-                continue
-            if nova_data < date.today():
-                nova_data = date.today()  # data pedida já passou -- usa hoje em vez de rejeitar
-
-        itens_cancelamento = []
-        itens_reagendamento = []
-        for p in pendentes:
-            resposta_texto = f"Resposta via página web: {acao}" + (
-                f" (data pedida: {nova_data.isoformat()})" if nova_data else "")
-            marcar_respondido(p["service_id"], resposta_texto, acao != "cancelar")
-            grupos_atualizados += 1
-            if p.get("code"):
-                tratativas.registrar_evento(
-                    p["code"], "INSUCESSO_ENTREGA", "RESPOSTA_RECEBIDA",
-                    service_id=p.get("service_id"), motivo_id=failed_reason_id,
-                    motivo_texto=motivo_texto, decisao=acao,
-                    remetente_email=remetente_email, texto=resposta_texto,
-                )
-
-            if acao == "cancelar":
-                ok = _cancelar_reentrega(p, vuupt)
-                if ok:
-                    cancelados += 1
-                itens_cancelamento.append((p.get("code") or str(p["service_id"]), ok))
-            elif acao == "reagendar":
-                data_final = _reagendar_reentrega(p, nova_data, vuupt)
-                if data_final:
-                    reagendados += 1
-                itens_reagendamento.append((p.get("code") or str(p["service_id"]), data_final))
-            else:
-                # Embarcador confirmou o reenvio -- como regra (desde
-                # 15/08) nada é duplicado antes da resposta, isso SEMPRE
-                # duplica agora (a checagem abaixo só evita duplicar de
-                # novo se este mesmo grupo for processado duas vezes).
-                if (p.get("code")
-                        and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"])
-                        and not fingerprint_duplicacao_agendada.ja_agendado(p["service_id"])):
-                    servico_original = vuupt.buscar_servico_por_code(p["code"])
-                    if servico_original:
-                        novo = duplicar_servico_por_insucesso(vuupt, servico_original)
-                        if novo:
-                            fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], novo.get("code", ""))
-                            duplicados += 1
-                            tratativas.registrar_evento(
-                                p["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
-                                service_id=p.get("service_id"), motivo_id=failed_reason_id,
-                                motivo_texto=motivo_texto,
-                                texto=f"Reenvio confirmado pelo embarcador (novo código: {novo.get('code', '')}).",
-                            )
-                    else:
-                        logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
+    for p in pendentes:
+        code = p.get("code") or str(p["service_id"])
+        resposta_texto = f"Resposta via página web: {acao}" + (
+            f" (data pedida: {nova_data.isoformat()})" if nova_data else "")
+        marcar_respondido(p["service_id"], resposta_texto, acao != "cancelar")
+        if p.get("code"):
+            tratativas.registrar_evento(
+                p["code"], "INSUCESSO_ENTREGA", "RESPOSTA_RECEBIDA",
+                service_id=p.get("service_id"), motivo_id=failed_reason_id,
+                motivo_texto=motivo_texto, decisao=acao,
+                remetente_email=remetente_email, texto=resposta_texto,
+            )
 
         if acao == "cancelar":
-            _notificar_atendimento_cancelamento(cfg_email, motivo_texto, itens_cancelamento,
-                                                "Resposta dada pela página web.", remetente_email)
+            ok = _cancelar_reentrega(p, vuupt)
+            itens_cancelamento.append((code, ok))
+            resultados.append({"code": code, "resultado": "cancelado" if ok else "falha", "data": None})
         elif acao == "reagendar":
-            _notificar_remetente_reagendamento(cfg_email, remetente_email, motivo_texto,
-                                               itens_reagendamento, nova_data)
-            codes_falha = [c for c, d in itens_reagendamento if not d]
-            if codes_falha:
-                _notificar_atendimento_falha_reagendamento(cfg_email, motivo_texto, codes_falha,
-                                                            remetente_email, nova_data)
+            data_final = _reagendar_reentrega(p, nova_data, vuupt)
+            itens_reagendamento.append((code, data_final))
+            resultados.append({"code": code, "resultado": "reagendado" if data_final else "falha", "data": data_final})
+        else:
+            # Embarcador confirmou o reenvio -- como regra (desde 15/08)
+            # nada é duplicado antes da resposta, isso SEMPRE duplica
+            # agora (a checagem abaixo só evita duplicar de novo se este
+            # mesmo grupo for aplicado duas vezes).
+            ok = True
+            if (p.get("code")
+                    and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"])
+                    and not fingerprint_duplicacao_agendada.ja_agendado(p["service_id"])):
+                servico_original = vuupt.buscar_servico_por_code(p["code"])
+                if servico_original:
+                    novo = duplicar_servico_por_insucesso(vuupt, servico_original)
+                    if novo:
+                        fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], novo.get("code", ""))
+                        tratativas.registrar_evento(
+                            p["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                            service_id=p.get("service_id"), motivo_id=failed_reason_id,
+                            motivo_texto=motivo_texto,
+                            texto=f"Reenvio confirmado pelo embarcador (novo código: {novo.get('code', '')}).",
+                        )
+                    else:
+                        ok = False
+                else:
+                    logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
+                    ok = False
+            resultados.append({"code": code, "resultado": "reenviado" if ok else "falha", "data": None})
 
-        logger.info(
-            f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}, {motivo_texto}) "
-            f"respondido: acao={acao}"
-            + (f" (nova data {nova_data.strftime('%d/%m/%Y')})" if nova_data else "")
-            + f" ({len(pendentes)} pedido(s))"
-        )
-        tokens_aplicados.append(token)
-
-    _confirmar_aplicados(cfg_resposta, tokens_aplicados)
+    if acao == "cancelar":
+        _notificar_atendimento_cancelamento(cfg_email, motivo_texto, itens_cancelamento,
+                                            "Resposta dada pela página web.", remetente_email)
+    elif acao == "reagendar":
+        _notificar_remetente_reagendamento(cfg_email, remetente_email, motivo_texto,
+                                           itens_reagendamento, nova_data)
+        codes_falha = [c for c, d in itens_reagendamento if not d]
+        if codes_falha:
+            _notificar_atendimento_falha_reagendamento(cfg_email, motivo_texto, codes_falha,
+                                                        remetente_email, nova_data)
 
     logger.info(
-        f"Sincronização de respostas de insucesso concluída: {processados} grupo(s) processado(s), "
-        f"{grupos_atualizados} pedido(s) atualizado(s), {duplicados} duplicado(s), "
-        f"{cancelados} reentrega(s) cancelada(s), {reagendados} reagendada(s), "
-        f"{nao_entendidos} não entendido(s)."
+        f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}, {motivo_texto}) "
+        f"respondido via página web: acao={acao}"
+        + (f" (nova data {nova_data.strftime('%d/%m/%Y')})" if nova_data else "")
+        + f" ({len(pendentes)} pedido(s))"
     )
-    return {
-        "processados": processados, "grupos_atualizados": grupos_atualizados,
-        "duplicados": duplicados, "cancelados": cancelados,
-        "reagendados": reagendados, "nao_entendidos": nao_entendidos,
-    }
-
-
-def main():
-    (_RAIZ / "dados").mkdir(parents=True, exist_ok=True)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(_RAIZ / "dados" / "sincronizar_respostas_insucesso.log", encoding="utf-8"),
-        ],
-    )
-    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-    resultado = processar_respostas_insucesso(config)
-    logger.info(f"Resultado: {resultado}")
-
-
-if __name__ == "__main__":
-    main()
+    return resultados

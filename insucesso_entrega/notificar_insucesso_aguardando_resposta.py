@@ -9,31 +9,37 @@ solicitar"): NENHUM insucesso é duplicado antes de perguntar. Este
 módulo manda a PERGUNTA ao remetente -- "houve insucesso, deseja o
 reenvio?" -- com botões pra confirmar, recusar ou pedir outra data. A
 reentrega só é criada quando a resposta chega e confirma (ou pede
-reagendamento), respondida na página web (ver abaixo) e aplicada por
-sincronizar_respostas_insucesso.py. Sem resposta, sem ação -- revoga a
-regra de 11/08 (duplicava tudo na hora e só perguntava depois, "responda
-se quiser cancelar"), que por sua vez já tinha revogado esta mesma regra
-de perguntar antes (03/08) -- o esqueleto de agrupamento/fingerprint
-nunca mudou, só o texto e o momento em que a reentrega é criada.
+reagendamento), respondida e aplicada na hora do clique (ver abaixo).
+Sem resposta, sem ação -- revoga a regra de 11/08 (duplicava tudo na
+hora e só perguntava depois, "responda se quiser cancelar"), que por
+sua vez já tinha revogado esta mesma regra de perguntar antes (03/08)
+-- o esqueleto de agrupamento/fingerprint nunca mudou, só o texto e o
+momento em que a reentrega é criada.
 
 BOTÕES (pedido do Hugo, 18/08: trocar os links mailto: -- que
 dependiam do embarcador abrir o cliente de e-mail e enviar, e só eram
 lidos por um job de IMAP a cada 30 min -- por um link único que já
 aplica a resposta no clique). Cada botão leva pra uma página pública
-(insucesso_resposta/app.py, hospedada numa VPS fora da rede local,
-mesmo padrão de confirmacao_motoristas/app.py): publicar_grupo() faz o
-push do conteúdo do grupo pra lá ANTES do e-mail ser enviado -- se a
-VPS não responder, o e-mail deste grupo não é mandado neste ciclo
-(tenta de novo no próximo, não faz sentido mandar um botão quebrado).
-Revoga a versão anterior (12/08-15/08) que usava mailto: lidos via
-IMAP + Claude (ler_respostas_insucesso.py, removido).
+(resposta_insucesso/app.py, hospedada na MESMA VPS que já roda
+expedir_pedidos.py desde a migração de 17/08 -- publicada em
+app.freshhub.com.br/insucesso, mesmo padrão técnico de painel_agentes)
+que lê o grupo AO VIVO em fingerprint_aguardando_resposta.py e aplica a
+decisão direto no VUUPT (insucesso_entrega/aplicar_resposta_insucesso.py)
+assim que o embarcador clica. Como o token do link já carrega
+{sender_id, failed_reason_id} assinado, montar o link aqui é só assinar
+-- não tem nada pra publicar/sincronizar com antecedência (revoga a
+tentativa anterior do mesmo dia, que copiava o padrão de
+confirmacao_motoristas/app.py -- uma VPS separada sem acesso à rede
+local -- e não se aplicava aqui, já que esta página roda na mesma
+máquina/mesmo banco). Revoga também a versão de 12/08-15/08, que usava
+mailto: lidos via IMAP + Claude (ler_respostas_insucesso.py, removido).
 
 Agrupa por (remetente, motivo) -- cada motivo tem uma pergunta
 diferente, então viram e-mails separados mesmo pro mesmo remetente.
 Rate-limit diário (fingerprint_aguardando_resposta.py): no máximo 1
 e-mail por dia por pedido, até a resposta chegar (status muda pra algo
 diferente de PENDENTE -- a aplicação da resposta vem de
-sincronizar_respostas_insucesso.py).
+aplicar_resposta_insucesso.py).
 
 Layout do e-mail (06/08, pedido do Hugo: "adequar pro padrão que já
 temos em outros agentes"): usa email_utils.py (módulo central da
@@ -51,7 +57,6 @@ from pathlib import Path
 _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
-import requests
 from itsdangerous import URLSafeTimedSerializer
 
 from email_utils import (
@@ -127,9 +132,10 @@ def _dias_fixos_do_grupo(pedidos: list[dict]) -> tuple[dict[str, str], bool]:
 
 def _textos_do_grupo(motivo_texto: str, pedidos: list[dict], failed_reason_id) -> dict:
     """
-    Pergunta/prazo/aviso de dia fixo do grupo, em HTML (pro corpo do
-    e-mail, com <strong>) e em texto plano (pro push da página de
-    resposta) -- fonte única, pra e-mail e página nunca divergirem.
+    Pergunta/prazo/aviso de dia fixo do grupo, em HTML, pro corpo do
+    e-mail (a página de resposta não precisa desse texto -- ela roda no
+    mesmo repo/máquina e mostra um texto genérico próprio, sem precisar
+    receber nada por fora).
     """
     from motivos_falha import aguarda_resposta, pergunta_do_motivo
 
@@ -166,64 +172,36 @@ def _textos_do_grupo(motivo_texto: str, pedidos: list[dict], failed_reason_id) -
     return {
         "pergunta_html": pergunta_html,
         "prazo_html": prazo_html,
-        "pergunta_texto": re.sub(r"<[^>]+>", "", pergunta_html),
-        "prazo_texto": re.sub(r"<[^>]+>", "", prazo_html),
         "aviso_dia_fixo_texto": aviso_dia_fixo_texto,
     }
 
 
-def publicar_grupo(sender_id, failed_reason_id, motivo_texto: str, pergunta_texto: str,
-                   prazo_texto: str, aviso_dia_fixo_texto: str | None,
-                   pedidos: list[dict], config_resposta: dict) -> str | None:
+def _url_resposta(sender_id, failed_reason_id, config_resposta: dict) -> str | None:
     """
-    Publica (ou atualiza) o conteúdo do grupo na página pública de
-    resposta (insucesso_resposta/app.py, na VPS -- a máquina local não
-    tem entrada de internet, então a página só pode existir lá) e
-    devolve a URL pra colocar nos botões do e-mail. Devolve None se a
-    VPS não respondeu ou se resposta_insucesso não está configurado em
-    config.yaml -- quem chama decide não mandar o e-mail nesse caso
-    (um botão quebrado é pior que esperar o próximo ciclo).
+    Monta a URL do link de resposta -- só assina um token (itsdangerous)
+    com {sender_id, failed_reason_id}, sem nenhuma chamada de rede: a
+    página (resposta_insucesso/app.py) roda na mesma VPS/mesmo repo e
+    consulta o grupo AO VIVO quando o token é acessado, não precisa
+    receber nada com antecedência. Devolve None se resposta_insucesso
+    não está configurado em config.yaml -- quem chama decide não mandar
+    o e-mail nesse caso (um botão quebrado é pior que esperar o próximo
+    ciclo de notificação).
     """
     url_base = (config_resposta.get("url_base") or "").rstrip("/")
     token_secret = config_resposta.get("token_secret")
-    sync_secret = config_resposta.get("sync_secret")
-    if not url_base or not token_secret or not sync_secret:
-        logger.warning("resposta_insucesso.url_base/token_secret/sync_secret não configurados "
-                       "em config.yaml -- botões de resposta não serão publicados.")
+    if not url_base or not token_secret:
+        logger.warning("resposta_insucesso.url_base/token_secret não configurados "
+                       "em config.yaml -- botões de resposta não serão enviados.")
         return None
 
     serializer = URLSafeTimedSerializer(token_secret, salt="resposta-insucesso")
     token = serializer.dumps({"sender_id": sender_id, "failed_reason_id": failed_reason_id})
-    pedidos_payload = [
-        {"code": "#" + (p.get("code", "") or "").lstrip("#"), "title": (p.get("title") or "")[:60]}
-        for p in pedidos
-    ]
-
-    try:
-        resp = requests.post(
-            f"{url_base}/api/sync/upsert",
-            json={
-                "token": token, "sender_id": sender_id, "failed_reason_id": failed_reason_id,
-                "motivo_texto": motivo_texto, "pergunta_texto": pergunta_texto,
-                "prazo_texto": prazo_texto, "aviso_dia_fixo_texto": aviso_dia_fixo_texto,
-                "pedidos": pedidos_payload,
-            },
-            headers={"X-Sync-Secret": sync_secret},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        token_final = resp.json().get("token") or token
-    except requests.RequestException as e:
-        logger.error(f"Falha ao publicar grupo (sender_id={sender_id}, "
-                    f"failed_reason_id={failed_reason_id}) na página de resposta: {e}")
-        return None
-
-    return f"{url_base}/r/{token_final}"
+    return f"{url_base}/r/{token}"
 
 
 def _botoes_resposta(url_resposta: str) -> str:
     """Três botões de ação -- todos levam pra MESMA página pública
-    (insucesso_resposta/app.py), que pergunta Sim/Reagendar/Não e só
+    (resposta_insucesso/app.py), que pergunta Sim/Reagendar/Não e só
     grava a resposta quando o embarcador de fato clica um botão NA
     PÁGINA (nunca por um GET simples do e-mail, pra não correr o risco
     de um scanner/preview de e-mail "clicar" sozinho e registrar uma
@@ -327,14 +305,10 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
         motivo_texto = texto_do_motivo(failed_reason_id)
         textos = _textos_do_grupo(motivo_texto, pedidos, failed_reason_id)
 
-        url_resposta = publicar_grupo(
-            sender_id, failed_reason_id, motivo_texto,
-            textos["pergunta_texto"], textos["prazo_texto"], textos["aviso_dia_fixo_texto"],
-            pedidos, config_resposta,
-        )
+        url_resposta = _url_resposta(sender_id, failed_reason_id, config_resposta)
         if not url_resposta:
-            logger.error(f"  sender_id={sender_id}: não consegui publicar o grupo na página de "
-                        f"resposta -- e-mail NÃO enviado neste ciclo (tenta de novo no próximo).")
+            logger.error(f"  sender_id={sender_id}: resposta_insucesso não configurado -- "
+                        f"e-mail NÃO enviado neste ciclo (tenta de novo no próximo).")
             falhas += 1
             continue
 
