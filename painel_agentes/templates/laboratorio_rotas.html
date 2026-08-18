@@ -23,9 +23,9 @@
   }
   .barra-controle label { display: flex; align-items: center; gap: 6px; }
   .banner-teste {
-    background: #EDEBFB;
-    border: 2px solid #6D5BD0;
-    color: #4A3B9E;
+    background: var(--teste-bg);
+    border: 2px solid var(--teste-texto);
+    color: var(--teste-texto);
     padding: 12px 18px;
     border-radius: 10px;
     font-size: 13px;
@@ -35,15 +35,7 @@
     align-items: center;
     gap: 8px;
   }
-  .aviso {
-    background: #FDF3E1;
-    border: 1px solid #F0D9A8;
-    color: #8A5A0C;
-    padding: 14px 18px;
-    border-radius: 10px;
-    font-size: 13px;
-    margin-bottom: 16px;
-  }
+  /* .aviso agora vem do base.html (compartilhado entre telas). */
   .tabela-metricas {
     background: var(--superficie);
     border: 1px solid var(--borda);
@@ -87,7 +79,7 @@
   .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
   .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
   .info-parada .remetente { color: #4F86F7; font-weight: 600; }
-  .info-parada .endereco { color: #6B7280; font-size: 12px; margin-top: 4px; }
+  .info-parada .endereco { color: var(--texto-suave); font-size: 12px; margin-top: 4px; }
 </style>
 {% endblock %}
 

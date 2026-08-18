@@ -3,45 +3,33 @@
 
 {% block estilo_extra %}
 <style>
-  /* Tema "Torre" (console escuro) -- só nesta página: redefine as
-     variáveis globais do base.html (--fundo/--superficie/--borda/
-     --texto/--texto-suave/--erro/--sucesso/--rodando/--acento) dentro
-     do <style> da própria página, então nada vaza pras outras telas do
-     painel. --primaria/--primaria-clara ficam de fora de propósito --
-     a barra superior do painel continua igual em qualquer tela.
-     Hugo, 15/08 (pesquisa de usabilidade + pedido "aplicar o Torre"). */
-  :root {
-    --fundo: #0B0E14;
-    --superficie: #121722;
-    --borda: #262F3F;
-    --texto: #DCE3EC;
-    --texto-suave: #7C89A0;
-    --acento: #2FD9AE;
-    --acento-real: #2FD9AE;
-    --sucesso: #2FD9AE;
-    --erro: #FF5C50;
-    --rodando: #F0AA45;
-  }
-  main {
-    max-width: 1600px;
+  /* Tema "Torre" (console escuro) -- as variáveis globais em si (--fundo/
+     --superficie/--borda/--texto/--texto-suave/--erro/--sucesso/--rodando/
+     --acento) hoje vêm do alternador claro/escuro em base.html (mesma
+     paleta desta página). Aqui ficam só os ajustes que fazem sentido
+     SÓ no tema escuro desta tela específica.
+     Hugo, 15/08 (pesquisa de usabilidade + pedido "aplicar o Torre");
+     17/08 (virou o alternador global, cores continuam as mesmas). */
+  main { max-width: 1600px; margin: 0 auto; }
+  html.tema-escuro main {
     background: #090C11;
     border-radius: 14px;
     padding: 18px;
-    margin: 0 auto;
   }
   main h1 { color: var(--texto); }
   /* Botão sólido do base.html usa --primaria (navy) -- em cima do
-     fundo quase preto daqui ele quase some. Nesta página, os botões
-     "sólidos" (classe .botao) usam o acento (teal) como CTA de
-     verdade; --primaria fica reservada pra a barra superior do painel. */
-  main .botao, main a.botao, main button.botao {
+     fundo quase preto daqui ele quase some. Nesta página, no tema
+     escuro, os botões "sólidos" (classe .botao) usam o acento (teal)
+     como CTA de verdade; --primaria fica reservada pra a barra
+     superior do painel, que não muda de cor entre os temas. */
+  html.tema-escuro main .botao, html.tema-escuro main a.botao, html.tema-escuro main button.botao {
     background: var(--acento);
     color: #06170F;
     font-weight: 700;
   }
-  main .botao:hover, main a.botao:hover, main button.botao:hover { background: #26C49A; }
-  main button.botao.perigo, main .botao.perigo { background: var(--erro); color: #1A0705; }
-  main button.botao.perigo:hover, main .botao.perigo:hover { background: #E8483C; }
+  html.tema-escuro main .botao:hover, html.tema-escuro main a.botao:hover, html.tema-escuro main button.botao:hover { background: #26C49A; }
+  html.tema-escuro main button.botao.perigo, html.tema-escuro main .botao.perigo { background: var(--erro); color: #1A0705; }
+  html.tema-escuro main button.botao.perigo:hover, html.tema-escuro main .botao.perigo:hover { background: #E8483C; }
   .barra-controle {
     display: flex;
     align-items: center;
@@ -73,15 +61,7 @@
   }
   .kpi-planejamento .kpi-rotulo { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
   .kpi-planejamento .kpi-valor { font-size: 22px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
-  .aviso {
-    background: #FDF3E1;
-    border: 1px solid #F0D9A8;
-    color: #8A5A0C;
-    padding: 14px 18px;
-    border-radius: 10px;
-    font-size: 13px;
-    margin-bottom: 16px;
-  }
+  /* .aviso agora vem do base.html (compartilhado entre telas). */
   /* 5 faixas: pool | divisor | rotas | divisor | mapa. As larguras das
      colunas são ajustáveis arrastando o divisor (o JS grava no
      gridTemplateColumns inline e persiste); o mapa fica com o resto. */
@@ -355,6 +335,71 @@
   }
   .item-parada .badge-caixas::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 2px; background: currentColor; }
   .item-parada .nf-pedido { font-size: 10.5px; color: var(--texto-suave); }
+  /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
+     coberto pelo filter:"input" do Sortable, então clicar nele nunca
+     inicia um arrasto (mesmo tratamento do numero-input) */
+  .item-parada .check-parada { vertical-align: text-bottom; margin-right: 5px; cursor: pointer; }
+  .barra-selecao-rotas {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 8px;
+    border: 1px solid var(--acento);
+    border-radius: 6px;
+    background: rgba(47,217,174,0.08);
+    font-size: 12px;
+  }
+  .barra-selecao-rotas #contagem-selecao-rotas { flex: none; font-weight: 700; white-space: nowrap; }
+  .barra-selecao-rotas select {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    padding: 6px 8px;
+    min-height: 32px;
+    border-radius: 5px;
+    border: 1px solid var(--borda);
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  .barra-selecao-rotas button {
+    flex: none;
+    min-height: 32px;
+    font-size: 11.5px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    color: var(--texto);
+    cursor: pointer;
+  }
+  .barra-selecao-rotas button:hover { background: var(--fundo); }
+  .barra-selecao-rotas button:disabled { opacity: 0.5; cursor: default; }
+  .barra-selecao-rotas #botao-mover-selecionados { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .card-rota .linha-fundir { display: flex; gap: 6px; margin-top: 6px; }
+  .card-rota .linha-fundir select {
+    flex: 1;
+    min-width: 0;
+    font-size: 11.5px;
+    padding: 6px 8px;
+    min-height: 34px;
+    border-radius: 6px;
+    border: 1px solid var(--borda);
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  .card-rota .linha-fundir button {
+    flex: none;
+    min-height: 34px;
+    font-size: 11.5px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    color: var(--texto);
+    cursor: pointer;
+  }
+  .card-rota .linha-fundir button:hover { background: var(--fundo); }
 
   .card-rota {
     border: 1px solid var(--borda);
@@ -1328,6 +1373,12 @@
         <option value="numero">digitando a posição</option>
       </select>
     </label>
+    <div class="barra-selecao-rotas" id="barra-selecao-rotas">
+      <span id="contagem-selecao-rotas">0 selecionado(s)</span>
+      <select id="select-destino-mover"><option value="">Mover pra...</option></select>
+      <button type="button" id="botao-mover-selecionados" disabled>Mover</button>
+      <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
+    </div>
     <div id="lista-rotas"></div>
   </div>
 
@@ -1450,7 +1501,7 @@
     return partes.length ? `<br>${partes.join(" ")}` : "";
   }
 
-  function itemParadaHtml(p) {
+  function itemParadaHtml(p, opts = {}) {
     const destinatario = p.destinatario_nome
       ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>`
       : "";
@@ -1462,9 +1513,15 @@
     const botaoCancelar = PODE_EDITAR
       ? `<button type="button" class="botao-cancelar-pedido" title="Cancelar esse pedido na VUUPT -- não pode ser desfeito">×</button>`
       : "";
+    // checkbox de seleção múltipla pra "Mover selecionados" -- só dentro
+    // de rota editável (nunca no pool, que já tem o próprio mecanismo de
+    // seleção por clique; ver opts.emRota em criarLiParada/criarCardRota)
+    const checkSelecao = opts.emRota
+      ? `<input type="checkbox" class="check-parada" title="Selecionar pra mover pra outra rota">`
+      : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
-    return `${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+    return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
       <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
   }
@@ -1482,7 +1539,7 @@
     return TIPOS_CARGA_POR_SENDER[p.sender_id] || TIPO_CARGA_PADRAO;
   }
 
-  function criarLiParada(p) {
+  function criarLiParada(p, opts = {}) {
     const li = document.createElement("li");
     li.className = "item-parada";
     li.dataset.serviceId = p.service_id;
@@ -1505,7 +1562,7 @@
     // texto usado pela busca client-side (código, remetente, destinatário, endereço, NF)
     li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco, p.numero_nf]
       .filter(Boolean).join(" ").toLowerCase();
-    li.innerHTML = itemParadaHtml({ ...p, remetente: p.remetente_nome || p.remetente });
+    li.innerHTML = itemParadaHtml({ ...p, remetente: p.remetente_nome || p.remetente }, opts);
     return li;
   }
 
@@ -1657,16 +1714,33 @@
       <div class="acoes">
         ${(enviada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
+        <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; os pedidos voltam pro pool">Cancelar rota</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
-      </div>`;
+      </div>
+      ${(enviada || !PODE_EDITAR) ? "" : selectFundirHtml(rascunho)}`;
     const ul = div.querySelector(".lista-paradas");
-    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p)));
+    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !enviada && PODE_EDITAR })));
     renumerarRotaEl(ul, rascunho.id);
     return div;
+  }
+
+  function selectFundirHtml(rascunho) {
+    // "Fundir com": só faz sentido se existir OUTRA rota ainda em
+    // RASCUNHO pra receber as paradas (Hugo, 17/08) -- lista vem de
+    // RASCUNHOS, atualizado a cada location.reload() (mesmo padrão do
+    // select de motorista); recém-criada via "+ Nova rota"/"Criar rota"
+    // só aparece depois do reload que já acontece nesses fluxos.
+    const outras = RASCUNHOS.filter(r => r.id !== rascunho.id && r.status === "RASCUNHO");
+    if (!outras.length) return "";
+    const opcoes = outras.map(r => `<option value="${r.id}">${escaparHtml(r.nome)}</option>`).join("");
+    return `<div class="linha-fundir">
+      <select class="select-fundir-destino" data-rascunho-id="${rascunho.id}"><option value="">Fundir com...</option>${opcoes}</select>
+      <button type="button" class="botao-fundir" data-rascunho-id="${rascunho.id}" title="Move todas as paradas desta rota pra rota escolhida e descarta esta">Fundir</button>
+    </div>`;
   }
 
   function definirColapso(card, colapsar) {
@@ -2255,6 +2329,19 @@
   function reencaixarNaSecaoCorreta(li) {
     const destino = document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
     if (destino && li.parentElement !== destino) destino.appendChild(li);
+    // o <li> que sai de uma rota pro pool é reaproveitado (não recriado)
+    // -- se ele carregava o checkbox de seleção múltipla de rota, tira o
+    // checkbox e limpa da seleção, senão fica um checkbox morto no pool
+    // (fora do #lista-rotas onde o listener de "change" escuta)
+    const check = li.querySelector(".check-parada");
+    if (check) {
+      check.remove();
+      const serviceId = Number(li.dataset.serviceId);
+      if (SELECIONADOS_ROTA.delete(serviceId)) {
+        li.classList.remove("selecionada");
+        atualizarBarraSelecaoRotas();
+      }
+    }
   }
 
   function atualizarContagensSecoesPool() {
@@ -2637,6 +2724,97 @@
       atualizarCardComResposta(resp.rascunho);
     } catch (e) {
       alert(`Falha ao otimizar: ${e.message}`);
+    }
+  }
+
+  async function inverterRota(rascunhoId) {
+    try {
+      const resp = await postJSON("/api/planejamento/inverter-rota", { rascunho_id: rascunhoId });
+      const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+      // reflete a inversão no DOM na mesma ordem devolvida pelo servidor
+      // (mesmo padrão de otimizarSequencia -- reaproveita os <li> já
+      // existentes, sem recriar)
+      const porId = {};
+      Array.from(ul.children).forEach(li => porId[li.dataset.serviceId] = li);
+      resp.rascunho.paradas.forEach(p => {
+        const li = porId[p.service_id];
+        if (li) ul.appendChild(li);
+      });
+      atualizarCardComResposta(resp.rascunho);
+    } catch (e) {
+      alert(`Falha ao inverter a rota: ${e.message}`);
+    }
+  }
+
+  async function fundirRotas(origemId, destinoId) {
+    const origem = RASCUNHOS.find(r => r.id === origemId);
+    const destino = RASCUNHOS.find(r => r.id === destinoId);
+    const nomeOrigem = origem ? origem.nome : `rota #${origemId}`;
+    const nomeDestino = destino ? destino.nome : `rota #${destinoId}`;
+    if (!confirm(`Fundir "${nomeOrigem}" em "${nomeDestino}"? As paradas de "${nomeOrigem}" passam pra "${nomeDestino}" e essa rota é descartada.`)) return;
+    try {
+      await postJSON("/api/planejamento/fundir-rotas", { rascunho_origem_id: origemId, rascunho_destino_id: destinoId });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao fundir: ${e.message}`);
+    }
+  }
+
+  // ---- Seleção múltipla de paradas DENTRO de uma rota, pra mover tudo
+  // de uma vez pra outra rota (Hugo, 17/08) -- separado do SELECIONADOS
+  // do pool (aquele é escopado ao pool, "Criar rota"/"Roteirizar"; este
+  // é escopado às rotas já criadas, "Mover selecionados"). Guarda só o
+  // service_id: a rota de origem de cada item é sempre lida do DOM na
+  // hora de mover (li.closest(".lista-paradas").dataset.listId), nunca
+  // fica presa a um estado antigo -- por isso sobrevive a um arrasto
+  // (Sortable) feito entre marcar o checkbox e clicar em "Mover".
+  let SELECIONADOS_ROTA = new Set();
+
+  function atualizarBarraSelecaoRotas() {
+    const barra = document.getElementById("barra-selecao-rotas");
+    if (!barra) return;
+    barra.style.display = SELECIONADOS_ROTA.size ? "flex" : "none";
+    document.getElementById("contagem-selecao-rotas").textContent = `${SELECIONADOS_ROTA.size} selecionado(s)`;
+    const select = document.getElementById("select-destino-mover");
+    const valorAtual = select.value;
+    const opcoes = RASCUNHOS.filter(r => r.status === "RASCUNHO")
+      .map(r => `<option value="${r.id}">${escaparHtml(r.nome)}</option>`).join("");
+    select.innerHTML = `<option value="">Mover pra...</option>${opcoes}`;
+    if (valorAtual) select.value = valorAtual;
+    document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !select.value;
+  }
+
+  function limparSelecaoRotas() {
+    SELECIONADOS_ROTA.clear();
+    document.querySelectorAll("#lista-rotas .item-parada.selecionada").forEach(li => {
+      li.classList.remove("selecionada");
+      const check = li.querySelector(".check-parada");
+      if (check) check.checked = false;
+    });
+    atualizarBarraSelecaoRotas();
+  }
+
+  async function moverSelecionados(botao) {
+    const destinoId = Number(document.getElementById("select-destino-mover").value);
+    if (!destinoId || !SELECIONADOS_ROTA.size) return;
+    // origem de cada item lida do DOM agora, não de um estado guardado
+    // na hora do clique no checkbox -- ver comentário de SELECIONADOS_ROTA
+    const itens = Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      const ul = li && li.closest(".lista-paradas");
+      return ul ? { service_id: serviceId, rascunho_origem_id: Number(ul.dataset.listId) } : null;
+    }).filter(Boolean);
+    if (!itens.length) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Movendo...";
+    try {
+      await postJSON("/api/planejamento/mover-paradas", { itens, rascunho_destino_id: destinoId });
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao mover: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
     }
   }
 
@@ -3251,7 +3429,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas"].forEach(id => {
+      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -3263,7 +3441,8 @@
 
     // Tema escuro do mapa (Torre, 15/08) -- sem isso o Google Maps
     // continua com o tile claro padrão, um retângulo bem claro cravado
-    // no meio da tela escura.
+    // no meio da tela escura. Só entra quando o alternador de tema
+    // (base.html) está no escuro; no claro o mapa usa o tile padrão.
     const ESTILO_MAPA_ESCURO = [
       { elementType: "geometry", stylers: [{ color: "#121722" }] },
       { elementType: "labels.text.fill", stylers: [{ color: "#7C89A0" }] },
@@ -3279,7 +3458,11 @@
       { featureType: "water", elementType: "geometry", stylers: [{ color: "#090C11" }] },
       { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#3F4B5E" }] },
     ];
-    map = new google.maps.Map(document.getElementById("map"), { center: BASE, zoom: 11, styles: ESTILO_MAPA_ESCURO });
+    function estiloMapaAtual() {
+      return document.documentElement.classList.contains("tema-escuro") ? ESTILO_MAPA_ESCURO : [];
+    }
+    map = new google.maps.Map(document.getElementById("map"), { center: BASE, zoom: 11, styles: estiloMapaAtual() });
+    document.addEventListener("tema:alterado", () => map.setOptions({ styles: estiloMapaAtual() }));
     infoWindow = new google.maps.InfoWindow();
 
     new google.maps.Marker({
@@ -3451,6 +3634,8 @@
       }
       if (e.target.classList.contains("botao-otimizar")) {
         otimizarSequencia(Number(e.target.dataset.rascunhoId));
+      } else if (e.target.classList.contains("botao-inverter")) {
+        inverterRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-descartar")) {
         descartarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-enviar")) {
@@ -3461,6 +3646,12 @@
         duplicarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-cancelar-rota")) {
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-fundir")) {
+        const origemId = Number(e.target.dataset.rascunhoId);
+        const select = document.querySelector(`.select-fundir-destino[data-rascunho-id="${origemId}"]`);
+        const destinoId = select ? Number(select.value) : NaN;
+        if (!destinoId) { alert("Escolha a rota de destino pra fundir."); return; }
+        fundirRotas(origemId, destinoId);
       }
     });
 
@@ -3482,6 +3673,15 @@
         if (li && ul) await moverParaPosicao(Number(ul.dataset.listId), Number(li.dataset.serviceId), Number(e.target.value));
         return;
       }
+      if (e.target.classList.contains("check-parada")) {
+        const li = e.target.closest(".item-parada");
+        if (!li) return;
+        const serviceId = Number(li.dataset.serviceId);
+        if (e.target.checked) SELECIONADOS_ROTA.add(serviceId); else SELECIONADOS_ROTA.delete(serviceId);
+        li.classList.toggle("selecionada", e.target.checked);
+        atualizarBarraSelecaoRotas();
+        return;
+      }
       if (!e.target.classList.contains("select-motorista")) return;
       const rascunhoId = Number(e.target.dataset.rascunhoId);
       const agentId = e.target.value ? Number(e.target.value) : null;
@@ -3498,6 +3698,11 @@
     });
 
     document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
+    document.getElementById("botao-limpar-selecao-rotas").addEventListener("click", limparSelecaoRotas);
+    document.getElementById("botao-mover-selecionados").addEventListener("click", (e) => moverSelecionados(e.target));
+    document.getElementById("select-destino-mover").addEventListener("change", (e) => {
+      document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !e.target.value;
+    });
     document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
     document.getElementById("botao-desalocar-motoristas").addEventListener("click", (e) => desalocarMotoristas(e.target));
     document.getElementById("botao-disponibilidade-motoristas").addEventListener("click", abrirModalDisponibilidade);

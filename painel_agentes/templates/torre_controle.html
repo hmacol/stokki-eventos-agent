@@ -22,6 +22,14 @@
     --enfase-fora:#C7CCD4;
     --trilha-verde:#DFF3DF;
   }
+  /* Tema escuro: só a trilha do funil muda (o cinza claro ficaria uma
+     tarja clara sobre o card escuro) -- as cores de série (--st-*) são
+     as mesmas validadas em 12/08 (CVD + contraste) e não mudam com o
+     tema, já que carregam significado (sucesso/rota/aceito/etc). */
+  html.tema-escuro {
+    --trilha: #1A2130;
+    --enfase-fora: #3A4457;
+  }
 
   .card {
     background: var(--superficie);
@@ -70,18 +78,18 @@
     padding: 5px 14px; border-radius: 100px; background: var(--fundo);
   }
   .semaforo .luz { width: 11px; height: 11px; border-radius: 100px; background: var(--texto-suave); flex: none; }
-  .semaforo.ok { background: #E5F7EF; color: #0A7D55; }
+  .semaforo.ok { background: var(--sucesso-bg); color: var(--sucesso); }
   .semaforo.ok .luz { background: var(--st-sucesso); }
-  .semaforo.atencao { background: #FDF3E1; color: #8A5A0C; }
+  .semaforo.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
   .semaforo.atencao .luz { background: var(--st-atencao); }
-  .semaforo.critico { background: #FDEBEA; color: var(--st-falha); }
+  .semaforo.critico { background: var(--erro-bg); color: var(--st-falha); }
   .semaforo.critico .luz { background: var(--st-falha); animation: pulso 1.2s ease-in-out infinite; }
   .kpis-linha { display: flex; align-items: baseline; gap: 6px 18px; flex-wrap: wrap; }
   .kpi-seg { white-space: nowrap; color: var(--texto-suave); font-size: 12.5px; cursor: default; }
   .kpi-seg .n { font-size: 17px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
   .kpi-seg .n .contexto { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); }
   .kpi-seg.bom .n { color: var(--st-sucesso); }
-  .kpi-seg.alerta .n { color: #A36F00; }
+  .kpi-seg.alerta .n { color: var(--rodando-texto); }
   .kpi-seg.ruim .n { color: var(--st-falha); }
   .carimbo { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
   .carimbo.erro { color: var(--erro); font-weight: 600; }
@@ -141,7 +149,7 @@
   .etapa .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
   .etapa.sucesso .estado { background: var(--st-sucesso); }
   .etapa.erro .estado { background: var(--st-falha); }
-  .etapa.erro { border-color: #F2C4C0; }
+  .etapa.erro { border-color: var(--erro); }
   .etapa.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
   @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
   .etapa button.rodar {
@@ -176,7 +184,7 @@
   .linha-rota .ident { min-width: 0; }
   .linha-rota .nome { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .linha-rota .motorista { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .linha-rota .motorista.faltando { color: #A36F00; font-weight: 600; }
+  .linha-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
   .barra-progresso { display: flex; gap: 2px; height: 16px; }
   .barra-progresso .seg { min-width: 4px; }
   .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
@@ -212,7 +220,7 @@
   .amanha-numeros { display: flex; gap: 22px; margin-bottom: 8px; }
   .amanha-numeros .bloco .n { font-size: 24px; font-weight: 700; }
   .amanha-numeros .bloco .l { font-size: 11px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
-  .aviso-amanha { font-size: 12px; color: #A36F00; font-weight: 600; margin-top: 4px; }
+  .aviso-amanha { font-size: 12px; color: var(--rodando-texto); font-weight: 600; margin-top: 4px; }
 
   /* ── Mini mapa expansivo ── */
   .card-mapa { position: relative; }
@@ -237,11 +245,11 @@
     padding: 2px 8px; border-radius: 100px; margin-left: 6px; white-space: nowrap;
   }
   .badge-insucesso.duplicado  { background: #E3EDFA; color: #1c5cab; }
-  .badge-insucesso.agendado   { background: #EBE8F8; color: #4a3aa7; }
-  .badge-insucesso.cancelado  { background: #EBEBEF; color: #5A5A6E; }
-  .badge-insucesso.aguardando { background: #FDF3E1; color: #A36F00; }
-  .badge-insucesso.respondido { background: #E5F7EF; color: #0A7D55; }
-  .badge-insucesso.falha      { background: #FDEBEA; color: var(--st-falha); }
+  .badge-insucesso.agendado   { background: var(--teste-bg); color: var(--teste-texto); }
+  .badge-insucesso.cancelado  { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-insucesso.aguardando { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-insucesso.respondido { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-insucesso.falha      { background: var(--erro-bg); color: var(--st-falha); }
 
   /* Motorista responsável pela atualização (insucesso vem do app dele) */
   .quem-atualizou {
@@ -260,8 +268,8 @@
   table.tabela-excecoes td { padding: 8px 10px; border-bottom: 1px solid var(--fundo); vertical-align: middle; }
   table.tabela-excecoes tr:last-child td { border-bottom: none; }
   .pill-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
-  .pill-sev.critico { background: #FDEBEA; color: var(--st-falha); }
-  .pill-sev.atencao { background: #FDF3E1; color: #A36F00; }
+  .pill-sev.critico { background: var(--erro-bg); color: var(--st-falha); }
+  .pill-sev.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
   .td-quando { color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .td-tipo { color: var(--texto-suave); font-weight: 600; white-space: nowrap; }
   .td-motivo { color: var(--st-falha); font-weight: 700; white-space: nowrap; }

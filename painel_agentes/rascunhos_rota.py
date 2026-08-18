@@ -431,6 +431,161 @@ def otimizar_sequencia(rascunho_id: int):
         conn.close()
 
 
+def inverter_ordem(rascunho_id: int):
+    """Inverte a ordem de execução das paradas -- botão "Inverter rota"
+    da tela (Hugo, 17/08), útil quando o trajeto calculado fica melhor
+    rodado de trás pra frente (ex: fim do dia perto de casa do
+    motorista). Não precisa recalcular km (mesmo trajeto, sentido
+    oposto -- soma das distâncias é a mesma), mas chama
+    _recalcular_km_silencioso do mesmo jeito que reordenar_paradas/
+    mover_parada, pra não deixar essa função como exceção do padrão."""
+    conn = _conectar()
+    try:
+        paradas = conn.execute(
+            "SELECT id FROM rascunhos_parada WHERE rascunho_id = ? ORDER BY ordem", (rascunho_id,),
+        ).fetchall()
+        n = len(paradas)
+        for i, p in enumerate(paradas):
+            conn.execute("UPDATE rascunhos_parada SET ordem = ? WHERE id = ?", (n - 1 - i, p["id"]))
+        _tocar(conn, rascunho_id)
+        _recalcular_km_silencioso(conn, rascunho_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mover_paradas(itens: list[dict], rascunho_destino_id: int) -> int:
+    """Move várias paradas de uma vez pro mesmo rascunho DESTINO --
+    seleção múltipla + "Mover selecionados" da tela (Hugo, 17/08), mesma
+    mecânica de mover_parada mas numa transação só (evita N recálculos
+    de km/geocodificação pra um lote inteiro).
+
+    `itens` é uma lista de {"service_id", "rascunho_origem_id"} -- cada
+    parada pode vir de uma rota de origem diferente, a seleção não
+    precisa ser de uma rota só. Parada cujo service_id já está no
+    destino é ignorada (mesmo edge case aceito em duplicar_rascunho: dá
+    pra existir o mesmo pedido em 2 rascunhos; aqui só evita estourar a
+    UNIQUE(rascunho_id, service_id) -- não é tratado como erro).
+
+    Retorna quantas paradas foram efetivamente movidas."""
+    conn = _conectar()
+    try:
+        ids_destino = {row["service_id"] for row in conn.execute(
+            "SELECT service_id FROM rascunhos_parada WHERE rascunho_id = ?", (rascunho_destino_id,),
+        ).fetchall()}
+        prox = conn.execute(
+            "SELECT COALESCE(MAX(ordem), -1) + 1 AS prox FROM rascunhos_parada WHERE rascunho_id = ?",
+            (rascunho_destino_id,),
+        ).fetchone()["prox"]
+
+        origens_tocadas = set()
+        movidas = 0
+        for item in itens:
+            service_id, origem_id = item["service_id"], item["rascunho_origem_id"]
+            if service_id in ids_destino:
+                continue
+            parada = conn.execute(
+                "SELECT * FROM rascunhos_parada WHERE rascunho_id = ? AND service_id = ?",
+                (origem_id, service_id),
+            ).fetchone()
+            if not parada:
+                continue
+            conn.execute("DELETE FROM rascunhos_parada WHERE id = ?", (parada["id"],))
+            conn.execute("""
+                INSERT INTO rascunhos_parada (
+                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
+                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
+                    nivel_dificuldade, volume_caixas
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rascunho_destino_id, prox + movidas, parada["service_id"], parada["codigo"], parada["titulo"],
+                parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
+                parada["remetente_nome"], parada["destinatario_nome"],
+                parada["nivel_dificuldade"], parada["volume_caixas"],
+            ))
+            ids_destino.add(service_id)
+            origens_tocadas.add(origem_id)
+            movidas += 1
+
+        for origem_id in origens_tocadas:
+            _tocar(conn, origem_id)
+            _recalcular_km_silencioso(conn, origem_id)
+        if movidas:
+            _tocar(conn, rascunho_destino_id)
+            _recalcular_km_silencioso(conn, rascunho_destino_id)
+        conn.commit()
+        return movidas
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def fundir_rascunhos(rascunho_origem_id: int, rascunho_destino_id: int) -> dict:
+    """Funde um rascunho no outro -- botão "Fundir com" do card (Hugo,
+    17/08): todas as paradas do rascunho ORIGEM passam pro DESTINO
+    (mantendo a ordem relativa, acrescentadas ao fim) e o rascunho
+    ORIGEM vira DESCARTADO (mesmo mecanismo de descartar_rascunho, sem
+    apagar rascunhos_parada -- não precisa limpeza extra). Só entre
+    rascunhos ainda em RASCUNHO (não dá pra fundir rota já ENVIADA por
+    aqui, mesma trava do drag-and-drop entre cards).
+
+    Parada com o mesmo service_id nos dois rascunhos (edge case aceito
+    em duplicar_rascunho) não é duplicada no destino -- fica só a cópia
+    que já estava lá; a do rascunho origem é descartada junto com ele
+    (linha órfã, inofensiva: o pool só reaparece se NENHUM rascunho
+    ativo tiver aquele service_id, e o destino continua com ele).
+
+    Retorna {"paradas_movidas", "paradas_duplicadas"}."""
+    if rascunho_origem_id == rascunho_destino_id:
+        raise ValueError("Não dá pra fundir uma rota com ela mesma.")
+    conn = _conectar()
+    try:
+        origem = conn.execute("SELECT * FROM rascunhos_rota WHERE id = ?", (rascunho_origem_id,)).fetchone()
+        destino = conn.execute("SELECT * FROM rascunhos_rota WHERE id = ?", (rascunho_destino_id,)).fetchone()
+        if not origem or not destino:
+            raise ValueError("Rota de origem ou destino não encontrada.")
+        if origem["status"] != STATUS_RASCUNHO or destino["status"] != STATUS_RASCUNHO:
+            raise ValueError("Só dá pra fundir rotas ainda em rascunho (não enviadas).")
+
+        ids_destino = {row["service_id"] for row in conn.execute(
+            "SELECT service_id FROM rascunhos_parada WHERE rascunho_id = ?", (rascunho_destino_id,),
+        ).fetchall()}
+        paradas = conn.execute(
+            "SELECT * FROM rascunhos_parada WHERE rascunho_id = ? ORDER BY ordem", (rascunho_origem_id,),
+        ).fetchall()
+        paradas_a_mover = [p for p in paradas if p["service_id"] not in ids_destino]
+        prox = conn.execute(
+            "SELECT COALESCE(MAX(ordem), -1) + 1 AS prox FROM rascunhos_parada WHERE rascunho_id = ?",
+            (rascunho_destino_id,),
+        ).fetchone()["prox"]
+        for i, p in enumerate(paradas_a_mover):
+            conn.execute(
+                "UPDATE rascunhos_parada SET rascunho_id = ?, ordem = ? WHERE id = ?",
+                (rascunho_destino_id, prox + i, p["id"]),
+            )
+
+        conn.execute(
+            "UPDATE rascunhos_rota SET status = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
+            (STATUS_DESCARTADO, rascunho_origem_id),
+        )
+        _tocar(conn, rascunho_destino_id)
+        _recalcular_km_silencioso(conn, rascunho_destino_id)
+        conn.commit()
+        logger.info(f"Rascunho {rascunho_origem_id} fundido em {rascunho_destino_id}: "
+                    f"{len(paradas_a_mover)} parada(s) movida(s).")
+        return {"paradas_movidas": len(paradas_a_mover), "paradas_duplicadas": len(paradas) - len(paradas_a_mover)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def reordenar_paradas(rascunho_id: int, ordem_service_ids: list[int]):
     conn = _conectar()
     try:

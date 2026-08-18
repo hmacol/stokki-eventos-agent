@@ -9,6 +9,13 @@
   if (localStorage.getItem("painel_sidebar_recolhida") === "1") {
     document.documentElement.classList.add("sidebar-recolhida");
   }
+  // Mesma lógica pro tema claro/escuro: sem preferência salva, usa o
+  // tema do sistema operacional como ponto de partida.
+  (function() {
+    var salvo = localStorage.getItem("painel_tema_escuro");
+    var escuro = salvo === "1" || (salvo === null && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (escuro) document.documentElement.classList.add("tema-escuro");
+  })();
 </script>
 <title>{% block titulo %}Painel de Agentes{% endblock %} — Freshlog</title>
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
@@ -25,9 +32,51 @@
     --rodando: #E8A33D;
     --fundo: #F3F4F6;
     --superficie: #FFFFFF;
+    --superficie-hover: #FAFAFB;
     --borda: #E5E7EB;
     --texto: #1F2937;
     --texto-suave: #6B7280;
+    --sucesso-bg: #E5F7EF;
+    --erro-bg: #FDEBEA;
+    --rodando-bg: #FDF3E1;
+    --rodando-texto: #B4790C;
+    --rodando-borda: #F0D9A8;
+    --interrompido-bg: #EBEBEF;
+    --interrompido-texto: #5A5A6E;
+    --timeout-bg: #FCE8E0;
+    --timeout-texto: #B5471F;
+    --nunca-bg: #F0F0F3;
+    --teste-bg: #EDEBFB;
+    --teste-texto: #6D5BD0;
+  }
+  /* Tema escuro -- paleta "Torre" (ver planejamento_rotas.html), agora
+     disponível no painel inteiro via classe em <html>. --primaria/
+     --primaria-clara ficam de fora de propósito: a sidebar já é escura
+     em qualquer tema, então não precisa mudar. Hugo, 17/08. */
+  html.tema-escuro {
+    --acento: #2FD9AE;
+    --acento-real: #2FD9AE;
+    --sucesso: #2FD9AE;
+    --erro: #FF5C50;
+    --rodando: #F0AA45;
+    --fundo: #0B0E14;
+    --superficie: #121722;
+    --superficie-hover: #1A2130;
+    --borda: #262F3F;
+    --texto: #DCE3EC;
+    --texto-suave: #7C89A0;
+    --sucesso-bg: rgba(47,217,174,0.16);
+    --erro-bg: rgba(255,92,80,0.16);
+    --rodando-bg: rgba(240,170,69,0.16);
+    --rodando-texto: #F0AA45;
+    --rodando-borda: rgba(240,170,69,0.35);
+    --interrompido-bg: rgba(124,137,160,0.18);
+    --interrompido-texto: #A9B4C7;
+    --timeout-bg: rgba(255,124,86,0.18);
+    --timeout-texto: #FF8F6B;
+    --nunca-bg: rgba(124,137,160,0.12);
+    --teste-bg: rgba(155,140,240,0.18);
+    --teste-texto: #B7A9F7;
   }
   * { box-sizing: border-box; }
   body {
@@ -35,6 +84,7 @@
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
     background: var(--fundo);
     color: var(--texto);
+    transition: background 0.15s, color 0.15s;
   }
   .shell {
     display: flex;
@@ -166,6 +216,28 @@
   .sidebar button.sair svg { width: 14px; height: 14px; flex: none; }
   .sidebar button.sair:hover { color: #fff; border-color: #C7C7E0; }
 
+  .zona-tema { border-top: 1px solid rgba(255,255,255,0.08); padding: 6px 0; }
+  .sidebar button.alterna-tema {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    background: none;
+    border: none;
+    color: #C7C7E0;
+    font-size: 14px;
+    padding: 11px 22px;
+    cursor: pointer;
+    white-space: nowrap;
+    text-align: left;
+    transition: color 0.15s, background 0.15s;
+  }
+  .sidebar button.alterna-tema:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .sidebar button.alterna-tema .icone { display: flex; flex: none; }
+  .sidebar button.alterna-tema .icone svg { width: 18px; height: 18px; }
+  html.sidebar-recolhida .sidebar button.alterna-tema { justify-content: center; padding: 11px 0; }
+  html.sidebar-recolhida .sidebar button.alterna-tema .rotulo { display: none; }
+
   /* Sidebar recolhida -- classe fica em <html>, aplicada já no <head>
      (ver script inline) pra não piscar a versão larga antes de colapsar. */
   html.sidebar-recolhida .sidebar { width: 68px; }
@@ -203,13 +275,26 @@
     letter-spacing: 0.4px;
     text-transform: uppercase;
   }
-  .badge-sucesso { background: #E5F7EF; color: var(--sucesso); }
-  .badge-erro { background: #FDEBEA; color: var(--erro); }
-  .badge-rodando { background: #FDF3E1; color: #B4790C; }
-  .badge-interrompido { background: #EBEBEF; color: #5A5A6E; }
-  .badge-timeout { background: #FCE8E0; color: #B5471F; }
-  .badge-nunca { background: #F0F0F3; color: var(--texto-suave); }
-  .badge-teste { background: #EDEBFB; color: #6D5BD0; }
+  .badge-sucesso { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-erro { background: var(--erro-bg); color: var(--erro); }
+  .badge-rodando { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-interrompido { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-timeout { background: var(--timeout-bg); color: var(--timeout-texto); }
+  .badge-nunca { background: var(--nunca-bg); color: var(--texto-suave); }
+  .badge-teste { background: var(--teste-bg); color: var(--teste-texto); }
+
+  /* Banner de aviso genérico -- compartilhado entre telas (planejamento,
+     laboratório, mapa de rotas) pra não duplicar as mesmas cores em
+     cada template. */
+  .aviso {
+    background: var(--rodando-bg);
+    border: 1px solid var(--rodando-borda);
+    color: var(--rodando-texto);
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
 
   a.botao, button.botao {
     display: inline-block;
@@ -291,6 +376,13 @@
       </a>
       {% endif %}
     </nav>
+    <div class="zona-tema">
+      <button type="button" class="alterna-tema" id="alterna-tema" title="Usar tema escuro" aria-label="Usar tema escuro">
+        <span class="icone icone-tema-claro"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.8v1.8M10 15.4v1.8M17.2 10h-1.8M4.6 10H2.8M15.1 4.9l-1.3 1.3M6.2 13.8l-1.3 1.3M15.1 15.1l-1.3-1.3M6.2 6.2L4.9 4.9"/></svg></span>
+        <span class="icone icone-tema-escuro" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 11.3A7.2 7.2 0 018.7 3a7.2 7.2 0 108.3 8.3z"/></svg></span>
+        <span class="rotulo" id="rotulo-tema">Tema escuro</span>
+      </button>
+    </div>
     {% if session.get('nivel_acesso') %}
     <div class="rodape">
       <span class="usuario" title="{{ session.get('usuario', '') }}">{{ session.get('usuario', '') }}</span>
@@ -324,6 +416,35 @@
       var recolhida = !document.documentElement.classList.contains("sidebar-recolhida");
       localStorage.setItem(CHAVE, recolhida ? "1" : "0");
       aplicar(recolhida);
+    });
+  })();
+</script>
+<script>
+  // Alternador de tema claro/escuro. Dispara "tema:alterado" no
+  // document pra páginas com conteúdo que não usa var(--...) direto
+  // (ex: estilo customizado do Google Maps em planejamento_rotas.html)
+  // poderem reagir também.
+  (function() {
+    var CHAVE = "painel_tema_escuro";
+    var botao = document.getElementById("alterna-tema");
+    if (!botao) return;
+    var rotulo = document.getElementById("rotulo-tema");
+    var iconeClaro = botao.querySelector(".icone-tema-claro");
+    var iconeEscuro = botao.querySelector(".icone-tema-escuro");
+    function aplicar(escuro, avisar) {
+      document.documentElement.classList.toggle("tema-escuro", escuro);
+      botao.title = escuro ? "Usar tema claro" : "Usar tema escuro";
+      botao.setAttribute("aria-label", botao.title);
+      if (rotulo) rotulo.textContent = escuro ? "Tema claro" : "Tema escuro";
+      if (iconeClaro) iconeClaro.hidden = escuro;
+      if (iconeEscuro) iconeEscuro.hidden = !escuro;
+      if (avisar) document.dispatchEvent(new CustomEvent("tema:alterado", { detail: { escuro: escuro } }));
+    }
+    aplicar(document.documentElement.classList.contains("tema-escuro"), false);
+    botao.addEventListener("click", function() {
+      var escuro = !document.documentElement.classList.contains("tema-escuro");
+      localStorage.setItem(CHAVE, escuro ? "1" : "0");
+      aplicar(escuro, true);
     });
   })();
 </script>

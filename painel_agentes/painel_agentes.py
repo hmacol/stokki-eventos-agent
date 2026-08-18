@@ -737,6 +737,61 @@ def api_reordenar():
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
 
 
+@app.route("/api/planejamento/inverter-rota", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_inverter_rota():
+    """Botão "Inverter rota" do card -- gira a ordem de execução das
+    paradas de trás pra frente (Hugo, 17/08)."""
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.inverter_ordem(body["rascunho_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/mover-paradas", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_mover_paradas():
+    """Seleção múltipla de paradas (de uma ou mais rotas) pra mover
+    tudo de uma vez pro mesmo rascunho destino -- botão "Mover
+    selecionados" da tela (Hugo, 17/08). Cada item de `itens` já vem
+    com a rota de origem (mesmo formato de mover-parada, só que em
+    lote)."""
+    body = request.get_json(force=True)
+    try:
+        itens = body["itens"]
+        rascunho_destino_id = body["rascunho_destino_id"]
+        if not itens:
+            return jsonify({"erro": "Nenhuma parada selecionada."}), 400
+        movidas = rascunhos_rota.mover_paradas(itens, rascunho_destino_id)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    origens_afetadas = sorted({int(item["rascunho_origem_id"]) for item in itens} - {int(rascunho_destino_id)})
+    return jsonify({
+        "ok": True, "movidas": movidas,
+        "rascunho_destino": _rascunho_ou_404(rascunho_destino_id),
+        "rascunhos_origem": [_rascunho_ou_404(rid) for rid in origens_afetadas],
+    })
+
+
+@app.route("/api/planejamento/fundir-rotas", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_fundir_rotas():
+    """Funde um rascunho no outro -- botão "Fundir com" do card (Hugo,
+    17/08): todas as paradas da rota ORIGEM passam pra rota DESTINO e
+    a ORIGEM vira DESCARTADO."""
+    body = request.get_json(force=True)
+    try:
+        resultado = rascunhos_rota.fundir_rascunhos(body["rascunho_origem_id"], body["rascunho_destino_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_destino_id"]), **resultado})
+
+
 @app.route("/api/planejamento/remover-parada", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
