@@ -15,11 +15,13 @@ perguntar" -- só muda O MOMENTO/CANAL da aplicação, não a regra):
   - "Não reenviar" -> registra no fingerprint que este insucesso NUNCA
     será duplicado e avisa o ATENDIMENTO por e-mail (config
     email.email_atendimento).
-  - "Reagendar" com data -> DUPLICA AGORA já com scheduled_start na
-    data pedida (VUUPT) -- a roteirização só pega o pedido no dia certo
-    (roteirizacao_dados.py::elegivel_para_data). Cidade com dia fixo de
-    entrega (regioes_dia_fixo.py) tem a data ajustada pra próxima
-    ocorrência do dia da região.
+  - "Reagendar" com data e horário -> DUPLICA AGORA já com scheduled_
+    start/scheduled_end formando uma janela de 2h a partir do horário
+    pedido (VUUPT) -- a roteirização só pega o pedido no dia certo
+    (roteirizacao_dados.py::elegivel_para_data), o horário é preferência
+    pro planejamento da rota. Cidade com dia fixo de entrega
+    (regioes_dia_fixo.py) tem a DATA ajustada pra próxima ocorrência do
+    dia da região; o horário pedido nunca muda.
   - "Sim, reenviar" -> DUPLICA AGORA (próximo dia útil).
 
 A ação sempre se aplica aos pedidos ATUALMENTE pendentes pro grupo
@@ -33,7 +35,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent  # sobe de insucesso_entrega/ pra raiz do projeto
@@ -167,18 +169,23 @@ def _ajustar_data_por_dia_fixo(servico: dict, nova_data: date) -> tuple[date, st
     return data_final, aviso
 
 
-def _reagendar_reentrega(pendente: dict, nova_data: date, vuupt: "VuuptClient") -> date | None:
+def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
+                         vuupt: "VuuptClient") -> date | None:
     """
-    Reagenda a reentrega de um insucesso pra data escolhida pelo
-    remetente na página de resposta:
+    Reagenda a reentrega de um insucesso pra data/horário escolhidos
+    pelo remetente na página de resposta (campo de horário adicionado
+    18/08, pedido do Hugo -- antes a janela era sempre fixa 08h-16h):
 
       - Regra de dia fixo: a data pedida é ajustada pra próxima data
-        válida (_ajustar_data_por_dia_fixo).
-      - Se o serviço duplicado JÁ existe no VUUPT: grava scheduled_start/
-        scheduled_end na data (08h-16h) -- a roteirização só pega o
-        pedido no dia certo (roteirizacao_dados.py::elegivel_para_data).
-      - Senão: duplica AGORA já com scheduled_start na data, e cancela
-        o agendamento local se havia um.
+        válida (_ajustar_data_por_dia_fixo) -- só a DATA, o horário
+        pedido nunca muda.
+      - A janela gravada (scheduled_start/scheduled_end) começa no
+        horário pedido e dura 2h -- a roteirização só pega o pedido no
+        dia certo (roteirizacao_dados.py::elegivel_para_data), o
+        horário é só uma preferência pro planejamento da rota.
+      - Se o serviço duplicado JÁ existe no VUUPT: só atualiza a janela.
+      - Senão: duplica AGORA já com a janela, e cancela o agendamento
+        local se havia um.
 
     Retorna a DATA final agendada (pode diferir da pedida por causa do
     dia fixo), ou None se não conseguiu reagendar.
@@ -191,9 +198,11 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, vuupt: "VuuptClient") 
     code = pendente.get("code") or str(service_id)
 
     def _agendamento(data: date) -> dict:
+        inicio = datetime.combine(data, datetime.strptime(hora_pedida, "%H:%M").time())
+        fim = inicio + timedelta(hours=2)
         return {
-            "scheduled_start": f"{data.isoformat()}T08:00:00-03:00",
-            "scheduled_end": f"{data.isoformat()}T16:00:00-03:00",
+            "scheduled_start": inicio.strftime("%Y-%m-%dT%H:%M:%S-03:00"),
+            "scheduled_end": fim.strftime("%Y-%m-%dT%H:%M:%S-03:00"),
         }
 
     novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(service_id)
@@ -294,9 +303,9 @@ def _notificar_atendimento_cancelamento(config_email: dict, motivo_texto: str,
 def _notificar_remetente_reagendamento(config_email: dict, remetente_email: str,
                                        motivo_texto: str,
                                        itens: list[tuple[str, "date | None"]],
-                                       data_pedida: date) -> None:
-    """Confirma ao remetente a data em que cada reentrega foi agendada
-    após o pedido de reagendamento. `itens`: [(code, data_final|None)]."""
+                                       data_pedida: date, hora_pedida: str) -> None:
+    """Confirma ao remetente a data/horário em que cada reentrega foi
+    agendada após o pedido de reagendamento. `itens`: [(code, data_final|None)]."""
     if not remetente_email:
         return
 
@@ -305,7 +314,7 @@ def _notificar_remetente_reagendamento(config_email: dict, remetente_email: str,
     algum_ajuste = False
     for code, data_final in itens:
         if data_final:
-            texto_data = f"<strong>{data_final.strftime('%d/%m/%Y')}</strong>"
+            texto_data = f"<strong>{data_final.strftime('%d/%m/%Y')} às {hora_pedida}</strong>"
             if data_final != data_pedida:
                 algum_ajuste = True
                 texto_data += " (ajustada para o dia de entrega da região)"
@@ -353,7 +362,8 @@ def _notificar_remetente_reagendamento(config_email: dict, remetente_email: str,
 
 def _notificar_atendimento_falha_reagendamento(config_email: dict, motivo_texto: str,
                                                codes_falha: list[str],
-                                               remetente_email: str, data_pedida: date) -> None:
+                                               remetente_email: str, data_pedida: date,
+                                               hora_pedida: str) -> None:
     """Avisa o atendimento quando algum reagendamento pedido pelo
     remetente NÃO pôde ser aplicado."""
     destino = (config_email.get("email_atendimento")
@@ -375,7 +385,7 @@ def _notificar_atendimento_falha_reagendamento(config_email: dict, motivo_texto:
 <p style="margin:0 0 12px 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
   O remetente <strong>{_html.escape(remetente_email or '(sem e-mail cadastrado)')}</strong> pediu o reagendamento da
   reentrega (motivo do insucesso: {_html.escape(motivo_texto)}) para
-  <strong>{data_pedida.strftime('%d/%m/%Y')}</strong>, mas os pedidos abaixo não puderam
+  <strong>{data_pedida.strftime('%d/%m/%Y')} às {hora_pedida}</strong>, mas os pedidos abaixo não puderam
   ser reagendados automaticamente — verificar no Vuupt e confirmar a data com o cliente:
 </p>
 <ul style="margin:0 0 8px 0;font-size:14px;color:{COR_TEXTO};line-height:1.8;">{lista}</ul>
@@ -387,7 +397,7 @@ def _notificar_atendimento_falha_reagendamento(config_email: dict, motivo_texto:
 
 
 def aplicar_decisao(sender_id, failed_reason_id, acao: str, nova_data: date | None,
-                    config: dict) -> list[dict]:
+                    config: dict, hora_pedida: str | None = None) -> list[dict]:
     """
     Aplica a decisão do embarcador a TODOS os pedidos ATUALMENTE
     pendentes do grupo (sender_id, failed_reason_id) -- consulta
@@ -395,8 +405,9 @@ def aplicar_decisao(sender_id, failed_reason_id, acao: str, nova_data: date | No
     Chamado direto do POST /r/<token> de resposta_insucesso/app.py.
 
     acao: "cancelar" | "reagendar" | "manter" (nome interno de sempre --
-    "manter" = confirma o reenvio). nova_data só é usada quando
-    acao == "reagendar" (já validada pelo chamador: data ISO >= hoje).
+    "manter" = confirma o reenvio). nova_data/hora_pedida só são usados
+    quando acao == "reagendar" (já validados pelo chamador: data ISO >=
+    hoje, hora no formato "HH:MM").
 
     Retorna [{"code", "resultado": "reenviado"|"cancelado"|"reagendado"|
     "falha", "data": date|None}] -- lista vazia quando não havia nada
@@ -408,13 +419,13 @@ def aplicar_decisao(sender_id, failed_reason_id, acao: str, nova_data: date | No
                        f"já está sendo processado por outro clique -- tente de novo em instantes.")
         return []
     try:
-        return _aplicar_decisao_travado(sender_id, failed_reason_id, acao, nova_data, config)
+        return _aplicar_decisao_travado(sender_id, failed_reason_id, acao, nova_data, config, hora_pedida)
     finally:
         _liberar_trava()
 
 
 def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: date | None,
-                             config: dict) -> list[dict]:
+                             config: dict, hora_pedida: str | None) -> list[dict]:
     cfg_email = config.get("email", {})
     vuupt_token = config.get("vuupt_api", {}).get("token", "")
     if not vuupt_token:
@@ -454,7 +465,7 @@ def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: 
             itens_cancelamento.append((code, ok))
             resultados.append({"code": code, "resultado": "cancelado" if ok else "falha", "data": None})
         elif acao == "reagendar":
-            data_final = _reagendar_reentrega(p, nova_data, vuupt)
+            data_final = _reagendar_reentrega(p, nova_data, hora_pedida, vuupt)
             itens_reagendamento.append((code, data_final))
             resultados.append({"code": code, "resultado": "reagendado" if data_final else "falha", "data": data_final})
         else:
@@ -489,16 +500,16 @@ def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: 
                                             "Resposta dada pela página web.", remetente_email)
     elif acao == "reagendar":
         _notificar_remetente_reagendamento(cfg_email, remetente_email, motivo_texto,
-                                           itens_reagendamento, nova_data)
+                                           itens_reagendamento, nova_data, hora_pedida)
         codes_falha = [c for c, d in itens_reagendamento if not d]
         if codes_falha:
             _notificar_atendimento_falha_reagendamento(cfg_email, motivo_texto, codes_falha,
-                                                        remetente_email, nova_data)
+                                                        remetente_email, nova_data, hora_pedida)
 
     logger.info(
         f"Grupo (sender_id={sender_id}, failed_reason_id={failed_reason_id}, {motivo_texto}) "
         f"respondido via página web: acao={acao}"
-        + (f" (nova data {nova_data.strftime('%d/%m/%Y')})" if nova_data else "")
+        + (f" (nova data {nova_data.strftime('%d/%m/%Y')} às {hora_pedida})" if nova_data else "")
         + f" ({len(pendentes)} pedido(s))"
     )
     return resultados

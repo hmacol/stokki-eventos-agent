@@ -31,7 +31,7 @@ COMO RODAR (produção -- ver infra/resposta-insucesso.service):
     waitress-serve --host=127.0.0.1 --port=8072 app:app
 """
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -95,6 +95,14 @@ def _data_valida(valor: str) -> bool:
     return d >= date.today()
 
 
+def _hora_valida(valor: str) -> bool:
+    try:
+        datetime.strptime(valor, "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
 def _codigo(code: str | None) -> str:
     """Normaliza o código do pedido pra exibição -- mesmo padrão usado
     nos e-mails (evita '##1234' se o valor salvo já tiver o #)."""
@@ -117,21 +125,26 @@ def responder(token):
     if request.method == "POST":
         acao = request.form.get("acao")
         data_pedida_raw = (request.form.get("data_pedida") or "").strip()
+        hora_pedida_raw = (request.form.get("hora_pedida") or "").strip()
         nova_data = None
         if acao not in ACOES_VALIDAS:
             erro = "Ação inválida."
         elif acao == "reagendar":
             if not _data_valida(data_pedida_raw):
                 erro = "Informe uma data válida (a partir de hoje) para o reagendamento."
+            elif not _hora_valida(hora_pedida_raw):
+                erro = "Informe um horário válido para o reagendamento."
             else:
                 nova_data = date.fromisoformat(data_pedida_raw)
 
         if not erro:
-            resultados = logica.aplicar_decisao(sender_id, failed_reason_id, acao, nova_data, _CONFIG)
+            resultados = logica.aplicar_decisao(sender_id, failed_reason_id, acao, nova_data, _CONFIG,
+                                                hora_pedida=hora_pedida_raw if acao == "reagendar" else None)
             if not resultados:
                 return render_template("resposta.html", estado="resolvido")
             resultados_view = [{**r, "code": _codigo(r["code"])} for r in resultados]
-            return render_template("resposta.html", estado="aplicado", resultados=resultados_view)
+            return render_template("resposta.html", estado="aplicado", resultados=resultados_view,
+                                   hora_pedida=hora_pedida_raw)
 
     pendentes = buscar_pendentes_por_grupo(sender_id, failed_reason_id)
     if not pendentes:

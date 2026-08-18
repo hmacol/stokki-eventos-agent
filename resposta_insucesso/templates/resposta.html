@@ -84,7 +84,7 @@
           <td>
             {% if r.resultado == "reenviado" %}Reenvio confirmado
             {% elif r.resultado == "cancelado" %}Reenvio não será feito
-            {% elif r.resultado == "reagendado" %}Reagendado{% if r.data %} para {{ r.data.strftime('%d/%m/%Y') }}{% endif %}
+            {% elif r.resultado == "reagendado" %}Reagendado{% if r.data %} para {{ r.data.strftime('%d/%m/%Y') }}{% if hora_pedida %} às {{ hora_pedida }}{% endif %}{% endif %}
             {% else %}Falha -- nossa equipe vai verificar
             {% endif %}
           </td>
@@ -110,8 +110,9 @@
     </table>
 
     <form method="post" id="form-resposta">
-      <label for="data_pedida">Se for reagendar, escolha a nova data desejada</label>
+      <label for="data_pedida">Se for reagendar, escolha a nova data e o horário desejados</label>
       <input type="date" name="data_pedida" id="data_pedida">
+      <input type="time" name="hora_pedida" id="hora_pedida">
       <div class="acoes">
         <button type="submit" name="acao" value="manter" class="manter">Sim, reenviar</button>
         <button type="submit" name="acao" value="reagendar" class="reagendar" onclick="return confirmarReagendar(this)">Reagendar para outra data</button>
@@ -121,8 +122,9 @@
     <script>
       function confirmarReagendar(botao) {
         var data = document.getElementById('data_pedida');
-        if (!data.value) {
-          alert('Escolha a data desejada para o reagendamento antes de enviar.');
+        var hora = document.getElementById('hora_pedida');
+        if (!data.value || !hora.value) {
+          alert('Escolha a data e o horário desejados para o reagendamento antes de enviar.');
           return false;
         }
         return true;
