@@ -1,0 +1,686 @@
+{% extends "base_mobile.html" %}
+{% block titulo %}Torre de Controle{% endblock %}
+{% block titulo_barra %}Torre de Controle{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  :root {
+    --st-sucesso: #0ca30c;
+    --st-rota:    #2a78d6;
+    --st-aceito:  #4a3aa7;
+    --st-atencao: #eda100;
+    --st-falha:   #d03b3b;
+    --st-neutro:  #8A8F98;
+    --trilha:     #ECEEF1;
+  }
+  html.tema-escuro { --trilha: #1A2130; }
+
+  .linha-data { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .linha-data input[type=date] { flex: 1; }
+  .linha-data .botao-icone { background: var(--superficie); border: 1px solid var(--borda); color: var(--texto); }
+
+  .semaforo {
+    display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 14px;
+    padding: 10px 16px; border-radius: 12px; background: var(--superficie); border: 1px solid var(--borda);
+    margin-bottom: 10px;
+  }
+  .semaforo .luz { width: 12px; height: 12px; border-radius: 100px; background: var(--texto-suave); flex: none; }
+  .semaforo.ok { background: var(--sucesso-bg); color: var(--sucesso); border-color: transparent; }
+  .semaforo.ok .luz { background: var(--st-sucesso); }
+  .semaforo.atencao { background: var(--rodando-bg); color: var(--rodando-texto); border-color: transparent; }
+  .semaforo.atencao .luz { background: var(--st-atencao); }
+  .semaforo.critico { background: var(--erro-bg); color: var(--st-falha); border-color: transparent; }
+  .semaforo.critico .luz { background: var(--st-falha); animation: pulso 1.2s ease-in-out infinite; }
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .carimbo { font-size: 11.5px; color: var(--texto-suave); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .carimbo.erro { color: var(--erro); font-weight: 600; }
+  .carimbo button { background: none; border: none; color: var(--acento); font-size: 11.5px; font-weight: 700; cursor: pointer; padding: 4px; }
+
+  .grade-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .kpi-tile { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; }
+  .kpi-tile .n { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .kpi-tile .n .contexto { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); }
+  .kpi-tile .l { font-size: 11px; color: var(--texto-suave); margin-top: 1px; }
+  .kpi-tile.bom .n { color: var(--st-sucesso); }
+  .kpi-tile.alerta .n { color: var(--rodando-texto); }
+  .kpi-tile.ruim .n { color: var(--st-falha); }
+
+  .etapa-mini { display: inline-flex; align-items: center; gap: 5px; color: var(--texto-suave); font-size: 11.5px; margin: 3px 8px 3px 0; }
+  .etapa-mini .estado { width: 8px; height: 8px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa-mini.sucesso .estado { background: var(--st-sucesso); }
+  .etapa-mini.erro { color: var(--st-falha); font-weight: 700; }
+  .etapa-mini.erro .estado { background: var(--st-falha); }
+  .etapa-mini.rodando { color: var(--texto); font-weight: 600; }
+  .etapa-mini.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .cartao-agente {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 0; border-bottom: 1px solid var(--fundo); font-size: 12.5px;
+  }
+  .cartao-agente:last-child { border-bottom: none; }
+  .cartao-agente .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; margin-right: 7px; }
+  .cartao-agente.sucesso .estado { background: var(--st-sucesso); }
+  .cartao-agente.erro .estado { background: var(--st-falha); }
+  .cartao-agente.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .cartao-agente .quando { color: var(--texto-suave); font-size: 11px; }
+  .cartao-agente button.rodar {
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 11.5px; padding: 5px 10px; cursor: pointer; color: var(--texto); flex: none;
+  }
+
+  .cartao-excecao { border: 1px solid var(--borda); border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+  .cartao-excecao:last-child { margin-bottom: 0; }
+  .pill-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
+  .pill-sev.critico { background: var(--erro-bg); color: var(--st-falha); }
+  .pill-sev.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .cartao-excecao .topo-excecao { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .cartao-excecao .quando-tipo { font-size: 11px; color: var(--texto-suave); font-weight: 600; }
+  .cartao-excecao .descricao { font-size: 13px; margin-bottom: 3px; }
+  .cartao-excecao .motivo { color: var(--st-falha); font-weight: 700; font-size: 12px; }
+  .cartao-excecao .quem-atualizou, .cartao-excecao .badge-insucesso { font-size: 11px; }
+  .cartao-excecao .acoes-excecao { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .cartao-excecao .acoes-excecao a, .cartao-excecao .acoes-excecao button {
+    font-size: 12px; padding: 6px 11px; border-radius: 7px; border: 1px solid var(--borda);
+    background: var(--superficie); color: var(--texto); cursor: pointer; text-decoration: none;
+  }
+  .cartao-excecao .acoes-excecao button.duplicar { color: #1c5cab; border-color: #C7D9F0; }
+  .excecao-vazia { display: flex; align-items: center; gap: 8px; color: var(--st-sucesso); font-size: 13px; font-weight: 600; }
+
+  .badge-insucesso {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 100px; margin-left: 4px; margin-top: 3px; white-space: nowrap;
+  }
+  .badge-insucesso.duplicado  { background: #E3EDFA; color: #1c5cab; }
+  .badge-insucesso.agendado   { background: var(--teste-bg); color: var(--teste-texto); }
+  .badge-insucesso.cancelado  { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-insucesso.aguardando { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-insucesso.respondido { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-insucesso.falha      { background: var(--erro-bg); color: var(--st-falha); }
+  .quem-atualizou { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; color: var(--texto-suave); }
+
+  details.tratadas { margin-top: 10px; font-size: 12.5px; }
+  details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
+  details.tratadas .cartao-excecao { margin-top: 8px; }
+  details.tratadas .motivo-tratado { font-style: italic; color: var(--texto-suave); font-size: 11.5px; margin-top: 3px; }
+
+  .cartao-rota { padding: 9px 0; border-bottom: 1px solid var(--fundo); }
+  .cartao-rota:last-child { border-bottom: none; }
+  .cartao-rota .ident-rota { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+  .cartao-rota .nome-rota { font-size: 13px; font-weight: 700; }
+  .cartao-rota .contagem-rota { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cartao-rota .motorista { font-size: 11.5px; color: var(--texto-suave); margin-bottom: 5px; }
+  .cartao-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
+  .barra-progresso { display: flex; gap: 2px; height: 14px; }
+  .barra-progresso .seg { min-width: 4px; }
+  .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-progresso .seg:only-child { border-radius: 4px; }
+  .estado-rota { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; text-align: right; margin-top: 2px; }
+  .estado-rota.em_andamento { color: var(--st-rota); }
+  .estado-rota.concluida { color: var(--st-sucesso); }
+  .estado-rota.nao_iniciada { color: var(--texto-suave); }
+  .estado-rota.vazia { color: var(--texto-suave); }
+  .legenda { display: flex; flex-wrap: wrap; gap: 5px 12px; font-size: 11.5px; color: var(--texto); margin-bottom: 10px; }
+  .legenda .item { display: inline-flex; align-items: center; gap: 5px; }
+  .legenda .ponto { width: 8px; height: 8px; border-radius: 100px; flex: none; }
+
+  #mini-mapa { width: 100%; height: 240px; border-radius: 10px; border: 1px solid var(--borda); }
+  .legenda-mapa { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--texto-suave); margin-top: 8px; }
+  .legenda-mapa .item { display: inline-flex; align-items: center; gap: 5px; }
+  .legenda-mapa .ponto { width: 8px; height: 8px; border-radius: 100px; flex: none; }
+
+  .barra-status { display: flex; gap: 2px; height: 18px; margin-bottom: 10px; }
+  .barra-status .seg { min-width: 5px; }
+  .barra-status .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-status .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-status .seg:only-child { border-radius: 4px; }
+  .lista-legenda { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .lista-legenda li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .lista-legenda .ponto { width: 8px; height: 8px; border-radius: 100px; flex: none; }
+  .lista-legenda .qtd { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .nota-rodape { font-size: 11px; color: var(--texto-suave); margin-top: 8px; }
+
+  .linha-funil { display: grid; grid-template-columns: 92px 1fr 30px; gap: 8px; align-items: center; padding: 4px 0; font-size: 11.5px; }
+  .linha-funil .barra { height: 12px; background: var(--trilha); border-radius: 0 4px 4px 0; overflow: hidden; }
+  .linha-funil .fill { height: 100%; background: var(--st-rota); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .linha-funil .fill.zero { background: transparent; }
+  .linha-funil .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  .amanha-numeros { display: flex; gap: 16px; margin-bottom: 6px; }
+  .amanha-numeros .bloco .n { font-size: 20px; font-weight: 700; }
+  .amanha-numeros .bloco .l { font-size: 10.5px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
+  .aviso-amanha { font-size: 11.5px; color: var(--rodando-texto); font-weight: 600; margin-top: 4px; }
+
+  .tendencia { display: flex; align-items: flex-end; gap: 8px; height: 110px; padding-top: 16px; }
+  .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 3px; }
+  .col-dia .valor-col { font-size: 10.5px; font-weight: 700; }
+  .col-dia .col { width: 100%; max-width: 20px; background: var(--interrompido-bg); border-radius: 4px 4px 0 0; }
+  .col-dia.destaque .col { background: var(--st-rota); }
+  .col-dia .rotulo-dia { font-size: 9.5px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="linha-data">
+  <form method="get" action="{{ url_for('torre_mobile') }}" style="flex:1;">
+    <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
+  </form>
+  <button type="button" class="botao-icone" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
+  <button type="button" class="botao-icone" onclick="carregarTudo()" title="Atualizar agora">↻</button>
+</div>
+
+<span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
+<div class="carimbo" id="carimbo">Carregando dados…</div>
+
+<div class="grade-kpis" id="kpis"></div>
+
+<div class="cartao">
+  <h2>Pipeline de agentes</h2>
+  <div id="pipeline-resumo"><span class="carregando">Carregando…</span></div>
+  <details class="acordeao" id="detalhes-pipeline">
+    <summary>Ver / rodar etapas</summary>
+    <div id="pipeline-detalhe" style="margin-top:8px;"></div>
+  </details>
+</div>
+
+<div class="cartao" id="card-excecoes">
+  <h2>Fila de ação <span id="contagem-acoes"></span></h2>
+  <div id="excecoes"><div class="carregando">Carregando…</div></div>
+</div>
+
+{% if google_maps_key %}
+<div class="cartao">
+  <h2><span>Mapa do dia</span><a href="#" id="link-mapa-completo" style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">mapa completo</a></h2>
+  <div id="mini-mapa"></div>
+  <div class="legenda-mapa">
+    <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregue</span>
+    <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucesso</span>
+    <span class="item"><span class="ponto" style="background:var(--st-rota)"></span>Em rota</span>
+    <span class="item"><span class="ponto" style="background:#8A8F98"></span>Pendente</span>
+    <span class="item"><span class="ponto" style="background:var(--primaria)"></span>Base</span>
+  </div>
+</div>
+{% endif %}
+
+<div class="cartao" id="card-rotas">
+  <h2>Andamento das rotas</h2>
+  <div class="legenda">
+    <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues</span>
+    <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucessos</span>
+    <span class="item"><span class="ponto" style="background:var(--trilha);border:1px solid var(--borda)"></span>Restantes</span>
+  </div>
+  <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
+</div>
+
+<div class="cartao">
+  <h2>Pedidos do dia por status</h2>
+  <div id="pedidos-status"><div class="carregando">Carregando…</div></div>
+</div>
+
+<div class="cartao">
+  <h2>A caminho (Stokki)</h2>
+  <div id="funil-stokki"><div class="carregando">Carregando…</div></div>
+</div>
+
+<div class="cartao">
+  <h2><span>Planejamento de amanhã</span><a href="#" id="link-planejamento" style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">abrir</a></h2>
+  <div id="amanha"><div class="carregando">Carregando…</div></div>
+</div>
+
+<div class="cartao">
+  <h2>Entregas finalizadas — últimos 7 dias úteis</h2>
+  <div class="tendencia" id="tendencia"><div class="carregando">Carregando…</div></div>
+</div>
+{% endblock %}
+
+{% block script_extra %}
+<script>
+const DATA_ALVO = {{ data_alvo_input | tojson }};
+const PODE_EDITAR = {{ pode_editar | tojson }};
+
+const STATUS_PEDIDO = [
+  { chave: "sucesso",      rotulo: "Entregues",              cor: "var(--st-sucesso)" },
+  { chave: "on_route",     rotulo: "Em rota",                cor: "var(--st-rota)" },
+  { chave: "accepted",     rotulo: "Aceitos (atribuídos)",   cor: "var(--st-aceito)" },
+  { chave: "not_assigned", rotulo: "Sem rota (atrasados)",   cor: "var(--st-atencao)" },
+  { chave: "falha",        rotulo: "Insucessos",             cor: "var(--st-falha)" },
+];
+const ROTULO_ESTADO_ROTA = {
+  em_andamento: "Em andamento", concluida: "Concluída",
+  nao_iniciada: "Não iniciada", vazia: "Vazia",
+};
+
+let ultimoOk = null, houveErro = false, algumaEtapaRodando = false, dadosAtuais = null;
+
+let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
+let idsExcecoesConhecidas = null;
+let audioCtx = null;
+function obterAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+document.addEventListener("click", () => obterAudioCtx(), { once: true });
+function tocarAlarme() {
+  if (alarmeMutado) return;
+  try {
+    const ctx = obterAudioCtx();
+    [0, 0.22].forEach(atraso => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = 880;
+      const t0 = ctx.currentTime + atraso;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + 0.2);
+    });
+  } catch (e) { console.error("torre mobile: falha ao tocar alarme", e); }
+}
+function atualizarBotaoAlarme() {
+  const btn = document.getElementById("botao-alarme");
+  if (!btn) return;
+  btn.textContent = alarmeMutado ? "🔕" : "🔔";
+}
+function alternarAlarme() {
+  alarmeMutado = !alarmeMutado;
+  localStorage.setItem("torre_alarme_mutado", alarmeMutado ? "1" : "0");
+  atualizarBotaoAlarme();
+  if (!alarmeMutado) obterAudioCtx();
+}
+atualizarBotaoAlarme();
+
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+let pipelineAberto = false;
+let ultimasEtapas = [];
+document.getElementById("detalhes-pipeline").addEventListener("toggle", e => {
+  pipelineAberto = e.target.open;
+});
+
+function renderStepper(etapas) {
+  ultimasEtapas = etapas;
+  algumaEtapaRodando = etapas.some(e => e.rodando);
+  const ok = etapas.filter(e => !e.rodando && e.status === "SUCESSO").length;
+  document.getElementById("pipeline-resumo").innerHTML =
+    `<span style="font-size:12px;font-weight:700;color:var(--texto-suave);">${ok}/${etapas.length} ok</span><br>` +
+    etapas.map(e => {
+      let classe = "", sufixo = "";
+      if (e.rodando) { classe = "rodando"; sufixo = " — rodando…"; }
+      else if (e.status === "SUCESSO") classe = "sucesso";
+      else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; sufixo = ` — ${e.status}`; }
+      return `<span class="etapa-mini ${classe}"><span class="estado"></span>${esc(e.titulo)}${esc(sufixo)}</span>`;
+    }).join("");
+
+  const cards = etapas.map(e => {
+    let classe = "";
+    if (e.rodando) classe = "rodando";
+    else if (e.status === "SUCESSO") classe = "sucesso";
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") classe = "erro";
+    const quando = e.quando
+      ? `<a href="${BASE_PATH}/execucao/${e.execucao_id}">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
+      : "nunca rodou";
+    const botaoRodar = PODE_EDITAR
+      ? `<button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')" ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+      : "";
+    return `<div class="cartao-agente ${classe}">
+        <div><span class="estado"></span><strong style="font-size:12.5px;">${esc(e.titulo)}</strong><div class="quando">${quando}</div></div>
+        ${botaoRodar}
+      </div>`;
+  }).join("");
+  const etapaTudo = PODE_EDITAR
+    ? `<button class="botao" style="width:100%;margin-top:8px;" onclick="rodarAgente('executar_tudo', 'Executar Tudo')" ${algumaEtapaRodando ? "disabled" : ""}>▶ Executar tudo</button>`
+    : "";
+  document.getElementById("pipeline-detalhe").innerHTML = cards + etapaTudo;
+}
+
+function renderKpis(d) {
+  const p = d.pedidos;
+  const finalizadas = p.sucesso + p.falha;
+  const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+  const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
+  const r = d.rotas_resumo;
+  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim"));
+
+  const tiles = [
+    { classe: "", n: `${p.sucesso}<span class="contexto">/${p.total}</span>`, l: `entregues (${pctEntregue}%)` },
+    { classe: classeTaxa, n: taxa === null ? "–" : taxa + "%", l: "taxa de sucesso" },
+    { classe: "", n: p.contagem.on_route || 0, l: "em rota" },
+    { classe: p.qtd_nao_atribuidos ? "alerta" : "", n: p.qtd_nao_atribuidos, l: "sem rota" },
+    { classe: p.falha ? "ruim" : "", n: p.falha, l: `insucesso${p.falha === 1 ? "" : "s"}` },
+    { classe: "", n: `${r.concluidas}<span class="contexto">/${d.rotas.length}</span>`, l: "rotas concluídas" },
+  ];
+  document.getElementById("kpis").innerHTML = tiles.map(t =>
+    `<div class="kpi-tile ${t.classe}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join("");
+}
+
+function renderRotas(d) {
+  const alvo = document.getElementById("rotas");
+  if (!d.rotas.length) {
+    alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
+    return;
+  }
+  alvo.innerHTML = d.rotas.map(r => {
+    const finalizados = r.entregues + r.insucessos;
+    const segmentos = [];
+    if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)"></div>`);
+    if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)"></div>`);
+    if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)"></div>`);
+    const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+    const motorista = r.motorista
+      ? `<div class="motorista">${esc(r.motorista)}</div>`
+      : `<div class="motorista faltando">sem motorista</div>`;
+    return `<div class="cartao-rota">
+        <div class="ident-rota"><span class="nome-rota">${esc(r.nome)}</span><span class="contagem-rota">${finalizados}/${r.total}</span></div>
+        ${motorista}
+        <div class="barra-progresso">${barra}</div>
+        <span class="estado-rota ${r.estado}">${ROTULO_ESTADO_ROTA[r.estado] || r.estado}</span>
+      </div>`;
+  }).join("");
+}
+
+function renderPedidosStatus(d) {
+  const p = d.pedidos;
+  const valores = {
+    sucesso: p.sucesso, on_route: p.contagem.on_route || 0, accepted: p.contagem.accepted || 0,
+    not_assigned: p.contagem.not_assigned || 0, falha: p.falha,
+  };
+  const soma = Object.values(valores).reduce((a, b) => a + b, 0);
+  let html;
+  if (!soma) {
+    html = `<div class="carregando">Nenhum pedido agendado para ${esc(d.data_alvo)}.</div>`;
+  } else {
+    const segs = STATUS_PEDIDO.filter(s => valores[s.chave] > 0)
+      .map(s => `<div class="seg" style="flex:${valores[s.chave]};background:${s.cor}"></div>`).join("");
+    const legenda = STATUS_PEDIDO.map(s => `<li><span class="ponto" style="background:${s.cor}"></span>${esc(s.rotulo)}<span class="qtd">${valores[s.chave]}</span></li>`).join("");
+    const notas = [];
+    if (p.contagem.canceled) notas.push(`${p.contagem.canceled} cancelado(s)`);
+    if (p.backlog_pool) notas.push(`${p.backlog_pool} no pool`);
+    if (p.backlog_futuros) notas.push(`${p.backlog_futuros} agendado(s) pra frente`);
+    const rodape = notas.length ? `<div class="nota-rodape">Fora da barra: ${notas.join(" · ")}.</div>` : "";
+    html = `<div class="barra-status">${segs}</div><ul class="lista-legenda">${legenda}</ul>${rodape}`;
+  }
+  document.getElementById("pedidos-status").innerHTML = html;
+}
+
+function badgesHtml(badges) {
+  return (badges || []).map(b => `<span class="badge-insucesso ${esc(b.tipo)}">${esc(b.texto)}</span>`).join("");
+}
+function quemAtualizou(x) {
+  if (x.motorista) return `<div class="quem-atualizou">🚚 ${esc(x.motorista)}</div>`;
+  if (x.rota) return `<div class="quem-atualizou">🚚 rota ${esc(x.rota)}</div>`;
+  return "";
+}
+
+function renderExcecoes(d) {
+  const alvo = document.getElementById("excecoes");
+  const partes = [];
+  const idsAtuais = new Set(d.excecoes.map(x => x.id));
+  if (idsExcecoesConhecidas && [...idsAtuais].some(id => !idsExcecoesConhecidas.has(id))) tocarAlarme();
+  idsExcecoesConhecidas = idsAtuais;
+
+  const contagem = document.getElementById("contagem-acoes");
+  if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
+
+  if (!d.excecoes.length) {
+    partes.push(`<div class="excecao-vazia">✓ Nenhuma ação pendente — operação normal.</div>`);
+  } else {
+    partes.push(d.excecoes.map(x => {
+      let acoes = "";
+      if (x.acao && x.acao.tipo === "link") acoes += `<a href="${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
+      else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) acoes += `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
+      if (x.link_log) acoes += `<a href="${esc(x.link_log)}">Log</a>`;
+      if (x.pode_duplicar && PODE_EDITAR) acoes += `<button class="duplicar" onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
+      if (PODE_EDITAR) acoes += `<button onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      const icone = x.severidade === "critico" ? "✗" : "▲";
+      return `<div class="cartao-excecao">
+          <div class="topo-excecao">
+            <span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span>
+            <span class="quando-tipo">${x.quando ? esc(x.quando) : ""} · ${esc(x.tipo)}</span>
+          </div>
+          <div class="descricao">${esc(x.descricao)}</div>
+          ${x.motivo_insucesso ? `<div class="motivo">${esc(x.motivo_insucesso)}</div>` : ""}
+          ${quemAtualizou(x)}${badgesHtml(x.badges)}
+          ${acoes ? `<div class="acoes-excecao">${acoes}</div>` : ""}
+        </div>`;
+    }).join(""));
+  }
+
+  if (d.tratadas && d.tratadas.length) {
+    const linhasTratadas = d.tratadas.map(x => `<div class="cartao-excecao">
+        <div class="descricao">${esc(x.tipo)} — ${esc(x.descricao)}</div>
+        ${quemAtualizou(x)}${badgesHtml(x.badges)}
+        <div class="motivo-tratado">"${esc(x.motivo)}" — ${esc(x.tratado_em)}</div>
+        ${PODE_EDITAR ? `<div class="acoes-excecao"><button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button></div>` : ""}
+      </div>`).join("");
+    partes.push(`<details class="tratadas"><summary>${d.tratadas.length} exceção(ões) tratada(s)</summary>${linhasTratadas}</details>`);
+  }
+  alvo.innerHTML = partes.join("");
+}
+
+async function tratarExcecao(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  const motivo = prompt(`Marcar como tratada:\n${x ? x.descricao : id}\n\nMotivo / o que foi feito (obrigatório):`);
+  if (motivo === null) return;
+  if (!motivo.trim()) { alert("Informe o motivo — é ele que vira o histórico."); return; }
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/tratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id, motivo: motivo.trim(),
+        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : DATA_ALVO,
+        tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
+        motorista: x ? x.motorista : null, rota: x ? x.rota : null,
+      }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao marcar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao marcar: " + e); }
+}
+async function destratarExcecao(id) {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/destratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao desfazer."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao desfazer: " + e); }
+}
+async function duplicarPedido(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Criar uma reentrega no VUUPT agora para ${x.codigo}?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}\n\nEssa ação cria um pedido novo de verdade -- não dá pra desfazer.`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/duplicar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: x.service_id, codigo: x.codigo, motorista: x.motorista, rota: x.rota }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao duplicar."); return; }
+    alert(`Reentrega criada: ${j.novo_code}`);
+    carregarDados();
+  } catch (e) { alert("Falha ao duplicar: " + e); }
+}
+
+function renderTendencia(d) {
+  const alvo = document.getElementById("tendencia");
+  if (!d.tendencia.length) { alvo.innerHTML = ""; return; }
+  const maior = Math.max(...d.tendencia.map(t => t.total), 1);
+  alvo.innerHTML = d.tendencia.map(t => {
+    const destaque = t.data === d.data_alvo_iso;
+    const altura = Math.max(2, Math.round(70 * t.total / maior));
+    return `<div class="col-dia ${destaque ? "destaque" : ""}">
+      ${destaque ? `<div class="valor-col">${t.total}</div>` : ""}
+      <div class="col" style="height:${altura}px"></div>
+      <div class="rotulo-dia">${esc(t.rotulo)}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderAmanha(d) {
+  const a = d.amanha;
+  const avisos = [];
+  if (a.qtd_rotas && a.sem_motorista) avisos.push(`▲ ${a.sem_motorista} rota(s) sem motorista`);
+  if (a.qtd_travas) avisos.push(`▲ ${a.qtd_travas} rascunho(s) com trava estourada`);
+  let corpo;
+  if (a.qtd_rotas) {
+    corpo = `<div class="amanha-numeros">
+         <div class="bloco"><div class="n">${a.qtd_rotas}</div><div class="l">rascunhos</div></div>
+         <div class="bloco"><div class="n">${a.qtd_paradas}</div><div class="l">paradas</div></div>
+         ${a.rotas_vuupt ? `<div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">na VUUPT</div></div>` : ""}
+       </div>${avisos.map(t => `<div class="aviso-amanha">${t}</div>`).join("")}`;
+  } else if (a.rotas_vuupt) {
+    corpo = `<div class="amanha-numeros"><div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">rotas na VUUPT</div></div></div>
+       <div class="nota-rodape">Criadas direto na VUUPT (job das 13h) para ${esc(a.data_rotulo)}.</div>`;
+  } else {
+    corpo = `<div class="carregando">Nenhum rascunho para ${esc(a.data_rotulo)} ainda.</div>`;
+  }
+  document.getElementById("amanha").innerHTML = corpo;
+  document.getElementById("link-planejamento").href = `${BASE_PATH}/planejamento/mobile?data=${a.data_iso}`;
+}
+
+function renderFunilStokki(f) {
+  const alvo = document.getElementById("funil-stokki");
+  if (!f.ok && !f.estagios.length) {
+    alvo.innerHTML = `<div class="carregando">${esc(f.erro || "Contagem indisponível.")}</div>`;
+    return;
+  }
+  const maior = Math.max(...f.estagios.map(e => e.total), 1);
+  const linhas = f.estagios.map(e => `
+    <div class="linha-funil">
+      <span>${esc(e.rotulo)}</span>
+      <div class="barra"><div class="fill ${e.total ? "" : "zero"}" style="width:${Math.round(100 * e.total / maior)}%"></div></div>
+      <span class="num">${e.total}</span>
+    </div>`).join("");
+  const nota = f.adiado
+    ? `<div class="nota-rodape">▲ Consulta adiada (agente rodando) — última leitura.</div>`
+    : `<div class="nota-rodape">Atualizado ${esc(f.atualizado_em || "")}.</div>`;
+  alvo.innerHTML = linhas + nota;
+}
+
+let mapa = null, infoWindow = null, marcadoresMapa = [], gmapsPronto = false;
+const COR_SITUACAO = { entregue: "#0ca30c", insucesso: "#d03b3b", em_rota: "#2a78d6", pendente: "#8A8F98" };
+const ROTULO_SITUACAO = { entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente" };
+
+function torreMapaPronto() {
+  gmapsPronto = true;
+  if (dadosAtuais) renderMapa(dadosAtuais);
+}
+function renderMapa(d) {
+  const el = document.getElementById("mini-mapa");
+  if (!el || !gmapsPronto) return;
+  if (!mapa) {
+    const primeira = (d.rotas.find(r => (r.paradas || []).length) || { paradas: [{ lat: -23.55, lng: -46.63 }] }).paradas[0];
+    mapa = new google.maps.Map(el, {
+      center: d.base || primeira, zoom: 10.5,
+      mapTypeControl: false, streetViewControl: false, fullscreenControl: false, gestureHandling: "greedy",
+    });
+    infoWindow = new google.maps.InfoWindow();
+    if (d.base) {
+      new google.maps.Marker({
+        position: d.base, map: mapa, title: "Base",
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+      });
+    }
+  }
+  marcadoresMapa.forEach(m => m.setMap(null));
+  marcadoresMapa = [];
+  d.rotas.forEach(r => (r.paradas || []).forEach(p => {
+    const cor = COR_SITUACAO[p.situacao] || "#8A8F98";
+    const marcador = new google.maps.Marker({
+      position: { lat: p.lat, lng: p.lng }, map: mapa, title: p.codigo,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: cor, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+    marcador.addListener("click", () => {
+      infoWindow.setContent(`<div style="font:12px 'Segoe UI',sans-serif;max-width:220px;">
+        <strong>${esc(p.codigo)}</strong> · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
+        ${esc(p.titulo)}<br><span style="color:#6B7280;">${esc(r.nome)}${r.motorista ? " · " + esc(r.motorista) : ""}</span></div>`);
+      infoWindow.open(mapa, marcador);
+    });
+    marcadoresMapa.push(marcador);
+  }));
+}
+
+function renderSemaforo(d) {
+  const el = document.getElementById("semaforo");
+  el.className = "semaforo " + d.semaforo;
+  const n = (d.excecoes || []).length;
+  const acoes = `${n} ${n === 1 ? "ação" : "ações"}`;
+  const rotulos = { ok: "Operação normal", atencao: `Atenção — ${acoes}`, critico: `Crítico — ${acoes}` };
+  document.getElementById("semaforo-texto").textContent = rotulos[d.semaforo] || d.semaforo;
+}
+
+async function carregarDados() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/dados?data=${DATA_ALVO}`);
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.erro || resp.statusText);
+    dadosAtuais = d;
+    renderSemaforo(d);
+    renderMapa(d);
+    renderKpis(d);
+    renderRotas(d);
+    renderPedidosStatus(d);
+    renderExcecoes(d);
+    renderTendencia(d);
+    renderAmanha(d);
+    document.getElementById("link-mapa-completo").href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
+    ultimoOk = new Date();
+    houveErro = false;
+  } catch (e) {
+    houveErro = true;
+    console.error("torre mobile: falha ao carregar dados", e);
+  } finally {
+    atualizarCarimbo();
+  }
+}
+async function carregarStokki() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/stokki`);
+    if (resp.ok) renderFunilStokki(await resp.json());
+  } catch (e) { console.error("torre mobile: falha no funil Stokki", e); }
+}
+async function carregarEtapas() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/etapas`);
+    if (resp.ok) renderStepper((await resp.json()).etapas);
+  } catch (e) { /* o ciclo principal recupera */ }
+  setTimeout(carregarEtapas, algumaEtapaRodando ? 5000 : 30000);
+}
+function atualizarCarimbo() {
+  const el = document.getElementById("carimbo");
+  if (!ultimoOk) {
+    el.innerHTML = `<span>${houveErro ? "Falha ao carregar — tentando de novo…" : "Carregando dados…"}</span>`;
+    el.className = houveErro ? "carimbo erro" : "carimbo";
+    return;
+  }
+  const seg = Math.round((Date.now() - ultimoOk.getTime()) / 1000);
+  el.innerHTML = `<span>Atualizado há ${seg < 60 ? seg + "s" : Math.floor(seg / 60) + "min"}${houveErro ? " · última tentativa falhou" : ""}</span>`;
+  el.className = houveErro ? "carimbo erro" : "carimbo";
+}
+async function rodarAgente(agenteId, titulo) {
+  if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/rodar`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agente_id: agenteId }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { alert(d.erro || "Falha ao iniciar."); return; }
+    algumaEtapaRodando = true;
+    fetch(`${BASE_PATH}/api/torre/etapas`).then(r => r.json()).then(j => renderStepper(j.etapas));
+  } catch (e) { alert("Falha ao iniciar: " + e); }
+}
+function carregarTudo() { carregarDados(); carregarStokki(); }
+
+carregarTudo();
+carregarEtapas();
+setInterval(carregarDados, 60000);
+setInterval(carregarStokki, 120000);
+setInterval(atualizarCarimbo, 1000);
+</script>
+{% if google_maps_key %}
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=torreMapaPronto"></script>
+{% endif %}
+{% endblock %}

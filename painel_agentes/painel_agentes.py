@@ -411,6 +411,31 @@ def planejamento():
     )
 
 
+@app.route("/planejamento/mobile")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def planejamento_mobile():
+    """Versão mobile de /planejamento (Hugo, 17/08) -- mesmos dados
+    (buscar_dados_planejamento), template próprio sem drag-and-drop/mapa
+    editável: só leitura + ações básicas (trocar motorista, confirmar
+    envio, cancelar rota, descartar rascunho, alocar/desalocar
+    motoristas). Consome os MESMOS endpoints /api/planejamento/* do
+    desktop -- nenhuma lógica nova."""
+    data_alvo = _parse_data_param()
+    try:
+        dados = buscar_dados_planejamento(data_alvo)
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados de planejamento (mobile)")
+        dados = None
+        erro = str(e)
+
+    return render_template(
+        "planejamento_mobile.html", dados=dados, erro=erro,
+        data_alvo_input=data_alvo.isoformat(), pode_editar=g.nivel_acesso in ("total", "operador"),
+        endpoint_desktop="planejamento",
+    )
+
+
 # IDs dos agentes acionáveis pela barra de botões do planejamento --
 # usada tanto pra validar o agente_id recebido em /rodar (não deixa
 # essa tela disparar qualquer agente do sistema, só os 4 dela) quanto
@@ -545,6 +570,20 @@ def torre():
                            google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"))
 
 
+@app.route("/torre/mobile")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def torre_mobile():
+    """Versão mobile da Torre de Controle (Hugo, 17/08) -- mesmo template
+    "casca vazia + JS" do desktop, só que consumindo os mesmos
+    /api/torre/* endpoints com uma renderização em cards (em vez de
+    tabela/grid) pensada pra tela estreita. Nenhum endpoint novo."""
+    data_alvo = _parse_data_param()
+    gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
+    return render_template("torre_mobile.html", data_alvo_input=data_alvo.isoformat(),
+                           google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
+                           endpoint_desktop="torre")
+
+
 @app.route("/api/torre/dados")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def api_torre_dados():
@@ -667,7 +706,10 @@ def api_romaneio(rascunho_id):
     """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
     o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
     roteirizacao/gerar_pdf_romaneios.py (capa + NFs + boletos +
-    canhoteira) aplicado direto sobre o rascunho local."""
+    canhoteira) aplicado direto sobre o rascunho local.
+
+    ?baixar=1 (botão 'Salvar rotas em PDF', 17/08: PDF pra mandar por
+    WhatsApp) força o download em vez de abrir inline no navegador."""
     try:
         caminho = gerar_romaneio_pdf(rascunho_id)
     except ValueError as e:
@@ -675,7 +717,13 @@ def api_romaneio(rascunho_id):
     except Exception as e:
         logging.getLogger(__name__).exception(f"Falha ao gerar romaneio do rascunho {rascunho_id}")
         return f"Falha ao gerar romaneio: {e}", 500
-    return send_file(caminho, mimetype="application/pdf", download_name=caminho.name)
+    baixar = request.args.get("baixar") == "1"
+    nome_arquivo = caminho.name
+    if baixar:
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho:
+            nome_arquivo = f"Romaneio - {rascunho['nome']}.pdf"
+    return send_file(caminho, mimetype="application/pdf", download_name=nome_arquivo, as_attachment=baixar)
 
 
 @app.route("/api/planejamento/carregar-documentos", methods=["POST"])

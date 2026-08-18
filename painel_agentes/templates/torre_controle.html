@@ -316,6 +316,7 @@
   <span class="carimbo" id="carimbo">Carregando dados…</span>
   <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
+  <a class="botao-refresh" href="{{ url_for('torre_mobile', data=data_alvo_input) }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
 </div>
 
 <div class="pipeline-linha" id="pipeline-linha">

@@ -1,0 +1,324 @@
+{% extends "base_mobile.html" %}
+{% block titulo %}Planejamento de Rotas{% endblock %}
+{% block titulo_barra %}Planejamento de Rotas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .linha-data { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .linha-data input[type=date] { flex: 1; }
+
+  /* ── Barra de agentes (mesmo padrão visual da torre mobile) ── */
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .etapa-mini { display: inline-flex; align-items: center; gap: 5px; color: var(--texto-suave); font-size: 11.5px; margin: 3px 8px 3px 0; }
+  .etapa-mini .estado { width: 8px; height: 8px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa-mini.sucesso .estado { background: var(--sucesso); }
+  .etapa-mini.erro { color: var(--erro); font-weight: 700; }
+  .etapa-mini.erro .estado { background: var(--erro); }
+  .etapa-mini.rodando { color: var(--texto); font-weight: 600; }
+  .etapa-mini.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .cartao-agente {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 0; border-bottom: 1px solid var(--fundo); font-size: 12.5px;
+  }
+  .cartao-agente:last-child { border-bottom: none; }
+  .cartao-agente .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; margin-right: 7px; }
+  .cartao-agente.sucesso .estado { background: var(--sucesso); }
+  .cartao-agente.erro .estado { background: var(--erro); }
+  .cartao-agente.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .cartao-agente .quando { color: var(--texto-suave); font-size: 11px; }
+  .cartao-agente button.rodar {
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 11.5px; padding: 5px 10px; cursor: pointer; color: var(--texto); flex: none;
+  }
+
+  /* ── Cards de rascunho ── */
+  .cartao-rascunho { margin-bottom: 10px; }
+  .cartao-rascunho summary {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    cursor: pointer; list-style: none; padding: 2px 0;
+  }
+  .cartao-rascunho summary::-webkit-details-marker { display: none; }
+  .cartao-rascunho .nome-rascunho { font-size: 13.5px; font-weight: 700; }
+  .cartao-rascunho .sub-rascunho { font-size: 11.5px; color: var(--texto-suave); margin-top: 2px; }
+  .badge-status { display: inline-block; padding: 3px 9px; border-radius: 100px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+  .badge-status.RASCUNHO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-status.ENVIADO { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-status.ERRO_ENVIO { background: var(--erro-bg); color: var(--erro); }
+  .badge-trava { display: inline-block; margin: 3px 5px 0 0; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-confirmacao { display: inline-block; margin: 3px 5px 0 0; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; }
+  .badge-confirmacao.AGUARDANDO { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-confirmacao.CONFIRMADO { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-confirmacao.RECUSADO { background: var(--erro-bg); color: var(--erro); }
+
+  .lista-paradas { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--fundo); }
+  .lista-paradas li { padding: 7px 0; border-bottom: 1px solid var(--fundo); font-size: 12.5px; }
+  .lista-paradas li:last-child { border-bottom: none; }
+  .lista-paradas .ordem-parada { color: var(--texto-suave); font-weight: 700; margin-right: 4px; }
+  .lista-paradas .endereco-parada { color: var(--texto-suave); font-size: 11.5px; }
+  .lista-paradas .agendado-parada { color: var(--acento); font-size: 11px; font-weight: 600; }
+
+  .linha-troca-motorista { display: flex; gap: 8px; margin-top: 10px; }
+  .linha-troca-motorista select { flex: 1; }
+
+  /* ── Resumo agendados (copiado de planejamento_rotas.html) ── */
+  .resumo-agendados h3 { margin: 0 0 8px; font-size: 12px; color: var(--texto-suave); text-transform: none; letter-spacing: 0; }
+  .dias-agendados { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin: 0 -2px; }
+  .card-dia-agendado {
+    flex: none; width: 190px; border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px;
+    font-size: 11.5px; color: var(--texto); text-decoration: none; background: var(--superficie);
+  }
+  .card-dia-agendado.atrasado { border-color: var(--erro); }
+  .card-dia-agendado .selo-atraso { font-size: 9.5px; font-weight: 700; color: var(--erro); text-transform: uppercase; }
+  .card-dia-agendado .cabecalho-dia { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .card-dia-agendado .dia-nome { font-weight: 700; }
+  .card-dia-agendado .dia-totais { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-agendado ul { list-style: none; margin: 0; padding: 0; }
+  .card-dia-agendado li { display: flex; justify-content: space-between; gap: 8px; line-height: 1.5; }
+  .card-dia-agendado .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
+  .card-dia-agendado .alerta-caixas { color: var(--erro); font-weight: 700; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="linha-data">
+  <form method="get" action="{{ url_for('planejamento_mobile') }}" style="flex:1;">
+    <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
+  </form>
+</div>
+
+{% if erro %}
+<div class="aviso">Falha ao carregar o planejamento: {{ erro }}</div>
+{% endif %}
+
+<div class="cartao">
+  <h2>Agentes de roteirização</h2>
+  <div id="agentes-resumo"><span class="carregando">Carregando…</span></div>
+  <details class="acordeao">
+    <summary>Ver / rodar etapas</summary>
+    <div id="agentes-detalhe" style="margin-top:8px;"></div>
+  </details>
+</div>
+
+{% if dados %}
+{% if pode_editar %}
+<div class="cartao">
+  <h2>Motoristas do lote</h2>
+  <div class="linha-botoes">
+    <button class="botao secundario" onclick="alocarMotoristas()">Alocar motoristas</button>
+    <button class="botao secundario" onclick="desalocarMotoristas()">Desalocar motoristas</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="cartao">
+  <h2>Rascunhos de rota — {{ data_alvo_input }} <span style="text-transform:none;font-weight:600;">({{ dados.rascunhos | length }})</span></h2>
+  {% if not dados.rascunhos %}
+  <div class="carregando">Nenhum rascunho para essa data ainda.</div>
+  {% endif %}
+  {% for r in dados.rascunhos %}
+  <details class="cartao-rascunho">
+    <summary>
+      <div>
+        <div class="nome-rascunho">{{ r.nome }}</div>
+        <div class="sub-rascunho">
+          {{ r.motorista_nome or "sem motorista" }} ·
+          {{ r.paradas | length }} parada(s) ·
+          {{ r.paradas | sum(attribute='volume_caixas') or 0 }} cx
+          {% if r.zona %} · {{ r.zona }}{% endif %}
+        </div>
+      </div>
+      <span class="badge-status {{ r.status }}">{{ r.status.replace('_', ' ') }}</span>
+    </summary>
+
+    {% if r.badges %}
+    <div>{% for b in r.badges %}<span class="badge-trava">⚠ {{ b }}</span>{% endfor %}</div>
+    {% endif %}
+    {% if r.confirmacao_motorista %}
+    <div><span class="badge-confirmacao {{ r.confirmacao_motorista.status }}">
+      motorista: {{ {"AGUARDANDO": "aguardando confirmação", "CONFIRMADO": "confirmou a rota", "RECUSADO": "recusou a rota"}[r.confirmacao_motorista.status] }}
+    </span></div>
+    {% endif %}
+
+    <ul class="lista-paradas">
+      {% for p in r.paradas %}
+      <li>
+        <span class="ordem-parada">{{ loop.index }}.</span>{{ p.destinatario_nome or p.titulo }}
+        <div class="endereco-parada">{{ p.endereco }}{% if p.agendado_para %} · <span class="agendado-parada">agendado {{ p.agendado_para }}</span>{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+
+    {% if pode_editar %}
+    <div class="linha-troca-motorista">
+      <select id="motorista-{{ r.id }}">
+        <option value="">sem motorista</option>
+        {% for m in dados.motoristas %}
+        <option value="{{ m.agent_id }}|{{ m.vehicle_id }}|{{ m.nome }}" {{ 'selected' if r.agent_id == m.agent_id else '' }}>{{ m.nome }}</option>
+        {% endfor %}
+      </select>
+      <button class="botao secundario" onclick="trocarMotorista({{ r.id }})">Trocar</button>
+    </div>
+    <div class="linha-botoes">
+      {% if r.status in ("RASCUNHO", "ERRO_ENVIO") %}
+      <button class="botao" onclick="confirmarEnvio({{ r.id }})">Confirmar e enviar</button>
+      <button class="botao perigo" onclick="descartarRascunho({{ r.id }})">Descartar</button>
+      {% elif r.status == "ENVIADO" %}
+      <button class="botao perigo" onclick="cancelarRota({{ r.id }})">Cancelar rota</button>
+      {% endif %}
+    </div>
+    {% if r.erro_envio %}<div class="aviso" style="margin-top:8px;">Erro no envio: {{ r.erro_envio }}</div>{% endif %}
+    {% endif %}
+  </details>
+  {% endfor %}
+</div>
+
+<div class="cartao">
+  <h2>Pool de não alocados</h2>
+  <div style="font-size:13px;">{{ dados.pool | length }} pedido(s) aguardando entrar numa rota.</div>
+  <div class="nota-rodape" style="font-size:11px;color:var(--texto-suave);margin-top:4px;">Alocação item a item só na versão completa.</div>
+</div>
+
+{% if dados.resumo_agendados %}
+<div class="cartao">
+  {% include "_resumo_agendados.html" %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block script_extra %}
+<script>
+const DATA_ALVO = {{ data_alvo_input | tojson }};
+
+function recarregar() { location.reload(); }
+
+async function postJSON(url, body) {
+  const resp = await fetch(BASE_PATH + url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const dados = await resp.json();
+  if (!resp.ok) throw new Error(dados.erro || `Falha em ${url}`);
+  return dados;
+}
+
+async function trocarMotorista(rascunhoId) {
+  const valor = document.getElementById(`motorista-${rascunhoId}`).value;
+  const [agentId, vehicleId, nome] = valor ? valor.split("|") : [null, null, null];
+  try {
+    await postJSON("/api/planejamento/trocar-motorista", {
+      rascunho_id: rascunhoId,
+      agent_id: agentId ? Number(agentId) : null,
+      vehicle_id: vehicleId && vehicleId !== "None" ? Number(vehicleId) : null,
+      motorista_nome: nome || null,
+    });
+    recarregar();
+  } catch (e) { alert("Falha ao trocar motorista: " + e.message); }
+}
+async function confirmarEnvio(rascunhoId) {
+  if (!confirm("Confirmar e enviar essa rota pra VUUPT agora?")) return;
+  try {
+    const r = await postJSON("/api/planejamento/confirmar-envio", { rascunho_ids: [rascunhoId] });
+    const falha = (r.resultados || []).find(x => !x.ok);
+    if (falha) { alert("Falha ao enviar: " + (falha.erro || "erro desconhecido")); return; }
+    recarregar();
+  } catch (e) { alert("Falha ao enviar: " + e.message); }
+}
+async function cancelarRota(rascunhoId) {
+  if (!confirm("Cancelar essa rota na VUUPT? Só funciona se o motorista ainda não começou a rodar.")) return;
+  try {
+    const r = await postJSON("/api/planejamento/cancelar-rota", { rascunho_ids: [rascunhoId] });
+    const falha = (r.resultados || []).find(x => !x.ok);
+    if (falha) { alert("Falha ao cancelar: " + (falha.erro || "erro desconhecido")); return; }
+    recarregar();
+  } catch (e) { alert("Falha ao cancelar: " + e.message); }
+}
+async function descartarRascunho(rascunhoId) {
+  if (!confirm("Descartar esse rascunho? As paradas voltam pro pool.")) return;
+  try {
+    await postJSON("/api/planejamento/descartar-rota", { rascunho_id: rascunhoId });
+    recarregar();
+  } catch (e) { alert("Falha ao descartar: " + e.message); }
+}
+async function alocarMotoristas() {
+  if (!confirm("Alocar motoristas automaticamente nos rascunhos sem motorista?")) return;
+  try {
+    await postJSON("/api/planejamento/alocar-motoristas", { data_alvo: DATA_ALVO });
+    recarregar();
+  } catch (e) { alert("Falha ao alocar: " + e.message); }
+}
+async function desalocarMotoristas() {
+  if (!confirm("Remover o motorista de todos os rascunhos ainda não enviados?")) return;
+  try {
+    await postJSON("/api/planejamento/desalocar-motoristas", { data_alvo: DATA_ALVO });
+    recarregar();
+  } catch (e) { alert("Falha ao desalocar: " + e.message); }
+}
+
+// ── Barra de agentes (Importação/Criar Rotas/Incrementar/Romaneios) ──
+const PODE_EDITAR = {{ pode_editar | tojson }};
+let algumaEtapaRodando = false;
+
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderAgentes(etapas) {
+  algumaEtapaRodando = etapas.some(e => e.rodando);
+  const ok = etapas.filter(e => !e.rodando && e.status === "SUCESSO").length;
+  document.getElementById("agentes-resumo").innerHTML =
+    `<span style="font-size:12px;font-weight:700;color:var(--texto-suave);">${ok}/${etapas.length} ok</span><br>` +
+    etapas.map(e => {
+      let classe = "", sufixo = "";
+      if (e.rodando) { classe = "rodando"; sufixo = " — rodando…"; }
+      else if (e.status === "SUCESSO") classe = "sucesso";
+      else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; sufixo = ` — ${e.status}`; }
+      return `<span class="etapa-mini ${classe}"><span class="estado"></span>${esc(e.titulo)}${esc(sufixo)}</span>`;
+    }).join("");
+
+  const cards = etapas.map(e => {
+    let classe = "";
+    if (e.rodando) classe = "rodando";
+    else if (e.status === "SUCESSO") classe = "sucesso";
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") classe = "erro";
+    const quando = e.quando
+      ? `<a href="${BASE_PATH}/execucao/${e.execucao_id}">${esc(e.quando.slice(5, 16))}</a>`
+      : "nunca rodou";
+    const botaoRodar = PODE_EDITAR
+      ? `<button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')" ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+      : "";
+    return `<div class="cartao-agente ${classe}">
+        <div><span class="estado"></span><strong style="font-size:12.5px;">${esc(e.titulo)}</strong><div class="quando">${quando}</div></div>
+        ${botaoRodar}
+      </div>`;
+  }).join("");
+  const etapaTudo = PODE_EDITAR
+    ? `<button class="botao" style="width:100%;margin-top:8px;" onclick="rodarAgente('executar_tudo', 'Executar Tudo')" ${algumaEtapaRodando ? "disabled" : ""}>▶ Executar tudo</button>`
+    : "";
+  document.getElementById("agentes-detalhe").innerHTML = cards + etapaTudo;
+}
+
+async function carregarAgentes() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
+    if (resp.ok) renderAgentes((await resp.json()).etapas);
+  } catch (e) { /* próximo ciclo tenta de novo */ }
+  setTimeout(carregarAgentes, algumaEtapaRodando ? 5000 : 30000);
+}
+
+async function rodarAgente(agenteId, titulo) {
+  if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+  try {
+    if (agenteId === "executar_tudo") {
+      await postJSON("/api/planejamento/agentes/rodar-tudo", {});
+    } else {
+      await postJSON("/api/planejamento/agentes/rodar", { agente_id: agenteId });
+    }
+    algumaEtapaRodando = true;
+    fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentes(j.etapas));
+  } catch (e) { alert("Falha ao iniciar: " + e.message); }
+}
+
+carregarAgentes();
+</script>
+{% endblock %}

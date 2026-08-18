@@ -1002,7 +1002,10 @@
 {% endblock %}
 
 {% block conteudo %}
-<h1 style="font-size:20px;margin:0 0 16px;">Planejamento de Rotas</h1>
+<h1 style="font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:12px;">
+  Planejamento de Rotas
+  <a href="{{ url_for('planejamento_mobile', data=data_alvo_input) }}" title="Versão mobile" style="font-size:12px;font-weight:600;color:var(--acento);text-decoration:none;">📱 mobile</a>
+</h1>
 
 <form class="barra-controle" method="GET" action="{{ url_for('planejamento') }}">
   <label for="data">Data:</label>
@@ -1362,6 +1365,10 @@
       <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
     </div>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button id="botao-salvar-todas" type="button" class="botao" style="flex:1;" title="Baixa o romaneio em PDF de cada rota, um arquivo por vez -- pra mandar pelo WhatsApp">Salvar rotas em PDF</button>
+      <button id="botao-imprimir-todas" type="button" class="botao" style="flex:1;" title="Abre o romaneio de cada rota numa aba nova, pra imprimir">Imprimir todas as rotas</button>
+    </div>
     <div class="zona-risco-titulo">Zona de risco</div>
     <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- os pedidos delas voltam pro pool">Cancelar todas as rotas</button>
     <button id="botao-descartar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Descarta todos os rascunhos ainda não enviados -- os pedidos deles voltam pro pool. Rotas já enviadas não são afetadas (use Cancelar todas as rotas pra essas).">Descartar todos os rascunhos</button>
@@ -3424,6 +3431,82 @@
     }
   }
 
+  async function salvarRotaPdf(rascunhoId, botao) {
+    // mesmo motor do "Imprimir rota", mas força o download (?baixar=1)
+    // em vez de abrir aba -- pra depois anexar o PDF no WhatsApp.
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Carregando documentos...";
+    try {
+      await postJSON("/api/planejamento/carregar-documentos", { rascunho_id: rascunhoId });
+    } catch (e) {
+      console.warn(`Falha ao carregar documentos (salvando romaneio com o que já tinha indexado): ${e.message}`);
+    } finally {
+      const link = document.createElement("a");
+      link.href = `${BASE_PATH}/api/planejamento/romaneio/${rascunhoId}?baixar=1`;
+      link.download = "";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function salvarTodasRotas(botao) {
+    // uma rota de cada vez (não em paralelo) -- carregar-documentos
+    // loga na Stokki por pedido, e login concorrente derruba a sessão
+    // (401 em massa, ver stokki-sessao-e-anexo-limitacoes).
+    const alvos = RASCUNHOS.slice();
+    if (!alvos.length) { alert("Nenhuma rota pra salvar."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    for (let i = 0; i < alvos.length; i++) {
+      botao.textContent = `Salvando ${i + 1}/${alvos.length}...`;
+      const botaoCard = document.querySelector(`.botao-imprimir[data-rascunho-id="${alvos[i].id}"]`);
+      await salvarRotaPdf(alvos[i].id, botaoCard || botao);
+    }
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+
+  async function imprimirTodasRotas(botao) {
+    const alvos = RASCUNHOS.slice();
+    if (!alvos.length) { alert("Nenhuma rota pra imprimir."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+
+    // abre uma aba em branco por rota JÁ, tudo síncrono dentro do
+    // clique -- se abrir depois (já async, esperando os fetches de
+    // documentos), o navegador trata como popup não solicitado e
+    // bloqueia a partir da 2ª aba (mesmo motivo do imprimirRota
+    // individual, só que precisa valer pras N rotas de uma vez).
+    const fila = alvos.map(r => {
+      const aba = window.open("", "_blank");
+      if (aba) {
+        aba.document.write(`<html><body style="font-family:sans-serif;padding:24px;color:#333;">
+          <p>Na fila -- buscando notas fiscais e boletos de "${escaparHtml(r.nome)}"...</p>
+        </body></html>`);
+      }
+      return { id: r.id, nome: r.nome, aba };
+    });
+
+    for (let i = 0; i < fila.length; i++) {
+      const { id, aba } = fila[i];
+      botao.textContent = `Imprimindo ${i + 1}/${fila.length}...`;
+      try {
+        await postJSON("/api/planejamento/carregar-documentos", { rascunho_id: id });
+      } catch (e) {
+        console.warn(`Falha ao carregar documentos do rascunho ${id} (abrindo romaneio com o que já tinha indexado): ${e.message}`);
+      }
+      const url = `${BASE_PATH}/api/planejamento/romaneio/${id}`;
+      if (aba && !aba.closed) aba.location.href = url; else window.open(url, "_blank");
+    }
+
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+
   function initMap() {
     if (!PODE_EDITAR) {
       // leitura: some tudo que dispara ação no servidor -- Sortable,
@@ -3728,6 +3811,8 @@
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       descartarTodosRascunhos(idsPendentes, e.target);
     });
+    document.getElementById("botao-salvar-todas").addEventListener("click", (e) => salvarTodasRotas(e.target));
+    document.getElementById("botao-imprimir-todas").addEventListener("click", (e) => imprimirTodasRotas(e.target));
 
     document.getElementById("botao-atualizar-pool").addEventListener("click", (e) => atualizarPool(e.target));
 

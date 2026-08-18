@@ -1,0 +1,61 @@
+{# Paleta de cores compartilhada entre base.html (desktop) e base_mobile.html
+   (mobile) -- extraída 17/08 pra evitar as duas divergirem quando o tema
+   muda (já aconteceu uma vez, 17/08, tema escuro "Torre"). #}
+<style>
+  :root {
+    --primaria: #141428;
+    --primaria-clara: #1F1F3D;
+    --acento: #0EA575;
+    --acento-real: #0EA575;
+    --sucesso: #0EA575;
+    --erro: #E1483D;
+    --rodando: #E8A33D;
+    --fundo: #F3F4F6;
+    --superficie: #FFFFFF;
+    --superficie-hover: #FAFAFB;
+    --borda: #E5E7EB;
+    --texto: #1F2937;
+    --texto-suave: #6B7280;
+    --sucesso-bg: #E5F7EF;
+    --erro-bg: #FDEBEA;
+    --rodando-bg: #FDF3E1;
+    --rodando-texto: #B4790C;
+    --rodando-borda: #F0D9A8;
+    --interrompido-bg: #EBEBEF;
+    --interrompido-texto: #5A5A6E;
+    --timeout-bg: #FCE8E0;
+    --timeout-texto: #B5471F;
+    --nunca-bg: #F0F0F3;
+    --teste-bg: #EDEBFB;
+    --teste-texto: #6D5BD0;
+  }
+  /* Tema escuro -- paleta "Torre" (ver planejamento_rotas.html), disponível
+     em qualquer shell via classe em <html>. --primaria/--primaria-clara
+     ficam de fora de propósito: a sidebar (desktop) e a barra superior
+     (mobile) já são escuras em qualquer tema. Hugo, 17/08. */
+  html.tema-escuro {
+    --acento: #2FD9AE;
+    --acento-real: #2FD9AE;
+    --sucesso: #2FD9AE;
+    --erro: #FF5C50;
+    --rodando: #F0AA45;
+    --fundo: #0B0E14;
+    --superficie: #121722;
+    --superficie-hover: #1A2130;
+    --borda: #262F3F;
+    --texto: #DCE3EC;
+    --texto-suave: #7C89A0;
+    --sucesso-bg: rgba(47,217,174,0.16);
+    --erro-bg: rgba(255,92,80,0.16);
+    --rodando-bg: rgba(240,170,69,0.16);
+    --rodando-texto: #F0AA45;
+    --rodando-borda: rgba(240,170,69,0.35);
+    --interrompido-bg: rgba(124,137,160,0.18);
+    --interrompido-texto: #A9B4C7;
+    --timeout-bg: rgba(255,124,86,0.18);
+    --timeout-texto: #FF8F6B;
+    --nunca-bg: rgba(124,137,160,0.12);
+    --teste-bg: rgba(155,140,240,0.18);
+    --teste-texto: #B7A9F7;
+  }
+</style>
