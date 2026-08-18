@@ -215,26 +215,17 @@ def extrair_nivel_dificuldade(servico: dict) -> int:
     return servico.get("_nivel_dificuldade") or 1
 
 
-def extrair_documento_destinatario(servico: dict) -> str:
-    """CNPJ/CPF do destinatário (campo 'customer.code' do serviço VUUPT,
-    o mesmo usado por classificar_nivel) -- extraído aqui pra ser
-    reaproveitado no agrupamento de nível 4 por rede (ver _raiz_cnpj)."""
-    return (servico.get("customer") or {}).get("code", "")
-
-
-def _raiz_cnpj(documento: str) -> str:
-    """
-    "Raiz" do CNPJ -- 8 primeiros dígitos, identifica a EMPRESA/rede
-    independente da filial (ex: matriz e várias lojas de uma rede de
-    supermercado têm a mesma raiz, cada uma com dígitos de filial e
-    verificadores diferentes). Usada pra permitir que pedidos nível 4
-    da MESMA rede dividam rota entre si (pedido do Hugo, 15/08 -- ver
-    dividir_em_sublotes). CPF (11 dígitos) ou documento fora do padrão
-    CNPJ: usa o documento inteiro (só "junta" com o documento idêntico,
-    já que CPF não tem conceito de matriz/filial).
-    """
-    digitos = "".join(c for c in str(documento or "") if c.isdigit())
-    return digitos[:8] if len(digitos) == 14 else digitos
+def _chave_nivel4(servico: dict) -> tuple[object, object]:
+    """Chave de junção de pedidos nível 4 -- ver separar_pedidos_exclusivos:
+    (endereço, dia de agendamento). Dois nível 4 só dividem rota com o
+    MESMO endereço de entrega; a data de agendamento só entra na
+    comparação quando AMBOS têm agendamento (pedido do Hugo, 17/08 --
+    substitui a regra anterior de "mesma rede", que juntava endereços
+    diferentes por raiz de CNPJ). Sem agendamento (`_dia_agendamento`
+    retorna None pros dois) junta só por endereço; um agendado + um sem
+    agendamento nunca junta (chaves com `dia` None x data nunca batem),
+    mesmo endereço igual."""
+    return (servico.get("address"), _dia_agendamento(servico))
 
 
 def _dia_agendamento(servico: dict):
@@ -508,11 +499,13 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 # com só 1 pedido nível-3 "puxando" e descartando o resto da vizinhança
 # geográfica fácil). Nível 4 nunca divide rota com nenhum pedido de
 # nível 1/2/3 (ver NIVEL_ROTA_EXCLUSIVA) -- mas PODE dividir rota com
-# OUTRO nível 4 da MESMA rede (mesma raiz de CNPJ) agendado pro MESMO
-# DIA, até este mesmo teto (pedido do Hugo, 15/08 -- achado real: 15
-# pedidos de lojas diferentes da rede Hirota, cada endereço com CNPJ
-# próprio, viravam 15 rotas de 1 pedido cada mesmo todas agendadas pro
-# mesmo dia).
+# OUTRO nível 4 do MESMO ENDEREÇO de entrega (embarcador igual ou
+# diferente não importa), até este mesmo teto (pedido do Hugo, 17/08 --
+# substitui a regra anterior de "mesma rede/raiz de CNPJ", que juntava
+# endereços diferentes da mesma empresa). Quando ambos têm agendamento
+# (`scheduled_start`), a data também precisa bater; sem agendamento nos
+# dois, junta só pelo endereço; um agendado + um sem agendamento nunca
+# junta -- ver _chave_nivel4.
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
 NIVEL_ROTA_EXCLUSIVA = 4
 NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
@@ -530,17 +523,16 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
     participam da comparação de proximidade de quem chama:
       - pedido "gigante" (mais caixas que `volume_maximo`): sempre
         isolado;
-      - nível 4 sem par possível (sem agendamento, ou sem outro nível 4
-        da mesma rede no lote): isolado, como sempre foi;
-      - nível 4 da MESMA rede (mesma raiz de CNPJ -- ver _raiz_cnpj) +
-        MESMO DIA de agendamento (`scheduled_start`): agrupados entre
-        si até `tamanho_maximo_nivel4`, respeitando a mesma trava de
-        distância dos demais sublotes (Grande SP x Viagem, via
-        `eh_viagem_fn`/`distancia_maxima_viagem_km`, igual aos outros
-        modelos deste pacote) -- pedido do Hugo, 15/08: achado real, 15
-        pedidos de lojas diferentes da rede Hirota, cada endereço com
-        CNPJ próprio, viravam 15 rotas de 1 pedido cada mesmo todas
-        agendadas pro mesmo dia;
+      - nível 4 sem par possível (nenhum outro nível 4 do MESMO
+        endereço, com a mesma condição de agendamento -- ver
+        _chave_nivel4): isolado, como sempre foi;
+      - nível 4 do MESMO endereço de entrega (`address`) -- e, quando
+        AMBOS têm agendamento (`scheduled_start`), também mesma data --
+        agrupados entre si até `tamanho_maximo_nivel4`, respeitando a
+        mesma trava de distância dos demais sublotes (Grande SP x
+        Viagem, via `eh_viagem_fn`/`distancia_maxima_viagem_km`, igual
+        aos outros modelos deste pacote); embarcador igual ou diferente
+        não importa (pedido do Hugo, 17/08);
       - grupo de até 4 endereços diferentes (ou até 2, quando o volume
         já exige Truck -- ver regras/tipo_veiculo.py) cujo volume
         COMBINADO já justifica um veículo maior que o de última milha
@@ -555,9 +547,9 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
     com o algoritmo próprio de cada esquema.
 
     Compartilhada por TODOS os esquemas de roteirização (pedido do
-    Hugo, 15/08: a junção de nível 4 por rede vale igual pros 5, não só
-    pro modelo Atual -- evita 5 implementações divergentes da mesma
-    regra de negócio).
+    Hugo, 15/08: a junção de nível 4 vale igual pros 5, não só pro
+    modelo Atual -- evita 5 implementações divergentes da mesma regra
+    de negócio).
     """
     def _limite(sublote_candidato: list[dict]) -> float | None:
         if eh_viagem_fn is not None and eh_viagem_fn(sublote_candidato):
@@ -700,8 +692,7 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
         return extraidos, sobras
 
     gigantes: list[dict] = []
-    grupos_nivel4: dict[tuple[str, object], list[dict]] = {}
-    nivel4_isolados: list[dict] = []
+    grupos_nivel4: dict[tuple[object, object], list[dict]] = {}
     demais: list[dict] = []
 
     for servico in servicos:
@@ -709,12 +700,7 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
             gigantes.append(servico)
             continue
         if extrair_nivel_dificuldade(servico) == NIVEL_ROTA_EXCLUSIVA:
-            dia = _dia_agendamento(servico)
-            if dia is None:
-                nivel4_isolados.append(servico)
-            else:
-                chave = (_raiz_cnpj(extrair_documento_destinatario(servico)), dia)
-                grupos_nivel4.setdefault(chave, []).append(servico)
+            grupos_nivel4.setdefault(_chave_nivel4(servico), []).append(servico)
             continue
         demais.append(servico)
 
@@ -723,7 +709,6 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
     sublotes_prontos: list[list[dict]] = [[s] for s in gigantes]
     for grupo in grupos_nivel4.values():
         sublotes_prontos.extend(_empacotar_grupo(grupo))
-    sublotes_prontos.extend([s] for s in nivel4_isolados)
     sublotes_prontos.extend(grupos_veiculo_grande)
 
     return sublotes_prontos, demais
@@ -772,9 +757,10 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     `volume_maximo` caixas nunca cabe junto com nenhum outro -- aloca
     uma rota exclusiva isolada só pra ele.
 
-    Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08): nunca divide
-    rota com pedido de nível 1/2/3. Mas PODE dividir rota com OUTRO
-    nível 4 da MESMA rede + MESMO DIA de agendamento -- ver
+    Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08 e 17/08): nunca
+    divide rota com pedido de nível 1/2/3. Mas PODE dividir rota com
+    OUTRO nível 4 do MESMO endereço de entrega (e mesma data de
+    agendamento, quando ambos têm agendamento) -- ver _chave_nivel4 e
     separar_pedidos_exclusivos, chamada abaixo, compartilhada por TODOS
     os esquemas de roteirização (não só este).
     """

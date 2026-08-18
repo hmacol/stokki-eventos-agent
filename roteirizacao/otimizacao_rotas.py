@@ -32,10 +32,11 @@ de produção:
     tamanho total do sublote continua até `tamanho_maximo` (ajustado
     15/08); pedido "gigante" (mais caixas que o limite) fica em rota
     exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando junta com
-    outro nível 4 da mesma rede (mesma raiz de CNPJ) agendado pro mesmo
-    dia (pedido do Hugo, 15/08) -- os 5 modelos usam a MESMA
-    pré-separação (roteirizacao_dados.separar_pedidos_exclusivos) pra
-    essa regra não divergir entre eles.
+    outro nível 4 do MESMO endereço de entrega (e mesma data de
+    agendamento, quando ambos têm agendamento -- pedido do Hugo, 15/08,
+    ajustado 17/08) -- os 5 modelos usam a MESMA pré-separação
+    (roteirizacao_dados.separar_pedidos_exclusivos) pra essa regra não
+    divergir entre eles.
 
 Diferenciação Grande SP x Viagem (regra 3 do doc): quem chama pode
 passar `eh_viagem_fn` (normalmente alocacao_motoristas.
@@ -168,7 +169,7 @@ def agrupar_por_sweep(servicos: list[dict], base_lat: float, base_lng: float,
     Pedido "gigante" e nível 4 são pré-separados por
     separar_pedidos_exclusivos ANTES da varredura -- só nível 1/2/3
     participa do sweep (pedido do Hugo, 15/08: junção de nível 4 por
-    rede vale igual pros 5 esquemas).
+    endereço vale igual pros 5 esquemas).
     """
     sublotes_prontos, demais = separar_pedidos_exclusivos(
         servicos, volume_maximo, distancia_maxima_km, api_key,
@@ -209,7 +210,7 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
     Pedido "gigante" e nível 4 são pré-separados por
     separar_pedidos_exclusivos ANTES da fusão -- só nível 1/2/3 entra
     no algoritmo de savings (pedido do Hugo, 15/08: junção de nível 4
-    por rede vale igual pros 5 esquemas).
+    por endereço vale igual pros 5 esquemas).
     """
     sublotes_prontos, demais = separar_pedidos_exclusivos(
         servicos, volume_maximo, distancia_maxima_km, api_key,
@@ -397,8 +398,8 @@ def agrupar_por_cep(servicos: list[dict], base_lat: float, base_lng: float,
 
     Pedido "gigante" e nível 4 são pré-separados por
     separar_pedidos_exclusivos ANTES da ordenação por CEP -- só nível
-    1/2/3 participa (pedido do Hugo, 15/08: junção de nível 4 por rede
-    vale igual pros 5 esquemas).
+    1/2/3 participa (pedido do Hugo, 15/08: junção de nível 4 por
+    endereço vale igual pros 5 esquemas).
     """
     sublotes_prontos, demais = separar_pedidos_exclusivos(
         servicos, volume_maximo, distancia_maxima_km, api_key,
@@ -452,8 +453,8 @@ def agrupar_por_kmeans(servicos: list[dict], base_lat: float, base_lng: float,
 
     Pedido "gigante" e nível 4 são pré-separados por
     separar_pedidos_exclusivos ANTES do clustering -- só nível 1/2/3
-    participa (pedido do Hugo, 15/08: junção de nível 4 por rede vale
-    igual pros 5 esquemas).
+    participa (pedido do Hugo, 15/08: junção de nível 4 por endereço
+    vale igual pros 5 esquemas).
     """
     sublotes_prontos, demais = separar_pedidos_exclusivos(
         servicos, volume_maximo, distancia_maxima_km, api_key,
