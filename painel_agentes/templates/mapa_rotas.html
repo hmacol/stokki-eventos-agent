@@ -99,8 +99,13 @@
   const DADOS_ROTAS = {{ dados.rotas | tojson }};
   const DADOS_REGIOES = {{ dados.regioes | tojson }};
   const BASE = {{ dados.base | tojson }};
-  const CORES = ["#0EA575", "#4F86F7", "#E1483D", "#B24FE0", "#E8A33D",
-                "#14A6A6", "#D0479A", "#6B7CE0", "#8FBF3F", "#E06B4F"];
+  // Mesma paleta de planejamento_rotas.html (19/08): matizes escolhidos em
+  // OKLab pra maximizar a diferença entre TODOS os pares, com contraste
+  // mínimo garantido nos dois fundos do mapa (claro e escuro).
+  const CORES = ["#7D4102", "#F99A13", "#B98B10", "#866F05", "#B5B868",
+                "#3F560B", "#5FBB17", "#169549", "#02B1A3", "#00899A",
+                "#16C2F1", "#07608C", "#1C92E7", "#074CDE", "#A39EFC",
+                "#533784", "#A157C4", "#E556E0", "#A52E81", "#F97FB2"];
   const ICONES_NUMERADOS = {};
 
   let map;

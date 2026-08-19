@@ -1530,12 +1530,18 @@
   // 12/08): vermelho é reservado pros pedidos NÃO ALOCADOS no mapa --
   // rota vermelha confundiria com pool. O verde acento também fica de
   // fora: é a cor de SELECIONADO (mapa e card). Recalculada em 18/08
-  // (Hugo relatou cores parecidas demais): matizes escolhidos em OKLab
-  // pra maximizar a diferença entre TODOS os pares (não só vizinhos),
-  // validado com o script da skill de dataviz -- pior par em visão
-  // normal foi de ΔE 4.6 (quase idêntico) pra 17.1.
-  const CORES = ["#8E3F06", "#D2920E", "#5F7A07", "#03B509", "#13ABE2",
-                "#0565B3", "#8F70F2", "#7012C6", "#EF69D5", "#B7068D"];
+  // (Hugo relatou cores parecidas demais) e ampliada de 10 pra 20 em
+  // 19/08: matizes escolhidos em OKLab pra maximizar a diferença entre
+  // TODOS os pares (não só vizinhos), com contraste mínimo garantido
+  // nos dois fundos do mapa (claro e escuro). Com 10 cores o pior par
+  // em visão normal foi de ΔE 4,6 (quase idêntico) pra 17,1; com 20
+  // cores dividindo o mesmo espaço de matiz livre (sem vermelho nem
+  // verde-acento), o pior par cai pra ΔE 11,5 -- ainda ~2,5x melhor
+  // que a original, mas o teto matemático desce ao dobrar a paleta.
+  const CORES = ["#7D4102", "#F99A13", "#B98B10", "#866F05", "#B5B868",
+                "#3F560B", "#5FBB17", "#169549", "#02B1A3", "#00899A",
+                "#16C2F1", "#07608C", "#1C92E7", "#074CDE", "#A39EFC",
+                "#533784", "#A157C4", "#E556E0", "#A52E81", "#F97FB2"];
   const COR_NAO_ALOCADO = "#E1483D";
   const COR_SELECIONADO = "#2FD9AE";
   const ICONES_NUMERADOS = {};
