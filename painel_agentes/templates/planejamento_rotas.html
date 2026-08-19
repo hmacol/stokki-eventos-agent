@@ -275,6 +275,38 @@
   }
   .filtro-cep, .filtro-caixas { display: flex; gap: 8px; }
   .filtro-cep input, .filtro-caixas input { flex: 1; min-width: 0; }
+  .linha-busca-pool { display: flex; gap: 8px; margin-bottom: 10px; }
+  .linha-busca-pool .campo-busca { flex: 1; min-width: 0; margin-bottom: 0; }
+  .botao-filtros {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 34px;
+    padding: 8px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    color: var(--texto);
+    cursor: pointer;
+  }
+  .botao-filtros:hover { background: var(--fundo); }
+  .botao-filtros.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .badge-filtros {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 100px;
+    background: var(--acento);
+    color: #06170F;
+    font-size: 10px;
+    font-weight: 700;
+  }
   .barra-selecao { display: flex; gap: 8px; margin-bottom: 10px; }
   .barra-selecao button {
     flex: 1 1 auto;
@@ -1034,6 +1066,27 @@
   .modal-editar-endereco .acoes button.confirmar:hover { background: #26C49A; }
   .modal-editar-endereco .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-editar-endereco .acoes button.cancelar:hover { background: var(--fundo); }
+  .modal-overlay-filtros-pool {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-filtros-pool.aberto { display: flex; }
+  .modal-filtros-pool {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 320px; max-width: calc(100vw - 32px);
+  }
+  .modal-filtros-pool h2 { font-size: 15px; margin: 0 0 14px; }
+  .modal-filtros-pool .filtro-flag { margin-bottom: 14px; }
+  .modal-filtros-pool .filtro-cep { margin-bottom: 10px; }
+  .modal-filtros-pool .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-filtros-pool .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-filtros-pool .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-filtros-pool .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-filtros-pool .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-filtros-pool .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -1208,6 +1261,28 @@
   </div>
 </div>
 
+<div class="modal-overlay-filtros-pool" id="modal-filtros-pool">
+  <div class="modal-filtros-pool" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-filtros-pool">
+    <h2 id="titulo-modal-filtros-pool">Filtros do pool</h2>
+    <label class="filtro-flag" title="Mostrar só os pedidos com agendamento pra essa data (ou atrasado) — o que não pode ficar de fora das rotas do dia">
+      <input type="checkbox" id="flag-precisa-sair">
+      Só o que precisa sair no dia (<span id="contagem-flag">0</span>)
+    </label>
+    <div class="filtro-cep" title="Faixa de CEP: aceita prefixo (ex: 01310) ou CEP completo. Os pedidos na faixa aparecem no mapa antes de virar rota.">
+      <input type="text" id="cep-de" class="campo-busca" placeholder="CEP de (ex: 01000)">
+      <input type="text" id="cep-ate" class="campo-busca" placeholder="CEP até (ex: 05999)">
+    </div>
+    <div class="filtro-caixas" title="Faixa de quantidade de caixas do pedido. Pedido sem volume informado conta como 1 caixa (mesma convenção das travas de rota).">
+      <input type="number" id="caixas-de" class="campo-busca" min="0" placeholder="Caixas: mín">
+      <input type="number" id="caixas-ate" class="campo-busca" min="0" placeholder="Caixas: máx">
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-fechar-filtros-pool">Fechar</button>
+      <button type="button" class="confirmar" id="botao-aplicar-filtros-pool">Aplicar</button>
+    </div>
+  </div>
+</div>
+
 <script>
   // Barra de agentes (Importação/Criar Rotas Diárias Rascunho/
   // Incrementar Rotas/Gerar Romaneios/Executar tudo) -- pedido do
@@ -1359,18 +1434,11 @@
       </span>
     </h3>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
-    <label class="filtro-flag" title="Mostrar só os pedidos com agendamento pra essa data (ou atrasado) — o que não pode ficar de fora das rotas do dia">
-      <input type="checkbox" id="flag-precisa-sair">
-      Só o que precisa sair no dia (<span id="contagem-flag">0</span>)
-    </label>
-    <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
-    <div class="filtro-cep" title="Faixa de CEP: aceita prefixo (ex: 01310) ou CEP completo. Os pedidos na faixa aparecem no mapa antes de virar rota.">
-      <input type="text" id="cep-de" class="campo-busca" placeholder="CEP de (ex: 01000)">
-      <input type="text" id="cep-ate" class="campo-busca" placeholder="CEP até (ex: 05999)">
-    </div>
-    <div class="filtro-caixas" title="Faixa de quantidade de caixas do pedido. Pedido sem volume informado conta como 1 caixa (mesma convenção das travas de rota).">
-      <input type="number" id="caixas-de" class="campo-busca" min="0" placeholder="Caixas: mín">
-      <input type="number" id="caixas-ate" class="campo-busca" min="0" placeholder="Caixas: máx">
+    <div class="linha-busca-pool">
+      <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
+      <button type="button" id="botao-filtros-pool" class="botao-filtros" title="Mais filtros: precisa sair no dia, faixa de CEP e faixa de caixas">
+        Filtros<span class="badge-filtros" id="badge-filtros-pool" hidden>0</span>
+      </button>
     </div>
     <div class="barra-selecao">
       <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis (das 2 seções) com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
@@ -2219,6 +2287,19 @@
   function filtroCaixasAtivo() {
     return !!(document.getElementById("caixas-de").value.trim() ||
               document.getElementById("caixas-ate").value.trim());
+  }
+
+  function atualizarBadgeFiltrosPool() {
+    // conta quantas das 3 dimensões do popup (flag/CEP/caixas) estão
+    // ativas -- o número aparece no botão pra avisar que a lista tá
+    // filtrada mesmo sem o popup aberto
+    const ativos = (document.getElementById("flag-precisa-sair").checked ? 1 : 0) +
+                   (filtroCepAtivo() ? 1 : 0) +
+                   (filtroCaixasAtivo() ? 1 : 0);
+    const badge = document.getElementById("badge-filtros-pool");
+    badge.hidden = ativos === 0;
+    badge.textContent = ativos;
+    document.getElementById("botao-filtros-pool").classList.toggle("ativo", ativos > 0);
   }
 
   function renumerarPool() {
@@ -3655,11 +3736,8 @@
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();
     atualizarContagensSecoesPool();
-    document.getElementById("flag-precisa-sair").addEventListener("change", () => {
-      aplicarFiltroFlag();
-      atualizarPreviewPool();  // visibilidade mudou -- preview acompanha
-    });
     aplicarFiltroFlag();  // inicializa o contador de "precisa sair no dia"
+    atualizarBadgeFiltrosPool();
     criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)
 
     // clique (sem drag) num card do pool = (des)seleciona pra rota nova
@@ -3677,25 +3755,23 @@
       centralizarNoMapa(li);
     });
 
-    // filtro por faixa de CEP: aplica na hora e, depois de uma pausa na
-    // digitação, enquadra o mapa nos pedidos da faixa (a pré-visualização)
-    let timerEnquadrar = null;
-    ["cep-de", "cep-ate"].forEach(id => {
-      document.getElementById(id).addEventListener("input", () => {
-        aplicarFiltroCep();
-        clearTimeout(timerEnquadrar);
-        if (filtroCepAtivo()) timerEnquadrar = setTimeout(enquadrarPreview, 400);
-      });
+    // popup de filtros (flag "precisa sair", faixa de CEP, faixa de
+    // caixas): os campos só valem pro pool depois do clique em "Aplicar"
+    // -- digitar dentro do popup não mexe na lista por trás
+    document.getElementById("botao-filtros-pool").addEventListener("click", () => {
+      document.getElementById("modal-filtros-pool").classList.add("aberto");
     });
-
-    // filtro por quantidade de caixas: mesmo comportamento da faixa de
-    // CEP (aplica na hora e enquadra o preview após pausa na digitação)
-    ["caixas-de", "caixas-ate"].forEach(id => {
-      document.getElementById(id).addEventListener("input", () => {
-        aplicarFiltroCaixas();
-        clearTimeout(timerEnquadrar);
-        if (filtroCaixasAtivo()) timerEnquadrar = setTimeout(enquadrarPreview, 400);
-      });
+    document.getElementById("botao-fechar-filtros-pool").addEventListener("click", () => {
+      document.getElementById("modal-filtros-pool").classList.remove("aberto");
+    });
+    document.getElementById("botao-aplicar-filtros-pool").addEventListener("click", () => {
+      aplicarFiltroFlag();
+      aplicarFiltroCep();
+      aplicarFiltroCaixas();
+      atualizarPreviewPool();
+      if (filtroCepAtivo() || filtroCaixasAtivo()) enquadrarPreview();
+      atualizarBadgeFiltrosPool();
+      document.getElementById("modal-filtros-pool").classList.remove("aberto");
     });
 
     document.getElementById("botao-selecionar-visiveis").addEventListener("click", selecionarVisiveis);
