@@ -3274,6 +3274,20 @@
       if (falhas.length) {
         alert(`${falhas.length} de ${rascunhoIds.length} rota(s) falharam no envio. Veja o aviso em cada card.`);
       }
+      // pedido(s) que a VUUPT recusou por já estar em outra rota (dado
+      // desatualizado -- ver criar_rota_removendo_conflitos) voltam pro
+      // pool sozinhos, sem contar como falha -- mas sem esse alerta
+      // bloqueante o location.reload() logo abaixo apaga a mensagem em
+      // cada card antes de dar tempo de ler (Hugo, 19/08: pedido
+      // "adicionado" sumiu sem aviso nenhum)
+      const comRemovidos = resp.resultados.filter(r => r.ok && r.codigos_removidos && r.codigos_removidos.length);
+      if (comRemovidos.length) {
+        const linhas = comRemovidos.map(r => {
+          const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
+          return `• ${nome}: ${r.codigos_removidos.join(", ")}`;
+        });
+        alert(`Atenção: a VUUPT recusou ${comRemovidos.reduce((n, r) => n + r.codigos_removidos.length, 0)} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();
     } catch (e) {

@@ -220,6 +220,10 @@ async function confirmarEnvio(rascunhoId) {
     const r = await postJSON("/api/planejamento/confirmar-envio", { rascunho_ids: [rascunhoId] });
     const falha = (r.resultados || []).find(x => !x.ok);
     if (falha) { alert("Falha ao enviar: " + (falha.erro || "erro desconhecido")); return; }
+    const removidos = (r.resultados || []).find(x => x.ok && x.codigos_removidos && x.codigos_removidos.length);
+    if (removidos) {
+      alert(`Atenção: a VUUPT recusou ${removidos.codigos_removidos.length} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados: ${removidos.codigos_removidos.join(", ")}`);
+    }
     recarregar();
   } catch (e) { alert("Falha ao enviar: " + e.message); }
 }
