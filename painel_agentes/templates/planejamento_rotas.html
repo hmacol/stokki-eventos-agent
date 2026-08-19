@@ -998,6 +998,36 @@
   .modal-reagendar .acoes button.confirmar:hover { background: #26C49A; }
   .modal-reagendar .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-reagendar .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Modal "Editar endereço" do menu de contexto (Hugo, 18/08) -- mesmo
+     esqueleto visual do modal de reagendamento. */
+  .modal-overlay-editar-endereco {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-editar-endereco.aberto { display: flex; }
+  .modal-editar-endereco {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 380px; max-width: calc(100vw - 32px);
+  }
+  .modal-editar-endereco h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-editar-endereco .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-editar-endereco .campo-reagendar { margin-bottom: 10px; }
+  .modal-editar-endereco .campo-reagendar > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-editar-endereco textarea {
+    width: 100%; padding: 6px 8px; min-height: 64px; resize: vertical;
+    border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: var(--fundo); color: var(--texto);
+  }
+  .modal-editar-endereco .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-editar-endereco .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-editar-endereco .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-editar-endereco .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-editar-endereco .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-editar-endereco .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -1153,6 +1183,21 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-reagendar">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-reagendar">Salvar agendamento</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-editar-endereco" id="modal-editar-endereco">
+  <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-editar-endereco">
+    <h2 id="titulo-modal-editar-endereco">Editar endereço</h2>
+    <p class="subtitulo">Pedido <strong id="editar-endereco-codigo"></strong> — atualiza o endereço direto na VUUPT (regeocodifica automaticamente).</p>
+    <div class="campo-reagendar">
+      <label for="editar-endereco-texto">Endereço</label>
+      <textarea id="editar-endereco-texto"></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-editar-endereco">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-editar-endereco">Salvar endereço</button>
     </div>
   </div>
 </div>
@@ -3229,6 +3274,43 @@
     }
   }
 
+  // pedido tendo o endereço editado pelo modal -- mesmo padrão de
+  // reagendarPendente
+  let editarEnderecoPendente = null;
+
+  // "Editar endereço" do menu de contexto (Hugo, 18/08): abre o modal
+  // com o endereço atual já preenchido (mesmo texto exibido no card).
+  function abrirModalEditarEndereco(li, serviceId, rascunhoId) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("editar-endereco-codigo").textContent = codigo;
+    document.getElementById("editar-endereco-texto").value = li.querySelector(".endereco")?.textContent.trim() || "";
+    editarEnderecoPendente = { serviceId, rascunhoId };
+    document.getElementById("modal-editar-endereco").classList.add("aberto");
+  }
+
+  async function confirmarEditarEndereco(botao) {
+    const pendente = editarEnderecoPendente;
+    if (!pendente) return;
+    const endereco = document.getElementById("editar-endereco-texto").value.trim();
+    if (!endereco) { alert("Preencha o endereço."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      await postJSON("/api/planejamento/editar-endereco", {
+        service_id: pendente.serviceId, endereco, rascunho_id: pendente.rascunhoId,
+      });
+      document.getElementById("modal-editar-endereco").classList.remove("aberto");
+      // recarrega -- o novo endereço pode mudar CEP/agrupamento por
+      // endereço distinto (mesmo padrão de confirmarReagendamento)
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao editar endereço: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // devolve uma parada de rota pro pool sem cancelar na VUUPT -- mesmo
   // endpoint e mesma sequência de atualização do drag-and-drop pro pool
   // (onDragEnd, toId === "pool"), só que disparado pelo menu de contexto
@@ -3313,6 +3395,9 @@
     ];
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Agendar / reagendar", acao: () => abrirModalReagendar(li, serviceId, rascunhoId) });
+    }
+    if (PODE_EDITAR) {
+      itens.push({ rotulo: "Editar endereço", acao: () => abrirModalEditarEndereco(li, serviceId, rascunhoId) });
     }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
@@ -3799,6 +3884,11 @@
       reagendarPendente = null;
     });
     document.getElementById("botao-confirmar-reagendar").addEventListener("click", (e) => confirmarReagendamento(e.target));
+    document.getElementById("botao-cancelar-editar-endereco").addEventListener("click", () => {
+      document.getElementById("modal-editar-endereco").classList.remove("aberto");
+      editarEnderecoPendente = null;
+    });
+    document.getElementById("botao-confirmar-editar-endereco").addEventListener("click", (e) => confirmarEditarEndereco(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);

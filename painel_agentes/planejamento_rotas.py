@@ -763,6 +763,58 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     return {"ok": True}
 
 
+def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | None = None) -> dict:
+    """
+    Edita o endereço de um pedido direto na VUUPT -- opção "Editar
+    endereço" do menu de contexto da tela de planejamento (Hugo,
+    18/08), mesmo padrão do "Agendar / reagendar" (reagendar_pedido).
+
+    Regeocodifica o novo endereço (mesma geocodificacao.geocodificar
+    usada na importação) e envia junto no PUT /services/{id}, dentro do
+    objeto 'customer' -- mesmo formato que montar_payload_servico já
+    usa na criação/atualização via pipeline, então não é um caminho de
+    API novo/não testado. Se a geocodificação falhar (endereço não
+    resolvido, sem API key etc.), envia só o texto do endereço; o VUUPT
+    geocodifica por conta própria nesse caso.
+
+    Se o pedido já está numa rota em rascunho (rascunho_id informado),
+    também atualiza a cópia local em rascunhos_parada -- ela é lida
+    ao vivo pela tela pra rotas já montadas, então sem isso o card
+    continuaria mostrando o endereço antigo.
+
+    NÃO mexe em nada na Stokki, só no cadastro do pedido na VUUPT.
+
+    Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
+    """
+    endereco = (endereco or "").strip()
+    if not endereco:
+        return {"ok": False, "erro": "Endereço não pode ficar em branco."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+
+    from geocodificacao import geocodificar
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+    coords = geocodificar(endereco, gmaps_key)
+
+    dados_customer = {"address": endereco}
+    if coords:
+        dados_customer["latitude"], dados_customer["longitude"] = coords
+
+    try:
+        VuuptClient(token).atualizar_servico(service_id, {"customer": dados_customer})
+    except VuuptAPIError as e:
+        return {"ok": False, "erro": str(e)}
+
+    if rascunho_id is not None:
+        rascunhos_rota.atualizar_endereco_parada(
+            rascunho_id, service_id, endereco,
+            coords[0] if coords else None, coords[1] if coords else None,
+        )
+
+    return {"ok": True}
+
+
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"
 
 

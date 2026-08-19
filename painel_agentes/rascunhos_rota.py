@@ -392,6 +392,40 @@ def mover_parada(service_id: int, rascunho_origem_id: int, rascunho_destino_id: 
         conn.close()
 
 
+def atualizar_endereco_parada(rascunho_id: int, service_id: int, endereco: str,
+                               latitude: float | None, longitude: float | None) -> bool:
+    """Atualiza o endereço/coordenadas cacheados de uma parada já em
+    rascunho -- opção "Editar endereço" do menu de contexto (Hugo,
+    18/08). Necessário porque a rota em rascunho lê de rascunhos_parada
+    (cópia local gravada quando o pedido entrou no rascunho), não ao
+    vivo da VUUPT: sem isto, editar o endereço na VUUPT via
+    planejamento_rotas.editar_endereco_pedido não refletiria numa
+    parada que já está numa rota.
+
+    Retorna True se achou e atualizou a parada, False se ela não está
+    (mais) nesse rascunho -- chamador trata como não-crítico, igual
+    _recalcular_km_silencioso."""
+    conn = _conectar()
+    try:
+        cursor = conn.execute(
+            "UPDATE rascunhos_parada SET endereco = ?, latitude = ?, longitude = ? "
+            "WHERE rascunho_id = ? AND service_id = ?",
+            (endereco, latitude, longitude, rascunho_id, service_id),
+        )
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return False
+        _tocar(conn, rascunho_id)
+        _recalcular_km_silencioso(conn, rascunho_id)
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def otimizar_sequencia(rascunho_id: int):
     """Botão explícito 'Otimizar sequência' -- roda o MESMO 2-opt do
     pipeline automático (otimizacao_rotas.ordenar_2opt) sobre as
