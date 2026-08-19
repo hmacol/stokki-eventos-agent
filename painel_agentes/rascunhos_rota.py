@@ -963,6 +963,30 @@ def reverter_para_rascunho(rascunho_id: int):
         conn.close()
 
 
+def reverter_por_vuupt_route_id(vuupt_route_id: int) -> int | None:
+    """Mesma coisa que reverter_para_rascunho, mas achando o rascunho
+    pelo vuupt_route_id -- pra rotinas externas que cancelam a rota
+    direto na VUUPT sem passar pelo botão "Cancelar rota" do painel
+    (ex: roteirizacao/cancelar_rotas_sem_motorista.py, rotina diária
+    das 17h45, Hugo 19/08), mantendo o rascunho local sincronizado em
+    vez de ficar como ENVIADO fantasma apontando pra uma rota que não
+    existe mais. Retorna o rascunho_id revertido, ou None se a rota
+    não tinha rascunho local (ex: criada pelo pipeline automático sem
+    --gerar-rascunho, nunca passou por /planejamento)."""
+    conn = _conectar()
+    try:
+        row = conn.execute(
+            "SELECT id FROM rascunhos_rota WHERE vuupt_route_id = ? AND status = ?",
+            (vuupt_route_id, STATUS_ENVIADO),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    reverter_para_rascunho(row["id"])
+    return row["id"]
+
+
 def marcar_enviado(rascunho_id: int, vuupt_route_id: int):
     conn = _conectar()
     try:

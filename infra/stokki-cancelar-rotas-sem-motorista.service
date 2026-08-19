@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Cancelar rotas de hoje sem motorista (cancelar_rotas_sem_motorista.py)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/roteirizacao
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/roteirizacao/cancelar_rotas_sem_motorista.py
