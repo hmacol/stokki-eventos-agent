@@ -594,6 +594,12 @@
     border: none;
   }
   body.cards-numeros .item-parada.selecionada { background: none; border-color: transparent; box-shadow: none; }
+  /* checkbox de "mover selecionados" (Hugo, 17/08): sem espaço num chip
+     de 34px -- se ficasse visível, empurraria o .numero pra baixo e
+     estouraria a altura fixa do chip, sobrepondo a linha seguinte (mesmo
+     motivo do botao-cancelar-pedido, já escondido aqui embaixo). Seleção
+     múltipla continua disponível trocando pro modo normal/compacto. */
+  body.cards-numeros .item-parada .check-parada,
   body.cards-numeros .item-parada br,
   body.cards-numeros .item-parada .codigo,
   body.cards-numeros .item-parada .remetente,
