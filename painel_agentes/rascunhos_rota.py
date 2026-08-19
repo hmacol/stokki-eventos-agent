@@ -943,6 +943,26 @@ def descartar_rascunho(rascunho_id: int):
         conn.close()
 
 
+def reverter_para_rascunho(rascunho_id: int):
+    """Devolve um rascunho ENVIADO pro status RASCUNHO -- usado por
+    cancelar_rota_enviada (Hugo, 18/08: cancelar não deve espalhar as
+    paradas de volta pro pool, e sim deixar a MESMA rota editável de
+    novo em "Pendentes de envio", pronta pra ajustar e reenviar).
+    vuupt_route_id/enviado_em são limpos (a rota antiga não existe
+    mais); motorista/veículo/paradas continuam como estavam."""
+    conn = _conectar()
+    try:
+        conn.execute("""
+            UPDATE rascunhos_rota
+            SET status = ?, vuupt_route_id = NULL, enviado_em = NULL, erro_envio = NULL,
+                atualizado_em = datetime('now','localtime')
+            WHERE id = ?
+        """, (STATUS_RASCUNHO, rascunho_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def marcar_enviado(rascunho_id: int, vuupt_route_id: int):
     conn = _conectar()
     try:
@@ -1067,8 +1087,10 @@ def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
 
     services_action="unassign" (mesma convenção de reprocessar_rotas.py):
     os pedidos da rota voltam pra not_assigned na VUUPT. O rascunho
-    local passa por descartar_rascunho -- mesmo mecanismo que já faz as
-    paradas reaparecerem no pool sem nenhuma limpeza extra.
+    local passa por reverter_para_rascunho -- volta a ser RASCUNHO
+    editável, com as mesmas paradas/motorista, em vez de descartado
+    (Hugo, 18/08: cancelar é "desfazer o envio", não "jogar fora a
+    rota").
 
     Retorna {"rascunho_id", "ok", "erro"?}.
     """
@@ -1090,7 +1112,7 @@ def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
             # rota não existe mais na VUUPT (excluída de vez, não só
             # cancelada) -- mesmo tratamento de "já cancelada por outra
             # via" abaixo: nada pra cancelar lá, só sincroniza o local.
-            descartar_rascunho(rascunho_id)
+            reverter_para_rascunho(rascunho_id)
             return {"rascunho_id": rascunho_id, "ok": True}
         return {"rascunho_id": rascunho_id, "ok": False,
                 "erro": f"Falha ao consultar a rota #{route_id} na VUUPT: {e}"}
@@ -1098,7 +1120,7 @@ def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
     status_atual = _rota_do_corpo(dados_rota).get("status")
     if status_atual == "canceled":
         # já cancelada na VUUPT por outra via -- só sincroniza o local
-        descartar_rascunho(rascunho_id)
+        reverter_para_rascunho(rascunho_id)
         return {"rascunho_id": rascunho_id, "ok": True}
     if status_atual not in STATUS_ROTA_NAO_INICIADA:
         return {"rascunho_id": rascunho_id, "ok": False,
@@ -1110,7 +1132,7 @@ def cancelar_rota_enviada(rascunho_id: int, token: str) -> dict:
     except Exception as e:
         return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
 
-    descartar_rascunho(rascunho_id)
+    reverter_para_rascunho(rascunho_id)
     return {"rascunho_id": rascunho_id, "ok": True}
 
 

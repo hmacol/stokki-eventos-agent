@@ -1489,7 +1489,7 @@
       <button id="botao-imprimir-todas" type="button" class="botao" style="flex:1;" title="Abre o romaneio de cada rota numa aba nova, pra imprimir">Imprimir todas as rotas</button>
     </div>
     <div class="zona-risco-titulo">Zona de risco</div>
-    <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- os pedidos delas voltam pro pool">Cancelar todas as rotas</button>
+    <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- elas voltam a ser rascunhos editáveis, prontos pra ajustar e reenviar">Cancelar todas as rotas</button>
     <button id="botao-descartar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Descarta todos os rascunhos ainda não enviados -- os pedidos deles voltam pro pool. Rotas já enviadas não são afetadas (use Cancelar todas as rotas pra essas).">Descartar todos os rascunhos</button>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, NF, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
@@ -1529,9 +1529,13 @@
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
   // 12/08): vermelho é reservado pros pedidos NÃO ALOCADOS no mapa --
   // rota vermelha confundiria com pool. O verde acento também fica de
-  // fora: é a cor de SELECIONADO (mapa e card).
-  const CORES = ["#4F86F7", "#E8A33D", "#B24FE0", "#14A6A6", "#6B7CE0",
-                "#8FBF3F", "#7C5CDB", "#3F8EAD", "#4C6B8A", "#0F7B8A"];
+  // fora: é a cor de SELECIONADO (mapa e card). Recalculada em 18/08
+  // (Hugo relatou cores parecidas demais): matizes escolhidos em OKLab
+  // pra maximizar a diferença entre TODOS os pares (não só vizinhos),
+  // validado com o script da skill de dataviz -- pior par em visão
+  // normal foi de ΔE 4.6 (quase idêntico) pra 17.1.
+  const CORES = ["#8E3F06", "#D2920E", "#5F7A07", "#03B509", "#13ABE2",
+                "#0565B3", "#8F70F2", "#7012C6", "#EF69D5", "#B7068D"];
   const COR_NAO_ALOCADO = "#E1483D";
   const COR_SELECIONADO = "#2FD9AE";
   const ICONES_NUMERADOS = {};
@@ -1843,7 +1847,7 @@
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
-        ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; os pedidos voltam pro pool">Cancelar rota</button>` : ""}
+        ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
@@ -3275,8 +3279,8 @@
   async function cancelarRota(rascunhoIds, botaoOrigem) {
     if (!rascunhoIds.length) { alert("Nenhuma rota enviada pra cancelar."); return; }
     const confirmMsg = rascunhoIds.length === 1
-      ? "Cancelar essa rota na VUUPT? Só funciona se o motorista ainda não iniciou o deslocamento -- os pedidos dela voltam pro pool."
-      : `Cancelar ${rascunhoIds.length} rota(s) na VUUPT? Só as que o motorista ainda não iniciou o deslocamento são canceladas -- os pedidos delas voltam pro pool.`;
+      ? "Cancelar essa rota na VUUPT? Só funciona se o motorista ainda não iniciou o deslocamento -- ela volta a ser rascunho editável, pronta pra ajustar e reenviar."
+      : `Cancelar ${rascunhoIds.length} rota(s) na VUUPT? Só as que o motorista ainda não iniciou o deslocamento são canceladas -- elas voltam a ser rascunhos editáveis, prontos pra ajustar e reenviar.`;
     if (!confirm(confirmMsg)) return;
     const textoOriginal = botaoOrigem ? botaoOrigem.textContent : "";
     if (botaoOrigem) { botaoOrigem.disabled = true; botaoOrigem.textContent = "Cancelando..."; }
@@ -3290,7 +3294,7 @@
         });
         alert(`${falhas.length} de ${rascunhoIds.length} rota(s) não puderam ser canceladas:\n${linhas.join("\n")}`);
       }
-      // recarrega pra sumir os cards cancelados e refletir o pool com os pedidos de volta
+      // recarrega pra mover os cards cancelados de "Enviadas" pra "Pendentes de envio"
       location.reload();
     } catch (e) {
       alert(`Falha ao cancelar: ${e.message}`);

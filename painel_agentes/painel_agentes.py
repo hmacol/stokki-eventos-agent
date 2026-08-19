@@ -1244,7 +1244,8 @@ def api_cancelar_rota():
     """Cancela na VUUPT a(s) rota(s) já enviada(s) indicada(s) -- botão
     "Cancelar rota"/"Cancelar todas as rotas" da tela. Só funciona pra
     rota que ainda não iniciou deslocamento (checado ao vivo contra a
-    API dentro de cancelar_rota_enviada). Mesmo padrão de
+    API dentro de cancelar_rota_enviada). O rascunho volta a ser
+    RASCUNHO editável (não é descartado) -- mesmo padrão de
     api_confirmar_envio: cada id é processado independentemente, falha
     em um não impede os outros."""
     body = request.get_json(force=True)
