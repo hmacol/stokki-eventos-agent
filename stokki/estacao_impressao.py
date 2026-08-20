@@ -38,6 +38,53 @@ def _credenciais_provider(config: dict) -> tuple[str, str]:
     return usuario, senha
 
 
+def _novo_contexto_disfarcado(browser):
+    """Contexto do Chromium com UA de navegador real e navigator.webdriver
+    mascarado. Sem isso a Stokki bloqueia com 403 ("Acesso automatizado
+    nao e permitido") -- o Chromium headless por padrao expoe
+    "HeadlessChrome" no User-Agent e navigator.webdriver=true (mesmo
+    problema e fix de stokki/auth.py)."""
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/120.0.0.0 Safari/537.36"
+    )
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    return context
+
+
+def _preencher_form_login(page, usuario, senha, tentativas=3, timeout_ms=15_000):
+    """Preenche e envia o formulario de login do /provider/, com retentativas.
+
+    Achado em producao na VPS (20/08): o formulario as vezes demora mais que
+    o timeout pra renderizar (Stokki lento/instavel) e o wait_for_selector
+    estourava sem segunda chance, derrubando a etapa inteira. Cada tentativa
+    recarrega a pagina antes de tentar de novo."""
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            page.wait_for_selector("[name='email']", timeout=timeout_ms)
+            page.fill("[name='email']", usuario)
+            page.fill("[name='password']", senha)
+            page.click("button[type='submit']")
+            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            return
+        except Exception as e:
+            ultimo_erro = e
+            logger.warning(
+                f"Falha no formulario de login (tentativa {tentativa}/{tentativas}): {e}"
+            )
+            if tentativa < tentativas:
+                try:
+                    page.reload(timeout=timeout_ms)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1000)
+    raise ultimo_erro
+
+
 def listar_pedidos_em_espera(config: dict) -> list:
     """
     Retorna a lista de pedidos em espera na Estacao de Impressao.
@@ -53,16 +100,12 @@ def listar_pedidos_em_espera(config: dict) -> list:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            context = browser.new_context()
+            context = _novo_contexto_disfarcado(browser)
             page    = context.new_page()
 
             # Navega para o provider antes do login para estabelecer sessao correta
             page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_selector("[name='email']", timeout=15_000)
-            page.fill("[name='email']", usuario)
-            page.fill("[name='password']", senha)
-            page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            _preencher_form_login(page, usuario, senha)
 
             # Captura a resposta JSON da estacao de impressao
             resultado_json = {}
@@ -103,15 +146,11 @@ def buscar_pedido_por_nf(config: dict, numero_nf: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            context = browser.new_context()
+            context = _novo_contexto_disfarcado(browser)
             page    = context.new_page()
 
             page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_selector("[name='email']", timeout=15_000)
-            page.fill("[name='email']", usuario)
-            page.fill("[name='password']", senha)
-            page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            _preencher_form_login(page, usuario, senha)
 
             csrf = page.evaluate(
                 "() => document.querySelector('meta[name=csrf-token]')?.content || ''"
@@ -217,11 +256,7 @@ def _login_provider(page, usuario, senha):
     """
     _navegar_com_retry(page, URL_PRINTING)
     logger.info(f"Fazendo login direto na área /provider/ como {usuario}...")
-    page.wait_for_selector("[name='email']", timeout=15_000)
-    page.fill("[name='email']", usuario)
-    page.fill("[name='password']", senha)
-    page.click("button[type='submit']")
-    page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+    _preencher_form_login(page, usuario, senha)
 
     # Recarrega a Estacao de Impressao ja autenticado, garantindo que a
     # tabela de pendentes carregue do zero (mesmo padrao usado em
@@ -341,7 +376,8 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not visivel)
-        page = browser.new_page()
+        context = _novo_contexto_disfarcado(browser)
+        page = context.new_page()
         try:
             _login_provider(page, usuario, senha)
 
