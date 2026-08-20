@@ -72,6 +72,20 @@ PADRAO_NF_DANFE = re.compile(r"N(?:[ºo°]\.?|\.)\s*([\d.]{1,12}+)(?!\s*,)")
 # evita casar com esse canhoto.
 PADRAO_SECAO_DESTINATARIO = re.compile(r"DESTINAT[ÁA]RIO\s*/?\s*REMETENTE", re.IGNORECASE)
 
+# "Pedido de Venda" do sistema interno da De Tommaso -- pedido do
+# Hugo, 20/08: quando ela não tem Nota Fiscal pra uma entrega, esse
+# documento conta como substituto (ver SENDERS_PEDIDO_VENDA_SUBSTITUI_NF
+# em roteirizacao/gerar_pdf_romaneios.py). Confirmado contra PDF real
+# (040191.pdf): cabeçalho "P E D I D O D E V E N D A" seguido do número
+# na mesma linha ("040191"), CNPJ do cliente logo abaixo, rotulado
+# "CNPJ:". Mesmo formato de referência de 6 dígitos já usado pela NF
+# (ver PADRAO_NF_DANFE e a Regra 3b abaixo) -- o número solto vira a
+# mesma referência de título que a importação grava no serviço VUUPT.
+PADRAO_NUM_PEDIDO_VENDA = re.compile(
+    r"P\s*E\s*D\s*I\s*D\s*O\s*D\s*E\s*V\s*E\s*N\s*D\s*A\D{0,40}?(\d{4,8})",
+    re.IGNORECASE,
+)
+
 
 def _normalizar_codigo(bruto: str) -> str:
     """'ps12345' ou 'PS-12345' ou 'ps_12345' -> 'PS-12345' (formato
@@ -121,6 +135,33 @@ def extrair_nf_da_danfe(texto: str) -> tuple[str | None, str | None]:
                 cnpj_destinatario = digitos
 
     return numero_nf, cnpj_destinatario
+
+
+def extrair_numero_e_cnpj_pedido_venda(texto: str) -> tuple[str | None, str | None]:
+    """(numero_pedido_venda, cnpj_cliente) do texto de um 'Pedido de
+    Venda' da De Tommaso -- mesmo papel de extrair_nf_da_danfe() pra
+    DANFE: o número alimenta a Regra 3b (referência no título do
+    serviço VUUPT) e o CNPJ o fallback de cliente único, reaproveitando
+    o resto de casar_documento_com_pedido() sem mudança nenhuma nelas."""
+    texto = texto or ""
+    numero = None
+    m = PADRAO_NUM_PEDIDO_VENDA.search(texto)
+    if m:
+        digitos = m.group(1).lstrip("0")
+        numero = digitos or None
+
+    cnpj = None
+    pos = texto.upper().find("CNPJ")
+    if pos != -1:
+        m_cnpj = PADRAO_CNPJ.search(texto, pos)
+        if m_cnpj:
+            digitos = re.sub(r"\D", "", m_cnpj.group(0))
+            if len(digitos) == 14:
+                cnpj = digitos
+    if not cnpj:
+        cnpj = extrair_cnpj(texto)
+
+    return numero, cnpj
 
 
 class IndexadorNF:
@@ -229,6 +270,8 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
                 return {**resolvido, "motivo_falha": None}
     elif tipo_documento == "Nota Fiscal":
         numero_nf, cnpj_destinatario_danfe = extrair_nf_da_danfe(texto_pdf)
+    elif tipo_documento == "Pedido de Venda":
+        numero_nf, cnpj_destinatario_danfe = extrair_numero_e_cnpj_pedido_venda(texto_pdf)
 
     # Regra 3b: número da NF como REFERÊNCIA no título do serviço.
     # Busca primeiro com zero-padding de 6 dígitos (formato dos títulos
@@ -293,9 +336,10 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
     if tipo_documento == "Boleto":
         cnpj = ((metadados_boleto or {}).get("cnpj_pagador")
                 or extrair_cnpj_pagador_boleto(texto_pdf))
-    elif tipo_documento == "Nota Fiscal":
+    elif tipo_documento in ("Nota Fiscal", "Pedido de Venda"):
         # Numa DANFE o primeiro CNPJ do texto é o do EMITENTE (o próprio
         # embarcador) -- o que identifica o pedido é o do destinatário.
+        # Pedido de Venda já veio com o CNPJ certo (rotulado "CNPJ:").
         cnpj = cnpj_destinatario_danfe or extrair_cnpj(texto_pdf)
     else:
         cnpj = extrair_cnpj(texto_pdf)

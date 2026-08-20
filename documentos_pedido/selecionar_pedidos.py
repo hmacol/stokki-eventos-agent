@@ -96,7 +96,12 @@ def _pedido_sem_nf(linha) -> bool:
 # confirmado (sem pedido real até 17/08 pra conferir) -- fica no
 # fallback por nome, sujeito ao mesmo risco de truncamento até isso
 # ser confirmado com um pedido real dela.
-EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS = {"18"}  # Dourado
+#
+# Fruta Fina (id 94, pedido do Hugo, 20/08): NF exclusivamente por
+# e-mail -- mesmo tratamento da Dourado/Muai (boleto continua tentando
+# pela Stokki também, ver EMBARCADORES_DANFE_SOMENTE_EMAIL não impede
+# a busca de Boleto na aba Documentos).
+EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS = {"18", "94"}  # Dourado, Fruta Fina
 EMBARCADORES_DANFE_SOMENTE_EMAIL = ("MUAI",)   # sem ID mapeado ainda
 
 
@@ -118,6 +123,7 @@ def _pedido_danfe_bloqueada(linha) -> bool:
 EMBARCADORES_BOLETO_EMAIL: dict[str, str] = {
     "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
     "48": "MARIA DOLORES INDUSTRIA E COMERCIO DE ALIMENTOS LTDA",
+    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",  # pedido do Hugo, 20/08 -- boleto sempre por e-mail
 }
 STATUS_EXPEDIDO = "Sent"
 

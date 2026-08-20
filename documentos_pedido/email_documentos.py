@@ -424,10 +424,29 @@ REMETENTES_EMBARCADORES: dict[str, dict] = {
                                  "tipos": {"Boleto", "Nota Fiscal"}},
     "faturamento@nuualimentos.com.br": {"nome": "Maria Dolores (NUU)",
                                         "tipos": {"Boleto"}},
+    # "Pedido de Venda" liberado 20/08 (pedido do Hugo): quando a De
+    # Tommaso não manda Nota Fiscal pra uma entrega, esse documento do
+    # sistema interno dela conta como substituto -- ver
+    # SENDERS_PEDIDO_VENDA_SUBSTITUI_NF em roteirizacao/gerar_pdf_romaneios.py.
     "@detommaso.com.br": {"nome": "De Tommaso",
-                          "tipos": {"Boleto", "Nota Fiscal"}},
+                          "tipos": {"Boleto", "Nota Fiscal", "Pedido de Venda"}},
     "@vidaveg.com.br": {"nome": "Vida Veg",
                         "tipos": {"Boleto", "Nota Fiscal"}},
+    # Pedido do Hugo, 20/08: NF da Fruta Fina só por e-mail (mesmo
+    # tratamento da Dourado/Muai -- ver EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS
+    # em selecionar_pedidos.py). Endereço tirado do cadastro (tabela
+    # interno) -- ainda não confirmado contra e-mail real recebido, como
+    # foi feito pros outros (ex: "pedro@" da De Tommaso, 11/08).
+    "frutafina.urubici@gmail.com": {"nome": "Fruta Fina",
+                                    "tipos": {"Boleto", "Nota Fiscal"}},
+    # Pedido do Hugo, 20/08: boleto da Jersey Vale sempre por e-mail (a
+    # NF continua vindo normalmente da Stokki, só o boleto não). Domínio
+    # inteiro (não um endereço só) -- mesmo padrão da De Tommaso/Vida Veg,
+    # já que há 2 endereços cadastrados (administrativo@, vendas@) e o
+    # time pode mandar de qualquer um dos dois -- não confirmado contra
+    # e-mail real ainda.
+    "@jerseyvale.com.br": {"nome": "Jersey Vale",
+                          "tipos": {"Boleto"}},
 }
 PASTA_TODOS_OS_EMAILS = '"[Gmail]/Todos os e-mails"'
 

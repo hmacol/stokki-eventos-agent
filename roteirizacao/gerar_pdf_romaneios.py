@@ -108,6 +108,13 @@ SENDERS_CANHOTEIRA = {
 # EMBARCADORES_SEM_NF).
 SENDERS_SEM_NF = set(SENDERS_CANHOTEIRA)
 
+# De Tommaso (pedido do Hugo, 20/08): quando ela não manda Nota Fiscal
+# pra uma entrega, um "Pedido de Venda" do sistema interno dela conta
+# como substituto -- documento padronizado, confirmado contra PDF real
+# (040191.pdf). sender_id do VUUPT (tabela interno), mesmo padrão de
+# SENDERS_CANHOTEIRA/SENDERS_SEM_NF acima.
+SENDERS_PEDIDO_VENDA_SUBSTITUI_NF = {20562589}  # De Tommaso
+
 # Pedido de reentrega ganha um código com sufixo "-R1", "-R2"... no
 # VUUPT (ver insucesso_entrega/expedir_pedidos.py::duplicar_servico_
 # por_insucesso) -- é o MESMO pedido original, mesma NF/boleto valem
@@ -119,14 +126,22 @@ SENDERS_SEM_NF = set(SENDERS_CANHOTEIRA)
 # têm sufixo -R). Buscar pelo código COM sufixo nunca casava nada pra
 # reentrega -- bug pré-existente, também presente no romaneio das 04h
 # pra rotas reais (não é algo introduzido pelo rascunho/planejamento).
-_PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 
 
 def _codigo_base(codigo: str) -> str:
-    """'#PS-36327-R1' -> 'PS-36327' -- usar SÓ pra buscar documentos;
-    a exibição do pedido na capa/canhoteira mantém o código completo
-    (o motorista precisa saber que é a reentrega, não o pedido original)."""
-    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
+    """Extrai o PREFIXO 'PS-NNNNN' em vez de remover sufixo do FIM da
+    string: reentrega de reentrega (insucesso de novo numa entrega já
+    reentregue) empilha sufixo -- 'PS-36741-R1-R1' -- e uma regex
+    ancorada em '$' só tira o ÚLTIMO '-R\\d+', devolvendo 'PS-36741-R1'
+    em vez do código base (achado 20/08: NF/boleto certos no banco sob
+    'PS-36741' somiam do romaneio pra esses casos). Casar pelo prefixo
+    é imune a qualquer sufixo/combinação que apareça depois (-R1, -C1,
+    -R1-R1, -R2-C1...). Usar SÓ pra buscar documentos -- a exibição do
+    pedido na capa/canhoteira mantém o código completo (o motorista
+    precisa saber que é a reentrega, não o pedido original)."""
+    m = _PADRAO_CODIGO_BASE.match((codigo or "").lstrip("#").strip())
+    return m.group(0) if m else (codigo or "").lstrip("#")
 
 
 def _codigos_base_lista(codigo: str) -> list[str]:
@@ -193,7 +208,7 @@ def carregar_documentos_por_pedido(codigos: set[str]) -> tuple[dict[str, list[di
             marcadores = ",".join("?" * len(lote))
             for row in con.execute(
                 f"SELECT * FROM documentos_processados "
-                f"WHERE status='ENVIADO' AND tipo IN ('Nota Fiscal','Boleto') "
+                f"WHERE status='ENVIADO' AND tipo IN ('Nota Fiscal','Boleto','Pedido de Venda') "
                 f"AND codigo_pedido IN ({marcadores})", lote):
                 docs_por_pedido.setdefault(row["codigo_pedido"], []).append(dict(row))
             em_revisao += con.execute(
@@ -276,6 +291,23 @@ def selecionar_boletos(docs: list[dict]) -> list[dict]:
     return boletos
 
 
+def selecionar_pedidos_de_venda(docs: list[dict]) -> list[dict]:
+    """'Pedido de Venda' do pedido, dedup por número -- mesmo critério
+    de selecionar_nfs(). Só é chamado como substituto de NF ausente
+    (ver SENDERS_PEDIDO_VENDA_SUBSTITUI_NF), hoje exclusivo da De
+    Tommaso."""
+    grupos: dict[str, list[dict]] = {}
+    for d in docs:
+        if d.get("tipo") != "Pedido de Venda":
+            continue
+        chave = _nf_norm(d.get("numero_nf")) or f"__sem_num__{d['hash_conteudo']}"
+        grupos.setdefault(chave, []).append(d)
+
+    escolhidas = [max(g, key=lambda d: d.get("processado_em") or "") for g in grupos.values()]
+    escolhidas.sort(key=lambda d: _nf_norm(d.get("numero_nf")) or "")
+    return escolhidas
+
+
 # ---------------------------------------------------------------------------
 # Volumes, peso e endereço de entrega (pedido do Hugo, 13/08)
 # ---------------------------------------------------------------------------
@@ -294,6 +326,11 @@ _RE_DANFE_TRIO = re.compile(
     r"(\d[\d.]*)\s+([\d.,]+)\s+([\d.,]+)\s+"
     r"QUANTIDADE\s+ESP[EÉ]CIE\s+MARCA\s+NUMERA[CÇ][AÃ]O\s+PESO\s+BRUTO",
     re.IGNORECASE)
+# "Pedido de Venda" da De Tommaso (ver SENDERS_PEDIDO_VENDA_SUBSTITUI_NF):
+# não tem peso, só "Volume1: N" -- validado contra PDF real (040191.pdf,
+# 20/08). Sem peso, a capa mostra "—" nessa coluna (mesmo comportamento
+# de qualquer NF sem peso legível).
+_RE_PV_VOLUME = re.compile(r"Volume1:\s*(\d+)", re.IGNORECASE)
 
 
 def _num_br(valor: str) -> float | None:
@@ -306,7 +343,9 @@ def _num_br(valor: str) -> float | None:
 
 def _qtd_peso_da_danfe(reader: PdfReader) -> tuple[int | None, float | None]:
     """(quantidade de volumes, peso bruto em kg) do bloco de transporte
-    da DANFE, ou None no que não der pra extrair. O bloco fica na 1ª
+    da DANFE (ou do 'Volume1:' do Pedido de Venda da De Tommaso, ver
+    _RE_PV_VOLUME -- mesma função, o reader pode ser qualquer um dos
+    dois), ou None no que não der pra extrair. O bloco fica na 1ª
     página, mas varre até 3 (DANFE de terceiro com página extra)."""
     for pagina in reader.pages[:3]:
         try:
@@ -332,6 +371,12 @@ def _qtd_peso_da_danfe(reader: PdfReader) -> tuple[int | None, float | None]:
                     qtd = int(round(v_qtd))
                 if v_peso and 0 < v_peso < 100000:
                     peso = v_peso
+        if qtd is None and peso is None:
+            m = _RE_PV_VOLUME.search(texto)
+            if m:
+                valor = _num_br(m.group(1))
+                if valor and 0 < valor < 10000:
+                    qtd = int(round(valor))
         if qtd is not None or peso is not None:
             return qtd, peso
     return None, None
@@ -553,7 +598,8 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
             x_nf = _COL_PEDIDO + draw.textlength(item["codigo"], font=fonte_ped) + 14
             larg_nf = _COL_EMB - 18 - x_nf
             if larg_nf > 40:
-                draw.text((x_nf, meio), _truncar(draw, f"NF {item['nfs']}", fonte_nf, larg_nf),
+                rotulo_nf = "PV" if item.get("veio_de_pedido_venda") else "NF"
+                draw.text((x_nf, meio), _truncar(draw, f"{rotulo_nf} {item['nfs']}", fonte_nf, larg_nf),
                           font=fonte_nf, fill=CINZA_TXT, anchor="lm")
         draw.text((_COL_EMB, meio), _truncar(draw, item["embarcador"], fonte_txt, _LARG_EMB),
                   font=fonte_txt, fill=NAVY, anchor="lm")
@@ -705,6 +751,12 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
 
         nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
+        # Sem NF, mas De Tommaso costuma mandar um "Pedido de Venda"
+        # padronizado no lugar dela (pedido do Hugo, 20/08) -- conta
+        # como se fosse a própria NF daqui pra baixo (capa, volumes/
+        # peso, páginas emendadas), só o número exibido leva "PV ".
+        if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
+            nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
         boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
 
         nf_dispensada = sender_id in SENDERS_SEM_NF
@@ -717,6 +769,8 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         pendencias.extend(f"{codigo}: {f}" for f in faltas)
 
         numeros_nf = [_nf_norm(row.get("numero_nf")) for row, _r in nfs]
+        veio_de_pedido_venda = bool(nfs) and all(
+            row.get("tipo") == "Pedido de Venda" for row, _r in nfs)
 
         # Volumes e peso bruto: DANFE primeiro (contagem real); sem NF
         # legível, volumes caem pro dimension_3 despoderado e o peso
@@ -732,6 +786,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             "endereco": _endereco_entrega(s),
             "volumes": volumes, "peso": peso,
             "nfs": ", ".join(n for n in numeros_nf if n),
+            "veio_de_pedido_venda": veio_de_pedido_venda,
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
             # NF dispensada E ausente -> capa mostra "—" no lugar da
             # marca (se uma NF antiga existir no banco, ela ainda vai

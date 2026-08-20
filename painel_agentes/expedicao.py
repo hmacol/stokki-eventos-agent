@@ -35,11 +35,20 @@ import gerar_pdf_romaneios as gpr
 # roteirizacao/gerar_pdf_romaneios.py::_codigo_base e
 # painel_agentes/planejamento_rotas.py::_codigo_base -- documentos e o
 # pedido na Stokki vivem sob o código BASE, sem sufixo de reentrega.
-_PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 
 
 def _codigo_base(codigo: str) -> str:
-    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
+    """Extrai o PREFIXO 'PS-NNNNN' em vez de remover sufixo do FIM da
+    string: reentrega de reentrega (insucesso de novo numa entrega já
+    reentregue) empilha sufixo -- 'PS-36741-R1-R1' -- e uma regex
+    ancorada em '$' só tira o ÚLTIMO '-R\\d+', devolvendo 'PS-36741-R1'
+    em vez do código base (achado 20/08: NF/boleto certos no banco sob
+    'PS-36741' somiam do romaneio pra esses casos). Casar pelo prefixo
+    é imune a qualquer sufixo/combinação que apareça depois (-R1, -C1,
+    -R1-R1, -R2-C1...)."""
+    m = _PADRAO_CODIGO_BASE.match((codigo or "").lstrip("#").strip())
+    return m.group(0) if m else (codigo or "").lstrip("#")
 
 
 def _codigos_base_lista(codigo: str) -> list[str]:
