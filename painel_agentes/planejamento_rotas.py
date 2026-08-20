@@ -55,9 +55,13 @@ logger = logging.getLogger(__name__)
 # Rotas, Gerar PDFs de Romaneio" direto na tela, sem precisar ir no
 # painel de agentes. Ordem = ordem operacional (e também a ordem em
 # que "Executar tudo" roda cada um). Mesmo padrão de torre_controle.
-# ETAPAS_PIPELINE/montar_etapas_pipeline, só que restrito aos 4
-# agentes relevantes pra essa tela (não inclui, por exemplo,
-# Expedição/Documentos/Relatório, que são da torre).
+# ETAPAS_PIPELINE/montar_etapas_pipeline, só que restrito aos agentes
+# relevantes pra essa tela (não inclui, por exemplo, Expedição/
+# Relatório, que são da torre).
+# Processar Documentos entra ANTES de Gerar Romaneios (pedido do
+# Hugo, 20/08): gerar_pdf_romaneios.py lê NF/boleto do índice/pastas
+# locais que processar_documentos.py alimenta -- sem rodar antes, o
+# romaneio sai sem a papelada.
 ETAPAS_AGENTES_PLANEJAMENTO = [
     {"agente_id": "somente_importacao",           "titulo": "Importação",
      "detalhe": "Stokki → VUUPT (todos, ou filtrado por pedido/embarcador)"},
@@ -65,6 +69,8 @@ ETAPAS_AGENTES_PLANEJAMENTO = [
      "detalhe": "gera rascunhos locais pra revisão nessa tela"},
     {"agente_id": "incrementar_rotas",             "titulo": "Incrementar Rotas",
      "detalhe": "aloca pedidos novos nas rotas do dia já criadas"},
+    {"agente_id": "processar_documentos",          "titulo": "Processar Documentos",
+     "detalhe": "busca NF/Boleto por e-mail e na Stokki, casa com o pedido e envia pro GCS"},
     {"agente_id": "gerar_romaneios",               "titulo": "Gerar PDFs de Romaneio",
      "detalhe": "1 PDF por rota do dia, na ordem de visita"},
 ]

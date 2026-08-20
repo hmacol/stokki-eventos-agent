@@ -488,7 +488,7 @@ def planejamento_mobile():
 
 # IDs dos agentes acionáveis pela barra de botões do planejamento --
 # usada tanto pra validar o agente_id recebido em /rodar (não deixa
-# essa tela disparar qualquer agente do sistema, só os 4 dela) quanto
+# essa tela disparar qualquer agente do sistema, só os dela) quanto
 # como ordem de execução do "Executar tudo".
 AGENTES_PLANEJAMENTO_IDS = tuple(e["agente_id"] for e in ETAPAS_AGENTES_PLANEJAMENTO)
 
@@ -498,7 +498,7 @@ AGENTES_PLANEJAMENTO_IDS = tuple(e["agente_id"] for e in ETAPAS_AGENTES_PLANEJAM
 def api_planejamento_agentes_etapas():
     """Estado da barra de agentes do planejamento (leitura barata no
     SQLite) -- mesmo padrão de /api/torre/etapas, só que restrito aos
-    4 agentes relevantes pra essa tela."""
+    agentes relevantes pra essa tela."""
     return jsonify({"etapas": montar_etapas_agentes_planejamento()})
 
 
@@ -539,10 +539,10 @@ def api_planejamento_agentes_rodar():
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar_tudo():
-    """Botão "Executar tudo" da barra do planejamento: os 4 agentes em
+    """Botão "Executar tudo" da barra do planejamento: os agentes em
     sequência (Importação sem filtro → Criar Rotas Diárias Rascunho →
-    Incrementar Rotas → Gerar Romaneios), cada um esperando o anterior
-    terminar (iniciar_sequencia)."""
+    Incrementar Rotas → Processar Documentos → Gerar Romaneios), cada
+    um esperando o anterior terminar (iniciar_sequencia)."""
     if any(ha_execucao_rodando(agente_id) for agente_id in AGENTES_PLANEJAMENTO_IDS):
         return jsonify({"erro": "Já tem uma etapa rodando -- espera terminar antes de rodar tudo."}), 409
     passos = [{"agente": buscar_agente(agente_id)} for agente_id in AGENTES_PLANEJAMENTO_IDS]
