@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-coleta-emporio-quatro-estrelas.service todo dia útil às 08:00
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

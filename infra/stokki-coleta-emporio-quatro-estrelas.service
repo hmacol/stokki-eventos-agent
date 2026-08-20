@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Lançar coleta diária do Empório Quatro Estrelas na VUUPT (lancar_coleta.py)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/coleta_emporio_quatro_estrelas
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/coleta_emporio_quatro_estrelas/lancar_coleta.py
