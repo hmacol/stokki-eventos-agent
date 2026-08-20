@@ -487,10 +487,18 @@ def planejamento_mobile():
 
 
 # IDs dos agentes acionáveis pela barra de botões do planejamento --
-# usada tanto pra validar o agente_id recebido em /rodar (não deixa
-# essa tela disparar qualquer agente do sistema, só os dela) quanto
-# como ordem de execução do "Executar tudo".
+# usada pra validar o agente_id recebido em /rodar (não deixa essa
+# tela disparar qualquer agente do sistema, só os dela).
 AGENTES_PLANEJAMENTO_IDS = tuple(e["agente_id"] for e in ETAPAS_AGENTES_PLANEJAMENTO)
+
+# Subconjunto que entra na ordem de execução do "Executar tudo" --
+# Expedição fica de fora (etapa "incluir_executar_tudo": False em
+# planejamento_rotas.py: atua sobre pedidos já entregues, roda pela
+# tarefa agendada própria, não faz parte do fluxo de criar rota pro
+# dia seguinte).
+AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS = tuple(
+    e["agente_id"] for e in ETAPAS_AGENTES_PLANEJAMENTO if e.get("incluir_executar_tudo", True)
+)
 
 
 @app.route("/api/planejamento/agentes/etapas")
@@ -540,12 +548,14 @@ def api_planejamento_agentes_rodar():
 @exige_mesma_origem
 def api_planejamento_agentes_rodar_tudo():
     """Botão "Executar tudo" da barra do planejamento: os agentes em
-    sequência (Importação sem filtro → Criar Rotas Diárias Rascunho →
-    Incrementar Rotas → Processar Documentos → Gerar Romaneios), cada
-    um esperando o anterior terminar (iniciar_sequencia)."""
+    sequência (Estação de Impressão → Importação sem filtro → Criar
+    Rotas Diárias Rascunho → Incrementar Rotas → Processar Documentos
+    → Gerar Romaneios), cada um esperando o anterior terminar
+    (iniciar_sequencia). Expedição fica fora dessa sequência -- ver
+    AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS."""
     if any(ha_execucao_rodando(agente_id) for agente_id in AGENTES_PLANEJAMENTO_IDS):
         return jsonify({"erro": "Já tem uma etapa rodando -- espera terminar antes de rodar tudo."}), 409
-    passos = [{"agente": buscar_agente(agente_id)} for agente_id in AGENTES_PLANEJAMENTO_IDS]
+    passos = [{"agente": buscar_agente(agente_id)} for agente_id in AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS]
     iniciar_sequencia(passos)
     return jsonify({"ok": True})
 

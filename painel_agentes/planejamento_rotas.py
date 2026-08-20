@@ -54,16 +54,28 @@ logger = logging.getLogger(__name__)
 # embarcador/pedido), Criar Rotas Diárias (Rascunho), Incrementar
 # Rotas, Gerar PDFs de Romaneio" direto na tela, sem precisar ir no
 # painel de agentes. Ordem = ordem operacional (e também a ordem em
-# que "Executar tudo" roda cada um). Mesmo padrão de torre_controle.
-# ETAPAS_PIPELINE/montar_etapas_pipeline, só que restrito aos agentes
-# relevantes pra essa tela (não inclui, por exemplo, Expedição/
-# Relatório, que são da torre).
+# que "Executar tudo" roda cada um, respeitando incluir_executar_tudo
+# -- ver AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS em painel_agentes.py).
+# Mesmo padrão de torre_controle.py::ETAPAS_PIPELINE/
+# montar_etapas_pipeline, só que restrito aos agentes relevantes pra
+# essa tela (não inclui, por exemplo, Relatório, que é só da torre).
 # Processar Documentos entra ANTES de Gerar Romaneios (pedido do
 # Hugo, 20/08): gerar_pdf_romaneios.py lê NF/boleto do índice/pastas
 # locais que processar_documentos.py alimenta -- sem rodar antes, o
 # romaneio sai sem a papelada.
+# Estação de Impressão e Expedição entraram 20/08 (pedido do Hugo):
+# Impressão vai no INÍCIO (move pedidos faturados de 'Em espera' pra
+# 'Aguardando Transportador' na Stokki -- pré-requisito pra Importação
+# conseguir puxar esses pedidos, mesma ordem do executar_tudo.py) e
+# participa do "Executar tudo"; Expedição vai no FIM (atua sobre
+# pedidos já ENTREGUES, não faz parte do fluxo de criar rota pro dia
+# seguinte) e fica FORA do "Executar tudo" -- roda pela tarefa
+# agendada própria, foi tirada de propósito do executar_tudo.py em
+# 06/08 e essa tela não deve reintroduzir isso sem o Hugo pedir.
 ETAPAS_AGENTES_PLANEJAMENTO = [
-    {"agente_id": "somente_importacao",           "titulo": "Importação",
+    {"agente_id": "somente_impressao",             "titulo": "Estação de Impressão",
+     "detalhe": "Em espera → Aguardando Transportador (Stokki)"},
+    {"agente_id": "somente_importacao",            "titulo": "Importação",
      "detalhe": "Stokki → VUUPT (todos, ou filtrado por pedido/embarcador)"},
     {"agente_id": "criar_rotas_diarias_rascunho",  "titulo": "Criar Rotas Diárias (Rascunho)",
      "detalhe": "gera rascunhos locais pra revisão nessa tela"},
@@ -73,6 +85,8 @@ ETAPAS_AGENTES_PLANEJAMENTO = [
      "detalhe": "busca NF/Boleto por e-mail e na Stokki, casa com o pedido e envia pro GCS"},
     {"agente_id": "gerar_romaneios",               "titulo": "Gerar PDFs de Romaneio",
      "detalhe": "1 PDF por rota do dia, na ordem de visita"},
+    {"agente_id": "somente_expedicao",             "titulo": "Expedição",
+     "detalhe": "entregues → Stokki", "incluir_executar_tudo": False},
 ]
 
 
@@ -94,7 +108,7 @@ def montar_etapas_agentes_planejamento() -> list[dict]:
 
 _DB_PATH = _RAIZ / "dados" / "dados.db"
 
-_PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 
 
 def _codigo_base(codigo: str) -> str:
@@ -105,8 +119,16 @@ def _codigo_base(codigo: str) -> str:
     (matcher.py grava codigo_pedido sempre sem '#'). Mesma normalização
     de roteirizacao/gerar_pdf_romaneios.py::_codigo_base (achado 12/08:
     sem ela, reentrega nunca casa com NF/boleto nem encontra o pedido
-    na Stokki)."""
-    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
+    na Stokki).
+
+    Extrai o PREFIXO 'PS-NNNNN' em vez de remover sufixo do FIM da
+    string (achado 20/08): reentrega de reentrega empilha sufixo --
+    'PS-36741-R1-R1' -- e uma regex ancorada em '$' só tira o ÚLTIMO
+    '-R\\d+', devolvendo 'PS-36741-R1' em vez do código base. Casar
+    pelo prefixo é imune a qualquer sufixo/combinação que apareça
+    depois (-R1, -C1, -R1-R1, -R2-C1...)."""
+    m = _PADRAO_CODIGO_BASE.match((codigo or "").lstrip("#").strip())
+    return m.group(0) if m else (codigo or "").lstrip("#")
 
 
 def _codigos_base_lista(codigo: str) -> list[str]:

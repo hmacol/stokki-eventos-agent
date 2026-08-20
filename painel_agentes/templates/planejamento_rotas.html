@@ -1284,9 +1284,10 @@
 </div>
 
 <script>
-  // Barra de agentes (Importação/Criar Rotas Diárias Rascunho/
-  // Incrementar Rotas/Gerar Romaneios/Executar tudo) -- pedido do
-  // Hugo, 14/08. Bloco à parte, FORA do if/elif principal da tela
+  // Barra de agentes (Estação de Impressão/Importação/Criar Rotas
+  // Diárias Rascunho/Incrementar Rotas/Processar Documentos/Gerar
+  // Romaneios/Expedição/Executar tudo) -- pedido do Hugo, 14/08
+  // (Impressão e Expedição entraram 20/08). Bloco à parte, FORA do if/elif principal da tela
   // (roda mesmo sem rascunho/pool pra essa data -- é justamente esse o
   // caso em que o botão "Criar Rotas Diárias (Rascunho)" mais faz
   // falta aqui). Nomes com sufixo "Agentes"/"AgentesPlanejamento" de
@@ -1392,7 +1393,7 @@
   }
 
   async function rodarTudoPlanejamento() {
-    if (!confirm("Rodar tudo agora: Importação (sem filtro) → Criar Rotas Diárias (Rascunho) → Incrementar Rotas → Gerar PDFs de Romaneio, em sequência?")) return;
+    if (!confirm("Rodar tudo agora: Estação de Impressão → Importação (sem filtro) → Criar Rotas Diárias (Rascunho) → Incrementar Rotas → Processar Documentos → Gerar PDFs de Romaneio, em sequência?")) return;
     try {
       await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar-tudo", {});
       algumaEtapaAgentePlanejamentoRodando = true;
