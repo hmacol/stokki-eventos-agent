@@ -1,7 +1,0 @@
-# HTTPS automatico via Let's Encrypt.
-# Requisito: o DNS de atendimento.freshlogbr.com ja deve apontar para o IP da VPS
-# ANTES de subir o Caddy (senao a emissao do certificado falha).
-
-atendimento.freshlogbr.com {
-	reverse_proxy rails:3000
-}

@@ -1,6 +1,9 @@
 # Chatwoot auto-hospedado — FreshLog Atendimento (Fase 0)
-# Baseado no docker-compose.production.yaml oficial do Chatwoot,
-# com Caddy na frente para HTTPS automático (Let's Encrypt).
+# Baseado no docker-compose.production.yaml oficial do Chatwoot.
+# Sem Caddy aqui dentro: essa VPS já roda Caddy nativo (systemd) na frente
+# de outros serviços (app.freshhub.com.br, confirmacao.freshhub.com.br) —
+# o rails deste compose só publica em 127.0.0.1:3000 e o Caddy nativo faz
+# o reverse proxy + HTTPS (ver Caddyfile-atendimento).
 #
 # Primeira subida (na VPS):
 #   docker compose run --rm rails bundle exec rails db:chatwoot_prepare
@@ -58,22 +61,7 @@ services:
     volumes:
       - redis_data:/data
 
-  caddy:
-    image: caddy:2-alpine
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - rails
-
 volumes:
   storage_data:
   postgres_data:
   redis_data:
-  caddy_data:
-  caddy_config:

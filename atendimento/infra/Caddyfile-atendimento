@@ -1,0 +1,9 @@
+# Bloco a acrescentar no /etc/caddy/Caddyfile NATIVO da VPS (não é usado por
+# nenhum container — essa VPS já roda Caddy via systemd na frente de outros
+# serviços). HTTPS automático via Let's Encrypt.
+# Requisito: o DNS de atendimento.freshhub.com.br já deve apontar para o IP
+# da VPS ANTES de acrescentar este bloco (senão a emissão do certificado falha).
+
+atendimento.freshhub.com.br {
+	reverse_proxy 127.0.0.1:3000
+}

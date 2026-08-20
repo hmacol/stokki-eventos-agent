@@ -9,14 +9,14 @@ Plano geral do projeto: https://claude.ai/code/artifact/e06e4d13-79b6-4aff-acd2-
 
 | # | Tarefa | Quem | Status |
 |---|--------|------|--------|
-| 1 | Comprar chip/número dedicado do atendimento | Hugo | ☐ |
-| 2 | Contratar VPS (Ubuntu 24.04, ≥4 GB RAM) | Hugo | ☐ |
-| 3 | Criar DNS `atendimento.freshlogbr.com` → IP da VPS | Hugo | ☐ |
-| 4 | Instalar Chatwoot na VPS (`infra/instalar_vps.sh`) | Claude + Hugo | ☐ |
-| 5 | Criar `atendimento@freshlogbr.com` no Google Workspace + senha de app | Hugo | ☐ |
-| 6 | Verificação da empresa no Meta Business (CNPJ) | Hugo | ☐ |
-| 7 | App na Meta + número na WhatsApp Cloud API + token permanente | Hugo (com roteiro abaixo) | ☐ |
-| 8 | Conectar canal WhatsApp no Chatwoot | Claude + Hugo | ☐ |
+| 1 | Comprar chip/número dedicado do atendimento | Hugo | ☑ |
+| 2 | VPS (reaproveitada a VPS de produção já existente, `187.127.52.197`) | Hugo | ☑ |
+| 3 | Criar DNS `atendimento.freshhub.com.br` → IP da VPS | Hugo | ☐ |
+| 4 | Instalar Chatwoot na VPS (`infra/instalar_vps.sh`) + bloco no Caddy nativo | Claude + Hugo | ☑ |
+| 5 | Senha de app do Google pra `hugo@freshlogbr.com` (SMTP técnico) | Hugo | ☐ |
+| 6 | Verificação da empresa no Meta Business (CNPJ) | Hugo | ☐ (em revisão desde 18/08, Meta estima ~2 dias úteis) |
+| 7 | App na Meta + número na WhatsApp Cloud API + token permanente | Hugo (com roteiro abaixo) | ☑ |
+| 8 | Conectar canal WhatsApp no Chatwoot | Claude + Hugo | ☑ |
 | 9 | Conectar canal E-mail no Chatwoot | Claude + Hugo | ☐ |
 | 10 | Criar usuários, equipes e caixas de entrada | Claude + Hugo | ☐ |
 | 11 | Teste de aceite (critério de pronto) | Todos | ☐ |
@@ -34,50 +34,47 @@ As tarefas 1, 2, 3, 5 e 6 podem andar **em paralelo desde já**. A 6 (verificaç
 
 ## 2. VPS
 
-Requisitos: Ubuntu 24.04, **4 GB RAM / 2 vCPU** (2 GB roda, mas 4 GB dá folga para o bot da Fase 2 no mesmo servidor), 40 GB+ de disco.
+Decisão (18/08): em vez de contratar uma VPS nova só para o Chatwoot, reaproveitamos a VPS Hostinger de produção que já hospeda o resto do Stokki Eventos (`187.127.52.197`, Ubuntu 24.04.4, 4 vCPU/15 GB RAM, ~188 GB livres — folga de sobra pro Chatwoot). Chave SSH dedicada gerada em `~/.ssh/atendimento_vps` e instalada no `authorized_keys` da VPS.
 
-Opções (valores de referência, conferir na contratação):
+Diferença importante em relação ao plano original: essa VPS já roda **Caddy nativo** (systemd, não em Docker) na frente de `app.freshhub.com.br` (guarda-chuva `/painel`, `/insucesso`) e `confirmacao.freshhub.com.br`. O Chatwoot segue o mesmo padrão de exceção do `confirmacao_motoristas`: **subdomínio próprio** (`atendimento.freshhub.com.br`), não path-prefix — Chatwoot não roda bem atrás de um path (assets/websockets esperam a raiz do domínio). O `docker-compose.yml` do Chatwoot **não inclui mais Caddy** — o rails publica só em `127.0.0.1:3000` e quem expõe pra internet é o Caddy nativo, via `Caddyfile-atendimento`.
 
-| Provedor | Plano | Local | Faixa de preço |
-|----------|-------|-------|----------------|
-| Hostinger (recomendado) | KVM 2 (2 vCPU/8 GB) | São Paulo | ~R$ 30–60/mês |
-| Vultr | Regular 4 GB | São Paulo | ~US$ 24/mês |
-| Hetzner | CX32 (4 vCPU/8 GB) | Europa | ~€ 7/mês (latência maior, funciona bem) |
-
-Ao contratar: escolher Ubuntu 24.04, adicionar chave SSH (posso gerar), anotar o **IP fixo**.
+Docker não estava instalado nessa VPS — o `instalar_vps.sh` cuida disso (`get.docker.com`). `ufw` já está ativo com 22/80/443 liberados, nada a mudar aí.
 
 ## 3. DNS
 
-No gerenciador do domínio `freshlogbr.com` (Registro.br, Cloudflare ou onde estiver):
+O domínio `freshhub.com.br` é gerenciado no **Registro.br** (nameservers `dns.br`). Lá, na zona do domínio:
 
 ```
-Tipo A | Nome: atendimento | Valor: IP_DA_VPS | TTL: 300
+Tipo A | Nome: atendimento | Valor: 187.127.52.197 | TTL: 300
 ```
 
-Fazer isso **antes** da instalação — o certificado HTTPS só é emitido com o DNS apontando.
+Fazer isso **antes** de acrescentar o bloco no Caddy — o certificado HTTPS só é emitido com o DNS já apontando.
 
 ## 4. Instalação do Chatwoot
 
-Arquivos prontos em [infra/](infra/): `docker-compose.yml` (Chatwoot + Postgres + Redis + Caddy com HTTPS automático), `env.exemplo` e `instalar_vps.sh`.
+Arquivos prontos em [infra/](infra/): `docker-compose.yml` (Chatwoot + Postgres + Redis, sem Caddy embutido), `env.exemplo`, `instalar_vps.sh` e `Caddyfile-atendimento` (bloco a acrescentar no Caddy nativo da VPS).
 
 ```bash
 # do Windows (PowerShell ou Git Bash), na pasta atendimento/:
-scp -r infra/ root@IP_DA_VPS:/opt/chatwoot
+scp -r infra/ root@187.127.52.197:/opt/stokki-eventos/atendimento/infra
 
-ssh root@IP_DA_VPS
-cd /opt/chatwoot
+ssh root@187.127.52.197
+cd /opt/stokki-eventos/atendimento/infra
 bash instalar_vps.sh        # 1ª execução: cria o .env com segredos e para
 nano .env                   # revisar SMTP (senha de app do Google — item 5)
-bash instalar_vps.sh        # 2ª execução: baixa imagens, prepara banco, sobe tudo
+bash instalar_vps.sh        # 2ª execução: baixa imagens, prepara banco, sobe tudo (rails em 127.0.0.1:3000)
 ```
 
-Primeiro acesso em `https://atendimento.freshlogbr.com`: criar a conta **FreshLog** (o primeiro usuário vira administrador — usar o e-mail do gerente ou do Hugo). Em seguida trocar `ENABLE_ACCOUNT_SIGNUP=false` no `.env` e rodar `docker compose up -d`.
+Depois, com o DNS já propagado, acrescentar o conteúdo de `Caddyfile-atendimento` ao `/etc/caddy/Caddyfile` nativo da VPS e rodar `caddy validate` + `systemctl reload caddy` (o Caddy emite o certificado Let's Encrypt automaticamente no reload).
 
-## 5. E-mail de atendimento
+Primeiro acesso em `https://atendimento.freshhub.com.br`: criar a conta **FreshLog** (o primeiro usuário vira administrador — usar o e-mail do gerente ou do Hugo). Em seguida trocar `ENABLE_ACCOUNT_SIGNUP=false` no `.env` e rodar `docker compose up -d`.
 
-1. No Google Workspace Admin, criar a conta `atendimento@freshlogbr.com` (ou um alias/grupo, mas conta própria é mais simples para IMAP).
-2. Na conta nova: ativar verificação em 2 etapas → gerar **senha de app** (https://myaccount.google.com/apppasswords). Ela serve para o SMTP do `.env` e para o canal de e-mail do Chatwoot.
-3. Ativar IMAP (Gmail → Configurações → Encaminhamento e POP/IMAP).
+## 5. SMTP técnico (e-mails transacionais do Chatwoot)
+
+Decisão (18/08): em vez de criar uma conta nova `atendimento@freshlogbr.com` só pra isso, o SMTP técnico (convites de usuário, reset de senha, notificações do próprio Chatwoot) usa a conta que já existe, `hugo@freshlogbr.com`. Isso é separado da caixa de entrada do suporte (essa sim, criada mais adiante — ver item 9).
+
+1. Confirmar que `hugo@freshlogbr.com` tem verificação em 2 etapas ativa.
+2. Gerar **senha de app** (https://myaccount.google.com/apppasswords) pra essa conta — vai no `SMTP_PASSWORD` do `.env`.
 
 ## 6. Meta Business — verificação da empresa
 
@@ -110,9 +107,11 @@ Com o portfólio criado (verificação pode estar em andamento):
 
 ## 9. Canal E-mail no Chatwoot
 
-1. Caixas de entrada → **Adicionar** → E-mail → `atendimento@freshlogbr.com`.
-2. Configurar **IMAP** (imap.gmail.com, 993, SSL) e **SMTP** (smtp.gmail.com, 587, STARTTLS) com a senha de app do item 5.
-3. Teste: enviar e-mail de fora → vira conversa no Chatwoot; responder → chega como e-mail normal.
+1. No Google Workspace Admin, criar a conta `atendimento@freshlogbr.com` (essa sim é a caixa de entrada real do suporte, separada do `hugo@freshlogbr.com` usado no SMTP técnico do item 5).
+2. Na conta nova: ativar verificação em 2 etapas → gerar **senha de app** própria (https://myaccount.google.com/apppasswords) e ativar IMAP (Gmail → Configurações → Encaminhamento e POP/IMAP).
+3. No Chatwoot: Caixas de entrada → **Adicionar** → E-mail → `atendimento@freshlogbr.com`.
+4. Configurar **IMAP** (imap.gmail.com, 993, SSL) e **SMTP** (smtp.gmail.com, 587, STARTTLS) com a senha de app gerada no passo 2.
+5. Teste: enviar e-mail de fora → vira conversa no Chatwoot; responder → chega como e-mail normal.
 
 ## 10. Usuários, equipes e caixas
 
@@ -128,7 +127,7 @@ Com o portfólio criado (verificação pode estar em andamento):
 - [ ] E-mail externo → vira conversa → resposta chega como e-mail.
 - [ ] Dois atendentes logados ao mesmo tempo respondendo conversas diferentes do mesmo número.
 - [ ] Gerente enxerga as conversas dos dois.
-- [ ] `https://atendimento.freshlogbr.com` com cadeado (HTTPS) válido.
+- [ ] `https://atendimento.freshhub.com.br` com cadeado (HTTPS) válido.
 
 ---
 
