@@ -58,10 +58,12 @@ from vuupt_client import VuuptClient
 from notificar_execucao_agente import notificar_execucao
 
 from classificador import classificar_documento
-from matcher import casar_documento_com_pedido, extrair_nf_da_danfe, IndexadorNF
+from matcher import (casar_documento_com_pedido, extrair_nf_da_danfe,
+                     extrair_numero_e_cnpj_pedido_venda, IndexadorNF)
 from boleto_parser import extrair_metadados_boleto
 from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
-                                    pedidos_nf_pendentes, atualizar_nf_pedido)
+                                    pedidos_nf_pendentes, atualizar_nf_pedido,
+                                    listar_pendentes_revisao)
 from email_documentos import buscar_pdfs_por_email
 import storage_gcs
 
@@ -144,7 +146,8 @@ def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
 
 def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
                            tipos_permitidos: set[str] | None = None,
-                           indexador_nf: IndexadorNF | None = None) -> str:
+                           indexador_nf: IndexadorNF | None = None,
+                           ignorar_ja_processado: bool = False) -> str:
     """
     item: {"caminho_local", "nome_arquivo", "assunto_email" (opcional)}
     tipos_permitidos: se informado, documento classificado com um tipo
@@ -154,6 +157,9 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     indexador_nf: índice NF->pedido compartilhado da execução -- as
     DANFEs processadas o alimentam, os boletos consultam (spec de
     boletos parcelados, 11/08).
+    ignorar_ja_processado: usado só por retentar_revisao_manual() --
+    reprocessa um hash que já está no banco (com status REVISAO_MANUAL)
+    de propósito, em vez de pular como "já visto".
     Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL",
     "FORA_DE_ESCOPO", "ERRO".
     """
@@ -162,7 +168,7 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     assunto_email = item.get("assunto_email")
 
     hash_conteudo = calcular_hash(caminho)
-    if ja_processado(hash_conteudo):
+    if not ignorar_ja_processado and ja_processado(hash_conteudo):
         return "JA_PROCESSADO"
 
     classificacao = classificar_documento(caminho)
@@ -180,6 +186,8 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     metadados_boleto = None
     if classificacao["tipo"] == "Nota Fiscal":
         numero_nf, cnpj_contraparte = extrair_nf_da_danfe(texto_completo)
+    elif classificacao["tipo"] == "Pedido de Venda":
+        numero_nf, cnpj_contraparte = extrair_numero_e_cnpj_pedido_venda(texto_completo)
     elif classificacao["tipo"] == "Boleto":
         metadados_boleto = extrair_metadados_boleto(caminho, texto_pdf=texto_completo)
         numero_nf = metadados_boleto["numero_nf"]
@@ -267,6 +275,62 @@ def _backfill_nf_danfes_locais(indexador: IndexadorNF):
             preenchidos += 1
     if preenchidos:
         logger.info(f"Backfill de NF: {preenchidos} DANFE(s) antiga(s) indexada(s) a partir dos PDFs locais.")
+
+
+# Pastas onde os PDFs ficam em cache local depois de baixados/separados
+# -- nenhuma delas é limpa depois do processamento (achado 20/08:
+# investigando por que documentos em REVISAO_MANUAL nunca se resolviam
+# sozinhos mesmo depois do pedido aparecer no VUUPT).
+_PASTAS_CACHE_DOCUMENTOS = [
+    Path(__file__).parent / "dados" / "boletos_separados",
+    Path(__file__).parent / "dados" / "nfs_separadas",
+    Path(__file__).parent / "dados" / "downloads_stokki_temp",
+    Path(__file__).parent / "dados" / "anexos_temp",
+]
+
+
+def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf: IndexadorNF) -> dict:
+    """
+    Retenta o casamento dos documentos que ficaram em REVISAO_MANUAL.
+    Achado 20/08: ja_processado() bloqueia pelo HASH DO CONTEÚDO pra
+    qualquer status (inclusive REVISAO_MANUAL) -- um documento que não
+    casou porque o pedido ainda não existia no VUUPT no momento do
+    processamento (mesma corrida de tempo entre a chegada do documento
+    e a importação do pedido pelo Pipeline, ver [[project_planilha_
+    entregas_nuu]]) fica preso pra sempre, mesmo o pedido aparecendo
+    minutos depois -- sem isso, é a maior causa de Boleto nunca casado.
+
+    Usa o arquivo já em cache em disco (nenhuma das pastas de
+    documentos separados/baixados é limpa depois do processamento) pra
+    reclassificar, re-extrair metadados e re-tentar o casamento do
+    zero -- se resolver agora, sobe pro GCS de verdade (documento em
+    REVISAO_MANUAL nunca foi enviado). Documento cujo arquivo não está
+    mais em disco fica de fora -- não há como recuperar o conteúdo
+    original.
+    """
+    pendentes = listar_pendentes_revisao(limite=10_000)
+
+    contadores = {"resolvidos": 0, "sem_arquivo": 0, "ainda_pendente": 0}
+    for row in pendentes:
+        caminho = next((p / row["nome_arquivo"] for p in _PASTAS_CACHE_DOCUMENTOS
+                        if (p / row["nome_arquivo"]).exists()), None)
+        if not caminho:
+            contadores["sem_arquivo"] += 1
+            continue
+
+        item = {"caminho_local": caminho, "nome_arquivo": row["nome_arquivo"],
+                "assunto_email": "" if row["origem"] == "email" else None}
+        status = processar_um_documento(item, vuupt, config, modo_teste,
+                                        indexador_nf=indexador_nf, ignorar_ja_processado=True)
+        if status == "ENVIADO":
+            contadores["resolvidos"] += 1
+            logger.info(f"  [retentativa] {row['nome_arquivo']} ({row['tipo']}): revisão manual resolvida.")
+        else:
+            contadores["ainda_pendente"] += 1
+
+    if pendentes:
+        logger.info(f"Retentativa de revisão manual: {contadores} (de {len(pendentes)} pendente(s)).")
+    return contadores
 
 
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True):
@@ -405,6 +469,17 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         resumo_etapas["Documentos (e-mail embarcadores)"] = {
             "status": "ok",
             "detalhe": f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)",
+        }
+
+        # ── Etapa 4: retentativa de REVISAO_MANUAL ────────────────────────
+        # Cobre a corrida comum entre o documento chegar e o pedido ser
+        # importado no VUUPT -- ver retentar_revisao_manual().
+        retentativa = retentar_revisao_manual(vuupt, config, modo_teste, indexador_nf)
+        contadores["ENVIADO"] = contadores.get("ENVIADO", 0) + retentativa["resolvidos"]
+        resumo_etapas["Documentos (retentativa revisão manual)"] = {
+            "status": "ok",
+            "detalhe": f"{retentativa['resolvidos']} resolvido(s), {retentativa['ainda_pendente']} ainda "
+                      f"pendente(s), {retentativa['sem_arquivo']} sem arquivo em cache",
         }
 
         resumo_etapas["Resumo geral"] = {
