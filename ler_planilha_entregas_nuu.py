@@ -390,32 +390,49 @@ def extrair_endereco_novo(texto: str) -> str | None:
 
 
 # ── Casamento com pedido no VUUPT ────────────────────────────────────────
+_RE_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
+
+
 def casar_nf_com_pedido(numero_nf: str, vuupt: VuuptClient) -> dict | None:
     """
     Mesma regra 3b de documentos_pedido/matcher.py (referência da NF no
     título do serviço): tenta o formato com zero-padding de 6 dígitos
     primeiro (padrão real dos títulos), cai pro número cru só se
-    diferente. Só aceita casamento SEM ambiguidade (exatamente 1 código
-    de pedido nos resultados) -- errar aqui manda a data de agendamento
-    ou o endereço pro pedido errado.
+    diferente. Só aceita casamento SEM ambiguidade -- errar aqui manda a
+    data de agendamento ou o endereço pro pedido errado.
+
+    A busca no VUUPT é por substring ("contains"), o que pode trazer
+    pedidos de OUTROS embarcadores cuja referência só COMEÇA com os
+    mesmos dígitos (ex: NF 40287 bate em '40287623831/PADRAO PURO LTDA',
+    uma referência maior de outro cliente) -- filtra client-side exigindo
+    a NF como número isolado no título (sem dígito colado antes/depois).
+    Reentregas (código com sufixo '-RN', ex: 'PS-36316-R1') contam como
+    o MESMO pedido pra fins de ambiguidade -- é o mesmo embarque, só uma
+    nova tentativa de entrega; nesse caso prefere a variante de
+    reentrega (é a que está de fato pendente de entrega).
     """
     ref6 = numero_nf.zfill(6)
     termos = [ref6] + ([numero_nf] if numero_nf != ref6 else [])
     for termo in termos:
         try:
             servicos = vuupt.listar_servicos(
-                [{"field": "title", "operator": "contains", "value": termo}], per_page=5
+                [{"field": "title", "operator": "contains", "value": termo}], per_page=10
             )
         except Exception as e:
             logger.warning(f"  Falha na busca por referência {termo!r} no VUUPT: {e}")
             continue
         if not servicos:
             continue
-        codigos = {s.get("code", "").lstrip("#") for s in servicos}
-        codigos.discard("")
-        if len(codigos) == 1:
-            codigo = next(iter(codigos))
-            servico = next(s for s in servicos if s.get("code", "").lstrip("#") == codigo)
+        padrao_isolado = re.compile(rf"(?<!\d){re.escape(termo)}(?!\d)")
+        validos = [s for s in servicos if padrao_isolado.search(s.get("title", "") or "")]
+        if not validos:
+            continue
+        codigos_base = {_RE_SUFIXO_REENTREGA.sub("", (s.get("code") or "").lstrip("#")) for s in validos}
+        codigos_base.discard("")
+        if len(codigos_base) == 1:
+            codigo = next(iter(codigos_base))
+            reentrega = next((s for s in validos if _RE_SUFIXO_REENTREGA.search((s.get("code") or "").lstrip("#"))), None)
+            servico = reentrega or validos[0]
             return {"codigo_pedido": codigo, "metodo": "nf_referencia_titulo", "servico": servico}
     return None
 
@@ -569,6 +586,57 @@ def _notificar_enderecos_novos(itens: list[dict], config_email: dict) -> bool:
                         corpo, config_email)
 
 
+# ── Retentativa de NFs pendentes ─────────────────────────────────────────
+def _reprocessar_pendencias(vuupt: VuuptClient, cnpj_emb: str, email_emb: str, modo_teste: bool) -> int:
+    """
+    Retenta o casamento de NFs que ficaram sem pedido em execuções
+    anteriores. Cobre o caso comum de a planilha ser lida ANTES do
+    pedido daquela NF ter sido importado no VUUPT (Etapa 1a roda antes
+    do Pipeline) -- sem isso, uma NF que não casou na 1ª tentativa fica
+    presa pra sempre, a não ser que reapareça numa planilha de um dia
+    futuro. Retorna quantos agendamentos foram aplicados nesta
+    retentativa.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    pendentes = conn.execute("""
+        SELECT numero_nf, data_agendamento_extraida FROM entregas_nuu_planilha
+        WHERE codigo_pedido IS NULL
+    """).fetchall()
+    conn.close()
+
+    aplicados = 0
+    for row in pendentes:
+        correspondencia = casar_nf_com_pedido(row["numero_nf"], vuupt)
+        if not correspondencia:
+            continue
+        codigo_pedido = correspondencia["codigo_pedido"]
+        servico = correspondencia["servico"]
+        logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: casamento pendente resolvido.")
+
+        if not modo_teste:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("""
+                UPDATE entregas_nuu_planilha SET codigo_pedido = ?, metodo_casamento = ?,
+                    atualizado_em = datetime('now','localtime') WHERE numero_nf = ?
+            """, (codigo_pedido, correspondencia["metodo"], row["numero_nf"]))
+            conn.commit()
+            conn.close()
+
+        data_agenda = row["data_agendamento_extraida"]
+        if not data_agenda:
+            continue
+        if modo_teste:
+            logger.info(f"  [retentativa][TESTE] NF {row['numero_nf']} -> {codigo_pedido}: "
+                       f"aplicaria agendamento {data_agenda}.")
+            aplicados += 1
+        elif _registrar_agendamento_confirmado(codigo_pedido, data_agenda, servico, vuupt, cnpj_emb, email_emb):
+            aplicados += 1
+            logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: agendamento "
+                       f"{data_agenda} registrado.")
+    return aplicados
+
+
 # ── Orquestração ──────────────────────────────────────────────────────────
 def processar_planilhas_entregas(config: dict, modo_teste: bool = False) -> dict:
     _garantir_tabelas()
@@ -633,8 +701,12 @@ def processar_planilhas_entregas(config: dict, modo_teste: bool = False) -> dict
         else:
             _notificar_enderecos_novos(enderecos_novos, config.get("email", {}))
 
+    agendamentos_retentativa = _reprocessar_pendencias(vuupt, cnpj_emb, email_emb, modo_teste)
+    agendamentos_aplicados += agendamentos_retentativa
+
     resultado = {"planilhas": len(planilhas), "linhas": total_linhas, "casados": casados,
-                "agendamentos_aplicados": agendamentos_aplicados, "enderecos_novos": len(enderecos_novos)}
+                "agendamentos_aplicados": agendamentos_aplicados, "enderecos_novos": len(enderecos_novos),
+                "agendamentos_retentativa": agendamentos_retentativa}
     logger.info(f"Planilhas de entregas NUU: {resultado}")
     return resultado
 
