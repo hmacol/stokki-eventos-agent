@@ -615,37 +615,45 @@ def _reprocessar_pendencias(vuupt: VuuptClient, cnpj_emb: str, email_emb: str, m
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     pendentes = conn.execute("""
-        SELECT numero_nf, data_agendamento_extraida FROM entregas_nuu_planilha
+        SELECT numero_nf, agenda_bruto FROM entregas_nuu_planilha
         WHERE codigo_pedido IS NULL
     """).fetchall()
     conn.close()
 
     aplicados = 0
     for row in pendentes:
+        # Reextrai a data do texto bruto em vez de confiar no valor já
+        # persistido -- autocorrige pendências gravadas com uma data
+        # ruim por uma versão anterior da extração (ex: 'AGENDADO
+        # 24/04' que já foi aceito como 24/04/2027) mesmo quando o
+        # casamento com o pedido ainda não resolve nesta tentativa.
+        data_agenda = extrair_data_agenda(row["agenda_bruto"])
         correspondencia = casar_nf_com_pedido(row["numero_nf"], vuupt)
-        if not correspondencia:
-            continue
-        codigo_pedido = correspondencia["codigo_pedido"]
-        servico = correspondencia["servico"]
-        logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: casamento pendente resolvido.")
+        codigo_pedido = correspondencia["codigo_pedido"] if correspondencia else None
+        metodo = correspondencia["metodo"] if correspondencia else None
 
         if not modo_teste:
             conn = sqlite3.connect(DB_PATH)
             conn.execute("""
                 UPDATE entregas_nuu_planilha SET codigo_pedido = ?, metodo_casamento = ?,
-                    atualizado_em = datetime('now','localtime') WHERE numero_nf = ?
-            """, (codigo_pedido, correspondencia["metodo"], row["numero_nf"]))
+                    data_agendamento_extraida = ?, atualizado_em = datetime('now','localtime')
+                WHERE numero_nf = ?
+            """, (codigo_pedido, metodo, data_agenda, row["numero_nf"]))
             conn.commit()
             conn.close()
 
-        data_agenda = row["data_agendamento_extraida"]
+        if not correspondencia:
+            continue
+        logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: casamento pendente resolvido.")
+
         if not data_agenda:
             continue
         if modo_teste:
             logger.info(f"  [retentativa][TESTE] NF {row['numero_nf']} -> {codigo_pedido}: "
                        f"aplicaria agendamento {data_agenda}.")
             aplicados += 1
-        elif _registrar_agendamento_confirmado(codigo_pedido, data_agenda, servico, vuupt, cnpj_emb, email_emb):
+        elif _registrar_agendamento_confirmado(codigo_pedido, data_agenda, correspondencia["servico"], vuupt,
+                                               cnpj_emb, email_emb):
             aplicados += 1
             logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: agendamento "
                        f"{data_agenda} registrado.")
