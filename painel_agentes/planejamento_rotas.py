@@ -109,6 +109,14 @@ def _codigo_base(codigo: str) -> str:
     return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
 
+def _codigos_base_lista(codigo: str) -> list[str]:
+    """'code' da VUUPT pode agrupar mais de um pedido combinado por
+    vírgula (achado 20/08, ver roteirizacao/gerar_pdf_romaneios.py::
+    _codigos_base_lista) -- quebra em códigos individuais antes de
+    normalizar, senão a busca de documentos nunca casa nada pro grupo."""
+    return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
+
+
 TAMANHO_MAXIMO_ROTA = 14  # Ajustado de 16 para 14 entregas por rota (pedido do Hugo, 20/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
@@ -232,8 +240,12 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
         "nivel_dificuldade": extrair_nivel_dificuldade(servico),
         "volume_caixas": extrair_volume_caixas(servico),
         # NF já casada (documentos_processados) pro pedido, se houver --
-        # Hugo, 14/08: buscar/adicionar pedido à rota pelo número da NF
-        "numero_nf": (nf_por_codigo or {}).get(_codigo_base(codigo), ""),
+        # Hugo, 14/08: buscar/adicionar pedido à rota pelo número da NF.
+        # 'codigo' pode agrupar mais de um pedido combinado por vírgula
+        # (achado 20/08) -- junta a NF de cada um.
+        "numero_nf": ", ".join(filter(None, (
+            (nf_por_codigo or {}).get(c, "") for c in _codigos_base_lista(codigo)
+        ))),
     }
 
 
@@ -357,7 +369,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
     servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
     nf_por_codigo = rascunhos_rota.carregar_nf_por_codigo_pedido(
-        {_codigo_base(s.get("code", "")) for s in servicos_brutos})
+        {c for s in servicos_brutos for c in _codigos_base_lista(s.get("code", ""))})
     pool = [
         _servico_para_pool(s, remetentes_por_id, nf_por_codigo)
         for s in servicos_brutos
@@ -432,11 +444,13 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
     # também dentro de rotas já montadas, não só no pool
     nf_por_codigo_rascunho = rascunhos_rota.carregar_nf_por_codigo_pedido(
-        {_codigo_base(p["codigo"]) for r in rascunhos for p in r["paradas"]})
+        {c for r in rascunhos for p in r["paradas"] for c in _codigos_base_lista(p["codigo"])})
     for r in rascunhos:
         for p in r["paradas"]:
             p["agendado_para"] = agendamentos.get(p["service_id"])
-            p["numero_nf"] = nf_por_codigo_rascunho.get(_codigo_base(p["codigo"]), "")
+            p["numero_nf"] = ", ".join(filter(None, (
+                nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
+            )))
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -884,7 +898,7 @@ def gerar_romaneio_pdf(rascunho_id: int) -> Path:
          "dimension_3": p.get("volume_caixas")}
         for p in rascunho["paradas"]
     ]
-    codigos = {_codigo_base(s["code"]) for s in servicos}
+    codigos = {c for s in servicos for c in _codigos_base_lista(s["code"])}
 
     docs_por_pedido, _em_revisao = gpr.carregar_documentos_por_pedido(codigos)
     embarcadores, fatores = gpr.carregar_embarcadores()
@@ -923,7 +937,7 @@ def carregar_documentos_do_rascunho(rascunho_id: int) -> dict:
     rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
     if not rascunho:
         raise ValueError(f"Rascunho {rascunho_id} não encontrado.")
-    codigos = sorted({_codigo_base(p["codigo"]) for p in rascunho["paradas"] if p["codigo"]})
+    codigos = sorted({c for p in rascunho["paradas"] if p["codigo"] for c in _codigos_base_lista(p["codigo"])})
     if not codigos:
         return {"JA_PROCESSADO": 0, "ENVIADO": 0, "REVISAO_MANUAL": 0, "ERRO": 0}
 

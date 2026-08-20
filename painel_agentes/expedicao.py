@@ -42,6 +42,14 @@ def _codigo_base(codigo: str) -> str:
     return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
 
+def _codigos_base_lista(codigo: str) -> list[str]:
+    """'code' da VUUPT pode agrupar mais de um pedido combinado por
+    vírgula (achado 20/08, ver roteirizacao/gerar_pdf_romaneios.py::
+    _codigos_base_lista) -- quebra em códigos individuais antes de
+    normalizar, senão a busca de documentos nunca casa nada pro grupo."""
+    return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
+
+
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -102,7 +110,7 @@ def gerar_romaneio_rota(data_alvo: date, rota_id: int) -> Path:
         raise ValueError("Rota sem paradas -- nada pra imprimir.")
 
     nome_motorista = nome_por_agent_id.get(rota.get("agent_id"), "(sem motorista)")
-    codigos = {_codigo_base((s.get("code") or "").lstrip("#")) for s in servicos}
+    codigos = {c for s in servicos for c in _codigos_base_lista(s.get("code") or "")}
     docs_por_pedido, _em_revisao = gpr.carregar_documentos_por_pedido(codigos)
     embarcadores, fatores = gpr.carregar_embarcadores()
 

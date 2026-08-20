@@ -128,6 +128,17 @@ def _codigo_base(codigo: str) -> str:
     (o motorista precisa saber que é a reentrega, não o pedido original)."""
     return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
+
+def _codigos_base_lista(codigo: str) -> list[str]:
+    """Um 'service' da VUUPT pode agrupar mais de um pedido no mesmo
+    endereço num único 'code' combinado por vírgula (achado 20/08, rota
+    #19: '#PS-37189, PS-37176, PS-37175', mesma entrega MARCHEF/GOURMAR)
+    -- _codigo_base sozinho tentava casar a string INTEIRA como chave e
+    nunca batia com nenhum codigo_pedido do banco, então a NF/boleto de
+    cada pedido (que estavam corretamente casados) sumiam do romaneio
+    inteiro. Aqui, quebra em códigos individuais antes de normalizar."""
+    return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
+
 # Página A4 em pixels a 150 dpi -- o resolution=150.0 no Image.save é
 # o que faz 1240px virarem 595pt (A4 de verdade) no PDF final.
 # Capa em PAISAGEM (pedido do Hugo, 13/08) pra caber endereço, volumes
@@ -691,7 +702,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
         sender_id = s.get("sender_id")
         embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
-        docs = docs_por_pedido.get(_codigo_base(codigo), [])
+        docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
 
         nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
         boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
@@ -824,7 +835,8 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
             logger.warning(f"Rota {r.get('name')} (id {r.get('id')}) sem serviços -- pulada.")
             continue
         rotas_com_servicos.append((r, servicos))
-        codigos.update(_codigo_base((s.get("code") or "").lstrip("#")) for s in servicos)
+        for s in servicos:
+            codigos.update(_codigos_base_lista(s.get("code") or ""))
 
     docs_por_pedido, em_revisao = carregar_documentos_por_pedido(codigos)
     logger.info(f"{sum(len(v) for v in docs_por_pedido.values())} documento(s) ENVIADO(s) "
