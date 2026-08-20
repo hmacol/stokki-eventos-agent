@@ -280,6 +280,9 @@ def validar_checklist_no_vuupt(token: str, checklist_id: int) -> bool:
         return False
 
 
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
+
+
 def duplicar_servico_por_canhoto(vuupt: VuuptClient, servico_original: dict) -> dict | None:
     """
     Clona o pedido no VUUPT pra RECOLETA DE CANHOTO quando a foto foi
@@ -287,8 +290,14 @@ def duplicar_servico_por_canhoto(vuupt: VuuptClient, servico_original: dict) -> 
     expedir_pedidos.py, com sufixo -C (canhoto) pra não confundir com
     as reentregas -R de insucesso. O novo nasce not_assigned e entra no
     próximo ciclo de roteirização normalmente.
-    """
-    code_original = (servico_original.get("code") or "").lstrip("#")
+
+    Parte do código BASE do original (achado 20/08 no fluxo irmão de
+    insucesso: sem isso, uma reentrega -R1 cujo canhoto também fosse
+    reprovado geraria 'PS-36741-R1-C1' em vez de 'PS-36741-C1' -- mesmo
+    risco de sufixo empilhando a cada nova recriação)."""
+    code_bruto = (servico_original.get("code") or "").lstrip("#")
+    m = _PADRAO_CODIGO_BASE.match(code_bruto)
+    code_original = m.group(0) if m else code_bruto
     sufixo = 1
     novo_code = f"#{code_original}-C{sufixo}"
     while vuupt.buscar_servico_por_code(novo_code):

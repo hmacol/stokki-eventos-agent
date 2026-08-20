@@ -324,6 +324,9 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
             logger.warning(f"  Pendente: {s.get('code')}")
 
 
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
+
+
 def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None:
     """
     Cria um NOVO serviço a partir de um insucesso de entrega, pra nova
@@ -339,11 +342,22 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
     normalmente. O `code` ganha um sufixo incremental (-R1, -R2...)
     pra não colidir com o original nem com duplicações anteriores.
 
+    Parte do código BASE do original, não do code literal (achado
+    20/08: uma entrega que já era reentrega, ao falhar de novo, gerava
+    'PS-36741-R1' -> 'PS-36741-R1-R1' em vez de 'PS-36741-R2' -- o
+    sufixo empilhava a cada nova tentativa, e a normalização de
+    "código base" rio abaixo (romaneio, expedição) não dava conta de
+    desempilhar uma cadeia arbitrária de sufixos). Extrair o prefixo
+    'PS-NNNNN' aqui garante que mesmo a 3ª, 4ª... tentativa do mesmo
+    pedido sempre gera um código limpo, de um sufixo só.
+
     Retorna o JSON do serviço criado, ou None se a criação falhar
     (loga o erro, não propaga exceção -- quem chama decide como
     tratar uma falha de duplicação).
     """
-    code_original = (servico_original.get("code") or "").lstrip("#")
+    code_bruto = (servico_original.get("code") or "").lstrip("#")
+    m = _PADRAO_CODIGO_BASE.match(code_bruto)
+    code_original = m.group(0) if m else code_bruto
     sufixo = 1
     novo_code = f"#{code_original}-R{sufixo}"
     while vuupt.buscar_servico_por_code(novo_code):
