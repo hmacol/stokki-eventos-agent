@@ -247,11 +247,11 @@ def main(modo_teste: bool, data_str: str) -> int:
         embarcadores = _carregar_embarcadores_por_sender_id()
 
         from playwright.sync_api import sync_playwright
-        from stokki_documentos import URL_PROVIDER_SHW, _extrair_id, _login, baixar_xml_nfe
+        from stokki_documentos import URL_PROVIDER_SHW, _extrair_id, _login, baixar_xml_nfe, nova_pagina
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            page = browser.new_context().new_page()
+            page = nova_pagina(browser)
             _login(page, config)
 
             for chave_transp, codigos in grupos.items():

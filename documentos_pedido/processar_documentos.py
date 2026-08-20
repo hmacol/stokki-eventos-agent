@@ -334,11 +334,11 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
 
         if lista_pedidos:
             from playwright.sync_api import sync_playwright
-            from stokki_documentos import _login, buscar_documentos_do_pedido
+            from stokki_documentos import _login, buscar_documentos_do_pedido, nova_pagina
 
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
-                page = browser.new_context().new_page()
+                page = nova_pagina(browser)
                 _login(page, config)
 
                 # Cada pedido em aberto precisa ser visitado toda vez -- um

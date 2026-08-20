@@ -635,23 +635,64 @@ def _credenciais_provider(config: dict) -> tuple[str, str]:
     return usuario, senha
 
 
+def _novo_contexto_disfarcado(browser):
+    """Contexto do Chromium com UA de navegador real e navigator.webdriver
+    mascarado. Sem isso a Stokki bloqueia com 403 ("Acesso automatizado
+    nao e permitido") -- o Chromium headless por padrao expoe
+    "HeadlessChrome" no User-Agent e navigator.webdriver=true (mesmo
+    problema e fix de stokki/auth.py, stokki/estacao_impressao.py e
+    documentos_pedido/stokki_documentos.py, 20/08)."""
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/120.0.0.0 Safari/537.36"
+    )
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    return context
+
+
+def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, timeout_ms: int = 15_000):
+    """Preenche e envia o formulário de login do /provider/, com
+    retentativas -- mesmo helper de stokki/estacao_impressao.py, 20/08:
+    o Stokki às vezes demora mais que o timeout pra renderizar o
+    formulário (lento/instável). Cada tentativa recarrega a página antes
+    de tentar de novo."""
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            page.wait_for_selector("[name='email']", timeout=timeout_ms)
+            page.fill("[name='email']", usuario)
+            page.fill("[name='password']", senha)
+            page.click("button[type='submit']")
+            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            return
+        except Exception as e:
+            ultimo_erro = e
+            logger.warning(f"  Falha no formulario de login (tentativa {tentativa}/{tentativas}): {e}")
+            if tentativa < tentativas:
+                try:
+                    page.reload(timeout=timeout_ms)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1000)
+    raise ultimo_erro
+
+
 def _setup_playwright(config: dict):
     from playwright.sync_api import sync_playwright
     usuario, senha = _credenciais_provider(config)
     pw      = sync_playwright().start()
     browser = pw.chromium.launch(headless=True)
     try:
-        ctx  = browser.new_context()
+        ctx  = _novo_contexto_disfarcado(browser)
         page = ctx.new_page()
 
         # Login direto pelo /pt-br/login (pagina de login do provider)
         logger.info(f"Login provider com usuario: {usuario!r}")
         page.goto(f"{STOKKI_BASE}/pt-br/login", wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_selector("[name=\'email\']", timeout=15_000)
-        page.fill("[name=\'email\']", usuario)
-        page.fill("[name=\'password\']", senha)
-        page.click("button[type=\'submit\']")
-        page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+        _preencher_form_login(page, usuario, senha)
         page.wait_for_timeout(1000)
         logger.info(f"Login OK. URL: {page.url}")
 
