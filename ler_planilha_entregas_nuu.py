@@ -320,6 +320,17 @@ def _rolar_para_futuro_se_muito_antiga(data_extraida: date, hoje: date) -> date:
     return data_extraida
 
 
+def _data_sem_ano_e_plausivel(data_extraida: date, hoje: date) -> bool:
+    """Sem ano explícito, o chute (ano atual ou virada pra o próximo) só
+    é confiável perto de hoje -- a NUU nunca agenda com mais de ~2 meses
+    de antecedência. Um resultado fora dessa janela (ex: 'AGENDADO
+    24/04' lido em agosto virando 24/04/2027 pela virada de ano) é mais
+    provável erro de digitação na planilha (mês/dia trocado) do que uma
+    data real -- falha fechada é melhor que aplicar uma data absurda
+    como se fosse confirmada."""
+    return hoje - timedelta(days=20) <= data_extraida <= hoje + timedelta(days=60)
+
+
 def extrair_data_agenda(texto: str, hoje: date | None = None) -> str | None:
     """
     Extrai DD/MM/YYYY de um texto livre de agendamento. Cobre os 3
@@ -348,10 +359,12 @@ def extrair_data_agenda(texto: str, hoje: date | None = None) -> str | None:
         mes = _MESES_PT.get(chave_mes)
         if mes and 1 <= dia <= 31:
             try:
-                data_extraida = date(hoje.year, mes, dia)
-                return _rolar_para_futuro_se_muito_antiga(data_extraida, hoje).strftime("%d/%m/%Y")
+                resultado = _rolar_para_futuro_se_muito_antiga(date(hoje.year, mes, dia), hoje)
             except ValueError:
                 return None
+            if not _data_sem_ano_e_plausivel(resultado, hoje):
+                return None
+            return resultado.strftime("%d/%m/%Y")
 
     m = re.search(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?", texto)
     if not m:
@@ -367,10 +380,12 @@ def extrair_data_agenda(texto: str, hoje: date | None = None) -> str | None:
         except ValueError:
             return None
     try:
-        data_extraida = date(hoje.year, mes, dia)
+        resultado = _rolar_para_futuro_se_muito_antiga(date(hoje.year, mes, dia), hoje)
     except ValueError:
         return None
-    return _rolar_para_futuro_se_muito_antiga(data_extraida, hoje).strftime("%d/%m/%Y")
+    if not _data_sem_ano_e_plausivel(resultado, hoje):
+        return None
+    return resultado.strftime("%d/%m/%Y")
 
 
 def extrair_endereco_novo(texto: str) -> str | None:
