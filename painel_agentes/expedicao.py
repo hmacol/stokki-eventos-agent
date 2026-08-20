@@ -39,7 +39,7 @@ _PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
 
 
 def _codigo_base(codigo: str) -> str:
-    return _PADRAO_SUFIXO_REENTREGA.sub("", codigo or "")
+    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
 
 def _carregar_config() -> dict:

@@ -290,14 +290,14 @@ def duplicar_servico_por_canhoto(vuupt: VuuptClient, servico_original: dict) -> 
     """
     code_original = (servico_original.get("code") or "").lstrip("#")
     sufixo = 1
-    novo_code = f"{code_original}-C{sufixo}"
+    novo_code = f"#{code_original}-C{sufixo}"
     while vuupt.buscar_servico_por_code(novo_code):
         sufixo += 1
-        novo_code = f"{code_original}-C{sufixo}"
+        novo_code = f"#{code_original}-C{sufixo}"
 
     payload = {
         "code": novo_code,
-        "title": f"{servico_original.get('title', '')} (recoleta canhoto)",
+        "title": f"{servico_original.get('title', '')} (recoleta canhoto C{sufixo})",
         "type": servico_original.get("type", "delivery"),
         "address": servico_original.get("address"),
         "address_complement": servico_original.get("address_complement"),

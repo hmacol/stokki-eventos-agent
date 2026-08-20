@@ -123,10 +123,10 @@ _PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
 
 
 def _codigo_base(codigo: str) -> str:
-    """'PS-36327-R1' -> 'PS-36327' -- usar SÓ pra buscar documentos;
+    """'#PS-36327-R1' -> 'PS-36327' -- usar SÓ pra buscar documentos;
     a exibição do pedido na capa/canhoteira mantém o código completo
     (o motorista precisa saber que é a reentrega, não o pedido original)."""
-    return _PADRAO_SUFIXO_REENTREGA.sub("", codigo or "")
+    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
 # Página A4 em pixels a 150 dpi -- o resolution=150.0 no Image.save é
 # o que faz 1240px virarem 595pt (A4 de verdade) no PDF final.

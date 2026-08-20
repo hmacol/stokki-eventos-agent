@@ -345,14 +345,14 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
     """
     code_original = (servico_original.get("code") or "").lstrip("#")
     sufixo = 1
-    novo_code = f"{code_original}-R{sufixo}"
+    novo_code = f"#{code_original}-R{sufixo}"
     while vuupt.buscar_servico_por_code(novo_code):
         sufixo += 1
-        novo_code = f"{code_original}-R{sufixo}"
+        novo_code = f"#{code_original}-R{sufixo}"
 
     payload = {
         "code": novo_code,
-        "title": f"{servico_original.get('title', '')} (reentrega)",
+        "title": f"{servico_original.get('title', '')} (reentrega R{sufixo})",
         "type": servico_original.get("type", "delivery"),
         "address": servico_original.get("address"),
         "address_complement": servico_original.get("address_complement"),

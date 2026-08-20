@@ -349,7 +349,7 @@ def montar_payload_vuupt(
 
     payload = {
         "title": titulo,
-        "code":  codigo_ps,
+        "code":  f"#{codigo_ps}",
         "type":  "delivery",
         "dimension_3": volume_final,
         "customer": {
