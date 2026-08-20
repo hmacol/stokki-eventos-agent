@@ -107,7 +107,7 @@ ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
-TAMANHO_MAXIMO_ROTA = 16  # Ajustado de 18 para 16 entregas por rota (pedido do Hugo, 15/08)
+TAMANHO_MAXIMO_ROTA = 14  # Ajustado de 16 para 14 entregas por rota (pedido do Hugo, 20/08)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
 DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo, 09/08 -- ajustado 10/08)
 # Rotas de Viagem (fora da Grande SP) NÃO têm limite de distância entre
@@ -234,7 +234,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
 
     `tamanho_maximo` (Hugo, 15/08): teto de pedidos por rota pro botão
     "Roteirizar" da tela de Planejamento -- padrão é o mesmo
-    TAMANHO_MAXIMO_ROTA do pipeline automático (18), mas o usuário pode
+    TAMANHO_MAXIMO_ROTA do pipeline automático (14), mas o usuário pode
     apertar (rotas menores) ou passar `None` explicitamente pra "sem
     limite" (vira SEM_LIMITE_PARADAS por baixo -- as outras travas,
     volume/distância/nível, continuam valendo do mesmo jeito).

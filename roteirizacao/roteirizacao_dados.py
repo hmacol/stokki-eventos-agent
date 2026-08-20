@@ -490,25 +490,48 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 
 
 # Nível de dificuldade 3: pode misturar livremente com níveis 1/2 (que
-# PREENCHEM a rota normalmente, até `tamanho_maximo`/`volume_maximo`) --
-# só a QUANTIDADE de pedidos nível 3 dentro da mesma rota é que fica
-# limitada a este teto (pedido do Hugo, 10/08 -- ajustado 15/08: antes
-# a rota INTEIRA caía pra esse tamanho assim que 1 nível-3 entrava,
-# mesmo sobrando nível 1/2 fácil pra preencher; achado real, 15/08: 24
-# das 36 rotas do dia (67%) saíam travadas em 4 por causa disso, muitas
-# com só 1 pedido nível-3 "puxando" e descartando o resto da vizinhança
-# geográfica fácil). Nível 4 nunca divide rota com nenhum pedido de
-# nível 1/2/3 (ver NIVEL_ROTA_EXCLUSIVA) -- mas PODE dividir rota com
-# OUTRO nível 4 do MESMO ENDEREÇO de entrega (embarcador igual ou
-# diferente não importa), até este mesmo teto (pedido do Hugo, 17/08 --
+# PREENCHEM a rota normalmente, até `tamanho_maximo`/`volume_maximo`).
+# A quantidade de nível 3 numa mesma rota NÃO tem mais um teto fixo de
+# pedidos -- pedido do Hugo, 20/08: em vez disso, cada rota tem um
+# ORÇAMENTO DE HORAS (ROTA_TEMPO_MAXIMO_HORAS, 9h); cada nível 3 custa
+# TEMPO_NIVEL3_HORAS (1,5h) e cada nível 1/2 custa TEMPO_PARADA_NORMAL_
+# HORAS (~25min) -- ver estimar_tempo_rota. Isso deixa o número de
+# nível 3 por rota subir quando sobra tempo (poucas paradas normais
+# nessa rota) e descer quando não sobra (reduzindo o total de pedidos
+# normais em vez de travar numa quantidade fixa de nível 3).
+# NIVEL_3_TAMANHO_MAXIMO_ROTA continua existindo só como REFERÊNCIA (o
+# valor típico de nível 3 numa rota cheia de tamanho_maximo, ver conta
+# acima) -- reaproveitado por otimizacao_rotas.py (módulo de benchmark
+# isolado da produção, sem a lógica de horas) e pelos badges do painel.
+#
+# Nível 4 nunca divide rota com nenhum pedido de nível 1/2/3 (ver
+# NIVEL_ROTA_EXCLUSIVA) -- mas PODE dividir rota com OUTRO nível 4 do
+# MESMO ENDEREÇO de entrega (embarcador igual ou diferente não
+# importa), até NIVEL_4_TAMANHO_MAXIMO_ROTA (pedido do Hugo, 17/08 --
 # substitui a regra anterior de "mesma rede/raiz de CNPJ", que juntava
 # endereços diferentes da mesma empresa). Quando ambos têm agendamento
 # (`scheduled_start`), a data também precisa bater; sem agendamento nos
 # dois, junta só pelo endereço; um agendado + um sem agendamento nunca
-# junta -- ver _chave_nivel4.
-NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
+# junta -- ver _chave_nivel4. Esse teto (nível 4) continua sendo por
+# QUANTIDADE, não por horas -- é rota exclusiva, sem parada normal
+# competindo pelo mesmo orçamento de tempo.
+NIVEL_3_TAMANHO_MAXIMO_ROTA = 3
 NIVEL_ROTA_EXCLUSIVA = 4
 NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
+TEMPO_NIVEL3_HORAS = 1.5
+TEMPO_PARADA_NORMAL_HORAS = 25 / 60
+ROTA_TEMPO_MAXIMO_HORAS = 9.0
+
+
+def estimar_tempo_rota(sublote: list[dict]) -> float:
+    """Tempo estimado (horas) de uma rota mista de nível 1/2/3: cada
+    nível 3 custa TEMPO_NIVEL3_HORAS e cada nível 1/2 custa TEMPO_
+    PARADA_NORMAL_HORAS. Não é chamada para nível 4 (rota exclusiva,
+    sem orçamento de horas -- ver NIVEL_ROTA_EXCLUSIVA)."""
+    return sum(
+        TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
+        for s in sublote
+    )
 
 
 def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
@@ -718,22 +741,19 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
                         volume_maximo: int = 100, distancia_maxima_km: float | None = 15,
                         api_key: str | None = None) -> list[list[dict]]:
     """
-    Divide uma região grande em sublotes respeitando QUATRO travas ao
+    Divide uma região grande em sublotes respeitando CINCO travas ao
     mesmo tempo (pedido do Hugo, 09/08: "no máximo 18 entregas OU 100
     caixas por rota, o que vier primeiro" -- e depois, 09/08: "máximo
     de 15km de distância entre pedidos da mesma rota", achado ao
     revisar a rota #6 do dia, que tinha pego um pedido de Niterói-RJ
     junto com pedidos de São Paulo por ser "a rota mais próxima com
-    espaço", mesmo estando a mais de 300km; e 10/08: nível de
-    dificuldade da entrega, ver extrair_nivel_dificuldade):
+    espaço", mesmo estando a mais de 300km; 10/08: nível de dificuldade
+    da entrega, ver extrair_nivel_dificuldade; e 20/08: orçamento de
+    horas da rota, ver estimar_tempo_rota):
       - até `tamanho_maximo` entregas por sublote (18 por padrão),
-        preenchido normalmente por nível 1/2/3 -- mas no máximo
-        NIVEL_3_TAMANHO_MAXIMO_ROTA (4) dessas entregas podem ser nível
-        3 (ajustado 15/08: antes a rota INTEIRA caía pra esse tamanho,
-        agora só a quantidade de nível 3 é limitada, nível 1/2 preenche
-        o resto normalmente); entrega nível 4 nunca divide sublote com
-        mais ninguém (rota exclusiva, mesmo tratamento do pedido
-        "gigante" de caixas, abaixo);
+        preenchido normalmente por nível 1/2/3; entrega nível 4 nunca
+        divide sublote com mais ninguém (rota exclusiva, mesmo
+        tratamento do pedido "gigante" de caixas, abaixo);
       - até `volume_maximo` caixas (soma de extrair_volume_caixas) por
         sublote;
       - nenhum par de pedidos do MESMO sublote pode estar a mais de
@@ -741,7 +761,20 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         coordenada -- sem coordenada não dá pra checar, não bloqueia).
         `distancia_maxima_km=None` desliga essa trava por completo
         (pedido do Hugo, 10/08: rotas de Viagem não têm limite de
-        distância -- só as outras travas de tamanho/volume/nível valem).
+        distância -- só as outras travas de tamanho/volume/nível valem);
+      - tempo estimado da rota (estimar_tempo_rota) até
+        ROTA_TEMPO_MAXIMO_HORAS (9h): cada nível 3 custa
+        TEMPO_NIVEL3_HORAS (1,5h) e cada nível 1/2 custa TEMPO_PARADA_
+        NORMAL_HORAS (~25min) -- ajustado 15/08 e substituído 20/08
+        (antes: teto FIXO de NIVEL_3_TAMANHO_MAXIMO_ROTA pedidos nível 3
+        por rota; achado real, 15/08, que motivou tirar o teto da rota
+        INTEIRA: 24 das 36 rotas do dia (67%) saíam travadas em 4 por
+        causa disso, muitas com só 1 pedido nível-3 "puxando" e
+        descartando o resto da vizinhança geográfica fácil; agora o
+        teto por QUANTIDADE virou um orçamento por TEMPO -- uma rota
+        com mais nível 3 cabe, mas com menos pedidos normais pra
+        compensar, e uma rota só de nível 1/2 nunca esbarra nele, 14
+        paradas * ~25min = ~5,8h < 9h).
 
     Considera PROXIMIDADE real: ordena os serviços por coordenada
     (lat, lng) quando disponível antes de dividir, pra que cada
@@ -750,7 +783,7 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     ordem já próxima, empacota de forma GANANCIOSA (greedy bin
     packing): vai enchendo o sublote atual até que o próximo pedido
     estoure uma das travas, aí fecha o sublote e abre outro -- isso
-    tende a aproximar cada rota do limite (18 ou 100), sem nunca
+    tende a aproximar cada rota do limite (18, 100 ou 9h), sem nunca
     estourar nenhuma das travas.
 
     Exceção de pedido gigante: um único pedido com mais de
@@ -797,14 +830,14 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         cx_pedido = extrair_volume_caixas(servico)
         nivel_pedido = extrair_nivel_dificuldade(servico)
 
-        qtd_nivel3_atual = sum(1 for s in sublote_atual if extrair_nivel_dificuldade(s) == 3)
-        cabe_nivel3 = qtd_nivel3_atual + (1 if nivel_pedido == 3 else 0) <= NIVEL_3_TAMANHO_MAXIMO_ROTA
+        tempo_pedido = TEMPO_NIVEL3_HORAS if nivel_pedido == 3 else TEMPO_PARADA_NORMAL_HORAS
+        cabe_tempo = estimar_tempo_rota(sublote_atual) + tempo_pedido <= ROTA_TEMPO_MAXIMO_HORAS
 
         cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
         cabe_distancia = _cabe_na_distancia(servico, sublote_atual)
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_nivel3):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0

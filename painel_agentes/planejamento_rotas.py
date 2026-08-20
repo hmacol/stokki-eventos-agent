@@ -92,20 +92,29 @@ _PADRAO_SUFIXO_REENTREGA = re.compile(r"-R\d+$")
 
 
 def _codigo_base(codigo: str) -> str:
-    """'PS-36327-R1' -> 'PS-36327' -- reentrega é o MESMO pedido
+    """'#PS-36327-R1' -> 'PS-36327' -- reentrega é o MESMO pedido
     original (VUUPT só duplica o serviço, ver insucesso_entrega/
     expedir_pedidos.py::duplicar_servico_por_insucesso); documentos e
-    o pedido na Stokki existem sob o código BASE, sem sufixo. Mesma
-    normalização de roteirizacao/gerar_pdf_romaneios.py::_codigo_base
-    (achado 12/08: sem ela, reentrega nunca casa com NF/boleto nem
-    encontra o pedido na Stokki)."""
-    return _PADRAO_SUFIXO_REENTREGA.sub("", codigo or "")
+    o pedido na Stokki existem sob o código BASE, sem sufixo e sem '#'
+    (matcher.py grava codigo_pedido sempre sem '#'). Mesma normalização
+    de roteirizacao/gerar_pdf_romaneios.py::_codigo_base (achado 12/08:
+    sem ela, reentrega nunca casa com NF/boleto nem encontra o pedido
+    na Stokki)."""
+    return _PADRAO_SUFIXO_REENTREGA.sub("", (codigo or "").lstrip("#"))
 
 
-TAMANHO_MAXIMO_ROTA = 16  # Ajustado de 18 para 16 entregas por rota (pedido do Hugo, 15/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
-NIVEL_3_TAMANHO_MAXIMO_ROTA = 4
+TAMANHO_MAXIMO_ROTA = 14  # Ajustado de 16 para 14 entregas por rota (pedido do Hugo, 20/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
+NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 20
+# Orçamento de horas por rota (pedido do Hugo, 20/08): substitui o teto
+# fixo de nível 3 por pedido -- cada nível 3 "custa" TEMPO_NIVEL3_HORAS e
+# cada nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS; mesmos valores de
+# roteirizacao_dados.py (constantes separadas, sem import entre os dois
+# módulos, mesmo padrão de TAMANHO_MAXIMO_ROTA acima).
+TEMPO_NIVEL3_HORAS = 1.5
+TEMPO_PARADA_NORMAL_HORAS = 25 / 60
+ROTA_TEMPO_MAXIMO_HORAS = 9.0
 # Pedido "grande": acima disso vira alerta visual nos cards e no resumo
 # do futuro (pedido do Hugo, 12/08) -- um pedido desses sozinho já
 # ocupa boa parte do VOLUME_MAXIMO_ROTA de uma rota e merece atenção
@@ -128,8 +137,14 @@ def _badges_trava(rascunho: dict) -> list[str]:
     regras/tipo_veiculo.py) troca as travas de paradas/caixas de última
     milha pelas do PRÓPRIO tipo (caixas máx e endereços diferentes máx)
     -- as travas de nível 3/4 não se aplicam a essas rotas (só entram
-    nelas pedido nível 1/2/3, nunca nível 4, e o teto de nível 3 foi
-    pensado pro contexto de última milha)."""
+    nelas pedido nível 1/2/3, nunca nível 4, e o orçamento de horas foi
+    pensado pro contexto de última milha).
+
+    Nível 3 (pedido do Hugo, 20/08): não é mais um teto fixo de
+    quantidade -- o aviso dispara quando o TEMPO ESTIMADO da rota
+    (nível 3 = TEMPO_NIVEL3_HORAS/1,5h, nível 1/2 = TEMPO_PARADA_
+    NORMAL_HORAS/~25min) passa de ROTA_TEMPO_MAXIMO_HORAS (9h) -- mesma
+    regra de roteirizacao_dados.estimar_tempo_rota."""
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
@@ -153,8 +168,16 @@ def _badges_trava(rascunho: dict) -> list[str]:
         niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
         if len(paradas) > 1 and any(n >= 4 for n in niveis):
             badges.append("entrega nível 4 dividindo rota com outras")
-        elif any(n == 3 for n in niveis) and len(paradas) > NIVEL_3_TAMANHO_MAXIMO_ROTA:
-            badges.append(f"entrega nível 3 com mais de {NIVEL_3_TAMANHO_MAXIMO_ROTA} paradas na rota")
+        else:
+            tempo_estimado = sum(
+                TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis
+            )
+            if tempo_estimado > ROTA_TEMPO_MAXIMO_HORAS:
+                qtd_nivel3 = sum(1 for n in niveis if n == 3)
+                badges.append(
+                    f"tempo estimado {tempo_estimado:.1f}h (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h, "
+                    f"{qtd_nivel3} nível 3)"
+                )
 
     if rascunho.get("tipo_rota") != "VIAGEM":
         coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]

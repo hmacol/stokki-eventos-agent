@@ -20,21 +20,24 @@ Reaproveita as funções utilitárias do ecossistema existente
 (roteirizacao_dados.py) -- nunca duplica geocodificação, cache ou
 cálculo de distância.
 
-Todos os modelos respeitam as MESMAS 4 travas do dividir_em_sublotes
-de produção:
+Todos os modelos respeitam as MESMAS 4 travas de QUANTIDADE do
+dividir_em_sublotes de produção (o orçamento de HORAS por rota,
+adicionado 20/08 em produção -- ver roteirizacao_dados.
+estimar_tempo_rota -- NÃO foi replicado aqui; módulo isolado, ver nota
+acima):
   - até `tamanho_maximo` entregas por sublote (18);
   - até `volume_maximo` caixas por sublote (100);
   - nenhum par de pedidos do mesmo sublote a mais de
     `distancia_maxima_km` (quando ambos têm coordenada; None desliga);
   - nível de dificuldade: nível 3 mistura livremente com nível 1/2 (que
     preenchem a rota normalmente) -- só a QUANTIDADE de pedidos nível 3
-    na mesma rota é limitada a NIVEL_3_TAMANHO_MAXIMO_ROTA (4), o
-    tamanho total do sublote continua até `tamanho_maximo` (ajustado
-    15/08); pedido "gigante" (mais caixas que o limite) fica em rota
-    exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando junta com
-    outro nível 4 do MESMO endereço de entrega (e mesma data de
-    agendamento, quando ambos têm agendamento -- pedido do Hugo, 15/08,
-    ajustado 17/08) -- os 5 modelos usam a MESMA pré-separação
+    na mesma rota é limitada a NIVEL_3_TAMANHO_MAXIMO_ROTA (3, ajustado
+    20/08), o tamanho total do sublote continua até `tamanho_maximo`
+    (ajustado 15/08); pedido "gigante" (mais caixas que o limite) fica
+    em rota exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando
+    junta com outro nível 4 do MESMO endereço de entrega (e mesma data
+    de agendamento, quando ambos têm agendamento -- pedido do Hugo,
+    15/08, ajustado 17/08) -- os 5 modelos usam a MESMA pré-separação
     (roteirizacao_dados.separar_pedidos_exclusivos) pra essa regra não
     divergir entre eles.
 
