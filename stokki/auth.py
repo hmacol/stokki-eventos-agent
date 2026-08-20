@@ -188,7 +188,21 @@ class StokkiSession:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
-                context = browser.new_context()
+                # O Chromium headless por padrao expoe "HeadlessChrome" no
+                # User-Agent e navigator.webdriver=true -- a Stokki passou a
+                # bloquear isso com 403 ("Acesso automatizado nao e
+                # permitido"), fazendo o wait_for_selector do e-mail estourar
+                # timeout porque a pagina carregada era a de erro, nao o
+                # formulario de login. UA de Chrome real + mascarar
+                # navigator.webdriver contorna a deteccao.
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/120.0.0.0 Safari/537.36"
+                )
+                context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
                 page = context.new_page()
 
                 try:
