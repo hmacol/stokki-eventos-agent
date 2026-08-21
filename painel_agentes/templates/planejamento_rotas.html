@@ -1942,27 +1942,50 @@
   // pelo CSS do modo compacto), então o tooltip é montado lendo os spans
   // do próprio li -- funciona igual pra pool e pra parada de rota, sem
   // depender do POOL_BY_ID (que só tem os itens do pool).
-  function montarTooltipParada(li) {
+  // dados crus por trás do tooltip/popup/"copiar resumo" -- uma função só
+  // pra não duplicar a leitura dos spans do card em três lugares
+  function extrairDadosParada(li) {
     const texto = sel => {
       const el = li.querySelector(sel);
       return el ? el.textContent.trim() : "";
     };
-    const nf = texto(".nf-pedido");
-    const partes = [`<div class="titulo">${escaparHtml(texto(".codigo"))}${nf ? " — " + escaparHtml(nf) : ""}</div>`];
-    const remetente = texto(".remetente");
-    if (remetente) partes.push(`<div class="remetente">${escaparHtml(remetente)}</div>`);
-    const destinatario = texto(".destinatario");
-    if (destinatario) partes.push(`<div class="destinatario">${escaparHtml(destinatario)}</div>`);
-    const endereco = texto(".endereco");
-    if (endereco) partes.push(`<div class="endereco">${escaparHtml(endereco)}</div>`);
     // caixas do data-caixas (fallback de 1 já aplicado no criarLiParada);
     // agendamento reaproveita o texto do badge, que já diz se está atrasado
-    const caixas = Number(li.dataset.caixas || 1);
-    const extras = [`${caixas} caixa${caixas === 1 ? "" : "s"}`];
-    const agendamento = texto(".agendamento");
-    if (agendamento) extras.push(agendamento);
+    return {
+      codigo: texto(".codigo"),
+      nf: texto(".nf-pedido"),
+      remetente: texto(".remetente"),
+      destinatario: texto(".destinatario"),
+      endereco: texto(".endereco"),
+      caixas: Number(li.dataset.caixas || 1),
+      agendamento: texto(".agendamento"),
+    };
+  }
+
+  function montarTooltipParada(li) {
+    const d = extrairDadosParada(li);
+    const partes = [`<div class="titulo">${escaparHtml(d.codigo)}${d.nf ? " — " + escaparHtml(d.nf) : ""}</div>`];
+    if (d.remetente) partes.push(`<div class="remetente">${escaparHtml(d.remetente)}</div>`);
+    if (d.destinatario) partes.push(`<div class="destinatario">${escaparHtml(d.destinatario)}</div>`);
+    if (d.endereco) partes.push(`<div class="endereco">${escaparHtml(d.endereco)}</div>`);
+    const extras = [`${d.caixas} caixa${d.caixas === 1 ? "" : "s"}`];
+    if (d.agendamento) extras.push(d.agendamento);
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
+  }
+
+  // versão em texto puro do mesmo resumo, pro "Copiar resumo" do menu de
+  // contexto -- uma linha por campo, sem HTML
+  function montarTextoResumoParada(li) {
+    const d = extrairDadosParada(li);
+    const linhas = [d.nf ? `${d.codigo} — ${d.nf}` : d.codigo];
+    if (d.remetente) linhas.push(d.remetente);
+    if (d.destinatario) linhas.push(d.destinatario);
+    if (d.endereco) linhas.push(d.endereco);
+    const extras = [`${d.caixas} caixa${d.caixas === 1 ? "" : "s"}`];
+    if (d.agendamento) extras.push(d.agendamento);
+    linhas.push(extras.join(" — "));
+    return linhas.join("\n");
   }
 
   function mostrarTooltipParada(li) {
@@ -3595,6 +3618,10 @@
     navigator.clipboard?.writeText(codigo).catch(() => {});
   }
 
+  function copiarResumoParada(li) {
+    navigator.clipboard?.writeText(montarTextoResumoParada(li)).catch(() => {});
+  }
+
   let popupDetalhesParada = null;
 
   function esconderDetalhesParada() {
@@ -3647,6 +3674,7 @@
     const itens = [
       { rotulo: "Ver detalhes", acao: () => mostrarDetalhesParada(li, x, y) },
       { rotulo: "Copiar código", acao: () => copiarCodigoParada(li) },
+      { rotulo: "Copiar resumo", acao: () => copiarResumoParada(li) },
     ];
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Agendar / reagendar", acao: () => abrirModalReagendar(li, serviceId, rascunhoId) });
