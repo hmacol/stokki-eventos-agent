@@ -79,7 +79,7 @@ URL_LOGIN_PROVIDER = f"{STOKKI_BASE}/pt-br/login"
 URL_PROVIDER_ADM = f"{STOKKI_BASE}/pt-br/administrator/inventory/outbound/show"
 URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 
-HORAS_PADRAO = 48
+HORAS_PADRAO = 168  # 7 dias (era 48h) -- validação manual no VUUPT pode demorar mais
 FUSO_LOCAL   = ZoneInfo("America/Sao_Paulo")
 
 # O e-mail de "dia sem insucesso" só sai nas execuções finais do dia
@@ -406,12 +406,12 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
     if not insucessos:
         return
 
-    # A busca usa janela de HORAS_PADRAO (48h) pra duplicação/agendamento
-    # não perder nada entre execuções, mas isso fazia este e-mail repetir
+    # A busca usa janela de HORAS_PADRAO pra duplicação/agendamento não
+    # perder nada entre execuções, mas isso fazia este e-mail repetir
     # insucessos de ontem a cada 30 min (pedido do Hugo, 12/08 e 13/08:
     # e-mail só com os insucessos DO DIA, sem repetição). O filtro vale só
-    # pra notificação -- a janela de 48h segue intacta pra duplicação,
-    # que tem fingerprint próprio. Entram no e-mail os insucessos de hoje
+    # pra notificação -- a janela de HORAS_PADRAO segue intacta pra
+    # duplicação, que tem fingerprint próprio. Entram no e-mail os insucessos de hoje
     # + qualquer um nunca notificado (ex.: concluído ontem depois da
     # última execução de 19h30, que senão sumiria sem aviso), e o e-mail
     # só sai se houver algum NOVO desde o último envio.
