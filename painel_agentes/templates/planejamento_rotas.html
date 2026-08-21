@@ -2989,6 +2989,19 @@
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
   }
 
+  // clique no card inteiro (des)seleciona, igual ao pool (alternarSelecao)
+  // -- o checkbox continua funcionando (mesma função, disparada pelo
+  // "change") só que agora não é mais o único jeito de marcar (Hugo, 20/08)
+  function alternarSelecaoRota(serviceId, li) {
+    if (SELECIONADOS_ROTA.has(serviceId)) SELECIONADOS_ROTA.delete(serviceId);
+    else SELECIONADOS_ROTA.add(serviceId);
+    const selecionado = SELECIONADOS_ROTA.has(serviceId);
+    li.classList.toggle("selecionada", selecionado);
+    const check = li.querySelector(".check-parada");
+    if (check) check.checked = selecionado;
+    atualizarBarraSelecaoRotas();
+  }
+
   function limparSelecaoRotas() {
     SELECIONADOS_ROTA.clear();
     document.querySelectorAll("#lista-rotas .item-parada.selecionada").forEach(li => {
@@ -4028,12 +4041,16 @@
         if (li && ul) cancelarPedido(Number(li.dataset.serviceId), Number(ul.dataset.listId), e.target);
         return;
       }
-      // clique numa parada centraliza o ponto dela no mapa (em qualquer
-      // densidade); o campo de posição (modo "digitando") fica de fora
-      // pra focar o input não sacudir o mapa
+      // clique numa parada (des)seleciona pra "Mover selecionados" e
+      // centraliza o ponto dela no mapa -- mesmo comportamento do pool
+      // (alternarSelecao + centralizarNoMapa); o campo de posição e o
+      // checkbox (ambos INPUT) ficam de fora pra não disparar dois toggles
+      // nem sacudir o mapa ao digitar
       const liParada = e.target.closest(".item-parada");
       if (liParada) {
-        if (!dragRecente && e.target.tagName !== "INPUT") centralizarNoMapa(liParada);
+        if (dragRecente || e.target.tagName === "INPUT") return;
+        alternarSelecaoRota(Number(liParada.dataset.serviceId), liParada);
+        centralizarNoMapa(liParada);
         return;
       }
       // clique no cabeçalho (nome/swatch/chevron) colapsa ou expande
@@ -4087,10 +4104,7 @@
       if (e.target.classList.contains("check-parada")) {
         const li = e.target.closest(".item-parada");
         if (!li) return;
-        const serviceId = Number(li.dataset.serviceId);
-        if (e.target.checked) SELECIONADOS_ROTA.add(serviceId); else SELECIONADOS_ROTA.delete(serviceId);
-        li.classList.toggle("selecionada", e.target.checked);
-        atualizarBarraSelecaoRotas();
+        alternarSelecaoRota(Number(li.dataset.serviceId), li);
         return;
       }
       if (!e.target.classList.contains("select-motorista")) return;
