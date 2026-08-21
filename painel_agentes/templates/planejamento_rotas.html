@@ -140,6 +140,12 @@
   .cabecalho-secao-pool .titulo-secao-pool { flex: 1; }
   .cabecalho-secao-pool .seta-secao { font-size: 10px; }
   .secao-pool.colapsada .lista-paradas { display: none; }
+  /* 3º bloco, "Fora da área de atendimento" (Hugo, 20/08): mesmo padrão
+     visual dos outros 2, só com o título na cor de erro pra não passar
+     despercebido -- são pedidos que o pipeline automático já exclui da
+     roteirização (notificar_area_nao_atendida.py), então só aparecem
+     aqui pra decisão manual (cotação dedicada / redespacho / etc). */
+  .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro); }
   .item-parada {
     position: relative;
     background: var(--fundo);
@@ -366,6 +372,18 @@
     color: var(--erro);
   }
   .item-parada .badge-caixas::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 2px; background: currentColor; }
+  .item-parada .badge-fora-area {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro);
+  }
   .item-parada .nf-pedido { font-size: 10.5px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
@@ -1442,7 +1460,7 @@
       </button>
     </div>
     <div class="barra-selecao">
-      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis (das 2 seções) com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
+      <button type="button" id="botao-selecionar-visiveis" title="Seleciona todos os pedidos visíveis (das 3 seções) com os filtros atuais (busca, agendamento, faixa de CEP e caixas)">Selecionar visíveis</button>
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
@@ -1452,9 +1470,17 @@
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Pra rotear hoje (<span id="contagem-secao-hoje">0</span>)</span>
-          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro">Selecionar</button>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro nem fora de área">Selecionar</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
+      </div>
+      <div class="secao-pool secao-pool-alerta" data-secao="fora-area" id="secao-pool-fora-area">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Fora da área de atendimento (<span id="contagem-secao-fora-area">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="fora-area" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-fora-area" data-list-id="pool"></ul>
       </div>
       <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
         <div class="cabecalho-secao-pool">
@@ -1616,9 +1642,14 @@
     return dados;
   }
 
+  const ROTULO_TIPO_AREA = { sp_nao_atendido: "Fora da área (SP)", fora_sp: "Fora de SP" };
+
   function badgesPedidoHtml(p) {
     // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
     const partes = [];
+    if (p.tipo_area) {
+      partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
+    }
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -1683,6 +1714,7 @@
     li.dataset.lat = p.latitude ?? "";
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
+    li.dataset.tipoArea = p.tipo_area || "";
     // urgência do agendamento pro CSS do modo "só número" (selo do chip:
     // vermelho = atrasado, azul = agendado pra data em edição, cinza =
     // agendado pra depois -- Hugo, 14/08)
@@ -2476,8 +2508,17 @@
     atualizarPreviewPool();
   }
 
+  function secaoDoItem(li) {
+    // fora de área tem prioridade sobre a urgência do agendamento --
+    // um pedido pode estar agendado E fora de área, mas o que importa
+    // pra essa tela é sinalizar que precisa de decisão manual antes de
+    // qualquer coisa (cotação/redespacho), não quando ele "venceria".
+    if (li.dataset.tipoArea) return document.getElementById("lista-pool-fora-area");
+    return document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+  }
+
   function reencaixarNaSecaoCorreta(li) {
-    const destino = document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+    const destino = secaoDoItem(li);
     if (destino && li.parentElement !== destino) destino.appendChild(li);
     // o <li> que sai de uma rota pro pool é reaproveitado (não recriado)
     // -- se ele carregava o checkbox de seleção múltipla de rota, tira o
@@ -2496,14 +2537,17 @@
 
   function atualizarContagensSecoesPool() {
     const elHoje = document.getElementById("contagem-secao-hoje");
+    const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
+    if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
     if (elFuturo) elFuturo.textContent = document.getElementById("lista-pool-futuro").children.length;
   }
 
   // Colapso persistido por seção (mesmo padrão de rotasColapsadas/
   // layoutColunas) -- "futuro" começa colapsado (é o bloco que menos
-  // importa pro trabalho do dia), "hoje" começa aberto.
+  // importa pro trabalho do dia), "hoje" e "fora-area" começam abertos
+  // ("fora-area" precisa de decisão manual -- não deve passar batido).
   let secoesPoolColapsadas;
   try {
     secoesPoolColapsadas = JSON.parse(localStorage.getItem("planejamento.secoesPoolColapsadas")) || {};
@@ -2511,6 +2555,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
 
   function definirColapsoSecaoPool(secaoEl, colapsar) {
@@ -3548,14 +3593,12 @@
       if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar o pool.");
 
       const listaPool = document.getElementById("lista-pool");
-      const listaPoolHoje = document.getElementById("lista-pool-hoje");
-      const listaPoolFuturo = document.getElementById("lista-pool-futuro");
       let novos = 0;
       dados.pool.forEach(p => {
         if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
         POOL_BY_ID[p.service_id] = p;
         const li = criarLiParada(p);
-        (li.dataset.urgencia === "futuro" ? listaPoolFuturo : listaPoolHoje).appendChild(li);
+        secaoDoItem(li).appendChild(li);
         novos++;
       });
 
@@ -3752,12 +3795,14 @@
 
     const listaPool = document.getElementById("lista-pool");
     const listaPoolHoje = document.getElementById("lista-pool-hoje");
+    const listaPoolForaArea = document.getElementById("lista-pool-fora-area");
     const listaPoolFuturo = document.getElementById("lista-pool-futuro");
     POOL.forEach(p => {
       const li = criarLiParada({ ...p, remetente_nome: p.remetente_nome });
-      (li.dataset.urgencia === "futuro" ? listaPoolFuturo : listaPoolHoje).appendChild(li);
+      secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();
     atualizarContagensSecoesPool();

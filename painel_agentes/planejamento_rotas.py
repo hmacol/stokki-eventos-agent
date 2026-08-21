@@ -244,12 +244,14 @@ def _data_agendada(servico: dict) -> date | None:
 
 
 def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
-                        nf_por_codigo: dict[str, str] | None = None) -> dict:
+                        nf_por_codigo: dict[str, str] | None = None,
+                        tipo_area: str | None = None) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
     agendado = _data_agendada(servico)
     codigo = servico.get("code", "")
     return {
         "agendado_para": agendado.isoformat() if agendado else None,
+        "tipo_area": tipo_area,  # None | "sp_nao_atendido" | "fora_sp" (ver identificar_area_nao_atendida)
         "service_id": servico["id"],
         "codigo": codigo,
         "titulo": servico.get("title", ""),
@@ -365,7 +367,17 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         item do pool também traz "numero_nf" (rascunhos_rota.
         carregar_nf_por_codigo_pedido, casado pelo código BASE) quando
         já existe NF processada pro pedido -- entra na busca do front
-        junto de código/remetente/destinatário/endereço (Hugo, 14/08);
+        junto de código/remetente/destinatário/endereço (Hugo, 14/08).
+        Cada item também traz "tipo_area" (None | "sp_nao_atendido" |
+        "fora_sp", mesma classificação de notificar_area_nao_atendida.
+        identificar_area_nao_atendida) -- pedido do Hugo, 20/08: pedido
+        fora da área de atendimento (mesmo critério que o pipeline
+        automático usa pra EXCLUIR da roteirização) precisa aparecer
+        separado num 3º bloco da tela ("Fora da área"), não misturado em "pra
+        rotear hoje" nem em "agendados pra depois" -- essa tela manual
+        não tinha esse filtro antes, então um pedido assim ficava
+        indistinguível dos demais no pool e podia ser arrastado pra uma
+        rota sem ninguém perceber que era fora de área;
       - "resumo_agendados": TODO agendado não finalizado, independente
         da data, agregado por dia e região (_resumo_pedidos_agendados;
         pedido do Hugo, 12/08 -- substitui o antigo "resumo do futuro").
@@ -378,10 +390,18 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         not_assigned com agendamento válido -- usado por
         buscar_dados_planejamento pra mostrar o agendamento também nas
         paradas já em rascunho (que continuam not_assigned na VUUPT até
-        o envio), sem precisar de coluna nova em rascunhos_parada.
+        o envio), sem precisar de coluna nova em rascunhos_parada;
+      - "tipos_area_por_service_id": {service_id: tipo_area} igual
+        acima, mesmo motivo -- buscar_dados_planejamento usa pra marcar
+        "tipo_area" também nas paradas já em rascunho (pedido pode ter
+        sido colocado numa rota manualmente antes de ficar fora de área,
+        ou por engano): o card continua mostrando o badge de alerta
+        mesmo dentro da rota, e se for removido de volta pro pool, cai
+        na seção certa ("Fora da área") em vez de "Pra rotear hoje".
     """
     config = config or _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
 
     rascunhos_ativos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
     ids_em_rascunho = {p["service_id"] for r in rascunhos_ativos for p in r["paradas"]}
@@ -392,8 +412,21 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
     nf_por_codigo = rascunhos_rota.carregar_nf_por_codigo_pedido(
         {c for s in servicos_brutos for c in _codigos_base_lista(s.get("code", ""))})
+
+    # Mesma classificação usada pelo pipeline automático pra excluir da
+    # roteirização (roteirizacao/notificar_area_nao_atendida.py) -- aqui só
+    # rotula o item do pool (tipo_area), não bloqueia nada: o Hugo continua
+    # podendo arrastar manualmente se decidir atender mesmo assim.
+    tipos_area: dict[int, str] = {}
+    try:
+        from notificar_area_nao_atendida import identificar_area_nao_atendida
+        for s, tipo in identificar_area_nao_atendida(servicos_brutos, gmaps_key):
+            tipos_area[s["id"]] = tipo
+    except Exception as e:
+        logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
+
     pool = [
-        _servico_para_pool(s, remetentes_por_id, nf_por_codigo)
+        _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]))
         for s in servicos_brutos
         if s["id"] not in ids_em_rascunho
     ]
@@ -420,6 +453,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "pool": pool,
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
+        "tipos_area_por_service_id": tipos_area,
     }
 
 
@@ -462,6 +496,11 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     # (elas continuam not_assigned na VUUPT até o envio) -- pedido do
     # Hugo, 12/08: mostrar o agendamento também nos cards das rotas
     agendamentos = pool_e_agendados["agendamentos_por_service_id"]
+    # tipo_area: mesmo princípio -- pedido do Hugo, 20/08: pedido fora
+    # da área de atendimento continua marcado (badge de alerta) mesmo
+    # se já estiver dentro de um rascunho, e volta pra seção certa do
+    # pool ("Fora da área") se for removido da rota de novo.
+    tipos_area = pool_e_agendados["tipos_area_por_service_id"]
     # NF: mesmo princípio, mas casada pelo código do pedido (não muda
     # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
     # também dentro de rotas já montadas, não só no pool
@@ -470,6 +509,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     for r in rascunhos:
         for p in r["paradas"]:
             p["agendado_para"] = agendamentos.get(p["service_id"])
+            p["tipo_area"] = tipos_area.get(p["service_id"])
             p["numero_nf"] = ", ".join(filter(None, (
                 nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
             )))
