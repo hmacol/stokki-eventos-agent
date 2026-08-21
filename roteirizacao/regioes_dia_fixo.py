@@ -114,7 +114,8 @@ ENDERECOS_DIA_FIXO: list[dict] = [
 # Raio (km) a partir de São Paulo considerado "Grande SP" -- entrega
 # normal, sem restrição de dia. Cidade fora disso E fora de uma
 # REGIAO definida acima vai pro fluxo de notificar_area_nao_atendida.py.
-RAIO_GRANDE_SP_KM = 70.0
+# Reduzido de 70 pra 35 (pedido do Hugo, 20/08).
+RAIO_GRANDE_SP_KM = 35.0
 ENDERECO_REFERENCIA_SP = "São Paulo, SP, Brasil"
 
 HORARIO_INICIO_PADRAO = "08:00:00"

@@ -90,7 +90,9 @@ from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agend
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
-from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
+from notificar_area_nao_atendida import (
+    identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida, EMAIL_TESTE,
+)
 from regras.preferencias_motoristas import CatalogoMotoristas
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
@@ -376,7 +378,11 @@ def main(modo_teste: bool = False):
             pendentes_area = identificar_area_nao_atendida(servicos, gmaps_key)
             ids_area_nao_atendida = {s["id"] for s, _tipo in pendentes_area}
             if pendentes_area:
-                resultado_area = notificar_area_nao_atendida(pendentes_area, config.get("email", {}), modo_teste=modo_teste)
+                # Redirecionado só pro Hugo por enquanto (pedido dele, 20/08,
+                # junto com a redução do raio da Grande SP pra 35km) -- quer
+                # acompanhar manualmente antes de deixar ir direto pro cliente.
+                resultado_area = notificar_area_nao_atendida(pendentes_area, config.get("email", {}),
+                                                              modo_teste=modo_teste, forcar_destino=EMAIL_TESTE)
                 logger.info(f"Notificação de área não atendida: {resultado_area}")
         except Exception as e:
             logger.error(f"Falha ao notificar área não atendida (não afeta o incremento): {e}")

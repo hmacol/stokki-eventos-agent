@@ -162,7 +162,7 @@ def _montar_conteudo(nome_remetente: str, tipo: str, pedidos: list[dict]) -> str
 
 
 def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_email: dict,
-                         modo_teste: bool = False) -> dict:
+                         modo_teste: bool = False, forcar_destino: str | None = None) -> dict:
     """
     Agrupa por (remetente, tipo) e manda 1 e-mail por combinação
     (um remetente pode ter pedidos dos 2 tipos, viram e-mails
@@ -170,6 +170,14 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
     notificado (fingerprint_area_nao_atendida.py), mesmo em modo_teste
     NÃO marca (deixa pra confirmar de verdade antes de considerar
     "já avisado").
+
+    forcar_destino (pedido do Hugo, 20/08, junto com a redução do raio
+    da Grande SP pra 35km): manda TODO mundo pra esse endereço em vez
+    do e-mail real do remetente, sem entrar no modo_teste (que também
+    deixaria de marcar o pedido como notificado) -- ele quer acompanhar
+    manualmente o volume de "área não atendida" antes de deixar ir
+    direto pro cliente, mas sem reenviar o mesmo pedido toda vez que o
+    job rodar.
     """
     from fingerprint_area_nao_atendida import marcar_notificado
 
@@ -191,10 +199,13 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
         conteudo = _montar_conteudo(emb["nome"], tipo, pedidos)
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
                               cor_acento=COR_DESTAQUE)
-        destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
+        destinos = [EMAIL_TESTE] if modo_teste else ([forcar_destino] if forcar_destino else emb["emails"])
 
         if modo_teste:
             logger.info(f"  [TESTE] {emb['nome']} ({tipo}) -> {EMAIL_TESTE} (original: {emb['emails']}) | "
+                       f"{len(pedidos)} pedido(s): {[p.get('code') for p in pedidos]}")
+        elif forcar_destino:
+            logger.info(f"  [REDIRECIONADO] {emb['nome']} ({tipo}) -> {forcar_destino} (original: {emb['emails']}) | "
                        f"{len(pedidos)} pedido(s): {[p.get('code') for p in pedidos]}")
 
         if enviar_email(destinos, assunto, corpo, config_email):
