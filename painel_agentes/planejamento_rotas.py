@@ -875,12 +875,18 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
     18/08), mesmo padrão do "Agendar / reagendar" (reagendar_pedido).
 
     Regeocodifica o novo endereço (mesma geocodificacao.geocodificar
-    usada na importação) e envia junto no PUT /services/{id}, dentro do
-    objeto 'customer' -- mesmo formato que montar_payload_servico já
-    usa na criação/atualização via pipeline, então não é um caminho de
-    API novo/não testado. Se a geocodificação falhar (endereço não
-    resolvido, sem API key etc.), envia só o texto do endereço; o VUUPT
-    geocodifica por conta própria nesse caso.
+    usada na importação) e grava com PUT /customers/{customer_id} --
+    NÃO embutido num PUT /services/{id} como uma versão anterior fazia:
+    vuupt_client.resolver_customer_id já documenta (confirmado com
+    testes reais de webhook) que o VUUPT ignora telefone e, em alguns
+    casos, dados de contato JÁ EXISTENTE quando o objeto 'customer' vem
+    embutido no serviço -- e aqui o contato SEMPRE já existe (é edição
+    de um pedido já cadastrado). O único caminho confiável pra atualizar
+    um contato existente é a chamada própria a /customers, por isso
+    busca o customer_id do serviço (buscar_servico_por_id) antes de
+    gravar. Se a geocodificação falhar (endereço não resolvido, sem API
+    key etc.), envia só o texto do endereço; o VUUPT geocodifica por
+    conta própria nesse caso.
 
     Se o pedido já está numa rota em rascunho (rascunho_id informado),
     também atualiza a cópia local em rascunhos_parada -- ela é lida
@@ -897,6 +903,12 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    servico = vuupt.buscar_servico_por_id(service_id)
+    customer_id = (servico or {}).get("customer_id")
+    if not customer_id:
+        return {"ok": False, "erro": f"Pedido {service_id} sem contato cadastrado na VUUPT (customer_id não encontrado)."}
 
     from geocodificacao import geocodificar
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
@@ -907,7 +919,7 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
         dados_customer["latitude"], dados_customer["longitude"] = coords
 
     try:
-        VuuptClient(token).atualizar_servico(service_id, {"customer": dados_customer})
+        vuupt.atualizar_customer(customer_id, dados_customer)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
 

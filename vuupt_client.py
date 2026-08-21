@@ -251,6 +251,25 @@ class VuuptClient:
         servicos_ordenados = sorted(servicos, key=lambda s: s.get("created_at", ""), reverse=True)
         return servicos_ordenados[0]
 
+    def buscar_servico_por_id(self, service_id: int) -> dict | None:
+        """
+        Busca um serviço existente pelo ID (GET /services/{id}) -- usado
+        quando só temos o service_id e precisamos de dados do pedido que
+        não vêm no payload de edição, como o customer_id do contato
+        vinculado (ver planejamento_rotas.editar_endereco_pedido).
+        Retorna None se não encontrar (404) ou em qualquer outra falha.
+        """
+        try:
+            resp = chamar_com_retry(self.session.get, f"{BASE_URL}/services/{service_id}", timeout=15)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            dado = resp.json()
+            return (dado.get("service") or dado) if isinstance(dado, dict) else dado
+        except Exception as e:
+            logger.warning(f"Falha ao buscar serviço {service_id}: {e}")
+            return None
+
     def criar_servico(self, payload: dict) -> dict:
         """Cria um serviço (pedido) no VUUPT. Retorna o JSON de resposta. Lança VuuptAPIError em falha."""
         resp = chamar_com_retry(self.session.post, f"{BASE_URL}/services", json=payload, timeout=20)
