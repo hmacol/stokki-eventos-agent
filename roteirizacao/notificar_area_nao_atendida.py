@@ -73,9 +73,23 @@ def classificar_pedido(servico: dict, api_key: str | None, coords_sp,
 
 def identificar_area_nao_atendida(servicos: list[dict], api_key: str | None) -> list[tuple[dict, str]]:
     """
-    Filtra os serviços que precisam de notificação de área não
-    atendida (excluindo quem já foi notificado antes). Retorna lista
-    de (servico, tipo).
+    Classifica os serviços quanto a área não atendida. Retorna lista de
+    (servico, tipo) com TODOS os pedidos fora da área (SP fora do raio
+    ou fora do estado) -- inclui quem já foi notificado antes, de
+    propósito: quem chama usa esta lista pra excluir da roteirização
+    normal, e essa exclusão precisa valer PRA SEMPRE, não só até o
+    aviso ser mandado.
+
+    BUG CORRIGIDO (20/08, achado com pedidos de João Pessoa/PB, Cacoal/RO,
+    Cascavel/PR e outros entrando numa rota de VIAGEM mesmo fora da área):
+    antes esta função já excluía quem `ja_notificado`, e o resultado dela
+    era o mesmo usado pra montar `ids_area_nao_atendida` (o conjunto que
+    tira o pedido da roteirização) -- assim que o pedido era notificado
+    1x, ele "sumia" do filtro de exclusão e voltava a ser roteirizado
+    normalmente na rodada seguinte. O corte por "já notificado" agora só
+    acontece em notificar_remetentes, na hora de decidir quem recebe o
+    e-mail (esse sim deve ser único) -- a exclusão da rota fica
+    independente disso.
     """
     from geocodificacao import geocodificar
     from regioes_dia_fixo import (
@@ -83,14 +97,11 @@ def identificar_area_nao_atendida(servicos: list[dict], api_key: str | None) -> 
         RAIO_GRANDE_SP_KM, ENDERECO_REFERENCIA_SP,
     )
     from roteirizacao_dados import obter_coordenadas, _distancia_km
-    from fingerprint_area_nao_atendida import ja_notificado
 
     coords_sp = geocodificar(ENDERECO_REFERENCIA_SP, api_key)
 
     resultado = []
     for s in servicos:
-        if ja_notificado(s["id"]):
-            continue
         tipo = classificar_pedido(
             s, api_key, coords_sp, extrair_cidade, extrair_uf, dia_fixo_da_cidade,
             obter_coordenadas, _distancia_km, RAIO_GRANDE_SP_KM,
@@ -178,8 +189,17 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
     manualmente o volume de "área não atendida" antes de deixar ir
     direto pro cliente, mas sem reenviar o mesmo pedido toda vez que o
     job rodar.
+
+    `pendentes_com_tipo` pode vir com pedidos JÁ notificados antes
+    (identificar_area_nao_atendida devolve todos os fora de área, não só
+    os novos -- ver o comentário lá) -- esta função é quem filtra
+    `ja_notificado` de verdade, na hora de decidir quem recebe o e-mail.
     """
-    from fingerprint_area_nao_atendida import marcar_notificado
+    from fingerprint_area_nao_atendida import ja_notificado, marcar_notificado
+
+    pendentes_com_tipo = [(s, t) for s, t in pendentes_com_tipo if not ja_notificado(s["id"])]
+    if not pendentes_com_tipo:
+        return {"enviados": 0, "falhas": 0, "sem_email": 0}
 
     embarcadores = _carregar_embarcadores_por_sender_id()
     grupos = defaultdict(list)
