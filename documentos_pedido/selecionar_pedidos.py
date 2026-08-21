@@ -58,20 +58,31 @@ def _stkkc_id_da_linha(linha) -> str | None:
 # Embarcadores cujas entregas NÃO precisam ir acompanhadas de Nota
 # Fiscal (pedido do Hugo, 13/08): a etapa da Stokki pula a geração do
 # DANFE desses pedidos (a aba Documentos continua sendo olhada -- boleto
-# etc). São os mesmos 3 embarcadores da CANHOTEIRA do romaneio
-# (roteirizacao/gerar_pdf_romaneios.py::SENDERS_CANHOTEIRA).
+# etc). São (parte d)os mesmos embarcadores da CANHOTEIRA do romaneio
+# (roteirizacao/gerar_pdf_romaneios.py::SENDERS_CANHOTEIRA) -- só que
+# ESSA lista aqui é especificamente sobre "vale a pena buscar a NF-e na
+# Stokki", não sobre "a entrega precisa do canhoto da NF" (são coisas
+# diferentes: a prova de entrega deles continua sendo a canhoteira,
+# ver SENDERS_SEM_NF em validar_checklists.py e gerar_pdf_romaneios.py,
+# que NÃO mudam aqui).
+#
+# Quatro Estrelas (98) tirada dessa lista em 21/08 (confirmado com o
+# Hugo): ela EMITE NF-e normalmente e ela fica anexada no pedido da
+# Stokki -- só não buscávamos porque a entrega dela usa canhoteira, não
+# porque faltasse o documento. Buscar agora alimenta o campo NF do
+# resumo de planejamento (planejamento_rotas.py::numero_nf) sem afetar
+# a validação de checklist nem a canhoteira do romaneio.
 #
 # Conferido por ID (ver _stkkc_id_da_linha), não por nome -- achado
 # real, 17/08: "QUATRO ESTRELAS" só aparece no MEIO do nome completo
 # do cliente na Stokki ("COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA"),
 # nunca sobrevive ao truncamento -- checado contra 786 pedidos reais
-# dela, 0 reconhecidos até essa correção (Padrão Puro e Pedramoura
-# "funcionavam" só por coincidência, por serem o COMEÇO do nome
-# completo deles). IDs tirados de interno.stkkc_id (dados.db) --
-# mesmos valores usados em pipeline.py::EMBARCADORES_IMPORTAR_ABERTOS
-# pra Quatro Estrelas. Nome mantido como fallback defensivo.
-EMBARCADORES_SEM_NF_IDS = {"23", "98", "96"}  # Padrão Puro, Quatro Estrelas, Pedramoura
-EMBARCADORES_SEM_NF = ("PADRAO PURO", "QUATRO ESTRELAS", "PEDRAMOURA")
+# dela, 0 reconhecidos até a correção pra ID em 17/08 (Padrão Puro e
+# Pedramoura "funcionavam" só por coincidência, por serem o COMEÇO do
+# nome completo deles). IDs tirados de interno.stkkc_id (dados.db) --
+# mesmos valores usados em pipeline.py::EMBARCADORES_IMPORTAR_ABERTOS.
+EMBARCADORES_SEM_NF_IDS = {"23", "96"}  # Padrão Puro, Pedramoura
+EMBARCADORES_SEM_NF = ("PADRAO PURO", "PEDRAMOURA")
 
 
 def _pedido_sem_nf(linha) -> bool:
