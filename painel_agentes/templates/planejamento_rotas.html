@@ -1245,7 +1245,7 @@
 <div class="modal-overlay-reagendar" id="modal-reagendar">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-reagendar">
     <h2 id="titulo-modal-reagendar">Agendar / reagendar pedido</h2>
-    <p class="subtitulo">Pedido <strong id="reagendar-codigo"></strong> — atualiza o agendamento direto na VUUPT.</p>
+    <p class="subtitulo"><span id="reagendar-prefixo">Pedido</span> <strong id="reagendar-codigo"></strong> — atualiza o agendamento direto na VUUPT.</p>
     <div class="campo-reagendar">
       <label for="reagendar-data">Data</label>
       <input type="date" id="reagendar-data" style="width:100%;">
@@ -1269,7 +1269,7 @@
 <div class="modal-overlay-editar-endereco" id="modal-editar-endereco">
   <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-editar-endereco">
     <h2 id="titulo-modal-editar-endereco">Editar endereço</h2>
-    <p class="subtitulo">Pedido <strong id="editar-endereco-codigo"></strong> — atualiza o endereço direto na VUUPT (regeocodifica automaticamente).</p>
+    <p class="subtitulo"><span id="editar-endereco-prefixo">Pedido</span> <strong id="editar-endereco-codigo"></strong> — atualiza o endereço direto na VUUPT (regeocodifica automaticamente).</p>
     <div class="campo-reagendar">
       <label for="editar-endereco-texto">Endereço</label>
       <textarea id="editar-endereco-texto"></textarea>
@@ -1466,6 +1466,8 @@
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
+      <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
+      <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
     </div>
     <div id="lista-pool">
       <div class="secao-pool" data-secao="hoje" id="secao-pool-hoje">
@@ -1532,6 +1534,8 @@
       <span id="contagem-selecao-rotas">0 selecionado(s)</span>
       <select id="select-destino-mover"><option value="">Mover pra...</option></select>
       <button type="button" id="botao-mover-selecionados" disabled>Mover</button>
+      <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
+      <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
@@ -2460,6 +2464,8 @@
     const botaoRoteirizar = document.getElementById("botao-roteirizar-selecao");
     botaoRoteirizar.disabled = SELECIONADOS.size === 0;
     botaoRoteirizar.textContent = SELECIONADOS.size ? `Roteirizar (${SELECIONADOS.size})` : "Roteirizar";
+    document.getElementById("botao-editar-endereco-selecao").disabled = SELECIONADOS.size === 0;
+    document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
   }
 
@@ -2979,6 +2985,8 @@
     select.innerHTML = `<option value="">Mover pra...</option>${opcoes}`;
     if (valorAtual) select.value = valorAtual;
     document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !select.value;
+    document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
   }
 
   function limparSelecaoRotas() {
@@ -3013,6 +3021,23 @@
       botao.disabled = false;
       botao.textContent = original;
     }
+  }
+
+  // monta os `itens` ({service_id, rascunho_id}) pros modais de
+  // edição em lote (endereço/agendamento) a partir de uma das duas
+  // seleções múltiplas da tela -- pool (SELECIONADOS, sempre sem rota)
+  // ou dentro de rotas (SELECIONADOS_ROTA, lê a rota de cada um do DOM
+  // agora, mesmo padrão de moverSelecionados) (Hugo, 20/08).
+  function itensDoPoolSelecionado() {
+    return Array.from(SELECIONADOS).map(serviceId => ({ service_id: serviceId, rascunho_id: null }));
+  }
+
+  function itensDaRotaSelecionada() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      const ul = li && li.closest(".lista-paradas");
+      return { service_id: serviceId, rascunho_id: ul ? Number(ul.dataset.listId) : null };
+    });
   }
 
   async function descartarRota(rascunhoId) {
@@ -3388,9 +3413,12 @@
     }
   }
 
-  // pedido sendo agendado/reagendado pelo modal -- guardado pra
-  // confirmarReagendamento saber quem atualizar (mesmo padrão de
-  // botaoRoteirizarPendente)
+  // pedido (ou lote de pedidos, ver abrirModalReagendarLote) sendo
+  // agendado/reagendado pelo modal -- guardado pra confirmarReagendamento
+  // saber quem atualizar (mesmo padrão de botaoRoteirizarPendente).
+  // Formato único: { serviceId, rascunhoId } (1 pedido, do menu de
+  // contexto) OU { itens: [{service_id, rascunho_id}, ...] } (lote, da
+  // barra de seleção múltipla, Hugo, 20/08).
   let reagendarPendente = null;
 
   // "Agendar / reagendar" do menu de contexto (Hugo, 16/08): abre o
@@ -3400,11 +3428,28 @@
   // atual não fica guardada no card, só a data.
   function abrirModalReagendar(li, serviceId, rascunhoId) {
     const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("reagendar-prefixo").textContent = "Pedido";
     document.getElementById("reagendar-codigo").textContent = codigo;
     document.getElementById("reagendar-data").value = li.dataset.agendadoPara || DATA_ALVO_ISO;
     document.getElementById("reagendar-hora-inicio").value = "08:00";
     document.getElementById("reagendar-hora-fim").value = "18:00";
     reagendarPendente = { serviceId, rascunhoId };
+    document.getElementById("modal-reagendar").classList.add("aberto");
+  }
+
+  // versão em lote: botão "Agendar" da barra de seleção múltipla (pool
+  // ou dentro de rotas, Hugo, 20/08) -- mesma janela de data/horário
+  // aplicada a todos os `itens` ({service_id, rascunho_id}). Sem
+  // dataset.agendadoPara de um card só pra puxar, sempre começa na
+  // data em edição + janela padrão 08:00-18:00.
+  function abrirModalReagendarLote(itens) {
+    if (!itens.length) return;
+    document.getElementById("reagendar-prefixo").textContent = "Lote de";
+    document.getElementById("reagendar-codigo").textContent = `${itens.length} pedido(s) selecionado(s)`;
+    document.getElementById("reagendar-data").value = DATA_ALVO_ISO;
+    document.getElementById("reagendar-hora-inicio").value = "08:00";
+    document.getElementById("reagendar-hora-fim").value = "18:00";
+    reagendarPendente = { itens };
     document.getElementById("modal-reagendar").classList.add("aberto");
   }
 
@@ -3419,10 +3464,22 @@
     botao.disabled = true;
     botao.textContent = "Salvando...";
     try {
-      await postJSON("/api/planejamento/reagendar-pedido", {
-        service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
-      });
+      let falhas = [];
+      if (pendente.itens) {
+        const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
+          itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
+        });
+        falhas = resp.falhas || [];
+      } else {
+        await postJSON("/api/planejamento/reagendar-pedido", {
+          service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+        });
+      }
       document.getElementById("modal-reagendar").classList.remove("aberto");
+      if (falhas.length) {
+        alert(`Agendamento aplicado, mas ${falhas.length} de ${pendente.itens.length} pedido(s) falharam:\n` +
+          falhas.map(f => `#${f.service_id}: ${f.erro}`).join("\n"));
+      }
       // recarrega -- o novo agendado_para pode mudar a seção/urgência
       // do card (mesmo padrão de cancelarPedido)
       location.reload();
@@ -3433,17 +3490,33 @@
     }
   }
 
-  // pedido tendo o endereço editado pelo modal -- mesmo padrão de
-  // reagendarPendente
+  // pedido (ou lote, ver abrirModalEditarEnderecoLote) tendo o endereço
+  // editado pelo modal -- mesmo padrão de reagendarPendente.
   let editarEnderecoPendente = null;
 
   // "Editar endereço" do menu de contexto (Hugo, 18/08): abre o modal
   // com o endereço atual já preenchido (mesmo texto exibido no card).
   function abrirModalEditarEndereco(li, serviceId, rascunhoId) {
     const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("editar-endereco-prefixo").textContent = "Pedido";
     document.getElementById("editar-endereco-codigo").textContent = codigo;
     document.getElementById("editar-endereco-texto").value = li.querySelector(".endereco")?.textContent.trim() || "";
     editarEnderecoPendente = { serviceId, rascunhoId };
+    document.getElementById("modal-editar-endereco").classList.add("aberto");
+  }
+
+  // versão em lote: botão "Editar endereço" da barra de seleção múltipla
+  // (pool ou dentro de rotas, Hugo, 20/08) -- grava o MESMO endereço
+  // digitado em todos os `itens` ({service_id, rascunho_id}). Sem
+  // pré-preencher o campo: pedidos selecionados normalmente têm
+  // endereços diferentes entre si, então não faz sentido puxar de um
+  // card só.
+  function abrirModalEditarEnderecoLote(itens) {
+    if (!itens.length) return;
+    document.getElementById("editar-endereco-prefixo").textContent = "Lote de";
+    document.getElementById("editar-endereco-codigo").textContent = `${itens.length} pedido(s) selecionado(s)`;
+    document.getElementById("editar-endereco-texto").value = "";
+    editarEnderecoPendente = { itens };
     document.getElementById("modal-editar-endereco").classList.add("aberto");
   }
 
@@ -3456,10 +3529,20 @@
     botao.disabled = true;
     botao.textContent = "Salvando...";
     try {
-      await postJSON("/api/planejamento/editar-endereco", {
-        service_id: pendente.serviceId, endereco, rascunho_id: pendente.rascunhoId,
-      });
+      let falhas = [];
+      if (pendente.itens) {
+        const resp = await postJSON("/api/planejamento/editar-endereco-lote", { itens: pendente.itens, endereco });
+        falhas = resp.falhas || [];
+      } else {
+        await postJSON("/api/planejamento/editar-endereco", {
+          service_id: pendente.serviceId, endereco, rascunho_id: pendente.rascunhoId,
+        });
+      }
       document.getElementById("modal-editar-endereco").classList.remove("aberto");
+      if (falhas.length) {
+        alert(`Endereço aplicado, mas ${falhas.length} de ${pendente.itens.length} pedido(s) falharam:\n` +
+          falhas.map(f => `#${f.service_id}: ${f.erro}`).join("\n"));
+      }
       // recarrega -- o novo endereço pode mudar CEP/agrupamento por
       // endereço distinto (mesmo padrão de confirmarReagendamento)
       location.reload();
@@ -3850,6 +3933,12 @@
     document.getElementById("botao-limpar-selecao").addEventListener("click", limparSelecao);
     document.getElementById("botao-criar-rota-selecao").addEventListener("click", (e) => criarRotaComSelecionados(e.target));
     document.getElementById("botao-roteirizar-selecao").addEventListener("click", (e) => abrirModalTipoRoteirizacao(e.target));
+    document.getElementById("botao-editar-endereco-selecao").addEventListener("click", () => {
+      abrirModalEditarEnderecoLote(itensDoPoolSelecionado());
+    });
+    document.getElementById("botao-reagendar-selecao").addEventListener("click", () => {
+      abrirModalReagendarLote(itensDoPoolSelecionado());
+    });
     document.getElementById("botao-cancelar-tipo-roteirizacao").addEventListener("click", () => {
       document.getElementById("modal-tipo-roteirizacao").classList.remove("aberto");
       botaoRoteirizarPendente = null;
@@ -4022,6 +4111,12 @@
     document.getElementById("botao-nova-rota").addEventListener("click", criarNovaRota);
     document.getElementById("botao-limpar-selecao-rotas").addEventListener("click", limparSelecaoRotas);
     document.getElementById("botao-mover-selecionados").addEventListener("click", (e) => moverSelecionados(e.target));
+    document.getElementById("botao-editar-endereco-selecao-rotas").addEventListener("click", () => {
+      abrirModalEditarEnderecoLote(itensDaRotaSelecionada());
+    });
+    document.getElementById("botao-reagendar-selecao-rotas").addEventListener("click", () => {
+      abrirModalReagendarLote(itensDaRotaSelecionada());
+    });
     document.getElementById("select-destino-mover").addEventListener("change", (e) => {
       document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !e.target.value;
     });

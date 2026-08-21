@@ -847,13 +847,9 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
 
     Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
     """
-    # _converter_data_para_iso só aceita "%Y-%m-%d %H:%M:%S" (com
-    # segundos) pro formato com espaço -- o <input type="time"> manda
-    # "HH:MM" sem segundos, por isso completa aqui antes de converter.
-    scheduled_start = _converter_data_para_iso(f"{data} {hora_inicio}:00")
-    scheduled_end = _converter_data_para_iso(f"{data} {hora_fim}:00")
-    if not scheduled_start or not scheduled_end:
-        return {"ok": False, "erro": f"Data/horário inválidos: {data} {hora_inicio}-{hora_fim}"}
+    scheduled_start, scheduled_end, erro = _converter_janela_reagendamento(data, hora_inicio, hora_fim)
+    if erro:
+        return {"ok": False, "erro": erro}
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -868,6 +864,119 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     return {"ok": True}
 
 
+def _converter_janela_reagendamento(data: str, hora_inicio: str, hora_fim: str) -> tuple[str | None, str | None, str | None]:
+    """Converte data + janela de horário (formato dos inputs date/time
+    do modal) pro par scheduled_start/scheduled_end ISO8601 que a VUUPT
+    espera -- compartilhado por reagendar_pedido e reagendar_pedidos
+    (lote). Retorna (scheduled_start, scheduled_end, None) ou
+    (None, None, mensagem_de_erro)."""
+    # _converter_data_para_iso só aceita "%Y-%m-%d %H:%M:%S" (com
+    # segundos) pro formato com espaço -- o <input type="time"> manda
+    # "HH:MM" sem segundos, por isso completa aqui antes de converter.
+    scheduled_start = _converter_data_para_iso(f"{data} {hora_inicio}:00")
+    scheduled_end = _converter_data_para_iso(f"{data} {hora_fim}:00")
+    if not scheduled_start or not scheduled_end:
+        return None, None, f"Data/horário inválidos: {data} {hora_inicio}-{hora_fim}"
+    return scheduled_start, scheduled_end, None
+
+
+def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: str) -> dict:
+    """
+    Versão em lote de reagendar_pedido -- aplica a MESMA janela de
+    data/horário a todos os pedidos de `itens` (cada item:
+    {"service_id": int}) -- botão "Agendar" da barra de seleção
+    múltipla da tela de planejamento (Hugo, 20/08), tanto pra seleção
+    do pool quanto pra seleção dentro de rotas.
+
+    Falha num pedido NÃO aborta os demais -- cada um é tentado
+    independentemente. Retorna {"ok": True, "falhas": [{"service_id":
+    n, "erro": "..."}]}, com "falhas" vazia quando tudo deu certo. Só
+    devolve {"ok": False} pra erro geral (data/hora inválida ou nenhum
+    pedido selecionado), sem tentar nenhum.
+    """
+    scheduled_start, scheduled_end, erro = _converter_janela_reagendamento(data, hora_inicio, hora_fim)
+    if erro:
+        return {"ok": False, "erro": erro}
+    if not itens:
+        return {"ok": False, "erro": "Nenhum pedido selecionado."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    falhas = []
+    for item in itens:
+        service_id = int(item["service_id"])
+        try:
+            vuupt.atualizar_servico(service_id, {
+                "scheduled_start": scheduled_start,
+                "scheduled_end": scheduled_end,
+            })
+        except VuuptAPIError as e:
+            falhas.append({"service_id": service_id, "erro": str(e)})
+
+    return {"ok": True, "falhas": falhas}
+
+
+def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
+                             dados_endereco: dict, rascunho_id: int | None) -> None:
+    """
+    Grava o endereço de UM pedido -- miolo compartilhado por
+    editar_endereco_pedido (1 pedido) e editar_endereco_pedidos (lote).
+
+    Grava com PUT /services/{id}, com address/latitude/longitude NO
+    NÍVEL RAIZ do payload -- achado 20/08 (Hugo reportou que a edição
+    "não impactava" a VUUPT): o SERVIÇO tem seus PRÓPRIOS campos
+    address/latitude/longitude, um snapshot independente do endereço do
+    'customer' (contato) vinculado -- mesmo padrão documentado pro
+    phone_number em montar_payload_servico ("o serviço tem seu PRÓPRIO
+    phone_number... independente do phone_number do contato... mesmo
+    padrão da latitude/longitude, que também existe nos dois níveis").
+    É esse campo do PRÓPRIO serviço que a VUUPT usa pro ponto de
+    entrega/roteirização (confirmado: é dele que _servico_para_pool lê
+    o "endereco" mostrado nos cards da tela) -- só atualizar o
+    'customer' (como uma versão anterior desta função passou a fazer,
+    corrigindo a confiabilidade do CADASTRO do contato) não move esse
+    ponto. Nível raiz = mesmo mecanismo comprovado por reagendar_pedido
+    com scheduled_start/scheduled_end, diferente do objeto 'customer'
+    aninhado (esse sim documentado como não confiável em
+    vuupt_client.resolver_customer_id).
+
+    Depois, tenta sincronizar o mesmo endereço no 'customer' vinculado
+    também (PUT /customers/{customer_id}, caminho confiável pra contato
+    já existente -- ver resolver_customer_id) pra manter o cadastro
+    coerente pra criações futuras. Isso é best-effort: falha aqui não
+    propaga nem impede o restante, já que o efeito visível principal (o
+    ponto da entrega) já foi gravado no passo acima.
+
+    Se o pedido já está numa rota em rascunho (rascunho_id informado),
+    também atualiza a cópia local em rascunhos_parada -- ela é lida ao
+    vivo pela tela pra rotas já montadas, então sem isso o card
+    continuaria mostrando o endereço antigo.
+
+    Propaga VuuptAPIError da gravação principal (no serviço) pro
+    chamador decidir como reportar -- é a única falha "fatal" aqui.
+    """
+    vuupt.atualizar_servico(service_id, dados_endereco)
+
+    servico = vuupt.buscar_servico_por_id(service_id)
+    customer_id = (servico or {}).get("customer_id")
+    if customer_id:
+        try:
+            vuupt.atualizar_customer(customer_id, dados_endereco)
+        except VuuptAPIError as e:
+            logger.warning(
+                f"Endereço do serviço {service_id} atualizado, mas falha ao "
+                f"sincronizar o contato {customer_id}: {e}"
+            )
+
+    if rascunho_id is not None:
+        rascunhos_rota.atualizar_endereco_parada(
+            rascunho_id, service_id, endereco,
+            dados_endereco.get("latitude"), dados_endereco.get("longitude"),
+        )
+
+
 def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | None = None) -> dict:
     """
     Edita o endereço de um pedido direto na VUUPT -- opção "Editar
@@ -875,37 +984,13 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
     18/08), mesmo padrão do "Agendar / reagendar" (reagendar_pedido).
 
     Regeocodifica o novo endereço (mesma geocodificacao.geocodificar
-    usada na importação) e grava com PUT /services/{id}, com
-    address/latitude/longitude NO NÍVEL RAIZ do payload -- achado 20/08
-    (Hugo reportou que a edição "não impactava" a VUUPT): o SERVIÇO tem
-    seus PRÓPRIOS campos address/latitude/longitude, um snapshot
-    independente do endereço do 'customer' (contato) vinculado -- mesmo
-    padrão documentado pro phone_number em montar_payload_servico ("o
-    serviço tem seu PRÓPRIO phone_number... independente do
-    phone_number do contato... mesmo padrão da latitude/longitude, que
-    também existe nos dois níveis"). É esse campo do PRÓPRIO serviço que
-    a VUUPT usa pro ponto de entrega/roteirização (confirmado: é dele
-    que _servico_para_pool lê o "endereco" mostrado nos cards da tela) --
-    só atualizar o 'customer' (como a versão anterior desta função
-    passou a fazer, corrigindo a confiabilidade do CADASTRO do contato)
-    não move esse ponto. Nível raiz = mesmo mecanismo comprovado por
-    reagendar_pedido com scheduled_start/scheduled_end, diferente do
-    objeto 'customer' aninhado (esse sim documentado como não confiável
-    em vuupt_client.resolver_customer_id). Se a geocodificação falhar
-    (endereço não resolvido, sem API key etc.), envia só o texto do
-    endereço; o VUUPT geocodifica por conta própria nesse caso.
-
-    Depois, tenta sincronizar o mesmo endereço no 'customer' vinculado
-    também (PUT /customers/{customer_id}, caminho confiável pra contato
-    já existente -- ver resolver_customer_id) pra manter o cadastro
-    coerente pra criações futuras. Isso é best-effort: falha aqui não
-    desfaz nem reporta erro pro usuário, já que o efeito visível
-    principal (o ponto da entrega) já foi gravado no passo acima.
-
-    Se o pedido já está numa rota em rascunho (rascunho_id informado),
-    também atualiza a cópia local em rascunhos_parada -- ela é lida
-    ao vivo pela tela pra rotas já montadas, então sem isso o card
-    continuaria mostrando o endereço antigo.
+    usada na importação) e delega a gravação em si (serviço + contato +
+    cópia local do rascunho) pro helper compartilhado
+    _gravar_endereco_pedido -- ver docstring dele pros detalhes de POR
+    QUE é assim (nível raiz do serviço, não o 'customer' aninhado). Se a
+    geocodificação falhar (endereço não resolvido, sem API key etc.),
+    envia só o texto do endereço; o VUUPT geocodifica por conta própria
+    nesse caso.
 
     NÃO mexe em nada na Stokki, só no cadastro do pedido na VUUPT.
 
@@ -928,28 +1013,57 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
         dados_endereco["latitude"], dados_endereco["longitude"] = coords
 
     try:
-        vuupt.atualizar_servico(service_id, dados_endereco)
+        _gravar_endereco_pedido(vuupt, service_id, endereco, dados_endereco, rascunho_id)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
 
-    servico = vuupt.buscar_servico_por_id(service_id)
-    customer_id = (servico or {}).get("customer_id")
-    if customer_id:
-        try:
-            vuupt.atualizar_customer(customer_id, dados_endereco)
-        except VuuptAPIError as e:
-            logger.warning(
-                f"Endereço do serviço {service_id} atualizado, mas falha ao "
-                f"sincronizar o contato {customer_id}: {e}"
-            )
-
-    if rascunho_id is not None:
-        rascunhos_rota.atualizar_endereco_parada(
-            rascunho_id, service_id, endereco,
-            coords[0] if coords else None, coords[1] if coords else None,
-        )
-
     return {"ok": True}
+
+
+def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:
+    """
+    Versão em lote de editar_endereco_pedido -- geocodifica o endereço
+    UMA ÚNICA VEZ e grava o MESMO endereço em todos os pedidos de
+    `itens` (cada item: {"service_id": int, "rascunho_id": int | None})
+    -- botão "Editar endereço" da barra de seleção múltipla da tela de
+    planejamento (Hugo, 20/08), tanto pra seleção do pool (rascunho_id
+    sempre None) quanto pra seleção dentro de rotas.
+
+    Falha num pedido NÃO aborta os demais -- cada um é tentado
+    independentemente (ver _gravar_endereco_pedido). Retorna {"ok":
+    True, "falhas": [{"service_id": n, "erro": "..."}]}, com "falhas"
+    vazia quando tudo deu certo. Só devolve {"ok": False} pra erro geral
+    (endereço vazio ou nenhum pedido selecionado), sem tentar nenhum.
+    """
+    endereco = (endereco or "").strip()
+    if not endereco:
+        return {"ok": False, "erro": "Endereço não pode ficar em branco."}
+    if not itens:
+        return {"ok": False, "erro": "Nenhum pedido selecionado."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    from geocodificacao import geocodificar
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+    coords = geocodificar(endereco, gmaps_key)
+
+    dados_endereco = {"address": endereco}
+    if coords:
+        dados_endereco["latitude"], dados_endereco["longitude"] = coords
+
+    falhas = []
+    for item in itens:
+        service_id = int(item["service_id"])
+        rascunho_id = item.get("rascunho_id")
+        rascunho_id = int(rascunho_id) if rascunho_id is not None else None
+        try:
+            _gravar_endereco_pedido(vuupt, service_id, endereco, dados_endereco, rascunho_id)
+        except VuuptAPIError as e:
+            falhas.append({"service_id": service_id, "erro": str(e)})
+
+    return {"ok": True, "falhas": falhas}
 
 
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"

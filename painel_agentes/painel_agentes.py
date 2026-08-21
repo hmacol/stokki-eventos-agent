@@ -63,7 +63,7 @@ from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
-    editar_endereco_pedido,
+    reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
@@ -1313,6 +1313,29 @@ def api_reagendar_pedido():
     return jsonify({"ok": True})
 
 
+@app.route("/api/planejamento/reagendar-pedidos", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_reagendar_pedidos():
+    """Agenda/reagenda em lote (MESMA janela de data/horário pra todos)
+    -- botão "Agendar" da barra de seleção múltipla da tela de
+    planejamento, tanto pra seleção do pool quanto pra seleção dentro de
+    rotas (ver planejamento_rotas.reagendar_pedidos)."""
+    body = request.get_json(force=True)
+    try:
+        itens = [{"service_id": int(it["service_id"])} for it in body["itens"]]
+        data = body["data"]
+        hora_inicio = body["hora_inicio"]
+        hora_fim = body["hora_fim"]
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True, "falhas": resultado["falhas"]})
+
+
 @app.route("/api/planejamento/editar-endereco", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
@@ -1333,6 +1356,31 @@ def api_editar_endereco():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})
+
+
+@app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_editar_endereco_lote():
+    """Edita o MESMO endereço em lote -- botão "Editar endereço" da
+    barra de seleção múltipla da tela de planejamento, tanto pra seleção
+    do pool quanto pra seleção dentro de rotas (ver
+    planejamento_rotas.editar_endereco_pedidos)."""
+    body = request.get_json(force=True)
+    try:
+        itens = [
+            {"service_id": int(it["service_id"]),
+             "rascunho_id": int(it["rascunho_id"]) if it.get("rascunho_id") is not None else None}
+            for it in body["itens"]
+        ]
+        endereco = body["endereco"]
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = editar_endereco_pedidos(itens, endereco)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True, "falhas": resultado["falhas"]})
 
 
 if __name__ == "__main__":
