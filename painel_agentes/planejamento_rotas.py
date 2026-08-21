@@ -912,7 +912,15 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
                 "scheduled_start": scheduled_start,
                 "scheduled_end": scheduled_end,
             })
-        except VuuptAPIError as e:
+            logger.info(f"Agendamento em lote: serviço {service_id} atualizado.")
+        except Exception as e:
+            # Exception ampla (não só VuuptAPIError) de propósito: uma
+            # falha de rede/timeout num item NÃO pode travar o loop e
+            # deixar os itens seguintes sem sequer serem tentados --
+            # achado 20/08 (Hugo reportou que o lote "não altera todos"),
+            # o catch estreito deixava passar qualquer erro que não
+            # fosse o VuuptAPIError da própria lib.
+            logger.warning(f"Agendamento em lote: falha no serviço {service_id}: {e}")
             falhas.append({"service_id": service_id, "erro": str(e)})
 
     return {"ok": True, "falhas": falhas}
@@ -964,7 +972,12 @@ def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
     if customer_id:
         try:
             vuupt.atualizar_customer(customer_id, dados_endereco)
-        except VuuptAPIError as e:
+        except Exception as e:
+            # Exception ampla de propósito (ver editar_endereco_pedidos):
+            # isso é best-effort por design -- não pode propagar por
+            # NENHUM tipo de erro, só VuuptAPIError, ou uma falha de
+            # rede aqui derrubaria o pedido inteiro (e, em lote, todos
+            # os itens seguintes) por causa só do passo secundário.
             logger.warning(
                 f"Endereço do serviço {service_id} atualizado, mas falha ao "
                 f"sincronizar o contato {customer_id}: {e}"
@@ -1014,7 +1027,10 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
 
     try:
         _gravar_endereco_pedido(vuupt, service_id, endereco, dados_endereco, rascunho_id)
-    except VuuptAPIError as e:
+    except Exception as e:
+        # Exception ampla (não só VuuptAPIError): uma falha de
+        # rede/timeout na chamada à VUUPT não pode virar um 500 cru pro
+        # navegador -- vira um erro reportável igual qualquer outro.
         return {"ok": False, "erro": str(e)}
 
     return {"ok": True}
@@ -1060,7 +1076,15 @@ def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:
         rascunho_id = int(rascunho_id) if rascunho_id is not None else None
         try:
             _gravar_endereco_pedido(vuupt, service_id, endereco, dados_endereco, rascunho_id)
-        except VuuptAPIError as e:
+            logger.info(f"Endereço em lote: serviço {service_id} atualizado.")
+        except Exception as e:
+            # Exception ampla (não só VuuptAPIError) de propósito: uma
+            # falha de rede/timeout num item NÃO pode travar o loop e
+            # deixar os itens seguintes sem sequer serem tentados --
+            # achado 20/08 (Hugo reportou que o lote "não altera todos"),
+            # o catch estreito deixava passar qualquer erro que não
+            # fosse o VuuptAPIError da própria lib.
+            logger.warning(f"Endereço em lote: falha no serviço {service_id}: {e}")
             falhas.append({"service_id": service_id, "erro": str(e)})
 
     return {"ok": True, "falhas": falhas}

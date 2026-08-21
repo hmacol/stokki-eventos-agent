@@ -1330,7 +1330,16 @@ def api_reagendar_pedidos():
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
 
-    resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim)
+    try:
+        resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim)
+    except Exception as e:
+        # rede de segurança: o loop em si já isola falha por item (ver
+        # planejamento_rotas.reagendar_pedidos), isso é só pra nunca
+        # devolver um 500 cru (HTML) pro fetch() do navegador, que
+        # quebraria tentando fazer resp.json() -- mesmo padrão de
+        # api_roteirizar_selecionados.
+        logging.getLogger(__name__).exception("Falha ao reagendar em lote")
+        return jsonify({"erro": str(e)}), 500
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"]})
@@ -1377,7 +1386,16 @@ def api_editar_endereco_lote():
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
 
-    resultado = editar_endereco_pedidos(itens, endereco)
+    try:
+        resultado = editar_endereco_pedidos(itens, endereco)
+    except Exception as e:
+        # rede de segurança: o loop em si já isola falha por item (ver
+        # planejamento_rotas.editar_endereco_pedidos), isso é só pra
+        # nunca devolver um 500 cru (HTML) pro fetch() do navegador, que
+        # quebraria tentando fazer resp.json() -- mesmo padrão de
+        # api_roteirizar_selecionados.
+        logging.getLogger(__name__).exception("Falha ao editar endereço em lote")
+        return jsonify({"erro": str(e)}), 500
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"]})

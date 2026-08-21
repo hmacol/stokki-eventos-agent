@@ -98,6 +98,24 @@ class ReagendarPedidosLoteTestCase(unittest.TestCase):
 
         self.assertEqual(resultado, {"ok": True, "falhas": []})
 
+    def test_erro_de_rede_generico_em_um_item_tambem_nao_aborta_os_demais(self):
+        """Regressão (achado 20/08, Hugo reportou lote "não altera
+        todos"): o loop só protegia contra VuuptAPIError -- qualquer
+        outro erro (timeout, conexão) no meio do lote derrubava a
+        exceção pra fora e travava os itens seguintes. Erro aqui NÃO é
+        VuuptAPIError de propósito."""
+        def falha_no_222(service_id, dados):
+            if service_id == 222:
+                raise ConnectionError("conexão perdida")
+
+        self.mock_vuupt.atualizar_servico.side_effect = falha_no_222
+
+        resultado = planejamento_rotas.reagendar_pedidos(self.itens, "2026-08-25", "08:00", "18:00")
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["falhas"], [{"service_id": 222, "erro": "conexão perdida"}])
+        self.assertEqual(self.mock_vuupt.atualizar_servico.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

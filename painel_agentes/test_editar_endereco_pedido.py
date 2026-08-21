@@ -129,6 +129,18 @@ class EditarEnderecoPedidoTestCase(unittest.TestCase):
         self.mock_vuupt.atualizar_customer.assert_not_called()
         self.mock_atualiza_parada.assert_not_called()
 
+    def test_erro_de_rede_generico_ao_atualizar_servico_tambem_vira_erro_reportavel(self):
+        """Regressão (achado 20/08, Hugo reportou lote "não altera
+        todos"): a falha ao gravar no serviço não pode se limitar a
+        VuuptAPIError -- um erro de rede/timeout cru (ConnectionError,
+        não vindo da lib) também tem que virar {"ok": False} em vez de
+        propagar e derrubar a request."""
+        self.mock_vuupt.atualizar_servico.side_effect = ConnectionError("timeout")
+
+        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
+
+        self.assertEqual(resultado, {"ok": False, "erro": "timeout"})
+
     # -- sincronização do contato (best-effort, não bloqueia o resultado) --
 
     def test_sincroniza_contato_vinculado_apos_gravar_no_servico(self):
@@ -141,6 +153,18 @@ class EditarEnderecoPedidoTestCase(unittest.TestCase):
 
     def test_erro_ao_sincronizar_contato_nao_derruba_resultado(self):
         self.mock_vuupt.atualizar_customer.side_effect = VuuptAPIError("Status 500: instável")
+
+        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100", rascunho_id=42)
+
+        self.assertEqual(resultado, {"ok": True})
+        self.mock_atualiza_parada.assert_called_once()
+
+    def test_erro_de_rede_generico_ao_sincronizar_contato_tambem_nao_derruba_resultado(self):
+        """Regressão (achado 20/08): igual ao teste acima, mas com um
+        erro que NÃO é VuuptAPIError -- a sincronização do contato é
+        best-effort por design, então tem que engolir qualquer exceção,
+        não só a da lib."""
+        self.mock_vuupt.atualizar_customer.side_effect = TimeoutError("deu ruim")
 
         resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100", rascunho_id=42)
 

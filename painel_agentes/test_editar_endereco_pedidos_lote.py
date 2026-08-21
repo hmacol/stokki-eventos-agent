@@ -137,6 +137,41 @@ class EditarEnderecoPedidosLoteTestCase(unittest.TestCase):
 
         self.assertEqual(resultado, {"ok": True, "falhas": []})
 
+    def test_erro_de_rede_generico_em_um_item_tambem_nao_aborta_os_demais(self):
+        """Regressão (achado 20/08, Hugo reportou que o lote "não altera
+        todos"): o loop só protegia contra VuuptAPIError -- qualquer
+        outro erro (timeout, conexão) no meio do lote derrubava a
+        exceção pra fora do loop e travava os itens seguintes sem
+        sequer tentar. Aqui o erro NÃO é VuuptAPIError de propósito."""
+        def falha_no_222(service_id, dados):
+            if service_id == 222:
+                raise ConnectionError("conexão perdida")
+
+        self.mock_vuupt.atualizar_servico.side_effect = falha_no_222
+
+        resultado = planejamento_rotas.editar_endereco_pedidos(self.itens, "Rua Nova, 100")
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["falhas"], [{"service_id": 222, "erro": "conexão perdida"}])
+        self.assertEqual(self.mock_vuupt.atualizar_servico.call_count, 3)
+
+    def test_erro_de_rede_generico_ao_sincronizar_contato_nao_aborta_o_lote(self):
+        """Mesma regressão, mas na sincronização best-effort do contato
+        (dentro de _gravar_endereco_pedido) -- também tem que engolir
+        qualquer exceção, não só VuuptAPIError, senão um erro aqui
+        derruba o item inteiro (e o resto do lote) por causa só do
+        passo secundário."""
+        def falha_no_customer_2220(customer_id, dados):
+            if customer_id == 2220:
+                raise TimeoutError("deu ruim")
+
+        self.mock_vuupt.atualizar_customer.side_effect = falha_no_customer_2220
+
+        resultado = planejamento_rotas.editar_endereco_pedidos(self.itens, "Rua Nova, 100")
+
+        self.assertEqual(resultado, {"ok": True, "falhas": []})
+        self.assertEqual(self.mock_vuupt.atualizar_servico.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
