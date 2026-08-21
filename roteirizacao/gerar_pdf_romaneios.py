@@ -412,6 +412,12 @@ def _endereco_entrega(servico: dict) -> str:
     """Endereço do serviço VUUPT sem o rabo ', CEP, Brasil' -- na capa
     o que importa é rua/número/bairro/cidade, e a coluna é disputada."""
     endereco = str(servico.get("address") or "").strip()
+    # Alguns remetentes mandam endereço com quebra de linha embutida
+    # (achado real 21/08: rota da Cícero, pedido #PS-37000, Ceagesp) --
+    # draw.textlength() do Pillow (usado em _truncar) recusa medir texto
+    # multilinha ("can't measure length of multiline text"), então isso
+    # precisa virar uma linha só antes de qualquer coisa.
+    endereco = re.sub(r"\s+", " ", endereco)
     endereco = re.sub(r",?\s*Brasil\s*$", "", endereco, flags=re.IGNORECASE)
     endereco = re.sub(r",?\s*\d{5}-?\d{3}\s*$", "", endereco)
     return endereco
@@ -750,16 +756,24 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
         docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
 
-        nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
-        # Sem NF, mas De Tommaso costuma mandar um "Pedido de Venda"
-        # padronizado no lugar dela (pedido do Hugo, 20/08) -- conta
-        # como se fosse a própria NF daqui pra baixo (capa, volumes/
-        # peso, páginas emendadas), só o número exibido leva "PV ".
-        if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
-            nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
+        nf_dispensada = sender_id in SENDERS_SEM_NF
+        if nf_dispensada:
+            # Esses embarcadores são controlados pela CANHOTEIRA, não
+            # pela NF -- mesmo que uma NF antiga esteja no banco
+            # (achado real, 20/08: NF de Padrão Puro indo emendada no
+            # romaneio de entrega), ela nunca é aberta, emendada ou
+            # contada pra eles.
+            nfs, problemas_nf = [], []
+        else:
+            nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
+            # Sem NF, mas De Tommaso costuma mandar um "Pedido de Venda"
+            # padronizado no lugar dela (pedido do Hugo, 20/08) -- conta
+            # como se fosse a própria NF daqui pra baixo (capa, volumes/
+            # peso, páginas emendadas), só o número exibido leva "PV ".
+            if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
+                nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
         boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
 
-        nf_dispensada = sender_id in SENDERS_SEM_NF
         faltas = []
         if not nfs and not nf_dispensada:
             faltas.append("sem nota fiscal")
@@ -788,10 +802,9 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "veio_de_pedido_venda": veio_de_pedido_venda,
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
-            # NF dispensada E ausente -> capa mostra "—" no lugar da
-            # marca (se uma NF antiga existir no banco, ela ainda vai
-            # impressa e a capa mostra o check normal).
-            "nf_dispensada": nf_dispensada and not nfs,
+            # NF dispensada -> capa mostra "—" no lugar da marca (nfs
+            # já vem sempre vazio pra esses embarcadores, ver acima).
+            "nf_dispensada": nf_dispensada,
             "_abertos_nf": nfs, "_abertos_bol": boletos,
         })
 
