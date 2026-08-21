@@ -103,6 +103,38 @@ def selecionar_motorista_equitativo(
     motorista elegível -- quem chama decide como seguir (rota sem
     motorista).
     """
+    elegiveis, tipo_str, rodizio_str, veiculo_str = _elegibilidade_sublote(
+        sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+    )
+
+    if not elegiveis:
+        logger.warning(
+            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}]{rodizio_str}{veiculo_str} em "
+            f"{data_rota.isoformat()} -- rota será criada sem motorista."
+        )
+        return None
+
+    # Ordenação equitativa: menor número de alocações no dia; empate
+    # resolvido por agent_id (round-robin circular estável -- a ordem
+    # entre motoristas com a mesma contagem sempre alterna da mesma
+    # forma, sem favorecer nenhum deles arbitrariamente).
+    elegiveis.sort(key=lambda m: (contagem_alocacoes_dia.get(m.agent_id, 0), m.agent_id))
+    return elegiveis[0]
+
+
+def _elegibilidade_sublote(
+    sublote: list[dict],
+    data_rota: date,
+    motoristas: list[MotoristaPreferencias],
+    contagem_alocacoes_dia: dict[int, int],
+    api_key: str | None = None,
+    ajustes_disponibilidade: dict[int, dict] | None = None,
+):
+    """Filtro de elegibilidade compartilhado por selecionar_motorista_equitativo
+    (escolhe 1) e contar_motoristas_elegiveis (só quer o tamanho, pra ordenar
+    sublotes por escassez antes de alocar -- ver criar_rotas_diarias.py).
+    Devolve (elegiveis, tipo_str, rodizio_str, veiculo_str), os 3 últimos já
+    prontos pro log de [ALERTA_ALOCACAO] de quem chama."""
     eh_viagem = classificar_rota_viagem(sublote, api_key)
     zona = None if eh_viagem else classificar_rota_zona(sublote, api_key)
     dia_semana = data_rota.weekday()
@@ -132,19 +164,33 @@ def selecionar_motorista_equitativo(
         and veiculo_comporta(m.tipo_veiculo, tipo_veiculo_necessario)
     ]
 
-    if not elegiveis:
-        tipo_str = "VIAGEM" if eh_viagem else f"Grande SP/{zona or 'zona desconhecida'}"
-        rodizio_str = " [dentro do Centro Expandido -- rodízio pode ter reduzido os elegíveis]" if rota_em_rodizio else ""
-        veiculo_str = f" [veículo grande: {tipo_veiculo_necessario}]" if tipo_veiculo_necessario else ""
-        logger.warning(
-            f"[ALERTA_ALOCACAO] Nenhum motorista elegível para rota tipo [{tipo_str}]{rodizio_str}{veiculo_str} em "
-            f"{data_rota.isoformat()} -- rota será criada sem motorista."
-        )
-        return None
+    tipo_str = "VIAGEM" if eh_viagem else f"Grande SP/{zona or 'zona desconhecida'}"
+    rodizio_str = " [dentro do Centro Expandido -- rodízio pode ter reduzido os elegíveis]" if rota_em_rodizio else ""
+    veiculo_str = f" [veículo grande: {tipo_veiculo_necessario}]" if tipo_veiculo_necessario else ""
+    return elegiveis, tipo_str, rodizio_str, veiculo_str
 
-    # Ordenação equitativa: menor número de alocações no dia; empate
-    # resolvido por agent_id (round-robin circular estável -- a ordem
-    # entre motoristas com a mesma contagem sempre alterna da mesma
-    # forma, sem favorecer nenhum deles arbitrariamente).
-    elegiveis.sort(key=lambda m: (contagem_alocacoes_dia.get(m.agent_id, 0), m.agent_id))
-    return elegiveis[0]
+
+def contar_motoristas_elegiveis(
+    sublote: list[dict],
+    data_rota: date,
+    motoristas: list[MotoristaPreferencias],
+    contagem_alocacoes_dia: dict[int, int],
+    api_key: str | None = None,
+    ajustes_disponibilidade: dict[int, dict] | None = None,
+) -> int:
+    """
+    Quantos motoristas do catálogo estão elegíveis pra esse sublote agora
+    (mesmos critérios de selecionar_motorista_equitativo, sem escolher nem
+    logar nada) -- usado pra ordenar sublotes por escassez ANTES de alocar
+    (pedido do Hugo, 20/08): sem isso, um motorista que atende várias zonas
+    podia ser "gasto" numa rota pequena de zona flexível processada antes de
+    uma rota grande de zona onde ele é um dos poucos elegíveis, deixando essa
+    rota maior sem motorista só por ordem de processamento (aconteceu 20/08:
+    Zona Sul só tinha 2 motoristas cadastrados; um deles foi alocado numa
+    rota de Zona Oeste de 1 pedido antes de chegar na 2ª rota de Zona Sul do
+    dia, com 14 pedidos, que ficou sem ninguém).
+    """
+    elegiveis, _, _, _ = _elegibilidade_sublote(
+        sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+    )
+    return len(elegiveis)

@@ -94,12 +94,14 @@ from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agend
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
-from notificar_area_nao_atendida import identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida
+from notificar_area_nao_atendida import (
+    identificar_area_nao_atendida, notificar_remetentes as notificar_area_nao_atendida, EMAIL_TESTE,
+)
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.disponibilidade_motoristas import carregar_ajustes_dia
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
-from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo
+from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo, contar_motoristas_elegiveis
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
 
@@ -409,7 +411,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             logger.info(f"{len(pendentes_area)} pedido(s) em área não atendida (SP fora do raio ou fora do estado).")
             ids_area_nao_atendida = {s["id"] for s, _tipo in pendentes_area}
             if pendentes_area:
-                resultado_area = notificar_area_nao_atendida(pendentes_area, config.get("email", {}), modo_teste=modo_teste)
+                # Redirecionado só pro Hugo por enquanto (pedido dele, 20/08,
+                # junto com a redução do raio da Grande SP pra 35km) -- quer
+                # acompanhar manualmente antes de deixar ir direto pro cliente.
+                resultado_area = notificar_area_nao_atendida(pendentes_area, config.get("email", {}),
+                                                              modo_teste=modo_teste, forcar_destino=EMAIL_TESTE)
                 logger.info(f"Notificação de área não atendida: {resultado_area}")
         except Exception as e:
             logger.error(f"Falha ao notificar área não atendida (não afeta a criação de rotas): {e}")
@@ -548,6 +554,22 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
                                              VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
                 ]
+
+            # Ordena por escassez de motorista ANTES de alocar (mais restrito
+            # primeiro, pedido do Hugo, 20/08): sem isso, um motorista que
+            # atende várias zonas pode ser "gasto" numa rota pequena de zona
+            # flexível processada antes de uma rota grande de zona onde ele é
+            # um dos poucos elegíveis (ver contar_motoristas_elegiveis em
+            # alocacao_motoristas.py -- caso real 20/08, Zona Sul). Ordenação
+            # estável: sublotes com a mesma contagem mantêm a ordem original
+            # (mais longe -> mais perto da base).
+            sublotes_do_dia = sorted(
+                sublotes_do_dia,
+                key=lambda sub: contar_motoristas_elegiveis(
+                    sub, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
+                    ajustes_disponibilidade=ajustes_disponibilidade,
+                ),
+            )
 
             for sublote in sublotes_do_dia:
                 nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice_global}"
