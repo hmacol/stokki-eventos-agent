@@ -290,7 +290,8 @@
   /* ── Faixa 5: tendência ── */
   .tendencia { display: flex; align-items: flex-end; gap: 14px; height: 130px; padding-top: 18px; }
   .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
-  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto); }
+  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto-suave); }
+  .col-dia.destaque .valor-col { color: var(--acento); }
   .col-dia .col { width: 100%; max-width: 24px; background: var(--enfase-fora); border-radius: 4px 4px 0 0; }
   .col-dia.destaque .col { background: var(--st-rota); }
   .col-dia .rotulo-dia { font-size: 11px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
@@ -548,6 +549,12 @@ function renderKpis(d) {
        <span class="n">${p.falha}</span> insucesso${p.falha === 1 ? "" : "s"}</span>`,
     `<span class="kpi-seg" title="${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)">
        <span class="n">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span> rotas</span>`,
+    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, hoje">
+       <span class="n">${d.media_pedidos_rota.dia}</span> ped./rota (dia)</span>`,
+    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, de segunda até hoje">
+       <span class="n">${d.media_pedidos_rota.semana}</span> ped./rota (sem.)</span>`,
+    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, do dia 1 até hoje">
+       <span class="n">${d.media_pedidos_rota.mes}</span> ped./rota (mês)</span>`,
   ];
   document.getElementById("kpis").innerHTML = segs.join("");
 }
@@ -750,10 +757,9 @@ function renderTendencia(d) {
   const maior = Math.max(...d.tendencia.map(t => t.total), 1);
   alvo.innerHTML = d.tendencia.map(t => {
     const destaque = t.data === d.data_alvo_iso;
-    const altura = Math.max(2, Math.round(88 * t.total / maior));
-    // Rótulo direto só na coluna em destaque (o hover cobre o resto).
+    const altura = Math.max(3, Math.round(88 * t.total / maior));
     return `<div class="col-dia ${destaque ? "destaque" : ""}" title="${esc(t.rotulo)}: ${t.total} pedido(s)">
-      ${destaque ? `<div class="valor-col">${t.total}</div>` : ""}
+      <div class="valor-col">${t.total}</div>
       <div class="col" style="height:${altura}px"></div>
       <div class="rotulo-dia">${esc(t.rotulo)}</div>
     </div>`;

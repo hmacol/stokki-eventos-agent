@@ -152,7 +152,8 @@
 
   .tendencia { display: flex; align-items: flex-end; gap: 8px; height: 110px; padding-top: 16px; }
   .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 3px; }
-  .col-dia .valor-col { font-size: 10.5px; font-weight: 700; }
+  .col-dia .valor-col { font-size: 10.5px; font-weight: 700; color: var(--texto-suave); }
+  .col-dia.destaque .valor-col { color: var(--acento); }
   .col-dia .col { width: 100%; max-width: 20px; background: var(--interrompido-bg); border-radius: 4px 4px 0 0; }
   .col-dia.destaque .col { background: var(--st-rota); }
   .col-dia .rotulo-dia { font-size: 9.5px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
@@ -351,6 +352,9 @@ function renderKpis(d) {
     { classe: p.qtd_nao_atribuidos ? "alerta" : "", n: p.qtd_nao_atribuidos, l: "sem rota" },
     { classe: p.falha ? "ruim" : "", n: p.falha, l: `insucesso${p.falha === 1 ? "" : "s"}` },
     { classe: "", n: `${r.concluidas}<span class="contexto">/${d.rotas.length}</span>`, l: "rotas concluídas" },
+    { classe: "", n: d.media_pedidos_rota.dia, l: "ped./rota (dia)" },
+    { classe: "", n: d.media_pedidos_rota.semana, l: "ped./rota (sem.)" },
+    { classe: "", n: d.media_pedidos_rota.mes, l: "ped./rota (mês)" },
   ];
   document.getElementById("kpis").innerHTML = tiles.map(t =>
     `<div class="kpi-tile ${t.classe}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join("");
@@ -510,9 +514,9 @@ function renderTendencia(d) {
   const maior = Math.max(...d.tendencia.map(t => t.total), 1);
   alvo.innerHTML = d.tendencia.map(t => {
     const destaque = t.data === d.data_alvo_iso;
-    const altura = Math.max(2, Math.round(70 * t.total / maior));
+    const altura = Math.max(3, Math.round(70 * t.total / maior));
     return `<div class="col-dia ${destaque ? "destaque" : ""}">
-      ${destaque ? `<div class="valor-col">${t.total}</div>` : ""}
+      <div class="valor-col">${t.total}</div>
       <div class="col" style="height:${altura}px"></div>
       <div class="rotulo-dia">${esc(t.rotulo)}</div>
     </div>`;

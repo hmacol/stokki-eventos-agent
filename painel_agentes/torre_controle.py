@@ -36,7 +36,11 @@ Fontes de dados (todas já usadas em outros pontos do projeto):
     waiting_approval são da fila de integração e ficam de fora, ver
     pipeline.py);
   - painel_execucoes (executor.py) -- última execução de cada etapa;
-  - rascunhos_rota -- planejamento do dia seguinte.
+  - rascunhos_rota -- planejamento do dia seguinte;
+  - VUUPT /routes por start_at de novo, mas numa faixa maior (semana
+    corrente / mês corrente) -- média de pedidos por rota (pedido do
+    Hugo, 21/08), com cache de 30 min por não ter persistência local de
+    rotas passadas (tudo ao vivo na VUUPT).
 
 O funil Stokki tem cache próprio (TTL) e NUNCA busca ao vivo enquanto
 algum agente está rodando -- login concorrente na Stokki derruba a
@@ -99,11 +103,13 @@ FUNIL_STOKKI = [
 
 TTL_FUNIL_STOKKI_SEG = 300   # 5 min -- funil upstream muda devagar
 TTL_TENDENCIA_SEG    = 600   # 10 min -- 7 chamadas de contagem na VUUPT
+TTL_MEDIA_PERIODO_SEG = 1800 # 30 min -- semana/mês busca rotas com include=services (payload pesado)
 
 FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")
 
 _cache_stokki: dict = {"quando": 0.0, "dados": None}
 _cache_tendencia: dict = {}  # data_iso -> {"quando": monotonic, "dados": [...]}
+_cache_media_periodo: dict = {}  # "semana:..."/"mes:..." -> {"quando": monotonic, "dados": {...}}
 _lock_caches = threading.Lock()
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
@@ -552,6 +558,65 @@ def _tendencia_com_cache(vuupt: VuuptClient, data_alvo: date) -> list[dict]:
     return dados
 
 
+# ── Média de pedidos por rota (dia/semana/mês, com cache) ─────────────────────
+
+def _media_pedidos_por_rota_periodo(token: str, data_inicio: date, data_fim_exclusiva: date) -> dict:
+    """Paradas válidas ÷ rotas com ao menos 1 parada válida, somado sobre
+    todas as rotas com start_at em [data_inicio, data_fim_exclusiva) --
+    mesmo critério de exclusão da média do dia (_coletar_rotas_dia: rota
+    cancelada fora, parada cancelada fora, rota vazia fora do
+    denominador pra não distorcer a média pra baixo). Só 1-2 chamadas
+    paginadas (listar_rotas já pagina sozinho), mesmo pra uma faixa de
+    um mês inteiro."""
+    filtro = [
+        {"field": "start_at", "operator": "gte", "value": data_inicio.strftime("%Y-%m-%d") + " 00:00:00"},
+        {"field": "start_at", "operator": "lt", "value": data_fim_exclusiva.strftime("%Y-%m-%d") + " 00:00:00"},
+    ]
+    rotas_brutas = listar_rotas(token, include=["services"], filtro=filtro)
+
+    total_paradas = qtd_rotas = 0
+    for rota in rotas_brutas:
+        if rota.get("status") == "canceled":
+            continue
+        validos = [s for s in extrair_servicos_da_rota(rota) if s.get("status") != "canceled"]
+        if validos:
+            total_paradas += len(validos)
+            qtd_rotas += 1
+
+    media = round(total_paradas / qtd_rotas, 1) if qtd_rotas else 0
+    return {"total_paradas": total_paradas, "qtd_rotas": qtd_rotas, "media": media}
+
+
+def _media_periodo_com_cache(token: str, chave: str, data_inicio: date, data_fim_exclusiva: date) -> dict:
+    with _lock_caches:
+        item = _cache_media_periodo.get(chave)
+        if item and time.monotonic() - item["quando"] < TTL_MEDIA_PERIODO_SEG:
+            return item["dados"]
+    dados = _media_pedidos_por_rota_periodo(token, data_inicio, data_fim_exclusiva)
+    with _lock_caches:
+        _cache_media_periodo[chave] = {"quando": time.monotonic(), "dados": dados}
+    return dados
+
+
+def _coletar_media_pedidos_por_rota(token: str, data_alvo: date, agregado: dict, rotas: list[dict]) -> dict:
+    """Média do dia sai de graça do que _coletar_rotas_dia já buscou
+    (0 chamadas extras); semana (segunda até data_alvo) e mês (dia 1 até
+    data_alvo) batem a VUUPT de novo, mas com cache de 30 min."""
+    rotas_com_parada_hoje = sum(1 for r in rotas if r["total"] > 0)
+    media_dia = round(agregado["total"] / rotas_com_parada_hoje, 1) if rotas_com_parada_hoje else 0
+
+    inicio_semana = data_alvo - timedelta(days=data_alvo.weekday())
+    inicio_mes = data_alvo.replace(day=1)
+    fim_exclusivo = data_alvo + timedelta(days=1)
+
+    semana = _media_periodo_com_cache(
+        token, f"semana:{inicio_semana.isoformat()}:{data_alvo.isoformat()}", inicio_semana, fim_exclusivo)
+    mes = _media_periodo_com_cache(
+        token, f"mes:{inicio_mes.isoformat()}:{data_alvo.isoformat()}", inicio_mes, fim_exclusivo)
+
+    return {"dia": media_dia, "semana": semana["media"], "mes": mes["media"]}
+
+
 # ── Exceções tratadas (persistência) ──────────────────────────────────────────
 
 def _conectar_tratadas():
@@ -884,6 +949,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     etapas = montar_etapas_pipeline()
     amanha = _resumo_amanha(data_alvo, token)
     tendencia = _tendencia_com_cache(vuupt, data_alvo)
+    media_pedidos_rota = _coletar_media_pedidos_por_rota(token, data_alvo, agregado, rotas)
     excecoes, tratadas = _montar_excecoes(pedidos, rotas, etapas, amanha, data_alvo)
 
     # Base do mini mapa (mesmo endereço/geocache do mapa_rotas.py).
@@ -917,6 +983,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "etapas": etapas,
         "amanha": amanha,
         "tendencia": tendencia,
+        "media_pedidos_rota": media_pedidos_rota,
         "excecoes": excecoes,
         "tratadas": tratadas,
         "base": base,
