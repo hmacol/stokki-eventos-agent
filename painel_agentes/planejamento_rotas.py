@@ -875,18 +875,32 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
     18/08), mesmo padrão do "Agendar / reagendar" (reagendar_pedido).
 
     Regeocodifica o novo endereço (mesma geocodificacao.geocodificar
-    usada na importação) e grava com PUT /customers/{customer_id} --
-    NÃO embutido num PUT /services/{id} como uma versão anterior fazia:
-    vuupt_client.resolver_customer_id já documenta (confirmado com
-    testes reais de webhook) que o VUUPT ignora telefone e, em alguns
-    casos, dados de contato JÁ EXISTENTE quando o objeto 'customer' vem
-    embutido no serviço -- e aqui o contato SEMPRE já existe (é edição
-    de um pedido já cadastrado). O único caminho confiável pra atualizar
-    um contato existente é a chamada própria a /customers, por isso
-    busca o customer_id do serviço (buscar_servico_por_id) antes de
-    gravar. Se a geocodificação falhar (endereço não resolvido, sem API
-    key etc.), envia só o texto do endereço; o VUUPT geocodifica por
-    conta própria nesse caso.
+    usada na importação) e grava com PUT /services/{id}, com
+    address/latitude/longitude NO NÍVEL RAIZ do payload -- achado 20/08
+    (Hugo reportou que a edição "não impactava" a VUUPT): o SERVIÇO tem
+    seus PRÓPRIOS campos address/latitude/longitude, um snapshot
+    independente do endereço do 'customer' (contato) vinculado -- mesmo
+    padrão documentado pro phone_number em montar_payload_servico ("o
+    serviço tem seu PRÓPRIO phone_number... independente do
+    phone_number do contato... mesmo padrão da latitude/longitude, que
+    também existe nos dois níveis"). É esse campo do PRÓPRIO serviço que
+    a VUUPT usa pro ponto de entrega/roteirização (confirmado: é dele
+    que _servico_para_pool lê o "endereco" mostrado nos cards da tela) --
+    só atualizar o 'customer' (como a versão anterior desta função
+    passou a fazer, corrigindo a confiabilidade do CADASTRO do contato)
+    não move esse ponto. Nível raiz = mesmo mecanismo comprovado por
+    reagendar_pedido com scheduled_start/scheduled_end, diferente do
+    objeto 'customer' aninhado (esse sim documentado como não confiável
+    em vuupt_client.resolver_customer_id). Se a geocodificação falhar
+    (endereço não resolvido, sem API key etc.), envia só o texto do
+    endereço; o VUUPT geocodifica por conta própria nesse caso.
+
+    Depois, tenta sincronizar o mesmo endereço no 'customer' vinculado
+    também (PUT /customers/{customer_id}, caminho confiável pra contato
+    já existente -- ver resolver_customer_id) pra manter o cadastro
+    coerente pra criações futuras. Isso é best-effort: falha aqui não
+    desfaz nem reporta erro pro usuário, já que o efeito visível
+    principal (o ponto da entrega) já foi gravado no passo acima.
 
     Se o pedido já está numa rota em rascunho (rascunho_id informado),
     também atualiza a cópia local em rascunhos_parada -- ela é lida
@@ -905,23 +919,29 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
 
-    servico = vuupt.buscar_servico_por_id(service_id)
-    customer_id = (servico or {}).get("customer_id")
-    if not customer_id:
-        return {"ok": False, "erro": f"Pedido {service_id} sem contato cadastrado na VUUPT (customer_id não encontrado)."}
-
     from geocodificacao import geocodificar
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
     coords = geocodificar(endereco, gmaps_key)
 
-    dados_customer = {"address": endereco}
+    dados_endereco = {"address": endereco}
     if coords:
-        dados_customer["latitude"], dados_customer["longitude"] = coords
+        dados_endereco["latitude"], dados_endereco["longitude"] = coords
 
     try:
-        vuupt.atualizar_customer(customer_id, dados_customer)
+        vuupt.atualizar_servico(service_id, dados_endereco)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
+
+    servico = vuupt.buscar_servico_por_id(service_id)
+    customer_id = (servico or {}).get("customer_id")
+    if customer_id:
+        try:
+            vuupt.atualizar_customer(customer_id, dados_endereco)
+        except VuuptAPIError as e:
+            logger.warning(
+                f"Endereço do serviço {service_id} atualizado, mas falha ao "
+                f"sincronizar o contato {customer_id}: {e}"
+            )
 
     if rascunho_id is not None:
         rascunhos_rota.atualizar_endereco_parada(

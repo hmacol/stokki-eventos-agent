@@ -7,12 +7,17 @@ opção "Editar endereço" do menu de contexto da tela de planejamento
 (investigação do Hugo, 20/08: como a edição de endereço em rascunhos é
 reproduzida na VUUPT).
 
-Cobre especificamente a correção de 20/08: gravar o endereço via PUT
-/customers/{customer_id} (atualizar_customer) em vez de embutir
-'customer' num PUT /services/{id} -- o padrão anterior, documentado em
-vuupt_client.resolver_customer_id como não confiável pra contato já
-existente (VUUPT ignora telefone e, em alguns casos, dados de contato
-JÁ EXISTENTE quando embutido no serviço).
+Cobre a correção de 20/08 (2ª rodada, depois do Hugo reportar que a 1ª
+correção "não impactava" a VUUPT): o SERVIÇO tem seus PRÓPRIOS campos
+address/latitude/longitude (snapshot independente do 'customer'
+vinculado, mesmo padrão do phone_number documentado em
+montar_payload_servico) -- é dele que a VUUPT usa o ponto de entrega,
+não do contato. A função agora grava com PUT /services/{id} tendo
+address/latitude/longitude NO NÍVEL RAIZ do payload (nunca aninhado sob
+'customer' -- esse sim documentado como não confiável em
+vuupt_client.resolver_customer_id), e só DEPOIS tenta sincronizar o
+mesmo endereço no contato vinculado (PUT /customers/{id}) como
+best-effort, sem bloquear o resultado se essa 2ª chamada falhar.
 
 Nenhum teste bate na VUUPT real: VuuptClient, geocodificacao.geocodificar
 e rascunhos_rota.atualizar_endereco_parada são todos mockados. Rodar
@@ -73,43 +78,22 @@ class EditarEnderecoPedidoTestCase(unittest.TestCase):
         self.assertFalse(resultado["ok"])
         self.mock_vuupt_cls.assert_not_called()
 
-    # -- pedido sem contato resolvível na VUUPT -------------------------
+    # -- efeito principal: address/lat/lng no NÍVEL RAIZ do serviço -----
 
-    def test_servico_nao_encontrado_retorna_erro_sem_gravar(self):
-        self.mock_vuupt.buscar_servico_por_id.return_value = None
-
-        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
-
-        self.assertFalse(resultado["ok"])
-        self.assertIn("555", resultado["erro"])
-        self.mock_vuupt.atualizar_customer.assert_not_called()
-        self.mock_geocodificar.assert_not_called()
-
-    def test_servico_sem_customer_id_retorna_erro_sem_gravar(self):
-        self.mock_vuupt.buscar_servico_por_id.return_value = {"id": 555}
-
-        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
-
-        self.assertFalse(resultado["ok"])
-        self.mock_vuupt.atualizar_customer.assert_not_called()
-
-    # -- fluxo feliz ------------------------------------------------------
-
-    def test_grava_via_atualizar_customer_com_coords(self):
+    def test_grava_endereco_no_servico_com_coords(self):
         resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
 
         self.assertEqual(resultado, {"ok": True})
-        self.mock_vuupt.buscar_servico_por_id.assert_called_once_with(555)
-        self.mock_vuupt.atualizar_customer.assert_called_once_with(
-            999, {"address": "Rua Nova, 100", "latitude": -23.55, "longitude": -46.63}
+        self.mock_vuupt.atualizar_servico.assert_called_once_with(
+            555, {"address": "Rua Nova, 100", "latitude": -23.55, "longitude": -46.63}
         )
 
     def test_endereco_e_stripado_antes_de_geocodificar_e_gravar(self):
         planejamento_rotas.editar_endereco_pedido(555, "  Rua Nova, 100  ")
 
         self.mock_geocodificar.assert_called_once_with("Rua Nova, 100", "key")
-        self.mock_vuupt.atualizar_customer.assert_called_once_with(
-            999, {"address": "Rua Nova, 100", "latitude": -23.55, "longitude": -46.63}
+        self.mock_vuupt.atualizar_servico.assert_called_once_with(
+            555, {"address": "Rua Nova, 100", "latitude": -23.55, "longitude": -46.63}
         )
 
     def test_geocodificacao_falha_envia_so_texto_do_endereco(self):
@@ -118,30 +102,69 @@ class EditarEnderecoPedidoTestCase(unittest.TestCase):
         resultado = planejamento_rotas.editar_endereco_pedido(555, "Endereço não resolvido, 1")
 
         self.assertEqual(resultado, {"ok": True})
+        self.mock_vuupt.atualizar_servico.assert_called_once_with(
+            555, {"address": "Endereço não resolvido, 1"}
+        )
         self.mock_vuupt.atualizar_customer.assert_called_once_with(
             999, {"address": "Endereço não resolvido, 1"}
         )
 
-    # -- regressão: NÃO pode voltar a embutir 'customer' no PUT de serviço --
-
-    def test_nao_usa_mais_atualizar_servico_para_editar_endereco(self):
-        """Guarda contra reintroduzir o padrão antigo (PUT /services/{id}
-        com 'customer' embutido) -- vuupt_client.resolver_customer_id
-        documenta que a VUUPT não reflete isso de forma confiável quando
-        o contato já existe, que é sempre o caso aqui."""
+    def test_payload_do_servico_nao_tem_customer_aninhado(self):
+        """Guarda contra reintroduzir o padrão não confiável: address/lat/
+        lng têm que ir soltos no payload de /services/{id}, nunca dentro
+        de um objeto 'customer' aninhado (ver vuupt_client.
+        resolver_customer_id -- é exatamente essa forma aninhada que a
+        VUUPT não reflete de forma confiável)."""
         planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
 
-        self.mock_vuupt.atualizar_servico.assert_not_called()
+        payload_enviado = self.mock_vuupt.atualizar_servico.call_args[0][1]
+        self.assertNotIn("customer", payload_enviado)
 
-    # -- erro da VUUPT ao gravar o contato --------------------------------
+    def test_erro_da_vuupt_ao_atualizar_servico_retorna_erro_sem_sincronizar(self):
+        self.mock_vuupt.atualizar_servico.side_effect = VuuptAPIError("Status 422: campo inválido")
 
-    def test_erro_da_vuupt_ao_atualizar_customer_retorna_erro(self):
-        self.mock_vuupt.atualizar_customer.side_effect = VuuptAPIError("Status 422: campo inválido")
+        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100", rascunho_id=42)
+
+        self.assertEqual(resultado, {"ok": False, "erro": "Status 422: campo inválido"})
+        self.mock_vuupt.atualizar_customer.assert_not_called()
+        self.mock_atualiza_parada.assert_not_called()
+
+    # -- sincronização do contato (best-effort, não bloqueia o resultado) --
+
+    def test_sincroniza_contato_vinculado_apos_gravar_no_servico(self):
+        planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
+
+        self.mock_vuupt.buscar_servico_por_id.assert_called_once_with(555)
+        self.mock_vuupt.atualizar_customer.assert_called_once_with(
+            999, {"address": "Rua Nova, 100", "latitude": -23.55, "longitude": -46.63}
+        )
+
+    def test_erro_ao_sincronizar_contato_nao_derruba_resultado(self):
+        self.mock_vuupt.atualizar_customer.side_effect = VuuptAPIError("Status 500: instável")
+
+        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100", rascunho_id=42)
+
+        self.assertEqual(resultado, {"ok": True})
+        self.mock_atualiza_parada.assert_called_once()
+
+    def test_servico_nao_encontrado_ao_resolver_contato_nao_impede_sucesso(self):
+        """buscar_servico_por_id (só usado pra achar o customer_id da
+        sincronização auxiliar) falhando não pode derrubar o resultado --
+        o efeito principal (endereço gravado no serviço) já aconteceu."""
+        self.mock_vuupt.buscar_servico_por_id.return_value = None
 
         resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
 
-        self.assertEqual(resultado, {"ok": False, "erro": "Status 422: campo inválido"})
-        self.mock_atualiza_parada.assert_not_called()
+        self.assertEqual(resultado, {"ok": True})
+        self.mock_vuupt.atualizar_customer.assert_not_called()
+
+    def test_servico_sem_customer_id_nao_impede_sucesso(self):
+        self.mock_vuupt.buscar_servico_por_id.return_value = {"id": 555}
+
+        resultado = planejamento_rotas.editar_endereco_pedido(555, "Rua Nova, 100")
+
+        self.assertEqual(resultado, {"ok": True})
+        self.mock_vuupt.atualizar_customer.assert_not_called()
 
     # -- cópia local em rascunhos_parada -----------------------------------
 
