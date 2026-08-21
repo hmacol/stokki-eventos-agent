@@ -115,12 +115,13 @@
 
   .lista-paradas { list-style: none; margin: 0; padding: 0; min-height: 24px; }
   .lista-paradas.pool { min-height: 60px; }
-  /* Pool dividido em 2 blocos colapsáveis (Hugo, 15/08): "pra rotear
-     hoje" (agendado pro dia, atrasado ou sem agendamento -- tudo que
-     PODE sair hoje) e "agendados pra depois" (urgência "futuro"), pra
-     não misturar o que é demanda do dia com o que só está passando
-     pela tela. Mesmo padrão visual/comportamental do colapso de
-     .card-rota (classe .colapsada escondendo o miolo, seta ▾/▸, drag
+  /* Pool dividido em blocos colapsáveis (Hugo, 15/08, 3º bloco 20/08):
+     "pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento --
+     tudo que PODE sair hoje), "agendados pra depois" (urgência "futuro")
+     e "fora da área de atendimento" (por último -- ver .secao-pool-
+     alerta), pra não misturar o que é demanda do dia com o que só está
+     passando pela tela. Mesmo padrão visual/comportamental do colapso
+     de .card-rota (classe .colapsada escondendo o miolo, seta ▾/▸, drag
      por cima reabre) -- ver definirColapsoSecaoPool. */
   .secao-pool { margin-bottom: 4px; }
   .secao-pool + .secao-pool { border-top: 1px solid var(--borda); padding-top: 6px; }
@@ -657,6 +658,7 @@
   body.cards-numeros .item-parada .endereco,
   body.cards-numeros .item-parada .agendamento,
   body.cards-numeros .item-parada .badge-caixas,
+  body.cards-numeros .item-parada .badge-fora-area,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
   body.cards-numeros .item-parada .numero {
     position: relative;
@@ -1474,14 +1476,6 @@
         </div>
         <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
       </div>
-      <div class="secao-pool secao-pool-alerta" data-secao="fora-area" id="secao-pool-fora-area">
-        <div class="cabecalho-secao-pool">
-          <span class="seta-secao">▾</span>
-          <span class="titulo-secao-pool">Fora da área de atendimento (<span id="contagem-secao-fora-area">0</span>)</span>
-          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="fora-area" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
-        </div>
-        <ul class="lista-paradas pool" id="lista-pool-fora-area" data-list-id="pool"></ul>
-      </div>
       <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▸</span>
@@ -1489,6 +1483,14 @@
           <button type="button" class="botao-mini botao-selecionar-secao" data-secao="futuro" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-futuro" data-list-id="pool"></ul>
+      </div>
+      <div class="secao-pool secao-pool-alerta" data-secao="fora-area" id="secao-pool-fora-area">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Fora da área de atendimento (<span id="contagem-secao-fora-area">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="fora-area" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-fora-area" data-list-id="pool"></ul>
       </div>
     </div>
   </div>
