@@ -19,8 +19,10 @@ aqui sobre o estado ATUAL de cada rascunho (que pode já ter sido
 editado manualmente) só pra gerar um aviso visual -- a edição manual
 NUNCA é bloqueada por causa delas (decisão do Hugo, 12/08).
 """
+import json
 import logging
 import re
+import statistics
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -32,8 +34,12 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 import yaml
 
 from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
-from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, _distancia_km
+from roteirizacao_dados import extrair_volume_caixas, _distancia_km
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
+from regras.complexidade_entrega import (
+    carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
+    definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
+)
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
 from regras.disponibilidade_motoristas import (
@@ -41,7 +47,9 @@ from regras.disponibilidade_motoristas import (
 )
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
-from alocacao_motoristas import selecionar_motorista_equitativo
+from regras import ofertas_rota
+from regras.resumo_oferta import montar_resumo as montar_resumo_oferta
+from alocacao_motoristas import selecionar_motorista_equitativo, listar_motoristas_elegiveis
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao
 
@@ -139,23 +147,36 @@ def _codigos_base_lista(codigo: str) -> list[str]:
     return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
 
 
-TAMANHO_MAXIMO_ROTA = 14  # Ajustado de 16 para 14 entregas por rota (pedido do Hugo, 20/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
+TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 (pedido do Hugo, 22/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 20
-# Orçamento de horas por rota (pedido do Hugo, 20/08): substitui o teto
-# fixo de nível 3 por pedido -- cada nível 3 "custa" TEMPO_NIVEL3_HORAS e
-# cada nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS; mesmos valores de
-# roteirizacao_dados.py (constantes separadas, sem import entre os dois
-# módulos, mesmo padrão de TAMANHO_MAXIMO_ROTA acima).
-TEMPO_NIVEL3_HORAS = 1.5
+# Orçamento de horas por rota (pedido do Hugo, 20/08; recalibrado 22/08):
+# substitui o teto fixo de nível 3 por pedido -- cada nível 3 "custa"
+# TEMPO_NIVEL3_HORAS e cada nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS,
+# mais o deslocamento real estimado (ver VELOCIDADE_MEDIA_KMH); mesmos
+# valores de roteirizacao_dados.py (constantes separadas, sem import
+# entre os dois módulos, mesmo padrão de TAMANHO_MAXIMO_ROTA acima).
+TEMPO_NIVEL3_HORAS = 2.0  # subiu de 1,5h pra 2h (pedido do Hugo, 22/08)
 TEMPO_PARADA_NORMAL_HORAS = 25 / 60
 ROTA_TEMPO_MAXIMO_HORAS = 9.0
+# Deslocamento real entre paradas (pedido do Hugo, 22/08): sem dado de
+# GPS/duração real calibrável ainda (timestamps de conclusão no VUUPT
+# vêm em lote, não em tempo real -- ver achado da análise de 22/08),
+# 18 km/h é uma estimativa de planejamento conservadora (trânsito denso
+# de SP + manobra/estacionamento entre paradas), fácil de recalibrar
+# depois que houver dado real de duração de rota.
+VELOCIDADE_MEDIA_KMH = 18.0
 # Pedido "grande": acima disso vira alerta visual nos cards e no resumo
 # do futuro (pedido do Hugo, 12/08) -- um pedido desses sozinho já
 # ocupa boa parte do VOLUME_MAXIMO_ROTA de uma rota e merece atenção
 # na hora de montar o dia (veículo/rota própria).
 LIMITE_ALERTA_CAIXAS = 70
+# Fase 0 do roadmap de roteirização (Hugo, 22/08): badges que olham o
+# LOTE INTEIRO do dia, não só o rascunho isolado -- ver _badges_lote.
+DISTANCIA_ISOLAMENTO_KM = DISTANCIA_MAXIMA_ROTA_KM  # ponto de partida: mesma magnitude da trava de agrupamento (20km)
+ISOLAMENTO_MAX_PARADAS = 2
+MINIMO_ROTAS_PARA_MEDIANA = 3  # com menos rotas no lote, "2x fora da mediana" não tem base estatística que preste
 
 
 def _carregar_config() -> dict:
@@ -205,14 +226,26 @@ def _badges_trava(rascunho: dict) -> list[str]:
         if len(paradas) > 1 and any(n >= 4 for n in niveis):
             badges.append("entrega nível 4 dividindo rota com outras")
         else:
-            tempo_estimado = sum(
+            tempo_paradas = sum(
                 TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis
             )
+            # Deslocamento real (pedido do Hugo, 22/08): soma sequencial
+            # das distâncias entre paradas CONSECUTIVAS na ordem em que
+            # estão no rascunho (aproximação -- não é o trajeto final
+            # pós-otimização --, mesmo padrão de roteirizacao_dados.py::
+            # _km_acumulado_sequencial) convertida em horas por
+            # VELOCIDADE_MEDIA_KMH.
+            coords_seq = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]
+            km_acumulado = sum(
+                _distancia_km(*coords_seq[i], *coords_seq[i + 1]) for i in range(len(coords_seq) - 1)
+            )
+            tempo_deslocamento = km_acumulado / VELOCIDADE_MEDIA_KMH
+            tempo_estimado = tempo_paradas + tempo_deslocamento
             if tempo_estimado > ROTA_TEMPO_MAXIMO_HORAS:
                 qtd_nivel3 = sum(1 for n in niveis if n == 3)
                 badges.append(
                     f"tempo estimado {tempo_estimado:.1f}h (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h, "
-                    f"{qtd_nivel3} nível 3)"
+                    f"{qtd_nivel3} nível 3, +{tempo_deslocamento:.1f}h deslocamento)"
                 )
 
     if rascunho.get("tipo_rota") != "VIAGEM":
@@ -230,6 +263,72 @@ def _badges_trava(rascunho: dict) -> list[str]:
     return badges
 
 
+def _centroide_paradas(paradas: list[dict]) -> tuple[float, float] | None:
+    coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]
+    if not coords:
+        return None
+    return (sum(c[0] for c in coords) / len(coords), sum(c[1] for c in coords) / len(coords))
+
+
+def _badges_lote(rascunhos: list[dict]) -> None:
+    """Avisos visuais que só fazem sentido olhando o LOTE INTEIRO do
+    dia (mediana de km/paradas entre as rotas, distância geográfica
+    entre rotas) -- diferente de _badges_trava (por rascunho, travas
+    fixas de dividir_em_sublotes reavaliadas isoladamente). MUTA
+    rascunho["badges"] de cada item em `rascunhos` (precisa já ter
+    sido populado por _badges_trava antes desta chamada -- ver
+    buscar_dados_planejamento). Pedido do Hugo, 22/08 (Fase 0).
+
+    Badge de ISOLAMENTO: rota com <= ISOLAMENTO_MAX_PARADAS paradas e
+    a mais de DISTANCIA_ISOLAMENTO_KM da rota mais próxima do lote
+    (pelo centroide de cada rota) -- sinal de que dividir_em_sublotes
+    (ou edição manual) deixou um bolsão pequeno e distante pra trás.
+    Não se aplica a rota Viagem (mesma exceção de _badges_trava --
+    Viagem já é esperado estar longe da Grande SP).
+
+    Badge de DISPARIDADE: km_estimado ou nº de paradas da rota é
+    2x+ maior OU 2x+ menor que a mediana do dia -- sinal de rota fora
+    do padrão do lote (pra cima ou pra baixo); pode ser legítimo (área
+    isolada, pedido grande) ou desbalanceamento que vale revisar."""
+    if len(rascunhos) < 2:
+        return
+
+    centroides = {r["id"]: _centroide_paradas(r["paradas"]) for r in rascunhos}
+
+    for r in rascunhos:
+        if r.get("tipo_rota") == "VIAGEM" or len(r["paradas"]) > ISOLAMENTO_MAX_PARADAS:
+            continue
+        centro = centroides.get(r["id"])
+        if not centro:
+            continue
+        distancias = [
+            _distancia_km(*centro, *centroides[outro["id"]])
+            for outro in rascunhos
+            if outro["id"] != r["id"] and centroides.get(outro["id"])
+        ]
+        if distancias and min(distancias) > DISTANCIA_ISOLAMENTO_KM:
+            r["badges"].append(
+                f"rota isolada: {len(r['paradas'])} parada(s) a {min(distancias):.0f}km "
+                f"da rota mais próxima do lote (máx {DISTANCIA_ISOLAMENTO_KM:.0f}km)"
+            )
+
+    if len(rascunhos) < MINIMO_ROTAS_PARA_MEDIANA:
+        return
+    kms = [r["km_estimado"] for r in rascunhos if r.get("km_estimado")]
+    qtds_paradas = [len(r["paradas"]) for r in rascunhos if r["paradas"]]
+    mediana_km = statistics.median(kms) if kms else None
+    mediana_paradas = statistics.median(qtds_paradas) if qtds_paradas else None
+
+    for r in rascunhos:
+        if mediana_km and r.get("km_estimado"):
+            if r["km_estimado"] >= 2 * mediana_km or r["km_estimado"] <= mediana_km / 2:
+                r["badges"].append(f"{r['km_estimado']:.1f}km fora do padrão do dia (mediana {mediana_km:.1f}km)")
+        if mediana_paradas and r["paradas"]:
+            n = len(r["paradas"])
+            if n >= 2 * mediana_paradas or n <= mediana_paradas / 2:
+                r["badges"].append(f"{n} parada(s) fora do padrão do dia (mediana {mediana_paradas:.0f})")
+
+
 def _data_agendada(servico: dict) -> date | None:
     """Data do scheduled_start do serviço, ou None se vazio/malformado
     (malformado = tratado como sem agendamento, o mesmo critério de
@@ -245,10 +344,15 @@ def _data_agendada(servico: dict) -> date | None:
 
 def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
                         nf_por_codigo: dict[str, str] | None = None,
-                        tipo_area: str | None = None) -> dict:
+                        tipo_area: str | None = None,
+                        mapa_niveis: dict[str, int] | None = None,
+                        mapa_horarios: dict[str, tuple[str, str]] | None = None,
+                        ajustes_manuais: dict[str, dict] | None = None) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
     agendado = _data_agendada(servico)
     codigo = servico.get("code", "")
+    documento = (servico.get("customer") or {}).get("code", "")
+    horario_inicio, horario_fim = horario_efetivo(documento, mapa_horarios or {}, ajustes_manuais or {})
     return {
         "agendado_para": agendado.isoformat() if agendado else None,
         "tipo_area": tipo_area,  # None | "sp_nao_atendido" | "fora_sp" (ver identificar_area_nao_atendida)
@@ -261,8 +365,16 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
         "sender_id": servico.get("sender_id"),
         "remetente_nome": remetentes_por_id.get(servico.get("sender_id"), "Remetente não identificado"),
         "destinatario_nome": (servico.get("customer") or {}).get("name") or "",
-        "nivel_dificuldade": extrair_nivel_dificuldade(servico),
+        # nível e horário: ajuste manual > planilha BD_CLIENTES.xlsx >
+        # padrão (Hugo, 22/08 -- ver regras/complexidade_entrega.py).
+        # Substitui o extrair_nivel_dificuldade(servico) puro que ficava
+        # sempre em 1 aqui, porque nada injeta '_nivel_dificuldade' num
+        # item do pool antes deste ponto (só criar_rotas_diarias.py faz
+        # isso, e só pra pedido que já virou rascunho).
+        "nivel_dificuldade": nivel_efetivo(documento, mapa_niveis or {}, ajustes_manuais or {}),
         "volume_caixas": extrair_volume_caixas(servico),
+        "horario_atendimento_inicio": horario_inicio,
+        "horario_atendimento_fim": horario_fim,
         # NF já casada (documentos_processados) pro pedido, se houver --
         # Hugo, 14/08: buscar/adicionar pedido à rota pelo número da NF.
         # 'codigo' pode agrupar mais de um pedido combinado por vírgula
@@ -413,6 +525,15 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     nf_por_codigo = rascunhos_rota.carregar_nf_por_codigo_pedido(
         {c for s in servicos_brutos for c in _codigos_base_lista(s.get("code", ""))})
 
+    # nível de dificuldade / horário de atendimento por destinatário
+    # (Hugo, 22/08 -- ver regras/complexidade_entrega.py e a opção "Nível
+    # / horário de atendimento" do menu de contexto): carregado uma vez
+    # por chamada, igual remetentes_por_id/nf_por_codigo acima.
+    caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
+    mapa_niveis = carregar_niveis(caminho_niveis)
+    mapa_horarios = carregar_horarios(caminho_niveis)
+    ajustes_manuais = carregar_ajustes_manuais()
+
     # Mesma classificação usada pelo pipeline automático pra excluir da
     # roteirização (roteirizacao/notificar_area_nao_atendida.py) -- aqui só
     # rotula o item do pool (tipo_area), não bloqueia nada: o Hugo continua
@@ -426,7 +547,8 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
 
     pool = [
-        _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]))
+        _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]),
+                            mapa_niveis, mapa_horarios, ajustes_manuais)
         for s in servicos_brutos
         if s["id"] not in ids_em_rascunho
     ]
@@ -489,6 +611,21 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["agent_id"] is not None
             else None
         )
+        # oferta do marketplace (Hugo, 22/08) só existe enquanto o
+        # rascunho está OFERTADA -- depois de escolhida, o rascunho já
+        # volta pra RASCUNHO com motorista preenchido (ver
+        # rascunhos_rota.aplicar_escolha_motorista), então não tem
+        # oferta pendente pra mostrar.
+        if r["status"] == rascunhos_rota.STATUS_OFERTADA:
+            oferta = ofertas_rota.buscar_por_rascunho(r["id"])
+            r["oferta"] = {
+                "resumo": json.loads(oferta["resumo_json"]),
+                "qtd_elegiveis": len(json.loads(oferta["agent_ids_elegiveis"])),
+            } if oferta else None
+        else:
+            r["oferta"] = None
+
+    _badges_lote(rascunhos)
 
     pool_e_agendados = buscar_pool_e_agendados(data_alvo, config)
 
@@ -745,6 +882,128 @@ def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
         desalocados.append({"rascunho_id": r["id"], "nome": r["nome"]})
 
     return {"desalocados": desalocados, "sem_motorista": sem_motorista}
+
+
+def _sublote_para_elegibilidade(paradas: list[dict]) -> list[dict]:
+    """Mesmo formato mínimo usado em alocar_motoristas_rascunhos --
+    'address' pra classificação de zona/viagem/rodízio (geocodifica via
+    cache, ignora latitude/longitude já resolvidas no rascunho) e
+    'dimension_3' pra classificar_tipo_veiculo (precisa do volume real
+    de cada parada)."""
+    return [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in paradas]
+
+
+def publicar_oferta_rascunho(rascunho_id: int) -> dict:
+    """
+    Botão "Publicar para motoristas" (Hugo, 22/08): publica um rascunho
+    SEM motorista pro marketplace de escolha aberta -- calcula quem é
+    elegível (mesmo filtro de alocar_motoristas_rascunhos, ver
+    alocacao_motoristas.listar_motoristas_elegiveis) e monta o resumo
+    que eles vão ver (regras/resumo_oferta.montar_resumo), grava a
+    oferta (regras/ofertas_rota.py) e muda o rascunho pra OFERTADA.
+
+    Não envia nada à VUUPT nem escolhe motorista sozinho -- só deixa a
+    rota visível pro grupo elegível. O aviso em si (e-mail/WhatsApp) é
+    disparado por quem chama este endpoint (ver painel_agentes.py),
+    depois de confirmar que a publicação teve sucesso.
+
+    Retorna {"ok": True, "elegiveis": [MotoristaPreferencias...], "resumo": {...}}
+    ou {"ok": False, "erro": "..."}.
+    """
+    rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return {"ok": False, "erro": "Rascunho não encontrado."}
+    if rascunho["status"] != rascunhos_rota.STATUS_RASCUNHO:
+        return {"ok": False, "erro": f"Rascunho não está em edição (status={rascunho['status']})."}
+    if rascunho.get("agent_id"):
+        return {"ok": False, "erro": "Rascunho já tem motorista definido -- desaloque antes de publicar."}
+    if not rascunho["paradas"]:
+        return {"ok": False, "erro": "Rascunho sem paradas -- nada pra publicar."}
+
+    data_alvo = date.fromisoformat(rascunho["data_alvo"])
+    config = _carregar_config()
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+    ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
+
+    outras_rotas = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    contagem_alocacoes_dia: dict[int, int] = {}
+    for r in outras_rotas:
+        if r.get("agent_id"):
+            contagem_alocacoes_dia[r["agent_id"]] = contagem_alocacoes_dia.get(r["agent_id"], 0) + 1
+
+    sublote = _sublote_para_elegibilidade(rascunho["paradas"])
+    elegiveis = listar_motoristas_elegiveis(
+        sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
+        ajustes_disponibilidade=ajustes_disponibilidade,
+    )
+    if not elegiveis:
+        return {"ok": False, "erro": "Nenhum motorista elegível pra essa rota -- ninguém veria a oferta."}
+
+    resumo = montar_resumo_oferta(rascunho["paradas"], gmaps_key)
+
+    def _ultimos4(telefone):
+        digitos = re.sub(r"\D", "", telefone or "")
+        return digitos[-4:] if len(digitos) >= 4 else None
+
+    ofertas_rota.criar_ou_atualizar_oferta(
+        rascunho_id, data_alvo, resumo,
+        [{"agent_id": m.agent_id, "telefone_ultimos4": _ultimos4(m.telefone)} for m in elegiveis],
+    )
+    rascunhos_rota.publicar_oferta(rascunho_id)
+
+    return {"ok": True, "elegiveis": elegiveis, "resumo": resumo}
+
+
+def publicar_ofertas_em_lote(data_alvo: date) -> dict:
+    """Botão "Publicar pendentes" (Hugo, 22/08): chama
+    publicar_oferta_rascunho pra todo rascunho RASCUNHO sem motorista do
+    lote ativo da data. Retorna {"publicados": [{rascunho_id, nome,
+    elegiveis}], "sem_elegivel": [nomes], "ja_tinham": N, "sem_paradas": N}."""
+    rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    publicados: list[dict] = []
+    sem_elegivel: list[str] = []
+    ja_tinham = sem_paradas = 0
+    for r in rascunhos:
+        if r["status"] != rascunhos_rota.STATUS_RASCUNHO:
+            continue
+        if r.get("agent_id"):
+            ja_tinham += 1
+            continue
+        if not r["paradas"]:
+            sem_paradas += 1
+            continue
+        resultado = publicar_oferta_rascunho(r["id"])
+        if not resultado["ok"]:
+            sem_elegivel.append(r["nome"])
+            continue
+        publicados.append({
+            "rascunho_id": r["id"], "nome": r["nome"],
+            "elegiveis": resultado["elegiveis"], "resumo": resultado["resumo"],
+        })
+
+    return {"publicados": publicados, "sem_elegivel": sem_elegivel,
+            "ja_tinham": ja_tinham, "sem_paradas": sem_paradas}
+
+
+def despublicar_oferta_rascunho(rascunho_id: int) -> dict:
+    """Botão "Despublicar" (Hugo, 22/08): desiste da publicação antes de
+    qualquer motorista escolher. Se um motorista ganhou a corrida
+    (escolheu entre o clique e a chegada aqui), a escolha prevalece --
+    ver regras/ofertas_rota.cancelar_oferta."""
+    rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return {"ok": False, "erro": "Rascunho não encontrado."}
+    if rascunho["status"] != rascunhos_rota.STATUS_OFERTADA:
+        return {"ok": False, "erro": f"Rascunho não está publicado (status={rascunho['status']})."}
+
+    cancelou = ofertas_rota.cancelar_oferta(rascunho_id)
+    if not cancelou:
+        return {"ok": False, "erro": "Um motorista já escolheu essa rota -- aguarde a sincronização aplicar a escolha."}
+
+    rascunhos_rota.despublicar_oferta(rascunho_id)
+    return {"ok": True}
 
 
 def salvar_disponibilidade_dia(data_alvo: date, ajustes_brutos: dict) -> dict:
@@ -1032,6 +1291,72 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
         # rede/timeout na chamada à VUUPT não pode virar um 500 cru pro
         # navegador -- vira um erro reportável igual qualquer outro.
         return {"ok": False, "erro": str(e)}
+
+    return {"ok": True}
+
+
+def editar_nivel_horario_pedido(service_id: int, nivel: int, horario_inicio: str,
+                                 horario_fim: str, rascunho_id: int | None = None) -> dict:
+    """
+    Corrige o nível de dificuldade e/ou horário de atendimento (padrão de
+    recebimento) do DESTINATÁRIO de um pedido -- opção "Nível / horário
+    de atendimento" do menu de contexto da tela de planejamento (Hugo,
+    22/08).
+
+    Diferente de "Agendar / reagendar" (agendamento pontual de UM
+    pedido, grava scheduled_start/end na VUUPT): isto aqui é uma
+    característica do CLIENTE, guardada por documento (CNPJ/CPF) numa
+    tabela local (regras.complexidade_entrega.definir_ajuste_manual) --
+    vale pra TODOS os pedidos pendentes/futuros daquele destinatário, não
+    só o pedido em que se clicou. NÃO grava nada na VUUPT: o campo
+    equivalente lá (customer.operating_hour_start/end) é reescrito pelo
+    pipeline de importação a partir de uma extração por LLM das mensagens
+    de CADA pedido (regras/endereco.py::resolver_endereco_entrega), então
+    seria sobrescrito silenciosamente numa importação futura.
+
+    Busca o serviço vivo na VUUPT só pra descobrir o documento do
+    destinatário (customer.code) -- não grava nada lá.
+
+    Se `rascunho_id` for informado, também atualiza a cópia local da
+    parada (rascunhos_rota.atualizar_nivel_horario_parada) pra quem já
+    está numa rota não ficar mostrando o valor antigo até recarregar.
+
+    Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
+    """
+    if nivel not in NIVEIS_VALIDOS:
+        return {"ok": False, "erro": f"Nível inválido: {nivel!r} (válidos: {sorted(NIVEIS_VALIDOS)})."}
+    if not re.match(r"^\d{2}:\d{2}$", horario_inicio or "") or not re.match(r"^\d{2}:\d{2}$", horario_fim or ""):
+        return {"ok": False, "erro": "Horário inválido (use HH:MM)."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    try:
+        servico = vuupt.buscar_servico_por_id(service_id)
+        customer_id = (servico or {}).get("customer_id")
+        customer = vuupt.buscar_customer_por_id(customer_id) if customer_id else None
+    except Exception as e:
+        return {"ok": False, "erro": str(e)}
+
+    # buscar_customer_por_id devolve o JSON cru da API, com o contato
+    # aninhado sob a chave "customer" (diferente de buscar_servico_por_id,
+    # que já desembrulha "service") -- mesmo idioma de desembrulho usado
+    # em vuupt_client.py (ex: "customer = atualizado.get('customer',
+    # atualizado)"). Achado 22/08 testando com dado real: sem isto,
+    # documento sempre vinha vazio.
+    customer = (customer or {}).get("customer", customer)
+    documento = (customer or {}).get("code", "")
+    if not documento:
+        return {"ok": False, "erro": "Pedido sem CNPJ/CPF de destinatário cadastrado -- não dá pra saber de qual cliente é."}
+
+    try:
+        definir_ajuste_manual(documento, nivel, horario_inicio, horario_fim)
+    except ValueError as e:
+        return {"ok": False, "erro": str(e)}
+
+    if rascunho_id is not None:
+        rascunhos_rota.atualizar_nivel_horario_parada(rascunho_id, service_id, nivel, horario_inicio, horario_fim)
 
     return {"ok": True}
 

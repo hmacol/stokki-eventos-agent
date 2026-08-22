@@ -25,14 +25,18 @@ NIVEL_PADRAO_CNPJ (2) como valor provisório e marca requer_revisao=True —
 CNPJ exige classificação manual na planilha antes de confiar nesse nível
 (pedido do Hugo, 10/08).
 """
+import datetime
 import logging
 import re
+import sqlite3
 import unicodedata
 from pathlib import Path
 
 import openpyxl
 
 logger = logging.getLogger(__name__)
+
+_DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 
 # Aplicados quando o documento do destinatário não está na planilha —
 # nunca fica sem nível nenhum (mesmo espírito do padrão "Seco-1" original,
@@ -61,6 +65,20 @@ COLUNAS_NIVEL = {
 # linha incompleta de exportações antigas). Ausência não é erro.
 COLUNAS_CEP = {"CEP", "DESTINATARIOCEP"}
 
+# Horário padrão de atendimento (recebimento) do destinatário — mesma
+# planilha do nível, colunas "Destinatário - Horário de atendimento -
+# início/fim" (Hugo, 22/08: não confundir com o agendamento pontual de
+# UM pedido, que é editado por outra tela e grava scheduled_start/end na
+# VUUPT -- isto aqui é o horário PADRÃO do cliente).
+COLUNAS_HORARIO_INICIO = {
+    "DESTINATARIOHORARIODEATENDIMENTOINICIO", "HORARIODEATENDIMENTOINICIO",
+    "HORARIOATENDIMENTOINICIO", "HORARIOINICIO",
+}
+COLUNAS_HORARIO_FIM = {
+    "DESTINATARIOHORARIODEATENDIMENTOFIM", "HORARIODEATENDIMENTOFIM",
+    "HORARIOATENDIMENTOFIM", "HORARIOFIM",
+}
+
 
 def _so_digitos(s) -> str:
     return "".join(c for c in str(s or "") if c.isdigit())
@@ -84,6 +102,24 @@ def _normalizar_nivel(v) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n in NIVEIS_VALIDOS else None
+
+
+def _normalizar_horario(v) -> str | None:
+    """Aceita datetime.time/datetime.datetime (célula Excel formatada como
+    hora) ou string 'HH:MM'/'HH:MM:SS' — devolve sempre 'HH:MM', ou None
+    se vazio/não reconhecível."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (datetime.time, datetime.datetime)):
+        return v.strftime("%H:%M")
+    texto = str(v).strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})", texto)
+    if not m:
+        return None
+    hora, minuto = int(m.group(1)), int(m.group(2))
+    if not (0 <= hora <= 23 and 0 <= minuto <= 59):
+        return None
+    return f"{hora:02d}:{minuto:02d}"
 
 
 def carregar_niveis(caminho: str | Path) -> dict[str, int]:
@@ -206,6 +242,75 @@ def carregar_niveis(caminho: str | Path) -> dict[str, int]:
     return mapa
 
 
+def carregar_horarios(caminho: str | Path) -> dict[str, tuple[str, str]]:
+    """
+    Lê a MESMA planilha de complexidade e retorna {documento_só_dígitos:
+    (horario_inicio, horario_fim)} das colunas "Destinatário - Horário de
+    atendimento - início/fim" (horário PADRÃO de recebimento do cliente,
+    Hugo 22/08 -- não confundir com agendamento pontual de um pedido).
+
+    Diferente de carregar_niveis: colunas ausentes NÃO são erro fatal (só
+    aviso no log, retorna {}) -- é uma leitura opcional, mais nova, e sua
+    ausência não pode quebrar o carregamento do nível que já funciona.
+
+    Duplicata de documento com horários divergentes: usa a janela mais
+    ABRANGENTE (menor início, maior fim) -- mais conservador pra quem lê
+    o horário (melhor considerar a janela mais larga do que arriscar
+    achar que o cliente não recebe fora de um horário que na real recebe).
+    """
+    if not caminho:
+        return {}
+
+    caminho = Path(caminho)
+    if not caminho.exists():
+        return {}
+
+    wb = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+    ws = wb.active
+
+    linha_cabecalho = next(ws.iter_rows(min_row=1, max_row=1))
+    cabecalho = [_normalizar_cabecalho(c.value) for c in linha_cabecalho]
+
+    def _achar_coluna(candidatos):
+        for i, c in enumerate(cabecalho):
+            if c in candidatos:
+                return i
+        return None
+
+    idx_doc = _achar_coluna(COLUNAS_DOCUMENTO)
+    idx_ini = _achar_coluna(COLUNAS_HORARIO_INICIO)
+    idx_fim = _achar_coluna(COLUNAS_HORARIO_FIM)
+
+    if idx_doc is None or idx_ini is None or idx_fim is None:
+        logger.warning(
+            f"Planilha de complexidade ({caminho}) sem coluna(s) de horário de "
+            f"atendimento -- todo destinatário usará o horário padrão (00:00-23:59)."
+        )
+        return {}
+
+    ocorrencias: dict[str, list[tuple[str, str]]] = {}
+    for linha in ws.iter_rows(min_row=2, values_only=True):
+        if linha is None or all(v is None for v in linha):
+            continue
+
+        doc = _so_digitos(linha[idx_doc])
+        inicio = _normalizar_horario(linha[idx_ini])
+        fim = _normalizar_horario(linha[idx_fim])
+        if not doc or inicio is None or fim is None:
+            continue
+
+        ocorrencias.setdefault(doc, []).append((inicio, fim))
+
+    mapa: dict[str, tuple[str, str]] = {}
+    for doc, ocs in ocorrencias.items():
+        inicio = min(i for i, _ in ocs)
+        fim = max(f for _, f in ocs)
+        mapa[doc] = (inicio, fim)
+
+    logger.info(f"Horário de atendimento carregado: {len(mapa)} documento(s) únicos.")
+    return mapa
+
+
 def classificar_nivel(documento: str, mapa: dict[str, int]) -> tuple[int, bool, bool]:
     """
     Retorna (nível, encontrado_na_planilha, requer_revisao).
@@ -225,3 +330,97 @@ def classificar_nivel(documento: str, mapa: dict[str, int]) -> tuple[int, bool, 
     if _e_cnpj(doc):
         return NIVEL_PADRAO_CNPJ, False, True
     return NIVEL_PADRAO_CPF, False, False
+
+
+# ---------------------------------------------------------------------
+# Ajuste manual (Hugo, 22/08): correção pontual de nível/horário de UM
+# cliente direto pela tela de Planejamento (menu de contexto de um
+# pedido), sem precisar editar a planilha Excel. Guardado por
+# DOCUMENTO (mesma chave da planilha) -- assim a correção vale pra
+# TODOS os pedidos pendentes/futuros daquele cliente, não só o pedido
+# em que se clicou. Sempre tem prioridade sobre a planilha.
+# ---------------------------------------------------------------------
+
+def _conectar_ajustes() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ajustes_complexidade_cliente (
+            documento                   TEXT PRIMARY KEY,
+            nivel_dificuldade           INTEGER NOT NULL,
+            horario_atendimento_inicio  TEXT NOT NULL,
+            horario_atendimento_fim     TEXT NOT NULL,
+            atualizado_em               TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def carregar_ajustes_manuais() -> dict[str, dict]:
+    """{documento: {"nivel_dificuldade": int, "horario_atendimento_inicio":
+    str, "horario_atendimento_fim": str}} de todos os ajustes manuais já
+    feitos pela tela de Planejamento."""
+    conn = _conectar_ajustes()
+    try:
+        return {
+            row["documento"]: {
+                "nivel_dificuldade": row["nivel_dificuldade"],
+                "horario_atendimento_inicio": row["horario_atendimento_inicio"],
+                "horario_atendimento_fim": row["horario_atendimento_fim"],
+            }
+            for row in conn.execute("SELECT * FROM ajustes_complexidade_cliente")
+        }
+    finally:
+        conn.close()
+
+
+def definir_ajuste_manual(documento: str, nivel: int, horario_inicio: str, horario_fim: str) -> None:
+    """Grava (upsert) o ajuste manual de um cliente -- opção "Nível /
+    horário de atendimento" do menu de contexto da tela de Planejamento."""
+    doc = _so_digitos(documento)
+    if not doc:
+        raise ValueError("Documento (CNPJ/CPF) vazio -- não dá pra gravar ajuste manual sem saber de qual cliente.")
+    if nivel not in NIVEIS_VALIDOS:
+        raise ValueError(f"Nível inválido: {nivel!r} (válidos: {sorted(NIVEIS_VALIDOS)}).")
+
+    conn = _conectar_ajustes()
+    try:
+        conn.execute("""
+            INSERT INTO ajustes_complexidade_cliente (
+                documento, nivel_dificuldade, horario_atendimento_inicio,
+                horario_atendimento_fim, atualizado_em
+            ) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+            ON CONFLICT(documento) DO UPDATE SET
+                nivel_dificuldade = excluded.nivel_dificuldade,
+                horario_atendimento_inicio = excluded.horario_atendimento_inicio,
+                horario_atendimento_fim = excluded.horario_atendimento_fim,
+                atualizado_em = excluded.atualizado_em
+        """, (doc, nivel, horario_inicio, horario_fim))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def nivel_efetivo(documento: str, mapa_niveis: dict[str, int], ajustes_manuais: dict[str, dict]) -> int:
+    """Nível "de verdade" a usar pro documento: ajuste manual > planilha
+    > padrão por tipo de documento (ver classificar_nivel)."""
+    doc = _so_digitos(documento)
+    ajuste = ajustes_manuais.get(doc)
+    if ajuste:
+        return ajuste["nivel_dificuldade"]
+    nivel, _, _ = classificar_nivel(documento, mapa_niveis)
+    return nivel
+
+
+def horario_efetivo(documento: str, mapa_horarios: dict[str, tuple[str, str]],
+                     ajustes_manuais: dict[str, dict]) -> tuple[str, str]:
+    """Horário de atendimento "de verdade" a usar pro documento: ajuste
+    manual > planilha > padrão fixo (00:00-23:59, mesmo piso que a VUUPT
+    já usa pro horário de atendimento importado)."""
+    doc = _so_digitos(documento)
+    ajuste = ajustes_manuais.get(doc)
+    if ajuste:
+        return ajuste["horario_atendimento_inicio"], ajuste["horario_atendimento_fim"]
+    return mapa_horarios.get(doc, ("00:00", "23:59"))

@@ -27,7 +27,7 @@ import logging
 import math
 import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -75,6 +75,22 @@ def macro_regiao_do_servico(servico: dict, api_key: str | None = None) -> str:
     if coords and _distancia_km(*coords, *COORD_CENTRO_SP) > RAIO_GRANDE_SP_KM:
         return MACRO_VIAGEM_GENERICA
     return MACRO_GRANDE_SP
+
+
+def macro_regiao_predominante_do_sublote(sublote: list[dict], api_key: str | None = None) -> str:
+    """Macro-região representativa de um sublote inteiro: a mais
+    FREQUENTE (moda) entre macro_regiao_do_servico de cada item --
+    mesmo padrão de zonas_sp.classificar_rota_zona (moda). Diferente de
+    alocacao_motoristas.classificar_rota_viagem (1 entrega de fora já
+    marca a rota inteira, trava de RISCO): aqui é predominância de
+    ÁREA, pra decidir fusão pós-hoc entre sublotes já formados (Fase 1,
+    22/08 -- ver criar_rotas_diarias.py::
+    _fundir_sublotes_entre_macrorregioes). Sublote vazio: MACRO_GRANDE_SP
+    (mesmo padrão seguro do resto do módulo)."""
+    if not sublote:
+        return MACRO_GRANDE_SP
+    macros = [macro_regiao_do_servico(s, api_key) for s in sublote]
+    return Counter(macros).most_common(1)[0][0]
 
 
 def particionar_por_macro_regiao(servicos: list[dict], api_key: str | None = None,
@@ -213,6 +229,21 @@ def extrair_nivel_dificuldade(servico: dict) -> int:
     agrupamento por falta dela.
     """
     return servico.get("_nivel_dificuldade") or 1
+
+
+def extrair_horario_atendimento(servico: dict) -> tuple[str, str]:
+    """
+    Horário padrão de atendimento (recebimento) do destinatário, formato
+    "HH:MM" -- igual extrair_nivel_dificuldade, injetado no dict do
+    serviço em criar_rotas_diarias.py (chaves '_horario_atendimento_
+    inicio'/'_fim', via regras.complexidade_entrega). Sem essas chaves,
+    assume o padrão mais amplo (00:00-23:59), mesmo piso que a VUUPT já
+    usa pro horário de atendimento importado.
+    """
+    return (
+        servico.get("_horario_atendimento_inicio") or "00:00",
+        servico.get("_horario_atendimento_fim") or "23:59",
+    )
 
 
 def _chave_nivel4(servico: dict) -> tuple[object, object]:
@@ -397,6 +428,132 @@ def _espalhamento_maximo(servicos: list[dict], api_key: str | None) -> float:
     return maior
 
 
+def _cabe_na_distancia_par(servico: dict, sublote_atual: list[dict],
+                           distancia_maxima_km: float | None, api_key: str | None) -> bool:
+    """Teste PAR-A-PAR (servico contra CADA item já em sublote_atual) --
+    extraído do nested _cabe_na_distancia de dividir_em_sublotes (Fase
+    1, 22/08) pra ser reaproveitado por fundir_sublotes_pequenos, que
+    testa vários pedidos de uma vez contra um receptor."""
+    if distancia_maxima_km is None:
+        return True
+    coords_novo = obter_coordenadas(servico, api_key)
+    if not coords_novo:
+        return True
+    for outro in sublote_atual:
+        coords_outro = obter_coordenadas(outro, api_key)
+        if coords_outro and _distancia_km(*coords_novo, *coords_outro) > distancia_maxima_km:
+            return False
+    return True
+
+
+def _km_acumulado_sequencial(servicos: list[dict], api_key: str | None) -> float:
+    """Soma das distâncias entre itens CONSECUTIVOS da lista, na ordem
+    em que aparecem -- SEM a perna até/da base. Aproximação do trajeto
+    acumulado (salvaguarda contra zigzag que a trava par-a-par não
+    pega), não a métrica final pós-2opt (ver calcular_km_estimado pra
+    essa). Item sem coordenada não conta na soma (mesmo padrão seguro
+    do resto do módulo). Fase 1, 22/08."""
+    coords = [c for c in (obter_coordenadas(s, api_key) for s in servicos) if c]
+    total = 0.0
+    for i in range(len(coords) - 1):
+        total += _distancia_km(*coords[i], *coords[i + 1])
+    return total
+
+
+def fundir_sublotes_pequenos(
+    sublotes: list[list[dict]], tamanho_minimo: int, tamanho_maximo: int,
+    volume_maximo: int, api_key: str | None = None,
+    distancia_maxima_km: float | None = None,
+    distancia_maxima_viagem_km: float | None = None,
+    km_acumulado_maximo: float | None = None,
+    km_acumulado_maximo_viagem: float | None = None,
+    eh_viagem_fn=None,
+    compativel=None,
+) -> list[list[dict]]:
+    """Pós-processamento (roda 1x, depois que TODOS os sublotes já
+    fecharam pela regra gulosa de sempre): tenta fundir cada sublote
+    abaixo de tamanho_minimo com o sublote MAIS PRÓXIMO (por centroide,
+    mesma primitiva de consolidar_regioes_pequenas) entre TODOS os
+    outros sublotes -- não só o antecessor imediato na ordem de
+    fechamento. Fundir só com o antecessor imediato NÃO FUNCIONA aqui:
+    por construção do laço guloso, o item que disparou o fechamento de
+    um sublote já falhou EXATAMENTE contra esse mesmo sublote (senão o
+    laço teria aceitado o item em vez de fechar) -- testar de novo dá
+    sempre o mesmo resultado (monotonicidade: mais itens só pioram
+    caixas/tempo/distância, nunca melhoram). Tenta o próximo candidato
+    mais próximo se o mais perto não couber, mesmo padrão de
+    consolidar_regioes_pequenas.
+
+    Corrige bug achado 22/08: tamanho_minimo era parâmetro de
+    dividir_em_sublotes mas nunca era lido -- um sublote podia sair com
+    1-2 pedidos sem aviso, sem tentativa de recuperação, quando as
+    travas de tamanho/caixas/distância/tempo forçavam quebra DEPOIS da
+    consolidação por região (consolidar_regioes_pequenas), que só
+    garante o mínimo até ali.
+
+    Extraída (Fase 1, 22/08) do nested _tenta_fundir_pequenos de
+    dividir_em_sublotes -- função PÚBLICA de módulo pra ser reaproveitada
+    pela fusão pós-hoc entre macro-regiões de uma partição inteira (ver
+    criar_rotas_diarias.py::_fundir_sublotes_entre_macrorregioes).
+    Generalizada com 2 parâmetros novos, opcionais:
+      - eh_viagem_fn(sublote_candidato) -> bool (opcional): decide por
+        RECEPTOR se usa o teto de Viagem (distancia_maxima_viagem_km/
+        km_acumulado_maximo_viagem) ou o de Grande SP -- mesmo padrão
+        já usado em escolher_melhor_modelo/separar_pedidos_exclusivos.
+        Sem isso (None, padrão), sempre usa distancia_maxima_km/
+        km_acumulado_maximo -- é o comportamento de dividir_em_
+        sublotes, uma única macro-região por chamada;
+      - compativel(pequeno, candidato) -> bool (opcional): predicado
+        extra -- só tenta fundir esse par se retornar True, além das
+        travas numéricas de sempre. Sem isso (None), qualquer par pode
+        tentar, como sempre foi."""
+    def _limite(sublote_candidato: list[dict]) -> tuple[float | None, float | None]:
+        eh_viagem = eh_viagem_fn is not None and eh_viagem_fn(sublote_candidato)
+        dist = distancia_maxima_viagem_km if eh_viagem else distancia_maxima_km
+        km_acum = km_acumulado_maximo_viagem if eh_viagem else km_acumulado_maximo
+        return dist, km_acum
+
+    resultado = list(sublotes)
+    i = 0
+    while i < len(resultado):
+        pequeno = resultado[i]
+        if len(pequeno) >= tamanho_minimo:
+            i += 1
+            continue
+        centro_pequeno = _centroide_coords(pequeno, api_key)
+        outros = [j for j in range(len(resultado)) if j != i]
+        if centro_pequeno:
+            outros.sort(key=lambda j: (
+                _distancia_km(*centro_pequeno, *_centroide_coords(resultado[j], api_key))
+                if _centroide_coords(resultado[j], api_key) else float("inf")
+            ))
+        fundiu = False
+        for j in outros:
+            receptor = resultado[j]
+            if compativel is not None and not compativel(pequeno, receptor):
+                continue
+            if len(receptor) + len(pequeno) > tamanho_maximo:
+                continue
+            if sum(extrair_volume_caixas(s) for s in receptor + pequeno) > volume_maximo:
+                continue
+            if estimar_tempo_rota(receptor + pequeno, api_key) > ROTA_TEMPO_MAXIMO_HORAS:
+                continue
+            distancia_max, km_acumulado_max = _limite(receptor + pequeno)
+            if distancia_max is not None and any(
+                not _cabe_na_distancia_par(s, receptor, distancia_max, api_key) for s in pequeno
+            ):
+                continue
+            if km_acumulado_max is not None and _km_acumulado_sequencial(receptor + pequeno, api_key) > km_acumulado_max:
+                continue
+            receptor.extend(pequeno)
+            del resultado[i]
+            fundiu = True
+            break
+        if not fundiu:
+            i += 1
+    return resultado
+
+
 def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
                                 api_key: str | None = None,
                                 distancia_maxima_km: float | None = None) -> dict[str, list[dict]]:
@@ -494,8 +651,10 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 # A quantidade de nível 3 numa mesma rota NÃO tem mais um teto fixo de
 # pedidos -- pedido do Hugo, 20/08: em vez disso, cada rota tem um
 # ORÇAMENTO DE HORAS (ROTA_TEMPO_MAXIMO_HORAS, 9h); cada nível 3 custa
-# TEMPO_NIVEL3_HORAS (1,5h) e cada nível 1/2 custa TEMPO_PARADA_NORMAL_
-# HORAS (~25min) -- ver estimar_tempo_rota. Isso deixa o número de
+# TEMPO_NIVEL3_HORAS (2h, recalibrado 22/08 -- antes 1,5h) e cada nível
+# 1/2 custa TEMPO_PARADA_NORMAL_HORAS (~25min), MAIS o deslocamento real
+# estimado entre paradas (km acumulado sequencial ÷ VELOCIDADE_MEDIA_KMH,
+# também 22/08) -- ver estimar_tempo_rota. Isso deixa o número de
 # nível 3 por rota subir quando sobra tempo (poucas paradas normais
 # nessa rota) e descer quando não sobra (reduzindo o total de pedidos
 # normais em vez de travar numa quantidade fixa de nível 3).
@@ -518,20 +677,40 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3
 NIVEL_ROTA_EXCLUSIVA = 4
 NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
-TEMPO_NIVEL3_HORAS = 1.5
+TEMPO_NIVEL3_HORAS = 2.0  # subiu de 1,5h pra 2h (pedido do Hugo, 22/08)
 TEMPO_PARADA_NORMAL_HORAS = 25 / 60
 ROTA_TEMPO_MAXIMO_HORAS = 9.0
+# Deslocamento real entre paradas (pedido do Hugo, 22/08 -- antes
+# estimar_tempo_rota só somava tempo de PARADA, sem nenhum tempo de
+# deslocamento, então "orçamento de horas" media só atendimento, não a
+# jornada real). Sem dado de GPS/duração real calibrável ainda
+# (timestamps de conclusão no VUUPT vêm em lote, não em tempo real --
+# achado da análise de 22/08, ver memória), 18 km/h é uma estimativa de
+# planejamento conservadora (trânsito denso de SP + manobra/
+# estacionamento entre paradas), fácil de recalibrar depois que houver
+# dado real de duração de rota.
+VELOCIDADE_MEDIA_KMH = 18.0
 
 
-def estimar_tempo_rota(sublote: list[dict]) -> float:
-    """Tempo estimado (horas) de uma rota mista de nível 1/2/3: cada
-    nível 3 custa TEMPO_NIVEL3_HORAS e cada nível 1/2 custa TEMPO_
-    PARADA_NORMAL_HORAS. Não é chamada para nível 4 (rota exclusiva,
-    sem orçamento de horas -- ver NIVEL_ROTA_EXCLUSIVA)."""
-    return sum(
+def estimar_tempo_rota(sublote: list[dict], api_key: str | None = None) -> float:
+    """Tempo estimado (horas) de uma rota mista de nível 1/2/3: soma do
+    tempo de PARADA (cada nível 3 custa TEMPO_NIVEL3_HORAS, cada nível
+    1/2 custa TEMPO_PARADA_NORMAL_HORAS) com o tempo de DESLOCAMENTO
+    estimado -- km acumulado sequencial entre itens consecutivos na
+    ordem dada (mesma aproximação de _km_acumulado_sequencial: ordem de
+    FORMAÇÃO, não o trajeto final pós-2opt) dividido por
+    VELOCIDADE_MEDIA_KMH. `api_key=None` (padrão) deixa o deslocamento
+    zerado -- só quem já tem `api_key` em mãos (dividir_em_sublotes,
+    fundir_sublotes_pequenos) passa esse termo de verdade; chamada sem
+    isso nunca quebra, só fica sem a parcela de deslocamento. Não é
+    chamada para nível 4 (rota exclusiva, sem orçamento de horas -- ver
+    NIVEL_ROTA_EXCLUSIVA)."""
+    tempo_paradas = sum(
         TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
         for s in sublote
     )
+    tempo_deslocamento = _km_acumulado_sequencial(sublote, api_key) / VELOCIDADE_MEDIA_KMH
+    return tempo_paradas + tempo_deslocamento
 
 
 def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
@@ -739,9 +918,10 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
 
 def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_maximo: int = 18,
                         volume_maximo: int = 100, distancia_maxima_km: float | None = 15,
-                        api_key: str | None = None) -> list[list[dict]]:
+                        api_key: str | None = None,
+                        km_acumulado_maximo: float | None = None) -> list[list[dict]]:
     """
-    Divide uma região grande em sublotes respeitando CINCO travas ao
+    Divide uma região grande em sublotes respeitando SEIS travas ao
     mesmo tempo (pedido do Hugo, 09/08: "no máximo 18 entregas OU 100
     caixas por rota, o que vier primeiro" -- e depois, 09/08: "máximo
     de 15km de distância entre pedidos da mesma rota", achado ao
@@ -764,17 +944,34 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         distância -- só as outras travas de tamanho/volume/nível valem);
       - tempo estimado da rota (estimar_tempo_rota) até
         ROTA_TEMPO_MAXIMO_HORAS (9h): cada nível 3 custa
-        TEMPO_NIVEL3_HORAS (1,5h) e cada nível 1/2 custa TEMPO_PARADA_
-        NORMAL_HORAS (~25min) -- ajustado 15/08 e substituído 20/08
-        (antes: teto FIXO de NIVEL_3_TAMANHO_MAXIMO_ROTA pedidos nível 3
-        por rota; achado real, 15/08, que motivou tirar o teto da rota
-        INTEIRA: 24 das 36 rotas do dia (67%) saíam travadas em 4 por
-        causa disso, muitas com só 1 pedido nível-3 "puxando" e
-        descartando o resto da vizinhança geográfica fácil; agora o
-        teto por QUANTIDADE virou um orçamento por TEMPO -- uma rota
-        com mais nível 3 cabe, mas com menos pedidos normais pra
-        compensar, e uma rota só de nível 1/2 nunca esbarra nele, 14
-        paradas * ~25min = ~5,8h < 9h).
+        TEMPO_NIVEL3_HORAS (2h, recalibrado 22/08 -- antes 1,5h) e cada
+        nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS (~25min), MAIS o
+        deslocamento real estimado entre paradas (km acumulado
+        sequencial ÷ VELOCIDADE_MEDIA_KMH, também 22/08 -- antes o
+        orçamento media só tempo de PARADA, nenhum deslocamento) --
+        ajustado 15/08 e substituído 20/08 (antes: teto FIXO de
+        NIVEL_3_TAMANHO_MAXIMO_ROTA pedidos nível 3 por rota; achado
+        real, 15/08, que motivou tirar o teto da rota INTEIRA: 24 das
+        36 rotas do dia (67%) saíam travadas em 4 por causa disso,
+        muitas com só 1 pedido nível-3 "puxando" e descartando o resto
+        da vizinhança geográfica fácil; agora o teto por QUANTIDADE
+        virou um orçamento por TEMPO -- uma rota com mais nível 3 cabe,
+        mas com menos pedidos normais pra compensar; diferente de antes
+        de 22/08, uma rota só de nível 1/2 NÃO está mais garantida a
+        nunca esbarrar nele -- com deslocamento real embutido, 16
+        paradas muito espalhadas geograficamente podem estourar o
+        orçamento mesmo sem nenhum nível 3);
+      - km ACUMULADO sequencial da rota (soma dos trechos entre itens
+        CONSECUTIVOS na ordem de FORMAÇÃO, não a ordem de visita final
+        pós-2opt -- ver _km_acumulado_sequencial) até
+        `km_acumulado_maximo` (desligado por padrão, `None`). Trava
+        NOVA (Fase 1, 22/08): a trava de distância acima é só PAR-A-
+        PAR (nenhum par a mais de `distancia_maxima_km`) -- uma
+        sequência de saltos de ~18km cada pode passar nela e ainda
+        assim virar uma rota de 150km, porque nada soma o trajeto.
+        `km_acumulado_maximo` é uma APROXIMAÇÃO (usa a mesma ordem 1D
+        de `_chave_ordenacao`, não a ordem farthest-first+2opt real),
+        mas já pega o caso zigzag que o par-a-par sozinho não pega.
 
     Considera PROXIMIDADE real: ordena os serviços por coordenada
     (lat, lng) quando disponível antes de dividir, pra que cada
@@ -805,16 +1002,23 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         return (1, int(cep) if cep else float("inf"), 0.0)
 
     def _cabe_na_distancia(servico: dict, sublote_atual: list[dict]) -> bool:
-        if distancia_maxima_km is None:
-            return True
+        return _cabe_na_distancia_par(servico, sublote_atual, distancia_maxima_km, api_key)
+
+    def _km_incremental(servico: dict, sublote_atual: list[dict]) -> float:
+        """Distância do ÚLTIMO item já no sublote (ordem de FORMAÇÃO,
+        não a ordem de visita final) até o candidato -- 0.0 se o
+        sublote está vazio (nada acumulado ainda) ou sem coordenada de
+        um dos lados (não bloqueia, mesmo padrão do resto do módulo).
+        Somada incrementalmente em km_acumulado_atual, abaixo -- O(1)
+        amortizado por item, sem recalcular o trajeto do zero a cada
+        iteração."""
+        if not sublote_atual:
+            return 0.0
         coords_novo = obter_coordenadas(servico, api_key)
-        if not coords_novo:
-            return True
-        for outro in sublote_atual:
-            coords_outro = obter_coordenadas(outro, api_key)
-            if coords_outro and _distancia_km(*coords_novo, *coords_outro) > distancia_maxima_km:
-                return False
-        return True
+        coords_ultimo = obter_coordenadas(sublote_atual[-1], api_key)
+        if not coords_novo or not coords_ultimo:
+            return 0.0
+        return _distancia_km(*coords_ultimo, *coords_novo)
 
     sublotes_prontos, demais = separar_pedidos_exclusivos(
         servicos, volume_maximo, distancia_maxima_km, api_key,
@@ -825,28 +1029,46 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     sublotes: list[list[dict]] = []
     sublote_atual: list[dict] = []
     caixas_atual = 0
+    km_acumulado_atual = 0.0
 
     for servico in ordenados:
         cx_pedido = extrair_volume_caixas(servico)
-        nivel_pedido = extrair_nivel_dificuldade(servico)
 
-        tempo_pedido = TEMPO_NIVEL3_HORAS if nivel_pedido == 3 else TEMPO_PARADA_NORMAL_HORAS
-        cabe_tempo = estimar_tempo_rota(sublote_atual) + tempo_pedido <= ROTA_TEMPO_MAXIMO_HORAS
+        # Recalcula a rota INTEIRA (paradas + deslocamento) com o
+        # candidato incluído, em vez de só somar o tempo de parada dele
+        # -- assim o trecho de deslocamento até ESSE candidato também
+        # entra na conta (estimar_tempo_rota() sozinho não sabe qual
+        # seria só o "tempo do pedido").
+        cabe_tempo = estimar_tempo_rota(sublote_atual + [servico], api_key) <= ROTA_TEMPO_MAXIMO_HORAS
 
         cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
         cabe_distancia = _cabe_na_distancia(servico, sublote_atual)
+        km_ate_aqui = _km_incremental(servico, sublote_atual)
+        cabe_km_acumulado = (
+            km_acumulado_maximo is None or km_acumulado_atual + km_ate_aqui <= km_acumulado_maximo
+        )
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo
+                                  and cabe_km_acumulado):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0
+            km_acumulado_atual = 0.0
+            km_ate_aqui = 0.0  # 1º item do sublote novo: nenhum antecessor pra somar
 
         sublote_atual.append(servico)
         caixas_atual += cx_pedido
+        km_acumulado_atual += km_ate_aqui
 
     if sublote_atual:
         sublotes.append(sublote_atual)
+
+    sublotes = fundir_sublotes_pequenos(
+        sublotes, tamanho_minimo, tamanho_maximo, volume_maximo, api_key,
+        distancia_maxima_km=distancia_maxima_km,
+        km_acumulado_maximo=km_acumulado_maximo,
+    )
 
     sublotes.extend(sublotes_prontos)
 

@@ -83,8 +83,12 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao, caixas_e_enderecos
+from roteirizacao_dados import (
+    elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao, caixas_e_enderecos,
+    fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
+)
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
+from otimizacao_rotas import ordenar_2opt
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
@@ -99,7 +103,10 @@ from notificar_area_nao_atendida import (
 )
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.disponibilidade_motoristas import carregar_ajustes_dia
-from regras.complexidade_entrega import carregar_niveis, classificar_nivel
+from regras.complexidade_entrega import (
+    carregar_niveis, classificar_nivel, carregar_horarios,
+    carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
+)
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo, contar_motoristas_elegiveis
 from zonas_sp import classificar_rota_zona
@@ -109,7 +116,7 @@ ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
-TAMANHO_MAXIMO_ROTA = 14  # Ajustado de 16 para 14 entregas por rota (pedido do Hugo, 20/08)
+TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
 DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo, 09/08 -- ajustado 10/08)
 # Rotas de Viagem (fora da Grande SP) NÃO têm limite de distância entre
@@ -119,6 +126,17 @@ DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da G
 # urbano lá só fracionava a região inteira em várias rotas pequenas
 # sem necessidade, já que é deslocamento longo de qualquer forma.
 DISTANCIA_MAXIMA_VIAGEM_KM = None
+# Teto de km ACUMULADO real da rota -- soma SEQUENCIAL dos trechos na
+# ordem de formação (aproximação; ver dividir_em_sublotes/
+# fundir_sublotes_pequenos em roteirizacao_dados.py), diferente do
+# teto PAR-A-PAR acima (que só testa espalhamento máximo, não
+# trajeto). Salvaguarda nova contra o caso extremo de zigzag que o
+# par-a-par sozinho não pega (pedido do Hugo, 22/08 -- Fase 1 do
+# roadmap de roteirização: ex. pedido de Niterói-RJ misturado com São
+# Paulo, dentro de uma região de dia fixo com vãos internos legítimos
+# de até ~55km).
+KM_ACUMULADO_MAXIMO_ROTA_KM = 60      # Dentro da Grande SP
+KM_ACUMULADO_MAXIMO_VIAGEM_KM = 300   # Viagem (fora da Grande SP) -- o teto PAR-A-PAR de Viagem acima continua None, deliberado (10/08)
 # Fusão entre macro-regiões externas vizinhas, como ÚLTIMO RECURSO
 # (pedido do Hugo, 15/08): quando uma região não junta o mínimo de
 # pedidos nem somando os dois tipos de carga (ver
@@ -209,6 +227,56 @@ def _particionar_carga_com_fusao(servicos: list[dict], tamanho_minimo: int,
     return particoes
 
 
+def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coords_base,
+                                         gmaps_key: str | None, label: str) -> list[list[dict]]:
+    """
+    Fusão pós-hoc (Fase 1, 22/08 -- pedido do Hugo): ANTES de alocar
+    motorista (nunca depois -- evita conflito de motorista já atribuído
+    a um dos dois sublotes fundidos), tenta fundir cada sublote abaixo
+    de TAMANHO_MINIMO_ROTA com o sublote mais próximo (por centroide)
+    da MESMA macro-região dentro da MESMA partição de carga (Seco/
+    Refrigerado/Misto -- só recebe sublotes de UMA partição por vez,
+    quem chama já garante isso).
+
+    sublotes_do_dia, neste ponto, é uma lista PLANA misturando sublotes
+    de TODAS as macro-regiões da partição (selecao_modelo.py::_por_macro
+    achata antes de devolver) -- recalcula a macro-região predominante
+    de cada sublote (macro_regiao_predominante_do_sublote) antes de
+    decidir compatibilidade -- nunca funde Grande SP com Viagem, nem
+    duas regiões externas diferentes entre si.
+
+    Reaproveita fundir_sublotes_pequenos (mesmo algoritmo do fix da
+    Fase 0: candidatos por centroide, tenta o próximo mais próximo se o
+    mais perto não couber), diferenciando o teto de distância/km
+    acumulado por Grande SP x Viagem via eh_viagem_fn -- igual
+    agrupar_atual faz.
+
+    sublotes_do_dia já saiu de escolher_melhor_modelo/agrupar_atual
+    SEQUENCIADO por ordenar_2opt -- fundir só concatena (receptor.
+    extend), sem reotimizar o trajeto. Por isso, quando coords_base
+    existe, roda ordenar_2opt de novo em TODOS os sublotes retornados
+    sempre que HOUVE pelo menos 1 fusão.
+    """
+    def _macro(sub):
+        return macro_regiao_predominante_do_sublote(sub, gmaps_key)
+
+    fundidos = fundir_sublotes_pequenos(
+        sublotes_do_dia, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
+        api_key=gmaps_key,
+        distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+        distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+        km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+        km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+        eh_viagem_fn=lambda sub: _macro(sub) != MACRO_GRANDE_SP,
+        compativel=lambda pequeno, candidato: _macro(pequeno) == _macro(candidato),
+    )
+    if len(fundidos) < len(sublotes_do_dia):
+        logger.info(f"[{label}] Fusão entre macro-regiões: {len(sublotes_do_dia)} -> {len(fundidos)} sublote(s).")
+        if coords_base:
+            fundidos = [ordenar_2opt(s, coords_base[0], coords_base[1], gmaps_key) for s in fundidos]
+    return fundidos
+
+
 def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
                               indice_inicial: int = 1,
                               contagem_alocacoes_dia: dict[int, int] | None = None,
@@ -259,11 +327,14 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     # destinatário) e tipo de carga (sender_id), injetados no dict
     caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
     mapa_niveis = carregar_niveis(caminho_niveis)
+    mapa_horarios = carregar_horarios(caminho_niveis)
+    ajustes_manuais = carregar_ajustes_manuais()
     mapa_tipos_carga = carregar_tipos_carga_por_sender(DB_PATH)
     for s in servicos:
         cnpj_destino = (s.get("customer") or {}).get("code", "")
-        nivel, _, _ = classificar_nivel(cnpj_destino, mapa_niveis)
-        s["_nivel_dificuldade"] = nivel
+        s["_nivel_dificuldade"] = nivel_efetivo(cnpj_destino, mapa_niveis, ajustes_manuais)
+        s["_horario_atendimento_inicio"], s["_horario_atendimento_fim"] = \
+            horario_efetivo(cnpj_destino, mapa_horarios, ajustes_manuais)
         tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
         s["_tipo_carga"] = tipo_carga
 
@@ -291,6 +362,8 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
                 modelo_forcado=modelo_forcado,
                 distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+                km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
             )
         else:
             # Fluxo de reserva do main() quando a base não geocodifica --
@@ -305,8 +378,11 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             sublotes = [
                 sub for svcs in particoes_macro.values()
                 for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, tamanho_maximo_efetivo,
-                                         VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
+                                         VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM,
+                                         KM_ACUMULADO_MAXIMO_ROTA_KM, KM_ACUMULADO_MAXIMO_VIAGEM_KM)
             ]
+
+        sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, f"{label}{sufixo_label}")
 
         for sublote in sublotes:
             nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
@@ -469,13 +545,21 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         # em roteirizacao_dados.py) sem precisar repassar como parâmetro.
         caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
         mapa_niveis = carregar_niveis(caminho_niveis)
+        mapa_horarios = carregar_horarios(caminho_niveis)
+        ajustes_manuais = carregar_ajustes_manuais()
         mapa_tipos_carga = carregar_tipos_carga_por_sender(DB_PATH)
         cnpjs_pendentes_nivel = set()
         for s in servicos:
             cnpj_destino = (s.get("customer") or {}).get("code", "")
-            nivel, _, nivel_requer_revisao = classificar_nivel(cnpj_destino, mapa_niveis)
-            s["_nivel_dificuldade"] = nivel
-            if nivel_requer_revisao:
+            _, _, nivel_requer_revisao = classificar_nivel(cnpj_destino, mapa_niveis)
+            s["_nivel_dificuldade"] = nivel_efetivo(cnpj_destino, mapa_niveis, ajustes_manuais)
+            s["_horario_atendimento_inicio"], s["_horario_atendimento_fim"] = \
+                horario_efetivo(cnpj_destino, mapa_horarios, ajustes_manuais)
+            # ajuste manual (Hugo, 22/08, via tela de Planejamento) já resolveu a
+            # classificação -- não pendura mais o alerta de "precisa classificar
+            # na planilha" pra um CNPJ que já foi corrigido manualmente
+            doc_destino = "".join(c for c in (cnpj_destino or "") if c.isdigit())
+            if nivel_requer_revisao and doc_destino not in ajustes_manuais:
                 cnpjs_pendentes_nivel.add(cnpj_destino)
 
             tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
@@ -536,6 +620,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
                     distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
                     distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+                    km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                    km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
                 )
                 modelos_vencedores[label] = modelo_vencedor
             else:
@@ -552,8 +638,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 sublotes_do_dia = [
                     sub for svcs in particoes_macro.values()
                     for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
-                                             VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM)
+                                             VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM,
+                                             KM_ACUMULADO_MAXIMO_ROTA_KM, KM_ACUMULADO_MAXIMO_VIAGEM_KM)
                 ]
+
+            sublotes_do_dia = _fundir_sublotes_entre_macrorregioes(sublotes_do_dia, coords_base, gmaps_key, label)
 
             # Ordena por escassez de motorista ANTES de alocar (mais restrito
             # primeiro, pedido do Hugo, 20/08): sem isso, um motorista que
