@@ -766,6 +766,27 @@ def referencia_para_rascunho_manual(data_alvo: date) -> dict:
     }
 
 
+_PADRAO_NUMERO_ROTA = re.compile(r"#(\d+)\s*$")
+
+
+def _proximo_numero_ordem(conn: sqlite3.Connection, data_alvo: date) -> int:
+    """Próximo #N livre pro nome da rota nessa data, seguindo o mesmo
+    padrão nativo do VUUPT ('Planejamento - DD/MM/AAAA - #N') que
+    criar_rotas_diarias.py já usa -- olha o nome de TODOS os rascunhos
+    não descartados da data (manual ou gerado pelo pipeline) e continua
+    a numeração dali, em vez de reiniciar em #1 e colidir com uma rota
+    que já existe."""
+    maior = 0
+    for row in conn.execute(
+        "SELECT nome FROM rascunhos_rota WHERE data_alvo = ? AND status != ?",
+        (data_alvo.isoformat(), STATUS_DESCARTADO),
+    ).fetchall():
+        match = _PADRAO_NUMERO_ROTA.search(row["nome"] or "")
+        if match:
+            maior = max(maior, int(match.group(1)))
+    return maior + 1
+
+
 def criar_rascunho_vazio(data_alvo: date, lote_id: str, particao: str, tipo_rota: str,
                          start_location_base_id: int, end_location_base_id: int | None,
                          start_at: str) -> int:
@@ -773,7 +794,7 @@ def criar_rascunho_vazio(data_alvo: date, lote_id: str, particao: str, tipo_rota
     tela pra receber paradas arrastadas de uma rota cheia."""
     conn = _conectar()
     try:
-        nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - manual-{uuid.uuid4().hex[:6]}"
+        nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - #{_proximo_numero_ordem(conn, data_alvo)}"
         cursor = conn.execute("""
             INSERT INTO rascunhos_rota (
                 data_alvo, lote_id, nome, particao, tipo_rota,
@@ -799,7 +820,7 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
     de adicionar_parada (itens do pool, tal como carregados no GET)."""
     conn = _conectar()
     try:
-        nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - manual-{uuid.uuid4().hex[:6]}"
+        nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - #{_proximo_numero_ordem(conn, data_alvo)}"
         cursor = conn.execute("""
             INSERT INTO rascunhos_rota (
                 data_alvo, lote_id, nome, particao, tipo_rota,
