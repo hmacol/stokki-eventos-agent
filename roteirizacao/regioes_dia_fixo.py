@@ -150,12 +150,25 @@ def extrair_cidade(servico: dict) -> str | None:
     texto logo antes de ' - UF,' (UF = 2 letras maiúsculas). Usa a
     ÚLTIMA ocorrência desse padrão no endereço (mais confiável que a
     primeira, evita pegar algo parecido em bairros/logradouros).
+
+    BUG CORRIGIDO (22/08, achado no PS-37434, Mogi das Cruzes): quando o
+    endereço grava o nome do estado por extenso ENTRE a cidade e a UF
+    ("Mogi das Cruzes - São Paulo - SP,", em vez do padrão "Mogi das
+    Cruzes - SP,"), o trecho capturado acima inclui esse nome do estado
+    junto com a cidade -- o resultado não batia com nenhuma cidade
+    cadastrada em REGIOES, então o dia fixo (Vale do Paraíba, Segunda)
+    não era aplicado e o pedido caía no cálculo de distância da Grande
+    SP (notificar_area_nao_atendida.py). Corrigido pegando só a parte
+    antes do primeiro ' - ' (hífen cercado de espaço) dentro do trecho
+    capturado -- não afeta cidades com hífen "colado" no próprio nome
+    (ex: Embu-Guaçu), que não têm espaço ao redor do traço.
     """
     endereco = servico.get("address") or ""
     ocorrencias = list(re.finditer(r",\s*([^,]+?)\s*-\s*[A-Z]{2}\s*,", endereco))
     if not ocorrencias:
         return None
-    return ocorrencias[-1].group(1).strip()
+    cidade = ocorrencias[-1].group(1).strip()
+    return re.split(r"\s+-\s+", cidade)[0].strip()
 
 
 def extrair_uf(servico: dict) -> str | None:
