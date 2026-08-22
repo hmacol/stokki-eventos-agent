@@ -209,7 +209,7 @@ AGENTES = [
         "id": "processar_documentos",
         "nome": "Processar Documentos (NF, Boleto, CC, Agendamento)",
         "descricao": "Busca documentos por e-mail e na Stokki, classifica, casa com o pedido e envia pro GCS.",
-        "script": "processar_documentos.py",
+        "script": "documentos_pedido/processar_documentos.py",
         "cwd": "documentos_pedido",
         "suporta_teste": True,
         "flag_teste": "--modo-teste",
