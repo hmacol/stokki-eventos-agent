@@ -623,8 +623,15 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # rascunho está OFERTADA -- depois de escolhida, o rascunho já
         # volta pra RASCUNHO com motorista preenchido (ver
         # rascunhos_rota.aplicar_escolha_motorista), então não tem
-        # oferta pendente pra mostrar.
-        if r["status"] == rascunhos_rota.STATUS_OFERTADA:
+        # oferta pendente pra mostrar. STATUS_OFERTADA só existe na
+        # versão de rascunhos_rota.py do marketplace, ainda não
+        # commitada -- getattr com default None faz essa comparação
+        # sempre dar False (nenhum rascunho "ofertado") em vez de
+        # AttributeError, até o marketplace ser deployado de verdade
+        # (achado 22/08: rodava em TODA carga de /planejamento assim
+        # que o lote do dia tivesse pelo menos 1 rascunho -- derrubava
+        # a tela inteira).
+        if r["status"] == getattr(rascunhos_rota, "STATUS_OFERTADA", None):
             from regras import ofertas_rota
             oferta = ofertas_rota.buscar_por_rascunho(r["id"])
             r["oferta"] = {
