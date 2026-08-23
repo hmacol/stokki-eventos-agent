@@ -213,7 +213,13 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         placa = re.sub(r"[^A-Z0-9]", "", _normalizar_texto(placa_bruta)) or None
 
     cpf_bruto = _parse_texto_numerico(registro.get("CPF_MOTORISTA"))
-    cpf = re.sub(r"\D", "", cpf_bruto) or None if cpf_bruto else None
+    cpf_digitos = re.sub(r"\D", "", cpf_bruto) if cpf_bruto else ""
+    cpf = cpf_digitos if len(cpf_digitos) == 11 else None
+    if cpf_bruto and cpf is None:
+        logger.warning(
+            f"CPF_MOTORISTA '{cpf_bruto}' do motorista {agent_id} não tem 11 dígitos -- "
+            f"tratado como sem CPF cadastrado (não aparece na identificação por CPF)."
+        )
 
     tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
     codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
@@ -247,7 +253,14 @@ class CatalogoMotoristas:
 
     @classmethod
     def _carregar_excel(cls, caminho: Path) -> "CatalogoMotoristas":
-        df = pd.read_excel(caminho)
+        # dtype=str só na coluna de CPF -- sem isso, o pandas infere a
+        # coluna inteira como número (mesmo artefato documentado em
+        # _parse_texto_numerico pro TELEFONE_MOTORISTA) e PERDE zero à
+        # esquerda de CPF pra sempre (09474142742 -> 9474142742.0 ->
+        # 9474142742, 10 dígitos) -- ali dá pra recuperar cortando o
+        # ".0", aqui não, o dígito já sumiu antes de qualquer parsing
+        # (achado 22/08, testando a sincronização de CPF de verdade).
+        df = pd.read_excel(caminho, dtype={"CPF_MOTORISTA": str})
         df.columns = [re.sub(r"[^A-Z0-9_]", "", _normalizar_texto(c)) for c in df.columns]
 
         motoristas = []
