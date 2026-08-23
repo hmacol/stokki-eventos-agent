@@ -244,6 +244,45 @@ def _tentar_escolher(conn, agent_id: int, rascunho_id: int, ultimos4_informado: 
     return None
 
 
+def _cancelar_escolha(conn, agent_id: int, rascunho_id: int) -> str | None:
+    """Desiste de uma oferta já ESCOLHIDA por esse agent_id (Hugo,
+    23/08: "mostrar a rota escolhida... com a opção de cancelamento").
+    Espelho de _tentar_escolher -- atômico, e restrito a quem
+    escolheu (WHERE escolhido_por = agent_id, ninguém cancela a
+    escolha alheia). Volta a oferta pra ABERTA, liberando de novo pra
+    qualquer elegível (inclusive o mesmo motorista, se mudar de ideia
+    de novo). Retorna a mensagem de erro, ou None se cancelou de fato.
+
+    IMPORTANTE: só alcança quem ainda não foi sincronizado pro lado
+    local (ver roteirizacao/sincronizar_respostas_confirmacao.py --
+    pull a cada 30min). Se o pull já aplicou a escolha (rascunho já
+    com esse motorista preenchido lá), cancelar aqui libera a oferta
+    de novo mas NÃO desfaz sozinho o que já foi aplicado do lado de
+    lá -- mesmo princípio de sempre: nada sai daqui sem o Hugo
+    conferir antes de mandar pra Vuupt, então ele nota e corrige na
+    tela de Planejamento se isso acontecer."""
+    cur = conn.execute("""
+        UPDATE ofertas SET status = 'ABERTA', escolhido_por = NULL, escolhido_em = NULL
+        WHERE rascunho_id = ? AND status = 'ESCOLHIDA' AND escolhido_por = ?
+    """, (rascunho_id, agent_id))
+    conn.commit()
+    if cur.rowcount == 0:
+        return "Essa escolha não existe mais (pode já ter sido cancelada, ou a rota foi retirada)."
+    return None
+
+
+def _listar_minhas_escolhidas(conn, agent_id: int) -> list[dict]:
+    """Ofertas ESCOLHIDA por esse agent_id -- mostradas com opção de
+    cancelar, tanto na hora de escolher quanto em qualquer visita
+    futura à mesma página."""
+    linhas = conn.execute(
+        "SELECT rascunho_id, resumo_json FROM ofertas WHERE status = 'ESCOLHIDA' AND escolhido_por = ? "
+        "ORDER BY escolhido_em DESC",
+        (agent_id,),
+    ).fetchall()
+    return [{"rascunho_id": linha["rascunho_id"], "resumo": json.loads(linha["resumo_json"])} for linha in linhas]
+
+
 def _listar_ofertas_abertas(conn, agent_id: int, data_rota: str | None = None) -> list[dict]:
     """Ofertas ABERTA elegíveis pra esse agent_id -- `data_rota` filtra
     pro dia do link pessoal (/escolher/<token>); None mostra QUALQUER
@@ -289,14 +328,20 @@ def escolher_rota(token):
         mensagem = erro = None
         if request.method == "POST":
             rascunho_id = request.form.get("rascunho_id", type=int)
-            ultimos4_informado = re.sub(r"\D", "", request.form.get("ultimos4", ""))
-            erro = _tentar_escolher(conn, agent_id, rascunho_id, ultimos4_informado)
-            if erro is None:
-                mensagem = "Rota escolhida! Aguarde o contato da Freshlog com os detalhes."
+            if request.form.get("acao") == "cancelar":
+                erro = _cancelar_escolha(conn, agent_id, rascunho_id)
+                if erro is None:
+                    mensagem = "Escolha cancelada -- a rota voltou a ficar disponível pra qualquer elegível."
+            else:
+                ultimos4_informado = re.sub(r"\D", "", request.form.get("ultimos4", ""))
+                erro = _tentar_escolher(conn, agent_id, rascunho_id, ultimos4_informado)
+                if erro is None:
+                    mensagem = "Rota escolhida! Aguarde o contato da Freshlog com os detalhes."
 
         ofertas = _listar_ofertas_abertas(conn, agent_id, data_rota)
+        escolhidas = _listar_minhas_escolhidas(conn, agent_id)
         return render_template("escolher_rota.html", estado="formulario",
-                                ofertas=ofertas, mensagem=mensagem, erro=erro)
+                                ofertas=ofertas, escolhidas=escolhidas, mensagem=mensagem, erro=erro)
     finally:
         conn.close()
 
@@ -323,13 +368,20 @@ def escolher_rota_por_cpf():
         cpf_informado = re.sub(r"\D", "", request.form.get("cpf", ""))
         mensagem = erro = None
         ofertas = []
+        escolhidas = []
         identificado = False
 
         if request.method == "POST" and cpf_informado:
+            # inclui quem já ESCOLHEU (não só quem tem oferta ABERTA
+            # aberta agora) -- sem isso, depois de escolher a única
+            # rota disponível, o motorista nunca mais conseguiria se
+            # identificar pra ver/cancelar a própria escolha (achado
+            # 23/08, pedido do Hugo de mostrar+cancelar).
             agent_ids = [row["agent_id"] for row in conn.execute(
                 "SELECT DISTINCT oe.agent_id FROM ofertas_elegibilidade oe "
                 "JOIN ofertas o ON o.rascunho_id = oe.rascunho_id "
-                "WHERE oe.cpf = ? AND o.status = 'ABERTA'",
+                "WHERE oe.cpf = ? AND (o.status = 'ABERTA' "
+                "OR (o.status = 'ESCOLHIDA' AND o.escolhido_por = oe.agent_id))",
                 (cpf_informado,),
             ).fetchall()]
 
@@ -345,16 +397,22 @@ def escolher_rota_por_cpf():
 
                 if request.form.get("rascunho_id"):
                     rascunho_id = request.form.get("rascunho_id", type=int)
-                    erro = _tentar_escolher(conn, agent_id, rascunho_id, "", verificar_telefone=False)
-                    if erro is None:
-                        mensagem = "Rota escolhida! Aguarde o contato da Freshlog com os detalhes."
+                    if request.form.get("acao") == "cancelar":
+                        erro = _cancelar_escolha(conn, agent_id, rascunho_id)
+                        if erro is None:
+                            mensagem = "Escolha cancelada -- a rota voltou a ficar disponível pra qualquer elegível."
+                    else:
+                        erro = _tentar_escolher(conn, agent_id, rascunho_id, "", verificar_telefone=False)
+                        if erro is None:
+                            mensagem = "Rota escolhida! Aguarde o contato da Freshlog com os detalhes."
 
                 ofertas = _listar_ofertas_abertas(conn, agent_id)
+                escolhidas = _listar_minhas_escolhidas(conn, agent_id)
             if not identificado:
                 erro = "Nenhuma rota disponível pra esse CPF no momento."
 
         return render_template("escolher_cpf.html", identificado=identificado,
-                                ofertas=ofertas, mensagem=mensagem, erro=erro,
+                                ofertas=ofertas, escolhidas=escolhidas, mensagem=mensagem, erro=erro,
                                 cpf_informado=cpf_informado if identificado else "")
     finally:
         conn.close()

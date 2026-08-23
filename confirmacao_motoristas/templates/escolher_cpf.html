@@ -38,11 +38,17 @@
     border: 1px solid var(--cor-borda); border-radius: 10px; padding: 16px; margin-bottom: 14px;
   }
   .oferta:last-child { margin-bottom: 0; }
+  .oferta.escolhida { border: 1px solid var(--cor-acento); background: #F3FEFB; }
   .oferta .regiao { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+  .oferta .selo-escolhida { display: inline-block; font-size: 11.5px; font-weight: 700; color: #0A6656;
+    background: #E6FBF5; border-radius: 999px; padding: 3px 10px; margin-bottom: 8px; }
   .oferta .linha { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--cor-borda); font-size: 13px; }
   .oferta .linha:last-of-type { border-bottom: none; }
   .oferta .linha span:first-child { color: var(--cor-texto-suave); }
   .oferta .linha span:last-child { font-weight: 600; text-align: right; }
+  .secao-titulo { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--cor-texto-suave); margin: 18px 0 8px; }
+  .secao-titulo:first-child { margin-top: 0; }
   label { display: block; font-size: 13px; color: var(--cor-texto-suave); margin: 12px 0 6px; }
   input[type=text] {
     width: 100%; padding: 10px 12px; border: 1px solid var(--cor-borda); border-radius: 8px;
@@ -51,6 +57,10 @@
   button.escolher, button.identificar {
     width: 100%; margin-top: 14px; padding: 13px 10px; border: none; border-radius: 8px;
     font-size: 15px; font-weight: 600; cursor: pointer; background: var(--cor-acento); color: #FFFFFF;
+  }
+  button.cancelar-escolha {
+    width: 100%; margin-top: 14px; padding: 13px 10px; border: 1px solid var(--cor-erro); border-radius: 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer; background: #FFFFFF; color: var(--cor-erro);
   }
   .trocar-cpf { text-align: center; font-size: 12.5px; margin-top: 10px; }
   .trocar-cpf a { color: var(--cor-texto-suave); }
@@ -84,7 +94,34 @@
     </form>
 
   {% else %}
-    {% if not ofertas %}
+    {% if escolhidas %}
+      <div class="secao-titulo">Sua rota escolhida</div>
+      {% for oferta in escolhidas %}
+        <div class="oferta escolhida">
+          <div class="selo-escolhida">✅ Escolhida por você</div>
+          <div class="regiao">📍 {{ oferta.resumo.regiao }}</div>
+          <div class="linha"><span>Paradas</span><span>{{ oferta.resumo.total_paradas }}</span></div>
+          <div class="linha"><span>Por nível</span><span>{% for nivel, qtd in oferta.resumo.paradas_por_nivel.items() %}nível {{ nivel }}: {{ qtd }}{{ ", " if not loop.last else "" }}{% endfor %}</span></div>
+          <div class="linha"><span>Caixas</span><span>{{ oferta.resumo.total_caixas }}</span></div>
+          {% if oferta.resumo.peso_kg is not none %}
+          <div class="linha"><span>Peso aproximado</span><span>~{{ oferta.resumo.peso_kg }} kg{% if oferta.resumo.peso_paradas_com_dado < oferta.resumo.total_paradas %} (parcial){% endif %}</span></div>
+          {% endif %}
+          {% if oferta.resumo.bairros %}
+          <div class="linha"><span>Bairros</span><span>{{ oferta.resumo.bairros | join(", ") }}</span></div>
+          {% endif %}
+          <form method="post" onsubmit="return confirm('Cancelar essa escolha? A rota volta a ficar disponível pra qualquer motorista elegível.');">
+            <input type="hidden" name="cpf" value="{{ cpf_informado }}">
+            <input type="hidden" name="rascunho_id" value="{{ oferta.rascunho_id }}">
+            <input type="hidden" name="acao" value="cancelar">
+            <button type="submit" class="cancelar-escolha">Cancelar escolha</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if ofertas %}
+      <div class="secao-titulo">Rotas disponíveis</div>
+    {% elif not escolhidas %}
       <div class="banner aviso">Não há rotas disponíveis pra você no momento. Fique de olho, novas rotas podem aparecer aqui.</div>
     {% endif %}
 
