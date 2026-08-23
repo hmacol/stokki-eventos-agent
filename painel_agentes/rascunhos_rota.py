@@ -45,6 +45,13 @@ STATUS_ENVIADO = "ENVIADO"
 STATUS_ERRO_ENVIO = "ERRO_ENVIO"
 STATUS_DESCARTADO = "DESCARTADO"
 
+# Acha o #N do nome da rota ('Planejamento - DD/MM/AAAA - #N', ou a
+# mesma coisa com ' (cópia)' no final) -- usado tanto pra achar o
+# próximo número livre (_proximo_numero_ordem) quanto pra ordenar as
+# rotas na tela numericamente (listar_rascunhos_do_dia), não como
+# texto (Hugo, 24/08: '#11' aparecia antes de '#2').
+_PADRAO_NUMERO_ROTA = re.compile(r"#(\d+)")
+
 
 def _conectar() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +274,16 @@ def _montar_rascunho(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     return {**dict(row), "paradas": [dict(p) for p in paradas]}
 
 
+def _chave_ordem_rota(nome: str | None) -> tuple:
+    """Ordena pelo #N numérico do nome (não como texto -- senão '#11'
+    cai antes de '#2'); rascunho sem #N reconhecível (renomeado à mão)
+    vai pro fim, em ordem alfabética entre si."""
+    match = _PADRAO_NUMERO_ROTA.search(nome or "")
+    if match:
+        return (0, int(match.group(1)), nome or "")
+    return (1, 0, nome or "")
+
+
 def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
     """Rascunhos (com paradas aninhadas) do lote ativo mais recente da
     data, prontos pra tela de planejamento."""
@@ -278,8 +295,8 @@ def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
         rows = conn.execute("""
             SELECT * FROM rascunhos_rota
             WHERE lote_id = ? AND status != ?
-            ORDER BY nome
         """, (lote_id, STATUS_DESCARTADO)).fetchall()
+        rows = sorted(rows, key=lambda r: _chave_ordem_rota(r["nome"]))
         return [_montar_rascunho(conn, r) for r in rows]
     finally:
         conn.close()
@@ -764,9 +781,6 @@ def referencia_para_rascunho_manual(data_alvo: date) -> dict:
         "end_location_base_id": BASE_LOCATION_ID,
         "start_at": f"{data_alvo.isoformat()}T13:00:00Z",
     }
-
-
-_PADRAO_NUMERO_ROTA = re.compile(r"#(\d+)\s*$")
 
 
 def _proximo_numero_ordem(conn: sqlite3.Connection, data_alvo: date) -> int:
