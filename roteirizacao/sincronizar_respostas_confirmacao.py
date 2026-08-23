@@ -187,6 +187,15 @@ def _reconciliar_escolhas_revertidas(url_base: str, sync_secret: str):
 
     if revertidas:
         logger.info(f"{revertidas} escolha(s) revertida(s) pelo motorista reconciliada(s).")
+        # empurra o CANCELADA de volta pra VPS -- sem isso a oferta
+        # ficaria "disponível" na página pública indefinidamente, mesmo
+        # já desalocada aqui (mesmo achado do Hugo: "continua aparecendo
+        # pro usuário de teste"). Guarda de sempre (status != 'ESCOLHIDA'
+        # do lado da VPS) protege sozinha o caso raro de outro motorista
+        # ter escolhido bem nesse meio-tempo -- o push simplesmente não
+        # tem efeito nesse caso, sem sobrescrever a escolha dele.
+        from avisar_motoristas_rotas import push_ofertas_vps
+        push_ofertas_vps({"url_base": url_base, "sync_secret": sync_secret})
 
 
 def main():

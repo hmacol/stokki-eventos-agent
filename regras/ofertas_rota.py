@@ -224,11 +224,16 @@ def marcar_revertida(rascunho_id: int) -> None:
     listar_aplicadas) -- status vira CANCELADA pra não ser reprocessada
     de novo por engano (nem por listar_escolhidas_nao_aplicadas, que já
     exige aplicado_em IS NULL, nem por esta mesma checagem, que exige
-    status='ESCOLHIDA')."""
+    status='ESCOLHIDA'). sincronizado_em volta pra NULL -- sem isso o
+    CANCELADA nunca seria empurrado de volta pra VPS (listar_pendentes_
+    de_envio só pega quem tem sincronizado_em NULL), e a oferta
+    continuaria "disponível" na página pública indefinidamente, mesmo
+    com o rascunho já de volta a RASCUNHO comum aqui (achado 23/08,
+    revisão do Hugo: "continua aparecendo pro usuário de teste")."""
     conn = _conectar()
     try:
         conn.execute(
-            "UPDATE ofertas_rota SET status = 'CANCELADA' WHERE rascunho_id = ?",
+            "UPDATE ofertas_rota SET status = 'CANCELADA', sincronizado_em = NULL WHERE rascunho_id = ?",
             (rascunho_id,),
         )
         conn.commit()
