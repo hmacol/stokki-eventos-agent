@@ -102,7 +102,13 @@ def cadastrar_motorista(config: dict, dados: dict) -> dict:
     if not caminho_planilha.exists():
         raise ValueError(f"Planilha de motoristas não encontrada em {caminho_planilha}.")
 
-    df = pd.read_excel(caminho_planilha)
+    # dtype=str no CPF -- sem isso o pandas infere a coluna como número e
+    # PERDE zero à esquerda de CPF (mesmo achado de
+    # regras/preferencias_motoristas.py::_carregar_excel); aqui importa
+    # ainda mais porque esta função reescreve a planilha inteira (df ==
+    # todo mundo, não só a linha nova), corrompendo CPF de quem já
+    # estava cadastrado a cada novo motorista registrado.
+    df = pd.read_excel(caminho_planilha, dtype={"CPF_MOTORISTA": str})
     colunas_originais = list(df.columns)
 
     if agent_id in _agent_ids_cadastrados(caminho_planilha):
