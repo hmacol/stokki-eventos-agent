@@ -54,7 +54,10 @@ from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 # quem não tiver esses arquivos. Importados sob demanda, só nas 3 funções
 # que realmente usam o marketplace (buscar_dados_planejamento,
 # publicar_oferta_rascunho, despublicar_oferta_rascunho).
-from alocacao_motoristas import selecionar_motorista_equitativo, listar_motoristas_elegiveis
+# listar_motoristas_elegiveis (marketplace, Hugo 22/08) importado sob
+# demanda dentro de publicar_oferta_rascunho -- mesmo motivo do
+# ofertas_rota/resumo_oferta acima, ainda não deployado.
+from alocacao_motoristas import selecionar_motorista_equitativo
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao
 
@@ -918,6 +921,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     """
     from regras import ofertas_rota
     from regras.resumo_oferta import montar_resumo as montar_resumo_oferta
+    from alocacao_motoristas import listar_motoristas_elegiveis
 
     rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
     if not rascunho:
