@@ -42,7 +42,7 @@ import requests
 import yaml
 
 from regras import confirmacao_rotas, ofertas_rota
-from rascunhos_rota import aplicar_escolha_motorista
+from rascunhos_rota import aplicar_escolha_motorista, trocar_motorista, buscar_rascunho
 
 
 def _carregar_config() -> dict:
@@ -130,6 +130,65 @@ def _sincronizar_ofertas_escolhidas(url_base: str, sync_secret: str):
     )
 
 
+def _reconciliar_escolhas_revertidas(url_base: str, sync_secret: str):
+    """Marketplace de rotas -- achado real 23/08 testando com o Hugo:
+    motorista escolhe, o pull acima já aplica (rascunho ganha o agent_id
+    dele), e DEPOIS o motorista desiste pela própria tela pública
+    (/escolher, botão "Cancelar escolha") -- a VPS volta a oferta pra
+    ABERTA, mas nada nunca reconsulta essa oferta específica de novo
+    (_sincronizar_ofertas_escolhidas só pergunta "quem ESTÁ escolhida
+    agora", nunca "essa que eu já apliquei ainda está?"). Resultado: o
+    rascunho local continua mostrando o motorista que desistiu, E a
+    rota reaparece disponível pra outro motorista escolher na VPS --
+    dois motoristas podiam achar que a rota é deles, sem o painel saber
+    de nenhum dos dois.
+
+    Consulta pontualmente (GET /api/sync/ofertas/status) só as ofertas
+    que o lado local marcou como aplicadas -- conjunto pequeno, não o
+    pull completo de sempre."""
+    aplicadas = ofertas_rota.listar_aplicadas()
+    if not aplicadas:
+        return
+
+    ids = [str(a["rascunho_id"]) for a in aplicadas]
+    try:
+        resp = requests.get(
+            f"{url_base}/api/sync/ofertas/status",
+            params={"ids": ",".join(ids)},
+            headers={"X-Sync-Secret": sync_secret},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao consultar status atual das ofertas aplicadas na VPS: {exc}")
+        return
+
+    status_atual = {linha["rascunho_id"]: linha for linha in resp.json().get("ofertas", [])}
+    revertidas = 0
+    for aplicada in aplicadas:
+        rascunho_id = aplicada["rascunho_id"]
+        atual = status_atual.get(rascunho_id)
+        # status != 'ESCOLHIDA' (motorista cancelou, ou o rascunho nem
+        # existe mais lá) conta como revertida; se ainda ESCOLHIDA mas
+        # por um agent_id DIFERENTE do que aplicamos, também -- alguém
+        # cancelou e outro motorista já pegou no lugar dele.
+        if atual and atual["status"] == "ESCOLHIDA" and atual["escolhido_por"] == aplicada["escolhido_por"]:
+            continue
+
+        rascunho = buscar_rascunho(rascunho_id)
+        if rascunho and rascunho.get("agent_id") == aplicada["escolhido_por"]:
+            trocar_motorista(rascunho_id, None, None, None)
+            logger.warning(
+                f"Rascunho {rascunho_id} ({rascunho['nome']}): motorista {aplicada['escolhido_por']} "
+                f"desistiu da escolha depois de já aplicada -- desalocado, precisa de nova decisão."
+            )
+        ofertas_rota.marcar_revertida(rascunho_id)
+        revertidas += 1
+
+    if revertidas:
+        logger.info(f"{revertidas} escolha(s) revertida(s) pelo motorista reconciliada(s).")
+
+
 def main():
     config = _carregar_config().get("confirmacao_rotas", {})
     url_base = (config.get("url_base") or "").rstrip("/")
@@ -140,6 +199,7 @@ def main():
 
     _sincronizar_confirmacoes(url_base, sync_secret)
     _sincronizar_ofertas_escolhidas(url_base, sync_secret)
+    _reconciliar_escolhas_revertidas(url_base, sync_secret)
 
 
 if __name__ == "__main__":

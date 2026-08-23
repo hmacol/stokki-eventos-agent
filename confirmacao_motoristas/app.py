@@ -528,5 +528,36 @@ def api_sync_ofertas_escolhidas():
     return jsonify({"ofertas": [dict(linha) for linha in linhas]})
 
 
+@app.route("/api/sync/ofertas/status", methods=["GET"])
+@_exige_segredo_sync
+def api_sync_ofertas_status():
+    """Status ATUAL de cada rascunho_id pedido (Hugo, 23/08: motorista
+    cancelando a própria escolha DEPOIS que o lado local já aplicou --
+    ver _cancelar_escolha). O pull normal (api_sync_ofertas_escolhidas)
+    só avisa quem ESTÁ ESCOLHIDA agora; não existe jeito de notar que
+    uma que JÁ foi aplicada localmente voltou pra ABERTA sem perguntar
+    puntualmente por ela. `ids` é uma lista de rascunho_id separada por
+    vírgula -- devolve só os que existem aqui (rascunho nunca publicado
+    nesta VPS simplesmente não aparece na resposta)."""
+    ids_brutos = request.args.get("ids", "")
+    try:
+        ids = [int(i) for i in ids_brutos.split(",") if i.strip()]
+    except ValueError:
+        return jsonify({"erro": "ids inválido -- esperado lista de inteiros separada por vírgula."}), 400
+    if not ids:
+        return jsonify({"ofertas": []})
+
+    conn = _conectar()
+    try:
+        marcadores = ",".join("?" * len(ids))
+        linhas = conn.execute(
+            f"SELECT rascunho_id, status, escolhido_por FROM ofertas WHERE rascunho_id IN ({marcadores})",
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({"ofertas": [dict(linha) for linha in linhas]})
+
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 8090)), debug=False)

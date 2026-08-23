@@ -199,6 +199,43 @@ def marcar_aplicada(rascunho_id: int) -> None:
         conn.close()
 
 
+def listar_aplicadas() -> list[dict]:
+    """Ofertas ESCOLHIDA e JÁ aplicadas em rascunhos_rota (Hugo, 23/08)
+    -- candidatas a checar contra a VPS se o motorista desistiu DEPOIS
+    da aplicação (ver GET /api/sync/ofertas/status em
+    confirmacao_motoristas/app.py e roteirizacao/
+    sincronizar_respostas_confirmacao.py::_reconciliar_escolhas_revertidas).
+    Sem isso, uma escolha desfeita pelo próprio motorista na página
+    pública nunca chega de volta pra cá -- o rascunho continuaria
+    mostrando o motorista errado, e a rota reaparece "disponível" pra
+    outro motorista escolher sem o painel saber."""
+    conn = _conectar()
+    try:
+        linhas = conn.execute(
+            "SELECT * FROM ofertas_rota WHERE status = 'ESCOLHIDA' AND aplicado_em IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def marcar_revertida(rascunho_id: int) -> None:
+    """A escolha foi desfeita na VPS depois de já aplicada aqui (ver
+    listar_aplicadas) -- status vira CANCELADA pra não ser reprocessada
+    de novo por engano (nem por listar_escolhidas_nao_aplicadas, que já
+    exige aplicado_em IS NULL, nem por esta mesma checagem, que exige
+    status='ESCOLHIDA')."""
+    conn = _conectar()
+    try:
+        conn.execute(
+            "UPDATE ofertas_rota SET status = 'CANCELADA' WHERE rascunho_id = ?",
+            (rascunho_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def buscar_por_rascunho(rascunho_id: int) -> dict | None:
     conn = _conectar()
     try:
