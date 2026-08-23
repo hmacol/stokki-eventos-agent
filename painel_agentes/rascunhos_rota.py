@@ -114,6 +114,14 @@ def _conectar() -> sqlite3.Connection:
     if "destinatario_nome" not in colunas:
         conn.execute("ALTER TABLE rascunhos_parada ADD COLUMN destinatario_nome TEXT")
 
+    # Migração pra banco criado antes de 22/08 (horário padrão de
+    # atendimento do destinatário, editável pelo menu de contexto da
+    # tela de Planejamento -- ver regras/complexidade_entrega.py).
+    if "horario_atendimento_inicio" not in colunas:
+        conn.execute("ALTER TABLE rascunhos_parada ADD COLUMN horario_atendimento_inicio TEXT")
+    if "horario_atendimento_fim" not in colunas:
+        conn.execute("ALTER TABLE rascunhos_parada ADD COLUMN horario_atendimento_fim TEXT")
+
     # Migração pra banco criado antes de 15/08 (tipo de veículo grande,
     # ver regras/tipo_veiculo.py).
     colunas_rota = {row["name"] for row in conn.execute("PRAGMA table_info(rascunhos_rota)")}
@@ -174,10 +182,11 @@ def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict
     """Extrai de um dict de serviço (formato bruto da VUUPT, já com
     '_nivel_dificuldade' injetado por criar_rotas_diarias.py) os campos
     gravados em rascunhos_parada."""
-    from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade
+    from roteirizacao_dados import extrair_volume_caixas, extrair_nivel_dificuldade, extrair_horario_atendimento
 
     sender_id = servico.get("sender_id")
     lat, lng = servico.get("latitude"), servico.get("longitude")
+    horario_inicio, horario_fim = extrair_horario_atendimento(servico)
     return {
         "service_id": servico["id"],
         "codigo": servico.get("code", ""),
@@ -190,6 +199,8 @@ def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict
         "destinatario_nome": (servico.get("customer") or {}).get("name") or "",
         "nivel_dificuldade": extrair_nivel_dificuldade(servico),
         "volume_caixas": extrair_volume_caixas(servico),
+        "horario_atendimento_inicio": horario_inicio,
+        "horario_atendimento_fim": horario_fim,
     }
 
 
@@ -238,13 +249,15 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                     INSERT INTO rascunhos_parada (
                         rascunho_id, ordem, service_id, codigo, titulo, endereco,
                         latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                        nivel_dificuldade, volume_caixas
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        nivel_dificuldade, volume_caixas,
+                        horario_atendimento_inicio, horario_atendimento_fim
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
                     parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
                     parada["remetente_nome"], parada["destinatario_nome"],
                     parada["nivel_dificuldade"], parada["volume_caixas"],
+                    parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
                 ))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
@@ -390,13 +403,15 @@ def mover_parada(service_id: int, rascunho_origem_id: int, rascunho_destino_id: 
             INSERT INTO rascunhos_parada (
                 rascunho_id, ordem, service_id, codigo, titulo, endereco,
                 latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                nivel_dificuldade, volume_caixas
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                nivel_dificuldade, volume_caixas,
+                horario_atendimento_inicio, horario_atendimento_fim
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rascunho_destino_id, nova_ordem, parada["service_id"], parada["codigo"], parada["titulo"],
             parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
             parada["remetente_nome"], parada["destinatario_nome"],
             parada["nivel_dificuldade"], parada["volume_caixas"],
+            parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
         ))
         _tocar(conn, rascunho_origem_id)
         _tocar(conn, rascunho_destino_id)
@@ -435,6 +450,40 @@ def atualizar_endereco_parada(rascunho_id: int, service_id: int, endereco: str,
             return False
         _tocar(conn, rascunho_id)
         _recalcular_km_silencioso(conn, rascunho_id)
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def atualizar_nivel_horario_parada(rascunho_id: int, service_id: int, nivel: int,
+                                    horario_inicio: str, horario_fim: str) -> bool:
+    """Atualiza o nível de dificuldade/horário de atendimento cacheados de
+    uma parada já em rascunho -- opção "Nível / horário de atendimento"
+    do menu de contexto (Hugo, 22/08), mesmo padrão de
+    atualizar_endereco_parada. O ajuste "de verdade" (que vale pra
+    qualquer pedido futuro do mesmo cliente) é gravado à parte por
+    regras.complexidade_entrega.definir_ajuste_manual; esta função só
+    mantém a cópia local coerente pra quem já está numa rota não ficar
+    mostrando o valor antigo até o próximo recarregamento.
+
+    Retorna True se achou e atualizou a parada, False se ela não está
+    (mais) nesse rascunho."""
+    conn = _conectar()
+    try:
+        cursor = conn.execute(
+            "UPDATE rascunhos_parada SET nivel_dificuldade = ?, "
+            "horario_atendimento_inicio = ?, horario_atendimento_fim = ? "
+            "WHERE rascunho_id = ? AND service_id = ?",
+            (nivel, horario_inicio, horario_fim, rascunho_id, service_id),
+        )
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return False
+        _tocar(conn, rascunho_id)
         conn.commit()
         return True
     except Exception:
@@ -550,13 +599,15 @@ def mover_paradas(itens: list[dict], rascunho_destino_id: int) -> int:
                 INSERT INTO rascunhos_parada (
                     rascunho_id, ordem, service_id, codigo, titulo, endereco,
                     latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    nivel_dificuldade, volume_caixas,
+                    horario_atendimento_inicio, horario_atendimento_fim
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rascunho_destino_id, prox + movidas, parada["service_id"], parada["codigo"], parada["titulo"],
                 parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
                 parada["remetente_nome"], parada["destinatario_nome"],
                 parada["nivel_dificuldade"], parada["volume_caixas"],
+                parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
             ))
             ids_destino.add(service_id)
             origens_tocadas.add(origem_id)
@@ -683,7 +734,8 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     """`parada` já vem no formato processado (mesmas chaves de
     _parada_de_servico/planejamento_rotas._servico_para_pool: service_id,
     codigo, titulo, endereco, latitude, longitude, sender_id,
-    remetente_nome, nivel_dificuldade, volume_caixas) -- o endpoint da
+    remetente_nome, nivel_dificuldade, volume_caixas,
+    horario_atendimento_inicio, horario_atendimento_fim) -- o endpoint da
     tela repassa o item do pool tal como já foi carregado no GET
     /planejamento, sem precisar bater na VUUPT de novo."""
     conn = _conectar()
@@ -698,13 +750,15 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
             INSERT INTO rascunhos_parada (
                 rascunho_id, ordem, service_id, codigo, titulo, endereco,
                 latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                nivel_dificuldade, volume_caixas
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                nivel_dificuldade, volume_caixas,
+                horario_atendimento_inicio, horario_atendimento_fim
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
             parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
             parada["remetente_nome"], parada.get("destinatario_nome", ""),
             parada["nivel_dificuldade"], parada["volume_caixas"],
+            parada.get("horario_atendimento_inicio", "00:00"), parada.get("horario_atendimento_fim", "23:59"),
         ))
         _tocar(conn, rascunho_id)
         _recalcular_km_silencioso(conn, rascunho_id)
@@ -908,13 +962,15 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
                 INSERT INTO rascunhos_parada (
                     rascunho_id, ordem, service_id, codigo, titulo, endereco,
                     latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    nivel_dificuldade, volume_caixas,
+                    horario_atendimento_inicio, horario_atendimento_fim
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
                 parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
                 parada["remetente_nome"], parada.get("destinatario_nome", ""),
                 parada["nivel_dificuldade"], parada["volume_caixas"],
+                parada.get("horario_atendimento_inicio", "00:00"), parada.get("horario_atendimento_fim", "23:59"),
             ))
         _recalcular_km_silencioso(conn, rascunho_id)
         conn.commit()
@@ -1001,13 +1057,15 @@ def duplicar_rascunho(rascunho_id: int) -> int:
                 INSERT INTO rascunhos_parada (
                     rascunho_id, ordem, service_id, codigo, titulo, endereco,
                     latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    nivel_dificuldade, volume_caixas,
+                    horario_atendimento_inicio, horario_atendimento_fim
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 novo_id, p["ordem"], p["service_id"], p["codigo"], p["titulo"],
                 p["endereco"], p["latitude"], p["longitude"], p["sender_id"],
                 p["remetente_nome"], p["destinatario_nome"],
                 p["nivel_dificuldade"], p["volume_caixas"],
+                p.get("horario_atendimento_inicio", "00:00"), p.get("horario_atendimento_fim", "23:59"),
             ))
         conn.commit()
         logger.info(f"Rascunho {rascunho_id} duplicado -> {novo_id} ('{nome_copia}').")

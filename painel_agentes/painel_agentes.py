@@ -64,6 +64,7 @@ from planejamento_rotas import (
     carregar_documentos_do_rascunho, roteirizar_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
+    editar_nivel_horario_pedido,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
@@ -1445,6 +1446,31 @@ def api_editar_endereco():
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
     resultado = editar_endereco_pedido(service_id, endereco, rascunho_id)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/planejamento/editar-nivel-horario", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_editar_nivel_horario():
+    """Corrige nível de dificuldade e horário de atendimento (padrão de
+    recebimento) do destinatário -- opção "Nível / horário de
+    atendimento" do menu de contexto (ver
+    planejamento_rotas.editar_nivel_horario_pedido)."""
+    body = request.get_json(force=True)
+    try:
+        service_id = int(body["service_id"])
+        nivel = int(body["nivel"])
+        horario_inicio = body["horario_inicio"]
+        horario_fim = body["horario_fim"]
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    rascunho_id = body.get("rascunho_id")
+    rascunho_id = int(rascunho_id) if rascunho_id is not None else None
+
+    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id)
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})

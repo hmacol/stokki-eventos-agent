@@ -1090,6 +1090,40 @@
   .modal-editar-endereco .acoes button.confirmar:hover { background: #26C49A; }
   .modal-editar-endereco .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-editar-endereco .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Modal "Nível / horário de atendimento" do menu de contexto (Hugo,
+     22/08) -- mesmo esqueleto visual do modal de reagendamento; corrige
+     uma característica do CLIENTE (destinatário), não da VUUPT. */
+  .modal-overlay-nivel-horario {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-nivel-horario.aberto { display: flex; }
+  .modal-nivel-horario {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  .modal-nivel-horario h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-nivel-horario .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-nivel-horario .campo-reagendar { margin-bottom: 10px; }
+  .modal-nivel-horario .campo-reagendar > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-nivel-horario .linha-horarios { display: flex; align-items: center; gap: 8px; }
+  .modal-nivel-horario .linha-horarios label { font-size: 12px; font-weight: 400; margin: 0; }
+  .modal-nivel-horario select, .modal-nivel-horario input[type="time"] {
+    padding: 5px 8px; min-height: 30px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; background: var(--fundo); color: var(--texto);
+  }
+  .modal-nivel-horario select { width: 100%; }
+  .modal-nivel-horario .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-nivel-horario .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-nivel-horario .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-nivel-horario .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-nivel-horario .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-nivel-horario .acoes button.cancelar:hover { background: var(--fundo); }
+
   .modal-overlay-filtros-pool {
     display: none;
     position: fixed; inset: 0; z-index: 10000;
@@ -1111,6 +1145,34 @@
   .modal-filtros-pool .acoes button.confirmar:hover { background: #26C49A; }
   .modal-filtros-pool .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-filtros-pool .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Fase 0 do roadmap de roteirização (Hugo, 22/08): resumo de
+     verdade antes de "Confirmar e enviar" -- mesmo padrão visual do
+     modal de filtros do pool acima. */
+  .modal-overlay-confirmar-envio {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-confirmar-envio.aberto { display: flex; }
+  .modal-confirmar-envio {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 420px; max-width: calc(100vw - 32px);
+    max-height: 80vh; overflow-y: auto;
+  }
+  .modal-confirmar-envio h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-confirmar-envio .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-confirmar-envio .resumo-linha { display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--borda); }
+  .modal-confirmar-envio .resumo-linha.alerta { color: var(--erro); font-weight: 600; }
+  .modal-confirmar-envio ul.lista-rotas-alerta { font-size: 11.5px; color: var(--texto-suave); margin: 6px 0 0; padding-left: 18px; }
+  .modal-confirmar-envio .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-confirmar-envio .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-confirmar-envio .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .modal-confirmar-envio .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-confirmar-envio .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-confirmar-envio .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -1285,6 +1347,35 @@
   </div>
 </div>
 
+<div class="modal-overlay-nivel-horario" id="modal-nivel-horario">
+  <div class="modal-nivel-horario" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-nivel-horario">
+    <h2 id="titulo-modal-nivel-horario">Nível / horário de atendimento</h2>
+    <p class="subtitulo"><span id="nivel-horario-prefixo">Pedido</span> <strong id="nivel-horario-codigo"></strong> — corrige uma característica do CLIENTE (vale pra todos os pedidos dele, não só este).</p>
+    <div class="campo-reagendar">
+      <label for="nivel-horario-nivel">Nível de dificuldade</label>
+      <select id="nivel-horario-nivel">
+        <option value="1">1 — mais fácil</option>
+        <option value="2">2</option>
+        <option value="3">3 — orçamento de 1,5h/parada</option>
+        <option value="4">4 — rota exclusiva</option>
+      </select>
+    </div>
+    <div class="campo-reagendar">
+      <label>Horário de atendimento (recebimento)</label>
+      <div class="linha-horarios">
+        <label for="nivel-horario-hora-inicio">Das</label>
+        <input type="time" id="nivel-horario-hora-inicio">
+        <label for="nivel-horario-hora-fim">até</label>
+        <input type="time" id="nivel-horario-hora-fim">
+      </div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-nivel-horario">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-nivel-horario">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-filtros-pool" id="modal-filtros-pool">
   <div class="modal-filtros-pool" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-filtros-pool">
     <h2 id="titulo-modal-filtros-pool">Filtros do pool</h2>
@@ -1303,6 +1394,18 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-fechar-filtros-pool">Fechar</button>
       <button type="button" class="confirmar" id="botao-aplicar-filtros-pool">Aplicar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-confirmar-envio" id="modal-confirmar-envio">
+  <div class="modal-confirmar-envio" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-confirmar-envio">
+    <h2 id="titulo-modal-confirmar-envio">Confirmar e enviar pra VUUPT</h2>
+    <p class="subtitulo">Depois de enviada, a rota não pode mais ser editada aqui.</p>
+    <div id="resumo-confirmar-envio"></div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-confirmar-envio">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-confirmar-envio">Confirmar e enviar</button>
     </div>
   </div>
 </div>
@@ -1590,6 +1693,7 @@
   let map;
   const coresPorRascunho = {};
   const gruposMapa = {};  // rascunho_id -> { renderer, markers: [] }
+  const kmReaisPorRascunho = {};  // rascunho_id -> km real de condução (Directions), preenchido assíncrono por redesenharRota (Fase 0, Hugo 22/08)
   let infoWindow;
 
   function escaparHtml(texto) {
@@ -1726,6 +1830,11 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
+    // 22/08 -- editável pelo menu de contexto, ver abrirModalNivelHorario)
+    li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
+    li.dataset.horarioInicio = p.horario_atendimento_inicio || "";
+    li.dataset.horarioFim = p.horario_atendimento_fim || "";
     // urgência do agendamento pro CSS do modo "só número" (selo do chip:
     // vermelho = atrasado, azul = agendado pra data em edição, cinza =
     // agendado pra depois -- Hugo, 14/08)
@@ -1754,9 +1863,22 @@
   }
 
   function metricasTexto(rascunho) {
-    // só o km estimado -- paradas e caixas moram nas barras de
-    // capacidade (capacidadeHtml), já comparadas com as travas
-    return rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km estimado` : "km ?";
+    // km estimado (haversine) -- paradas e caixas moram nas barras de
+    // capacidade (capacidadeHtml), já comparadas com as travas. Km
+    // REAL (condução, Google Directions) é preenchido depois,
+    // assíncrono, por redesenharRota/atualizarKmRealNoCard -- pode
+    // chegar alguns instantes depois do card já estar na tela (Fase
+    // 0, Hugo 22/08); some silenciosamente se a rota não estiver
+    // visível no mapa (toggle desligado), sem erro.
+    const haversine = rascunho.km_estimado != null ? `${rascunho.km_estimado.toFixed(1)} km estimado` : "km ?";
+    const kmReal = kmReaisPorRascunho[rascunho.id];
+    const realTexto = kmReal != null ? ` · ${kmReal.toFixed(1)} km real` : "";
+    return `<span class="km-haversine">${haversine}</span><span class="km-real" id="km-real-${rascunho.id}">${realTexto}</span>`;
+  }
+
+  function atualizarKmRealNoCard(rascunhoId, kmReal) {
+    const el = document.getElementById(`km-real-${rascunhoId}`);
+    if (el) el.textContent = ` · ${kmReal.toFixed(1)} km real`;
   }
 
   function barraCapacidadeHtml(rotulo, valor, maximo) {
@@ -1989,6 +2111,9 @@
       endereco: texto(".endereco"),
       caixas: Number(li.dataset.caixas || 1),
       agendamento: texto(".agendamento"),
+      nivel: li.dataset.nivelDificuldade || "",
+      horarioInicio: li.dataset.horarioInicio || "",
+      horarioFim: li.dataset.horarioFim || "",
     };
   }
 
@@ -2000,6 +2125,8 @@
     if (d.endereco) partes.push(`<div class="endereco">${escaparHtml(d.endereco)}</div>`);
     const extras = [`${d.caixas} caixa${d.caixas === 1 ? "" : "s"}`];
     if (d.agendamento) extras.push(d.agendamento);
+    if (d.nivel) extras.push(`nível ${d.nivel}`);
+    if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
   }
@@ -2014,6 +2141,8 @@
     if (d.endereco) linhas.push(d.endereco);
     const extras = [`${d.caixas} caixa${d.caixas === 1 ? "" : "s"}`];
     if (d.agendamento) extras.push(d.agendamento);
+    if (d.nivel) extras.push(`nível ${d.nivel}`);
+    if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     linhas.push(extras.join(" — "));
     return linhas.join("\n");
   }
@@ -2159,6 +2288,12 @@
     }, (result, status) => {
       if (status === "OK" && gruposMapa[rascunhoId]) {
         gruposMapa[rascunhoId].renderer.setDirections(result);
+        // km REAL de condução (Fase 0, Hugo 22/08) -- mesma resposta
+        // já usada pra desenhar a polyline, só soma as legs em vez de
+        // descartar; zero chamadas novas à API.
+        const kmReal = (result.routes[0].legs || []).reduce((soma, leg) => soma + (leg.distance ? leg.distance.value : 0), 0) / 1000;
+        kmReaisPorRascunho[rascunhoId] = kmReal;
+        atualizarKmRealNoCard(rascunhoId, kmReal);
       }
     });
   }
@@ -3474,12 +3609,47 @@
     }
   }
 
-  async function confirmarEnvio(rascunhoIds, botaoOrigem) {
+  // Fase 0 do roadmap de roteirização (Hugo, 22/08): "Confirmar e
+  // enviar" ganhou um modal com resumo de verdade em vez do confirm()
+  // de texto fixo de antes -- mesmo padrão de botaoRoteirizarPendente
+  // (listeners fixos, registrados 1x no DOMContentLoaded, não
+  // empilham a cada clique).
+  let confirmarEnvioPendente = null;
+
+  function montarResumoConfirmarEnvio(rascunhoIds) {
+    const alvo = RASCUNHOS.filter(r => rascunhoIds.includes(r.id));
+    const comBadge = alvo.filter(r => (r.badges || []).length > 0);
+    const isoladas = alvo.filter(r => (r.badges || []).some(b => b.startsWith("rota isolada")));
+    const kmTotal = alvo.reduce((soma, r) => soma + (r.km_estimado || 0), 0);
+    let html = `
+      <div class="resumo-linha"><span>Rota(s) a enviar</span><span>${alvo.length}</span></div>
+      <div class="resumo-linha${comBadge.length ? " alerta" : ""}"><span>Com aviso ativo (badge)</span><span>${comBadge.length}</span></div>
+      <div class="resumo-linha${isoladas.length ? " alerta" : ""}"><span>Rota(s) isolada(s) (&le;2 paradas)</span><span>${isoladas.length}</span></div>
+      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>`;
+    if (comBadge.length) {
+      html += `<ul class="lista-rotas-alerta">${comBadge.map(r => `<li>${escaparHtml(r.nome)}: ${r.badges.map(escaparHtml).join("; ")}</li>`).join("")}</ul>`;
+    }
+    return html;
+  }
+
+  function abrirModalConfirmarEnvio(rascunhoIds, botaoOrigem) {
     if (!rascunhoIds.length) return;
-    const confirmMsg = rascunhoIds.length === 1
-      ? "Confirmar e enviar essa rota pra VUUPT? Depois disso ela não pode mais ser editada aqui."
-      : `Confirmar e enviar ${rascunhoIds.length} rota(s) pra VUUPT? Depois disso elas não podem mais ser editadas aqui.`;
-    if (!confirm(confirmMsg)) return;
+    const modal = document.getElementById("modal-confirmar-envio");
+    if (modal.classList.contains("aberto")) return;
+    document.getElementById("resumo-confirmar-envio").innerHTML = montarResumoConfirmarEnvio(rascunhoIds);
+    confirmarEnvioPendente = { rascunhoIds, botaoOrigem };
+    modal.classList.add("aberto");
+  }
+
+  async function confirmarEnvio(rascunhoIds, botaoOrigem) {
+    abrirModalConfirmarEnvio(rascunhoIds, botaoOrigem);
+  }
+
+  async function executarConfirmarEnvio() {
+    if (!confirmarEnvioPendente) return;
+    const { rascunhoIds, botaoOrigem } = confirmarEnvioPendente;
+    document.getElementById("modal-confirmar-envio").classList.remove("aberto");
+    confirmarEnvioPendente = null;
     if (botaoOrigem) { botaoOrigem.disabled = true; botaoOrigem.textContent = "Enviando..."; }
     try {
       const resp = await postJSON("/api/planejamento/confirmar-envio", { rascunho_ids: rascunhoIds });
@@ -3694,6 +3864,53 @@
     }
   }
 
+  // pedido tendo nível/horário do CLIENTE editados pelo modal -- mesmo
+  // padrão de editarEnderecoPendente. Sem versão em lote: diferente de
+  // endereço/agendamento, "mesmo nível pra vários pedidos DE CLIENTES
+  // DIFERENTES" não faz sentido (Hugo, 22/08).
+  let nivelHorarioPendente = null;
+
+  // "Nível / horário de atendimento" do menu de contexto (Hugo, 22/08):
+  // abre o modal com os valores EFETIVOS atuais já preenchidos (ajuste
+  // manual > planilha > padrão -- ver planejamento_rotas._servico_para_
+  // pool/_parada_de_servico), tanto pra pedido do pool quanto já numa rota.
+  function abrirModalNivelHorario(li, serviceId, rascunhoId) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("nivel-horario-prefixo").textContent = "Pedido";
+    document.getElementById("nivel-horario-codigo").textContent = codigo;
+    document.getElementById("nivel-horario-nivel").value = li.dataset.nivelDificuldade || "1";
+    document.getElementById("nivel-horario-hora-inicio").value = li.dataset.horarioInicio || "00:00";
+    document.getElementById("nivel-horario-hora-fim").value = li.dataset.horarioFim || "23:59";
+    nivelHorarioPendente = { serviceId, rascunhoId };
+    document.getElementById("modal-nivel-horario").classList.add("aberto");
+  }
+
+  async function confirmarNivelHorario(botao) {
+    const pendente = nivelHorarioPendente;
+    if (!pendente) return;
+    const nivel = Number(document.getElementById("nivel-horario-nivel").value);
+    const horaInicio = document.getElementById("nivel-horario-hora-inicio").value;
+    const horaFim = document.getElementById("nivel-horario-hora-fim").value;
+    if (!horaInicio || !horaFim) { alert("Preencha a janela de horário."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      await postJSON("/api/planejamento/editar-nivel-horario", {
+        service_id: pendente.serviceId, nivel, horario_inicio: horaInicio, horario_fim: horaFim,
+        rascunho_id: pendente.rascunhoId,
+      });
+      document.getElementById("modal-nivel-horario").classList.remove("aberto");
+      // recarrega -- a correção vale pro cliente inteiro (mesmo CNPJ/CPF),
+      // pode afetar outros cards visíveis do mesmo destinatário também
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao salvar nível/horário: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // devolve uma parada de rota pro pool sem cancelar na VUUPT -- mesmo
   // endpoint e mesma sequência de atualização do drag-and-drop pro pool
   // (onDragEnd, toId === "pool"), só que disparado pelo menu de contexto
@@ -3786,6 +4003,9 @@
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Editar endereço", acao: () => abrirModalEditarEndereco(li, serviceId, rascunhoId) });
+    }
+    if (PODE_EDITAR) {
+      itens.push({ rotulo: "Nível / horário de atendimento", acao: () => abrirModalNivelHorario(li, serviceId, rascunhoId) });
     }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
@@ -4103,6 +4323,11 @@
       botaoRoteirizarPendente = null;
       if (botao) roteirizarSelecionados(botao, escolhido === "automatico" ? null : escolhido, maxParadasPorRota);
     });
+    document.getElementById("botao-cancelar-confirmar-envio").addEventListener("click", () => {
+      document.getElementById("modal-confirmar-envio").classList.remove("aberto");
+      confirmarEnvioPendente = null;
+    });
+    document.getElementById("botao-confirmar-confirmar-envio").addEventListener("click", executarConfirmarEnvio);
 
     // modo de reordenação (arrastar x digitar posição) -- persistido,
     // e a troca re-renderiza os números de todas as rotas na hora
@@ -4290,6 +4515,11 @@
       editarEnderecoPendente = null;
     });
     document.getElementById("botao-confirmar-editar-endereco").addEventListener("click", (e) => confirmarEditarEndereco(e.target));
+    document.getElementById("botao-cancelar-nivel-horario").addEventListener("click", () => {
+      document.getElementById("modal-nivel-horario").classList.remove("aberto");
+      nivelHorarioPendente = null;
+    });
+    document.getElementById("botao-confirmar-nivel-horario").addEventListener("click", (e) => confirmarNivelHorario(e.target));
     document.getElementById("botao-enviar-todas").addEventListener("click", (e) => {
       const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
       confirmarEnvio(idsPendentes, e.target);
