@@ -39,12 +39,16 @@ def _servico_fake(parada: dict) -> dict:
 
 
 def _bairro_cidade(endereco: str) -> tuple[str | None, str | None]:
-    """Best-effort a partir do endereço já sem CEP/Brasil (formato
-    típico Vuupt: 'Rua X, 123, Bairro, Cidade - UF') -- só para exibição
-    resumida ao motorista, nunca usado pra decisão de negócio (mesmo
-    espírito de gerar_pdf_romaneios._endereco_entrega, que já limpa o
-    mesmo campo pro romaneio)."""
-    partes = [p.strip() for p in (endereco or "").split(",") if p.strip()]
+    """Best-effort a partir do endereço bruto da Vuupt ('Rua X, 123,
+    Bairro, Cidade - UF, CEP, Brasil') -- só para exibição resumida ao
+    motorista, nunca usado pra decisão de negócio. Remove o rabo ',
+    CEP, Brasil' antes de separar (mesmas 2 regras de
+    gerar_pdf_romaneios._endereco_entrega -- achado 22/08 em teste
+    real: sem isso, 'Cidade - UF' nunca é o último segmento, e o
+    CEP acaba virando "bairro" na tela)."""
+    endereco = re.sub(r",?\s*Brasil\s*$", "", endereco or "", flags=re.IGNORECASE)
+    endereco = re.sub(r",?\s*\d{5}-?\d{3}\s*$", "", endereco)
+    partes = [p.strip() for p in endereco.split(",") if p.strip()]
     if not partes:
         return None, None
     match = _RE_UF_FINAL.match(partes[-1])
