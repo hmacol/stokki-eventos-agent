@@ -676,6 +676,20 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     ]
     disponibilidade_ajustes = carregar_ajustes_dia(data_alvo)
 
+    # Resumo do marketplace (Hugo, 23/08): total publicado + por região,
+    # pro topo da tela -- computado aqui (não em JS) porque toda ação de
+    # publicar/despublicar já recarrega a página inteira (location.reload
+    # em planejamento_rotas.html), então o número sempre vem fresco.
+    ofertadas = [r for r in rascunhos if r["oferta"]]
+    contagem_regiao: dict[str, int] = {}
+    for r in ofertadas:
+        regiao = r["oferta"]["resumo"].get("regiao") or "Região não identificada"
+        contagem_regiao[regiao] = contagem_regiao.get(regiao, 0) + 1
+    resumo_ofertas = {
+        "total": len(ofertadas),
+        "por_regiao": sorted(contagem_regiao.items(), key=lambda item: (-item[1], item[0])),
+    }
+
     return {
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
         "data_alvo_iso": data_alvo.isoformat(),
@@ -685,6 +699,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
+        "resumo_ofertas": resumo_ofertas,
         "disponibilidade_ajustes": disponibilidade_ajustes,
         "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,
         # Limites das travas pro card de rota mostrar a ocupação como
@@ -1026,6 +1041,29 @@ def despublicar_oferta_rascunho(rascunho_id: int) -> dict:
 
     rascunhos_rota.despublicar_oferta(rascunho_id)
     return {"ok": True}
+
+
+def despublicar_ofertas_em_lote(data_alvo: date) -> dict:
+    """Botão "Cancelar publicações" (Hugo, 23/08): despublica de uma vez
+    todo rascunho OFERTADA do lote ativo da data -- espelho de
+    publicar_ofertas_em_lote. Não mexe em quem já foi ESCOLHIDA (mesma
+    trava de sempre, ver despublicar_oferta_rascunho/
+    regras.ofertas_rota.cancelar_oferta): só despublica quem ainda
+    está ABERTA -- se um motorista ganhou a corrida antes desse clique
+    chegar, a escolha dele prevalece."""
+    rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    despublicados: list[dict] = []
+    ja_escolhida: list[str] = []
+    for r in rascunhos:
+        if r["status"] != rascunhos_rota.STATUS_OFERTADA:
+            continue
+        resultado = despublicar_oferta_rascunho(r["id"])
+        if resultado["ok"]:
+            despublicados.append({"rascunho_id": r["id"], "nome": r["nome"]})
+        else:
+            ja_escolhida.append(r["nome"])
+
+    return {"despublicados": despublicados, "ja_escolhida": ja_escolhida}
 
 
 def salvar_disponibilidade_dia(data_alvo: date, ajustes_brutos: dict) -> dict:

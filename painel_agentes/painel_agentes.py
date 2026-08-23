@@ -66,7 +66,7 @@ from planejamento_rotas import (
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
-    publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho,
+    publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
@@ -1076,6 +1076,23 @@ def api_despublicar_oferta():
         return jsonify(resultado)
     push_ofertas_vps(_carregar_config().get("confirmacao_rotas", {}))
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
+
+
+@app.route("/api/planejamento/despublicar-ofertas-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_despublicar_ofertas_lote():
+    """Botão "Cancelar publicações" (Hugo, 23/08): despublica de uma vez
+    toda rota OFERTADA do lote ativo."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = despublicar_ofertas_em_lote(data_alvo)
+    push_ofertas_vps(_carregar_config().get("confirmacao_rotas", {}))
+    return jsonify({"ok": True, **resultado})
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas", methods=["POST"])

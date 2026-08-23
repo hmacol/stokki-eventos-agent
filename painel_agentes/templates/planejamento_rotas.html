@@ -61,6 +61,13 @@
   }
   .kpi-planejamento .kpi-rotulo { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
   .kpi-planejamento .kpi-valor { font-size: 22px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  /* Resumo do marketplace por região (Hugo, 23/08) -- linha de chips
+     logo abaixo da tira de KPI, só aparece com alguma rota publicada. */
+  .resumo-regioes-ofertas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--texto-suave); }
+  .resumo-regioes-ofertas .chip-regiao-oferta {
+    background: color-mix(in srgb, var(--acento) 10%, var(--superficie)); border: 1px solid var(--borda);
+    border-radius: 999px; padding: 2px 10px; font-weight: 600; color: var(--texto);
+  }
   /* .aviso agora vem do base.html (compartilhado entre telas). */
   /* 5 faixas: pool | divisor | rotas | divisor | mapa. As larguras das
      colunas são ajustáveis arrastando o divisor (o JS grava no
@@ -1210,7 +1217,20 @@
     {% if dados.resumo_agendados %}
     <div class="kpi-planejamento"><div class="kpi-rotulo">Agendados</div><div class="kpi-valor">{{ dados.resumo_agendados | sum(attribute='total_pedidos') }}</div></div>
     {% endif %}
+    {% if dados.resumo_ofertas.total %}
+    <div class="kpi-planejamento" title="Rotas publicadas no marketplace de escolha aberta, aguardando um motorista escolher">
+      <div class="kpi-rotulo">Publicadas</div><div class="kpi-valor">{{ dados.resumo_ofertas.total }}</div>
+    </div>
+    {% endif %}
   </div>
+  {% if dados.resumo_ofertas.total %}
+  <div class="resumo-regioes-ofertas" style="flex:1 1 100%;">
+    Por região:
+    {% for regiao, qtd in dados.resumo_ofertas.por_regiao %}
+    <span class="chip-regiao-oferta">{{ regiao }}: {{ qtd }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
 </form>
 
@@ -1622,6 +1642,7 @@
       <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
     </div>
     <button id="botao-publicar-ofertas-lote" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Publica de uma vez, pro marketplace de escolha aberta, toda rota ainda sem motorista -- avisa (Chatwoot/e-mail/texto) cada motorista elegível uma única vez, mesmo se ele for elegível pra mais de uma rota publicada agora">Publicar pendentes para motoristas</button>
+    <button id="botao-despublicar-ofertas-lote" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela de uma vez a publicação de toda rota ainda OFERTADA (aguardando escolha) -- não mexe em rota que já foi escolhida por algum motorista">Cancelar publicações</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
     <div style="display:flex;gap:8px;margin-bottom:12px;">
       <button id="botao-salvar-todas" type="button" class="botao" style="flex:1;" title="Baixa o romaneio em PDF de cada rota, um arquivo por vez -- pra mandar pelo WhatsApp">Salvar rotas em PDF</button>
@@ -3462,6 +3483,33 @@
     }
   }
 
+  async function despublicarOfertasLote(botao) {
+    if (!confirm("Cancelar a publicação de TODAS as rotas ainda aguardando escolha?")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Cancelando...";
+    try {
+      const resp = await postJSON("/api/planejamento/despublicar-ofertas-lote", { data_alvo: DATA_ALVO_ISO });
+      const linhas = [];
+      if (resp.despublicados && resp.despublicados.length) {
+        linhas.push(`${resp.despublicados.length} publicação(ões) cancelada(s):`);
+        resp.despublicados.forEach(p => linhas.push(`• ${p.nome}`));
+      } else {
+        linhas.push("Nenhuma rota estava publicada no momento.");
+      }
+      if (resp.ja_escolhida && resp.ja_escolhida.length) {
+        linhas.push(`Já tinham sido escolhidas por um motorista (mantidas): ${resp.ja_escolhida.join(", ")}.`);
+      }
+      alert(linhas.join("\n"));
+      if (resp.despublicados && resp.despublicados.length) location.reload();
+    } catch (e) {
+      alert(`Falha ao cancelar publicações: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   async function despublicarOferta(rascunhoId, botao) {
     if (!confirm("Tirar essa rota do marketplace e voltar a editar?")) return;
     const original = botao.textContent;
@@ -4203,7 +4251,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
+      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-despublicar-ofertas-lote", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -4499,6 +4547,7 @@
     document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
     document.getElementById("botao-desalocar-motoristas").addEventListener("click", (e) => desalocarMotoristas(e.target));
     document.getElementById("botao-publicar-ofertas-lote").addEventListener("click", (e) => publicarOfertasLote(e.target));
+    document.getElementById("botao-despublicar-ofertas-lote").addEventListener("click", (e) => despublicarOfertasLote(e.target));
     document.getElementById("botao-disponibilidade-motoristas").addEventListener("click", abrirModalDisponibilidade);
     document.getElementById("botao-cancelar-disponibilidade").addEventListener("click", () => {
       document.getElementById("modal-disponibilidade-motoristas").classList.remove("aberto");
