@@ -73,8 +73,10 @@ from rotas_client import listar_rotas
 from regioes_dia_fixo import extrair_cidade
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_rota_zona
+import integracao_chatwoot
 
 ARQUIVO_SAIDA = _RAIZ_LOCAL / "dados" / "mensagens_whatsapp_amanha.txt"
+ARQUIVO_SAIDA_OFERTAS = _RAIZ_LOCAL / "dados" / "mensagens_whatsapp_ofertas.txt"
 TZ_BRASILIA = timezone(timedelta(hours=-3))
 
 DIAS_SEMANA_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira",
@@ -281,6 +283,137 @@ def push_confirmacoes_vps(config_confirmacao: dict) -> dict:
 
     confirmacao_rotas.marcar_sincronizadas([linha["id"] for linha in pendentes])
     logger.info(f"{len(pendentes)} confirmação(ões) sincronizada(s) com a VPS.")
+    return {"enviadas": len(pendentes), "falha": False}
+
+
+def preparar_link_oferta(agent_id: int, data_alvo: date, config_confirmacao: dict) -> str | None:
+    """Link assinado da página de escolha (confirmacao_motoristas/app.py,
+    rota /escolher/<token>) pro motorista ver/pegar as rotas ABERTA do
+    marketplace naquele dia -- token por MOTORISTA+DIA (não por rota,
+    ao contrário de preparar_confirmacoes), já que a página lista tudo
+    que ele é elegível a escolher no momento em que abre, não uma rota
+    fixa gravada no token. Mesmo secret/url_base de confirmacao_rotas
+    (config.yaml), salt próprio pra não misturar com os tokens da
+    confirmação de rota já enviada."""
+    secret = config_confirmacao.get("token_secret")
+    url_base = (config_confirmacao.get("url_base") or "").rstrip("/")
+    if not secret or not url_base:
+        return None
+    serializer = URLSafeTimedSerializer(secret, salt="escolha-rota")
+    token = serializer.dumps({"agent_id": agent_id, "data_rota": data_alvo.isoformat()})
+    return f"{url_base}/escolher/{token}"
+
+
+def _mensagem_oferta(nome: str, link_escolha: str) -> str:
+    return (
+        "🚚 *ROTA DISPONÍVEL - FRESHLOG*\n"
+        f"Olá, *{nome}*!\n"
+        "Tem rota disponível pra você escolher -- veja o resumo (região, paradas, caixas) "
+        "e pegue a que preferir:\n\n"
+        f"👉 {link_escolha}\n\n"
+        "Só o primeiro que escolher leva -- se demorar, pode já não estar mais disponível."
+    )
+
+
+def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alvo: date, config: dict) -> dict:
+    """
+    Avisa cada motorista elegível de que há rota(s) publicada(s) pra
+    escolha (Hugo, 22/08: botão "Publicar para motoristas" do
+    planejamento) -- chamado pelo painel depois que
+    planejamento_rotas.publicar_oferta_rascunho/publicar_ofertas_em_lote
+    já gravaram a(s) oferta(s).
+
+    Ordem de tentativa por motorista: WhatsApp via Chatwoot (automático
+    de verdade, se configurado e o telefone existir -- ver
+    integracao_chatwoot.py) + e-mail automático (se EMAIL_MOTORISTA
+    existir) -- e SEMPRE grava o texto pronto pra copiar/colar em
+    ARQUIVO_SAIDA_OFERTAS, mesmo quando os automáticos deram certo
+    (mesmo padrão de main(): o arquivo é sempre a cópia completa/
+    auditável de tudo que devia ter sido avisado).
+
+    Retorna {"whatsapp_chatwoot": N, "email": N, "sem_contato": N,
+    "arquivo": N} -- N sempre <= len(elegiveis) (um motorista pode
+    contar em mais de uma categoria, ex.: Chatwoot E e-mail).
+    """
+    config_confirmacao = config.get("confirmacao_rotas", {})
+    config_email = config.get("email", {})
+    config_chatwoot = config.get("chatwoot", {})
+
+    blocos = []
+    contagem = {"whatsapp_chatwoot": 0, "email": 0, "sem_contato": 0}
+    for motorista in elegiveis:
+        link = preparar_link_oferta(motorista.agent_id, data_alvo, config_confirmacao)
+        if not link:
+            logger.warning(
+                "confirmacao_rotas.token_secret/url_base não configurados -- "
+                "oferta de rota sairá sem link de escolha."
+            )
+            continue
+        mensagem = _mensagem_oferta(motorista.nome, link)
+        blocos.append(
+            f"--- {motorista.nome} ({motorista.telefone or 'sem telefone cadastrado'}) ---\n{mensagem}"
+        )
+
+        teve_contato = False
+        if motorista.telefone and integracao_chatwoot.enviar_whatsapp_oferta(
+                config_chatwoot, motorista.telefone, motorista.nome, link):
+            contagem["whatsapp_chatwoot"] += 1
+            teve_contato = True
+        if motorista.email:
+            corpo_html = "<p style='white-space:pre-line;font-size:14px;line-height:1.6;'>" \
+                        + mensagem.replace("*", "").replace("\n", "<br>") + "</p>"
+            corpo = envelope_html(corpo_html, rodape="Mensagem automática — Agente Stokki Eventos.")
+            if enviar_email([motorista.email], "[Freshlog] Rota disponível para escolha", corpo, config_email):
+                contagem["email"] += 1
+                teve_contato = True
+        if not teve_contato:
+            contagem["sem_contato"] += 1
+
+    if blocos:
+        data_hora = datetime.now(TZ_BRASILIA).strftime("%d/%m/%Y %H:%M")
+        texto = (
+            f"OFERTA DE ROTA PUBLICADA -- {data_hora}\n{'=' * 60}\n\n"
+            + "\n\n".join(blocos) + "\n"
+        )
+        with open(ARQUIVO_SAIDA_OFERTAS, "a", encoding="utf-8") as f:
+            f.write(texto + "\n")
+
+    return {**contagem, "arquivo": len(blocos)}
+
+
+def push_ofertas_vps(config_confirmacao: dict) -> dict:
+    """Empurra pra VPS as ofertas do marketplace ainda não sincronizadas
+    (publicadas ou despublicadas desde o último push) -- mesmo padrão de
+    push_confirmacoes_vps, endpoint irmão na VPS
+    (confirmacao_motoristas/app.py::api_sync_ofertas_upsert). Chamado
+    SÍNCRONO no momento da publicação (painel_agentes.py), antes de
+    avisar o motorista -- o link só funciona depois que a VPS já
+    conhece a oferta, então nunca faz sentido avisar antes de empurrar."""
+    from regras import ofertas_rota
+
+    url_base = (config_confirmacao.get("url_base") or "").rstrip("/")
+    sync_secret = config_confirmacao.get("sync_secret")
+    pendentes = ofertas_rota.listar_pendentes_de_envio()
+    if not pendentes:
+        return {"enviadas": 0, "falha": False}
+    if not url_base or not sync_secret:
+        logger.warning(f"{len(pendentes)} oferta(s) pendente(s) de push, mas VPS não configurada.")
+        return {"enviadas": 0, "falha": True}
+
+    try:
+        resp = requests.post(
+            f"{url_base}/api/sync/ofertas/upsert",
+            json={"ofertas": pendentes},
+            headers={"X-Sync-Secret": sync_secret},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao empurrar ofertas pra VPS ({len(pendentes)} pendente(s)): {exc}")
+        return {"enviadas": 0, "falha": True}
+
+    ofertas_rota.marcar_sincronizadas([linha["id"] for linha in pendentes])
+    logger.info(f"{len(pendentes)} oferta(s) sincronizada(s) com a VPS.")
     return {"enviadas": len(pendentes), "falha": False}
 
 

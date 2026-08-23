@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
 STATUS_RASCUNHO = "RASCUNHO"
+STATUS_OFERTADA = "OFERTADA"
 STATUS_ENVIADO = "ENVIADO"
 STATUS_ERRO_ENVIO = "ERRO_ENVIO"
 STATUS_DESCARTADO = "DESCARTADO"
@@ -743,6 +744,63 @@ def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | N
             (agent_id, vehicle_id, motorista_nome, rascunho_id),
         )
         _tocar(conn, rascunho_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def publicar_oferta(rascunho_id: int):
+    """RASCUNHO -> OFERTADA -- botão 'Publicar para motoristas' (Hugo,
+    22/08). Só a transição de status; o resumo/elegibilidade e o
+    registro da oferta em si vivem em regras/ofertas_rota.py (chamado
+    ANTES desta função por painel_agentes/planejamento_rotas.py::
+    publicar_oferta_rascunho, que decide o resumo e quem é elegível)."""
+    conn = _conectar()
+    try:
+        conn.execute(
+            "UPDATE rascunhos_rota SET status = ?, atualizado_em = datetime('now','localtime') "
+            "WHERE id = ? AND status = ?",
+            (STATUS_OFERTADA, rascunho_id, STATUS_RASCUNHO),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def despublicar_oferta(rascunho_id: int):
+    """OFERTADA -> RASCUNHO -- botão 'Despublicar' (Hugo, 22/08),
+    desistência de publicar antes de qualquer motorista escolher (ver
+    regras/ofertas_rota.cancelar_oferta pra a oferta em si, que recusa
+    cancelar se já tiver sido ESCOLHIDA -- nesse caso o rascunho segue
+    OFERTADA até o próximo pull aplicar a escolha)."""
+    conn = _conectar()
+    try:
+        conn.execute(
+            "UPDATE rascunhos_rota SET status = ?, atualizado_em = datetime('now','localtime') "
+            "WHERE id = ? AND status = ?",
+            (STATUS_RASCUNHO, rascunho_id, STATUS_OFERTADA),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def aplicar_escolha_motorista(rascunho_id: int, agent_id: int, vehicle_id: int | None, motorista_nome: str | None):
+    """Aplica a escolha de um motorista sobre uma oferta (vinda do pull
+    da VPS, ver roteirizacao/sincronizar_respostas_confirmacao.py) --
+    grava o motorista escolhido e volta o rascunho pra RASCUNHO, pronto
+    pro fluxo normal de revisão/'Confirmar e Enviar' que já existe
+    (decisão do Hugo, 22/08: a escolha do motorista nunca dispara envio
+    à Vuupt sozinha). Idempotente: reaplicar a mesma escolha (ex.: pull
+    rodado de novo antes do rascunho sair de OFERTADA por outro motivo)
+    só regrava os mesmos campos, sem efeito colateral."""
+    conn = _conectar()
+    try:
+        conn.execute(
+            "UPDATE rascunhos_rota SET agent_id = ?, vehicle_id = ?, motorista_nome = ?, "
+            "status = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
+            (agent_id, vehicle_id, motorista_nome, STATUS_RASCUNHO, rascunho_id),
+        )
         conn.commit()
     finally:
         conn.close()

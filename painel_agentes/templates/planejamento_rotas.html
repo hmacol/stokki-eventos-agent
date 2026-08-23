@@ -543,6 +543,10 @@
      (verde de propósito, mesma linguagem visual do resto da tela). */
   .card-rota .acoes .botao-enviar { border-color: var(--acento); color: var(--acento); font-weight: 700; }
   .card-rota.enviada { opacity: 0.75; background: var(--fundo); }
+  .card-rota.ofertada { border-left: 4px solid var(--acento); background: color-mix(in srgb, var(--acento) 6%, var(--fundo)); }
+  .oferta-resumo { font-size: 12px; line-height: 1.5; margin: 6px 0; padding: 6px 8px; border-radius: 6px;
+                   background: color-mix(in srgb, var(--acento) 10%, transparent); }
+  .card-rota .acoes .botao-publicar-oferta { border-color: var(--acento); color: var(--acento); }
   /* variante "perigo" do .botao sólido (base.html só define a cor
      primária) -- usada no botão fixo "Cancelar todas as rotas" */
   button.botao.perigo { background: var(--erro); }
@@ -1514,6 +1518,7 @@
       <button id="botao-alocar-motoristas" type="button" class="botao" style="flex:1;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
       <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
     </div>
+    <button id="botao-publicar-ofertas-lote" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Publica de uma vez, pro marketplace de escolha aberta, toda rota ainda sem motorista -- avisa (Chatwoot/e-mail/texto) cada motorista elegível uma única vez, mesmo se ele for elegível pra mais de uma rota publicada agora">Publicar pendentes para motoristas</button>
     <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
     <div style="display:flex;gap:8px;margin-bottom:12px;">
       <button id="botao-salvar-todas" type="button" class="botao" style="flex:1;" title="Baixa o romaneio em PDF de cada rota, um arquivo por vez -- pra mandar pelo WhatsApp">Salvar rotas em PDF</button>
@@ -1862,9 +1867,11 @@
 
   function criarCardRota(rascunho, cor) {
     const enviada = rascunho.status === "ENVIADO";
+    const ofertada = rascunho.status === "OFERTADA";
+    const bloqueada = enviada || ofertada; // sem edição enquanto publicada, mesmo padrão de enviada
     const colapsada = rotasColapsadas.has(rascunho.id);
     const div = document.createElement("div");
-    div.className = "card-rota" + (enviada ? " enviada" : "") + (colapsada ? " colapsada" : "");
+    div.className = "card-rota" + (enviada ? " enviada" : "") + (ofertada ? " ofertada" : "") + (colapsada ? " colapsada" : "");
     div.id = `card-rota-${rascunho.id}`;
     div.style.setProperty("--cor-rota", cor);
     // texto usado pela busca client-side, junto do nome da rota
@@ -1874,7 +1881,7 @@
         <span class="titulo-rota">
           <span class="cor-swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${cor};margin-right:6px;"></span>
           <span class="nome">${escaparHtml(rascunho.nome)}</span>
-          ${(enviada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
+          ${(bloqueada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
           ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
@@ -1884,23 +1891,46 @@
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
-      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(enviada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
+      <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
+      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(bloqueada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
       <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
       <div class="acoes">
-        ${(enviada || !PODE_EDITAR) ? "" : `
+        ${(bloqueada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
+        ${(!rascunho.agent_id && rascunho.paradas.length) ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher">Publicar para motoristas</button>` : ""}
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
+        ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
-      ${(enviada || !PODE_EDITAR) ? "" : selectFundirHtml(rascunho)}`;
+      ${(bloqueada || !PODE_EDITAR) ? "" : selectFundirHtml(rascunho)}`;
     const ul = div.querySelector(".lista-paradas");
-    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !enviada && PODE_EDITAR })));
+    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !bloqueada && PODE_EDITAR })));
     renumerarRotaEl(ul, rascunho.id);
     return div;
+  }
+
+  function ofertaHtml(rascunho) {
+    // Resumo publicado pro motorista (Hugo, 22/08) -- mostrado aqui
+    // também pro Hugo conferir exatamente o que o motorista está vendo,
+    // já que a rota fica travada enquanto OFERTADA.
+    if (rascunho.status !== "OFERTADA" || !rascunho.oferta) return "";
+    const r = rascunho.oferta.resumo;
+    const niveis = Object.entries(r.paradas_por_nivel || {})
+      .map(([nivel, qtd]) => `nível ${nivel}: ${qtd}`).join(", ");
+    const partes = [
+      `📍 ${escaparHtml(r.regiao || "Região não identificada")}`,
+      `${r.total_paradas} parada(s) (${niveis})`,
+      `${r.total_caixas} caixa(s)`,
+    ];
+    if (r.peso_kg != null) {
+      partes.push(`~${r.peso_kg} kg${r.peso_paradas_com_dado < r.total_paradas ? ` (peso parcial, ${r.peso_paradas_com_dado} de ${r.total_paradas} pedidos)` : ""}`);
+    }
+    if (r.bairros && r.bairros.length) partes.push(`Bairros: ${escaparHtml(r.bairros.join(", "))}`);
+    return `<div class="oferta-resumo">🛒 <strong>Publicada</strong> — aguardando escolha (${rascunho.oferta.qtd_elegiveis} motorista(s) elegível/eis)<br>${partes.join(" · ")}</div>`;
   }
 
   function selectFundirHtml(rascunho) {
@@ -3239,6 +3269,81 @@
     }
   }
 
+  function resumoAvisoTexto(aviso) {
+    if (!aviso) return "";
+    const linhas = [];
+    if (aviso.whatsapp_chatwoot) linhas.push(`${aviso.whatsapp_chatwoot} avisado(s) por WhatsApp (Chatwoot).`);
+    if (aviso.email) linhas.push(`${aviso.email} avisado(s) por e-mail.`);
+    if (aviso.sem_contato) linhas.push(`${aviso.sem_contato} sem WhatsApp/e-mail cadastrado -- veja o texto pra copiar/colar em dados/mensagens_whatsapp_ofertas.txt.`);
+    return linhas.length ? "\n\nAviso: " + linhas.join(" ") : "";
+  }
+
+  async function publicarOferta(rascunhoId, botao) {
+    // publica 1 rota pro marketplace de escolha aberta (Hugo, 22/08) --
+    // recarrega a página no sucesso, mesmo padrão de confirmarEnvio/
+    // cancelarRota (o card muda de status/controles disponíveis)
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Publicando...";
+    try {
+      const resp = await postJSON("/api/planejamento/publicar-oferta", { rascunho_id: rascunhoId });
+      if (!resp.ok) { alert(`Não deu pra publicar: ${resp.erro}`); return; }
+      alert(`Rota publicada para ${resp.elegiveis.length} motorista(s) elegível/eis.${resumoAvisoTexto(resp.aviso)}`);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao publicar rota: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function publicarOfertasLote(botao) {
+    if (!confirm("Publicar pro marketplace toda rota ainda sem motorista?")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Publicando...";
+    try {
+      const resp = await postJSON("/api/planejamento/publicar-ofertas-lote", { data_alvo: DATA_ALVO_ISO });
+      const linhas = [];
+      if (resp.publicados && resp.publicados.length) {
+        linhas.push(`${resp.publicados.length} rota(s) publicada(s):`);
+        resp.publicados.forEach(p => linhas.push(`• ${p.nome}`));
+      } else {
+        linhas.push("Nenhuma rota estava pendente de publicação.");
+      }
+      if (resp.ja_tinham) linhas.push(`${resp.ja_tinham} rota(s) já tinham motorista e foram ignoradas.`);
+      if (resp.sem_paradas) linhas.push(`${resp.sem_paradas} rota(s) vazia(s) ficaram de fora.`);
+      if (resp.sem_elegivel && resp.sem_elegivel.length) {
+        linhas.push(`Sem motorista elegível pra: ${resp.sem_elegivel.join(", ")}.`);
+      }
+      alert(linhas.join("\n") + resumoAvisoTexto(resp.aviso));
+      if (resp.publicados && resp.publicados.length) location.reload();
+    } catch (e) {
+      alert(`Falha ao publicar rotas: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function despublicarOferta(rascunhoId, botao) {
+    if (!confirm("Tirar essa rota do marketplace e voltar a editar?")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Despublicando...";
+    try {
+      const resp = await postJSON("/api/planejamento/despublicar-oferta", { rascunho_id: rascunhoId });
+      if (!resp.ok) { alert(`Não deu pra despublicar: ${resp.erro}`); return; }
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao despublicar rota: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // Disponibilidade de motoristas (Hugo, 16/08): toggle diário + marcação
   // por período (férias/atestado). "Alocar motoristas" sempre lê essa
   // seleção no servidor (regras/disponibilidade_motoristas.py) -- aqui é
@@ -3878,7 +3983,7 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
+      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -4102,6 +4207,10 @@
         duplicarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-cancelar-rota")) {
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-publicar-oferta")) {
+        publicarOferta(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-despublicar-oferta")) {
+        despublicarOferta(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-fundir")) {
         const origemId = Number(e.target.dataset.rascunhoId);
         const select = document.querySelector(`.select-fundir-destino[data-rascunho-id="${origemId}"]`);
@@ -4164,6 +4273,7 @@
     });
     document.getElementById("botao-alocar-motoristas").addEventListener("click", (e) => alocarMotoristas(e.target));
     document.getElementById("botao-desalocar-motoristas").addEventListener("click", (e) => desalocarMotoristas(e.target));
+    document.getElementById("botao-publicar-ofertas-lote").addEventListener("click", (e) => publicarOfertasLote(e.target));
     document.getElementById("botao-disponibilidade-motoristas").addEventListener("click", abrirModalDisponibilidade);
     document.getElementById("botao-cancelar-disponibilidade").addEventListener("click", () => {
       document.getElementById("modal-disponibilidade-motoristas").classList.remove("aberto");

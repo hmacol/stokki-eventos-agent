@@ -65,8 +65,10 @@ from planejamento_rotas import (
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
+    publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
+from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota
 import rascunhos_rota
@@ -992,6 +994,87 @@ def api_desalocar_motoristas():
         logging.getLogger(__name__).exception("Falha ao desalocar motoristas dos rascunhos")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/planejamento/publicar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_publicar_oferta():
+    """Botão "Publicar para motoristas" de um card (Hugo, 22/08):
+    publica o rascunho no marketplace de escolha aberta e já dispara o
+    aviso (Chatwoot/e-mail automático + texto copiar/colar) pros
+    motoristas elegíveis."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_id = body["rascunho_id"]
+    except KeyError as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = publicar_oferta_rascunho(rascunho_id)
+    if not resultado["ok"]:
+        return jsonify(resultado)
+
+    rascunho = _rascunho_ou_404(rascunho_id)
+    config = _carregar_config()
+    push_ofertas_vps(config.get("confirmacao_rotas", {}))
+    aviso = notificar_oferta_motoristas(
+        resultado["elegiveis"], date.fromisoformat(rascunho["data_alvo"]), config,
+    )
+    return jsonify({
+        "ok": True, "rascunho": rascunho, "resumo": resultado["resumo"],
+        "elegiveis": [{"agent_id": m.agent_id, "nome": m.nome} for m in resultado["elegiveis"]],
+        "aviso": aviso,
+    })
+
+
+@app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_publicar_ofertas_lote():
+    """Botão "Publicar pendentes" (Hugo, 22/08): publica de uma vez
+    todo rascunho RASCUNHO sem motorista do lote ativo, e avisa (1 vez
+    por motorista, não 1 por rota) todo motorista elegível pra pelo
+    menos uma das rotas publicadas nesta chamada."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = publicar_ofertas_em_lote(data_alvo)
+
+    config = _carregar_config()
+    push_ofertas_vps(config.get("confirmacao_rotas", {}))
+    motoristas_por_agent_id = {}
+    for item in resultado["publicados"]:
+        for m in item["elegiveis"]:
+            motoristas_por_agent_id[m.agent_id] = m
+    aviso = notificar_oferta_motoristas(list(motoristas_por_agent_id.values()), data_alvo, config)
+
+    return jsonify({
+        "ok": True,
+        "publicados": [{"rascunho_id": p["rascunho_id"], "nome": p["nome"]} for p in resultado["publicados"]],
+        "sem_elegivel": resultado["sem_elegivel"], "ja_tinham": resultado["ja_tinham"],
+        "sem_paradas": resultado["sem_paradas"], "aviso": aviso,
+    })
+
+
+@app.route("/api/planejamento/despublicar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_despublicar_oferta():
+    """Botão "Despublicar" de um card OFERTADA (Hugo, 22/08)."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_id = body["rascunho_id"]
+    except KeyError as e:
+        return jsonify({"erro": str(e)}), 400
+
+    resultado = despublicar_oferta_rascunho(rascunho_id)
+    if not resultado["ok"]:
+        return jsonify(resultado)
+    push_ofertas_vps(_carregar_config().get("confirmacao_rotas", {}))
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas", methods=["POST"])

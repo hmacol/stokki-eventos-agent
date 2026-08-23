@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Rotas disponíveis — Freshlog</title>
+<style>
+  :root {
+    --cor-primaria: #141428;
+    --cor-acento: #00C896;
+    --cor-destaque: #F5A623;
+    --cor-erro: #EF4444;
+    --cor-texto: #1F2937;
+    --cor-texto-suave: #6B7280;
+    --cor-fundo: #F3F4F6;
+    --cor-borda: #E5E7EB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px; background: var(--cor-fundo);
+    font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: var(--cor-texto);
+  }
+  .cartao {
+    max-width: 460px; margin: 0 auto 16px; background: #FFFFFF; border-radius: 12px;
+    overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .cabecalho {
+    background: var(--cor-primaria); color: #FFFFFF; padding: 20px 24px;
+  }
+  .cabecalho h1 { margin: 0; font-size: 18px; }
+  .cabecalho p { margin: 4px 0 0; font-size: 13px; opacity: 0.8; }
+  .corpo { padding: 24px; }
+  .banner { border-radius: 8px; padding: 14px 16px; font-size: 14px; margin-bottom: 18px; }
+  .banner.ok { background: #E6FBF5; color: #0A6656; border: 1px solid var(--cor-acento); }
+  .banner.erro { background: #FEF2F2; color: #991B1B; border: 1px solid var(--cor-erro); }
+  .banner.aviso { background: #FFF8EC; color: #92600A; border: 1px solid var(--cor-destaque); }
+  .oferta {
+    border: 1px solid var(--cor-borda); border-radius: 10px; padding: 16px; margin-bottom: 14px;
+  }
+  .oferta:last-child { margin-bottom: 0; }
+  .oferta .regiao { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+  .oferta .linha { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--cor-borda); font-size: 13px; }
+  .oferta .linha:last-of-type { border-bottom: none; }
+  .oferta .linha span:first-child { color: var(--cor-texto-suave); }
+  .oferta .linha span:last-child { font-weight: 600; text-align: right; }
+  label { display: block; font-size: 13px; color: var(--cor-texto-suave); margin: 12px 0 6px; }
+  input[type=text] {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--cor-borda); border-radius: 8px;
+    font-size: 16px; font-family: inherit;
+  }
+  button.escolher {
+    width: 100%; margin-top: 14px; padding: 13px 10px; border: none; border-radius: 8px;
+    font-size: 15px; font-weight: 600; cursor: pointer; background: var(--cor-acento); color: #FFFFFF;
+  }
+  .rodape { text-align: center; font-size: 12px; color: var(--cor-texto-suave); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="cartao">
+  <div class="cabecalho">
+    <h1>🚚 Freshlog</h1>
+    <p>Rotas disponíveis para escolha</p>
+  </div>
+  <div class="corpo">
+
+  {% if estado == "invalido" %}
+    <div class="banner erro">Esse link não é válido. Confira se copiou o endereço completo ou peça um novo aviso.</div>
+
+  {% elif estado == "expirado" %}
+    <div class="banner erro">Esse link expirou. Fale com a Freshlog pra ver as rotas disponíveis por outro canal.</div>
+
+  {% elif estado == "formulario" %}
+    {% if mensagem %}
+      <div class="banner ok">✅ {{ mensagem }}</div>
+    {% endif %}
+    {% if erro %}
+      <div class="banner erro">{{ erro }}</div>
+    {% endif %}
+
+    {% if not ofertas %}
+      <div class="banner aviso">Não há rotas disponíveis pra você no momento. Fique de olho, novas rotas podem aparecer aqui.</div>
+    {% endif %}
+
+    {% for oferta in ofertas %}
+      <div class="oferta">
+        <div class="regiao">📍 {{ oferta.resumo.regiao }}</div>
+        <div class="linha"><span>Paradas</span><span>{{ oferta.resumo.total_paradas }}</span></div>
+        <div class="linha"><span>Por nível</span><span>{% for nivel, qtd in oferta.resumo.paradas_por_nivel.items() %}nível {{ nivel }}: {{ qtd }}{{ ", " if not loop.last else "" }}{% endfor %}</span></div>
+        <div class="linha"><span>Caixas</span><span>{{ oferta.resumo.total_caixas }}</span></div>
+        {% if oferta.resumo.peso_kg is not none %}
+        <div class="linha"><span>Peso aproximado</span><span>~{{ oferta.resumo.peso_kg }} kg{% if oferta.resumo.peso_paradas_com_dado < oferta.resumo.total_paradas %} (parcial){% endif %}</span></div>
+        {% endif %}
+        {% if oferta.resumo.bairros %}
+        <div class="linha"><span>Bairros</span><span>{{ oferta.resumo.bairros | join(", ") }}</span></div>
+        {% endif %}
+        <form method="post">
+          <input type="hidden" name="rascunho_id" value="{{ oferta.rascunho_id }}">
+          {% if oferta.exige_telefone %}
+            <label for="ultimos4-{{ oferta.rascunho_id }}">Confirme os 4 últimos dígitos do seu telefone cadastrado</label>
+            <input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="ultimos4" id="ultimos4-{{ oferta.rascunho_id }}" required>
+          {% endif %}
+          <button type="submit" class="escolher">Escolher esta rota</button>
+        </form>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+    <div class="rodape">Mensagem automática — Freshlog</div>
+  </div>
+</div>
+</body>
+</html>

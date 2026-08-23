@@ -395,6 +395,45 @@ def _qtd_peso_do_pedido(nfs_abertas: list[tuple[dict, PdfReader]]) -> tuple[int 
     return qtd_total, peso_total
 
 
+def calcular_peso_paradas(paradas: list[dict]) -> tuple[float | None, int, int]:
+    """
+    Peso bruto conhecido (kg) de uma lista de paradas (formato
+    rascunhos_parada -- chaves 'codigo' e 'sender_id'), somando só o que
+    já tem NF processada. Reaproveita o MESMO motor de extração da capa
+    do romaneio (DANFE local via carregar_documentos_por_pedido/
+    selecionar_nfs/_abrir_documentos/_qtd_peso_do_pedido) em vez de
+    duplicar a lógica -- pedido do Hugo, 22/08: mostrar peso aproximado
+    no resumo da oferta de rota pro motorista, só quando já é dado real
+    (nunca estimativa).
+
+    Retorna (peso_total_kg ou None se nada conhecido, paradas com peso
+    conhecido, total de paradas) -- quem chama decide como exibir
+    parcial (ex.: "340 kg (8 de 12 pedidos)").
+    """
+    codigos_base = {_codigo_base(p["codigo"]) for p in paradas if p.get("codigo")}
+    docs_por_pedido, _em_revisao = carregar_documentos_por_pedido(codigos_base)
+
+    peso_total = None
+    paradas_com_peso = 0
+    for p in paradas:
+        codigo = p.get("codigo")
+        if not codigo:
+            continue
+        sender_id = p.get("sender_id")
+        if sender_id in SENDERS_SEM_NF:
+            continue  # controlado por canhoteira, não por NF -- nunca tem peso de DANFE.
+        docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
+        nfs, _problemas = _abrir_documentos(selecionar_nfs(docs))
+        if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
+            nfs, _problemas = _abrir_documentos(selecionar_pedidos_de_venda(docs))
+        _qtd, peso = _qtd_peso_do_pedido(nfs)
+        if peso is not None:
+            peso_total = (peso_total or 0.0) + peso
+            paradas_com_peso += 1
+
+    return peso_total, paradas_com_peso, len(paradas)
+
+
 def _volumes_fallback(servico: dict, fator: float) -> int | None:
     """Sem DANFE legível, estima a quantidade real de volumes desfazendo
     a ponderação do dimension_3 (= max(1, round(qtd x fator)), ver

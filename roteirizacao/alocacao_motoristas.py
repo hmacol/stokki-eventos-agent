@@ -194,3 +194,23 @@ def contar_motoristas_elegiveis(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
     )
     return len(elegiveis)
+
+
+def listar_motoristas_elegiveis(
+    sublote: list[dict],
+    data_rota: date,
+    motoristas: list[MotoristaPreferencias],
+    contagem_alocacoes_dia: dict[int, int],
+    api_key: str | None = None,
+    ajustes_disponibilidade: dict[int, dict] | None = None,
+) -> list[MotoristaPreferencias]:
+    """
+    Lista completa de motoristas elegíveis pra esse sublote (mesmos
+    critérios de selecionar_motorista_equitativo, sem escolher 1) --
+    usado pelo marketplace de rotas (Hugo, 22/08): publicar uma rota
+    pra escolha aberta precisa saber QUEM pode vê-la, não só quantos.
+    """
+    elegiveis, _, _, _ = _elegibilidade_sublote(
+        sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+    )
+    return elegiveis

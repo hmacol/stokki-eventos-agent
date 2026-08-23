@@ -21,6 +21,7 @@ _RAIZ_LOCAL   = Path(__file__).parent
 _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 sys.path.insert(0, str(_RAIZ_LOCAL))
+sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -40,7 +41,8 @@ logger = logging.getLogger("sincronizar_respostas_confirmacao")
 import requests
 import yaml
 
-from regras import confirmacao_rotas
+from regras import confirmacao_rotas, ofertas_rota
+from rascunhos_rota import aplicar_escolha_motorista
 
 
 def _carregar_config() -> dict:
@@ -48,14 +50,7 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def main():
-    config = _carregar_config().get("confirmacao_rotas", {})
-    url_base = (config.get("url_base") or "").rstrip("/")
-    sync_secret = config.get("sync_secret")
-    if not url_base or not sync_secret:
-        logger.warning("confirmacao_rotas.url_base/sync_secret não configurados em config.yaml -- nada a sincronizar.")
-        return
-
+def _sincronizar_confirmacoes(url_base: str, sync_secret: str):
     try:
         resp = requests.get(
             f"{url_base}/api/sync/respostas",
@@ -80,9 +75,71 @@ def main():
             nao_encontradas += 1
 
     logger.info(
-        f"{len(respostas)} resposta(s) recebida(s) da VPS -- {aplicadas} aplicada(s) localmente"
+        f"{len(respostas)} resposta(s) de confirmação recebida(s) da VPS -- {aplicadas} aplicada(s) localmente"
         + (f", {nao_encontradas} sem correspondência local (dessincronia)" if nao_encontradas else "") + "."
     )
+
+
+def _sincronizar_ofertas_escolhidas(url_base: str, sync_secret: str):
+    """Marketplace de rotas (Hugo, 22/08): puxa da VPS as ofertas já
+    ESCOLHIDA e aplica em rascunhos_rota (motorista gravado, rascunho
+    volta pra RASCUNHO pronto pro 'Confirmar e Enviar' normal). Full
+    pull a cada rodada, mesmo padrão de _sincronizar_confirmacoes --
+    ofertas_rota.marcar_aplicada garante que reaplicar a mesma escolha
+    de novo (rodada seguinte, antes do rascunho sair de OFERTADA por
+    algum outro motivo) não tem efeito colateral."""
+    try:
+        resp = requests.get(
+            f"{url_base}/api/sync/ofertas/escolhidas",
+            headers={"X-Sync-Secret": sync_secret},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao consultar ofertas escolhidas na VPS: {exc}")
+        return
+
+    escolhidas = resp.json().get("ofertas", [])
+    for oferta in escolhidas:
+        ofertas_rota.aplicar_resposta_remota(
+            rascunho_id=oferta["rascunho_id"], agent_id=oferta["escolhido_por"],
+            escolhido_em=oferta["escolhido_em"],
+        )
+
+    pendentes = ofertas_rota.listar_escolhidas_nao_aplicadas()
+    if pendentes:
+        # A VPS só sabe o agent_id de quem escolheu -- nome/vehicle_id
+        # pra gravar no rascunho vêm do MESMO catálogo local que
+        # planejamento_rotas.publicar_oferta_rascunho já usa.
+        from regras.preferencias_motoristas import CatalogoMotoristas
+        cfg_motoristas = _carregar_config().get("motoristas", {})
+        catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+        motoristas_por_id = {m.agent_id: m for m in catalogo.motoristas}
+
+    for pendente in pendentes:
+        motorista = motoristas_por_id.get(pendente["escolhido_por"])
+        aplicar_escolha_motorista(
+            pendente["rascunho_id"], pendente["escolhido_por"],
+            vehicle_id=motorista.vehicle_id if motorista else None,
+            motorista_nome=motorista.nome if motorista else f"Motorista {pendente['escolhido_por']}",
+        )
+        ofertas_rota.marcar_aplicada(pendente["rascunho_id"])
+
+    logger.info(
+        f"{len(escolhidas)} oferta(s) escolhida(s) recebida(s) da VPS -- {len(pendentes)} aplicada(s) localmente."
+    )
+
+
+def main():
+    config = _carregar_config().get("confirmacao_rotas", {})
+    url_base = (config.get("url_base") or "").rstrip("/")
+    sync_secret = config.get("sync_secret")
+    if not url_base or not sync_secret:
+        logger.warning("confirmacao_rotas.url_base/sync_secret não configurados em config.yaml -- nada a sincronizar.")
+        return
+
+    _sincronizar_confirmacoes(url_base, sync_secret)
+    _sincronizar_ofertas_escolhidas(url_base, sync_secret)
 
 
 if __name__ == "__main__":
