@@ -84,7 +84,8 @@ def _validar(servicos, sublotes, tamanho_maximo, volume_maximo):
 
 
 def agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
-                  volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km):
+                  volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km,
+                  km_acumulado_maximo=None, km_acumulado_maximo_viagem=None):
     """Agrupamento de produção de sempre, região a região, com o limite
     de distância decidido pelo tipo da região (Grande SP x Viagem) --
     mesma lógica que vivia em criar_rotas_diarias._rotear_particao.
@@ -114,13 +115,13 @@ def agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
                                          distancia_maxima_km=distancia_maxima_consolidacao)
     sublotes = []
     for servicos_regiao in grupos.values():
-        distancia_regiao = (
-            distancia_maxima_viagem_km if classificar_rota_viagem(servicos_regiao, gmaps_key)
-            else distancia_maxima_km
-        )
+        eh_viagem_regiao = classificar_rota_viagem(servicos_regiao, gmaps_key)
+        distancia_regiao = distancia_maxima_viagem_km if eh_viagem_regiao else distancia_maxima_km
+        km_acumulado_regiao = km_acumulado_maximo_viagem if eh_viagem_regiao else km_acumulado_maximo
         sublotes.extend(dividir_em_sublotes(
             servicos_regiao, tamanho_minimo=tamanho_minimo, tamanho_maximo=tamanho_maximo,
             volume_maximo=volume_maximo, distancia_maxima_km=distancia_regiao, api_key=gmaps_key,
+            km_acumulado_maximo=km_acumulado_regiao,
         ))
     return sublotes
 
@@ -145,6 +146,8 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
                            distancia_maxima_viagem_km: float | None = None,
                            modelo_forcado: str | None = None,
                            distancia_maxima_fusao_regiao_km: float | None = None,
+                           km_acumulado_maximo: float | None = None,
+                           km_acumulado_maximo_viagem: float | None = None,
                            ) -> tuple[str, list[list[dict]]]:
     """
     Avalia os 5 agrupamentos sobre os pedidos do dia e retorna
@@ -172,6 +175,13 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     recurso, mas só até esse teto de distância -- ver
     roteirizacao_dados.particionar_por_macro_regiao. Sem isso (None,
     padrão): macro-regiões sempre 100% isoladas, como antes.
+
+    `km_acumulado_maximo`/`km_acumulado_maximo_viagem` (Fase 1, 22/08):
+    teto de km ACUMULADO sequencial da rota (soma dos trechos, não só
+    par-a-par) -- ver roteirizacao_dados.dividir_em_sublotes. Vale só
+    pro candidato "Atual (Grade+Greedy)" nesta fase; os outros 4
+    esquemas (Sweep/Clarke-Wright/CEP/K-means) não ganham essa trava
+    ainda -- mesma assimetria intencional documentada na Fase 0.
     """
     eh_viagem_fn = lambda sub: classificar_rota_viagem(sub, gmaps_key)
 
@@ -189,7 +199,8 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     candidatos = {
         "Atual (Grade+Greedy)": lambda: _por_macro(lambda svcs: agrupar_atual(
             svcs, gmaps_key, tamanho_minimo, tamanho_maximo,
-            volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km)),
+            volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km,
+            km_acumulado_maximo, km_acumulado_maximo_viagem)),
         "Sweep Polar": lambda: _por_macro(lambda svcs: agrupar_por_sweep(
             svcs, base_lat, base_lng, tamanho_maximo=tamanho_maximo,
             volume_maximo=volume_maximo, distancia_maxima_km=distancia_maxima_km,

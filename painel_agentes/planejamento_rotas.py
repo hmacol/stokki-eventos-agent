@@ -47,8 +47,13 @@ from regras.disponibilidade_motoristas import (
 )
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
-from regras import ofertas_rota
-from regras.resumo_oferta import montar_resumo as montar_resumo_oferta
+# regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
+# 22/08) NÃO são importados aqui em cima de propósito -- ainda não foram
+# deployados (falta config Chatwoot/template Meta, ver memória do
+# projeto), então um import de módulo aqui quebraria a tela inteira em
+# quem não tiver esses arquivos. Importados sob demanda, só nas 3 funções
+# que realmente usam o marketplace (buscar_dados_planejamento,
+# publicar_oferta_rascunho, despublicar_oferta_rascunho).
 from alocacao_motoristas import selecionar_motorista_equitativo, listar_motoristas_elegiveis
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao
@@ -617,6 +622,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # rascunhos_rota.aplicar_escolha_motorista), então não tem
         # oferta pendente pra mostrar.
         if r["status"] == rascunhos_rota.STATUS_OFERTADA:
+            from regras import ofertas_rota
             oferta = ofertas_rota.buscar_por_rascunho(r["id"])
             r["oferta"] = {
                 "resumo": json.loads(oferta["resumo_json"]),
@@ -910,6 +916,9 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     Retorna {"ok": True, "elegiveis": [MotoristaPreferencias...], "resumo": {...}}
     ou {"ok": False, "erro": "..."}.
     """
+    from regras import ofertas_rota
+    from regras.resumo_oferta import montar_resumo as montar_resumo_oferta
+
     rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
     if not rascunho:
         return {"ok": False, "erro": "Rascunho não encontrado."}
@@ -992,6 +1001,8 @@ def despublicar_oferta_rascunho(rascunho_id: int) -> dict:
     qualquer motorista escolher. Se um motorista ganhou a corrida
     (escolheu entre o clique e a chegada aqui), a escolha prevalece --
     ver regras/ofertas_rota.cancelar_oferta."""
+    from regras import ofertas_rota
+
     rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
     if not rascunho:
         return {"ok": False, "erro": "Rascunho não encontrado."}
