@@ -138,6 +138,10 @@
       <label for="motorista-placa">Placa</label>
       <input type="text" id="motorista-placa" placeholder="opcional">
     </div>
+    <div class="campo-motorista">
+      <label for="motorista-cpf">CPF</label>
+      <input type="text" id="motorista-cpf" placeholder="opcional -- identifica o motorista no marketplace de rotas" inputmode="numeric">
+    </div>
 
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-motorista">Cancelar</button>
@@ -235,6 +239,7 @@ async function postJSON(url, body) {
         telefone: document.getElementById("motorista-telefone").value.trim(),
         email: document.getElementById("motorista-email").value.trim(),
         placa: document.getElementById("motorista-placa").value.trim(),
+        cpf: document.getElementById("motorista-cpf").value.trim(),
       });
       alert(`Motorista "${nome}" cadastrado.`);
       location.reload();

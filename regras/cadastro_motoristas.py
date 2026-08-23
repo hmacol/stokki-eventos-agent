@@ -14,6 +14,7 @@ cadastro: gravar a linha na planilha com o AGENT_ID_VUUPT que o Hugo
 escolher.
 """
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,7 @@ API_BASE = "https://api.vuupt.com/api/v1"
 COLUNAS_PADRAO = [
     "AGENT_ID_VUUPT", "VEHICLE_ID_VUUPT", "NOME_MOTORISTA", "ACEITA_VIAGENS",
     "DIAS_DISPONIVEIS", "MAX_ROTAS_DIA", "ATIVO", "ZONAS_PREFERIDAS",
-    "TELEFONE_MOTORISTA", "EMAIL_MOTORISTA", "PLACA",
+    "TELEFONE_MOTORISTA", "EMAIL_MOTORISTA", "PLACA", "CPF_MOTORISTA",
 ]
 
 
@@ -124,6 +125,7 @@ def cadastrar_motorista(config: dict, dados: dict) -> dict:
         "TELEFONE_MOTORISTA": str(dados.get("telefone") or "").strip() or None,
         "EMAIL_MOTORISTA": str(dados.get("email") or "").strip() or None,
         "PLACA": str(dados.get("placa") or "").strip().upper() or None,
+        "CPF_MOTORISTA": re.sub(r"\D", "", str(dados.get("cpf") or "")) or None,
     }
     if tipo_veiculo_codigo:
         nova_linha["TIPO_VEICULO"] = tipo_veiculo_codigo

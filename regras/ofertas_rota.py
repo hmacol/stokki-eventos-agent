@@ -67,11 +67,16 @@ def criar_ou_atualizar_oferta(rascunho_id: int, data_alvo, resumo: dict, elegive
     aplicada -- antes dele voltar a ficar disponível pra publicar de
     novo).
 
-    `elegiveis` é uma lista de {"agent_id": int, "telefone_ultimos4": str|None}
-    -- o telefone vai junto (não só o agent_id) porque a página de
-    escolha na VPS (/escolher/<token>) exige a mesma checagem leve de 4
-    últimos dígitos que a confirmação de rota já enviada usa, por
-    consistência (ver confirmacao_motoristas/app.py).
+    `elegiveis` é uma lista de {"agent_id": int, "telefone_ultimos4": str|None,
+    "cpf": str|None} -- telefone e cpf vão junto (não só o agent_id)
+    porque a VPS decide sozinha quem pode escolher o quê: telefone_ultimos4
+    é a checagem leve da página pessoal (/escolher/<token>, mesmo padrão
+    da confirmação de rota já enviada); cpf é o identificador completo
+    da página compartilhada sem token (/escolher, Hugo 22/08 -- "dar a
+    mesma oportunidade a todos", não depende de link individual chegar
+    em quem tem telefone/e-mail cadastrado). Motorista sem CPF
+    cadastrado simplesmente não aparece pra identificação na página
+    compartilhada -- ver regras/preferencias_motoristas.py.
 
     Retorna o id da linha."""
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -969,7 +969,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
 
     ofertas_rota.criar_ou_atualizar_oferta(
         rascunho_id, data_alvo, resumo,
-        [{"agent_id": m.agent_id, "telefone_ultimos4": _ultimos4(m.telefone)} for m in elegiveis],
+        [{"agent_id": m.agent_id, "telefone_ultimos4": _ultimos4(m.telefone), "cpf": m.cpf} for m in elegiveis],
     )
     rascunhos_rota.publicar_oferta(rascunho_id)
 

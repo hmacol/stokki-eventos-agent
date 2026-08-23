@@ -9,7 +9,18 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
     DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
-    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO
+    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO | CPF_MOTORISTA
+
+CPF_MOTORISTA (pedido do Hugo, 22/08): identificador do motorista na
+tela compartilhada do marketplace de rotas (regras/ofertas_rota.py,
+confirmacao_motoristas/app.py rota /escolher sem token) -- ao
+contrário do link pessoal assinado, essa tela não tem nada além do
+CPF pra confirmar quem é quem, então o valor completo (11 dígitos) é
+usado como identificador, nunca só os 4 últimos como no /escolher/
+<token> pessoal. Coluna ainda não existe na planilha real -- até o
+Hugo preencher, cpf=None e o motorista simplesmente não aparece pra
+identificação na tela compartilhada (mesmo padrão seguro de
+TELEFONE_MOTORISTA/PLACA: dado ausente nunca vira acesso "universal").
 
 PLACA (pedido do Hugo, 11/08): placa do veículo do motorista, usada
 pela trava de rodízio municipal de SP (ver roteirizacao/rodizio_sp.py
@@ -116,6 +127,7 @@ class MotoristaPreferencias:
     email: str | None = None  # coluna EMAIL_MOTORISTA -- usado em avisar_motoristas_rotas.py (e-mail de aviso)
     placa: str | None = None  # coluna PLACA -- usado pela trava de rodízio (ver roteirizacao/rodizio_sp.py)
     tipo_veiculo: str | None = None  # coluna TIPO_VEICULO -- código de regras/tipo_veiculo.py, usado pela trava de veículo grande
+    cpf: str | None = None  # coluna CPF_MOTORISTA -- só dígitos; identificação do motorista no marketplace de rotas (ver regras/ofertas_rota.py)
 
 
 def _normalizar_texto(s) -> str:
@@ -200,6 +212,9 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     else:
         placa = re.sub(r"[^A-Z0-9]", "", _normalizar_texto(placa_bruta)) or None
 
+    cpf_bruto = _parse_texto_numerico(registro.get("CPF_MOTORISTA"))
+    cpf = re.sub(r"\D", "", cpf_bruto) or None if cpf_bruto else None
+
     tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
     codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
     tipo_veiculo = tipo_por_codigo(codigo_tipo_veiculo)
@@ -222,6 +237,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         email=email,
         placa=placa,
         tipo_veiculo=tipo_veiculo.codigo if tipo_veiculo else None,
+        cpf=cpf,
     )
 
 
