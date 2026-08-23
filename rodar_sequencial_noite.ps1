@@ -14,14 +14,20 @@
 # pra testar.
 #
 # O envio automático de rascunho pendente (EnviarRascunhosPendentes)
-# foi CANCELADO daqui (pedido do Hugo, 14/08): desde que
-# CriarRotasDiarias das 18h passou a gerar rascunho em vez de criar
-# direto (13/08), IncrementarRotas só encontra rota "de hoje" na
-# VUUPT se alguém tiver confirmado o rascunho em /planejamento antes
-# das 22h. Sem confirmação, IncrementarRotas agora FALHA de propósito
-# (e-mail de alerta) em vez de criar rota nova do zero em cima do que
-# já estava no rascunho -- é o comportamento que o Hugo quer: forçar
-# a confirmação manual em vez de mascarar o esquecimento.
+# foi CANCELADO daqui em 14/08 (mandava QUALQUER pendente, cego demais)
+# e REVIVIDO em 23/08 como Fase 3 do roadmap de roteirização (portão
+# automático): volta a rodar antes do IncrementarRotas, mas agora só
+# manda pra VUUPT o rascunho pendente aprovado na nota de qualidade
+# (zero badges da tela /planejamento + motorista atribuído) -- o resto
+# continua em RASCUNHO e o IncrementarRotas continua FALHANDO de
+# propósito (e-mail de alerta) pra esses, forçando a confirmação
+# manual em vez de mascarar o esquecimento (mesmo espírito do Hugo em
+# 14/08, só que agora a maioria não precisa mais de confirmação manual
+# nenhuma).
+#
+# Produção roda isso na VPS (infra/sequencia_noite.sh, systemd timer),
+# não mais por este .ps1 -- ver memória do projeto (migração VPS). Este
+# arquivo fica só pra rodar/testar localmente no Windows.
 
 $Raiz = "C:\agente_stokki_eventos"
 # Caminho COMPLETO do launcher: existe um arquivo "py" (0 bytes, sem
@@ -34,6 +40,7 @@ $LogDir = "$Raiz\dados"
 $passos = @(
     @{ Nome = "ExecutarTudo"; Script = "$Raiz\executar_tudo.py"; Cwd = $Raiz }
     @{ Nome = "VerificarDuplicadosVuupt"; Script = "$Raiz\verificar_pedidos_duplicados_vuupt.py"; Cwd = $Raiz }
+    @{ Nome = "EnviarRascunhosPendentes"; Script = "$Raiz\roteirizacao\enviar_rascunhos_pendentes.py"; Cwd = "$Raiz\roteirizacao" }
     @{ Nome = "IncrementarRotas"; Script = "$Raiz\roteirizacao\incrementar_rotas.py"; Cwd = "$Raiz\roteirizacao" }
 )
 
