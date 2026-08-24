@@ -54,11 +54,11 @@
   .carregando { color: var(--texto-suave); font-size: 13px; padding: 8px 0; }
   .atualizando { opacity: 0.55; transition: opacity 0.2s; }
 
-  /* ── Faixa 1: saúde do dia ──
-     Semáforo + KPIs fundidos numa régua só (redesenho 13/08): os 6
-     cards de KPI viravam 6 paradas de leitura com o mesmo peso visual;
-     aqui o que está normal é texto discreto e só o que pede atenção
-     ganha cor. O semáforo carrega a contagem de ações da fila. */
+  /* ── Faixa 1: barra de utilidade ──
+     Redesenho 24/08 (opção B): a régua de KPIs saiu daqui e virou
+     cartões próprios (.card-kpis, logo abaixo) -- essa faixa fica só
+     com data / semáforo / ações de atualizar, sem competir por espaço
+     com os números. O semáforo carrega a contagem de ações da fila. */
   .faixa-saude {
     display: flex;
     align-items: center;
@@ -84,13 +84,6 @@
   .semaforo.atencao .luz { background: var(--st-atencao); }
   .semaforo.critico { background: var(--erro-bg); color: var(--st-falha); }
   .semaforo.critico .luz { background: var(--st-falha); animation: pulso 1.2s ease-in-out infinite; }
-  .kpis-linha { display: flex; align-items: baseline; gap: 6px 18px; flex-wrap: wrap; }
-  .kpi-seg { white-space: nowrap; color: var(--texto-suave); font-size: 12.5px; cursor: default; }
-  .kpi-seg .n { font-size: 17px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
-  .kpi-seg .n .contexto { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); }
-  .kpi-seg.bom .n { color: var(--st-sucesso); }
-  .kpi-seg.alerta .n { color: var(--rodando-texto); }
-  .kpi-seg.ruim .n { color: var(--st-falha); }
   .carimbo { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
   .carimbo.erro { color: var(--erro); font-weight: 600; }
   .botao-refresh {
@@ -98,6 +91,33 @@
     padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--texto);
   }
   .botao-refresh:hover { border-color: var(--acento); color: var(--acento); }
+
+  /* ── Cartões de indicador (redesenho 24/08, opção B) ──
+     Cada número ganha cartão próprio, mesmo padrão de "amanha-numeros"
+     mais abaixo na página. Cartão com pendência ganha fundo/borda de
+     cor -- não só o número -- pra chamar atenção passando o olho
+     rápido pela tela, sem depender de acuidade de cor (rótulo sempre
+     visível junto). */
+  .card-kpis { padding: 14px 18px; }
+  .grade-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+  .tile {
+    background: var(--fundo); border-radius: 8px; padding: 10px 12px;
+    border: 1px solid transparent; display: flex; flex-direction: column; gap: 2px;
+  }
+  .tile .rotulo-tile { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); }
+  .tile .valor-tile { font-size: 23px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .tile .valor-tile .contexto { font-size: 13px; font-weight: 600; color: var(--texto-suave); }
+  .tile .sub-tile { font-size: 11px; color: var(--texto-suave); }
+  .tile.tile-bom .valor-tile { color: var(--st-sucesso); }
+  .tile.tile-alerta { background: var(--rodando-bg); border-color: var(--rodando-texto); }
+  .tile.tile-alerta .valor-tile { color: var(--rodando-texto); }
+  .tile.tile-ruim { background: var(--erro-bg); border-color: var(--st-falha); }
+  .tile.tile-ruim .valor-tile { color: var(--st-falha); }
+  .faixa-medias-kpi {
+    display: flex; gap: 6px 20px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--fundo); font-size: 12px; color: var(--texto-suave);
+  }
+  .faixa-medias-kpi .n { font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
 
   /* ── Pipeline colapsado (redesenho 13/08) ──
      O stepper completo saía do topo: etapa com erro já vira item da
@@ -339,12 +359,13 @@
     <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
   </form>
   <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
-  <div class="kpis-linha" id="kpis"></div>
   <span class="carimbo" id="carimbo">Carregando dados…</span>
   <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
   <a class="botao-refresh" href="{{ url_for('torre_mobile', data=data_alvo_input) }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
 </div>
+
+<div class="card card-kpis" id="kpis"><div class="carregando">Carregando indicadores…</div></div>
 
 <div class="pipeline-linha" id="pipeline-linha">
   <span class="carregando">Carregando etapas…</span>
@@ -566,37 +587,56 @@ function renderStepper(etapas) {
 }
 
 function renderKpis(d) {
-  // Régua de saúde (redesenho 13/08): tudo numa linha, cor só no que
-  // pede atenção; o contexto que morava nos sub-textos dos cards
-  // virou title (hover) de cada segmento.
+  // Cartões de indicador (redesenho 24/08, opção B): cada número tem
+  // cartão próprio; o contexto que morava só no title (hover) de cada
+  // segmento agora aparece como sub-texto visível onde ajuda mais
+  // (em rota / sem rota / rotas), já que hover não existe em touch.
   const p = d.pedidos;
-  const finalizadas = p.sucesso + p.falha;
   const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+  const finalizadas = p.sucesso + p.falha;
   const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
   const r = d.rotas_resumo;
-  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim"));
+  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "tile-bom" : (taxa >= 85 ? "tile-alerta" : "tile-ruim"));
+  const classeSemRota = p.qtd_nao_atribuidos ? "tile-alerta" : "";
+  const classeFalha = p.falha ? "tile-ruim" : "";
 
-  const segs = [
-    `<span class="kpi-seg" title="${pctEntregue}% do dia entregue">
-       <span class="n">${p.sucesso}<span class="contexto">/${p.total}</span></span> entregues</span>`,
-    `<span class="kpi-seg ${classeTaxa}" title="${taxa === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
-       <span class="n">${taxa === null ? "–" : taxa + "%"}</span> sucesso</span>`,
-    `<span class="kpi-seg" title="${p.contagem.accepted || 0} aceito(s) aguardando saída">
-       <span class="n">${p.contagem.on_route || 0}</span> em rota</span>`,
-    `<span class="kpi-seg ${p.qtd_nao_atribuidos ? "alerta" : ""}" title="agendamento vencido e ainda sem rota · pool p/ próximas rotas: ${p.backlog_pool}">
-       <span class="n">${p.qtd_nao_atribuidos}</span> sem rota</span>`,
-    `<span class="kpi-seg ${p.falha ? "ruim" : ""}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
-       <span class="n">${p.falha}</span> insucesso${p.falha === 1 ? "" : "s"}</span>`,
-    `<span class="kpi-seg" title="${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)">
-       <span class="n">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span> rotas</span>`,
-    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, hoje">
-       <span class="n">${d.media_pedidos_rota.dia}</span> ped./rota (dia)</span>`,
-    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, de segunda até hoje">
-       <span class="n">${d.media_pedidos_rota.semana}</span> ped./rota (sem.)</span>`,
-    `<span class="kpi-seg" title="pedidos ÷ rotas com carga, do dia 1 até hoje">
-       <span class="n">${d.media_pedidos_rota.mes}</span> ped./rota (mês)</span>`,
+  const tiles = [
+    `<div class="tile tile-bom" title="${pctEntregue}% do dia entregue">
+       <span class="rotulo-tile">Entregues</span>
+       <span class="valor-tile">${p.sucesso}<span class="contexto">/${p.total}</span></span>
+     </div>`,
+    `<div class="tile ${classeTaxa}" title="${taxa === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
+       <span class="rotulo-tile">Sucesso</span>
+       <span class="valor-tile">${taxa === null ? "–" : taxa + "%"}</span>
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Em rota</span>
+       <span class="valor-tile">${p.contagem.on_route || 0}</span>
+       <span class="sub-tile">${p.contagem.accepted || 0} aguardando saída</span>
+     </div>`,
+    `<div class="tile ${classeSemRota}">
+       <span class="rotulo-tile">Sem rota</span>
+       <span class="valor-tile">${p.qtd_nao_atribuidos}</span>
+       <span class="sub-tile">pool p/ próximas: ${p.backlog_pool}</span>
+     </div>`,
+    `<div class="tile ${classeFalha}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
+       <span class="rotulo-tile">Insucesso${p.falha === 1 ? "" : "s"}</span>
+       <span class="valor-tile">${p.falha}</span>
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Rotas</span>
+       <span class="valor-tile">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span>
+       <span class="sub-tile">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</span>
+     </div>`,
   ];
-  document.getElementById("kpis").innerHTML = segs.join("");
+
+  const medias = `<div class="faixa-medias-kpi">
+      <span title="pedidos ÷ rotas com carga, hoje">ped./rota dia <span class="n">${d.media_pedidos_rota.dia}</span></span>
+      <span title="pedidos ÷ rotas com carga, de segunda até hoje">semana <span class="n">${d.media_pedidos_rota.semana}</span></span>
+      <span title="pedidos ÷ rotas com carga, do dia 1 até hoje">mês <span class="n">${d.media_pedidos_rota.mes}</span></span>
+    </div>`;
+
+  document.getElementById("kpis").innerHTML = `<div class="grade-tiles">${tiles.join("")}</div>${medias}`;
 }
 
 const ROTULO_SITUACAO_PEDIDO = {
