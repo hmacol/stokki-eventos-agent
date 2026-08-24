@@ -117,13 +117,15 @@
   .barra-progresso .seg:only-child { border-radius: 4px; }
   /* Timeline de pedidos: chip = número da parada na rota (mesma ordem
      do planejamento), ligados por um traço que "acende" conforme a
-     parada é finalizada -- tamanho do chip é FIXO (círculo). */
-  .chips-pedidos { display: flex; flex-wrap: wrap; align-items: center; row-gap: 7px; }
+     parada é finalizada -- tamanho do chip é FIXO (quadrado). Fica
+     numa linha só e rola horizontalmente quando não cabe (pedido do
+     Hugo, 23/08). */
+  .chips-pedidos { display: flex; flex-wrap: nowrap; align-items: center; overflow-x: auto; padding: 3px 2px; }
   .chip-pedido {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 21px; height: 21px; border-radius: 100px; flex: none;
+    width: 28px; height: 28px; border-radius: 7px; flex: none;
     background: var(--fundo); border: 2px solid var(--trilha); box-sizing: border-box;
-    font-size: 9.5px; font-weight: 700; line-height: 1;
+    font-size: 12.5px; font-weight: 700; line-height: 1;
     color: var(--texto-suave); font-variant-numeric: tabular-nums;
   }
   .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
