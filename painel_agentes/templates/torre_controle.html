@@ -198,12 +198,15 @@
   .barra-progresso .seg:only-child { border-radius: 4px; }
   .chips-pedidos { display: flex; flex-wrap: wrap; gap: 4px; align-content: center; }
   .chip-pedido {
-    width: 13px; height: 13px; border-radius: 4px; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 19px; padding: 0 5px; border-radius: 5px; flex: none;
     background: var(--trilha); border: 1px solid var(--borda);
+    font-size: 9.5px; font-weight: 700; line-height: 1; white-space: nowrap;
+    color: var(--texto-suave); font-variant-numeric: tabular-nums;
   }
-  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); }
-  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); }
-  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); }
+  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
+  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); color: #fff; }
+  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); color: #fff; }
   .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
   .linha-rota .contagem .pct { color: var(--texto-suave); margin-left: 3px; }
   .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
@@ -614,7 +617,7 @@ function chipsPedidosHtml(pedidos) {
   const chips = pedidos.map(p => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
     const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
-    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})"></span>`;
+    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})">${esc(p.codigo || "")}</span>`;
   }).join("");
   return `<div class="chips-pedidos">${chips}</div>`;
 }

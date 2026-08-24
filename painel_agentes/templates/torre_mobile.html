@@ -117,12 +117,15 @@
   .barra-progresso .seg:only-child { border-radius: 4px; }
   .chips-pedidos { display: flex; flex-wrap: wrap; gap: 5px; }
   .chip-pedido {
-    width: 14px; height: 14px; border-radius: 4px; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 22px; height: 21px; padding: 0 5px; border-radius: 5px; flex: none;
     background: var(--trilha); border: 1px solid var(--borda);
+    font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap;
+    color: var(--texto-suave); font-variant-numeric: tabular-nums;
   }
-  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); }
-  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); }
-  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); }
+  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
+  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); color: #fff; }
+  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); color: #fff; }
   #card-rotas select#visao-rotas {
     font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
     background: var(--fundo); color: var(--texto);
@@ -399,7 +402,7 @@ function chipsPedidosHtml(pedidos) {
   const chips = pedidos.map(p => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
     const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
-    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})"></span>`;
+    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})">${esc(p.codigo || "")}</span>`;
   }).join("");
   return `<div class="chips-pedidos">${chips}</div>`;
 }
