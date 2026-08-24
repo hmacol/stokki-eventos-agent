@@ -49,6 +49,7 @@ aprendido em produção).
 """
 import importlib.util
 import logging
+import re
 import sqlite3
 import sys
 import threading
@@ -349,13 +350,30 @@ def _coletar_backlog(vuupt: VuuptClient, data_alvo: date) -> dict:
     """Classifica os not_assigned da conta: 'atrasados' (agendamento
     <= data_alvo e ainda sem rota -- deviam estar na rua, é o número
     acionável) vs pool normal (sem agendamento, aguardando a próxima
-    roteirização) vs futuros (agendados pra frente, é só esperar)."""
+    roteirização) vs futuros (agendados pra frente, é só esperar).
+
+    Desconta quem já está num rascunho de data_alvo (mesmo cuidado que
+    planejamento_rotas.py::buscar_dados_planejamento já toma pro pool --
+    achado do Hugo, 23/08: pedido colocado num rascunho pelo
+    criar_rotas_diarias das 18h continua 'not_assigned' na VUUPT até o
+    rascunho ser enviado, então sem esse desconto ele aparecia como
+    "sem rota" na Fila de ação mesmo já tendo rota, deixando o alerta
+    quase sempre superestimado entre a criação do rascunho e o envio)."""
+    try:
+        rascunhos_ativos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+        ids_em_rascunho = {p["service_id"] for r in rascunhos_ativos for p in r["paradas"]}
+    except Exception as e:
+        logger.warning(f"[torre] Falha ao ler rascunhos de {data_alvo} pro desconto do backlog: {e}")
+        ids_em_rascunho = set()
+
     filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
     servicos = vuupt.listar_servicos(filtro, per_page=100)
 
     atrasados = []
     pool = futuros = 0
     for s in servicos:
+        if s.get("id") in ids_em_rascunho:
+            continue
         bruto = s.get("scheduled_start")
         data_agendada = None
         if bruto:
@@ -400,6 +418,19 @@ def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
     }
 
 
+_PADRAO_NUMERO = re.compile(r"(\d+)")
+
+
+def _chave_ordem_natural(texto: str) -> list:
+    """Quebra o nome em pedaços texto/número pra comparar dígitos pelo
+    valor numérico, não caractere a caractere (achado do Hugo, 23/08:
+    'Planejamento - ... - #11' ordenava antes de '#2' porque '1' < '2'
+    como string). Cada pedaço vira (0, int) ou (1, str) pra tupla nunca
+    comparar int com str quando dois nomes têm estrutura diferente."""
+    pedacos = _PADRAO_NUMERO.split(texto)
+    return [(0, int(p)) if p.isdigit() else (1, p.lower()) for p in pedacos if p != ""]
+
+
 # ── Rotas do dia (VUUPT /routes) ──────────────────────────────────────────────
 
 def _coletar_rotas_dia(token: str, data_alvo: date,
@@ -436,6 +467,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
         total = len(validos)
         entregues = insucessos = em_rota = 0
         paradas_mapa = []
+        pedidos_chip = []
         for s in validos:
             status = s.get("status")
             if status == "done":
@@ -465,6 +497,15 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
                 if status == "accepted":
                     agregado["aceitos"] += 1
                 situacao = "pendente"
+
+            # Chip por pedido (visão alternativa da torre, pedido do
+            # Hugo, 23/08) -- ao contrário de paradas_mapa, entra TODO
+            # pedido válido, com ou sem coordenada.
+            pedidos_chip.append({
+                "codigo": s.get("code", ""),
+                "titulo": (s.get("title") or "")[:70],
+                "situacao": situacao,
+            })
 
             # Parada georreferenciada pro mini mapa -- serviço sem
             # coordenada fica fora do mapa, mas conta em tudo acima.
@@ -503,14 +544,19 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
             "entregues": entregues,
             "insucessos": insucessos,
             "restantes": max(0, total - finalizados),
+            "percentual": round(finalizados / total * 100) if total else 0,
             "estado": estado,
             "paradas": paradas_mapa,
+            "pedidos": pedidos_chip,
         })
 
     # Em andamento primeiro (é onde a atenção deve estar), depois as que
-    # ainda nem saíram, concluídas por último; empate por nome.
+    # ainda nem saíram, concluídas por último; empate por nome em ordem
+    # NUMÉRICA (_chave_ordem_natural), não alfabética -- nome de rota
+    # tem o formato 'Planejamento - DD/MM/AAAA - #N' e ordenação de
+    # string pura colocava '#11' antes de '#2' (achado do Hugo, 23/08).
     ordem_estado = {"em_andamento": 0, "nao_iniciada": 1, "concluida": 2, "vazia": 3}
-    rotas.sort(key=lambda r: (ordem_estado.get(r["estado"], 9), r["nome"]))
+    rotas.sort(key=lambda r: (ordem_estado.get(r["estado"], 9), _chave_ordem_natural(r["nome"])))
     return rotas, agregado
 
 

@@ -178,8 +178,14 @@
   .legenda .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
   .legenda .qtd { color: var(--texto-suave); font-variant-numeric: tabular-nums; }
 
+  .controles-rotas { display: flex; align-items: center; gap: 10px; text-transform: none; letter-spacing: 0; }
+  .controles-rotas select {
+    font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
+    background: var(--fundo); color: var(--texto); text-transform: none;
+  }
+
   /* Barras de rota */
-  .linha-rota { display: grid; grid-template-columns: 240px 1fr 74px; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--fundo); }
+  .linha-rota { display: grid; grid-template-columns: 240px 1fr 96px; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--fundo); }
   .linha-rota:last-child { border-bottom: none; }
   .linha-rota .ident { min-width: 0; }
   .linha-rota .nome { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -190,7 +196,16 @@
   .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
   .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
   .barra-progresso .seg:only-child { border-radius: 4px; }
+  .chips-pedidos { display: flex; flex-wrap: wrap; gap: 4px; align-content: center; }
+  .chip-pedido {
+    width: 13px; height: 13px; border-radius: 4px; flex: none;
+    background: var(--trilha); border: 1px solid var(--borda);
+  }
+  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); }
+  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); }
+  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); }
   .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
+  .linha-rota .contagem .pct { color: var(--texto-suave); margin-left: 3px; }
   .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
   .estado-rota.em_andamento { color: var(--st-rota); }
   .estado-rota.concluida { color: var(--st-sucesso); }
@@ -301,7 +316,7 @@
     .stepper { grid-template-columns: repeat(3, 1fr); }
     .carimbo { margin-left: 0; }
     .corpo { grid-template-columns: 1fr; }
-    .linha-rota { grid-template-columns: 150px 1fr 70px; }
+    .linha-rota { grid-template-columns: 150px 1fr 92px; }
   }
 </style>
 {% endblock %}
@@ -335,12 +350,16 @@
     </div>
 
     <div class="card" id="card-rotas">
-      <h3><span>Andamento das rotas</span><a href="#" id="link-mapa">ver no mapa</a></h3>
-      <div class="legenda">
-        <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues</span>
-        <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucessos</span>
-        <span class="item"><span class="ponto" style="background:var(--trilha);border:1px solid var(--borda)"></span>Restantes</span>
-      </div>
+      <h3><span>Andamento das rotas</span>
+        <span class="controles-rotas">
+          <select id="visao-rotas" onchange="alternarVisaoRotas()" title="Como exibir o progresso de cada rota">
+            <option value="barra">Barra por rota</option>
+            <option value="chips">Chips por pedido</option>
+          </select>
+          <a href="#" id="link-mapa">ver no mapa</a>
+        </span>
+      </h3>
+      <div class="legenda" id="legenda-rotas"></div>
       <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
     </div>
 
@@ -406,6 +425,16 @@ let ultimoOk = null;        // Date do último carregamento com sucesso
 let houveErro = false;
 let algumaEtapaRodando = false;
 let dadosAtuais = null;     // última resposta boa de /api/torre/dados
+
+// ── Visão do andamento das rotas: barra agregada ou chip por pedido ──
+let visaoRotas = localStorage.getItem("torre_visao_rotas") || "barra";
+document.getElementById("visao-rotas").value = visaoRotas;
+
+function alternarVisaoRotas() {
+  visaoRotas = document.getElementById("visao-rotas").value;
+  localStorage.setItem("torre_visao_rotas", visaoRotas);
+  if (dadosAtuais) renderRotas(dadosAtuais);
+}
 
 // ── Alarme sonoro de novas ações na fila ────────────────────────────
 let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
@@ -559,19 +588,57 @@ function renderKpis(d) {
   document.getElementById("kpis").innerHTML = segs.join("");
 }
 
+const ROTULO_SITUACAO_PEDIDO = {
+  entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente",
+};
+
+function renderLegendaRotas() {
+  const itens = visaoRotas === "chips"
+    ? [
+        ["var(--st-sucesso)", "Entregues"],
+        ["var(--st-falha)", "Insucessos"],
+        ["var(--st-rota)", "Em rota"],
+        ["var(--trilha)", "Pendentes"],
+      ]
+    : [
+        ["var(--st-sucesso)", "Entregues"],
+        ["var(--st-falha)", "Insucessos"],
+        ["var(--trilha)", "Restantes"],
+      ];
+  document.getElementById("legenda-rotas").innerHTML = itens.map(([cor, rotulo]) =>
+    `<span class="item"><span class="ponto" style="background:${cor};border:1px solid var(--borda)"></span>${rotulo}</span>`).join("");
+}
+
+function chipsPedidosHtml(pedidos) {
+  if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
+  const chips = pedidos.map(p => {
+    const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
+    const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
+    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})"></span>`;
+  }).join("");
+  return `<div class="chips-pedidos">${chips}</div>`;
+}
+
 function renderRotas(d) {
   const alvo = document.getElementById("rotas");
+  renderLegendaRotas();
   if (!d.rotas.length) {
     alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
     return;
   }
   alvo.innerHTML = d.rotas.map(r => {
     const finalizados = r.entregues + r.insucessos;
-    const segmentos = [];
-    if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)" title="${r.entregues} entregue(s)"></div>`);
-    if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)" title="${r.insucessos} insucesso(s)"></div>`);
-    if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)" title="${r.restantes} restante(s)"></div>`);
-    const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+    let meio;
+    if (visaoRotas === "chips") {
+      meio = chipsPedidosHtml(r.pedidos);
+    } else {
+      const segmentos = [];
+      if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)" title="${r.entregues} entregue(s)"></div>`);
+      if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)" title="${r.insucessos} insucesso(s)"></div>`);
+      if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)" title="${r.restantes} restante(s)"></div>`);
+      const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+      meio = `<div class="barra-progresso">${barra}</div>`;
+    }
     const motorista = r.motorista
       ? `<div class="motorista" title="${esc(r.motorista)}">${esc(r.motorista)}</div>`
       : `<div class="motorista faltando">sem motorista</div>`;
@@ -581,8 +648,8 @@ function renderRotas(d) {
           <div class="nome" title="${esc(r.nome)}">${esc(r.nome)}</div>
           ${motorista}
         </div>
-        <div class="barra-progresso">${barra}</div>
-        <div class="contagem">${finalizados}/${r.total}
+        ${meio}
+        <div class="contagem">${finalizados}/${r.total}<span class="pct">${r.percentual}%</span>
           <span class="estado-rota ${r.estado}">${ROTULO_ESTADO_ROTA[r.estado] || r.estado}</span>
         </div>
       </div>`;

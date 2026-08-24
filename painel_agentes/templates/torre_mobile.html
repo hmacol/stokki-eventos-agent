@@ -107,6 +107,7 @@
   .cartao-rota .ident-rota { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 5px; }
   .cartao-rota .nome-rota { font-size: 13px; font-weight: 700; }
   .cartao-rota .contagem-rota { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cartao-rota .contagem-rota .pct { color: var(--texto-suave); }
   .cartao-rota .motorista { font-size: 11.5px; color: var(--texto-suave); margin-bottom: 5px; }
   .cartao-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
   .barra-progresso { display: flex; gap: 2px; height: 14px; }
@@ -114,6 +115,18 @@
   .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
   .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
   .barra-progresso .seg:only-child { border-radius: 4px; }
+  .chips-pedidos { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip-pedido {
+    width: 14px; height: 14px; border-radius: 4px; flex: none;
+    background: var(--trilha); border: 1px solid var(--borda);
+  }
+  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); }
+  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); }
+  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); }
+  #card-rotas select#visao-rotas {
+    font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
+    background: var(--fundo); color: var(--texto);
+  }
   .estado-rota { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; text-align: right; margin-top: 2px; }
   .estado-rota.em_andamento { color: var(--st-rota); }
   .estado-rota.concluida { color: var(--st-sucesso); }
@@ -203,12 +216,13 @@
 {% endif %}
 
 <div class="cartao" id="card-rotas">
-  <h2>Andamento das rotas</h2>
-  <div class="legenda">
-    <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues</span>
-    <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucessos</span>
-    <span class="item"><span class="ponto" style="background:var(--trilha);border:1px solid var(--borda)"></span>Restantes</span>
-  </div>
+  <h2><span>Andamento das rotas</span>
+    <select id="visao-rotas" onchange="alternarVisaoRotas()" title="Como exibir o progresso de cada rota" style="text-transform:none;">
+      <option value="barra">Barra</option>
+      <option value="chips">Chips</option>
+    </select>
+  </h2>
+  <div class="legenda" id="legenda-rotas"></div>
   <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
 </div>
 
@@ -251,6 +265,14 @@ const ROTULO_ESTADO_ROTA = {
 };
 
 let ultimoOk = null, houveErro = false, algumaEtapaRodando = false, dadosAtuais = null;
+
+let visaoRotas = localStorage.getItem("torre_visao_rotas") || "barra";
+document.getElementById("visao-rotas").value = visaoRotas;
+function alternarVisaoRotas() {
+  visaoRotas = document.getElementById("visao-rotas").value;
+  localStorage.setItem("torre_visao_rotas", visaoRotas);
+  if (dadosAtuais) renderRotas(dadosAtuais);
+}
 
 let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
 let idsExcecoesConhecidas = null;
@@ -360,26 +382,55 @@ function renderKpis(d) {
     `<div class="kpi-tile ${t.classe}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join("");
 }
 
+const ROTULO_SITUACAO_PEDIDO = {
+  entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente",
+};
+
+function renderLegendaRotas() {
+  const itens = visaoRotas === "chips"
+    ? [["var(--st-sucesso)", "Entregues"], ["var(--st-falha)", "Insucessos"], ["var(--st-rota)", "Em rota"], ["var(--trilha)", "Pendentes"]]
+    : [["var(--st-sucesso)", "Entregues"], ["var(--st-falha)", "Insucessos"], ["var(--trilha)", "Restantes"]];
+  document.getElementById("legenda-rotas").innerHTML = itens.map(([cor, rotulo]) =>
+    `<span class="item"><span class="ponto" style="background:${cor};border:1px solid var(--borda)"></span>${rotulo}</span>`).join("");
+}
+
+function chipsPedidosHtml(pedidos) {
+  if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
+  const chips = pedidos.map(p => {
+    const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
+    const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
+    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})"></span>`;
+  }).join("");
+  return `<div class="chips-pedidos">${chips}</div>`;
+}
+
 function renderRotas(d) {
   const alvo = document.getElementById("rotas");
+  renderLegendaRotas();
   if (!d.rotas.length) {
     alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
     return;
   }
   alvo.innerHTML = d.rotas.map(r => {
     const finalizados = r.entregues + r.insucessos;
-    const segmentos = [];
-    if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)"></div>`);
-    if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)"></div>`);
-    if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)"></div>`);
-    const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+    let meio;
+    if (visaoRotas === "chips") {
+      meio = chipsPedidosHtml(r.pedidos);
+    } else {
+      const segmentos = [];
+      if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)"></div>`);
+      if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)"></div>`);
+      if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)"></div>`);
+      const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+      meio = `<div class="barra-progresso">${barra}</div>`;
+    }
     const motorista = r.motorista
       ? `<div class="motorista">${esc(r.motorista)}</div>`
       : `<div class="motorista faltando">sem motorista</div>`;
     return `<div class="cartao-rota">
-        <div class="ident-rota"><span class="nome-rota">${esc(r.nome)}</span><span class="contagem-rota">${finalizados}/${r.total}</span></div>
+        <div class="ident-rota"><span class="nome-rota">${esc(r.nome)}</span><span class="contagem-rota">${finalizados}/${r.total} <span class="pct">${r.percentual}%</span></span></div>
         ${motorista}
-        <div class="barra-progresso">${barra}</div>
+        ${meio}
         <span class="estado-rota ${r.estado}">${ROTULO_ESTADO_ROTA[r.estado] || r.estado}</span>
       </div>`;
   }).join("");
