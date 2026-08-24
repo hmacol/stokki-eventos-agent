@@ -115,17 +115,22 @@
   .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
   .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
   .barra-progresso .seg:only-child { border-radius: 4px; }
-  .chips-pedidos { display: flex; flex-wrap: wrap; gap: 5px; }
+  /* Timeline de pedidos: chip = número da parada na rota (mesma ordem
+     do planejamento), ligados por um traço que "acende" conforme a
+     parada é finalizada -- tamanho do chip é FIXO (círculo). */
+  .chips-pedidos { display: flex; flex-wrap: wrap; align-items: center; row-gap: 7px; }
   .chip-pedido {
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 22px; height: 21px; padding: 0 5px; border-radius: 5px; flex: none;
-    background: var(--trilha); border: 1px solid var(--borda);
-    font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap;
+    width: 21px; height: 21px; border-radius: 100px; flex: none;
+    background: var(--fundo); border: 2px solid var(--trilha); box-sizing: border-box;
+    font-size: 9.5px; font-weight: 700; line-height: 1;
     color: var(--texto-suave); font-variant-numeric: tabular-nums;
   }
   .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
   .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); color: #fff; }
-  .chip-pedido.em_rota { background: var(--st-rota); border-color: var(--st-rota); color: #fff; }
+  .chip-pedido.em_rota { border-color: var(--st-rota); color: var(--st-rota); animation: pulso 1.4s ease-in-out infinite; }
+  .linha-conectora { width: 10px; height: 2px; background: var(--trilha); flex: none; }
+  .linha-conectora.feita { background: var(--acento); }
   #card-rotas select#visao-rotas {
     font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
     background: var(--fundo); color: var(--texto);
@@ -399,12 +404,15 @@ function renderLegendaRotas() {
 
 function chipsPedidosHtml(pedidos) {
   if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
-  const chips = pedidos.map(p => {
+  const partes = pedidos.map((p, i) => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
     const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
-    return `<span class="chip-pedido ${p.situacao}" title="${esc(titulo)} (${rotulo})">${esc(p.codigo || "")}</span>`;
-  }).join("");
-  return `<div class="chips-pedidos">${chips}</div>`;
+    const chip = `<span class="chip-pedido ${p.situacao}" title="Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})">${p.ordem ?? (i + 1)}</span>`;
+    if (i === pedidos.length - 1) return chip;
+    const finalizado = p.situacao === "entregue" || p.situacao === "insucesso";
+    return chip + `<span class="linha-conectora ${finalizado ? "feita" : ""}"></span>`;
+  });
+  return `<div class="chips-pedidos">${partes.join("")}</div>`;
 }
 
 function renderRotas(d) {

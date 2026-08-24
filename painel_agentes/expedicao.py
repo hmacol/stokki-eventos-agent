@@ -174,23 +174,6 @@ def _catalogo_motoristas() -> dict:
     return {m.agent_id: m for m in catalogo.motoristas}
 
 
-_PADRAO_REFERENCIA_TITULO = re.compile(r"^#\S+\s+-\s+(.+)$")
-
-
-def _extrair_referencia_do_titulo(titulo: str) -> str:
-    """O 'title' do serviço na VUUPT é montado em pipeline.py::
-    montar_payload_vuupt como '#PS-XXXXX - Referencia / Apelido /
-    Destinatario' (Referencia só entra quando o pedido tem uma na
-    Stokki -- campo 'Ref. do Pedido:' na tela de detalhe, é o número
-    do pedido que o embarcador reconhece, diferente do código interno
-    PS-XXXXX). Não existe hoje um campo próprio pra isso na VUUPT nem
-    persistência local -- a referência só sobrevive embutida nesse
-    texto livre, daí o parse aqui em vez de uma segunda consulta."""
-    primeiro_segmento = (titulo or "").split(" / ", 1)[0]
-    m = _PADRAO_REFERENCIA_TITULO.match(primeiro_segmento)
-    return m.group(1).strip() if m else ""
-
-
 def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) -> list[dict]:
     """Chip por pedido (Hugo, 23/08) -- pro time de expedição conferir o
     que tem na rota e, se algo não foi carregado no caminhão, tirar da
@@ -202,12 +185,20 @@ def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) ->
     excluído dela hoje (_exclusoes_por_rota, histórico local). Um
     pedido reexcluído mais de uma vez conta só a tentativa mais
     recente; um que voltou a ficar ativo na MESMA rota depois de
-    excluído (raro) prevalece como ativo, não como excluído."""
+    excluído (raro) prevalece como ativo, não como excluído.
+
+    `ordem` é a posição da parada dentro da rota (1, 2, 3...), a MESMA
+    numeração exibida no planejamento -- é o que o Hugo chama de
+    "Número da Ordem de Entrega" (CORRIGIDO 23/08: a 1ª versão tentava
+    extrair uma "referência" do título do serviço via regex, mas isso
+    não é a Ordem de Entrega -- é outra coisa, às vezes um número de
+    NF). Pedido excluído não tem posição na rota atual, fica sem ordem.
+    """
     ids_ativos = {s.get("id") for s in servicos}
     pedidos_chip = [
         {"service_id": s.get("id"), "codigo": s.get("code") or "", "titulo": (s.get("title") or "")[:70],
-         "numero_pedido": _extrair_referencia_do_titulo(s.get("title") or ""), "excluido": False}
-        for s in servicos
+         "ordem": i, "excluido": False}
+        for i, s in enumerate(servicos, start=1)
     ]
     vistos_excluidos = set()
     for ex in _exclusoes_por_rota(data_alvo, rota_id):
@@ -217,7 +208,7 @@ def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) ->
         vistos_excluidos.add(sid)
         pedidos_chip.append({
             "service_id": sid, "codigo": ex["codigo_pedido"] or "", "titulo": "",
-            "numero_pedido": "", "excluido": True, "motivo": ex["motivo"], "observacao": ex["observacao"],
+            "ordem": None, "excluido": True, "motivo": ex["motivo"], "observacao": ex["observacao"],
         })
     return pedidos_chip
 

@@ -468,7 +468,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
         entregues = insucessos = em_rota = 0
         paradas_mapa = []
         pedidos_chip = []
-        for s in validos:
+        for ordem, s in enumerate(validos, start=1):
             status = s.get("status")
             if status == "done":
                 if s.get("status_done") == "failed":
@@ -500,8 +500,13 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
 
             # Chip por pedido (visão alternativa da torre, pedido do
             # Hugo, 23/08) -- ao contrário de paradas_mapa, entra TODO
-            # pedido válido, com ou sem coordenada.
+            # pedido válido, com ou sem coordenada. `ordem` é a posição
+            # da parada dentro da rota (1, 2, 3...), a MESMA numeração
+            # exibida no planejamento -- é o que o Hugo chama de
+            # "Número da Ordem de Entrega" (não confundir com `codigo`,
+            # o PS-XXXXX interno da VUUPT).
             pedidos_chip.append({
+                "ordem": ordem,
                 "codigo": s.get("code", ""),
                 "titulo": (s.get("title") or "")[:70],
                 "situacao": situacao,

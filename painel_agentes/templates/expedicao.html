@@ -60,9 +60,10 @@
     user-select: none;
   }
   .chip:hover { border-color: var(--acento); }
-  /* número do pedido (Ref. do Pedido na Stokki) em destaque -- é o que
-     o time de expedição confere contra a papelada; código PS-XXXXX
-     interno vem ao lado, mais discreto */
+  /* número da Ordem de Entrega (posição da parada na rota, mesma
+     numeração do planejamento) em destaque -- é o que o time de
+     expedição confere contra a papelada; código PS-XXXXX interno vem
+     ao lado, mais discreto */
   .chip .chip-num { font-weight: 700; }
   .chip .chip-cod { opacity: 0.6; font-weight: 400; }
   .chip.somente-consulta { cursor: default; }
@@ -174,9 +175,9 @@
             {% if p.excluido %}
             title="Excluído da rota -- {{ p.motivo }}{% if p.observacao %}: {{ p.observacao }}{% endif %}"
             {% else %}
-            title="{% if p.numero_pedido %}Nº {{ p.numero_pedido }} · {% endif %}{{ p.codigo }}{% if p.titulo %} · {{ p.titulo }}{% endif %}"
+            title="{% if p.ordem %}Ordem de Entrega {{ p.ordem }} · {% endif %}{{ p.codigo }}{% if p.titulo %} · {{ p.titulo }}{% endif %}"
             {% endif %}>
-        {% if p.numero_pedido %}<span class="chip-num">{{ p.numero_pedido }}</span> <span class="chip-cod">{{ p.codigo }}</span>
+        {% if p.ordem %}<span class="chip-num">{{ p.ordem }}</span> <span class="chip-cod">{{ p.codigo }}</span>
         {% else %}{{ p.codigo or ('#' ~ p.service_id) }}{% endif %}
       </span>
       {% endfor %}
