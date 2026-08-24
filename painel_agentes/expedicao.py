@@ -174,6 +174,23 @@ def _catalogo_motoristas() -> dict:
     return {m.agent_id: m for m in catalogo.motoristas}
 
 
+_PADRAO_REFERENCIA_TITULO = re.compile(r"^#\S+\s+-\s+(.+)$")
+
+
+def _extrair_referencia_do_titulo(titulo: str) -> str:
+    """O 'title' do serviço na VUUPT é montado em pipeline.py::
+    montar_payload_vuupt como '#PS-XXXXX - Referencia / Apelido /
+    Destinatario' (Referencia só entra quando o pedido tem uma na
+    Stokki -- campo 'Ref. do Pedido:' na tela de detalhe, é o número
+    do pedido que o embarcador reconhece, diferente do código interno
+    PS-XXXXX). Não existe hoje um campo próprio pra isso na VUUPT nem
+    persistência local -- a referência só sobrevive embutida nesse
+    texto livre, daí o parse aqui em vez de uma segunda consulta."""
+    primeiro_segmento = (titulo or "").split(" / ", 1)[0]
+    m = _PADRAO_REFERENCIA_TITULO.match(primeiro_segmento)
+    return m.group(1).strip() if m else ""
+
+
 def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) -> list[dict]:
     """Chip por pedido (Hugo, 23/08) -- pro time de expedição conferir o
     que tem na rota e, se algo não foi carregado no caminhão, tirar da
@@ -189,7 +206,7 @@ def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) ->
     ids_ativos = {s.get("id") for s in servicos}
     pedidos_chip = [
         {"service_id": s.get("id"), "codigo": s.get("code") or "", "titulo": (s.get("title") or "")[:70],
-         "excluido": False}
+         "numero_pedido": _extrair_referencia_do_titulo(s.get("title") or ""), "excluido": False}
         for s in servicos
     ]
     vistos_excluidos = set()
@@ -200,7 +217,7 @@ def _montar_pedidos_chip(data_alvo: date, rota_id: int, servicos: list[dict]) ->
         vistos_excluidos.add(sid)
         pedidos_chip.append({
             "service_id": sid, "codigo": ex["codigo_pedido"] or "", "titulo": "",
-            "excluido": True, "motivo": ex["motivo"], "observacao": ex["observacao"],
+            "numero_pedido": "", "excluido": True, "motivo": ex["motivo"], "observacao": ex["observacao"],
         })
     return pedidos_chip
 
