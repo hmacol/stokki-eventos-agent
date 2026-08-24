@@ -14,6 +14,9 @@
   .cartao-rota {
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px;
     padding: 16px 18px; margin-bottom: 12px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .cartao-rota .linha-topo {
     display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
   }
   .cartao-rota .info { min-width: 0; }
@@ -23,6 +26,10 @@
   .cartao-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
   .cartao-rota .meta { font-size: 12.5px; color: var(--texto-suave); }
   .cartao-rota .meta span + span::before { content: " · "; }
+  /* rota que perdeu a última parada por exclusão -- some da VUUPT como
+     rota de verdade, mas o card fica (só com o chip excluído) pra não
+     esconder o que aconteceu (Hugo, 23/08) */
+  .cartao-rota.cancelada { opacity: 0.7; border-style: dashed; }
 
   a.botao-imprimir {
     display: inline-flex; align-items: center; gap: 8px; flex: none;
@@ -32,6 +39,87 @@
   }
   a.botao-imprimir:hover { opacity: 0.88; }
   a.botao-imprimir:active { opacity: 0.75; }
+
+  /* Chips de pedido (Hugo, 23/08) -- um por parada da rota; botão
+     direito abre "Excluir da Rota" pro caso de algo não ter sido
+     carregado no caminhão. */
+  .pedidos-chip { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    display: inline-block;
+    max-width: 170px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--fundo);
+    border: 1px solid var(--borda);
+    color: var(--texto);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: context-menu;
+    user-select: none;
+  }
+  .chip:hover { border-color: var(--acento); }
+  .chip.somente-consulta { cursor: default; }
+  .chip.somente-consulta:hover { border-color: var(--borda); }
+  /* pedido excluído da rota -- nunca some da tela, só muda de estado;
+     motivo aparece no title (tooltip nativo) ao passar o mouse */
+  .chip.excluido {
+    background: var(--erro-bg); border-color: var(--erro-bg);
+    color: var(--texto-suave); text-decoration: line-through;
+    cursor: help;
+  }
+  .chip.excluido:hover { border-color: var(--erro); }
+
+  /* menu de contexto (botão direito) de um chip -- mesmo padrão visual
+     do menu de contexto do planejamento */
+  .menu-contexto {
+    position: fixed;
+    z-index: 10001;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 4px;
+    min-width: 170px;
+    font-size: 12.5px;
+  }
+  .menu-contexto button {
+    display: block; width: 100%; text-align: left;
+    padding: 7px 10px; border: none; background: none; border-radius: 5px;
+    cursor: pointer; color: var(--erro); font-size: inherit;
+  }
+  .menu-contexto button:hover { background: rgba(255,92,80,0.16); }
+
+  /* modal de motivo da exclusão */
+  .modal-overlay-excluir {
+    display: none;
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay-excluir.aberto { display: flex; }
+  .modal-excluir {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  .modal-excluir h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-excluir .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-excluir .campo { margin-bottom: 10px; }
+  .modal-excluir .campo > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-excluir select, .modal-excluir textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 13px; background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  .modal-excluir textarea { resize: vertical; min-height: 60px; }
+  .modal-excluir .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-excluir .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
+  .modal-excluir .acoes button.confirmar:hover { opacity: 0.88; }
+  .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
+  .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-excluir .acoes button.cancelar:hover { background: var(--fundo); }
 </style>
 {% endblock %}
 
@@ -51,21 +139,169 @@
 <div class="vazio">Nenhuma rota criada pra esse dia ainda.</div>
 {% else %}
   {% for r in rotas %}
-  <div class="cartao-rota">
-    <div class="info">
-      <div class="nome-rota">{{ r.nome }}</div>
-      <div class="motorista {{ 'faltando' if r.motorista == '(sem motorista)' else '' }}">
-        {{ r.motorista }}{% if r.placa %} <span class="placa">· {{ r.placa }}</span>{% endif %}
+  <div class="cartao-rota{% if r.cancelada %} cancelada{% endif %}">
+    <div class="linha-topo">
+      <div class="info">
+        <div class="nome-rota">{{ r.nome }}</div>
+        <div class="motorista {{ 'faltando' if r.motorista == '(sem motorista)' else '' }}">
+          {{ r.motorista }}{% if r.placa %} <span class="placa">· {{ r.placa }}</span>{% endif %}
+        </div>
+        <div class="meta">
+          {% if r.inicio %}<span>saída {{ r.inicio }}</span>{% endif %}
+          {% if r.cancelada %}
+          <span>rota cancelada -- todos os pedidos foram excluídos</span>
+          {% else %}
+          <span>{{ r.pedidos }} pedido{{ 's' if r.pedidos != 1 else '' }}</span>
+          {% endif %}
+        </div>
       </div>
-      <div class="meta">
-        {% if r.inicio %}<span>saída {{ r.inicio }}</span>{% endif %}
-        <span>{{ r.pedidos }} pedido{{ 's' if r.pedidos != 1 else '' }}</span>
-      </div>
+      {% if not r.cancelada %}
+      <a class="botao-imprimir" href="{{ url_for('api_expedicao_romaneio', rota_id=r.id, data=data_alvo_input) }}" target="_blank" rel="noopener">
+        🖨️ Imprimir documentos
+      </a>
+      {% endif %}
     </div>
-    <a class="botao-imprimir" href="{{ url_for('api_expedicao_romaneio', rota_id=r.id, data=data_alvo_input) }}" target="_blank" rel="noopener">
-      🖨️ Imprimir documentos
-    </a>
+    {% if r.pedidos_chip %}
+    <div class="pedidos-chip">
+      {% for p in r.pedidos_chip %}
+      <span class="chip{% if p.excluido %} excluido{% elif not pode_excluir %} somente-consulta{% endif %}"
+            data-rota-id="{{ r.id }}" data-service-id="{{ p.service_id }}" data-codigo="{{ p.codigo }}"
+            {% if p.excluido %}
+            title="Excluído da rota -- {{ p.motivo }}{% if p.observacao %}: {{ p.observacao }}{% endif %}"
+            {% else %}
+            title="{{ p.codigo }}{% if p.titulo %} · {{ p.titulo }}{% endif %}"
+            {% endif %}>
+        {{ p.codigo or ('#' ~ p.service_id) }}
+      </span>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
 {% endif %}
+
+<div class="modal-overlay-excluir" id="modal-excluir">
+  <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-excluir">
+    <h2 id="titulo-modal-excluir">Excluir pedido da rota</h2>
+    <p class="subtitulo" id="excluir-codigo">—</p>
+    <div class="campo">
+      <label for="excluir-motivo">Motivo</label>
+      <select id="excluir-motivo">
+        <option value="">Selecione...</option>
+        {% for m in motivos_exclusao %}
+        <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="excluir-observacao">Observação (opcional)</label>
+      <textarea id="excluir-observacao" placeholder="Detalhe o motivo, se precisar..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalExcluir()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-exclusao" onclick="confirmarExclusaoChip(this)">Excluir da rota</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const URL_EXCLUIR_PEDIDO = "{{ url_for('api_expedicao_excluir_pedido', data=data_alvo_input) }}";
+  // Dia passado é só consulta aqui -- mesma regra do planejamento (Hugo,
+  // 23/08): sem PODE_EXCLUIR nem tenta abrir o menu de contexto do chip,
+  // pra não deixar o usuário preencher o modal inteiro só pra levar erro
+  // do servidor no fim.
+  const PODE_EXCLUIR = {{ 'true' if pode_excluir else 'false' }};
+
+  let menuContextoChip = null;
+  let chipPendenteExclusao = null;
+
+  function fecharMenuContextoChip() {
+    if (menuContextoChip) { menuContextoChip.remove(); menuContextoChip = null; }
+  }
+
+  function abrirMenuContextoChip(chip, x, y) {
+    fecharMenuContextoChip();
+    const menu = document.createElement("div");
+    menu.className = "menu-contexto";
+    menu.innerHTML = '<button type="button">Excluir da Rota</button>';
+    menu.querySelector("button").addEventListener("click", () => {
+      fecharMenuContextoChip();
+      abrirModalExcluir(chip);
+    });
+    document.body.appendChild(menu);
+    const largura = menu.offsetWidth, altura = menu.offsetHeight;
+    let px = x, py = y;
+    if (px + largura > window.innerWidth - 8) px = Math.max(8, window.innerWidth - largura - 8);
+    if (py + altura > window.innerHeight - 8) py = Math.max(8, window.innerHeight - altura - 8);
+    menu.style.left = `${px}px`;
+    menu.style.top = `${py}px`;
+    menuContextoChip = menu;
+  }
+
+  if (PODE_EXCLUIR) {
+    // .excluido fica de fora -- pedido já foi tirado da rota, não tem
+    // o que excluir de novo (e tentar mandaria "não está mais nessa
+    // rota" do servidor)
+    document.querySelectorAll(".chip:not(.excluido)").forEach((chip) => {
+      chip.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        abrirMenuContextoChip(chip, e.clientX, e.clientY);
+      });
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (menuContextoChip && !menuContextoChip.contains(e.target)) fecharMenuContextoChip();
+  });
+  document.addEventListener("scroll", fecharMenuContextoChip, true);
+
+  function abrirModalExcluir(chip) {
+    chipPendenteExclusao = chip;
+    document.getElementById("excluir-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+    document.getElementById("excluir-motivo").value = "";
+    document.getElementById("excluir-observacao").value = "";
+    document.getElementById("modal-excluir").classList.add("aberto");
+  }
+
+  function fecharModalExcluir() {
+    document.getElementById("modal-excluir").classList.remove("aberto");
+    chipPendenteExclusao = null;
+  }
+
+  document.getElementById("modal-excluir").addEventListener("click", (e) => {
+    if (e.target.id === "modal-excluir") fecharModalExcluir();
+  });
+
+  async function confirmarExclusaoChip(botao) {
+    if (!chipPendenteExclusao) return;
+    const motivo = document.getElementById("excluir-motivo").value;
+    if (!motivo) { alert("Selecione o motivo."); return; }
+    const observacao = document.getElementById("excluir-observacao").value.trim();
+
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Excluindo...";
+    try {
+      const resp = await fetch(URL_EXCLUIR_PEDIDO, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rota_id: Number(chipPendenteExclusao.dataset.rotaId),
+          service_id: Number(chipPendenteExclusao.dataset.serviceId),
+          motivo,
+          observacao,
+        }),
+      });
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao excluir da rota.");
+      // recarrega -- cobre tanto o caso simples (chip some da rota)
+      // quanto o de última parada, que cancela a rota inteira
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao excluir da rota: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+</script>
 {% endblock %}

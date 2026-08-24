@@ -554,13 +554,22 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
 
-    pool = [
-        _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]),
-                            mapa_niveis, mapa_horarios, ajustes_manuais)
-        for s in servicos_brutos
-        if s["id"] not in ids_em_rascunho
-    ]
-    pool.sort(key=lambda p: p["codigo"])
+    # Pool é sempre a FOTO AO VIVO do not_assigned na VUUPT -- não existe
+    # "pool de um dia passado" (pedido do Hugo, 23/08: plano de dia
+    # anterior a hoje é só consulta, sem editar/cancelar nem oferecer
+    # pedido pra rotear ali). resumo_agendados/agendamentos/tipos_area
+    # abaixo continuam calculados do jeito de sempre -- não são "o
+    # Pool", e já eram os mesmos pra qualquer data_alvo antes desta trava.
+    if data_alvo < date.today():
+        pool = []
+    else:
+        pool = [
+            _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]),
+                                mapa_niveis, mapa_horarios, ajustes_manuais)
+            for s in servicos_brutos
+            if s["id"] not in ids_em_rascunho
+        ]
+        pool.sort(key=lambda p: p["codigo"])
 
     agendamentos_por_service_id = {}
     for s in servicos_brutos:

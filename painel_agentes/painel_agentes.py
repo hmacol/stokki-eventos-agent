@@ -71,7 +71,7 @@ from planejamento_rotas import (
 )
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
-from expedicao import listar_rotas_do_dia, gerar_romaneio_rota
+from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
 import rascunhos_rota
 import torre_controle
 import tratativas
@@ -203,6 +203,68 @@ def exige_mesma_origem(f):
         origem = request.headers.get("Origin") or request.headers.get("Referer")
         if not origem or urlparse(origem).netloc != request.host:
             abort(403, "Origem da requisição não confere (proteção CSRF).")
+        return f(*args, **kwargs)
+    return decorado
+
+
+def _resolver_data_alvo_planejamento(body: dict) -> date | None:
+    """Descobre a data-alvo do plano que uma chamada de mutação do
+    /api/planejamento/* afeta, pra bloquear ação sobre plano de dia já
+    passado (pedido do Hugo, 23/08: uma data anterior a hoje é só
+    consulta -- sem edição/cancelamento nem Pool). Tenta, nessa ordem:
+    'data_alvo' direto no corpo (rotas que operam a data inteira, ex.
+    alocar-motoristas/roteirizar-selecionados/nova-rota); senão, o
+    primeiro rascunho_id referenciado (direto, em 'rascunho_ids', em
+    'rascunho_origem_id'/'rascunho_destino_id', ou dentro de 'itens')
+    -- todo rascunho tocado numa mesma chamada pertence ao mesmo
+    lote/dia, então o primeiro que existir já basta. None quando o
+    corpo não referencia nem data nem rascunho (ex. cancelar-pedido/
+    reagendar-pedido/editar-endereco só com service_id, sem
+    rascunho_id -- é sempre um pedido do Pool, que já não existe pra
+    data passada) ou quando nenhum id referenciado resolve pra um
+    rascunho existente -- nesses casos não há o que bloquear aqui, e o
+    handler segue tratando erro de dado inexistente do jeito de sempre."""
+    valor = body.get("data_alvo")
+    if valor:
+        try:
+            return datetime.strptime(valor, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    candidatos_id = [body.get("rascunho_id"), body.get("rascunho_origem_id"), body.get("rascunho_destino_id")]
+    candidatos_id.extend(body.get("rascunho_ids") or [])
+    for item in (body.get("itens") or []):
+        if isinstance(item, dict):
+            candidatos_id.append(item.get("rascunho_id") or item.get("rascunho_origem_id"))
+
+    for rascunho_id in candidatos_id:
+        if rascunho_id is None:
+            continue
+        try:
+            rascunho = rascunhos_rota.buscar_rascunho(int(rascunho_id))
+        except (TypeError, ValueError):
+            continue
+        if rascunho:
+            return date.fromisoformat(rascunho["data_alvo"])
+    return None
+
+
+def bloqueia_planejamento_passado(f):
+    """Recusa (403) qualquer mutação do planejamento (edição, exclusão,
+    envio, cancelamento, oferta) que caia sobre o plano de um dia
+    anterior a hoje -- dia passado é só consulta (pedido do Hugo,
+    23/08). Aplicado só nas rotas de mutação que fazem sentido escopar
+    por dia (não em disparo de agente nem disponibilidade de
+    motoristas, que não são sobre editar o plano de um dia específico
+    já fechado)."""
+    @wraps(f)
+    def decorado(*args, **kwargs):
+        body = request.get_json(force=True, silent=True) or {}
+        data_alvo = _resolver_data_alvo_planejamento(body)
+        if data_alvo and data_alvo < date.today():
+            return jsonify({
+                "erro": f"Plano de {data_alvo.strftime('%d/%m/%Y')} já passou -- essa tela só permite consulta pra dia anterior a hoje.",
+            }), 403
         return f(*args, **kwargs)
     return decorado
 
@@ -415,6 +477,14 @@ def expedicao():
         erro = str(e)
     return render_template(
         "expedicao.html", rotas=rotas, erro=erro, data_alvo_input=data_alvo.isoformat(),
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # "Excluir da Rota" só faz sentido de hoje em diante -- dia
+        # passado é só consulta aqui (mesma regra de planejamento_rotas.
+        # py, ver expedicao.excluir_pedido_da_rota) -- e nível "leitura"
+        # não tem botão de ação nenhum, por definição (ver docstring de
+        # requer_auth). Esconde a opção em vez de deixar o usuário
+        # tentar e levar 401/erro do servidor.
+        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") != "leitura",
     )
 
 
@@ -433,6 +503,33 @@ def api_expedicao_romaneio(rota_id):
         logging.getLogger(__name__).exception(f"Falha ao gerar romaneio da rota {rota_id}")
         return f"Falha ao gerar romaneio: {e}", 500
     return send_file(caminho, mimetype="application/pdf", download_name=caminho.name)
+
+
+@app.route("/api/expedicao/excluir-pedido", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "expedicao"))
+@exige_mesma_origem
+def api_expedicao_excluir_pedido():
+    """Tira 1 pedido de uma rota já criada na VUUPT -- "Excluir da Rota"
+    no menu de contexto de um chip de pedido da tela de expedição
+    (Hugo, 23/08): motivo (dropdown fixo, ver expedicao.MOTIVOS_EXCLUSAO)
+    + observação livre, gravados pra auditoria. Fora do nível "leitura"
+    de propósito -- é uma ação que muda a rota na VUUPT. Ver
+    expedicao.py::excluir_pedido_da_rota."""
+    body = request.get_json(force=True)
+    try:
+        rota_id = int(body["rota_id"])
+        service_id = int(body["service_id"])
+        motivo = str(body["motivo"])
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    observacao = (body.get("observacao") or "").strip()
+    data_alvo = _parse_data_param()
+
+    resultado = excluir_pedido_da_rota(data_alvo, rota_id, service_id, motivo, observacao,
+                                       session.get("usuario", ""))
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
 
 
 def _parse_data_param(padrao_amanha: bool = False) -> date:
@@ -460,7 +557,12 @@ def planejamento():
 
     return render_template(
         "planejamento_rotas.html", dados=dados, erro=erro,
-        data_alvo_input=data_alvo.isoformat(), pode_editar=g.nivel_acesso in ("total", "operador"),
+        data_alvo_input=data_alvo.isoformat(),
+        # dia anterior a hoje é só consulta (pedido do Hugo, 23/08) --
+        # some com toda a barra de ação/edição, independente do nível
+        # de acesso (ver bloqueia_planejamento_passado pro reforço
+        # equivalente no backend das rotas de mutação).
+        pode_editar=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
     )
 
 
@@ -484,7 +586,8 @@ def planejamento_mobile():
 
     return render_template(
         "planejamento_mobile.html", dados=dados, erro=erro,
-        data_alvo_input=data_alvo.isoformat(), pode_editar=g.nivel_acesso in ("total", "operador"),
+        data_alvo_input=data_alvo.isoformat(),
+        pode_editar=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
         endpoint_desktop="planejamento",
     )
 
@@ -821,6 +924,7 @@ def _rascunho_ou_404(rascunho_id):
 @app.route("/api/planejamento/mover-parada", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_mover_parada():
     body = request.get_json(force=True)
     try:
@@ -840,6 +944,7 @@ def api_mover_parada():
 @app.route("/api/planejamento/reordenar", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_reordenar():
     body = request.get_json(force=True)
     try:
@@ -852,6 +957,7 @@ def api_reordenar():
 @app.route("/api/planejamento/inverter-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_inverter_rota():
     """Botão "Inverter rota" do card -- gira a ordem de execução das
     paradas de trás pra frente (Hugo, 17/08)."""
@@ -866,6 +972,7 @@ def api_inverter_rota():
 @app.route("/api/planejamento/mover-paradas", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_mover_paradas():
     """Seleção múltipla de paradas (de uma ou mais rotas) pra mover
     tudo de uma vez pro mesmo rascunho destino -- botão "Mover
@@ -892,6 +999,7 @@ def api_mover_paradas():
 @app.route("/api/planejamento/fundir-rotas", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_fundir_rotas():
     """Funde um rascunho no outro -- botão "Fundir com" do card (Hugo,
     17/08): todas as paradas da rota ORIGEM passam pra rota DESTINO e
@@ -907,6 +1015,7 @@ def api_fundir_rotas():
 @app.route("/api/planejamento/remover-parada", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_remover_parada():
     body = request.get_json(force=True)
     try:
@@ -923,6 +1032,7 @@ def api_remover_parada():
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_adicionar_parada():
     body = request.get_json(force=True)
     try:
@@ -935,6 +1045,7 @@ def api_adicionar_parada():
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_trocar_motorista():
     body = request.get_json(force=True)
     try:
@@ -949,6 +1060,7 @@ def api_trocar_motorista():
 @app.route("/api/planejamento/renomear-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_renomear_rota():
     body = request.get_json(force=True)
     try:
@@ -961,6 +1073,7 @@ def api_renomear_rota():
 @app.route("/api/planejamento/alocar-motoristas", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_alocar_motoristas():
     """Roda a alocação equitativa de motoristas (mesma do criador de
     rotas) nos rascunhos do lote ativo que ainda estão sem motorista --
@@ -981,6 +1094,7 @@ def api_alocar_motoristas():
 @app.route("/api/planejamento/desalocar-motoristas", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_desalocar_motoristas():
     """Limpa o motorista de todo rascunho (ainda não enviado) do lote
     ativo -- botão "Desalocar motoristas" da tela, oposto do "Alocar
@@ -1000,6 +1114,7 @@ def api_desalocar_motoristas():
 @app.route("/api/planejamento/publicar-oferta", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_publicar_oferta():
     """Botão "Publicar para motoristas" de um card (Hugo, 22/08):
     publica o rascunho no marketplace de escolha aberta e já dispara o
@@ -1031,6 +1146,7 @@ def api_publicar_oferta():
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_publicar_ofertas_lote():
     """Botão "Publicar pendentes" (Hugo, 22/08): publica de uma vez
     todo rascunho RASCUNHO sem motorista do lote ativo, e avisa (1 vez
@@ -1063,6 +1179,7 @@ def api_publicar_ofertas_lote():
 @app.route("/api/planejamento/despublicar-oferta", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_despublicar_oferta():
     """Botão "Despublicar" de um card OFERTADA (Hugo, 22/08)."""
     body = request.get_json(force=True)
@@ -1081,6 +1198,7 @@ def api_despublicar_oferta():
 @app.route("/api/planejamento/despublicar-ofertas-lote", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_despublicar_ofertas_lote():
     """Botão "Cancelar publicações" (Hugo, 23/08): despublica de uma vez
     toda rota OFERTADA do lote ativo."""
@@ -1204,6 +1322,7 @@ def api_cadastrar_motorista():
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_nova_rota():
     body = request.get_json(force=True)
     try:
@@ -1223,6 +1342,7 @@ def api_nova_rota():
 @app.route("/api/planejamento/criar-rota-com-paradas", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_criar_rota_com_paradas():
     """Rascunho novo já com as paradas selecionadas no pool (seleção
     múltipla da tela, Hugo 12/08) -- herda partição/tipo/bases/start_at
@@ -1249,6 +1369,7 @@ def api_criar_rota_com_paradas():
 @app.route("/api/planejamento/roteirizar-selecionados", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_roteirizar_selecionados():
     """Roda o criador de rotas (mesmo miolo do job diário: partição
     Seco/Frio, seleção de modelo + 2-opt, motorista sugerido) só com os
@@ -1285,6 +1406,7 @@ def api_roteirizar_selecionados():
 @app.route("/api/planejamento/otimizar-sequencia", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_otimizar_sequencia():
     body = request.get_json(force=True)
     try:
@@ -1297,6 +1419,7 @@ def api_otimizar_sequencia():
 @app.route("/api/planejamento/duplicar-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_duplicar_rota():
     """Duplica uma rota do card -- funciona tanto em RASCUNHO quanto em
     ENVIADO (Hugo, 13/08): a cópia nasce sempre em RASCUNHO, editável,
@@ -1312,6 +1435,7 @@ def api_duplicar_rota():
 @app.route("/api/planejamento/descartar-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_descartar_rota():
     """Descarta um rascunho (botão do card, rascunho_id) ou vários de
     uma vez (botão "Descartar todos os rascunhos", rascunho_ids) --
@@ -1332,6 +1456,7 @@ def api_descartar_rota():
 @app.route("/api/planejamento/confirmar-envio", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_confirmar_envio():
     """Materializa os rascunhos aprovados na VUUPT de verdade (Fase 3).
     Processa cada rascunho_id independentemente -- falha em um não
@@ -1351,6 +1476,7 @@ def api_confirmar_envio():
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_cancelar_rota():
     """Cancela na VUUPT a(s) rota(s) já enviada(s) indicada(s) -- botão
     "Cancelar rota"/"Cancelar todas as rotas" da tela. Só funciona pra
@@ -1373,6 +1499,7 @@ def api_cancelar_rota():
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_cancelar_pedido():
     """Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id}) --
     botão "Cancelar pedido" da tela, em qualquer lugar onde ele esteja
@@ -1395,6 +1522,7 @@ def api_cancelar_pedido():
 @app.route("/api/planejamento/reagendar-pedido", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_reagendar_pedido():
     """Agenda/reagenda um pedido na VUUPT (scheduled_start/scheduled_end)
     -- opção "Agendar / reagendar" do menu de contexto (ver
@@ -1417,6 +1545,7 @@ def api_reagendar_pedido():
 @app.route("/api/planejamento/reagendar-pedidos", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_reagendar_pedidos():
     """Agenda/reagenda em lote (MESMA janela de data/horário pra todos)
     -- botão "Agendar" da barra de seleção múltipla da tela de
@@ -1449,6 +1578,7 @@ def api_reagendar_pedidos():
 @app.route("/api/planejamento/editar-endereco", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_editar_endereco():
     """Edita o endereço de um pedido direto na VUUPT -- opção "Editar
     endereço" do menu de contexto (ver
@@ -1471,6 +1601,7 @@ def api_editar_endereco():
 @app.route("/api/planejamento/editar-nivel-horario", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_editar_nivel_horario():
     """Corrige nível de dificuldade e horário de atendimento (padrão de
     recebimento) do destinatário -- opção "Nível / horário de
@@ -1496,6 +1627,7 @@ def api_editar_nivel_horario():
 @app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
+@bloqueia_planejamento_passado
 def api_editar_endereco_lote():
     """Edita o MESMO endereço em lote -- botão "Editar endereço" da
     barra de seleção múltipla da tela de planejamento, tanto pra seleção
