@@ -482,10 +482,13 @@ def _servico_com_sucesso(servico: dict) -> bool:
 
 def buscar_sucesso_vuupt(order_number: str) -> dict:
     """
-    Botão "Buscar na Vuupt" da triagem (pedido do Hugo, 25/08): procura
-    o pedido original e, se ele já foi duplicado por insucesso (mesmo
-    fingerprint que duplicar() usa pra Reenvio), também a reentrega -- e
-    devolve o primeiro dos dois que tiver sido entregue com SUCESSO
+    Botão "Buscar na Vuupt" da triagem (pedido do Hugo, 25/08; ajustado
+    25/08 pra andar a cadeia inteira de reentregas): procura o pedido
+    original e, se ele já foi duplicado por insucesso (mesmo fingerprint
+    que duplicar() usa pra Reenvio), segue a cadeia de reentregas até o
+    fim -- uma reentrega pode falhar de novo e gerar outra reentrega
+    (R1 -> R2 -> ...). Entre todos os candidatos da cadeia, devolve o
+    de created_at mais recente que tenha sido entregue com SUCESSO
     (mesmo critério de _servico_com_sucesso), com link direto pra tela
     de serviços na Vuupt. Sob demanda (1 chamada por clique) em vez de
     embutido na listagem -- resolver na Vuupt é lento pra rodar pra
@@ -499,20 +502,25 @@ def buscar_sucesso_vuupt(order_number: str) -> dict:
     candidatos = []
     if servico:
         candidatos.append(servico)
-        if fingerprint_duplicacao_insucesso.ja_duplicado(servico["id"]):
-            novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(servico["id"])
-            if novo_code:
-                reentrega = vuupt.buscar_servico_por_code(novo_code)
-                if reentrega:
-                    candidatos.append(reentrega)
+        atual = servico
+        while fingerprint_duplicacao_insucesso.ja_duplicado(atual["id"]):
+            novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(atual["id"])
+            if not novo_code:
+                break
+            reentrega = vuupt.buscar_servico_por_code(novo_code)
+            if not reentrega:
+                break
+            candidatos.append(reentrega)
+            atual = reentrega
 
-    for candidato in candidatos:
-        if _servico_com_sucesso(candidato):
-            return {
-                "ok": True,
-                "encontrado": True,
-                "code": candidato.get("code"),
-                "link": f"{URL_SERVICO_VUUPT}/{candidato['id']}",
-            }
+    com_sucesso = [c for c in candidatos if _servico_com_sucesso(c)]
+    if com_sucesso:
+        mais_recente = max(com_sucesso, key=lambda s: s.get("created_at", ""))
+        return {
+            "ok": True,
+            "encontrado": True,
+            "code": mais_recente.get("code"),
+            "link": f"{URL_SERVICO_VUUPT}/{mais_recente['id']}",
+        }
 
     return {"ok": True, "encontrado": False}
