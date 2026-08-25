@@ -144,7 +144,7 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
     que pode ser o ID numérico do Stokki (a parte de PS-XXXXX) OU a NF
     do cliente, sem jeito de saber qual só olhando o valor (achado
     24/08, ver TRATATIVAS_PEDIDOS_PARADOS.md). Tenta os dois, nessa
-    ordem.
+    ordem, e só então o caso do embarcador Quatro Estrelas (abaixo).
 
     Retorna (servico, pedido_code) -- pedido_code no formato "PS-XXXXX"
     (mesmo padrão usado por tratativas.py) -- ou (None, None) se não
@@ -170,6 +170,19 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
         servico = vuupt.buscar_servico_por_code(code)
         if servico:
             return servico, code
+
+    # Quatro Estrelas: o order_number do Fresh Hub é a NF do cliente, mas
+    # o `code` do serviço na Vuupt é o PS interno do Stokki -- sem
+    # relação numérica com a NF (achado 25/08, pedido do Hugo) -- então
+    # as duas tentativas acima nunca acham nada pra esse embarcador. A
+    # NF SÓ aparece no `title` do serviço, sempre no formato
+    # "#PS-XXXXX - {NF}/QUATRO ESTRELAS - {destinatário}" (confirmado
+    # via API real). Busca por conter "{NF}/QUATRO ESTRELAS" no título
+    # -- específico o bastante pra não casar por acidente com o pedido
+    # de outro embarcador.
+    servico = vuupt.buscar_servico_por_titulo_contendo(f"{order_number}/QUATRO ESTRELAS")
+    if servico and servico.get("code"):
+        return servico, servico["code"].lstrip("#")
 
     return None, None
 
