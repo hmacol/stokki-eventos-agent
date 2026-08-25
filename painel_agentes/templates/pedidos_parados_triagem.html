@@ -74,7 +74,7 @@
 <script>
 const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
 const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar"];
-const ENCAMINHAM_OPERACAO = ["Cancelados", "Devolução Parcial"];
+const ENCAMINHAM_OPERACAO = ["Cancelados", "Devolução Parcial", "Descartar"];
 
 let pedidosAtuais = [];
 let ultimoOk = null;
@@ -115,8 +115,6 @@ function renderTabela() {
       acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar p/ operação</button>`;
     } else if (p.classificacao === "Agendado") {
       acaoHtml = `<span class="status-ok">✓ revisado (manter agendamento)</span>`;
-    } else if (p.classificacao === "Descartar") {
-      acaoHtml = `<span class="status-ok">✓ descartado</span>`;
     }
 
     const repetido = p.vezes_registrado > 1

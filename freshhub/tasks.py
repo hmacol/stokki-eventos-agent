@@ -18,6 +18,9 @@ ele nesse dia em task_categories):
   Devolução Parcial:
     category: "Devolução Parcial"
     area:     "Operações"
+  Descartar:
+    (mesmo molde de Cancelados -- confirmado com o Hugo, 24/08: "mesmo
+    comportamento de Cancelado, precisamos comunicar a equipe")
 
 Em ambos: priority="alta", status inicial "aguardando_prazo",
 requested_by = o próprio usuário de serviço logado (sessao.user_id) --
@@ -39,6 +42,12 @@ MOLDE_TRATATIVA = {
     },
     "Devolução Parcial": {
         "category": "Devolução Parcial",
+        "area": "Operações",
+    },
+    # Mesmo molde de Cancelados -- confirmado com o Hugo, 24/08: mesmo
+    # comportamento, a operação precisa ser avisada do mesmo jeito.
+    "Descartar": {
+        "category": "Cancelamento de Pedido e Retorno ao Estoque",
         "area": "Operações",
     },
 }
