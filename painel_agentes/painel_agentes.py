@@ -868,8 +868,15 @@ def torre():
     coleta na VUUPT leva alguns segundos e não deve segurar o load)."""
     data_alvo = _parse_data_param()
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    return render_template("torre_controle.html", data_alvo_input=data_alvo.isoformat(),
-                           google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"))
+    return render_template(
+        "torre_controle.html", data_alvo_input=data_alvo.isoformat(),
+        google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # "Excluir da Rota" do chip (25/08, mesmo botão da Expedição) só
+        # faz sentido de hoje em diante -- dia passado é só consulta,
+        # mesma regra de pode_excluir da Expedição.
+        pode_excluir_pedido=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+    )
 
 
 @app.route("/torre/mobile")
@@ -881,9 +888,13 @@ def torre_mobile():
     tabela/grid) pensada pra tela estreita. Nenhum endpoint novo."""
     data_alvo = _parse_data_param()
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    return render_template("torre_mobile.html", data_alvo_input=data_alvo.isoformat(),
-                           google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
-                           endpoint_desktop="torre")
+    return render_template(
+        "torre_mobile.html", data_alvo_input=data_alvo.isoformat(),
+        google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
+        endpoint_desktop="torre",
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        pode_excluir_pedido=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+    )
 
 
 @app.route("/api/torre/dados")
@@ -904,6 +915,35 @@ def api_torre_stokki():
     cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
     com agente rodando)."""
     return jsonify(torre_controle.buscar_funil_stokki())
+
+
+@app.route("/api/torre/excluir-pedido", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_torre_excluir_pedido():
+    """Tira 1 pedido de uma rota já criada na VUUPT -- "Excluir da Rota"
+    no menu de contexto de um chip pendente/em rota da Torre (Hugo,
+    25/08): mesmo botão e mesmo motivo (dropdown fixo, ver
+    expedicao.MOTIVOS_EXCLUSAO) da tela de Expedição, mas aqui a rota
+    pode já estar rodando -- permitir_rota_em_andamento=True troca a
+    trava de "rota não iniciada" pra "rota não encerrada" (ver
+    expedicao.excluir_pedido_da_rota). Fora do nível "leitura" de
+    propósito -- é uma ação que muda a rota na VUUPT."""
+    body = request.get_json(force=True)
+    try:
+        rota_id = int(body["rota_id"])
+        service_id = int(body["service_id"])
+        motivo = str(body["motivo"])
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    observacao = (body.get("observacao") or "").strip()
+    data_alvo = _parse_data_param()
+
+    resultado = excluir_pedido_da_rota(data_alvo, rota_id, service_id, motivo, observacao,
+                                       session.get("usuario", ""), permitir_rota_em_andamento=True)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
 
 
 @app.route("/api/torre/etapas")

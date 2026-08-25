@@ -72,6 +72,7 @@ from regras.preferencias_motoristas import CatalogoMotoristas
 from mapa_util import extrair_servicos_da_rota
 from executor import buscar_ultima_execucao
 from motivos_falha import texto_do_motivo
+from expedicao import _exclusoes_por_rota, _rota_ids_com_exclusao_no_dia, _rota_do_corpo
 import rascunhos_rota
 import tratativas
 
@@ -476,6 +477,54 @@ def _chave_ordem_natural(texto: str) -> list:
 
 # ── Rotas do dia (VUUPT /routes) ──────────────────────────────────────────────
 
+def _montar_card_rota_cancelada(token: str, data_alvo: date, rota_id: int,
+                                nomes_motoristas: dict[int, str]) -> dict:
+    """Reconstrói o card (formato Torre) de uma rota que sumiu de
+    listar_rotas porque foi cancelada de vez (perdeu a última parada
+    ATIVA por um "Excluir da Rota", ver expedicao.excluir_pedido_da_
+    rota) -- sem paradas ativas, só o(s) chip(s) excluído(s). Mesmo
+    padrão e mesmo motivo da Expedição (ver expedicao._montar_card_
+    rota_cancelada): o pedido não pode sumir da tela só porque a rota
+    em si deixou de existir na VUUPT. Busca a rota direto por ID pra
+    pegar nome/motorista atualizados -- GET /routes/{id} devolve a
+    rota mesmo cancelada (só a LISTAGEM filtra); se nem isso responder
+    (rota apagada de vez, não só cancelada), cai pro nome gravado na
+    própria exclusão."""
+    from rotas_client import buscar_rota
+
+    nome, motorista = None, None
+    try:
+        rota = _rota_do_corpo(buscar_rota(token, rota_id, include=["agent"]))
+        nome = rota.get("name")
+        agent_id = rota.get("agent_id")
+        motorista = nomes_motoristas.get(agent_id) if agent_id else None
+    except Exception:
+        pass
+
+    exclusoes = _exclusoes_por_rota(data_alvo, rota_id)
+    if not nome:
+        nome = (exclusoes[0]["rota_nome"] if exclusoes and exclusoes[0].get("rota_nome") else f"Rota {rota_id}")
+
+    vistos = set()
+    pedidos_chip = []
+    for ex in exclusoes:
+        sid = ex["service_id"]
+        if sid in vistos:
+            continue
+        vistos.add(sid)
+        pedidos_chip.append({
+            "ordem": None, "codigo": ex["codigo_pedido"] or "", "titulo": "",
+            "situacao": "excluido", "service_id": sid,
+            "motivo": ex["motivo"], "observacao": ex["observacao"],
+        })
+
+    return {
+        "id": rota_id, "nome": nome, "motorista": motorista,
+        "total": 0, "entregues": 0, "insucessos": 0, "restantes": 0, "percentual": 0,
+        "estado": "vazia", "paradas": [], "pedidos": pedidos_chip, "cancelada": True,
+    }
+
+
 def _coletar_rotas_dia(token: str, data_alvo: date,
                        nomes_motoristas: dict[int, str]) -> tuple[list[dict], dict, list[dict]]:
     """Progresso parada a parada de cada rota do dia (todas as rotas da
@@ -555,6 +604,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
                 "codigo": s.get("code", ""),
                 "titulo": (s.get("title") or "")[:70],
                 "situacao": situacao,
+                "service_id": s.get("id"),
             })
 
             # Parada georreferenciada pro mini mapa -- serviço sem
@@ -570,6 +620,30 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
                     })
             except (TypeError, ValueError):
                 pass
+
+        # Pedido excluído da rota por aqui ("Excluir da Rota" do menu de
+        # contexto do chip, pedido do Hugo, 25/08 -- mesmo botão da
+        # Expedição, ver expedicao.excluir_pedido_da_rota chamado com
+        # permitir_rota_em_andamento=True) nunca some do chip: mesma
+        # regra da Expedição, fica marcado "excluido" (motivo no hover)
+        # em vez de sumir. LIMITAÇÃO conhecida: se era a ÚLTIMA parada
+        # ATIVA da rota, a rota inteira é cancelada na VUUPT (ver
+        # excluir_pedido_da_rota) e some desta listagem no próximo
+        # refresh -- a Expedição reconstrói um card "cancelada" pra
+        # esse caso (_montar_card_rota_cancelada), a Torre ainda não.
+        ids_ativos = {p["service_id"] for p in pedidos_chip}
+        vistos_excluidos = set()
+        for ex in _exclusoes_por_rota(data_alvo, rota.get("id")):
+            sid = ex["service_id"]
+            if sid in ids_ativos or sid in vistos_excluidos:
+                continue
+            vistos_excluidos.add(sid)
+            pedidos_chip.append({
+                "ordem": None, "codigo": ex["codigo_pedido"] or "", "titulo": "",
+                "situacao": "excluido", "service_id": sid,
+                "motivo": ex["motivo"], "observacao": ex["observacao"],
+            })
+
         finalizados = entregues + insucessos
 
         agregado["total"] += total
@@ -598,7 +672,21 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
             "estado": estado,
             "paradas": paradas_mapa,
             "pedidos": pedidos_chip,
+            "cancelada": False,
         })
+
+    # Rota que perdeu a ÚLTIMA parada ATIVA por uma exclusão feita por
+    # aqui (chip -> "Excluir da Rota") vira "canceled" na VUUPT (ver
+    # excluir_pedido_da_rota) e por isso foi pulada no loop acima --
+    # reconstrói um card mínimo só pra manter visível o(s) chip(s)
+    # excluído(s), mesmo padrão da Expedição (ver expedicao.
+    # _montar_card_rota_cancelada). Só entra rota_id que teve exclusão
+    # HOJE e não ficou de pé em `rotas` (a maioria das exclusões não
+    # cancela a rota inteira -- só tira 1 pedido de uma rota que segue
+    # ativa, essa já foi tratada dentro do loop acima).
+    ids_com_dados = {r["id"] for r in rotas}
+    for rota_id in _rota_ids_com_exclusao_no_dia(data_alvo) - ids_com_dados:
+        rotas.append(_montar_card_rota_cancelada(token, data_alvo, rota_id, nomes_motoristas))
 
     # Em andamento primeiro (é onde a atenção deve estar), depois as que
     # ainda nem saíram, concluídas por último; empate por nome em ordem

@@ -229,6 +229,11 @@
   /* Barras de rota */
   .linha-rota { display: grid; grid-template-columns: 190px 1fr 96px; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--fundo); }
   .linha-rota:last-child { border-bottom: none; }
+  /* rota que perdeu a última parada ativa por exclusão -- some da
+     VUUPT como rota de verdade, mas a linha fica (só com o chip
+     excluído) pra não esconder o que aconteceu (mesmo padrão da
+     Expedição, Hugo 25/08) */
+  .linha-rota.cancelada { opacity: 0.65; border-bottom-style: dashed; }
   .linha-rota .ident { min-width: 0; }
   .linha-rota .nome { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .linha-rota .motorista { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -255,8 +260,62 @@
   .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
   .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); color: #fff; }
   .chip-pedido.em_rota { border-color: var(--st-rota); color: var(--st-rota); animation: pulso 1.4s ease-in-out infinite; }
+  /* pedido excluído da rota (botão direito -> "Excluir da Rota",
+     Hugo, 25/08 -- mesmo mecanismo da Expedição) -- nunca some do chip,
+     só muda de estado; motivo aparece no title (tooltip) ao passar o
+     mouse. */
+  .chip-pedido.excluido {
+    background: var(--erro-bg); border-color: var(--erro-bg); color: var(--texto-suave);
+    text-decoration: line-through; cursor: help;
+  }
+  .chip-pedido.excluido:hover { border-color: var(--st-falha); }
+  /* só chip pendente/em rota pode ser excluído (Hugo, 25/08: já
+     entregue/insucesso não tem o que "tirar da rota", já aconteceu) */
+  .chip-pedido.acionavel { cursor: context-menu; }
+  .chip-pedido.acionavel:hover { outline: 2px solid var(--acento); outline-offset: 1px; }
   .linha-conectora { width: 10px; height: 2px; background: var(--trilha); flex: none; }
   .linha-conectora.feita { background: var(--acento); }
+
+  /* menu de contexto (botão direito) de um chip -- mesmo padrão visual
+     do menu de contexto da Expedição/planejamento */
+  .menu-contexto {
+    position: fixed; z-index: 10001;
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 4px; min-width: 170px; font-size: 12.5px;
+  }
+  .menu-contexto button {
+    display: block; width: 100%; text-align: left;
+    padding: 7px 10px; border: none; background: none; border-radius: 5px;
+    cursor: pointer; color: var(--erro); font-size: inherit;
+  }
+  .menu-contexto button:hover { background: rgba(255,92,80,0.16); }
+
+  /* modal de motivo da exclusão -- mesmo padrão da Expedição */
+  .modal-overlay-excluir {
+    display: none; position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35); align-items: center; justify-content: center;
+  }
+  .modal-overlay-excluir.aberto { display: flex; }
+  .modal-excluir {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  .modal-excluir h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-excluir .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-excluir .campo { margin-bottom: 10px; }
+  .modal-excluir .campo > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-excluir select, .modal-excluir textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 13px; background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  .modal-excluir textarea { resize: vertical; min-height: 60px; }
+  .modal-excluir .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-excluir .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
+  .modal-excluir .acoes button.confirmar:hover { opacity: 0.88; }
+  .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
+  .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-excluir .acoes button.cancelar:hover { background: var(--fundo); }
   .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
   .linha-rota .contagem .pct { color: var(--texto-suave); margin-left: 3px; }
   .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
@@ -458,9 +517,41 @@
   </div>
 </div>
 
+<div class="modal-overlay-excluir" id="modal-excluir">
+  <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-excluir">
+    <h2 id="titulo-modal-excluir">Excluir pedido da rota</h2>
+    <p class="subtitulo" id="excluir-codigo">—</p>
+    <div class="campo">
+      <label for="excluir-motivo">Motivo</label>
+      <select id="excluir-motivo">
+        <option value="">Selecione...</option>
+        {% for m in motivos_exclusao %}
+        <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="excluir-observacao">Observação (opcional)</label>
+      <textarea id="excluir-observacao" placeholder="Detalhe o motivo, se precisar..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalExcluir()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-exclusao" onclick="confirmarExclusaoChip(this)">Excluir da rota</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const DATA_ALVO = {{ data_alvo_input | tojson }};
 const PODE_EDITAR = {{ pode_editar | tojson }};
+// "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo botão da Expedição,
+// mas aqui a rota pode estar rodando (ver painel_agentes.py::
+// api_torre_excluir_pedido, permitir_rota_em_andamento=True). Dia
+// passado é só consulta aqui (mesma regra do pode_excluir da
+// Expedição) -- some a opção em vez de deixar tentar e levar erro do
+// servidor.
+const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
+const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido', data=data_alvo_input) }}";
 
 // Rótulos/cores dos status de pedido -- MESMA ordem em que os
 // segmentos se tocam na barra empilhada (ordem validada contra CVD).
@@ -831,12 +922,20 @@ function renderLegendaRotas() {
     `<span class="item"><span class="ponto" style="background:${cor};border:1px solid var(--borda)"></span>${rotulo}</span>`).join("");
 }
 
-function chipsPedidosHtml(pedidos) {
+function chipsPedidosHtml(pedidos, rotaId) {
   if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
   const partes = pedidos.map((p, i) => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
     const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
-    const chip = `<span class="chip-pedido ${p.situacao}" title="Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})">${p.ordem ?? (i + 1)}</span>`;
+    // Só pendente/em rota pode ser excluído da rota por aqui (Hugo,
+    // 25/08) -- já entregue/insucesso já aconteceu, não tem o que tirar.
+    const acionavel = PODE_EXCLUIR_PEDIDO && (p.situacao === "pendente" || p.situacao === "em_rota");
+    const tituloAttr = p.situacao === "excluido"
+      ? `Excluído da rota — ${esc(p.motivo || "")}${p.observacao ? ": " + esc(p.observacao) : ""}`
+      : `Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})`;
+    const chip = `<span class="chip-pedido ${p.situacao}${acionavel ? " acionavel" : ""}"` +
+      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}"` +
+      ` title="${tituloAttr}">${p.ordem ?? (i + 1)}</span>`;
     if (i === pedidos.length - 1) return chip;
     const finalizado = p.situacao === "entregue" || p.situacao === "insucesso";
     return chip + `<span class="linha-conectora ${finalizado ? "feita" : ""}"></span>`;
@@ -855,7 +954,7 @@ function renderRotas(d) {
     const finalizados = r.entregues + r.insucessos;
     let meio;
     if (visaoRotas === "chips") {
-      meio = chipsPedidosHtml(r.pedidos);
+      meio = chipsPedidosHtml(r.pedidos, r.id);
     } else {
       const segmentos = [];
       if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)" title="${r.entregues} entregue(s)"></div>`);
@@ -867,18 +966,110 @@ function renderRotas(d) {
     const motorista = r.motorista
       ? `<div class="motorista" title="${esc(r.motorista)}">${esc(r.motorista)}</div>`
       : `<div class="motorista faltando">sem motorista</div>`;
+    const rotuloEstado = r.cancelada ? "Cancelada" : (ROTULO_ESTADO_ROTA[r.estado] || r.estado);
     return `
-      <div class="linha-rota">
+      <div class="linha-rota${r.cancelada ? " cancelada" : ""}">
         <div class="ident">
           <div class="nome" title="${esc(r.nome)}">${esc(r.nome)}</div>
           ${motorista}
         </div>
         ${meio}
         <div class="contagem">${finalizados}/${r.total}<span class="pct">${r.percentual}%</span>
-          <span class="estado-rota ${r.estado}">${ROTULO_ESTADO_ROTA[r.estado] || r.estado}</span>
+          <span class="estado-rota ${r.estado}">${rotuloEstado}</span>
         </div>
       </div>`;
   }).join("");
+}
+
+// ── "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo mecanismo da
+// Expedição (menu de contexto -> modal de motivo -> POST), mas os
+// chips aqui são recriados a cada refresh de dados (setInterval
+// carregarDados, 60s) -- por isso o listener de contextmenu fica
+// delegado no container #rotas em vez de 1 por chip. ─────────────────
+let menuContextoChip = null;
+let chipPendenteExclusao = null;
+
+function fecharMenuContextoChip() {
+  if (menuContextoChip) { menuContextoChip.remove(); menuContextoChip = null; }
+}
+
+function abrirMenuContextoChip(chip, x, y) {
+  fecharMenuContextoChip();
+  const menu = document.createElement("div");
+  menu.className = "menu-contexto";
+  menu.innerHTML = '<button type="button">Excluir da Rota</button>';
+  menu.querySelector("button").addEventListener("click", () => {
+    fecharMenuContextoChip();
+    abrirModalExcluir(chip);
+  });
+  document.body.appendChild(menu);
+  const largura = menu.offsetWidth, altura = menu.offsetHeight;
+  let px = x, py = y;
+  if (px + largura > window.innerWidth - 8) px = Math.max(8, window.innerWidth - largura - 8);
+  if (py + altura > window.innerHeight - 8) py = Math.max(8, window.innerHeight - altura - 8);
+  menu.style.left = `${px}px`;
+  menu.style.top = `${py}px`;
+  menuContextoChip = menu;
+}
+
+document.getElementById("rotas").addEventListener("contextmenu", (e) => {
+  const chip = e.target.closest(".chip-pedido.acionavel");
+  if (!chip) return;
+  e.preventDefault();
+  abrirMenuContextoChip(chip, e.clientX, e.clientY);
+});
+
+document.addEventListener("click", (e) => {
+  if (menuContextoChip && !menuContextoChip.contains(e.target)) fecharMenuContextoChip();
+});
+document.addEventListener("scroll", fecharMenuContextoChip, true);
+
+function abrirModalExcluir(chip) {
+  chipPendenteExclusao = chip;
+  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("excluir-motivo").value = "";
+  document.getElementById("excluir-observacao").value = "";
+  document.getElementById("modal-excluir").classList.add("aberto");
+}
+
+function fecharModalExcluir() {
+  document.getElementById("modal-excluir").classList.remove("aberto");
+  chipPendenteExclusao = null;
+}
+
+document.getElementById("modal-excluir").addEventListener("click", (e) => {
+  if (e.target.id === "modal-excluir") fecharModalExcluir();
+});
+
+async function confirmarExclusaoChip(botao) {
+  if (!chipPendenteExclusao) return;
+  const motivo = document.getElementById("excluir-motivo").value;
+  if (!motivo) { alert("Selecione o motivo."); return; }
+  const observacao = document.getElementById("excluir-observacao").value.trim();
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Excluindo...";
+  try {
+    const resp = await fetch(URL_TORRE_EXCLUIR_PEDIDO, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rota_id: Number(chipPendenteExclusao.dataset.rotaId),
+        service_id: Number(chipPendenteExclusao.dataset.serviceId),
+        motivo,
+        observacao,
+      }),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao excluir da rota.");
+    fecharModalExcluir();
+    carregarDados();
+  } catch (e) {
+    alert(`Falha ao excluir da rota: ${e.message}`);
+    botao.disabled = false;
+    botao.textContent = original;
+  }
 }
 
 function renderPedidosStatus(d) {
