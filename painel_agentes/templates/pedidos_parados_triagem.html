@@ -39,10 +39,12 @@
 {% block conteudo %}
 <h1>Pedidos parados</h1>
 <p class="subtitulo">
-  Origem: freshhub.com.br/pedidos-parados. Classifique cada pedido e dispare a
-  tratativa correspondente -- ver TRATATIVAS_PEDIDOS_PARADOS.md pro critério
-  de cada classificação. Pedidos parados há {{ '2+' }} dias ficam marcados
-  como prioridade.
+  Origem: freshhub.com.br/pedidos-parados. Mostra só quem foi registrado de
+  novo hoje (pedido entregue por fora da triagem some da lista sozinho).
+  Classifique cada pedido e dispare a tratativa correspondente -- ver
+  TRATATIVAS_PEDIDOS_PARADOS.md pro critério de cada classificação. "Dias
+  parado" conta desde a primeira vez que o pedido apareceu como parado
+  (não só hoje); 2+ dias fica marcado como prioridade.
 </p>
 
 <div class="barra-utilidade">

@@ -17,17 +17,25 @@ A classificação em si é NOSSA (não existe campo de status em
 `stalled_orders` no Fresh Hub, achado 24/08) -- fica na tabela local
 `pedidos_parados_classificacao`, chaveada por `order_number` (não por
 `freshhub_id`): o mesmo pedido pode ser registrado como parado mais de
-uma vez no Fresh Hub (achado 24/08, 68 casos na amostra), e a
+uma vez no Fresh Hub (é re-registrado todo dia enquanto continua
+parado, achado 24/08 -- teve caso de 35 dias seguidos), e a
 classificação/tratativa precisa "grudar" no pedido, não em cada
 registro individual -- é assim que "verificar se já foi tratado"
 funciona de fato.
+
+A LISTA exibida (`listar_com_classificacao`) só mostra quem foi
+registrado de novo no dia mais recente (pedido do Hugo, 24/08) e já
+tira quem foi entregue por fora da triagem (`completed_at` na Vuupt,
+sem insucesso) -- mas `dias_parado` usa o histórico completo, não só o
+registro de hoje.
 """
 import importlib.util
 import logging
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -49,6 +57,25 @@ CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agend
 CLASSIFICACOES_QUE_ENCAMINHAM_OPERACAO = ("Cancelados", "Devolução Parcial")
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
+
+FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")  # mesmo fuso da Torre de Controle
+
+# Quantos registros brutos buscar no Fresh Hub pra ter histórico
+# suficiente de "há quantos dias esse pedido aparece" -- o mesmo pedido
+# é re-registrado todo dia enquanto continua parado (achado 24/08), então
+# 200 (o default de listar_pedidos_parados) só cobre uns 3 dias de
+# histórico; usamos uma janela maior aqui especificamente pra não
+# subestimar `dias_parado` de pedidos parados há muito tempo.
+LIMITE_HISTORICO_PEDIDOS_PARADOS = 2000
+
+# Janela de busca de serviços concluídos na Vuupt pra saber quem já foi
+# entregue (pedido do Hugo, 24/08) -- só precisa cobrir "recente" (o
+# pedido só aparece na lista se ainda foi registrado como parado no dia
+# mais recente; se tivesse sido entregue há muito tempo, não teria sido
+# re-registrado). Insucesso (completed_at preenchido só que com
+# failed_reason_id) NÃO conta como entregue -- continua na lista, já
+# tem tratativa própria na Torre.
+DIAS_JANELA_ENTREGUES = 3
 
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
@@ -149,25 +176,93 @@ def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
     conn.close()
 
 
+def _data_local(iso_utc: str) -> date:
+    """Converte um created_at do Fresh Hub (ISO em UTC) pra data local
+    (America/Sao_Paulo) -- usado pra saber em que DIA o registro
+    aconteceu de verdade (perto da meia-noite, UTC e local podem cair
+    em dias diferentes)."""
+    dt = datetime.fromisoformat(iso_utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(FUSO_LOCAL).date()
+
+
+def _codes_entregues_recentes(vuupt: VuuptClient, dias: int = DIAS_JANELA_ENTREGUES) -> set[str]:
+    """
+    Códigos (sem '#') de serviços concluídos com SUCESSO (completed_at
+    preenchido e sem failed_reason_id) nos últimos `dias` dias -- busca
+    em lote (1 chamada paginada) em vez de resolver pedido a pedido, bem
+    mais rápido (pedido do Hugo, 24/08: pedidos entregues somem da
+    lista). Insucesso (completed_at preenchido só que com
+    failed_reason_id) fica de fora do set de propósito -- já tem
+    tratativa própria na Torre de Controle, não é "resolvido" pra fins
+    de pedido parado.
+
+    Se a busca falhar, devolve um set vazio (não filtra nada) em vez de
+    derrubar a listagem inteira por causa disso.
+    """
+    inicio = date.today() - timedelta(days=dias)
+    filtros = [{"field": "completed_at", "operator": "gte", "value": inicio.strftime("%Y-%m-%d")}]
+    try:
+        servicos = vuupt.listar_servicos(filtros)
+    except Exception as e:
+        logger.warning(f"Falha ao buscar serviços concluídos recentes (não filtro entregues por segurança): {e}")
+        return set()
+
+    return {
+        s["code"].lstrip("#")
+        for s in servicos
+        if s.get("code") and s.get("completed_at") and not s.get("failed_reason_id")
+    }
+
+
 # ── Leitura ────────────────────────────────────────────────────────────────────
 
 def listar_com_classificacao() -> list[dict]:
     """
-    Une os pedidos parados do Fresh Hub com a classificação local,
-    deduplicando por `order_number` (mantém só o registro mais recente
-    de cada pedido -- ver docstring do módulo).
+    Une os pedidos parados do Fresh Hub com a classificação local.
+
+    Regras combinadas com o Hugo, 24/08:
+    - Só mostra pedidos registrados no dia mais recente presente nos
+      dados (o mesmo pedido é re-registrado todo dia enquanto continua
+      parado -- se não foi re-registrado hoje, ou já foi resolvido, sai
+      da lista de qualquer forma).
+    - `dias_parado` olha o HISTÓRICO completo disponível (não só o
+      registro de hoje) -- é a diferença entre hoje e a primeira vez
+      que esse pedido apareceu como parado, senão a prioridade (>=2
+      dias) nunca dispararia.
+    - Pedidos já entregues (completed_at na Vuupt, sem insucesso) saem
+      da lista mesmo que tenham sido re-registrados hoje.
     """
     sessao = _sessao_freshhub()
-    brutos = listar_pedidos_parados(sessao)
+    brutos = listar_pedidos_parados(sessao, limit=LIMITE_HISTORICO_PEDIDOS_PARADOS)
+    if not brutos:
+        return []
 
-    mais_recente: dict[str, dict] = {}
+    primeira_vez: dict[str, str] = {}
+    ultima_vez: dict[str, dict] = {}
     contagem: dict[str, int] = {}
     for p in brutos:
         numero = p["order_number"]
         contagem[numero] = contagem.get(numero, 0) + 1
-        atual = mais_recente.get(numero)
+        if numero not in primeira_vez or p["created_at"] < primeira_vez[numero]:
+            primeira_vez[numero] = p["created_at"]
+        atual = ultima_vez.get(numero)
         if atual is None or p["created_at"] > atual["created_at"]:
-            mais_recente[numero] = p
+            ultima_vez[numero] = p
+
+    dia_mais_recente = max(_data_local(p["created_at"]) for p in brutos)
+    pedidos_do_dia = {
+        numero: p for numero, p in ultima_vez.items()
+        if _data_local(p["created_at"]) == dia_mais_recente
+    }
+
+    vuupt = _vuupt()
+    entregues = _codes_entregues_recentes(vuupt)
+    pedidos_do_dia = {
+        numero: p for numero, p in pedidos_do_dia.items()
+        if f"PS-{numero}" not in entregues
+    }
 
     conn = _conectar()
     try:
@@ -177,11 +272,9 @@ def listar_com_classificacao() -> list[dict]:
     finally:
         conn.close()
 
-    agora = datetime.now(timezone.utc)
     resultado = []
-    for numero, p in mais_recente.items():
-        criado_em = datetime.fromisoformat(p["created_at"])
-        dias_parado = (agora - criado_em).days
+    for numero, p in pedidos_do_dia.items():
+        dias_parado = (dia_mais_recente - _data_local(primeira_vez[numero])).days + 1
         local = locais.get(numero, {})
         resultado.append({
             "order_number": numero,
@@ -199,8 +292,8 @@ def listar_com_classificacao() -> list[dict]:
             "acao_detalhe": local.get("acao_detalhe"),
         })
 
-    # mais antigos primeiro -- são os que mais precisam de atenção
-    resultado.sort(key=lambda r: r["created_at"])
+    # mais dias parado primeiro -- são os que mais precisam de atenção
+    resultado.sort(key=lambda r: r["dias_parado"], reverse=True)
     return resultado
 
 

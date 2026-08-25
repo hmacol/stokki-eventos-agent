@@ -331,11 +331,23 @@ a casca, dados chegam por `/api/pedidos-parados/*` via JS):
 - `painel_agentes/pedidos_parados_triagem.py` — lógica de negócio:
   - `listar_com_classificacao()` — une a leitura do Fresh Hub
     (`freshhub.pedidos_parados.listar_pedidos_parados`) com a
-    classificação local, **deduplicando por `order_number`** (mantém só
-    o registro mais recente de cada pedido — o mesmo pedido pode ter
-    sido registrado várias vezes no Fresh Hub). Calcula `dias_parado` e
-    a flag `prioridade` (≥2 dias). Testado: 200 registros brutos → 103
-    pedidos únicos.
+    classificação local. **Ajustado, 24/08 (pedido do Hugo)**: a lista
+    exibida só mostra pedidos **registrados de novo no dia mais
+    recente** presente nos dados (o mesmo pedido é re-registrado todo
+    dia enquanto continua parado — se não aparece de novo hoje, ou já
+    foi resolvido, some da lista de qualquer forma), e **tira quem já
+    foi entregue** por fora da triagem (`_codes_entregues_recentes()`:
+    busca em lote os serviços com `completed_at` preenchido e SEM
+    `failed_reason_id` nos últimos 3 dias na Vuupt — insucesso não
+    conta como "entregue", continua na lista, já tem tratativa própria
+    na Torre). `dias_parado` usa o **histórico completo** disponível
+    (busca até 2000 registros brutos, não só os 200 default — o mesmo
+    pedido pode aparecer dezenas de vezes), calculado como hoje menos a
+    primeira vez que aquele pedido apareceu como parado — é assim que a
+    prioridade (≥2 dias) continua funcionando mesmo só mostrando o dia
+    de hoje. **Achado real ao testar**: tem pedido parado há **35 dias**
+    (registrado 19-20 vezes!). Testado: 76 pedidos no dia mais recente,
+    1 já entregue (removido), 75 exibidos.
   - `classificar()` — grava a classificação numa tabela nova,
     `pedidos_parados_classificacao` (`dados/dados.db`, raiz do
     projeto), **chaveada por `order_number`** (não por `freshhub_id`)
