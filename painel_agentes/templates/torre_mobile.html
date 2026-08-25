@@ -176,6 +176,14 @@
      excluído) pra não esconder o que aconteceu (mesmo padrão do
      desktop/Expedição) */
   .cartao-rota.cancelada { opacity: 0.65; border-bottom-style: dashed; }
+  /* fixada no topo por exclusão recente (ver MINUTOS_DESTAQUE_EXCLUSAO
+     no backend) -- destaque sutil pra explicar por que uma rota
+     "Concluída"/"Vazia" aparece antes de rotas em andamento */
+  .cartao-rota.recente { background: var(--rodando-bg); border-radius: 8px; padding: 9px 10px; margin: 0 -10px 0; border-bottom: none; }
+  .nota-recente {
+    display: block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.2px; color: var(--rodando-texto); margin-top: 3px;
+  }
 
   /* modal de motivo da exclusão -- mesmo padrão do desktop/Expedição */
   .modal-overlay-excluir {
@@ -655,11 +663,16 @@ function renderRotas(d) {
       ? `<div class="motorista">${esc(r.motorista)}</div>`
       : `<div class="motorista faltando">sem motorista</div>`;
     const rotuloEstado = r.cancelada ? "Cancelada" : (ROTULO_ESTADO_ROTA[r.estado] || r.estado);
-    return `<div class="cartao-rota${r.cancelada ? " cancelada" : ""}">
+    // "30 min" abaixo precisa acompanhar MINUTOS_DESTAQUE_EXCLUSAO em
+    // torre_controle.py -- só rótulo, o backend é a fonte da verdade.
+    const notaRecente = r.excluido_recente
+      ? `<span class="nota-recente">fixada · exclusão recente</span>` : "";
+    return `<div class="cartao-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}">
         <div class="ident-rota"><span class="nome-rota">${esc(r.nome)}</span><span class="contagem-rota">${finalizados}/${r.total} <span class="pct">${r.percentual}%</span></span></div>
         ${motorista}
         ${meio}
         <span class="estado-rota ${r.estado}">${rotuloEstado}</span>
+        ${notaRecente}
       </div>`;
   }).join("");
 }

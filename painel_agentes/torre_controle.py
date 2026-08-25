@@ -477,6 +477,28 @@ def _chave_ordem_natural(texto: str) -> list:
 
 # ── Rotas do dia (VUUPT /routes) ──────────────────────────────────────────────
 
+# Uma rota que acabou de ter um pedido excluído fica destacada no topo
+# de "Andamento das rotas" por um tempo (pedido do Hugo, 25/08: excluir
+# o ÚLTIMO pendente de uma rota vira "Concluída" na hora e pula pro fim
+# da lista -- de longe parece que a rota sumiu, achado em produção no
+# mesmo dia). Por TEMPO DE PAREDE desde o registro da exclusão
+# (criado_em), não por sessão de navegador -- mais de 1 pessoa pode
+# estar olhando a Torre ao mesmo tempo, e assim vale igual pra
+# qualquer uma que abrir a tela dentro da janela.
+MINUTOS_DESTAQUE_EXCLUSAO = 30
+
+
+def _teve_exclusao_recente(exclusoes: list[dict], agora: datetime) -> bool:
+    for ex in exclusoes:
+        try:
+            quando = datetime.fromisoformat(ex["criado_em"])
+        except (TypeError, ValueError):
+            continue
+        if agora - quando <= timedelta(minutes=MINUTOS_DESTAQUE_EXCLUSAO):
+            return True
+    return False
+
+
 def _montar_card_rota_cancelada(token: str, data_alvo: date, rota_id: int,
                                 nomes_motoristas: dict[int, str]) -> dict:
     """Reconstrói o card (formato Torre) de uma rota que sumiu de
@@ -522,6 +544,7 @@ def _montar_card_rota_cancelada(token: str, data_alvo: date, rota_id: int,
         "id": rota_id, "nome": nome, "motorista": motorista,
         "total": 0, "entregues": 0, "insucessos": 0, "restantes": 0, "percentual": 0,
         "estado": "vazia", "paradas": [], "pedidos": pedidos_chip, "cancelada": True,
+        "excluido_recente": _teve_exclusao_recente(exclusoes, datetime.now()),
     }
 
 
@@ -544,6 +567,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
     ]
     rotas_brutas = listar_rotas(token, include=["services"], filtro=filtro)
 
+    agora = datetime.now()
     rotas = []
     agregado = {"total": 0, "entregues": 0, "insucessos": 0, "em_rota": 0,
                 "aceitos": 0, "cancelados": 0, "insucessos_lista": []}
@@ -626,14 +650,13 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
         # Expedição, ver expedicao.excluir_pedido_da_rota chamado com
         # permitir_rota_em_andamento=True) nunca some do chip: mesma
         # regra da Expedição, fica marcado "excluido" (motivo no hover)
-        # em vez de sumir. LIMITAÇÃO conhecida: se era a ÚLTIMA parada
-        # ATIVA da rota, a rota inteira é cancelada na VUUPT (ver
-        # excluir_pedido_da_rota) e some desta listagem no próximo
-        # refresh -- a Expedição reconstrói um card "cancelada" pra
-        # esse caso (_montar_card_rota_cancelada), a Torre ainda não.
+        # em vez de sumir. Se era a ÚLTIMA parada ATIVA da rota, ela é
+        # cancelada de vez na VUUPT e some desta listagem -- reconstruída
+        # à parte mais abaixo (ver _montar_card_rota_cancelada).
+        exclusoes_rota = _exclusoes_por_rota(data_alvo, rota.get("id"))
         ids_ativos = {p["service_id"] for p in pedidos_chip}
         vistos_excluidos = set()
-        for ex in _exclusoes_por_rota(data_alvo, rota.get("id")):
+        for ex in exclusoes_rota:
             sid = ex["service_id"]
             if sid in ids_ativos or sid in vistos_excluidos:
                 continue
@@ -673,6 +696,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
             "paradas": paradas_mapa,
             "pedidos": pedidos_chip,
             "cancelada": False,
+            "excluido_recente": _teve_exclusao_recente(exclusoes_rota, agora),
         })
 
     # Rota que perdeu a ÚLTIMA parada ATIVA por uma exclusão feita por
@@ -688,13 +712,22 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
     for rota_id in _rota_ids_com_exclusao_no_dia(data_alvo) - ids_com_dados:
         rotas.append(_montar_card_rota_cancelada(token, data_alvo, rota_id, nomes_motoristas))
 
-    # Em andamento primeiro (é onde a atenção deve estar), depois as que
-    # ainda nem saíram, concluídas por último; empate por nome em ordem
-    # NUMÉRICA (_chave_ordem_natural), não alfabética -- nome de rota
-    # tem o formato 'Planejamento - DD/MM/AAAA - #N' e ordenação de
-    # string pura colocava '#11' antes de '#2' (achado do Hugo, 23/08).
+    # Rota com exclusão recente primeiro de tudo (ver MINUTOS_DESTAQUE_
+    # EXCLUSAO acima) -- excluir o último pendente fecha a rota em
+    # "Concluída" na hora, que sem isso pularia direto pro fim da
+    # lista, dando a impressão de ter sumido (achado do Hugo, 25/08).
+    # Dentro de cada grupo: em andamento primeiro (é onde a atenção
+    # deve estar), depois as que ainda nem saíram, concluídas por
+    # último; empate por nome em ordem NUMÉRICA (_chave_ordem_natural),
+    # não alfabética -- nome de rota tem o formato 'Planejamento -
+    # DD/MM/AAAA - #N' e ordenação de string pura colocava '#11' antes
+    # de '#2' (achado do Hugo, 23/08).
     ordem_estado = {"em_andamento": 0, "nao_iniciada": 1, "concluida": 2, "vazia": 3}
-    rotas.sort(key=lambda r: (ordem_estado.get(r["estado"], 9), _chave_ordem_natural(r["nome"])))
+    rotas.sort(key=lambda r: (
+        0 if r.get("excluido_recente") else 1,
+        ordem_estado.get(r["estado"], 9),
+        _chave_ordem_natural(r["nome"]),
+    ))
     return rotas, agregado, rotas_brutas
 
 
