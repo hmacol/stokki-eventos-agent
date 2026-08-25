@@ -31,6 +31,7 @@ registro de hoje.
 """
 import importlib.util
 import logging
+import re
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -76,6 +77,14 @@ LIMITE_HISTORICO_PEDIDOS_PARADOS = 2000
 # failed_reason_id) NÃO conta como entregue -- continua na lista, já
 # tem tratativa própria na Torre.
 DIAS_JANELA_ENTREGUES = 3
+
+# Link direto pro pedido na Stokki (mesma convenção de expedir_pedidos.py:
+# URL_PROVIDER_SHW) e pra tela do pedido na Vuupt -- pedido do Hugo,
+# 25/08. Confirmado pelo Hugo, 25/08: https://app.vuupt.com/manager/orders/{id}
+# (o id numérico do próprio serviço, não o code "PS-XXXXX").
+STOKKI_BASE = "https://freshlog.stokki.com.br"
+URL_PEDIDO_STOKKI = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
+URL_SERVICO_VUUPT = "https://app.vuupt.com/manager/orders"
 
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
@@ -163,6 +172,41 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
             return servico, code
 
     return None, None
+
+
+def _resolver_ids_stokki(order_numbers: list[str]) -> dict[str, str]:
+    """
+    ID numérico real do Stokki (o final de /outbound/show/{id}) pra cada
+    order_number -- mesma ambiguidade de _resolver_pedido: o
+    order_number do Fresh Hub pode já SER o ID Stokki (caso mais comum)
+    ou pode ser a NF do cliente, que só mapeia pro ID Stokki via
+    `pedidos_historico` (ver TRATATIVAS_PEDIDOS_PARADOS.md). Só consulta
+    o banco local (nunca a Vuupt) -- precisa ser rápido pra lista
+    inteira, diferente da busca sob demanda de buscar_sucesso_vuupt().
+
+    Default: o próprio order_number, quando não acha nada em
+    pedidos_historico (é o caso mais comum -- já É o ID Stokki).
+    """
+    if not order_numbers:
+        return {}
+
+    resultado = {n: n for n in order_numbers}
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        marcadores = ",".join("?" * len(order_numbers))
+        linhas = conn.execute(
+            f"SELECT numero_nfe, id_pedido FROM pedidos_historico WHERE numero_nfe IN ({marcadores})",
+            list(order_numbers),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for linha in linhas:
+        m = re.search(r"PS-(\d+)", linha["id_pedido"] or "")
+        if m:
+            resultado[linha["numero_nfe"]] = m.group(1)
+    return resultado
 
 
 def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
@@ -272,6 +316,8 @@ def listar_com_classificacao() -> list[dict]:
     finally:
         conn.close()
 
+    ids_stokki = _resolver_ids_stokki(list(pedidos_do_dia.keys()))
+
     resultado = []
     for numero, p in pedidos_do_dia.items():
         dias_parado = (dia_mais_recente - _data_local(primeira_vez[numero])).days + 1
@@ -283,6 +329,7 @@ def listar_com_classificacao() -> list[dict]:
             "recebedor_name": p["recebedor_name"],
             "created_at": p["created_at"],
             "vezes_registrado": contagem[numero],
+            "stokki_url": f"{URL_PEDIDO_STOKKI}/{ids_stokki.get(numero, numero)}",
             "dias_parado": dias_parado,
             "prioridade": dias_parado >= DIAS_PRIORIDADE,
             "classificacao": local.get("classificacao"),
@@ -409,3 +456,47 @@ def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> 
         )
     _marcar_acao(order_number, "concluida", f"demanda criada → {criada.get('id')}")
     return {"ok": True, "demanda_id": criada.get("id"), "client_name": client_name}
+
+
+def _servico_com_sucesso(servico: dict) -> bool:
+    """Mesmo critério de sucesso usado em _codes_entregues_recentes:
+    completed_at preenchido e sem failed_reason_id."""
+    return bool(servico.get("completed_at")) and not servico.get("failed_reason_id")
+
+
+def buscar_sucesso_vuupt(order_number: str) -> dict:
+    """
+    Botão "Buscar na Vuupt" da triagem (pedido do Hugo, 25/08): procura
+    o pedido original e, se ele já foi duplicado por insucesso (mesmo
+    fingerprint que duplicar() usa pra Reenvio), também a reentrega -- e
+    devolve o primeiro dos dois que tiver sido entregue com SUCESSO
+    (mesmo critério de _servico_com_sucesso), com link direto pra tela
+    de serviços na Vuupt. Sob demanda (1 chamada por clique) em vez de
+    embutido na listagem -- resolver na Vuupt é lento pra rodar pra
+    cada linha da tabela toda vez que ela recarrega.
+    """
+    import fingerprint_duplicacao_insucesso  # sys.path já tem insucesso_entrega/
+
+    vuupt = _vuupt()
+    servico, _pedido_code = _resolver_pedido(vuupt, order_number)
+
+    candidatos = []
+    if servico:
+        candidatos.append(servico)
+        if fingerprint_duplicacao_insucesso.ja_duplicado(servico["id"]):
+            novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(servico["id"])
+            if novo_code:
+                reentrega = vuupt.buscar_servico_por_code(novo_code)
+                if reentrega:
+                    candidatos.append(reentrega)
+
+    for candidato in candidatos:
+        if _servico_com_sucesso(candidato):
+            return {
+                "ok": True,
+                "encontrado": True,
+                "code": candidato.get("code"),
+                "link": f"{URL_SERVICO_VUUPT}/{candidato['id']}",
+            }
+
+    return {"ok": True, "encontrado": False}

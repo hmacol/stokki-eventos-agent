@@ -767,6 +767,20 @@ def api_pedidos_parados_classificar():
     return jsonify({"ok": True})
 
 
+@app.route("/api/pedidos-parados/buscar-vuupt")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def api_pedidos_parados_buscar_vuupt():
+    order_number = request.args.get("order_number", "")
+    if not order_number:
+        return jsonify({"erro": "parâmetro order_number ausente"}), 400
+    try:
+        resultado = pedidos_parados_triagem.buscar_sucesso_vuupt(order_number)
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao buscar pedido parado na Vuupt")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
+
+
 @app.route("/api/pedidos-parados/duplicar", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem

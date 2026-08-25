@@ -33,6 +33,15 @@
   .status-erro { color: var(--erro); font-size: 12px; }
   .sem-dado { color: var(--texto-suave); }
   .carregando { padding: 30px; text-align: center; color: var(--texto-suave); }
+  .celula-pedido { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .link-stokki { color: var(--primaria); text-decoration: none; }
+  .link-stokki:hover { text-decoration: underline; }
+  .botao-vuupt {
+    padding: 1px 6px; border: 1px solid var(--borda); border-radius: 5px; background: var(--superficie);
+    font-size: 11px; cursor: pointer; color: var(--texto-suave); line-height: 1.6;
+  }
+  .botao-vuupt:hover { background: var(--superficie-hover); }
+  .botao-vuupt:disabled { opacity: 0.5; cursor: default; }
 </style>
 {% endblock %}
 
@@ -134,7 +143,13 @@ function renderTabela() {
 
     return `
       <tr class="${p.prioridade ? 'prioridade' : ''}">
-        <td class="mono">${esc(p.order_number)}${repetido}</td>
+        <td class="mono">
+          <div class="celula-pedido">
+            <a class="link-stokki" href="${esc(p.stokki_url)}" target="_blank" rel="noopener" title="Abrir pedido na Stokki">${esc(p.order_number)}</a>
+            <button class="botao-vuupt" onclick="buscarVuupt('${p.order_number}', this)" title="Buscar pedido com sucesso na Vuupt">Vuupt 🔍</button>
+            ${repetido}
+          </div>
+        </td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
         <td>${p.prioridade ? `<span class="badge badge-prioridade">${p.dias_parado}d</span>` : p.dias_parado + 'd'}</td>
@@ -143,6 +158,27 @@ function renderTabela() {
         <td>${acaoHtml}</td>
       </tr>`;
   }).join("");
+}
+
+async function buscarVuupt(orderNumber, botao) {
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Buscando…";
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/buscar-vuupt?order_number=${encodeURIComponent(orderNumber)}`);
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao buscar na Vuupt."); return; }
+    if (j.encontrado) {
+      window.open(j.link, "_blank", "noopener");
+    } else {
+      alert(`Pedido ${orderNumber}: nenhum serviço com sucesso encontrado na Vuupt.`);
+    }
+  } catch (e) {
+    alert("Falha ao buscar na Vuupt: " + e);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
 }
 
 async function classificar(orderNumber, freshhubId, classificacao) {
