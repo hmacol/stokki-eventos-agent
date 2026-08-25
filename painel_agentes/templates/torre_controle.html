@@ -113,11 +113,33 @@
   .tile.tile-alerta .valor-tile { color: var(--rodando-texto); }
   .tile.tile-ruim { background: var(--erro-bg); border-color: var(--st-falha); }
   .tile.tile-ruim .valor-tile { color: var(--st-falha); }
-  .faixa-medias-kpi {
+
+  /* ── Seletor de período dos KPIs (24/08 -- Fase 1 do pedido do Hugo:
+     "quero semana, mês e comparação com o período anterior") -- trocar
+     de aba só re-renderiza os mesmos tiles com o slice de
+     dadosAtuais.kpis_periodo já carregado, sem novo fetch. */
+  .abas-periodo { display: inline-flex; background: var(--fundo); border-radius: 8px; padding: 3px; gap: 2px; margin-bottom: 12px; }
+  .abas-periodo button {
+    border: none; background: transparent; color: var(--texto-suave); font-size: 12.5px; font-weight: 600;
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .abas-periodo button.ativa { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,0.08); }
+  .link-trimestre {
+    font-size: 12px; color: var(--acento); background: none; border: none; cursor: pointer;
+    font-weight: 600; padding: 6px 4px; font-family: inherit; margin-top: 10px;
+  }
+  .delta { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; margin-top: 1px; }
+  .delta.pos { color: var(--st-sucesso); }
+  .delta.neg { color: var(--st-falha); }
+  .delta .rot-comp { font-weight: 500; color: var(--texto-suave); margin-left: 2px; }
+  .faixa-trimestre { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--borda); display: none; }
+  .faixa-trimestre.aberta { display: block; }
+  .faixa-trimestre .rot { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); margin-bottom: 10px; }
+  .faixa-motivos {
     display: flex; gap: 6px 20px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
     border-top: 1px solid var(--fundo); font-size: 12px; color: var(--texto-suave);
   }
-  .faixa-medias-kpi .n { font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .faixa-motivos .n { font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
 
   /* ── Pipeline colapsado (redesenho 13/08) ──
      O stepper completo saía do topo: etapa com erro já vira item da
@@ -328,6 +350,8 @@
   .td-acao button.tratar { color: var(--texto-suave); }
   .td-acao button.duplicar { color: #1c5cab; border-color: #C7D9F0; }
   .td-acao button.duplicar:hover { border-color: #1c5cab; }
+  .td-acao button.notificar { color: #0a8f6e; border-color: #B7E8DA; }
+  .td-acao button.notificar:hover { border-color: #0a8f6e; }
   details.tratadas { margin-top: 12px; font-size: 12.5px; }
   details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
   details.tratadas table td { color: var(--texto-suave); }
@@ -457,6 +481,8 @@ let ultimoOk = null;        // Date do último carregamento com sucesso
 let houveErro = false;
 let algumaEtapaRodando = false;
 let dadosAtuais = null;     // última resposta boa de /api/torre/dados
+let periodoKpiAtivo = "dia"; // aba ativa da régua de KPIs -- sobrevive ao refresh de 60s
+let trimestreAberto = false; // "ver comparação trimestral" -- idem
 
 // ── Visão do andamento das rotas: barra agregada ou chip por pedido ──
 let visaoRotas = localStorage.getItem("torre_visao_rotas") || "barra";
@@ -586,57 +612,202 @@ function renderStepper(etapas) {
   document.getElementById("stepper").innerHTML = cards + etapaTudo;
 }
 
+const ROTULO_ABA_KPI = { dia: "Hoje", semana: "Semana", mes: "Mês" };
+const ROTULO_COMPARACAO_KPI = {
+  dia: "vs. ontem",
+  semana: "vs. semana passada",
+  mes: "vs. mesmo período, mês anterior",
+  trimestre: "vs. mesmo período, trimestre anterior",
+};
+
+function formatarDuracaoMin(min) {
+  if (min === null || min === undefined) return "–";
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h ? `${h}h${m ? " " + m + "min" : ""}` : `${m}min`;
+}
+
+// Δ em pontos percentuais (taxas: sucesso, utilização) -- "mais é
+// melhor" sempre (nenhum KPI de taxa da torre inverte esse sentido).
+function deltaPP(atual, anterior) {
+  if (atual === null || atual === undefined || anterior === null || anterior === undefined) return null;
+  const dif = atual - anterior;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = classe === "pos" ? "▲" : (classe === "neg" ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(1)}pp`, classe, seta };
+}
+
+// Δ percentual (médias: ped./rota) -- null quando não há base de
+// comparação (período anterior sem nenhuma rota).
+function deltaPercentual(atual, anterior) {
+  if (!anterior) return null;
+  const dif = ((atual - anterior) / anterior) * 100;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(0)}%`, classe, seta };
+}
+
+// Δ em contagem absoluta (insucessos, duração) -- menosEhMelhor inverte
+// a cor (cair vira verde), usado pra "menos insucesso"/"rota mais rápida".
+function deltaContagem(atual, anterior, menosEhMelhor) {
+  const dif = atual - anterior;
+  let classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  if (menosEhMelhor) classe = dif > 0 ? "neg" : (dif < 0 ? "pos" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif}`, classe, seta };
+}
+
+function tagDelta(delta, rotuloComparacao) {
+  if (!delta) return "";
+  return `<span class="delta ${delta.classe}">${delta.seta} ${delta.texto}<span class="rot-comp">${rotuloComparacao}</span></span>`;
+}
+
+function renderTilesPeriodo(d, periodo) {
+  const bloco = d.kpis_periodo[periodo];
+  const atual = bloco.atual, anterior = bloco.anterior;
+  const rotComp = ROTULO_COMPARACAO_KPI[periodo];
+  const tiles = [];
+
+  if (periodo === "dia") {
+    // Tiles ricos de "hoje" ficam como sempre foram (redesenho de
+    // 24/08) -- "em rota"/"sem rota" só existem em tempo real, não têm
+    // equivalente somado numa semana/mês, por isso só aparecem aqui.
+    const p = d.pedidos, r = d.rotas_resumo;
+    const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+    const finalizadas = p.sucesso + p.falha;
+    const taxaHoje = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
+    const classeTaxa = taxaHoje === null ? "" : (taxaHoje >= 95 ? "tile-bom" : (taxaHoje >= 85 ? "tile-alerta" : "tile-ruim"));
+    const classeSemRota = p.qtd_nao_atribuidos ? "tile-alerta" : "";
+    const classeFalha = p.falha ? "tile-ruim" : "";
+    const dSucesso = (taxaHoje === null || anterior.sucesso_pct === null) ? null : deltaPP(taxaHoje, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(p.falha, anterior.insucessos, true);
+
+    tiles.push(
+      `<div class="tile tile-bom" title="${pctEntregue}% do dia entregue">
+         <span class="rotulo-tile">Entregues</span>
+         <span class="valor-tile">${p.sucesso}<span class="contexto">/${p.total}</span></span>
+       </div>`,
+      `<div class="tile ${classeTaxa}" title="${taxaHoje === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
+         <span class="rotulo-tile">Sucesso</span>
+         <span class="valor-tile">${taxaHoje === null ? "–" : taxaHoje + "%"}</span>
+         ${tagDelta(dSucesso, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Em rota</span>
+         <span class="valor-tile">${p.contagem.on_route || 0}</span>
+         <span class="sub-tile">${p.contagem.accepted || 0} aguardando saída</span>
+       </div>`,
+      `<div class="tile ${classeSemRota}">
+         <span class="rotulo-tile">Sem rota</span>
+         <span class="valor-tile">${p.qtd_nao_atribuidos}</span>
+         <span class="sub-tile">pool p/ próximas: ${p.backlog_pool}</span>
+       </div>`,
+      `<div class="tile ${classeFalha}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
+         <span class="rotulo-tile">Insucesso${p.falha === 1 ? "" : "s"}</span>
+         <span class="valor-tile">${p.falha}</span>
+         ${tagDelta(dInsucessos, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Rotas</span>
+         <span class="valor-tile">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span>
+         <span class="sub-tile">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</span>
+       </div>`,
+    );
+  } else {
+    const dSucesso = (atual.sucesso_pct === null || anterior.sucesso_pct === null) ? null : deltaPP(atual.sucesso_pct, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(atual.insucessos, anterior.insucessos, true);
+    const classeTaxa = atual.sucesso_pct === null ? "" : (atual.sucesso_pct >= 95 ? "tile-bom" : (atual.sucesso_pct >= 85 ? "tile-alerta" : "tile-ruim"));
+    const classeFalha = atual.insucessos ? "tile-ruim" : "";
+
+    tiles.push(
+      `<div class="tile tile-bom">
+         <span class="rotulo-tile">Entregues</span>
+         <span class="valor-tile">${atual.entregues}<span class="contexto">/${atual.total_paradas}</span></span>
+       </div>`,
+      `<div class="tile ${classeTaxa}">
+         <span class="rotulo-tile">Sucesso</span>
+         <span class="valor-tile">${atual.sucesso_pct === null ? "–" : atual.sucesso_pct + "%"}</span>
+         ${tagDelta(dSucesso, rotComp)}
+       </div>`,
+      `<div class="tile ${classeFalha}">
+         <span class="rotulo-tile">Insucesso${atual.insucessos === 1 ? "" : "s"}</span>
+         <span class="valor-tile">${atual.insucessos}</span>
+         ${tagDelta(dInsucessos, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Rotas</span>
+         <span class="valor-tile">${atual.rotas_concluidas}<span class="contexto">/${atual.rotas_total}</span></span>
+       </div>`,
+    );
+  }
+
+  // Comuns a todas as abas (inclusive hoje): os 3 KPIs novos + o que
+  // até 23/08 vivia solto na "faixa-medias-kpi" (ped./rota).
+  const dPedRota = deltaPercentual(atual.ped_rota, anterior.ped_rota);
+  const dDuracao = (atual.duracao_media_min === null || anterior.duracao_media_min === null)
+    ? null : deltaContagem(Math.round(atual.duracao_media_min), Math.round(anterior.duracao_media_min), true);
+  const dUtilizacao = (atual.utilizacao_motoristas_pct === null || anterior.utilizacao_motoristas_pct === null)
+    ? null : deltaPP(atual.utilizacao_motoristas_pct, anterior.utilizacao_motoristas_pct);
+
+  tiles.push(
+    `<div class="tile">
+       <span class="rotulo-tile">Ped./rota</span>
+       <span class="valor-tile">${atual.ped_rota}</span>
+       ${tagDelta(dPedRota, rotComp)}
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Duração média de rota</span>
+       <span class="valor-tile">${formatarDuracaoMin(atual.duracao_media_min)}</span>
+       ${tagDelta(dDuracao, rotComp)}
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Utilização motoristas</span>
+       <span class="valor-tile">${atual.utilizacao_motoristas_pct === null ? "–" : atual.utilizacao_motoristas_pct + "%"}</span>
+       <span class="sub-tile">${atual.motoristas_distintos} motorista(s) rodaram</span>
+       ${tagDelta(dUtilizacao, rotComp)}
+     </div>`,
+  );
+
+  return tiles.join("");
+}
+
+function renderMotivosInsucesso(bloco) {
+  const motivos = bloco.atual.motivos_insucesso;
+  if (!motivos.length) return `<div class="faixa-motivos">Nenhum insucesso no período. 🎉</div>`;
+  const itens = motivos.map(m => `<span>${m.motivo} <span class="n">${m.qtd}</span></span>`).join("");
+  return `<div class="faixa-motivos">${itens}</div>`;
+}
+
+function trocarPeriodoKpi(periodo) {
+  periodoKpiAtivo = periodo;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+
+function alternarTrimestreKpi() {
+  trimestreAberto = !trimestreAberto;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+
 function renderKpis(d) {
-  // Cartões de indicador (redesenho 24/08, opção B): cada número tem
-  // cartão próprio; o contexto que morava só no title (hover) de cada
-  // segmento agora aparece como sub-texto visível onde ajuda mais
-  // (em rota / sem rota / rotas), já que hover não existe em touch.
-  const p = d.pedidos;
-  const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
-  const finalizadas = p.sucesso + p.falha;
-  const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
-  const r = d.rotas_resumo;
-  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "tile-bom" : (taxa >= 85 ? "tile-alerta" : "tile-ruim"));
-  const classeSemRota = p.qtd_nao_atribuidos ? "tile-alerta" : "";
-  const classeFalha = p.falha ? "tile-ruim" : "";
+  // Régua de KPIs com abas (Fase 1, 24/08 -- pedido do Hugo: "semana,
+  // mês e comparação com o período anterior"). Os 4 períodos já vêm
+  // prontos em d.kpis_periodo; trocar de aba só re-renderiza, sem
+  // fetch novo (ver trocarPeriodoKpi/alternarTrimestreKpi).
+  const abas = ["dia", "semana", "mes"].map(p =>
+    `<button class="${p === periodoKpiAtivo ? "ativa" : ""}" onclick="trocarPeriodoKpi('${p}')">${ROTULO_ABA_KPI[p]}</button>`
+  ).join("");
 
-  const tiles = [
-    `<div class="tile tile-bom" title="${pctEntregue}% do dia entregue">
-       <span class="rotulo-tile">Entregues</span>
-       <span class="valor-tile">${p.sucesso}<span class="contexto">/${p.total}</span></span>
-     </div>`,
-    `<div class="tile ${classeTaxa}" title="${taxa === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
-       <span class="rotulo-tile">Sucesso</span>
-       <span class="valor-tile">${taxa === null ? "–" : taxa + "%"}</span>
-     </div>`,
-    `<div class="tile">
-       <span class="rotulo-tile">Em rota</span>
-       <span class="valor-tile">${p.contagem.on_route || 0}</span>
-       <span class="sub-tile">${p.contagem.accepted || 0} aguardando saída</span>
-     </div>`,
-    `<div class="tile ${classeSemRota}">
-       <span class="rotulo-tile">Sem rota</span>
-       <span class="valor-tile">${p.qtd_nao_atribuidos}</span>
-       <span class="sub-tile">pool p/ próximas: ${p.backlog_pool}</span>
-     </div>`,
-    `<div class="tile ${classeFalha}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
-       <span class="rotulo-tile">Insucesso${p.falha === 1 ? "" : "s"}</span>
-       <span class="valor-tile">${p.falha}</span>
-     </div>`,
-    `<div class="tile">
-       <span class="rotulo-tile">Rotas</span>
-       <span class="valor-tile">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span>
-       <span class="sub-tile">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</span>
-     </div>`,
-  ];
+  const grade = `<div class="grade-tiles">${renderTilesPeriodo(d, periodoKpiAtivo)}</div>
+    ${renderMotivosInsucesso(d.kpis_periodo[periodoKpiAtivo])}`;
 
-  const medias = `<div class="faixa-medias-kpi">
-      <span title="pedidos ÷ rotas com carga, hoje">ped./rota dia <span class="n">${d.media_pedidos_rota.dia}</span></span>
-      <span title="pedidos ÷ rotas com carga, de segunda até hoje">semana <span class="n">${d.media_pedidos_rota.semana}</span></span>
-      <span title="pedidos ÷ rotas com carga, do dia 1 até hoje">mês <span class="n">${d.media_pedidos_rota.mes}</span></span>
+  const trimestre = `
+    <button class="link-trimestre" onclick="alternarTrimestreKpi()">${trimestreAberto ? "ocultar comparação trimestral ▴" : "ver comparação trimestral ▾"}</button>
+    <div class="faixa-trimestre ${trimestreAberto ? "aberta" : ""}">
+      <div class="rot">Trimestre corrente vs. mesmo recorte do trimestre anterior</div>
+      <div class="grade-tiles">${renderTilesPeriodo(d, "trimestre")}</div>
+      ${renderMotivosInsucesso(d.kpis_periodo.trimestre)}
     </div>`;
 
-  document.getElementById("kpis").innerHTML = `<div class="grade-tiles">${tiles.join("")}</div>${medias}`;
+  document.getElementById("kpis").innerHTML = `<div class="abas-periodo">${abas}</div>${grade}${trimestre}`;
 }
 
 const ROTULO_SITUACAO_PEDIDO = {
@@ -784,6 +955,10 @@ function renderExcecoes(d) {
         acao += ` <button class="duplicar" title="Cria a reentrega no VUUPT agora, sem esperar resposta do remetente"
                           onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
       }
+      if (x.pode_notificar_ocorrencia && PODE_EDITAR) {
+        acao += ` <button class="notificar" title="Manda a pergunta de reenvio ao remetente agora"
+                          onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
+      }
       if (PODE_EDITAR) {
         acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
                           onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
@@ -870,6 +1045,22 @@ async function duplicarPedido(id) {
     alert(`Reentrega criada: ${j.novo_code}`);
     carregarDados();
   } catch (e) { alert("Falha ao duplicar: " + e); }
+}
+
+async function notificarOcorrencia(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Mandar a pergunta de reenvio ao remetente de ${x.codigo} agora?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/notificar-ocorrencia`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: x.service_id, codigo: x.codigo }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao notificar."); return; }
+    alert(j.mensagem || "E-mail enviado.");
+    carregarDados();
+  } catch (e) { alert("Falha ao notificar: " + e); }
 }
 
 function renderTendencia(d) {

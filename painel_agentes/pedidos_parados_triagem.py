@@ -29,6 +29,7 @@ tira quem foi entregue por fora da triagem (`completed_at` na Vuupt,
 sem insucesso) -- mas `dias_parado` usa o histórico completo, não só o
 registro de hoje.
 """
+import html
 import importlib.util
 import logging
 import re
@@ -44,6 +45,7 @@ sys.path.insert(0, str(_RAIZ / "insucesso_entrega"))
 
 import yaml
 
+import email_utils
 import tratativas
 from vuupt_client import VuuptClient
 from freshhub.auth import FreshHubSession
@@ -54,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
-CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota")
+CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira")
 CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
@@ -85,6 +87,31 @@ DIAS_JANELA_ENTREGUES = 3
 STOKKI_BASE = "https://freshlog.stokki.com.br"
 URL_PEDIDO_STOKKI = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 URL_SERVICO_VUUPT = "https://app.vuupt.com/manager/orders"
+
+# Embarcadores cujo `order_number` do Fresh Hub é a NF do cliente, não o
+# ID do Stokki -- o `code` do serviço na Vuupt é o PS interno, sem
+# relação numérica com a NF (achado 25/08, caso Quatro Estrelas). A NF
+# só aparece no `title` do serviço, sempre no formato "#PS-XXXXX - {NF}
+# / {apelido} / {destinatário}" (apelido = coluna `nome_remetente` da
+# tabela `interno`, é como pipeline.montar_payload_vuupt monta o
+# título) -- com espaços em volta da barra. Confirmado via API real pra
+# cada um, pedido do Hugo 25/08: Quatro Estrelas (pedido 175780,
+# apelido "QUATRO ESTRELAS") e Laticínio Dourado (pedido 150282,
+# apelido "DOURADO").
+EMBARCADORES_ORDER_NUMBER_E_NF = ["QUATRO ESTRELAS", "DOURADO"]
+
+
+def _buscar_servico_por_nf_embarcadores(vuupt: VuuptClient, order_number: str) -> dict | None:
+    """Tenta achar o serviço na Vuupt pelo título, pros embarcadores em
+    EMBARCADORES_ORDER_NUMBER_E_NF (ver comentário acima) -- usado tanto
+    por _resolver_pedido (ações sob demanda) quanto por
+    _resolver_ids_stokki (link da Stokki na listagem)."""
+    for apelido in EMBARCADORES_ORDER_NUMBER_E_NF:
+        servico = vuupt.buscar_servico_por_titulo_contendo(f"{order_number} / {apelido}")
+        if servico:
+            return servico
+    return None
+
 
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
@@ -144,7 +171,8 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
     que pode ser o ID numérico do Stokki (a parte de PS-XXXXX) OU a NF
     do cliente, sem jeito de saber qual só olhando o valor (achado
     24/08, ver TRATATIVAS_PEDIDOS_PARADOS.md). Tenta os dois, nessa
-    ordem, e só então o caso do embarcador Quatro Estrelas (abaixo).
+    ordem, e só então o caso dos embarcadores em
+    EMBARCADORES_ORDER_NUMBER_E_NF (abaixo).
 
     Retorna (servico, pedido_code) -- pedido_code no formato "PS-XXXXX"
     (mesmo padrão usado por tratativas.py) -- ou (None, None) se não
@@ -171,37 +199,37 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
         if servico:
             return servico, code
 
-    # Quatro Estrelas: o order_number do Fresh Hub é a NF do cliente, mas
-    # o `code` do serviço na Vuupt é o PS interno do Stokki -- sem
+    # Embarcadores em EMBARCADORES_ORDER_NUMBER_E_NF (Quatro Estrelas,
+    # Laticínio Dourado): o order_number do Fresh Hub é a NF do cliente,
+    # mas o `code` do serviço na Vuupt é o PS interno do Stokki -- sem
     # relação numérica com a NF (achado 25/08, pedido do Hugo) -- então
-    # as duas tentativas acima nunca acham nada pra esse embarcador. A
-    # NF SÓ aparece no `title` do serviço, sempre no formato
-    # "#PS-XXXXX - {NF} / QUATRO ESTRELAS / {destinatário}" -- com
-    # espaços em volta da barra (confirmado via API real, pedido
-    # 175780: "#PS-37580 - 175780 / QUATRO ESTRELAS / Leila Cristina
-    # Dias" -- a 1ª tentativa desse fallback, sem os espaços, nunca
-    # casava). Busca por conter "{NF} / QUATRO ESTRELAS" no título --
-    # específico o bastante pra não casar por acidente com o pedido de
-    # outro embarcador.
-    servico = vuupt.buscar_servico_por_titulo_contendo(f"{order_number} / QUATRO ESTRELAS")
+    # as duas tentativas acima nunca acham nada pra esses embarcadores. A
+    # NF SÓ aparece no `title` do serviço (ver comentário de
+    # EMBARCADORES_ORDER_NUMBER_E_NF pro formato exato e a confirmação
+    # via API real de cada um).
+    servico = _buscar_servico_por_nf_embarcadores(vuupt, order_number)
     if servico and servico.get("code"):
         return servico, servico["code"].lstrip("#")
 
     return None, None
 
 
-def _resolver_ids_stokki(order_numbers: list[str]) -> dict[str, str]:
+def _resolver_ids_stokki(vuupt: VuuptClient, order_numbers: list[str]) -> dict[str, str]:
     """
     ID numérico real do Stokki (o final de /outbound/show/{id}) pra cada
     order_number -- mesma ambiguidade de _resolver_pedido: o
     order_number do Fresh Hub pode já SER o ID Stokki (caso mais comum)
     ou pode ser a NF do cliente, que só mapeia pro ID Stokki via
-    `pedidos_historico` (ver TRATATIVAS_PEDIDOS_PARADOS.md). Só consulta
-    o banco local (nunca a Vuupt) -- precisa ser rápido pra lista
-    inteira, diferente da busca sob demanda de buscar_sucesso_vuupt().
+    `pedidos_historico` (ver TRATATIVAS_PEDIDOS_PARADOS.md). Prioriza o
+    banco local (rápido, cobre a maioria da lista); só recorre à Vuupt
+    (busca de título, ver EMBARCADORES_ORDER_NUMBER_E_NF) pros que
+    sobraram sem resolver -- pedido do Hugo, 25/08: sem esse fallback o
+    link da Stokki saía errado (usava a NF como se fosse o ID do
+    Stokki) pra Quatro Estrelas e Laticínio Dourado, os únicos
+    embarcadores nesse caso hoje.
 
-    Default: o próprio order_number, quando não acha nada em
-    pedidos_historico (é o caso mais comum -- já É o ID Stokki).
+    Default: o próprio order_number, quando não acha nada de nenhum
+    jeito (é o caso mais comum -- já É o ID Stokki).
     """
     if not order_numbers:
         return {}
@@ -218,11 +246,80 @@ def _resolver_ids_stokki(order_numbers: list[str]) -> dict[str, str]:
     finally:
         conn.close()
 
+    resolvidos = set()
     for linha in linhas:
         m = re.search(r"PS-(\d+)", linha["id_pedido"] or "")
         if m:
             resultado[linha["numero_nfe"]] = m.group(1)
+            resolvidos.add(linha["numero_nfe"])
+
+    for numero in order_numbers:
+        if numero in resolvidos:
+            continue
+        servico = _buscar_servico_por_nf_embarcadores(vuupt, numero)
+        if not servico or not servico.get("code"):
+            continue
+        m = re.search(r"PS-(\d+)", servico["code"])
+        if m:
+            resultado[numero] = m.group(1)
+
     return resultado
+
+
+def _resolver_embarcador(order_number: str) -> dict | None:
+    """
+    Acha o embarcador (nome + e-mails cadastrados) do pedido pra
+    notificação de "Cliente Retira" (pedido do Hugo, 25/08) -- cruza
+    `pedidos_historico` (mesma ambiguidade de order_number = ID Stokki
+    OU NF do cliente que _resolver_pedido trata pra Vuupt) com
+    `interno` pelo CNPJ, não pelo nome (mais confiável que fuzzy match):
+    `pedidos_historico.cliente_cnpj` vem formatado (com pontuação),
+    `interno.cnpj_embarcador` vem só dígitos -- comparamos só os
+    dígitos dos dois lados.
+
+    Retorna None se o pedido não estiver em `pedidos_historico` (ainda
+    não passou pelo pipeline), se o embarcador não estiver cadastrado em
+    `interno`, se `notificar_email` estiver desligado pra ele, ou se não
+    houver e-mail válido cadastrado -- em qualquer um desses casos quem
+    chama decide como avisar (não dá pra mandar e-mail sem destinatário).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id_pedido, cliente, cliente_cnpj FROM pedidos_historico "
+            "WHERE id_pedido = ? OR id_pedido = ? OR numero_nfe = ?",
+            (f"#PS-{order_number}", f"PS-{order_number}", order_number),
+        ).fetchone()
+        if not row or not row["cliente_cnpj"]:
+            return None
+
+        digitos = re.sub(r"\D", "", row["cliente_cnpj"])
+        if not digitos:
+            return None
+
+        emb = conn.execute(
+            "SELECT nome_remetente, apelido, email, notificar_email FROM interno "
+            "WHERE cnpj_embarcador = ?",
+            (digitos,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not emb:
+        return None
+    if emb["notificar_email"] is not None and not emb["notificar_email"]:
+        return None
+
+    emails = [e.strip() for e in re.split(r"[,;\t]+", emb["email"] or "") if e.strip() and "@" in e]
+    if not emails:
+        return None
+
+    return {
+        "codigo": row["id_pedido"] or f"PS-{order_number}",
+        "nome": emb["apelido"] or emb["nome_remetente"] or row["cliente"] or "",
+        "emails": emails,
+    }
 
 
 def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
@@ -332,7 +429,7 @@ def listar_com_classificacao() -> list[dict]:
     finally:
         conn.close()
 
-    ids_stokki = _resolver_ids_stokki(list(pedidos_do_dia.keys()))
+    ids_stokki = _resolver_ids_stokki(vuupt, list(pedidos_do_dia.keys()))
 
     resultado = []
     for numero, p in pedidos_do_dia.items():
@@ -472,6 +569,59 @@ def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> 
         )
     _marcar_acao(order_number, "concluida", f"demanda criada → {criada.get('id')}")
     return {"ok": True, "demanda_id": criada.get("id"), "client_name": client_name}
+
+
+def notificar_cliente_retira(order_number: str, usuario: str) -> dict:
+    """
+    Ação da tratativa "Cliente Retira" (pedido do Hugo, 25/08): manda
+    e-mail pro embarcador avisando que o pedido está aguardando retirada
+    e ainda não foi coletado -- é a tratativa inteira (sem duplicar, sem
+    Demanda, confirmado com o Hugo). Usa o mesmo template visual
+    (`email_utils.envelope_html`) já usado pelos outros notificadores
+    automáticos do projeto ("design que já temos desenvolvido").
+    """
+    embarcador = _resolver_embarcador(order_number)
+    if not embarcador:
+        detalhe = "embarcador não resolvido (sem CNPJ em pedidos_historico ou sem e-mail cadastrado em 'interno')"
+        _marcar_acao(order_number, "erro", detalhe)
+        raise ValueError(f"Pedido {order_number}: {detalhe}.")
+
+    codigo = embarcador["codigo"]
+    nome   = embarcador["nome"]
+    emails = embarcador["emails"]
+
+    conteudo = f"""
+    <h2 style="margin:0 0 4px;font-size:20px;color:{email_utils.COR_TEXTO};">Pedido aguardando retirada</h2>
+    <p style="margin:0 0 24px;font-size:14px;color:{email_utils.COR_TEXTO_SUAVE};">
+      Olá, <strong>{html.escape(nome)}</strong>!<br><br>
+      O pedido <strong>{html.escape(codigo)}</strong> está marcado como
+      <strong>retirada pelo cliente</strong> e ainda não foi coletado.
+      Por favor, oriente o cliente a providenciar a retirada o quanto antes
+      para que possamos dar continuidade à expedição.
+    </p>
+    <p style="margin:0;font-size:14px;color:{email_utils.COR_TEXTO};line-height:1.6;">
+      Atenciosamente,<br><strong>Freshlog Logística</strong>
+    </p>"""
+    corpo = email_utils.envelope_html(
+        conteudo,
+        rodape="Freshlog Logística -- aviso automático de pedido aguardando retirada.",
+        cor_acento=email_utils.COR_DESTAQUE,
+    )
+    assunto = f"[Freshlog] Pedido {codigo} aguardando retirada"
+
+    config_email = _carregar_config().get("email", {})
+    if not email_utils.enviar_email(emails, assunto, corpo, config_email):
+        detalhe = f"falha ao enviar e-mail pra {', '.join(emails)}"
+        _marcar_acao(order_number, "erro", detalhe)
+        raise RuntimeError(detalhe)
+
+    pedido_code = codigo.lstrip("#")
+    tratativas.registrar_evento(
+        pedido_code, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLIENTE_RETIRA_NOTIFICADO",
+        texto=f"E-mail de 'ainda não coletado' enviado por {usuario} pra {nome} ({', '.join(emails)})",
+    )
+    _marcar_acao(order_number, "concluida", f"e-mail enviado → {nome} ({', '.join(emails)})")
+    return {"ok": True, "nome_embarcador": nome, "emails": emails}
 
 
 def _servico_com_sucesso(servico: dict) -> bool:

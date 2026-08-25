@@ -29,6 +29,36 @@
   .resumo-item.tem-aviso strong { color: var(--rodando-texto); }
   .resumo-separador { color: var(--borda); }
 
+  .progresso-container { margin-bottom: 16px; }
+  .progresso-cabecalho {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12.5px;
+    color: var(--texto-suave);
+    margin-bottom: 6px;
+  }
+  .progresso-trilha {
+    height: 8px;
+    border-radius: 100px;
+    background: var(--borda);
+    overflow: hidden;
+  }
+  .progresso-preenchimento {
+    height: 100%;
+    border-radius: 100px;
+    background: var(--acento);
+    width: 0%;
+    transition: width 0.6s ease;
+  }
+  .progresso-preenchimento.indeterminado {
+    width: 30% !important;
+    animation: progresso-indeterminado 1.4s ease-in-out infinite;
+  }
+  @keyframes progresso-indeterminado {
+    0% { margin-left: -30%; }
+    100% { margin-left: 100%; }
+  }
+
   #log-box {
     background: var(--primaria);
     border-radius: 10px;
@@ -71,6 +101,15 @@
   <span id="status-badge" class="badge badge-rodando">Rodando</span>
 </div>
 
+<div class="progresso-container" id="progresso-container" style="display: {{ 'block' if execucao.status == 'RODANDO' else 'none' }};">
+  <div class="progresso-cabecalho">
+    <span id="progresso-texto">Calculando previsão…</span>
+  </div>
+  <div class="progresso-trilha">
+    <div class="progresso-preenchimento indeterminado" id="progresso-preenchimento"></div>
+  </div>
+</div>
+
 <div class="resumo-barra">
   <div class="resumo-item">⏱ <strong id="resumo-tempo">0s</strong></div>
   <span class="resumo-separador">·</span>
@@ -91,6 +130,9 @@
   const tempoEl = document.getElementById('resumo-tempo');
   const errosEl = document.getElementById('resumo-erros');
   const avisosEl = document.getElementById('resumo-avisos');
+  const progressoContainer = document.getElementById('progresso-container');
+  const progressoPreenchimento = document.getElementById('progresso-preenchimento');
+  const progressoTexto = document.getElementById('progresso-texto');
   let intervalo = null;
   let cronometro = null;
 
@@ -127,6 +169,32 @@
     tempoEl.textContent = formatarTempo(decorridoSeg);
   }
 
+  function formatarEta(segundos) {
+    if (segundos === null || segundos === undefined) return null;
+    if (segundos < 60) return 'menos de 1 min';
+    const min = Math.round(segundos / 60);
+    return min <= 1 ? '1 min' : `${min} min`;
+  }
+
+  function atualizarProgresso(dados) {
+    if (dados.status !== 'RODANDO') {
+      progressoContainer.style.display = 'none';
+      return;
+    }
+    progressoContainer.style.display = 'block';
+    if (dados.percentual === null || dados.percentual === undefined) {
+      progressoPreenchimento.classList.add('indeterminado');
+      progressoTexto.textContent = 'Calculando previsão…';
+    } else {
+      progressoPreenchimento.classList.remove('indeterminado');
+      progressoPreenchimento.style.width = `${dados.percentual}%`;
+      const eta = formatarEta(dados.eta_segundos);
+      progressoTexto.textContent = eta
+        ? `${dados.percentual}% concluído · previsão: ${eta} restante(s)`
+        : `${dados.percentual}% concluído`;
+    }
+  }
+
   function renderizarLog(textoLog) {
     if (!textoLog) {
       logBox.textContent = '(sem saída ainda)';
@@ -160,6 +228,7 @@
 
         statusBadge.className = badgeClasse(dados.status);
         statusBadge.textContent = badgeTexto(dados.status);
+        atualizarProgresso(dados);
         if (dados.status !== 'RODANDO') {
           if (intervalo) clearInterval(intervalo);
           if (cronometro) clearInterval(cronometro);

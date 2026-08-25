@@ -102,15 +102,18 @@ FUNIL_STOKKI = [
     ("count_waiting_carrier", "Aguardando transportador"),
 ]
 
-TTL_FUNIL_STOKKI_SEG = 300   # 5 min -- funil upstream muda devagar
-TTL_TENDENCIA_SEG    = 600   # 10 min -- 7 chamadas de contagem na VUUPT
-TTL_MEDIA_PERIODO_SEG = 1800 # 30 min -- semana/mês busca rotas com include=services (payload pesado)
+TTL_FUNIL_STOKKI_SEG = 300     # 5 min -- funil upstream muda devagar
+TTL_TENDENCIA_SEG    = 600     # 10 min -- 7 chamadas de contagem na VUUPT
+TTL_KPIS_DIA_SEG     = 1800    # 30 min -- dia/semana busca rotas com include=services (payload pesado)
+TTL_KPIS_SEMANA_SEG  = 1800
+TTL_KPIS_MES_SEG     = 7200    # 2h -- faixa maior (até 1 mês de rotas), muda mais devagar
+TTL_KPIS_TRIMESTRE_SEG = 43200 # 12h -- até 3 meses de rotas por busca, não vale martelar
 
 FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")
 
 _cache_stokki: dict = {"quando": 0.0, "dados": None}
 _cache_tendencia: dict = {}  # data_iso -> {"quando": monotonic, "dados": [...]}
-_cache_media_periodo: dict = {}  # "semana:..."/"mes:..." -> {"quando": monotonic, "dados": {...}}
+_cache_kpis_periodo: dict = {}  # "dia_atual:..."/"semana_anterior:..." -> {"quando": monotonic, "dados": [rotas_brutas]}
 _lock_caches = threading.Lock()
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
@@ -206,6 +209,46 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
         texto=f"Duplicado manualmente pela Torre → {novo_code}",
     )
     return {"ok": True, "novo_code": novo_code}
+
+
+def notificar_ocorrencia_manual(service_id: int, codigo: str) -> dict:
+    """
+    Dispara manualmente a pergunta de reenvio ao remetente pra UM
+    insucesso específico -- botão 'Notificar' da fila de ação (pedido
+    do Hugo, 25/08: as notificações automáticas de ocorrência foram
+    desligadas em expedir_pedidos.py -- notificacoes_automaticas.ativo
+    no config.yaml --, esse botão passa a decidir item a item quando
+    notificar).
+
+    Usa a MESMA notificar_remetentes do fluxo automático -- reaplica o
+    rate-limit real (fingerprint_aguardando_resposta.pode_notificar: 1
+    e-mail/dia/pedido até responder) antes de mandar, e a própria
+    função já grava a auditoria (tratativas.AVISO_ENVIADO), não precisa
+    duplicar isso aqui.
+    """
+    from notificar_insucesso_aguardando_resposta import identificar_aguardando_resposta, notificar_remetentes
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    servico = vuupt.buscar_servico_por_code(codigo)
+    if not servico:
+        return {"ok": False, "erro": f"Pedido {codigo} não encontrado no VUUPT."}
+
+    pendentes = identificar_aguardando_resposta([servico])
+    if not pendentes:
+        return {"ok": False, "erro": "Já foi perguntado hoje sobre esse pedido (ou aguardando resposta) "
+                                     "-- só é possível notificar de novo amanhã."}
+
+    resultado = notificar_remetentes(
+        pendentes, config.get("email", {}), config.get("resposta_insucesso", {}), modo_teste=False)
+
+    if resultado.get("enviados"):
+        return {"ok": True, "mensagem": "E-mail de ocorrência enviado."}
+    if resultado.get("sem_email"):
+        return {"ok": False, "erro": "Remetente sem e-mail cadastrado."}
+    return {"ok": False, "erro": "Falha ao enviar o e-mail (ver log de expedição)."}
 
 
 # ── Faixa 1: etapas do pipeline ────────────────────────────────────────────────
@@ -434,13 +477,15 @@ def _chave_ordem_natural(texto: str) -> list:
 # ── Rotas do dia (VUUPT /routes) ──────────────────────────────────────────────
 
 def _coletar_rotas_dia(token: str, data_alvo: date,
-                       nomes_motoristas: dict[int, str]) -> tuple[list[dict], dict]:
+                       nomes_motoristas: dict[int, str]) -> tuple[list[dict], dict, list[dict]]:
     """Progresso parada a parada de cada rota do dia (todas as rotas da
     data, não só as com prefixo 'Planejamento' do mapa -- a torre
     precisa enxergar também rota criada na mão).
 
-    Retorna (rotas, agregado): o agregado soma as paradas de TODAS as
-    rotas do dia e é a base da visão de pedidos (_montar_pedidos_dia).
+    Retorna (rotas, agregado, rotas_brutas): o agregado soma as paradas
+    de TODAS as rotas do dia e é a base da visão de pedidos
+    (_montar_pedidos_dia); rotas_brutas é devolvido também pra
+    alimentar _estatisticas_periodo do KPI "hoje" sem 2ª chamada à API.
     """
     inicio = data_alvo.strftime("%Y-%m-%d") + " 00:00:00"
     fim = (data_alvo + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
@@ -562,7 +607,7 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
     # string pura colocava '#11' antes de '#2' (achado do Hugo, 23/08).
     ordem_estado = {"em_andamento": 0, "nao_iniciada": 1, "concluida": 2, "vazia": 3}
     rotas.sort(key=lambda r: (ordem_estado.get(r["estado"], 9), _chave_ordem_natural(r["nome"])))
-    return rotas, agregado
+    return rotas, agregado, rotas_brutas
 
 
 # ── Tendência (7 dias úteis, com cache) ───────────────────────────────────────
@@ -609,63 +654,189 @@ def _tendencia_com_cache(vuupt: VuuptClient, data_alvo: date) -> list[dict]:
     return dados
 
 
-# ── Média de pedidos por rota (dia/semana/mês, com cache) ─────────────────────
+# ── KPIs por período (dia/semana/mês/trimestre, atual x anterior, com cache) ──
+#
+# Generaliza o que só existia pra "pedidos por rota" (21/08) pra todos os
+# KPIs -- e acrescenta o período ANTERIOR equivalente de cada aba, pra dar
+# a variação (Δ) que a Torre nunca teve. "Equivalente" importa: mês/
+# trimestre correntes são sempre parciais (hoje pode ser dia 23), então o
+# anterior usa o MESMO número de dias decorridos, nunca o período anterior
+# inteiro -- senão a comparação é enganosa (23 dias de agosto vs os 31 de
+# julho puxaria a taxa/volume pra baixo por motivo nenhum).
 
-def _media_pedidos_por_rota_periodo(token: str, data_inicio: date, data_fim_exclusiva: date) -> dict:
-    """Paradas válidas ÷ rotas com ao menos 1 parada válida, somado sobre
-    todas as rotas com start_at em [data_inicio, data_fim_exclusiva) --
-    mesmo critério de exclusão da média do dia (_coletar_rotas_dia: rota
-    cancelada fora, parada cancelada fora, rota vazia fora do
-    denominador pra não distorcer a média pra baixo). Só 1-2 chamadas
-    paginadas (listar_rotas já pagina sozinho), mesmo pra uma faixa de
-    um mês inteiro."""
+def _inicio_semana(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _inicio_mes(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _inicio_trimestre(d: date) -> date:
+    mes_inicio = ((d.month - 1) // 3) * 3 + 1
+    return d.replace(month=mes_inicio, day=1)
+
+
+def _subtrai_meses(d: date, n: int) -> date:
+    """d precisa já ser dia 1 de algum mês (início de mês ou de
+    trimestre) -- volta n meses, sempre devolvendo outro dia 1."""
+    indice = d.year * 12 + (d.month - 1) - n
+    return date(indice // 12, indice % 12 + 1, 1)
+
+
+def _janela_anterior_equivalente(inicio_atual: date, data_alvo: date, subtrair) -> tuple[date, date]:
+    """(início, fim exclusivo) do período anterior com o MESMO número de
+    dias decorridos que [inicio_atual, data_alvo] tem hoje."""
+    dias_decorridos = (data_alvo - inicio_atual).days + 1
+    inicio_anterior = subtrair(inicio_atual)
+    fim_anterior_exclusivo = inicio_anterior + timedelta(days=dias_decorridos)
+    return inicio_anterior, fim_anterior_exclusivo
+
+
+def _duracao_rota_min(start_at_bruto, completed_ats: list[str]) -> float | None:
+    """Minutos entre o início real da rota (campo start_at, confirmado
+    como real em incrementar_rotas.py::_data_inicio_rota) e a última
+    parada finalizada. None se alguma data faltar ou não parsear -- não
+    quebra o agregado do período por causa de 1 rota com dado ruim."""
+    if not start_at_bruto or not completed_ats:
+        return None
+    try:
+        inicio = datetime.fromisoformat(str(start_at_bruto))
+        fim = max(datetime.fromisoformat(str(c)) for c in completed_ats)
+    except (ValueError, TypeError):
+        return None
+    minutos = (fim - inicio).total_seconds() / 60
+    return minutos if minutos > 0 else None
+
+
+def _estatisticas_periodo(rotas_brutas: list[dict]) -> dict:
+    """Agregado leve sobre rotas cruas da API -- sem chips, mini mapa,
+    badges nem gravação de tratativas (isso é só da visão rica de
+    "hoje", _coletar_rotas_dia). Usado pra semana/mês/trimestre (atual
+    e anterior) e também pro "hoje", reaproveitando as MESMAS
+    rotas_brutas que _coletar_rotas_dia já buscou (0 chamadas extras)."""
+    total = entregues = insucessos = 0
+    rotas_total = rotas_concluidas = rotas_com_carga = 0
+    motivos = Counter()
+    duracoes_min = []
+    motoristas_distintos = set()
+
+    for rota in rotas_brutas:
+        if rota.get("status") == "canceled":
+            continue
+        rotas_total += 1
+        validos = [s for s in extrair_servicos_da_rota(rota) if s.get("status") != "canceled"]
+        if not validos:
+            continue
+
+        finalizados_em = []
+        rota_entregues = rota_insucessos = 0
+        for s in validos:
+            if s.get("status") == "done":
+                if s.get("status_done") == "failed":
+                    rota_insucessos += 1
+                    motivos[texto_do_motivo(s.get("failed_reason_id"))] += 1
+                else:
+                    rota_entregues += 1
+                if s.get("completed_at"):
+                    finalizados_em.append(s["completed_at"])
+
+        total += len(validos)
+        entregues += rota_entregues
+        insucessos += rota_insucessos
+        rotas_com_carga += 1
+        agent_id = rota.get("agent_id")
+        if agent_id:
+            motoristas_distintos.add(agent_id)
+
+        finalizados = rota_entregues + rota_insucessos
+        if finalizados >= len(validos):
+            rotas_concluidas += 1
+            duracao = _duracao_rota_min(rota.get("start_at"), finalizados_em)
+            if duracao is not None:
+                duracoes_min.append(duracao)
+
+    top_motivos = [{"motivo": m, "qtd": q} for m, q in motivos.most_common(5)]
+    if len(motivos) > 5:
+        resto = sum(q for _, q in motivos.most_common()[5:])
+        top_motivos.append({"motivo": "Outros", "qtd": resto})
+
+    return {
+        "entregues": entregues,
+        "total_paradas": total,
+        "sucesso_pct": round(100 * entregues / (entregues + insucessos), 1) if (entregues + insucessos) else None,
+        "insucessos": insucessos,
+        "rotas_total": rotas_total,
+        "rotas_concluidas": rotas_concluidas,
+        "ped_rota": round(total / rotas_com_carga, 1) if rotas_com_carga else 0,
+        "duracao_media_min": round(sum(duracoes_min) / len(duracoes_min)) if duracoes_min else None,
+        "motivos_insucesso": top_motivos,
+        "motoristas_distintos": len(motoristas_distintos),
+    }
+
+
+def _rotas_periodo_com_cache(token: str, chave: str, data_inicio: date, data_fim_exclusiva: date, ttl: int) -> list[dict]:
+    with _lock_caches:
+        item = _cache_kpis_periodo.get(chave)
+        if item and time.monotonic() - item["quando"] < ttl:
+            return item["dados"]
     filtro = [
         {"field": "start_at", "operator": "gte", "value": data_inicio.strftime("%Y-%m-%d") + " 00:00:00"},
         {"field": "start_at", "operator": "lt", "value": data_fim_exclusiva.strftime("%Y-%m-%d") + " 00:00:00"},
     ]
     rotas_brutas = listar_rotas(token, include=["services"], filtro=filtro)
-
-    total_paradas = qtd_rotas = 0
-    for rota in rotas_brutas:
-        if rota.get("status") == "canceled":
-            continue
-        validos = [s for s in extrair_servicos_da_rota(rota) if s.get("status") != "canceled"]
-        if validos:
-            total_paradas += len(validos)
-            qtd_rotas += 1
-
-    media = round(total_paradas / qtd_rotas, 1) if qtd_rotas else 0
-    return {"total_paradas": total_paradas, "qtd_rotas": qtd_rotas, "media": media}
-
-
-def _media_periodo_com_cache(token: str, chave: str, data_inicio: date, data_fim_exclusiva: date) -> dict:
     with _lock_caches:
-        item = _cache_media_periodo.get(chave)
-        if item and time.monotonic() - item["quando"] < TTL_MEDIA_PERIODO_SEG:
-            return item["dados"]
-    dados = _media_pedidos_por_rota_periodo(token, data_inicio, data_fim_exclusiva)
-    with _lock_caches:
-        _cache_media_periodo[chave] = {"quando": time.monotonic(), "dados": dados}
-    return dados
+        _cache_kpis_periodo[chave] = {"quando": time.monotonic(), "dados": rotas_brutas}
+    return rotas_brutas
 
 
-def _coletar_media_pedidos_por_rota(token: str, data_alvo: date, agregado: dict, rotas: list[dict]) -> dict:
-    """Média do dia sai de graça do que _coletar_rotas_dia já buscou
-    (0 chamadas extras); semana (segunda até data_alvo) e mês (dia 1 até
-    data_alvo) batem a VUUPT de novo, mas com cache de 30 min."""
-    rotas_com_parada_hoje = sum(1 for r in rotas if r["total"] > 0)
-    media_dia = round(agregado["total"] / rotas_com_parada_hoje, 1) if rotas_com_parada_hoje else 0
+def _bloco_periodo(token: str, inicio_atual: date, data_alvo: date,
+                   subtrair, ttl: int, prefixo: str, rotas_brutas_atual: list[dict] | None = None) -> dict:
+    """{"atual": ..., "anterior": ...} -- estatísticas do período atual
+    (segunda até hoje, dia 1 até hoje, etc.) e do período anterior
+    equivalente (_janela_anterior_equivalente). rotas_brutas_atual
+    reaproveita o que _coletar_rotas_dia já buscou pro "hoje"; None faz
+    a busca própria (cacheada por `ttl` segundos)."""
+    fim_atual_exclusivo = data_alvo + timedelta(days=1)
+    if rotas_brutas_atual is None:
+        rotas_brutas_atual = _rotas_periodo_com_cache(
+            token, f"{prefixo}_atual:{inicio_atual.isoformat()}:{data_alvo.isoformat()}",
+            inicio_atual, fim_atual_exclusivo, ttl)
 
-    inicio_semana = data_alvo - timedelta(days=data_alvo.weekday())
-    inicio_mes = data_alvo.replace(day=1)
-    fim_exclusivo = data_alvo + timedelta(days=1)
+    inicio_anterior, fim_anterior_exclusivo = _janela_anterior_equivalente(inicio_atual, data_alvo, subtrair)
+    rotas_brutas_anterior = _rotas_periodo_com_cache(
+        token, f"{prefixo}_anterior:{inicio_anterior.isoformat()}:{fim_anterior_exclusivo.isoformat()}",
+        inicio_anterior, fim_anterior_exclusivo, ttl)
 
-    semana = _media_periodo_com_cache(
-        token, f"semana:{inicio_semana.isoformat()}:{data_alvo.isoformat()}", inicio_semana, fim_exclusivo)
-    mes = _media_periodo_com_cache(
-        token, f"mes:{inicio_mes.isoformat()}:{data_alvo.isoformat()}", inicio_mes, fim_exclusivo)
+    return {
+        "atual": _estatisticas_periodo(rotas_brutas_atual),
+        "anterior": _estatisticas_periodo(rotas_brutas_anterior),
+    }
 
-    return {"dia": media_dia, "semana": semana["media"], "mes": mes["media"]}
+
+def _montar_kpis_periodo(token: str, data_alvo: date, rotas_brutas_hoje: list[dict],
+                         motoristas_ativos: int) -> dict:
+    """As 4 abas da régua de KPIs. `motoristas_ativos` (denominador fixo
+    do catálogo) transforma motoristas_distintos em % de utilização --
+    calculado aqui fora, não dentro de _estatisticas_periodo, porque não
+    depende do período nenhum, só do cadastro atual."""
+    blocos = {
+        "dia": _bloco_periodo(token, data_alvo, data_alvo,
+                              lambda d: d - timedelta(days=1), TTL_KPIS_DIA_SEG, "dia",
+                              rotas_brutas_atual=rotas_brutas_hoje),
+        "semana": _bloco_periodo(token, _inicio_semana(data_alvo), data_alvo,
+                                 lambda d: d - timedelta(days=7), TTL_KPIS_SEMANA_SEG, "semana"),
+        "mes": _bloco_periodo(token, _inicio_mes(data_alvo), data_alvo,
+                              lambda d: _subtrai_meses(d, 1), TTL_KPIS_MES_SEG, "mes"),
+        "trimestre": _bloco_periodo(token, _inicio_trimestre(data_alvo), data_alvo,
+                                    lambda d: _subtrai_meses(d, 3), TTL_KPIS_TRIMESTRE_SEG, "trimestre"),
+    }
+    for bloco in blocos.values():
+        for chave in ("atual", "anterior"):
+            distintos = bloco[chave]["motoristas_distintos"]
+            bloco[chave]["utilizacao_motoristas_pct"] = (
+                round(100 * distintos / motoristas_ativos, 1) if motoristas_ativos else None)
+    return blocos
 
 
 # ── Exceções tratadas (persistência) ──────────────────────────────────────────
@@ -787,9 +958,29 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
                 "_epoch": epoch,
             })
 
+    try:
+        from fingerprint_aguardando_resposta import pode_notificar as _pode_notificar_ocorrencia
+    except Exception:
+        _pode_notificar_ocorrencia = None
+
     for i in pedidos["insucessos"]:
         quando, epoch = _quando_fila(i.get("completed_at"), utc=True)
         badges = i.get("badges", [])
+        sid = i.get("service_id")
+        # Botão 'Notificar' (pedido do Hugo, 25/08: notificações
+        # automáticas de ocorrência desligadas, esse botão passa a
+        # decidir). Reaplica o MESMO rate-limit do fluxo automático
+        # (1 e-mail/dia/pedido até responder) só pra decidir se o
+        # botão aparece -- a checagem de verdade roda de novo na hora
+        # do clique (notificar_ocorrencia_manual).
+        if _pode_notificar_ocorrencia and sid:
+            try:
+                pode_notificar_ocorrencia = _pode_notificar_ocorrencia(sid)
+            except Exception as e:
+                logger.warning(f"[torre] Falha ao checar rate-limit de notificação p/ {sid}: {e}")
+                pode_notificar_ocorrencia = True
+        else:
+            pode_notificar_ocorrencia = bool(sid)
         excecoes.append({
             "id": f"insucesso:{i['codigo']}",
             "severidade": "critico",
@@ -805,6 +996,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "badges": badges,
             "service_id": i.get("service_id"),
             "codigo": i.get("codigo"),
+            "pode_notificar_ocorrencia": pode_notificar_ocorrencia,
             # Botão 'Duplicar pedido' (pedido do Hugo, 17/08): some
             # quando já existe uma reentrega executada (badge
             # 'duplicado') -- duplicar de novo criaria uma segunda.
@@ -985,6 +1177,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     vuupt = VuuptClient(token)
 
     cfg_motoristas = config.get("motoristas", {})
+    catalogo = None
     try:
         catalogo = CatalogoMotoristas.carregar(
             cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -992,15 +1185,16 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     except Exception as e:
         logger.warning(f"[torre] Falha ao carregar catálogo de motoristas: {e}")
         nomes_motoristas = {}
+    motoristas_ativos = sum(1 for m in catalogo.motoristas if m.ativo) if catalogo else 0
 
-    rotas, agregado = _coletar_rotas_dia(token, data_alvo, nomes_motoristas)
+    rotas, agregado, rotas_brutas_hoje = _coletar_rotas_dia(token, data_alvo, nomes_motoristas)
     backlog = _coletar_backlog(vuupt, data_alvo)
     pedidos = _montar_pedidos_dia(agregado, backlog)
     _badges_insucessos(pedidos["insucessos"])
     etapas = montar_etapas_pipeline()
     amanha = _resumo_amanha(data_alvo, token)
     tendencia = _tendencia_com_cache(vuupt, data_alvo)
-    media_pedidos_rota = _coletar_media_pedidos_por_rota(token, data_alvo, agregado, rotas)
+    kpis_periodo = _montar_kpis_periodo(token, data_alvo, rotas_brutas_hoje, motoristas_ativos)
     excecoes, tratadas = _montar_excecoes(pedidos, rotas, etapas, amanha, data_alvo)
 
     # Base do mini mapa (mesmo endereço/geocache do mapa_rotas.py).
@@ -1034,7 +1228,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "etapas": etapas,
         "amanha": amanha,
         "tendencia": tendencia,
-        "media_pedidos_rota": media_pedidos_rota,
+        "kpis_periodo": kpis_periodo,
         "excecoes": excecoes,
         "tratadas": tratadas,
         "base": base,

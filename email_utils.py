@@ -140,3 +140,11 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
     except Exception as e:
         logger.error(f"Falha ao enviar e-mail para {destinatarios}: {e}")
         return False
+
+
+def notificacoes_automaticas_ativas(config: dict) -> bool:
+    """Chave-mestra pra desligar os e-mails automáticos que vão pra fora
+    (embarcador/transportadora) sem tocar nos alertas internos (que usam
+    notificacao_execucao.ativo, separado). config.yaml: notificacoes_automaticas.ativo
+    -- default True (não quebra quem ainda não tem essa seção no config)."""
+    return bool((config or {}).get("notificacoes_automaticas", {}).get("ativo", True))

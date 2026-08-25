@@ -59,7 +59,7 @@ from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 # ofertas_rota/resumo_oferta acima, ainda não deployado.
 from alocacao_motoristas import selecionar_motorista_equitativo
 from mapa_util import carregar_remetentes_por_sender_id
-from executor import buscar_ultima_execucao
+from executor import buscar_ultima_execucao, progresso_execucao
 
 import rascunhos_rota
 
@@ -113,12 +113,16 @@ def montar_etapas_agentes_planejamento() -> list[dict]:
     etapas = []
     for etapa in ETAPAS_AGENTES_PLANEJAMENTO:
         ultima = buscar_ultima_execucao(etapa["agente_id"])
+        rodando = bool(ultima and ultima["status"] == "RODANDO")
+        progresso = progresso_execucao(ultima["id"]) if rodando else None
         etapas.append({
             **etapa,
             "status": ultima["status"] if ultima else None,
             "quando": (ultima.get("finalizado_em") or ultima.get("iniciado_em")) if ultima else None,
             "execucao_id": ultima["id"] if ultima else None,
-            "rodando": bool(ultima and ultima["status"] == "RODANDO"),
+            "rodando": rodando,
+            "percentual": (progresso or {}).get("percentual"),
+            "eta_segundos": (progresso or {}).get("eta_segundos"),
         })
     return etapas
 

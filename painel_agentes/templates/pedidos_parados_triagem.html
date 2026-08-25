@@ -29,6 +29,7 @@
   .botao-acao { padding: 5px 10px; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; color: #fff; }
   .botao-duplicar { background: var(--primaria); }
   .botao-encaminhar { background: #92400E; }
+  .botao-notificar { background: #0E7490; }
   .status-ok { color: #15803D; font-size: 12px; }
   .status-erro { color: var(--erro); font-size: 12px; }
   .sem-dado { color: var(--texto-suave); }
@@ -82,7 +83,7 @@
 
 <script>
 const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
-const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota"];
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira"];
 // Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
 const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota" };
 const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
@@ -131,6 +132,8 @@ function renderTabela() {
       acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>`;
     } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
       acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
+    } else if (PODE_EDITAR && p.classificacao === "Cliente Retira") {
+      acaoHtml = `<button class="botao-acao botao-notificar" onclick="notificarClienteRetira('${p.order_number}')">Notificar embarcador</button>`;
     } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
       const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
       acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
@@ -221,6 +224,20 @@ async function encaminhar(orderNumber, classificacao) {
     alert(`Demanda criada no Fresh Hub (cliente: ${j.client_name}).`);
     carregarDados();
   } catch (e) { alert("Falha ao encaminhar: " + e); }
+}
+
+async function notificarClienteRetira(orderNumber) {
+  if (!confirm(`Enviar e-mail pro embarcador do pedido ${orderNumber} avisando que ainda não foi retirado?`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/notificar-cliente-retira`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_number: orderNumber }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao notificar o embarcador."); return; }
+    alert(`E-mail enviado pra ${j.nome_embarcador} (${j.emails.join(", ")}).`);
+    carregarDados();
+  } catch (e) { alert("Falha ao notificar o embarcador: " + e); }
 }
 
 function atualizarCarimbo() {

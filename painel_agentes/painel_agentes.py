@@ -55,7 +55,7 @@ from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
     iniciar_execucao, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
     listar_execucoes_recentes, ha_execucao_rodando, ler_log, limpar_execucoes_travadas,
-    encerrar_todas_execucoes,
+    encerrar_todas_execucoes, progresso_execucao,
 )
 from mapa_rotas import buscar_rotas_para_mapa
 from laboratorio_rotas import buscar_dados_laboratorio
@@ -414,12 +414,34 @@ def execucao_status(execucao_id):
     exec_info = buscar_execucao(execucao_id)
     if not exec_info:
         return jsonify({"erro": "não encontrada"}), 404
+    progresso = progresso_execucao(execucao_id) if exec_info["status"] == "RODANDO" else None
     return jsonify({
         "status": exec_info["status"],
         "codigo_saida": exec_info["codigo_saida"],
         "finalizado_em": exec_info["finalizado_em"],
         "log": ler_log(execucao_id),
+        "percentual": (progresso or {}).get("percentual"),
+        "eta_segundos": (progresso or {}).get("eta_segundos"),
     })
+
+
+@app.route("/api/agentes/progresso")
+@requer_auth
+def agentes_progresso():
+    """Progresso (%/ETA) de todo agente RODANDO agora -- usado pelo
+    polling da grade de Agentes (index.html), que não tinha nenhuma
+    atualização ao vivo antes disso (pedido do Hugo, 24/08)."""
+    resultado = {}
+    for agente in AGENTES:
+        ultima = buscar_ultima_execucao(agente["id"])
+        if ultima and ultima["status"] == "RODANDO":
+            progresso = progresso_execucao(ultima["id"]) or {}
+            resultado[agente["id"]] = {
+                "execucao_id": ultima["id"],
+                "percentual": progresso.get("percentual"),
+                "eta_segundos": progresso.get("eta_segundos"),
+            }
+    return jsonify(resultado)
 
 
 @app.route("/encerrar-tudo", methods=["POST"])
@@ -819,6 +841,25 @@ def api_pedidos_parados_encaminhar():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/notificar-cliente-retira", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_notificar_cliente_retira():
+    body = request.get_json(force=True)
+    try:
+        resultado = pedidos_parados_triagem.notificar_cliente_retira(
+            body["order_number"], session.get("usuario", "desconhecido"),
+        )
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    except (ValueError, RuntimeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao notificar cliente retira")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
+
+
 @app.route("/torre")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def torre():
@@ -938,6 +979,26 @@ def api_torre_duplicar():
         service_id, codigo, motorista=body.get("motorista"), rota=body.get("rota"))
     if not resultado.get("ok"):
         return jsonify({"erro": resultado.get("erro", "Falha ao duplicar.")}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_torre_notificar_ocorrencia():
+    """Botão 'Notificar' da fila de ação -- dispara na hora a pergunta
+    de reenvio ao remetente pra esse insucesso (as notificações
+    automáticas de ocorrência foram desligadas, ver config.yaml:
+    notificacoes_automaticas.ativo)."""
+    body = request.get_json(force=True)
+    try:
+        service_id = int(body["service_id"])
+        codigo = body["codigo"]
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id/codigo ausente ou inválido."}), 400
+    resultado = torre_controle.notificar_ocorrencia_manual(service_id, codigo)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro", "Falha ao notificar.")}), 400
     return jsonify(resultado)
 
 

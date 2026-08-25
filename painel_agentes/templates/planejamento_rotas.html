@@ -927,6 +927,15 @@
   .barra-agentes-planejamento .etapa.erro { border-color: color-mix(in srgb, var(--erro) 45%, var(--borda)); }
   .barra-agentes-planejamento .etapa.rodando .estado { background: var(--rodando); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--rodando) 70%, transparent); animation: pulso-agente 1.2s ease-in-out infinite; }
   @keyframes pulso-agente { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .barra-agentes-planejamento .etapa .progresso-texto { color: var(--texto-suave); font-size: 10.5px; margin-top: 5px; }
+  .barra-agentes-planejamento .etapa .progresso-trilha { height: 5px; border-radius: 100px; background: var(--borda); overflow: hidden; margin-top: 3px; }
+  .barra-agentes-planejamento .etapa .progresso-preenchimento {
+    height: 100%; border-radius: 100px; background: var(--rodando); width: 0%; transition: width 0.6s ease;
+  }
+  .barra-agentes-planejamento .etapa .progresso-preenchimento.indeterminado {
+    width: 30% !important; animation: progresso-indeterminado-planejamento 1.4s ease-in-out infinite;
+  }
+  @keyframes progresso-indeterminado-planejamento { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
   .barra-agentes-planejamento .etapa button.rodar {
     position: absolute; top: 8px; right: 8px;
     background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
@@ -1460,6 +1469,13 @@
     return dados;
   }
 
+  function formatarEtaPlanejamento(segundos) {
+    if (segundos === null || segundos === undefined) return null;
+    if (segundos < 60) return "menos de 1 min";
+    const min = Math.round(segundos / 60);
+    return min <= 1 ? "1 min" : `${min} min`;
+  }
+
   function renderAgentesPlanejamento(etapas) {
     algumaEtapaAgentePlanejamentoRodando = etapas.some(e => e.rodando);
 
@@ -1479,10 +1495,25 @@
       const botaoRodar = PODE_EDITAR_AGENTES
         ? `<button class="rodar" onclick="${aoClicar}" ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
         : "";
+
+      let progresso = "";
+      if (e.rodando) {
+        const eta = formatarEtaPlanejamento(e.eta_segundos);
+        const texto = e.percentual === null || e.percentual === undefined
+          ? "calculando previsão…"
+          : (eta ? `${e.percentual}% · ${eta} restante(s)` : `${e.percentual}%`);
+        const larguraEstilo = e.percentual === null || e.percentual === undefined ? "" : `style="width:${e.percentual}%"`;
+        const classeIndeterminada = e.percentual === null || e.percentual === undefined ? "indeterminado" : "";
+        progresso = `
+        <div class="progresso-trilha"><div class="progresso-preenchimento ${classeIndeterminada}" ${larguraEstilo}></div></div>
+        <div class="progresso-texto">${texto}</div>`;
+      }
+
       return `<div class="etapa ${classe}" title="${escaparHtmlAgentes(tituloEstado)}">
         ${botaoRodar}
         <div class="topo"><span class="estado"></span><span class="titulo">${escaparHtmlAgentes(e.titulo)}</span></div>
         <div class="detalhe">${escaparHtmlAgentes(e.detalhe)}</div>
+        ${progresso}
         <div class="quando">${quando}</div>
       </div>`;
     }).join("");

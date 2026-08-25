@@ -31,7 +31,7 @@ from notificar_execucao_agente import notificar_execucao
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
-from email_utils import enviar_email
+from email_utils import enviar_email, notificacoes_automaticas_ativas
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
@@ -269,6 +269,14 @@ def main(modo_teste=False):
             logger.info("Nenhum pedido para notificar por e-mail.")
             resultado["detalhe"] = (
                 (detalhe_impressao + "; " if detalhe_impressao else "") + "Nenhum pedido para notificar por e-mail."
+            )
+            return
+
+        if not notificacoes_automaticas_ativas(config):
+            logger.info("Notificações automáticas desativadas -- pulando cobrança de XML por e-mail.")
+            resultado["detalhe"] = (
+                (detalhe_impressao + "; " if detalhe_impressao else "")
+                + "Notificação automática desativada (config.yaml: notificacoes_automaticas.ativo=false)."
             )
             return
 

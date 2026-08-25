@@ -46,6 +46,7 @@ from stokki.estacao_impressao import listar_pedidos_em_espera
 from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from geocodificacao import geocodificar
 from historico import registrar_execucao
+from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
@@ -1023,7 +1024,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # avisa os remetentes no mesmo e-mail do agendamento por dia fixo
     # (1 e-mail por remetente, com data original e data ajustada).
     ajustes_dia_fixo = [r["ajuste_dia_fixo"] for r in resultados if r.get("ajuste_dia_fixo")]
-    if ajustes_dia_fixo:
+    if ajustes_dia_fixo and notificacoes_automaticas_ativas(config):
         try:
             from roteirizacao.notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
             itens = [{

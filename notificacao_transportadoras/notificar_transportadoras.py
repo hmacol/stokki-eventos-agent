@@ -70,7 +70,9 @@ logger = logging.getLogger("notificar_transportadoras")
 import yaml
 
 from avisar_motoristas_rotas import _extrair_servicos_da_rota, _parse_data, buscar_rotas_do_dia
-from email_utils import COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email
+from email_utils import (
+    COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacoes_automaticas_ativas,
+)
 from notificar_execucao_agente import notificar_execucao
 from regras.transportadoras import CatalogoTransportadoras
 from stokki import pedidos as stokki_pedidos
@@ -240,7 +242,13 @@ def main(modo_teste: bool, data_str: str) -> int:
     contadores = {"transportadoras_notificadas": 0, "pedidos_enviados": 0,
                  "sem_email": 0, "sem_xml": 0, "falhas": 0}
 
-    if not grupos:
+    if not notificacoes_automaticas_ativas(config):
+        resumo_etapas["Resumo geral"] = {
+            "status": "ok",
+            "detalhe": "Notificação automática desativada (config.yaml: notificacoes_automaticas.ativo=false).",
+        }
+        logger.info("Notificações automáticas desativadas -- pulando notificação de transportadoras.")
+    elif not grupos:
         resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": "Nenhuma entrega para transportadora hoje."}
         logger.info("Nenhuma entrega para transportadora hoje -- nada a notificar.")
     else:

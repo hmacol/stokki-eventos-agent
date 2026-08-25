@@ -36,14 +36,40 @@
   .carimbo.erro { color: var(--erro); font-weight: 600; }
   .carimbo button { background: none; border: none; color: var(--acento); font-size: 11.5px; font-weight: 700; cursor: pointer; padding: 4px; }
 
-  .grade-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
-  .kpi-tile { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; }
+  .grade-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi-tile { background: var(--fundo); border: 1px solid transparent; border-radius: 10px; padding: 10px 12px; }
   .kpi-tile .n { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
   .kpi-tile .n .contexto { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); }
   .kpi-tile .l { font-size: 11px; color: var(--texto-suave); margin-top: 1px; }
+  .kpi-tile .delta { display: block; font-size: 10.5px; font-weight: 700; margin-top: 2px; }
+  .kpi-tile .delta.pos { color: var(--st-sucesso); }
+  .kpi-tile .delta.neg { color: var(--st-falha); }
   .kpi-tile.bom .n { color: var(--st-sucesso); }
+  .kpi-tile.alerta { background: var(--rodando-bg); }
   .kpi-tile.alerta .n { color: var(--rodando-texto); }
+  .kpi-tile.ruim { background: var(--erro-bg); }
   .kpi-tile.ruim .n { color: var(--st-falha); }
+
+  /* ── Seletor de período dos KPIs (Fase 1, 24/08 -- mesmo padrão do
+     desktop, adaptado ao grid 2 colunas). */
+  .abas-periodo { display: flex; background: var(--fundo); border-radius: 8px; padding: 3px; gap: 2px; margin-bottom: 10px; }
+  .abas-periodo button {
+    flex: 1; border: none; background: transparent; color: var(--texto-suave); font-size: 12.5px; font-weight: 600;
+    padding: 7px 6px; border-radius: 6px;
+  }
+  .abas-periodo button.ativa { background: var(--superficie); color: var(--texto); }
+  .link-trimestre {
+    display: block; width: 100%; text-align: center; font-size: 12px; color: var(--acento); background: none;
+    border: none; font-weight: 600; padding: 8px 4px; margin-top: 4px;
+  }
+  .faixa-trimestre { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--borda); display: none; }
+  .faixa-trimestre.aberta { display: block; }
+  .faixa-trimestre .rot { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); margin-bottom: 8px; }
+  .faixa-motivos {
+    display: flex; gap: 5px 14px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--fundo); font-size: 11.5px; color: var(--texto-suave);
+  }
+  .faixa-motivos .n { font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
 
   .etapa-mini { display: inline-flex; align-items: center; gap: 5px; color: var(--texto-suave); font-size: 11.5px; margin: 3px 8px 3px 0; }
   .etapa-mini .estado { width: 8px; height: 8px; border-radius: 100px; background: #D3D5DB; flex: none; }
@@ -83,6 +109,7 @@
     background: var(--superficie); color: var(--texto); cursor: pointer; text-decoration: none;
   }
   .cartao-excecao .acoes-excecao button.duplicar { color: #1c5cab; border-color: #C7D9F0; }
+  .cartao-excecao .acoes-excecao button.notificar { color: #0a8f6e; border-color: #B7E8DA; }
   .excecao-vazia { display: flex; align-items: center; gap: 8px; color: var(--st-sucesso); font-size: 13px; font-weight: 600; }
 
   .badge-insucesso {
@@ -195,7 +222,7 @@
 <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
 <div class="carimbo" id="carimbo">Carregando dados…</div>
 
-<div class="grade-kpis" id="kpis"></div>
+<div class="cartao" id="kpis"></div>
 
 <div class="cartao">
   <h2>Pipeline de agentes</h2>
@@ -275,6 +302,8 @@ const ROTULO_ESTADO_ROTA = {
 };
 
 let ultimoOk = null, houveErro = false, algumaEtapaRodando = false, dadosAtuais = null;
+let periodoKpiAtivo = "dia"; // aba ativa da régua de KPIs -- sobrevive ao refresh
+let trimestreAberto = false; // "ver comparação trimestral" -- idem
 
 let visaoRotas = localStorage.getItem("torre_visao_rotas") || "barra";
 document.getElementById("visao-rotas").value = visaoRotas;
@@ -369,27 +398,134 @@ function renderStepper(etapas) {
   document.getElementById("pipeline-detalhe").innerHTML = cards + etapaTudo;
 }
 
-function renderKpis(d) {
-  const p = d.pedidos;
-  const finalizadas = p.sucesso + p.falha;
-  const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
-  const taxa = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
-  const r = d.rotas_resumo;
-  const classeTaxa = taxa === null ? "" : (taxa >= 95 ? "bom" : (taxa >= 85 ? "alerta" : "ruim"));
+const ROTULO_ABA_KPI = { dia: "Hoje", semana: "Semana", mes: "Mês" };
+const ROTULO_COMPARACAO_KPI = { dia: "ontem", semana: "sem. passada", mes: "mês ant.", trimestre: "trim. ant." };
 
-  const tiles = [
-    { classe: "", n: `${p.sucesso}<span class="contexto">/${p.total}</span>`, l: `entregues (${pctEntregue}%)` },
-    { classe: classeTaxa, n: taxa === null ? "–" : taxa + "%", l: "taxa de sucesso" },
-    { classe: "", n: p.contagem.on_route || 0, l: "em rota" },
-    { classe: p.qtd_nao_atribuidos ? "alerta" : "", n: p.qtd_nao_atribuidos, l: "sem rota" },
-    { classe: p.falha ? "ruim" : "", n: p.falha, l: `insucesso${p.falha === 1 ? "" : "s"}` },
-    { classe: "", n: `${r.concluidas}<span class="contexto">/${d.rotas.length}</span>`, l: "rotas concluídas" },
-    { classe: "", n: d.media_pedidos_rota.dia, l: "ped./rota (dia)" },
-    { classe: "", n: d.media_pedidos_rota.semana, l: "ped./rota (sem.)" },
-    { classe: "", n: d.media_pedidos_rota.mes, l: "ped./rota (mês)" },
-  ];
-  document.getElementById("kpis").innerHTML = tiles.map(t =>
-    `<div class="kpi-tile ${t.classe}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join("");
+function formatarDuracaoMin(min) {
+  if (min === null || min === undefined) return "–";
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h ? `${h}h${m ? " " + m + "min" : ""}` : `${m}min`;
+}
+function deltaPP(atual, anterior) {
+  if (atual === null || atual === undefined || anterior === null || anterior === undefined) return null;
+  const dif = atual - anterior;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = classe === "pos" ? "▲" : (classe === "neg" ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(1)}pp`, classe, seta };
+}
+function deltaPercentual(atual, anterior) {
+  if (!anterior) return null;
+  const dif = ((atual - anterior) / anterior) * 100;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(0)}%`, classe, seta };
+}
+function deltaContagem(atual, anterior, menosEhMelhor) {
+  const dif = atual - anterior;
+  let classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  if (menosEhMelhor) classe = dif > 0 ? "neg" : (dif < 0 ? "pos" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif}`, classe, seta };
+}
+function marcaDelta(delta, rotComp) {
+  if (!delta) return "";
+  return `<div class="delta ${delta.classe}">${delta.seta} ${delta.texto} vs. ${rotComp}</div>`;
+}
+
+function tilesPeriodo(d, periodo) {
+  const bloco = d.kpis_periodo[periodo];
+  const atual = bloco.atual, anterior = bloco.anterior;
+  const rotComp = ROTULO_COMPARACAO_KPI[periodo];
+  const tiles = [];
+
+  if (periodo === "dia") {
+    // Tiles ricos de "hoje" ficam como sempre foram -- "em rota"/
+    // "sem rota" só existem em tempo real, sem equivalente somado
+    // numa semana/mês.
+    const p = d.pedidos, r = d.rotas_resumo;
+    const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+    const finalizadas = p.sucesso + p.falha;
+    const taxaHoje = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
+    const classeTaxa = taxaHoje === null ? "" : (taxaHoje >= 95 ? "bom" : (taxaHoje >= 85 ? "alerta" : "ruim"));
+    const dSucesso = (taxaHoje === null || anterior.sucesso_pct === null) ? null : deltaPP(taxaHoje, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(p.falha, anterior.insucessos, true);
+
+    tiles.push(
+      { classe: "", n: `${p.sucesso}<span class="contexto">/${p.total}</span>`, l: `entregues (${pctEntregue}%)`, delta: "" },
+      { classe: classeTaxa, n: taxaHoje === null ? "–" : taxaHoje + "%", l: "taxa de sucesso", delta: marcaDelta(dSucesso, rotComp) },
+      { classe: "", n: p.contagem.on_route || 0, l: "em rota", delta: "" },
+      { classe: p.qtd_nao_atribuidos ? "alerta" : "", n: p.qtd_nao_atribuidos, l: "sem rota", delta: "" },
+      { classe: p.falha ? "ruim" : "", n: p.falha, l: `insucesso${p.falha === 1 ? "" : "s"}`, delta: marcaDelta(dInsucessos, rotComp) },
+      { classe: "", n: `${r.concluidas}<span class="contexto">/${d.rotas.length}</span>`, l: "rotas concluídas", delta: "" },
+    );
+  } else {
+    const dSucesso = (atual.sucesso_pct === null || anterior.sucesso_pct === null) ? null : deltaPP(atual.sucesso_pct, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(atual.insucessos, anterior.insucessos, true);
+    const classeTaxa = atual.sucesso_pct === null ? "" : (atual.sucesso_pct >= 95 ? "bom" : (atual.sucesso_pct >= 85 ? "alerta" : "ruim"));
+
+    tiles.push(
+      { classe: "", n: `${atual.entregues}<span class="contexto">/${atual.total_paradas}</span>`, l: "entregues", delta: "" },
+      { classe: classeTaxa, n: atual.sucesso_pct === null ? "–" : atual.sucesso_pct + "%", l: "taxa de sucesso", delta: marcaDelta(dSucesso, rotComp) },
+      { classe: atual.insucessos ? "ruim" : "", n: atual.insucessos, l: `insucesso${atual.insucessos === 1 ? "" : "s"}`, delta: marcaDelta(dInsucessos, rotComp) },
+      { classe: "", n: `${atual.rotas_concluidas}<span class="contexto">/${atual.rotas_total}</span>`, l: "rotas concluídas", delta: "" },
+    );
+  }
+
+  // Comuns a todas as abas: os 3 KPIs novos + ped./rota (até 23/08
+  // vivia solto no grid, sem comparação nenhuma).
+  const dPedRota = deltaPercentual(atual.ped_rota, anterior.ped_rota);
+  const dDuracao = (atual.duracao_media_min === null || anterior.duracao_media_min === null)
+    ? null : deltaContagem(Math.round(atual.duracao_media_min), Math.round(anterior.duracao_media_min), true);
+  const dUtilizacao = (atual.utilizacao_motoristas_pct === null || anterior.utilizacao_motoristas_pct === null)
+    ? null : deltaPP(atual.utilizacao_motoristas_pct, anterior.utilizacao_motoristas_pct);
+
+  tiles.push(
+    { classe: "", n: atual.ped_rota, l: "ped./rota", delta: marcaDelta(dPedRota, rotComp) },
+    { classe: "", n: formatarDuracaoMin(atual.duracao_media_min), l: "duração média rota", delta: marcaDelta(dDuracao, rotComp) },
+    { classe: "", n: atual.utilizacao_motoristas_pct === null ? "–" : atual.utilizacao_motoristas_pct + "%",
+      l: `utilização motoristas (${atual.motoristas_distintos})`, delta: marcaDelta(dUtilizacao, rotComp) },
+  );
+
+  return tiles.map(t =>
+    `<div class="kpi-tile ${t.classe}"><div class="n">${t.n}</div><div class="l">${t.l}</div>${t.delta}</div>`).join("");
+}
+
+function motivosInsucessoKpi(bloco) {
+  const motivos = bloco.atual.motivos_insucesso;
+  if (!motivos.length) return `<div class="faixa-motivos">Nenhum insucesso no período. 🎉</div>`;
+  const itens = motivos.map(m => `<span>${m.motivo} <span class="n">${m.qtd}</span></span>`).join("");
+  return `<div class="faixa-motivos">${itens}</div>`;
+}
+
+function trocarPeriodoKpi(periodo) {
+  periodoKpiAtivo = periodo;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+function alternarTrimestreKpi() {
+  trimestreAberto = !trimestreAberto;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+
+function renderKpis(d) {
+  // Régua de KPIs com abas (Fase 1, 24/08) -- os 4 períodos já vêm
+  // prontos em d.kpis_periodo; trocar de aba só re-renderiza, sem
+  // fetch novo (ver trocarPeriodoKpi/alternarTrimestreKpi).
+  const abas = ["dia", "semana", "mes"].map(p =>
+    `<button class="${p === periodoKpiAtivo ? "ativa" : ""}" onclick="trocarPeriodoKpi('${p}')">${ROTULO_ABA_KPI[p]}</button>`
+  ).join("");
+
+  const grade = `<div class="grade-kpis">${tilesPeriodo(d, periodoKpiAtivo)}</div>
+    ${motivosInsucessoKpi(d.kpis_periodo[periodoKpiAtivo])}`;
+
+  const trimestre = `
+    <button class="link-trimestre" onclick="alternarTrimestreKpi()">${trimestreAberto ? "ocultar comparação trimestral ▴" : "ver comparação trimestral ▾"}</button>
+    <div class="faixa-trimestre ${trimestreAberto ? "aberta" : ""}">
+      <div class="rot">Trimestre vs. mesmo recorte do trimestre anterior</div>
+      <div class="grade-kpis">${tilesPeriodo(d, "trimestre")}</div>
+      ${motivosInsucessoKpi(d.kpis_periodo.trimestre)}
+    </div>`;
+
+  document.getElementById("kpis").innerHTML = `<div class="abas-periodo">${abas}</div>${grade}${trimestre}`;
 }
 
 const ROTULO_SITUACAO_PEDIDO = {
@@ -501,6 +637,7 @@ function renderExcecoes(d) {
       else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) acoes += `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
       if (x.link_log) acoes += `<a href="${esc(x.link_log)}">Log</a>`;
       if (x.pode_duplicar && PODE_EDITAR) acoes += `<button class="duplicar" onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
+      if (x.pode_notificar_ocorrencia && PODE_EDITAR) acoes += `<button class="notificar" onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
       if (PODE_EDITAR) acoes += `<button onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
       const icone = x.severidade === "critico" ? "✗" : "▲";
       return `<div class="cartao-excecao">
@@ -570,6 +707,21 @@ async function duplicarPedido(id) {
     alert(`Reentrega criada: ${j.novo_code}`);
     carregarDados();
   } catch (e) { alert("Falha ao duplicar: " + e); }
+}
+async function notificarOcorrencia(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Mandar a pergunta de reenvio ao remetente de ${x.codigo} agora?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/notificar-ocorrencia`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: x.service_id, codigo: x.codigo }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao notificar."); return; }
+    alert(j.mensagem || "E-mail enviado.");
+    carregarDados();
+  } catch (e) { alert("Falha ao notificar: " + e); }
 }
 
 function renderTendencia(d) {

@@ -83,6 +83,11 @@ def _carregar_config() -> dict:
 # expedição só lida com rota já criada de verdade na VUUPT).
 _STATUS_ROTA_NAO_INICIADA = {"not_started", "assigned", "accepted", "not_assigned", "scheduled"}
 
+# Rota (VUUPT) já encerrada -- usado só pelo modo "permitir_rota_em_andamento"
+# de excluir_pedido_da_rota (Torre de Controle, 25/08): ali a exclusão é
+# permitida com a rota rodando, e só é bloqueada quando ela já terminou.
+_STATUS_ROTA_ENCERRADA = {"finished", "canceled"}
+
 MOTIVOS_EXCLUSAO = ["Não Encontrado", "Não coube", "Já enviado (Stokki)", "Já enviado (Vuupt)", "Outros"]
 
 _DB_PATH = _RAIZ / "dados" / "dados.db"
@@ -340,7 +345,8 @@ def gerar_romaneio_rota(data_alvo: date, rota_id: int) -> Path:
 
 
 def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
-                           motivo: str, observacao: str, usuario: str) -> dict:
+                           motivo: str, observacao: str, usuario: str,
+                           permitir_rota_em_andamento: bool = False) -> dict:
     """Tira 1 pedido de uma rota JÁ CRIADA na VUUPT -- botão "Excluir da
     Rota" do menu de contexto de um chip de pedido, tela de expedição
     (Hugo, 23/08): o motorista foi carregar o caminhão e o pedido não
@@ -352,10 +358,17 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
     que acontece com o pedido.
 
     Mesmo mecanismo (e mesma trava) de rascunhos_rota.
-    preparar_cancelamento_de_parada: só mexe em rota que, checada AO
-    VIVO contra a API, ainda não iniciou deslocamento -- não faz
-    sentido tirar parada de rota que o motorista já está rodando. Se
-    for a ÚLTIMA parada, cancela a ROTA INTEIRA com
+    preparar_cancelamento_de_parada: por padrão (permitir_rota_em_
+    andamento=False, usado pela Expedição) só mexe em rota que, checada
+    AO VIVO contra a API, ainda não iniciou deslocamento -- não faz
+    sentido tirar parada de rota que o motorista já está rodando ANTES
+    de sair pra carregar o caminhão. A Torre de Controle (25/08) chama
+    com permitir_rota_em_andamento=True: lá o caso de uso é justamente
+    tirar um pedido de uma rota que já está rodando (ex: cliente
+    cancelou no meio do dia), então a trava vira "rota ainda não
+    encerrada" (_STATUS_ROTA_ENCERRADA) em vez de "rota ainda não
+    iniciada". Se for a ÚLTIMA parada ATIVA da rota (mesmo com outras já
+    entregues/insucesso), cancela a ROTA INTEIRA com
     services_action="unassign" (não dá pra ter rota com 0 paradas); o
     pedido em si continua 'not_assigned', só a rota que deixa de
     existir.
@@ -400,7 +413,12 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
 
     rota = _rota_do_corpo(dados_rota)
     status_atual = rota.get("status")
-    if status_atual not in _STATUS_ROTA_NAO_INICIADA:
+    if permitir_rota_em_andamento:
+        if status_atual in _STATUS_ROTA_ENCERRADA:
+            return {"ok": False,
+                    "erro": f"Rota #{rota_id} já foi encerrada (status atual na VUUPT: "
+                            f"'{status_atual}') -- não é possível alterar depois que a rota termina."}
+    elif status_atual not in _STATUS_ROTA_NAO_INICIADA:
         return {"ok": False,
                 "erro": f"Rota #{rota_id} não pode ser alterada por aqui (status atual na VUUPT: "
                         f"'{status_atual}') -- só rotas que ainda não iniciaram deslocamento."}

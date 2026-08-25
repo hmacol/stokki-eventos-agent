@@ -58,6 +58,7 @@ from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from notificar_execucao_agente import notificar_execucao
 from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
 from roteirizacao.notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
+from email_utils import notificacoes_automaticas_ativas
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
@@ -191,7 +192,7 @@ def main(modo_teste: bool = False):
 
         # Avisa os remetentes das datas movidas pelo dia fixo (1 e-mail
         # por remetente). Falha aqui não desfaz as atualizações.
-        if ajustes_dia_fixo:
+        if ajustes_dia_fixo and notificacoes_automaticas_ativas(config):
             try:
                 resultado_aviso = notificar_agendamentos_dia_fixo(
                     ajustes_dia_fixo, config.get("email", {}), modo_teste=modo_teste)

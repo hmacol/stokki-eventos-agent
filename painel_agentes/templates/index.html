@@ -33,6 +33,26 @@
   .cartao .ultima-execucao { font-size: 12px; color: var(--texto-suave); }
   .cartao form { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
   .cartao label.teste { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+  .progresso-container { display: none; }
+  .progresso-container.visivel { display: block; }
+  .progresso-texto { font-size: 11.5px; color: var(--texto-suave); margin-bottom: 5px; }
+  .progresso-trilha { height: 6px; border-radius: 100px; background: var(--borda); overflow: hidden; }
+  .progresso-preenchimento {
+    height: 100%;
+    border-radius: 100px;
+    background: var(--acento);
+    width: 0%;
+    transition: width 0.6s ease;
+  }
+  .progresso-preenchimento.indeterminado {
+    width: 30% !important;
+    animation: progresso-indeterminado 1.4s ease-in-out infinite;
+  }
+  @keyframes progresso-indeterminado {
+    0% { margin-left: -30%; }
+    100% { margin-left: 100%; }
+  }
 </style>
 {% endblock %}
 
@@ -42,26 +62,32 @@
   <h2>{{ nome_categoria }}</h2>
   <div class="grade">
     {% for agente in agentes %}
-    <div class="cartao">
+    <div class="cartao" data-agente-id="{{ agente.id }}">
       <div class="titulo-linha">
         <h3>{{ agente.nome }}</h3>
         {% if agente.rodando %}
-          <span class="badge badge-rodando">Rodando</span>
+          <span class="badge badge-rodando badge-status">Rodando</span>
         {% elif agente.ultima_execucao %}
           {% if agente.ultima_execucao.status == 'SUCESSO' %}
-            <span class="badge badge-sucesso">OK</span>
+            <span class="badge badge-sucesso badge-status">OK</span>
           {% elif agente.ultima_execucao.status == 'INTERROMPIDO' %}
-            <span class="badge badge-interrompido">Interrompido</span>
+            <span class="badge badge-interrompido badge-status">Interrompido</span>
           {% elif agente.ultima_execucao.status == 'TIMEOUT' %}
-            <span class="badge badge-timeout">Tempo esgotado</span>
+            <span class="badge badge-timeout badge-status">Tempo esgotado</span>
           {% else %}
-            <span class="badge badge-erro">Erro</span>
+            <span class="badge badge-erro badge-status">Erro</span>
           {% endif %}
         {% else %}
-          <span class="badge badge-nunca">Nunca rodou</span>
+          <span class="badge badge-nunca badge-status">Nunca rodou</span>
         {% endif %}
       </div>
       <p class="descricao">{{ agente.descricao }}</p>
+      <div class="progresso-container{% if agente.rodando %} visivel{% endif %}">
+        <div class="progresso-texto">Calculando previsão…</div>
+        <div class="progresso-trilha">
+          <div class="progresso-preenchimento indeterminado"></div>
+        </div>
+      </div>
       {% if agente.ultima_execucao %}
       <p class="ultima-execucao">
         Última execução: {{ agente.ultima_execucao.iniciado_em }}
@@ -86,4 +112,78 @@
   </div>
 </div>
 {% endfor %}
+
+<script>
+  function formatarEta(segundos) {
+    if (segundos === null || segundos === undefined) return null;
+    if (segundos < 60) return 'menos de 1 min';
+    const min = Math.round(segundos / 60);
+    return min <= 1 ? '1 min' : `${min} min`;
+  }
+
+  let idsRodandoConhecidos = new Set();
+  let recarregandoPorConclusao = false;
+
+  function atualizarProgressoAgentes() {
+    fetch(`${BASE_PATH}/api/agentes/progresso`)
+      .then(r => r.json())
+      .then(dados => {
+        const idsRodandoAgora = new Set(Object.keys(dados));
+
+        document.querySelectorAll('.cartao[data-agente-id]').forEach(cartao => {
+          const agenteId = cartao.dataset.agenteId;
+          const info = dados[agenteId];
+          const container = cartao.querySelector('.progresso-container');
+          const texto = cartao.querySelector('.progresso-texto');
+          const preenchimento = cartao.querySelector('.progresso-preenchimento');
+          const badgeStatus = cartao.querySelector('.badge-status');
+          const botao = cartao.querySelector('button[type="submit"]');
+
+          if (!info) {
+            container.classList.remove('visivel');
+            return;
+          }
+
+          container.classList.add('visivel');
+          if (badgeStatus) {
+            badgeStatus.className = 'badge badge-rodando badge-status';
+            badgeStatus.textContent = 'Rodando';
+          }
+          if (botao) {
+            botao.disabled = true;
+            botao.classList.add('desabilitado');
+            botao.textContent = 'Rodando…';
+          }
+
+          if (info.percentual === null || info.percentual === undefined) {
+            preenchimento.classList.add('indeterminado');
+            texto.textContent = 'Calculando previsão…';
+          } else {
+            preenchimento.classList.remove('indeterminado');
+            preenchimento.style.width = `${info.percentual}%`;
+            const eta = formatarEta(info.eta_segundos);
+            texto.textContent = eta
+              ? `${info.percentual}% · previsão: ${eta} restante(s)`
+              : `${info.percentual}%`;
+          }
+        });
+
+        // Se um agente que estava rodando terminou, recarrega a página
+        // uma vez pra atualizar badge/última execução/link de log --
+        // esses dados não vêm nesse endpoint (só % e ETA).
+        const algumTerminou = [...idsRodandoConhecidos].some(id => !idsRodandoAgora.has(id));
+        idsRodandoConhecidos = idsRodandoAgora;
+        if (algumTerminou && !recarregandoPorConclusao) {
+          recarregandoPorConclusao = true;
+          setTimeout(() => window.location.reload(), 1200);
+          return;
+        }
+
+        setTimeout(atualizarProgressoAgentes, idsRodandoAgora.size > 0 ? 3000 : 20000);
+      })
+      .catch(() => setTimeout(atualizarProgressoAgentes, 20000));
+  }
+
+  atualizarProgressoAgentes();
+</script>
 {% endblock %}

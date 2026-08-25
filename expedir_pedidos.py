@@ -45,6 +45,7 @@ from motivos_falha import texto_do_motivo, aprender_motivos
 from notificar_insucesso_aguardando_resposta import (
     identificar_aguardando_resposta, notificar_remetentes as notificar_insucesso_aguardando_resposta,
 )
+from email_utils import notificacoes_automaticas_ativas
 from vuupt_client import VuuptClient
 import tratativas
 
@@ -919,11 +920,14 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             # "no caso do cliente responder, prevalece o que ele
             # solicitar" -- sem resposta, sem ação.
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
-            if pendentes_resposta:
+            if pendentes_resposta and notificacoes_automaticas_ativas(config):
                 resultado_espera = notificar_insucesso_aguardando_resposta(
                     pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste
                 )
                 logger.info(f"Pergunta de reenvio aos remetentes: {resultado_espera}")
+            elif pendentes_resposta:
+                logger.info(f"Notificações automáticas desativadas -- {len(pendentes_resposta)} pedido(s) "
+                           f"aguardando pergunta de reenvio, disponível pra disparo manual na Fila de Ação.")
 
             notificar_insucesso_entrega(insucessos, config_email, modo_teste)
 

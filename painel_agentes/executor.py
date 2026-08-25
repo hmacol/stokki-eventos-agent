@@ -9,6 +9,7 @@ dados/dados.db. O log de cada execução vai pra um arquivo separado em
 dados/logs/, lido sob demanda pelo painel (polling simples via JS).
 """
 import logging
+import re
 import sqlite3
 import subprocess
 import sys
@@ -264,6 +265,92 @@ def ler_log(execucao_id: int) -> str:
         return log_path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
         return f"(falha ao ler o log: {e})"
+
+
+_PADRAO_PROGRESSO_LOG = re.compile(r"\[(\d+)/(\d+)\]")
+
+
+def _duracao_media_historica_segundos(agente_id: str, modo_teste: int, limite: int = 5) -> float | None:
+    """Média de duração (segundos) das últimas execuções SUCESSO desse
+    agente -- usada pra estimar % e ETA quando o log não tem um padrão
+    "[i/n]" parseável (pedido do Hugo, 24/08: barra de evolução com
+    previsão de minutos e % pra cada Agente). Prioriza execuções do
+    mesmo modo (teste/normal), já que o modo teste costuma processar um
+    volume bem menor; se não houver amostra suficiente nesse modo, cai
+    pra qualquer SUCESSO desse agente."""
+    conn = _conectar()
+
+    def _media(filtro_modo: bool) -> float | None:
+        query = """
+            SELECT iniciado_em, finalizado_em FROM painel_execucoes
+            WHERE agente_id = ? AND status = 'SUCESSO' AND finalizado_em IS NOT NULL
+        """
+        params = [agente_id]
+        if filtro_modo:
+            query += " AND modo_teste = ?"
+            params.append(modo_teste)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limite)
+        duracoes = []
+        for row in conn.execute(query, params).fetchall():
+            try:
+                ini = datetime.strptime(row["iniciado_em"], "%Y-%m-%d %H:%M:%S")
+                fim = datetime.strptime(row["finalizado_em"], "%Y-%m-%d %H:%M:%S")
+                duracoes.append((fim - ini).total_seconds())
+            except Exception:
+                continue
+        return sum(duracoes) / len(duracoes) if duracoes else None
+
+    media = _media(filtro_modo=True)
+    if media is None:
+        media = _media(filtro_modo=False)
+    conn.close()
+    return media
+
+
+def progresso_execucao(execucao_id: int) -> dict | None:
+    """Estima % concluído e previsão de tempo pra terminar, de uma
+    execução RODANDO. Dois jeitos, nessa ordem de preferência:
+
+      1) o log tem um padrão "[i/n]" (hoje só "Somente Importação" e
+         "Somente Expedição" logam assim) -- usa o item real: percentual
+         = i/n, ETA extrapola o tempo por item já gasto pro que falta.
+      2) sem esse padrão -- usa a duração média das últimas execuções
+         SUCESSO desse mesmo agente como "tamanho esperado" do trabalho:
+         percentual = decorrido/média, ETA = média - decorrido.
+
+    Se não tiver nem log parseável nem histórico (1ª execução do
+    agente), retorna fonte=None -- o front mostra a barra "indeterminada"
+    (sem número, só animação), em vez de travar em 0%.
+
+    Retorna None se a execução não existir ou não estiver RODANDO.
+    """
+    execucao = buscar_execucao(execucao_id)
+    if not execucao or execucao["status"] != "RODANDO":
+        return None
+
+    try:
+        iniciado = datetime.strptime(execucao["iniciado_em"], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+    decorrido_seg = max(0.0, (datetime.now() - iniciado).total_seconds())
+
+    log_texto = ler_log(execucao_id)
+    matches = _PADRAO_PROGRESSO_LOG.findall(log_texto) if log_texto else []
+    if matches:
+        i, n = (int(x) for x in matches[-1])
+        if n > 0 and 0 < i <= n:
+            percentual = min(99, round(i / n * 100))
+            eta_segundos = round((decorrido_seg / i) * (n - i))
+            return {"percentual": percentual, "eta_segundos": eta_segundos, "fonte": "log"}
+
+    media_seg = _duracao_media_historica_segundos(execucao["agente_id"], execucao["modo_teste"])
+    if media_seg and media_seg > 0:
+        percentual = min(99, round(decorrido_seg / media_seg * 100))
+        eta_segundos = max(0, round(media_seg - decorrido_seg))
+        return {"percentual": percentual, "eta_segundos": eta_segundos, "fonte": "historico"}
+
+    return {"percentual": None, "eta_segundos": None, "fonte": None}
 
 
 def encerrar_todas_execucoes() -> int:
