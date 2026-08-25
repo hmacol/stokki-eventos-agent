@@ -176,11 +176,14 @@ def _resolver_pedido(vuupt: VuuptClient, order_number: str) -> tuple[dict | None
     # relação numérica com a NF (achado 25/08, pedido do Hugo) -- então
     # as duas tentativas acima nunca acham nada pra esse embarcador. A
     # NF SÓ aparece no `title` do serviço, sempre no formato
-    # "#PS-XXXXX - {NF}/QUATRO ESTRELAS - {destinatário}" (confirmado
-    # via API real). Busca por conter "{NF}/QUATRO ESTRELAS" no título
-    # -- específico o bastante pra não casar por acidente com o pedido
-    # de outro embarcador.
-    servico = vuupt.buscar_servico_por_titulo_contendo(f"{order_number}/QUATRO ESTRELAS")
+    # "#PS-XXXXX - {NF} / QUATRO ESTRELAS / {destinatário}" -- com
+    # espaços em volta da barra (confirmado via API real, pedido
+    # 175780: "#PS-37580 - 175780 / QUATRO ESTRELAS / Leila Cristina
+    # Dias" -- a 1ª tentativa desse fallback, sem os espaços, nunca
+    # casava). Busca por conter "{NF} / QUATRO ESTRELAS" no título --
+    # específico o bastante pra não casar por acidente com o pedido de
+    # outro embarcador.
+    servico = vuupt.buscar_servico_por_titulo_contendo(f"{order_number} / QUATRO ESTRELAS")
     if servico and servico.get("code"):
         return servico, servico["code"].lstrip("#")
 
