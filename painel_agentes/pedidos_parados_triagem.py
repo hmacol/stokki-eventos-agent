@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
-CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar")
-CLASSIFICACOES_QUE_ENCAMINHAM_OPERACAO = ("Cancelados", "Devolução Parcial", "Descartar")
+CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente")
+CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
 
@@ -369,14 +369,16 @@ def duplicar(order_number: str, usuario: str) -> dict:
 
 def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> dict:
     """
-    Ação das tratativas "Cancelados"/"Devolução Parcial": cria a Demanda
-    no Fresh Hub (nunca duplica na Vuupt). Resolve o nome do cliente na
-    Vuupt só pra usar no título/client_name do card -- se não conseguir,
-    cria a Demanda com um título genérico em vez de travar a ação (é
-    mais importante a operação ver o card do que travar por causa de um
-    nome que não resolveu)."""
-    if classificacao not in CLASSIFICACOES_QUE_ENCAMINHAM_OPERACAO:
-        raise ValueError(f"Classificação {classificacao!r} não encaminha pra operação.")
+    Ação das tratativas que criam Demanda no Fresh Hub (Cancelados/
+    Devolução Parcial/Descartar/Verificar com Cliente -- cada uma numa
+    área diferente, ver MOLDE_TRATATIVA em freshhub/tasks.py; nunca
+    duplica na Vuupt). Resolve o nome do cliente na Vuupt só pra usar no
+    título/client_name do card -- se não conseguir, cria a Demanda com
+    um título genérico em vez de travar a ação (é mais importante quem
+    for tratar ver o card do que travar por causa de um nome que não
+    resolveu)."""
+    if classificacao not in CLASSIFICACOES_QUE_CRIAM_DEMANDA:
+        raise ValueError(f"Classificação {classificacao!r} não cria Demanda.")
 
     vuupt = _vuupt()
     servico, pedido_code = _resolver_pedido(vuupt, order_number)

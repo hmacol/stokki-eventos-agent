@@ -73,8 +73,17 @@
 
 <script>
 const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
-const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar"];
-const ENCAMINHAM_OPERACAO = ["Cancelados", "Devolução Parcial", "Descartar"];
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente"];
+const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
+// Área de destino de cada classificação que cria Demanda -- só pra
+// mostrar no botão/confirmação; a fonte de verdade é MOLDE_TRATATIVA em
+// freshhub/tasks.py (manter os dois em sincronia se adicionar uma nova).
+const AREA_POR_CLASSIFICACAO = {
+  "Cancelados": "Operações",
+  "Devolução Parcial": "Operações",
+  "Descartar": "Operações",
+  "Verificar com Cliente": "Atendimento",
+};
 
 let pedidosAtuais = [];
 let ultimoOk = null;
@@ -111,8 +120,9 @@ function renderTabela() {
       acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>`;
     } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
       acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
-    } else if (PODE_EDITAR && ENCAMINHAM_OPERACAO.includes(p.classificacao)) {
-      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar p/ operação</button>`;
+    } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
+      const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
+      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
     } else if (p.classificacao === "Agendado") {
       acaoHtml = `<span class="status-ok">✓ revisado (manter agendamento)</span>`;
     }
@@ -161,7 +171,8 @@ async function duplicar(orderNumber) {
 }
 
 async function encaminhar(orderNumber, classificacao) {
-  if (!confirm(`Criar uma Demanda de "${classificacao}" pro pedido ${orderNumber} no Fresh Hub?\n\nAparece de verdade pro time de operação.`)) return;
+  const area = AREA_POR_CLASSIFICACAO[classificacao] || "?";
+  if (!confirm(`Criar uma Demanda de "${classificacao}" pro pedido ${orderNumber} no Fresh Hub?\n\nAparece de verdade pra área "${area}".`)) return;
   try {
     const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/encaminhar`, {
       method: "POST", headers: { "Content-Type": "application/json" },

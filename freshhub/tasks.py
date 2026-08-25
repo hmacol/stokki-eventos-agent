@@ -3,10 +3,10 @@
 freshhub/tasks.py
 
 Escrita na tabela `tasks` -- fonte real do Kanban "Demandas" do Fresh
-Hub (freshhub.com.br/demandas). Usado pelo encaminhamento à equipe de
-operação dos pedidos parados classificados como Cancelados ou Devolução
-Parcial (nunca duplicados na Vuupt -- ver TRATATIVAS_PEDIDOS_PARADOS.md
-na raiz do projeto pro contexto de negócio completo).
+Hub (freshhub.com.br/demandas). Usado pelo encaminhamento das
+classificações de pedido parado que precisam de alguém olhar (nunca
+duplicadas na Vuupt -- ver TRATATIVAS_PEDIDOS_PARADOS.md na raiz do
+projeto pro contexto de negócio completo).
 
 Molde de cada tratativa (categoria/área já cadastradas no Fresh Hub,
 confirmadas com o Hugo em 24/08 -- "Devolução Parcial" foi criada por
@@ -21,8 +21,11 @@ ele nesse dia em task_categories):
   Descartar:
     (mesmo molde de Cancelados -- confirmado com o Hugo, 24/08: "mesmo
     comportamento de Cancelado, precisamos comunicar a equipe")
+  Verificar com Cliente:
+    category: "Verificar Pedido com Cliente"
+    area:     "Atendimento"
 
-Em ambos: priority="alta", status inicial "aguardando_prazo",
+Em todos: priority="alta", status inicial "aguardando_prazo",
 requested_by = o próprio usuário de serviço logado (sessao.user_id) --
 não o humano que classificou no nosso painel (decisão do Hugo, 24/08).
 Título sempre "{categoria} — {client_name}", sem número do pedido.
@@ -49,6 +52,10 @@ MOLDE_TRATATIVA = {
     "Descartar": {
         "category": "Cancelamento de Pedido e Retorno ao Estoque",
         "area": "Operações",
+    },
+    "Verificar com Cliente": {
+        "category": "Verificar Pedido com Cliente",
+        "area": "Atendimento",
     },
 }
 
