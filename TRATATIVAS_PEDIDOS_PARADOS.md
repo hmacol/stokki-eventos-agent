@@ -53,6 +53,7 @@ cadastrar mais opções mais adiante").
 | **Devolução Parcial** | **Nunca** | Criar card em Demandas para a equipe de operação |
 | **Reenvio** | **Sim** | Duplicar o pedido e reenviar à Vuupt o quanto antes, pra voltar pra rota |
 | **Agendado** | Não | Verificar e manter o agendamento já existente (não é caso de operação nem de duplicação) |
+| **Descartar** | Não | Nenhuma ação além de classificar — mesmo comportamento de "Agendado" no sistema (só marca como revisado), mas pra pedido que não precisa de nenhuma tratativa (adicionado 24/08, pedido do Hugo) |
 | *(novo status futuro)* | **Indefinido até ser documentado aqui** | Tratar como Pendente — nunca duplicar nem presumir tratativa por conta própria; decidir manualmente e atualizar esta tabela |
 
 **Importante (confirmado com o Hugo, 24/08): a classificação acontece no
