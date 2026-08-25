@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block titulo %}Pedidos Parados{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitulo { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  .barra-utilidade {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    margin: 0 0 16px; flex-wrap: wrap;
+  }
+  .barra-utilidade label { font-size: 13px; color: var(--texto-suave); display: flex; align-items: center; gap: 6px; }
+  .carimbo { font-size: 12px; color: var(--texto-suave); }
+  .carimbo.erro { color: var(--erro); }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--superficie-hover); }
+  tr.prioridade td:first-child { border-left: 3px solid var(--destaque, #F5A623); }
+  .mono { font-size: 12px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10px; font-weight: 700;
+           letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; }
+  .badge-prioridade { background: #FCEFD9; color: #92400E; }
+  .badge-repetido { background: var(--teste-bg); color: var(--teste-texto); }
+  select.classificacao { padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; min-width: 160px; }
+  .botao-acao { padding: 5px 10px; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; color: #fff; }
+  .botao-duplicar { background: var(--primaria); }
+  .botao-encaminhar { background: #92400E; }
+  .status-ok { color: #15803D; font-size: 12px; }
+  .status-erro { color: var(--erro); font-size: 12px; }
+  .sem-dado { color: var(--texto-suave); }
+  .carregando { padding: 30px; text-align: center; color: var(--texto-suave); }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Pedidos parados</h1>
+<p class="subtitulo">
+  Origem: freshhub.com.br/pedidos-parados. Classifique cada pedido e dispare a
+  tratativa correspondente -- ver TRATATIVAS_PEDIDOS_PARADOS.md pro critério
+  de cada classificação. Pedidos parados há {{ '2+' }} dias ficam marcados
+  como prioridade.
+</p>
+
+<div class="barra-utilidade">
+  <label><input type="checkbox" id="so-pendentes"> Mostrar só não tratados</label>
+  <span class="carimbo" id="carimbo">Carregando…</span>
+</div>
+
+<div class="tabela-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Pedido</th>
+      <th>Volumes</th>
+      <th>Registrado em</th>
+      <th>Dias parado</th>
+      <th>Recebedor</th>
+      <th>Classificação</th>
+      <th>Tratativa</th>
+    </tr>
+  </thead>
+  <tbody id="corpo-tabela">
+    <tr><td colspan="7" class="carregando">Carregando pedidos parados…</td></tr>
+  </tbody>
+</table>
+</div>
+
+<script>
+const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado"];
+const ENCAMINHAM_OPERACAO = ["Cancelados", "Devolução Parcial"];
+
+let pedidosAtuais = [];
+let ultimoOk = null;
+let houveErro = false;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderTabela() {
+  const soPendentes = document.getElementById("so-pendentes").checked;
+  const alvo = document.getElementById("corpo-tabela");
+  const linhas = soPendentes
+    ? pedidosAtuais.filter(p => p.acao_status !== "concluida")
+    : pedidosAtuais;
+
+  if (!linhas.length) {
+    alvo.innerHTML = `<tr><td colspan="7" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
+    return;
+  }
+
+  alvo.innerHTML = linhas.map(p => {
+    const opcoes = `<option value="">-- classificar --</option>` +
+      CLASSIFICACOES.map(c => `<option value="${c}" ${p.classificacao === c ? "selected" : ""}>${c}</option>`).join("");
+
+    const selectHtml = PODE_EDITAR
+      ? `<select class="classificacao" onchange="classificar('${p.order_number}', '${p.freshhub_id}', this.value)">${opcoes}</select>`
+      : (p.classificacao || `<span class="sem-dado">Pendente</span>`);
+
+    let acaoHtml = `<span class="sem-dado">—</span>`;
+    if (p.acao_status === "concluida") {
+      acaoHtml = `<span class="status-ok">✓ ${esc(p.acao_detalhe || "concluído")}</span>`;
+    } else if (p.acao_status === "erro") {
+      acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>`;
+    } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
+      acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
+    } else if (PODE_EDITAR && ENCAMINHAM_OPERACAO.includes(p.classificacao)) {
+      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar p/ operação</button>`;
+    } else if (p.classificacao === "Agendado") {
+      acaoHtml = `<span class="status-ok">✓ revisado (manter agendamento)</span>`;
+    }
+
+    const repetido = p.vezes_registrado > 1
+      ? ` <span class="badge badge-repetido">${p.vezes_registrado}x registrado</span>` : "";
+
+    return `
+      <tr class="${p.prioridade ? 'prioridade' : ''}">
+        <td class="mono">${esc(p.order_number)}${repetido}</td>
+        <td>${esc(p.volumes)}</td>
+        <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
+        <td>${p.prioridade ? `<span class="badge badge-prioridade">${p.dias_parado}d</span>` : p.dias_parado + 'd'}</td>
+        <td>${esc(p.recebedor_name)}</td>
+        <td>${selectHtml}</td>
+        <td>${acaoHtml}</td>
+      </tr>`;
+  }).join("");
+}
+
+async function classificar(orderNumber, freshhubId, classificacao) {
+  if (!classificacao) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/classificar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_number: orderNumber, freshhub_id: freshhubId, classificacao }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao classificar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao classificar: " + e); }
+}
+
+async function duplicar(orderNumber) {
+  if (!confirm(`Duplicar o pedido ${orderNumber} na Vuupt agora?\n\nCria uma entrega nova de verdade -- não dá pra desfazer.`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/duplicar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_number: orderNumber }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao duplicar."); return; }
+    alert(j.ja_existia ? `Já tinha sido duplicado antes: ${j.novo_code}` : `Reentrega criada: ${j.novo_code}`);
+    carregarDados();
+  } catch (e) { alert("Falha ao duplicar: " + e); }
+}
+
+async function encaminhar(orderNumber, classificacao) {
+  if (!confirm(`Criar uma Demanda de "${classificacao}" pro pedido ${orderNumber} no Fresh Hub?\n\nAparece de verdade pro time de operação.`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/encaminhar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_number: orderNumber, classificacao }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao encaminhar."); return; }
+    alert(`Demanda criada no Fresh Hub (cliente: ${j.client_name}).`);
+    carregarDados();
+  } catch (e) { alert("Falha ao encaminhar: " + e); }
+}
+
+function atualizarCarimbo() {
+  const el = document.getElementById("carimbo");
+  if (!ultimoOk) {
+    el.textContent = houveErro ? "Falha ao carregar -- tentando de novo…" : "Carregando dados…";
+    el.className = houveErro ? "carimbo erro" : "carimbo";
+    return;
+  }
+  const seg = Math.round((Date.now() - ultimoOk.getTime()) / 1000);
+  el.textContent = `${pedidosAtuais.length} pedido(s) -- atualizado há ${seg < 60 ? seg + "s" : Math.floor(seg / 60) + "min"}` +
+                   (houveErro ? " · última tentativa falhou" : "");
+  el.className = houveErro ? "carimbo erro" : "carimbo";
+}
+
+async function carregarDados() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/dados`);
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.erro || resp.statusText);
+    pedidosAtuais = d.pedidos;
+    renderTabela();
+    ultimoOk = new Date();
+    houveErro = false;
+  } catch (e) {
+    houveErro = true;
+    console.error("pedidos-parados: falha ao carregar", e);
+  } finally {
+    atualizarCarimbo();
+  }
+}
+
+document.getElementById("so-pendentes").addEventListener("change", renderTabela);
+
+carregarDados();
+setInterval(carregarDados, 60000);
+setInterval(atualizarCarimbo, 1000);
+</script>
+{% endblock %}

@@ -1,6 +1,7 @@
 # Segredos / credenciais
 config.yaml
 **/sessao_stokki.json
+**/sessao_freshhub.json
 **/*service_account*.json
 **/*service-account*.json
 **/gcs-service-account.json

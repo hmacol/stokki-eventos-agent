@@ -75,6 +75,7 @@ from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_d
 import rascunhos_rota
 import torre_controle
 import tratativas
+import pedidos_parados_triagem
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -722,6 +723,86 @@ def historico_tratativas():
         motivos=tratativas.valores_distintos("motivo_texto"),
         eventos=tratativas.EVENTOS_POR_PEDIDO,
     )
+
+
+@app.route("/pedidos-parados")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def pedidos_parados():
+    """Triagem dos pedidos parados do Fresh Hub -- pedido do Hugo,
+    24/08. Página sobe só com a casca; os dados chegam por
+    /api/pedidos-parados/dados via JS (login no Fresh Hub + Vuupt pode
+    levar alguns segundos, não deve travar o load -- mesmo padrão da
+    Torre)."""
+    return render_template("pedidos_parados_triagem.html",
+                           pode_editar=g.nivel_acesso in ("total", "operador"))
+
+
+@app.route("/api/pedidos-parados/dados")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def api_pedidos_parados_dados():
+    try:
+        return jsonify({"pedidos": pedidos_parados_triagem.listar_com_classificacao()})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao montar dados de pedidos parados")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/pedidos-parados/classificar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_classificar():
+    body = request.get_json(force=True)
+    try:
+        pedidos_parados_triagem.classificar(
+            body["order_number"], body.get("freshhub_id", ""),
+            body["classificacao"], session.get("usuario", "desconhecido"),
+        )
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao classificar pedido parado")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pedidos-parados/duplicar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_duplicar():
+    body = request.get_json(force=True)
+    try:
+        resultado = pedidos_parados_triagem.duplicar(
+            body["order_number"], session.get("usuario", "desconhecido"),
+        )
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    except (ValueError, RuntimeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao duplicar pedido parado")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
+
+
+@app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_encaminhar():
+    body = request.get_json(force=True)
+    try:
+        resultado = pedidos_parados_triagem.encaminhar_operacao(
+            body["order_number"], body["classificacao"], session.get("usuario", "desconhecido"),
+        )
+    except KeyError as e:
+        return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao encaminhar pedido parado pra operação")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
 
 
 @app.route("/torre")
