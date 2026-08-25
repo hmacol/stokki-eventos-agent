@@ -73,7 +73,9 @@
 
 <script>
 const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
-const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente"];
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota"];
+// Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
+const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota" };
 const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
 // Área de destino de cada classificação que cria Demanda -- só pra
 // mostrar no botão/confirmação; a fonte de verdade é MOLDE_TRATATIVA em
@@ -123,8 +125,8 @@ function renderTabela() {
     } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
       const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
       acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
-    } else if (p.classificacao === "Agendado") {
-      acaoHtml = `<span class="status-ok">✓ revisado (manter agendamento)</span>`;
+    } else if (p.classificacao in SO_REVISA) {
+      acaoHtml = `<span class="status-ok">✓ revisado (${SO_REVISA[p.classificacao]})</span>`;
     }
 
     const repetido = p.vezes_registrado > 1

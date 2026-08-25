@@ -55,6 +55,7 @@ cadastrar mais opções mais adiante").
 | **Agendado** | Não | Verificar e manter o agendamento já existente (não é caso de operação nem de duplicação) |
 | **Descartar** | **Nunca** | **Mesmo comportamento de "Cancelados"** (corrigido 24/08, pedido do Hugo: "precisamos comunicar a equipe") — cria card em Demandas com o mesmo molde de Cancelados (categoria "Cancelamento de Pedido e Retorno ao Estoque", área "Operações") |
 | **Verificar com Cliente** | **Nunca** | Cria card em Demandas pra área **Atendimento** (categoria "Verificar Pedido com Cliente", cadastrada pelo Hugo em 24/08) — antes de decidir Cancelados/Devolução Parcial/Reenvio, alguém do atendimento ou comercial confirma com o cliente o que fazer com o pedido |
+| **Em Rota** | Não | **Mesmo comportamento de "Agendado"** (pedido do Hugo, 25/08) — só marca como revisado, sem duplicar nem criar Demanda; pedido já está em rota, não precisa de mais nada |
 | *(novo status futuro)* | **Indefinido até ser documentado aqui** | Tratar como Pendente — nunca duplicar nem presumir tratativa por conta própria; decidir manualmente e atualizar esta tabela |
 
 **Importante (confirmado com o Hugo, 24/08): a classificação acontece no

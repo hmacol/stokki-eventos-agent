@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
-CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente")
+CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota")
 CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
