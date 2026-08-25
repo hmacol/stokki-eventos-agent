@@ -22,6 +22,15 @@ Cada entrada:
                    de --diario ou --semanal, não tem um modo "geral")
   categoria     -- agrupamento visual no painel
 """
+import sys
+
+# agente_importacao_stokki é outro projeto/repositório inteiro (ver
+# entrada abaixo) -- em produção roda na VPS em /opt/agente-importacao-stokki
+# (migração 17/08), mas localmente (teste do painel no Windows) mora em
+# C:\agente_importacao_stokki. Escolhe pelo SO onde o painel está rodando.
+_RAIZ_IMPORTACAO_STOKKI = (
+    r"C:\agente_importacao_stokki" if sys.platform == "win32" else "/opt/agente-importacao-stokki"
+)
 
 AGENTES = [
     {
@@ -199,7 +208,7 @@ AGENTES = [
         "descricao": "Baixa XMLs de pedido por e-mail, processa e importa na Stokki (Playwright).",
         "script": "main.py",
         "cwd": ".",
-        "raiz_absoluta": r"C:\agente_importacao_stokki",
+        "raiz_absoluta": _RAIZ_IMPORTACAO_STOKKI,
         "suporta_teste": True,
         "flag_teste": "--modo-teste",
         "args_fixos": ["Empório Quatro Estrelas"],
