@@ -43,6 +43,14 @@
   }
   .botao-vuupt:hover { background: var(--superficie-hover); }
   .botao-vuupt:disabled { opacity: 0.5; cursor: default; }
+  .botao-copiar { padding: 6px 12px; border: 1px solid var(--borda); border-radius: 6px; background: var(--superficie); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--texto); }
+  .botao-copiar:hover { background: var(--superficie-hover); }
+  th.col-filtro { padding: 6px 14px 10px; }
+  th.col-filtro input, th.col-filtro select {
+    width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px; font-weight: 400;
+    text-transform: none; letter-spacing: normal; border: 1px solid var(--borda); border-radius: 5px;
+    background: var(--fundo, var(--superficie)); color: var(--texto);
+  }
 </style>
 {% endblock %}
 
@@ -59,6 +67,7 @@
 
 <div class="barra-utilidade">
   <label><input type="checkbox" id="so-pendentes"> Mostrar só não tratados</label>
+  <button class="botao-copiar" id="botao-copiar-tabela" onclick="copiarTabela()">Copiar tabela (Pedido - Volumes - Classificação)</button>
   <span class="carimbo" id="carimbo">Carregando…</span>
 </div>
 
@@ -70,13 +79,32 @@
       <th>Volumes</th>
       <th>Registrado em</th>
       <th>Dias parado</th>
-      <th>Recebedor</th>
       <th>Classificação</th>
       <th>Tratativa</th>
     </tr>
+    <tr>
+      <th class="col-filtro"><input type="text" id="filtro-pedido" placeholder="Filtrar…" oninput="atualizarFiltro('pedido', this.value)"></th>
+      <th class="col-filtro"><input type="text" id="filtro-volumes" placeholder="Filtrar…" oninput="atualizarFiltro('volumes', this.value)"></th>
+      <th class="col-filtro"><input type="text" id="filtro-registrado" placeholder="Filtrar…" oninput="atualizarFiltro('registrado', this.value)"></th>
+      <th class="col-filtro"><input type="text" id="filtro-dias" placeholder="Filtrar…" oninput="atualizarFiltro('dias', this.value)"></th>
+      <th class="col-filtro">
+        <select id="filtro-classificacao" onchange="atualizarFiltro('classificacao', this.value)">
+          <option value="">-- todas --</option>
+          <option value="__vazio__">(sem classificação)</option>
+        </select>
+      </th>
+      <th class="col-filtro">
+        <select id="filtro-tratativa" onchange="atualizarFiltro('tratativa', this.value)">
+          <option value="">-- todas --</option>
+          <option value="pendente">Pendente</option>
+          <option value="concluida">Concluída</option>
+          <option value="erro">Erro</option>
+        </select>
+      </th>
+    </tr>
   </thead>
   <tbody id="corpo-tabela">
-    <tr><td colspan="7" class="carregando">Carregando pedidos parados…</td></tr>
+    <tr><td colspan="6" class="carregando">Carregando pedidos parados…</td></tr>
   </tbody>
 </table>
 </div>
@@ -100,20 +128,59 @@ const AREA_POR_CLASSIFICACAO = {
 let pedidosAtuais = [];
 let ultimoOk = null;
 let houveErro = false;
+const filtros = { pedido: "", volumes: "", registrado: "", dias: "", classificacao: "", tratativa: "" };
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
-function renderTabela() {
+(function preencherFiltroClassificacao() {
+  const sel = document.getElementById("filtro-classificacao");
+  CLASSIFICACOES.forEach(c => {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+})();
+
+function atualizarFiltro(campo, valor) {
+  filtros[campo] = valor;
+  renderTabela();
+}
+
+function linhaPassaFiltros(p) {
+  const contem = (valor, termo) => String(valor ?? "").toLowerCase().includes(termo.toLowerCase());
+  if (filtros.pedido && !contem(p.order_number, filtros.pedido)) return false;
+  if (filtros.volumes && !contem(p.volumes, filtros.volumes)) return false;
+  if (filtros.registrado && !contem(p.created_at.replace('T', ' ').slice(0, 16), filtros.registrado)) return false;
+  if (filtros.dias && !contem(p.dias_parado, filtros.dias)) return false;
+  if (filtros.classificacao) {
+    if (filtros.classificacao === "__vazio__") {
+      if (p.classificacao) return false;
+    } else if (p.classificacao !== filtros.classificacao) return false;
+  }
+  if (filtros.tratativa) {
+    const ehPendente = p.acao_status !== "concluida" && p.acao_status !== "erro";
+    const statusAtual = ehPendente ? "pendente" : p.acao_status;
+    if (statusAtual !== filtros.tratativa) return false;
+  }
+  return true;
+}
+
+function linhasFiltradas() {
   const soPendentes = document.getElementById("so-pendentes").checked;
+  return pedidosAtuais
+    .filter(p => !soPendentes || p.acao_status !== "concluida")
+    .filter(linhaPassaFiltros);
+}
+
+function renderTabela() {
   const alvo = document.getElementById("corpo-tabela");
-  const linhas = soPendentes
-    ? pedidosAtuais.filter(p => p.acao_status !== "concluida")
-    : pedidosAtuais;
+  const linhas = linhasFiltradas();
 
   if (!linhas.length) {
-    alvo.innerHTML = `<tr><td colspan="7" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
+    alvo.innerHTML = `<tr><td colspan="6" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
     return;
   }
 
@@ -156,7 +223,6 @@ function renderTabela() {
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
         <td>${p.prioridade ? `<span class="badge badge-prioridade">${p.dias_parado}d</span>` : p.dias_parado + 'd'}</td>
-        <td>${esc(p.recebedor_name)}</td>
         <td>${selectHtml}</td>
         <td>${acaoHtml}</td>
       </tr>`;
@@ -238,6 +304,26 @@ async function notificarClienteRetira(orderNumber) {
     alert(`E-mail enviado pra ${j.nome_embarcador} (${j.emails.join(", ")}).`);
     carregarDados();
   } catch (e) { alert("Falha ao notificar o embarcador: " + e); }
+}
+
+async function copiarTabela() {
+  const linhas = linhasFiltradas();
+  if (!linhas.length) { alert("Nenhum pedido para copiar com o filtro atual."); return; }
+
+  const texto = linhas
+    .map(p => `${p.order_number} - ${p.volumes} - ${p.classificacao || "Sem classificação"}`)
+    .join("\n");
+
+  const botao = document.getElementById("botao-copiar-tabela");
+  const original = botao.textContent;
+  try {
+    await navigator.clipboard.writeText(texto);
+    botao.textContent = "Copiado!";
+  } catch (e) {
+    alert("Não foi possível copiar automaticamente. Copie manualmente:\n\n" + texto);
+  } finally {
+    setTimeout(() => { botao.textContent = original; }, 1500);
+  }
 }
 
 function atualizarCarimbo() {
