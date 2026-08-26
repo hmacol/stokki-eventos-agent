@@ -1,6 +1,6 @@
 # Plano de Execução: App de Motoristas + Saída da VUUPT
 
-**Status (26/08): FASES A e B PRONTAS E TESTADAS, NÃO DEPLOYADAS — nada em produção ainda.** Este
+**Status (26/08, 06h): FASES A e B DEPLOYADAS NA VPS (commit `1181053`) — API pública no ar, histórico de 30 dias carregado, usuário de teste do Hugo criado. Falta o teste no celular e as contas das lojas.** Este
 documento é o roteiro combinado com o Hugo pra (1) criar um aplicativo
 mobile próprio pros motoristas (App Store + Play Store) e (2) deixar de usar
 a VUUPT, que hoje é ao mesmo tempo o banco oficial de pedidos/rotas, o app
@@ -328,3 +328,15 @@ Entregáveis:
   Nada commitado/deployado; `secret_key` da API precisa entrar no
   `config.yaml` (Hugo). Próximo: deploy 5.A.1 + 5.B.1, Hugo testa no
   celular via Expo Go, depois contas das lojas → EAS build.
+- **26/08 (06h)** — Hugo: "me ajuda a fazer minha parte". **DEPLOYADO NA
+  VPS** (commit `1181053`): `secret_key` gravada nos dois `config.yaml`
+  (backup `config.yaml.bak-26-08` na VPS), `motorista-api.service` ativo
+  na 8073, bloco `/motorista/*` no Caddy (backup `Caddyfile.bak-26-08`),
+  `https://app.freshhub.com.br/motorista/api/saude` OK, timer
+  `stokki-nucleo-sincronizar-vuupt` a cada 30 min (:15/:45), backfill de
+  30 dias = 406 rotas / 3.620 paradas / 3.307 eventos (145 rotas com
+  rascunho + km vinculados), tarifas semeadas, `painel-agentes` reiniciado
+  com o gancho. Usuário TESTE do Hugo (CPF `00000000000`, agent_id 999001,
+  PIN passado no chat) + rota real de hoje replicada como APP #407
+  (17 paradas). Login público testado. Falta: Hugo testar no celular
+  (Expo Go), D-U-N-S/contas, decisões de km/pedágio, WAL antes do piloto real.
