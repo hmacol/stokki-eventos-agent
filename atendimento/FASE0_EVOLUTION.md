@@ -22,16 +22,24 @@ do mesmo número sem conflito; o aviso automático de oferta de rota
 
 | # | Tarefa | Quem | Status |
 |---|--------|------|--------|
-| 1 | **Manual, antes de tudo**: desregistrar o número da WhatsApp Cloud API no Meta Business Manager | Hugo | ☐ |
-| 2 | Subir o stack Evolution API na VPS (`atendimento/infra/instalar_vps.sh`) | Claude + Hugo | ☐ |
-| 3 | Criar a instância e parear o número (QR ou código por telefone, tela `/admin/whatsapp`) | Hugo | ☐ |
+| 1 | **Manual, antes de tudo**: desregistrar o número da WhatsApp Cloud API no Meta Business Manager | Hugo | ☑ (26/08) |
+| 2 | Subir o stack Evolution API na VPS (`atendimento/infra/instalar_vps.sh`) | Claude + Hugo | ☑ (26/08, pasta isolada `atendimento/infra-evolution/` na VPS -- ver nota abaixo) |
+| 3 | Criar a instância e parear o número (QR ou código por telefone, tela `/admin/whatsapp`) | Hugo | ☑ (26/08, número final `11991919762` -- trocado do número original da Cloud API a pedido do Hugo; pareado por linha de comando, a tela `/admin/whatsapp` ainda não foi usada de verdade) |
 | 4 | Testar persistência: reiniciar o container Evolution e confirmar que não pede pareamento de novo | Claude | ☐ |
-| 5 | Construir `atendimento/` (banco, app, templates) + `integracao_evolution.py` | Claude | ☑ (código pronto, falta validar contra a instância real) |
-| 6 | Deploy (`git pull` + `infra/atendimento-central.service` + atualizar `Caddyfile-atendimento`) | Claude + Hugo | ☐ |
-| 7 | Criar o primeiro usuário admin via CLI (`python -m atendimento.gerenciar_usuarios --criar ...`) | Hugo | ☐ |
-| 8 | Migrar `avisar_motoristas_rotas.py` e testar o aviso de rota ponta a ponta | Claude | ☑ (código pronto, falta testar contra instância real) |
+| 5 | Construir `atendimento/` (banco, app, templates) + `integracao_evolution.py` | Claude | ☑ |
+| 6 | Deploy (`git pull` + `infra/atendimento-central.service` + atualizar `Caddyfile-atendimento`) | Claude + Hugo | ☑ (26/08) |
+| 7 | Criar o primeiro usuário admin via CLI (`python -m atendimento.gerenciar_usuarios --criar ...`) | Hugo | ☑ (26/08, hugo@freshlogbr.com) |
+| 8 | Migrar `avisar_motoristas_rotas.py` e testar o aviso de rota ponta a ponta | Claude | ☑ código migrado; ☐ teste ponta a ponta ainda não feito |
 | 9 | Desligar/remover o stack Chatwoot (containers + volumes), só depois de tudo acima validado | Hugo | ☐ |
-| 10 | Teste de aceite (abaixo) | Todos | ☐ |
+| 10 | Teste de aceite (abaixo) | Todos | ☐ (recebimento OK; envio de resposta bloqueado agora por rate-limit da Meta, ver risco novo abaixo) |
+
+**Nota sobre o passo 2:** a Evolution API foi instalada numa pasta separada
+(`atendimento/infra-evolution/`), não em `atendimento/infra/` -- essa
+última ainda tem o `docker-compose.yml`/`.env` do Chatwoot **rodando de
+verdade** na VPS (projeto Docker `infra`). Subir o compose novo na mesma
+pasta recriaria o container `postgres` do projeto `infra` com uma imagem
+diferente sobre o volume do Chatwoot, corrompendo os dois. Resolver isso
+(mover pra `infra/` de vez) só no passo 9, depois do Chatwoot desligado.
 
 ## Riscos aceitos / a lembrar
 
@@ -51,6 +59,22 @@ do mesmo número sem conflito; o aviso automático de oferta de rota
 - `backup_dados_gcs.py` já cobre `dados/atendimento.db` (feito nesta
   entrega) -- confirmar que aparece no primeiro backup depois que a
   central entrar no ar.
+- **Observado de verdade em 26/08, não só teórico:** depois de vários
+  ciclos seguidos de pareamento/despareamento (trocamos o número, várias
+  tentativas de código expiradas, apagamos e recriamos a instância), o
+  WhatsApp passou a **bloquear só o envio** de mensagens pro número que
+  tinha acabado de mandar mensagem de teste (erro `463` /
+  `NackCallerReachoutTimelocked` -- Baileys), enquanto o **recebimento
+  seguiu funcionando normalmente**. É um rate-limit/"esquenta de conta"
+  que a Meta aplica a aparelho recém-pareado que troca de vínculo demais
+  em pouco tempo -- não é o banimento definitivo, mas é o mesmo tipo de
+  penalidade que o risco aceito previa, só que aparecendo bem mais cedo
+  do que o esperado. Lição prática: **depois de parear, evitar
+  reconectar/trocar de número repetidas vezes** -- deixar a sessão
+  quieta por um tempo (o time-lock costuma passar sozinho) antes de
+  testar de novo, e considerar usar o número normalmente pelo próprio
+  celular (fora da API) por um tempo pra "esquentar" a conta antes de
+  depender dela pra produção.
 
 ## Teste de aceite
 
