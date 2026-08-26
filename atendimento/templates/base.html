@@ -90,5 +90,55 @@
 <main>
 {% block conteudo %}{% endblock %}
 </main>
+{% if session.get('usuario_id') %}
+<script>
+  // Notificação de mensagem nova (som + Notification API) -- roda em
+  // qualquer página logada, não só no Inbox, pra avisar mesmo se o
+  // atendente estiver em outra tela/aba deste app. Limitação: só
+  // funciona com a aba aberta (poll simples, sem push/websocket) --
+  // consistente com o resto do projeto, que não usa websockets.
+  (function() {
+    let ultimoId = null;
+    let audioCtx = null;
+    function beep() {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {}
+    }
+    if (window.Notification && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    function verificar() {
+      const qs = ultimoId === null ? "" : ("?desde=" + ultimoId);
+      fetch(BASE_PATH + "/api/mensagens/novas" + qs)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!d) return;
+          if (ultimoId !== null && d.mensagens.length) {
+            beep();
+            d.mensagens.forEach(m => {
+              if (window.Notification && Notification.permission === "granted") {
+                new Notification("Nova mensagem — " + (m.contato_nome || m.contato_telefone), {
+                  body: (m.corpo || "").slice(0, 120),
+                });
+              }
+            });
+          }
+          ultimoId = d.max_id;
+        }).catch(() => {});
+    }
+    verificar();
+    setInterval(verificar, 6000);
+  })();
+</script>
+{% endif %}
 </body>
 </html>

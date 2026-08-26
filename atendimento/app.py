@@ -197,10 +197,11 @@ def criar_app(config: dict | None = None) -> Flask:
             "id": row["id"], "protocolo": row["protocolo"], "time": row["time"],
             "status": row["status"], "atendente_id": row["atendente_id"],
             "atendente_nome": row["atendente_nome"],
+            "contato_id": row["contato_id"],
             "contato_nome": row["contato_nome"], "contato_telefone": row["contato_telefone"],
             "ultima_mensagem_em": row["ultima_mensagem_em"],
             "ultima_mensagem_preview": row["ultima_mensagem_preview"],
-            "aberta_em": row["aberta_em"],
+            "aberta_em": row["aberta_em"], "encerrada_em": row["encerrada_em"],
         }
 
     _SELECT_CONVERSAS = """
@@ -214,23 +215,73 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.get("/api/conversas")
     @requer_auth
     def api_conversas():
+        busca = (request.args.get("busca") or "").strip()
+        if busca:
+            # Busca vale pra qualquer conversa (aberta ou resolvida) --
+            # revisar o que já foi falado é justamente o caso de uso do
+            # histórico de conversas encerradas.
+            termo = f"%{busca}%"
+            sql = f"{_SELECT_CONVERSAS} WHERE ct.nome LIKE ? OR ct.telefone_e164 LIKE ? OR c.protocolo LIKE ? " \
+                  "ORDER BY c.ultima_mensagem_em DESC LIMIT 50"
+            linhas = conn().execute(sql, (termo, termo, termo)).fetchall()
+            return jsonify({"conversas": [_linha_conversa(r) for r in linhas]})
+
         filtro = request.args.get("filtro", "fila")
         clausulas = ["c.status = 'ABERTA'"]
         parametros = []
+        ordem = "c.ultima_mensagem_em DESC"
         if filtro == "minhas":
             clausulas.append("c.atendente_id = ?")
             parametros.append(g.usuario_id)
         elif filtro == "fila":
             clausulas.append("c.atendente_id IS NULL")
+            # Fila de espera de verdade: quem está esperando há mais tempo
+            # entra primeiro, não a mensagem mais recente (isso já é
+            # "minhas"/"todas", que são sobre atividade, não espera).
+            ordem = "c.aberta_em ASC"
         elif filtro.startswith("time:"):
             clausulas.append("c.time = ?")
             parametros.append(filtro.split(":", 1)[1])
         elif filtro == "resolvidas":
             clausulas = ["c.status = 'RESOLVIDA'"]
+            ordem = "c.encerrada_em DESC"
         # filtro == "todas": sem cláusula extra além do status ABERTA
-        sql = f"{_SELECT_CONVERSAS} WHERE {' AND '.join(clausulas)} ORDER BY c.ultima_mensagem_em DESC"
+        sql = f"{_SELECT_CONVERSAS} WHERE {' AND '.join(clausulas)} ORDER BY {ordem}"
         linhas = conn().execute(sql, parametros).fetchall()
         return jsonify({"conversas": [_linha_conversa(r) for r in linhas]})
+
+    @app.get("/api/mensagens/novas")
+    @requer_auth
+    def api_mensagens_novas():
+        """Base da notificação de mensagem nova (som/Notification API no
+        navegador, ver base.html): mensagens recebidas em conversas que
+        são minhas ou ainda não assumidas por ninguém, com id maior que
+        o último visto pelo cliente."""
+        desde = request.args.get("desde", type=int) or 0
+        linhas = conn().execute(
+            "SELECT m.id, m.conversa_id, m.corpo, c.protocolo, "
+            "       ct.nome AS contato_nome, ct.telefone_e164 AS contato_telefone "
+            "FROM mensagens m "
+            "JOIN conversas c ON c.id = m.conversa_id "
+            "JOIN contatos ct ON ct.id = c.contato_id "
+            "WHERE m.id > ? AND m.direcao = 'IN' AND c.status = 'ABERTA' "
+            "  AND (c.atendente_id IS NULL OR c.atendente_id = ?) "
+            "ORDER BY m.id ASC LIMIT 50",
+            (desde, g.usuario_id),
+        ).fetchall()
+        max_id = conn().execute("SELECT COALESCE(MAX(id), 0) AS m FROM mensagens").fetchone()["m"]
+        return jsonify({"mensagens": [dict(r) for r in linhas], "max_id": max_id})
+
+    @app.post("/api/contatos/<int:contato_id>/nome")
+    @requer_auth
+    @exige_mesma_origem
+    def api_contato_renomear(contato_id):
+        nome = (request.get_json(silent=True) or {}).get("nome", "").strip()
+        if not nome:
+            return jsonify({"erro": "Nome não pode ser vazio."}), 400
+        conn().execute("UPDATE contatos SET nome = ? WHERE id = ?", (nome, contato_id))
+        conn().commit()
+        return jsonify({"ok": True})
 
     @app.get("/api/conversas/<int:conversa_id>/mensagens")
     @requer_auth

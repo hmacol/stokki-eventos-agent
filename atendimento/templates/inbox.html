@@ -35,6 +35,15 @@
     padding: 4px 10px; border-radius: 6px; cursor: pointer;
   }
   .vazio { padding: 24px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+  .caixa-busca { padding: 10px; border-bottom: 1px solid var(--borda); }
+  .caixa-busca input {
+    width: 100%; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 7px; font-size: 13px;
+  }
+  .espera { font-size: 10px; font-weight: 700; color: var(--erro); }
+  .badge-resolvida { font-size: 10px; background: var(--fundo); color: var(--texto-suave); padding: 2px 7px; border-radius: 100px; }
+  .editar-nome { background: none; border: none; cursor: pointer; color: var(--texto-suave); font-size: 12px; padding: 0 0 0 4px; }
+  .editar-nome:hover { color: var(--texto); }
+  .info-resolvida { padding: 10px 16px; font-size: 12px; color: var(--texto-suave); background: var(--fundo); border-bottom: 1px solid var(--borda); }
 
   .coluna-thread {
     flex: 1;
@@ -69,6 +78,9 @@
 {% block conteudo %}
 <div class="shell">
   <div class="coluna-lista">
+    <div class="caixa-busca">
+      <input type="text" id="busca-conversas" placeholder="Buscar por nome, telefone ou protocolo...">
+    </div>
     <div class="abas" id="abas-filtro">
       <button data-filtro="fila" class="ativa">Não atribuídas</button>
       <button data-filtro="minhas">Minha fila</button>
@@ -88,8 +100,20 @@
 <script>
 const TIMES = {{ times | tojson }};
 let filtroAtual = "fila";
+let buscaAtual = "";
 let conversaSelecionadaId = null;
 let ultimoIdMensagemRenderizado = 0;
+
+function tempoDecorrido(dataHoraStr) {
+  if (!dataHoraStr) return "";
+  const inicio = new Date(dataHoraStr.replace(" ", "T"));
+  const minutos = Math.max(0, Math.round((Date.now() - inicio.getTime()) / 60000));
+  if (minutos < 1) return "agora";
+  if (minutos < 60) return `há ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `há ${horas}h${minutos % 60 ? (minutos % 60) + 'min' : ''}`;
+  return `há ${Math.floor(horas / 24)}d`;
+}
 
 function fetchJson(url, opcoes) {
   return fetch(BASE_PATH + url, opcoes).then(async r => {
@@ -117,15 +141,21 @@ function renderizarLista(conversas) {
       </div>
       <div class="preview">${escapeHtml(c.ultima_mensagem_preview || '')}</div>
       <div class="rodape">
-        <span class="tag-time">${c.time ? c.time.replace('_', '/') : (c.atendente_nome ? c.atendente_nome : 'sem time')}</span>
-        ${!c.atendente_id ? `<button class="btn-assumir" data-id="${c.id}">Assumir</button>` : ''}
+        <span class="tag-time">
+          ${c.status === 'RESOLVIDA' ? '<span class="badge-resolvida">resolvida</span>' : (c.time ? c.time.replace('_', '/') : (c.atendente_nome ? c.atendente_nome : 'sem time'))}
+          ${filtroAtual === 'fila' && !buscaAtual ? `<span class="espera">${tempoDecorrido(c.aberta_em)}</span>` : ''}
+        </span>
+        ${!c.atendente_id && c.status === 'ABERTA' ? `<button class="btn-assumir" data-id="${c.id}">Assumir</button>` : ''}
       </div>
     </div>
   `).join("");
 }
 
 function carregarConversas() {
-  fetchJson(`/api/conversas?filtro=${encodeURIComponent(filtroAtual)}`)
+  const params = buscaAtual
+    ? `busca=${encodeURIComponent(buscaAtual)}`
+    : `filtro=${encodeURIComponent(filtroAtual)}`;
+  fetchJson(`/api/conversas?${params}`)
     .then(d => renderizarLista(d.conversas))
     .catch(() => {});
 }
@@ -149,23 +179,28 @@ function bolhaHtml(m) {
 function montarCabecalho(conversa) {
   const opcoesTime = ['<option value="">sem time</option>']
     .concat(TIMES.map(t => `<option value="${t}" ${conversa.time === t ? 'selected' : ''}>${t.replace('_', '/')}</option>`));
+  const resolvida = conversa.status === 'RESOLVIDA';
+  const acoes = resolvida
+    ? `<span class="badge-resolvida">Resolvida ${conversa.encerrada_em ? 'em ' + conversa.encerrada_em.slice(0, 16) : ''}</span>`
+    : `<select id="select-time">${opcoesTime.join('')}</select>
+       ${!conversa.atendente_id ? `<button class="botao" id="btn-assumir-thread">Assumir</button>` : ''}
+       <button class="botao perigo" id="btn-encerrar">Encerrar</button>`;
   return `
     <div class="thread-cabecalho">
       <div class="info">
-        <div class="nome">${escapeHtml(conversa.contato_nome || conversa.contato_telefone)}</div>
+        <div class="nome">${escapeHtml(conversa.contato_nome || conversa.contato_telefone)}
+          <button type="button" class="editar-nome" id="btn-editar-nome" title="Editar nome do contato">✎</button>
+        </div>
         <div class="telefone">${escapeHtml(conversa.contato_telefone)} · ${conversa.protocolo || ''}</div>
       </div>
-      <div class="acoes">
-        <select id="select-time">${opcoesTime.join('')}</select>
-        ${!conversa.atendente_id ? `<button class="botao" id="btn-assumir-thread">Assumir</button>` : ''}
-        <button class="botao perigo" id="btn-encerrar">Encerrar</button>
-      </div>
+      <div class="acoes">${acoes}</div>
     </div>
     <div class="thread-mensagens" id="thread-mensagens"></div>
+    ${resolvida ? `<div class="info-resolvida">Conversa encerrada — somente leitura.</div>` : `
     <div class="thread-resposta">
       <textarea id="texto-resposta" placeholder="Escreva uma resposta..."></textarea>
       <button class="botao" id="btn-enviar">Enviar</button>
-    </div>
+    </div>`}
   `;
 }
 
@@ -175,7 +210,16 @@ function carregarThread(primeiraVez) {
     const coluna = document.getElementById("coluna-thread");
     if (primeiraVez) {
       coluna.innerHTML = montarCabecalho(d.conversa);
-      document.getElementById("select-time").addEventListener("change", e => {
+      document.getElementById("btn-editar-nome").addEventListener("click", () => {
+        const novoNome = prompt("Nome do contato:", d.conversa.contato_nome || "");
+        if (!novoNome || !novoNome.trim()) return;
+        fetchJson(`/api/contatos/${d.conversa.contato_id}/nome`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({nome: novoNome.trim()}),
+        }).then(() => { carregarThread(true); carregarConversas(); }).catch(err => alert(err.message));
+      });
+      const selectTime = document.getElementById("select-time");
+      if (selectTime) selectTime.addEventListener("change", e => {
         fetchJson(`/api/conversas/${conversaSelecionadaId}/time`, {
           method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({time: e.target.value || null}),
@@ -183,14 +227,17 @@ function carregarThread(primeiraVez) {
       });
       const btnAssumir = document.getElementById("btn-assumir-thread");
       if (btnAssumir) btnAssumir.addEventListener("click", () => assumir(conversaSelecionadaId));
-      document.getElementById("btn-encerrar").addEventListener("click", () => {
+      const btnEncerrar = document.getElementById("btn-encerrar");
+      if (btnEncerrar) btnEncerrar.addEventListener("click", () => {
         if (!confirm("Encerrar esta conversa?")) return;
         fetchJson(`/api/conversas/${conversaSelecionadaId}/encerrar`, {method: "POST"})
           .then(() => { conversaSelecionadaId = null; document.getElementById("coluna-thread").innerHTML = '<div class="sem-selecao">Selecione uma conversa à esquerda.</div>'; carregarConversas(); })
           .catch(err => alert(err.message));
       });
-      document.getElementById("btn-enviar").addEventListener("click", enviarResposta);
-      document.getElementById("texto-resposta").addEventListener("keydown", e => {
+      const btnEnviar = document.getElementById("btn-enviar");
+      if (btnEnviar) btnEnviar.addEventListener("click", enviarResposta);
+      const campoResposta = document.getElementById("texto-resposta");
+      if (campoResposta) campoResposta.addEventListener("keydown", e => {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviarResposta(); }
       });
     }
@@ -232,6 +279,17 @@ document.getElementById("abas-filtro").addEventListener("click", e => {
   filtroAtual = botao.dataset.filtro;
   document.querySelectorAll("#abas-filtro button").forEach(b => b.classList.toggle("ativa", b === botao));
   carregarConversas();
+});
+
+let temporizadorBusca = null;
+document.getElementById("busca-conversas").addEventListener("input", e => {
+  clearTimeout(temporizadorBusca);
+  const valor = e.target.value.trim();
+  temporizadorBusca = setTimeout(() => {
+    buscaAtual = valor;
+    document.getElementById("abas-filtro").style.opacity = buscaAtual ? "0.4" : "1";
+    carregarConversas();
+  }, 300);
 });
 
 document.getElementById("lista-conversas").addEventListener("click", e => {
