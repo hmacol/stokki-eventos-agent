@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Espelha rotas/paradas da VUUPT no nucleo proprio (Fase A do app de motoristas)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/sincronizar_vuupt.py

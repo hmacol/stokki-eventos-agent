@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "FreshLog Motorista",
+    "slug": "freshlog-motorista",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "freshlogmotorista",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "br.com.freshlog.motorista",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Fotografar o canhoto e comprovantes de entrega.",
+        "NSLocationWhenInUseUsageDescription": "Registrar o trajeto e o local de cada entrega enquanto a rota está em andamento.",
+        "NSPhotoLibraryUsageDescription": "Anexar comprovantes já fotografados."
+      }
+    },
+    "android": {
+      "package": "br.com.freshlog.motorista",
+      "adaptiveIcon": {
+        "backgroundColor": "#1E8E5A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-image-picker", { "cameraPermission": "Fotografar o canhoto e comprovantes de entrega." }],
+      ["expo-location", { "locationWhenInUsePermission": "Registrar o trajeto e o local de cada entrega." }],
+      "expo-notifications"
+    ],
+    "extra": {
+      "apiUrl": "https://app.freshhub.com.br/motorista/api",
+      "router": {},
+      "eas": {}
+    }
+  }
+}

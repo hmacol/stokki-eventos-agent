@@ -743,11 +743,19 @@ def processar_pedido(
             logger.info(f"  {codigo_ps}: [TESTE] payload montado, fonte={res_end.fonte}")
             resultado["acao"] = "simulado"
         else:
-            _, acao = vuupt.criar_ou_atualizar_servico(payload)
+            resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
             logger.info(
                 f"  {codigo_ps}: {acao} no VUUPT (endereço via {res_end.fonte})"
             )
+            # Dual-write no núcleo próprio (Fase A do app de motoristas,
+            # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: a VUUPT
+            # já foi atualizada, falha aqui só vira aviso.
+            try:
+                from nucleo.pedidos import registrar_importacao
+                registrar_importacao(payload, resposta_vuupt, acao)
+            except Exception as e_nucleo:
+                logger.warning(f"  {codigo_ps}: não espelhado no núcleo próprio ({e_nucleo}) -- VUUPT já atualizada, segue.")
 
     except Exception as e:
         resultado["erro"] = str(e)

@@ -1150,6 +1150,15 @@ def marcar_enviado(rascunho_id: int, vuupt_route_id: int):
     finally:
         conn.close()
 
+    # Espelho no núcleo próprio (Fase A do app de motoristas, ver
+    # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: qualquer
+    # falha aqui NÃO pode desfazer o envio à VUUPT que acabou de acontecer.
+    try:
+        from nucleo.rotas import registrar_rota_enviada
+        registrar_rota_enviada(rascunho_id, vuupt_route_id)
+    except Exception as e:
+        logger.warning(f"Rota VUUPT {vuupt_route_id} (rascunho {rascunho_id}) enviada, mas não espelhada no núcleo: {e}")
+
 
 def marcar_erro_envio(rascunho_id: int, mensagem: str):
     conn = _conectar()

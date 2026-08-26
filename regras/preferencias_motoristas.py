@@ -224,7 +224,11 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
     codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
     tipo_veiculo = tipo_por_codigo(codigo_tipo_veiculo)
-    if codigo_tipo_veiculo and tipo_veiculo is None:
+    # "FIORINO"/"UTILITARIO" explícito na planilha = veículo padrão da
+    # última milha (mesma coisa que coluna vazia pra roteirização, sem
+    # aviso) -- só a tarifa do motorista distingue isso, ver
+    # regras/tarifa_motorista.py (vazio e FIORINO caem na mesma tarifa).
+    if codigo_tipo_veiculo and tipo_veiculo is None and codigo_tipo_veiculo not in ("FIORINO", "UTILITARIO"):
         logger.warning(
             f"TIPO_VEICULO '{tipo_veiculo_bruto}' não reconhecido pro motorista {agent_id} -- "
             f"tratado como sem tipo de veículo cadastrado (não elegível pra rota de veículo grande)."

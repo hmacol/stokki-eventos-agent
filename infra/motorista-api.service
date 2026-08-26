@@ -1,0 +1,14 @@
+[Unit]
+Description=API do app de motoristas (nucleo/api_motorista.py) - Freshlog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/waitress-serve --host=127.0.0.1 --port=8073 --call nucleo.api_motorista:criar_app
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target
