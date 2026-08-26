@@ -289,6 +289,13 @@ deslocamento → Cheguei no local → Resultado** (eventos `DESLOCAMENTO`
 → `started_at`, `CHEGADA` → `arrived_at`, situação `EM_DESLOCAMENTO`
 nova em `nucleo_paradas`). Publicado por OTA no canal `preview`; ícone/
 splash exigem novo APK (pendente, aguardando o fim do lote de design).
+**Durações por parada (26/08):** `nucleo_paradas.tempo_no_local_s`
+(completed − arrived: "quanto demora pra receber") e
+`tempo_deslocamento_s` (arrived − started), calculadas por
+`nucleo/tempos.py` a cada evento do app e a cada sync da VUUPT;
+relatório `nucleo/metricas.py` (média/mediana/p90 por geral, nível,
+origem, motorista, remetente, destinatário; só durações entre 30 s e 4 h —
+abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill.
 
 **Limitações conhecidas do v1 (decisões, não bugs):** GPS só com o app aberto (background exige justificativa na review da Apple e gasta bateria — avaliar na Fase C); telefone/janela do destinatário na parada só aparecem quando o pedido passou pelo `pipeline.py` com dual-write (rotas só do backfill vêm sem); push só funciona depois do `eas init` (projectId); a recusa de rota exige sinal (é rara e a operação precisa saber na hora).
 
