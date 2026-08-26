@@ -11,6 +11,7 @@ COMO USAR (na VPS, mesmo venv do resto do projeto):
     python -m atendimento.gerenciar_usuarios --listar
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,22 @@ sys.path.insert(0, str(_RAIZ))
 from werkzeug.security import generate_password_hash
 
 from atendimento import banco
+
+
+def _corrigir_dono_do_banco():
+    """Rodar este CLI via SSH como root (comum na VPS) cria/toca
+    dados/atendimento.db como root -- mas o serviço roda como www-data
+    (infra/atendimento-central.service) e não consegue mais escrever
+    nele (achado 26/08: 1º login deu "attempt to write a readonly
+    database"). Sem efeito fora de Linux/root (pwd/grp não existem no
+    Windows) -- por isso o try/except silencioso."""
+    try:
+        import pwd, grp
+        uid = pwd.getpwnam("www-data").pw_uid
+        gid = grp.getgrnam("www-data").gr_gid
+        os.chown(banco.DB_PATH, uid, gid)
+    except Exception:
+        pass
 
 
 def criar(login: str, nome: str, senha: str, papel: str):
@@ -36,6 +53,7 @@ def criar(login: str, nome: str, senha: str, papel: str):
         raise SystemExit(f"Falha ao criar usuário (login já existe?): {exc}")
     finally:
         conn.close()
+    _corrigir_dono_do_banco()
     print(f"Usuário '{login}' ({papel}) criado.")
 
 
