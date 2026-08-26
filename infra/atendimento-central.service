@@ -1,0 +1,14 @@
+[Unit]
+Description=Central de Atendimento (WhatsApp via Evolution API) - Freshlog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/waitress-serve --host=127.0.0.1 --port=8095 --call atendimento.app:criar_app
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

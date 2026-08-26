@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block titulo %}WhatsApp{% endblock %}
+{% block estilo_extra %}
+<style>
+  .caixa { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 20px; max-width: 480px; margin-bottom: 20px; }
+  .caixa h3 { margin: 0 0 12px; font-size: 14px; }
+  .status-linha { font-size: 13px; margin-bottom: 4px; }
+  .status-linha .rotulo { color: var(--texto-suave); }
+  .caixa label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+  .caixa input { width: 100%; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; }
+  .resultado { margin-top: 16px; }
+  .resultado img { max-width: 260px; border: 1px solid var(--borda); border-radius: 8px; }
+  .resultado .codigo { font-size: 22px; font-weight: 800; letter-spacing: 2px; font-family: monospace; padding: 12px; background: var(--fundo); border-radius: 8px; text-align: center; }
+  .aviso-erro { color: var(--erro); font-size: 13px; margin-top: 10px; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="caixa">
+  <h3>Status da conexão</h3>
+  <div id="status-conteudo">Carregando...</div>
+  <button class="botao" id="btn-atualizar-status" style="margin-top:10px;">Atualizar</button>
+</div>
+
+<div class="caixa">
+  <h3>Parear número</h3>
+  <p style="font-size:12px;color:var(--texto-suave);">
+    Deixe o campo vazio para gerar um QR code (escaneie em WhatsApp &gt; Aparelhos conectados &gt; Conectar um aparelho).
+    Preencha o número (com DDI, só dígitos) para gerar um código de pareamento em vez disso
+    (WhatsApp &gt; Aparelhos conectados &gt; Conectar com número de telefone) — não exige câmera.
+  </p>
+  <label>Número (opcional, ex: 5511999999999)</label>
+  <input type="text" id="numero-pareamento">
+  <button class="botao" id="btn-parear" style="margin-top:12px;">Gerar</button>
+  <div class="resultado" id="resultado-pareamento"></div>
+</div>
+
+<script>
+function fetchJson(url, opcoes) {
+  return fetch(BASE_PATH + url, opcoes).then(async r => {
+    const dados = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dados.erro || ("Erro " + r.status));
+    return dados;
+  });
+}
+
+function carregarStatus() {
+  document.getElementById("status-conteudo").textContent = "Carregando...";
+  fetchJson("/api/whatsapp/status").then(d => {
+    document.getElementById("status-conteudo").innerHTML =
+      `<div class="status-linha"><span class="rotulo">Estado:</span> <strong>${d.instance && d.instance.state || JSON.stringify(d)}</strong></div>`;
+  }).catch(err => {
+    document.getElementById("status-conteudo").innerHTML = `<div class="aviso-erro">${err.message}</div>`;
+  });
+}
+
+document.getElementById("btn-atualizar-status").addEventListener("click", carregarStatus);
+
+document.getElementById("btn-parear").addEventListener("click", () => {
+  const numero = document.getElementById("numero-pareamento").value.trim();
+  const alvo = document.getElementById("resultado-pareamento");
+  alvo.innerHTML = "Gerando...";
+  fetchJson("/api/whatsapp/parear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({numero: numero || null}),
+  }).then(d => {
+    if (d.pairingCode) {
+      alvo.innerHTML = `<div class="codigo">${d.pairingCode}</div>`;
+    } else if (d.base64) {
+      alvo.innerHTML = `<img src="${d.base64}" alt="QR code">`;
+    } else if (d.code) {
+      alvo.innerHTML = `<div class="codigo">${d.code}</div>`;
+    } else {
+      alvo.innerHTML = `<pre style="white-space:pre-wrap;font-size:11px;">${JSON.stringify(d, null, 2)}</pre>`;
+    }
+  }).catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; });
+});
+
+carregarStatus();
+</script>
+{% endblock %}

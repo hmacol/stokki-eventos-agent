@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block titulo %}Inbox{% endblock %}
+{% block estilo_extra %}
+<style>
+  .shell { display: flex; gap: 16px; height: calc(100vh - 54px - 48px); }
+  .coluna-lista {
+    flex: 0 0 340px;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .abas { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; border-bottom: 1px solid var(--borda); }
+  .abas button {
+    background: none; border: 1px solid var(--borda); border-radius: 100px; font-size: 12px;
+    padding: 5px 10px; cursor: pointer; color: var(--texto-suave); font-weight: 600;
+  }
+  .abas button.ativa { background: var(--primaria); color: #fff; border-color: var(--primaria); }
+  .lista-conversas { flex: 1; overflow-y: auto; }
+  .card-conversa {
+    padding: 12px 14px; border-bottom: 1px solid var(--borda); cursor: pointer;
+  }
+  .card-conversa:hover { background: var(--superficie-hover); }
+  .card-conversa.selecionada { background: rgba(14,165,117,0.10); }
+  .card-conversa .linha1 { display: flex; justify-content: space-between; gap: 8px; }
+  .card-conversa .nome { font-weight: 700; font-size: 13px; }
+  .card-conversa .protocolo { font-size: 11px; color: var(--texto-suave); font-family: monospace; }
+  .card-conversa .preview { font-size: 12px; color: var(--texto-suave); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-conversa .rodape { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+  .tag-time { font-size: 10px; background: var(--fundo); color: var(--texto-suave); padding: 2px 7px; border-radius: 100px; }
+  .btn-assumir {
+    font-size: 11px; font-weight: 700; background: var(--acento); color: #fff; border: none;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  }
+  .vazio { padding: 24px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+
+  .coluna-thread {
+    flex: 1;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .thread-cabecalho {
+    padding: 12px 16px; border-bottom: 1px solid var(--borda);
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  }
+  .thread-cabecalho .info .nome { font-weight: 700; font-size: 14px; }
+  .thread-cabecalho .info .telefone { font-size: 12px; color: var(--texto-suave); font-family: monospace; }
+  .thread-cabecalho .acoes { display: flex; gap: 8px; align-items: center; }
+  .thread-cabecalho select { font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--borda); }
+  .thread-mensagens { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .bolha { max-width: 65%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; }
+  .bolha.IN { align-self: flex-start; background: var(--fundo); }
+  .bolha.OUT { align-self: flex-end; background: rgba(14,165,117,0.15); }
+  .bolha .meta { font-size: 10px; color: var(--texto-suave); margin-top: 4px; }
+  .thread-resposta { padding: 12px 16px; border-top: 1px solid var(--borda); display: flex; gap: 8px; }
+  .thread-resposta textarea {
+    flex: 1; resize: none; border: 1px solid var(--borda); border-radius: 8px; padding: 8px 10px;
+    font-size: 13px; font-family: inherit; height: 40px;
+  }
+  .sem-selecao { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--texto-suave); }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="shell">
+  <div class="coluna-lista">
+    <div class="abas" id="abas-filtro">
+      <button data-filtro="fila" class="ativa">Não atribuídas</button>
+      <button data-filtro="minhas">Minha fila</button>
+      {% for t in times %}
+      <button data-filtro="time:{{ t }}">{{ t.replace('_', '/').title() }}</button>
+      {% endfor %}
+      <button data-filtro="todas">Todas</button>
+      <button data-filtro="resolvidas">Resolvidas</button>
+    </div>
+    <div class="lista-conversas" id="lista-conversas"></div>
+  </div>
+  <div class="coluna-thread" id="coluna-thread">
+    <div class="sem-selecao">Selecione uma conversa à esquerda.</div>
+  </div>
+</div>
+
+<script>
+const TIMES = {{ times | tojson }};
+let filtroAtual = "fila";
+let conversaSelecionadaId = null;
+let ultimoIdMensagemRenderizado = 0;
+
+function fetchJson(url, opcoes) {
+  return fetch(BASE_PATH + url, opcoes).then(async r => {
+    const dados = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dados.erro || ("Erro " + r.status));
+    return dados;
+  });
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderizarLista(conversas) {
+  const alvo = document.getElementById("lista-conversas");
+  if (!conversas.length) {
+    alvo.innerHTML = '<div class="vazio">Nenhuma conversa aqui.</div>';
+    return;
+  }
+  alvo.innerHTML = conversas.map(c => `
+    <div class="card-conversa ${c.id === conversaSelecionadaId ? 'selecionada' : ''}" data-id="${c.id}">
+      <div class="linha1">
+        <span class="nome">${escapeHtml(c.contato_nome || c.contato_telefone)}</span>
+        <span class="protocolo">${c.protocolo || ''}</span>
+      </div>
+      <div class="preview">${escapeHtml(c.ultima_mensagem_preview || '')}</div>
+      <div class="rodape">
+        <span class="tag-time">${c.time ? c.time.replace('_', '/') : (c.atendente_nome ? c.atendente_nome : 'sem time')}</span>
+        ${!c.atendente_id ? `<button class="btn-assumir" data-id="${c.id}">Assumir</button>` : ''}
+      </div>
+    </div>
+  `).join("");
+}
+
+function carregarConversas() {
+  fetchJson(`/api/conversas?filtro=${encodeURIComponent(filtroAtual)}`)
+    .then(d => renderizarLista(d.conversas))
+    .catch(() => {});
+}
+
+function selecionarConversa(id) {
+  conversaSelecionadaId = id;
+  ultimoIdMensagemRenderizado = 0;
+  document.getElementById("coluna-thread").innerHTML = '<div class="sem-selecao">Carregando...</div>';
+  carregarThread(true);
+}
+
+function bolhaHtml(m) {
+  const hora = (m.criado_em || '').slice(11, 16);
+  const quem = m.direcao === 'OUT' ? (m.atendente_nome || 'Você/celular') : '';
+  return `<div class="bolha ${m.direcao}" data-id="${m.id}">
+    ${escapeHtml(m.corpo || '')}
+    <div class="meta">${quem ? escapeHtml(quem) + ' · ' : ''}${hora}</div>
+  </div>`;
+}
+
+function montarCabecalho(conversa) {
+  const opcoesTime = ['<option value="">sem time</option>']
+    .concat(TIMES.map(t => `<option value="${t}" ${conversa.time === t ? 'selected' : ''}>${t.replace('_', '/')}</option>`));
+  return `
+    <div class="thread-cabecalho">
+      <div class="info">
+        <div class="nome">${escapeHtml(conversa.contato_nome || conversa.contato_telefone)}</div>
+        <div class="telefone">${escapeHtml(conversa.contato_telefone)} · ${conversa.protocolo || ''}</div>
+      </div>
+      <div class="acoes">
+        <select id="select-time">${opcoesTime.join('')}</select>
+        ${!conversa.atendente_id ? `<button class="botao" id="btn-assumir-thread">Assumir</button>` : ''}
+        <button class="botao perigo" id="btn-encerrar">Encerrar</button>
+      </div>
+    </div>
+    <div class="thread-mensagens" id="thread-mensagens"></div>
+    <div class="thread-resposta">
+      <textarea id="texto-resposta" placeholder="Escreva uma resposta..."></textarea>
+      <button class="botao" id="btn-enviar">Enviar</button>
+    </div>
+  `;
+}
+
+function carregarThread(primeiraVez) {
+  if (conversaSelecionadaId === null) return;
+  fetchJson(`/api/conversas/${conversaSelecionadaId}/mensagens`).then(d => {
+    const coluna = document.getElementById("coluna-thread");
+    if (primeiraVez) {
+      coluna.innerHTML = montarCabecalho(d.conversa);
+      document.getElementById("select-time").addEventListener("change", e => {
+        fetchJson(`/api/conversas/${conversaSelecionadaId}/time`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({time: e.target.value || null}),
+        }).catch(err => alert(err.message));
+      });
+      const btnAssumir = document.getElementById("btn-assumir-thread");
+      if (btnAssumir) btnAssumir.addEventListener("click", () => assumir(conversaSelecionadaId));
+      document.getElementById("btn-encerrar").addEventListener("click", () => {
+        if (!confirm("Encerrar esta conversa?")) return;
+        fetchJson(`/api/conversas/${conversaSelecionadaId}/encerrar`, {method: "POST"})
+          .then(() => { conversaSelecionadaId = null; document.getElementById("coluna-thread").innerHTML = '<div class="sem-selecao">Selecione uma conversa à esquerda.</div>'; carregarConversas(); })
+          .catch(err => alert(err.message));
+      });
+      document.getElementById("btn-enviar").addEventListener("click", enviarResposta);
+      document.getElementById("texto-resposta").addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviarResposta(); }
+      });
+    }
+    const alvo = document.getElementById("thread-mensagens");
+    const mensagensNovas = d.mensagens.filter(m => m.id > ultimoIdMensagemRenderizado);
+    if (primeiraVez) {
+      alvo.innerHTML = d.mensagens.map(bolhaHtml).join("");
+    } else if (mensagensNovas.length) {
+      alvo.insertAdjacentHTML("beforeend", mensagensNovas.map(bolhaHtml).join(""));
+    }
+    if (d.mensagens.length) ultimoIdMensagemRenderizado = Math.max(...d.mensagens.map(m => m.id));
+    if (primeiraVez || mensagensNovas.length) alvo.scrollTop = alvo.scrollHeight;
+  }).catch(() => {});
+}
+
+function enviarResposta() {
+  const campo = document.getElementById("texto-resposta");
+  const texto = campo.value.trim();
+  if (!texto) return;
+  campo.disabled = true;
+  fetchJson(`/api/conversas/${conversaSelecionadaId}/responder`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({texto}),
+  }).then(() => {
+    campo.value = "";
+    carregarThread(false);
+  }).catch(err => alert(err.message)).finally(() => { campo.disabled = false; campo.focus(); });
+}
+
+function assumir(id) {
+  fetchJson(`/api/conversas/${id}/assumir`, {method: "POST"})
+    .then(() => { carregarConversas(); if (conversaSelecionadaId === id) carregarThread(true); })
+    .catch(err => alert(err.message));
+}
+
+document.getElementById("abas-filtro").addEventListener("click", e => {
+  const botao = e.target.closest("button[data-filtro]");
+  if (!botao) return;
+  filtroAtual = botao.dataset.filtro;
+  document.querySelectorAll("#abas-filtro button").forEach(b => b.classList.toggle("ativa", b === botao));
+  carregarConversas();
+});
+
+document.getElementById("lista-conversas").addEventListener("click", e => {
+  const btnAssumir = e.target.closest(".btn-assumir");
+  if (btnAssumir) { assumir(parseInt(btnAssumir.dataset.id, 10)); return; }
+  const card = e.target.closest(".card-conversa");
+  if (card) selecionarConversa(parseInt(card.dataset.id, 10));
+});
+
+carregarConversas();
+setInterval(carregarConversas, 4000);
+setInterval(() => carregarThread(false), 3000);
+</script>
+{% endblock %}

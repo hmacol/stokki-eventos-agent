@@ -1,56 +1,47 @@
-# Chatwoot auto-hospedado — FreshLog Atendimento (Fase 0)
-# Baseado no docker-compose.production.yaml oficial do Chatwoot.
+# Evolution API auto-hospedada — FreshLog Atendimento (substitui o Chatwoot,
+# 26/08: custo por conversa da Cloud API + verificação de CNPJ travada na
+# Meta inviabilizaram continuar por ali. Risco de banimento aceito pelo Hugo).
+#
 # Sem Caddy aqui dentro: essa VPS já roda Caddy nativo (systemd) na frente
-# de outros serviços (app.freshhub.com.br, confirmacao.freshhub.com.br) —
-# o rails deste compose só publica em 127.0.0.1:3000 e o Caddy nativo faz
-# o reverse proxy + HTTPS (ver Caddyfile-atendimento).
+# de outros serviços (app.freshhub.com.br, confirmacao.freshhub.com.br,
+# atendimento.freshhub.com.br) -- mas a Evolution API NUNCA é exposta por
+# ele: só publica em 127.0.0.1:8080, chamada por loopback pelo app Python
+# novo (atendimento/app.py, infra/atendimento-central.service), o mesmo
+# jeito que o Chatwoot fazia com o painel_agentes.
 #
 # Primeira subida (na VPS):
-#   docker compose run --rm rails bundle exec rails db:chatwoot_prepare
 #   docker compose up -d
+#   (a Evolution API roda sua própria migração via Prisma automaticamente
+#   no start do container -- não tem passo equivalente ao antigo
+#   `rails db:chatwoot_prepare` do Chatwoot)
 #
 # Atualização de versão:
-#   trocar a tag da imagem abaixo -> docker compose pull
-#   -> docker compose run --rm rails bundle exec rails db:chatwoot_prepare
-#   -> docker compose up -d
+#   trocar a tag da imagem abaixo -> docker compose pull -> docker compose up -d
 
 x-base: &base
-  image: chatwoot/chatwoot:latest   # apos instalar, fixar na versao corrente (ex.: v4.x)
+  image: evoapicloud/evolution-api:v2.3.7   # org antiga (atendai/evolution-api) migrou pra evoapicloud -- fixar sempre numa tag, nunca :latest (mesma lição do Chatwoot)
   env_file: .env
-  volumes:
-    - storage_data:/app/storage
   restart: always
-  environment:
-    - NODE_ENV=production
-    - RAILS_ENV=production
-    - INSTALLATION_ENV=docker
 
 services:
-  rails:
+  evolution:
     <<: *base
     depends_on:
       - postgres
       - redis
     ports:
-      - "127.0.0.1:3000:3000"   # so localhost; o acesso externo e via Caddy
-    entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
-
-  sidekiq:
-    <<: *base
-    depends_on:
-      - postgres
-      - redis
-    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+      - "127.0.0.1:8080:8080"   # só localhost; nunca exposto pelo Caddy
+    volumes:
+      - evolution_instances:/evolution/instances   # credenciais Baileys da sessão pareada -- sem isso, todo restart pede pareamento de novo
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine   # não precisa da variante pgvector (Evolution não usa embeddings)
     restart: always
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=chatwoot
-      - POSTGRES_USER=postgres
+      - POSTGRES_DB=evolution
+      - POSTGRES_USER=evolution
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
   redis:
@@ -62,6 +53,6 @@ services:
       - redis_data:/data
 
 volumes:
-  storage_data:
+  evolution_instances:
   postgres_data:
   redis_data:

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block titulo %}Central de Atendimento{% endblock %} — Freshlog</title>
+<style>
+  :root {
+    --primaria: #141428;
+    --primaria-clara: #1F1F3D;
+    --acento: #0EA575;
+    --erro: #E1483D;
+    --erro-bg: #FDEBEA;
+    --fundo: #F3F4F6;
+    --superficie: #FFFFFF;
+    --superficie-hover: #FAFAFB;
+    --borda: #E5E7EB;
+    --texto: #1F2937;
+    --texto-suave: #6B7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  header.topo {
+    background: var(--primaria);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 0 20px;
+    height: 54px;
+  }
+  header.topo .marca { font-weight: 800; font-size: 15px; white-space: nowrap; }
+  header.topo nav { display: flex; gap: 4px; flex: 1; }
+  header.topo nav a {
+    color: #C7C7E0;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 6px;
+  }
+  header.topo nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+  header.topo nav a.ativo { color: #fff; background: rgba(14,165,117,0.25); }
+  header.topo .usuario { font-size: 12px; color: #A3A3C2; white-space: nowrap; }
+  header.topo button.sair {
+    background: none; border: 1px solid #3A3A5C; color: #C7C7E0; font-size: 12px;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  header.topo button.sair:hover { color: #fff; border-color: #C7C7E0; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  a.botao, button.botao {
+    display: inline-block; background: var(--primaria); color: #fff; border: none;
+    padding: 8px 16px; border-radius: 7px; font-size: 13px; font-weight: 600;
+    cursor: pointer; text-decoration: none; transition: background 0.15s, opacity 0.15s;
+  }
+  a.botao:hover, button.botao:hover { background: var(--primaria-clara); }
+  button.botao:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.botao.perigo { background: var(--erro); }
+</style>
+{% block estilo_extra %}{% endblock %}
+</head>
+<body>
+<script>
+  // Prefixo do app quando servido atrás de proxy sob um caminho -- vazio
+  // no acesso direto (subdomínio próprio, sem path-prefix). Usar pra
+  // montar chamadas fetch() com caminho absoluto fixo.
+  const BASE_PATH = "{{ request.script_root }}";
+</script>
+<header class="topo">
+  <span class="marca">Central de Atendimento</span>
+  <nav>
+    <a href="{{ url_for('inbox') }}" class="{{ 'ativo' if request.endpoint == 'inbox' else '' }}">Inbox</a>
+    {% if session.get('papel') == 'admin' %}
+    <a href="{{ url_for('usuarios_pagina') }}" class="{{ 'ativo' if request.endpoint == 'usuarios_pagina' else '' }}">Usuários</a>
+    <a href="{{ url_for('admin_whatsapp') }}" class="{{ 'ativo' if request.endpoint == 'admin_whatsapp' else '' }}">WhatsApp</a>
+    {% endif %}
+  </nav>
+  {% if session.get('usuario_id') %}
+  <span class="usuario">{{ session.get('nome', '') }}</span>
+  <form method="post" action="{{ url_for('logout') }}">
+    <button type="submit" class="sair">Sair</button>
+  </form>
+  {% endif %}
+</header>
+<main>
+{% block conteudo %}{% endblock %}
+</main>
+</body>
+</html>

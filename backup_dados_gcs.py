@@ -70,11 +70,15 @@ def _cliente_gcs(config: dict):
     return cliente
 
 
-def snapshot_dados_db(carimbo: str) -> Path:
+def snapshot_sqlite(nome_arquivo: str, carimbo: str) -> Path | None:
     """VACUUM INTO em vez de cópia de bytes -- snapshot consistente mesmo
-    com o dados.db sendo escrito por outro processo ao mesmo tempo."""
-    origem = PASTA_DADOS / "dados.db"
-    destino = PASTA_TMP / f"dados_{carimbo}.db"
+    com o banco sendo escrito por outro processo ao mesmo tempo. Retorna
+    None se o arquivo não existir (ex.: atendimento.db antes da central
+    de atendimento entrar no ar) -- não é erro, só nada a fazer ainda."""
+    origem = PASTA_DADOS / nome_arquivo
+    if not origem.exists():
+        return None
+    destino = PASTA_TMP / f"{origem.stem}_{carimbo}.db"
     destino.parent.mkdir(parents=True, exist_ok=True)
     if destino.exists():
         destino.unlink()
@@ -86,6 +90,10 @@ def snapshot_dados_db(carimbo: str) -> Path:
     finally:
         con.close()
     return destino
+
+
+def snapshot_dados_db(carimbo: str) -> Path:
+    return snapshot_sqlite("dados.db", carimbo)
 
 
 def enviar_para_gcs(config: dict, caminho_local: Path, caminho_gcs: str):
@@ -134,12 +142,23 @@ def main():
     tamanho_mb = snapshot.stat().st_size / 1024 / 1024
     logger.info(f"  Snapshot gerado: {snapshot.name} ({tamanho_mb:.1f} MB)")
 
+    logger.info("Gerando snapshot de atendimento.db (histórico de WhatsApp da central de atendimento)...")
+    snapshot_atendimento = snapshot_sqlite("atendimento.db", carimbo)
+    if snapshot_atendimento:
+        tamanho_mb_at = snapshot_atendimento.stat().st_size / 1024 / 1024
+        logger.info(f"  Snapshot gerado: {snapshot_atendimento.name} ({tamanho_mb_at:.1f} MB)")
+    else:
+        logger.info("  atendimento.db ainda não existe -- pulando (normal antes da central de atendimento entrar no ar).")
+
     if args.modo_teste:
         logger.info("--modo-teste: não envia pro GCS. Snapshot fica em dados/backup_tmp/ pra inspeção manual.")
         return
 
     enviar_para_gcs(config, snapshot, f"backups/dados_db/dados_{carimbo}.db")
     snapshot.unlink()
+    if snapshot_atendimento:
+        enviar_para_gcs(config, snapshot_atendimento, f"backups/atendimento_db/atendimento_{carimbo}.db")
+        snapshot_atendimento.unlink()
 
     for nome in ARQUIVOS_PLANILHA:
         caminho = PASTA_DADOS / nome
@@ -150,6 +169,7 @@ def main():
 
     logger.info("Limpando backups antigos (retenção de %d dias)...", DIAS_RETENCAO)
     limpar_backups_antigos(config, "backups/dados_db/", DIAS_RETENCAO)
+    limpar_backups_antigos(config, "backups/atendimento_db/", DIAS_RETENCAO)
     limpar_backups_antigos(config, "backups/planilhas/", DIAS_RETENCAO)
 
     logger.info("=== Backup concluído ===")

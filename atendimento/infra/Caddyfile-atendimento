@@ -1,9 +1,16 @@
-# Bloco a acrescentar no /etc/caddy/Caddyfile NATIVO da VPS (não é usado por
-# nenhum container — essa VPS já roda Caddy via systemd na frente de outros
-# serviços). HTTPS automático via Let's Encrypt.
-# Requisito: o DNS de atendimento.freshhub.com.br já deve apontar para o IP
-# da VPS ANTES de acrescentar este bloco (senão a emissão do certificado falha).
+# Bloco a acrescentar (ou atualizar) no /etc/caddy/Caddyfile NATIVO da VPS
+# (não é usado por nenhum container — essa VPS já roda Caddy via systemd na
+# frente de outros serviços). HTTPS automático via Let's Encrypt.
+#
+# 26/08: trocado de Chatwoot (porta 3000) para o app Python novo de
+# atendimento (atendimento/app.py, infra/atendimento-central.service,
+# porta 8095 -- ver config.yaml -> atendimento.porta). A Evolution API em
+# si (porta 8080) NUNCA é exposta aqui -- só o app Python fala com ela,
+# por loopback.
+#
+# Requisito: o DNS de atendimento.freshhub.com.br já aponta para o IP da
+# VPS desde a fase do Chatwoot -- nenhuma mudança de DNS necessária.
 
 atendimento.freshhub.com.br {
-	reverse_proxy 127.0.0.1:3000
+	reverse_proxy 127.0.0.1:8095
 }

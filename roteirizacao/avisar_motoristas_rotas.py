@@ -73,7 +73,7 @@ from rotas_client import listar_rotas
 from regioes_dia_fixo import extrair_cidade
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_rota_zona
-import integracao_chatwoot
+import integracao_evolution
 
 ARQUIVO_SAIDA = _RAIZ_LOCAL / "dados" / "mensagens_whatsapp_amanha.txt"
 ARQUIVO_SAIDA_OFERTAS = _RAIZ_LOCAL / "dados" / "mensagens_whatsapp_ofertas.txt"
@@ -323,24 +323,24 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
     planejamento_rotas.publicar_oferta_rascunho/publicar_ofertas_em_lote
     já gravaram a(s) oferta(s).
 
-    Ordem de tentativa por motorista: WhatsApp via Chatwoot (automático
-    de verdade, se configurado e o telefone existir -- ver
-    integracao_chatwoot.py) + e-mail automático (se EMAIL_MOTORISTA
+    Ordem de tentativa por motorista: WhatsApp via Evolution API
+    (automático de verdade, se configurado e o telefone existir -- ver
+    integracao_evolution.py) + e-mail automático (se EMAIL_MOTORISTA
     existir) -- e SEMPRE grava o texto pronto pra copiar/colar em
     ARQUIVO_SAIDA_OFERTAS, mesmo quando os automáticos deram certo
     (mesmo padrão de main(): o arquivo é sempre a cópia completa/
     auditável de tudo que devia ter sido avisado).
 
-    Retorna {"whatsapp_chatwoot": N, "email": N, "sem_contato": N,
+    Retorna {"whatsapp_evolution": N, "email": N, "sem_contato": N,
     "arquivo": N} -- N sempre <= len(elegiveis) (um motorista pode
-    contar em mais de uma categoria, ex.: Chatwoot E e-mail).
+    contar em mais de uma categoria, ex.: Evolution E e-mail).
     """
     config_confirmacao = config.get("confirmacao_rotas", {})
     config_email = config.get("email", {})
-    config_chatwoot = config.get("chatwoot", {})
+    config_evolution = config.get("evolution_api", {})
 
     blocos = []
-    contagem = {"whatsapp_chatwoot": 0, "email": 0, "sem_contato": 0}
+    contagem = {"whatsapp_evolution": 0, "email": 0, "sem_contato": 0}
     for motorista in elegiveis:
         link = preparar_link_oferta(motorista.agent_id, data_alvo, config_confirmacao)
         if not link:
@@ -355,9 +355,9 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
         )
 
         teve_contato = False
-        if motorista.telefone and integracao_chatwoot.enviar_whatsapp_oferta(
-                config_chatwoot, motorista.telefone, motorista.nome, link):
-            contagem["whatsapp_chatwoot"] += 1
+        if motorista.telefone and integracao_evolution.enviar_whatsapp_oferta(
+                config_evolution, motorista.telefone, motorista.nome, link):
+            contagem["whatsapp_evolution"] += 1
             teve_contato = True
         if motorista.email:
             corpo_html = "<p style='white-space:pre-line;font-size:14px;line-height:1.6;'>" \

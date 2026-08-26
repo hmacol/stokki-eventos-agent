@@ -926,6 +926,9 @@
   .barra-agentes-planejamento .etapa.erro .estado { background: var(--erro); }
   .barra-agentes-planejamento .etapa.erro { border-color: color-mix(in srgb, var(--erro) 45%, var(--borda)); }
   .barra-agentes-planejamento .etapa.rodando .estado { background: var(--rodando); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--rodando) 70%, transparent); animation: pulso-agente 1.2s ease-in-out infinite; }
+  .barra-agentes-planejamento .etapa.na-fila .estado { background: var(--acento); }
+  .barra-agentes-planejamento .etapa.na-fila { border-color: color-mix(in srgb, var(--acento) 40%, var(--borda)); }
+  .barra-agentes-planejamento .etapa .na-fila-texto { color: var(--acento); font-size: 10.5px; margin-top: 5px; font-weight: 600; }
   @keyframes pulso-agente { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
   .barra-agentes-planejamento .etapa .progresso-texto { color: var(--texto-suave); font-size: 10.5px; margin-top: 5px; }
   .barra-agentes-planejamento .etapa .progresso-trilha { height: 5px; border-radius: 100px; background: var(--borda); overflow: hidden; margin-top: 3px; }
@@ -1477,11 +1480,12 @@
   }
 
   function renderAgentesPlanejamento(etapas) {
-    algumaEtapaAgentePlanejamentoRodando = etapas.some(e => e.rodando);
+    algumaEtapaAgentePlanejamentoRodando = etapas.some(e => e.rodando || e.na_fila);
 
     const cards = etapas.map(e => {
       let classe = "", tituloEstado = "nunca rodou";
       if (e.rodando) { classe = "rodando"; tituloEstado = "rodando agora"; }
+      else if (e.na_fila) { classe = "na-fila"; tituloEstado = "na fila -- aguardando a etapa anterior terminar"; }
       else if (e.status === "SUCESSO") { classe = "sucesso"; tituloEstado = "última execução OK"; }
       else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; tituloEstado = "última execução falhou (" + e.status + ")"; }
       else if (e.status) { tituloEstado = "última execução: " + e.status; }
@@ -1492,8 +1496,10 @@
       const aoClicar = e.agente_id === "somente_importacao"
         ? "abrirPainelImportacao()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
+      const desabilitado = e.rodando || e.na_fila;
+      const textoBotao = e.rodando ? "rodando…" : (e.na_fila ? "na fila…" : "▶ rodar");
       const botaoRodar = PODE_EDITAR_AGENTES
-        ? `<button class="rodar" onclick="${aoClicar}" ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+        ? `<button class="rodar" onclick="${aoClicar}" ${desabilitado ? "disabled" : ""}>${textoBotao}</button>`
         : "";
 
       let progresso = "";
@@ -1507,6 +1513,8 @@
         progresso = `
         <div class="progresso-trilha"><div class="progresso-preenchimento ${classeIndeterminada}" ${larguraEstilo}></div></div>
         <div class="progresso-texto">${texto}</div>`;
+      } else if (e.na_fila) {
+        progresso = `<div class="na-fila-texto">na fila -- aguardando a etapa anterior</div>`;
       }
 
       return `<div class="etapa ${classe}" title="${escaparHtmlAgentes(tituloEstado)}">
@@ -3459,7 +3467,7 @@
   function resumoAvisoTexto(aviso) {
     if (!aviso) return "";
     const linhas = [];
-    if (aviso.whatsapp_chatwoot) linhas.push(`${aviso.whatsapp_chatwoot} avisado(s) por WhatsApp (Chatwoot).`);
+    if (aviso.whatsapp_evolution) linhas.push(`${aviso.whatsapp_evolution} avisado(s) por WhatsApp.`);
     if (aviso.email) linhas.push(`${aviso.email} avisado(s) por e-mail.`);
     if (aviso.sem_contato) linhas.push(`${aviso.sem_contato} sem WhatsApp/e-mail cadastrado -- veja o texto pra copiar/colar em dados/mensagens_whatsapp_ofertas.txt.`);
     return linhas.length ? "\n\nAviso: " + linhas.join(" ") : "";
