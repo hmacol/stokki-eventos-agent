@@ -20,20 +20,21 @@ Reaproveita as funções utilitárias do ecossistema existente
 (roteirizacao_dados.py) -- nunca duplica geocodificação, cache ou
 cálculo de distância.
 
-Todos os modelos respeitam as MESMAS 4 travas de QUANTIDADE do
-dividir_em_sublotes de produção (o orçamento de HORAS por rota,
-adicionado 20/08 em produção -- ver roteirizacao_dados.
-estimar_tempo_rota -- NÃO foi replicado aqui; módulo isolado, ver nota
-acima):
+Todos os modelos respeitam as MESMAS travas do dividir_em_sublotes de
+produção, inclusive o ORÇAMENTO DE HORAS (roteirizacao_dados.
+estimar_tempo_rota <= ROTA_TEMPO_MAXIMO_HORAS -- paridade adicionada em
+25/08: até então só o modelo Atual tinha essa trava, e a seleção diária
+por "menos rotas" premiava sistematicamente quem a ignorava, com ~40%
+das rotas do Clarke-Wright acima de 9h; ver selecao_modelo.py):
   - até `tamanho_maximo` entregas por sublote (18);
   - até `volume_maximo` caixas por sublote (100);
   - nenhum par de pedidos do mesmo sublote a mais de
     `distancia_maxima_km` (quando ambos têm coordenada; None desliga);
-  - nível de dificuldade: nível 3 mistura livremente com nível 1/2 (que
-    preenchem a rota normalmente) -- só a QUANTIDADE de pedidos nível 3
-    na mesma rota é limitada a NIVEL_3_TAMANHO_MAXIMO_ROTA (3, ajustado
-    20/08), o tamanho total do sublote continua até `tamanho_maximo`
-    (ajustado 15/08); pedido "gigante" (mais caixas que o limite) fica
+  - tempo estimado da rota (paradas + deslocamento com perna da base)
+    até ROTA_TEMPO_MAXIMO_HORAS -- substitui o antigo teto FIXO de 3
+    pedidos nível 3 por rota (nível 3 mistura livremente com nível 1/2,
+    cada um custando o seu tempo, mesma regra do modelo Atual desde
+    20/08); pedido "gigante" (mais caixas que o limite) fica
     em rota exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando
     junta com outro nível 4 do MESMO endereço de entrega (e mesma data
     de agendamento, quando ambos têm agendamento -- pedido do Hugo,
@@ -56,7 +57,7 @@ from roteirizacao_dados import (
     obter_coordenadas, _distancia_km, extrair_cep,
     extrair_volume_caixas, extrair_nivel_dificuldade,
     calcular_km_estimado, separar_pedidos_exclusivos, caixas_e_enderecos,
-    NIVEL_3_TAMANHO_MAXIMO_ROTA,
+    estimar_tempo_rota, ROTA_TEMPO_MAXIMO_HORAS, _orcamento_inviavel_por_distancia,
 )
 from regras.tipo_veiculo import classificar_tipo_veiculo
 
@@ -116,8 +117,8 @@ def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_max
                           eh_viagem_fn=None) -> list[list[dict]]:
     """
     Empacotamento ganancioso IDÊNTICO ao de dividir_em_sublotes
-    (roteirizacao_dados.py) -- inclusive trava de nível 3 e distância
-    entre pares. A ÚNICA diferença dos modelos que usam isto é a
+    (roteirizacao_dados.py) -- inclusive orçamento de horas (25/08) e
+    distância entre pares. A ÚNICA diferença dos modelos que usam isto é a
     ORDENAÇÃO de entrada (grade 1D -> theta polar etc.). Pedido
     "gigante" e nível 4 já vêm PRÉ-SEPARADOS por quem chama (ver
     roteirizacao_dados.separar_pedidos_exclusivos) -- `ordenados` aqui
@@ -129,17 +130,20 @@ def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_max
 
     for servico in ordenados:
         cx_pedido = extrair_volume_caixas(servico)
-        nivel_pedido = extrair_nivel_dificuldade(servico)
-
-        qtd_nivel3_atual = sum(1 for s in sublote_atual if extrair_nivel_dificuldade(s) == 3)
-        cabe_nivel3 = qtd_nivel3_atual + (1 if nivel_pedido == 3 else 0) <= NIVEL_3_TAMANHO_MAXIMO_ROTA
 
         cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo
         cabe_distancia = _cabe_na_distancia(servico, sublote_atual, distancia_maxima_km, api_key,
                                             distancia_maxima_viagem_km, eh_viagem_fn)
+        # Orçamento de horas (paridade com dividir_em_sublotes, 25/08):
+        # recalcula a rota inteira com o candidato, igual à produção.
+        # Exceção: destino já inviável só por distância não usa o
+        # orçamento pra fragmentar mais (ver _orcamento_inviavel_por_distancia).
+        candidato = sublote_atual + [servico]
+        cabe_tempo = (estimar_tempo_rota(candidato, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
+                     or _orcamento_inviavel_por_distancia(candidato, api_key))
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_nivel3):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0
@@ -252,9 +256,6 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
             return False
         if len(sublote) > tamanho_maximo:
             return False
-        qtd_nivel3 = sum(1 for s in sublote if extrair_nivel_dificuldade(s) == 3)
-        if qtd_nivel3 > NIVEL_3_TAMANHO_MAXIMO_ROTA:
-            return False
         limite_dist = _limite_distancia(sublote, distancia_maxima_km,
                                         distancia_maxima_viagem_km, eh_viagem_fn)
         if limite_dist is not None:
@@ -263,7 +264,13 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
                 for b in range(a + 1, len(pontos)):
                     if _distancia_km(*pontos[a], *pontos[b]) > limite_dist:
                         return False
-        return True
+        # Orçamento de horas por último (é a checagem mais cara): a rota
+        # fundida, na ordem de concatenação, precisa caber no dia --
+        # exceto quando já é inviável só por distância (destino muito
+        # longe da base): nesse caso não bloqueia a fusão, ver
+        # _orcamento_inviavel_por_distancia.
+        return (estimar_tempo_rota(sublote, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
+               or _orcamento_inviavel_por_distancia(sublote, api_key))
 
     for s_ij, i, j in savings:
         ra, rb = rota_de[i], rota_de[j]

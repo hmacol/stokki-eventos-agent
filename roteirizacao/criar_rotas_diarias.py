@@ -86,6 +86,7 @@ from notificar_execucao_agente import notificar_execucao
 from roteirizacao_dados import (
     elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao, caixas_e_enderecos,
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
+    definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -257,6 +258,18 @@ def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coor
     extend), sem reotimizar o trajeto. Por isso, quando coords_base
     existe, roda ordenar_2opt de novo em TODOS os sublotes retornados
     sempre que HOUVE pelo menos 1 fusão.
+
+    Orçamento de horas na ordem FINAL (25/08, achado da revisão
+    adversarial): fundir_sublotes_pequenos aceita cada fusão pelo tempo
+    estimado na ordem de CONCATENAÇÃO (perto->longe), mas o ordenar_2opt
+    logo acima muda a ordem pra farthest-first -- a perna da base pode
+    ser percorrida 2x na prática (base->longe, depois longe->perto) e
+    uma fusão que cabia na concatenação estourar na ordem final, sem
+    ninguém reconferir depois (diferente de selecao_modelo.escolher_
+    melhor_modelo, que já reparava só ANTES desta fusão cross-região).
+    Mesmo padrão de dois passes de escolher_melhor_modelo: repara,
+    resequencia de novo só quem foi reparado, repara de novo (sem 3º
+    2-opt -- convergência esperada na 2ª rodada).
     """
     def _macro(sub):
         return macro_regiao_predominante_do_sublote(sub, gmaps_key)
@@ -275,6 +288,12 @@ def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coor
         logger.info(f"[{label}] Fusão entre macro-regiões: {len(sublotes_do_dia)} -> {len(fundidos)} sublote(s).")
         if coords_base:
             fundidos = [ordenar_2opt(s, coords_base[0], coords_base[1], gmaps_key) for s in fundidos]
+            fundidos, reparadas = reparar_sublotes_por_horas(fundidos, gmaps_key)
+            if reparadas:
+                fundidos = [ordenar_2opt(s, coords_base[0], coords_base[1], gmaps_key) for s in fundidos]
+                fundidos, _ = reparar_sublotes_por_horas(fundidos, gmaps_key)
+                logger.warning(f"[{label}] Fusão entre macro-regiões: {reparadas} rota(s) passaram de "
+                               f"{ROTA_TEMPO_MAXIMO_HORAS:.0f}h na ordem final -- quebradas pra caber no dia.")
     return fundidos
 
 
@@ -346,6 +365,10 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
         coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
     except Exception as e:
         logger.warning(f"Não consegui geocodificar a base -- seguindo com o agrupamento fixo: {e}")
+    if coords_base:
+        # orçamento de horas passa a contar a perna base -> 1ª parada
+        # (25/08) em todo agrupamento/fusão deste processo
+        definir_coords_base(*coords_base)
 
     indice = indice_inicial
     rascunhos: list[dict] = []
@@ -594,6 +617,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
         except Exception as e:
             logger.warning(f"Não consegui geocodificar a base -- seguindo com o agrupamento fixo: {e}")
+        if coords_base:
+            definir_coords_base(*coords_base)
 
         rotas_criadas = 0
         pedidos_alocados = 0

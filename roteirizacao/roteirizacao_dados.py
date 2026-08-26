@@ -536,7 +536,9 @@ def fundir_sublotes_pequenos(
                 continue
             if sum(extrair_volume_caixas(s) for s in receptor + pequeno) > volume_maximo:
                 continue
-            if estimar_tempo_rota(receptor + pequeno, api_key) > ROTA_TEMPO_MAXIMO_HORAS:
+            candidata = receptor + pequeno
+            if (estimar_tempo_rota(candidata, api_key) > ROTA_TEMPO_MAXIMO_HORAS
+                    and not _orcamento_inviavel_por_distancia(candidata, api_key)):
                 continue
             distancia_max, km_acumulado_max = _limite(receptor + pequeno)
             if distancia_max is not None and any(
@@ -651,10 +653,11 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 # A quantidade de nível 3 numa mesma rota NÃO tem mais um teto fixo de
 # pedidos -- pedido do Hugo, 20/08: em vez disso, cada rota tem um
 # ORÇAMENTO DE HORAS (ROTA_TEMPO_MAXIMO_HORAS, 9h); cada nível 3 custa
-# TEMPO_NIVEL3_HORAS (2h, recalibrado 22/08 -- antes 1,5h) e cada nível
-# 1/2 custa TEMPO_PARADA_NORMAL_HORAS (~25min), MAIS o deslocamento real
-# estimado entre paradas (km acumulado sequencial ÷ VELOCIDADE_MEDIA_KMH,
-# também 22/08) -- ver estimar_tempo_rota. Isso deixa o número de
+# TEMPO_NIVEL3_HORAS e cada nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS
+# (ambos calibrados pela execução real em 25/08, ver bloco de constantes
+# abaixo), MAIS o deslocamento estimado: perna base -> 1ª parada e pernas
+# entre paradas, haversine x FATOR_ESTRADA, a VELOCIDADE_MEDIA_KMH (ou
+# VELOCIDADE_RODOVIA_KMH em perna longa) -- ver estimar_tempo_rota. Isso deixa o número de
 # nível 3 por rota subir quando sobra tempo (poucas paradas normais
 # nessa rota) e descer quando não sobra (reduzindo o total de pedidos
 # normais em vez de travar numa quantidade fixa de nível 3).
@@ -677,40 +680,185 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3
 NIVEL_ROTA_EXCLUSIVA = 4
 NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
-TEMPO_NIVEL3_HORAS = 2.0  # subiu de 1,5h pra 2h (pedido do Hugo, 22/08)
-TEMPO_PARADA_NORMAL_HORAS = 25 / 60
+# Calibração pela execução REAL de 60 dias (análise 25/08: 5.180
+# entregas, 546 rotas finalizadas, timestamps de chegada/conclusão da
+# VUUPT descartando as confirmações em lote):
+#   - parada nível 3: mediana 36,8min, p75 72,6min -> 1h15 (antes 2h,
+#     ~3x acima do real);
+#   - parada nível 1/2: mediana 9,6min, p75 23,9min -> 15min (antes 25min);
+#   - velocidade entre paradas: mediana real 15,4 km/h -> 15 (antes 18,
+#     que era OTIMISTA, não conservador);
+#   - orçamento de 9h coincide com o p90 da duração útil real (9,05h):
+#     bem calibrado, mantido.
+# Antes de 25/08 os erros se cancelavam: nível 3 inflado compensava a
+# perna da base que ficava fora da conta (ver COORDS_BASE abaixo). Os
+# quatro ajustes andam JUNTOS -- corrigir só um desequilibra (só a base:
+# metade das rotas reais de 6h seria rejeitada; só o nível 3: 29% das
+# rotas de ida longa ficam subestimadas).
+TEMPO_NIVEL3_HORAS = 1.25
+TEMPO_PARADA_NORMAL_HORAS = 15 / 60
 ROTA_TEMPO_MAXIMO_HORAS = 9.0
-# Deslocamento real entre paradas (pedido do Hugo, 22/08 -- antes
-# estimar_tempo_rota só somava tempo de PARADA, sem nenhum tempo de
-# deslocamento, então "orçamento de horas" media só atendimento, não a
-# jornada real). Sem dado de GPS/duração real calibrável ainda
-# (timestamps de conclusão no VUUPT vêm em lote, não em tempo real --
-# achado da análise de 22/08, ver memória), 18 km/h é uma estimativa de
-# planejamento conservadora (trânsito denso de SP + manobra/
-# estacionamento entre paradas), fácil de recalibrar depois que houver
-# dado real de duração de rota.
-VELOCIDADE_MEDIA_KMH = 18.0
+VELOCIDADE_MEDIA_KMH = 15.0
+# Perna longa (haversine acima de PERNA_RODOVIA_KM) anda em rodovia:
+# sem isso um pedido Viagem a 200 km "custaria" 17h a 15 km/h e nunca
+# caberia em rota nenhuma (achado da simulação de 25/08).
+VELOCIDADE_RODOVIA_KMH = 60.0
+PERNA_RODOVIA_KM = 30.0
+# Haversine subestima a estrada: fator medido nas rotas reais (km
+# rodado pela VUUPT / haversine da sequência executada, mediana 1,3;
+# medindo só entre paradas o real chega a 2,5x -- a perna da base é
+# metade do trajeto real).
+FATOR_ESTRADA = 1.3
+# Coordenada da base (Rua Zilda): quem já geocodificou (criar_rotas_
+# diarias, selecao_modelo, painel de planejamento) registra uma vez por
+# processo via definir_coords_base. Com ela, estimar_tempo_rota inclui a
+# perna base -> 1ª parada (mediana 0,64h, p90 2,3h na execução real --
+# ficava de fora até 25/08). Sem ela o estimador segue sem essa perna
+# (nunca quebra, só fica otimista). A perna de VOLTA fica de fora de
+# propósito, por regra de NEGÓCIO (pedido do Hugo, 26/08), não só por
+# calibração: numa rota que não é Viagem, o motorista só volta pro
+# galpão se algo deu errado (insucesso com produto pra devolver) --
+# não faz parte da jornada normal, então não deve contar no orçamento
+# de horas. Bate com o dado real: a duração calibrada (p90 9,05h) foi
+# medida do início até a ÚLTIMA ENTREGA CONCLUÍDA, nunca até a volta.
+COORDS_BASE: tuple[float, float] | None = None
 
 
-def estimar_tempo_rota(sublote: list[dict], api_key: str | None = None) -> float:
-    """Tempo estimado (horas) de uma rota mista de nível 1/2/3: soma do
-    tempo de PARADA (cada nível 3 custa TEMPO_NIVEL3_HORAS, cada nível
-    1/2 custa TEMPO_PARADA_NORMAL_HORAS) com o tempo de DESLOCAMENTO
-    estimado -- km acumulado sequencial entre itens consecutivos na
-    ordem dada (mesma aproximação de _km_acumulado_sequencial: ordem de
-    FORMAÇÃO, não o trajeto final pós-2opt) dividido por
-    VELOCIDADE_MEDIA_KMH. `api_key=None` (padrão) deixa o deslocamento
-    zerado -- só quem já tem `api_key` em mãos (dividir_em_sublotes,
-    fundir_sublotes_pequenos) passa esse termo de verdade; chamada sem
-    isso nunca quebra, só fica sem a parcela de deslocamento. Não é
-    chamada para nível 4 (rota exclusiva, sem orçamento de horas -- ver
-    NIVEL_ROTA_EXCLUSIVA)."""
+def definir_coords_base(lat: float, lng: float) -> None:
+    """Registra a coordenada da base pro estimador de horas deste
+    processo (ver COORDS_BASE)."""
+    global COORDS_BASE
+    COORDS_BASE = (float(lat), float(lng))
+
+
+def _tempo_perna_horas(km_haversine: float) -> float:
+    """Horas de UMA perna: haversine x FATOR_ESTRADA, os primeiros
+    PERNA_RODOVIA_KM a VELOCIDADE_MEDIA_KMH (urbana) e o excedente a
+    VELOCIDADE_RODOVIA_KMH -- MISTURA contínua, não um degrau (corrigido
+    25/08, achado da revisão adversarial: a versão anterior trocava de
+    velocidade de uma vez só EXATAMENTE em PERNA_RODOVIA_KM, criando uma
+    descontinuidade de ~4x -- uma perna de 29,9km custava mais que uma
+    de 30,1km, e o estimador deixava de ser monotônico: adicionar um
+    pedido mais distante podia REDUZIR o tempo estimado da rota,
+    distorcendo as travas de formação/reparo pra rotas com 1ª parada
+    entre ~25 e 30km da base (Cotia, Barueri, Itaquá). Contínua em
+    km_haversine == PERNA_RODOVIA_KM (ambos os lados dão o mesmo valor
+    ali) e estritamente crescente em km_haversine -- ver
+    test_perna_horas_e_continua_e_monotona."""
+    urbano_km = min(km_haversine, PERNA_RODOVIA_KM)
+    rodovia_km = max(km_haversine - PERNA_RODOVIA_KM, 0.0)
+    return (urbano_km / VELOCIDADE_MEDIA_KMH + rodovia_km / VELOCIDADE_RODOVIA_KMH) * FATOR_ESTRADA
+
+
+def _orcamento_inviavel_por_distancia(sublote: list[dict], api_key: str | None = None,
+                                      coords_base: tuple[float, float] | None = None) -> bool:
+    """True quando NENHUM agrupamento possível faria este sublote caber
+    em ROTA_TEMPO_MAXIMO_HORAS: pelo menos um pedido, SOZINHO (só ele +
+    a perna da base), já estoura o orçamento por pura DISTÂNCIA até a
+    base -- destino muito longe (ex.: seleção manual fora da área usual
+    de atendimento), não excesso de paradas. Como o 2-opt sempre visita
+    a parada mais distante PRIMEIRO (farthest-first, ver ordenar_2opt),
+    qualquer rota que inclua esse pedido paga aquela mesma perna longa
+    de qualquer forma -- fragmentar em rotas de 1 pedido não resolve
+    nada (cada uma continuaria acima do orçamento) e só multiplica
+    motoristas pro mesmo problema (achado da revisão de 25/08: N
+    pedidos vizinhos e distantes viravam N rotas de 1, todas ainda
+    acima de 9h). Nesse caso o orçamento de horas não deve bloquear o
+    agrupamento/reprovar o candidato -- as outras travas (distância
+    par-a-par, volume, tamanho) continuam valendo normalmente; usada por
+    dividir_em_sublotes, _empacotar_ganancioso, agrupar_por_savings,
+    fundir_sublotes_pequenos e exige_orcamento_horas pra não divergirem."""
+    return any(
+        estimar_tempo_rota([s], api_key, coords_base) > ROTA_TEMPO_MAXIMO_HORAS
+        for s in sublote
+    )
+
+
+def estimar_tempo_rota(sublote: list[dict], api_key: str | None = None,
+                       coords_base: tuple[float, float] | None = None,
+                       coords_fn=None) -> float:
+    """Tempo estimado (horas) de uma rota de nível 1/2/3 até a ÚLTIMA
+    entrega: tempo de PARADA (nível 3 custa TEMPO_NIVEL3_HORAS, nível
+    1/2 custa TEMPO_PARADA_NORMAL_HORAS) + DESLOCAMENTO: perna base ->
+    1ª parada (quando `coords_base` ou COORDS_BASE existe) e pernas
+    entre itens consecutivos na ordem dada (ordem de FORMAÇÃO em
+    dividir_em_sublotes/_fusao_valida; ordem final pós-2opt em
+    selecao_modelo._validar), cada perna por _tempo_perna_horas.
+
+    `coords_fn(servico) -> (lat, lng) | None` (opcional) substitui
+    obter_coordenadas -- pro painel de planejamento, cujas paradas já
+    carregam latitude/longitude e não têm o endereço na forma que o
+    cache de geocodificação conhece (evita geocodificar de novo).
+
+    Serviço sem coordenada não conta no deslocamento (mesmo padrão
+    seguro do resto do módulo) -- chamada sem coordenada nenhuma nunca
+    quebra, só fica sem a parcela de deslocamento. Não é chamada para
+    nível 4 (rota exclusiva, sem orçamento de horas -- ver
+    NIVEL_ROTA_EXCLUSIVA e exige_orcamento_horas)."""
     tempo_paradas = sum(
         TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
         for s in sublote
     )
-    tempo_deslocamento = _km_acumulado_sequencial(sublote, api_key) / VELOCIDADE_MEDIA_KMH
+    resolver = coords_fn or (lambda s: obter_coordenadas(s, api_key))
+    coords = [c for c in (resolver(s) for s in sublote) if c]
+    base = coords_base or COORDS_BASE
+    tempo_deslocamento = 0.0
+    if coords and base:
+        tempo_deslocamento += _tempo_perna_horas(_distancia_km(base[0], base[1], *coords[0]))
+    for i in range(len(coords) - 1):
+        tempo_deslocamento += _tempo_perna_horas(_distancia_km(*coords[i], *coords[i + 1]))
     return tempo_paradas + tempo_deslocamento
+
+
+def exige_orcamento_horas(sublote: list[dict], api_key: str | None = None,
+                          coords_base: tuple[float, float] | None = None) -> bool:
+    """Rota que o orçamento de horas alcança: última milha com 2+
+    paradas, sem nível 4 (rota exclusiva), não classificada como
+    veículo grande (as travas dela são as do próprio tipo, ver
+    _extrair_grupos_veiculo_grande) e não inviável só por distância (ver
+    _orcamento_inviavel_por_distancia -- destino tão longe que nenhum
+    agrupamento caberia mesmo, mesma exceção de "gigante" de caixas, só
+    que por tempo). Mesmas exceções que dividir_em_sublotes já aplica ao
+    pular os sublotes "prontos" de separar_pedidos_exclusivos --
+    centralizadas aqui pra selecao_modelo._validar e
+    reparar_sublotes_por_horas não divergirem."""
+    if len(sublote) <= 1:
+        return False
+    if any(extrair_nivel_dificuldade(s) == NIVEL_ROTA_EXCLUSIVA for s in sublote):
+        return False
+    if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
+        return False
+    if _orcamento_inviavel_por_distancia(sublote, api_key, coords_base):
+        return False
+    return True
+
+
+def reparar_sublotes_por_horas(sublotes: list[list[dict]], api_key: str | None = None,
+                               coords_base: tuple[float, float] | None = None) -> tuple[list[list[dict]], int]:
+    """Rede de segurança pós-sequenciamento (25/08): as travas de horas
+    dos agrupadores estimam na ordem de FORMAÇÃO; o 2-opt depois muda a
+    1ª parada (e portanto a perna da base), e uma rota pode ficar
+    marginalmente acima do orçamento na ordem FINAL (achado da
+    simulação: ~10% das rotas do savings, 9,1-9,9h). Quebra cada rota
+    dessas, na ordem dada, em pedaços que cabem em
+    ROTA_TEMPO_MAXIMO_HORAS. Devolve (sublotes, qtd_rotas_reparadas)."""
+    resultado: list[list[dict]] = []
+    reparadas = 0
+    for sublote in sublotes:
+        if (not exige_orcamento_horas(sublote)
+                or estimar_tempo_rota(sublote, api_key, coords_base) <= ROTA_TEMPO_MAXIMO_HORAS):
+            resultado.append(sublote)
+            continue
+        reparadas += 1
+        atual: list[dict] = []
+        for servico in sublote:
+            if atual and estimar_tempo_rota(atual + [servico], api_key, coords_base) > ROTA_TEMPO_MAXIMO_HORAS:
+                resultado.append(atual)
+                atual = []
+            atual.append(servico)
+        if atual:
+            resultado.append(atual)
+    return resultado, reparadas
 
 
 def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
@@ -944,11 +1092,14 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         distância -- só as outras travas de tamanho/volume/nível valem);
       - tempo estimado da rota (estimar_tempo_rota) até
         ROTA_TEMPO_MAXIMO_HORAS (9h): cada nível 3 custa
-        TEMPO_NIVEL3_HORAS (2h, recalibrado 22/08 -- antes 1,5h) e cada
-        nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS (~25min), MAIS o
-        deslocamento real estimado entre paradas (km acumulado
-        sequencial ÷ VELOCIDADE_MEDIA_KMH, também 22/08 -- antes o
-        orçamento media só tempo de PARADA, nenhum deslocamento) --
+        TEMPO_NIVEL3_HORAS e cada nível 1/2 custa
+        TEMPO_PARADA_NORMAL_HORAS (calibrados pela execução real em
+        25/08, ver bloco de constantes), MAIS o deslocamento estimado:
+        perna base -> 1ª parada (quando COORDS_BASE está registrada) e
+        pernas entre paradas consecutivas, haversine x FATOR_ESTRADA a
+        velocidade urbana/rodovia (22/08 adicionou o deslocamento entre
+        paradas; 25/08 a perna da base, o fator estrada e as 2
+        velocidades -- antes o orçamento media só tempo de PARADA) --
         ajustado 15/08 e substituído 20/08 (antes: teto FIXO de
         NIVEL_3_TAMANHO_MAXIMO_ROTA pedidos nível 3 por rota; achado
         real, 15/08, que motivou tirar o teto da rota INTEIRA: 24 das
@@ -1038,8 +1189,12 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         # candidato incluído, em vez de só somar o tempo de parada dele
         # -- assim o trecho de deslocamento até ESSE candidato também
         # entra na conta (estimar_tempo_rota() sozinho não sabe qual
-        # seria só o "tempo do pedido").
-        cabe_tempo = estimar_tempo_rota(sublote_atual + [servico], api_key) <= ROTA_TEMPO_MAXIMO_HORAS
+        # seria só o "tempo do pedido"). Exceção: destino já inviável só
+        # por distância (ver _orcamento_inviavel_por_distancia) não usa
+        # o orçamento pra fragmentar mais -- fragmentar não resolve nada.
+        candidato = sublote_atual + [servico]
+        cabe_tempo = (estimar_tempo_rota(candidato, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
+                     or _orcamento_inviavel_por_distancia(candidato, api_key))
 
         cabe_entregas = len(sublote_atual) + 1 <= tamanho_maximo
         cabe_caixas = caixas_atual + cx_pedido <= volume_maximo

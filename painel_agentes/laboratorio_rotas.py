@@ -30,7 +30,10 @@ import yaml
 
 from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
-from roteirizacao_dados import elegivel_para_data, particionar_por_macro_regiao, _cache_coordenadas, caixas_e_enderecos
+from roteirizacao_dados import (
+    elegivel_para_data, particionar_por_macro_regiao, _cache_coordenadas, caixas_e_enderecos,
+    definir_coords_base,
+)
 from otimizacao_rotas import (
     agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans,
     avaliar_candidatos,
@@ -283,6 +286,13 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste
         raise RuntimeError("Não consegui geocodificar a base -- laboratório precisa da coordenada da base.")
     base_lat, base_lng = coords_base
     resultado["base"] = {"lat": base_lat, "lng": base_lng}
+    # orçamento de horas conta a perna base->1ª parada quando a base
+    # está registrada (25/08) -- sem isso o laboratório divergiria do
+    # que criar_rotas_diarias/selecao_modelo fazem em produção (ambos
+    # sempre registram), e o resultado mudaria silenciosamente conforme
+    # qual tela foi aberta primeiro no mesmo processo (COORDS_BASE é
+    # estado global do módulo, achado da revisão adversarial de 25/08).
+    definir_coords_base(base_lat, base_lng)
 
     eh_viagem_fn = lambda sub: classificar_rota_viagem(sub, gmaps_key)
     particoes_macro = particionar_por_macro_regiao(servicos_particao, gmaps_key)

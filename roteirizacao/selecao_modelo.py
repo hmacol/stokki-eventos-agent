@@ -44,7 +44,8 @@ from pathlib import Path
 from roteirizacao_dados import (
     agrupar_por_regiao, consolidar_regioes_pequenas, dividir_em_sublotes,
     calcular_km_estimado, extrair_volume_caixas, particionar_por_macro_regiao,
-    caixas_e_enderecos,
+    caixas_e_enderecos, definir_coords_base, estimar_tempo_rota,
+    exige_orcamento_horas, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
 )
 from otimizacao_rotas import (
     agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans, ordenar_2opt,
@@ -63,20 +64,29 @@ def _km_total(sublotes, base_lat, base_lng, api_key):
     return sum(calcular_km_estimado(sublote, base_lat, base_lng, api_key) for sublote in sublotes)
 
 
-def _validar(servicos, sublotes, tamanho_maximo, volume_maximo):
+def _validar(servicos, sublotes, tamanho_maximo, volume_maximo, api_key=None):
     """Travas + cobertura -- candidato que falhar aqui sai do páreo.
 
     Sublote classificado como veículo grande (regras/tipo_veiculo.py --
     pedido do Hugo, 15/08) fica de fora das travas de entregas/caixas
     de última milha (as travas que valem pra ele são as do PRÓPRIO
     tipo, já garantidas na hora do empacotamento -- ver
-    roteirizacao_dados.py::_extrair_grupos_veiculo_grande)."""
+    roteirizacao_dados.py::_extrair_grupos_veiculo_grande).
+
+    Orçamento de horas (25/08): checado aqui na ordem FINAL (pós-2opt e
+    pós-reparo) pra nenhum candidato vencer com rota que não cabe no
+    dia -- antes só o Atual tinha a trava, e "menos rotas" premiava quem
+    a ignorava."""
     for sublote in sublotes:
         if classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None:
             continue
         assert len(sublote) <= tamanho_maximo, f"sublote com {len(sublote)} entregas (máx {tamanho_maximo})"
         caixas = sum(extrair_volume_caixas(s) for s in sublote)
         assert caixas <= volume_maximo or len(sublote) == 1, f"sublote com {caixas} caixas (máx {volume_maximo})"
+        if exige_orcamento_horas(sublote):
+            tempo = estimar_tempo_rota(sublote, api_key)
+            assert tempo <= ROTA_TEMPO_MAXIMO_HORAS, \
+                f"sublote com {tempo:.1f}h estimadas (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h)"
     ids_originais = {s["id"] for s in servicos}
     ids_alocados = [s["id"] for sub in sublotes for s in sub]
     assert len(ids_alocados) == len(set(ids_alocados)), "pedido duplicado entre sublotes"
@@ -182,7 +192,19 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     pro candidato "Atual (Grade+Greedy)" nesta fase; os outros 4
     esquemas (Sweep/Clarke-Wright/CEP/K-means) não ganham essa trava
     ainda -- mesma assimetria intencional documentada na Fase 0.
+
+    Orçamento de HORAS (25/08): vale pros 5 candidatos por igual --
+    dentro de cada agrupador (dividir_em_sublotes, _empacotar_ganancioso,
+    _fusao_valida do savings) e de novo na ordem FINAL, depois do 2-opt
+    (reparar_sublotes_por_horas + _validar). Simulação de 60 dias reais:
+    sem essa paridade o Clarke-Wright "vencia" com 548 rotas das quais
+    ~40% não cabiam em 9h -- número ilusório. Com a paridade completa
+    (mais os 6 fixes da revisão adversarial de 25/08, ver
+    roteirizacao/test_orcamento_horas.py), a competição diária real
+    produz 774 rotas contra 877 do modelo Atual isolado sem nenhuma
+    calibração (-11,7%), com o portão de horas validado nos 5 modelos.
     """
+    definir_coords_base(base_lat, base_lng)
     eh_viagem_fn = lambda sub: classificar_rota_viagem(sub, gmaps_key)
 
     particoes_macro = particionar_por_macro_regiao(
@@ -236,7 +258,17 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
         try:
             sublotes = fn()
             sublotes = [ordenar_2opt(s, base_lat, base_lng, gmaps_key) for s in sublotes]
-            _validar(servicos, sublotes, tamanho_maximo, volume_maximo)
+            # O 2-opt muda a 1ª parada (e a perna da base): rota que cabia
+            # na ordem de formação pode passar do orçamento na ordem final
+            # -- quebra essas, re-sequencia os pedaços e confere de novo
+            # (sem 2-opt na 2ª passada, senão vira ciclo).
+            sublotes, reparadas = reparar_sublotes_por_horas(sublotes, gmaps_key)
+            if reparadas:
+                sublotes = [ordenar_2opt(s, base_lat, base_lng, gmaps_key) for s in sublotes]
+                sublotes, _ = reparar_sublotes_por_horas(sublotes, gmaps_key)
+                logger.warning(f"[{label}] Modelo '{nome}': {reparadas} rota(s) passaram de "
+                               f"{ROTA_TEMPO_MAXIMO_HORAS:.0f}h na ordem final -- quebradas pra caber no dia.")
+            _validar(servicos, sublotes, tamanho_maximo, volume_maximo, gmaps_key)
             avaliacoes[nome] = {
                 "sublotes": sublotes,
                 "rotas": len(sublotes),

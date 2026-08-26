@@ -34,7 +34,10 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 import yaml
 
 from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
-from roteirizacao_dados import extrair_volume_caixas, _distancia_km
+from roteirizacao_dados import (
+    extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
+    ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
+)
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
@@ -163,22 +166,36 @@ TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 (pedido do Hugo, 22/08) -- mesm
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 20
-# Orçamento de horas por rota (pedido do Hugo, 20/08; recalibrado 22/08):
-# substitui o teto fixo de nível 3 por pedido -- cada nível 3 "custa"
-# TEMPO_NIVEL3_HORAS e cada nível 1/2 custa TEMPO_PARADA_NORMAL_HORAS,
-# mais o deslocamento real estimado (ver VELOCIDADE_MEDIA_KMH); mesmos
-# valores de roteirizacao_dados.py (constantes separadas, sem import
-# entre os dois módulos, mesmo padrão de TAMANHO_MAXIMO_ROTA acima).
-TEMPO_NIVEL3_HORAS = 2.0  # subiu de 1,5h pra 2h (pedido do Hugo, 22/08)
-TEMPO_PARADA_NORMAL_HORAS = 25 / 60
-ROTA_TEMPO_MAXIMO_HORAS = 9.0
-# Deslocamento real entre paradas (pedido do Hugo, 22/08): sem dado de
-# GPS/duração real calibrável ainda (timestamps de conclusão no VUUPT
-# vêm em lote, não em tempo real -- ver achado da análise de 22/08),
-# 18 km/h é uma estimativa de planejamento conservadora (trânsito denso
-# de SP + manobra/estacionamento entre paradas), fácil de recalibrar
-# depois que houver dado real de duração de rota.
-VELOCIDADE_MEDIA_KMH = 18.0
+# Orçamento de horas por rota: TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_
+# HORAS e ROTA_TEMPO_MAXIMO_HORAS vêm IMPORTADOS de roteirizacao_dados
+# (25/08 -- antes eram cópias locais, e o estimador do badge era uma
+# reimplementação; como este badge virou o portão automático da Fase 3,
+# ele precisa bater exatamente com a trava que formou a rota, então usa
+# roteirizacao_dados.estimar_tempo_rota direto -- ver _badges_trava).
+ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"  # mesma base de criar_rotas_diarias.py
+_coords_base_cache: tuple[float, float] | None | bool = None
+
+
+def _garantir_coords_base() -> tuple[float, float] | None:
+    """Coordenada da base pro estimador de horas (perna base -> 1ª
+    parada, 25/08): geocodifica UMA vez por processo (cache hit em
+    dados.db, sem chamada nova) e registra em roteirizacao_dados.
+    Falha vira None (estimador segue sem a perna da base, nunca quebra
+    a tela) -- e não tenta de novo até o processo reiniciar."""
+    global _coords_base_cache
+    if _coords_base_cache is None:
+        try:
+            from geocodificacao import geocodificar
+            gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
+            _coords_base_cache = geocodificar(ENDERECO_BASE, gmaps_key) or False
+        except Exception as e:
+            logger.warning(f"Sem coordenada da base pro estimador de horas: {e}")
+            _coords_base_cache = False
+        if _coords_base_cache:
+            definir_coords_base(*_coords_base_cache)
+    return _coords_base_cache or None
+
+
 # Pedido "grande": acima disso vira alerta visual nos cards e no resumo
 # do futuro (pedido do Hugo, 12/08) -- um pedido desses sozinho já
 # ocupa boa parte do VOLUME_MAXIMO_ROTA de uma rota e merece atenção
@@ -210,10 +227,13 @@ def _badges_trava(rascunho: dict) -> list[str]:
     pensado pro contexto de última milha).
 
     Nível 3 (pedido do Hugo, 20/08): não é mais um teto fixo de
-    quantidade -- o aviso dispara quando o TEMPO ESTIMADO da rota
-    (nível 3 = TEMPO_NIVEL3_HORAS/1,5h, nível 1/2 = TEMPO_PARADA_
-    NORMAL_HORAS/~25min) passa de ROTA_TEMPO_MAXIMO_HORAS (9h) -- mesma
-    regra de roteirizacao_dados.estimar_tempo_rota."""
+    quantidade -- o aviso dispara quando o TEMPO ESTIMADO da rota passa
+    de ROTA_TEMPO_MAXIMO_HORAS. Custo por parada (TEMPO_NIVEL3_HORAS,
+    TEMPO_PARADA_NORMAL_HORAS) e deslocamento (perna da base, fator
+    estrada, velocidade urbana/rodovia) calibrados pela execução real em
+    25/08 -- ver o bloco de constantes e a docstring de
+    roteirizacao_dados.estimar_tempo_rota pros valores atuais, não
+    repetidos aqui de propósito pra não desatualizar de novo."""
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
@@ -238,26 +258,25 @@ def _badges_trava(rascunho: dict) -> list[str]:
         if len(paradas) > 1 and any(n >= 4 for n in niveis):
             badges.append("entrega nível 4 dividindo rota com outras")
         else:
-            tempo_paradas = sum(
-                TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis
+            # MESMO estimador que formou a rota (roteirizacao_dados.
+            # estimar_tempo_rota: paradas calibradas + perna da base +
+            # fator estrada + velocidade urbana/rodovia), na ordem em que
+            # as paradas estão no rascunho. As paradas já carregam
+            # lat/lng -- coords_fn evita re-geocodificar o endereço.
+            pseudo_servicos = [
+                {"_nivel_dificuldade": n, "latitude": p["latitude"], "longitude": p["longitude"]}
+                for n, p in zip(niveis, paradas)
+            ]
+            tempo_estimado = estimar_tempo_rota(
+                pseudo_servicos, coords_base=_garantir_coords_base(),
+                coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
             )
-            # Deslocamento real (pedido do Hugo, 22/08): soma sequencial
-            # das distâncias entre paradas CONSECUTIVAS na ordem em que
-            # estão no rascunho (aproximação -- não é o trajeto final
-            # pós-otimização --, mesmo padrão de roteirizacao_dados.py::
-            # _km_acumulado_sequencial) convertida em horas por
-            # VELOCIDADE_MEDIA_KMH.
-            coords_seq = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]
-            km_acumulado = sum(
-                _distancia_km(*coords_seq[i], *coords_seq[i + 1]) for i in range(len(coords_seq) - 1)
-            )
-            tempo_deslocamento = km_acumulado / VELOCIDADE_MEDIA_KMH
-            tempo_estimado = tempo_paradas + tempo_deslocamento
             if tempo_estimado > ROTA_TEMPO_MAXIMO_HORAS:
+                tempo_paradas = sum(TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis)
                 qtd_nivel3 = sum(1 for n in niveis if n == 3)
                 badges.append(
                     f"tempo estimado {tempo_estimado:.1f}h (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h, "
-                    f"{qtd_nivel3} nível 3, +{tempo_deslocamento:.1f}h deslocamento)"
+                    f"{qtd_nivel3} nível 3, +{tempo_estimado - tempo_paradas:.1f}h deslocamento)"
                 )
 
     if rascunho.get("tipo_rota") != "VIAGEM":
@@ -617,7 +636,6 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
 
     from geocodificacao import geocodificar
-    ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
     coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
 
     rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
