@@ -289,6 +289,15 @@ deslocamento → Cheguei no local → Resultado** (eventos `DESLOCAMENTO`
 → `started_at`, `CHEGADA` → `arrived_at`, situação `EM_DESLOCAMENTO`
 nova em `nucleo_paradas`). Publicado por OTA no canal `preview`; ícone/
 splash exigem novo APK (pendente, aguardando o fim do lote de design).
+**Cards da parada (26/08, 2ª rodada):** cada card tem UM controle por
+arrasto que evolui — Iniciar deslocamento ›› Cheguei no local ›› Finalizar
+entrega (abre a tela de resultado); só uma parada em andamento por vez.
+Tela de resultado: Entregue / Entregue parcial / Não entregue / **Reagendar**,
+todas por arrasto; as três de entrega pedem confirmação ("tem certeza?")
+antes do checklist. Reagendar = evento `REAGENDAR` com `novo_horario`
+("YYYY-MM-DD HH:MM" ou `FIM` = depois das outras): parada volta a
+PENDENTE, `reagendado_para` + `tentativas`+1, e a tentativa (started/
+arrived/tempo no local) fica guardada no evento.
 **Durações por parada (26/08):** `nucleo_paradas.tempo_no_local_s`
 (completed − arrived: "quanto demora pra receber") e
 `tempo_deslocamento_s` (arrived − started), calculadas por
