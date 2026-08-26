@@ -35,6 +35,8 @@ import logging
 import re
 import sqlite3
 import sys
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -100,6 +102,43 @@ URL_SERVICO_VUUPT = "https://app.vuupt.com/manager/orders"
 # apelido "DOURADO").
 EMBARCADORES_ORDER_NUMBER_E_NF = ["QUATRO ESTRELAS", "DOURADO"]
 
+# ── Cache da parte externa da listagem ─────────────────────────────────
+# Por quê (incidente 25/08 à tarde): a listagem resolvia o link da Stokki
+# pedido a pedido na Vuupt (busca de título, 2 chamadas por pedido -- uma
+# por apelido em EMBARCADORES_ORDER_NUMBER_E_NF) pra TODO pedido que não
+# casava em `pedidos_historico` -- que na prática eram todos (55 de 55
+# naquele dia = 110 buscas por carga), e a tela recarrega a cada 60s POR
+# ABA. Estourou o rate limit da Vuupt (HTTP 429 persistindo além dos 5
+# retries do http_retry) e a tela ficou em "Falha ao carregar" a tarde
+# inteira, derrubando de quebra as outras integrações com a Vuupt no
+# mesmo minuto.
+#
+# Três defesas, todas aqui:
+# 1. A base externa (Fresh Hub + entregues + ids Stokki) é montada uma
+#    vez a cada TTL_BASE_EXTERNA_SEG, sob lock (single-flight): N abas
+#    abertas = 1 montagem. A classificação local é lida fresca sempre,
+#    então uma ação do operador aparece na hora, sem esperar o cache.
+# 2. O mapeamento order_number -> id Stokki achado na Vuupt é PERSISTIDO
+#    em SQLite (não muda nunca: o PS de uma NF é fixo) -- sobrevive ao
+#    restart do painel, que acontece a cada deploy. Quem NÃO foi achado
+#    fica num cache negativo em memória por TTL_NEGATIVO_ID_STOKKI_SEG
+#    (não é dos embarcadores de NF, ou o serviço ainda não existe).
+# 3. Por carga, no máximo MAX_BUSCAS_VUUPT_POR_CARGA pedidos novos vão à
+#    Vuupt -- os demais ficam pra próxima carga (o link cai no default,
+#    o próprio order_number, até resolver). E se a Vuupt falhar no meio
+#    (429 esgotado, rede), a carga NÃO derruba: loga, para de tentar
+#    nessa rodada e devolve o que tem -- o link da Stokki é o único
+#    afetado, e só pros pedidos dos 2 embarcadores de NF.
+TTL_BASE_EXTERNA_SEG = 60
+TTL_ENTREGUES_SEG = 300            # lista paginada de concluídos dos últimos 3 dias, muda devagar
+TTL_NEGATIVO_ID_STOKKI_SEG = 6 * 3600
+MAX_BUSCAS_VUUPT_POR_CARGA = 10    # pedidos (cada um = até 2 chamadas)
+
+_lock_cache = threading.Lock()
+_cache_base: dict = {"quando": 0.0, "dados": None}
+_cache_entregues: dict = {"quando": 0.0, "dados": None}
+_ids_stokki_nao_achados: dict[str, float] = {}  # order_number -> monotonic da última tentativa sem sucesso
+
 
 def _buscar_servico_por_nf_embarcadores(vuupt: VuuptClient, order_number: str) -> dict | None:
     """Tenta achar o serviço na Vuupt pelo título, pros embarcadores em
@@ -135,6 +174,16 @@ def _conectar():
             acao_status      TEXT,
             acao_detalhe     TEXT,
             acao_em          TEXT
+        )
+    """)
+    # order_number (Fresh Hub) -> id numérico real do Stokki, achado na
+    # Vuupt pelo título (ver _resolver_ids_stokki). Persistido porque não
+    # muda e porque reconstruir custa chamadas na Vuupt (incidente 25/08).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pedidos_parados_id_stokki (
+            order_number TEXT PRIMARY KEY,
+            id_stokki    TEXT NOT NULL,
+            resolvido_em TEXT
         )
     """)
     conn.commit()
@@ -230,17 +279,28 @@ def _resolver_ids_stokki(vuupt: VuuptClient, order_numbers: list[str]) -> dict[s
 
     Default: o próprio order_number, quando não acha nada de nenhum
     jeito (é o caso mais comum -- já É o ID Stokki).
+
+    A ida à Vuupt é a parte cara e foi o que derrubou a tela em 25/08
+    (ver comentário de TTL_BASE_EXTERNA_SEG): o que ela acha é gravado em
+    `pedidos_parados_id_stokki` pra nunca mais perguntar; o que ela NÃO
+    acha entra num cache negativo em memória; e por chamada no máximo
+    MAX_BUSCAS_VUUPT_POR_CARGA pedidos novos são consultados -- o resto
+    fica pra próxima carga. Qualquer falha na Vuupt encerra a rodada
+    (não derruba a listagem) e não é cacheada, pra tentar de novo depois.
     """
     if not order_numbers:
         return {}
 
     resultado = {n: n for n in order_numbers}
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    marcadores = ",".join("?" * len(order_numbers))
+    conn = _conectar()
     try:
-        marcadores = ",".join("?" * len(order_numbers))
         linhas = conn.execute(
             f"SELECT numero_nfe, id_pedido FROM pedidos_historico WHERE numero_nfe IN ({marcadores})",
+            list(order_numbers),
+        ).fetchall()
+        persistidos = conn.execute(
+            f"SELECT order_number, id_stokki FROM pedidos_parados_id_stokki WHERE order_number IN ({marcadores})",
             list(order_numbers),
         ).fetchall()
     finally:
@@ -252,16 +312,53 @@ def _resolver_ids_stokki(vuupt: VuuptClient, order_numbers: list[str]) -> dict[s
         if m:
             resultado[linha["numero_nfe"]] = m.group(1)
             resolvidos.add(linha["numero_nfe"])
+    for linha in persistidos:
+        resultado[linha["order_number"]] = linha["id_stokki"]
+        resolvidos.add(linha["order_number"])
 
-    for numero in order_numbers:
-        if numero in resolvidos:
-            continue
-        servico = _buscar_servico_por_nf_embarcadores(vuupt, numero)
-        if not servico or not servico.get("code"):
-            continue
-        m = re.search(r"PS-(\d+)", servico["code"])
+    agora = time.monotonic()
+    pendentes = [
+        n for n in order_numbers
+        if n not in resolvidos
+        and agora - _ids_stokki_nao_achados.get(n, -float("inf")) >= TTL_NEGATIVO_ID_STOKKI_SEG
+    ]
+    if not pendentes:
+        return resultado
+    if len(pendentes) > MAX_BUSCAS_VUUPT_POR_CARGA:
+        logger.info(
+            f"[pedidos-parados] {len(pendentes)} pedido(s) sem id Stokki resolvido; consultando "
+            f"{MAX_BUSCAS_VUUPT_POR_CARGA} na Vuupt nesta carga, o resto fica pra próxima."
+        )
+        pendentes = pendentes[:MAX_BUSCAS_VUUPT_POR_CARGA]
+
+    achados: dict[str, str] = {}
+    for numero in pendentes:
+        try:
+            servico = _buscar_servico_por_nf_embarcadores(vuupt, numero)
+        except Exception as e:
+            logger.warning(
+                f"[pedidos-parados] Vuupt falhou ao resolver id Stokki do pedido {numero} "
+                f"(parando nesta carga, tento de novo na próxima): {e}"
+            )
+            break
+        m = re.search(r"PS-(\d+)", (servico or {}).get("code") or "")
         if m:
+            achados[numero] = m.group(1)
             resultado[numero] = m.group(1)
+        else:
+            _ids_stokki_nao_achados[numero] = agora
+
+    if achados:
+        carimbo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = _conectar()
+        try:
+            conn.executemany(
+                "INSERT OR REPLACE INTO pedidos_parados_id_stokki (order_number, id_stokki, resolvido_em) VALUES (?, ?, ?)",
+                [(n, i, carimbo) for n, i in achados.items()],
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     return resultado
 
@@ -355,17 +452,12 @@ def _codes_entregues_recentes(vuupt: VuuptClient, dias: int = DIAS_JANELA_ENTREG
     tratativa própria na Torre de Controle, não é "resolvido" pra fins
     de pedido parado.
 
-    Se a busca falhar, devolve um set vazio (não filtra nada) em vez de
-    derrubar a listagem inteira por causa disso.
+    Lança a exceção da Vuupt pra quem chama (_entregues_com_cache decide
+    entre reaproveitar o último resultado bom e não filtrar nada).
     """
     inicio = date.today() - timedelta(days=dias)
     filtros = [{"field": "completed_at", "operator": "gte", "value": inicio.strftime("%Y-%m-%d")}]
-    try:
-        servicos = vuupt.listar_servicos(filtros)
-    except Exception as e:
-        logger.warning(f"Falha ao buscar serviços concluídos recentes (não filtro entregues por segurança): {e}")
-        return set()
-
+    servicos = vuupt.listar_servicos(filtros)
     return {
         s["code"].lstrip("#")
         for s in servicos
@@ -373,28 +465,35 @@ def _codes_entregues_recentes(vuupt: VuuptClient, dias: int = DIAS_JANELA_ENTREG
     }
 
 
-# ── Leitura ────────────────────────────────────────────────────────────────────
+def _entregues_com_cache(vuupt: VuuptClient) -> set[str]:
+    """Set de _codes_entregues_recentes, renovado a cada TTL_ENTREGUES_SEG.
+    Se a Vuupt falhar, reaproveita o último resultado bom (mesmo vencido)
+    ou, sem nenhum, não filtra nada -- em vez de derrubar a listagem.
+    Chamado só de dentro de _base_externa_com_cache (já sob _lock_cache)."""
+    idade = time.monotonic() - _cache_entregues["quando"]
+    if _cache_entregues["dados"] is not None and idade < TTL_ENTREGUES_SEG:
+        return _cache_entregues["dados"]
+    try:
+        dados = _codes_entregues_recentes(vuupt)
+    except Exception as e:
+        if _cache_entregues["dados"] is not None:
+            logger.warning(f"Falha ao buscar serviços concluídos recentes (usando último resultado bom): {e}")
+            return _cache_entregues["dados"]
+        logger.warning(f"Falha ao buscar serviços concluídos recentes (não filtro entregues por segurança): {e}")
+        return set()
+    _cache_entregues["quando"] = time.monotonic()
+    _cache_entregues["dados"] = dados
+    return dados
 
-def listar_com_classificacao() -> list[dict]:
-    """
-    Une os pedidos parados do Fresh Hub com a classificação local.
 
-    Regras combinadas com o Hugo, 24/08:
-    - Só mostra pedidos registrados no dia mais recente presente nos
-      dados (o mesmo pedido é re-registrado todo dia enquanto continua
-      parado -- se não foi re-registrado hoje, ou já foi resolvido, sai
-      da lista de qualquer forma).
-    - `dias_parado` olha o HISTÓRICO completo disponível (não só o
-      registro de hoje) -- é a diferença entre hoje e a primeira vez
-      que esse pedido apareceu como parado, senão a prioridade (>=2
-      dias) nunca dispararia.
-    - Pedidos já entregues (completed_at na Vuupt, sem insucesso) saem
-      da lista mesmo que tenham sido re-registrados hoje.
-    """
+def _montar_base_externa() -> dict:
+    """Tudo da listagem que vem de fora (Fresh Hub + Vuupt) -- separado
+    da classificação local de propósito, pra poder cachear só isto."""
     sessao = _sessao_freshhub()
     brutos = listar_pedidos_parados(sessao, limit=LIMITE_HISTORICO_PEDIDOS_PARADOS)
     if not brutos:
-        return []
+        return {"pedidos_do_dia": {}, "primeira_vez": {}, "contagem": {},
+                "dia_mais_recente": None, "ids_stokki": {}}
 
     primeira_vez: dict[str, str] = {}
     ultima_vez: dict[str, dict] = {}
@@ -415,11 +514,62 @@ def listar_com_classificacao() -> list[dict]:
     }
 
     vuupt = _vuupt()
-    entregues = _codes_entregues_recentes(vuupt)
+    entregues = _entregues_com_cache(vuupt)
     pedidos_do_dia = {
         numero: p for numero, p in pedidos_do_dia.items()
         if f"PS-{numero}" not in entregues
     }
+    ids_stokki = _resolver_ids_stokki(vuupt, list(pedidos_do_dia.keys()))
+
+    return {"pedidos_do_dia": pedidos_do_dia, "primeira_vez": primeira_vez, "contagem": contagem,
+            "dia_mais_recente": dia_mais_recente, "ids_stokki": ids_stokki}
+
+
+def _base_externa_com_cache() -> dict:
+    """_montar_base_externa a cada TTL_BASE_EXTERNA_SEG, sob lock: várias
+    abas recarregando ao mesmo tempo (a tela faz isso a cada 60s cada)
+    viram UMA montagem, as outras esperam e pegam o resultado pronto.
+    Ver comentário de TTL_BASE_EXTERNA_SEG pro incidente que motivou."""
+    with _lock_cache:
+        idade = time.monotonic() - _cache_base["quando"]
+        if _cache_base["dados"] is not None and idade < TTL_BASE_EXTERNA_SEG:
+            return _cache_base["dados"]
+        dados = _montar_base_externa()
+        _cache_base["quando"] = time.monotonic()
+        _cache_base["dados"] = dados
+        return dados
+
+
+# ── Leitura ────────────────────────────────────────────────────────────────────
+
+def listar_com_classificacao() -> list[dict]:
+    """
+    Une os pedidos parados do Fresh Hub com a classificação local.
+
+    Regras combinadas com o Hugo, 24/08:
+    - Só mostra pedidos registrados no dia mais recente presente nos
+      dados (o mesmo pedido é re-registrado todo dia enquanto continua
+      parado -- se não foi re-registrado hoje, ou já foi resolvido, sai
+      da lista de qualquer forma).
+    - `dias_parado` olha o HISTÓRICO completo disponível (não só o
+      registro de hoje) -- é a diferença entre hoje e a primeira vez
+      que esse pedido apareceu como parado, senão a prioridade (>=2
+      dias) nunca dispararia.
+    - Pedidos já entregues (completed_at na Vuupt, sem insucesso) saem
+      da lista mesmo que tenham sido re-registrados hoje.
+
+    A parte externa (Fresh Hub + Vuupt) vem cacheada de
+    _base_externa_com_cache; a classificação local é lida fresca a cada
+    chamada, então uma ação do operador aparece na hora.
+    """
+    base = _base_externa_com_cache()
+    pedidos_do_dia = base["pedidos_do_dia"]
+    if not pedidos_do_dia:
+        return []
+    primeira_vez = base["primeira_vez"]
+    contagem = base["contagem"]
+    dia_mais_recente = base["dia_mais_recente"]
+    ids_stokki = base["ids_stokki"]
 
     conn = _conectar()
     try:
@@ -428,8 +578,6 @@ def listar_com_classificacao() -> list[dict]:
         ).fetchall()}
     finally:
         conn.close()
-
-    ids_stokki = _resolver_ids_stokki(vuupt, list(pedidos_do_dia.keys()))
 
     resultado = []
     for numero, p in pedidos_do_dia.items():
