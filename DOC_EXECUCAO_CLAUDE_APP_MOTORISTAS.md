@@ -281,6 +281,15 @@ Entregáveis:
 - [ ] Login do EAS nesta máquina não persiste: usar `EXPO_TOKEN` (token criado em expo.dev → Account settings → Access tokens) por sessão; revogar o token usado em 26/08.
 - [ ] Decisões pendentes da seção 4 (km ida/volta, pedágio, VUC/3-4/Truck).
 
+**Ajustes de design (26/08, pedidos do Hugo):** paleta da marca (mesma
+do painel) + logo no login + ícones/splash da folha; na tela da rota as
+ações principais são por **arrastar pra direita** (`src/deslizar.tsx`:
+aceitar, iniciar rota, finalizar) e cada parada tem os passos **Iniciar
+deslocamento → Cheguei no local → Resultado** (eventos `DESLOCAMENTO`
+→ `started_at`, `CHEGADA` → `arrived_at`, situação `EM_DESLOCAMENTO`
+nova em `nucleo_paradas`). Publicado por OTA no canal `preview`; ícone/
+splash exigem novo APK (pendente, aguardando o fim do lote de design).
+
 **Limitações conhecidas do v1 (decisões, não bugs):** GPS só com o app aberto (background exige justificativa na review da Apple e gasta bateria — avaliar na Fase C); telefone/janela do destinatário na parada só aparecem quando o pedido passou pelo `pipeline.py` com dual-write (rotas só do backfill vêm sem); push só funciona depois do `eas init` (projectId); a recusa de rota exige sinal (é rara e a operação precisa saber na hora).
 
 #### 5.B.1. Deploy da API na VPS (checklist)
