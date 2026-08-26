@@ -34,15 +34,27 @@ App Expo / React Native dos motoristas — Fase B do
 - `src/gps.ts` — rastreamento em primeiro plano durante a rota → km real no financeiro.
 - `src/assinatura.tsx` — assinatura na tela (WebView).
 
-## Publicar (EAS)
+## Distribuir (Android, APK direto — decisão de 26/08: só Android por enquanto)
+
+Sem Play Store, sem conta Google, sem D-U-N-S. Só uma conta gratuita em
+[expo.dev](https://expo.dev).
 
 ```
-npm i -g eas-cli
-eas login                # conta Expo da FreshLog
-eas init                 # grava extra.eas.projectId no app.json (necessário pro push)
-eas build --profile preview --platform android   # APK de teste
-eas build --platform ios                          # precisa da conta Apple Developer (D-U-N-S)
-eas submit                                         # lojas
+npx eas-cli login                                   # conta Expo (uma vez nesta máquina)
+npx eas-cli init                                    # grava extra.eas.projectId no app.json (uma vez)
+npx eas-cli build -p android --profile preview      # gera o APK na nuvem (~10-15 min) e devolve um link
 ```
-Distribuição: Apple **Unlisted** + Google Play **teste fechado** (app
-privado, sem busca pública). Piloto via TestFlight / Internal Testing.
+Manda o link do APK por WhatsApp; o motorista instala ("permitir fonte
+desconhecida"). Mudança só de tela/regra vai sem reinstalar:
+```
+npx eas-cli update --channel preview --message "o que mudou"
+```
+Mudança nativa (nova permissão/módulo) → novo `eas build`, subir
+`android.versionCode` no `app.json`.
+
+**Push no Android** precisa de credenciais FCM (projeto Firebase gratuito
+→ `google-services.json` → `npx eas-cli credentials`). Sem isso o app
+funciona normalmente, só não recebe aviso de rota.
+
+**Play Store / iPhone** ficam pra depois: o perfil `production` do
+`eas.json` gera o AAB da loja; iOS exige conta Apple Developer.

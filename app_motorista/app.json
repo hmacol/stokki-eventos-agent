@@ -7,7 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "freshlogmotorista",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "br.com.freshlog.motorista",
@@ -19,6 +18,7 @@
     },
     "android": {
       "package": "br.com.freshlog.motorista",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#1E8E5A",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -38,9 +38,20 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      ["expo-image-picker", { "cameraPermission": "Fotografar o canhoto e comprovantes de entrega." }],
-      ["expo-location", { "locationWhenInUsePermission": "Registrar o trajeto e o local de cada entrega." }],
-      "expo-notifications"
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Fotografar o canhoto e comprovantes de entrega."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Registrar o trajeto e o local de cada entrega."
+        }
+      ],
+      "expo-notifications",
+      "expo-font"
     ],
     "extra": {
       "apiUrl": "https://app.freshhub.com.br/motorista/api",

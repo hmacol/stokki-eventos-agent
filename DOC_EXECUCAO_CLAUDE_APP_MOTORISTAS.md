@@ -26,6 +26,7 @@ atualiza. Ler este arquivo ANTES de mexer em qualquer fase.
 | Stack do app | Expo (React Native) + EAS Build — uma base pra iOS e Android, push via Expo, atualização OTA. |
 | Backend | Serviço Flask novo na MESMA VPS, sob `app.freshhub.com.br/<serviço>` (padrão do DOC_EXECUCAO_CLAUDE_MIGRACAO_VPS.md). Lê/grava direto em `dados/dados.db` (fonte de verdade desde o corte de 17/08). |
 | Distribuição nas lojas | Apple **Unlisted App** (só com link) + Google Play **teste fechado** — app privado, não aparece em busca. Piloto via TestFlight / Internal Testing. |
+| **Plataforma (26/08)** | **Só Android por enquanto** (decisão do Hugo). Distribuição por **APK direto** (EAS build `preview`, link por WhatsApp), sem Play Store e sem D-U-N-S. iPhone fica pra depois — exige conta Apple Developer (individual no nome do Hugo é o caminho rápido, transferível pra empresa). |
 
 ---
 
@@ -274,7 +275,8 @@ Entregáveis:
 - [x] Testes: `nucleo/test_api_motorista.py` (7 cenários: bloqueio de PIN, refresh, fluxo completo com GPS/foto/insucesso/conclusão automática, rota VUUPT somente leitura + confirmação, ofertas, disponibilidade, checklist). Smoke ponta a ponta com rota REAL replicada numa cópia do banco: login → aceitar → iniciar → entrega → extrato R$340.
 - [ ] `api_motorista.secret_key` no `config.yaml` (local e VPS) — arquivo de segredos do Hugo, não mexi.
 - [ ] Deploy da API na VPS (checklist 5.B.1) + rodar no celular via Expo Go.
-- [ ] Contas Apple/Google (D-U-N-S) → `eas init` → build → TestFlight/Internal Testing.
+- [ ] ~~Contas Apple/Google (D-U-N-S)~~ → **Android só, APK direto** (26/08). Pré-requisitos: conta gratuita em expo.dev (Hugo) + `npx eas-cli login` nesta máquina; depois `npx eas-cli init` (grava `extra.eas.projectId`), `npx eas-cli build -p android --profile preview` → link do APK. `eas.json` já tem os perfis `preview` (APK) e `production` (AAB, só se a Play Store entrar). Push no Android exige credenciais FCM (projeto Firebase gratuito + `google-services.json` + `eas credentials`) — o app funciona sem, só não recebe push.
+- [ ] Atualizações OTA: `npx eas-cli update --channel preview --message "..."` publica mudança de JS sem novo APK (o `preview` do `eas.json` já aponta pro canal).
 - [ ] Decisões pendentes da seção 4 (km ida/volta, pedágio, VUC/3-4/Truck).
 
 **Limitações conhecidas do v1 (decisões, não bugs):** GPS só com o app aberto (background exige justificativa na review da Apple e gasta bateria — avaliar na Fase C); telefone/janela do destinatário na parada só aparecem quando o pedido passou pelo `pipeline.py` com dual-write (rotas só do backfill vêm sem); push só funciona depois do `eas init` (projectId); a recusa de rota exige sinal (é rara e a operação precisa saber na hora).
