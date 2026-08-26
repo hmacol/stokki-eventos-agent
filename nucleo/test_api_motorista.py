@@ -134,11 +134,17 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(self.cli.post("/api/gps", json={"pontos": pontos}, headers=h).get_json()["novos"], 5)
         self.assertEqual(self.cli.post("/api/gps", json={"pontos": pontos}, headers=h).get_json()["novos"], 0)
 
-        # Chegada + entrega na 1ª parada, com checklist; reenvio idempotente
+        # Deslocamento -> chegada -> entrega na 1ª parada, com checklist; reenvio idempotente
         p1, p2 = paradas[0]["id"], paradas[1]["id"]
+        r = self.cli.post(f"/api/paradas/{p1}/eventos", json={"uuid": "e0", "tipo": "DESLOCAMENTO", "ocorrido_em": "2026-08-26 07:50:00"}, headers=h)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.get_json()["parada"]["situacao"], "EM_DESLOCAMENTO")
+        self.assertEqual(r.get_json()["parada"]["started_at"], "2026-08-26 07:50:00")
+        self.assertEqual(r.get_json()["contadores"]["pendentes"], 2)
         r = self.cli.post(f"/api/paradas/{p1}/eventos", json={"uuid": "e1", "tipo": "CHEGADA", "ocorrido_em": "2026-08-26 08:10:00"}, headers=h)
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.get_json()["parada"]["situacao"], "EM_ROTA")
+        self.assertEqual(r.get_json()["parada"]["arrived_at"], "2026-08-26 08:10:00")
         ev = {"uuid": "e2", "tipo": "ENTREGUE", "ocorrido_em": "2026-08-26 08:20:00",
               "checklist": {"nome_recebedor": "Maria", "vinculo": "Porteiro"}, "latitude": -23.50, "longitude": -46.60}
         r = self.cli.post(f"/api/paradas/{p1}/eventos", json=ev, headers=h)

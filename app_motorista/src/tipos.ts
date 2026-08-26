@@ -11,7 +11,7 @@ export type Motorista = {
   perfil: 'MOTORISTA' | 'TESTE';
 };
 
-export type SituacaoParada = 'PENDENTE' | 'EM_ROTA' | 'ENTREGUE' | 'PARCIAL' | 'INSUCESSO' | 'CANCELADA';
+export type SituacaoParada = 'PENDENTE' | 'EM_DESLOCAMENTO' | 'EM_ROTA' | 'ENTREGUE' | 'PARCIAL' | 'INSUCESSO' | 'CANCELADA';
 export type StatusRota = 'PLANEJADA' | 'ACEITA' | 'EM_ROTA' | 'CONCLUIDA' | 'CANCELADA';
 
 export type Comprovante = { id: number; tipo: string; uuid: string; capturado_em: string | null };
@@ -34,6 +34,7 @@ export type Parada = {
   telefone?: string | null;
   situacao: SituacaoParada;
   motivo_texto: string | null;
+  started_at: string | null;
   arrived_at: string | null;
   completed_at: string | null;
   comprovantes: Comprovante[];

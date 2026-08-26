@@ -31,6 +31,7 @@ export const cores = {
 
 export const situacaoCor: Record<string, string> = {
   PENDENTE: '#9CA3AF',
+  EM_DESLOCAMENTO: cores.primariaClara,
   EM_ROTA: cores.info,
   ENTREGUE: cores.sucesso,
   PARCIAL: cores.alerta,
@@ -40,6 +41,7 @@ export const situacaoCor: Record<string, string> = {
 
 export const situacaoRotulo: Record<string, string> = {
   PENDENTE: 'Pendente',
+  EM_DESLOCAMENTO: 'A caminho',
   EM_ROTA: 'No local',
   ENTREGUE: 'Entregue',
   PARCIAL: 'Parcial',

@@ -28,7 +28,11 @@ from datetime import date, timedelta
 from nucleo import banco, pedidos as nucleo_pedidos
 from nucleo.rotas import registrar_evento
 
-TIPOS_EVENTO_PARADA = {"CHEGADA", "ENTREGUE", "PARCIAL", "INSUCESSO", "OBSERVACAO"}
+# Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
+# grava started_at) -> CHEGADA ("Cheguei no local", grava arrived_at) ->
+# ENTREGUE | PARCIAL | INSUCESSO (completed_at). Tempo de deslocamento e
+# tempo no local saem direto desses três timestamps.
+TIPOS_EVENTO_PARADA = {"DESLOCAMENTO", "CHEGADA", "ENTREGUE", "PARCIAL", "INSUCESSO", "OBSERVACAO"}
 _SITUACAO_DO_EVENTO = {
     "ENTREGUE": banco.PARADA_ENTREGUE,
     "PARCIAL": banco.PARADA_PARCIAL,
@@ -184,7 +188,7 @@ def _recalcular_contadores(conn: sqlite3.Connection, rota_id: int) -> dict:
         SELECT COUNT(*) FILTER (WHERE situacao != 'CANCELADA') AS total,
                COUNT(*) FILTER (WHERE situacao IN ('ENTREGUE', 'PARCIAL')) AS entregues,
                COUNT(*) FILTER (WHERE situacao = 'INSUCESSO') AS insucessos,
-               COUNT(*) FILTER (WHERE situacao IN ('PENDENTE', 'EM_ROTA')) AS pendentes
+               COUNT(*) FILTER (WHERE situacao IN ('PENDENTE', 'EM_DESLOCAMENTO', 'EM_ROTA')) AS pendentes
         FROM nucleo_paradas WHERE rota_id = ?
     """, (rota_id,)).fetchone()
     conn.execute("UPDATE nucleo_rotas SET total_paradas = ?, entregues = ?, insucessos = ?, atualizado_em = ? WHERE id = ?",
@@ -237,9 +241,18 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
         conn.execute("UPDATE nucleo_rotas SET status = ?, iniciada_em = COALESCE(iniciada_em, ?), atualizado_em = ? WHERE id = ?",
                      (banco.ROTA_EM_ROTA, ocorrido_em, agora, rota["id"]))
 
-    if tipo == "CHEGADA":
-        conn.execute("UPDATE nucleo_paradas SET arrived_at = COALESCE(arrived_at, ?), situacao = CASE WHEN situacao = 'PENDENTE' THEN 'EM_ROTA' ELSE situacao END, atualizado_em = ? WHERE id = ?",
-                     (ocorrido_em, agora, parada_id))
+    if tipo == "DESLOCAMENTO":
+        conn.execute("""
+            UPDATE nucleo_paradas SET started_at = COALESCE(started_at, ?),
+                   situacao = CASE WHEN situacao = 'PENDENTE' THEN 'EM_DESLOCAMENTO' ELSE situacao END, atualizado_em = ?
+            WHERE id = ?
+        """, (ocorrido_em, agora, parada_id))
+    elif tipo == "CHEGADA":
+        conn.execute("""
+            UPDATE nucleo_paradas SET arrived_at = COALESCE(arrived_at, ?), started_at = COALESCE(started_at, ?),
+                   situacao = CASE WHEN situacao IN ('PENDENTE', 'EM_DESLOCAMENTO') THEN 'EM_ROTA' ELSE situacao END, atualizado_em = ?
+            WHERE id = ?
+        """, (ocorrido_em, ocorrido_em, agora, parada_id))
     elif tipo in _SITUACAO_DO_EVENTO:
         situacao = _SITUACAO_DO_EVENTO[tipo]
         conn.execute("""

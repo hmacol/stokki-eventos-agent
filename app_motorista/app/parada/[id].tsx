@@ -173,7 +173,7 @@ export default function RegistroParada() {
         <Text style={s.titulo}>{parada.ordem}. {parada.destinatario_nome || parada.titulo}</Text>
         <Text style={s.sub}>{parada.endereco}</Text>
         <Text style={s.sub}>{parada.codigo}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}</Text>
-        {!chegou && parada.situacao === 'PENDENTE' ? <Botao titulo="Cheguei no local" tipo="secundario" onPress={registrarChegada} estilo={{ marginTop: 10 }} /> : null}
+        {!chegou && (parada.situacao === 'PENDENTE' || parada.situacao === 'EM_DESLOCAMENTO') ? <Botao titulo="Cheguei no local" tipo="secundario" onPress={registrarChegada} estilo={{ marginTop: 10 }} /> : null}
       </Cartao>
 
       {!fluxo ? (

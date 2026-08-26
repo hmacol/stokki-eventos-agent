@@ -44,7 +44,8 @@ ROTA_CANCELADA = "CANCELADA"
 
 # nucleo_paradas.situacao
 PARADA_PENDENTE = "PENDENTE"
-PARADA_EM_ROTA = "EM_ROTA"
+PARADA_EM_DESLOCAMENTO = "EM_DESLOCAMENTO"   # motorista a caminho (evento DESLOCAMENTO, app)
+PARADA_EM_ROTA = "EM_ROTA"                   # motorista no local (CHEGADA no app / on_route na VUUPT)
 PARADA_ENTREGUE = "ENTREGUE"
 PARADA_PARCIAL = "PARCIAL"
 PARADA_INSUCESSO = "INSUCESSO"
