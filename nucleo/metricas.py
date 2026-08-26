@@ -38,14 +38,22 @@ from nucleo import banco, tempos
 MIN_PLAUSIVEL_S = 30          # menos que isso = confirmação em lote / toque errado
 MAX_PLAUSIVEL_S = 4 * 3600    # mais que isso = esqueceu de registrar
 
+# Destinatário: chave = customer_id da VUUPT (o mesmo de clientes.customer_id);
+# nome preferencialmente do cadastro `clientes` (quando a tabela existe),
+# senão o nome parseado do título do serviço.
 _AGRUPAMENTOS = {
     "geral": ("'Todas as paradas'", ""),
     "nivel": ("COALESCE('Nível ' || p.nivel_dificuldade, 'Sem nível')", ""),
-    "destinatario": ("COALESCE(pe.destinatario_nome, p.destinatario_nome, p.titulo, p.codigo)", "LEFT JOIN nucleo_pedidos pe ON pe.codigo = p.codigo"),
+    "destinatario": ("COALESCE({cliente_nome}p.destinatario_nome, pe.destinatario_nome, 'customer ' || p.customer_id, p.titulo)",
+                     "LEFT JOIN nucleo_pedidos pe ON pe.codigo = p.codigo {join_clientes}"),
     "remetente": ("COALESCE(p.remetente_nome, pe.remetente_nome, 'sender ' || p.sender_id)", "LEFT JOIN nucleo_pedidos pe ON pe.codigo = p.codigo"),
     "motorista": ("COALESCE(r.motorista_nome, 'agent ' || r.agent_id)", ""),
     "origem": ("r.provedor", ""),
 }
+
+
+def _tem_tabela(conn: sqlite3.Connection, nome: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (nome,)).fetchone() is not None
 
 
 def _resumo(valores: list[int]) -> dict:
@@ -68,8 +76,12 @@ def tempo_por_grupo(conn: sqlite3.Connection, de: date, ate: date, por: str = "g
     if por not in _AGRUPAMENTOS or campo not in ("tempo_no_local_s", "tempo_deslocamento_s"):
         raise ValueError("agrupamento/campo inválido")
     expr, join = _AGRUPAMENTOS[por]
+    tem_clientes = _tem_tabela(conn, "clientes")
+    expr = expr.format(cliente_nome="cl.nome, " if tem_clientes else "")
+    join = join.format(join_clientes="LEFT JOIN clientes cl ON cl.customer_id = p.customer_id" if tem_clientes else "")
+    chave = "p.customer_id" if por == "destinatario" else "NULL"
     rows = conn.execute(f"""
-        SELECT {expr} AS grupo, p.{campo} AS t
+        SELECT {expr} AS grupo, p.{campo} AS t, {chave} AS chave
         FROM nucleo_paradas p
         JOIN nucleo_rotas r ON r.id = p.rota_id
         {join}
@@ -77,10 +89,15 @@ def tempo_por_grupo(conn: sqlite3.Connection, de: date, ate: date, por: str = "g
           AND p.situacao IN ('ENTREGUE', 'PARCIAL', 'INSUCESSO')
           AND p.{campo} BETWEEN ? AND ?
     """, (de.isoformat(), ate.isoformat(), MIN_PLAUSIVEL_S, MAX_PLAUSIVEL_S)).fetchall()
-    grupos: dict[str, list[int]] = {}
-    for g, t in rows:
-        grupos.setdefault(g or "—", []).append(int(t))
-    saida = [{"grupo": g, **_resumo(v)} for g, v in grupos.items() if len(v) >= minimo_amostra]
+    # Agrupa pela chave (customer_id) quando existe, senão pelo nome -- assim
+    # dois nomes diferentes do mesmo cliente caem juntos, e o nome exibido é o 1º visto.
+    grupos: dict[object, list[int]] = {}
+    nomes: dict[object, str] = {}
+    for g, t, chave in rows:
+        k = chave if chave is not None else (g or "—")
+        grupos.setdefault(k, []).append(int(t))
+        nomes.setdefault(k, g or "—")
+    saida = [{"grupo": nomes[k], "chave": k, **_resumo(v)} for k, v in grupos.items() if len(v) >= minimo_amostra]
     saida.sort(key=lambda x: (-x["n"], x["grupo"]))
     return saida
 

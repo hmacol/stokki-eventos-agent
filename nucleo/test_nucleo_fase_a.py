@@ -301,15 +301,17 @@ class TestTempos(_BaseTemp):
         conn = banco.conectar()
         conn.execute("CREATE TABLE motivos_ocorrencia (id INTEGER PRIMARY KEY, vuupt_failed_reason_id INTEGER, motivo_texto TEXT)")
         servicos = [
-            # 20 min no local (plausível)
-            {"id": 1, "code": "PS-1", "status": "done", "status_done": "success", "started_at": "2026-08-26 07:00:00",
+            # 20 min no local (plausível) -- título no formato real da VUUPT
+            {"id": 1, "code": "PS-1", "title": "#PS-1 - 036076 / DE TOMMASO / HORTIFRUTI DCE PRECO", "customer_id": 500,
+             "status": "done", "status_done": "success", "started_at": "2026-08-26 07:00:00",
              "arrived_at": "2026-08-26 07:30:00", "completed_at": "2026-08-26 07:50:00"},
             # 10 s no local = confirmação em lote -> gravado, mas fora da média
             {"id": 2, "code": "PS-2", "status": "done", "status_done": "success", "arrived_at": "2026-08-26 08:00:00",
              "completed_at": "2026-08-26 08:00:10"},
-            # 10 min, insucesso (conta também)
-            {"id": 3, "code": "PS-3", "status": "done", "status_done": "failed", "failed_reason_id": 99,
-             "arrived_at": "2026-08-26 09:00:00", "completed_at": "2026-08-26 09:10:00", "nivel": None},
+            # 10 min, insucesso (conta também) -- mesmo destinatário (customer_id) da PS-1, nome escrito diferente
+            {"id": 3, "code": "PS-3", "title": "#PS-3 - 036099 / DE TOMMASO / HORTIFRUTI DCE PREÇO LTDA", "customer_id": 500,
+             "status": "done", "status_done": "failed", "failed_reason_id": 99,
+             "arrived_at": "2026-08-26 09:00:00", "completed_at": "2026-08-26 09:10:00"},
             # sem arrived_at -> NULL
             {"id": 4, "code": "PS-4", "status": "done", "status_done": "success", "completed_at": "2026-08-26 10:00:00"},
         ]
@@ -328,6 +330,13 @@ class TestTempos(_BaseTemp):
         self.assertEqual(geral[0]["mediana_min"], 15.0)
         por_motorista = metricas.tempo_por_grupo(conn, de, ate, "motorista")
         self.assertEqual(por_motorista[0]["grupo"], "João")
+        # Destinatário parseado do título e agrupado pelo customer_id (PS-1 e PS-3 juntas)
+        p1 = conn.execute("SELECT destinatario_nome, remetente_nome, customer_id FROM nucleo_paradas WHERE codigo = 'PS-1'").fetchone()
+        self.assertEqual(tuple(p1), ("HORTIFRUTI DCE PRECO", "DE TOMMASO", 500))
+        por_dest = metricas.tempo_por_grupo(conn, de, ate, "destinatario")
+        self.assertEqual(len(por_dest), 1)
+        self.assertEqual((por_dest[0]["grupo"], por_dest[0]["chave"], por_dest[0]["n"]), ("HORTIFRUTI DCE PRECO", 500, 2))
+        self.assertEqual(sincronizar_vuupt.partes_do_titulo("Cliente A"), (None, "Cliente A"))
         cob = metricas.cobertura(conn, de, ate)
         self.assertEqual((cob["concluidas"], cob["com_duracao"], cob["plausiveis"], cob["abaixo_30s"]), (4, 3, 2, 1))
 

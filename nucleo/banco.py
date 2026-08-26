@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS nucleo_paradas (
     completed_at            TEXT,                           -- resultado (ENTREGUE/PARCIAL/INSUCESSO)
     tempo_deslocamento_s    INTEGER,                        -- arrived_at - started_at (Hugo, 26/08)
     tempo_no_local_s        INTEGER,                        -- completed_at - arrived_at: quanto demora pra receber
+    customer_id             INTEGER,                        -- destinatário na VUUPT (clientes.customer_id)
     dados_json              TEXT,
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -245,6 +246,7 @@ _COLUNAS_MOTORISTAS_NOVAS = [
 _COLUNAS_PARADAS_NOVAS = [
     ("tempo_deslocamento_s", "INTEGER"),
     ("tempo_no_local_s", "INTEGER"),
+    ("customer_id", "INTEGER"),   # destinatário na VUUPT (casa com clientes.customer_id) -- chave da média por destinatário
 ]
 
 

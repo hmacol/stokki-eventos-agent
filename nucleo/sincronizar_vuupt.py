@@ -132,6 +132,33 @@ class _Contexto:
             (vuupt_route_id,),
         ).fetchone()
 
+    def paradas_do_rascunho(self, rascunho_id: int | None) -> dict[int, sqlite3.Row]:
+        """{service_id: linha de rascunhos_parada} -- nível de dificuldade,
+        destinatário e caixas que só o planejamento conhece (a VUUPT não
+        devolve nada disso)."""
+        if rascunho_id is None or not self.tem_rascunhos:
+            return {}
+        return {
+            r["service_id"]: r for r in self.conn.execute(
+                "SELECT service_id, nivel_dificuldade, destinatario_nome, remetente_nome, volume_caixas "
+                "FROM rascunhos_parada WHERE rascunho_id = ?", (rascunho_id,)
+            ).fetchall()
+        }
+
+
+def partes_do_titulo(titulo: str | None) -> tuple[str | None, str | None]:
+    """Título do serviço na VUUPT: "#PS-37649 - 036076 / DE TOMMASO / HORTIFRUTI DCE PRECO"
+    -> (remetente, destinatário) = penúltimo e último segmento. Sem " / "
+    devolve (None, título)."""
+    if not titulo:
+        return None, None
+    partes = [p.strip() for p in str(titulo).split(" / ") if p.strip()]
+    if len(partes) >= 3:
+        return partes[-2], partes[-1]
+    if len(partes) == 2:
+        return None, partes[-1]
+    return None, partes[0] if partes else None
+
 
 def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     conn = ctx.conn
@@ -148,8 +175,10 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     if existente and existente["provedor"] != banco.PROVEDOR_VUUPT:
         return  # rota do app: a VUUPT não manda nela
 
+    rascunho_id = None
     if existente is None:
         rascunho = ctx.rascunho_de(int(vuupt_route_id))
+        rascunho_id = rascunho["id"] if rascunho else None
         cur = conn.execute("""
             INSERT INTO nucleo_rotas (data_rota, nome, provedor, vuupt_route_id, rascunho_id, agent_id, vehicle_id,
                                       motorista_nome, tipo_veiculo, start_at, km_estimado, km_fonte, status,
@@ -173,6 +202,8 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     else:
         rota_id = existente["id"]
         status_anterior = existente["status"]
+        rascunho_id = existente["rascunho_id"]
+    extras_rascunho = ctx.paradas_do_rascunho(rascunho_id)
 
     # Paradas ---------------------------------------------------------------
     # Achado com dados reais (26/08): numa rota CANCELADA a VUUPT continua
@@ -207,11 +238,20 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
 
         failed_reason_id = s.get("failed_reason_id")
         motivo = ctx.motivos.get(int(failed_reason_id)) if failed_reason_id is not None else None
+        # Destinatário/remetente/nível: do rascunho (planejamento) quando a
+        # rota nasceu lá; senão parseados do título do serviço da VUUPT.
+        extra = extras_rascunho.get(service_id)
+        remetente_titulo, destinatario_titulo = partes_do_titulo(s.get("title"))
+        destinatario_nome = (extra["destinatario_nome"] if extra else None) or destinatario_titulo
+        remetente_nome = (extra["remetente_nome"] if extra else None) or remetente_titulo
+        nivel = extra["nivel_dificuldade"] if extra else None
+        caixas = (extra["volume_caixas"] if extra else None) or s.get("dimension_3")
         campos = (
             s.get("code"), s.get("title"), s.get("address"), s.get("latitude"), s.get("longitude"),
             s.get("sender_id"), situacao, s.get("status"), s.get("status_done"),
             motivo[0] if motivo else None, motivo[1] if motivo else None, failed_reason_id,
             started_at, s.get("arrived_at"), completed_at, _json(s), agora,
+            destinatario_nome, remetente_nome, nivel, caixas, s.get("customer_id"),
         )
         anterior = paradas_existentes.get(service_id)
         if anterior is None:
@@ -219,8 +259,9 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                 INSERT INTO nucleo_paradas (rota_id, ordem, service_id, codigo, titulo, endereco, latitude, longitude,
                                             sender_id, situacao, status_provedor, status_done_provedor, motivo_id,
                                             motivo_texto, failed_reason_id, started_at, arrived_at, completed_at,
-                                            dados_json, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            dados_json, atualizado_em,
+                                            destinatario_nome, remetente_nome, nivel_dificuldade, volume_caixas, customer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (rota_id, ordem, service_id, *campos))
             parada_id = cur.lastrowid
             situacao_anterior = None
@@ -234,7 +275,10 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                     endereco = COALESCE(?, endereco), latitude = COALESCE(?, latitude), longitude = COALESCE(?, longitude),
                     sender_id = COALESCE(?, sender_id), situacao = ?, status_provedor = ?, status_done_provedor = ?,
                     motivo_id = ?, motivo_texto = ?, failed_reason_id = ?, started_at = ?, arrived_at = ?,
-                    completed_at = ?, dados_json = ?, atualizado_em = ?
+                    completed_at = ?, dados_json = ?, atualizado_em = ?,
+                    destinatario_nome = COALESCE(destinatario_nome, ?), remetente_nome = COALESCE(remetente_nome, ?),
+                    nivel_dificuldade = COALESCE(nivel_dificuldade, ?), volume_caixas = COALESCE(volume_caixas, ?),
+                    customer_id = COALESCE(?, customer_id)
                 WHERE id = ?
             """, (ordem, *campos, parada_id))
 
