@@ -1,6 +1,9 @@
-// Registro do resultado da parada: Entregue / Parcial / Insucesso, com o
-// checklist configurável (checklist_modelo), fotos (câmera), assinatura
-// na tela e motivo (motivos_ocorrencia). Tudo entra na fila offline.
+// Resultado da parada (Hugo, 26/08): quatro ações, todas por ARRASTAR pra
+// direita -- Entregue / Entregue parcial / Não entregue / Reagendar. As
+// três de entrega perguntam "tem certeza?" antes de abrir o checklist
+// (checklist_modelo); fotos pela câmera, assinatura na tela, motivo do
+// motivos_ocorrencia. Reagendar marca um horário de retorno pra mesma
+// entrega (a parada volta pra pendente). Tudo entra na fila offline.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -13,14 +16,14 @@ import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
 import { ModalAssinatura } from '../../src/assinatura';
+import { Deslizar } from '../../src/deslizar';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
-import { cores } from '../../src/tema';
+import { cores, hoje } from '../../src/tema';
 import type { CampoChecklist, Checklist, Parada, SituacaoParada } from '../../src/tipos';
 
-type Fluxo = 'ENTREGUE' | 'PARCIAL' | 'NAO_ENTREGUE';
+type Fluxo = 'ENTREGUE' | 'PARCIAL' | 'NAO_ENTREGUE' | 'REAGENDAR';
 const CHAVE_CHECKLIST = 'motorista.checklist.v1';
 
-// Fallback se a API do checklist não estiver alcançável na 1ª vez
 const CHECKLIST_PADRAO: Checklist = {
   fluxos: {
     ENTREGUE: [
@@ -45,6 +48,10 @@ const CHECKLIST_PADRAO: Checklist = {
 
 const TIPO_COMPROVANTE: Record<string, string> = {
   foto_canhoto: 'CANHOTO', foto_nf_devolucao: 'NF_DEVOLUCAO', foto_produto_devolvido: 'PRODUTO', foto_ocorrencia: 'OCORRENCIA', documento: 'DOCUMENTO',
+};
+
+const TITULO_FLUXO: Record<Fluxo, string> = {
+  ENTREGUE: 'Entregue', PARCIAL: 'Entregue parcial', NAO_ENTREGUE: 'Não entregue', REAGENDAR: 'Reagendar',
 };
 
 async function carregarChecklist(): Promise<Checklist> {
@@ -84,6 +91,11 @@ function base64ParaBytes(b64: string): Uint8Array {
   return saida.slice(0, i);
 }
 
+function horaMaisMinutos(min: number): string {
+  const d = new Date(Date.now() + min * 60000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 export default function RegistroParada() {
   const { id, rota: rotaParam } = useLocalSearchParams<{ id: string; rota: string }>();
   const paradaId = Number(id);
@@ -98,7 +110,10 @@ export default function RegistroParada() {
   const [motivoId, setMotivoId] = useState<number | null>(null);
   const [assinando, setAssinando] = useState(false);
   const [enviando, setEnviando] = useState(false);
-  const [chegou, setChegou] = useState(false);
+  // Reagendar
+  const [horaRetorno, setHoraRetorno] = useState<string | 'FIM' | null>(null);
+  const [horaManual, setHoraManual] = useState('');
+  const [obsRetorno, setObsRetorno] = useState('');
 
   const carregar = useCallback(async () => {
     const r = await carregarRotas();
@@ -110,12 +125,18 @@ export default function RegistroParada() {
 
   if (!parada || !checklist) return <Carregando />;
 
-  const registrarChegada = async () => {
-    const pos = await gps.posicaoAtual();
-    await local.marcarParada(parada.id, 'EM_ROTA');
-    await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: parada.id, corpo: { tipo: 'CHEGADA', ocorrido_em: fila.agoraIso(), ...pos }, criadoEm: fila.agoraIso(), tentativas: 0 });
-    setChegou(true);
-  };
+  const escolherComConfirmacao = (f: Fluxo) =>
+    new Promise<void>((resolve) => {
+      Alert.alert(
+        `Finalizar como "${TITULO_FLUXO[f]}"?`,
+        'Tem certeza que quer finalizar este pedido? Depois disso o checklist é aberto.',
+        [
+          { text: 'Voltar', style: 'cancel', onPress: () => resolve() },
+          { text: 'Sim, finalizar', onPress: () => { setFluxo(f); resolve(); } },
+        ],
+        { cancelable: true, onDismiss: () => resolve() },
+      );
+    });
 
   const tirarFoto = async (chave: string) => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -124,7 +145,7 @@ export default function RegistroParada() {
     if (!r.canceled && r.assets[0]) setFotos((f) => ({ ...f, [chave]: r.assets[0].uri }));
   };
 
-  const campos: CampoChecklist[] = fluxo ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [];
+  const campos: CampoChecklist[] = fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [];
   const exigeMotivo = fluxo === 'NAO_ENTREGUE' || fluxo === 'PARCIAL';
   const motivos = checklist.motivos;
 
@@ -139,7 +160,7 @@ export default function RegistroParada() {
     return null;
   };
 
-  const confirmar = async () => {
+  const confirmarEntrega = async () => {
     const falta = validar();
     if (falta) return Alert.alert('Quase lá', falta);
     setEnviando(true);
@@ -167,24 +188,74 @@ export default function RegistroParada() {
     }
   };
 
+  const confirmarReagendamento = async () => {
+    let novo: string;
+    if (horaRetorno === 'FIM') novo = 'FIM';
+    else {
+      const hhmm = horaRetorno ?? horaManual.trim();
+      if (!/^\d{2}:\d{2}$/.test(hhmm)) return Alert.alert('Horário', 'Escolha um horário (ou "Depois das outras").');
+      novo = `${hoje()} ${hhmm}`;
+    }
+    setEnviando(true);
+    try {
+      const pos = await gps.posicaoAtual();
+      const agora = fila.agoraIso();
+      await local.marcarParada(parada.id, 'PENDENTE');
+      await fila.enfileirar({
+        uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: parada.id, criadoEm: agora, tentativas: 0,
+        corpo: { tipo: 'REAGENDAR', ocorrido_em: agora, ...pos, novo_horario: novo, observacoes: obsRetorno.trim() || null },
+      });
+      router.back();
+    } finally {
+      setEnviando(false);
+    }
+  };
+
   return (
-    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 60 }}>
+    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
       <Cartao>
         <Text style={s.titulo}>{parada.ordem}. {parada.destinatario_nome || parada.titulo}</Text>
         <Text style={s.sub}>{parada.endereco}</Text>
-        <Text style={s.sub}>{parada.codigo}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}</Text>
-        {!chegou && (parada.situacao === 'PENDENTE' || parada.situacao === 'EM_DESLOCAMENTO') ? <Botao titulo="Cheguei no local" tipo="secundario" onPress={registrarChegada} estilo={{ marginTop: 10 }} /> : null}
+        <Text style={s.sub}>{parada.codigo}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}{parada.tentativas > 0 ? ` · ${parada.tentativas}ª tentativa já feita` : ''}</Text>
       </Cartao>
 
       {!fluxo ? (
-        <View style={{ gap: 10 }}>
-          <Botao titulo="✅  Entregue" onPress={() => setFluxo('ENTREGUE')} />
-          <Botao titulo="◐  Entrega parcial (com devolução)" tipo="alerta" onPress={() => setFluxo('PARCIAL')} />
-          <Botao titulo="✖  Não entregue" tipo="perigo" onPress={() => setFluxo('NAO_ENTREGUE')} />
+        <View style={{ gap: 12 }}>
+          <Text style={s.instrucao}>Arraste para a direita a opção que corresponde ao resultado:</Text>
+          <Deslizar titulo="Entregue" icone="checkmark" cor={cores.acento} onConfirmar={() => escolherComConfirmacao('ENTREGUE')} />
+          <Deslizar titulo="Entregue parcial" icone="remove-circle" cor={cores.alerta} onConfirmar={() => escolherComConfirmacao('PARCIAL')} />
+          <Deslizar titulo="Não entregue" icone="close" cor={cores.perigo} onConfirmar={() => escolherComConfirmacao('NAO_ENTREGUE')} />
+          <Deslizar titulo="Reagendar (voltar depois)" icone="time" cor={cores.primaria} onConfirmar={() => { setFluxo('REAGENDAR'); }} />
         </View>
+      ) : fluxo === 'REAGENDAR' ? (
+        <>
+          <Pressable onPress={() => setFluxo(null)}><Text style={s.trocar}>← voltar</Text></Pressable>
+          <Cartao>
+            <Text style={s.rotulo}>Quando você volta nesta entrega? *</Text>
+            <View style={s.opcoes}>
+              {[30, 60, 120, 180].map((min) => {
+                const h = horaMaisMinutos(min);
+                return (
+                  <Pressable key={min} onPress={() => { setHoraRetorno(h); setHoraManual(''); }} style={[s.opcao, horaRetorno === h && s.opcaoAtiva]}>
+                    <Text style={[s.opcaoTexto, horaRetorno === h && { color: '#fff' }]}>{min < 60 ? `em ${min} min` : `em ${min / 60}h`} ({h})</Text>
+                  </Pressable>
+                );
+              })}
+              <Pressable onPress={() => { setHoraRetorno('FIM'); setHoraManual(''); }} style={[s.opcao, horaRetorno === 'FIM' && s.opcaoAtiva]}>
+                <Text style={[s.opcaoTexto, horaRetorno === 'FIM' && { color: '#fff' }]}>Depois das outras entregas</Text>
+              </Pressable>
+            </View>
+            <Text style={[s.rotulo, { marginTop: 12 }]}>Ou digite o horário (HH:MM)</Text>
+            <TextInput style={s.campo} placeholder="14:30" placeholderTextColor="#9CA3AF" keyboardType="numbers-and-punctuation" value={horaManual}
+              onChangeText={(v) => { setHoraManual(v.replace(/[^\d:]/g, '').slice(0, 5)); setHoraRetorno(null); }} />
+            <Text style={[s.rotulo, { marginTop: 12 }]}>Motivo / observação</Text>
+            <TextInput style={s.campo} placeholder="Ex.: cliente pediu pra voltar depois do almoço" placeholderTextColor="#9CA3AF" value={obsRetorno} onChangeText={setObsRetorno} multiline />
+          </Cartao>
+          <Deslizar titulo="Confirmar reagendamento" icone="time" cor={cores.primaria} onConfirmar={confirmarReagendamento} desabilitado={enviando} />
+        </>
       ) : (
         <>
-          <Pressable onPress={() => setFluxo(null)}><Text style={s.trocar}>← trocar resultado</Text></Pressable>
+          <Pressable onPress={() => setFluxo(null)}><Text style={s.trocar}>← trocar resultado ({TITULO_FLUXO[fluxo]})</Text></Pressable>
           {exigeMotivo && motivos.length > 0 ? (
             <Cartao>
               <Text style={s.rotulo}>Motivo *</Text>
@@ -217,7 +288,7 @@ export default function RegistroParada() {
               ) : null}
               {c.tipo === 'DOCUMENTO' ? (
                 <>
-                  <TextInput style={s.campo} placeholder="Número do documento (RG/CPF)" value={respostas[c.chave] ?? ''} onChangeText={(v) => setRespostas((r) => ({ ...r, [c.chave]: v }))} />
+                  <TextInput style={s.campo} placeholder="Número do documento (RG/CPF)" placeholderTextColor="#9CA3AF" value={respostas[c.chave] ?? ''} onChangeText={(v) => setRespostas((r) => ({ ...r, [c.chave]: v }))} />
                   <Botao titulo={fotos[c.chave] ? 'Foto do documento ✓ (refazer)' : 'Fotografar documento'} tipo="secundario" onPress={() => tirarFoto(c.chave)} estilo={{ marginTop: 8 }} />
                 </>
               ) : null}
@@ -236,7 +307,7 @@ export default function RegistroParada() {
               <Botao titulo={assinatura ? 'Assinar de novo' : '✍  Coletar assinatura'} tipo="secundario" onPress={() => setAssinando(true)} />
             </Cartao>
           ) : null}
-          <Botao titulo="Confirmar registro" onPress={confirmar} carregando={enviando} estilo={{ marginTop: 8 }} />
+          <Deslizar titulo={`Confirmar: ${TITULO_FLUXO[fluxo]}`} icone="checkmark-done" cor={fluxo === 'NAO_ENTREGUE' ? cores.perigo : fluxo === 'PARCIAL' ? cores.alerta : cores.acento} onConfirmar={confirmarEntrega} desabilitado={enviando} />
         </>
       )}
       <ModalAssinatura visivel={assinando} onFechar={() => setAssinando(false)} onAssinou={(d) => { setAssinatura(d); setAssinando(false); }} />
@@ -248,10 +319,11 @@ const s = StyleSheet.create({
   tela: { flex: 1, backgroundColor: cores.fundo },
   titulo: { fontSize: 18, fontWeight: '800', color: cores.texto },
   sub: { color: cores.textoSuave, marginTop: 4 },
+  instrucao: { color: cores.textoSuave, marginBottom: 4, textAlign: 'center' },
   trocar: { color: cores.info, fontWeight: '600', marginBottom: 10 },
   rotulo: { fontWeight: '700', color: cores.texto, marginBottom: 8, fontSize: 15 },
   aviso: { color: cores.alerta, fontSize: 12, marginBottom: 8 },
-  campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, fontSize: 16 },
+  campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, fontSize: 16, color: cores.texto },
   opcoes: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   opcao: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 999, backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda },
   opcaoAtiva: { backgroundColor: cores.primaria, borderColor: cores.primaria },

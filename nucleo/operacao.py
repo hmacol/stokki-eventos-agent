@@ -32,7 +32,12 @@ from nucleo.rotas import registrar_evento
 # grava started_at) -> CHEGADA ("Cheguei no local", grava arrived_at) ->
 # ENTREGUE | PARCIAL | INSUCESSO (completed_at). Tempo de deslocamento e
 # tempo no local saem direto desses três timestamps.
-TIPOS_EVENTO_PARADA = {"DESLOCAMENTO", "CHEGADA", "ENTREGUE", "PARCIAL", "INSUCESSO", "OBSERVACAO"}
+# REAGENDAR (Hugo, 26/08): motorista esteve no local e marca um retorno
+# (novo_horario "YYYY-MM-DD HH:MM" ou "FIM" = depois das outras paradas).
+# A parada volta a PENDENTE com reagendado_para preenchido e tentativas+1;
+# a tentativa (started/arrived/tempo no local) fica registrada no evento.
+TIPOS_EVENTO_PARADA = {"DESLOCAMENTO", "CHEGADA", "ENTREGUE", "PARCIAL", "INSUCESSO", "REAGENDAR", "OBSERVACAO"}
+REAGENDAR_FIM = "FIM"
 _SITUACAO_DO_EVENTO = {
     "ENTREGUE": banco.PARADA_ENTREGUE,
     "PARCIAL": banco.PARADA_PARCIAL,
@@ -233,6 +238,14 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
                 raise OperacaoInvalida("motivo_id desconhecido.")
             motivo_texto = m["motivo_texto"]
 
+    novo_horario = None
+    if tipo == "REAGENDAR":
+        novo_horario = str(dados.get("novo_horario") or "").strip()
+        if novo_horario.upper() == REAGENDAR_FIM:
+            novo_horario = REAGENDAR_FIM
+        elif not tempos.parse_ts(novo_horario):
+            raise OperacaoInvalida("Reagendar exige novo_horario ('YYYY-MM-DD HH:MM' ou 'FIM').")
+
     ocorrido_em = dados.get("ocorrido_em") or banco.agora()
     agora = banco.agora()
 
@@ -253,6 +266,17 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
                    situacao = CASE WHEN situacao IN ('PENDENTE', 'EM_DESLOCAMENTO') THEN 'EM_ROTA' ELSE situacao END, atualizado_em = ?
             WHERE id = ?
         """, (ocorrido_em, ocorrido_em, agora, parada_id))
+    elif tipo == "REAGENDAR":
+        # Guarda a tentativa no evento e libera a parada pra nova ida.
+        tentativa = {"started_at": p["started_at"], "arrived_at": p["arrived_at"],
+                     "tempo_no_local_s": tempos.diferenca_s(p["arrived_at"], ocorrido_em)}
+        dados = {**dados, "tentativa": tentativa}
+        conn.execute("""
+            UPDATE nucleo_paradas SET situacao = 'PENDENTE', started_at = NULL, arrived_at = NULL,
+                   tempo_deslocamento_s = NULL, tempo_no_local_s = NULL,
+                   reagendado_para = ?, tentativas = tentativas + 1, atualizado_em = ?
+            WHERE id = ?
+        """, (novo_horario, agora, parada_id))
     elif tipo in _SITUACAO_DO_EVENTO:
         situacao = _SITUACAO_DO_EVENTO[tipo]
         conn.execute("""
@@ -265,13 +289,15 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
                                          status=_STATUS_PEDIDO_DA_SITUACAO[situacao])
 
     # Durações (deslocamento / no local) recalculadas a cada passo.
-    tempos.atualizar_tempos_parada(conn, parada_id)
+    if tipo != "REAGENDAR":
+        tempos.atualizar_tempos_parada(conn, parada_id)
 
     registrar_evento(
         conn, tipo, banco.ORIGEM_APP, ocorrido_em, rota_id=rota["id"], parada_id=parada_id, agent_id=agent_id,
         latitude=dados.get("latitude"), longitude=dados.get("longitude"), precisao_m=dados.get("precisao_m"),
         dados={"checklist": dados.get("checklist"), "motivo_id": motivo_id, "motivo_texto": motivo_texto,
-               "observacoes": dados.get("observacoes"), "codigo": p["codigo"]},
+               "observacoes": dados.get("observacoes"), "codigo": p["codigo"],
+               "novo_horario": novo_horario, "tentativa": dados.get("tentativa")},
         uuid=uuid,
     )
 

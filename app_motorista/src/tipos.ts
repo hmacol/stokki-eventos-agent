@@ -37,6 +37,8 @@ export type Parada = {
   started_at: string | null;
   arrived_at: string | null;
   completed_at: string | null;
+  reagendado_para: string | null;   // "YYYY-MM-DD HH:MM" ou "FIM" (depois das outras)
+  tentativas: number;
   comprovantes: Comprovante[];
 };
 

@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS nucleo_paradas (
     tempo_deslocamento_s    INTEGER,                        -- arrived_at - started_at (Hugo, 26/08)
     tempo_no_local_s        INTEGER,                        -- completed_at - arrived_at: quanto demora pra receber
     customer_id             INTEGER,                        -- destinatário na VUUPT (clientes.customer_id)
+    reagendado_para         TEXT,                           -- retorno marcado pelo motorista (REAGENDAR)
+    tentativas              INTEGER NOT NULL DEFAULT 0,
     dados_json              TEXT,
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -247,6 +249,8 @@ _COLUNAS_PARADAS_NOVAS = [
     ("tempo_deslocamento_s", "INTEGER"),
     ("tempo_no_local_s", "INTEGER"),
     ("customer_id", "INTEGER"),   # destinatário na VUUPT (casa com clientes.customer_id) -- chave da média por destinatário
+    ("reagendado_para", "TEXT"),  # motorista reagendou o retorno (evento REAGENDAR): "YYYY-MM-DD HH:MM" ou 'FIM' (depois das outras)
+    ("tentativas", "INTEGER NOT NULL DEFAULT 0"),   # quantas vezes o motorista já esteve no local sem concluir
 ]
 
 

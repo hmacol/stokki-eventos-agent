@@ -1,8 +1,10 @@
-// Tela da rota (Hugo, 26/08): ações principais por ARRASTAR pra direita
-// (aceitar, iniciar rota, finalizar) e cada parada com os passos
-// "Iniciar deslocamento" -> "Cheguei no local" -> registrar resultado.
-// Os passos alimentam started_at / arrived_at / completed_at da parada
-// (tempo de deslocamento e tempo no local viram métrica no núcleo).
+// Tela da rota (Hugo, 26/08): TODA ação principal é por ARRASTAR pra
+// direita. Rota: aceitar -> iniciar -> finalizar. Cada card de parada tem
+// UM controle que evolui com o estado dela:
+//   Iniciar deslocamento >>>  Cheguei no local >>>  Finalizar entrega >>>
+// e o último abre a tela de resultado (Entregue / Parcial / Não entregue /
+// Reagendar). Só uma parada "em andamento" por vez -- os outros cards
+// ficam travados até ela ser resolvida ou reagendada.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -18,6 +20,7 @@ import type { Parada, Rota, SituacaoParada } from '../../src/tipos';
 
 const FINAIS: SituacaoParada[] = ['ENTREGUE', 'PARCIAL', 'INSUCESSO', 'CANCELADA'];
 const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
+const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
 
 function abrirNavegacao(p: Parada) {
   const destino = p.latitude !== null && p.longitude !== null ? `${p.latitude},${p.longitude}` : encodeURIComponent(p.endereco ?? '');
@@ -26,6 +29,12 @@ function abrirNavegacao(p: Parada) {
     { text: 'Waze', onPress: () => void Linking.openURL(p.latitude !== null ? `https://waze.com/ul?ll=${destino}&navigate=yes` : `https://waze.com/ul?q=${destino}&navigate=yes`) },
     { text: 'Cancelar', style: 'cancel' },
   ]);
+}
+
+function rotuloRetorno(p: Parada): string | null {
+  if (!p.reagendado_para) return null;
+  if (p.reagendado_para === 'FIM') return 'Reagendada: depois das outras';
+  return `Reagendada para ${p.reagendado_para.slice(11, 16) || p.reagendado_para}`;
 }
 
 export default function DetalheRota() {
@@ -37,7 +46,6 @@ export default function DetalheRota() {
   const [ocupado, setOcupado] = useState(false);
   const [motivoRecusa, setMotivoRecusa] = useState('');
   const [recusando, setRecusando] = useState(false);
-  const [atualId, setAtualId] = useState<number | null>(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -57,13 +65,21 @@ export default function DetalheRota() {
 
   if (!rota) return <Carregando />;
 
-  // Parada atual: a que já está a caminho/no local; senão a escolhida; senão a 1ª pendente na ordem.
   const pendentes = rota.paradas.filter(ehPendente);
-  const emAndamento = rota.paradas.find((p) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA');
-  const atual = emAndamento ?? pendentes.find((p) => p.id === atualId) ?? pendentes[0] ?? null;
+  const ativa = rota.paradas.find(emAndamento) ?? null;       // a parada em andamento (no máximo uma)
   const feitas = rota.paradas.filter((p) => ['ENTREGUE', 'PARCIAL', 'INSUCESSO'].includes(p.situacao)).length;
   const ativas = rota.paradas.filter((p) => p.situacao !== 'CANCELADA');
   const operavel = rota.editavel && rota.status === 'EM_ROTA';
+
+  // Ordem de exibição: sequência da rota, com as reagendadas "depois das
+  // outras" no fim e as reagendadas com horário no fim ordenadas por horário.
+  const paradasOrdenadas = [...rota.paradas].sort((a, b) => {
+    const ka = a.reagendado_para && ehPendente(a) ? (a.reagendado_para === 'FIM' ? 2 : 1) : 0;
+    const kb = b.reagendado_para && ehPendente(b) ? (b.reagendado_para === 'FIM' ? 2 : 1) : 0;
+    if (ka !== kb) return ka - kb;
+    if (ka === 1) return (a.reagendado_para ?? '').localeCompare(b.reagendado_para ?? '');
+    return a.ordem - b.ordem;
+  });
 
   const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}) => {
     setOcupado(true);
@@ -117,11 +133,26 @@ export default function DetalheRota() {
     }) ?? void acaoRota('finalizar', 'CONCLUIDA', { pedagio: null });
   };
 
+  /** O único controle do card, conforme o estado da parada. */
+  const controleParada = (p: Parada) => {
+    if (!operavel || !ehPendente(p)) return null;
+    const travada = ativa !== null && ativa.id !== p.id;
+    if (travada) {
+      return <Text style={s.travada}>Finalize a parada {ativa.ordem} pra liberar esta.</Text>;
+    }
+    if (p.situacao === 'PENDENTE') {
+      return <Deslizar titulo={p.tentativas > 0 ? 'Voltar: iniciar deslocamento' : 'Iniciar deslocamento'} icone="navigate" onConfirmar={() => passoParada(p, 'DESLOCAMENTO')} />;
+    }
+    if (p.situacao === 'EM_DESLOCAMENTO') {
+      return <Deslizar titulo="Cheguei no local" icone="location" cor={cores.info} onConfirmar={() => passoParada(p, 'CHEGADA')} />;
+    }
+    return <Deslizar titulo="Finalizar entrega" icone="checkmark-done" cor={cores.primaria} onConfirmar={() => router.push(`/parada/${p.id}?rota=${rota.id}`)} />;
+  };
+
   return (
     <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
       {offline ? <Text style={s.aviso}>Sem conexão — trabalhando com a última versão salva.</Text> : null}
 
-      {/* Cabeçalho da rota + ação principal por gesto */}
       <Cartao>
         <Text style={s.nome}>{rota.nome ?? `Rota #${rota.id}`}</Text>
         <Text style={s.sub}>{formatarData(rota.data_rota)}{rota.start_at ? ` · saída ${rota.start_at.slice(11, 16)}` : ''} · {statusRotaRotulo[rota.status]}</Text>
@@ -157,50 +188,16 @@ export default function DetalheRota() {
         {rota.confirmacao ? <Text style={s.sub}>Confirmação: {rota.confirmacao.status.toLowerCase()}</Text> : null}
       </Cartao>
 
-      {/* Parada atual: passos por gesto */}
-      {operavel && atual ? (
-        <Cartao estilo={{ borderColor: cores.acento, borderWidth: 2 }}>
-          <Text style={s.secao}>PARADA ATUAL · {atual.ordem} de {ativas.length}</Text>
-          <Text style={s.paradaTituloGrande}>{atual.destinatario_nome || atual.titulo || atual.codigo}</Text>
-          <Text style={s.paradaEndGrande}>{atual.endereco}</Text>
-          <Text style={s.paradaMeta}>
-            {atual.codigo}{atual.remetente_nome ? ` · ${atual.remetente_nome}` : ''}{atual.volume_caixas ? ` · ${atual.volume_caixas} cx` : ''}
-            {atual.janela_inicio ? ` · ${atual.janela_inicio}–${atual.janela_fim}` : ''}
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-            <Botao titulo="Navegar" tipo="secundario" onPress={() => abrirNavegacao(atual)} estilo={{ flex: 1, minHeight: 44, paddingVertical: 10 }} />
-            {atual.telefone ? <Botao titulo="Ligar" tipo="secundario" onPress={() => void Linking.openURL(`tel:${atual.telefone}`)} estilo={{ flex: 1, minHeight: 44, paddingVertical: 10 }} /> : null}
-          </View>
-
-          <View style={s.passos}>
-            <Passo numero={1} rotulo="Deslocamento" feito={atual.situacao !== 'PENDENTE'} ativo={atual.situacao === 'PENDENTE'} />
-            <Passo numero={2} rotulo="No local" feito={atual.situacao === 'EM_ROTA'} ativo={atual.situacao === 'EM_DESLOCAMENTO'} />
-            <Passo numero={3} rotulo="Resultado" feito={false} ativo={atual.situacao === 'EM_ROTA'} />
-          </View>
-
-          {atual.situacao === 'PENDENTE' ? (
-            <Deslizar titulo="Iniciar deslocamento" icone="navigate" onConfirmar={() => passoParada(atual, 'DESLOCAMENTO')} />
-          ) : null}
-          {atual.situacao === 'EM_DESLOCAMENTO' ? (
-            <Deslizar titulo="Cheguei no local" icone="location" cor={cores.info} onConfirmar={() => passoParada(atual, 'CHEGADA')} />
-          ) : null}
-          {atual.situacao === 'EM_ROTA' ? (
-            <Botao titulo="Registrar resultado da entrega" onPress={() => router.push(`/parada/${atual.id}?rota=${rota.id}`)} />
-          ) : null}
-        </Cartao>
-      ) : null}
-
-      {/* Lista completa */}
-      <Text style={s.secao}>TODAS AS PARADAS</Text>
-      {rota.paradas.map((p) => {
-        const ehAtual = atual?.id === p.id;
+      {paradasOrdenadas.map((p) => {
+        const destaque = ativa?.id === p.id;
+        const retorno = rotuloRetorno(p);
         return (
-          <Cartao key={p.id} estilo={{ opacity: p.situacao === 'CANCELADA' ? 0.5 : 1, borderColor: ehAtual ? cores.acento : cores.borda }}>
+          <Cartao key={p.id} estilo={{ opacity: p.situacao === 'CANCELADA' ? 0.5 : 1, borderColor: destaque ? cores.acento : cores.borda, borderWidth: destaque ? 2 : 1 }}>
             <View style={s.paradaCab}>
-              <View style={[s.ordem, ehAtual && { backgroundColor: cores.acento }]}><Text style={s.ordemTexto}>{p.ordem}</Text></View>
+              <View style={[s.ordem, destaque && { backgroundColor: cores.acento }]}><Text style={s.ordemTexto}>{p.ordem}</Text></View>
               <View style={{ flex: 1 }}>
                 <Text style={s.paradaTitulo} numberOfLines={2}>{p.destinatario_nome || p.titulo || p.codigo}</Text>
-                <Text style={s.paradaEnd} numberOfLines={2}>{p.endereco}</Text>
+                <Text style={s.paradaEnd} numberOfLines={3}>{p.endereco}</Text>
               </View>
               <Etiqueta texto={situacaoRotulo[p.situacao]} cor={situacaoCor[p.situacao]} />
             </View>
@@ -208,26 +205,19 @@ export default function DetalheRota() {
               {p.codigo}{p.remetente_nome ? ` · ${p.remetente_nome}` : ''}{p.volume_caixas ? ` · ${p.volume_caixas} cx` : ''}
               {p.janela_inicio ? ` · ${p.janela_inicio}–${p.janela_fim}` : ''}{p.nivel_dificuldade && p.nivel_dificuldade >= 3 ? ' · ⚠ entrega demorada' : ''}
             </Text>
+            {retorno && ehPendente(p) ? <Text style={[s.paradaMeta, { color: cores.alerta, fontWeight: '700' }]}>{retorno}{p.tentativas > 0 ? ` · ${p.tentativas}ª tentativa feita` : ''}</Text> : null}
             {p.motivo_texto ? <Text style={[s.paradaMeta, { color: cores.perigo }]}>Motivo: {p.motivo_texto}</Text> : null}
-            {operavel && ehPendente(p) && !ehAtual && !emAndamento ? (
-              <Pressable onPress={() => setAtualId(p.id)} style={{ marginTop: 8 }}><Text style={s.link}>Atender esta parada agora →</Text></Pressable>
+            {ehPendente(p) ? (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                <Botao titulo="Navegar" tipo="secundario" onPress={() => abrirNavegacao(p)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} />
+                {p.telefone ? <Botao titulo="Ligar" tipo="secundario" onPress={() => void Linking.openURL(`tel:${p.telefone}`)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} /> : null}
+              </View>
             ) : null}
+            <View style={{ marginTop: 10 }}>{controleParada(p)}</View>
           </Cartao>
         );
       })}
     </ScrollView>
-  );
-}
-
-function Passo({ numero, rotulo, feito, ativo }: { numero: number; rotulo: string; feito: boolean; ativo: boolean }) {
-  const cor = feito ? cores.acento : ativo ? cores.primaria : cores.borda;
-  return (
-    <View style={s.passo}>
-      <View style={[s.passoBolinha, { backgroundColor: cor }]}>
-        <Text style={s.passoNum}>{feito ? '✓' : numero}</Text>
-      </View>
-      <Text style={[s.passoRotulo, (feito || ativo) && { color: cores.texto, fontWeight: '700' }]}>{rotulo}</Text>
-    </View>
   );
 }
 
@@ -236,19 +226,12 @@ const s = StyleSheet.create({
   aviso: { backgroundColor: cores.alerta, color: '#fff', padding: 8, borderRadius: 8, textAlign: 'center', marginBottom: 12, fontWeight: '600' },
   nome: { fontSize: 19, fontWeight: '800', color: cores.texto },
   sub: { color: cores.textoSuave, marginTop: 4 },
-  secao: { fontSize: 13, fontWeight: '800', color: cores.textoSuave, marginBottom: 8, marginTop: 4, letterSpacing: 0.5 },
   link: { color: cores.info, fontWeight: '700', textAlign: 'center' },
+  travada: { color: cores.textoSuave, fontStyle: 'italic', textAlign: 'center', paddingVertical: 6 },
   barraFundo: { height: 8, backgroundColor: cores.borda, borderRadius: 4, marginTop: 10, overflow: 'hidden' },
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
-  paradaTituloGrande: { fontSize: 20, fontWeight: '800', color: cores.texto },
-  paradaEndGrande: { fontSize: 15, color: cores.texto, marginTop: 4 },
-  passos: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 14, paddingHorizontal: 8 },
-  passo: { alignItems: 'center', flex: 1 },
-  passoBolinha: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  passoNum: { color: '#fff', fontWeight: '800' },
-  passoRotulo: { fontSize: 12, color: cores.textoSuave, marginTop: 4 },
   paradaCab: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   ordem: { width: 32, height: 32, borderRadius: 16, backgroundColor: cores.primaria, alignItems: 'center', justifyContent: 'center' },
   ordemTexto: { color: '#fff', fontWeight: '800' },

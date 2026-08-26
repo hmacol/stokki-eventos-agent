@@ -169,6 +169,26 @@ class TestApiMotorista(unittest.TestCase):
                           data={"arquivo": (io.BytesIO(b"x"), "c.jpg"), "tipo": "CANHOTO", "uuid": "f1"}, content_type="multipart/form-data")
         self.assertTrue(r.get_json()["ja_registrado"])
 
+        # Reagendar na 2ª parada: esteve no local 5 min, marca retorno; parada volta a PENDENTE
+        self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "r0", "tipo": "DESLOCAMENTO", "ocorrido_em": "2026-08-26 08:30:00"}, headers=h)
+        self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "r1", "tipo": "CHEGADA", "ocorrido_em": "2026-08-26 08:40:00"}, headers=h)
+        r = self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "r2", "tipo": "REAGENDAR", "ocorrido_em": "2026-08-26 08:45:00"}, headers=h)
+        self.assertEqual(r.status_code, 400)   # sem novo_horario
+        r = self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "r2", "tipo": "REAGENDAR", "ocorrido_em": "2026-08-26 08:45:00",
+                                                              "novo_horario": "2026-08-26 11:00", "observacoes": "voltar às 11"}, headers=h)
+        self.assertEqual(r.status_code, 201, r.get_json())
+        pr = r.get_json()["parada"]
+        self.assertEqual((pr["situacao"], pr["reagendado_para"], pr["tentativas"], pr["arrived_at"]), ("PENDENTE", "2026-08-26 11:00", 1, None))
+        self.assertEqual(r.get_json()["rota_status"], "EM_ROTA")
+        conn = banco.conectar()
+        ev = conn.execute("SELECT dados_json FROM nucleo_eventos WHERE uuid = 'r2'").fetchone()[0]
+        conn.close()
+        self.assertIn('"tempo_no_local_s": 300', ev)
+        # 'FIM' também vale; volta, chega de novo e aí sim conclui
+        r = self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "r3", "tipo": "REAGENDAR", "novo_horario": "fim"}, headers=h)
+        self.assertEqual(r.get_json()["parada"]["reagendado_para"], "FIM")
+        self.assertEqual(r.get_json()["parada"]["tentativas"], 2)
+
         # Insucesso sem motivo -> 400; com motivo -> conclui a rota sozinha
         r = self.cli.post(f"/api/paradas/{p2}/eventos", json={"uuid": "e3", "tipo": "INSUCESSO"}, headers=h)
         self.assertEqual(r.status_code, 400)
