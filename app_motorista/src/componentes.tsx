@@ -8,7 +8,9 @@ export function Botao({
   titulo: string; onPress: () => void; tipo?: 'primario' | 'secundario' | 'perigo' | 'alerta';
   desabilitado?: boolean; carregando?: boolean; estilo?: ViewStyle;
 }) {
-  const fundo = { primario: cores.primaria, secundario: cores.cartao, perigo: cores.perigo, alerta: cores.alerta }[tipo];
+  // Ação principal em verde (acento do logo), como o botão "Confirmar" da
+  // página de confirmação; navy fica pra cabeçalhos e seleção.
+  const fundo = { primario: cores.acento, secundario: cores.cartao, perigo: cores.perigo, alerta: cores.alerta }[tipo];
   const textoCor = tipo === 'secundario' ? cores.texto : '#fff';
   return (
     <Pressable
@@ -40,7 +42,7 @@ export function Etiqueta({ texto, cor }: { texto: string; cor: string }) {
 export function Carregando({ texto = 'Carregando…' }: { texto?: string }) {
   return (
     <View style={s.centro}>
-      <ActivityIndicator size="large" color={cores.primaria} />
+      <ActivityIndicator size="large" color={cores.acento} />
       <Text style={{ marginTop: 12, color: cores.textoSuave }}>{texto}</Text>
     </View>
   );

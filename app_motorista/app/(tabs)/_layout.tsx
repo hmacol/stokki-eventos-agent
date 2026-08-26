@@ -12,7 +12,7 @@ export default function Abas() {
     <Tabs
       screenOptions={{
         headerStyle: { backgroundColor: cores.primaria }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' },
-        tabBarActiveTintColor: cores.primaria, tabBarInactiveTintColor: cores.textoSuave,
+        tabBarActiveTintColor: cores.acento, tabBarInactiveTintColor: cores.textoSuave,
         tabBarLabelStyle: { fontSize: 12, fontWeight: '600' }, tabBarStyle: { height: 64, paddingBottom: 8, paddingTop: 6 },
       }}
     >

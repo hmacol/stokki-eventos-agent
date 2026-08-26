@@ -4,10 +4,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Cartao, Etiqueta, Vazio } from '../../src/componentes';
 import { carregarRotas } from '../../src/rotasStore';
 import * as fila from '../../src/fila';
-import { cores, formatarData, hoje, somarDias, statusRotaRotulo } from '../../src/tema';
+import { cores, formatarData, hoje, somarDias, statusRotaCor, statusRotaRotulo } from '../../src/tema';
 import type { Rota } from '../../src/tipos';
 
-const corStatus: Record<string, string> = { PLANEJADA: cores.alerta, ACEITA: cores.info, EM_ROTA: cores.primaria, CONCLUIDA: '#5F6B66', CANCELADA: '#777' };
+const corStatus = statusRotaCor;
 
 export default function Rotas() {
   const router = useRouter();
@@ -92,5 +92,5 @@ const s = StyleSheet.create({
   nome: { fontSize: 17, fontWeight: '700', color: cores.texto, flexShrink: 1 },
   detalhe: { color: cores.textoSuave, marginTop: 6 },
   vuupt: { color: cores.info, marginTop: 6, fontSize: 12 },
-  chamada: { color: cores.primaria, marginTop: 8, fontWeight: '700' },
+  chamada: { color: cores.acento, marginTop: 8, fontWeight: '700' },
 });

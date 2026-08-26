@@ -12,14 +12,14 @@
       "bundleIdentifier": "br.com.freshlog.motorista",
       "infoPlist": {
         "NSCameraUsageDescription": "Fotografar o canhoto e comprovantes de entrega.",
-        "NSLocationWhenInUseUsageDescription": "Registrar o trajeto e o local de cada entrega enquanto a rota estÃ¡ em andamento.",
-        "NSPhotoLibraryUsageDescription": "Anexar comprovantes jÃ¡ fotografados."
+        "NSLocationWhenInUseUsageDescription": "Registrar o trajeto e o local de cada entrega enquanto a rota está em andamento.",
+        "NSPhotoLibraryUsageDescription": "Anexar comprovantes já fotografados."
       }
     },
     "android": {
       "package": "br.com.freshlog.motorista",
       "adaptiveIcon": {
-        "backgroundColor": "#1E8E5A",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -27,12 +27,7 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -45,7 +40,8 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Fotografar o canhoto e comprovantes de entrega."
+          "cameraPermission": "Fotografar o canhoto e comprovantes de entrega.",
+          "microphonePermission": false
         }
       ],
       [
@@ -55,7 +51,15 @@
         }
       ],
       "expo-notifications",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 240
+        }
+      ]
     ],
     "extra": {
       "apiUrl": "https://app.freshhub.com.br/motorista/api",
