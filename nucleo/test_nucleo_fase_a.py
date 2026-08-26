@@ -19,7 +19,7 @@ from unittest import mock
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco, financeiro, pedidos, rotas, sincronizar_vuupt
+from nucleo import banco, financeiro, metricas, pedidos, rotas, sincronizar_vuupt, tempos
 from regras import tarifa_motorista
 
 
@@ -285,6 +285,56 @@ class TestPedidos(_BaseTemp):
         pedidos.registrar_importacao({"title": "x"}, None, "pulado_atribuido")
         conn = banco.conectar()
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM nucleo_pedidos").fetchone()[0], 0)
+        conn.close()
+
+
+class TestTempos(_BaseTemp):
+    def test_parse_e_diferenca(self):
+        self.assertEqual(tempos.diferenca_s("2026-08-26 08:10:00", "2026-08-26 08:20:00"), 600)
+        self.assertEqual(tempos.diferenca_s("2026-08-26T08:10:00.000000Z", "2026-08-26 08:15:30"), 330)
+        self.assertEqual(tempos.diferenca_s("2026-08-26T08:10:00-03:00", "2026-08-26T08:11:00-03:00"), 60)
+        self.assertIsNone(tempos.diferenca_s("2026-08-26 08:20:00", "2026-08-26 08:10:00"))   # fora de ordem
+        self.assertIsNone(tempos.diferenca_s(None, "2026-08-26 08:10:00"))
+        self.assertIsNone(tempos.parse_ts("ontem"))
+
+    def test_sync_vuupt_grava_duracoes_e_metricas_filtram_lote(self):
+        conn = banco.conectar()
+        conn.execute("CREATE TABLE motivos_ocorrencia (id INTEGER PRIMARY KEY, vuupt_failed_reason_id INTEGER, motivo_texto TEXT)")
+        servicos = [
+            # 20 min no local (plausível)
+            {"id": 1, "code": "PS-1", "status": "done", "status_done": "success", "started_at": "2026-08-26 07:00:00",
+             "arrived_at": "2026-08-26 07:30:00", "completed_at": "2026-08-26 07:50:00"},
+            # 10 s no local = confirmação em lote -> gravado, mas fora da média
+            {"id": 2, "code": "PS-2", "status": "done", "status_done": "success", "arrived_at": "2026-08-26 08:00:00",
+             "completed_at": "2026-08-26 08:00:10"},
+            # 10 min, insucesso (conta também)
+            {"id": 3, "code": "PS-3", "status": "done", "status_done": "failed", "failed_reason_id": 99,
+             "arrived_at": "2026-08-26 09:00:00", "completed_at": "2026-08-26 09:10:00", "nivel": None},
+            # sem arrived_at -> NULL
+            {"id": 4, "code": "PS-4", "status": "done", "status_done": "success", "completed_at": "2026-08-26 10:00:00"},
+        ]
+        rota = {**_rota_vuupt(status="finished", servicos=servicos), "finished_at": "2026-08-26 10:00:00"}
+        sincronizar_vuupt.sincronizar_rotas([rota], conn, {1234: "João"})
+        valores = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT codigo, tempo_deslocamento_s, tempo_no_local_s FROM nucleo_paradas")}
+        self.assertEqual(valores["PS-1"], (1800, 1200))
+        self.assertEqual(valores["PS-2"], (None, 10))
+        self.assertEqual(valores["PS-3"], (None, 600))
+        self.assertEqual(valores["PS-4"], (None, None))
+
+        de = ate = __import__("datetime").date(2026, 8, 26)
+        geral = metricas.tempo_por_grupo(conn, de, ate, "geral")
+        self.assertEqual(geral[0]["n"], 2)                      # PS-1 e PS-3; PS-2 (10s) e PS-4 (NULL) fora
+        self.assertEqual(geral[0]["media_min"], 15.0)
+        self.assertEqual(geral[0]["mediana_min"], 15.0)
+        por_motorista = metricas.tempo_por_grupo(conn, de, ate, "motorista")
+        self.assertEqual(por_motorista[0]["grupo"], "João")
+        cob = metricas.cobertura(conn, de, ate)
+        self.assertEqual((cob["concluidas"], cob["com_duracao"], cob["plausiveis"], cob["abaixo_30s"]), (4, 3, 2, 1))
+
+        # Backfill: zera e recalcula
+        conn.execute("UPDATE nucleo_paradas SET tempo_no_local_s = NULL, tempo_deslocamento_s = NULL")
+        conn.commit()
+        self.assertEqual(tempos.recalcular_todas(conn), 3)
         conn.close()
 
 

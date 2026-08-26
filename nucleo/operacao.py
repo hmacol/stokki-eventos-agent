@@ -25,7 +25,7 @@ import math
 import sqlite3
 from datetime import date, timedelta
 
-from nucleo import banco, pedidos as nucleo_pedidos
+from nucleo import banco, pedidos as nucleo_pedidos, tempos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -263,6 +263,9 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
         if p["codigo"]:
             nucleo_pedidos.upsert_pedido(conn, p["codigo"], {}, origem=banco.ORIGEM_APP,
                                          status=_STATUS_PEDIDO_DA_SITUACAO[situacao])
+
+    # Durações (deslocamento / no local) recalculadas a cada passo.
+    tempos.atualizar_tempos_parada(conn, parada_id)
 
     registrar_evento(
         conn, tipo, banco.ORIGEM_APP, ocorrido_em, rota_id=rota["id"], parada_id=parada_id, agent_id=agent_id,

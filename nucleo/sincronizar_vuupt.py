@@ -41,7 +41,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 logger = logging.getLogger("nucleo.sincronizar_vuupt")
 
-from nucleo import banco, pedidos as nucleo_pedidos
+from nucleo import banco, pedidos as nucleo_pedidos, tempos
 from nucleo.rotas import registrar_evento
 
 # Status brutos da VUUPT -> status do núcleo (rota). O que não bate cai
@@ -237,6 +237,10 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                     completed_at = ?, dados_json = ?, atualizado_em = ?
                 WHERE id = ?
             """, (ordem, *campos, parada_id))
+
+        # Durações a partir dos carimbos da VUUPT (started/arrived/completed)
+        # -- com a ressalva da confirmação em lote (tempo ~0 é ruído).
+        tempos.atualizar_tempos_parada(conn, parada_id)
 
         if not rota_cancelada and situacao != situacao_anterior and situacao != banco.PARADA_PENDENTE:
             registrar_evento(

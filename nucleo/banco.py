@@ -151,9 +151,11 @@ CREATE TABLE IF NOT EXISTS nucleo_paradas (
     motivo_id               INTEGER,                        -- motivos_ocorrencia.id
     motivo_texto            TEXT,
     failed_reason_id        INTEGER,
-    started_at              TEXT,
-    arrived_at              TEXT,
-    completed_at            TEXT,
+    started_at              TEXT,                           -- saiu pra parada (DESLOCAMENTO)
+    arrived_at              TEXT,                           -- chegou (CHEGADA)
+    completed_at            TEXT,                           -- resultado (ENTREGUE/PARCIAL/INSUCESSO)
+    tempo_deslocamento_s    INTEGER,                        -- arrived_at - started_at (Hugo, 26/08)
+    tempo_no_local_s        INTEGER,                        -- completed_at - arrived_at: quanto demora pra receber
     dados_json              TEXT,
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -239,6 +241,13 @@ _COLUNAS_MOTORISTAS_NOVAS = [
 ]
 
 
+# Colunas novas de nucleo_paradas (bancos criados antes de 26/08) -- migração aditiva.
+_COLUNAS_PARADAS_NOVAS = [
+    ("tempo_deslocamento_s", "INTEGER"),
+    ("tempo_no_local_s", "INTEGER"),
+]
+
+
 def agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -256,6 +265,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
     conn.executescript(_DDL)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
     conn.commit()
 
