@@ -212,7 +212,16 @@ class CatalogoTransportadoras:
         Resolve o tipo e endereço de redespacho para o nome/CNPJ dado.
 
         Prioridade de matching:
-          1. CNPJ (quando fornecido) — chave primária, sem ambiguidade
+          0. Nome que já resolve (sozinho, sem ambiguidade) para RETIRADA
+             — prevalece sobre CNPJ. Achado 27/08 (caso #PS-37190): pedidos
+             "Cliente Retira" no Stokki vêm com o CNPJ da própria Freshlog
+             anexado no bloco Transportadora (é o galpão de origem, não um
+             transportador real), e esse mesmo CNPJ está cadastrado na
+             planilha sob várias grafias de "Freshlog" como tipo ENTREGA —
+             sem esta prioridade, o match por CNPJ mascarava silenciosamente
+             um nome inequívoco de retirada, deixando o pedido ir pro VUUPT.
+          1. CNPJ (quando fornecido) — chave primária pros demais casos,
+             sem ambiguidade
           2. Nome normalizado — fallback quando CNPJ não está na planilha
 
         Casos possíveis:
@@ -220,6 +229,21 @@ class CatalogoTransportadoras:
           - Conflito de tipos → retorna resultado com conflito=True
           - Não encontrado → retorna resultado com desconhecida=True
         """
+        nome_norm = _normalizar(nome_transportadora)
+        candidatos_nome = self._indice.get(nome_norm, [])
+
+        # Prioridade 0: nome inequívoco de RETIRADA vence CNPJ
+        if candidatos_nome:
+            tipos_nome = {e.tipo for e in candidatos_nome}
+            if tipos_nome == {"RETIRADA"}:
+                entrada = candidatos_nome[0]
+                return ResultadoResolucao(
+                    tipo="RETIRADA",
+                    nome_original=nome_transportadora,
+                    nome_normalizado=nome_norm,
+                    email=entrada.email,
+                )
+
         # Prioridade 1: CNPJ
         if cnpj and cnpj in self._indice_cnpj:
             candidatos_cnpj = self._indice_cnpj[cnpj]
@@ -247,10 +271,8 @@ class CatalogoTransportadoras:
                 email=entrada.email,
             )
 
-        # Prioridade 2: nome normalizado
-        nome_norm = _normalizar(nome_transportadora)
-
-        candidatos = self._indice.get(nome_norm, [])
+        # Prioridade 2: nome normalizado (já calculado acima, na prioridade 0)
+        candidatos = candidatos_nome
 
         if not candidatos:
             return ResultadoResolucao(
