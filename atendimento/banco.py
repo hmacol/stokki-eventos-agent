@@ -124,6 +124,11 @@ def conectar() -> sqlite3.Connection:
 # migração aditiva, mesmo padrão de nucleo/banco.py.
 _COLUNAS_CONVERSAS_NOVAS = [
     ("ultima_mensagem_direcao", "TEXT"),  # IN | OUT -- base da métrica "atendimentos parados"
+    # Bot de triagem (ver app.py::webhook_evolution) -- motivo_contato é só
+    # informativo (chip na UI), independente de `time` (fila do time humano).
+    ("motivo_contato", "TEXT"),          # status_pedido | canhoto | cotacao | outro
+    ("bot_aguardando_menu", "INTEGER NOT NULL DEFAULT 0"),
+    ("bot_tentativas", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Colunas novas de `mensagens` (tabela já existia antes da fila de reenvio) --
@@ -209,6 +214,71 @@ def assumir_conversa(conn: sqlite3.Connection, conversa_id: int, atendente_id: i
     )
     conn.commit()
     return cur.rowcount == 1
+
+
+# ── Bot de triagem (ver app.py::webhook_evolution) ──────────────────────────
+
+_BOT_TRIAGEM_LOGIN = "_bot_triagem"
+
+
+def marcar_bot_aguardando_menu(conn: sqlite3.Connection, conversa_id: int, aguardando: bool) -> None:
+    conn.execute(
+        "UPDATE conversas SET bot_aguardando_menu = ? WHERE id = ?",
+        (int(aguardando), conversa_id),
+    )
+    conn.commit()
+
+
+def classificar_conversa_pelo_bot(conn: sqlite3.Connection, conversa_id: int,
+                                   time: str | None, motivo: str) -> None:
+    """Cliente respondeu uma opção válida do menu -- grava o time (fila
+    humana) e o motivo (informativo) e encerra a participação do bot nessa
+    conversa (bot_aguardando_menu volta a 0)."""
+    conn.execute(
+        "UPDATE conversas SET time = ?, motivo_contato = ?, bot_aguardando_menu = 0 WHERE id = ?",
+        (time, motivo, conversa_id),
+    )
+    conn.commit()
+
+
+def incrementar_tentativas_bot(conn: sqlite3.Connection, conversa_id: int) -> int:
+    """Resposta não reconhecida como opção do menu -- incrementa o contador
+    e devolve o total, pra quem chama decidir se já esgotou MAX_TENTATIVAS_MENU
+    (ver app.py) e deve desistir."""
+    conn.execute("UPDATE conversas SET bot_tentativas = bot_tentativas + 1 WHERE id = ?", (conversa_id,))
+    conn.commit()
+    return conn.execute(
+        "SELECT bot_tentativas FROM conversas WHERE id = ?", (conversa_id,),
+    ).fetchone()["bot_tentativas"]
+
+
+def desistir_bot(conn: sqlite3.Connection, conversa_id: int) -> None:
+    """Esgotou as tentativas de entender a resposta -- desiste, cai na fila
+    geral (sem `time`) pra um atendente resolver na mão."""
+    conn.execute(
+        "UPDATE conversas SET bot_aguardando_menu = 0, motivo_contato = 'outro' WHERE id = ?",
+        (conversa_id,),
+    )
+    conn.commit()
+
+
+def usuario_bot_id(conn: sqlite3.Connection) -> int:
+    """Id do usuário reservado que representa o bot de triagem nas mensagens
+    OUT que ele manda (mensagens.atendente_id) -- só existe pra popular o
+    nome do remetente na UI via o LEFT JOIN que já existe em
+    _SELECT_CONVERSAS/api_mensagens; nunca loga de verdade (ativo=0, senha
+    aleatória). Cria a linha na primeira chamada (idempotente)."""
+    row = conn.execute("SELECT id FROM usuarios WHERE login = ?", (_BOT_TRIAGEM_LOGIN,)).fetchone()
+    if row:
+        return row["id"]
+    import secrets
+    from werkzeug.security import generate_password_hash
+    cur = conn.execute(
+        "INSERT INTO usuarios (login, nome, senha_hash, papel, ativo) VALUES (?, ?, ?, 'bot', 0)",
+        (_BOT_TRIAGEM_LOGIN, "Bot de triagem", generate_password_hash(secrets.token_hex(32))),
+    )
+    conn.commit()
+    return cur.lastrowid
 
 
 def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str, corpo: str | None,

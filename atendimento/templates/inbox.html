@@ -30,6 +30,7 @@
   .card-conversa .preview { font-size: 12px; color: var(--texto-suave); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card-conversa .rodape { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
   .tag-time { font-size: 10px; background: var(--fundo); color: var(--texto-suave); padding: 2px 7px; border-radius: 100px; }
+  .tag-motivo { font-size: 10px; background: rgba(14,165,117,0.12); color: var(--acento); padding: 2px 7px; border-radius: 100px; margin-right: 4px; }
   .btn-assumir {
     font-size: 11px; font-weight: 700; background: var(--acento); color: #fff; border: none;
     padding: 4px 10px; border-radius: 6px; cursor: pointer;
@@ -120,6 +121,10 @@
 
 <script>
 const TIMES = {{ times | tojson }};
+const ROTULOS_MOTIVO = {
+  status_pedido: "Status do pedido", canhoto: "Canhoto/comprovante",
+  cotacao: "Cotação de frete", outro: "Outro assunto",
+};
 let filtroAtual = "fila";
 let buscaAtual = "";
 let conversaSelecionadaId = null;
@@ -162,6 +167,7 @@ function renderizarLista(conversas) {
       <div class="preview">${escapeHtml(c.ultima_mensagem_preview || '')}</div>
       <div class="rodape">
         <span class="tag-time">
+          ${c.motivo_contato ? `<span class="tag-motivo">${ROTULOS_MOTIVO[c.motivo_contato] || c.motivo_contato}</span>` : ''}
           ${c.status === 'RESOLVIDA' ? '<span class="badge-resolvida">resolvida</span>' : (c.time ? c.time.replace('_', '/') : (c.atendente_nome ? c.atendente_nome : 'sem time'))}
           ${filtroAtual === 'fila' && !buscaAtual ? `<span class="espera">${tempoDecorrido(c.aberta_em)}</span>` : ''}
         </span>
@@ -239,7 +245,9 @@ function montarCabecalho(conversa) {
         <div class="nome">${escapeHtml(conversa.contato_nome || conversa.contato_telefone)}
           <button type="button" class="editar-nome" id="btn-editar-nome" title="Editar nome do contato">✎</button>
         </div>
-        <div class="telefone">${escapeHtml(conversa.contato_telefone)} · ${conversa.protocolo || ''}</div>
+        <div class="telefone">${escapeHtml(conversa.contato_telefone)} · ${conversa.protocolo || ''}
+          ${conversa.motivo_contato ? `<span class="tag-motivo">${ROTULOS_MOTIVO[conversa.motivo_contato] || conversa.motivo_contato}</span>` : ''}
+        </div>
       </div>
       <div class="acoes">${acoes}</div>
     </div>

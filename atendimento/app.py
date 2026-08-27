@@ -133,6 +133,62 @@ def _baixar_e_salvar_midia(cfg_evolution: dict, dado: dict, achado_midia: tuple,
     }
 
 
+_TENTATIVAS_MENU_MAX = 2  # depois disso o bot desiste e cai pra fila geral
+
+_MENU_TRIAGEM_TEXTO = (
+    "Olá! 👋 Pra te ajudar mais rápido, escolha uma opção:\n\n"
+    "1️⃣ Status do pedido/entrega\n"
+    "2️⃣ Enviar canhoto/comprovante\n"
+    "3️⃣ Cotação de frete\n"
+    "4️⃣ Outro assunto / falar com atendente\n\n"
+    "Responda só com o número (ex: 1)."
+)
+
+_MENU_TRIAGEM_REPETIR = (
+    "Não entendi 🤔 Responda só com o número de uma das opções:\n\n"
+    "1️⃣ Status do pedido/entrega\n"
+    "2️⃣ Enviar canhoto/comprovante\n"
+    "3️⃣ Cotação de frete\n"
+    "4️⃣ Outro assunto / falar com atendente"
+)
+
+_MENU_TRIAGEM_DESISTENCIA = "Sem problemas, já te encaminho pra um atendente conversar com você."
+
+# Mapeamento motivo->time fácil de ajustar (uma linha) se o Hugo quiser outro
+# time pra alguma opção depois -- ver plano.
+_OPCOES_TRIAGEM = {
+    "1": {"motivo": "status_pedido", "time": "DESTINATARIOS",
+          "resposta": "Certo! Já te encaminho pro time responsável pelo status do seu pedido. Só um instante 🙏"},
+    "2": {"motivo": "canhoto", "time": "DESTINATARIOS",
+          "resposta": "Perfeito! Encaminhando pro time que cuida de canhotos/comprovantes. Já te retornamos."},
+    "3": {"motivo": "cotacao", "time": "COMERCIAL_FINANCEIRO",
+          "resposta": "Show! Vou te direcionar pro time comercial pra cotação de frete."},
+    "4": {"motivo": "outro", "time": None,
+          "resposta": "Ok, já te encaminho pra um atendente."},
+}
+
+
+def _extrair_opcao_menu(texto: str | None) -> str | None:
+    """Primeiro dígito 1-4 encontrado na mensagem (tolera "1)", "opção 2"
+    etc.) -- triagem por menu, não por IA/NLP, ver plano."""
+    if not texto:
+        return None
+    m = re.search(r"[1-4]", texto)
+    return m.group(0) if m else None
+
+
+def _bot_enviar(cfg_evolution: dict, conexao, conversa_id: int, telefone_e164: str, texto: str) -> None:
+    """Manda uma mensagem do bot de triagem e grava igual a uma resposta de
+    atendente -- mesmo caminho de falha/retry (status PENDENTE cai na fila
+    de reenviar_pendentes.py, que não distingue quem mandou)."""
+    sucesso, evolution_id = integracao_evolution.enviar_texto(cfg_evolution, telefone_e164, texto)
+    bot_id = banco.usuario_bot_id(conexao)
+    banco.registrar_mensagem(
+        conexao, conversa_id, "OUT", texto, atendente_id=bot_id,
+        evolution_message_id=evolution_id, status="ENVIADA" if sucesso else "PENDENTE",
+    )
+
+
 def _carregar_config() -> dict:
     caminho = _RAIZ / "config.yaml"
     if not caminho.exists():
@@ -285,6 +341,7 @@ def criar_app(config: dict | None = None) -> Flask:
     def _linha_conversa(row: dict) -> dict:
         return {
             "id": row["id"], "protocolo": row["protocolo"], "time": row["time"],
+            "motivo_contato": row["motivo_contato"],
             "status": row["status"], "atendente_id": row["atendente_id"],
             "atendente_nome": row["atendente_nome"],
             "contato_id": row["contato_id"],
@@ -514,7 +571,8 @@ def criar_app(config: dict | None = None) -> Flask:
     @requer_auth(niveis=("admin",))
     def api_usuarios_listar():
         linhas = conn().execute(
-            "SELECT id, login, nome, papel, ativo, ultimo_login_em FROM usuarios ORDER BY nome",
+            "SELECT id, login, nome, papel, ativo, ultimo_login_em FROM usuarios "
+            "WHERE papel != 'bot' ORDER BY nome",
         ).fetchall()
         return jsonify({"usuarios": [dict(r) for r in linhas]})
 
@@ -618,7 +676,8 @@ def criar_app(config: dict | None = None) -> Flask:
 
         contato = banco.buscar_ou_criar_contato(conn(), telefone_e164, nome_push)
         conversa = banco.conversa_aberta_do_contato(conn(), contato["id"])
-        if conversa is None:
+        conversa_eh_nova = conversa is None
+        if conversa_eh_nova:
             conversa = banco.abrir_conversa(conn(), contato["id"])
 
         # fromMe:true = mensagem mandada direto do celular vinculado (não
@@ -638,6 +697,31 @@ def criar_app(config: dict | None = None) -> Flask:
             conn(), conversa["id"], direcao, texto,
             atendente_id=None, evolution_message_id=chave.get("id"), midia=midia_info,
         )
+
+        # Bot de triagem: só entra na primeira mensagem de conversa nova e no
+        # follow-up que responde o menu -- depois disso (time classificado)
+        # nunca mais interfere nessa conversa. Ver plano "Bot de triagem".
+        if direcao == "IN":
+            cfg_evolution = app.config["CONFIG_EVOLUTION"]
+            if conversa_eh_nova:
+                banco.marcar_bot_aguardando_menu(conn(), conversa["id"], True)
+                _bot_enviar(cfg_evolution, conn(), conversa["id"], telefone_e164, _MENU_TRIAGEM_TEXTO)
+            elif conversa["time"] is None and conversa["bot_aguardando_menu"]:
+                opcao = _extrair_opcao_menu(texto)
+                if opcao:
+                    dados_opcao = _OPCOES_TRIAGEM[opcao]
+                    banco.classificar_conversa_pelo_bot(
+                        conn(), conversa["id"], dados_opcao["time"], dados_opcao["motivo"],
+                    )
+                    _bot_enviar(cfg_evolution, conn(), conversa["id"], telefone_e164, dados_opcao["resposta"])
+                else:
+                    tentativas = banco.incrementar_tentativas_bot(conn(), conversa["id"])
+                    if tentativas > _TENTATIVAS_MENU_MAX:
+                        banco.desistir_bot(conn(), conversa["id"])
+                        _bot_enviar(cfg_evolution, conn(), conversa["id"], telefone_e164, _MENU_TRIAGEM_DESISTENCIA)
+                    else:
+                        _bot_enviar(cfg_evolution, conn(), conversa["id"], telefone_e164, _MENU_TRIAGEM_REPETIR)
+
         return jsonify({"ok": True})
 
     @app.get("/midia/<int:mensagem_id>")
