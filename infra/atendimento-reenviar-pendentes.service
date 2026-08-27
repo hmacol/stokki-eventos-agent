@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Reenvia mensagens de WhatsApp pendentes na central de atendimento (Evolution API)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/atendimento/reenviar_pendentes.py

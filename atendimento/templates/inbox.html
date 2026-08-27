@@ -68,6 +68,9 @@
   .bolha.OUT { align-self: flex-end; background: rgba(14,165,117,0.15); }
   .bolha.NOTA { align-self: center; max-width: 85%; background: #FDF3D6; border: 1px dashed #D9B857; color: #6B5416; font-size: 12px; }
   .bolha .meta { font-size: 10px; color: var(--texto-suave); margin-top: 4px; }
+  .status-envio { margin-left: 6px; }
+  .status-envio.pendente { color: var(--texto-suave); }
+  .status-envio.falhou { color: var(--erro); font-weight: 600; }
   .thread-resposta { padding: 12px 16px; border-top: 1px solid var(--borda); display: flex; gap: 8px; position: relative; }
   .thread-resposta textarea { min-height: 40px; }
   .picker-respostas { position: relative; }
@@ -183,9 +186,11 @@ function selecionarConversa(id) {
 function bolhaHtml(m) {
   const hora = (m.criado_em || '').slice(11, 16);
   const quem = m.direcao === 'OUT' ? (m.atendente_nome || 'Você/celular') : '';
+  const statusEnvio = m.status === 'PENDENTE' ? '<span class="status-envio pendente">⏳ reenviando…</span>'
+    : m.status === 'FALHOU' ? '<span class="status-envio falhou">⚠️ não entregue</span>' : '';
   return `<div class="bolha ${m.direcao}">
     ${escapeHtml(m.corpo || '')}
-    <div class="meta">${quem ? escapeHtml(quem) + ' · ' : ''}${hora}</div>
+    <div class="meta">${quem ? escapeHtml(quem) + ' · ' : ''}${hora}${statusEnvio}</div>
   </div>`;
 }
 

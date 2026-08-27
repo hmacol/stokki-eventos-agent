@@ -31,6 +31,12 @@ TIMES = ("DESTINATARIOS", "MOTORISTAS", "COMERCIAL_FINANCEIRO")
 LIMITE_SLA_FILA_MIN = 15   # conversa não atribuída esperando há mais que isso = SLA estourado
 LIMITE_PARADO_MIN = 20     # conversa atribuída sem resposta ao cliente há mais que isso = parada
 
+# Fila de reenvio de mensagens OUT que falharam ao enviar (canal Evolution API
+# instável -- ver integracao_evolution.py e atendimento/reenviar_pendentes.py).
+# Backoff exponencial com teto: 30s, 1min, 2min, 4min, 8min, 15min, 15min, 15min --
+# depois de MAX_TENTATIVAS_ENVIO desiste e marca FALHOU (dispara e-mail de alerta).
+MAX_TENTATIVAS_ENVIO = 8
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS usuarios (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +98,15 @@ CREATE TABLE IF NOT EXISTS respostas_rapidas (
     corpo                   TEXT NOT NULL,
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+
+-- Linha única (id sempre 1) com o último estado conhecido da sessão do
+-- WhatsApp -- base do alerta por e-mail em monitorar_saude_evolution.py,
+-- que só avisa na transição (edge-triggered), não a cada execução do timer.
+CREATE TABLE IF NOT EXISTS estado_evolution (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    conectado INTEGER NOT NULL DEFAULT 1,
+    mudou_em  TEXT
+);
 """
 
 
@@ -111,6 +126,15 @@ _COLUNAS_CONVERSAS_NOVAS = [
     ("ultima_mensagem_direcao", "TEXT"),  # IN | OUT -- base da métrica "atendimentos parados"
 ]
 
+# Colunas novas de `mensagens` (tabela já existia antes da fila de reenvio) --
+# DEFAULT 'ENVIADA' garante que mensagens antigas (e as IN, que nunca passam por
+# aqui) não entrem na fila de retry por engano.
+_COLUNAS_MENSAGENS_NOVAS = [
+    ("status", "TEXT NOT NULL DEFAULT 'ENVIADA'"),  # ENVIADA | PENDENTE | FALHOU
+    ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
+    ("proxima_tentativa_em", "TEXT"),
+]
+
 
 def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[str, str]]):
     existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
@@ -123,6 +147,8 @@ def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[s
 def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
     _migrar_colunas(conn, "conversas", _COLUNAS_CONVERSAS_NOVAS)
+    _migrar_colunas(conn, "mensagens", _COLUNAS_MENSAGENS_NOVAS)
+    conn.execute("INSERT OR IGNORE INTO estado_evolution (id, conectado) VALUES (1, 1)")
     conn.commit()
 
 
@@ -179,10 +205,15 @@ def assumir_conversa(conn: sqlite3.Connection, conversa_id: int, atendente_id: i
 
 
 def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str, corpo: str | None,
-                        atendente_id: int | None = None, evolution_message_id: str | None = None) -> int | None:
+                        atendente_id: int | None = None, evolution_message_id: str | None = None,
+                        status: str = "ENVIADA") -> int | None:
     """Insere a mensagem e atualiza o resumo da conversa (preview + hora).
     Idempotente por evolution_message_id: se o id já existe (eco/retry do
-    webhook), não duplica -- retorna None nesse caso."""
+    webhook), não duplica -- retorna None nesse caso.
+
+    status="PENDENTE" é usado quando o envio pela Evolution API falhou na
+    hora (ver api_responder em app.py): a mensagem já aparece na thread em
+    vez de sumir, e reenviar_pendentes.py assume dali."""
     if evolution_message_id:
         ja = conn.execute(
             "SELECT id FROM mensagens WHERE evolution_message_id = ?", (evolution_message_id,),
@@ -190,9 +221,9 @@ def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str,
         if ja:
             return None
     cur = conn.execute(
-        "INSERT INTO mensagens (conversa_id, direcao, atendente_id, corpo, evolution_message_id) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (conversa_id, direcao, atendente_id, corpo, evolution_message_id),
+        "INSERT INTO mensagens (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status),
     )
     preview = (corpo or "")[:120]
     conn.execute(
@@ -202,6 +233,75 @@ def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str,
     )
     conn.commit()
     return cur.lastrowid
+
+
+def _proximo_backoff_segundos(tentativas: int) -> int:
+    """Backoff exponencial com teto de 15min -- ver MAX_TENTATIVAS_ENVIO."""
+    return min(30 * 2 ** (tentativas - 1), 900)
+
+
+_SELECT_MENSAGENS_PENDENTES = """
+    SELECT m.id, m.corpo, m.tentativas, c.id AS conversa_id, c.protocolo,
+           ct.telefone_e164
+    FROM mensagens m
+    JOIN conversas c ON c.id = m.conversa_id
+    JOIN contatos ct ON ct.id = c.contato_id
+    WHERE m.status = 'PENDENTE'
+      AND (m.proxima_tentativa_em IS NULL OR m.proxima_tentativa_em <= datetime('now','localtime'))
+    ORDER BY m.id ASC
+"""
+
+
+def mensagens_pendentes_para_retry(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Mensagens OUT que falharam ao enviar e já podem tentar de novo --
+    usado por reenviar_pendentes.py (timer a cada 1min)."""
+    return conn.execute(_SELECT_MENSAGENS_PENDENTES).fetchall()
+
+
+def marcar_envio_sucesso(conn: sqlite3.Connection, mensagem_id: int, evolution_message_id: str | None) -> None:
+    conn.execute(
+        "UPDATE mensagens SET status = 'ENVIADA', evolution_message_id = ?, proxima_tentativa_em = NULL "
+        "WHERE id = ?",
+        (evolution_message_id, mensagem_id),
+    )
+    conn.commit()
+
+
+def marcar_envio_falha_ou_esgotado(conn: sqlite3.Connection, mensagem_id: int, tentativas_atuais: int) -> bool:
+    """Incrementa a tentativa; se esgotou MAX_TENTATIVAS_ENVIO marca FALHOU
+    (definitivo), senão agenda a próxima com backoff. Retorna True quando
+    esgotou -- reenviar_pendentes.py usa isso pra decidir se manda o e-mail
+    de alerta (uma vez só, não a cada tentativa)."""
+    tentativas = tentativas_atuais + 1
+    if tentativas >= MAX_TENTATIVAS_ENVIO:
+        conn.execute(
+            "UPDATE mensagens SET status = 'FALHOU', tentativas = ?, proxima_tentativa_em = NULL WHERE id = ?",
+            (tentativas, mensagem_id),
+        )
+        conn.commit()
+        return True
+    conn.execute(
+        "UPDATE mensagens SET tentativas = ?, "
+        "proxima_tentativa_em = datetime('now','localtime', ?) WHERE id = ?",
+        (tentativas, f"+{_proximo_backoff_segundos(tentativas)} seconds", mensagem_id),
+    )
+    conn.commit()
+    return False
+
+
+def atualizar_estado_evolution(conn: sqlite3.Connection, conectado: bool) -> bool:
+    """Atualiza o estado conhecido da sessão do WhatsApp; retorna True só
+    quando o valor mudou desde a última checagem (edge-triggered) -- usado
+    por monitorar_saude_evolution.py pra só mandar e-mail na transição."""
+    atual = conn.execute("SELECT conectado FROM estado_evolution WHERE id = 1").fetchone()
+    mudou = atual is None or bool(atual["conectado"]) != conectado
+    if mudou:
+        conn.execute(
+            "UPDATE estado_evolution SET conectado = ?, mudou_em = datetime('now','localtime') WHERE id = 1",
+            (int(conectado),),
+        )
+        conn.commit()
+    return mudou
 
 
 def calcular_metricas(conn: sqlite3.Connection) -> dict:

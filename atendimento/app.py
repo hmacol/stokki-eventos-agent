@@ -427,7 +427,12 @@ def criar_app(config: dict | None = None) -> Flask:
             app.config["CONFIG_EVOLUTION"], conversa["telefone_e164"], texto,
         )
         if not sucesso:
-            return jsonify({"erro": "Falha ao enviar pelo WhatsApp -- tente de novo em instantes."}), 502
+            # Não perde a mensagem: grava como PENDENTE (aparece na thread com
+            # selo de "reenviando") e deixa reenviar_pendentes.py (timer a cada
+            # 1min) assumir o retry -- em vez do 502 anterior, que só devolvia
+            # erro pro atendente sem guardar nada.
+            banco.registrar_mensagem(conn(), conversa_id, "OUT", texto, g.usuario_id, status="PENDENTE")
+            return jsonify({"ok": True, "pendente": True}), 202
         banco.registrar_mensagem(conn(), conversa_id, "OUT", texto, g.usuario_id, evolution_id)
         return jsonify({"ok": True})
 
