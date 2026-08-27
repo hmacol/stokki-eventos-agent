@@ -705,8 +705,16 @@ def criar_app(config: dict | None = None) -> Flask:
             # de chave etc.) -- nada pra mostrar na Inbox, não vale abrir/
             # tocar uma conversa por causa disso.
             return jsonify({"ok": True})
-        nome_push = dado.get("pushName")
         de_mim_mesmo = bool(chave.get("fromMe"))
+        # pushName é o nome de quem MANDOU essa mensagem -- numa mensagem
+        # fromMe:true (mandada direto do celular vinculado, fora da UI),
+        # quem mandou somos NÓS, então pushName vem com o nosso próprio
+        # nome de perfil ("Freshlog"), não o do cliente. Achado real
+        # (27/08): isso gravava "Freshlog" como nome de vários contatos,
+        # permanentemente (só atualiza se o nome ainda estiver vazio) --
+        # só usar pushName pra nomear o contato em mensagem genuinamente
+        # recebida do cliente.
+        nome_push = dado.get("pushName") if not de_mim_mesmo else None
 
         contato = banco.buscar_ou_criar_contato(conn(), telefone_e164, nome_push)
         conversa = banco.conversa_aberta_do_contato(conn(), contato["id"])
