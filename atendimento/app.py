@@ -688,6 +688,12 @@ def criar_app(config: dict | None = None) -> Flask:
         dado = payload.get("data") or {}
         chave = dado.get("key") or {}
         remote_jid = chave.get("remoteJid", "")
+        # Grupo (@g.us) não é um contato individual -- achado real (27/08):
+        # o bot disparou o menu dentro de um grupo (JID tratado como se fosse
+        # telefone) e uma menção com dígito foi lida como "opção 1" do menu.
+        # Enviar pro "número" de um grupo também sempre falha (400 Bad
+        # Request) -- não é um alvo válido pro campo que a Evolution espera.
+        eh_grupo = remote_jid.endswith("@g.us")
         telefone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
         if not telefone:
             return jsonify({"ok": True})
@@ -728,8 +734,8 @@ def criar_app(config: dict | None = None) -> Flask:
 
         # Bot de triagem: só entra na primeira mensagem de conversa nova e no
         # follow-up que responde o menu -- depois disso (time classificado)
-        # nunca mais interfere nessa conversa. Ver plano "Bot de triagem".
-        if direcao == "IN":
+        # nunca mais interfere nessa conversa. Nunca em grupo (eh_grupo).
+        if direcao == "IN" and not eh_grupo:
             cfg_evolution = app.config["CONFIG_EVOLUTION"]
             if conversa_eh_nova:
                 banco.marcar_bot_aguardando_menu(conn(), conversa["id"], True)
