@@ -189,6 +189,21 @@ def gerar_pareamento(cfg: dict, numero: str | None = None) -> dict:
     return resp.json()
 
 
+def desconectar_instancia(cfg: dict) -> dict:
+    """DELETE /instance/logout/{instance} -- desvincula o número atual (a
+    sessão some do Postgres da Evolution); depois é preciso parear de novo
+    (gerar_pareamento). Usado pela tela /admin/whatsapp pra trocar de número
+    (27/08: chip novo travado por 463 -> número com histórico). Levanta em
+    falha; quem chama mostra."""
+    base = cfg["base_url"].rstrip("/")
+    resp = requests.delete(
+        f"{base}/instance/logout/{cfg['instance']}",
+        headers={"apikey": cfg["api_key"]}, timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def ativar_licenca(cfg: dict, codigo: str) -> tuple[int, dict]:
     """Evolution >= 2.4 exige ativação de licença (gratuita, tier community)
     -- GET /license/activate?code= troca o código devolvido pelo formulário

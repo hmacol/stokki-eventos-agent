@@ -35,7 +35,13 @@
   </p>
   <label>Número (opcional, ex: 5511999999999)</label>
   <input type="text" id="numero-pareamento">
-  <button class="botao" id="btn-parear" style="margin-top:12px;">Gerar</button>
+  <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="botao" id="btn-parear">Gerar</button>
+    <button class="botao perigo" id="btn-desconectar" title="Logout do número atual -- necessário antes de parear outro número">Desconectar número atual</button>
+  </div>
+  <p style="font-size:12px;color:var(--texto-suave);margin-top:8px;">
+    Trocar de número: 1) Desconectar 2) digitar o número novo e Gerar 3) no WhatsApp do número novo, Aparelhos conectados &gt; Conectar com número de telefone &gt; digitar o código (vale poucos minutos).
+  </p>
   <div class="resultado" id="resultado-pareamento"></div>
 </div>
 
@@ -88,6 +94,15 @@ document.getElementById("btn-pausar").addEventListener("click", () => {
 document.getElementById("btn-retomar").addEventListener("click", () => {
   if (!confirm("Retomar libera o bot de triagem e a fila de reenvio mesmo com trava 463 recente (cada envio renova a trava). Confirma?")) return;
   fetchJson("/api/whatsapp/retomar", {method: "POST"}).then(carregarStatus).catch(err => alert(err.message));
+});
+
+document.getElementById("btn-desconectar").addEventListener("click", () => {
+  if (!confirm("Desconectar (logout) o número atual? A central para de receber até parear um número de novo.")) return;
+  const alvo = document.getElementById("resultado-pareamento");
+  alvo.innerHTML = "Desconectando...";
+  fetchJson("/api/whatsapp/desconectar", {method: "POST"})
+    .then(() => { alvo.innerHTML = "Desconectado. Agora digite o número novo e clique em Gerar."; carregarStatus(); })
+    .catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; });
 });
 
 document.getElementById("btn-parear").addEventListener("click", () => {

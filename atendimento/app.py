@@ -39,6 +39,7 @@ import random
 import re
 import sys
 import threading
+import time
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
@@ -136,6 +137,13 @@ def _baixar_e_salvar_midia(cfg_evolution: dict, dado: dict, achado_midia: tuple,
 
 
 _TENTATIVAS_MENU_MAX = 2  # depois disso o bot desiste e cai pra fila geral
+
+# Ao parear um número COM histórico (27/08: troca do chip novo travado por
+# 463 por uma linha antiga), o WhatsApp ressincroniza mensagens recentes e
+# elas chegam como messages.upsert normais -- sem esse corte, o inbox enche
+# de conversa velha "nova" (e o bot mandaria menu pra todo mundo se não
+# estivesse pausado). Upsert mais velho que isso é ignorado.
+_IDADE_MAX_UPSERT_S = 600
 
 _MENU_TRIAGEM_TEXTO = (
     "Olá! 👋 Pra te ajudar mais rápido, escolha uma opção:\n\n"
@@ -266,6 +274,11 @@ def criar_app(config: dict | None = None) -> Flask:
     app.config["SUSPENSAO_463_HORAS"] = float(
         cfg_atendimento.get("suspensao_463_horas", banco.SUSPENSAO_463_HORAS_PADRAO)
     )
+    # Número com histórico participa de dezenas de grupos -- cada um viraria
+    # uma "conversa não atribuída" no inbox. Default: ignorar grupos por
+    # completo (nem registra). config.yaml: atendimento.ignorar_grupos: false
+    # pra voltar a registrar (o bot nunca responde em grupo de qualquer forma).
+    app.config["IGNORAR_GRUPOS"] = bool(cfg_atendimento.get("ignorar_grupos", True))
 
     secret = cfg_atendimento.get("secret_key")
     if not secret:
@@ -689,6 +702,22 @@ def criar_app(config: dict | None = None) -> Flask:
         banco.retomar_envios_automaticos(conn())
         return jsonify({"ok": True})
 
+    @app.post("/api/whatsapp/desconectar")
+    @requer_auth(niveis=("admin",))
+    @exige_mesma_origem
+    def api_whatsapp_desconectar():
+        """Logout do número atual -- passo 1 da troca de número (depois
+        "Parear" com o número novo). Enquanto a sessão está `open`, o
+        /instance/connect não gera código nem QR."""
+        if not integracao_evolution.configurado(app.config["CONFIG_EVOLUTION"]):
+            return jsonify({"erro": "evolution_api não configurado no config.yaml."}), 400
+        try:
+            resultado = integracao_evolution.desconectar_instancia(app.config["CONFIG_EVOLUTION"])
+        except Exception as exc:
+            return jsonify({"erro": f"Falha ao desconectar: {exc}"}), 502
+        logger.warning(f"WhatsApp desconectado (logout) por {session.get('nome')} -- aguardando novo pareamento.")
+        return jsonify({"ok": True, "resultado": resultado})
+
     @app.post("/api/whatsapp/parear")
     @requer_auth(niveis=("admin",))
     @exige_mesma_origem
@@ -759,9 +788,24 @@ def criar_app(config: dict | None = None) -> Flask:
         # Enviar pro "número" de um grupo também sempre falha (400 Bad
         # Request) -- não é um alvo válido pro campo que a Evolution espera.
         eh_grupo = remote_jid.endswith("@g.us")
+        if eh_grupo and app.config["IGNORAR_GRUPOS"]:
+            return jsonify({"ok": True})
         telefone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
         if not telefone:
             return jsonify({"ok": True})
+        # Ressincronização de histórico ao parear (ver _IDADE_MAX_UPSERT_S):
+        # messageTimestamp vem em segundos (às vezes ms) -- muito velho, ignora.
+        ts_bruto = dado.get("messageTimestamp")
+        try:
+            ts = float(ts_bruto) if ts_bruto is not None else None
+        except (TypeError, ValueError):
+            ts = None
+        if ts:
+            if ts > 1e12:
+                ts /= 1000.0
+            if time.time() - ts > _IDADE_MAX_UPSERT_S:
+                logger.info(f"Upsert antigo ignorado ({int(time.time() - ts)}s, {remote_jid}) -- ressincronização de histórico.")
+                return jsonify({"ok": True})
         telefone_e164 = f"+{telefone}" if not telefone.startswith("+") else telefone
 
         texto = _descrever_conteudo_mensagem(dado.get("message") or {})
