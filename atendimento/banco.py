@@ -365,12 +365,35 @@ def marcar_envio_falha_ou_esgotado(conn: sqlite3.Connection, mensagem_id: int, t
         conn.commit()
         return True
     conn.execute(
-        "UPDATE mensagens SET tentativas = ?, "
+        "UPDATE mensagens SET status = 'PENDENTE', tentativas = ?, "
         "proxima_tentativa_em = datetime('now','localtime', ?) WHERE id = ?",
         (tentativas, f"+{_proximo_backoff_segundos(tentativas)} seconds", mensagem_id),
     )
     conn.commit()
     return False
+
+
+def marcar_falha_entrega_reportada(conn: sqlite3.Connection, evolution_message_id: str | None) -> bool:
+    """A Evolution API manda um POST de sucesso na hora do envio (vira
+    status=ENVIADA), mas a entrega de verdade só é confirmada depois, via
+    webhook messages.update -- pode chegar bem mais tarde reportando
+    status=ERROR (achado real: erro 463, mensagem sai mas não chega).
+    Reaproveita o MESMO backoff/teto de marcar_envio_falha_ou_esgotado --
+    uma entrega que falha tarde entra na fila de reenvio exatamente como
+    uma que falhou na hora, incluindo o e-mail de alerta se esgotar
+    MAX_TENTATIVAS_ENVIO. Retorna False (sem efeito) se o id não bater com
+    nenhuma mensagem nossa ainda com status=ENVIADA -- evita reprocessar um
+    evento duplicado ou um id que já foi tratado antes."""
+    if not evolution_message_id:
+        return False
+    linha = conn.execute(
+        "SELECT id, tentativas FROM mensagens WHERE evolution_message_id = ? AND status = 'ENVIADA'",
+        (evolution_message_id,),
+    ).fetchone()
+    if not linha:
+        return False
+    marcar_envio_falha_ou_esgotado(conn, linha["id"], linha["tentativas"])
+    return True
 
 
 def atualizar_estado_evolution(conn: sqlite3.Connection, conectado: bool) -> bool:

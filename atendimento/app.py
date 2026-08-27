@@ -654,7 +654,25 @@ def criar_app(config: dict | None = None) -> Flask:
             abort(404)  # 404, não 401 -- não confirma pra fora que o path existe
 
         payload = request.get_json(silent=True) or {}
-        if payload.get("event") != "messages.upsert":
+        evento = payload.get("event")
+
+        if evento == "messages.update":
+            # A Evolution API confirma o envio na hora (POST 2xx com um id),
+            # mas a entrega de verdade só vem depois por aqui -- achado real
+            # (26-27/08): erro 463, a mensagem "sai" mas o WhatsApp reporta
+            # status=ERROR minutos depois. Sem isso, a mensagem ficava
+            # marcada ENVIADA pra sempre mesmo não tendo chegado.
+            dado_update = payload.get("data") or {}
+            if dado_update.get("status") == "ERROR":
+                reagendada = banco.marcar_falha_entrega_reportada(conn(), dado_update.get("keyId"))
+                if reagendada:
+                    logger.warning(
+                        f"Entrega reportada como ERRO pela Evolution API (keyId={dado_update.get('keyId')}) "
+                        "-- reagendada pra reenvio.",
+                    )
+            return jsonify({"ok": True})
+
+        if evento != "messages.upsert":
             return jsonify({"ok": True})  # outros eventos (connection.update etc.) -- nada a fazer ainda
 
         dado = payload.get("data") or {}
