@@ -304,6 +304,25 @@ def atualizar_estado_evolution(conn: sqlite3.Connection, conectado: bool) -> boo
     return mudou
 
 
+def estado_evolution_atual(conn: sqlite3.Connection) -> dict:
+    """Último estado conhecido pelo monitor (não faz nenhuma chamada de rede
+    -- é só o que monitorar_saude_evolution.py gravou na última execução do
+    timer). Usado na tela /admin/whatsapp ao lado da checagem ao vivo."""
+    row = conn.execute("SELECT conectado, mudou_em FROM estado_evolution WHERE id = 1").fetchone()
+    if row is None:
+        return {"conectado": None, "mudou_em": None}
+    return {"conectado": bool(row["conectado"]), "mudou_em": row["mudou_em"]}
+
+
+def contagem_fila_reenvio(conn: sqlite3.Connection) -> dict:
+    """Quantas mensagens estão esperando reenvio (PENDENTE, ver
+    reenviar_pendentes.py) e quantas esgotaram as tentativas e nunca foram
+    entregues (FALHOU) -- total histórico, não só as de hoje."""
+    pendentes = conn.execute("SELECT COUNT(*) AS n FROM mensagens WHERE status = 'PENDENTE'").fetchone()["n"]
+    falhou = conn.execute("SELECT COUNT(*) AS n FROM mensagens WHERE status = 'FALHOU'").fetchone()["n"]
+    return {"pendentes": pendentes, "falhou": falhou}
+
+
 def calcular_metricas(conn: sqlite3.Connection) -> dict:
     """Métricas da barra do topo (ver app.py::api_metricas e base.html) --
     pensadas pro atendente acompanhar em tempo real, não só o admin:

@@ -508,12 +508,22 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.get("/api/whatsapp/status")
     @requer_auth(niveis=("admin",))
     def api_whatsapp_status():
+        # Sempre devolve o que o monitor já sabe (estado_evolution + fila de
+        # reenvio, sem chamada de rede) mesmo quando a checagem ao vivo abaixo
+        # falha -- é justamente quando a Evolution API está fora do ar que
+        # essa informação importa mais pro admin ver.
+        resposta = {
+            "estado_monitorado": banco.estado_evolution_atual(conn()),
+            "fila_reenvio": banco.contagem_fila_reenvio(conn()),
+        }
         if not integracao_evolution.configurado(app.config["CONFIG_EVOLUTION"]):
-            return jsonify({"erro": "evolution_api não configurado no config.yaml."}), 400
+            resposta["erro_live"] = "evolution_api não configurado no config.yaml."
+            return jsonify(resposta)
         try:
-            return jsonify(integracao_evolution.status_instancia(app.config["CONFIG_EVOLUTION"]))
+            resposta.update(integracao_evolution.status_instancia(app.config["CONFIG_EVOLUTION"]))
         except Exception as exc:
-            return jsonify({"erro": f"Falha ao consultar a Evolution API: {exc}"}), 502
+            resposta["erro_live"] = f"Falha ao consultar a Evolution API: {exc}"
+        return jsonify(resposta)
 
     @app.post("/api/whatsapp/parear")
     @requer_auth(niveis=("admin",))

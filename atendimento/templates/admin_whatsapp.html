@@ -12,6 +12,7 @@
   .resultado img { max-width: 260px; border: 1px solid var(--borda); border-radius: 8px; }
   .resultado .codigo { font-size: 22px; font-weight: 800; letter-spacing: 2px; font-family: monospace; padding: 12px; background: var(--fundo); border-radius: 8px; text-align: center; }
   .aviso-erro { color: var(--erro); font-size: 13px; margin-top: 10px; }
+  .texto-erro { color: var(--erro); }
 </style>
 {% endblock %}
 {% block conteudo %}
@@ -46,8 +47,21 @@ function fetchJson(url, opcoes) {
 function carregarStatus() {
   document.getElementById("status-conteudo").textContent = "Carregando...";
   fetchJson("/api/whatsapp/status").then(d => {
-    document.getElementById("status-conteudo").innerHTML =
-      `<div class="status-linha"><span class="rotulo">Estado:</span> <strong>${d.instance && d.instance.state || JSON.stringify(d)}</strong></div>`;
+    const linhas = [];
+    if (d.erro_live) {
+      linhas.push(`<div class="aviso-erro">Checagem ao vivo falhou: ${d.erro_live}</div>`);
+    } else {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Estado (ao vivo):</span> <strong>${(d.instance && d.instance.state) || "desconhecido"}</strong></div>`);
+    }
+    const em = d.estado_monitorado && d.estado_monitorado.mudou_em;
+    const conectadoMonitorado = d.estado_monitorado && d.estado_monitorado.conectado;
+    if (d.estado_monitorado && d.estado_monitorado.conectado !== null) {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Monitor (timer 5min):</span> <strong class="${conectadoMonitorado ? '' : 'texto-erro'}">${conectadoMonitorado ? "conectado" : "desconectado"}</strong>${em ? ` desde ${em.slice(0, 16)}` : ""}</div>`);
+    }
+    if (d.fila_reenvio) {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Fila de reenvio:</span> ${d.fila_reenvio.pendentes} pendente(s), <span class="${d.fila_reenvio.falhou ? 'texto-erro' : ''}">${d.fila_reenvio.falhou} não entregue(s)</span></div>`);
+    }
+    document.getElementById("status-conteudo").innerHTML = linhas.join("");
   }).catch(err => {
     document.getElementById("status-conteudo").innerHTML = `<div class="aviso-erro">${err.message}</div>`;
   });
