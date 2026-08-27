@@ -25,6 +25,12 @@ DB_PATH = _RAIZ / "dados" / "atendimento.db"
 # times possíveis de uma conversa (roteamento manual, sem bot de triagem ainda)
 TIMES = ("DESTINATARIOS", "MOTORISTAS", "COMERCIAL_FINANCEIRO")
 
+# Limiares das métricas em tempo real (barra do topo, ver app.py::api_metricas
+# e base.html) -- fixos por enquanto, virar configurável em config.yaml se o
+# Hugo pedir depois de ver como se comporta na prática.
+LIMITE_SLA_FILA_MIN = 15   # conversa não atribuída esperando há mais que isso = SLA estourado
+LIMITE_PARADO_MIN = 20     # conversa atribuída sem resposta ao cliente há mais que isso = parada
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS usuarios (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,8 +105,24 @@ def conectar() -> sqlite3.Connection:
     return conn
 
 
+# Coluna nova de `conversas` (tabela já existia antes da barra de métricas) --
+# migração aditiva, mesmo padrão de nucleo/banco.py.
+_COLUNAS_CONVERSAS_NOVAS = [
+    ("ultima_mensagem_direcao", "TEXT"),  # IN | OUT -- base da métrica "atendimentos parados"
+]
+
+
+def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[str, str]]):
+    existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
+    for nome, tipo in colunas:
+        if nome not in existentes:
+            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+            logger.info(f"atendimento: coluna {tabela}.{nome} adicionada.")
+
+
 def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
+    _migrar_colunas(conn, "conversas", _COLUNAS_CONVERSAS_NOVAS)
     conn.commit()
 
 
@@ -175,8 +197,40 @@ def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str,
     preview = (corpo or "")[:120]
     conn.execute(
         "UPDATE conversas SET ultima_mensagem_em = datetime('now','localtime'), "
-        "ultima_mensagem_preview = ? WHERE id = ?",
-        (preview, conversa_id),
+        "ultima_mensagem_preview = ?, ultima_mensagem_direcao = ? WHERE id = ?",
+        (preview, direcao, conversa_id),
     )
     conn.commit()
     return cur.lastrowid
+
+
+def calcular_metricas(conn: sqlite3.Connection) -> dict:
+    """Métricas da barra do topo (ver app.py::api_metricas e base.html) --
+    pensadas pro atendente acompanhar em tempo real, não só o admin:
+    'fila' e 'fila_sla_estourado' medem a porta de entrada (conversa sem
+    ninguém ainda), 'parados' mede acompanhamento (conversa já assumida
+    mas o cliente escreveu por último e ninguém respondeu ainda),
+    'resolvidas_hoje' é a métrica "de produtividade"."""
+    fila = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversas WHERE status = 'ABERTA' AND atendente_id IS NULL",
+    ).fetchone()["n"]
+    fila_sla_estourado = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversas WHERE status = 'ABERTA' AND atendente_id IS NULL "
+        "  AND aberta_em <= datetime('now', 'localtime', ?)",
+        (f"-{LIMITE_SLA_FILA_MIN} minutes",),
+    ).fetchone()["n"]
+    parados = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversas WHERE status = 'ABERTA' AND atendente_id IS NOT NULL "
+        "  AND ultima_mensagem_direcao = 'IN' AND ultima_mensagem_em <= datetime('now', 'localtime', ?)",
+        (f"-{LIMITE_PARADO_MIN} minutes",),
+    ).fetchone()["n"]
+    resolvidas_hoje = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversas WHERE status = 'RESOLVIDA' "
+        "  AND encerrada_em >= date('now', 'localtime')",
+    ).fetchone()["n"]
+    return {
+        "fila": fila,
+        "fila_sla_estourado": fila_sla_estourado,
+        "parados": parados,
+        "resolvidas_hoje": resolvidas_hoje,
+    }

@@ -225,6 +225,11 @@ def criar_app(config: dict | None = None) -> Flask:
     def admin_whatsapp():
         return render_template("admin_whatsapp.html")
 
+    @app.get("/api/metricas")
+    @requer_auth
+    def api_metricas():
+        return jsonify(banco.calcular_metricas(conn()))
+
     # ── API: conversas ───────────────────────────────────────────────
     def _linha_conversa(row: dict) -> dict:
         return {
