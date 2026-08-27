@@ -35,6 +35,7 @@ import base64
 import hmac
 import logging
 import mimetypes
+import random
 import re
 import sys
 from datetime import timedelta
@@ -154,6 +155,13 @@ _MENU_TRIAGEM_REPETIR = (
 
 _MENU_TRIAGEM_DESISTENCIA = "Sem problemas, já te encaminho pra um atendente conversar com você."
 
+# Resposta instantânea (<1s) é um dos sinais que o WhatsApp usa pra
+# identificar automação -- suspeito de contribuir pro erro 463 (ver
+# integracao_evolution.enviar_texto). Faixa aleatória, não fixa, pra não
+# ficar óbvio que é sempre o mesmo tempo.
+_BOT_DELAY_MS_MIN = 1500
+_BOT_DELAY_MS_MAX = 3500
+
 # Mapeamento motivo->time fácil de ajustar (uma linha) se o Hugo quiser outro
 # time pra alguma opção depois -- ver plano.
 _OPCOES_TRIAGEM = {
@@ -180,8 +188,10 @@ def _extrair_opcao_menu(texto: str | None) -> str | None:
 def _bot_enviar(cfg_evolution: dict, conexao, conversa_id: int, telefone_e164: str, texto: str) -> None:
     """Manda uma mensagem do bot de triagem e grava igual a uma resposta de
     atendente -- mesmo caminho de falha/retry (status PENDENTE cai na fila
-    de reenviar_pendentes.py, que não distingue quem mandou)."""
-    sucesso, evolution_id = integracao_evolution.enviar_texto(cfg_evolution, telefone_e164, texto)
+    de reenviar_pendentes.py, que não distingue quem mandou). Delay + "digitando"
+    aleatório (ver _BOT_DELAY_MS_*) pra não responder instantaneamente."""
+    delay_ms = random.randint(_BOT_DELAY_MS_MIN, _BOT_DELAY_MS_MAX)
+    sucesso, evolution_id = integracao_evolution.enviar_texto(cfg_evolution, telefone_e164, texto, delay_ms=delay_ms)
     bot_id = banco.usuario_bot_id(conexao)
     banco.registrar_mensagem(
         conexao, conversa_id, "OUT", texto, atendente_id=bot_id,

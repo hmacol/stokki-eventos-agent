@@ -62,7 +62,7 @@ def _telefone_e164(telefone: str) -> str | None:
     return f"+{digitos}"
 
 
-def enviar_texto(cfg: dict, telefone: str, texto: str) -> tuple[bool, str | None]:
+def enviar_texto(cfg: dict, telefone: str, texto: str, delay_ms: int | None = None) -> tuple[bool, str | None]:
     """Primitiva única de envio, reaproveitada pelo aviso automático de
     oferta de rota (enviar_whatsapp_oferta) e pela rota de resposta da
     central de atendimento. Nunca levanta exceção -- qualquer falha
@@ -70,7 +70,17 @@ def enviar_texto(cfg: dict, telefone: str, texto: str) -> tuple[bool, str | None
     Retorna (sucesso, evolution_message_id) -- o id serve pra já gravar
     a mensagem em atendimento/banco.py com o mesmo id que vai chegar de
     volta no webhook (evita duplicar quando o eco da própria mensagem
-    enviada retornar via messages.upsert)."""
+    enviada retornar via messages.upsert).
+
+    delay_ms (opcional): confirmado no código-fonte da Evolution API
+    (whatsapp.baileys.service.ts::sendMessageWithTyping) -- faz o Baileys
+    mostrar "digitando..." pro destinatário por esse tempo ANTES de mandar
+    (a chamada HTTP fica bloqueada até lá, então não usar valores altos).
+    Usado pelo bot de triagem (app.py::_bot_enviar) pra não responder
+    instantaneamente -- resposta em <1s é um dos sinais que o WhatsApp usa
+    pra identificar automação e é suspeito de contribuir pro erro 463.
+    None/0 (default) não manda o campo -- comportamento de sempre, sem
+    delay, usado por respostas de atendente humano e aviso de rota."""
     if not configurado(cfg):
         return False, None
     telefone_e164 = _telefone_e164(telefone)
@@ -80,12 +90,14 @@ def enviar_texto(cfg: dict, telefone: str, texto: str) -> tuple[bool, str | None
     base = cfg["base_url"].rstrip("/")
     instancia = cfg["instance"]
     headers = {"apikey": cfg["api_key"]}
+    corpo = {"number": telefone_e164.lstrip("+"), "text": texto}
+    if delay_ms:
+        corpo["delay"] = delay_ms
 
     try:
         resp = requests.post(
             f"{base}/message/sendText/{instancia}",
-            json={"number": telefone_e164.lstrip("+"), "text": texto},
-            headers=headers, timeout=_TIMEOUT,
+            json=corpo, headers=headers, timeout=_TIMEOUT,
         )
         resp.raise_for_status()
         dados = resp.json()
