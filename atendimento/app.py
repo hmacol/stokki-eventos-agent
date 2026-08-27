@@ -31,19 +31,23 @@ config.yaml:
       instance: "..."
       webhook_secret: "..."
 """
+import base64
 import hmac
 import logging
+import mimetypes
+import re
 import sys
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
 import yaml
-from flask import Flask, abort, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -52,34 +56,81 @@ import integracao_evolution
 
 logger = logging.getLogger("atendimento.app")
 
+_PASTA_MIDIA = _RAIZ / "dados" / "atendimento_midia"
+
+# (chave do payload da Evolution, categoria estável pro front-end, rótulo em
+# português pro texto de mensagens.corpo)
 _TIPOS_MIDIA = (
-    ("imageMessage", "Imagem"), ("videoMessage", "Vídeo"), ("audioMessage", "Áudio"),
-    ("documentMessage", "Documento"), ("stickerMessage", "Figurinha"),
+    ("imageMessage", "imagem", "Imagem"), ("videoMessage", "video", "Vídeo"),
+    ("audioMessage", "audio", "Áudio"), ("documentMessage", "documento", "Documento"),
+    ("stickerMessage", "figurinha", "Figurinha"),
 )
+
+
+def _analisar_midia(mensagem: dict) -> tuple[str, str, str] | None:
+    """(chave_evolution, categoria, rótulo) do primeiro tipo de mídia
+    reconhecido em `mensagem`, ou None se não for mídia."""
+    for chave, categoria, rotulo in _TIPOS_MIDIA:
+        if mensagem.get(chave):
+            return chave, categoria, rotulo
+    return None
 
 
 def _descrever_conteudo_mensagem(mensagem: dict) -> str | None:
     """Texto pra guardar em mensagens.corpo a partir do payload bruto do
-    webhook. Mídia (foto/áudio/documento/etc.) ainda não é baixada nem
-    exibida de verdade -- só um rótulo (📎 Tipo: legenda) pra o atendente
-    saber que algo chegou; baixar/mostrar o arquivo em si fica pra uma
-    entrega futura (mais estrutural). Retorna None quando o evento não
-    tem conteúdo reconhecível (ex.: reação, recibo, distribuição de
-    chave) -- quem chama decide não gravar nada nesse caso."""
+    webhook -- pra mídia, é o rótulo (📎 Tipo: legenda) usado como legenda
+    abaixo do arquivo de verdade (ver _baixar_e_salvar_midia) ou, se o
+    download falhar, como único indício de que algo chegou. Retorna None
+    quando o evento não tem conteúdo reconhecível (ex.: reação, recibo,
+    distribuição de chave) -- quem chama decide não gravar nada nesse caso."""
     texto = mensagem.get("conversation") or (mensagem.get("extendedTextMessage") or {}).get("text")
     if texto:
         return texto
-    for chave, rotulo in _TIPOS_MIDIA:
-        m = mensagem.get(chave)
-        if m:
-            partes = [f"📎 {rotulo}"]
-            if m.get("fileName"):
-                partes.append(m["fileName"])
-            descricao = " — ".join(partes)
-            if m.get("caption"):
-                descricao += f": {m['caption']}"
-            return descricao
+    achado = _analisar_midia(mensagem)
+    if achado:
+        chave, _categoria, rotulo = achado
+        m = mensagem[chave]
+        partes = [f"📎 {rotulo}"]
+        if m.get("fileName"):
+            partes.append(m["fileName"])
+        descricao = " — ".join(partes)
+        if m.get("caption"):
+            descricao += f": {m['caption']}"
+        return descricao
     return None
+
+
+def _baixar_e_salvar_midia(cfg_evolution: dict, dado: dict, achado_midia: tuple,
+                            evolution_message_id: str | None) -> dict | None:
+    """Baixa a mídia de uma mensagem recebida (ver integracao_evolution.baixar_midia,
+    que exige o `dado` INTEIRO do webhook, não só a key) e salva em
+    dados/atendimento_midia/. Nunca levanta -- None em qualquer falha (rede,
+    mídia expirada, base64 inválido), e quem chama cai de volta pro
+    comportamento de só gravar o rótulo de texto."""
+    _chave, categoria, _rotulo = achado_midia
+    resultado = integracao_evolution.baixar_midia(cfg_evolution, dado)
+    if not resultado:
+        return None
+    try:
+        conteudo = base64.b64decode(resultado["base64"])
+    except Exception:
+        logger.warning("Base64 de mídia inválido recebido da Evolution API.")
+        return None
+
+    mime = resultado.get("mimetype") or "application/octet-stream"
+    extensao = mimetypes.guess_extension(mime.split(";")[0].strip()) or ""
+    id_seguro = re.sub(r"[^A-Za-z0-9_-]", "_", evolution_message_id or "") or uuid4().hex
+    nome_arquivo = f"{id_seguro}{extensao}"
+
+    _PASTA_MIDIA.mkdir(parents=True, exist_ok=True)
+    caminho = _PASTA_MIDIA / nome_arquivo
+    caminho.write_bytes(conteudo)
+
+    return {
+        "categoria": categoria, "mime": mime,
+        "caminho": str(caminho.relative_to(_RAIZ)),
+        "nome_original": resultado.get("fileName"),
+    }
 
 
 def _carregar_config() -> dict:
@@ -574,11 +625,38 @@ def criar_app(config: dict | None = None) -> Flask:
         # pela UI) -- ainda assim tem que aparecer na thread, senão o
         # histórico fica incompleto (achado do design, ver plano).
         direcao = "OUT" if de_mim_mesmo else "IN"
+        achado_midia = _analisar_midia(dado.get("message") or {})
+        midia_info = None
+        if achado_midia:
+            # Tem que ser agora, com o `dado` completo em mãos -- ver
+            # docstring de integracao_evolution.baixar_midia. Falha aqui
+            # nunca derruba o webhook, só cai de volta pro rótulo de texto.
+            midia_info = _baixar_e_salvar_midia(
+                app.config["CONFIG_EVOLUTION"], dado, achado_midia, chave.get("id"),
+            )
         banco.registrar_mensagem(
             conn(), conversa["id"], direcao, texto,
-            atendente_id=None, evolution_message_id=chave.get("id"),
+            atendente_id=None, evolution_message_id=chave.get("id"), midia=midia_info,
         )
         return jsonify({"ok": True})
+
+    @app.get("/midia/<int:mensagem_id>")
+    @requer_auth
+    def midia(mensagem_id):
+        linha = conn().execute(
+            "SELECT midia_caminho, midia_mime, midia_nome_original FROM mensagens WHERE id = ?",
+            (mensagem_id,),
+        ).fetchone()
+        if not linha or not linha["midia_caminho"]:
+            abort(404)
+        caminho = (_RAIZ / linha["midia_caminho"]).resolve()
+        # Defesa em profundidade: midia_caminho é sempre construído por
+        # _baixar_e_salvar_midia (nunca vem do usuário), mas confirmar mesmo
+        # assim que continua dentro da pasta esperada antes de servir.
+        if not caminho.is_relative_to(_PASTA_MIDIA.resolve()) or not caminho.is_file():
+            abort(404)
+        return send_file(caminho, mimetype=linha["midia_mime"] or None,
+                          download_name=linha["midia_nome_original"] or caminho.name)
 
     return app
 

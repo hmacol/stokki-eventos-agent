@@ -71,6 +71,9 @@
   .status-envio { margin-left: 6px; }
   .status-envio.pendente { color: var(--texto-suave); }
   .status-envio.falhou { color: var(--erro); font-weight: 600; }
+  .midia-imagem, .midia-video { max-width: 220px; border-radius: 8px; display: block; margin-bottom: 4px; }
+  .midia-audio { width: 100%; margin-bottom: 4px; }
+  .midia-documento { display: block; margin-bottom: 4px; text-decoration: underline; color: inherit; }
   .thread-resposta { padding: 12px 16px; border-top: 1px solid var(--borda); display: flex; gap: 8px; position: relative; }
   .thread-resposta textarea { min-height: 40px; }
   .picker-respostas { position: relative; }
@@ -183,12 +186,23 @@ function selecionarConversa(id) {
   carregarThread(true);
 }
 
+function conteudoMidiaHtml(m) {
+  if (!m.midia_categoria) return '';
+  const url = `${BASE_PATH}/midia/${m.id}`;
+  if (m.midia_categoria === 'imagem') return `<img src="${url}" class="midia-imagem" loading="lazy">`;
+  if (m.midia_categoria === 'video') return `<video src="${url}" class="midia-video" controls></video>`;
+  if (m.midia_categoria === 'audio') return `<audio src="${url}" class="midia-audio" controls></audio>`;
+  const nome = escapeHtml(m.midia_nome_original || (m.midia_categoria === 'figurinha' ? 'figurinha' : 'documento'));
+  return `<a href="${url}" target="_blank" rel="noopener" class="midia-documento">📎 ${nome}</a>`;
+}
+
 function bolhaHtml(m) {
   const hora = (m.criado_em || '').slice(11, 16);
   const quem = m.direcao === 'OUT' ? (m.atendente_nome || 'Você/celular') : '';
   const statusEnvio = m.status === 'PENDENTE' ? '<span class="status-envio pendente">⏳ reenviando…</span>'
     : m.status === 'FALHOU' ? '<span class="status-envio falhou">⚠️ não entregue</span>' : '';
   return `<div class="bolha ${m.direcao}">
+    ${conteudoMidiaHtml(m)}
     ${escapeHtml(m.corpo || '')}
     <div class="meta">${quem ? escapeHtml(quem) + ' · ' : ''}${hora}${statusEnvio}</div>
   </div>`;

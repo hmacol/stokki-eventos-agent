@@ -39,6 +39,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15
+_TIMEOUT_MIDIA = 20  # mídia demora mais que texto pra baixar, mas não pode travar o webhook por muito tempo
 
 
 def configurado(cfg: dict | None) -> bool:
@@ -93,6 +94,41 @@ def enviar_texto(cfg: dict, telefone: str, texto: str) -> tuple[bool, str | None
     except requests.RequestException as exc:
         logger.warning(f"Falha ao enviar WhatsApp via Evolution API para {telefone}: {exc}")
         return False, None
+
+
+def baixar_midia(cfg: dict, mensagem_bruta: dict) -> dict | None:
+    """Busca o conteúdo (base64) de uma mensagem de mídia recebida --
+    POST /chat/getBase64FromMediaMessage/{instance}. `mensagem_bruta` precisa
+    ser o objeto INTEIRO do evento messages.upsert (key + message juntos,
+    não só a key sozinha) -- confirmado direto no código-fonte da Evolution
+    API (whatsapp.baileys.service.ts::getBase64FromMediaMessage): se faltar
+    o `message`, ela tenta reconsultar do armazenamento interno do Baileys,
+    que pode não ter mais a mensagem. Por isso o download tem que acontecer
+    no momento do webhook, com o payload completo ainda em mãos.
+
+    Nunca levanta exceção -- retorna None em qualquer falha (mídia expirada,
+    rede, resposta sem base64 etc.), mesmo padrão de enviar_texto."""
+    if not configurado(cfg):
+        return None
+    base = cfg["base_url"].rstrip("/")
+    instancia = cfg["instance"]
+    headers = {"apikey": cfg["api_key"]}
+    try:
+        resp = requests.post(
+            f"{base}/chat/getBase64FromMediaMessage/{instancia}",
+            json={"message": mensagem_bruta}, headers=headers, timeout=_TIMEOUT_MIDIA,
+        )
+        resp.raise_for_status()
+        dados = resp.json()
+        if not dados.get("base64"):
+            return None
+        return dados
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao baixar mídia via Evolution API: {exc}")
+        return None
+    except ValueError as exc:  # resposta não é JSON válido
+        logger.warning(f"Resposta inesperada ao baixar mídia via Evolution API: {exc}")
+        return None
 
 
 def enviar_whatsapp_oferta(cfg: dict, telefone: str, nome: str, link_escolha: str) -> bool:

@@ -133,6 +133,13 @@ _COLUNAS_MENSAGENS_NOVAS = [
     ("status", "TEXT NOT NULL DEFAULT 'ENVIADA'"),  # ENVIADA | PENDENTE | FALHOU
     ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
     ("proxima_tentativa_em", "TEXT"),
+    # Mídia recebida baixada de verdade (ver app.py::_baixar_e_salvar_midia) --
+    # todas NULL quando a mensagem não é mídia ou o download falhou (cai de
+    # volta pro rótulo de texto em `corpo`, comportamento de antes).
+    ("midia_categoria", "TEXT"),        # imagem | video | audio | documento | figurinha
+    ("midia_mime", "TEXT"),
+    ("midia_caminho", "TEXT"),          # relativo à raiz do projeto
+    ("midia_nome_original", "TEXT"),
 ]
 
 
@@ -206,24 +213,31 @@ def assumir_conversa(conn: sqlite3.Connection, conversa_id: int, atendente_id: i
 
 def registrar_mensagem(conn: sqlite3.Connection, conversa_id: int, direcao: str, corpo: str | None,
                         atendente_id: int | None = None, evolution_message_id: str | None = None,
-                        status: str = "ENVIADA") -> int | None:
+                        status: str = "ENVIADA", midia: dict | None = None) -> int | None:
     """Insere a mensagem e atualiza o resumo da conversa (preview + hora).
     Idempotente por evolution_message_id: se o id já existe (eco/retry do
     webhook), não duplica -- retorna None nesse caso.
 
     status="PENDENTE" é usado quando o envio pela Evolution API falhou na
     hora (ver api_responder em app.py): a mensagem já aparece na thread em
-    vez de sumir, e reenviar_pendentes.py assume dali."""
+    vez de sumir, e reenviar_pendentes.py assume dali.
+
+    midia (opcional): dict com categoria/mime/caminho/nome_original quando o
+    webhook baixou a mídia recebida com sucesso (ver
+    app.py::_baixar_e_salvar_midia). None (default) grava tudo NULL."""
     if evolution_message_id:
         ja = conn.execute(
             "SELECT id FROM mensagens WHERE evolution_message_id = ?", (evolution_message_id,),
         ).fetchone()
         if ja:
             return None
+    midia = midia or {}
     cur = conn.execute(
-        "INSERT INTO mensagens (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status),
+        "INSERT INTO mensagens (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status, "
+        "midia_categoria, midia_mime, midia_caminho, midia_nome_original) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (conversa_id, direcao, atendente_id, corpo, evolution_message_id, status,
+         midia.get("categoria"), midia.get("mime"), midia.get("caminho"), midia.get("nome_original")),
     )
     preview = (corpo or "")[:120]
     conn.execute(
