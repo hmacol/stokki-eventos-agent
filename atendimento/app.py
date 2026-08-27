@@ -720,7 +720,11 @@ def criar_app(config: dict | None = None) -> Flask:
             # definitiva: NÃO reenviar (0/14 reenvios funcionaram e cada um
             # renova a trava) -- marca FALHOU, arma o disjuntor e avisa.
             dado_update = payload.get("data") or {}
-            if dado_update.get("status") == "ERROR":
+            status_upd = dado_update.get("status")
+            if status_upd in ("DELIVERY_ACK", "READ"):
+                # ✓✓ -- chegou no aparelho (base da sonda_entrega.py e do tique na thread)
+                banco.marcar_entrega_confirmada(conn(), dado_update.get("keyId"))
+            elif status_upd == "ERROR":
                 falha = banco.marcar_entrega_falhou_definitivo(conn(), dado_update.get("keyId"))
                 if falha:
                     banco.suspender_envios_automaticos(

@@ -157,6 +157,9 @@ _COLUNAS_MENSAGENS_NOVAS = [
     ("midia_mime", "TEXT"),
     ("midia_caminho", "TEXT"),          # relativo à raiz do projeto
     ("midia_nome_original", "TEXT"),
+    # ✓✓ -- messages.update DELIVERY_ACK/READ (ver app.py::webhook_evolution).
+    # Base da sonda_entrega.py e do tique na thread; NULL = sem confirmação.
+    ("entregue_em", "TEXT"),
 ]
 
 # Colunas novas de `estado_evolution` (disjuntor, ver SUSPENSAO_463_HORAS_PADRAO).
@@ -418,6 +421,21 @@ def marcar_entrega_falhou_definitivo(conn: sqlite3.Connection, evolution_message
     )
     conn.commit()
     return dict(linha)
+
+
+def marcar_entrega_confirmada(conn: sqlite3.Connection, evolution_message_id: str | None) -> bool:
+    """messages.update DELIVERY_ACK/READ = chegou no aparelho do destinatário
+    (✓✓). Idempotente (COALESCE mantém a primeira confirmação). Retorna True
+    se era uma mensagem nossa ainda sem confirmação."""
+    if not evolution_message_id:
+        return False
+    cur = conn.execute(
+        "UPDATE mensagens SET entregue_em = COALESCE(entregue_em, datetime('now','localtime')) "
+        "WHERE evolution_message_id = ? AND status != 'FALHOU' AND entregue_em IS NULL",
+        (evolution_message_id,),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 # ── Disjuntor de envios automáticos ─────────────────────────────────────────

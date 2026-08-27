@@ -54,3 +54,23 @@ def avisar_mensagem_nao_entregue(config: dict, protocolo: str | None, telefone: 
         email_utils.envelope_html("".join(linhas), cor_acento=email_utils.COR_ERRO),
         config.get("email", {}),
     )
+
+
+def avisar_resultado_sonda(config: dict, telefone: str, resultado: str, detalhe: str) -> bool:
+    """Veredito da sonda de entrega (atendimento/sonda_entrega.py): ENTREGUE,
+    RECUSADA (463), INDETERMINADA ou FALHA_NO_POST -- com a instrução do que
+    fazer em cada caso, pra decisão não depender de abrir log."""
+    entregue = resultado == "ENTREGUE"
+    conteudo = (
+        f"<p><strong>Sonda de entrega pelo WhatsApp (API): {html.escape(resultado)}</strong></p>"
+        f"<p>Telefone: {html.escape(telefone)}<br>{html.escape(detalhe)}</p>"
+        "<p>ENTREGUE = a trava 463 expirou -- pode clicar em <em>Retomar</em> em "
+        "atendimento.freshhub.com.br/admin/whatsapp.<br>"
+        "RECUSADA = ainda travada -- manter a pausa e esperar mais antes de outra sonda (nunca em rajada).<br>"
+        "INDETERMINADA = sem ✓✓ nem recusa no prazo -- conferir no celular se chegou antes de decidir.</p>"
+    )
+    return email_utils.enviar_email(
+        [_destinatario(config)], f"Atendimento: sonda de entrega -- {resultado}",
+        email_utils.envelope_html(conteudo, cor_acento=email_utils.COR_ACENTO if entregue else email_utils.COR_ERRO),
+        config.get("email", {}),
+    )

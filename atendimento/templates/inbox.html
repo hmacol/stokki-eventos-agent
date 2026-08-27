@@ -72,6 +72,7 @@
   .status-envio { margin-left: 6px; }
   .status-envio.pendente { color: var(--texto-suave); }
   .status-envio.falhou { color: var(--erro); font-weight: 600; }
+  .status-envio.entregue { color: var(--acento); font-weight: 700; }
   .midia-imagem, .midia-video { max-width: 220px; border-radius: 8px; display: block; margin-bottom: 4px; }
   .midia-audio { width: 100%; margin-bottom: 4px; }
   .midia-documento { display: block; margin-bottom: 4px; text-decoration: underline; color: inherit; }
@@ -206,7 +207,8 @@ function bolhaHtml(m) {
   const hora = (m.criado_em || '').slice(11, 16);
   const quem = m.direcao === 'OUT' ? (m.atendente_nome || 'Você/celular') : '';
   const statusEnvio = m.status === 'PENDENTE' ? '<span class="status-envio pendente">⏳ reenviando…</span>'
-    : m.status === 'FALHOU' ? '<span class="status-envio falhou">⚠️ não entregue</span>' : '';
+    : m.status === 'FALHOU' ? '<span class="status-envio falhou">⚠️ não entregue</span>'
+    : m.entregue_em ? `<span class="status-envio entregue" title="entregue em ${m.entregue_em.slice(0, 16)}">✓✓</span>` : '';
   return `<div class="bolha ${m.direcao}">
     ${conteudoMidiaHtml(m)}
     ${escapeHtml(m.corpo || '')}
