@@ -49,7 +49,7 @@ import yaml
 
 import email_utils
 import tratativas
-from vuupt_client import VuuptClient
+from vuupt_client import VuuptClient, VuuptAPIError
 from freshhub.auth import FreshHubSession
 from freshhub.pedidos_parados import listar_pedidos_parados
 from freshhub.tasks import criar_demanda_para_tratativa
@@ -768,8 +768,41 @@ def notificar_cliente_retira(order_number: str, usuario: str) -> dict:
         pedido_code, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLIENTE_RETIRA_NOTIFICADO",
         texto=f"E-mail de 'ainda não coletado' enviado por {usuario} pra {nome} ({', '.join(emails)})",
     )
-    _marcar_acao(order_number, "concluida", f"e-mail enviado → {nome} ({', '.join(emails)})")
-    return {"ok": True, "nome_embarcador": nome, "emails": emails}
+
+    # Caso #PS-37190 (27/08): pedido tinha sido importado no VUUPT ANTES
+    # de virar "Cliente Retira" no Stokki -- o filtro de RETIRADA em
+    # pipeline.py só roda na importação, então o serviço ficou órfão no
+    # VUUPT depois da reclassificação. Como esta ação já É a confirmação
+    # de que o pedido é retirada pelo cliente, aproveita pra cancelar o
+    # serviço aqui também, se ele existir e ainda não tiver sido tocado
+    # (nunca cancela algo já atribuído/em rota/concluído -- nesse caso
+    # só avisa, intervenção manual).
+    detalhe_vuupt = ""
+    try:
+        servico = _vuupt().buscar_servico_por_code(codigo)
+        if servico:
+            status = servico.get("status")
+            if status == "not_assigned":
+                _vuupt().cancelar_servico(servico["id"])
+                tratativas.registrar_evento(
+                    pedido_code, "PEDIDOS_PARADOS", "SERVICO_VUUPT_CANCELADO_CLIENTE_RETIRA",
+                    service_id=servico["id"],
+                    texto=f"Serviço {servico['id']} cancelado no VUUPT por {usuario} -- pedido é retirada pelo cliente.",
+                )
+                detalhe_vuupt = f" (serviço {servico['id']} cancelado no VUUPT)"
+            else:
+                logger.warning(
+                    f"{pedido_code}: é Cliente Retira, mas o serviço {servico['id']} no VUUPT "
+                    f"está em status '{status}' (não 'not_assigned') -- não cancelado automaticamente, "
+                    f"intervenção manual necessária."
+                )
+                detalhe_vuupt = f" (AVISO: serviço {servico['id']} no VUUPT em status '{status}', cancelar manualmente)"
+    except VuuptAPIError as e:
+        logger.warning(f"{pedido_code}: falha ao cancelar serviço no VUUPT -- {e}")
+        detalhe_vuupt = f" (falha ao cancelar no VUUPT: {e})"
+
+    _marcar_acao(order_number, "concluida", f"e-mail enviado → {nome} ({', '.join(emails)})" + detalhe_vuupt)
+    return {"ok": True, "nome_embarcador": nome, "emails": emails, "detalhe_vuupt": detalhe_vuupt}
 
 
 def _servico_com_sucesso(servico: dict) -> bool:
