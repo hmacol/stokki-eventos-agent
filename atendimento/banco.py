@@ -37,6 +37,18 @@ LIMITE_PARADO_MIN = 20     # conversa atribuída sem resposta ao cliente há mai
 # depois de MAX_TENTATIVAS_ENVIO desiste e marca FALHOU (dispara e-mail de alerta).
 MAX_TENTATIVAS_ENVIO = 8
 
+# Disjuntor de envios automáticos (bot de triagem + fila de reenvio). Achado
+# real (26-27/08): o erro 463 é a trava "reach-out time-lock" do servidor do
+# WhatsApp -- o Baileys rc.9 da Evolution 2.3.7 não manda os tokens de
+# privacidade (tctoken/cstoken), então toda mensagem nossa conta como
+# "abordagem" e a conta é travada; cada reenvio RENOVA a trava (0 sucesso em
+# 14 reenvios). Por isso 463 é falha definitiva (sem retry) e suspende os
+# envios automáticos por SUSPENSAO_463_HORAS (config.yaml:
+# atendimento.suspensao_463_horas). Retry com backoff continua valendo só
+# pra falha do próprio POST (Evolution fora do ar, rede).
+SUSPENSAO_463_HORAS_PADRAO = 6
+PAUSA_MANUAL_ATE = "9999-12-31 23:59:59"  # sentinela: pausa manual, só sai pelo "Retomar" da tela WhatsApp
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS usuarios (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +159,12 @@ _COLUNAS_MENSAGENS_NOVAS = [
     ("midia_nome_original", "TEXT"),
 ]
 
+# Colunas novas de `estado_evolution` (disjuntor, ver SUSPENSAO_463_HORAS_PADRAO).
+_COLUNAS_ESTADO_EVOLUTION_NOVAS = [
+    ("envios_suspensos_ate", "TEXT"),   # NULL = envios automáticos liberados
+    ("motivo_suspensao", "TEXT"),
+]
+
 
 def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[str, str]]):
     existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
@@ -160,6 +178,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
     _migrar_colunas(conn, "conversas", _COLUNAS_CONVERSAS_NOVAS)
     _migrar_colunas(conn, "mensagens", _COLUNAS_MENSAGENS_NOVAS)
+    _migrar_colunas(conn, "estado_evolution", _COLUNAS_ESTADO_EVOLUTION_NOVAS)
     conn.execute("INSERT OR IGNORE INTO estado_evolution (id, conectado) VALUES (1, 1)")
     conn.commit()
 
@@ -373,27 +392,73 @@ def marcar_envio_falha_ou_esgotado(conn: sqlite3.Connection, mensagem_id: int, t
     return False
 
 
-def marcar_falha_entrega_reportada(conn: sqlite3.Connection, evolution_message_id: str | None) -> bool:
+def marcar_entrega_falhou_definitivo(conn: sqlite3.Connection, evolution_message_id: str | None) -> dict | None:
     """A Evolution API manda um POST de sucesso na hora do envio (vira
     status=ENVIADA), mas a entrega de verdade só é confirmada depois, via
-    webhook messages.update -- pode chegar bem mais tarde reportando
-    status=ERROR (achado real: erro 463, mensagem sai mas não chega).
-    Reaproveita o MESMO backoff/teto de marcar_envio_falha_ou_esgotado --
-    uma entrega que falha tarde entra na fila de reenvio exatamente como
-    uma que falhou na hora, incluindo o e-mail de alerta se esgotar
-    MAX_TENTATIVAS_ENVIO. Retorna False (sem efeito) se o id não bater com
-    nenhuma mensagem nossa ainda com status=ENVIADA -- evita reprocessar um
-    evento duplicado ou um id que já foi tratado antes."""
+    webhook messages.update -- que pode reportar status=ERROR (erro 463,
+    ver SUSPENSAO_463_HORAS_PADRAO). Isso é falha DEFINITIVA: não entra na
+    fila de reenvio (reenviar só renova a trava do WhatsApp). Marca FALHOU
+    e devolve protocolo/telefone/corpo pro alerta; None (sem efeito) se o id
+    não bater com nenhuma mensagem nossa ainda não-FALHOU -- evita reagir a
+    evento duplicado."""
     if not evolution_message_id:
-        return False
+        return None
     linha = conn.execute(
-        "SELECT id, tentativas FROM mensagens WHERE evolution_message_id = ? AND status = 'ENVIADA'",
+        "SELECT m.id, c.protocolo, ct.telefone_e164, m.corpo "
+        "FROM mensagens m JOIN conversas c ON c.id = m.conversa_id "
+        "JOIN contatos ct ON ct.id = c.contato_id "
+        "WHERE m.evolution_message_id = ? AND m.status != 'FALHOU'",
         (evolution_message_id,),
     ).fetchone()
     if not linha:
-        return False
-    marcar_envio_falha_ou_esgotado(conn, linha["id"], linha["tentativas"])
-    return True
+        return None
+    conn.execute(
+        "UPDATE mensagens SET status = 'FALHOU', proxima_tentativa_em = NULL WHERE id = ?",
+        (linha["id"],),
+    )
+    conn.commit()
+    return dict(linha)
+
+
+# ── Disjuntor de envios automáticos ─────────────────────────────────────────
+
+def prazo_em_horas(horas: float) -> str:
+    from datetime import datetime, timedelta
+    return (datetime.now() + timedelta(hours=horas)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def suspender_envios_automaticos(conn: sqlite3.Connection, ate: str, motivo: str) -> None:
+    """Só ESTENDE a suspensão, nunca encurta: uma pausa manual
+    (PAUSA_MANUAL_ATE) não é derrubada por um 463 posterior, e dois 463
+    seguidos não reduzem o prazo já vigente."""
+    atual = conn.execute("SELECT envios_suspensos_ate FROM estado_evolution WHERE id = 1").fetchone()
+    if atual and atual["envios_suspensos_ate"] and atual["envios_suspensos_ate"] >= ate:
+        return
+    conn.execute(
+        "UPDATE estado_evolution SET envios_suspensos_ate = ?, motivo_suspensao = ? WHERE id = 1",
+        (ate, motivo),
+    )
+    conn.commit()
+
+
+def retomar_envios_automaticos(conn: sqlite3.Connection) -> None:
+    conn.execute("UPDATE estado_evolution SET envios_suspensos_ate = NULL, motivo_suspensao = NULL WHERE id = 1")
+    conn.commit()
+
+
+def suspensao_envios(conn: sqlite3.Connection) -> dict | None:
+    """{'ate', 'motivo', 'manual'} enquanto a suspensão vigorar; None quando
+    bot e fila de reenvio estão liberados. Comparação de texto funciona
+    porque o formato é sempre 'YYYY-MM-DD HH:MM:SS'."""
+    row = conn.execute(
+        "SELECT envios_suspensos_ate, motivo_suspensao FROM estado_evolution WHERE id = 1",
+    ).fetchone()
+    if not row or not row["envios_suspensos_ate"] or row["envios_suspensos_ate"] <= datetime_agora_str():
+        return None
+    return {
+        "ate": row["envios_suspensos_ate"], "motivo": row["motivo_suspensao"],
+        "manual": row["envios_suspensos_ate"] == PAUSA_MANUAL_ATE,
+    }
 
 
 def atualizar_estado_evolution(conn: sqlite3.Connection, conectado: bool) -> bool:

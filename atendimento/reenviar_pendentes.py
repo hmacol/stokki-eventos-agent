@@ -32,36 +32,15 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import yaml
 
-import email_utils
 import integracao_evolution
-from atendimento import banco
+from atendimento import alertas, banco
 
 logger = logging.getLogger("atendimento.reenviar_pendentes")
-
-_DESTINATARIO_PADRAO = "hugo@freshlogbr.com"
 
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _avisar_esgotado(config: dict, protocolo: str, telefone: str, corpo: str | None) -> None:
-    destinatario = (config.get("atendimento", {}) or {}).get("email_alerta", _DESTINATARIO_PADRAO)
-    conteudo = (
-        f"<p>Uma mensagem não pôde ser entregue pelo WhatsApp depois de "
-        f"{banco.MAX_TENTATIVAS_ENVIO} tentativas.</p>"
-        f"<p><strong>Protocolo:</strong> {protocolo}<br>"
-        f"<strong>Telefone:</strong> {telefone}<br>"
-        f"<strong>Mensagem:</strong> {corpo or '(vazia)'}</p>"
-        f"<p>Verifique a conexão em atendimento.freshhub.com.br/admin/whatsapp "
-        f"e reenvie manualmente pela conversa se preciso.</p>"
-    )
-    email_utils.enviar_email(
-        [destinatario], f"Atendimento: mensagem não entregue ({protocolo})",
-        email_utils.envelope_html(conteudo, cor_acento=email_utils.COR_ERRO),
-        config.get("email", {}),
-    )
 
 
 def main() -> int:
@@ -75,6 +54,12 @@ def main() -> int:
     cfg_evolution = config.get("evolution_api", {}) or {}
     conn = banco.conectar()
     try:
+        suspensao = banco.suspensao_envios(conn)
+        if suspensao:
+            # Disjuntor (ver banco.SUSPENSAO_463_HORAS_PADRAO): reenviar agora
+            # só renovaria a trava do WhatsApp -- as pendentes esperam.
+            logger.info(f"Envios automáticos suspensos até {suspensao['ate']} ({suspensao['motivo']}) -- nada reenviado.")
+            return 0
         pendentes = banco.mensagens_pendentes_para_retry(conn)
         if not pendentes:
             logger.info("Nenhuma mensagem pendente.")
@@ -92,7 +77,10 @@ def main() -> int:
             esgotou = banco.marcar_envio_falha_ou_esgotado(conn, msg["id"], msg["tentativas"])
             if esgotou:
                 esgotadas += 1
-                _avisar_esgotado(config, msg["protocolo"], msg["telefone_e164"], msg["corpo"])
+                alertas.avisar_mensagem_nao_entregue(
+                    config, msg["protocolo"], msg["telefone_e164"], msg["corpo"],
+                    motivo=f"esgotou {banco.MAX_TENTATIVAS_ENVIO} tentativas (falha ao chamar a Evolution API)",
+                )
 
         logger.info(f"{len(pendentes)} pendente(s): {reenviadas} reenviada(s), {esgotadas} esgotada(s) (FALHOU).")
         return 0

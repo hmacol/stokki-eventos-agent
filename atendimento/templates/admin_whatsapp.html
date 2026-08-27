@@ -19,7 +19,11 @@
 <div class="caixa">
   <h3>Status da conexão</h3>
   <div id="status-conteudo">Carregando...</div>
-  <button class="botao" id="btn-atualizar-status" style="margin-top:10px;">Atualizar</button>
+  <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="botao" id="btn-atualizar-status">Atualizar</button>
+    <button class="botao perigo" id="btn-pausar" title="Bot de triagem e fila de reenvio param de mandar mensagens; respostas manuais continuam">Pausar envios automáticos</button>
+    <button class="botao" id="btn-retomar" title="Libera bot e reenvio, mesmo com trava 463 recente">Retomar</button>
+  </div>
 </div>
 
 <div class="caixa">
@@ -61,13 +65,30 @@ function carregarStatus() {
     if (d.fila_reenvio) {
       linhas.push(`<div class="status-linha"><span class="rotulo">Fila de reenvio:</span> ${d.fila_reenvio.pendentes} pendente(s), <span class="${d.fila_reenvio.falhou ? 'texto-erro' : ''}">${d.fila_reenvio.falhou} não entregue(s)</span></div>`);
     }
+    if (d.suspensao) {
+      const prazo = d.suspensao.manual ? "(pausa manual, até clicar em Retomar)" : `até ${d.suspensao.ate.slice(0, 16)}`;
+      linhas.push(`<div class="status-linha"><span class="rotulo">Envios automáticos:</span> <strong class="texto-erro">SUSPENSOS</strong> ${prazo} — ${escapeHtml(d.suspensao.motivo || "")}</div>`);
+    } else {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Envios automáticos:</span> <strong>ativos</strong> (bot de triagem + fila de reenvio)</div>`);
+    }
     document.getElementById("status-conteudo").innerHTML = linhas.join("");
   }).catch(err => {
     document.getElementById("status-conteudo").innerHTML = `<div class="aviso-erro">${err.message}</div>`;
   });
 }
 
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
 document.getElementById("btn-atualizar-status").addEventListener("click", carregarStatus);
+document.getElementById("btn-pausar").addEventListener("click", () => {
+  fetchJson("/api/whatsapp/pausar", {method: "POST"}).then(carregarStatus).catch(err => alert(err.message));
+});
+document.getElementById("btn-retomar").addEventListener("click", () => {
+  if (!confirm("Retomar libera o bot de triagem e a fila de reenvio mesmo com trava 463 recente (cada envio renova a trava). Confirma?")) return;
+  fetchJson("/api/whatsapp/retomar", {method: "POST"}).then(carregarStatus).catch(err => alert(err.message));
+});
 
 document.getElementById("btn-parear").addEventListener("click", () => {
   const numero = document.getElementById("numero-pareamento").value.trim();

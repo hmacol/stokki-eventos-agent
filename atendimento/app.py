@@ -38,6 +38,7 @@ import mimetypes
 import random
 import re
 import sys
+import threading
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
@@ -52,7 +53,7 @@ from flask import Flask, abort, g, jsonify, redirect, render_template, request, 
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from atendimento import banco
+from atendimento import alertas, banco
 import integracao_evolution
 
 logger = logging.getLogger("atendimento.app")
@@ -261,6 +262,10 @@ def criar_app(config: dict | None = None) -> Flask:
     app = Flask(__name__)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1, x_for=1, x_host=1)
     app.config["CONFIG_EVOLUTION"] = cfg_evolution
+    app.config["CONFIG_COMPLETA"] = config  # e-mail de alerta (atendimento/alertas.py) precisa da seção email
+    app.config["SUSPENSAO_463_HORAS"] = float(
+        cfg_atendimento.get("suspensao_463_horas", banco.SUSPENSAO_463_HORAS_PADRAO)
+    )
 
     secret = cfg_atendimento.get("secret_key")
     if not secret:
@@ -634,6 +639,7 @@ def criar_app(config: dict | None = None) -> Flask:
         resposta = {
             "estado_monitorado": banco.estado_evolution_atual(conn()),
             "fila_reenvio": banco.contagem_fila_reenvio(conn()),
+            "suspensao": banco.suspensao_envios(conn()),
         }
         if not integracao_evolution.configurado(app.config["CONFIG_EVOLUTION"]):
             resposta["erro_live"] = "evolution_api não configurado no config.yaml."
@@ -643,6 +649,26 @@ def criar_app(config: dict | None = None) -> Flask:
         except Exception as exc:
             resposta["erro_live"] = f"Falha ao consultar a Evolution API: {exc}"
         return jsonify(resposta)
+
+    @app.post("/api/whatsapp/pausar")
+    @requer_auth(niveis=("admin",))
+    @exige_mesma_origem
+    def api_whatsapp_pausar():
+        """Pausa manual dos envios automáticos (bot + fila de reenvio) --
+        sentinela PAUSA_MANUAL_ATE, só sai pelo /retomar."""
+        banco.suspender_envios_automaticos(
+            conn(), banco.PAUSA_MANUAL_ATE, f"pausa manual por {session.get('nome')}",
+        )
+        return jsonify({"ok": True, "suspensao": banco.suspensao_envios(conn())})
+
+    @app.post("/api/whatsapp/retomar")
+    @requer_auth(niveis=("admin",))
+    @exige_mesma_origem
+    def api_whatsapp_retomar():
+        """Libera bot e fila de reenvio -- inclusive por cima de uma
+        suspensão automática por 463 ainda vigente (decisão explícita do admin)."""
+        banco.retomar_envios_automaticos(conn())
+        return jsonify({"ok": True})
 
     @app.post("/api/whatsapp/parear")
     @requer_auth(niveis=("admin",))
@@ -669,17 +695,33 @@ def criar_app(config: dict | None = None) -> Flask:
         if evento == "messages.update":
             # A Evolution API confirma o envio na hora (POST 2xx com um id),
             # mas a entrega de verdade só vem depois por aqui -- achado real
-            # (26-27/08): erro 463, a mensagem "sai" mas o WhatsApp reporta
-            # status=ERROR minutos depois. Sem isso, a mensagem ficava
-            # marcada ENVIADA pra sempre mesmo não tendo chegado.
+            # (26-27/08): erro 463 (trava "reach-out" do WhatsApp, ver
+            # banco.SUSPENSAO_463_HORAS_PADRAO), a mensagem "sai" mas o
+            # WhatsApp reporta status=ERROR segundos depois. É falha
+            # definitiva: NÃO reenviar (0/14 reenvios funcionaram e cada um
+            # renova a trava) -- marca FALHOU, arma o disjuntor e avisa.
             dado_update = payload.get("data") or {}
             if dado_update.get("status") == "ERROR":
-                reagendada = banco.marcar_falha_entrega_reportada(conn(), dado_update.get("keyId"))
-                if reagendada:
-                    logger.warning(
-                        f"Entrega reportada como ERRO pela Evolution API (keyId={dado_update.get('keyId')}) "
-                        "-- reagendada pra reenvio.",
+                falha = banco.marcar_entrega_falhou_definitivo(conn(), dado_update.get("keyId"))
+                if falha:
+                    banco.suspender_envios_automaticos(
+                        conn(), banco.prazo_em_horas(app.config["SUSPENSAO_463_HORAS"]),
+                        f"falha de entrega (463) pra {falha['telefone_e164']}",
                     )
+                    suspensao = banco.suspensao_envios(conn()) or {}
+                    logger.warning(
+                        f"Entrega recusada pelo WhatsApp (keyId={dado_update.get('keyId')}, "
+                        f"{falha['telefone_e164']}) -- marcada FALHOU; envios automáticos suspensos "
+                        f"até {suspensao.get('ate')}.",
+                    )
+                    # E-mail em thread pra não segurar a resposta do webhook
+                    # (SMTP pode levar até 30s; a Evolution reenviaria o evento).
+                    threading.Thread(
+                        target=alertas.avisar_mensagem_nao_entregue,
+                        args=(app.config["CONFIG_COMPLETA"], falha["protocolo"], falha["telefone_e164"],
+                              falha["corpo"], "o WhatsApp recusou a entrega (erro 463, trava de abordagem)"),
+                        kwargs={"suspenso_ate": suspensao.get("ate")}, daemon=True,
+                    ).start()
             return jsonify({"ok": True})
 
         if evento != "messages.upsert":
@@ -742,8 +784,10 @@ def criar_app(config: dict | None = None) -> Flask:
 
         # Bot de triagem: só entra na primeira mensagem de conversa nova e no
         # follow-up que responde o menu -- depois disso (time classificado)
-        # nunca mais interfere nessa conversa. Nunca em grupo (eh_grupo).
-        if direcao == "IN" and not eh_grupo:
+        # nunca mais interfere nessa conversa. Nunca em grupo (eh_grupo) e
+        # nunca com o disjuntor armado (suspensao_envios): sem poder mandar o
+        # menu, a conversa só cai na fila humana sem classificação.
+        if direcao == "IN" and not eh_grupo and not banco.suspensao_envios(conn()):
             cfg_evolution = app.config["CONFIG_EVOLUTION"]
             if conversa_eh_nova:
                 banco.marcar_bot_aguardando_menu(conn(), conversa["id"], True)
