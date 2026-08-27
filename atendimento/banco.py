@@ -166,6 +166,13 @@ _COLUNAS_MENSAGENS_NOVAS = [
 _COLUNAS_ESTADO_EVOLUTION_NOVAS = [
     ("envios_suspensos_ate", "TEXT"),   # NULL = envios automáticos liberados
     ("motivo_suspensao", "TEXT"),
+    # Último código/QR de pareamento recebido via webhook qrcode.updated -- o
+    # WhatsApp troca o código a cada ~30s (27/08: o código mostrado na tela
+    # envelheceu antes do Hugo digitar -> erro no celular). A tela
+    # /admin/whatsapp lê daqui a cada 5s (ver pareamento_atual).
+    ("pareamento_codigo", "TEXT"),
+    ("pareamento_qr", "TEXT"),          # data-URL base64 do QR (pode ser NULL)
+    ("pareamento_em", "TEXT"),
 ]
 
 
@@ -492,6 +499,39 @@ def atualizar_estado_evolution(conn: sqlite3.Connection, conectado: bool) -> boo
         )
         conn.commit()
     return mudou
+
+
+def salvar_pareamento(conn: sqlite3.Connection, codigo: str | None, qr_base64: str | None) -> None:
+    conn.execute(
+        "UPDATE estado_evolution SET pareamento_codigo = ?, pareamento_qr = ?, "
+        "pareamento_em = datetime('now','localtime') WHERE id = 1",
+        (codigo, qr_base64),
+    )
+    conn.commit()
+
+
+def limpar_pareamento(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "UPDATE estado_evolution SET pareamento_codigo = NULL, pareamento_qr = NULL, pareamento_em = NULL WHERE id = 1",
+    )
+    conn.commit()
+
+
+def pareamento_atual(conn: sqlite3.Connection, validade_s: int = 180) -> dict | None:
+    """Código/QR mais recente, com a idade em segundos -- None se não há
+    pareamento em andamento ou se o último é velho demais (a Evolution
+    para de renovar depois de N tentativas; aí o admin clica em Gerar de novo)."""
+    from datetime import datetime
+    row = conn.execute(
+        "SELECT pareamento_codigo, pareamento_qr, pareamento_em FROM estado_evolution WHERE id = 1",
+    ).fetchone()
+    if not row or not row["pareamento_em"]:
+        return None
+    idade = (datetime.now() - datetime.strptime(row["pareamento_em"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+    if idade > validade_s:
+        return None
+    return {"codigo": row["pareamento_codigo"], "qr": row["pareamento_qr"],
+            "em": row["pareamento_em"], "idade_s": int(idade)}
 
 
 def estado_evolution_atual(conn: sqlite3.Connection) -> dict:

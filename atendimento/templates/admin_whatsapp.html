@@ -78,9 +78,36 @@ function carregarStatus() {
       linhas.push(`<div class="status-linha"><span class="rotulo">Envios automáticos:</span> <strong>ativos</strong> (bot de triagem + fila de reenvio)</div>`);
     }
     document.getElementById("status-conteudo").innerHTML = linhas.join("");
+    // Pareamento em andamento (código renovado pelo webhook a cada ~30s):
+    // mantém a tela acompanhando até conectar.
+    const estadoLive = d.instance && d.instance.state;
+    if (d.pareamento && estadoLive !== "open" && !pollPareamento) iniciarPollPareamento();
   }).catch(err => {
     document.getElementById("status-conteudo").innerHTML = `<div class="aviso-erro">${err.message}</div>`;
   });
+}
+
+let pollPareamento = null;
+function renderPareamento(p, estado) {
+  const alvo = document.getElementById("resultado-pareamento");
+  if (estado === "open") {
+    alvo.innerHTML = '<div class="status-linha"><strong>Conectado!</strong></div>';
+    clearInterval(pollPareamento); pollPareamento = null; carregarStatus();
+    return;
+  }
+  if (!p) { alvo.innerHTML = "Aguardando o código do WhatsApp..."; return; }
+  alvo.innerHTML =
+    (p.codigo ? `<div class="codigo">${escapeHtml(p.codigo)}</div>` : "") +
+    (p.qr ? `<img src="${p.qr}" alt="QR code" style="margin-top:10px;">` : "") +
+    `<div class="status-linha" style="margin-top:8px;">código atualizado há ${p.idade_s}s — o WhatsApp troca o código a cada ~30s; digite o que estiver na tela AGORA (esta tela se atualiza sozinha a cada 5s)</div>`;
+}
+function iniciarPollPareamento() {
+  if (pollPareamento) clearInterval(pollPareamento);
+  const tick = () => fetchJson("/api/whatsapp/status")
+    .then(d => renderPareamento(d.pareamento, d.instance && d.instance.state))
+    .catch(() => {});
+  tick();
+  pollPareamento = setInterval(tick, 5000);
 }
 
 function escapeHtml(s) {
@@ -122,7 +149,8 @@ document.getElementById("btn-parear").addEventListener("click", () => {
     } else {
       alvo.innerHTML = `<pre style="white-space:pre-wrap;font-size:11px;">${JSON.stringify(d, null, 2)}</pre>`;
     }
-  }).catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; });
+    iniciarPollPareamento();  // daqui em diante mostra sempre o código ATUAL
+  }).catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; iniciarPollPareamento(); });
 });
 
 carregarStatus();

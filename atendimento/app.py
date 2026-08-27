@@ -653,6 +653,7 @@ def criar_app(config: dict | None = None) -> Flask:
             "estado_monitorado": banco.estado_evolution_atual(conn()),
             "fila_reenvio": banco.contagem_fila_reenvio(conn()),
             "suspensao": banco.suspensao_envios(conn()),
+            "pareamento": banco.pareamento_atual(conn()),
         }
         if not integracao_evolution.configurado(app.config["CONFIG_EVOLUTION"]):
             resposta["erro_live"] = "evolution_api não configurado no config.yaml."
@@ -776,8 +777,21 @@ def criar_app(config: dict | None = None) -> Flask:
                     ).start()
             return jsonify({"ok": True})
 
+        if evento == "qrcode.updated":
+            # Código de pareamento/QR novo (o WhatsApp renova a cada ~30s) --
+            # a tela /admin/whatsapp lê o atual via /api/whatsapp/status.
+            qr = (payload.get("data") or {}).get("qrcode") or {}
+            banco.salvar_pareamento(conn(), qr.get("pairingCode"), qr.get("base64"))
+            return jsonify({"ok": True})
+
+        if evento == "connection.update":
+            estado = (payload.get("data") or {}).get("state")
+            if estado == "open":
+                banco.limpar_pareamento(conn())  # pareou -- código não serve mais
+            return jsonify({"ok": True})
+
         if evento != "messages.upsert":
-            return jsonify({"ok": True})  # outros eventos (connection.update etc.) -- nada a fazer ainda
+            return jsonify({"ok": True})  # outros eventos -- nada a fazer
 
         dado = payload.get("data") or {}
         chave = dado.get("key") or {}
