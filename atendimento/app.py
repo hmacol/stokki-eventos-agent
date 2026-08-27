@@ -650,6 +650,25 @@ def criar_app(config: dict | None = None) -> Flask:
             resposta["erro_live"] = f"Falha ao consultar a Evolution API: {exc}"
         return jsonify(resposta)
 
+    @app.get("/admin/whatsapp/licenca/callback")
+    @requer_auth(niveis=("admin",))
+    def admin_whatsapp_licenca_callback():
+        """Callback do registro de licença da Evolution >= 2.4: gera-se o link
+        com GET /license/register?redirect_uri=<esta rota>, o admin preenche
+        o formulário no site da Evolution Foundation e o navegador volta pra
+        cá com ?code=. A troca tem que ser imediata (código expira em poucos
+        minutos) -- por isso é o app que chama /license/activate na hora, em
+        vez de alguém copiar o código. Se a sessão tiver expirado, o login
+        preserva a query string (proximo=full_path) e cai aqui depois."""
+        codigo = (request.args.get("code") or "").strip()
+        if not codigo:
+            return "Faltou ?code= na URL de retorno do registro da licença.", 400
+        try:
+            http, corpo = integracao_evolution.ativar_licenca(app.config["CONFIG_EVOLUTION"], codigo)
+        except Exception as exc:
+            return f"Falha ao chamar a Evolution API pra ativar a licença: {exc}", 502
+        return jsonify({"http": http, **corpo}), (200 if http < 400 else 502)
+
     @app.post("/api/whatsapp/pausar")
     @requer_auth(niveis=("admin",))
     @exige_mesma_origem

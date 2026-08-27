@@ -187,3 +187,18 @@ def gerar_pareamento(cfg: dict, numero: str | None = None) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def ativar_licenca(cfg: dict, codigo: str) -> tuple[int, dict]:
+    """Evolution >= 2.4 exige ativação de licença (gratuita, tier community)
+    -- GET /license/activate?code= troca o código devolvido pelo formulário
+    de registro pela chave. Rota pública (sem apikey). O código expira em
+    poucos minutos (copiar/colar na mão falhou em 27/08), por isso quem chama
+    é o callback automático em atendimento/app.py. Levanta em falha de rede;
+    quem chama decide como mostrar."""
+    base = cfg["base_url"].rstrip("/")
+    resp = requests.get(f"{base}/license/activate", params={"code": codigo}, timeout=30)
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, {"erro": resp.text[:300]}
