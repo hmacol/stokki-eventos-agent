@@ -70,6 +70,22 @@ CREATE TABLE IF NOT EXISTS mensagens (
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_mensagens_conversa ON mensagens(conversa_id, criado_em);
+
+CREATE TABLE IF NOT EXISTS notas_internas (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversa_id             INTEGER NOT NULL REFERENCES conversas(id) ON DELETE CASCADE,
+    atendente_id            INTEGER REFERENCES usuarios(id),
+    corpo                   TEXT NOT NULL,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_notas_conversa ON notas_internas(conversa_id, criado_em);
+
+CREATE TABLE IF NOT EXISTS respostas_rapidas (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    titulo                  TEXT NOT NULL,
+    corpo                   TEXT NOT NULL,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 """
 
 

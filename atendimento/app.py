@@ -52,6 +52,35 @@ import integracao_evolution
 
 logger = logging.getLogger("atendimento.app")
 
+_TIPOS_MIDIA = (
+    ("imageMessage", "Imagem"), ("videoMessage", "Vídeo"), ("audioMessage", "Áudio"),
+    ("documentMessage", "Documento"), ("stickerMessage", "Figurinha"),
+)
+
+
+def _descrever_conteudo_mensagem(mensagem: dict) -> str | None:
+    """Texto pra guardar em mensagens.corpo a partir do payload bruto do
+    webhook. Mídia (foto/áudio/documento/etc.) ainda não é baixada nem
+    exibida de verdade -- só um rótulo (📎 Tipo: legenda) pra o atendente
+    saber que algo chegou; baixar/mostrar o arquivo em si fica pra uma
+    entrega futura (mais estrutural). Retorna None quando o evento não
+    tem conteúdo reconhecível (ex.: reação, recibo, distribuição de
+    chave) -- quem chama decide não gravar nada nesse caso."""
+    texto = mensagem.get("conversation") or (mensagem.get("extendedTextMessage") or {}).get("text")
+    if texto:
+        return texto
+    for chave, rotulo in _TIPOS_MIDIA:
+        m = mensagem.get(chave)
+        if m:
+            partes = [f"📎 {rotulo}"]
+            if m.get("fileName"):
+                partes.append(m["fileName"])
+            descricao = " — ".join(partes)
+            if m.get("caption"):
+                descricao += f": {m['caption']}"
+            return descricao
+    return None
+
 
 def _carregar_config() -> dict:
     caminho = _RAIZ / "config.yaml"
@@ -186,6 +215,11 @@ def criar_app(config: dict | None = None) -> Flask:
     def usuarios_pagina():
         return render_template("usuarios.html")
 
+    @app.route("/respostas-rapidas")
+    @requer_auth(niveis=("admin",))
+    def respostas_rapidas_pagina():
+        return render_template("respostas_rapidas.html")
+
     @app.route("/admin/whatsapp")
     @requer_auth(niveis=("admin",))
     def admin_whatsapp():
@@ -295,10 +329,69 @@ def criar_app(config: dict | None = None) -> Flask:
             "WHERE m.conversa_id = ? ORDER BY m.id ASC",
             (conversa_id,),
         ).fetchall()
+        notas = conn().execute(
+            "SELECT n.*, u.nome AS atendente_nome FROM notas_internas n "
+            "LEFT JOIN usuarios u ON u.id = n.atendente_id "
+            "WHERE n.conversa_id = ? ORDER BY n.id ASC",
+            (conversa_id,),
+        ).fetchall()
         return jsonify({
             "conversa": _linha_conversa(conversa),
             "mensagens": [dict(m) for m in mensagens],
+            "notas": [dict(n) for n in notas],
         })
+
+    @app.post("/api/conversas/<int:conversa_id>/notas")
+    @requer_auth
+    @exige_mesma_origem
+    def api_notas_criar(conversa_id):
+        corpo = (request.get_json(silent=True) or {}).get("corpo", "").strip()
+        if not corpo:
+            return jsonify({"erro": "Nota vazia."}), 400
+        conn().execute(
+            "INSERT INTO notas_internas (conversa_id, atendente_id, corpo) VALUES (?, ?, ?)",
+            (conversa_id, g.usuario_id, corpo),
+        )
+        conn().commit()
+        return jsonify({"ok": True}), 201
+
+    @app.post("/api/conversas/<int:conversa_id>/reabrir")
+    @requer_auth
+    @exige_mesma_origem
+    def api_reabrir(conversa_id):
+        conn().execute(
+            "UPDATE conversas SET status = 'ABERTA', encerrada_em = NULL WHERE id = ?",
+            (conversa_id,),
+        )
+        conn().commit()
+        return jsonify({"ok": True})
+
+    @app.get("/api/respostas-rapidas")
+    @requer_auth
+    def api_respostas_rapidas_listar():
+        linhas = conn().execute("SELECT * FROM respostas_rapidas ORDER BY titulo").fetchall()
+        return jsonify({"respostas": [dict(r) for r in linhas]})
+
+    @app.post("/api/respostas-rapidas")
+    @requer_auth(niveis=("admin",))
+    @exige_mesma_origem
+    def api_respostas_rapidas_criar():
+        corpo_json = request.get_json(silent=True) or {}
+        titulo = (corpo_json.get("titulo") or "").strip()
+        corpo = (corpo_json.get("corpo") or "").strip()
+        if not titulo or not corpo:
+            return jsonify({"erro": "Título e texto são obrigatórios."}), 400
+        conn().execute("INSERT INTO respostas_rapidas (titulo, corpo) VALUES (?, ?)", (titulo, corpo))
+        conn().commit()
+        return jsonify({"ok": True}), 201
+
+    @app.post("/api/respostas-rapidas/<int:resposta_id>/excluir")
+    @requer_auth(niveis=("admin",))
+    @exige_mesma_origem
+    def api_respostas_rapidas_excluir(resposta_id):
+        conn().execute("DELETE FROM respostas_rapidas WHERE id = ?", (resposta_id,))
+        conn().commit()
+        return jsonify({"ok": True})
 
     @app.post("/api/conversas/<int:conversa_id>/assumir")
     @requer_auth
@@ -443,11 +536,12 @@ def criar_app(config: dict | None = None) -> Flask:
             return jsonify({"ok": True})
         telefone_e164 = f"+{telefone}" if not telefone.startswith("+") else telefone
 
-        texto = (
-            (dado.get("message") or {}).get("conversation")
-            or ((dado.get("message") or {}).get("extendedTextMessage") or {}).get("text")
-            or ""
-        )
+        texto = _descrever_conteudo_mensagem(dado.get("message") or {})
+        if texto is None:
+            # Evento sem conteúdo reconhecível (reação, recibo, distribuição
+            # de chave etc.) -- nada pra mostrar na Inbox, não vale abrir/
+            # tocar uma conversa por causa disso.
+            return jsonify({"ok": True})
         nome_push = dado.get("pushName")
         de_mim_mesmo = bool(chave.get("fromMe"))
 

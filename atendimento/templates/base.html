@@ -77,6 +77,7 @@
     <a href="{{ url_for('inbox') }}" class="{{ 'ativo' if request.endpoint == 'inbox' else '' }}">Inbox</a>
     {% if session.get('papel') == 'admin' %}
     <a href="{{ url_for('usuarios_pagina') }}" class="{{ 'ativo' if request.endpoint == 'usuarios_pagina' else '' }}">Usuários</a>
+    <a href="{{ url_for('respostas_rapidas_pagina') }}" class="{{ 'ativo' if request.endpoint == 'respostas_rapidas_pagina' else '' }}">Respostas rápidas</a>
     <a href="{{ url_for('admin_whatsapp') }}" class="{{ 'ativo' if request.endpoint == 'admin_whatsapp' else '' }}">WhatsApp</a>
     {% endif %}
   </nav>

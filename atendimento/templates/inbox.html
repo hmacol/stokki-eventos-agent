@@ -66,8 +66,23 @@
   .bolha { max-width: 65%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; }
   .bolha.IN { align-self: flex-start; background: var(--fundo); }
   .bolha.OUT { align-self: flex-end; background: rgba(14,165,117,0.15); }
+  .bolha.NOTA { align-self: center; max-width: 85%; background: #FDF3D6; border: 1px dashed #D9B857; color: #6B5416; font-size: 12px; }
   .bolha .meta { font-size: 10px; color: var(--texto-suave); margin-top: 4px; }
-  .thread-resposta { padding: 12px 16px; border-top: 1px solid var(--borda); display: flex; gap: 8px; }
+  .thread-resposta { padding: 12px 16px; border-top: 1px solid var(--borda); display: flex; gap: 8px; position: relative; }
+  .thread-resposta textarea { min-height: 40px; }
+  .picker-respostas { position: relative; }
+  .lista-respostas-rapidas {
+    display: none; position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; width: 320px; max-height: 260px;
+    overflow-y: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 5;
+  }
+  .lista-respostas-rapidas.aberta { display: block; }
+  .lista-respostas-rapidas .item { padding: 8px 12px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--borda); }
+  .lista-respostas-rapidas .item:last-child { border-bottom: none; }
+  .lista-respostas-rapidas .item:hover { background: var(--superficie-hover); }
+  .lista-respostas-rapidas .item .titulo { font-weight: 700; }
+  .lista-respostas-rapidas .item .preview { color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lista-respostas-rapidas .vazio { padding: 10px 12px; font-size: 12px; color: var(--texto-suave); }
   .thread-resposta textarea {
     flex: 1; resize: none; border: 1px solid var(--borda); border-radius: 8px; padding: 8px 10px;
     font-size: 13px; font-family: inherit; height: 40px;
@@ -102,7 +117,6 @@ const TIMES = {{ times | tojson }};
 let filtroAtual = "fila";
 let buscaAtual = "";
 let conversaSelecionadaId = null;
-let ultimoIdMensagemRenderizado = 0;
 
 function tempoDecorrido(dataHoraStr) {
   if (!dataHoraStr) return "";
@@ -162,7 +176,6 @@ function carregarConversas() {
 
 function selecionarConversa(id) {
   conversaSelecionadaId = id;
-  ultimoIdMensagemRenderizado = 0;
   document.getElementById("coluna-thread").innerHTML = '<div class="sem-selecao">Carregando...</div>';
   carregarThread(true);
 }
@@ -170,10 +183,25 @@ function selecionarConversa(id) {
 function bolhaHtml(m) {
   const hora = (m.criado_em || '').slice(11, 16);
   const quem = m.direcao === 'OUT' ? (m.atendente_nome || 'Você/celular') : '';
-  return `<div class="bolha ${m.direcao}" data-id="${m.id}">
+  return `<div class="bolha ${m.direcao}">
     ${escapeHtml(m.corpo || '')}
     <div class="meta">${quem ? escapeHtml(quem) + ' · ' : ''}${hora}</div>
   </div>`;
+}
+
+function notaHtml(n) {
+  const hora = (n.criado_em || '').slice(11, 16);
+  return `<div class="bolha NOTA">
+    📌 Nota de ${escapeHtml(n.atendente_nome || 'atendente')}: ${escapeHtml(n.corpo || '')}
+    <div class="meta">${hora}</div>
+  </div>`;
+}
+
+function mesclarOrdenado(mensagens, notas) {
+  const itens = mensagens.map(m => ({dados: m, tipo: 'MSG', quando: m.criado_em || ''}))
+    .concat((notas || []).map(n => ({dados: n, tipo: 'NOTA', quando: n.criado_em || ''})));
+  itens.sort((a, b) => a.quando.localeCompare(b.quando));
+  return itens;
 }
 
 function montarCabecalho(conversa) {
@@ -181,7 +209,8 @@ function montarCabecalho(conversa) {
     .concat(TIMES.map(t => `<option value="${t}" ${conversa.time === t ? 'selected' : ''}>${t.replace('_', '/')}</option>`));
   const resolvida = conversa.status === 'RESOLVIDA';
   const acoes = resolvida
-    ? `<span class="badge-resolvida">Resolvida ${conversa.encerrada_em ? 'em ' + conversa.encerrada_em.slice(0, 16) : ''}</span>`
+    ? `<span class="badge-resolvida">Resolvida ${conversa.encerrada_em ? 'em ' + conversa.encerrada_em.slice(0, 16) : ''}</span>
+       <button class="botao" id="btn-reabrir">Reabrir</button>`
     : `<select id="select-time">${opcoesTime.join('')}</select>
        ${!conversa.atendente_id ? `<button class="botao" id="btn-assumir-thread">Assumir</button>` : ''}
        <button class="botao perigo" id="btn-encerrar">Encerrar</button>`;
@@ -198,6 +227,11 @@ function montarCabecalho(conversa) {
     <div class="thread-mensagens" id="thread-mensagens"></div>
     ${resolvida ? `<div class="info-resolvida">Conversa encerrada — somente leitura.</div>` : `
     <div class="thread-resposta">
+      <div class="picker-respostas">
+        <button type="button" class="botao" id="btn-respostas-rapidas" title="Respostas rápidas">📋</button>
+        <div class="lista-respostas-rapidas" id="lista-respostas-rapidas"></div>
+      </div>
+      <button type="button" class="botao" id="btn-nota" title="Nota interna (não vai pro cliente)">📌</button>
       <textarea id="texto-resposta" placeholder="Escreva uma resposta..."></textarea>
       <button class="botao" id="btn-enviar">Enviar</button>
     </div>`}
@@ -234,6 +268,28 @@ function carregarThread(primeiraVez) {
           .then(() => { conversaSelecionadaId = null; document.getElementById("coluna-thread").innerHTML = '<div class="sem-selecao">Selecione uma conversa à esquerda.</div>'; carregarConversas(); })
           .catch(err => alert(err.message));
       });
+      const btnReabrir = document.getElementById("btn-reabrir");
+      if (btnReabrir) btnReabrir.addEventListener("click", () => {
+        fetchJson(`/api/conversas/${conversaSelecionadaId}/reabrir`, {method: "POST"})
+          .then(() => { carregarThread(true); carregarConversas(); })
+          .catch(err => alert(err.message));
+      });
+      const btnNota = document.getElementById("btn-nota");
+      if (btnNota) btnNota.addEventListener("click", () => {
+        const texto = prompt("Nota interna (não é enviada ao cliente):");
+        if (!texto || !texto.trim()) return;
+        fetchJson(`/api/conversas/${conversaSelecionadaId}/notas`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({corpo: texto.trim()}),
+        }).then(() => carregarThread(false)).catch(err => alert(err.message));
+      });
+      const btnRespostasRapidas = document.getElementById("btn-respostas-rapidas");
+      if (btnRespostasRapidas) btnRespostasRapidas.addEventListener("click", () => {
+        const lista = document.getElementById("lista-respostas-rapidas");
+        const abrir = !lista.classList.contains("aberta");
+        lista.classList.toggle("aberta", abrir);
+        if (abrir) carregarRespostasRapidas();
+      });
       const btnEnviar = document.getElementById("btn-enviar");
       if (btnEnviar) btnEnviar.addEventListener("click", enviarResposta);
       const campoResposta = document.getElementById("texto-resposta");
@@ -242,15 +298,35 @@ function carregarThread(primeiraVez) {
       });
     }
     const alvo = document.getElementById("thread-mensagens");
-    const mensagensNovas = d.mensagens.filter(m => m.id > ultimoIdMensagemRenderizado);
-    if (primeiraVez) {
-      alvo.innerHTML = d.mensagens.map(bolhaHtml).join("");
-    } else if (mensagensNovas.length) {
-      alvo.insertAdjacentHTML("beforeend", mensagensNovas.map(bolhaHtml).join(""));
-    }
-    if (d.mensagens.length) ultimoIdMensagemRenderizado = Math.max(...d.mensagens.map(m => m.id));
-    if (primeiraVez || mensagensNovas.length) alvo.scrollTop = alvo.scrollHeight;
+    const estavaNoFim = primeiraVez || (alvo.scrollHeight - alvo.scrollTop - alvo.clientHeight < 40);
+    const itens = mesclarOrdenado(d.mensagens, d.notas);
+    alvo.innerHTML = itens.map(it => it.tipo === 'NOTA' ? notaHtml(it.dados) : bolhaHtml(it.dados)).join("");
+    if (estavaNoFim) alvo.scrollTop = alvo.scrollHeight;
   }).catch(() => {});
+}
+
+function carregarRespostasRapidas() {
+  const lista = document.getElementById("lista-respostas-rapidas");
+  if (!lista) return;
+  lista.innerHTML = '<div class="vazio">Carregando...</div>';
+  fetchJson("/api/respostas-rapidas").then(d => {
+    if (!d.respostas.length) {
+      lista.innerHTML = '<div class="vazio">Nenhuma resposta rápida cadastrada (crie em "Respostas rápidas" no menu).</div>';
+      return;
+    }
+    lista.innerHTML = d.respostas.map(r => `
+      <div class="item" data-corpo="${escapeHtml(r.corpo)}">
+        <div class="titulo">${escapeHtml(r.titulo)}</div>
+        <div class="preview">${escapeHtml(r.corpo)}</div>
+      </div>
+    `).join("");
+    lista.querySelectorAll(".item").forEach(el => el.addEventListener("click", () => {
+      const campo = document.getElementById("texto-resposta");
+      campo.value = campo.value ? campo.value + "\n" + el.dataset.corpo : el.dataset.corpo;
+      lista.classList.remove("aberta");
+      campo.focus();
+    }));
+  }).catch(() => { lista.innerHTML = '<div class="vazio">Falha ao carregar.</div>'; });
 }
 
 function enviarResposta() {
