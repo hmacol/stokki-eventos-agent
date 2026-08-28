@@ -726,8 +726,22 @@ def criar_app(config: dict | None = None) -> Flask:
         if not integracao_evolution.configurado(app.config["CONFIG_EVOLUTION"]):
             return jsonify({"erro": "evolution_api não configurado no config.yaml."}), 400
         numero = (request.get_json(silent=True) or {}).get("numero")
+        cfg = app.config["CONFIG_EVOLUTION"]
         try:
-            return jsonify(integracao_evolution.gerar_pareamento(app.config["CONFIG_EVOLUTION"], numero))
+            estado = (integracao_evolution.status_instancia(cfg).get("instance") or {}).get("state")
+        except Exception:
+            estado = None
+        if estado != "open":
+            # Presa em connecting/close com o ciclo de QR esgotado, a
+            # instância devolve um código VELHO no connect (28/08) -- reinicia
+            # o socket antes. Se o restart falhar, tenta o connect mesmo assim.
+            try:
+                integracao_evolution.reiniciar_instancia(cfg)
+                time.sleep(3)
+            except Exception as exc:
+                logger.warning(f"Restart da instância antes do pareamento falhou ({exc}) -- seguindo com o connect.")
+        try:
+            return jsonify(integracao_evolution.gerar_pareamento(cfg, numero))
         except Exception as exc:
             return jsonify({"erro": f"Falha ao gerar pareamento: {exc}"}), 502
 

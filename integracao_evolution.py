@@ -204,6 +204,22 @@ def desconectar_instancia(cfg: dict) -> dict:
     return resp.json()
 
 
+def reiniciar_instancia(cfg: dict) -> dict:
+    """POST /instance/restart/{instance} (é POST, não PUT -- conferido no
+    instance.router.ts da 2.4.0) -- reinicia o socket do WhatsApp da
+    instância. Necessário antes de parear quando ela ficou presa em
+    `connecting` com o ciclo de QR esgotado: 28/08, /instance/connect
+    devolvia o MESMO código vencido de 15h antes e nenhum qrcode.updated
+    novo chegava. Levanta em falha; quem chama decide se segue mesmo assim."""
+    base = cfg["base_url"].rstrip("/")
+    resp = requests.post(
+        f"{base}/instance/restart/{cfg['instance']}",
+        headers={"apikey": cfg["api_key"]}, timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def ativar_licenca(cfg: dict, codigo: str) -> tuple[int, dict]:
     """Evolution >= 2.4 exige ativação de licença (gratuita, tier community)
     -- GET /license/activate?code= troca o código devolvido pelo formulário
