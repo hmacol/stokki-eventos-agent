@@ -204,17 +204,34 @@ def desconectar_instancia(cfg: dict) -> dict:
     return resp.json()
 
 
-def reiniciar_instancia(cfg: dict) -> dict:
-    """POST /instance/restart/{instance} (é POST, não PUT -- conferido no
-    instance.router.ts da 2.4.0) -- reinicia o socket do WhatsApp da
-    instância. Necessário antes de parear quando ela ficou presa em
-    `connecting` com o ciclo de QR esgotado: 28/08, /instance/connect
-    devolvia o MESMO código vencido de 15h antes e nenhum qrcode.updated
-    novo chegava. Levanta em falha; quem chama decide se segue mesmo assim."""
+def recriar_instancia(cfg: dict) -> dict:
+    """Reset completo só pela API: logout (ignora "já desconectado") ->
+    DELETE /instance/delete -> POST /instance/create com as MESMAS opções da
+    instância original (WHATSAPP-BAILEYS, token = chave global, sem sync de
+    histórico, grupos NÃO ignorados aqui -- quem filtra grupo é o app).
+    Motivo (28/08): um pareamento incompleto deixa uma sessão meio-registrada
+    no Postgres da Evolution; depois disso todo connect vai connecting ->
+    close com 401 e nenhum QR/código novo sai; logout não limpa e restart
+    falha em instância fechada. Recriar a instância é o único caminho sem
+    psql. Só chamar quando NÃO há número conectado (nada a perder: histórico
+    de mensagens da Evolution não é usado pelo app). Levanta em falha."""
     base = cfg["base_url"].rstrip("/")
+    headers = {"apikey": cfg["api_key"]}
+    nome = cfg["instance"]
+    try:
+        requests.delete(f"{base}/instance/logout/{nome}", headers=headers, timeout=_TIMEOUT)
+    except requests.RequestException:
+        pass  # "already disconnected" ou fora do ar -- o delete abaixo decide
+    resp = requests.delete(f"{base}/instance/delete/{nome}", headers=headers, timeout=_TIMEOUT)
+    if resp.status_code not in (200, 201, 404):
+        resp.raise_for_status()
     resp = requests.post(
-        f"{base}/instance/restart/{cfg['instance']}",
-        headers={"apikey": cfg["api_key"]}, timeout=_TIMEOUT,
+        f"{base}/instance/create", headers=headers, timeout=_TIMEOUT,
+        json={
+            "instanceName": nome, "integration": "WHATSAPP-BAILEYS", "token": cfg["api_key"],
+            "qrcode": True, "rejectCall": False, "groupsIgnore": False, "alwaysOnline": False,
+            "readMessages": False, "readStatus": False, "syncFullHistory": False,
+        },
     )
     resp.raise_for_status()
     return resp.json()

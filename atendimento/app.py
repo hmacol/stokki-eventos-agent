@@ -145,6 +145,11 @@ _TENTATIVAS_MENU_MAX = 2  # depois disso o bot desiste e cai pra fila geral
 # estivesse pausado). Upsert mais velho que isso é ignorado.
 _IDADE_MAX_UPSERT_S = 600
 
+# Ciclo de QR "vivo" = qrcode.updated recebido há menos que isso (o WhatsApp
+# renova a cada ~30-45s). Sem ciclo vivo e sem número conectado, o Gerar
+# recria a instância antes de pedir código (ver api_whatsapp_parear).
+_PAREAMENTO_VIVO_S = 90
+
 _MENU_TRIAGEM_TEXTO = (
     "Olá! 👋 Pra te ajudar mais rápido, escolha uma opção:\n\n"
     "1️⃣ Status do pedido/entrega\n"
@@ -731,15 +736,18 @@ def criar_app(config: dict | None = None) -> Flask:
             estado = (integracao_evolution.status_instancia(cfg).get("instance") or {}).get("state")
         except Exception:
             estado = None
-        if estado != "open":
-            # Presa em connecting/close com o ciclo de QR esgotado, a
-            # instância devolve um código VELHO no connect (28/08) -- reinicia
-            # o socket antes. Se o restart falhar, tenta o connect mesmo assim.
+        pareamento_vivo = banco.pareamento_atual(conn(), validade_s=_PAREAMENTO_VIVO_S)
+        if estado != "open" and not pareamento_vivo:
+            # Sem ciclo de QR vivo (nenhum qrcode.updated recente): a instância
+            # está presa (connecting/close com sessão meio-registrada -> 401 em
+            # todo connect, ou código velho repetido). Único reset que funciona
+            # só pela API é recriar a instância -- ver integracao_evolution.
             try:
-                integracao_evolution.reiniciar_instancia(cfg)
+                integracao_evolution.recriar_instancia(cfg)
+                logger.warning(f"Instância recriada antes do pareamento por {session.get('nome')} (não havia ciclo de QR vivo).")
                 time.sleep(3)
             except Exception as exc:
-                logger.warning(f"Restart da instância antes do pareamento falhou ({exc}) -- seguindo com o connect.")
+                return jsonify({"erro": f"Falha ao recriar a instância antes do pareamento: {exc}"}), 502
         try:
             return jsonify(integracao_evolution.gerar_pareamento(cfg, numero))
         except Exception as exc:
