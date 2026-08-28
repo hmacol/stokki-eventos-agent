@@ -60,6 +60,24 @@ cadastrar mais opções mais adiante").
 | **Entregue** | Não | **Mesmo comportamento de "Agendado"** (pedido do Hugo, 25/08) — só marca como revisado, sem notificação, sem Demanda e sem duplicar; o pedido já foi entregue, o registro de "parado" ficou pra trás |
 | *(novo status futuro)* | **Indefinido até ser documentado aqui** | Tratar como Pendente — nunca duplicar nem presumir tratativa por conta própria; decidir manualmente e atualizar esta tabela |
 
+**Classificação automática via Stokki (pedido do Hugo, 28/08)**: o botão
+"Consultar Stokki (cancelados / cliente retira)" na barra da tela abre o
+detalhe de cada pedido em tela na Stokki (1 GET por pedido, ~1s cada) e
+classifica sozinho: situação **Cancelado** → "Cancelados"; transportadora
+com nome literal **CLIENTE RETIRA** → "Cliente Retira" (botão "Notificar
+embarcador" disponível, manual); transportadora com tipo **RETIRADA na
+BD_TRANSPORTADORAS** (terceira que coleta no galpão, ex.: ACEVILLE) →
+também "Cliente Retira", mas **sem notificação ao cliente** (Hugo, 28/08):
+a tratativa já nasce concluída, sem botão. Cancelado vence quando os dois
+batem. A tratativa dos demais (Encaminhar / Notificar) continua manual. Pedido que já
+tem OUTRA classificação com tratativa concluída não é sobrescrito (vira
+"divergente" no resumo). Pedidos cujo `order_number` é a NF do cliente e
+não foi resolvido pra id Stokki aparecem como "não encontrados". A
+consulta é recusada enquanto houver agente rodando no painel (login
+concorrente derruba a sessão Stokki do agente). O status/transportadora
+vistos ficam gravados (`pedidos_parados_stokki`) e aparecem embaixo do
+número do pedido.
+
 **Importante (confirmado com o Hugo, 24/08): a classificação acontece no
 NOSSO painel, não na tela do Fresh Hub.** O Fresh Hub continua sendo só a
 fonte do registro bruto (pedido, volumes, data, foto); o Status/tratativa

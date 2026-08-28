@@ -860,6 +860,29 @@ def api_pedidos_parados_notificar_cliente_retira():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/verificar-stokki", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_verificar_stokki():
+    """Consulta status/transportadora de todos os pedidos em tela na
+    Stokki e classifica sozinho Cancelados / Cliente Retira -- pedido do
+    Hugo, 28/08."""
+    body = request.get_json(force=True) or {}
+    pedidos = body.get("pedidos") or []
+    if not isinstance(pedidos, list) or not pedidos:
+        return jsonify({"erro": "lista 'pedidos' vazia"}), 400
+    try:
+        resultado = pedidos_parados_triagem.verificar_na_stokki(
+            pedidos, session.get("usuario", "desconhecido"),
+        )
+    except RuntimeError as e:
+        return jsonify({"erro": str(e)}), 409
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao verificar pedidos parados na Stokki")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
+
+
 @app.route("/torre")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def torre():

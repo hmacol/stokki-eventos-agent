@@ -186,6 +186,18 @@ def _conectar():
             resolvido_em TEXT
         )
     """)
+    # Último resultado da consulta em lote à Stokki (botão "Consultar
+    # Stokki", pedido do Hugo 28/08) -- guardado pra tela mostrar o status/
+    # transportadora vistos, sem reconsultar a cada recarga.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pedidos_parados_stokki (
+            order_number   TEXT PRIMARY KEY,
+            id_stokki      TEXT,
+            status         TEXT,
+            transportadora TEXT,
+            consultado_em  TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -576,6 +588,9 @@ def listar_com_classificacao() -> list[dict]:
         locais = {r["order_number"]: dict(r) for r in conn.execute(
             "SELECT * FROM pedidos_parados_classificacao"
         ).fetchall()}
+        stokki = {r["order_number"]: dict(r) for r in conn.execute(
+            "SELECT * FROM pedidos_parados_stokki"
+        ).fetchall()}
     finally:
         conn.close()
 
@@ -583,7 +598,11 @@ def listar_com_classificacao() -> list[dict]:
     for numero, p in pedidos_do_dia.items():
         dias_parado = (dia_mais_recente - _data_local(primeira_vez[numero])).days + 1
         local = locais.get(numero, {})
+        stk = stokki.get(numero, {})
         resultado.append({
+            "stokki_status": stk.get("status"),
+            "stokki_transportadora": stk.get("transportadora"),
+            "stokki_consultado_em": stk.get("consultado_em"),
             "order_number": numero,
             "freshhub_id": p["id"],
             "volumes": p["volumes"],
@@ -855,3 +874,221 @@ def buscar_sucesso_vuupt(order_number: str) -> dict:
         }
 
     return {"ok": True, "encontrado": False}
+
+
+# ── Consulta em lote à Stokki (status + transportadora) ───────────────────────
+#
+# Botão "Consultar Stokki" da triagem (pedido do Hugo, 28/08): pra todos os
+# pedidos em tela, olha na Stokki o status e a transportadora e já
+# classifica sozinho os casos óbvios -- "Cancelado" na Stokki vira
+# "Cancelados"; transportadora de RETIRADA (CLIENTE RETIRA) vira "Cliente
+# Retira". Cancelado vence retirada quando os dois batem.
+#
+# Fonte: a página de detalhe do pedido (/administrator/inventory/outbound/
+# show/{id}), 1 GET por pedido. Testado 28/08: a busca textual da listagem
+# (`input_search`) NÃO indexa o id/PS (busca por "31156", "PS-31156" e
+# "#PS-31156" devolvem 0), então a listagem não serve pra achar um pedido
+# específico. No detalhe, o status é o primeiro `badge-status` logo após
+# o rótulo "Situação:" (ex.: "Cancelado", "Enviado" -- os badges seguintes
+# são marcadores tipo "Remessa Expressa") e a transportadora vem do bloco
+# "Transportadora:" que `_parsear_pagina_detalhe` já lê. Só entra em ação o
+# pedido que ainda não está classificado assim; quem já tem OUTRA
+# classificação com tratativa concluída não é sobrescrito (só reportado
+# como divergente), pra não apagar uma Demanda/duplicação já feita.
+#
+# Trava de sessão: mesma regra da Torre (buscar_funil_stokki) -- a
+# StokkiSession renova login sozinha e um login concorrente derruba a
+# sessão de um agente em execução, então a consulta é recusada enquanto
+# houver execução RODANDO no painel.
+STOKKI_PAUSA_ENTRE_CONSULTAS_SEG = 0.3
+_lock_consulta_stokki = threading.Lock()
+
+
+def _painel_tem_execucao_rodando() -> bool:
+    """Mesma checagem de torre_controle._rodando_fora_das_etapas (copiada
+    pra não importar o módulo inteiro da Torre aqui)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("SELECT 1 FROM painel_execucoes WHERE status='RODANDO' LIMIT 1").fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _limpar_html(texto) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(texto or ""))).strip()
+
+
+_RE_SITUACAO_STOKKI = re.compile(
+    r"Situa[çc][ãa]o:\s*</th>\s*<td>\s*<span[^>]*badge-status[^>]*>(.*?)</span>", re.S | re.IGNORECASE,
+)
+
+
+def _status_e_transportadora_stokki(sessao, id_stokki: str) -> dict | None:
+    """Abre o detalhe do pedido na Stokki e devolve {"status", "transportadora"}
+    -- None se o pedido não existir (404) ou a página não tiver o bloco
+    de situação (id que não é um pedido)."""
+    from stokki import pedidos as stokki_pedidos
+
+    resp = sessao.get(f"{stokki_pedidos.BASE_URL}/pt-br/administrator/inventory/outbound/show/{id_stokki}")
+    # Id inexistente (ex.: order_number que na verdade é a NF do cliente,
+    # não resolvido pra id Stokki) dá 500 na Stokki, não 404 -- visto
+    # 28/08 com o 53826. Os dois viram "não encontrado".
+    if resp.status_code in (404, 500):
+        return None
+    resp.raise_for_status()
+    m = _RE_SITUACAO_STOKKI.search(resp.text)
+    if not m:
+        return None
+    detalhe = stokki_pedidos._parsear_pagina_detalhe(resp.text, int(id_stokki) if str(id_stokki).isdigit() else 0)
+    transp = detalhe.get("transportadora") or {}
+    return {"status": _limpar_html(m.group(1)), "transportadora": (transp.get("nome") or "").strip()}
+
+
+def _catalogo_transportadoras():
+    """Catálogo da BD_TRANSPORTADORAS (mesmo do pipeline) -- None se a
+    planilha não abrir (aí só vale o nome literal)."""
+    try:
+        from regras.transportadoras import CatalogoTransportadoras
+        return CatalogoTransportadoras.carregar(_RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx")
+    except Exception as e:
+        logger.warning(f"[pedidos-parados] Sem catálogo de transportadoras ({e}); usando só o nome.")
+        return None
+
+
+def _tipo_retira(nome_transportadora: str, catalogo) -> str | None:
+    """
+    "literal"  -> transportadora chama "CLIENTE RETIRA" na Stokki: o
+                  cliente mesmo busca; vira "Cliente Retira" com o botão
+                  "Notificar embarcador" disponível (manual, como sempre).
+    "catalogo" -> tipo RETIRADA na BD_TRANSPORTADORAS (transportadora
+                  terceira que coleta no galpão, ex.: ACEVILLE): também
+                  vira "Cliente Retira" (Hugo, 28/08), mas SEM notificação
+                  ao cliente -- a tratativa já nasce concluída.
+    None       -> não é retirada.
+    """
+    nome = re.sub(r"\s+", " ", (nome_transportadora or "")).strip()
+    if not nome:
+        return None
+    if "CLIENTE RETIRA" in nome.upper():
+        return "literal"
+    if catalogo is not None:
+        try:
+            if catalogo.resolver(nome).tipo == "RETIRADA":
+                return "catalogo"
+        except Exception:
+            pass
+    return None
+
+
+def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
+    """
+    `pedidos`: lista de {"order_number", "freshhub_id"} (os que estão em
+    tela). Retorna um resumo com o que foi visto e o que foi classificado.
+    """
+    if not _lock_consulta_stokki.acquire(blocking=False):
+        raise RuntimeError("Já existe uma consulta à Stokki em andamento -- aguarde ela terminar.")
+    try:
+        if _painel_tem_execucao_rodando():
+            raise RuntimeError(
+                "Há um agente em execução no painel -- consulta à Stokki adiada pra não derrubar a sessão dele."
+            )
+
+        from stokki.auth import StokkiSession
+
+        sessao = StokkiSession(_carregar_config())
+        catalogo = _catalogo_transportadoras()
+
+        base = _base_externa_com_cache()
+        ids_stokki = base.get("ids_stokki", {})
+        conn = _conectar()
+        try:
+            locais = {r["order_number"]: dict(r) for r in conn.execute(
+                "SELECT order_number, classificacao, acao_status FROM pedidos_parados_classificacao"
+            ).fetchall()}
+        finally:
+            conn.close()
+
+        resumo = {"consultados": 0, "nao_encontrados": [], "erros": [],
+                  "cancelados": [], "cliente_retira": [], "retira_transportadora": [],
+                  "divergentes": [], "detalhes": []}
+        carimbo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for i, p in enumerate(pedidos):
+            numero = str(p.get("order_number") or "").strip()
+            if not numero:
+                continue
+            id_stokki = ids_stokki.get(numero, numero)
+            if i:
+                time.sleep(STOKKI_PAUSA_ENTRE_CONSULTAS_SEG)
+            try:
+                visto = _status_e_transportadora_stokki(sessao, id_stokki)
+            except Exception as e:
+                logger.warning(f"[pedidos-parados] Stokki falhou pro pedido {numero} (id {id_stokki}): {e}")
+                resumo["erros"].append(numero)
+                continue
+            resumo["consultados"] += 1
+            if not visto:
+                resumo["nao_encontrados"].append(numero)
+                continue
+
+            status = visto["status"]
+            transportadora = visto["transportadora"]
+            conn = _conectar()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO pedidos_parados_stokki "
+                    "(order_number, id_stokki, status, transportadora, consultado_em) VALUES (?, ?, ?, ?, ?)",
+                    (numero, str(id_stokki), status, transportadora, carimbo),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            alvo = None
+            retira = None
+            if re.search(r"cancel", status, re.IGNORECASE):
+                alvo = "Cancelados"
+            else:
+                retira = _tipo_retira(transportadora, catalogo)
+                if retira:
+                    alvo = "Cliente Retira"
+            resumo["detalhes"].append({"order_number": numero, "status": status,
+                                       "transportadora": transportadora, "sugestao": alvo})
+            if not alvo:
+                continue
+
+            local = locais.get(numero, {})
+            if local.get("classificacao") == alvo:
+                continue
+            if local.get("classificacao") and local.get("acao_status") == "concluida":
+                resumo["divergentes"].append(
+                    f"{numero}: Stokki sugere {alvo}, mas já está {local['classificacao']} com tratativa concluída"
+                )
+                continue
+
+            classificar(numero, str(p.get("freshhub_id") or ""), alvo, f"{usuario} (auto via Stokki)")
+            tratativas.registrar_evento(
+                numero, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLASSIFICADO_AUTO_STOKKI",
+                decisao=alvo,
+                texto=f"Classificado automaticamente como {alvo} por {usuario} -- "
+                      f"Stokki: status '{status}', transportadora '{transportadora}'",
+            )
+            if alvo == "Cancelados":
+                resumo["cancelados"].append(numero)
+            elif retira == "catalogo":
+                # Transportadora terceira que coleta no galpão: sem
+                # notificação ao cliente (Hugo, 28/08) -- tratativa já
+                # nasce concluída, a tela não oferece "Notificar embarcador".
+                _marcar_acao(
+                    numero, "concluida",
+                    f"transportadora '{transportadora}' é de RETIRADA (BD_TRANSPORTADORAS) -- sem notificação ao cliente",
+                )
+                resumo["retira_transportadora"].append(numero)
+            else:
+                resumo["cliente_retira"].append(numero)
+
+        return resumo
+    finally:
+        _lock_consulta_stokki.release()

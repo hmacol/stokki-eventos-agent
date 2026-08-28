@@ -45,6 +45,8 @@
   .botao-vuupt:disabled { opacity: 0.5; cursor: default; }
   .botao-copiar { padding: 6px 12px; border: 1px solid var(--borda); border-radius: 6px; background: var(--superficie); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--texto); }
   .botao-copiar:hover { background: var(--superficie-hover); }
+  .botao-copiar:disabled { opacity: 0.6; cursor: default; }
+  .info-stokki { font-size: 11px; color: var(--texto-suave); margin-top: 3px; font-family: inherit; }
   th.col-filtro { padding: 6px 14px 10px; }
   th.col-filtro input, th.col-filtro select {
     width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px; font-weight: 400;
@@ -68,6 +70,9 @@
 <div class="barra-utilidade">
   <label><input type="checkbox" id="so-pendentes"> Mostrar só não tratados</label>
   <button class="botao-copiar" id="botao-copiar-tabela" onclick="copiarTabela()">Copiar tabela (Pedido - Volumes - Classificação)</button>
+  {% if pode_editar %}
+  <button class="botao-copiar" id="botao-verificar-stokki" onclick="verificarStokki()" title="Consulta status e transportadora de todos os pedidos em tela na Stokki; Cancelado vira 'Cancelados'; CLIENTE RETIRA ou transportadora de RETIRADA (BD) vira 'Cliente Retira' automaticamente (a de RETIRADA sem notificação ao cliente)">Consultar Stokki (cancelados / cliente retira)</button>
+  {% endif %}
   <span class="carimbo" id="carimbo">Carregando…</span>
 </div>
 
@@ -210,6 +215,9 @@ function renderTabela() {
 
     const repetido = p.vezes_registrado > 1
       ? ` <span class="badge badge-repetido">${p.vezes_registrado}x registrado</span>` : "";
+    const stokkiInfo = p.stokki_status || p.stokki_transportadora
+      ? `<div class="info-stokki" title="Visto na Stokki em ${esc(p.stokki_consultado_em || '')}">Stokki: ${esc(p.stokki_status || '?')} · ${esc(p.stokki_transportadora || 'sem transportadora')}</div>`
+      : "";
 
     return `
       <tr class="${p.prioridade ? 'prioridade' : ''}">
@@ -219,6 +227,7 @@ function renderTabela() {
             <button class="botao-vuupt" onclick="buscarVuupt('${p.order_number}', this)" title="Buscar pedido com sucesso na Vuupt">Vuupt 🔍</button>
             ${repetido}
           </div>
+          ${stokkiInfo}
         </td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
@@ -304,6 +313,41 @@ async function notificarClienteRetira(orderNumber) {
     alert(`E-mail enviado pra ${j.nome_embarcador} (${j.emails.join(", ")}).`);
     carregarDados();
   } catch (e) { alert("Falha ao notificar o embarcador: " + e); }
+}
+
+async function verificarStokki() {
+  const linhas = linhasFiltradas();
+  if (!linhas.length) { alert("Nenhum pedido em tela para consultar."); return; }
+  if (!confirm(`Consultar ${linhas.length} pedido(s) na Stokki?\n\nQuem estiver Cancelado vira "Cancelados" e quem tiver transportadora CLIENTE RETIRA vira "Cliente Retira" automaticamente (pedidos com outra tratativa já concluída não são alterados).`)) return;
+
+  const botao = document.getElementById("botao-verificar-stokki");
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = `Consultando ${linhas.length} pedido(s) na Stokki…`;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/verificar-stokki`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pedidos: linhas.map(p => ({ order_number: p.order_number, freshhub_id: p.freshhub_id })) }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao consultar a Stokki."); return; }
+    const partes = [
+      `${j.consultados} pedido(s) consultado(s) na Stokki.`,
+      `Classificados como Cancelados: ${j.cancelados.length}${j.cancelados.length ? " (" + j.cancelados.join(", ") + ")" : ""}`,
+      `Classificados como Cliente Retira: ${j.cliente_retira.length}${j.cliente_retira.length ? " (" + j.cliente_retira.join(", ") + ")" : ""}`,
+    ];
+    if (j.retira_transportadora.length) partes.push(`Cliente Retira por transportadora de RETIRADA (sem notificação ao cliente, já concluídos): ${j.retira_transportadora.join(", ")}`);
+    if (j.nao_encontrados.length) partes.push(`Não encontrados na Stokki: ${j.nao_encontrados.join(", ")}`);
+    if (j.erros.length) partes.push(`Falha na consulta: ${j.erros.join(", ")}`);
+    if (j.divergentes.length) partes.push(`Não alterados (tratativa já concluída):\n- ${j.divergentes.join("\n- ")}`);
+    alert(partes.join("\n"));
+    carregarDados();
+  } catch (e) {
+    alert("Falha ao consultar a Stokki: " + e);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
 }
 
 async function copiarTabela() {
