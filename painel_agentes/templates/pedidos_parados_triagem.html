@@ -25,6 +25,10 @@
            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; }
   .badge-prioridade { background: #FCEFD9; color: #92400E; }
   .badge-repetido { background: var(--teste-bg); color: var(--teste-texto); }
+  .badge-urgente { background: #DC2626; color: #fff; }
+  tr.urgente td { background: #FEE2E2; }
+  tr.urgente td:first-child { border-left: 3px solid #DC2626; }
+  tr.urgente:hover td { background: #FECACA; }
   select.classificacao { padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; min-width: 160px; }
   .botao-acao { padding: 5px 10px; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; color: #fff; }
   .botao-duplicar { background: var(--primaria); }
@@ -72,7 +76,7 @@
   <button class="botao-copiar" id="botao-copiar-tabela" onclick="copiarTabela()">Copiar tabela (Pedido - Volumes - Classificação)</button>
   {% if pode_editar %}
   <button class="botao-copiar" id="botao-verificar-stokki" onclick="verificarStokki()" title="Consulta status e transportadora de todos os pedidos em tela na Stokki; Cancelado vira 'Cancelados'; CLIENTE RETIRA ou transportadora de RETIRADA (BD) vira 'Cliente Retira' automaticamente (a de RETIRADA sem notificação ao cliente)">Consultar Stokki (cancelados / cliente retira)</button>
-  <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; não atribuído sem agendamento ou agendado pra hoje vira 'Em Rota', agendado pra depois de hoje vira 'Agendado'">Consultar Vuupt (em rota / agendado)</button>
+  <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; atribuído/aceito/em deslocamento/chegou ao cliente ou não atribuído sem agendamento/agendado pra hoje vira 'Em Rota', agendado pra depois de hoje vira 'Agendado', concluído com sucesso vira 'Entregue'">Consultar Vuupt (em rota / agendado / entregue)</button>
   {% endif %}
   <span class="carimbo" id="carimbo">Carregando…</span>
 </div>
@@ -210,6 +214,8 @@ function renderTabela() {
     } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
       const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
       acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
+    } else if (p.revisao_urgente) {
+      acaoHtml = `<span class="badge badge-urgente" title="Classificado como Entregue, mas voltou a ser registrado como parado depois disso">NECESSITA REVISÃO URGENTE</span>`;
     } else if (p.classificacao in SO_REVISA) {
       acaoHtml = `<span class="status-ok">✓ revisado (${SO_REVISA[p.classificacao]})</span>`;
     }
@@ -224,7 +230,7 @@ function renderTabela() {
       : "";
 
     return `
-      <tr class="${p.prioridade ? 'prioridade' : ''}">
+      <tr class="${p.revisao_urgente ? 'urgente' : (p.prioridade ? 'prioridade' : '')}">
         <td class="mono">
           <div class="celula-pedido">
             <a class="link-stokki" href="${esc(p.stokki_url)}" target="_blank" rel="noopener" title="Abrir pedido na Stokki">${esc(p.order_number)}</a>
@@ -357,7 +363,7 @@ async function verificarStokki() {
 async function verificarVuupt() {
   const linhas = linhasFiltradas();
   if (!linhas.length) { alert("Nenhum pedido em tela para consultar."); return; }
-  if (!confirm(`Consultar ${linhas.length} pedido(s) na Vuupt?\n\nNão atribuído sem agendamento ou agendado pra hoje vira "Em Rota"; agendado pra depois de hoje vira "Agendado". Pedidos já classificados de outra forma não são alterados.`)) return;
+  if (!confirm(`Consultar ${linhas.length} pedido(s) na Vuupt?\n\nAtribuído/aceito/em deslocamento/chegou ao cliente, ou não atribuído sem agendamento ou agendado pra hoje, vira "Em Rota"; agendado pra depois de hoje vira "Agendado"; concluído com sucesso vira "Entregue". Pedidos já classificados de outra forma não são alterados.`)) return;
 
   const botao = document.getElementById("botao-verificar-vuupt");
   const original = botao.textContent;
@@ -375,6 +381,7 @@ async function verificarVuupt() {
       `${j.consultados} pedido(s) consultado(s) na Vuupt.`,
       `Classificados como Em Rota: ${j.em_rota.length}${lista(j.em_rota)}`,
       `Classificados como Agendado: ${j.agendado.length}${lista(j.agendado)}`,
+      `Classificados como Entregue: ${j.entregue.length}${lista(j.entregue)}`,
     ];
     if (j.nao_encontrados.length) partes.push(`Não encontrados na Vuupt: ${j.nao_encontrados.join(", ")}`);
     if (j.sem_acao.length) partes.push(`Sem ação automática:\n- ${j.sem_acao.join("\n- ")}`);

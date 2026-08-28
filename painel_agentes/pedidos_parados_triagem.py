@@ -614,7 +614,24 @@ def listar_com_classificacao() -> list[dict]:
         local = locais.get(numero, {})
         stk = stokki.get(numero, {})
         vu = vuupt_visto.get(numero, {})
+        # Pedido do Hugo, 28/08: um pedido classificado como "Entregue"
+        # que foi registrado como parado DE NOVO depois da classificação
+        # precisa de revisão urgente (ou não foi entregue de verdade, ou
+        # o Fresh Hub está recebendo registro de algo já entregue).
+        # Compara o registro mais recente (created_at, UTC) com o momento
+        # da classificação (hora local) -- os dois no fuso local.
+        revisao_urgente = False
+        if local.get("classificacao") == "Entregue" and local.get("classificado_em"):
+            try:
+                registrado = datetime.fromisoformat(p["created_at"])
+                if registrado.tzinfo is None:
+                    registrado = registrado.replace(tzinfo=timezone.utc)
+                classificado = datetime.strptime(local["classificado_em"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=FUSO_LOCAL)
+                revisao_urgente = registrado > classificado
+            except (ValueError, TypeError):
+                revisao_urgente = False
         resultado.append({
+            "revisao_urgente": revisao_urgente,
             "vuupt_code": vu.get("code"),
             "vuupt_status": vu.get("status"),
             "vuupt_scheduled_start": vu.get("scheduled_start"),
@@ -638,8 +655,8 @@ def listar_com_classificacao() -> list[dict]:
             "acao_detalhe": local.get("acao_detalhe"),
         })
 
-    # mais dias parado primeiro -- são os que mais precisam de atenção
-    resultado.sort(key=lambda r: r["dias_parado"], reverse=True)
+    # revisão urgente no topo; depois mais dias parado primeiro
+    resultado.sort(key=lambda r: (r["revisao_urgente"], r["dias_parado"]), reverse=True)
     return resultado
 
 
@@ -1135,7 +1152,15 @@ def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
 # entra no ciclo de 60s da tela), e qualquer erro da Vuupt encerra a
 # rodada em vez de insistir (lição do 429 de 25/08).
 VUUPT_PAUSA_ENTRE_CONSULTAS_SEG = 0.3
-CLASSIFICACOES_AUTO_VUUPT = ("Em Rota", "Agendado")
+CLASSIFICACOES_AUTO_VUUPT = ("Em Rota", "Agendado", "Entregue")
+
+# Status de serviço que o Hugo mandou tratar como "Em Rota" (28/08):
+# Atribuído, Aceito, Em deslocamento, Chegou ao cliente. Na API os dois
+# últimos são o mesmo status `on_route` (o que muda é started_at/
+# arrived_at -- ver DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md, "status brutos
+# de serviço"); os demais valores aqui são tolerância a variações que
+# outros módulos do projeto já mapeiam (nucleo/sincronizar_vuupt.py).
+STATUS_VUUPT_EM_ROTA = {"assigned", "accepted", "on_route", "in_route", "in_progress", "started", "arrived"}
 _lock_consulta_vuupt = threading.Lock()
 
 
@@ -1169,6 +1194,14 @@ def _servico_mais_recente_da_cadeia(vuupt: VuuptClient, servico: dict) -> dict:
 def _sugestao_vuupt(servico: dict, hoje: date) -> tuple[str | None, str]:
     """(classificação sugerida ou None, motivo legível)."""
     status = servico.get("status") or ""
+    if status in STATUS_VUUPT_EM_ROTA:
+        return "Em Rota", f"status '{status}' (atribuído/aceito/em deslocamento/chegou ao cliente)"
+    if status == "done":
+        # Concluído com sucesso = Entregue (Hugo, 28/08). Insucesso já
+        # tem tratativa própria na Torre -- não classifica aqui.
+        if servico.get("status_done") == "success" or _servico_com_sucesso(servico):
+            return "Entregue", "concluído com sucesso"
+        return None, "concluído com INSUCESSO (tratativa na Torre)"
     if status != "not_assigned":
         return None, f"status '{status}' (não é 'não atribuído')"
     data_ag = _data_agendamento_local(servico.get("scheduled_start"))
@@ -1198,7 +1231,7 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
             conn.close()
 
         resumo = {"consultados": 0, "nao_encontrados": [], "erros": [], "interrompido": None,
-                  "em_rota": [], "agendado": [], "sem_acao": [], "divergentes": [], "detalhes": []}
+                  "em_rota": [], "agendado": [], "entregue": [], "sem_acao": [], "divergentes": [], "detalhes": []}
         carimbo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         for i, p in enumerate(pedidos):
@@ -1256,7 +1289,7 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
                 service_id=servico.get("id"), decisao=alvo,
                 texto=f"Classificado automaticamente como {alvo} por {usuario} -- Vuupt: {motivo}",
             )
-            (resumo["em_rota"] if alvo == "Em Rota" else resumo["agendado"]).append(numero)
+            {"Em Rota": resumo["em_rota"], "Agendado": resumo["agendado"], "Entregue": resumo["entregue"]}[alvo].append(numero)
 
         return resumo
     finally:

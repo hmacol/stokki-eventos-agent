@@ -80,16 +80,28 @@ número do pedido.
 
 **Classificação automática via Vuupt (pedido do Hugo, 28/08)**: o botão
 "Consultar Vuupt (em rota / agendado)" resolve cada pedido em tela na
-Vuupt (segue a cadeia de reentregas até o serviço mais recente) e, se o
-serviço está **não atribuído** (`not_assigned`): sem agendamento → "Em
-Rota"; agendado pra **hoje** → "Em Rota"; agendado pra **depois de hoje**
-→ "Agendado". Agendamento vencido (antes de hoje) e qualquer outro
-status (atribuído/em rota/concluído/cancelado) NÃO classificam, só
-aparecem em "sem ação" no resumo. Só preenche classificação vazia ou
-troca Em Rota ↔ Agendado — Cancelados/Cliente Retira/Reenvio etc. já
-marcados não são sobrescritos (viram "divergente"). Erro da Vuupt (ex.:
-429) interrompe a rodada em vez de insistir. O status/agendamento vistos
-ficam em `pedidos_parados_vuupt` e aparecem embaixo do número.
+Vuupt (segue a cadeia de reentregas até o serviço mais recente) e:
+- **Atribuído / Aceito / Em deslocamento / Chegou ao cliente**
+  (`assigned`, `accepted`, `on_route`) → "Em Rota" (Hugo, 28/08);
+- **não atribuído** (`not_assigned`): sem agendamento → "Em Rota";
+  agendado pra **hoje** → "Em Rota"; agendado pra **depois de hoje** →
+  "Agendado"; agendamento vencido → sem ação;
+- **concluído com sucesso** (`done` + `status_done=success`) →
+  "Entregue"; concluído com insucesso → sem ação (tratativa na Torre);
+- cancelado → sem ação.
+Só preenche classificação vazia ou troca entre Em Rota / Agendado /
+Entregue — Cancelados/Cliente Retira/Reenvio etc. já marcados não são
+sobrescritos (viram "divergente"). Erro da Vuupt (ex.: 429) interrompe
+a rodada em vez de insistir. O status/agendamento vistos ficam em
+`pedidos_parados_vuupt` e aparecem embaixo do número.
+
+**NECESSITA REVISÃO URGENTE (Hugo, 28/08)**: pedido classificado como
+"Entregue" que volta a ser registrado como parado no Fresh Hub DEPOIS da
+classificação (registro mais recente > `classificado_em`) aparece em
+**vermelho** no topo da lista, com o badge "NECESSITA REVISÃO URGENTE" no
+lugar do "✓ revisado" — ou não foi entregue de verdade, ou algo está
+errado no registro. Reclassificar resolve (o carimbo passa a ser mais
+novo que o registro).
 
 **Importante (confirmado com o Hugo, 24/08): a classificação acontece no
 NOSSO painel, não na tela do Fresh Hub.** O Fresh Hub continua sendo só a
