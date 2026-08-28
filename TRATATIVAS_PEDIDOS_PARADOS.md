@@ -78,6 +78,19 @@ concorrente derruba a sessão Stokki do agente). O status/transportadora
 vistos ficam gravados (`pedidos_parados_stokki`) e aparecem embaixo do
 número do pedido.
 
+**Classificação automática via Vuupt (pedido do Hugo, 28/08)**: o botão
+"Consultar Vuupt (em rota / agendado)" resolve cada pedido em tela na
+Vuupt (segue a cadeia de reentregas até o serviço mais recente) e, se o
+serviço está **não atribuído** (`not_assigned`): sem agendamento → "Em
+Rota"; agendado pra **hoje** → "Em Rota"; agendado pra **depois de hoje**
+→ "Agendado". Agendamento vencido (antes de hoje) e qualquer outro
+status (atribuído/em rota/concluído/cancelado) NÃO classificam, só
+aparecem em "sem ação" no resumo. Só preenche classificação vazia ou
+troca Em Rota ↔ Agendado — Cancelados/Cliente Retira/Reenvio etc. já
+marcados não são sobrescritos (viram "divergente"). Erro da Vuupt (ex.:
+429) interrompe a rodada em vez de insistir. O status/agendamento vistos
+ficam em `pedidos_parados_vuupt` e aparecem embaixo do número.
+
 **Importante (confirmado com o Hugo, 24/08): a classificação acontece no
 NOSSO painel, não na tela do Fresh Hub.** O Fresh Hub continua sendo só a
 fonte do registro bruto (pedido, volumes, data, foto); o Status/tratativa

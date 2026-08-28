@@ -72,6 +72,7 @@
   <button class="botao-copiar" id="botao-copiar-tabela" onclick="copiarTabela()">Copiar tabela (Pedido - Volumes - Classificação)</button>
   {% if pode_editar %}
   <button class="botao-copiar" id="botao-verificar-stokki" onclick="verificarStokki()" title="Consulta status e transportadora de todos os pedidos em tela na Stokki; Cancelado vira 'Cancelados'; CLIENTE RETIRA ou transportadora de RETIRADA (BD) vira 'Cliente Retira' automaticamente (a de RETIRADA sem notificação ao cliente)">Consultar Stokki (cancelados / cliente retira)</button>
+  <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; não atribuído sem agendamento ou agendado pra hoje vira 'Em Rota', agendado pra depois de hoje vira 'Agendado'">Consultar Vuupt (em rota / agendado)</button>
   {% endif %}
   <span class="carimbo" id="carimbo">Carregando…</span>
 </div>
@@ -218,6 +219,9 @@ function renderTabela() {
     const stokkiInfo = p.stokki_status || p.stokki_transportadora
       ? `<div class="info-stokki" title="Visto na Stokki em ${esc(p.stokki_consultado_em || '')}">Stokki: ${esc(p.stokki_status || '?')} · ${esc(p.stokki_transportadora || 'sem transportadora')}</div>`
       : "";
+    const vuuptInfo = p.vuupt_status
+      ? `<div class="info-stokki" title="Visto na Vuupt em ${esc(p.vuupt_consultado_em || '')}">Vuupt ${esc(p.vuupt_code || '')}: ${esc(p.vuupt_status)}${p.vuupt_scheduled_start ? " · agend. " + esc(String(p.vuupt_scheduled_start).slice(0, 10).split("-").reverse().join("/")) : " · sem agendamento"}</div>`
+      : "";
 
     return `
       <tr class="${p.prioridade ? 'prioridade' : ''}">
@@ -227,7 +231,7 @@ function renderTabela() {
             <button class="botao-vuupt" onclick="buscarVuupt('${p.order_number}', this)" title="Buscar pedido com sucesso na Vuupt">Vuupt 🔍</button>
             ${repetido}
           </div>
-          ${stokkiInfo}
+          ${stokkiInfo}${vuuptInfo}
         </td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
@@ -344,6 +348,42 @@ async function verificarStokki() {
     carregarDados();
   } catch (e) {
     alert("Falha ao consultar a Stokki: " + e);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
+async function verificarVuupt() {
+  const linhas = linhasFiltradas();
+  if (!linhas.length) { alert("Nenhum pedido em tela para consultar."); return; }
+  if (!confirm(`Consultar ${linhas.length} pedido(s) na Vuupt?\n\nNão atribuído sem agendamento ou agendado pra hoje vira "Em Rota"; agendado pra depois de hoje vira "Agendado". Pedidos já classificados de outra forma não são alterados.`)) return;
+
+  const botao = document.getElementById("botao-verificar-vuupt");
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = `Consultando ${linhas.length} pedido(s) na Vuupt…`;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/verificar-vuupt`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pedidos: linhas.map(p => ({ order_number: p.order_number, freshhub_id: p.freshhub_id })) }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao consultar a Vuupt."); return; }
+    const lista = a => a.length ? ` (${a.join(", ")})` : "";
+    const partes = [
+      `${j.consultados} pedido(s) consultado(s) na Vuupt.`,
+      `Classificados como Em Rota: ${j.em_rota.length}${lista(j.em_rota)}`,
+      `Classificados como Agendado: ${j.agendado.length}${lista(j.agendado)}`,
+    ];
+    if (j.nao_encontrados.length) partes.push(`Não encontrados na Vuupt: ${j.nao_encontrados.join(", ")}`);
+    if (j.sem_acao.length) partes.push(`Sem ação automática:\n- ${j.sem_acao.join("\n- ")}`);
+    if (j.divergentes.length) partes.push(`Não alterados (já classificados de outra forma):\n- ${j.divergentes.join("\n- ")}`);
+    if (j.interrompido) partes.push(`ATENÇÃO: ${j.interrompido}`);
+    alert(partes.join("\n"));
+    carregarDados();
+  } catch (e) {
+    alert("Falha ao consultar a Vuupt: " + e);
   } finally {
     botao.disabled = false;
     botao.textContent = original;

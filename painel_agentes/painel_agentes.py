@@ -883,6 +883,28 @@ def api_pedidos_parados_verificar_stokki():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/verificar-vuupt", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_pedidos_parados_verificar_vuupt():
+    """Consulta status/agendamento de todos os pedidos em tela na Vuupt
+    e classifica sozinho Em Rota / Agendado -- pedido do Hugo, 28/08."""
+    body = request.get_json(force=True) or {}
+    pedidos = body.get("pedidos") or []
+    if not isinstance(pedidos, list) or not pedidos:
+        return jsonify({"erro": "lista 'pedidos' vazia"}), 400
+    try:
+        resultado = pedidos_parados_triagem.verificar_na_vuupt(
+            pedidos, session.get("usuario", "desconhecido"),
+        )
+    except RuntimeError as e:
+        return jsonify({"erro": str(e)}), 409
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao verificar pedidos parados na Vuupt")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify(resultado)
+
+
 @app.route("/torre")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def torre():

@@ -198,6 +198,17 @@ def _conectar():
             consultado_em  TEXT
         )
     """)
+    # Último resultado da consulta em lote à Vuupt (botão "Consultar
+    # Vuupt", pedido do Hugo 28/08) -- mesmo papel da tabela acima.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pedidos_parados_vuupt (
+            order_number    TEXT PRIMARY KEY,
+            code            TEXT,
+            status          TEXT,
+            scheduled_start TEXT,
+            consultado_em   TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -591,6 +602,9 @@ def listar_com_classificacao() -> list[dict]:
         stokki = {r["order_number"]: dict(r) for r in conn.execute(
             "SELECT * FROM pedidos_parados_stokki"
         ).fetchall()}
+        vuupt_visto = {r["order_number"]: dict(r) for r in conn.execute(
+            "SELECT * FROM pedidos_parados_vuupt"
+        ).fetchall()}
     finally:
         conn.close()
 
@@ -599,7 +613,12 @@ def listar_com_classificacao() -> list[dict]:
         dias_parado = (dia_mais_recente - _data_local(primeira_vez[numero])).days + 1
         local = locais.get(numero, {})
         stk = stokki.get(numero, {})
+        vu = vuupt_visto.get(numero, {})
         resultado.append({
+            "vuupt_code": vu.get("code"),
+            "vuupt_status": vu.get("status"),
+            "vuupt_scheduled_start": vu.get("scheduled_start"),
+            "vuupt_consultado_em": vu.get("consultado_em"),
             "stokki_status": stk.get("status"),
             "stokki_transportadora": stk.get("transportadora"),
             "stokki_consultado_em": stk.get("consultado_em"),
@@ -1092,3 +1111,153 @@ def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
         return resumo
     finally:
         _lock_consulta_stokki.release()
+
+
+# ── Consulta em lote à Vuupt (status + agendamento) ───────────────────────────
+#
+# Botão "Consultar Vuupt" da triagem (pedido do Hugo, 28/08). Regras dele,
+# literais, pra serviço **não atribuído** (status 'not_assigned'):
+#   - sem agendamento (scheduled_start vazio)            -> "Em Rota"
+#   - agendamento com data de HOJE                       -> "Em Rota"
+#   - agendamento com data DEPOIS de hoje                -> "Agendado"
+# Lacunas que ele não cobriu, tratadas de forma conservadora (só
+# reportadas, sem classificar): agendamento com data ANTERIOR a hoje
+# (vencido) e serviço em qualquer outro status (atribuído/em rota/
+# concluído/cancelado). Segue a cadeia de reentregas (mesmo fingerprint
+# de buscar_sucesso_vuupt) e avalia o serviço MAIS RECENTE da cadeia.
+#
+# Não sobrescreve classificação que veio de outra fonte (Cancelados,
+# Cliente Retira, Reenvio...): só preenche vazio ou troca Em Rota <->
+# Agendado entre si -- o resto vira "divergente" no resumo.
+#
+# Custo: 1 a 3 chamadas na Vuupt por pedido (mesma _resolver_pedido das
+# ações), com pausa entre pedidos; é manual e único por clique (não
+# entra no ciclo de 60s da tela), e qualquer erro da Vuupt encerra a
+# rodada em vez de insistir (lição do 429 de 25/08).
+VUUPT_PAUSA_ENTRE_CONSULTAS_SEG = 0.3
+CLASSIFICACOES_AUTO_VUUPT = ("Em Rota", "Agendado")
+_lock_consulta_vuupt = threading.Lock()
+
+
+def _data_agendamento_local(scheduled_start) -> date | None:
+    if not scheduled_start:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(scheduled_start))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(FUSO_LOCAL)
+    return dt.date()
+
+
+def _servico_mais_recente_da_cadeia(vuupt: VuuptClient, servico: dict) -> dict:
+    import fingerprint_duplicacao_insucesso  # sys.path já tem insucesso_entrega/
+
+    atual = servico
+    while fingerprint_duplicacao_insucesso.ja_duplicado(atual["id"]):
+        novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(atual["id"])
+        if not novo_code:
+            break
+        reentrega = vuupt.buscar_servico_por_code(novo_code)
+        if not reentrega:
+            break
+        atual = reentrega
+    return atual
+
+
+def _sugestao_vuupt(servico: dict, hoje: date) -> tuple[str | None, str]:
+    """(classificação sugerida ou None, motivo legível)."""
+    status = servico.get("status") or ""
+    if status != "not_assigned":
+        return None, f"status '{status}' (não é 'não atribuído')"
+    data_ag = _data_agendamento_local(servico.get("scheduled_start"))
+    if data_ag is None:
+        return "Em Rota", "não atribuído, sem agendamento"
+    if data_ag == hoje:
+        return "Em Rota", f"não atribuído, agendado pra hoje ({data_ag:%d/%m})"
+    if data_ag > hoje:
+        return "Agendado", f"não atribuído, agendado pra {data_ag:%d/%m/%Y}"
+    return None, f"não atribuído, agendamento vencido ({data_ag:%d/%m/%Y})"
+
+
+def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
+    """`pedidos`: lista de {"order_number", "freshhub_id"} (os que estão em
+    tela). Retorna resumo com o que foi visto e o que foi classificado."""
+    if not _lock_consulta_vuupt.acquire(blocking=False):
+        raise RuntimeError("Já existe uma consulta à Vuupt em andamento -- aguarde ela terminar.")
+    try:
+        vuupt = _vuupt()
+        hoje = datetime.now(FUSO_LOCAL).date()
+        conn = _conectar()
+        try:
+            locais = {r["order_number"]: dict(r) for r in conn.execute(
+                "SELECT order_number, classificacao, acao_status FROM pedidos_parados_classificacao"
+            ).fetchall()}
+        finally:
+            conn.close()
+
+        resumo = {"consultados": 0, "nao_encontrados": [], "erros": [], "interrompido": None,
+                  "em_rota": [], "agendado": [], "sem_acao": [], "divergentes": [], "detalhes": []}
+        carimbo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for i, p in enumerate(pedidos):
+            numero = str(p.get("order_number") or "").strip()
+            if not numero:
+                continue
+            if i:
+                time.sleep(VUUPT_PAUSA_ENTRE_CONSULTAS_SEG)
+            try:
+                servico, _code = _resolver_pedido(vuupt, numero)
+                if servico:
+                    servico = _servico_mais_recente_da_cadeia(vuupt, servico)
+            except Exception as e:
+                logger.warning(f"[pedidos-parados] Vuupt falhou no pedido {numero}; parando a rodada: {e}")
+                resumo["erros"].append(numero)
+                resumo["interrompido"] = f"Vuupt falhou no pedido {numero} ({e}); os seguintes não foram consultados."
+                break
+            resumo["consultados"] += 1
+            if not servico:
+                resumo["nao_encontrados"].append(numero)
+                continue
+
+            status = servico.get("status") or ""
+            scheduled_start = servico.get("scheduled_start") or ""
+            code = (servico.get("code") or "").lstrip("#")
+            conn = _conectar()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO pedidos_parados_vuupt "
+                    "(order_number, code, status, scheduled_start, consultado_em) VALUES (?, ?, ?, ?, ?)",
+                    (numero, code, status, scheduled_start, carimbo),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            alvo, motivo = _sugestao_vuupt(servico, hoje)
+            resumo["detalhes"].append({"order_number": numero, "code": code, "status": status,
+                                       "scheduled_start": scheduled_start, "sugestao": alvo, "motivo": motivo})
+            if not alvo:
+                resumo["sem_acao"].append(f"{numero}: {motivo}")
+                continue
+
+            local = locais.get(numero, {})
+            atual = local.get("classificacao")
+            if atual == alvo:
+                continue
+            if atual and atual not in CLASSIFICACOES_AUTO_VUUPT:
+                resumo["divergentes"].append(f"{numero}: Vuupt sugere {alvo} ({motivo}), mas já está {atual}")
+                continue
+
+            classificar(numero, str(p.get("freshhub_id") or ""), alvo, f"{usuario} (auto via Vuupt)")
+            tratativas.registrar_evento(
+                code or numero, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLASSIFICADO_AUTO_VUUPT",
+                service_id=servico.get("id"), decisao=alvo,
+                texto=f"Classificado automaticamente como {alvo} por {usuario} -- Vuupt: {motivo}",
+            )
+            (resumo["em_rota"] if alvo == "Em Rota" else resumo["agendado"]).append(numero)
+
+        return resumo
+    finally:
+        _lock_consulta_vuupt.release()
