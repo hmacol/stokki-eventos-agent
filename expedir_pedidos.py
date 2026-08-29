@@ -800,6 +800,35 @@ def _setup_playwright(config: dict):
     return pw, browser, page
 
 
+_PADRAO_SITUACAO_STOKKI = re.compile(r"Situa[çc][ãa]o:?\s*([A-Za-zÀ-ú ]{3,40}?)(?:\s{2,}|\n|Data|Declara|$)", re.IGNORECASE)
+
+
+def _situacao_na_stokki(page, codigo_ps: str) -> str | None:
+    """
+    Lê a "Situação:" real do pedido na página do /provider/ (ex.:
+    "Enviado", "Aguardando Transportador", "Em espera"). Usada quando a
+    Stokki responde 404 "situação inválida" à expedição -- achado 28/08:
+    esse 404 NÃO significa "já expedido" em todos os casos (PS-37718,
+    PS-37642 e PS-34818 continuavam "Aguardando Transportador" e mesmo
+    assim ganharam fingerprint porque o anexo do canhoto funcionou; 13
+    reentregas -R1 idem, por um bug antigo de id). None se não conseguir
+    ler (aí quem chama mantém o comportamento antigo).
+    """
+    try:
+        page.goto(
+            f"{URL_PROVIDER_SHW}/{_extrair_id(codigo_ps)}",
+            wait_until="networkidle",
+            timeout=30_000,
+        )
+        page.wait_for_timeout(500)
+        texto = page.inner_text("body", timeout=5_000)
+        m = _PADRAO_SITUACAO_STOKKI.search(texto)
+        return m.group(1).strip() if m else None
+    except Exception as e:
+        logger.debug(f"  Leitura da situacao na Stokki falhou: {e}")
+        return None
+
+
 def _canhoto_ja_anexado(page, codigo_ps: str) -> bool:
     """
     Verifica se ja existe um 'Comprovante de Entrega' na aba Documentos
@@ -1097,6 +1126,21 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             pdf_path = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
 
             resultado_exp = expedir_na_stokki(page, codigo_ps)
+            situacao = None
+
+            if resultado_exp == "ja_expedido":
+                # 404 "situação inválida" só vale como "já expedido" se a
+                # página do pedido confirmar "Enviado" (ver _situacao_na_stokki).
+                situacao = _situacao_na_stokki(page, codigo_ps)
+                if situacao and "enviado" not in situacao.lower():
+                    res["falha"] += 1
+                    motivo = f"situacao_invalida_na_stokki ({situacao})"
+                    n = fingerprint_expedicao.registrar_falha(codigo_ps, motivo, servico.get("id"))
+                    logger.warning(f"  {codigo_ps}: Stokki recusou e o pedido esta '{situacao}', "
+                                   f"nao 'Enviado' -- sem fingerprint ({n}/{MAX_TENTATIVAS_FALHA}).")
+                    time.sleep(0.5)
+                    continue
+                logger.info(f"  {codigo_ps}: situacao na Stokki = {situacao or 'nao lida'} -- tratando como ja expedido.")
 
             if resultado_exp in ("expedido", "ja_expedido"):
                 if resultado_exp == "expedido":
@@ -1126,12 +1170,18 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     sem_comprovante.append(servico)
                     logger.warning(f"  {codigo_ps}: expedido sem comprovante (sem foto de canhoto).")
+                elif situacao and "enviado" in situacao.lower():
+                    # Stokki confirmou "Enviado" e não há canhoto pra
+                    # anexar: já está expedido, nada mais a fazer.
+                    res["ja_expedido"] = res.get("ja_expedido", 0)
+                    fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
+                    fingerprint_expedicao.limpar_falha(codigo_ps)
+                    logger.info(f"  {codigo_ps}: ja 'Enviado' na Stokki, sem canhoto -- marcado como processado.")
                 else:
-                    # Stokki recusou ("situação inválida") e não há nada
-                    # pra anexar que confirme que já estava expedido --
-                    # pode ser pedido "Em espera"/cancelado na Stokki.
-                    # Conta como falha; depois de MAX_TENTATIVAS_FALHA vai
-                    # pro e-mail de pendências em vez de ficar em loop.
+                    # Stokki recusou ("situação inválida"), não deu pra
+                    # ler a situação e não há nada pra anexar que confirme
+                    # que já estava expedido. Conta como falha; depois de
+                    # MAX_TENTATIVAS_FALHA vai pro e-mail de pendências.
                     res["falha"] += 1
                     n = fingerprint_expedicao.registrar_falha(codigo_ps, "situacao_invalida_na_stokki", servico.get("id"))
                     logger.warning(f"  {codigo_ps}: Stokki recusou e nao ha canhoto pra confirmar ({n}/{MAX_TENTATIVAS_FALHA}).")
