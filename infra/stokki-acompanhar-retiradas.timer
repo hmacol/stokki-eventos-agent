@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-acompanhar-retiradas.service a cada 30 min, 08:05-17:35 (fora das sequencias 18h/22h, que ja rodam a etapa)
+
+[Timer]
+OnCalendar=*-*-* 08..17:05/30:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

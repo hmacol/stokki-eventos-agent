@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Acompanhar retiradas no galpao (Stokki Enviado/Cancelado -> VUUPT)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/retiradas/acompanhar_retiradas.py

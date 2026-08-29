@@ -53,6 +53,11 @@ from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agend
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
 import redespacho_confirmacao
+from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
+
+# Seção 'retiradas' do config.yaml, preenchida em main() -- processar_pedido
+# não recebe o config inteiro e tem assinatura usada por vários chamadores.
+config_retiradas_global: dict = {}
 
 # ── Configuração de logging ────────────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -482,14 +487,33 @@ def processar_pedido(
         res_end = resolver_endereco_entrega(
             detalhe, catalogo, anthropic_api_key, google_maps_api_key)
 
-        # Pedidos com transportadora RETIRADA nao vao pro VUUPT
-        # (transportadora coleta no galpao, nao ha rota de entrega)
+        # Pedidos com transportadora RETIRADA (cliente retira / terceira
+        # coleta no galpão): SERVIÇO AVULSO na VUUPT, título "[RETIRADA]",
+        # atribuído ao agente fixo de retiradas -- nunca entra em rota
+        # (pedido do Hugo, 28/08; ver retiradas/regras_retirada.py). Sem
+        # retiradas.agent_id no config, mantém o comportamento antigo
+        # (ignora). Quem fecha/cancela depois é acompanhar_retiradas.py.
         if res_end.transportadora.get("tipo") == "RETIRADA":
-            logger.info(
-                f"  {codigo_ps}: RETIRADA ({res_end.transportadora.get('nome')}) "
-                f"— ignorado, nao importa no VUUPT."
-            )
-            resultado["acao"] = "ignorado_retirada"
+            cfg_ret = config_retiradas(config_retiradas_global or {})
+            if not cfg_ret["ativo"]:
+                logger.info(
+                    f"  {codigo_ps}: RETIRADA ({res_end.transportadora.get('nome')}) "
+                    f"— ignorado, nao importa no VUUPT (retiradas desativadas no config)."
+                )
+                resultado["acao"] = "ignorado_retirada"
+                return resultado
+            stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
+            dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
+            transp_bloco = detalhe.get("transportadora") or {}
+            transp_info = {"nome": res_end.transportadora.get("nome") or transp_bloco.get("nome", ""),
+                           "documento": transp_bloco.get("documento", "")}
+            payload_ret = montar_payload_retirada(
+                codigo_ps, referencia or detalhe.get("referencia", ""), detalhe,
+                transp_info, dados_banco, cfg_ret)
+            acao_ret, _ = importar_retirada(vuupt, payload_ret, cfg_ret, servico_existente, modo_teste)
+            resultado["acao"] = acao_ret
+            resultado["fonte_endereco"] = "retirada_galpao"
+            resultado["observacao"] = f"Retirada no galpão via {transp_info['nome'] or 'cliente'} -- serviço avulso, sem rota."
             return resultado
 
         # Local de Entrega fora da área atendida e sem redespacho conhecido
@@ -774,6 +798,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     )
 
     config           = _carregar_config()
+    global config_retiradas_global
+    config_retiradas_global = config
     anthropic_key    = config.get("anthropic", {}).get("api_key", "")
     vuupt_token      = config.get("vuupt_api", {}).get("token", "")
     gmaps_key        = config.get("google_maps", {}).get("api_key", "")

@@ -1103,6 +1103,7 @@ def api_pool():
         return jsonify({"erro": str(e)}), 500
     return jsonify({
         "pool": resultado["pool"],
+        "pool_retiradas": resultado.get("pool_retiradas", []),
         "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
     })
 

@@ -22,6 +22,7 @@ from http_retry import chamar_com_retry
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://app.vuupt.com/api/v1"
+API_BASE_URL = "https://api.vuupt.com/api/v1"  # rotas, checklists, agentes e AÇÕES de serviço (assign/cancel/...)
 
 
 def aplicar_forma_leve_se_endereco_inalterado(payload: dict) -> dict:
@@ -302,6 +303,74 @@ class VuuptClient:
         except Exception:
             erro = {"message": resp.text}
         raise VuuptAPIError(f"Status {resp.status_code}: {erro}")
+
+    # ── Ações sobre o serviço (api.vuupt.com) ─────────────────────────────
+    # Descobertas/validadas em 28/08 (ver reference na memória e
+    # testar_fluxo_agente_vuupt.py). assign/unassign/cancel estão na doc
+    # pública (vuupt.stoplight.io); accept/start/check-in/check-out NÃO
+    # estão documentados, mas funcionam com o token de conta -- usados só
+    # pra fechar serviços que nunca passam pelo app (retiradas no galpão).
+
+    def _acao_servico(self, service_id: int, acao: str, data: dict | None = None):
+        url = f"{API_BASE_URL}/services/{service_id}/{acao}"
+        # form-urlencoded de propósito: o check-out só entende
+        # accomplished="true" como string de formulário; em JSON (true/1)
+        # a VUUPT fecha como INSUCESSO com o 1º motivo da conta (28/08).
+        # (requests só REMOVE um header da sessão quando o valor por
+        # requisição é None -- omitir a chave mantém o application/json)
+        resp = chamar_com_retry(self.session.put, url, data=data, headers={"Content-Type": None}, timeout=20)
+        if not resp.ok:
+            try:
+                erro = resp.json()
+            except Exception:
+                erro = {"message": resp.text}
+            raise VuuptAPIError(f"{acao} do serviço {service_id}: status {resp.status_code}: {erro}")
+        return resp.json() if resp.text else None
+
+    def atribuir_agente(self, service_id: int, agent_id: int):
+        """PUT /services/{id}/assign-agent/{agent_id} -> status 'assigned', sem rota."""
+        return self._acao_servico(service_id, f"assign-agent/{int(agent_id)}")
+
+    def desatribuir_agente(self, service_id: int):
+        """PUT /services/{id}/unassign-agent -> volta pra 'not_assigned' (só se não iniciado)."""
+        return self._acao_servico(service_id, "unassign-agent")
+
+    def cancelar_servico_oficial(self, service_id: int):
+        """PUT /services/{id}/cancel (doc pública): status 'canceled', irreversível.
+        409 se o serviço já está 'done'; 200 se já estava cancelado."""
+        return self._acao_servico(service_id, "cancel")
+
+    def concluir_como_agente(self, service_id: int, sucesso: bool = True,
+                             failed_reason_id: int | None = None, status_atual: str = "") -> None:
+        """Percorre o ciclo do agente por API: accept -> start -> check-in
+        -> check-out. Idempotente em relação ao status atual (pula as
+        etapas já feitas). Não gera checklist -- é pra serviço que nunca
+        passa pelo app (retirada no galpão)."""
+        ordem = ["assigned", "accepted", "on_route", "arrived"]
+        etapas = [("accepted", "accept"), ("on_route", "start"), ("arrived", "check-in")]
+        pos_atual = ordem.index(status_atual) if status_atual in ordem else 0
+        for i, (status_alvo, acao) in enumerate(etapas):
+            if i + 1 > pos_atual:
+                self._acao_servico(service_id, acao)
+        data = {"accomplished": "true" if sucesso else "false"}
+        if not sucesso and failed_reason_id:
+            data["failed_reason_id"] = str(failed_reason_id)
+        self._acao_servico(service_id, "check-out", data=data)
+
+    def listar_servicos_do_agente(self, agent_id: int, statuses: tuple[str, ...] = ("assigned", "accepted", "on_route", "arrived")) -> list[dict]:
+        """Serviços atribuídos ao agente que ainda não terminaram (1 chamada por status)."""
+        encontrados: list[dict] = []
+        for status in statuses:
+            filtro = [
+                {"field": "driver_id", "operator": "eq", "value": int(agent_id)},
+                {"field": "status", "operator": "eq", "value": status},
+            ]
+            for s in self.listar_servicos(filtro, per_page=100):
+                # defesa contra filtro ignorado silenciosamente pela API
+                # (rotas_client.py:179-187): confere o driver_id de cada item
+                if str(s.get("driver_id")) == str(agent_id):
+                    encontrados.append(s)
+        return encontrados
 
     def cancelar_servico(self, service_id: int) -> dict | None:
         """

@@ -50,6 +50,7 @@ from regras.disponibilidade_motoristas import (
 )
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
+from retiradas.regras_retirada import PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas, eh_servico_retirada
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
 # 22/08) NÃO são importados aqui em cima de propósito -- ainda não foram
 # deployados (falta config Chatwoot/template Meta, ver memória do
@@ -416,6 +417,44 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
     }
 
 
+ROTULO_STATUS_RETIRADA = {
+    "assigned": "Aguardando retirada",
+    "accepted": "Aguardando retirada",
+    "on_route": "Em andamento",
+    "arrived": "Em andamento",
+}
+
+
+def _servico_para_retirada(servico: dict, remetentes_por_id: dict[int, str],
+                           nf_por_codigo: dict[str, str] | None = None) -> dict:
+    """Item do bloco "A retirar" -- só leitura (sem drag/seleção). O
+    destinatário e a transportadora vêm do próprio título montado por
+    retiradas.regras_retirada.montar_titulo:
+    "[RETIRADA] #PS-x - ref / Embarcador / Destinatário / via Transp"."""
+    titulo = (servico.get("title") or "").strip()
+    sem_prefixo = titulo[len(PREFIXO_TITULO):].strip() if titulo.upper().startswith(PREFIXO_TITULO) else titulo
+    partes = [p.strip() for p in sem_prefixo.split(" / ")]
+    transportadora = next((p[4:] for p in partes if p.lower().startswith("via ")), "")
+    meio = [p for p in partes[1:] if not p.lower().startswith("via ")]
+    destinatario = meio[-1] if meio else ""
+    codigo = servico.get("code", "")
+    return {
+        "service_id": servico["id"],
+        "codigo": codigo,
+        "titulo": sem_prefixo,
+        "remetente_nome": remetentes_por_id.get(servico.get("sender_id"), "Remetente não identificado"),
+        "destinatario_nome": destinatario,
+        "transportadora": transportadora,
+        "status": servico.get("status", ""),
+        "status_rotulo": ROTULO_STATUS_RETIRADA.get(servico.get("status", ""), servico.get("status", "")),
+        "criado_em": (servico.get("created_at") or "")[:10],
+        "volume_caixas": extrair_volume_caixas(servico),
+        "numero_nf": ", ".join(filter(None, (
+            (nf_por_codigo or {}).get(c, "") for c in _codigos_base_lista(codigo)
+        ))),
+    }
+
+
 def _regiao_do_servico(servico: dict) -> str:
     """
     Rótulo de região pro resumo do futuro. Prioridade igual à das regras
@@ -611,8 +650,27 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         except Exception as e:
             logger.warning(f"Falha ao buscar serviços '{status_rota}' pro resumo de agendados: {e}")
 
+    # Retiradas no galpão (Hugo, 28/08): bloco PRÓPRIO, fora do pool --
+    # são serviços avulsos "[RETIRADA] ..." atribuídos ao agente fixo de
+    # retiradas (status assigned/accepted/..., nunca not_assigned), então
+    # nunca entram em rota nem no pool; a tela só mostra pra acompanhar.
+    # Falha aqui não derruba a tela.
+    pool_retiradas: list[dict] = []
+    try:
+        cfg_ret = config_retiradas(config)
+        if cfg_ret["ativo"] and data_alvo >= date.today():
+            servicos_ret = [s for s in vuupt.listar_servicos_do_agente(cfg_ret["agent_id"], STATUSES_ABERTOS)
+                            if eh_servico_retirada(s)]
+            nf_ret = rascunhos_rota.carregar_nf_por_codigo_pedido(
+                {c for s in servicos_ret for c in _codigos_base_lista(s.get("code", ""))})
+            pool_retiradas = [_servico_para_retirada(s, remetentes_por_id, nf_ret) for s in servicos_ret]
+            pool_retiradas.sort(key=lambda p: p["codigo"])
+    except Exception as e:
+        logger.warning(f"Falha ao carregar retiradas no galpão pro planejamento (tela segue sem o bloco): {e}")
+
     return {
         "pool": pool,
+        "pool_retiradas": pool_retiradas,
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
@@ -726,6 +784,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "data_alvo_iso": data_alvo.isoformat(),
         "rascunhos": rascunhos,
         "pool": pool_e_agendados["pool"],
+        "pool_retiradas": pool_e_agendados["pool_retiradas"],
         "resumo_agendados": pool_e_agendados["resumo_agendados"],
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,

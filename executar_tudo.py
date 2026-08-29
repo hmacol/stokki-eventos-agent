@@ -235,6 +235,28 @@ def main(modo_teste: bool = False,
         logger.error(f"Erro no pipeline: {e}")
         resumo_etapas["Pipeline"] = {"status": "erro", "detalhe": str(e)}
 
+    # ── Etapa 4: Retiradas no galpão (Hugo, 28/08) ────────────────────────────
+    # Fecha na VUUPT (entregue com sucesso) as retiradas que a Stokki já
+    # marcou "Enviado" e cancela as que a Stokki cancelou. Roda DEPOIS do
+    # pipeline, na mesma sequência, pra reaproveitar a sessão Stokki sem
+    # login concorrente. Também roda sozinho a cada 30 min em horário
+    # comercial (infra/stokki-acompanhar-retiradas.timer).
+    logger.info("\n>>> ETAPA 4: Acompanhar retiradas no galpão (Stokki -> VUUPT)")
+    logger.info("-" * 60)
+    try:
+        from retiradas.acompanhar_retiradas import acompanhar as acompanhar_retiradas
+        resumo_ret = acompanhar_retiradas(config, modo_teste=modo_teste, ignorar_trava_painel=True)
+        resumo_etapas["Retiradas"] = {
+            "status": "erro" if resumo_ret.get("erros") else "ok",
+            "detalhe": (f"Concluídas: {len(resumo_ret.get('concluidos', []))}, "
+                        f"canceladas: {len(resumo_ret.get('cancelados', []))}, "
+                        f"aguardando: {len(resumo_ret.get('aguardando', []))}, "
+                        f"erros: {len(resumo_ret.get('erros', []))}"),
+        }
+    except Exception as e:
+        logger.error(f"Erro no acompanhamento de retiradas: {e}")
+        resumo_etapas["Retiradas"] = {"status": "erro", "detalhe": str(e)}
+
     logger.info("-" * 60)
     elapsed = time.time() - inicio
     logger.info(f"\nExecucao completa finalizada em {elapsed/60:.1f} minutos.")

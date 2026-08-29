@@ -154,6 +154,26 @@
      roteirização (notificar_area_nao_atendida.py), então só aparecem
      aqui pra decisão manual (cotação dedicada / redespacho / etc). */
   .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro); }
+  /* 4º bloco, "A retirar no galpão" (Hugo, 28/08): só leitura -- cards
+     sem cursor de arrasto, com o status do acompanhamento como badge. */
+  .secao-pool-retirada { margin-top: 10px; border-top: 1px dashed var(--borda); padding-top: 4px; }
+  .secao-pool-retirada .cabecalho-secao-pool { color: var(--acento, #2FD9AE); }
+  .item-retirada {
+    background: var(--fundo);
+    border: 1px dashed var(--borda);
+    border-radius: 6px;
+    padding: 7px 9px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    opacity: 0.9;
+  }
+  .item-retirada .codigo { font-weight: 700; }
+  .item-retirada .transportadora { color: var(--texto-suave); }
+  .item-retirada .badge-retirada {
+    display: inline-block; margin-top: 3px; padding: 1px 6px; border-radius: 10px;
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    background: rgba(47, 217, 174, 0.15); color: var(--acento, #2FD9AE);
+  }
   .item-parada {
     position: relative;
     background: var(--fundo);
@@ -1661,6 +1681,18 @@
         <ul class="lista-paradas pool" id="lista-pool-fora-area" data-list-id="pool"></ul>
       </div>
     </div>
+    <!-- 4º bloco, "A retirar no galpão" (Hugo, 28/08): FORA do #lista-pool de
+         propósito -- são serviços avulsos "[RETIRADA] ..." já atribuídos ao
+         agente fixo de retiradas (nunca not_assigned), só leitura: sem
+         drag, sem seleção, sem número no mapa. Quem fecha/cancela é
+         retiradas/acompanhar_retiradas.py conforme a Stokki. -->
+    <div class="secao-pool secao-pool-retirada" data-secao="retirada" id="secao-pool-retirada">
+      <div class="cabecalho-secao-pool" title="Pedidos com transportadora RETIRADA (cliente retira / terceira coleta no galpão). Nunca entram em rota: ficam como serviço avulso na VUUPT, atribuídos ao agente de retiradas, e são fechados sozinhos quando a Stokki marca 'Enviado' (ou cancelados quando a Stokki cancela).">
+        <span class="seta-secao">▾</span>
+        <span class="titulo-secao-pool">A retirar no galpão (<span id="contagem-secao-retirada">0</span>)</span>
+      </div>
+      <ul class="lista-paradas" id="lista-pool-retirada"></ul>
+    </div>
   </div>
 
   <div class="divisor" data-coluna="pool" title="Arraste pra ajustar a largura do pool; duplo clique volta pro padrão"></div>
@@ -1718,6 +1750,7 @@
   const PODE_EDITAR = {{ pode_editar | tojson }};
   const RASCUNHOS = {{ dados.rascunhos | tojson }};
   const POOL = {{ dados.pool | tojson }};
+  const POOL_RETIRADAS = {{ (dados.pool_retiradas or []) | tojson }};
   const BASE = {{ dados.base | tojson }};
   const MOTORISTAS = {{ dados.motoristas | tojson }};
   const DISPONIBILIDADE_AJUSTES = {{ dados.disponibilidade_ajustes | tojson }};
@@ -2789,6 +2822,30 @@
         atualizarBarraSelecaoRotas();
       }
     }
+  }
+
+  function renderizarRetiradas(lista) {
+    // Bloco "A retirar no galpão" (Hugo, 28/08) -- só leitura, redesenha
+    // inteiro a cada carga/Atualizar (não participa de POOL_BY_ID,
+    // seleção, drag nem mapa: são serviços avulsos que nunca vão pra rota).
+    const ul = document.getElementById("lista-pool-retirada");
+    const contagem = document.getElementById("contagem-secao-retirada");
+    if (!ul) return;
+    ul.innerHTML = "";
+    (lista || []).forEach(p => {
+      const li = document.createElement("li");
+      li.className = "item-retirada";
+      li.dataset.serviceId = p.service_id;
+      const nf = p.numero_nf ? ` <span class="nf">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+      const destinatario = p.destinatario_nome ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>` : "";
+      const transportadora = p.transportadora ? `<br><span class="transportadora">retira: ${escaparHtml(p.transportadora)}</span>` : "";
+      const caixas = p.volume_caixas ? ` · ${p.volume_caixas} cx` : "";
+      li.innerHTML = `<span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+        <span class="remetente">${escaparHtml(p.remetente_nome || "")}</span>${destinatario}${transportadora}<br>
+        <span class="badge-retirada" title="Status na VUUPT: ${escaparHtml(p.status)} · importado em ${escaparHtml(p.criado_em || "?")}">${escaparHtml(p.status_rotulo || p.status)}${caixas}</span>`;
+      ul.appendChild(li);
+    });
+    if (contagem) contagem.textContent = (lista || []).length;
   }
 
   function atualizarContagensSecoesPool() {
@@ -4162,6 +4219,7 @@
       atualizarBarraSelecao();
       atualizarContagensTotais();
       atualizarContagensSecoesPool();
+      if (dados.pool_retiradas !== undefined) renderizarRetiradas(dados.pool_retiradas);
 
       // resumo dos agendados (por dia/região) vem já renderizado
       // do servidor -- mesmo partial do load da página, só troca o HTML
@@ -4344,6 +4402,7 @@
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();
     atualizarContagensSecoesPool();
+    renderizarRetiradas(POOL_RETIRADAS);
     aplicarFiltroFlag();  // inicializa o contador de "precisa sair no dia"
     atualizarBadgeFiltrosPool();
     criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)

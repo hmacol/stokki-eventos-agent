@@ -59,6 +59,8 @@ ROTULOS = {
     "pulado_sem_alteracao": "Sem alteração (fingerprint)",
     "pulado_atribuido":     "Pulados (já atribuídos/concluídos)",
     "ignorado_retirada":    "Ignorados (RETIRADA)",
+    "retirada_criada":      "Retiradas criadas (serviço avulso)",
+    "retirada_atualizada":  "Retiradas atualizadas",
     "simulado":             "Simulados (modo teste)",
     "erro":                 "Erros",
     "revisao":              "Revisão manual",
