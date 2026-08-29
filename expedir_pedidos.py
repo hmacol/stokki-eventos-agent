@@ -3,18 +3,34 @@
 expedir_pedidos.py
 
 Expede na Stokki os pedidos que foram entregues com sucesso no VUUPT
-e possuem canhoto VALIDADO MANUALMENTE no VUUPT (validated_at preenchido).
+(status=done, status_done=success).
 
-Pedidos com canhoto pendente de validacao recebem notificacao interna.
+REGRA ATUAL (28/08, análise de pedidos acumulados, pedido do Hugo: "fechar
+um processamento definitivo pra nunca deixar acumular, mesmo tirando
+travas"): a ENTREGA é o critério de expedição. O canhoto (foto do
+checklist) deixou de ser trava -- validado ou não, com foto ou sem:
+  - com foto  -> expede e anexa o PDF do canhoto (validado ou não);
+  - sem foto  -> expede mesmo assim e entra no e-mail interno de
+                 "expedidos sem comprovante", pra cobrar o motorista.
+Antes disso, 230 entregas ficavam presas em "Aguardando Transportador"
+esperando alguém clicar "Validar canhoto" no VUUPT, e entregas sem foto
+nem entravam na busca (ficavam presas pra sempre, sem aparecer em lista
+nenhuma). A validação continua existindo no VUUPT como controle, só não
+bloqueia mais.
 
-Fluxo por pedido validado:
-  1. Baixa o PDF do canhoto
-  2. Expede o pedido na Stokki via POST /provider/operation/shipping/store
-  3. Anexa o PDF do canhoto na aba Documentos do pedido (Playwright)
+Janela: entregues dos últimos HORAS_ENTREGUES (30 dias) -- o fingerprint
+(expedicoes_processadas) é o que evita reprocessar, não a janela. Antes
+eram 168h, e qualquer pedido que atrasasse mais que isso sumia da fila
+em silêncio. Insucessos continuam em HORAS_PADRAO (168h).
+
+Falhas: cada falha (Stokki recusou, anexo falhou...) é contada em
+expedicoes_falhas; depois de MAX_TENTATIVAS_FALHA com o mesmo erro o
+pedido sai da fila automática e vai pro e-mail interno de pendências
+(antes: retentado a cada 30 min por 7 dias, depois sumia).
 
 Execute:
   py -3.11 expedir_pedidos.py
-  py -3.11 expedir_pedidos.py --horas 48 --limite 10
+  py -3.11 expedir_pedidos.py --horas-entregues 48 --limite 10
   py -3.11 expedir_pedidos.py --modo-teste
 """
 import argparse
@@ -80,7 +96,13 @@ URL_LOGIN_PROVIDER = f"{STOKKI_BASE}/pt-br/login"
 URL_PROVIDER_ADM = f"{STOKKI_BASE}/pt-br/administrator/inventory/outbound/show"
 URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 
-HORAS_PADRAO = 168  # 7 dias (era 48h) -- validação manual no VUUPT pode demorar mais
+HORAS_PADRAO = 168  # 7 dias -- janela dos INSUCESSOS (notificação/tratativa)
+# Entregues: 30 dias. O fingerprint é quem evita reprocessar; a janela só
+# limita quantas páginas do VUUPT são lidas por execução (~25 de 100).
+HORAS_ENTREGUES = 24 * 30
+# Falhas iguais seguidas antes do pedido sair da fila automática e ir
+# pro e-mail interno de pendências (ver fingerprint_expedicao.registrar_falha).
+MAX_TENTATIVAS_FALHA = 3
 FUSO_LOCAL   = ZoneInfo("America/Sao_Paulo")
 
 # O e-mail de "dia sem insucesso" só sai nas execuções finais do dia
@@ -192,15 +214,18 @@ def _buscar_servicos_por_status_done(token: str, status_done_alvo: str, horas: i
         if page >= pag.get("total_pages", page):
             break
         page += 1
-        time.sleep(0.3)
+        time.sleep(0.5)
 
     return encontrados
 
 
-def buscar_servicos_entregues(token: str, horas: int = HORAS_PADRAO) -> list:
-    """Busca serviços entregues com sucesso que tenham canhoto."""
-    encontrados = _buscar_servicos_por_status_done(token, "success", horas, exigir_canhoto=True)
-    logger.info(f"VUUPT: {len(encontrados)} entregue(s) com canhoto nas ultimas {horas}h")
+def buscar_servicos_entregues(token: str, horas: int = HORAS_ENTREGUES) -> list:
+    """Busca serviços entregues com sucesso -- COM ou SEM canhoto (28/08:
+    a foto deixou de ser trava, ver docstring do módulo)."""
+    encontrados = _buscar_servicos_por_status_done(token, "success", horas, exigir_canhoto=False)
+    com_foto = sum(1 for s in encontrados if tem_canhoto(s))
+    logger.info(f"VUUPT: {len(encontrados)} entregue(s) nas ultimas {horas}h "
+                f"({com_foto} com canhoto, {len(encontrados) - com_foto} sem foto)")
     return encontrados
 
 
@@ -253,76 +278,113 @@ def baixar_canhoto_pdf(token: str, checklist_id: int, codigo_ps: str) -> Path | 
 
 # ── Notificacao interna ───────────────────────────────────────────────────────
 
-def notificar_validacao_pendente(pendentes: list, config_email: dict, modo_teste: bool):
-    """Envia e-mail interno listando pedidos com canhoto pendente de validacao."""
-    if not pendentes:
+def notificar_pendencias_expedicao(sem_comprovante: list, falhas: dict,
+                                   config_email: dict, modo_teste: bool):
+    """
+    E-mail interno com o que a expedição automática NÃO resolve sozinha
+    (28/08, substitui o antigo "canhotos pendentes de validação", que
+    deixou de existir como trava):
+      - `sem_comprovante`: serviços expedidos SEM foto de canhoto (cobrar
+        o motorista / anexar depois na mão);
+      - `falhas`: {codigo: {motivo, tentativas, ...}} que já estouraram
+        MAX_TENTATIVAS_FALHA e saíram da fila automática (ex.: Stokki
+        "situação inválida" -- pedido em espera/cancelado lá).
+    Só manda o que ainda não foi avisado (expedicao_avisos_enviados) --
+    roda de 30 em 30 min, não pode repetir a lista inteira toda vez.
+    """
+    chaves_sc = {f"SEM_COMPROVANTE:{fingerprint_expedicao._normalizar(s.get('code'))}": s
+                 for s in sem_comprovante if s.get("code")}
+    chaves_fl = {f"FALHA:{codigo}:{info.get('motivo')}": (codigo, info)
+                 for codigo, info in falhas.items()}
+    novas = fingerprint_expedicao.filtrar_avisos_novos(list(chaves_sc) + list(chaves_fl))
+    if not novas:
         return
+    novos_sc = [chaves_sc[c] for c in novas if c in chaves_sc]
+    novas_fl = [chaves_fl[c] for c in novas if c in chaves_fl]
+
+    for s in novos_sc:
+        logger.warning(f"  Expedido SEM comprovante (sem foto de canhoto no VUUPT): {s.get('code')}")
+    for codigo, info in novas_fl:
+        logger.warning(f"  Falha persistente de expedicao: {codigo} -- {info.get('motivo')} "
+                       f"({info.get('tentativas')} tentativas, desde {info.get('primeira_em')})")
 
     remetente = config_email.get("remetente", "")
     senha     = config_email.get("senha_app") or config_email.get("senha", "")
     responsavel = config_email.get("email_responsavel", "")
-
     if not responsavel:
         logger.info("E-mail de responsavel nao configurado -- notificacao interna pulada.")
-        for p in pendentes:
-            logger.warning(f"  Validacao pendente no VUUPT: {p.get('code')}")
+        return
+    if modo_teste:
+        logger.info(f"[MODO TESTE] Avisaria {len(novos_sc)} sem comprovante e {len(novas_fl)} falha(s) persistente(s).")
         return
 
     COR_HEADER  = "#141428"
     COR_ACENTO  = "#00C896"
     COR_DESTAQUE = "#F5A623"
 
-    linhas = ""
-    for s in pendentes:
-        cl      = _extrair_checklist(s)
-        filled  = (cl or {}).get("filled_at", "")[:16] if cl else ""
-        linhas += (
-            f"<tr>"
-            f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-weight:600;"
-            f"font-size:13px;color:#1F2937;'>{html.escape(s.get('code','') or '')}</td>"
-            f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
-            f"color:#6B7280;'>{html.escape(filled)}</td>"
-            f"</tr>"
-        )
+    def _linha(c1, c2):
+        return (f"<tr><td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-weight:600;"
+                f"font-size:13px;color:#1F2937;'>{html.escape(c1)}</td>"
+                f"<td style='padding:8px 14px;border-bottom:1px solid #E5E7EB;font-size:12px;"
+                f"color:#6B7280;'>{html.escape(c2)}</td></tr>")
+
+    def _tabela(titulo1, titulo2, linhas):
+        return (f"<table style='width:100%;border-collapse:collapse;margin:16px 0;'>"
+                f"<thead><tr style='background:{COR_HEADER};'>"
+                f"<th style='padding:10px 14px;text-align:left;color:#fff;font-size:12px;'>{titulo1}</th>"
+                f"<th style='padding:10px 14px;text-align:left;color:#fff;font-size:12px;'>{titulo2}</th>"
+                f"</tr></thead><tbody>{''.join(linhas)}</tbody></table>")
+
+    blocos = ""
+    if novos_sc:
+        linhas = [_linha(s.get("code", "") or "", (s.get("completed_at") or "")[:16]) for s in novos_sc]
+        blocos += (f"<h3 style='color:#1F2937;margin:20px 0 6px;'>Expedidos sem comprovante ({len(novos_sc)})</h3>"
+                   f"<p style='color:#1F2937;font-size:13px;margin:0;'>Entregues no VUUPT e expedidos na Stokki, "
+                   f"mas o motorista <strong>nao registrou foto do canhoto</strong> -- cobrar o comprovante e "
+                   f"anexar na Stokki manualmente.</p>"
+                   + _tabela("Pedido", "Entregue em", linhas))
+    if novas_fl:
+        linhas = [_linha(codigo, f"{info.get('motivo')} -- {info.get('tentativas')}x desde {info.get('primeira_em')}")
+                  for codigo, info in novas_fl]
+        blocos += (f"<h3 style='color:#1F2937;margin:20px 0 6px;'>Falhas persistentes de expedicao ({len(novas_fl)})</h3>"
+                   f"<p style='color:#1F2937;font-size:13px;margin:0;'>Entregues no VUUPT, mas a Stokki "
+                   f"<strong>recusou a expedicao {MAX_TENTATIVAS_FALHA} vezes seguidas</strong> (pedido em espera, "
+                   f"cancelado ou com outro problema la). Sairam da fila automatica -- resolver na Stokki.</p>"
+                   + _tabela("Pedido", "Motivo", linhas))
 
     corpo = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
 <div style="background:{COR_ACENTO};padding:20px;border-radius:8px 8px 0 0;">
-<h2 style="color:#fff;margin:0;">Canhotos Pendentes de Validacao</h2></div>
+<h2 style="color:#fff;margin:0;">Pendencias da Expedicao</h2></div>
 <div style="background:#f9f9f9;padding:24px;border:1px solid #E5E7EB;border-top:none;border-radius:0 0 8px 8px;">
-<p style="color:#1F2937;">Os pedidos abaixo foram entregues com sucesso no VUUPT e possuem canhoto
-registrado, mas <strong>ainda nao foram validados manualmente</strong>. Eles nao serao expedidos
-na Stokki ate que a validacao seja feita no VUUPT.</p>
-<table style="width:100%;border-collapse:collapse;margin:16px 0;">
-<thead><tr style="background:{COR_HEADER};">
-<th style="padding:10px 14px;text-align:left;color:#fff;font-size:12px;">Pedido</th>
-<th style="padding:10px 14px;text-align:left;color:#fff;font-size:12px;">Canhoto Registrado Em</th>
-</tr></thead><tbody>{linhas}</tbody></table>
-<div style="background:#FFF8EC;border-left:4px solid {COR_DESTAQUE};border-radius:6px;padding:14px 18px;">
-<p style="margin:0;font-size:13px;color:#1F2937;">Para liberar a expedicao automatica, acesse o VUUPT,
-abra cada pedido e clique em <strong>Validar Canhoto</strong>.</p></div>
+{blocos}
+<div style="background:#FFF8EC;border-left:4px solid {COR_DESTAQUE};border-radius:6px;padding:14px 18px;margin-top:16px;">
+<p style="margin:0;font-size:13px;color:#1F2937;">Cada pedido aparece neste e-mail uma unica vez.</p></div>
 <p style="font-size:12px;color:#6B7280;margin-top:20px;">
 Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
 </div></body></html>"""
 
-    assunto = f"[Freshlog] {len(pendentes)} canhoto(s) aguardando validacao no VUUPT".replace("\r", " ").replace("\n", " ")
-    destino = "hugo@freshlogbr.com" if modo_teste else responsavel
+    partes = []
+    if novos_sc:
+        partes.append(f"{len(novos_sc)} expedido(s) sem comprovante")
+    if novas_fl:
+        partes.append(f"{len(novas_fl)} falha(s) persistente(s)")
+    assunto = f"[Freshlog] Expedicao: {' | '.join(partes)}".replace("\r", " ").replace("\n", " ")
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = assunto
         msg["From"]    = remetente
-        msg["To"]      = destino
+        msg["To"]      = responsavel
         msg.attach(MIMEText(corpo, "html", "utf-8"))
 
         with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(remetente, senha)
             smtp.send_message(msg)
-        logger.info(f"  Notificacao de validacao pendente enviada para {destino}")
+        logger.info(f"  Notificacao de pendencias da expedicao enviada para {responsavel}")
+        fingerprint_expedicao.marcar_avisos_enviados(novas)
     except Exception as e:
-        logger.warning(f"  Falha ao enviar notificacao: {e}")
-        for s in pendentes:
-            logger.warning(f"  Pendente: {s.get('code')}")
+        logger.warning(f"  Falha ao enviar notificacao de pendencias: {e}")
 
 
 _PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
@@ -635,7 +697,14 @@ def expedir_na_stokki(page, codigo_ps: str) -> bool:
         return "expedido"
 
     if status == 404 and "situa" in corpo.lower() and "inv" in corpo.lower():
-        logger.info(f"  {codigo_ps} ja estava expedido -- pulando expedicao, tentara anexar.")
+        # "Situação inválida" = a Stokki não aceita expedir NESTE estado.
+        # Normalmente é porque já está expedido (Enviado) -- mas também
+        # acontece com pedido "Em espera"/cancelado lá (caso real 28/08:
+        # 13 entregas de 27/07 ainda "Em espera" na Stokki). Quem chama
+        # decide: com canhoto anexado/anexável vira processado; sem nada
+        # pra anexar conta como falha 'situacao_invalida' (vai pro
+        # e-mail de pendências depois de MAX_TENTATIVAS_FALHA).
+        logger.info(f"  {codigo_ps}: Stokki recusou (situacao invalida) -- provavelmente ja expedido, tentara anexar.")
         return "ja_expedido"
 
     logger.warning(f"  Falha na expedicao de {codigo_ps}: status={status}")
@@ -827,9 +896,9 @@ def anexar_canhoto(page, codigo_ps: str, pdf_path: Path) -> bool:
 # ── Orquestrador ───────────────────────────────────────────────────────────────
 
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
-         forcar: list = None):
+         forcar: list = None, horas_entregues: int = HORAS_ENTREGUES):
     prefixo = "[MODO TESTE] " if modo_teste else ""
-    logger.info(f"{prefixo}Expedicao iniciada (janela: {horas}h)")
+    logger.info(f"{prefixo}Expedicao iniciada (janela entregues: {horas_entregues}h | insucessos: {horas}h)")
 
     config       = _carregar_config()
     vuupt_token  = config.get("vuupt_api", {}).get("token", "")
@@ -842,36 +911,49 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         codigos = [c.strip().lstrip("#") for c in forcar]
         logger.info(f"MODO FORCADO: {len(codigos)} pedido(s): {codigos}")
         validados = [{"code": c, "checklistAnswers": {"data": []}} for c in codigos]
-        pendentes = []
+        falhas_persistentes = {}
     else:
-        # 1. Busca entregues com canhoto
-        servicos = buscar_servicos_entregues(vuupt_token, horas=horas)
+        # 1. Busca entregues (com ou sem canhoto -- 28/08, a foto e a
+        # validação deixaram de ser trava; ver docstring do módulo)
+        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
         if not servicos:
-            # Sem return: mesmo sem canhoto novo, a parte de INSUCESSO
+            # Sem return: mesmo sem entrega nova, a parte de INSUCESSO
             # abaixo precisa rodar (notificação, duplicação, aviso de dia
             # sem insucesso) -- o gate da expedição em si é o
             # "if not validados" mais adiante.
-            logger.info("Nenhum pedido com canhoto no periodo.")
+            logger.info("Nenhum pedido entregue no periodo.")
 
-        # 2. Separa validados dos pendentes
-        validados = [s for s in servicos if canhoto_validado(s)]
-        pendentes = [s for s in servicos if not canhoto_validado(s)]
-        logger.info(f"Validados no VUUPT: {len(validados)} | Pendentes de validacao: {len(pendentes)}")
+        n_validados = sum(1 for s in servicos if canhoto_validado(s))
+        n_sem_foto  = sum(1 for s in servicos if not tem_canhoto(s))
+        logger.info(f"Entregues: {len(servicos)} | canhoto validado: {n_validados} | "
+                    f"canhoto sem validar: {len(servicos) - n_validados - n_sem_foto} | sem foto: {n_sem_foto} "
+                    f"-- todos elegiveis pra expedicao.")
 
-        # 2b. Filtra quem já foi expedido + canhoto tratado numa execução
-        # anterior -- nem entra na lista, evita reprocessar (pedido do
-        # Hugo, 30/07: "logo de início nem entraria mais na lista")
-        antes = len(validados)
-        validados = [s for s in validados if not fingerprint_expedicao.ja_processado(s.get("code"))]
+        # 2. Filtra quem já foi expedido numa execução anterior -- nem
+        # entra na lista, evita reprocessar (pedido do Hugo, 30/07:
+        # "logo de início nem entraria mais na lista")
+        antes = len(servicos)
+        validados = [s for s in servicos if not fingerprint_expedicao.ja_processado(s.get("code"))]
         pulados = antes - len(validados)
         if pulados:
             logger.info(f"{pulados} pedido(s) já expedido(s)/tratado(s) antes -- pulando (fingerprint).")
 
-        # 3. Notifica pendentes
-        if pendentes:
-            codigos_pend = [s.get('code') for s in pendentes]
-            logger.info(f"Pendentes (nao serao expedidos): {codigos_pend}")
-            notificar_validacao_pendente(pendentes, config_email, modo_teste)
+        # 2b. Quem já falhou MAX_TENTATIVAS_FALHA vezes seguidas com o
+        # mesmo erro sai da fila automática (vai pro e-mail de pendências
+        # abaixo) -- antes era retentado a cada 30 min por 7 dias e
+        # depois sumia sem aviso.
+        falhas_persistentes = fingerprint_expedicao.falhas_persistentes(MAX_TENTATIVAS_FALHA)
+        if falhas_persistentes:
+            antes = len(validados)
+            validados = [s for s in validados
+                         if fingerprint_expedicao._normalizar(s.get("code")) not in falhas_persistentes]
+            if antes - len(validados):
+                logger.info(f"{antes - len(validados)} pedido(s) com falha persistente "
+                            f"(>= {MAX_TENTATIVAS_FALHA} tentativas) -- fora da fila, ver e-mail de pendencias.")
+
+        # 3. Avisa falhas persistentes (os "sem comprovante" entram no
+        # mesmo e-mail depois de expedidos, no fim da execução)
+        notificar_pendencias_expedicao([], falhas_persistentes, config_email, modo_teste)
 
         # 3b. Busca insucessos de entrega (status_done='failed'). NÃO
         # exige canhoto/checklist validado -- confirmado com dado real
@@ -975,7 +1057,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_duplicacao_agendada.marcar_falha(pendente["service_id"], "Falha ao criar o novo serviço")
 
         if not validados:
-            logger.info("Nenhum pedido com canhoto validado. Nada a expedir.")
+            logger.info("Nenhum pedido entregue pendente de expedicao. Nada a expedir.")
             return
 
     if limite > 0:
@@ -983,13 +1065,15 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         logger.info(f"Limite: processando {len(validados)} pedido(s).")
 
     if modo_teste:
-        logger.info("[MODO TESTE] Seriam expedidos:")
+        logger.info(f"[MODO TESTE] Seriam expedidos ({len(validados)}):")
         for s in validados:
             cl = _extrair_checklist(s)
+            situacao = ("validado" if canhoto_validado(s)
+                        else "sem validar" if tem_canhoto(s) else "SEM FOTO")
             logger.info(
                 f"  {s.get('code')} | vuupt_id={s.get('id')} | "
-                f"checklist_id={cl.get('id') if cl else '?'} | "
-                f"validado_em={(cl or {}).get('validated_at','')[:16]}"
+                f"entregue_em={(s.get('completed_at') or '')[:16]} | "
+                f"checklist_id={cl.get('id') if cl else '?'} | canhoto={situacao}"
             )
         return
 
@@ -997,16 +1081,17 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     pw, browser, page = _setup_playwright(config)
 
     res = {"expedido": 0, "falha": 0, "anexado": 0, "falha_anexo": 0, "sem_pdf": 0}
+    sem_comprovante = []
 
     total = len(validados)
     try:
         for i, servico in enumerate(validados, 1):
             codigo_ps    = servico.get("code", "")
-            checklist_id = extrair_checklist_id(servico)
+            checklist_id = extrair_checklist_id(servico) if tem_canhoto(servico) else None
             cl           = _extrair_checklist(servico)
             logger.info(
-                f"[{i}/{total}] {codigo_ps} | "
-                f"validado_em={(cl or {}).get('validated_at','')[:16]}"
+                f"[{i}/{total}] {codigo_ps} | entregue_em={(servico.get('completed_at') or '')[:16]} | "
+                f"validado_em={(cl or {}).get('validated_at') or '-'}"[:120]
             )
 
             pdf_path = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
@@ -1022,16 +1107,38 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     if _canhoto_ja_anexado(page, codigo_ps):
                         res["anexado"] += 1  # conta como ok -- ja estava la
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
+                        fingerprint_expedicao.limpar_falha(codigo_ps)
                     elif anexar_canhoto(page, codigo_ps, pdf_path):
                         res["anexado"] += 1
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
+                        fingerprint_expedicao.limpar_falha(codigo_ps)
                     else:
                         res["falha_anexo"] += 1
-                else:
+                        n = fingerprint_expedicao.registrar_falha(codigo_ps, "falha_anexo_canhoto", servico.get("id"))
+                        logger.warning(f"  {codigo_ps}: falha ao anexar canhoto ({n}/{MAX_TENTATIVAS_FALHA}).")
+                elif resultado_exp == "expedido":
+                    # Expedido SEM comprovante (sem foto no VUUPT, ou PDF
+                    # indisponível): a expedição está feita, não volta
+                    # pra fila -- entra no e-mail de pendências pra cobrar
+                    # o comprovante e anexar na mão.
                     res["sem_pdf"] += 1
-                    logger.warning(f"  {codigo_ps}: sem canhoto para anexar.")
+                    fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
+                    fingerprint_expedicao.limpar_falha(codigo_ps)
+                    sem_comprovante.append(servico)
+                    logger.warning(f"  {codigo_ps}: expedido sem comprovante (sem foto de canhoto).")
+                else:
+                    # Stokki recusou ("situação inválida") e não há nada
+                    # pra anexar que confirme que já estava expedido --
+                    # pode ser pedido "Em espera"/cancelado na Stokki.
+                    # Conta como falha; depois de MAX_TENTATIVAS_FALHA vai
+                    # pro e-mail de pendências em vez de ficar em loop.
+                    res["falha"] += 1
+                    n = fingerprint_expedicao.registrar_falha(codigo_ps, "situacao_invalida_na_stokki", servico.get("id"))
+                    logger.warning(f"  {codigo_ps}: Stokki recusou e nao ha canhoto pra confirmar ({n}/{MAX_TENTATIVAS_FALHA}).")
             else:
                 res["falha"] += 1
+                n = fingerprint_expedicao.registrar_falha(codigo_ps, "expedicao_recusada", servico.get("id"))
+                logger.warning(f"  {codigo_ps}: falha na expedicao ({n}/{MAX_TENTATIVAS_FALHA}).")
 
             time.sleep(0.5)  # era 1.5s (04/08, mesmo motivo: margem generosa demais herdada)
     finally:
@@ -1042,19 +1149,24 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     logger.info(
         f"RESUMO: Expedidos={res['expedido']} | Ja expedidos={res.get('ja_expedido',0)} | "
         f"Falhas={res['falha']} | Canhotos anexados={res['anexado']} | "
-        f"Falha anexo={res['falha_anexo']} | Sem PDF={res['sem_pdf']}"
+        f"Falha anexo={res['falha_anexo']} | Sem comprovante={res['sem_pdf']}"
     )
+    if sem_comprovante and not forcar:
+        notificar_pendencias_expedicao(sem_comprovante, {}, config_email, modo_teste)
     if res.get("anexado") or res.get("falha_anexo"):
         logger.info(f"Canhotos (PDF) salvos em: {CANHOTOS_DIR.resolve()}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--horas", type=int, default=HORAS_PADRAO)
+    parser.add_argument("--horas", type=int, default=HORAS_PADRAO,
+                        help="janela dos insucessos (padrao 168h)")
+    parser.add_argument("--horas-entregues", type=int, default=HORAS_ENTREGUES,
+                        help="janela dos entregues a expedir (padrao 30 dias)")
     parser.add_argument("--limite", type=int, default=0)
     parser.add_argument("--modo-teste", action="store_true")
     parser.add_argument("--forcar", nargs="+", metavar="PS-XXXXX",
                         help="Expede forcadamente os codigos informados, sem verificar VUUPT")
     args = parser.parse_args()
     main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
-         forcar=args.forcar)
+         forcar=args.forcar, horas_entregues=args.horas_entregues)
