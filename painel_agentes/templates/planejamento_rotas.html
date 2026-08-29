@@ -2922,10 +2922,16 @@
         if (e.target.closest(".botao-selecionar-secao")) return;
         definirColapsoSecaoPool(secaoEl, !secaoEl.classList.contains("colapsada"));
       });
-      secaoEl.querySelector(".botao-selecionar-secao").addEventListener("click", (e) => {
-        e.stopPropagation();
-        selecionarSecao(secaoEl);
-      });
+      // a seção "A retirar no galpão" é só leitura e não tem o botão
+      // Selecionar -- sem esse guard o initMap inteiro morria num
+      // TypeError aqui (clique/seleção/filtros/Atualizar do pool paravam)
+      const botaoSelecionar = secaoEl.querySelector(".botao-selecionar-secao");
+      if (botaoSelecionar) {
+        botaoSelecionar.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selecionarSecao(secaoEl);
+        });
+      }
       // arrastar um pedido por cima de uma seção colapsada reabre ela --
       // mesma lógica de alternarColuna (senão não teria onde soltar)
       const aoArrastarSobre = () => {
