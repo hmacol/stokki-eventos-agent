@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Checagem diaria de entregues sem expedicao na Stokki (verificar_entregues_nao_expedidos.py)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/verificar_entregues_nao_expedidos.py

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-verificar-entregues-nao-expedidos.service todo dia as 07:15 (antes da 1a expedicao das 08h, sem outra sessao Stokki aberta)
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
