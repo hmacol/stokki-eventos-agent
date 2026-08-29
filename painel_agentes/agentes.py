@@ -215,6 +215,17 @@ AGENTES = [
         "categoria": "Importação Stokki",
     },
     {
+        "id": "sincronizar_lalamove",
+        "nome": "Sincronizar Lalamove",
+        "descricao": "Atualiza status dos pedidos Lalamove (motorista virtual LALAMOVE) e conclui na VUUPT os serviços já entregues.",
+        "script": "nucleo/sincronizar_lalamove.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": [],
+        "categoria": "Roteirização",
+    },
+    {
         "id": "processar_documentos",
         "nome": "Processar Documentos (NF, Boleto, CC, Agendamento)",
         "descricao": "Busca documentos por e-mail e na Stokki, classifica, casa com o pedido e envia pro GCS.",

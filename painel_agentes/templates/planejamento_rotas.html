@@ -2056,10 +2056,23 @@
 
   function statusHtml(rascunho) {
     if (rascunho.status === "ENVIADO") {
-      return `<div class="status-envio ok">Enviada à VUUPT (rota #${rascunho.vuupt_route_id})</div>`;
+      return `<div class="status-envio ok">Enviada à VUUPT (rota #${rascunho.vuupt_route_id})</div>${lalamoveHtml(rascunho)}`;
     }
     if (rascunho.status === "ERRO_ENVIO") {
       return `<div class="status-envio erro">Falha no envio: ${escaparHtml(rascunho.erro_envio)}</div>`;
+    }
+    return "";
+  }
+
+  function lalamoveHtml(rascunho) {
+    // Pedido na Lalamove (motorista virtual LALAMOVE, ver lalamove_integracao.py).
+    if (rascunho.lalamove_order_id) {
+      const preco = rascunho.lalamove_preco ? ` · R$ ${escaparHtml(rascunho.lalamove_preco)}` : "";
+      const link = rascunho.lalamove_share_link ? ` · <a href="${escaparHtml(rascunho.lalamove_share_link)}" target="_blank" rel="noopener">rastrear</a>` : "";
+      return `<div class="status-envio ok" title="Atualizado em ${escaparHtml(rascunho.lalamove_atualizado_em || "")}">Lalamove #${escaparHtml(rascunho.lalamove_order_id)} — ${escaparHtml(rascunho.lalamove_status || "?")}${preco}${link}</div>`;
+    }
+    if (rascunho.lalamove_erro) {
+      return `<div class="status-envio erro">Lalamove: ${escaparHtml(rascunho.lalamove_erro)}</div>`;
     }
     return "";
   }

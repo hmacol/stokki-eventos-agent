@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Sincroniza pedidos Lalamove (status + conclusao dos servicos na VUUPT)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/sincronizar_lalamove.py

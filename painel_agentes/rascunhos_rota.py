@@ -128,6 +128,13 @@ def _conectar() -> sqlite3.Connection:
     if "tipo_veiculo" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN tipo_veiculo TEXT")
 
+    # Migração 28/08: rota enviada pro motorista virtual LALAMOVE vira
+    # também um pedido na Lalamove (ver lalamove_integracao.py).
+    for coluna in ("lalamove_order_id", "lalamove_quotation_id", "lalamove_status",
+                   "lalamove_share_link", "lalamove_preco", "lalamove_erro", "lalamove_atualizado_em"):
+        if coluna not in colunas_rota:
+            conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} TEXT")
+
     conn.commit()
     return conn
 
@@ -1233,7 +1240,59 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_alocado(s["id"], rota["id"])
 
     marcar_enviado(rascunho_id, rota["id"])
-    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+    resultado = {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+
+    # Motorista virtual LALAMOVE (Hugo, 28/08): além da rota na VUUPT,
+    # cria o pedido na Lalamove e carimba o código no título dos
+    # serviços. Best-effort: falha aqui NÃO desfaz a rota já criada --
+    # fica registrada em lalamove_erro e aparece no card.
+    try:
+        from lalamove_integracao import criar_pedido_para_rascunho, rascunho_e_lalamove
+        if rascunho_e_lalamove(rascunho):
+            resultado["lalamove"] = criar_pedido_para_rascunho(rascunho_id, token)
+    except Exception as e:
+        logger.warning(f"Rota VUUPT {rota['id']} (rascunho {rascunho_id}) criada, mas pedido Lalamove falhou: {e}")
+        gravar_lalamove(rascunho_id, erro=str(e))
+        resultado["lalamove"] = {"ok": False, "erro": str(e)}
+    return resultado
+
+
+def gravar_lalamove(rascunho_id: int, **campos):
+    """Atualiza as colunas lalamove_* do rascunho (só as passadas).
+    Ex.: gravar_lalamove(id, order_id='...', status='ASSIGNING_DRIVER')."""
+    permitidas = {"order_id", "quotation_id", "status", "share_link", "preco", "erro"}
+    sets, valores = [], []
+    for chave, valor in campos.items():
+        if chave not in permitidas:
+            raise ValueError(f"Campo lalamove desconhecido: {chave}")
+        sets.append(f"lalamove_{chave} = ?")
+        valores.append(None if valor is None else str(valor))
+    if not sets:
+        return
+    sets.append("lalamove_atualizado_em = datetime('now','localtime')")
+    valores.append(rascunho_id)
+    conn = _conectar()
+    try:
+        conn.execute(f"UPDATE rascunhos_rota SET {', '.join(sets)} WHERE id = ?", valores)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def listar_rascunhos_lalamove_abertos() -> list[dict]:
+    """Rascunhos ENVIADOS com pedido Lalamove ainda não em status final
+    (pra sincronizar_lalamove.py acompanhar)."""
+    conn = _conectar()
+    try:
+        rows = conn.execute("""
+            SELECT * FROM rascunhos_rota
+            WHERE status = ? AND lalamove_order_id IS NOT NULL AND lalamove_order_id != ''
+              AND COALESCE(lalamove_status, '') NOT IN ('COMPLETED', 'CANCELED', 'REJECTED', 'EXPIRED')
+            ORDER BY data_alvo, id
+        """, (STATUS_ENVIADO,)).fetchall()
+        return [_montar_rascunho(conn, r) for r in rows]
+    finally:
+        conn.close()
 
 
 # Espelho de roteirizacao/incrementar_rotas.py::STATUS_ROTA_HOJE_LIBERADOS

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-sincronizar-lalamove.service a cada 15 min
+
+[Timer]
+OnCalendar=*-*-* *:05/15:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
