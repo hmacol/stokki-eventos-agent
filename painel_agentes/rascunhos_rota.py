@@ -131,7 +131,8 @@ def _conectar() -> sqlite3.Connection:
     # Migração 28/08: rota enviada pro motorista virtual LALAMOVE vira
     # também um pedido na Lalamove (ver lalamove_integracao.py).
     for coluna in ("lalamove_order_id", "lalamove_quotation_id", "lalamove_status",
-                   "lalamove_share_link", "lalamove_preco", "lalamove_erro", "lalamove_atualizado_em"):
+                   "lalamove_share_link", "lalamove_preco", "lalamove_erro", "lalamove_atualizado_em",
+                   "lalamove_veiculo"):
         if coluna not in colunas_rota:
             conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} TEXT")
 
@@ -1257,10 +1258,28 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     return resultado
 
 
+def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None):
+    """Seletor de veículo Lalamove no card (Hugo, 29/08) -- só faz
+    sentido antes do envio; depois o pedido já foi cotado."""
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT status FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        if not row:
+            raise ValueError("Rascunho não encontrado.")
+        if row["status"] == STATUS_ENVIADO:
+            raise ValueError("Rota já enviada -- o veículo Lalamove não pode mais ser trocado.")
+        conn.execute("UPDATE rascunhos_rota SET lalamove_veiculo = ? WHERE id = ?",
+                     ((codigo or "").strip().upper() or None, rascunho_id))
+        _tocar(conn, rascunho_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def gravar_lalamove(rascunho_id: int, **campos):
     """Atualiza as colunas lalamove_* do rascunho (só as passadas).
     Ex.: gravar_lalamove(id, order_id='...', status='ASSIGNING_DRIVER')."""
-    permitidas = {"order_id", "quotation_id", "status", "share_link", "preco", "erro"}
+    permitidas = {"order_id", "quotation_id", "status", "share_link", "preco", "erro", "veiculo"}
     sets, valores = [], []
     for chave, valor in campos.items():
         if chave not in permitidas:

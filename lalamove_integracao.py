@@ -62,6 +62,26 @@ def cliente_de_config(cfg: dict) -> LalamoveClient:
     )
 
 
+def resolver_veiculo(cfg: dict, codigo: str | None) -> dict:
+    """codigo do seletor (lalamove_veiculo do rascunho) -> {codigo,
+    service_type, special_requests}. Sem código ou código desconhecido:
+    veiculo_padrao; sem lista de veículos: service_type simples do config."""
+    veiculos = [v for v in (cfg.get("veiculos") or []) if v.get("codigo")]
+    codigo = (codigo or "").strip().upper()
+    padrao = str(cfg.get("veiculo_padrao") or "").upper()
+    escolhido = next((v for v in veiculos if str(v["codigo"]).upper() == codigo), None)
+    if escolhido is None and codigo:
+        logger.warning(f"Lalamove: veículo '{codigo}' não está em lalamove.veiculos -- usando o padrão.")
+    if escolhido is None:
+        escolhido = next((v for v in veiculos if str(v["codigo"]).upper() == padrao), None) or (veiculos[0] if veiculos else None)
+    if escolhido is None:
+        return {"codigo": str(cfg.get("service_type") or "VAN"), "service_type": str(cfg.get("service_type") or "VAN"),
+                "special_requests": []}
+    return {"codigo": str(escolhido["codigo"]).upper(),
+            "service_type": str(escolhido.get("service_type") or escolhido["codigo"]).upper(),
+            "special_requests": [str(s) for s in (escolhido.get("special_requests") or [])]}
+
+
 def rascunho_e_lalamove(rascunho: dict, cfg: dict | None = None) -> bool:
     """Rota cujo motorista é o agente virtual LALAMOVE (por agent_id do
     config; fallback: nome do motorista começando com 'LALAMOVE')."""
@@ -157,8 +177,13 @@ def criar_pedido_para_rascunho(rascunho_id: int, token: str, config: dict | None
     lat_b, lng_b = _coords_base(config)
     stops = stops_da_rota({"latitude": lat_b, "longitude": lng_b, "endereco": ENDERECO_BASE}, entregas)
 
-    cotacao = lala.cotar(stops, str(cfg.get("service_type") or "VAN"),
-                         schedule_at=_schedule_at(rascunho.get("start_at")), is_route_optimized=False)
+    veiculo = resolver_veiculo(cfg, rascunho.get("lalamove_veiculo"))
+    logger.info(f"Lalamove: veículo {veiculo['codigo']} -> serviceType {veiculo['service_type']} "
+                f"specialRequests {veiculo['special_requests']}")
+    cotacao = lala.cotar(stops, veiculo["service_type"], schedule_at=_schedule_at(rascunho.get("start_at")),
+                         is_route_optimized=False, special_requests=veiculo["special_requests"])
+    if not rascunho.get("lalamove_veiculo"):
+        rascunhos_rota.gravar_lalamove(rascunho_id, veiculo=veiculo["codigo"])
     stop_ids = [s.get("stopId") for s in cotacao.get("stops", [])]
     if len(stop_ids) != len(stops):
         raise LalamoveAPIError(f"Cotação devolveu {len(stop_ids)} stopIds pra {len(stops)} paradas.")

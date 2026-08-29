@@ -177,6 +177,19 @@ ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"  # mesma base de c
 _coords_base_cache: tuple[float, float] | None | bool = None
 
 
+def _dados_lalamove(config: dict) -> dict:
+    """{agent_id, veiculo_padrao, veiculos:[{codigo,nome}]} pro seletor de
+    veículo Lalamove no card da rota (Hugo, 29/08)."""
+    cfg = config.get("lalamove", {}) or {}
+    veiculos = [{"codigo": str(v.get("codigo") or "").upper(), "nome": str(v.get("nome") or v.get("codigo") or "")}
+                for v in (cfg.get("veiculos") or []) if v.get("codigo")]
+    return {
+        "agent_id": int(cfg.get("agent_id_vuupt") or 0),
+        "veiculo_padrao": str(cfg.get("veiculo_padrao") or "").upper() or (veiculos[0]["codigo"] if veiculos else ""),
+        "veiculos": veiculos,
+    }
+
+
 def _garantir_coords_base() -> tuple[float, float] | None:
     """Coordenada da base pro estimador de horas (perna base -> 1ª
     parada, 25/08): geocodifica UMA vez por processo (cache hit em
@@ -789,6 +802,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
         "motoristas": motoristas,
+        # Motorista virtual LALAMOVE + veículos do seletor do card (ver
+        # lalamove_integracao.py e config.yaml lalamove.veiculos)
+        "lalamove": _dados_lalamove(config),
         "resumo_ofertas": resumo_ofertas,
         "disponibilidade_ajustes": disponibilidade_ajustes,
         "limite_alerta_caixas": LIMITE_ALERTA_CAIXAS,

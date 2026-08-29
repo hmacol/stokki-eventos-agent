@@ -1299,6 +1299,21 @@ def api_trocar_motorista():
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
 
 
+@app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_lalamove_veiculo():
+    """Seletor de veículo Lalamove no card (Hugo, 29/08) -- ver
+    lalamove_integracao.py e config.yaml lalamove.veiculos."""
+    body = request.get_json(force=True)
+    try:
+        rascunhos_rota.definir_lalamove_veiculo(body["rascunho_id"], body.get("codigo"))
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
 @app.route("/api/planejamento/renomear-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
