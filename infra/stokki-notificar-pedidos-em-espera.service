@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Notificador de pedidos em espera (cobranca de XML por embarcador + faturados na Estacao de Impressao)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/notificar_pedidos_em_espera.py

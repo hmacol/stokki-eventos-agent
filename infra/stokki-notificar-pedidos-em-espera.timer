@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara stokki-notificar-pedidos-em-espera.service todo dia as 08:20 e 15:20
+
+[Timer]
+OnCalendar=*-*-* 08:20:00
+OnCalendar=*-*-* 15:20:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

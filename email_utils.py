@@ -148,3 +148,13 @@ def notificacoes_automaticas_ativas(config: dict) -> bool:
     notificacao_execucao.ativo, separado). config.yaml: notificacoes_automaticas.ativo
     -- default True (não quebra quem ainda não tem essa seção no config)."""
     return bool((config or {}).get("notificacoes_automaticas", {}).get("ativo", True))
+
+
+def notificacao_pedidos_em_espera_ativa(config: dict) -> bool:
+    """Flag PRÓPRIO da cobrança de XML dos pedidos em espera
+    (notificar_pedidos_em_espera.py). Separado da chave-mestra
+    notificacoes_automaticas de propósito (28/08, pedido do Hugo): esse fluxo
+    roda em timer próprio (08:20 e 15:20) e pode ficar ligado mesmo com os
+    outros e-mails externos desligados. config.yaml:
+    notificacao_pedidos_em_espera.ativo -- default True."""
+    return bool((config or {}).get("notificacao_pedidos_em_espera", {}).get("ativo", True))

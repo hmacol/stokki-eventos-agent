@@ -10,6 +10,11 @@ Fluxo:
      Estacao de Impressao -> muda para 'Aguardando Transportador'
   3. Aguardando Faturamento: envia e-mail para o embarcador
 
+Agendamento (VPS): timer proprio stokki-notificar-pedidos-em-espera.timer,
+2x ao dia (08:20 e 15:20), um e-mail por embarcador. Liga/desliga pelo flag
+proprio config.yaml: notificacao_pedidos_em_espera.ativo (independente da
+chave-mestra notificacoes_automaticas).
+
 Execute:
   py -3.11 notificar_pedidos_em_espera.py
   py -3.11 notificar_pedidos_em_espera.py --modo-teste   (envia para hugo@freshlogbr.com)
@@ -31,7 +36,7 @@ from notificar_execucao_agente import notificar_execucao
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
-from email_utils import enviar_email, notificacoes_automaticas_ativas
+from email_utils import enviar_email, notificacao_pedidos_em_espera_ativa
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
@@ -272,11 +277,11 @@ def main(modo_teste=False):
             )
             return
 
-        if not notificacoes_automaticas_ativas(config):
-            logger.info("Notificações automáticas desativadas -- pulando cobrança de XML por e-mail.")
+        if not notificacao_pedidos_em_espera_ativa(config):
+            logger.info("Cobrança de XML desativada -- pulando e-mail aos embarcadores.")
             resultado["detalhe"] = (
                 (detalhe_impressao + "; " if detalhe_impressao else "")
-                + "Notificação automática desativada (config.yaml: notificacoes_automaticas.ativo=false)."
+                + "Cobrança de XML desativada (config.yaml: notificacao_pedidos_em_espera.ativo=false)."
             )
             return
 
