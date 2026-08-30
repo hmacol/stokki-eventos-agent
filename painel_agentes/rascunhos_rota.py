@@ -24,6 +24,7 @@ apagar lotes anteriores (histórico/auditoria). A tela sempre trabalha
 com o lote mais recente, ainda não DESCARTADO, de uma data_alvo --
 `_lote_ativo_id` centraliza esse critério.
 """
+import json
 import logging
 import re
 import sqlite3
@@ -132,7 +133,7 @@ def _conectar() -> sqlite3.Connection:
     # também um pedido na Lalamove (ver lalamove_integracao.py).
     for coluna in ("lalamove_order_id", "lalamove_quotation_id", "lalamove_status",
                    "lalamove_share_link", "lalamove_preco", "lalamove_erro", "lalamove_atualizado_em",
-                   "lalamove_veiculo"):
+                   "lalamove_veiculo", "lalamove_special_requests"):
         if coluna not in colunas_rota:
             conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} TEXT")
 
@@ -1258,9 +1259,12 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     return resultado
 
 
-def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None):
-    """Seletor de veículo Lalamove no card (Hugo, 29/08) -- só faz
-    sentido antes do envio; depois o pedido já foi cotado."""
+def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None,
+                             special_requests: list | None = None):
+    """Seletor de veículo + opcionais Lalamove no card (Hugo, 29-30/08)
+    -- só faz sentido antes do envio; depois o pedido já foi cotado.
+    special_requests=None mantém os opcionais como estão; lista (mesmo
+    vazia) substitui."""
     conn = _conectar()
     try:
         row = conn.execute("SELECT status FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
@@ -1270,6 +1274,10 @@ def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None):
             raise ValueError("Rota já enviada -- o veículo Lalamove não pode mais ser trocado.")
         conn.execute("UPDATE rascunhos_rota SET lalamove_veiculo = ? WHERE id = ?",
                      ((codigo or "").strip().upper() or None, rascunho_id))
+        if special_requests is not None:
+            lista = sorted({str(s).strip().upper() for s in special_requests if str(s).strip()})
+            conn.execute("UPDATE rascunhos_rota SET lalamove_special_requests = ? WHERE id = ?",
+                         (json.dumps(lista) if lista else None, rascunho_id))
         _tocar(conn, rascunho_id)
         conn.commit()
     finally:

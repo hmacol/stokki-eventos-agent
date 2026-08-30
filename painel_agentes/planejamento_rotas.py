@@ -181,12 +181,23 @@ def _dados_lalamove(config: dict) -> dict:
     """{agent_id, veiculo_padrao, veiculos:[{codigo,nome}]} pro seletor de
     veículo Lalamove no card da rota (Hugo, 29/08)."""
     cfg = config.get("lalamove", {}) or {}
-    veiculos = [{"codigo": str(v.get("codigo") or "").upper(), "nome": str(v.get("nome") or v.get("codigo") or "")}
+    veiculos = [{"codigo": str(v.get("codigo") or "").upper(), "nome": str(v.get("nome") or v.get("codigo") or ""),
+                 "service_type": str(v.get("service_type") or v.get("codigo") or "").upper()}
                 for v in (cfg.get("veiculos") or []) if v.get("codigo")]
+    # Catálogo de opcionais por service_type (espera, ajuda no carregamento,
+    # refrigeração...) -- vem da API com cache de 24h em disco; indisponível
+    # = tela sem os opcionais, nunca quebra o carregamento (Hugo, 30/08).
+    try:
+        from lalamove_integracao import catalogo_special_requests
+        catalogo = catalogo_special_requests(config)
+    except Exception as e:
+        logger.warning(f"Catálogo de opcionais Lalamove indisponível: {e}")
+        catalogo = {}
     return {
         "agent_id": int(cfg.get("agent_id_vuupt") or 0),
         "veiculo_padrao": str(cfg.get("veiculo_padrao") or "").upper() or (veiculos[0]["codigo"] if veiculos else ""),
         "veiculos": veiculos,
+        "catalogo": catalogo,
     }
 
 

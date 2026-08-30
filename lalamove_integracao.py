@@ -62,6 +62,99 @@ def cliente_de_config(cfg: dict) -> LalamoveClient:
     )
 
 
+# ── Catálogo de opcionais (special requests) por veículo ───────────────
+# GET /v3/cities estruturado: cada item tem parent_type (grupo, máx. 1
+# por grupo) ou é avulso. Cacheado em dados/lalamove_catalogo.json por
+# 24h -- a tela do planejamento lê daqui (ver _dados_lalamove).
+
+_ARQ_CATALOGO = _RAIZ / "dados" / "lalamove_catalogo.json"
+_TTL_CATALOGO_H = 24
+_LOCODE_SP = "BR SAO"
+
+_GRUPOS_PT = {
+    "How much extra time is needed?": "Espera extra",
+    "How long do you need help for?": "Ajuda no carregamento",
+}
+_NOMES_PT = {
+    "RETURN": "Ida e volta",
+    "THERMAL_BAG_1": "Bolsa térmica",
+    "REFRIGERATED_VEHICLE": "Refrigerado (-1°C a -15°C)",
+    "INSULATED_VEHICLE": "Isotérmico",
+    "FROZEN_VEHICLE": "Congelado (abaixo de -15°C)",
+    "LOADING_1DRIVER1HELPER": "Porta a porta (motorista + ajudante)",
+}
+_GRUPO_TEMPERATURA = {"REFRIGERATED_VEHICLE", "INSULATED_VEHICLE", "FROZEN_VEHICLE"}
+_DURACOES_PT = {"30 min": "até 30 min", "1 hr": "até 1h", "1.5 hr": "até 1h30",
+                "2 hr": "até 2h", "3 hr": "até 3h", "4 hr": "até 4h"}
+
+
+def _traduzir_special_request(item: dict) -> dict:
+    nome_api = str(item.get("name") or "")
+    descricao = str(item.get("description") or "")
+    grupo = _GRUPOS_PT.get(str(item.get("parent_type") or ""), "")
+    if nome_api in _GRUPO_TEMPERATURA:
+        grupo = "Tipo de baú"
+    nome = _NOMES_PT.get(nome_api)
+    if not nome:
+        duracao = descricao.split("·")[-1].strip().lower()
+        duracao_pt = next((pt for en, pt in _DURACOES_PT.items() if duracao.endswith(en.lower())), None)
+        if duracao_pt:
+            sufixo = ""
+            if "1DRIVER1HELPER" in nome_api:
+                sufixo = " (com ajudante)"
+            elif nome_api.startswith("HOUSE_MOVING"):
+                sufixo = " (mudança)"
+            nome = duracao_pt + sufixo
+        else:
+            nome = descricao or nome_api
+    return {"codigo": nome_api, "nome": nome, "grupo": grupo}
+
+
+def catalogo_special_requests(config: dict, forcar: bool = False) -> dict:
+    """{service_type: [{codigo, nome, grupo}]} da cidade de SP, com cache
+    em disco (24h). Falha de rede sem cache -> {} (a tela só não mostra
+    opcionais; o resto segue)."""
+    import json as _json
+    import time as _time
+    try:
+        if not forcar and _ARQ_CATALOGO.exists():
+            bruto = _json.loads(_ARQ_CATALOGO.read_text(encoding="utf-8"))
+            if _time.time() - float(bruto.get("_em", 0)) < _TTL_CATALOGO_H * 3600:
+                return bruto.get("catalogo", {})
+    except Exception:
+        pass
+    try:
+        cli = cliente_de_config(cfg_lalamove(config))
+        catalogo: dict[str, list] = {}
+        for cidade in cli.info_cidades():
+            if str(cidade.get("locode") or "") != _LOCODE_SP:
+                continue
+            for servico in cidade.get("services", []) or []:
+                chave = str(servico.get("key") or "").upper()
+                if chave:
+                    catalogo[chave] = [_traduzir_special_request(i) for i in (servico.get("specialRequests") or [])]
+        _ARQ_CATALOGO.parent.mkdir(parents=True, exist_ok=True)
+        _ARQ_CATALOGO.write_text(_json.dumps({"_em": _time.time(), "catalogo": catalogo}, ensure_ascii=False),
+                                 encoding="utf-8")
+        return catalogo
+    except Exception as e:
+        logger.warning(f"Lalamove: catálogo de opcionais indisponível ({e}) -- usando cache velho se houver.")
+        try:
+            return _json.loads(_ARQ_CATALOGO.read_text(encoding="utf-8")).get("catalogo", {})
+        except Exception:
+            return {}
+
+
+def special_requests_do_rascunho(rascunho: dict) -> list[str]:
+    import json as _json
+    bruto = rascunho.get("lalamove_special_requests") or "[]"
+    try:
+        lista = _json.loads(bruto) if isinstance(bruto, str) else list(bruto)
+        return [str(s).upper() for s in lista if s]
+    except Exception:
+        return []
+
+
 def resolver_veiculo(cfg: dict, codigo: str | None) -> dict:
     """codigo do seletor (lalamove_veiculo do rascunho) -> {codigo,
     service_type, special_requests}. Sem código ou código desconhecido:
@@ -178,10 +271,21 @@ def criar_pedido_para_rascunho(rascunho_id: int, token: str, config: dict | None
     stops = stops_da_rota({"latitude": lat_b, "longitude": lng_b, "endereco": ENDERECO_BASE}, entregas)
 
     veiculo = resolver_veiculo(cfg, rascunho.get("lalamove_veiculo"))
+    # Opcionais escolhidos na tela + os fixos do veículo do config, sem
+    # duplicar; o que não existe pro service_type (catálogo) é descartado
+    # com aviso em vez de derrubar a cotação inteira.
+    special = list(dict.fromkeys(veiculo["special_requests"] + special_requests_do_rascunho(rascunho)))
+    catalogo = catalogo_special_requests(config)
+    validos = {i["codigo"] for i in catalogo.get(veiculo["service_type"], [])}
+    if validos:
+        descartados = [s for s in special if s not in validos]
+        if descartados:
+            logger.warning(f"Lalamove: opcionais fora do catálogo de {veiculo['service_type']} descartados: {descartados}")
+        special = [s for s in special if s in validos]
     logger.info(f"Lalamove: veículo {veiculo['codigo']} -> serviceType {veiculo['service_type']} "
-                f"specialRequests {veiculo['special_requests']}")
+                f"specialRequests {special}")
     cotacao = lala.cotar(stops, veiculo["service_type"], schedule_at=_schedule_at(rascunho.get("start_at")),
-                         is_route_optimized=False, special_requests=veiculo["special_requests"])
+                         is_route_optimized=False, special_requests=special)
     if not rascunho.get("lalamove_veiculo"):
         rascunhos_rota.gravar_lalamove(rascunho_id, veiculo=veiculo["codigo"])
     stop_ids = [s.get("stopId") for s in cotacao.get("stops", [])]

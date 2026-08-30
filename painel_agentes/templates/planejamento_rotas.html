@@ -608,7 +608,17 @@
   }
   .card-rota.colapsada .lista-paradas,
   .card-rota.colapsada .select-motorista,
-  .card-rota.colapsada .acoes { display: none; }
+  .card-rota.colapsada .lalamove-box,
+  .card-rota.colapsada .acoes { display: none !important; }
+  /* Caixa Lalamove do card: veículo + opcionais da corrida (Hugo, 30/08) */
+  .lalamove-box {
+    display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+    margin: 4px 0 6px; padding: 6px 8px; font-size: 11.5px;
+    border: 1px dashed var(--borda); border-radius: 8px;
+  }
+  .lalamove-box .lalamove-opcionais-wrap { display: contents; }
+  .lalamove-opcional { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .lalamove-opcional select { font-size: 11.5px; padding: 2px 4px; max-width: 150px; }
   #lista-rotas.buscando .card-rota.colapsada .lista-paradas { display: block; }
   .coluna h3 .botao-mini, .botao-mini {
     font-size: 11px;
@@ -1965,15 +1975,60 @@
     return v ? v.nome : (codigo || "");
   }
 
-  function selectLalamoveHtml(rascunho, editavel) {
-    // Seletor de veículo Lalamove (Hugo, 29/08): só aparece com o
-    // motorista virtual LALAMOVE escolhido; o valor vai pra cotação
-    // (service_type + special_requests, ver config.yaml lalamove.veiculos).
+  function serviceTypeDoVeiculo(codigo) {
+    const v = (LALAMOVE.veiculos || []).find(x => x.codigo === codigo);
+    return v ? (v.service_type || v.codigo) : codigo;
+  }
+
+  function nomeOpcionalLalamove(codigo) {
+    for (const lista of Object.values(LALAMOVE.catalogo || {})) {
+      const o = (lista || []).find(x => x.codigo === codigo);
+      if (o) return o.nome;
+    }
+    return codigo;
+  }
+
+  function srSelecionados(rascunho) {
+    try { return JSON.parse(rascunho.lalamove_special_requests || "[]"); } catch (e) { return []; }
+  }
+
+  function opcionaisLalamoveHtml(rascunho, veiculo, editavel) {
+    // Opcionais da corrida (Hugo, 30/08): espera extra, ajuda no
+    // carregamento, tipo de baú, ida e volta... -- vêm do catálogo da API
+    // (GET /v3/cities, cache 24h) e variam por veículo. Grupo = máx. 1
+    // escolha (select); avulso = checkbox.
+    const catalogo = (LALAMOVE.catalogo || {})[serviceTypeDoVeiculo(veiculo)] || [];
+    if (!catalogo.length) return "";
+    const marcados = srSelecionados(rascunho);
+    const grupos = new Map(), avulsos = [];
+    catalogo.forEach(o => {
+      if (o.grupo) { if (!grupos.has(o.grupo)) grupos.set(o.grupo, []); grupos.get(o.grupo).push(o); }
+      else avulsos.push(o);
+    });
+    const dis = editavel ? "" : "disabled";
+    const partes = [];
+    grupos.forEach((ops, grupo) => {
+      const sel = ops.map(o => `<option value="${o.codigo}" ${marcados.includes(o.codigo) ? "selected" : ""}>${escaparHtml(o.nome)}</option>`).join("");
+      partes.push(`<label class="lalamove-opcional">${escaparHtml(grupo)} <select class="lalamove-sr" ${dis}><option value="">— não —</option>${sel}</select></label>`);
+    });
+    avulsos.forEach(o => {
+      partes.push(`<label class="lalamove-opcional"><input type="checkbox" class="lalamove-sr" value="${o.codigo}" ${marcados.includes(o.codigo) ? "checked" : ""} ${dis}> ${escaparHtml(o.nome)}</label>`);
+    });
+    return partes.join("");
+  }
+
+  function lalamoveBoxHtml(rascunho, editavel) {
+    // Caixa Lalamove no card (veículo + opcionais) -- só aparece com o
+    // motorista virtual LALAMOVE escolhido; tudo vai pra cotação
+    // (service_type + specialRequests).
     if (!LALAMOVE || !LALAMOVE.veiculos || !LALAMOVE.veiculos.length) return "";
     const atual = rascunho.lalamove_veiculo || LALAMOVE.veiculo_padrao;
     const opcoes = LALAMOVE.veiculos.map(v =>
       `<option value="${v.codigo}" ${v.codigo === atual ? "selected" : ""}>${escaparHtml(v.nome)}</option>`).join("");
-    return `<select data-rascunho-id="${rascunho.id}" class="select-lalamove-veiculo" title="Veículo que será pedido à Lalamove" ${editavel ? "" : "disabled"} style="${rotaEhLalamove(rascunho) ? "" : "display:none"}">${opcoes}</select>`;
+    return `<div class="lalamove-box" data-rascunho-id="${rascunho.id}" style="${rotaEhLalamove(rascunho) ? "" : "display:none"}">
+      <label class="lalamove-opcional"><strong>Lalamove</strong> · Veículo <select class="select-lalamove-veiculo" data-rascunho-id="${rascunho.id}" ${editavel ? "" : "disabled"}>${opcoes}</select></label>
+      <span class="lalamove-opcionais-wrap">${opcionaisLalamoveHtml(rascunho, atual, editavel)}</span>
+    </div>`;
   }
 
   function metricasTexto(rascunho) {
@@ -2090,7 +2145,9 @@
     if (rascunho.lalamove_order_id) {
       const preco = rascunho.lalamove_preco ? ` · R$ ${escaparHtml(rascunho.lalamove_preco)}` : "";
       const link = rascunho.lalamove_share_link ? ` · <a href="${escaparHtml(rascunho.lalamove_share_link)}" target="_blank" rel="noopener">rastrear</a>` : "";
-      const veic = rascunho.lalamove_veiculo ? ` · ${escaparHtml(nomeVeiculoLalamove(rascunho.lalamove_veiculo))}` : "";
+      const srNomes = srSelecionados(rascunho).map(nomeOpcionalLalamove).join(", ");
+      const veic = (rascunho.lalamove_veiculo ? ` · ${escaparHtml(nomeVeiculoLalamove(rascunho.lalamove_veiculo))}` : "")
+        + (srNomes ? ` (${escaparHtml(srNomes)})` : "");
       return `<div class="status-envio ok" title="Atualizado em ${escaparHtml(rascunho.lalamove_atualizado_em || "")}">Lalamove #${escaparHtml(rascunho.lalamove_order_id)} — ${escaparHtml(rascunho.lalamove_status || "?")}${veic}${preco}${link}</div>`;
     }
     if (rascunho.lalamove_erro) {
@@ -2143,7 +2200,7 @@
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
       <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(bloqueada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
-      ${selectLalamoveHtml(rascunho, !(bloqueada || !PODE_EDITAR))}
+      ${lalamoveBoxHtml(rascunho, !(bloqueada || !PODE_EDITAR))}
       <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
       <div class="acoes">
         ${(bloqueada || !PODE_EDITAR) ? "" : `
@@ -4657,14 +4714,25 @@
         alternarSelecaoRota(Number(li.dataset.serviceId), li);
         return;
       }
-      if (e.target.classList.contains("select-lalamove-veiculo")) {
-        const rid = Number(e.target.dataset.rascunhoId);
+      const boxLala = e.target.closest(".lalamove-box");
+      if (boxLala) {
+        const rid = Number(boxLala.dataset.rascunhoId);
+        const r = RASCUNHOS.find(x => x.id === rid);
+        const veiculo = boxLala.querySelector(".select-lalamove-veiculo").value;
+        if (e.target.classList.contains("select-lalamove-veiculo") && r) {
+          // Trocou o veículo: os opcionais disponíveis mudam junto --
+          // re-renderiza a lista e zera a seleção anterior.
+          r.lalamove_veiculo = veiculo; r.lalamove_special_requests = "[]";
+          boxLala.querySelector(".lalamove-opcionais-wrap").innerHTML = opcionaisLalamoveHtml(r, veiculo, true);
+        }
+        const srs = [];
+        boxLala.querySelectorAll("select.lalamove-sr").forEach(s => { if (s.value) srs.push(s.value); });
+        boxLala.querySelectorAll("input.lalamove-sr:checked").forEach(c => srs.push(c.value));
         try {
-          await postJSON("/api/planejamento/lalamove-veiculo", { rascunho_id: rid, codigo: e.target.value });
-          const r = RASCUNHOS.find(x => x.id === rid);
-          if (r) r.lalamove_veiculo = e.target.value;
+          await postJSON("/api/planejamento/lalamove-veiculo", { rascunho_id: rid, codigo: veiculo, special_requests: srs });
+          if (r) { r.lalamove_veiculo = veiculo; r.lalamove_special_requests = JSON.stringify(srs); }
         } catch (err) {
-          alert(`Falha ao trocar o veículo Lalamove: ${err.message}`);
+          alert(`Falha ao salvar as opções da Lalamove: ${err.message}`);
         }
         return;
       }
@@ -4680,8 +4748,8 @@
         });
         const r = RASCUNHOS.find(x => x.id === rascunhoId);
         if (r) { r.agent_id = agentId; r.motorista_nome = motorista ? motorista.nome : null; }
-        const selLala = document.querySelector(`.select-lalamove-veiculo[data-rascunho-id="${rascunhoId}"]`);
-        if (selLala) selLala.style.display = (LALAMOVE.agent_id && agentId === LALAMOVE.agent_id) ? "" : "none";
+        const boxLala2 = document.querySelector(`.lalamove-box[data-rascunho-id="${rascunhoId}"]`);
+        if (boxLala2) boxLala2.style.display = (LALAMOVE.agent_id && agentId === LALAMOVE.agent_id) ? "" : "none";
       } catch (err) {
         alert(`Falha ao trocar motorista: ${err.message}`);
       }

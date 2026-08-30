@@ -1308,7 +1308,8 @@ def api_lalamove_veiculo():
     lalamove_integracao.py e config.yaml lalamove.veiculos."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.definir_lalamove_veiculo(body["rascunho_id"], body.get("codigo"))
+        rascunhos_rota.definir_lalamove_veiculo(body["rascunho_id"], body.get("codigo"),
+                                                special_requests=body.get("special_requests"))
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
