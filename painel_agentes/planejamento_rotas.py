@@ -107,7 +107,7 @@ ETAPAS_AGENTES_PLANEJAMENTO = [
     {"agente_id": "gerar_romaneios",               "titulo": "Gerar PDFs de Romaneio",
      "detalhe": "1 PDF por rota do dia, na ordem de visita"},
     {"agente_id": "somente_expedicao",             "titulo": "Expedição",
-     "detalhe": "entregues → Stokki", "incluir_executar_tudo": False},
+     "detalhe": "entregues → Stokki (todos, ou só pedidos selecionados)", "incluir_executar_tudo": False},
 ]
 
 
@@ -119,6 +119,7 @@ def montar_etapas_agentes_planejamento() -> list[dict]:
     for etapa in ETAPAS_AGENTES_PLANEJAMENTO:
         ultima = buscar_ultima_execucao(etapa["agente_id"])
         rodando = bool(ultima and ultima["status"] == "RODANDO")
+        na_fila = bool(ultima and ultima["status"] == "NA_FILA")
         progresso = progresso_execucao(ultima["id"]) if rodando else None
         etapas.append({
             **etapa,
@@ -126,6 +127,7 @@ def montar_etapas_agentes_planejamento() -> list[dict]:
             "quando": (ultima.get("finalizado_em") or ultima.get("iniciado_em")) if ultima else None,
             "execucao_id": ultima["id"] if ultima else None,
             "rodando": rodando,
+            "na_fila": na_fila,
             "percentual": (progresso or {}).get("percentual"),
             "eta_segundos": (progresso or {}).get("eta_segundos"),
         })

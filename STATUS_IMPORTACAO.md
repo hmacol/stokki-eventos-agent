@@ -4,52 +4,30 @@
 
 ## Última execução
 
-- **Quando:** 16/08/2026 18:13:00
-- **Modo:** REAL
-- **Duração:** 709s
-- **Pedidos processados:** 341
+- **Quando:** 28/08/2026 22:44:21
+- **Modo:** TESTE (nada gravado no VUUPT)
+- **Filtro:** `PS-36657`
+- **Duração:** 9s
+- **Pedidos processados:** 1
 - **Resultado:** OK
 
 | Resultado | Qtde |
 |---|---|
 | Criados | 0 |
 | Atualizados | 0 |
-| Sem alteração (fingerprint) | 149 |
+| Sem alteração (fingerprint) | 0 |
 | Pulados (já atribuídos/concluídos) | 0 |
-| Ignorados (RETIRADA) | 75 |
-| Revisão manual | 31 |
-| pulado_ja_atribuido | 117 |
+| Ignorados (RETIRADA) | 0 |
+| Simulados (modo teste) | 1 |
 
-Detalhe por pedido: `dados\logs\importacoes\importacao_20260816_181300.csv`
-
-### Revisão manual
-
-- `#PS-36826`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36829`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36836`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36852`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36857`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36861`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36863`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36867`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36868`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36792`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36425`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36460`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36706`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36707`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36708`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36709`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36710`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36711`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36712`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- `#PS-36713`: CNPJ do destinatário sem classificação de nível na planilha de complexidade — aplicando nível padrão (2) provisoriamente
-- ... e mais 11 (ver CSV)
+Detalhe por pedido: `dados\logs\importacoes\importacao_20260828_224421.csv`
 
 ## Últimas execuções
 
 | Quando | Modo | Total | Criados | Atualizados | Sem alt. | Ignorados | Erros |
 |---|---|---|---|---|---|---|---|
+| 28/08/2026 22:44:21 | teste | 1 | 0 | 0 | 0 | 0 | 0 |
+| 28/08/2026 22:43:17 | teste | 1 | 0 | 0 | 0 | 1 | 0 |
 | 16/08/2026 18:13:00 | real | 341 | 0 | 0 | 149 | 75 | 0 |
 | 15/08/2026 22:12:42 | real | 341 | 0 | 17 | 132 | 75 | 0 |
 | 15/08/2026 18:52:42 | real | 341 | 0 | 0 | 149 | 75 | 0 |
@@ -58,5 +36,3 @@ Detalhe por pedido: `dados\logs\importacoes\importacao_20260816_181300.csv`
 | 14/08/2026 11:39:26 | real | 217 | 0 | 0 | 56 | 61 | 0 |
 | 14/08/2026 11:35:57 | real | 217 | 5 | 0 | 51 | 61 | 0 |
 | 14/08/2026 11:01:08 | real | 338 | 47 | 0 | 13 | 61 | 0 |
-| 13/08/2026 22:11:51 | real | 308 | 0 | 0 | 71 | 59 | 0 |
-| 13/08/2026 19:49:41 | real | 308 | 18 | 0 | 53 | 59 | 0 |

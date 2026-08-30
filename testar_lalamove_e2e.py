@@ -6,8 +6,10 @@ testar_lalamove_e2e.py -- teste ponta a ponta da integração Lalamove
     python testar_lalamove_e2e.py criar
         -> cria 2 serviços de teste na VUUPT (LALA-TESTE-*), monta um
            rascunho pra amanhã com o motorista virtual LALAMOVE (50258),
-           chama rascunhos_rota.enviar_rascunho (rota na VUUPT + pedido
-           Lalamove sandbox + código no título). Imprime ids.
+           chama rascunhos_rota.enviar_rascunho (rota na VUUPT) e depois
+           rascunhos_rota.lancar_lalamove (pedido Lalamove sandbox +
+           código no título) -- mesmo caminho dos 2 botões da tela.
+           Imprime ids.
 
     python testar_lalamove_e2e.py sync
         -> roda lalamove_integracao.sincronizar_pedidos (o que o timer faz).
@@ -72,6 +74,10 @@ def criar():
 
     print("\n== enviar_rascunho (mesmo caminho do botão Confirmar e enviar) ==")
     res = rascunhos_rota.enviar_rascunho(rid, token)
+    print(res)
+
+    print("\n== lancar_lalamove (mesmo caminho do botão Lançar na Lalamove) ==")
+    res = rascunhos_rota.lancar_lalamove(rid, token)
     print(res)
     r = rascunhos_rota.buscar_rascunho(rid)
     print(f"\nRascunho: status={r['status']} vuupt_route_id={r['vuupt_route_id']} "

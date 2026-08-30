@@ -38,6 +38,17 @@ _PROCESSOS_RODANDO: dict[int, subprocess.Popen] = {}
 _EXECUCOES_ENCERRADAS_MANUALMENTE: set[int] = set()
 _LOCK_PROCESSOS = threading.Lock()
 
+# Filas de espera pra grupos de agentes (ex: barra do planejamento) --
+# pedido do Hugo, 26/08: os botões de etapa avulsos só bloqueavam
+# rodar de novo O MESMO agente enquanto rodava; clicar em duas etapas
+# DIFERENTES seguidas rodava as duas ao mesmo tempo (mesmo risco de
+# concorrência no SQLite/sessão Stokki que o "Executar tudo" já evita
+# via iniciar_sequencia). _FILAS é indexado pela tupla de agente_ids do
+# grupo (chave estável, ex: AGENTES_PLANEJAMENTO_IDS) -> lista de
+# execucao_id aguardando a vez, em ordem de chegada (FIFO).
+_FILAS: dict[tuple, list[int]] = {}
+_LOCK_FILAS = threading.Lock()
+
 
 def _conectar():
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -196,7 +207,7 @@ def iniciar_execucao(agente: dict, modo_teste: bool, args_extra: list[str] | Non
     return execucao_id
 
 
-def iniciar_sequencia(passos: list[dict]):
+def iniciar_sequencia(passos: list[dict], ids_do_grupo: tuple[str, ...] | None = None):
     """Roda uma lista de agentes em sequência, cada um esperando o
     anterior terminar de verdade antes do próximo começar -- pedido do
     Hugo, 14/08 ("Executar tudo" da barra de agentes do planejamento:
@@ -204,22 +215,33 @@ def iniciar_sequencia(passos: list[dict]):
     Gerar Romaneios). Mesmo motivo do -Wait do rodar_sequencial.ps1:
     evitar concorrência no SQLite/sessão Stokki entre etapas.
 
+    ids_do_grupo, se passado, faz cada passo entrar na MESMA fila usada
+    por iniciar_execucao_com_fila (cliques avulsos em botões
+    individuais do mesmo grupo) -- sem isso, um clique solto no botão
+    de um agente do grupo poderia colar bem no instante da troca entre
+    dois passos da sequência e rodar junto. Pedido do Hugo, 26/08.
+
     Cada passo já vira uma execução normal em painel_execucoes, então o
     front acompanha pelo /etapas de sempre (buscar_ultima_execucao por
     agente_id) -- não precisa de um status de sequência à parte.
 
     passos: [{"agente": <dict de agentes.py>, "args_extra": [...] | None}, ...]
     """
-    thread = threading.Thread(target=_rodar_sequencia, args=(passos,), daemon=True)
+    thread = threading.Thread(target=_rodar_sequencia, args=(passos, ids_do_grupo), daemon=True)
     thread.start()
 
 
-def _rodar_sequencia(passos: list[dict]):
+def _rodar_sequencia(passos: list[dict], ids_do_grupo: tuple[str, ...] | None = None):
     for passo in passos:
-        execucao_id = iniciar_execucao(passo["agente"], modo_teste=False, args_extra=passo.get("args_extra"))
+        if ids_do_grupo:
+            execucao_id, _ = iniciar_execucao_com_fila(
+                passo["agente"], modo_teste=False, ids_do_grupo=ids_do_grupo, args_extra=passo.get("args_extra"),
+            )
+        else:
+            execucao_id = iniciar_execucao(passo["agente"], modo_teste=False, args_extra=passo.get("args_extra"))
         while True:
             execucao = buscar_execucao(execucao_id)
-            if not execucao or execucao["status"] != "RODANDO":
+            if not execucao or execucao["status"] not in ("RODANDO", "NA_FILA"):
                 break
             time.sleep(2)
 
@@ -252,6 +274,79 @@ def listar_execucoes_recentes(limite: int = 50) -> list[dict]:
 def ha_execucao_rodando(agente_id: str) -> bool:
     ultima = buscar_ultima_execucao(agente_id)
     return bool(ultima and ultima["status"] == "RODANDO")
+
+
+def ha_execucao_pendente(agente_id: str) -> bool:
+    """Como ha_execucao_rodando, mas também conta quem está NA_FILA
+    (aguardando a vez num grupo) -- usado pra barrar um segundo clique
+    no MESMO agente enquanto o primeiro ainda nem começou a rodar de
+    verdade."""
+    ultima = buscar_ultima_execucao(agente_id)
+    return bool(ultima and ultima["status"] in ("RODANDO", "NA_FILA"))
+
+
+def iniciar_execucao_com_fila(agente: dict, modo_teste: bool, ids_do_grupo: tuple[str, ...],
+                              args_extra: list[str] | None = None) -> tuple[int, bool]:
+    """Como iniciar_execucao, mas primeiro checa se algum agente do
+    grupo (ids_do_grupo) já está rodando ou tem gente na fila desse
+    grupo -- se sim, entra numa fila (FIFO) em vez de rodar em
+    paralelo, e só dispara o subprocess de verdade quando chegar sua
+    vez (mesmo motivo do iniciar_sequencia, mas pra cliques avulsos em
+    botões individuais em vez de uma lista fixa de passos).
+
+    Retorna (execucao_id, entrou_na_fila).
+    """
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOGS_DIR / f"{agente['id']}_{carimbo}.log"
+
+    with _LOCK_FILAS:
+        fila = _FILAS.setdefault(ids_do_grupo, [])
+        entrou_na_fila = bool(fila) or any(ha_execucao_rodando(aid) for aid in ids_do_grupo)
+        status_inicial = "NA_FILA" if entrou_na_fila else "RODANDO"
+
+        conn = _conectar()
+        cursor = conn.execute("""
+            INSERT INTO painel_execucoes (agente_id, agente_nome, modo_teste, status, iniciado_em, log_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (agente["id"], agente["nome"], 1 if modo_teste else 0, status_inicial, agora, str(log_path)))
+        execucao_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        if entrou_na_fila:
+            fila.append(execucao_id)
+
+    if entrou_na_fila:
+        thread = threading.Thread(
+            target=_aguardar_vez_e_rodar,
+            args=(agente, modo_teste, execucao_id, log_path, ids_do_grupo, args_extra), daemon=True,
+        )
+    else:
+        thread = threading.Thread(
+            target=_rodar_processo, args=(agente, modo_teste, execucao_id, log_path, args_extra), daemon=True,
+        )
+    thread.start()
+    return execucao_id, entrou_na_fila
+
+
+def _aguardar_vez_e_rodar(agente: dict, modo_teste: bool, execucao_id: int, log_path: Path,
+                          ids_do_grupo: tuple[str, ...], args_extra: list[str] | None):
+    while True:
+        with _LOCK_FILAS:
+            fila = _FILAS.get(ids_do_grupo, [])
+            if fila and fila[0] == execucao_id and not any(ha_execucao_rodando(aid) for aid in ids_do_grupo):
+                fila.pop(0)
+                break
+        time.sleep(2)
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conectar()
+    conn.execute("UPDATE painel_execucoes SET status='RODANDO', iniciado_em=? WHERE id=?", (agora, execucao_id))
+    conn.commit()
+    conn.close()
+
+    _rodar_processo(agente, modo_teste, execucao_id, log_path, args_extra)
 
 
 def ler_log(execucao_id: int) -> str:
@@ -395,13 +490,13 @@ def limpar_execucoes_travadas() -> int:
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _conectar()
     cursor = conn.execute(
-        "UPDATE painel_execucoes SET status = 'INTERROMPIDO', finalizado_em = ? WHERE status = 'RODANDO'",
+        "UPDATE painel_execucoes SET status = 'INTERROMPIDO', finalizado_em = ? WHERE status IN ('RODANDO', 'NA_FILA')",
         (agora,),
     )
     conn.commit()
     quantidade = cursor.rowcount
     conn.close()
     if quantidade:
-        logger.warning(f"{quantidade} execução(ões) travada(s) em RODANDO foram marcadas como INTERROMPIDO "
+        logger.warning(f"{quantidade} execução(ões) travada(s) em RODANDO/NA_FILA foram marcadas como INTERROMPIDO "
                        f"(provavelmente o painel foi encerrado à força na execução anterior).")
     return quantidade

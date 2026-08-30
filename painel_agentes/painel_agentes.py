@@ -53,8 +53,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas
 from executor import (
-    iniciar_execucao, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
-    listar_execucoes_recentes, ha_execucao_rodando, ler_log, limpar_execucoes_travadas,
+    iniciar_execucao, iniciar_execucao_com_fila, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
+    listar_execucoes_recentes, ha_execucao_rodando, ha_execucao_pendente, ler_log, limpar_execucoes_travadas,
     encerrar_todas_execucoes, progresso_execucao,
 )
 from mapa_rotas import buscar_rotas_para_mapa
@@ -643,10 +643,13 @@ def api_planejamento_agentes_etapas():
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar():
-    """Dispara um agente da barra do planejamento. Só a Importação
-    aceita filtro (pedido/embarcador) -- vira argv extra pro
-    pipeline.py (--pedido/--embarcador), sem precisar de uma entrada
-    nova em agentes.py pra cada combinação de filtro possível."""
+    """Dispara um agente da barra do planejamento. Importação aceita
+    filtro (pedido/embarcador -> --pedido/--embarcador do pipeline.py)
+    e Expedição aceita seleção de pedidos (30/08: "pedidos" com códigos
+    separados por vírgula/espaço -> --pedido do expedir_pedidos.py, que
+    roda o fluxo normal restrito só a eles; vazio = rodada completa) --
+    tudo via argv extra, sem precisar de uma entrada nova em agentes.py
+    pra cada combinação possível."""
     body = request.get_json(force=True)
     agente_id = body.get("agente_id", "")
     if agente_id not in AGENTES_PLANEJAMENTO_IDS:
@@ -654,8 +657,8 @@ def api_planejamento_agentes_rodar():
     agente = buscar_agente(agente_id)
     if not agente:
         return jsonify({"erro": "Agente não encontrado."}), 404
-    if ha_execucao_rodando(agente_id):
-        return jsonify({"erro": "Esse agente já está rodando -- espera terminar antes de rodar de novo."}), 409
+    if ha_execucao_pendente(agente_id):
+        return jsonify({"erro": "Essa etapa já está rodando ou na fila -- espera terminar antes de rodar de novo."}), 409
 
     args_extra = None
     if agente_id == "somente_importacao":
@@ -667,9 +670,26 @@ def api_planejamento_agentes_rodar():
         if embarcador:
             args_extra += ["--embarcador", embarcador]
         args_extra = args_extra or None
+    elif agente_id == "somente_expedicao":
+        # Aceita "PS-1, PS-2 PS-3" (vírgula, espaço ou ponto-e-vírgula) e
+        # valida o formato aqui mesmo -- um token errado viraria só um
+        # warning perdido no log do agente, melhor barrar antes de rodar.
+        codigos = [c for c in re.split(r"[\s,;]+", (body.get("pedidos") or "").strip()) if c]
+        invalidos = [c for c in codigos if not re.fullmatch(r"#?PS-?\d{4,6}(-[A-Za-z]\d+)*", c, re.IGNORECASE)]
+        if invalidos:
+            return jsonify({"erro": f"Código(s) de pedido inválido(s): {', '.join(invalidos)} "
+                                    f"-- use o formato PS-XXXXX."}), 400
+        if codigos:
+            args_extra = ["--pedido"] + codigos
 
-    execucao_id = iniciar_execucao(agente, modo_teste=False, args_extra=args_extra)
-    return jsonify({"ok": True, "execucao_id": execucao_id})
+    # Se outra etapa da barra já está rodando (ou na fila), entra na
+    # fila em vez de disparar em paralelo -- pedido do Hugo, 26/08:
+    # clicar em duas etapas diferentes seguidas rodava as duas ao
+    # mesmo tempo, arriscando concorrência no SQLite/sessão Stokki.
+    execucao_id, na_fila = iniciar_execucao_com_fila(
+        agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS, args_extra=args_extra,
+    )
+    return jsonify({"ok": True, "execucao_id": execucao_id, "na_fila": na_fila})
 
 
 @app.route("/api/planejamento/agentes/rodar-tudo", methods=["POST"])
@@ -682,10 +702,10 @@ def api_planejamento_agentes_rodar_tudo():
     → Gerar Romaneios), cada um esperando o anterior terminar
     (iniciar_sequencia). Expedição fica fora dessa sequência -- ver
     AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS."""
-    if any(ha_execucao_rodando(agente_id) for agente_id in AGENTES_PLANEJAMENTO_IDS):
-        return jsonify({"erro": "Já tem uma etapa rodando -- espera terminar antes de rodar tudo."}), 409
+    if any(ha_execucao_pendente(agente_id) for agente_id in AGENTES_PLANEJAMENTO_IDS):
+        return jsonify({"erro": "Já tem uma etapa rodando ou na fila -- espera terminar antes de rodar tudo."}), 409
     passos = [{"agente": buscar_agente(agente_id)} for agente_id in AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS]
-    iniciar_sequencia(passos)
+    iniciar_sequencia(passos, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS)
     return jsonify({"ok": True})
 
 
@@ -1313,6 +1333,26 @@ def api_lalamove_veiculo():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
+@app.route("/api/planejamento/lalamove-lancar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_lalamove_lancar():
+    """Botão "Lançar na Lalamove" do card (Hugo, 30/08): cria a corrida
+    na Lalamove pra rota do motorista virtual JÁ ENVIADA à VUUPT --
+    separado do "Confirmar e enviar" (ver rascunhos_rota.lancar_lalamove)."""
+    body = request.get_json(force=True)
+    try:
+        rascunho_id = int(body["rascunho_id"])
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    token = _carregar_config().get("vuupt_api", {}).get("token", "")
+    resultado = rascunhos_rota.lancar_lalamove(rascunho_id, token)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro") or "Falha ao lançar na Lalamove."}), 400
+    return jsonify({"ok": True, "resultado": resultado})
 
 
 @app.route("/api/planejamento/renomear-rota", methods=["POST"])

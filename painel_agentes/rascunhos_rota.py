@@ -1242,27 +1242,46 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_alocado(s["id"], rota["id"])
 
     marcar_enviado(rascunho_id, rota["id"])
-    resultado = {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+    # Motorista virtual LALAMOVE: a corrida NÃO é mais criada aqui
+    # (Hugo, 30/08) -- o envio só cria a rota na VUUPT; a corrida (paga)
+    # sai pelo botão "Lançar na Lalamove" do card (lancar_lalamove).
+    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
 
-    # Motorista virtual LALAMOVE (Hugo, 28/08): além da rota na VUUPT,
-    # cria o pedido na Lalamove e carimba o código no título dos
-    # serviços. Best-effort: falha aqui NÃO desfaz a rota já criada --
-    # fica registrada em lalamove_erro e aparece no card.
+
+def lancar_lalamove(rascunho_id: int, token: str) -> dict:
+    """Botão "Lançar na Lalamove" do card (Hugo, 30/08): separado do
+    "Confirmar e enviar" -- a rota do motorista virtual LALAMOVE vira
+    rota na VUUPT no envio e a corrida (paga) só é criada aqui, com o
+    veículo/opcionais escolhidos no card. Idempotente via
+    criar_pedido_para_rascunho (pedido já criado volta ja_existia).
+
+    Retorna {"rascunho_id", "ok", "order_id"?, "preco"?, "erro"?}.
+    """
+    from lalamove_integracao import criar_pedido_para_rascunho, rascunho_e_lalamove
+
+    rascunho = buscar_rascunho(rascunho_id)
+    if not rascunho:
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
+    if rascunho["status"] != STATUS_ENVIADO:
+        return {"rascunho_id": rascunho_id, "ok": False,
+                "erro": f"Rota ainda não enviada à VUUPT (status={rascunho['status']}) -- confirme o envio antes de lançar na Lalamove."}
+    if not rascunho_e_lalamove(rascunho):
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rota não está com o motorista virtual LALAMOVE."}
+
     try:
-        from lalamove_integracao import criar_pedido_para_rascunho, rascunho_e_lalamove
-        if rascunho_e_lalamove(rascunho):
-            resultado["lalamove"] = criar_pedido_para_rascunho(rascunho_id, token)
+        resultado = criar_pedido_para_rascunho(rascunho_id, token)
     except Exception as e:
-        logger.warning(f"Rota VUUPT {rota['id']} (rascunho {rascunho_id}) criada, mas pedido Lalamove falhou: {e}")
+        logger.warning(f"Lançamento Lalamove do rascunho {rascunho_id} falhou: {e}")
         gravar_lalamove(rascunho_id, erro=str(e))
-        resultado["lalamove"] = {"ok": False, "erro": str(e)}
-    return resultado
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
+    return {"rascunho_id": rascunho_id, **resultado}
 
 
 def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None,
                              special_requests: list | None = None):
     """Seletor de veículo + opcionais Lalamove no card (Hugo, 29-30/08)
-    -- só faz sentido antes do envio; depois o pedido já foi cotado.
+    -- só faz sentido antes de "Lançar na Lalamove"; depois o pedido já
+    foi cotado.
     special_requests=None mantém os opcionais como estão; lista (mesmo
     vazia) substitui."""
     conn = _conectar()

@@ -32,6 +32,7 @@ Execute:
   py -3.11 expedir_pedidos.py
   py -3.11 expedir_pedidos.py --horas-entregues 48 --limite 10
   py -3.11 expedir_pedidos.py --modo-teste
+  py -3.11 expedir_pedidos.py --pedido PS-12345 PS-67890   (só esses, fluxo normal)
 """
 import argparse
 import html
@@ -924,8 +925,23 @@ def anexar_canhoto(page, codigo_ps: str, pdf_path: Path) -> bool:
 
 # ── Orquestrador ───────────────────────────────────────────────────────────────
 
+def _bases_do_code(code: str) -> set[str]:
+    """Códigos BASE ('PS-36327') contidos num 'code' da VUUPT -- que
+    pode vir com '#', sufixo de reentrega ('PS-36327-R1', ou empilhado
+    '-R1-R1') e até mais de um pedido combinado por vírgula. Mesmo
+    casamento por PREFIXO de _PADRAO_CODIGO_BASE usado em
+    duplicar_servico_por_insucesso e nos _codigo_base do painel."""
+    bases = set()
+    for pedaco in (code or "").split(","):
+        m = _PADRAO_CODIGO_BASE.match(pedaco.strip().lstrip("#"))
+        if m:
+            bases.add(m.group(0).upper())
+    return bases
+
+
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
-         forcar: list = None, horas_entregues: int = HORAS_ENTREGUES):
+         forcar: list = None, horas_entregues: int = HORAS_ENTREGUES,
+         pedidos: list = None):
     prefixo = "[MODO TESTE] " if modo_teste else ""
     logger.info(f"{prefixo}Expedicao iniciada (janela entregues: {horas_entregues}h | insucessos: {horas}h)")
 
@@ -941,6 +957,42 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         logger.info(f"MODO FORCADO: {len(codigos)} pedido(s): {codigos}")
         validados = [{"code": c, "checklistAnswers": {"data": []}} for c in codigos]
         falhas_persistentes = {}
+    elif pedidos:
+        # Modo selecionado (--pedido, botão "Expedição" do planejamento,
+        # Hugo 30/08): roda o fluxo REAL de expedição (busca os entregues
+        # na VUUPT, baixa e anexa canhoto) mas SÓ pros códigos informados
+        # -- diferente do --forcar, que pula a VUUPT e por isso nunca
+        # anexa canhoto. Por serem escolhidos à mão, os selecionados NÃO
+        # passam pelos cortes de fingerprint (já processado) nem de falha
+        # persistente: reexpedir um já expedido é inofensivo (a Stokki
+        # responde 'ja_expedido' e o fluxo trata), e retentar um que
+        # esgotou as MAX_TENTATIVAS_FALHA é exatamente o caso de uso de
+        # uma rodada manual. Toda a parte de INSUCESSO (perguntas de
+        # reenvio, e-mails a remetentes, duplicações agendadas) fica de
+        # fora -- rodada pontual não dispara notificação a cliente.
+        codigos_alvo = set()
+        for c in pedidos:
+            m = _PADRAO_CODIGO_BASE.match(c.strip().lstrip("#"))
+            if m:
+                codigos_alvo.add(m.group(0).upper())
+            else:
+                logger.warning(f"Codigo invalido ignorado (esperado PS-NNNNN): {c!r}")
+        if not codigos_alvo:
+            logger.info("Nenhum codigo valido na selecao. Nada a expedir.")
+            return
+        logger.info(f"MODO SELECIONADO: {len(codigos_alvo)} pedido(s): {sorted(codigos_alvo)}")
+
+        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
+        validados = [s for s in servicos if _bases_do_code(s.get("code")) & codigos_alvo]
+        encontrados = {b for s in validados for b in _bases_do_code(s.get("code"))} & codigos_alvo
+        faltando = codigos_alvo - encontrados
+        if faltando:
+            logger.warning(f"{len(faltando)} pedido(s) selecionado(s) NAO estao entre os entregues "
+                           f"das ultimas {horas_entregues}h na VUUPT -- fora desta rodada: {sorted(faltando)}")
+        falhas_persistentes = {}
+        if not validados:
+            logger.info("Nenhum dos pedidos selecionados esta elegivel. Nada a expedir.")
+            return
     else:
         # 1. Busca entregues (com ou sem canhoto -- 28/08, a foto e a
         # validação deixaram de ser trava; ver docstring do módulo)
@@ -1217,6 +1269,10 @@ if __name__ == "__main__":
     parser.add_argument("--modo-teste", action="store_true")
     parser.add_argument("--forcar", nargs="+", metavar="PS-XXXXX",
                         help="Expede forcadamente os codigos informados, sem verificar VUUPT")
+    parser.add_argument("--pedido", nargs="+", metavar="PS-XXXXX",
+                        help="Expede SO os codigos informados, mas pelo fluxo normal (verifica "
+                             "entrega na VUUPT e anexa canhoto); ignora fingerprint/falha "
+                             "persistente e nao roda a parte de insucessos")
     args = parser.parse_args()
     main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
-         forcar=args.forcar, horas_entregues=args.horas_entregues)
+         forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido)

@@ -151,7 +151,7 @@ def main(modo_teste: bool = False):
                     f"'{rascunho['nome']}' -- {'; '.join(motivos)}."
                 )
 
-            enviados, com_erro = [], []
+            enviados, com_erro, lalamove_sem_corrida = [], [], []
             for rascunho, _ in aprovados:
                 if modo_teste:
                     logger.info(f"{prefixo}Enviaria '{rascunho['nome']}' ({len(rascunho['paradas'])} parada(s)).")
@@ -164,6 +164,17 @@ def main(modo_teste: bool = False):
                                        if resultado.get("codigos_removidos") else "")
                     logger.info(f"Rascunho '{rascunho['nome']}' enviado -- rota VUUPT id={resultado['vuupt_route_id']}{aviso_removidos}.")
                     enviados.append(rascunho["nome"])
+                    # Lançamento na Lalamove virou botão separado do envio
+                    # (Hugo, 30/08) -- corrida NUNCA sai automática daqui,
+                    # só avisa que ficou pendente em /planejamento.
+                    try:
+                        from lalamove_integracao import rascunho_e_lalamove
+                        if rascunho_e_lalamove(rascunho):
+                            logger.warning(f"Rota LALAMOVE '{rascunho['nome']}' enviada à VUUPT SEM corrida na "
+                                           f"Lalamove -- lançar pelo botão do card em /planejamento.")
+                            lalamove_sem_corrida.append(rascunho["nome"])
+                    except Exception as e:
+                        logger.warning(f"Não deu pra checar se '{rascunho['nome']}' é rota LALAMOVE: {e}")
                 else:
                     logger.error(f"Falha ao enviar rascunho '{rascunho['nome']}': {resultado.get('erro')}")
                     com_erro.append(f"{rascunho['nome']} ({resultado.get('erro')})")
@@ -180,6 +191,12 @@ def main(modo_teste: bool = False):
                 )
             if com_erro:
                 detalhe += f" [ALERTA_ENVIO_RASCUNHO] {len(com_erro)} falha(s): {'; '.join(com_erro)}."
+            if lalamove_sem_corrida:
+                detalhe += (
+                    f" [ALERTA_LALAMOVE_PENDENTE] {len(lalamove_sem_corrida)} rota(s) LALAMOVE enviada(s) à VUUPT "
+                    f"sem corrida na Lalamove (lançar pelo botão do card em /planejamento): "
+                    f"{'; '.join(lalamove_sem_corrida)}."
+                )
             resumo_etapas["Envio de rascunhos pendentes"] = {
                 "status": "ok" if not (com_erro or reprovados) else "erro",
                 "detalhe": detalhe,
