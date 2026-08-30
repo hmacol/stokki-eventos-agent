@@ -185,7 +185,11 @@
   .item-retirada .check-retirada { float: right; margin-left: 8px; cursor: pointer; }
   .item-retirada .check-retirada input { cursor: pointer; width: 15px; height: 15px; accent-color: var(--acento, #2FD9AE); }
   .item-retirada.marcada-expedir { border-style: solid; border-color: var(--acento, #2FD9AE); opacity: 1; }
-  .botao-expedir-retiradas { margin-left: auto; border-color: var(--acento, #2FD9AE); color: var(--acento, #2FD9AE); }
+  /* "Marcar todas" leva o margin-left:auto (é o 1º da dupla de botões à
+     direita); "Expedir marcadas" só é visível quando há marcada, e nesse
+     caso "Marcar todas" também está -- nunca fica órfão sem o auto. */
+  #botao-marcar-retiradas { margin-left: auto; }
+  .botao-expedir-retiradas { border-color: var(--acento, #2FD9AE); color: var(--acento, #2FD9AE); }
   .item-parada {
     position: relative;
     background: var(--fundo);
@@ -1815,6 +1819,8 @@
       <div class="cabecalho-secao-pool" title="Pedidos com transportadora RETIRADA (cliente retira / terceira coleta no galpão). Nunca entram em rota: ficam como serviço avulso na VUUPT, atribuídos ao agente de retiradas, e são fechados sozinhos quando a Stokki marca 'Enviado' (ou cancelados quando a Stokki cancela).">
         <span class="seta-secao">▾</span>
         <span class="titulo-secao-pool">A retirar no galpão (<span id="contagem-secao-retirada">0</span>)</span>
+        <button type="button" class="botao-mini" id="botao-marcar-retiradas" hidden
+                title="Marca (ou desmarca) todas as retiradas da lista de uma vez">Marcar todas</button>
         <button type="button" class="botao-mini botao-expedir-retiradas" id="botao-expedir-retiradas" hidden
                 title="Expede na Stokki as retiradas marcadas (a pessoa veio buscar). O serviço na VUUPT é fechado sozinho pelo acompanhamento, ao ver 'Enviado' na Stokki.">Expedir marcadas</button>
       </div>
@@ -3077,6 +3083,33 @@
     if (!botao) return;
     botao.hidden = RETIRADAS_MARCADAS.size === 0;
     botao.textContent = `Expedir marcadas (${RETIRADAS_MARCADAS.size})`;
+    // "Marcar todas" (Hugo, 31/08): aparece sempre que a lista tem
+    // checkbox (ou seja, há retirada E o usuário pode editar) e vira
+    // "Desmarcar todas" quando tudo já está marcado.
+    const botaoMarcar = document.getElementById("botao-marcar-retiradas");
+    if (botaoMarcar) {
+      const cbs = document.querySelectorAll("#lista-pool-retirada input[type=checkbox][data-codigo]");
+      botaoMarcar.hidden = cbs.length === 0;
+      const todasMarcadas = cbs.length > 0 && [...cbs].every(cb => cb.checked);
+      botaoMarcar.textContent = todasMarcadas ? "Desmarcar todas" : "Marcar todas";
+    }
+  }
+
+  const botaoMarcarRetiradas = document.getElementById("botao-marcar-retiradas");
+  if (botaoMarcarRetiradas) {
+    botaoMarcarRetiradas.addEventListener("click", (e) => {
+      e.stopPropagation();  // o clique no cabeçalho colapsa a seção -- não aqui
+      const cbs = [...document.querySelectorAll("#lista-pool-retirada input[type=checkbox][data-codigo]")];
+      if (!cbs.length) return;
+      const marcarTudo = !cbs.every(cb => cb.checked);
+      cbs.forEach(cb => {
+        cb.checked = marcarTudo;
+        if (marcarTudo) RETIRADAS_MARCADAS.add(cb.dataset.codigo);
+        else RETIRADAS_MARCADAS.delete(cb.dataset.codigo);
+        cb.closest(".item-retirada").classList.toggle("marcada-expedir", marcarTudo);
+      });
+      atualizarBotaoExpedirRetiradas();
+    });
   }
 
   function renderizarRetiradas(lista) {
@@ -3144,7 +3177,10 @@
       e.stopPropagation();  // o clique no cabeçalho colapsa a seção -- não aqui
       const codigos = [...RETIRADAS_MARCADAS];
       if (!codigos.length) return;
-      if (!confirm(`Expedir na Stokki ${codigos.length} retirada(s): ${codigos.join(", ")}?\n\n` +
+      // com "Marcar todas" a lista pode ter dezenas de códigos -- o
+      // confirm mostra só os primeiros pra caixa não virar um paredão
+      const amostra = codigos.slice(0, 12).join(", ") + (codigos.length > 12 ? ` … e mais ${codigos.length - 12}` : "");
+      if (!confirm(`Expedir na Stokki ${codigos.length} retirada(s): ${amostra}?\n\n` +
                    `O serviço na VUUPT é fechado sozinho pelo acompanhamento depois que a Stokki marcar 'Enviado'.`)) return;
       try {
         await iniciarExecucaoAgentePlanejamento("somente_expedicao", { pedidos: codigos.join(" ") });
