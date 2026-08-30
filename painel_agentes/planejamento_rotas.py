@@ -50,7 +50,8 @@ from regras.disponibilidade_motoristas import (
 )
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
-from retiradas.regras_retirada import PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas, eh_servico_retirada
+from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
+                                       data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
 # 22/08) NÃO são importados aqui em cima de propósito -- ainda não foram
 # deployados (falta config Chatwoot/template Meta, ver memória do
@@ -449,6 +450,12 @@ ROTULO_STATUS_RETIRADA = {
 }
 
 
+def _data_br(iso: str) -> str:
+    """'2026-08-28' -> '28/08/2026'; devolve como veio se não for ISO."""
+    partes = iso.split("-")
+    return f"{partes[2]}/{partes[1]}/{partes[0]}" if len(partes) == 3 else iso
+
+
 def _servico_para_retirada(servico: dict, remetentes_por_id: dict[int, str],
                            nf_por_codigo: dict[str, str] | None = None) -> dict:
     """Item do bloco "A retirar" -- só leitura (sem drag/seleção). O
@@ -471,7 +478,10 @@ def _servico_para_retirada(servico: dict, remetentes_por_id: dict[int, str],
         "transportadora": transportadora,
         "status": servico.get("status", ""),
         "status_rotulo": ROTULO_STATUS_RETIRADA.get(servico.get("status", ""), servico.get("status", "")),
-        "criado_em": (servico.get("created_at") or "")[:10],
+        "criado_em": _data_br((servico.get("created_at") or "")[:10]),
+        # previsão de expedição da Stokki, carimbada na nota do serviço
+        # pela importação (pipeline) -- vazio pra serviço anterior a isso
+        "data_prevista": data_prevista_do_servico(servico),
         "volume_caixas": extrair_volume_caixas(servico),
         "numero_nf": ", ".join(filter(None, (
             (nf_por_codigo or {}).get(c, "") for c in _codigos_base_lista(codigo)

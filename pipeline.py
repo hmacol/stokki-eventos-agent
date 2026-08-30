@@ -509,7 +509,7 @@ def processar_pedido(
                            "documento": transp_bloco.get("documento", "")}
             payload_ret = montar_payload_retirada(
                 codigo_ps, referencia or detalhe.get("referencia", ""), detalhe,
-                transp_info, dados_banco, cfg_ret)
+                transp_info, dados_banco, cfg_ret, data_saida=data_saida)
             acao_ret, _ = importar_retirada(vuupt, payload_ret, cfg_ret, servico_existente, modo_teste)
             resultado["acao"] = acao_ret
             resultado["fonte_endereco"] = "retirada_galpao"

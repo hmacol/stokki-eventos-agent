@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 PREFIXO_TITULO = "[RETIRADA]"
 STATUSES_ABERTOS = ("assigned", "accepted", "on_route", "arrived")
 
+# Previsão de expedição da listagem Stokki (expedition_date, DD/MM/AAAA),
+# carimbada na NOTA do serviço na importação -- a VUUPT não tem campo
+# próprio pra isso num serviço sem agendamento, e scheduled_start faria a
+# retirada entrar no resumo de agendados do /planejamento como se fosse
+# entrega. O card "A retirar no galpão" lê de volta com este regex.
+_REGEX_PREVISAO_NOTA = re.compile(r"Previs[ãa]o de expedi[çc][ãa]o \(Stokki\):\s*(\d{2}/\d{2}/\d{4})")
+
+
+def data_prevista_do_servico(servico: dict) -> str:
+    """'DD/MM/AAAA' carimbado na nota pela importação; '' se não houver
+    (serviço criado antes desta versão, ou listagem sem a data)."""
+    m = _REGEX_PREVISAO_NOTA.search(servico.get("note") or "")
+    return m.group(1) if m else ""
+
 
 def config_retiradas(config: dict) -> dict:
     """{'ativo', 'agent_id', 'customer_id'} -- ativo só quando agent_id e
@@ -62,7 +76,8 @@ def montar_titulo(codigo_ps: str, referencia: str, nome_embarcador: str,
 
 
 def montar_payload_retirada(codigo_ps: str, referencia: str, detalhe: dict,
-                            transportadora: dict, dados_banco: dict, cfg: dict) -> dict:
+                            transportadora: dict, dados_banco: dict, cfg: dict,
+                            data_saida: str = "") -> dict:
     destino = detalhe.get("destino") or {}
     nome_dest = (destino.get("nome") or "").strip()
     doc_dest = (destino.get("documento") or "").strip()
@@ -78,6 +93,8 @@ def montar_payload_retirada(codigo_ps: str, referencia: str, detalhe: dict,
         f"Destinatário final: {nome_dest}{f' ({doc_dest})' if doc_dest else ''}. "
         f"Fechado automaticamente quando a Stokki marcar 'Enviado'."
     )
+    if (data_saida or "").strip():
+        nota += f" Previsão de expedição (Stokki): {data_saida.strip()}."
     payload = {
         "title": montar_titulo(codigo_ps, referencia, nome_emb, nome_dest, nome_transp),
         "code": f"#{codigo_ps}",
