@@ -50,17 +50,21 @@
   }
   .barra-controle .status-lote { margin-left: auto; color: var(--texto-suave); }
   .barra-controle input[type=date] { background: var(--fundo); color: var(--texto); }
-  /* Tira de KPI: troca a linha de status em texto corrido por números
-     grandes e escaneáveis -- pesquisa de dashboards mostra que muito
-     elemento competindo "acima da dobra" aumenta abandono; números
-     grandes reduzem carga cognitiva ("progressive disclosure"). */
-  .kpis-planejamento { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 12px; }
-  .kpi-planejamento {
-    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
-    padding: 10px 14px; border-left: 3px solid var(--acento);
+  /* KPIs em chips (redesenho "cockpit compacto", Hugo 30/08): a tira de
+     tiles grandes virou uma linha de pílulas na própria barra de
+     controle -- mesma informação, ~90px a menos de altura acima da
+     dobra, sobrando pro pool/rotas/mapa. "No pool" ganha borda de
+     alerta quando > 0 (vermelho = não alocado, mesma semântica do mapa). */
+  .chips-kpi { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  .chip-kpi {
+    display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap;
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 100px;
+    padding: 5px 12px; font-variant-numeric: tabular-nums;
   }
-  .kpi-planejamento .kpi-rotulo { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
-  .kpi-planejamento .kpi-valor { font-size: 22px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .chip-kpi .kpi-valor { font-size: 14px; font-weight: 700; color: var(--texto); }
+  .chip-kpi .kpi-rotulo { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
+  .chip-kpi.alerta { border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
+  .chip-kpi.alerta .kpi-valor { color: var(--erro); }
   /* Resumo do marketplace por região (Hugo, 23/08) -- linha de chips
      logo abaixo da tira de KPI, só aparece com alguma rota publicada. */
   .resumo-regioes-ofertas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--texto-suave); }
@@ -620,6 +624,14 @@
   .lalamove-box .lalamove-opcionais-wrap { display: contents; }
   .lalamove-opcional { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .lalamove-opcional select { font-size: 11.5px; padding: 2px 4px; max-width: 150px; }
+  /* Botão "Lançar na Lalamove" (Hugo, 30/08): a corrida sai separada do
+     "Confirmar e enviar" -- aparece no card ENVIADO ainda sem pedido */
+  .botao-lancar-lalamove {
+    display: block; margin: 4px 0 2px; padding: 5px 10px; font-size: 12px; font-weight: 700;
+    border: 1px solid var(--acento); color: var(--acento); background: transparent;
+    border-radius: 6px; cursor: pointer;
+  }
+  .botao-lancar-lalamove:disabled { opacity: .6; cursor: default; }
   #lista-rotas.buscando .card-rota.colapsada .lista-paradas { display: block; }
   .coluna h3 .botao-mini, .botao-mini {
     font-size: 11px;
@@ -864,30 +876,55 @@
   .badge-confirmacao.ok { background: rgba(47,217,174,0.16); color: var(--sucesso); }
   .badge-confirmacao.recusado { background: rgba(255,92,80,0.16); color: var(--erro); }
   .badge-confirmacao.pendente { background: rgba(245,166,35,0.16); color: #F5A623; }
-  #botao-nova-rota {
-    width: 100%;
-    min-height: 40px;
-    margin-bottom: 12px;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px dashed var(--borda);
-    background: var(--fundo);
-    color: var(--texto);
-    cursor: pointer;
-    font-size: 12.5px;
+  /* Barra de ferramentas da coluna de rotas (cockpit compacto, Hugo
+     30/08): a pilha de ~10 botões de lote virou "+ Nova rota" + 3 menus
+     (Motoristas / Lote / Risco). A separação da zona de risco continua:
+     as ações destrutivas moram SÓ no menu vermelho "Risco", longe do
+     CTA "Confirmar e enviar todas" (mesmo cuidado do desenho antigo). */
+  .toolbar-rotas { display: flex; gap: 6px; margin-bottom: 10px; }
+  .toolbar-rotas > button, .toolbar-rotas .menu-toggle {
+    flex: 1 1 auto; width: 100%; min-height: 34px; font-size: 11.5px; padding: 6px 8px;
+    border-radius: 6px; border: 1px solid var(--borda); background: var(--superficie);
+    color: var(--texto); cursor: pointer; white-space: nowrap;
   }
-  /* Ações destrutivas (cancelar/descartar tudo) separadas do fluxo do
-     dia a dia -- padrão de UX de dashboards enterprise pra evitar
-     clique acidental perto de "Enviar todas"/"Alocar motoristas". */
-  .zona-risco-titulo {
-    margin: 14px 0 8px;
-    padding-top: 12px;
-    border-top: 1px dashed var(--borda);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--texto-suave);
+  .toolbar-rotas > button:hover, .toolbar-rotas .menu-toggle:hover { background: var(--fundo); }
+  #botao-nova-rota { border-style: dashed; background: var(--fundo); }
+  .menu-rotas { position: relative; flex: 1 1 auto; display: flex; }
+  .menu-rotas.aberto .menu-toggle { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .menu-rotas .menu-toggle.risco { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
+  .menu-rotas.aberto .menu-toggle.risco { border-color: var(--erro); color: var(--erro); }
+  .menu-rotas .menu-drop {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
+    min-width: 225px; background: var(--superficie); border: 1px solid var(--borda);
+    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.35); padding: 4px;
   }
+  .menu-rotas .menu-drop.menu-drop-direita { left: auto; right: 0; }
+  .menu-rotas.aberto .menu-drop { display: block; }
+  .menu-rotas .menu-drop button {
+    display: block; width: 100%; text-align: left; padding: 8px 10px; border: none;
+    background: none; border-radius: 5px; cursor: pointer; color: var(--texto); font-size: 12px;
+  }
+  .menu-rotas .menu-drop button:hover { background: var(--fundo); }
+  .menu-rotas .menu-drop button.perigo { color: var(--erro); }
+  .menu-rotas .menu-drop button.perigo:hover { background: color-mix(in srgb, var(--erro) 16%, transparent); }
+  /* Abas por status (30/08): filtram os cards por classe no container.
+     Durante a busca (.buscando) o filtro fica suspenso -- resultado de
+     busca escondido atrás de uma aba não ativa pareceria "não achou"
+     (mesmo raciocínio do colapso na busca). Os divisores de grupo
+     antigos ("Pendentes de envio"/"Enviadas") ficam redundantes com as
+     abas e somem enquanto o filtro está ativo. */
+  .abas-rotas { display: flex; gap: 2px; margin-bottom: 10px; border-bottom: 1px solid var(--borda); }
+  .abas-rotas[hidden] { display: none; }
+  .abas-rotas .aba-rotas {
+    padding: 7px 10px; font-size: 12px; color: var(--texto-suave); border: none;
+    background: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
+  }
+  .abas-rotas .aba-rotas.ativa { color: var(--acento); border-bottom-color: var(--acento); font-weight: 700; }
+  #lista-rotas.com-abas:not(.buscando) .divisor-grupo-rotas { display: none; }
+  #lista-rotas.aba-rascunhos:not(.buscando) .card-rota.enviada,
+  #lista-rotas.aba-rascunhos:not(.buscando) .card-rota.ofertada { display: none; }
+  #lista-rotas.aba-ofertadas:not(.buscando) .card-rota:not(.ofertada) { display: none; }
+  #lista-rotas.aba-enviadas:not(.buscando) .card-rota:not(.enviada) { display: none; }
   .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
   .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
   .info-parada .remetente { color: #6FA0FF; font-weight: 600; }
@@ -938,52 +975,54 @@
   .card-dia-agendado .regiao-numeros { color: var(--texto-suave); white-space: nowrap; }
   .card-dia-agendado .alerta-caixas { color: var(--erro); font-weight: 700; cursor: help; }
 
-  /* Barra de agentes (Importação, Criar Rotas Diárias Rascunho,
-     Incrementar Rotas, Gerar Romaneios + Executar tudo) -- mesmo
-     padrão visual do stepper da Torre de Controle (torre_controle.html). */
-  .barra-agentes-planejamento { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
-  .barra-agentes-planejamento .etapa {
-    flex: 1 1 200px; min-width: 180px;
+  /* Barra de agentes -- redesenho "cockpit compacto" (Hugo, 30/08): os
+     cards viraram um trilho de pílulas numa faixa única. Cada pílula
+     mantém tudo que o card tinha: bolinha de estado, título, link pro
+     log da última execução, botão ▶ e progresso (mini-barra + % + ETA)
+     quando rodando; o texto "detalhe" migrou pro title (tooltip). */
+  .barra-agentes-planejamento {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
-    padding: 10px 12px; font-size: 12px; position: relative;
+    padding: 8px 12px; margin-bottom: 16px;
   }
-  .barra-agentes-planejamento .etapa .topo { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-  .barra-agentes-planejamento .etapa .titulo { font-weight: 700; font-size: 12.5px; }
-  .barra-agentes-planejamento .etapa .detalhe { color: var(--texto-suave); font-size: 11px; }
-  .barra-agentes-planejamento .etapa .quando { color: var(--texto-suave); font-size: 11px; margin-top: 5px; }
+  .barra-agentes-planejamento .etapa {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 100px;
+    padding: 5px 11px; font-size: 11.5px; white-space: nowrap;
+  }
+  .barra-agentes-planejamento .etapa .titulo { font-weight: 700; font-size: 11.5px; }
+  .barra-agentes-planejamento .etapa .quando { color: var(--texto-suave); font-size: 11px; }
   .barra-agentes-planejamento .etapa .quando a { color: var(--texto-suave); }
-  .barra-agentes-planejamento .etapa .estado { width: 9px; height: 9px; border-radius: 100px; background: var(--borda); flex: none; }
-  .barra-agentes-planejamento .etapa.sucesso .estado { background: var(--sucesso); box-shadow: 0 0 8px 1px color-mix(in srgb, var(--sucesso) 70%, transparent); }
+  .barra-agentes-planejamento .etapa .estado { width: 8px; height: 8px; border-radius: 100px; background: var(--borda); flex: none; }
+  .barra-agentes-planejamento .etapa.sucesso .estado { background: var(--sucesso); box-shadow: 0 0 6px 1px color-mix(in srgb, var(--sucesso) 70%, transparent); }
   .barra-agentes-planejamento .etapa.erro .estado { background: var(--erro); }
   .barra-agentes-planejamento .etapa.erro { border-color: color-mix(in srgb, var(--erro) 45%, var(--borda)); }
-  .barra-agentes-planejamento .etapa.rodando .estado { background: var(--rodando); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--rodando) 70%, transparent); animation: pulso-agente 1.2s ease-in-out infinite; }
+  .barra-agentes-planejamento .etapa.rodando .estado { background: var(--rodando); box-shadow: 0 0 8px 2px color-mix(in srgb, var(--rodando) 70%, transparent); animation: pulso-agente 1.2s ease-in-out infinite; }
+  .barra-agentes-planejamento .etapa.rodando { border-color: color-mix(in srgb, var(--rodando) 45%, var(--borda)); }
   .barra-agentes-planejamento .etapa.na-fila .estado { background: var(--acento); }
   .barra-agentes-planejamento .etapa.na-fila { border-color: color-mix(in srgb, var(--acento) 40%, var(--borda)); }
-  .barra-agentes-planejamento .etapa .na-fila-texto { color: var(--acento); font-size: 10.5px; margin-top: 5px; font-weight: 600; }
+  .barra-agentes-planejamento .etapa .na-fila-texto { color: var(--acento); font-size: 10.5px; font-weight: 600; }
   @keyframes pulso-agente { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .barra-agentes-planejamento .etapa .progresso-texto { color: var(--texto-suave); font-size: 10.5px; margin-top: 5px; }
-  .barra-agentes-planejamento .etapa .progresso-trilha { height: 5px; border-radius: 100px; background: var(--borda); overflow: hidden; margin-top: 3px; }
+  .barra-agentes-planejamento .etapa .progresso-texto { color: var(--texto-suave); font-size: 10.5px; }
+  .barra-agentes-planejamento .etapa .progresso-trilha { width: 46px; height: 4px; border-radius: 100px; background: var(--borda); overflow: hidden; flex: none; }
   .barra-agentes-planejamento .etapa .progresso-preenchimento {
-    height: 100%; border-radius: 100px; background: var(--rodando); width: 0%; transition: width 0.6s ease;
+    display: block; height: 100%; border-radius: 100px; background: var(--rodando); width: 0%; transition: width 0.6s ease;
   }
   .barra-agentes-planejamento .etapa .progresso-preenchimento.indeterminado {
     width: 30% !important; animation: progresso-indeterminado-planejamento 1.4s ease-in-out infinite;
   }
   @keyframes progresso-indeterminado-planejamento { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
   .barra-agentes-planejamento .etapa button.rodar {
-    position: absolute; top: 8px; right: 8px;
-    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
-    font-size: 11px; padding: 3px 8px; cursor: pointer; color: var(--texto);
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px;
+    font-size: 10px; line-height: 1; padding: 3px 7px; cursor: pointer; color: var(--texto);
   }
   .barra-agentes-planejamento .etapa button.rodar:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
   .barra-agentes-planejamento .etapa button.rodar:disabled { opacity: 0.4; cursor: not-allowed; }
-  .barra-agentes-planejamento .etapa-tudo {
-    flex: 0 0 160px; display: flex; flex-direction: column; justify-content: center; padding: 10px 12px;
-  }
+  .barra-agentes-planejamento .etapa-tudo { margin-left: auto; }
   .barra-agentes-planejamento .etapa-tudo button {
     background: var(--acento); color: #06170F; border: none; border-radius: 7px;
-    min-height: 38px;
-    padding: 8px 14px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+    min-height: 32px;
+    padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
   }
   .barra-agentes-planejamento .etapa-tudo button:hover:not(:disabled) { background: #26C49A; }
   .barra-agentes-planejamento .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1239,7 +1278,7 @@
   {% if dados %}
   {% set total_alocados = dados.rascunhos | map(attribute='paradas') | map('length') | sum %}
   {# sem name= de propósito: o seletor não pode ir junto no GET do Buscar #}
-  <label class="toggle-compacto" style="margin-left:auto" title="Tamanho dos cards de pedido: compactos = 1 linha (número + código + badges); só número = chips numerados, vários por linha. Nos dois, as informações completas aparecem ao passar o mouse por cima.">
+  <label class="toggle-compacto" title="Tamanho dos cards de pedido: compactos = 1 linha (número + código + badges); só número = chips numerados, vários por linha. Nos dois, as informações completas aparecem ao passar o mouse por cima.">
     Cards:
     <select id="densidade-cards">
       <option value="normal">normais</option>
@@ -1247,23 +1286,19 @@
       <option value="numeros">só número</option>
     </select>
   </label>
-  {# Tira de KPI: substitui a linha de status em texto corrido -- números
-     grandes e escaneáveis reduzem carga cognitiva "acima da dobra"
-     (pesquisa de UX de dashboards, Hugo 15/08). Mesmos IDs de antes
-     (contagem-alocados/contagem-total-pedidos), só realocados aqui --
-     o JS que os atualiza continua igual. #}
-  <div class="kpis-planejamento" style="flex:1 1 100%;">
-    <div class="kpi-planejamento"><div class="kpi-rotulo">Rascunhos</div><div class="kpi-valor">{{ dados.rascunhos|length }}</div></div>
-    <div class="kpi-planejamento"><div class="kpi-rotulo">Alocados</div><div class="kpi-valor" id="contagem-alocados">{{ total_alocados }}</div></div>
-    <div class="kpi-planejamento"><div class="kpi-rotulo">No pool</div><div class="kpi-valor">{{ dados.pool|length }}</div></div>
-    <div class="kpi-planejamento"><div class="kpi-rotulo">Total</div><div class="kpi-valor" id="contagem-total-pedidos">{{ total_alocados + dados.pool|length }}</div></div>
+  {# KPIs em chips na própria barra (cockpit compacto, Hugo 30/08) --
+     mesmos IDs de antes (contagem-alocados/contagem-total-pedidos), o
+     JS que os atualiza continua igual. #}
+  <div class="chips-kpi">
+    <span class="chip-kpi"><span class="kpi-valor">{{ dados.rascunhos|length }}</span><span class="kpi-rotulo">Rascunhos</span></span>
+    <span class="chip-kpi"><span class="kpi-valor" id="contagem-alocados">{{ total_alocados }}</span><span class="kpi-rotulo">Alocados</span></span>
+    <span class="chip-kpi{% if dados.pool|length %} alerta{% endif %}"><span class="kpi-valor">{{ dados.pool|length }}</span><span class="kpi-rotulo">No pool</span></span>
+    <span class="chip-kpi"><span class="kpi-valor" id="contagem-total-pedidos">{{ total_alocados + dados.pool|length }}</span><span class="kpi-rotulo">Total</span></span>
     {% if dados.resumo_agendados %}
-    <div class="kpi-planejamento"><div class="kpi-rotulo">Agendados</div><div class="kpi-valor">{{ dados.resumo_agendados | sum(attribute='total_pedidos') }}</div></div>
+    <span class="chip-kpi"><span class="kpi-valor">{{ dados.resumo_agendados | sum(attribute='total_pedidos') }}</span><span class="kpi-rotulo">Agendados</span></span>
     {% endif %}
     {% if dados.resumo_ofertas.total %}
-    <div class="kpi-planejamento" title="Rotas publicadas no marketplace de escolha aberta, aguardando um motorista escolher">
-      <div class="kpi-rotulo">Publicadas</div><div class="kpi-valor">{{ dados.resumo_ofertas.total }}</div>
-    </div>
+    <span class="chip-kpi" title="Rotas publicadas no marketplace de escolha aberta, aguardando um motorista escolher"><span class="kpi-valor">{{ dados.resumo_ofertas.total }}</span><span class="kpi-rotulo">Publicadas</span></span>
     {% endif %}
   </div>
   {% if dados.resumo_ofertas.total %}
@@ -1290,6 +1325,21 @@
   <div class="acoes">
     <button type="button" class="botao" onclick="rodarImportacaoComFiltro()">Rodar importação</button>
     <button type="button" onclick="fecharPainelImportacao()">Cancelar</button>
+  </div>
+</div>
+
+{# Mesmo padrão do painel de filtro da Importação (reusa o CSS) --
+   pedido do Hugo, 30/08: rodar a Expedição direto do planejamento
+   escolhendo os pedidos. Vazio = rodada completa (igual ao timer). #}
+<div class="painel-importacao-filtro" id="painel-expedicao-selecao">
+  <strong>Expedição</strong>
+  <label style="flex:1 1 260px;">Pedidos (vazio = todos os pendentes)
+    <input type="text" id="selecao-expedicao-pedidos" placeholder="PS-34345, PS-34346"
+           title="Códigos separados por vírgula ou espaço. Só esses são expedidos, pelo fluxo normal (com canhoto); em branco roda a expedição completa.">
+  </label>
+  <div class="acoes">
+    <button type="button" class="botao" onclick="rodarExpedicaoComSelecao()">Rodar expedição</button>
+    <button type="button" onclick="fecharPainelExpedicao()">Cancelar</button>
   </div>
 </div>
 
@@ -1526,34 +1576,37 @@
         : "nunca rodou";
       const aoClicar = e.agente_id === "somente_importacao"
         ? "abrirPainelImportacao()"
+        : e.agente_id === "somente_expedicao"
+        ? "abrirPainelExpedicao()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
       const desabilitado = e.rodando || e.na_fila;
-      const textoBotao = e.rodando ? "rodando…" : (e.na_fila ? "na fila…" : "▶ rodar");
-      const botaoRodar = PODE_EDITAR_AGENTES
-        ? `<button class="rodar" onclick="${aoClicar}" ${desabilitado ? "disabled" : ""}>${textoBotao}</button>`
+      // Pílula (cockpit compacto, 30/08): sem botão enquanto roda/na fila
+      // -- o estado já diz isso e o botão desabilitado só ocupava largura.
+      const botaoRodar = (PODE_EDITAR_AGENTES && !desabilitado)
+        ? `<button class="rodar" onclick="${aoClicar}" title="rodar agora (modo real)">▶ rodar</button>`
         : "";
 
       let progresso = "";
       if (e.rodando) {
         const eta = formatarEtaPlanejamento(e.eta_segundos);
         const texto = e.percentual === null || e.percentual === undefined
-          ? "calculando previsão…"
-          : (eta ? `${e.percentual}% · ${eta} restante(s)` : `${e.percentual}%`);
+          ? "calculando…"
+          : (eta ? `${e.percentual}% · ${eta}` : `${e.percentual}%`);
         const larguraEstilo = e.percentual === null || e.percentual === undefined ? "" : `style="width:${e.percentual}%"`;
         const classeIndeterminada = e.percentual === null || e.percentual === undefined ? "indeterminado" : "";
         progresso = `
-        <div class="progresso-trilha"><div class="progresso-preenchimento ${classeIndeterminada}" ${larguraEstilo}></div></div>
-        <div class="progresso-texto">${texto}</div>`;
+        <span class="progresso-trilha"><span class="progresso-preenchimento ${classeIndeterminada}" ${larguraEstilo}></span></span>
+        <span class="progresso-texto">${texto}</span>`;
       } else if (e.na_fila) {
-        progresso = `<div class="na-fila-texto">na fila -- aguardando a etapa anterior</div>`;
+        progresso = `<span class="na-fila-texto">na fila</span>`;
       }
 
-      return `<div class="etapa ${classe}" title="${escaparHtmlAgentes(tituloEstado)}">
-        ${botaoRodar}
-        <div class="topo"><span class="estado"></span><span class="titulo">${escaparHtmlAgentes(e.titulo)}</span></div>
-        <div class="detalhe">${escaparHtmlAgentes(e.detalhe)}</div>
+      // o "detalhe" do card antigo vive no tooltip da pílula
+      return `<div class="etapa ${classe}" title="${escaparHtmlAgentes(e.detalhe)} — ${escaparHtmlAgentes(tituloEstado)}">
+        <span class="estado"></span><span class="titulo">${escaparHtmlAgentes(e.titulo)}</span>
         ${progresso}
-        <div class="quando">${quando}</div>
+        <span class="quando">${quando}</span>
+        ${botaoRodar}
       </div>`;
     }).join("");
 
@@ -1604,6 +1657,30 @@
     fecharPainelImportacao();
     try {
       await iniciarExecucaoAgentePlanejamento("somente_importacao", { pedido, embarcador });
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  // Expedição com seleção de pedidos (Hugo, 30/08) -- mesmo padrão do
+  // painel da Importação. Vazio roda a expedição completa (igual ao
+  // clique antigo direto no card, que virou este painel).
+  function abrirPainelExpedicao() {
+    document.getElementById("painel-expedicao-selecao").classList.add("aberto");
+  }
+  function fecharPainelExpedicao() {
+    document.getElementById("painel-expedicao-selecao").classList.remove("aberto");
+    document.getElementById("selecao-expedicao-pedidos").value = "";
+  }
+  async function rodarExpedicaoComSelecao() {
+    const pedidos = document.getElementById("selecao-expedicao-pedidos").value.trim();
+    const pergunta = pedidos
+      ? `Expedir na Stokki SÓ os pedidos informados (${pedidos})?`
+      : "Rodar a Expedição completa agora (todos os entregues pendentes)?";
+    if (!confirm(pergunta)) return;
+    fecharPainelExpedicao();
+    try {
+      await iniciarExecucaoAgentePlanejamento("somente_expedicao", { pedidos });
     } catch (e) {
       alert(`Falha ao iniciar: ${e.message}`);
     }
@@ -1717,22 +1794,45 @@
         <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="rotas" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
       </span>
     </h3>
-    <button id="botao-nova-rota" type="button">+ Nova rota</button>
-    <button id="botao-disponibilidade-motoristas" type="button" class="botao" style="width:100%;margin-bottom:8px;" title="Marca quem está disponível pra rota nesse dia (folga, férias, atestado) -- Alocar motoristas sempre respeita essa seleção.">Disponibilidade de motoristas</button>
-    <div style="display:flex;gap:8px;margin-bottom:12px;">
-      <button id="botao-alocar-motoristas" type="button" class="botao" style="flex:1;" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
-      <button id="botao-desalocar-motoristas" type="button" class="botao perigo" style="flex:1;" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
+    {# Cockpit compacto (Hugo, 30/08): a pilha de botões de lote virou
+       "+ Nova rota" + 3 menus; só o CTA "Confirmar e enviar todas"
+       continua sempre à vista. Os botões são os MESMOS elementos/IDs de
+       antes (nenhum handler do JS mudou), só realocados pros menus. #}
+    <div class="toolbar-rotas">
+      <button id="botao-nova-rota" type="button">+ Nova rota</button>
+      <div class="menu-rotas" id="menu-motoristas">
+        <button type="button" class="menu-toggle">Motoristas ▾</button>
+        <div class="menu-drop">
+          <button id="botao-disponibilidade-motoristas" type="button" title="Marca quem está disponível pra rota nesse dia (folga, férias, atestado) -- Alocar motoristas sempre respeita essa seleção.">Disponibilidade de motoristas</button>
+          <button id="botao-alocar-motoristas" type="button" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
+          <button id="botao-desalocar-motoristas" type="button" class="perigo" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
+        </div>
+      </div>
+      <div class="menu-rotas" id="menu-lote">
+        <button type="button" class="menu-toggle">Lote ▾</button>
+        <div class="menu-drop menu-drop-direita">
+          <button id="botao-publicar-ofertas-lote" type="button" title="Publica de uma vez, pro marketplace de escolha aberta, toda rota ainda sem motorista -- avisa (Chatwoot/e-mail/texto) cada motorista elegível uma única vez, mesmo se ele for elegível pra mais de uma rota publicada agora">Publicar pendentes para motoristas</button>
+          <button id="botao-despublicar-ofertas-lote" type="button" class="perigo" title="Cancela de uma vez a publicação de toda rota ainda OFERTADA (aguardando escolha) -- não mexe em rota que já foi escolhida por algum motorista">Cancelar publicações</button>
+          <button id="botao-salvar-todas" type="button" title="Baixa o romaneio em PDF de cada rota, um arquivo por vez -- pra mandar pelo WhatsApp">Salvar rotas em PDF</button>
+          <button id="botao-imprimir-todas" type="button" title="Abre o romaneio de cada rota numa aba nova, pra imprimir">Imprimir todas as rotas</button>
+        </div>
+      </div>
+      <div class="menu-rotas" id="menu-risco">
+        <button type="button" class="menu-toggle risco" title="Zona de risco: ações destrutivas em lote">Risco ▾</button>
+        <div class="menu-drop menu-drop-direita">
+          <button id="botao-cancelar-todas" type="button" class="perigo" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- elas voltam a ser rascunhos editáveis, prontos pra ajustar e reenviar">Cancelar todas as rotas</button>
+          <button id="botao-descartar-todas" type="button" class="perigo" title="Descarta todos os rascunhos ainda não enviados -- os pedidos deles voltam pro pool. Rotas já enviadas não são afetadas (use Cancelar todas as rotas pra essas).">Descartar todos os rascunhos</button>
+        </div>
+      </div>
     </div>
-    <button id="botao-publicar-ofertas-lote" type="button" class="botao" style="width:100%;margin-bottom:12px;" title="Publica de uma vez, pro marketplace de escolha aberta, toda rota ainda sem motorista -- avisa (Chatwoot/e-mail/texto) cada motorista elegível uma única vez, mesmo se ele for elegível pra mais de uma rota publicada agora">Publicar pendentes para motoristas</button>
-    <button id="botao-despublicar-ofertas-lote" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela de uma vez a publicação de toda rota ainda OFERTADA (aguardando escolha) -- não mexe em rota que já foi escolhida por algum motorista">Cancelar publicações</button>
-    <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:12px;">Confirmar e enviar todas</button>
-    <div style="display:flex;gap:8px;margin-bottom:12px;">
-      <button id="botao-salvar-todas" type="button" class="botao" style="flex:1;" title="Baixa o romaneio em PDF de cada rota, um arquivo por vez -- pra mandar pelo WhatsApp">Salvar rotas em PDF</button>
-      <button id="botao-imprimir-todas" type="button" class="botao" style="flex:1;" title="Abre o romaneio de cada rota numa aba nova, pra imprimir">Imprimir todas as rotas</button>
+    <button id="botao-enviar-todas" type="button" class="botao" style="width:100%;margin-bottom:10px;">Confirmar e enviar todas</button>
+    {# Abas por status (30/08): contagens e comportamento preenchidos no
+       JS (initMap) a partir de RASCUNHOS; escondidas sem rascunho. #}
+    <div class="abas-rotas" id="abas-rotas" hidden>
+      <button type="button" class="aba-rotas" data-aba="rascunhos">Rascunhos</button>
+      <button type="button" class="aba-rotas" data-aba="ofertadas">Ofertadas</button>
+      <button type="button" class="aba-rotas" data-aba="enviadas">Enviadas</button>
     </div>
-    <div class="zona-risco-titulo">Zona de risco</div>
-    <button id="botao-cancelar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Cancela na VUUPT toda rota já enviada que ainda não iniciou deslocamento -- elas voltam a ser rascunhos editáveis, prontos pra ajustar e reenviar">Cancelar todas as rotas</button>
-    <button id="botao-descartar-todas" type="button" class="botao perigo" style="width:100%;margin-bottom:12px;" title="Descarta todos os rascunhos ainda não enviados -- os pedidos deles voltam pro pool. Rotas já enviadas não são afetadas (use Cancelar todas as rotas pra essas).">Descartar todos os rascunhos</button>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, NF, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
       Reordenar:
@@ -2151,10 +2251,15 @@
         + (srNomes ? ` (${escaparHtml(srNomes)})` : "");
       return `<div class="status-envio ok" title="Atualizado em ${escaparHtml(rascunho.lalamove_atualizado_em || "")}">Lalamove #${escaparHtml(rascunho.lalamove_order_id)} — ${escaparHtml(rascunho.lalamove_status || "?")}${veic}${preco}${link}</div>`;
     }
-    if (rascunho.lalamove_erro) {
-      return `<div class="status-envio erro">Lalamove: ${escaparHtml(rascunho.lalamove_erro)}</div>`;
+    const erro = rascunho.lalamove_erro
+      ? `<div class="status-envio erro">Lalamove: ${escaparHtml(rascunho.lalamove_erro)}</div>` : "";
+    // Rota enviada à VUUPT mas ainda sem corrida: o lançamento é um
+    // botão separado do "Confirmar e enviar" (Hugo, 30/08) -- a corrida
+    // (paga) só é criada ao clicar aqui, com o veículo/opcionais do card.
+    if (rotaEhLalamove(rascunho) && PODE_EDITAR) {
+      return `${erro}<button type="button" class="botao-lancar-lalamove" data-rascunho-id="${rascunho.id}" title="Cota e cria a corrida REAL na Lalamove com o veículo e opcionais escolhidos no card">Lançar na Lalamove</button>`;
     }
-    return "";
+    return erro;
   }
 
   function confirmacaoMotoristaHtml(rascunho) {
@@ -2201,7 +2306,9 @@
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
       <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(bloqueada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
-      ${lalamoveBoxHtml(rascunho, !(bloqueada || !PODE_EDITAR))}
+      ${/* veículo/opcionais editáveis até a corrida existir: o lançamento
+           agora é um botão separado do envio (Hugo, 30/08) */""}
+      ${lalamoveBoxHtml(rascunho, PODE_EDITAR && !ofertada && !(enviada && rascunho.lalamove_order_id))}
       <ul class="lista-paradas" id="lista-parada-${rascunho.id}" data-list-id="${rascunho.id}"></ul>
       <div class="acoes">
         ${(bloqueada || !PODE_EDITAR) ? "" : `
@@ -3932,6 +4039,25 @@
     }
   }
 
+  async function lancarLalamove(rascunhoId, botao) {
+    // Botão "Lançar na Lalamove" (Hugo, 30/08): separado do "Confirmar e
+    // enviar" -- a rota já foi criada na VUUPT, aqui só cota e cria a
+    // corrida (paga) com o veículo/opcionais escolhidos no card.
+    const r = RASCUNHOS.find(x => x.id === rascunhoId) || {};
+    const veic = nomeVeiculoLalamove(r.lalamove_veiculo || LALAMOVE.veiculo_padrao) || "veículo padrão";
+    if (!confirm(`Lançar "${r.nome || `rota ${rascunhoId}`}" na Lalamove com ${veic}? Isso cota e cria uma corrida REAL (cobrada).`)) return;
+    if (botao) { botao.disabled = true; botao.textContent = "Lançando..."; }
+    try {
+      const resp = await postJSON("/api/planejamento/lalamove-lancar", { rascunho_id: rascunhoId });
+      const res = resp.resultado || {};
+      alert(`Corrida criada na Lalamove: #${res.order_id || "?"}${res.preco ? ` · R$ ${res.preco}` : ""}${res.ja_existia ? " (já existia)" : ""}`);
+    } catch (e) {
+      alert(`Falha ao lançar na Lalamove: ${e.message}`);
+    }
+    // recarrega pra refletir status/erro gravados no card (mesmo padrão do envio)
+    location.reload();
+  }
+
   async function cancelarRota(rascunhoIds, botaoOrigem) {
     if (!rascunhoIds.length) { alert("Nenhuma rota enviada pra cancelar."); return; }
     const confirmMsg = rascunhoIds.length === 1
@@ -4456,7 +4582,9 @@
       // leitura: some tudo que dispara ação no servidor -- Sortable,
       // select de motorista e botões de card já são tratados nos
       // próprios pontos de criação; aqui só os controles fixos da tela.
-      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-despublicar-ofertas-lote", "botao-enviar-todas", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
+      // menu-motoristas e menu-risco somem inteiros (só têm ações de
+      // escrita); menu-lote fica -- Salvar PDF/Imprimir são leitura.
+      ["botao-nova-rota", "menu-motoristas", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-despublicar-ofertas-lote", "botao-enviar-todas", "menu-risco", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -4627,6 +4755,54 @@
       cards.forEach(c => definirColapso(c, colapsar));
     });
 
+    // Menus da barra de rotas (Motoristas / Lote / Risco) -- cockpit
+    // compacto, 30/08. Abre um por vez; fecha em clique fora, Esc ou ao
+    // clicar num item (a ação segue pelo handler normal do botão).
+    const fecharMenusRotas = () => document.querySelectorAll(".menu-rotas.aberto").forEach(m => m.classList.remove("aberto"));
+    document.querySelectorAll(".menu-rotas .menu-toggle").forEach(toggle => {
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const wrap = toggle.closest(".menu-rotas");
+        const jaAberto = wrap.classList.contains("aberto");
+        fecharMenusRotas();
+        if (!jaAberto) wrap.classList.add("aberto");
+      });
+    });
+    document.addEventListener("click", (e) => { if (!e.target.closest(".menu-rotas")) fecharMenusRotas(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharMenusRotas(); });
+    document.querySelectorAll(".menu-rotas .menu-drop").forEach(drop => drop.addEventListener("click", fecharMenusRotas));
+
+    // Abas por status (30/08): filtram os cards via classe no container
+    // (CSS faz o resto; busca ativa suspende o filtro). As contagens são
+    // estáveis até o próximo reload -- toda mudança de status (publicar,
+    // enviar, cancelar rota...) já recarrega a página inteira.
+    const contagensAbas = {
+      rascunhos: RASCUNHOS.filter(r => r.status !== "ENVIADO" && r.status !== "OFERTADA").length,
+      ofertadas: RASCUNHOS.filter(r => r.status === "OFERTADA").length,
+      enviadas: RASCUNHOS.filter(r => r.status === "ENVIADO").length,
+    };
+    const barraAbas = document.getElementById("abas-rotas");
+    if (RASCUNHOS.length) {
+      barraAbas.hidden = false;
+      listaRotas.classList.add("com-abas");
+      const aplicarAba = (aba) => {
+        listaRotas.classList.remove("aba-rascunhos", "aba-ofertadas", "aba-enviadas");
+        listaRotas.classList.add("aba-" + aba);
+        barraAbas.querySelectorAll(".aba-rotas").forEach(b => b.classList.toggle("ativa", b.dataset.aba === aba));
+        localStorage.setItem("planejamento.abaRotas", aba);
+      };
+      barraAbas.querySelectorAll(".aba-rotas").forEach(b => {
+        b.textContent = `${b.textContent.trim()} (${contagensAbas[b.dataset.aba]})`;
+        b.addEventListener("click", () => aplicarAba(b.dataset.aba));
+      });
+      // aba lembrada; se ela está vazia hoje, cai na primeira com rota
+      let abaAtiva = localStorage.getItem("planejamento.abaRotas");
+      if (!(abaAtiva in contagensAbas) || !contagensAbas[abaAtiva]) {
+        abaAtiva = ["rascunhos", "ofertadas", "enviadas"].find(a => contagensAbas[a]) || "rascunhos";
+      }
+      aplicarAba(abaAtiva);
+    }
+
     // arrastar um pedido por cima de um card colapsado expande ele na
     // hora (senão a lista escondida não teria onde receber o drop) --
     // "dragover" cobre o drag nativo do SortableJS no desktop e
@@ -4686,6 +4862,8 @@
         duplicarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-cancelar-rota")) {
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-lancar-lalamove")) {
+        lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-publicar-oferta")) {
         publicarOferta(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-despublicar-oferta")) {
