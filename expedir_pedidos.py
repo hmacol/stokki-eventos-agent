@@ -925,6 +925,24 @@ def anexar_canhoto(page, codigo_ps: str, pdf_path: Path) -> bool:
 
 # ── Orquestrador ───────────────────────────────────────────────────────────────
 
+def _buscar_retiradas_em_aberto(config: dict, token: str, codigos_alvo: set[str]) -> list[dict]:
+    """Serviços de retirada no galpão ([RETIRADA], agente fixo, status
+    aberto) cujo código base está em codigos_alvo -- usado só pelo modo
+    selecionado (--pedido). Falha aqui não derruba a rodada: devolve []
+    e os códigos ficam no aviso de "fora desta rodada"."""
+    try:
+        from retiradas.regras_retirada import STATUSES_ABERTOS, config_retiradas, eh_servico_retirada
+        cfg = config_retiradas(config)
+        if not cfg["ativo"]:
+            return []
+        vuupt = VuuptClient(token)
+        return [s for s in vuupt.listar_servicos_do_agente(cfg["agent_id"], STATUSES_ABERTOS)
+                if eh_servico_retirada(s) and _bases_do_code(s.get("code")) & codigos_alvo]
+    except Exception as e:
+        logger.warning(f"Falha ao buscar retiradas no galpao ({e}) -- seguindo so com os entregues.")
+        return []
+
+
 def _bases_do_code(code: str) -> set[str]:
     """Códigos BASE ('PS-36327') contidos num 'code' da VUUPT -- que
     pode vir com '#', sufixo de reentrega ('PS-36327-R1', ou empilhado
@@ -986,9 +1004,28 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         validados = [s for s in servicos if _bases_do_code(s.get("code")) & codigos_alvo]
         encontrados = {b for s in validados for b in _bases_do_code(s.get("code"))} & codigos_alvo
         faltando = codigos_alvo - encontrados
+
+        # Código selecionado que não é entregue pode ser uma RETIRADA NO
+        # GALPÃO em aberto (Hugo, 31/08: selecionar os "A retirar" do
+        # planejamento pra expedir também) -- expedir na Stokki é
+        # justamente o gatilho que retiradas/acompanhar_retiradas.py
+        # espera pra fechar o serviço na VUUPT (Stokki 'Enviado' ->
+        # check-out no proximo ciclo do timer). Retirada não tem
+        # motorista/checklist: expede sem anexo e sem entrar no e-mail
+        # de "expedidos sem comprovante" (marcador _retirada, ver loop).
+        if faltando:
+            retiradas = _buscar_retiradas_em_aberto(config, vuupt_token, faltando)
+            for s in retiradas:
+                s["_retirada"] = True
+            validados += retiradas
+            achadas = {b for s in retiradas for b in _bases_do_code(s.get("code"))} & faltando
+            if achadas:
+                logger.info(f"{len(achadas)} retirada(s) no galpao entre os selecionados: {sorted(achadas)}")
+            faltando -= achadas
         if faltando:
             logger.warning(f"{len(faltando)} pedido(s) selecionado(s) NAO estao entre os entregues "
-                           f"das ultimas {horas_entregues}h na VUUPT -- fora desta rodada: {sorted(faltando)}")
+                           f"das ultimas {horas_entregues}h na VUUPT nem entre as retiradas em aberto "
+                           f"-- fora desta rodada: {sorted(faltando)}")
         falhas_persistentes = {}
         if not validados:
             logger.info("Nenhum dos pedidos selecionados esta elegivel. Nada a expedir.")
@@ -1149,7 +1186,8 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         logger.info(f"[MODO TESTE] Seriam expedidos ({len(validados)}):")
         for s in validados:
             cl = _extrair_checklist(s)
-            situacao = ("validado" if canhoto_validado(s)
+            situacao = ("RETIRADA no galpao" if s.get("_retirada")
+                        else "validado" if canhoto_validado(s)
                         else "sem validar" if tem_canhoto(s) else "SEM FOTO")
             logger.info(
                 f"  {s.get('code')} | vuupt_id={s.get('id')} | "
@@ -1212,6 +1250,17 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         res["falha_anexo"] += 1
                         n = fingerprint_expedicao.registrar_falha(codigo_ps, "falha_anexo_canhoto", servico.get("id"))
                         logger.warning(f"  {codigo_ps}: falha ao anexar canhoto ({n}/{MAX_TENTATIVAS_FALHA}).")
+                elif servico.get("_retirada"):
+                    # Retirada no galpão expedida via seleção manual
+                    # (--pedido): não tem motorista/canhoto por natureza,
+                    # então NÃO entra no e-mail de "sem comprovante" nem
+                    # conta em sem_pdf. Quem fecha o serviço na VUUPT é o
+                    # acompanhar_retiradas.py, ao ver 'Enviado' na Stokki.
+                    fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
+                    fingerprint_expedicao.limpar_falha(codigo_ps)
+                    verbo = "expedida" if resultado_exp == "expedido" else "ja constava como Enviado"
+                    logger.info(f"  {codigo_ps}: retirada no galpao {verbo} -- o acompanhar_retiradas "
+                                f"fecha o servico na VUUPT no proximo ciclo.")
                 elif resultado_exp == "expedido":
                     # Expedido SEM comprovante (sem foto no VUUPT, ou PDF
                     # indisponível): a expedição está feita, não volta
@@ -1271,7 +1320,8 @@ if __name__ == "__main__":
                         help="Expede forcadamente os codigos informados, sem verificar VUUPT")
     parser.add_argument("--pedido", nargs="+", metavar="PS-XXXXX",
                         help="Expede SO os codigos informados, mas pelo fluxo normal (verifica "
-                             "entrega na VUUPT e anexa canhoto); ignora fingerprint/falha "
+                             "entrega na VUUPT e anexa canhoto); aceita tambem retiradas no "
+                             "galpao em aberto (expede sem canhoto); ignora fingerprint/falha "
                              "persistente e nao roda a parte de insucessos")
     args = parser.parse_args()
     main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,

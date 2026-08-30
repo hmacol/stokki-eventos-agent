@@ -1806,9 +1806,11 @@
     </div>
     <!-- 4º bloco, "A retirar no galpão" (Hugo, 28/08): FORA do #lista-pool de
          propósito -- são serviços avulsos "[RETIRADA] ..." já atribuídos ao
-         agente fixo de retiradas (nunca not_assigned), só leitura: sem
-         drag, sem seleção, sem número no mapa. Quem fecha/cancela é
-         retiradas/acompanhar_retiradas.py conforme a Stokki. -->
+         agente fixo de retiradas (nunca not_assigned): sem drag, sem número
+         no mapa, fora da seleção do pool. Desde 31/08 tem seleção PRÓPRIA
+         (checkbox + "Expedir marcadas") só pra expedir na Stokki quando a
+         pessoa vem buscar; quem fecha/cancela o serviço na VUUPT continua
+         sendo retiradas/acompanhar_retiradas.py conforme a Stokki. -->
     <div class="secao-pool secao-pool-retirada" data-secao="retirada" id="secao-pool-retirada">
       <div class="cabecalho-secao-pool" title="Pedidos com transportadora RETIRADA (cliente retira / terceira coleta no galpão). Nunca entram em rota: ficam como serviço avulso na VUUPT, atribuídos ao agente de retiradas, e são fechados sozinhos quando a Stokki marca 'Enviado' (ou cancelados quando a Stokki cancela).">
         <span class="seta-secao">▾</span>
@@ -3062,18 +3064,42 @@
     }
   }
 
+  // Retiradas marcadas pra expedir (Hugo, 31/08) -- códigos (com #)
+  // escolhidos via checkbox nos cards "A retirar no galpão"; o botão
+  // "Expedir marcadas" do cabeçalho dispara o agente Expedição com
+  // --pedido só pra eles (expedir_pedidos.py sabe achar retirada em
+  // aberto além de entregue). Sobrevive ao redesenho da lista
+  // (Atualizar): só perde marcação de retirada que saiu da lista.
+  const RETIRADAS_MARCADAS = new Set();
+
+  function atualizarBotaoExpedirRetiradas() {
+    const botao = document.getElementById("botao-expedir-retiradas");
+    if (!botao) return;
+    botao.hidden = RETIRADAS_MARCADAS.size === 0;
+    botao.textContent = `Expedir marcadas (${RETIRADAS_MARCADAS.size})`;
+  }
+
   function renderizarRetiradas(lista) {
-    // Bloco "A retirar no galpão" (Hugo, 28/08) -- só leitura, redesenha
-    // inteiro a cada carga/Atualizar (não participa de POOL_BY_ID,
-    // seleção, drag nem mapa: são serviços avulsos que nunca vão pra rota).
+    // Bloco "A retirar no galpão" (Hugo, 28/08) -- redesenha inteiro a
+    // cada carga/Atualizar (não participa de POOL_BY_ID, drag nem mapa:
+    // são serviços avulsos que nunca vão pra rota). Desde 31/08 tem
+    // seleção própria (RETIRADAS_MARCADAS, fora do SELECIONADOS do pool)
+    // só pra expedir na Stokki.
     const ul = document.getElementById("lista-pool-retirada");
     const contagem = document.getElementById("contagem-secao-retirada");
     if (!ul) return;
     ul.innerHTML = "";
+    const codigosAtuais = new Set((lista || []).map(p => p.codigo));
+    [...RETIRADAS_MARCADAS].forEach(c => { if (!codigosAtuais.has(c)) RETIRADAS_MARCADAS.delete(c); });
     (lista || []).forEach(p => {
       const li = document.createElement("li");
-      li.className = "item-retirada";
+      const marcada = RETIRADAS_MARCADAS.has(p.codigo);
+      li.className = "item-retirada" + (marcada ? " marcada-expedir" : "");
       li.dataset.serviceId = p.service_id;
+      const check = PODE_EDITAR_AGENTES
+        ? `<label class="check-retirada" title="Marcar pra expedir na Stokki (a pessoa veio buscar)">
+             <input type="checkbox" data-codigo="${escaparHtml(p.codigo)}" ${marcada ? "checked" : ""}></label>`
+        : "";
       const nf = p.numero_nf ? ` <span class="nf">NF ${escaparHtml(p.numero_nf)}</span>` : "";
       const destinatario = p.destinatario_nome ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>` : "";
       const transportadora = p.transportadora ? `<br><span class="transportadora">retira: ${escaparHtml(p.transportadora)}</span>` : "";
@@ -3086,12 +3112,52 @@
       if (p.criado_em) datas.push(`Criado: ${escaparHtml(p.criado_em)}`);
       if (p.data_prevista) datas.push(`Prev. expedição: ${escaparHtml(p.data_prevista)}`);
       const linhaDatas = datas.length ? `<br><span class="datas-retirada">${datas.join(" · ")}</span>` : "";
-      li.innerHTML = `<span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+      li.innerHTML = `${check}<span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
         <span class="remetente">${escaparHtml(p.remetente_nome || "")}</span>${destinatario}${transportadora}<br>
         <span class="badge-retirada" title="Status na VUUPT: ${escaparHtml(p.status)} · importado em ${escaparHtml(p.criado_em || "?")}">${escaparHtml(p.status_rotulo || p.status)}${caixas}</span>${linhaDatas}`;
       ul.appendChild(li);
     });
     if (contagem) contagem.textContent = (lista || []).length;
+    atualizarBotaoExpedirRetiradas();
+  }
+
+  // Delegação: 1 listener pro <ul> inteiro cobre os checkboxes de todos
+  // os redesenhos (renderizarRetiradas troca o innerHTML a cada carga).
+  // Guard no getElementById de propósito: um null aqui mataria o script
+  // inteiro da tela (mesma armadilha do TypeError da seção de retiradas
+  // que derrubou o pool em 28/08).
+  const listaPoolRetirada = document.getElementById("lista-pool-retirada");
+  if (listaPoolRetirada) {
+    listaPoolRetirada.addEventListener("change", (e) => {
+      const cb = e.target.closest("input[type=checkbox][data-codigo]");
+      if (!cb) return;
+      if (cb.checked) RETIRADAS_MARCADAS.add(cb.dataset.codigo);
+      else RETIRADAS_MARCADAS.delete(cb.dataset.codigo);
+      cb.closest(".item-retirada").classList.toggle("marcada-expedir", cb.checked);
+      atualizarBotaoExpedirRetiradas();
+    });
+  }
+
+  const botaoExpedirRetiradas = document.getElementById("botao-expedir-retiradas");
+  if (botaoExpedirRetiradas) {
+    botaoExpedirRetiradas.addEventListener("click", async (e) => {
+      e.stopPropagation();  // o clique no cabeçalho colapsa a seção -- não aqui
+      const codigos = [...RETIRADAS_MARCADAS];
+      if (!codigos.length) return;
+      if (!confirm(`Expedir na Stokki ${codigos.length} retirada(s): ${codigos.join(", ")}?\n\n` +
+                   `O serviço na VUUPT é fechado sozinho pelo acompanhamento depois que a Stokki marcar 'Enviado'.`)) return;
+      try {
+        await iniciarExecucaoAgentePlanejamento("somente_expedicao", { pedidos: codigos.join(" ") });
+        RETIRADAS_MARCADAS.clear();
+        document.querySelectorAll("#lista-pool-retirada input[type=checkbox]").forEach(cb => {
+          cb.checked = false;
+          cb.closest(".item-retirada").classList.remove("marcada-expedir");
+        });
+        atualizarBotaoExpedirRetiradas();
+      } catch (err) {
+        alert(`Falha ao iniciar a expedição: ${err.message}`);
+      }
+    });
   }
 
   function atualizarContagensSecoesPool() {
