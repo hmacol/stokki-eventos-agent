@@ -920,6 +920,11 @@
     background: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
   }
   .abas-rotas .aba-rotas.ativa { color: var(--acento); border-bottom-color: var(--acento); font-weight: 700; }
+  /* Rota LALAMOVE enviada à VUUPT ainda sem corrida lançada: alerta na
+     aba, senão o botão "Lançar na Lalamove" fica invisível atrás dela
+     (mesma ideia do chip-kpi.alerta do "No pool") -- Hugo, 30/08 */
+  .abas-rotas .aba-rotas.alerta { color: var(--erro); }
+  .abas-rotas .aba-rotas.alerta.ativa { border-bottom-color: var(--erro); }
   #lista-rotas.com-abas:not(.buscando) .divisor-grupo-rotas { display: none; }
   #lista-rotas.aba-rascunhos:not(.buscando) .card-rota.enviada,
   #lista-rotas.aba-rascunhos:not(.buscando) .card-rota.ofertada { display: none; }
@@ -4791,8 +4796,18 @@
         barraAbas.querySelectorAll(".aba-rotas").forEach(b => b.classList.toggle("ativa", b.dataset.aba === aba));
         localStorage.setItem("planejamento.abaRotas", aba);
       };
+      // Corrida Lalamove pendente atrás da aba (o lançamento é um botão
+      // separado do envio, Hugo 30/08) -- sem esse alerta a rota LALAMOVE
+      // enviada ficaria sem corrida sem ninguém perceber.
+      const lalamovePendentes = RASCUNHOS.filter(r =>
+        r.status === "ENVIADO" && rotaEhLalamove(r) && !r.lalamove_order_id).length;
       barraAbas.querySelectorAll(".aba-rotas").forEach(b => {
         b.textContent = `${b.textContent.trim()} (${contagensAbas[b.dataset.aba]})`;
+        if (b.dataset.aba === "enviadas" && lalamovePendentes) {
+          b.classList.add("alerta");
+          b.textContent += " ⚠";
+          b.title = `${lalamovePendentes} rota(s) LALAMOVE enviada(s) à VUUPT ainda sem corrida -- abra a aba e use "Lançar na Lalamove" no card`;
+        }
         b.addEventListener("click", () => aplicarAba(b.dataset.aba));
       });
       // aba lembrada; se ela está vazia hoje, cai na primeira com rota
