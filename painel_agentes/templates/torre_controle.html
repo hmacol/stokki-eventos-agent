@@ -775,7 +775,7 @@ function renderTilesPeriodo(d, periodo) {
     const finalizadas = p.sucesso + p.falha;
     const taxaHoje = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
     const classeTaxa = taxaHoje === null ? "" : (taxaHoje >= 95 ? "tile-bom" : (taxaHoje >= 85 ? "tile-alerta" : "tile-ruim"));
-    const classeSemRota = p.qtd_nao_atribuidos ? "tile-alerta" : "";
+    const classeSemRota = p.qtd_nao_atribuidos ? "tile-ruim" : "";
     const classeFalha = p.falha ? "tile-ruim" : "";
     const dSucesso = (taxaHoje === null || anterior.sucesso_pct === null) ? null : deltaPP(taxaHoje, anterior.sucesso_pct);
     const dInsucessos = deltaContagem(p.falha, anterior.insucessos, true);

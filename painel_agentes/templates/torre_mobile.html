@@ -532,7 +532,7 @@ function tilesPeriodo(d, periodo) {
       { classe: "", n: `${p.sucesso}<span class="contexto">/${p.total}</span>`, l: `entregues (${pctEntregue}%)`, delta: "" },
       { classe: classeTaxa, n: taxaHoje === null ? "–" : taxaHoje + "%", l: "taxa de sucesso", delta: marcaDelta(dSucesso, rotComp) },
       { classe: "", n: p.contagem.on_route || 0, l: "em rota", delta: "" },
-      { classe: p.qtd_nao_atribuidos ? "alerta" : "", n: p.qtd_nao_atribuidos, l: "sem rota", delta: "" },
+      { classe: p.qtd_nao_atribuidos ? "ruim" : "", n: p.qtd_nao_atribuidos, l: "sem rota", delta: "" },
       { classe: p.falha ? "ruim" : "", n: p.falha, l: `insucesso${p.falha === 1 ? "" : "s"}`, delta: marcaDelta(dInsucessos, rotComp) },
       { classe: "", n: `${r.concluidas}<span class="contexto">/${d.rotas.length}</span>`, l: "rotas concluídas", delta: "" },
     );
