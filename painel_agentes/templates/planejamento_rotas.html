@@ -179,6 +179,13 @@
     background: rgba(47, 217, 174, 0.15); color: var(--acento, #2FD9AE);
   }
   .item-retirada .datas-retirada { display: block; margin-top: 2px; font-size: 11px; color: var(--texto-suave); }
+  /* Seleção pra expedir (Hugo, 31/08): checkbox no canto do card + botão
+     "Expedir marcadas" no cabeçalho da seção -- dispara o agente
+     Expedição com --pedido só pros códigos marcados. */
+  .item-retirada .check-retirada { float: right; margin-left: 8px; cursor: pointer; }
+  .item-retirada .check-retirada input { cursor: pointer; width: 15px; height: 15px; accent-color: var(--acento, #2FD9AE); }
+  .item-retirada.marcada-expedir { border-style: solid; border-color: var(--acento, #2FD9AE); opacity: 1; }
+  .botao-expedir-retiradas { margin-left: auto; border-color: var(--acento, #2FD9AE); color: var(--acento, #2FD9AE); }
   .item-parada {
     position: relative;
     background: var(--fundo);
@@ -1305,6 +1312,9 @@
     {% if dados.resumo_ofertas.total %}
     <span class="chip-kpi" title="Rotas publicadas no marketplace de escolha aberta, aguardando um motorista escolher"><span class="kpi-valor">{{ dados.resumo_ofertas.total }}</span><span class="kpi-rotulo">Publicadas</span></span>
     {% endif %}
+    {# "Sem rota hoje" é sempre de HOJE (independe da data planejada) e
+       vem da VUUPT ao vivo -- preenchido async pra não segurar o load. #}
+    <span class="chip-kpi" id="chip-sem-rota-hoje" title="Pedidos com agendamento até hoje e ainda sem rota na VUUPT (mesmo número do KPI 'Sem rota' da torre)"><span class="kpi-valor" id="valor-sem-rota-hoje">…</span><span class="kpi-rotulo">Sem rota hoje</span></span>
   </div>
   {% if dados.resumo_ofertas.total %}
   <div class="resumo-regioes-ofertas" style="flex:1 1 100%;">
@@ -1632,6 +1642,26 @@
     setTimeout(carregarAgentesPlanejamento, algumaEtapaAgentePlanejamentoRodando ? 5000 : 30000);
   }
 
+  async function carregarSemRotaHoje() {
+    const chip = document.getElementById("chip-sem-rota-hoje");
+    const valor = document.getElementById("valor-sem-rota-hoje");
+    if (!chip) return;
+    try {
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/sem-rota-hoje`);
+      const j = await resp.json();
+      if (!resp.ok) throw new Error(j.erro || resp.status);
+      valor.textContent = j.qtd;
+      chip.classList.toggle("alerta", j.qtd > 0);
+      if (j.qtd > 0 && j.exemplos.length) chip.title = `Com agendamento até hoje e sem rota na VUUPT — ex.: ${j.exemplos.join(", ")}`;
+    } catch (e) {
+      valor.textContent = "?";
+      chip.title = "Falha ao consultar a VUUPT — recarregue a página";
+    }
+    // O número cai sozinho ao longo do dia conforme as rotas saem.
+    setTimeout(carregarSemRotaHoje, 5 * 60 * 1000);
+  }
+  carregarSemRotaHoje();
+
   async function iniciarExecucaoAgentePlanejamento(agenteId, extra) {
     await postJSONAgentesPlanejamento("/api/planejamento/agentes/rodar", { agente_id: agenteId, ...(extra || {}) });
     algumaEtapaAgentePlanejamentoRodando = true;
@@ -1783,6 +1813,8 @@
       <div class="cabecalho-secao-pool" title="Pedidos com transportadora RETIRADA (cliente retira / terceira coleta no galpão). Nunca entram em rota: ficam como serviço avulso na VUUPT, atribuídos ao agente de retiradas, e são fechados sozinhos quando a Stokki marca 'Enviado' (ou cancelados quando a Stokki cancela).">
         <span class="seta-secao">▾</span>
         <span class="titulo-secao-pool">A retirar no galpão (<span id="contagem-secao-retirada">0</span>)</span>
+        <button type="button" class="botao-mini botao-expedir-retiradas" id="botao-expedir-retiradas" hidden
+                title="Expede na Stokki as retiradas marcadas (a pessoa veio buscar). O serviço na VUUPT é fechado sozinho pelo acompanhamento, ao ver 'Enviado' na Stokki.">Expedir marcadas</button>
       </div>
       <ul class="lista-paradas" id="lista-pool-retirada"></ul>
     </div>

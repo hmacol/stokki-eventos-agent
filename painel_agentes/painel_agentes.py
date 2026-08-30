@@ -1128,6 +1128,19 @@ def api_pool():
     })
 
 
+@app.route("/api/planejamento/sem-rota-hoje")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def api_planejamento_sem_rota_hoje():
+    """Número "Sem rota" de HOJE (mesmo cálculo da torre) pro chip do
+    planejamento -- carregado async pelo template pra não segurar o
+    load da página numa consulta ao vivo à VUUPT."""
+    try:
+        return jsonify(torre_controle.contar_sem_rota(date.today()))
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao contar sem rota de hoje")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def api_romaneio(rascunho_id):

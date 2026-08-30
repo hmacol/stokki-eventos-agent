@@ -435,6 +435,21 @@ def _coletar_backlog(vuupt: VuuptClient, data_alvo: date) -> dict:
     return {"atrasados": atrasados, "pool": pool, "futuros": futuros}
 
 
+def contar_sem_rota(data_alvo: date | None = None) -> dict:
+    """Só o número "Sem rota" da torre (atrasados do backlog), pro chip
+    do planejamento -- 1 fetch de serviços, sem pagar a visão completa
+    de buscar_dados_torre."""
+    data_alvo = data_alvo or date.today()
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+    backlog = _coletar_backlog(vuupt, data_alvo)
+    return {
+        "qtd": len(backlog["atrasados"]),
+        "exemplos": [p["codigo"] for p in backlog["atrasados"][:5]],
+    }
+
+
 def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
     """
     Visão de pedidos do dia = paradas das rotas do dia (agregado de
