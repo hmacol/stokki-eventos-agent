@@ -14,7 +14,12 @@
 RAIZ="/opt/stokki-eventos"
 PY="$RAIZ/venv/bin/python"
 
-cd "$RAIZ" && "$PY" executar_tudo.py
+# 31/08 (pedido do Hugo): --sem-impressao SO AQUI na sequencia da noite --
+# a etapa da Estacao de Impressao (Em espera -> Aguardando Transportador)
+# continua rodando as 18h (sequencia_tarde.sh) e as 08:20/15:20
+# (notificar_pedidos_em_espera.py); pedidos faturados a noite ficam em
+# espera ate a rodada das 08:20 do dia seguinte.
+cd "$RAIZ" && "$PY" executar_tudo.py --sem-impressao
 cd "$RAIZ" && "$PY" verificar_pedidos_duplicados_vuupt.py
 cd "$RAIZ/roteirizacao" && "$PY" enviar_rascunhos_pendentes.py
 cd "$RAIZ/roteirizacao" && "$PY" incrementar_rotas.py
