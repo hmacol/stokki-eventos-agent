@@ -1196,6 +1196,10 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             )
         return
 
+    # Cliente VUUPT pra fechar retiradas na hora (check-out) -- só existe
+    # quando a seleção tem retirada (ver branch _retirada no loop abaixo).
+    vuupt_fechar_retiradas = VuuptClient(vuupt_token) if any(s.get("_retirada") for s in validados) else None
+
     # 4. Setup Playwright provider (expedicao e anexo)
     pw, browser, page = _setup_playwright(config)
 
@@ -1254,13 +1258,24 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     # Retirada no galpão expedida via seleção manual
                     # (--pedido): não tem motorista/canhoto por natureza,
                     # então NÃO entra no e-mail de "sem comprovante" nem
-                    # conta em sem_pdf. Quem fecha o serviço na VUUPT é o
-                    # acompanhar_retiradas.py, ao ver 'Enviado' na Stokki.
+                    # conta em sem_pdf.
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     verbo = "expedida" if resultado_exp == "expedido" else "ja constava como Enviado"
-                    logger.info(f"  {codigo_ps}: retirada no galpao {verbo} -- o acompanhar_retiradas "
-                                f"fecha o servico na VUUPT no proximo ciclo.")
+                    # Fecha o serviço na VUUPT NA HORA (check-out) -- antes
+                    # só o timer do acompanhar_retiradas fazia isso, até 30
+                    # min depois, e a seção "A retirar no galpão" (que lê a
+                    # VUUPT) continuava mostrando o pedido já expedido
+                    # (Hugo, 31/08). Mesma chamada idempotente do
+                    # acompanhar; se falhar, o timer segue de fallback.
+                    try:
+                        vuupt_fechar_retiradas.concluir_como_agente(
+                            servico["id"], sucesso=True, status_atual=servico.get("status", ""))
+                        logger.info(f"  {codigo_ps}: retirada no galpao {verbo} -- servico "
+                                    f"{servico['id']} fechado na VUUPT (check-out).")
+                    except Exception as e:
+                        logger.warning(f"  {codigo_ps}: retirada no galpao {verbo}, mas falhou o fechamento "
+                                       f"na VUUPT ({e}) -- o acompanhar_retiradas fecha no proximo ciclo.")
                 elif resultado_exp == "expedido":
                     # Expedido SEM comprovante (sem foto no VUUPT, ou PDF
                     # indisponível): a expedição está feita, não volta

@@ -3190,10 +3190,34 @@
           cb.closest(".item-retirada").classList.remove("marcada-expedir");
         });
         atualizarBotaoExpedirRetiradas();
+        aguardarExpedicaoEAtualizarPool();  // fire-and-forget: refresh quando a execução terminar
       } catch (err) {
         alert(`Falha ao iniciar a expedição: ${err.message}`);
       }
     });
+  }
+
+  // Depois de disparar a expedição pelas retiradas, espera a execução
+  // terminar e dispara o mesmo Atualizar do pool (Hugo, 31/08: a seção
+  // "A retirar no galpão" não refletia o expedido -- agora o
+  // expedir_pedidos fecha o serviço na VUUPT na hora, então o refresh
+  // já volta sem os expedidos). Polling barato no /agentes/etapas
+  // (SQLite), 5s; para sozinho em 30 min se algo ficar pendurado.
+  async function aguardarExpedicaoEAtualizarPool() {
+    const inicio = Date.now();
+    while (Date.now() - inicio < 30 * 60 * 1000) {
+      await new Promise(r => setTimeout(r, 5000));
+      try {
+        const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
+        if (!resp.ok) continue;
+        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === "somente_expedicao");
+        // o POST de disparo já deixou a execução RODANDO/NA_FILA antes
+        // deste polling começar -- "não ativa" aqui significa "terminou"
+        if (!etapa || (!etapa.rodando && !etapa.na_fila)) break;
+      } catch (e) { /* rede oscilou -- tenta no próximo ciclo */ }
+    }
+    const botaoAtualizar = document.getElementById("botao-atualizar-pool");
+    if (botaoAtualizar && !botaoAtualizar.disabled) atualizarPool(botaoAtualizar);
   }
 
   function atualizarContagensSecoesPool() {
