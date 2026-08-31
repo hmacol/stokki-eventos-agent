@@ -941,6 +941,7 @@
   #lista-rotas.aba-rascunhos:not(.buscando) .card-rota.ofertada { display: none; }
   #lista-rotas.aba-ofertadas:not(.buscando) .card-rota:not(.ofertada) { display: none; }
   #lista-rotas.aba-enviadas:not(.buscando) .card-rota:not(.enviada) { display: none; }
+  #lista-rotas.aba-lalamove:not(.buscando) .card-rota:not(.lalamove) { display: none; }
   .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
   .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
   .info-parada .remetente { color: #6FA0FF; font-weight: 600; }
@@ -1877,6 +1878,7 @@
       <button type="button" class="aba-rotas" data-aba="rascunhos">Rascunhos</button>
       <button type="button" class="aba-rotas" data-aba="ofertadas">Ofertadas</button>
       <button type="button" class="aba-rotas" data-aba="enviadas">Enviadas</button>
+      <button type="button" class="aba-rotas" data-aba="lalamove">Lalamove</button>
     </div>
     <input type="text" id="busca-rotas" class="campo-busca" placeholder="Buscar rota, código, NF, remetente ou destinatário...">
     <label class="modo-ordenacao" title="Como reordenar as paradas dentro de cada rota">
@@ -2329,7 +2331,7 @@
     const bloqueada = enviada || ofertada; // sem edição enquanto publicada, mesmo padrão de enviada
     const colapsada = rotasColapsadas.has(rascunho.id);
     const div = document.createElement("div");
-    div.className = "card-rota" + (enviada ? " enviada" : "") + (ofertada ? " ofertada" : "") + (colapsada ? " colapsada" : "");
+    div.className = "card-rota" + (enviada ? " enviada" : "") + (ofertada ? " ofertada" : "") + (colapsada ? " colapsada" : "") + (rotaEhLalamove(rascunho) ? " lalamove" : "");
     div.id = `card-rota-${rascunho.id}`;
     div.style.setProperty("--cor-rota", cor);
     // texto usado pela busca client-side, junto do nome da rota
@@ -4943,13 +4945,16 @@
       rascunhos: RASCUNHOS.filter(r => r.status !== "ENVIADO" && r.status !== "OFERTADA").length,
       ofertadas: RASCUNHOS.filter(r => r.status === "OFERTADA").length,
       enviadas: RASCUNHOS.filter(r => r.status === "ENVIADO").length,
+      // a aba Lalamove cruza os status: mostra toda rota do agente
+      // LALAMOVE, seja rascunho, ofertada ou enviada
+      lalamove: RASCUNHOS.filter(rotaEhLalamove).length,
     };
     const barraAbas = document.getElementById("abas-rotas");
     if (RASCUNHOS.length) {
       barraAbas.hidden = false;
       listaRotas.classList.add("com-abas");
       const aplicarAba = (aba) => {
-        listaRotas.classList.remove("aba-rascunhos", "aba-ofertadas", "aba-enviadas");
+        listaRotas.classList.remove("aba-rascunhos", "aba-ofertadas", "aba-enviadas", "aba-lalamove");
         listaRotas.classList.add("aba-" + aba);
         barraAbas.querySelectorAll(".aba-rotas").forEach(b => b.classList.toggle("ativa", b.dataset.aba === aba));
         localStorage.setItem("planejamento.abaRotas", aba);
@@ -4961,7 +4966,7 @@
         r.status === "ENVIADO" && rotaEhLalamove(r) && !r.lalamove_order_id).length;
       barraAbas.querySelectorAll(".aba-rotas").forEach(b => {
         b.textContent = `${b.textContent.trim()} (${contagensAbas[b.dataset.aba]})`;
-        if (b.dataset.aba === "enviadas" && lalamovePendentes) {
+        if ((b.dataset.aba === "enviadas" || b.dataset.aba === "lalamove") && lalamovePendentes) {
           b.classList.add("alerta");
           b.textContent += " ⚠";
           b.title = `${lalamovePendentes} rota(s) LALAMOVE enviada(s) à VUUPT ainda sem corrida -- abra a aba e use "Lançar na Lalamove" no card`;
@@ -4971,7 +4976,7 @@
       // aba lembrada; se ela está vazia hoje, cai na primeira com rota
       let abaAtiva = localStorage.getItem("planejamento.abaRotas");
       if (!(abaAtiva in contagensAbas) || !contagensAbas[abaAtiva]) {
-        abaAtiva = ["rascunhos", "ofertadas", "enviadas"].find(a => contagensAbas[a]) || "rascunhos";
+        abaAtiva = ["rascunhos", "ofertadas", "enviadas", "lalamove"].find(a => contagensAbas[a]) || "rascunhos";
       }
       aplicarAba(abaAtiva);
     }
