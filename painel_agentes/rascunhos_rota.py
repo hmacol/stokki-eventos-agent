@@ -1086,18 +1086,32 @@ def duplicar_rascunho(rascunho_id: int) -> int:
         conn.close()
 
 
-def descartar_rascunho(rascunho_id: int):
+def descartar_rascunho(rascunho_id: int, *, permitir_enviado: bool = False):
     """As paradas não são apagadas fisicamente aqui de propósito: o
     rascunho passa a status=DESCARTADO, e como o pool de não alocados é
     sempre 'not_assigned da VUUPT menos o que está em rascunho ATIVO',
     as paradas voltam pro pool sozinhas -- sem precisar de nenhuma
-    limpeza extra em rascunhos_parada."""
+    limpeza extra em rascunhos_parada.
+
+    Só descarta RASCUNHO/ERRO_ENVIO por padrão: com a tela aberta em
+    paralelo em outra sessão, o id pode ter virado ENVIADO depois do
+    render -- descartar aí deixaria a rota da VUUPT sem card local
+    (fantasma). permitir_enviado=True é só pros fluxos internos que
+    descartam um ENVIADO de propósito, com a rota da VUUPT já
+    cancelada/inexistente (preparar_cancelamento_de_parada)."""
+    permitidos = [STATUS_RASCUNHO, STATUS_ERRO_ENVIO]
+    if permitir_enviado:
+        permitidos.append(STATUS_ENVIADO)
     conn = _conectar()
     try:
-        conn.execute(
-            "UPDATE rascunhos_rota SET status = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
-            (STATUS_DESCARTADO, rascunho_id),
+        cursor = conn.execute(
+            f"UPDATE rascunhos_rota SET status = ?, atualizado_em = datetime('now','localtime') "
+            f"WHERE id = ? AND status IN ({','.join('?' * len(permitidos))})",
+            (STATUS_DESCARTADO, rascunho_id, *permitidos),
         )
+        if cursor.rowcount == 0:
+            logger.warning(f"Descarte do rascunho {rascunho_id} ignorado -- status atual "
+                           f"não é descartável (provável edição concorrente em outra sessão).")
         conn.commit()
     finally:
         conn.close()
@@ -1109,12 +1123,37 @@ def reverter_para_rascunho(rascunho_id: int):
     paradas de volta pro pool, e sim deixar a MESMA rota editável de
     novo em "Pendentes de envio", pronta pra ajustar e reenviar).
     vuupt_route_id/enviado_em são limpos (a rota antiga não existe
-    mais); motorista/veículo/paradas continuam como estavam."""
+    mais); motorista/veículo/paradas continuam como estavam.
+
+    Os campos da corrida Lalamove (order_id/status/link/preço) também
+    são limpos se a corrida já morreu (ou nunca existiu) -- sem isso,
+    reenviar a rota mostrava a corrida velha no card e escondia o botão
+    "Lançar na Lalamove". Corrida ainda ABERTA é preservada (cancelar
+    na VUUPT não cancela na Lalamove -- pendência conhecida): apagar a
+    referência aqui perderia o único rastro de uma corrida paga.
+    lalamove_veiculo/special_requests ficam sempre (são escolha do
+    card, não estado da corrida)."""
+    from lalamove_client import STATUS_FINAIS
+
     conn = _conectar()
     try:
-        conn.execute("""
+        row = conn.execute(
+            "SELECT lalamove_order_id, lalamove_status, lalamove_share_link "
+            "FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        corrida_aberta = bool(row and row["lalamove_order_id"]
+                              and (row["lalamove_status"] or "") not in STATUS_FINAIS)
+        if corrida_aberta:
+            logger.warning(
+                f"Rascunho {rascunho_id} revertido pra RASCUNHO com corrida Lalamove ainda aberta "
+                f"(#{row['lalamove_order_id']}, status {row['lalamove_status']}) -- cancelar na VUUPT "
+                f"não cancela na Lalamove; acompanhar em {row['lalamove_share_link'] or 'app da Lalamove'}.")
+        limpeza_lalamove = "" if corrida_aberta else (
+            ", lalamove_order_id = NULL, lalamove_quotation_id = NULL, lalamove_status = NULL,"
+            " lalamove_share_link = NULL, lalamove_preco = NULL, lalamove_erro = NULL,"
+            " lalamove_atualizado_em = NULL")
+        conn.execute(f"""
             UPDATE rascunhos_rota
-            SET status = ?, vuupt_route_id = NULL, enviado_em = NULL, erro_envio = NULL,
+            SET status = ?, vuupt_route_id = NULL, enviado_em = NULL, erro_envio = NULL{limpeza_lalamove},
                 atualizado_em = datetime('now','localtime')
             WHERE id = ?
         """, (STATUS_RASCUNHO, rascunho_id))
@@ -1474,13 +1513,13 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
         if resposta is not None and resposta.status_code == 404:
             # rota não existe mais na VUUPT -- nada pra tirar de lá,
             # só sincroniza o local (mesmo tratamento de cancelar_rota_enviada)
-            descartar_rascunho(rascunho_id)
+            descartar_rascunho(rascunho_id, permitir_enviado=True)
             return {"ok": True}
         return {"ok": False, "erro": f"Falha ao consultar a rota #{route_id} na VUUPT: {e}"}
 
     status_atual = _rota_do_corpo(dados_rota).get("status")
     if status_atual == "canceled":
-        descartar_rascunho(rascunho_id)
+        descartar_rascunho(rascunho_id, permitir_enviado=True)
         return {"ok": True}
     if status_atual not in STATUS_ROTA_NAO_INICIADA:
         return {"ok": False,
@@ -1491,7 +1530,7 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
     try:
         if not ids_restantes:
             cancelar_rota(token, route_id, services_action="unassign")
-            descartar_rascunho(rascunho_id)
+            descartar_rascunho(rascunho_id, permitir_enviado=True)
             return {"ok": True}
         atualizar_rota(token, route_id, ids_restantes)
     except Exception as e:

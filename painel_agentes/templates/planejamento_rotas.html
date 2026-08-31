@@ -5137,7 +5137,11 @@
       cancelarRota(idsEnviados, e.target);
     });
     document.getElementById("botao-descartar-todas").addEventListener("click", (e) => {
-      const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => r.id);
+      // ERRO_ENVIO entra junto: a aba "Pendentes de envio" mostra esses
+      // cards, então "Descartar todos" precisa limpá-los também (antes o
+      // card de erro sobrevivia ao clique e parecia bug). OFERTADA fica
+      // de fora de propósito -- precisa de Despublicar primeiro.
+      const idsPendentes = RASCUNHOS.filter(r => r.status === "RASCUNHO" || r.status === "ERRO_ENVIO").map(r => r.id);
       descartarTodosRascunhos(idsPendentes, e.target);
     });
     document.getElementById("botao-salvar-todas").addEventListener("click", (e) => salvarTodasRotas(e.target));
