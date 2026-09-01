@@ -204,7 +204,7 @@ def desconectar_instancia(cfg: dict) -> dict:
     return resp.json()
 
 
-def recriar_instancia(cfg: dict) -> dict:
+def recriar_instancia(cfg: dict, numero: str | None = None) -> dict:
     """Reset completo só pela API: logout (ignora "já desconectado") ->
     DELETE /instance/delete -> POST /instance/create com as MESMAS opções da
     instância original (WHATSAPP-BAILEYS, token = chave global, sem sync de
@@ -225,14 +225,18 @@ def recriar_instancia(cfg: dict) -> dict:
     resp = requests.delete(f"{base}/instance/delete/{nome}", headers=headers, timeout=_TIMEOUT)
     if resp.status_code not in (200, 201, 404):
         resp.raise_for_status()
-    resp = requests.post(
-        f"{base}/instance/create", headers=headers, timeout=_TIMEOUT,
-        json={
-            "instanceName": nome, "integration": "WHATSAPP-BAILEYS", "token": cfg["api_key"],
-            "qrcode": True, "rejectCall": False, "groupsIgnore": False, "alwaysOnline": False,
-            "readMessages": False, "readStatus": False, "syncFullHistory": False,
-        },
-    )
+    corpo = {
+        "instanceName": nome, "integration": "WHATSAPP-BAILEYS", "token": cfg["api_key"],
+        "qrcode": True, "rejectCall": False, "groupsIgnore": False, "alwaysOnline": False,
+        "readMessages": False, "readStatus": False, "syncFullHistory": False,
+    }
+    if numero:
+        # O código de pareamento por dígitos só é pedido no INÍCIO do ciclo
+        # (28/08): o create com qrcode:true já auto-conecta, então o número
+        # precisa ir AQUI -- connect?number= depois só devolve o QR em cache
+        # com pairingCode null.
+        corpo["number"] = re.sub(r"\D", "", numero)
+    resp = requests.post(f"{base}/instance/create", headers=headers, json=corpo, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 

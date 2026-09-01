@@ -743,7 +743,7 @@ def criar_app(config: dict | None = None) -> Flask:
             # todo connect, ou código velho repetido). Único reset que funciona
             # só pela API é recriar a instância -- ver integracao_evolution.
             try:
-                integracao_evolution.recriar_instancia(cfg)
+                integracao_evolution.recriar_instancia(cfg, numero=numero)
                 logger.warning(f"Instância recriada antes do pareamento por {session.get('nome')} (não havia ciclo de QR vivo).")
                 time.sleep(3)
             except Exception as exc:
