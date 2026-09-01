@@ -737,7 +737,11 @@ def criar_app(config: dict | None = None) -> Flask:
         except Exception:
             estado = None
         pareamento_vivo = banco.pareamento_atual(conn(), validade_s=_PAREAMENTO_VIVO_S)
-        if estado != "open" and not pareamento_vivo:
+        # Ciclo vivo iniciado SEM número só tem QR (codigo=None) e nunca vai
+        # produzir código por dígitos (01/09) -- se o admin pediu código
+        # (numero preenchido), esse ciclo não serve: recria com o número.
+        ciclo_serve = bool(pareamento_vivo) and (not numero or bool(pareamento_vivo.get("codigo")))
+        if estado != "open" and not ciclo_serve:
             # Sem ciclo de QR vivo (nenhum qrcode.updated recente): a instância
             # está presa (connecting/close com sessão meio-registrada -> 401 em
             # todo connect, ou código velho repetido). Único reset que funciona
