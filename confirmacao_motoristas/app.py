@@ -116,6 +116,15 @@ def _conectar():
     colunas_elegibilidade = {row["name"] for row in conn.execute("PRAGMA table_info(ofertas_elegibilidade)")}
     if "cpf" not in colunas_elegibilidade:
         conn.execute("ALTER TABLE ofertas_elegibilidade ADD COLUMN cpf TEXT")
+    # Ondas de prioridade (Hugo, 03/09 -- regras/prioridade_ofertas.py no
+    # repo principal): visivel_a_partir_de (UTC 'YYYY-MM-DDTHH:MM:SSZ',
+    # comparado como string; NULL = visível desde sempre, oferta anterior
+    # às ondas) e vagas_restantes (quantas rotas desse dia o motorista
+    # ainda pode escolher; NULL = 1).
+    if "visivel_a_partir_de" not in colunas_elegibilidade:
+        conn.execute("ALTER TABLE ofertas_elegibilidade ADD COLUMN visivel_a_partir_de TEXT")
+    if "vagas_restantes" not in colunas_elegibilidade:
+        conn.execute("ALTER TABLE ofertas_elegibilidade ADD COLUMN vagas_restantes INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ofertas_elegibilidade_cpf ON ofertas_elegibilidade(cpf)")
     conn.commit()
     return conn
@@ -123,6 +132,13 @@ def _conectar():
 
 def _agora_iso() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _agora_utc_iso() -> str:
+    """Mesmo formato de regras/prioridade_ofertas.FORMATO_UTC (repo
+    principal) -- a comparação com visivel_a_partir_de é por string, e
+    em UTC dos dois lados, então não depende do fuso desta máquina."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _exige_segredo_sync(f):
@@ -224,15 +240,34 @@ def _tentar_escolher(conn, agent_id: int, rascunho_id: int, ultimos4_informado: 
     regras/preferencias_motoristas.py) só adicionaria fricção sem
     reforçar segurança nenhuma."""
     elegibilidade = conn.execute(
-        "SELECT telefone_ultimos4 FROM ofertas_elegibilidade WHERE rascunho_id = ? AND agent_id = ?",
+        "SELECT telefone_ultimos4, visivel_a_partir_de, vagas_restantes FROM ofertas_elegibilidade "
+        "WHERE rascunho_id = ? AND agent_id = ?",
         (rascunho_id, agent_id),
     ).fetchone()
     if elegibilidade is None:
         return "Essa rota não está mais disponível pra você."
+    # Onda ainda não aberta pra ele (a listagem já esconde, mas um POST
+    # montado à mão não pode furar a fila -- mesma checagem do lado
+    # do servidor).
+    if elegibilidade["visivel_a_partir_de"] and elegibilidade["visivel_a_partir_de"] > _agora_utc_iso():
+        return "Essa rota ainda não está liberada pra você -- tente de novo em alguns minutos."
 
     exige_checagem = verificar_telefone and bool(elegibilidade["telefone_ultimos4"])
     if exige_checagem and ultimos4_informado != elegibilidade["telefone_ultimos4"]:
         return "Os 4 últimos dígitos não conferem com o telefone cadastrado."
+
+    # Teto de escolhas por dia (Hugo, 03/09): o MAX_ROTAS_DIA da planilha
+    # só era checado na hora de publicar -- com 3 rotas publicadas
+    # juntas, um motorista elegível pras 3 podia escolher as 3.
+    vagas = elegibilidade["vagas_restantes"] if elegibilidade["vagas_restantes"] is not None else 1
+    ja_escolhidas = conn.execute("""
+        SELECT COUNT(*) FROM ofertas o
+        WHERE o.status = 'ESCOLHIDA' AND o.escolhido_por = ?
+          AND o.data_rota = (SELECT data_rota FROM ofertas WHERE rascunho_id = ?)
+    """, (agent_id, rascunho_id)).fetchone()[0]
+    if ja_escolhidas >= vagas:
+        return (f"Você já escolheu {ja_escolhidas} rota(s) pra esse dia -- é o máximo do seu cadastro. "
+                f"Cancele uma escolha se quiser trocar.")
 
     cur = conn.execute("""
         UPDATE ofertas SET status = 'ESCOLHIDA', escolhido_por = ?, escolhido_em = ?
@@ -288,13 +323,16 @@ def _listar_ofertas_abertas(conn, agent_id: int, data_rota: str | None = None) -
     pro dia do link pessoal (/escolher/<token>); None mostra QUALQUER
     oferta aberta pra ele, usado pela página compartilhada por CPF
     (/escolher), que não carrega data nenhuma."""
+    # visivel_a_partir_de: onda de prioridade ainda fechada pra esse
+    # motorista fica invisível até a hora (NULL = sem onda, sempre visível).
     sql = """
         SELECT o.rascunho_id, o.resumo_json, oe.telefone_ultimos4
         FROM ofertas o
         JOIN ofertas_elegibilidade oe ON oe.rascunho_id = o.rascunho_id
         WHERE oe.agent_id = ? AND o.status = 'ABERTA'
+          AND (oe.visivel_a_partir_de IS NULL OR oe.visivel_a_partir_de <= ?)
     """
-    parametros = [agent_id]
+    parametros = [agent_id, _agora_utc_iso()]
     if data_rota is not None:
         sql += " AND o.data_rota = ?"
         parametros.append(data_rota)
@@ -504,9 +542,11 @@ def api_sync_ofertas_upsert():
             conn.execute("DELETE FROM ofertas_elegibilidade WHERE rascunho_id = ?", (item["rascunho_id"],))
             for elegivel in json.loads(item.get("agent_ids_elegiveis") or "[]"):
                 conn.execute("""
-                    INSERT OR REPLACE INTO ofertas_elegibilidade (rascunho_id, agent_id, telefone_ultimos4, cpf)
-                    VALUES (?, ?, ?, ?)
-                """, (item["rascunho_id"], elegivel["agent_id"], elegivel.get("telefone_ultimos4"), elegivel.get("cpf")))
+                    INSERT OR REPLACE INTO ofertas_elegibilidade
+                        (rascunho_id, agent_id, telefone_ultimos4, cpf, visivel_a_partir_de, vagas_restantes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (item["rascunho_id"], elegivel["agent_id"], elegivel.get("telefone_ultimos4"), elegivel.get("cpf"),
+                      elegivel.get("visivel_a_partir_de"), elegivel.get("vagas_restantes")))
         conn.commit()
     finally:
         conn.close()

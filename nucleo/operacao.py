@@ -23,7 +23,7 @@ Regras fixas:
 import json
 import math
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from nucleo import banco, pedidos as nucleo_pedidos, tempos
 from nucleo.rotas import registrar_evento
@@ -455,27 +455,51 @@ def carregar_checklist(conn: sqlite3.Connection) -> dict:
 
 # ── Ofertas (marketplace) ──────────────────────────────────────────────────────
 
-def _elegivel(oferta: sqlite3.Row, agent_id: int) -> bool:
+def _agora_utc_iso() -> str:
+    """Mesmo formato de regras/prioridade_ofertas.FORMATO_UTC -- comparação
+    por string com visivel_a_partir_de, em UTC, independente do fuso."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _elegibilidade(oferta: sqlite3.Row, agent_id: int) -> dict | None:
+    """Entrada desse agent_id em agent_ids_elegiveis (dict com onda/
+    visivel_a_partir_de/vagas_restantes quando a oferta foi publicada
+    com ondas -- regras/prioridade_ofertas.py; formato antigo, só o
+    id, vira {'agent_id': id}). None = não elegível."""
     try:
         lista = json.loads(oferta["agent_ids_elegiveis"] or "[]")
     except (TypeError, ValueError):
-        return False
+        return None
     for e in lista:
         aid = e.get("agent_id") if isinstance(e, dict) else e
         if aid == agent_id:
-            return True
-    return False
+            return e if isinstance(e, dict) else {"agent_id": aid}
+    return None
+
+
+def _elegivel(oferta: sqlite3.Row, agent_id: int) -> bool:
+    return _elegibilidade(oferta, agent_id) is not None
+
+
+def _onda_aberta(elegibilidade: dict | None, agora_utc: str) -> bool:
+    """Ondas de prioridade: a oferta só aparece/aceita escolha desse
+    motorista depois de visivel_a_partir_de (ausente = sempre visível)."""
+    if not elegibilidade:
+        return False
+    visivel = elegibilidade.get("visivel_a_partir_de")
+    return not visivel or visivel <= agora_utc
 
 
 def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
     if agent_id is None or not _tem_tabela(conn, "ofertas_rota"):
         return {"abertas": [], "minhas": []}
     hoje = date.today().isoformat()
+    agora_utc = _agora_utc_iso()
     abertas, minhas = [], []
     for o in conn.execute("SELECT * FROM ofertas_rota WHERE data_alvo >= ? ORDER BY data_alvo, id", (hoje,)):
         item = {"rascunho_id": o["rascunho_id"], "data_alvo": o["data_alvo"],
                 "resumo": json.loads(o["resumo_json"] or "{}"), "status": o["status"]}
-        if o["status"] == "ABERTA" and _elegivel(o, agent_id):
+        if o["status"] == "ABERTA" and _onda_aberta(_elegibilidade(o, agent_id), agora_utc):
             abertas.append(item)
         elif o["status"] == "ESCOLHIDA" and o["escolhido_por"] == agent_id:
             item["aplicada"] = o["aplicado_em"] is not None
@@ -490,8 +514,22 @@ def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id:
     if agent_id is None:
         raise OperacaoInvalida("Motorista sem agent_id -- não pode escolher rota.", 403)
     o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
-    if not o or not _elegivel(o, agent_id):
+    elegibilidade = _elegibilidade(o, agent_id) if o else None
+    if not elegibilidade:
         raise OperacaoInvalida("Essa rota não está disponível pra você.", 404)
+    if not _onda_aberta(elegibilidade, _agora_utc_iso()):
+        raise OperacaoInvalida("Essa rota ainda não está liberada pra você -- tente de novo em alguns minutos.", 403)
+    # Teto de escolhas por dia (Hugo, 03/09) -- espelho de
+    # confirmacao_motoristas/app.py::_tentar_escolher.
+    vagas = elegibilidade.get("vagas_restantes") or 1
+    ja_escolhidas = conn.execute(
+        "SELECT COUNT(*) FROM ofertas_rota WHERE status = 'ESCOLHIDA' AND escolhido_por = ? AND data_alvo = ?",
+        (agent_id, o["data_alvo"]),
+    ).fetchone()[0]
+    if ja_escolhidas >= vagas:
+        raise OperacaoInvalida(
+            f"Você já escolheu {ja_escolhidas} rota(s) pra esse dia -- é o máximo do seu cadastro. "
+            f"Cancele uma escolha se quiser trocar.", 409)
     cur = conn.execute("""
         UPDATE ofertas_rota SET status = 'ESCOLHIDA', escolhido_por = ?, escolhido_em = ?, sincronizado_em = NULL
         WHERE rascunho_id = ? AND status = 'ABERTA'

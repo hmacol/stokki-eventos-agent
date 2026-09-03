@@ -331,16 +331,45 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
     (mesmo padrão de main(): o arquivo é sempre a cópia completa/
     auditável de tudo que devia ter sido avisado).
 
+    Ondas de prioridade (Hugo, 03/09, ver regras/prioridade_ofertas.py):
+    só avisa, dentre `elegiveis`, quem já tem pelo menos UMA oferta
+    ABERTA pra `data_alvo` com a onda aberta agora e ainda não foi
+    avisado dela (regras/ofertas_rota.listar_liberacoes_pendentes) --
+    e registra o aviso (marcar_avisados) pra nunca repetir. Quem ainda
+    está numa onda futura é avisado pelo job periódico
+    (avisar_ondas_liberadas, chamado por
+    sincronizar_respostas_confirmacao.py) quando a onda dele abrir.
+    Com as ondas desligadas (tamanho_onda=0) todo elegível cai na onda
+    0 e o comportamento é o de sempre: todos avisados na hora.
+
     Retorna {"whatsapp_evolution": N, "email": N, "sem_contato": N,
-    "arquivo": N} -- N sempre <= len(elegiveis) (um motorista pode
-    contar em mais de uma categoria, ex.: Evolution E e-mail).
+    "arquivo": N, "aguardando_onda": N} -- N sempre <= len(elegiveis)
+    (um motorista pode contar em mais de uma categoria, ex.: Evolution
+    E e-mail).
     """
+    from regras import ofertas_rota
+    from regras.prioridade_ofertas import agora_utc_str
+
     config_confirmacao = config.get("confirmacao_rotas", {})
     config_email = config.get("email", {})
     config_evolution = config.get("evolution_api", {})
 
+    liberacoes = [
+        lib for lib in ofertas_rota.listar_liberacoes_pendentes(
+            agora_utc_str(), apenas_agent_ids={m.agent_id for m in elegiveis})
+        if lib["data_alvo"] == data_alvo.isoformat()
+    ]
+    agent_ids_liberados = {lib["agent_id"] for lib in liberacoes}
+    aguardando_onda = [m for m in elegiveis if m.agent_id not in agent_ids_liberados]
+    elegiveis = [m for m in elegiveis if m.agent_id in agent_ids_liberados]
+    if aguardando_onda:
+        logger.info(
+            f"{len(aguardando_onda)} elegível(is) em onda futura -- serão avisados quando a onda abrir: "
+            + ", ".join(m.nome for m in aguardando_onda)
+        )
+
     blocos = []
-    contagem = {"whatsapp_evolution": 0, "email": 0, "sem_contato": 0}
+    contagem = {"whatsapp_evolution": 0, "email": 0, "sem_contato": 0, "aguardando_onda": len(aguardando_onda)}
     for motorista in elegiveis:
         link = preparar_link_oferta(motorista.agent_id, data_alvo, config_confirmacao)
         if not link:
@@ -378,7 +407,56 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
         with open(ARQUIVO_SAIDA_OFERTAS, "a", encoding="utf-8") as f:
             f.write(texto + "\n")
 
+    # Marca como avisado mesmo quem ficou "sem_contato" -- o texto pronto
+    # no arquivo é a cópia auditável do que devia ter sido avisado, e o
+    # job periódico não deve ficar reavisando a mesma pessoa a cada rodada.
+    ofertas_rota.marcar_avisados(liberacoes)
+
     return {**contagem, "arquivo": len(blocos)}
+
+
+def avisar_ondas_liberadas(config: dict) -> dict:
+    """Job das ondas (Hugo, 03/09): avisa todo motorista cuja onda de
+    alguma oferta ABERTA acabou de abrir e que ainda não foi avisado
+    dela -- 1 mensagem por motorista+dia (o link já lista tudo que ele
+    pode escolher naquele dia), mesmo padrão do botão "Publicar
+    pendentes". Chamado a cada rodada de
+    roteirizacao/sincronizar_respostas_confirmacao.py; sem liberação
+    pendente, não faz nada. Retorna {data_alvo: contagem} (contagem no
+    formato de notificar_oferta_motoristas)."""
+    from regras import ofertas_rota
+    from regras.prioridade_ofertas import agora_utc_str
+
+    liberacoes = ofertas_rota.listar_liberacoes_pendentes(agora_utc_str())
+    if not liberacoes:
+        return {}
+
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+    motoristas_por_id = {m.agent_id: m for m in catalogo.motoristas}
+
+    por_dia: dict[str, dict[int, MotoristaPreferencias]] = defaultdict(dict)
+    desconhecidos: list[dict] = []
+    for lib in liberacoes:
+        motorista = motoristas_por_id.get(lib["agent_id"])
+        if motorista is None:
+            desconhecidos.append(lib)  # saiu da planilha depois da publicação -- não tem como avisar
+            continue
+        por_dia[lib["data_alvo"]][motorista.agent_id] = motorista
+
+    if desconhecidos:
+        logger.warning(
+            f"{len(desconhecidos)} liberação(ões) de onda pra agent_id fora da planilha de motoristas -- "
+            f"marcadas como avisadas sem envio: {sorted({d['agent_id'] for d in desconhecidos})}"
+        )
+        ofertas_rota.marcar_avisados(desconhecidos)
+
+    resultado = {}
+    for data_alvo_iso, motoristas in sorted(por_dia.items()):
+        contagem = notificar_oferta_motoristas(list(motoristas.values()), date.fromisoformat(data_alvo_iso), config)
+        resultado[data_alvo_iso] = contagem
+        logger.info(f"Onda liberada pra {data_alvo_iso}: {len(motoristas)} motorista(s) avisado(s) -- {contagem}")
+    return resultado
 
 
 def push_ofertas_vps(config_confirmacao: dict) -> dict:

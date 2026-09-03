@@ -209,6 +209,25 @@ def main():
     _sincronizar_confirmacoes(url_base, sync_secret)
     _sincronizar_ofertas_escolhidas(url_base, sync_secret)
     _reconciliar_escolhas_revertidas(url_base, sync_secret)
+    _avisar_ondas_liberadas()
+
+
+def _avisar_ondas_liberadas():
+    """Ondas de prioridade do marketplace (Hugo, 03/09, ver
+    regras/prioridade_ofertas.py): avisa os motoristas cuja onda abriu
+    desde a última rodada. A VPS já mostra a oferta pra eles sozinha
+    (compara visivel_a_partir_de na hora da consulta); este passo só
+    cuida do AVISO (WhatsApp/e-mail/texto). Roda por último: se uma
+    oferta acabou de ser escolhida/revertida acima, a lista de ABERTA
+    já está atualizada."""
+    try:
+        from avisar_motoristas_rotas import avisar_ondas_liberadas
+        resultado = avisar_ondas_liberadas(_carregar_config())
+    except Exception as exc:  # aviso nunca pode derrubar a sincronização em si
+        logger.warning(f"Falha ao avisar ondas liberadas do marketplace: {exc}")
+        return
+    if resultado:
+        logger.info(f"Ondas do marketplace avisadas: {resultado}")
 
 
 if __name__ == "__main__":

@@ -1067,12 +1067,20 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     disparado por quem chama este endpoint (ver painel_agentes.py),
     depois de confirmar que a publicação teve sucesso.
 
-    Retorna {"ok": True, "elegiveis": [MotoristaPreferencias...], "resumo": {...}}
-    ou {"ok": False, "erro": "..."}.
+    Priorização em ondas (Hugo, 03/09, ver regras/prioridade_ofertas.py):
+    os elegíveis são ordenados (rodízio "leitura B", depois quem rodou
+    menos em 7d/30d) e cada um ganha um 'visivel_a_partir_de' -- a VPS e
+    o app do motorista só mostram a oferta a quem já teve a onda aberta.
+
+    Retorna {"ok": True, "elegiveis": [MotoristaPreferencias...] (já na
+    ordem de prioridade), "resumo": {...}, "ondas": {onda: qtd}} ou
+    {"ok": False, "erro": "..."}.
     """
     from regras import ofertas_rota
     from regras.resumo_oferta import montar_resumo as montar_resumo_oferta
+    from regras.prioridade_ofertas import priorizar, resumo_ondas
     from alocacao_motoristas import listar_motoristas_elegiveis
+    from rodizio_sp import sublote_em_area_rodizio
 
     rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
     if not rascunho:
@@ -1107,17 +1115,23 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
 
     resumo = montar_resumo_oferta(rascunho["paradas"], gmaps_key)
 
-    def _ultimos4(telefone):
-        digitos = re.sub(r"\D", "", telefone or "")
-        return digitos[-4:] if len(digitos) >= 4 else None
+    # Mesmo critério de área de _elegibilidade_sublote (só dia útil tem
+    # rodízio); geocodificação vem do cache, já aquecida pela chamada de
+    # listar_motoristas_elegiveis logo acima.
+    rota_em_area_rodizio = data_alvo.weekday() in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, gmaps_key)
+    priorizados = priorizar(elegiveis, data_alvo, rota_em_area_rodizio, contagem_alocacoes_dia, config)
 
     ofertas_rota.criar_ou_atualizar_oferta(
-        rascunho_id, data_alvo, resumo,
-        [{"agent_id": m.agent_id, "telefone_ultimos4": _ultimos4(m.telefone), "cpf": m.cpf} for m in elegiveis],
+        rascunho_id, data_alvo, resumo, [p.para_json() for p in priorizados],
     )
     rascunhos_rota.publicar_oferta(rascunho_id)
 
-    return {"ok": True, "elegiveis": elegiveis, "resumo": resumo}
+    ondas = resumo_ondas(priorizados)
+    logger.info(
+        f"Oferta do rascunho {rascunho_id} publicada pra {len(priorizados)} elegível(is) em ondas {ondas}"
+        f"{' [rota fora do Centro Expandido: placa restrita hoje vem primeiro]' if not rota_em_area_rodizio else ''}."
+    )
+    return {"ok": True, "elegiveis": [p.motorista for p in priorizados], "resumo": resumo, "ondas": ondas}
 
 
 def publicar_ofertas_em_lote(data_alvo: date) -> dict:

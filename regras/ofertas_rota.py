@@ -54,6 +54,20 @@ def _conectar():
             aplicado_em           TEXT
         )
     """)
+    # Priorização em ondas (Hugo, 03/09 -- ver regras/prioridade_ofertas.py):
+    # cada elegível da oferta tem um 'visivel_a_partir_de' dentro do JSON de
+    # agent_ids_elegiveis; esta tabela registra quem JÁ FOI AVISADO de cada
+    # oferta, pra o job periódico avisar a onda seguinte só quando ela
+    # abrir, e nunca avisar o mesmo motorista 2x pela mesma oferta.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ofertas_avisos (
+            rascunho_id  INTEGER NOT NULL,
+            agent_id     INTEGER NOT NULL,
+            onda         INTEGER NOT NULL DEFAULT 0,
+            avisado_em   TEXT NOT NULL,
+            PRIMARY KEY (rascunho_id, agent_id)
+        )
+    """)
     conn.commit()
     return conn
 
@@ -98,6 +112,9 @@ def criar_ou_atualizar_oferta(rascunho_id: int, data_alvo, resumo: dict, elegive
                 aplicado_em         = NULL
         """, (rascunho_id, data_alvo.isoformat(), json.dumps(resumo, ensure_ascii=False),
               json.dumps(elegiveis), agora))
+        # republicação = ondas recomeçam do zero, todo mundo pode ser
+        # avisado de novo (a lista de elegíveis/liberações é nova).
+        conn.execute("DELETE FROM ofertas_avisos WHERE rascunho_id = ?", (rascunho_id,))
         conn.commit()
         linha = conn.execute("SELECT id FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
         return linha["id"]
@@ -248,3 +265,80 @@ def buscar_por_rascunho(rascunho_id: int) -> dict | None:
         return dict(linha) if linha else None
     finally:
         conn.close()
+
+
+def listar_liberacoes_pendentes(agora_utc: str, apenas_agent_ids: set[int] | None = None) -> list[dict]:
+    """Elegíveis de ofertas ABERTA cuja onda JÁ ABRIU (visivel_a_partir_de
+    <= agora_utc, ou sem esse campo -- oferta gravada antes das ondas
+    existirem, tratada como visível desde sempre) e que ainda não foram
+    avisados dessa oferta (sem linha em ofertas_avisos). É a fila do
+    aviso: quem publica avisa a onda 0 na hora, o job periódico
+    (sincronizar_respostas_confirmacao.py) avisa as seguintes.
+
+    `apenas_agent_ids` restringe ao conjunto que quem chama tem em mãos
+    (o endpoint de publicação só conhece os elegíveis daquela rota).
+    Retorna [{rascunho_id, data_alvo, agent_id, onda}] -- um item por
+    (oferta, motorista); quem chama agrupa por motorista+dia."""
+    conn = _conectar()
+    try:
+        ofertas = conn.execute("SELECT rascunho_id, data_alvo, agent_ids_elegiveis FROM ofertas_rota WHERE status = 'ABERTA'").fetchall()
+        avisados = {
+            (r["rascunho_id"], r["agent_id"])
+            for r in conn.execute("SELECT rascunho_id, agent_id FROM ofertas_avisos")
+        }
+    finally:
+        conn.close()
+
+    pendentes = []
+    for oferta in ofertas:
+        try:
+            elegiveis = json.loads(oferta["agent_ids_elegiveis"] or "[]")
+        except ValueError:
+            continue
+        for e in elegiveis:
+            agent_id = e.get("agent_id") if isinstance(e, dict) else e
+            if agent_id is None or (apenas_agent_ids is not None and agent_id not in apenas_agent_ids):
+                continue
+            if (oferta["rascunho_id"], agent_id) in avisados:
+                continue
+            visivel = e.get("visivel_a_partir_de") if isinstance(e, dict) else None
+            if visivel and visivel > agora_utc:
+                continue
+            pendentes.append({
+                "rascunho_id": oferta["rascunho_id"], "data_alvo": oferta["data_alvo"],
+                "agent_id": agent_id, "onda": (e.get("onda") if isinstance(e, dict) else 0) or 0,
+            })
+    return pendentes
+
+
+def marcar_avisados(itens: list[dict]) -> None:
+    """Registra em ofertas_avisos os pares (rascunho_id, agent_id) de
+    `itens` (mesmo formato de listar_liberacoes_pendentes)."""
+    if not itens:
+        return
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conectar()
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO ofertas_avisos (rascunho_id, agent_id, onda, avisado_em) VALUES (?, ?, ?, ?)",
+            [(i["rascunho_id"], i["agent_id"], i.get("onda") or 0, agora) for i in itens],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def contar_escolhidas_no_dia(agent_id: int, data_alvo: str, conn: sqlite3.Connection | None = None) -> int:
+    """Quantas ofertas desse dia esse motorista já ESCOLHEU (pra respeitar
+    vagas_restantes no app do motorista -- ver nucleo/operacao.py)."""
+    fechar = conn is None
+    conn = conn or _conectar()
+    try:
+        linha = conn.execute(
+            "SELECT COUNT(*) FROM ofertas_rota WHERE status = 'ESCOLHIDA' AND escolhido_por = ? AND data_alvo = ?",
+            (agent_id, data_alvo),
+        ).fetchone()
+        return int(linha[0]) if linha else 0
+    finally:
+        if fechar:
+            conn.close()
