@@ -169,9 +169,15 @@ def main(modo_teste: bool = False):
                     # só avisa que ficou pendente em /planejamento.
                     try:
                         from lalamove_integracao import rascunho_e_lalamove
-                        if rascunho_e_lalamove(rascunho):
+                        if rascunho_e_lalamove(rascunho) and rascunho.get("lalamove_lancar_em"):
+                            # Horário escolhido no card (Hugo, 03/09): o timer
+                            # lancar_lalamove_programados cuida do lançamento.
+                            logger.info(f"Rota LALAMOVE '{rascunho['nome']}' enviada à VUUPT; corrida programada "
+                                        f"pra {rascunho['lalamove_lancar_em']} (timer lancar_lalamove_programados).")
+                        elif rascunho_e_lalamove(rascunho):
                             logger.warning(f"Rota LALAMOVE '{rascunho['nome']}' enviada à VUUPT SEM corrida na "
-                                           f"Lalamove -- lançar pelo botão do card em /planejamento.")
+                                           f"Lalamove e sem horário programado -- lançar pelo botão do card "
+                                           f"em /planejamento ou escolher o horário na caixa Lalamove.")
                             lalamove_sem_corrida.append(rascunho["nome"])
                     except Exception as e:
                         logger.warning(f"Não deu pra checar se '{rascunho['nome']}' é rota LALAMOVE: {e}")

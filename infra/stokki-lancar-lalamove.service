@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Lanca na Lalamove as corridas com horario programado no /planejamento
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/lancar_lalamove_programados.py

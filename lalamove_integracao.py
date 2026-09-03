@@ -7,7 +7,11 @@ Hugo, 28/08: quando a rota é confirmada com o motorista virtual
 "LALAMOVE" (config lalamove.agent_id_vuupt), além da rota na VUUPT:
 
   1. cota e cria o pedido na Lalamove (base = coleta, paradas = entregas,
-     na ordem do rascunho, scheduleAt = start_at da rota);
+     na ordem do rascunho) -- sempre IMEDIATO, sem o scheduleAt da
+     Lalamove (Hugo, 03/09): a corrida sai na hora do clique em "Lançar
+     na Lalamove" ou no horário escolhido no card (lalamove_lancar_em),
+     disparado pelo timer nucleo/lancar_lalamove_programados.py
+     (lancar_programados);
   2. grava orderId/status/preço/link no rascunho (colunas lalamove_*);
   3. carimba o código Lalamove no título de cada serviço na VUUPT
      ("[LALAMOVE 1234567890] <título original>");
@@ -23,7 +27,7 @@ rota já criada; fica em lalamove_erro e aparece no card.
 import logging
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent
@@ -205,22 +209,6 @@ def _telefone_servico(servico: dict | None) -> str:
     return tel if re.fullmatch(r"\+[1-9]\d{1,14}", tel) else ""
 
 
-def _schedule_at(start_at: str | None) -> str | None:
-    """start_at do rascunho ('2026-08-29T13:00:00Z'); se já passou (rota
-    confirmada depois do horário de saída), pedido imediato."""
-    if not start_at:
-        return None
-    try:
-        dt = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    if dt <= datetime.now(timezone.utc) + timedelta(minutes=5):
-        return None
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:00Z")
-
-
 def _titulo_com_codigo(titulo: str, order_id: str, prefixo: str) -> str:
     marca = f"[{prefixo} {order_id}]"
     titulo = (titulo or "").strip()
@@ -284,7 +272,10 @@ def criar_pedido_para_rascunho(rascunho_id: int, token: str, config: dict | None
         special = [s for s in special if s in validos]
     logger.info(f"Lalamove: veículo {veiculo['codigo']} -> serviceType {veiculo['service_type']} "
                 f"specialRequests {special}")
-    cotacao = lala.cotar(stops, veiculo["service_type"], schedule_at=_schedule_at(rascunho.get("start_at")),
+    # Sem scheduleAt: corrida imediata. O "quando" é decidido do nosso
+    # lado -- clique no botão ou horário programado no card (Hugo, 03/09
+    # não quer o agendamento da Lalamove).
+    cotacao = lala.cotar(stops, veiculo["service_type"], schedule_at=None,
                          is_route_optimized=False, special_requests=special)
     if not rascunho.get("lalamove_veiculo"):
         rascunhos_rota.gravar_lalamove(rascunho_id, veiculo=veiculo["codigo"])
@@ -426,4 +417,73 @@ def sincronizar_pedidos(token: str, config: dict | None = None, modo_teste: bool
         if status in STATUS_FINAIS and status != "COMPLETED":
             logger.warning(f"Lalamove pedido {r['lalamove_order_id']} terminou como {status} -- "
                            f"rota '{r.get('nome')}' (VUUPT #{r.get('vuupt_route_id')}) precisa de outro motorista.")
+    return stats
+
+
+# ── Lançamento no horário programado ───────────────────────────────────
+
+MAX_TENTATIVAS_PROGRAMADO = 3
+
+
+def lancar_programados(token: str, config: dict | None = None, modo_teste: bool = False,
+                       agora: datetime | None = None) -> dict:
+    """Timer nucleo/lancar_lalamove_programados.py (Hugo, 03/09): lança a
+    corrida IMEDIATA das rotas LALAMOVE já enviadas à VUUPT cujo horário
+    de lançamento escolhido no card (lalamove_lancar_em) chegou. É o
+    substituto do agendamento da própria Lalamove (scheduleAt), que o
+    Hugo não quer usar: o horário é nosso, a corrida nasce na hora.
+
+    Falha conta uma tentativa (lalamove_lancar_tentativas); depois de
+    MAX_TENTATIVAS_PROGRAMADO desiste e deixa o erro no card -- o botão
+    "Lançar na Lalamove" continua valendo. Rota que trocou de motorista
+    ou é de dia passado perde a programação (não lanço corrida atrasada
+    de outro dia). Retorna contadores."""
+    import rascunhos_rota
+
+    config = config or _carregar_config()
+    cfg = cfg_lalamove(config)
+    agora = agora or datetime.now()
+    hoje = agora.date().isoformat()
+    stats = {"pendentes": 0, "lancados": 0, "erros": 0, "desistidos": 0, "ignorados": 0}
+
+    for r in rascunhos_rota.listar_rascunhos_lalamove_programados(agora.strftime("%Y-%m-%d %H:%M"),
+                                                                  max_tentativas=MAX_TENTATIVAS_PROGRAMADO):
+        stats["pendentes"] += 1
+        rotulo = (f"rota '{r.get('nome')}' (rascunho {r['id']}, VUUPT #{r.get('vuupt_route_id')}, "
+                  f"programada pra {r.get('lalamove_lancar_em')})")
+        motivo_ignorar = None
+        if not rascunho_e_lalamove(r, cfg):
+            motivo_ignorar = "não está mais com o motorista virtual LALAMOVE"
+        elif str(r.get("data_alvo") or "") < hoje:
+            motivo_ignorar = "é de dia passado -- não lanço corrida atrasada de outro dia"
+        if motivo_ignorar:
+            stats["ignorados"] += 1
+            logger.warning(f"Lalamove: {rotulo} {motivo_ignorar}; programação removida.")
+            if not modo_teste:
+                rascunhos_rota.gravar_lalamove(r["id"], lancar_em=None)
+            continue
+
+        if modo_teste:
+            logger.info(f"[TESTE] lançaria agora a corrida da {rotulo}.")
+            stats["lancados"] += 1
+            continue
+
+        resultado = rascunhos_rota.lancar_lalamove(r["id"], token)  # grava lalamove_erro em falha
+        if resultado.get("ok"):
+            stats["lancados"] += 1
+            preco = f" · R$ {resultado['preco']}" if resultado.get("preco") else ""
+            logger.info(f"Lalamove: corrida #{resultado.get('order_id')} lançada no horário programado{preco} -- "
+                        f"{rotulo}{' (já existia)' if resultado.get('ja_existia') else ''}.")
+            continue
+
+        stats["erros"] += 1
+        tentativas = int(r.get("lalamove_lancar_tentativas") or 0) + 1
+        rascunhos_rota.gravar_lalamove(r["id"], lancar_tentativas=tentativas)
+        if tentativas >= MAX_TENTATIVAS_PROGRAMADO:
+            stats["desistidos"] += 1
+            logger.error(f"Lalamove: lançamento programado da {rotulo} falhou {tentativas}x -- desisti; lançar "
+                         f"pelo botão do card em /planejamento. Último erro: {resultado.get('erro')}")
+        else:
+            logger.warning(f"Lalamove: lançamento programado da {rotulo} falhou (tentativa {tentativas}/"
+                           f"{MAX_TENTATIVAS_PROGRAMADO}): {resultado.get('erro')} -- tento de novo na próxima rodada.")
     return stats

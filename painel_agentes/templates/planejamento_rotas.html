@@ -646,6 +646,14 @@
     border-radius: 6px; cursor: pointer;
   }
   .botao-lancar-lalamove:disabled { opacity: .6; cursor: default; }
+  /* Horário de lançamento da corrida (Hugo, 03/09): o timer lança a
+     corrida imediata nesse horário -- sem o agendamento da Lalamove */
+  .lalamove-horario { font-size: 11.5px; padding: 1px 4px; }
+  .botao-lalamove-horario-limpar {
+    border: none; background: transparent; cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1;
+    color: var(--texto-fraco, #777);
+  }
+  .status-envio.programado { color: var(--acento); }
   #lista-rotas.buscando .card-rota.colapsada .lista-paradas { display: block; }
   .coluna h3 .botao-mini, .botao-mini {
     font-size: 11px;
@@ -2176,10 +2184,21 @@
     const atual = rascunho.lalamove_veiculo || LALAMOVE.veiculo_padrao;
     const opcoes = LALAMOVE.veiculos.map(v =>
       `<option value="${v.codigo}" ${v.codigo === atual ? "selected" : ""}>${escaparHtml(v.nome)}</option>`).join("");
+    // Horário de lançamento (Hugo, 03/09): HH:MM do dia da rota em que o
+    // robô cria a corrida IMEDIATA -- substitui o agendamento da própria
+    // Lalamove, que não é usado. Vazio = só pelo botão "Lançar na Lalamove".
+    const horario = horarioLancamentoLalamove(rascunho);
     return `<div class="lalamove-box" data-rascunho-id="${rascunho.id}" style="${rotaEhLalamove(rascunho) ? "" : "display:none"}">
       <label class="lalamove-opcional"><strong>Lalamove</strong> · Veículo <select class="select-lalamove-veiculo" data-rascunho-id="${rascunho.id}" ${editavel ? "" : "disabled"}>${opcoes}</select></label>
       <span class="lalamove-opcionais-wrap">${opcionaisLalamoveHtml(rascunho, atual, editavel)}</span>
+      <label class="lalamove-opcional" title="Horário (do dia da rota) em que o robô lança a corrida na Lalamove, como corrida imediata. A rota precisa estar enviada à VUUPT nesse horário. Vazio = lançar só pelo botão.">⏰ Lançar às <input type="time" class="lalamove-horario" value="${horario}" ${editavel ? "" : "disabled"}>${(horario && editavel) ? `<button type="button" class="botao-lalamove-horario-limpar" title="Remover o horário programado">✕</button>` : ""}</label>
     </div>`;
+  }
+
+  function horarioLancamentoLalamove(rascunho) {
+    // lalamove_lancar_em = 'YYYY-MM-DD HH:MM' (hora local) -> 'HH:MM'
+    const v = rascunho.lalamove_lancar_em || "";
+    return v.length >= 16 ? v.slice(11, 16) : "";
   }
 
   function metricasTexto(rascunho) {
@@ -2301,15 +2320,21 @@
         + (srNomes ? ` (${escaparHtml(srNomes)})` : "");
       return `<div class="status-envio ok" title="Atualizado em ${escaparHtml(rascunho.lalamove_atualizado_em || "")}">Lalamove #${escaparHtml(rascunho.lalamove_order_id)} — ${escaparHtml(rascunho.lalamove_status || "?")}${veic}${preco}${link}</div>`;
     }
+    const tentativas = Number(rascunho.lalamove_lancar_tentativas || 0);
     const erro = rascunho.lalamove_erro
-      ? `<div class="status-envio erro">Lalamove: ${escaparHtml(rascunho.lalamove_erro)}</div>` : "";
+      ? `<div class="status-envio erro">Lalamove: ${escaparHtml(rascunho.lalamove_erro)}${tentativas ? ` (${tentativas} tentativa(s) do lançamento programado)` : ""}</div>` : "";
+    // Horário programado no card (Hugo, 03/09): o robô lança a corrida
+    // imediata nesse horário (timer lancar_lalamove_programados).
+    const horario = horarioLancamentoLalamove(rascunho);
+    const programado = (rotaEhLalamove(rascunho) && horario)
+      ? `<div class="status-envio programado" title="O robô lança a corrida (imediata) na Lalamove nesse horário -- sem usar o agendamento da Lalamove">⏰ Corrida programada pra ${escaparHtml(horario)}</div>` : "";
     // Rota enviada à VUUPT mas ainda sem corrida: o lançamento é um
     // botão separado do "Confirmar e enviar" (Hugo, 30/08) -- a corrida
     // (paga) só é criada ao clicar aqui, com o veículo/opcionais do card.
     if (rotaEhLalamove(rascunho) && PODE_EDITAR) {
-      return `${erro}<button type="button" class="botao-lancar-lalamove" data-rascunho-id="${rascunho.id}" title="Cota e cria a corrida REAL na Lalamove com o veículo e opcionais escolhidos no card">Lançar na Lalamove</button>`;
+      return `${erro}${programado}<button type="button" class="botao-lancar-lalamove" data-rascunho-id="${rascunho.id}" title="Cota e cria AGORA a corrida REAL (imediata) na Lalamove com o veículo e opcionais escolhidos no card">Lançar na Lalamove agora</button>`;
     }
-    return erro;
+    return erro + programado;
   }
 
   function confirmacaoMotoristaHtml(rascunho) {
@@ -4260,7 +4285,9 @@
     // corrida (paga) com o veículo/opcionais escolhidos no card.
     const r = RASCUNHOS.find(x => x.id === rascunhoId) || {};
     const veic = nomeVeiculoLalamove(r.lalamove_veiculo || LALAMOVE.veiculo_padrao) || "veículo padrão";
-    if (!confirm(`Lançar "${r.nome || `rota ${rascunhoId}`}" na Lalamove com ${veic}? Isso cota e cria uma corrida REAL (cobrada).`)) return;
+    const horario = horarioLancamentoLalamove(r);
+    const avisoProgramado = horario ? ` A programação pra ${horario} deixa de valer.` : "";
+    if (!confirm(`Lançar AGORA "${r.nome || `rota ${rascunhoId}`}" na Lalamove com ${veic}? Isso cota e cria uma corrida REAL e IMEDIATA (cobrada) -- o motorista da Lalamove sai já.${avisoProgramado}`)) return;
     if (botao) { botao.disabled = true; botao.textContent = "Lançando..."; }
     try {
       const resp = await postJSON("/api/planejamento/lalamove-lancar", { rascunho_id: rascunhoId });
@@ -4271,6 +4298,43 @@
     }
     // recarrega pra refletir status/erro gravados no card (mesmo padrão do envio)
     location.reload();
+  }
+
+  async function definirHorarioLalamove(rascunhoId, horario, input) {
+    // Campo "Lançar às" da caixa Lalamove (Hugo, 03/09): grava o horário
+    // (do dia da rota) em que o robô lança a corrida IMEDIATA. Sem
+    // scheduleAt da Lalamove -- o "quando" é nosso.
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    const anterior = r ? horarioLancamentoLalamove(r) : "";
+    if (horario && DATA_ALVO_ISO === new Date().toLocaleDateString("sv-SE")) {
+      const agora = new Date().toTimeString().slice(0, 5);
+      if (horario <= agora && !confirm(`${horario} já passou hoje -- o robô vai lançar a corrida na próxima rodada (em até 1 min), como corrida imediata. Continuar?`)) {
+        if (input) input.value = anterior;
+        return;
+      }
+    }
+    if (horario && r && r.status !== "ENVIADO") {
+      alert(`Horário ${horario} gravado. Atenção: a corrida só sai se a rota já estiver enviada à VUUPT nesse horário (o envio da noite cuida disso, ou "Confirmar e enviar").`);
+    }
+    try {
+      const resp = await postJSON("/api/planejamento/lalamove-horario", { rascunho_id: rascunhoId, horario: horario || null });
+      if (r) {
+        // reprogramar zera erro/tentativas no servidor (definir_lalamove_horario)
+        r.lalamove_lancar_em = resp.lancar_em || null;
+        r.lalamove_erro = null; r.lalamove_lancar_tentativas = 0;
+      }
+      // re-renderiza caixa + status pra refletir programação/erro zerado
+      const box = document.querySelector(`.lalamove-box[data-rascunho-id="${rascunhoId}"]`);
+      if (box && r) {
+        const editavel = PODE_EDITAR && r.status !== "OFERTADA" && !(r.status === "ENVIADO" && r.lalamove_order_id);
+        box.outerHTML = lalamoveBoxHtml(r, editavel);
+        const statusDiv = document.getElementById(`status-${rascunhoId}`);
+        if (statusDiv) statusDiv.innerHTML = statusHtml(r);
+      }
+    } catch (err) {
+      if (input) input.value = anterior;
+      alert(`Falha ao gravar o horário de lançamento: ${err.message}`);
+    }
   }
 
   async function cancelarRota(rascunhoIds, botaoOrigem) {
@@ -5013,14 +5077,16 @@
       // Corrida Lalamove pendente atrás da aba (o lançamento é um botão
       // separado do envio, Hugo 30/08) -- sem esse alerta a rota LALAMOVE
       // enviada ficaria sem corrida sem ninguém perceber.
+      // Rota com horário programado (Hugo, 03/09) não é pendência: o
+      // robô lança sozinho -- só alerta quem não tem corrida NEM horário.
       const lalamovePendentes = RASCUNHOS.filter(r =>
-        r.status === "ENVIADO" && rotaEhLalamove(r) && !r.lalamove_order_id).length;
+        r.status === "ENVIADO" && rotaEhLalamove(r) && !r.lalamove_order_id && !horarioLancamentoLalamove(r)).length;
       barraAbas.querySelectorAll(".aba-rotas").forEach(b => {
         b.textContent = `${b.textContent.trim()} (${contagensAbas[b.dataset.aba]})`;
         if ((b.dataset.aba === "enviadas" || b.dataset.aba === "lalamove") && lalamovePendentes) {
           b.classList.add("alerta");
           b.textContent += " ⚠";
-          b.title = `${lalamovePendentes} rota(s) LALAMOVE enviada(s) à VUUPT ainda sem corrida -- abra a aba e use "Lançar na Lalamove" no card`;
+          b.title = `${lalamovePendentes} rota(s) LALAMOVE enviada(s) à VUUPT sem corrida e sem horário programado -- abra a aba e use "Lançar na Lalamove agora" ou escolha o horário em "Lançar às" no card`;
         }
         b.addEventListener("click", () => aplicarAba(b.dataset.aba));
       });
@@ -5093,6 +5159,9 @@
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
       } else if (e.target.classList.contains("botao-lancar-lalamove")) {
         lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-lalamove-horario-limpar")) {
+        const box = e.target.closest(".lalamove-box");
+        definirHorarioLalamove(Number(box.dataset.rascunhoId), "", box.querySelector(".lalamove-horario"));
       } else if (e.target.classList.contains("botao-publicar-oferta")) {
         publicarOferta(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-despublicar-oferta")) {
@@ -5128,6 +5197,13 @@
         const li = e.target.closest(".item-parada");
         if (!li) return;
         alternarSelecaoRota(Number(li.dataset.serviceId), li);
+        return;
+      }
+      if (e.target.classList.contains("lalamove-horario")) {
+        // Horário de lançamento (Hugo, 03/09) -- vai pra coluna própria,
+        // não pra cotação; limpar = vazio.
+        const box = e.target.closest(".lalamove-box");
+        await definirHorarioLalamove(Number(box.dataset.rascunhoId), e.target.value, e.target);
         return;
       }
       const boxLala = e.target.closest(".lalamove-box");

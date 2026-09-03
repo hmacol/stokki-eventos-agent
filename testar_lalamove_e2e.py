@@ -14,6 +14,15 @@ testar_lalamove_e2e.py -- teste ponta a ponta da integração Lalamove
     python testar_lalamove_e2e.py sync
         -> roda lalamove_integracao.sincronizar_pedidos (o que o timer faz).
 
+    python testar_lalamove_e2e.py programar <rascunho_id> HH:MM
+        -> grava o horário de lançamento no rascunho (campo "Lançar às"
+           do card); HH:MM vazio ('') limpa.
+
+    python testar_lalamove_e2e.py programados [--modo-teste]
+        -> roda lalamove_integracao.lancar_programados (o que o timer
+           de 1 min faz): lança corrida IMEDIATA das rotas cujo horário
+           programado já chegou.
+
     python testar_lalamove_e2e.py limpar <rascunho_id>
         -> cancela o pedido Lalamove, a rota e os serviços na VUUPT e
            descarta o rascunho.
@@ -27,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent / "roteirizacao"))
 sys.path.insert(0, str(Path(__file__).parent / "painel_agentes"))
 
 import rascunhos_rota  # noqa: E402
-from lalamove_integracao import _carregar_config, cfg_lalamove, cliente_de_config, sincronizar_pedidos  # noqa: E402
+from lalamove_integracao import (_carregar_config, cfg_lalamove, cliente_de_config,  # noqa: E402
+                                 lancar_programados, sincronizar_pedidos)
 from rotas_client import cancelar_rota  # noqa: E402
 from vuupt_client import VuuptClient  # noqa: E402
 
@@ -96,6 +106,16 @@ def sync():
         print(f"aberto: rascunho {r['id']} pedido {r['lalamove_order_id']} status {r['lalamove_status']}")
 
 
+def programar(rid: int, horario: str):
+    gravado = rascunhos_rota.definir_lalamove_horario(rid, horario or None)
+    print(f"Rascunho {rid}: lalamove_lancar_em = {gravado}")
+
+
+def programados(modo_teste: bool):
+    config = _carregar_config()
+    print(lancar_programados(config["vuupt_api"]["token"], config, modo_teste=modo_teste))
+
+
 def limpar(rid: int):
     config = _carregar_config()
     token = config["vuupt_api"]["token"]
@@ -135,6 +155,10 @@ if __name__ == "__main__":
         criar()
     elif cmd == "sync":
         sync()
+    elif cmd == "programar":
+        programar(int(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
+    elif cmd == "programados":
+        programados("--modo-teste" in sys.argv)
     elif cmd == "limpar":
         limpar(int(sys.argv[2]))
     else:

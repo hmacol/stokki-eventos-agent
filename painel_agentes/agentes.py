@@ -226,6 +226,17 @@ AGENTES = [
         "categoria": "Roteirização",
     },
     {
+        "id": "lancar_lalamove_programados",
+        "nome": "Lançar corridas Lalamove programadas",
+        "descricao": "Cria a corrida (imediata) na Lalamove das rotas LALAMOVE enviadas à VUUPT cujo horário de lançamento escolhido no card já chegou.",
+        "script": "nucleo/lancar_lalamove_programados.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": [],
+        "categoria": "Roteirização",
+    },
+    {
         "id": "processar_documentos",
         "nome": "Processar Documentos (NF, Boleto, CC, Agendamento)",
         "descricao": "Busca documentos por e-mail e na Stokki, classifica, casa com o pedido e envia pro GCS.",

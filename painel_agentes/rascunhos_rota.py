@@ -30,7 +30,7 @@ import re
 import sqlite3
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -136,6 +136,15 @@ def _conectar() -> sqlite3.Connection:
                    "lalamove_veiculo", "lalamove_special_requests"):
         if coluna not in colunas_rota:
             conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} TEXT")
+
+    # Migração 03/09: horário de lançamento da corrida Lalamove escolhido
+    # no card (Hugo). O timer nucleo/lancar_lalamove_programados.py lança
+    # a corrida IMEDIATA quando esse horário chega -- sem o agendamento
+    # (scheduleAt) da própria Lalamove. Formato 'YYYY-MM-DD HH:MM' local.
+    if "lalamove_lancar_em" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN lalamove_lancar_em TEXT")
+    if "lalamove_lancar_tentativas" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN lalamove_lancar_tentativas INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
     return conn
@@ -1325,11 +1334,14 @@ def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None,
     vazia) substitui."""
     conn = _conectar()
     try:
-        row = conn.execute("SELECT status FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        row = conn.execute("SELECT status, lalamove_order_id FROM rascunhos_rota WHERE id = ?",
+                           (rascunho_id,)).fetchone()
         if not row:
             raise ValueError("Rascunho não encontrado.")
-        if row["status"] == STATUS_ENVIADO:
-            raise ValueError("Rota já enviada -- o veículo Lalamove não pode mais ser trocado.")
+        # A trava é a corrida existir, não o envio à VUUPT: o card deixa
+        # editar veículo/opcionais até "Lançar na Lalamove" (Hugo, 30/08).
+        if row["lalamove_order_id"]:
+            raise ValueError("Corrida já lançada na Lalamove -- o veículo não pode mais ser trocado.")
         conn.execute("UPDATE rascunhos_rota SET lalamove_veiculo = ? WHERE id = ?",
                      ((codigo or "").strip().upper() or None, rascunho_id))
         if special_requests is not None:
@@ -1342,10 +1354,64 @@ def definir_lalamove_veiculo(rascunho_id: int, codigo: str | None,
         conn.close()
 
 
+def definir_lalamove_horario(rascunho_id: int, horario: str | None) -> str | None:
+    """Horário de lançamento da corrida Lalamove escolhido no card (Hugo,
+    03/09): HH:MM (hora local) do dia da rota (data_alvo). O timer
+    nucleo/lancar_lalamove_programados.py lança a corrida IMEDIATA quando
+    esse horário chega -- o Hugo não quer usar o agendamento (scheduleAt)
+    da própria Lalamove. None/'' limpa a programação. Reprogramar zera as
+    tentativas e o erro anterior. Devolve o valor gravado
+    ('YYYY-MM-DD HH:MM' ou None)."""
+    horario = (horario or "").strip()
+    if horario and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", horario):
+        raise ValueError("Horário inválido -- use HH:MM.")
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT data_alvo, lalamove_order_id FROM rascunhos_rota WHERE id = ?",
+                           (rascunho_id,)).fetchone()
+        if not row:
+            raise ValueError("Rascunho não encontrado.")
+        if row["lalamove_order_id"]:
+            raise ValueError("Corrida já lançada na Lalamove -- o horário não pode mais ser alterado.")
+        lancar_em = f"{row['data_alvo']} {horario}" if horario else None
+        conn.execute("""
+            UPDATE rascunhos_rota
+            SET lalamove_lancar_em = ?, lalamove_lancar_tentativas = 0, lalamove_erro = NULL
+            WHERE id = ?
+        """, (lancar_em, rascunho_id))
+        _tocar(conn, rascunho_id)
+        conn.commit()
+        return lancar_em
+    finally:
+        conn.close()
+
+
+def listar_rascunhos_lalamove_programados(ate: str | None = None, max_tentativas: int = 3) -> list[dict]:
+    """Rascunhos ENVIADOS, ainda sem corrida, cujo horário de lançamento
+    Lalamove já chegou (lalamove_lancar_em <= `ate`, 'YYYY-MM-DD HH:MM'
+    local; padrão = agora) e que ainda não esgotaram as tentativas --
+    pro timer nucleo/lancar_lalamove_programados.py."""
+    ate = ate or datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = _conectar()
+    try:
+        rows = conn.execute("""
+            SELECT * FROM rascunhos_rota
+            WHERE status = ?
+              AND COALESCE(lalamove_order_id, '') = ''
+              AND lalamove_lancar_em IS NOT NULL AND lalamove_lancar_em <= ?
+              AND COALESCE(lalamove_lancar_tentativas, 0) < ?
+            ORDER BY lalamove_lancar_em, id
+        """, (STATUS_ENVIADO, ate, max_tentativas)).fetchall()
+        return [_montar_rascunho(conn, r) for r in rows]
+    finally:
+        conn.close()
+
+
 def gravar_lalamove(rascunho_id: int, **campos):
     """Atualiza as colunas lalamove_* do rascunho (só as passadas).
     Ex.: gravar_lalamove(id, order_id='...', status='ASSIGNING_DRIVER')."""
-    permitidas = {"order_id", "quotation_id", "status", "share_link", "preco", "erro", "veiculo"}
+    permitidas = {"order_id", "quotation_id", "status", "share_link", "preco", "erro", "veiculo",
+                  "lancar_em", "lancar_tentativas"}
     sets, valores = [], []
     for chave, valor in campos.items():
         if chave not in permitidas:

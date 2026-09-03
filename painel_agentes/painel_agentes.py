@@ -1348,6 +1348,23 @@ def api_lalamove_veiculo():
     return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
 
 
+@app.route("/api/planejamento/lalamove-horario", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_lalamove_horario():
+    """Campo "Lançar às" da caixa Lalamove do card (Hugo, 03/09): horário
+    HH:MM do dia da rota em que o timer nucleo/lancar_lalamove_programados.py
+    cria a corrida IMEDIATA (sem o agendamento da Lalamove). horario
+    vazio/null limpa a programação."""
+    body = request.get_json(force=True)
+    try:
+        lancar_em = rascunhos_rota.definir_lalamove_horario(body["rascunho_id"], body.get("horario"))
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "lancar_em": lancar_em, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+
+
 @app.route("/api/planejamento/lalamove-lancar", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-lancar-lalamove.service a cada minuto (horario de lancamento escolhido no card)
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=false
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
