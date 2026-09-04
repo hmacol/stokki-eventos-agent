@@ -75,15 +75,19 @@ def sincronizar_perfis(conn, sess, maximo: int, pausa: float = 0.4) -> dict:
         try:
             perfil = stokki_produtos.ler_perfil(sess, sid)
             wms.atualizar_perfil_produto(conn, sid, perfil)
+            # Commit a cada perfil: a leitura HTTP fica FORA da transação.
+            # Segurar o lock em blocos de 50 (≈20 s) derrubou o painel na
+            # subida ("database is locked" em limpar_execucoes_travadas),
+            # 04/09 -- o dados.db é compartilhado com todos os agentes.
+            conn.commit()
             ok += 1
         except Exception as e:  # noqa: BLE001 -- um perfil ruim não derruba a rodada
+            conn.rollback()
             falhas += 1
             logger.warning("Perfil %s falhou: %s", sid, e)
         if i % 50 == 0:
-            conn.commit()
             logger.info("Perfis: %d/%d", i, len(ids))
         time.sleep(pausa)
-    conn.commit()
     return {"pendentes_no_inicio": len(ids), "lidos": ok, "falhas": falhas}
 
 
