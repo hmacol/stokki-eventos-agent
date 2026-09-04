@@ -15,6 +15,7 @@ COMO USAR (produção):
     py -3.11 -m waitress --host=0.0.0.0 --port=8070 painel_agentes:app
 """
 import hmac
+import json
 import logging
 import re
 import sys
@@ -46,7 +47,7 @@ from urllib.parse import urlparse
 
 import yaml
 from flask import (
-    Flask, abort, g, redirect, render_template, request, url_for,
+    Flask, Response, abort, g, redirect, render_template, request, url_for,
     jsonify, send_file, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -76,6 +77,7 @@ import rascunhos_rota
 import torre_controle
 import tratativas
 import pedidos_parados_triagem
+import wms
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -118,9 +120,9 @@ limpar_execucoes_travadas()
 
 
 def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
-    """Confere usuário/senha contra os quatro pares possíveis e devolve o
-    nível de acesso correspondente ("total", "operador", "leitura" ou
-    "expedicao"), ou None se não bateram com nenhum deles."""
+    """Confere usuário/senha contra os cinco pares possíveis e devolve o
+    nível de acesso correspondente ("total", "operador", "leitura",
+    "expedicao" ou "galpao"), ou None se não bateram com nenhum deles."""
     if not usuario or not senha:
         return None
     usuario_total = cfg_painel.get("usuario")
@@ -143,6 +145,11 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_expedicao and senha_expedicao and hmac.compare_digest(usuario, usuario_expedicao) \
             and hmac.compare_digest(senha, senha_expedicao):
         return "expedicao"
+    usuario_galpao = cfg_painel.get("usuario_galpao")
+    senha_galpao = cfg_painel.get("senha_galpao")
+    if usuario_galpao and senha_galpao and hmac.compare_digest(usuario, usuario_galpao) \
+            and hmac.compare_digest(senha, senha_galpao):
+        return "galpao"
     return None
 
 
@@ -154,7 +161,10 @@ def requer_auth(f=None, *, niveis=("total",)):
     Histórico), "leitura" (usuario_leitura/senha_leitura, só as telas e
     APIs marcadas com niveis=(..., "leitura"), sem nenhum botão de ação) e
     "expedicao" (usuario_expedicao/senha_expedicao, só a tela /expedicao e
-    o PDF de romaneio -- nada mais do painel, nem em modo leitura).
+    o PDF de romaneio -- nada mais do painel, nem em modo leitura) e
+    "galpao" (usuario_galpao/senha_galpao, só a tela /wms de endereçamento
+    do galpão e suas APIs, 04/09 -- login fixo do aparelho compartilhado;
+    quem opera se identifica por nome + PIN dentro da tela).
     Rota sem `niveis` exige nível total. Pedido do Hugo, 13/08: time
     acompanha Torre e Planejamento sem poder disparar ações; nível
     "operador" adicionado 17/08 pra quem toca a operação do dia a dia sem
@@ -346,7 +356,7 @@ def login():
             session["usuario"] = usuario
             # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
             # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = url_for("expedicao") if nivel == "expedicao" else url_for("torre")
+            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms")}.get(nivel) or url_for("torre")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -1971,6 +1981,371 @@ def api_editar_endereco_lote():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"]})
+
+
+# ── Galpão: endereçamento de produtos (WMS, Hugo 04/09) ─────────────────────
+# Tela mobile única (/wms, PWA instalável no aparelho compartilhado do
+# galpão) + APIs em /api/wms/*. Lógica e tabelas em wms.py; aqui só HTTP.
+# Níveis: total e operador (também veem no menu) e "galpao" (login fixo do
+# aparelho). Quem opera se identifica por nome + PIN, guardado na sessão
+# por SESSAO_OPERADOR_HORAS (renova a cada movimento).
+
+_NIVEIS_WMS = ("total", "operador", "galpao")
+_NIVEIS_WMS_ADMIN = ("total", "operador")
+
+
+def _wms_operador_atual():
+    op = session.get("wms_operador")
+    if not op:
+        return None
+    try:
+        em = datetime.fromisoformat(op.get("em", ""))
+    except ValueError:
+        return None
+    if datetime.now() - em > timedelta(hours=wms.SESSAO_OPERADOR_HORAS):
+        session.pop("wms_operador", None)
+        return None
+    return {"id": op["id"], "nome": op["nome"]}
+
+
+def _wms_gravar_operador(op: dict):
+    session["wms_operador"] = {"id": op["id"], "nome": op["nome"], "em": datetime.now().isoformat(timespec="seconds")}
+
+
+def _wms_exige_operador():
+    op = _wms_operador_atual()
+    if not op:
+        abort(Response(jsonify({"erro": "Identifique o operador (nome + PIN) antes de registrar.", "sem_operador": True}).get_data(),
+                       status=409, mimetype="application/json"))
+    _wms_gravar_operador(op)
+    return op
+
+
+def _wms_json_erro(e, status=400):
+    return jsonify({"erro": str(e)}), status
+
+
+def _wms_bootstrap(conn) -> dict:
+    return {
+        "operador": _wms_operador_atual(),
+        "operadores": wms.listar_operadores(conn),
+        "areas": wms.listar_areas(conn),
+        "resumo": wms.resumo_dia(conn),
+        "produtos": wms.contar_produtos(conn),
+        "nivel": g.nivel_acesso,
+        "pode_administrar": g.nivel_acesso in _NIVEIS_WMS_ADMIN,
+        "sessao_operador_horas": wms.SESSAO_OPERADOR_HORAS,
+    }
+
+
+@app.route("/wms", endpoint="wms")
+@requer_auth(niveis=_NIVEIS_WMS)
+def tela_wms():
+    conn = wms.conectar()
+    try:
+        wms.semear_estrutura_inicial(conn)
+        boot = _wms_bootstrap(conn)
+    finally:
+        conn.close()
+    return render_template("wms.html", boot=boot)
+
+
+@app.route("/wms/manifest.webmanifest")
+def wms_manifest():
+    raiz = request.script_root or ""
+    manifesto = {
+        "name": "Galpão Freshlog", "short_name": "Galpão", "lang": "pt-BR",
+        "start_url": f"{raiz}/wms", "scope": f"{raiz}/wms", "display": "standalone",
+        "orientation": "portrait", "background_color": "#141428", "theme_color": "#141428",
+        "icons": [{"src": url_for("static", filename="apple-touch-icon.png"), "sizes": "180x180", "type": "image/png", "purpose": "any"}],
+    }
+    return Response(json.dumps(manifesto, ensure_ascii=False), mimetype="application/manifest+json")
+
+
+@app.route("/wms/sw.js")
+def wms_service_worker():
+    """Service worker mínimo (exigido pra "instalar" a PWA): rede primeiro,
+    cache da casca só como fallback quando a rede cai. API nunca é cacheada."""
+    raiz = request.script_root or ""
+    js = """
+const CACHE = 'wms-casca-v1';
+const CASCA = ['%(raiz)s/wms'];
+self.addEventListener('install', (e) => { self.skipWaiting(); });
+self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.pathname.includes('/api/')) return;
+  if (!CASCA.includes(url.pathname)) return;
+  e.respondWith(
+    fetch(e.request).then((resp) => {
+      if (resp.ok) caches.open(CACHE).then((c) => c.put(e.request, resp.clone()));
+      return resp;
+    }).catch(() => caches.match(e.request))
+  );
+});
+""" % {"raiz": raiz}
+    resp = Response(js, mimetype="application/javascript")
+    resp.headers["Service-Worker-Allowed"] = f"{raiz}/wms"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/api/wms/bootstrap")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_bootstrap():
+    conn = wms.conectar()
+    try:
+        return jsonify(_wms_bootstrap(conn))
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/operador/entrar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_operador_entrar():
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        op = wms.autenticar_operador(conn, int(body.get("operador_id") or 0), body.get("pin", ""))
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e, 401)
+    finally:
+        conn.close()
+    _wms_gravar_operador(op)
+    return jsonify({"ok": True, "operador": op})
+
+
+@app.route("/api/wms/operador/sair", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_operador_sair():
+    session.pop("wms_operador", None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/wms/ler")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_ler():
+    conn = wms.conectar()
+    try:
+        return jsonify(wms.ler_codigo(conn, request.args.get("codigo", "")))
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/produtos")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_produtos():
+    conn = wms.conectar()
+    try:
+        return jsonify({"produtos": wms.buscar_produtos_texto(conn, request.args.get("q", ""))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/produtos/<int:produto_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_produto(produto_id):
+    conn = wms.conectar()
+    try:
+        p = wms.obter_produto(conn, produto_id)
+        if not p:
+            return _wms_json_erro("Produto não encontrado.", 404)
+        p["saldos"] = wms.saldos_produto(conn, produto_id)
+        p["total"] = round(sum(s["quantidade"] for s in p["saldos"]), 3)
+        p["movimentos"] = wms.listar_movimentos(conn, 20, produto_id=produto_id)
+        return jsonify(p)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/produtos/manual", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_produto_manual():
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        qtd = body.get("qtd_por_caixa")
+        p = wms.criar_produto_manual(conn, body.get("ean", ""), body.get("descricao", ""), body.get("embarcador", ""),
+                                     body.get("unidade") or "UN", float(qtd) if qtd not in (None, "") else None)
+        return jsonify({"ok": True, "produto": p})
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/produtos/<int:produto_id>/controla-validade", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_produto_controla_validade(produto_id):
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        return jsonify({"ok": True, "produto": wms.definir_controla_validade(conn, produto_id, bool(body.get("controla", True)))})
+    finally:
+        conn.close()
+
+
+def _wms_registrar(conn, item: dict, op: dict) -> dict:
+    return wms.registrar_movimento(
+        conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
+        quantidade=item.get("quantidade"), lote=item.get("lote", ""), validade=item.get("validade"),
+        origem=item.get("origem"), destino=item.get("destino"), operador=op, uuid=item.get("uuid"),
+        observacao=item.get("observacao", ""), dispositivo=(request.user_agent.string or "")[:80],
+        criado_em=item.get("criado_em"))
+
+
+@app.route("/api/wms/movimentos", methods=["GET"])
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_movimentos():
+    conn = wms.conectar()
+    try:
+        return jsonify({"movimentos": wms.listar_movimentos(
+            conn, request.args.get("limite", 50, type=int), produto_id=request.args.get("produto_id", type=int),
+            posicao=request.args.get("posicao"), operador_id=request.args.get("operador_id", type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/movimentos", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_registrar_movimento():
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        m = _wms_registrar(conn, body, op)
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "movimento": m})
+
+
+@app.route("/api/wms/movimentos/lote", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_movimentos_lote():
+    """Reenvio da fila offline: cada item leva o uuid gerado no aparelho e o
+    operador que estava logado na hora; o servidor ignora uuid repetido."""
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    resultados = []
+    try:
+        for item in body.get("movimentos") or []:
+            op_item = item.get("operador") if isinstance(item.get("operador"), dict) and item["operador"].get("id") else op
+            try:
+                m = _wms_registrar(conn, item, op_item)
+                resultados.append({"uuid": item.get("uuid"), "ok": True, "movimento": m})
+            except (wms.ErroWMS, ValueError) as e:
+                resultados.append({"uuid": item.get("uuid"), "ok": False, "erro": str(e)})
+    finally:
+        conn.close()
+    return jsonify({"resultados": resultados})
+
+
+@app.route("/api/wms/posicoes")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_posicoes():
+    conn = wms.conectar()
+    try:
+        return jsonify({"posicoes": wms.listar_posicoes(conn, request.args.get("area"),
+                                                        apenas_ativas=request.args.get("todas") != "1")})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/posicoes/<codigo>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_posicao(codigo):
+    conn = wms.conectar()
+    try:
+        p = wms.obter_posicao(conn, codigo)
+        if not p:
+            return _wms_json_erro("Posição não existe.", 404)
+        p["conteudo"] = wms.conteudo_posicao(conn, p["codigo"])
+        p["movimentos"] = wms.listar_movimentos(conn, 20, posicao=p["codigo"])
+        return jsonify(p)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/posicoes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_criar_posicao():
+    body = request.get_json(force=True) or {}
+    op = _wms_operador_atual()
+    conn = wms.conectar()
+    try:
+        p = wms.criar_posicao(conn, body.get("codigo", ""), (op or {}).get("nome") or session.get("usuario"))
+        return jsonify({"ok": True, "posicao": p})
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/posicoes/<codigo>/ativo", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_posicao_ativo(codigo):
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        return jsonify({"ok": True, "posicao": wms.desativar_posicao(conn, codigo, bool(body.get("ativo", False)))})
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/areas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_criar_area():
+    """Cria (ou atualiza) uma área e, opcionalmente, gera as posições em
+    lote: estantes × níveis + pallets."""
+    body = request.get_json(force=True) or {}
+    op = _wms_operador_atual()
+    conn = wms.conectar()
+    try:
+        area = wms.criar_area(conn, body.get("codigo", ""), body.get("tipo", "CONTAINER"), body.get("nome"), body.get("temperatura"))
+        geradas = wms.gerar_posicoes(conn, area["codigo"], body.get("estantes") or 0, body.get("niveis") or 0,
+                                     body.get("pallets") or 0, (op or {}).get("nome") or session.get("usuario"))
+        return jsonify({"ok": True, "area": area, "geradas": geradas, "areas": wms.listar_areas(conn)})
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/wms/etiquetas.pdf")
+@requer_auth(niveis=_NIVEIS_WMS)
+def wms_etiquetas_pdf():
+    """PDF 10 × 5 cm, uma etiqueta por página. ?area=C5 imprime a área toda,
+    ?codigos=C5-E3-N2,C5-P1 imprime só essas."""
+    conn = wms.conectar()
+    try:
+        area = request.args.get("area")
+        if area:
+            codigos = [p["codigo"] for p in wms.listar_posicoes(conn, area)]
+            nome = f"etiquetas_{wms.normalizar_codigo(area)}.pdf"
+        else:
+            codigos = [c for c in (request.args.get("codigos") or "").split(",") if c.strip()]
+            nome = "etiquetas_" + (wms.normalizar_codigo(codigos[0]) if codigos else "vazio") + ".pdf"
+        try:
+            pdf = wms.gerar_etiquetas_pdf(conn, codigos)
+        except wms.ErroWMS as e:
+            abort(400, str(e))
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf", headers={"Content-Disposition": f'inline; filename="{nome}"'})
 
 
 if __name__ == "__main__":

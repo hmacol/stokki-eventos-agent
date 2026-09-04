@@ -304,6 +304,12 @@
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="1.5"/><path d="M7 8h6M7 11.2h6M7 14.4h3.5"/></svg></span>
         <span class="rotulo">Expedição</span>
       </a>
+      {% if session.get('nivel_acesso') in ('total', 'operador') %}
+      <a href="{{ url_for('wms') }}" class="{{ 'ativo' if request.endpoint == 'wms' else '' }}" title="Galpão (endereçamento)">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L10 4l6.5 4.5V16h-13z"/><path d="M7 16v-4.5h6V16"/><path d="M8.5 9.2h3"/></svg></span>
+        <span class="rotulo">Galpão</span>
+      </a>
+      {% endif %}
       {% if session.get('nivel_acesso') != 'expedicao' %}
       <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}" title="Motoristas">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/></svg></span>

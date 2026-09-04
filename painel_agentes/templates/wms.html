@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#141428">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>
+  (function() {
+    var salvo = localStorage.getItem("painel_tema_escuro");
+    var escuro = salvo === "1" || (salvo === null && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (escuro) document.documentElement.classList.add("tema-escuro");
+  })();
+</script>
+<title>Galpão — Freshlog</title>
+<link rel="manifest" href="{{ url_for('wms_manifest') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+{% include "_paleta_cores.html" %}
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--fundo); color: var(--texto);
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    font-size: 15px; line-height: 1.4; overscroll-behavior-y: contain;
+  }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace; font-variant-numeric: tabular-nums; }
+  .topo {
+    position: sticky; top: 0; z-index: 40; background: var(--primaria); color: #fff;
+    padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top));
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .topo .marca { font-weight: 800; font-size: 14px; }
+  .topo .sub { font-size: 12px; color: #A3A3C2; }
+  .topo .operador { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; background: rgba(255,255,255,0.08); border: none; color: #fff; padding: 6px 10px; border-radius: 100px; cursor: pointer; }
+  .topo .operador .bola { width: 22px; height: 22px; border-radius: 50%; background: var(--acento); color: #06202B; display: grid; place-items: center; font-size: 10px; font-weight: 800; }
+  .topo .operador.vazio .bola { background: #E8A33D; }
+  .rede { position: relative; padding-left: 14px; font-size: 11px; color: #C7C7E0; white-space: nowrap; }
+  .rede::before { content: ""; position: absolute; left: 0; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: #2FD9AE; }
+  .rede.off::before { background: #F0AA45; }
+  .faixa { background: var(--rodando-bg); color: var(--rodando-texto); border-bottom: 1px solid var(--rodando-borda); padding: 8px 14px; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .faixa[hidden] { display: none; }
+  .faixa button { background: none; border: 1px solid currentColor; color: inherit; border-radius: 6px; padding: 4px 8px; font-weight: 700; font-size: 12px; }
+  main { max-width: 640px; margin: 0 auto; padding: 12px 14px calc(78px + env(safe-area-inset-bottom)); }
+  h1 { margin: 4px 0 2px; font-size: 22px; line-height: 1.1; }
+  h1 small { display: block; font-size: 12.5px; color: var(--texto-suave); font-weight: 400; margin-top: 3px; }
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  .cartao .rotulo { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--texto-suave); font-weight: 700; margin-bottom: 4px; }
+  .cartao .valor { font-weight: 700; font-size: 16px; }
+  .cartao .sub { font-size: 12.5px; color: var(--texto-suave); margin-top: 2px; }
+  .cartao.ok { border-left: 4px solid var(--sucesso); }
+  .cartao.atencao { border-left: 4px solid var(--rodando); }
+  .cartao.erro { border-left: 4px solid var(--erro); }
+  .leitura {
+    border: 2px dashed var(--acento); background: var(--superficie); border-radius: 12px; padding: 12px; margin: 10px 0;
+    display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+  }
+  .leitura input { width: 100%; font-size: 18px; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); color: var(--texto); font-family: inherit; }
+  .leitura input:focus { outline: 2px solid var(--acento); border-color: transparent; }
+  .leitura .dica { grid-column: 1 / -1; font-size: 12px; color: var(--texto-suave); text-align: center; }
+  .btn-cam { width: 52px; height: 48px; border-radius: 10px; border: none; background: var(--acento); color: #fff; font-size: 22px; cursor: pointer; }
+  .acoes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+  .acoes button { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px 12px; text-align: left; display: grid; gap: 3px; cursor: pointer; color: var(--texto); font-family: inherit; }
+  .acoes button b { font-size: 17px; }
+  .acoes button span { font-size: 11.5px; color: var(--texto-suave); }
+  .acoes button.primario { background: var(--primaria); border-color: var(--primaria); color: #fff; }
+  .acoes button.primario span { color: #C7C7E0; }
+  .campo { display: grid; gap: 4px; margin: 10px 0; }
+  .campo label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--texto-suave); font-weight: 700; }
+  .campo input, .campo select, .campo textarea {
+    width: 100%; font-size: 17px; padding: 11px 12px; border: 1px solid var(--borda); border-radius: 10px;
+    background: var(--superficie); color: var(--texto); font-family: inherit; min-height: 48px;
+  }
+  .campo input:focus, .campo select:focus, .campo textarea:focus { outline: 2px solid var(--acento); border-color: transparent; }
+  .campo input.aguardando { border: 2px dashed var(--acento); }
+  .campo .ajuda { font-size: 12px; color: var(--texto-suave); }
+  .campo .com-botao { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .campo .com-botao button { border-radius: 10px; border: 1px solid var(--borda); background: var(--superficie); color: var(--acento); font-weight: 700; padding: 0 12px; font-size: 13px; cursor: pointer; }
+  .duas { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .duas-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+  .lista { display: grid; gap: 6px; margin: 10px 0; }
+  .item { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; cursor: pointer; }
+  .item .cod { grid-column: 1; grid-row: 1; font-weight: 700; font-size: 15px; }
+  .item .meta { grid-column: 1; grid-row: 2; font-size: 12.5px; color: var(--texto-suave); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .item .qtd { grid-column: 2; grid-row: 1 / span 2; font-size: 22px; font-weight: 800; text-align: right; line-height: 1; }
+  .item .qtd small { display: block; font-size: 10.5px; color: var(--texto-suave); font-weight: 600; }
+  .item.venc { border-left: 4px solid var(--erro); }
+  .item.perto { border-left: 4px solid var(--rodando); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
+  .badge-erro { background: var(--erro-bg); color: var(--erro); }
+  .badge-atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-ok { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-neutro { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .total { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 2px; }
+  .total b { font-size: 22px; }
+  .total span { font-size: 12.5px; color: var(--texto-suave); }
+  .botoes { display: grid; gap: 8px; margin: 12px 0; }
+  .botoes.linha { grid-template-columns: 1fr 1fr; }
+  button.botao, a.botao {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--acento); color: #fff; border: none; min-height: 50px; padding: 10px 16px;
+    border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; text-decoration: none; font-family: inherit;
+  }
+  button.botao.secundario, a.botao.secundario { background: transparent; color: var(--acento); border: 1px solid var(--acento); }
+  button.botao.neutro { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  button.botao.perigo { background: var(--erro); }
+  button.botao:disabled { opacity: .5; cursor: not-allowed; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .chip { border: 1px solid var(--borda); background: var(--superficie); border-radius: 100px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--texto); font-family: inherit; }
+  .chip.on { background: var(--texto); color: var(--fundo); border-color: var(--texto); }
+  .voltar { background: none; border: none; color: var(--acento); font-weight: 700; font-size: 14px; padding: 6px 0; cursor: pointer; font-family: inherit; }
+  .barra-inferior { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; background: var(--superficie); border-top: 1px solid var(--borda); padding-bottom: env(safe-area-inset-bottom); }
+  .aba { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px 7px; color: var(--texto-suave); background: none; border: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; font-family: inherit; }
+  .aba .ic { font-size: 19px; line-height: 1; }
+  .aba.on { color: var(--acento); }
+  .vazio { color: var(--texto-suave); font-size: 13.5px; padding: 14px 4px; text-align: center; }
+  .toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60; background: var(--texto); color: var(--fundo); padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; max-width: 92vw; box-shadow: 0 6px 20px rgba(0,0,0,.25); opacity: 0; transition: opacity .15s; pointer-events: none; }
+  .toast.erro { background: var(--erro); color: #fff; }
+  .toast.on { opacity: 1; }
+  .modal-cam { position: fixed; inset: 0; z-index: 70; background: #000; display: none; flex-direction: column; }
+  .modal-cam.on { display: flex; }
+  .modal-cam video { flex: 1; width: 100%; object-fit: cover; }
+  .modal-cam .mira { position: absolute; left: 10%; right: 10%; top: 30%; height: 28%; border: 2px solid rgba(255,255,255,.85); border-radius: 12px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); pointer-events: none; }
+  .modal-cam .rodape-cam { padding: 14px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); display: grid; gap: 8px; background: #000; }
+  .modal-cam .rodape-cam p { margin: 0; color: #ccc; font-size: 13px; text-align: center; }
+  .pin { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+  .pin button { min-height: 56px; font-size: 22px; font-weight: 700; border-radius: 12px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); cursor: pointer; font-family: inherit; }
+  .pin-visor { text-align: center; font-size: 30px; letter-spacing: .5em; padding: 10px; min-height: 56px; font-weight: 700; }
+  .grade-num { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .info-linha { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--borda); }
+  .info-linha:last-child { border-bottom: none; }
+  table.mov { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.mov td { padding: 7px 4px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  .ocupacao { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+  .ocupacao .pos { border: 1px solid var(--borda); border-radius: 8px; padding: 8px 6px; text-align: center; font-size: 12px; font-weight: 700; background: var(--superficie); cursor: pointer; }
+  .ocupacao .pos.cheia { background: var(--sucesso-bg); border-color: var(--sucesso); }
+  .ocupacao .pos small { display: block; font-weight: 400; color: var(--texto-suave); font-size: 10.5px; }
+  @media (min-width: 700px) { main { max-width: 760px; } .acoes { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+<script>
+  const BASE_PATH = "{{ request.script_root }}";
+  const BOOT = {{ boot | tojson }};
+</script>
+
+<div class="topo">
+  <div>
+    <div class="marca">Galpão Freshlog</div>
+    <div class="sub" id="topo-sub">Endereçamento</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="rede" id="rede">online</span>
+    <button type="button" class="operador vazio" id="btn-operador"><span class="bola">?</span><span id="operador-nome">ninguém</span></button>
+  </div>
+</div>
+<div class="faixa" id="faixa-fila" hidden><span id="faixa-texto"></span><button type="button" id="btn-reenviar">Reenviar</button></div>
+
+<main id="app"></main>
+
+<nav class="barra-inferior">
+  <button class="aba on" data-aba="inicio"><span class="ic">⌂</span>Início</button>
+  <button class="aba" data-aba="busca"><span class="ic">⌕</span>Consultar</button>
+  <button class="aba" data-aba="movimentos"><span class="ic">≡</span>Movimentos</button>
+  <button class="aba" data-aba="posicoes"><span class="ic">▦</span>Posições</button>
+</nav>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-cam" id="modal-cam">
+  <video id="video" playsinline muted autoplay></video>
+  <div class="mira"></div>
+  <div class="rodape-cam">
+    <p id="cam-status">Aponte para o código de barras ou QR</p>
+    <button type="button" class="botao neutro" id="btn-fechar-cam">Fechar câmera</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const API = BASE_PATH + '/api/wms';
+  const app = document.getElementById('app');
+  const S = {
+    operador: BOOT.operador, operadores: BOOT.operadores, areas: BOOT.areas, resumo: BOOT.resumo,
+    produtosInfo: BOOT.produtos, podeAdministrar: BOOT.pode_administrar,
+    tela: 'inicio', pilha: [], ctx: {}, aguardando: null, fila: carregarFila(),
+  };
+  const TIPOS_AREA = { CONTAINER: 'Container', CAM_CONGELADA: 'Câmara congelada', CAM_REFRIGERADA: 'Câmara refrigerada' };
+  const TIPOS_MOV = { ENTRADA: 'Entrada', SAIDA: 'Saída', TRANSFERENCIA: 'Transferência', AJUSTE: 'Ajuste', INVENTARIO: 'Inventário' };
+
+  // ── util ──────────────────────────────────────────────────────────────
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const num = (v) => { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 }); };
+  const dataBr = (iso) => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '';
+  const horaBr = (ts) => ts ? ts.slice(11, 16) : '';
+  const dataHoraBr = (ts) => ts ? dataBr(ts.slice(0, 10)) + ' ' + horaBr(ts) : '';
+  const hoje = () => new Date().toISOString().slice(0, 10);
+  function uuid() { return (crypto.randomUUID ? crypto.randomUUID() : 'x' + Date.now().toString(16) + Math.random().toString(16).slice(2)); }
+  function toast(msg, erro) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.toggle('erro', !!erro); t.classList.add('on');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), erro ? 4500 : 2600);
+  }
+  async function api(caminho, opts) {
+    opts = opts || {};
+    const init = { method: opts.method || 'GET', headers: { 'Accept': 'application/json' }, credentials: 'same-origin' };
+    if (opts.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
+    const r = await fetch(API + caminho, init);
+    let j = null;
+    try { j = await r.json(); } catch (e) { /* html de erro */ }
+    if (r.status === 401) { location.href = BASE_PATH + '/login?proximo=' + encodeURIComponent(BASE_PATH + '/wms'); throw new Error('Sessão expirada'); }
+    if (!r.ok) { const e = new Error((j && j.erro) || ('Erro ' + r.status)); e.status = r.status; e.dados = j; throw e; }
+    return j;
+  }
+  function badgeValidade(dias, validade) {
+    if (!validade) return '<span class="badge badge-neutro">sem validade</span>';
+    if (dias < 0) return '<span class="badge badge-erro">vencido há ' + (-dias) + ' d</span>';
+    if (dias <= 7) return '<span class="badge badge-erro">vence em ' + dias + ' d</span>';
+    if (dias <= 30) return '<span class="badge badge-atencao">vence em ' + dias + ' d</span>';
+    return '<span class="badge badge-neutro">val. ' + dataBr(validade) + '</span>';
+  }
+  function classeValidade(dias, validade) { if (!validade) return ''; if (dias <= 7) return 'venc'; if (dias <= 30) return 'perto'; return ''; }
+  function unidadeTexto(p, q) {
+    let t = num(q) + ' ' + (p.unidade || 'UN');
+    if (p.qtd_por_caixa && p.qtd_por_caixa > 0 && q >= p.qtd_por_caixa) t += ' (' + num(Math.floor(q / p.qtd_por_caixa * 100) / 100) + ' CX)';
+    return t;
+  }
+
+  // ── navegação ─────────────────────────────────────────────────────────
+  function ir(tela, ctx, empilhar) {
+    if (empilhar !== false && S.tela !== tela) S.pilha.push({ tela: S.tela, ctx: S.ctx });
+    if (S.pilha.length > 12) S.pilha.shift();
+    S.tela = tela; S.ctx = ctx || {}; S.aguardando = null;
+    document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === tela));
+    render();
+    window.scrollTo(0, 0);
+  }
+  function voltar() { const p = S.pilha.pop(); if (p) ir(p.tela, p.ctx, false); else ir('inicio', {}, false); }
+  document.querySelectorAll('.aba').forEach((a) => a.addEventListener('click', () => ir(a.dataset.aba)));
+  document.getElementById('btn-operador').addEventListener('click', () => ir('operador'));
+
+  function atualizarTopo() {
+    const b = document.getElementById('btn-operador');
+    const nome = document.getElementById('operador-nome');
+    if (S.operador) {
+      b.classList.remove('vazio');
+      b.querySelector('.bola').textContent = S.operador.nome.split(' ').map((x) => x[0]).join('').slice(0, 2).toUpperCase();
+      nome.textContent = S.operador.nome.split(' ')[0];
+    } else { b.classList.add('vazio'); b.querySelector('.bola').textContent = '?'; nome.textContent = 'ninguém'; }
+    const r = document.getElementById('rede');
+    r.classList.toggle('off', !navigator.onLine); r.textContent = navigator.onLine ? 'online' : 'offline';
+    const f = document.getElementById('faixa-fila');
+    f.hidden = S.fila.length === 0;
+    document.getElementById('faixa-texto').textContent = S.fila.length + (S.fila.length === 1 ? ' movimento aguardando rede' : ' movimentos aguardando rede');
+  }
+  window.addEventListener('online', () => { atualizarTopo(); reenviarFila(); });
+  window.addEventListener('offline', atualizarTopo);
+
+  // ── render ────────────────────────────────────────────────────────────
+  function render() {
+    atualizarTopo();
+    const fn = TELAS[S.tela] || TELAS.inicio;
+    app.innerHTML = fn(S.ctx);
+    const pos = TELAS_POS[S.tela]; if (pos) pos(S.ctx);
+    const campo = app.querySelector('[data-foco]'); if (campo && !('ontouchstart' in window)) campo.focus();
+  }
+  const TELAS = {}, TELAS_POS = {};
+
+  // Início
+  TELAS.inicio = () => `
+    <h1>Início<small>Leia qualquer etiqueta pra começar</small></h1>
+    <div class="leitura">
+      <input type="text" id="campo-leitura" data-foco inputmode="none" placeholder="Ler ou digitar código" autocomplete="off">
+      <button type="button" class="btn-cam" id="btn-cam" title="Ler com a câmera">📷</button>
+      <div class="dica">produto (EAN da embalagem ou DUN da caixa) · posição (QR da etiqueta)</div>
+    </div>
+    <div class="acoes">
+      <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
+      <button data-ir="busca"><b>Consultar</b><span>onde está / o que tem</span></button>
+      <button data-ir="mov" data-tipo="TRANSFERENCIA"><b>Mover</b><span>de uma posição a outra</span></button>
+      <button data-ir="mov" data-tipo="SAIDA"><b>Saída</b><span>expedição, perda, devolução</span></button>
+      <button data-ir="posicoes"><b>Posições</b><span>criar e imprimir etiquetas</span></button>
+      <button data-ir="movimentos"><b>Movimentos</b><span>o que foi feito hoje</span></button>
+    </div>
+    <div class="cartao">
+      <div class="rotulo">Hoje</div>
+      <div class="valor">${S.resumo.movimentos || 0} movimentos · ${S.resumo.ocupadas || 0} de ${S.resumo.posicoes || 0} posições ocupadas</div>
+      <div class="sub">${S.resumo.vencendo_7d ? '<span class="badge badge-erro">' + S.resumo.vencendo_7d + ' lote(s) vencendo em 7 dias</span> · ' : ''}catálogo: ${S.produtosInfo.ativos || 0} produtos ativos, ${S.produtosInfo.com_ean || 0} com EAN${S.fila.length ? ' · <b>' + S.fila.length + ' na fila offline</b>' : ''}</div>
+    </div>`;
+  TELAS_POS.inicio = () => {
+    const c = document.getElementById('campo-leitura');
+    c.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = c.value.trim(); c.value = ''; if (v) lerCodigo(v); } });
+    c.addEventListener('focus', () => { c.setAttribute('inputmode', 'text'); });
+    document.getElementById('btn-cam').addEventListener('click', () => abrirCamera(lerCodigo));
+    app.querySelectorAll('[data-ir]').forEach((b) => b.addEventListener('click', () => ir(b.dataset.ir, b.dataset.tipo ? { tipo: b.dataset.tipo } : {})));
+  };
+
+  // Operador
+  TELAS.operador = () => `
+    <h1>Quem está operando?<small>aparelho compartilhado · o operador fica ativo por ${BOOT.sessao_operador_horas} h sem uso</small></h1>
+    ${S.operador ? `<div class="cartao ok"><div class="rotulo">Ativo agora</div><div class="valor">${esc(S.operador.nome)}</div><div class="botoes" style="margin:8px 0 0"><button class="botao neutro" id="btn-sair-op">Trocar operador</button></div></div>` : ''}
+    <div class="lista">${S.operadores.map((o) => `<div class="item" data-op="${o.id}" data-nome="${esc(o.nome)}" style="grid-template-columns:1fr"><div class="cod">${esc(o.nome)}</div></div>`).join('') || '<div class="vazio">Nenhum operador cadastrado. Peça ao Hugo pra cadastrar.</div>'}</div>
+    <div id="area-pin" hidden>
+      <div class="cartao"><div class="rotulo">PIN de <span id="pin-nome"></span></div><div class="pin-visor mono" id="pin-visor"></div></div>
+      <div class="pin">${[1,2,3,4,5,6,7,8,9].map((n) => `<button data-d="${n}">${n}</button>`).join('')}<button data-d="apagar">⌫</button><button data-d="0">0</button><button data-d="ok" style="background:var(--acento);color:#fff;border-color:var(--acento)">Entrar</button></div>
+      <input type="password" inputmode="numeric" id="pin-input" maxlength="4" style="position:absolute;opacity:0;pointer-events:none" aria-hidden="true">
+    </div>`;
+  TELAS_POS.operador = () => {
+    let opId = null, pin = '';
+    const visor = document.getElementById('pin-visor');
+    const mostrar = () => { visor.textContent = '●'.repeat(pin.length) + '○'.repeat(Math.max(0, 4 - pin.length)); };
+    app.querySelectorAll('[data-op]').forEach((el) => el.addEventListener('click', () => {
+      opId = Number(el.dataset.op); pin = '';
+      app.querySelectorAll('[data-op]').forEach((x) => x.style.borderColor = ''); el.style.borderColor = 'var(--acento)';
+      document.getElementById('area-pin').hidden = false; document.getElementById('pin-nome').textContent = el.dataset.nome; mostrar();
+      el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }));
+    async function entrar() {
+      if (!opId || pin.length !== 4) return;
+      try {
+        const r = await api('/operador/entrar', { method: 'POST', body: { operador_id: opId, pin } });
+        S.operador = r.operador; toast('Olá, ' + r.operador.nome.split(' ')[0] + '!');
+        if (S.pilha.length) voltar(); else ir('inicio');
+      } catch (e) { pin = ''; mostrar(); toast(e.message, true); }
+    }
+    app.querySelectorAll('.pin button').forEach((b) => b.addEventListener('click', () => {
+      const d = b.dataset.d;
+      if (d === 'apagar') pin = pin.slice(0, -1); else if (d === 'ok') return entrar(); else if (pin.length < 4) pin += d;
+      mostrar(); if (pin.length === 4 && d !== 'ok') entrar();
+    }));
+    document.addEventListener('keydown', function tecla(e) {
+      if (S.tela !== 'operador') { document.removeEventListener('keydown', tecla); return; }
+      if (!opId) return;
+      if (/^\d$/.test(e.key) && pin.length < 4) { pin += e.key; mostrar(); if (pin.length === 4) entrar(); }
+      else if (e.key === 'Backspace') { pin = pin.slice(0, -1); mostrar(); }
+      else if (e.key === 'Enter') entrar();
+    });
+    const sair = document.getElementById('btn-sair-op');
+    if (sair) sair.addEventListener('click', async () => { await api('/operador/sair', { method: 'POST', body: {} }); S.operador = null; render(); });
+  };
+
+  // Busca
+  TELAS.busca = (ctx) => `
+    <h1>Consultar<small>produto por nome, SKU ou EAN · posição pelo código</small></h1>
+    <div class="leitura">
+      <input type="search" id="campo-busca" data-foco placeholder="Ex.: salmão, MKCA2022, 7898966259166, C5-E3-N2" autocomplete="off" value="${esc(ctx.q || '')}">
+      <button type="button" class="btn-cam" id="btn-cam">📷</button>
+    </div>
+    <div class="lista" id="resultados"><div class="vazio">Digite pelo menos 2 letras ou leia um código.</div></div>`;
+  TELAS_POS.busca = (ctx) => {
+    const c = document.getElementById('campo-busca'); const res = document.getElementById('resultados');
+    let h = null;
+    async function buscar() {
+      const q = c.value.trim();
+      if (q.length < 2) return;
+      if (/^(pos:)?[a-z]{1,3}\d{1,2}-/i.test(q)) { res.innerHTML = '<div class="vazio">Parece uma posição. Dê Enter pra abrir.</div>'; return; }
+      const r = await api('/produtos?q=' + encodeURIComponent(q));
+      if (!r.produtos.length) { res.innerHTML = '<div class="vazio">Nada encontrado no catálogo. <button class="voltar" id="btn-novo-prod">Cadastrar produto manual</button></div>'; document.getElementById('btn-novo-prod').addEventListener('click', () => ir('novoProduto', { ean: /^\d{8,14}$/.test(q) ? q : '' })); return; }
+      res.innerHTML = r.produtos.map((p) => `<div class="item" data-pid="${p.id}" style="grid-template-columns:1fr"><div class="cod">${esc(p.descricao)}</div><div class="meta"><span class="mono">${esc(p.ean || p.sku || '')}</span>${p.embarcador ? '· ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''}${p.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">manual</span>' : ''}</div></div>`).join('');
+      res.querySelectorAll('[data-pid]').forEach((el) => el.addEventListener('click', () => abrirProduto(Number(el.dataset.pid))));
+    }
+    c.addEventListener('input', () => { clearTimeout(h); h = setTimeout(buscar, 250); });
+    c.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = c.value.trim(); if (v) lerCodigo(v); } });
+    document.getElementById('btn-cam').addEventListener('click', () => abrirCamera(lerCodigo));
+    if (ctx.q) buscar();
+  };
+
+  // Produto
+  TELAS.produto = (ctx) => {
+    const p = ctx.produto; const saldos = p.saldos || [];
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${esc(p.descricao)}<small class="mono">${esc(p.ean || '')}${p.sku ? ' · SKU ' + esc(p.sku) : ''}${p.embarcador ? ' · ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''}</small></h1>
+    ${p.lido_como === 'DUN' ? '<div class="cartao atencao"><div class="sub">Você leu o código da <b>caixa</b> (DUN). 1 caixa = ' + num(p.qtd_por_caixa || 0) + ' ' + esc(p.unidade) + '.</div></div>' : ''}
+    ${p.origem === 'MANUAL' ? '<div class="cartao atencao"><div class="sub">Produto cadastrado à mão neste app, ainda não conciliado com o Stokki.</div></div>' : ''}
+    <div class="total"><b>${unidadeTexto(p, p.total || 0)}</b><span>em ${saldos.length} ${saldos.length === 1 ? 'posição' : 'posições'} · ordenado por validade</span></div>
+    <div class="lista">${saldos.map((s) => `
+      <div class="item ${classeValidade(s.dias_para_vencer, s.validade)}" data-pos="${s.posicao}">
+        <div class="cod mono">${s.posicao}</div>
+        <div class="qtd">${num(s.quantidade)}<small>${esc(p.unidade)}</small></div>
+        <div class="meta">${s.lote ? 'lote ' + esc(s.lote) + ' · ' : ''}${badgeValidade(s.dias_para_vencer, s.validade)} · ${esc(s.area_nome)}</div>
+      </div>`).join('') || '<div class="vazio">Sem saldo endereçado.</div>'}</div>
+    <div class="botoes linha">
+      <button class="botao" data-mov="ENTRADA">Dar entrada</button>
+      <button class="botao secundario" data-mov="TRANSFERENCIA" ${saldos.length ? '' : 'disabled'}>Mover</button>
+      <button class="botao secundario" data-mov="SAIDA" ${saldos.length ? '' : 'disabled'}>Saída</button>
+      <button class="botao neutro" id="btn-movs">Movimentações</button>
+    </div>
+    ${S.podeAdministrar ? `<div class="cartao"><div class="rotulo">Regra do produto</div><label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" id="chk-validade" ${p.controla_validade ? 'checked' : ''} style="width:22px;height:22px"> Validade obrigatória na entrada</label></div>` : ''}
+    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td class="mono">${m.posicao_origem ? esc(m.posicao_origem) + ' → ' : ''}${esc(m.posicao_destino || '—')}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
+  };
+  TELAS_POS.produto = (ctx) => {
+    const p = ctx.produto;
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    app.querySelectorAll('[data-pos]').forEach((el) => el.addEventListener('click', () => abrirPosicao(el.dataset.pos)));
+    app.querySelectorAll('[data-mov]').forEach((b) => b.addEventListener('click', () => ir('mov', {
+      tipo: b.dataset.mov, produto: p, unidadeLida: p.lido_como === 'DUN' ? 'CX' : 'UN',
+      lotes: b.dataset.mov === 'ENTRADA' ? [] : (p.saldos || []), loteSel: null,
+    })));
+    document.getElementById('btn-movs').addEventListener('click', () => ir('movimentos', { produto_id: p.id, titulo: p.descricao }));
+    const chk = document.getElementById('chk-validade');
+    if (chk) chk.addEventListener('change', async () => { try { const r = await api('/produtos/' + p.id + '/controla-validade', { method: 'POST', body: { controla: chk.checked } }); p.controla_validade = r.produto.controla_validade; toast('Regra salva'); } catch (e) { toast(e.message, true); chk.checked = !chk.checked; } });
+  };
+
+  // Posição
+  TELAS.posicao = (ctx) => {
+    const p = ctx.posicao; const itens = p.conteudo || [];
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1 class="mono">${esc(p.codigo)}<small>${esc(p.area_nome)} · ${esc(p.descricao)} · ${esc((p.temperatura || '').toLowerCase())}${p.ativo ? '' : ' · <span class="badge badge-erro">desativada</span>'}</small></h1>
+    <div class="total"><b>${itens.length} ${itens.length === 1 ? 'produto' : 'produtos'}</b><span>${itens.length ? 'toque num item pra ver o produto' : 'posição vazia'}</span></div>
+    <div class="lista">${itens.map((s) => `
+      <div class="item ${classeValidade(s.dias_para_vencer, s.validade)}" data-pid="${s.produto_id}">
+        <div class="cod">${esc(s.descricao)}</div>
+        <div class="qtd">${num(s.quantidade)}<small>${esc(s.unidade)}</small></div>
+        <div class="meta">${s.embarcador ? esc(s.embarcador.split(' ').slice(0, 2).join(' ')) + ' · ' : ''}${s.lote ? 'lote ' + esc(s.lote) + ' · ' : ''}${badgeValidade(s.dias_para_vencer, s.validade)}</div>
+      </div>`).join('')}</div>
+    <div class="botoes linha">
+      <button class="botao" data-mov="ENTRADA">Entrada aqui</button>
+      <button class="botao secundario" data-mov="TRANSFERENCIA" ${itens.length ? '' : 'disabled'}>Mover daqui</button>
+      <button class="botao secundario" data-mov="SAIDA" ${itens.length ? '' : 'disabled'}>Saída daqui</button>
+      <a class="botao neutro" href="${BASE_PATH}/wms/etiquetas.pdf?codigos=${encodeURIComponent(p.codigo)}" target="_blank">Etiqueta</a>
+    </div>
+    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos nesta posição</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td>${esc(m.produto_descricao).slice(0, 28)}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
+  };
+  TELAS_POS.posicao = (ctx) => {
+    const p = ctx.posicao;
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    app.querySelectorAll('[data-pid]').forEach((el) => el.addEventListener('click', () => abrirProduto(Number(el.dataset.pid))));
+    app.querySelectorAll('[data-mov]').forEach((b) => b.addEventListener('click', () => {
+      const tipo = b.dataset.mov;
+      ir('mov', tipo === 'ENTRADA' ? { tipo, destino: p.codigo } : { tipo, origem: p.codigo, conteudo: p.conteudo });
+    }));
+  };
+
+  // Movimento (Entrada / Transferência / Saída)
+  TELAS.mov = (ctx) => {
+    const tipo = ctx.tipo || 'ENTRADA'; const p = ctx.produto;
+    const titulo = { ENTRADA: 'Entrada', TRANSFERENCIA: 'Mover', SAIDA: 'Saída' }[tipo];
+    const sub = { ENTRADA: 'produto chega na posição', TRANSFERENCIA: 'transferência entre posições', SAIDA: 'baixa por expedição, perda ou devolução' }[tipo];
+    const temCaixa = p && p.qtd_por_caixa > 0;
+    const lotes = ctx.lotes || [];
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${titulo}<small>${sub}</small></h1>
+    <div class="campo">
+      <label>Produto</label>
+      ${p ? `<div class="cartao" style="margin:0"><div class="valor">${esc(p.descricao)}</div><div class="sub mono">${esc(p.ean || p.sku || '')}${p.embarcador ? ' · ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''} · ${esc(p.unidade)}${temCaixa ? ' · caixa de ' + num(p.qtd_por_caixa) : ''}</div><button class="voltar" id="btn-trocar-prod">Trocar produto</button></div>`
+           : `<div class="com-botao"><input type="text" id="f-produto" class="aguardando" data-foco inputmode="none" placeholder="Leia o EAN ou digite" autocomplete="off"><button type="button" id="btn-cam-prod">📷</button></div><div class="ajuda">Ou <button class="voltar" id="btn-buscar-prod">buscar pelo nome</button></div>`}
+    </div>
+    ${tipo !== 'ENTRADA' ? `
+    <div class="campo"><label>De (origem)</label>
+      ${lotes.length ? `<div class="lista" style="margin:0">${lotes.map((l, i) => `<div class="item ${classeValidade(l.dias_para_vencer, l.validade)}" data-lote="${i}" style="${ctx.loteSel === i ? 'border-color:var(--acento);box-shadow:0 0 0 1px var(--acento)' : ''}"><div class="cod mono">${esc(l.posicao)}</div><div class="qtd">${num(l.quantidade)}<small>${esc(p ? p.unidade : '')}</small></div><div class="meta">${l.lote ? 'lote ' + esc(l.lote) + ' · ' : ''}${badgeValidade(l.dias_para_vencer, l.validade)}</div></div>`).join('')}</div>`
+                     : `<div class="com-botao"><input type="text" id="f-origem" class="mono ${ctx.origem ? '' : 'aguardando'}" value="${esc(ctx.origem || '')}" placeholder="Leia a etiqueta da posição" autocomplete="off"><button type="button" id="btn-cam-origem">📷</button></div>`}
+    </div>` : ''}
+    <div class="duas">
+      <div class="campo"><label>Lote</label><input type="text" id="f-lote" value="${esc(ctx.lote || '')}" placeholder="opcional" autocomplete="off" ${lotes.length ? 'readonly' : ''} style="text-transform:uppercase"></div>
+      <div class="campo"><label>Validade${p && !p.controla_validade ? ' (opcional)' : ''}</label><input type="date" id="f-validade" value="${esc(ctx.validade || '')}" min="2020-01-01" ${lotes.length ? 'readonly' : ''}></div>
+    </div>
+    <div class="duas-3">
+      <div class="campo"><label>Quantidade</label><input type="number" id="f-qtd" inputmode="decimal" min="0" step="any" value="${esc(ctx.quantidade || '')}" placeholder="0"></div>
+      <div class="campo"><label>Unidade</label>${temCaixa ? `<select id="f-unid"><option value="UN" ${ctx.unidadeLida !== 'CX' ? 'selected' : ''}>${esc(p.unidade)}</option><option value="CX" ${ctx.unidadeLida === 'CX' ? 'selected' : ''}>CX (${num(p.qtd_por_caixa)})</option></select>` : `<input type="text" value="${esc(p ? p.unidade : 'UN')}" readonly>`}</div>
+    </div>
+    ${tipo !== 'SAIDA' ? `
+    <div class="campo"><label>${tipo === 'ENTRADA' ? 'Posição' : 'Para (destino)'}</label>
+      <div class="com-botao"><input type="text" id="f-destino" class="mono ${ctx.destino ? '' : 'aguardando'}" value="${esc(ctx.destino || '')}" placeholder="Leia a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" id="btn-cam-destino">📷</button></div>
+      <div class="ajuda" id="destino-info"></div>
+    </div>` : ''}
+    ${tipo === 'SAIDA' ? `<div class="campo"><label>Motivo</label><select id="f-motivo"><option>Expedição</option><option>Devolução ao embarcador</option><option>Perda / avaria</option><option>Vencido</option><option>Amostra / consumo</option><option>Outro</option></select></div>` : ''}
+    <div class="campo"><label>Observação</label><input type="text" id="f-obs" placeholder="opcional" autocomplete="off"></div>
+    <div id="mov-erro"></div>
+    <div class="botoes"><button class="botao" id="btn-confirmar">Confirmar ${titulo.toLowerCase()}</button></div>`;
+  };
+  TELAS_POS.mov = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const g = (id) => document.getElementById(id);
+    const setCtx = (extra) => Object.assign(S.ctx, extra);
+    if (!ctx.produto) {
+      S.aguardando = 'produto';
+      const f = g('f-produto');
+      f.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (f.value.trim()) lerCodigo(f.value.trim()); } });
+      f.addEventListener('focus', () => f.setAttribute('inputmode', 'text'));
+      g('btn-cam-prod').addEventListener('click', () => abrirCamera((c) => lerCodigo(c)));
+      g('btn-buscar-prod').addEventListener('click', () => ir('busca', { paraMov: true }));
+    } else {
+      g('btn-trocar-prod').addEventListener('click', () => { setCtx({ produto: null, lotes: [], loteSel: null }); render(); });
+    }
+    app.querySelectorAll('[data-lote]').forEach((el) => el.addEventListener('click', () => {
+      const l = ctx.lotes[Number(el.dataset.lote)];
+      setCtx({ loteSel: Number(el.dataset.lote), origem: l.posicao, lote: l.lote, validade: l.validade || '', quantidade: ctx.quantidade || l.quantidade });
+      render();
+    }));
+    const fo = g('f-origem');
+    if (fo) { fo.addEventListener('change', () => setCtx({ origem: fo.value.toUpperCase() })); fo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); setCtx({ origem: fo.value.toUpperCase() }); g('f-lote').focus(); } }); g('btn-cam-origem').addEventListener('click', () => abrirCamera((c) => { fo.value = c.replace(/^pos:/i, '').toUpperCase(); setCtx({ origem: fo.value }); })); }
+    const fd = g('f-destino');
+    if (fd) {
+      const info = g('destino-info');
+      const conferir = async () => {
+        const cod = fd.value.replace(/^pos:/i, '').toUpperCase().trim(); fd.value = cod; setCtx({ destino: cod });
+        if (!cod) { info.textContent = ''; return; }
+        try { const p = await api('/posicoes/' + encodeURIComponent(cod)); info.innerHTML = '✓ ' + esc(p.area_nome) + ' · ' + esc(p.descricao) + ' · ' + esc((p.temperatura || '').toLowerCase()) + (p.conteudo.length ? ' · já tem ' + p.conteudo.length + ' item(ns)' : ' · vazia'); info.style.color = 'var(--sucesso)'; }
+        catch (e) { info.textContent = e.status === 404 ? 'Posição não existe. Crie em Posições.' : e.message; info.style.color = 'var(--erro)'; }
+      };
+      fd.addEventListener('change', conferir);
+      fd.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); conferir(); } });
+      g('btn-cam-destino').addEventListener('click', () => abrirCamera((c) => { fd.value = c; conferir(); }));
+      if (ctx.destino) conferir();
+    }
+    ['f-lote', 'f-validade', 'f-qtd', 'f-obs'].forEach((id) => { const el = g(id); if (el) el.addEventListener('change', () => setCtx({ lote: g('f-lote').value, validade: g('f-validade').value, quantidade: g('f-qtd').value })); });
+    g('btn-confirmar').addEventListener('click', confirmarMovimento);
+  };
+  async function confirmarMovimento() {
+    const ctx = S.ctx; const g = (id) => document.getElementById(id);
+    const erroEl = g('mov-erro'); erroEl.innerHTML = '';
+    const falha = (m) => { erroEl.innerHTML = '<div class="cartao erro"><div class="sub">' + esc(m) + '</div></div>'; toast(m, true); };
+    if (!ctx.produto) return falha('Leia ou escolha o produto.');
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    let q = Number(String(g('f-qtd').value).replace(',', '.'));
+    if (!(q > 0)) return falha('Informe a quantidade.');
+    const unid = g('f-unid'); let obsUnid = '';
+    if (unid && unid.value === 'CX') { obsUnid = num(q) + ' CX × ' + num(ctx.produto.qtd_por_caixa); q = q * ctx.produto.qtd_por_caixa; }
+    const validade = g('f-validade').value;
+    if (ctx.tipo === 'ENTRADA' && ctx.produto.controla_validade && !validade) return falha('Validade é obrigatória pra esse produto.');
+    const obs = [g('f-motivo') ? g('f-motivo').value : '', obsUnid, g('f-obs').value].filter(Boolean).join(' · ');
+    const mov = {
+      uuid: uuid(), tipo: ctx.tipo, produto_id: ctx.produto.id, lote: g('f-lote').value.trim().toUpperCase(), validade: validade || null,
+      quantidade: q, origem: g('f-origem') ? g('f-origem').value.trim().toUpperCase() : (ctx.origem || null),
+      destino: g('f-destino') ? g('f-destino').value.trim().toUpperCase() : null, observacao: obs,
+      criado_em: new Date().toISOString().slice(0, 19).replace('T', ' '), operador: S.operador,
+    };
+    if (ctx.tipo === 'ENTRADA' && !mov.destino) return falha('Leia a etiqueta da posição de destino.');
+    if (ctx.tipo !== 'ENTRADA' && !mov.origem) return falha('Escolha de onde sai o produto.');
+    if (ctx.tipo === 'TRANSFERENCIA' && !mov.destino) return falha('Leia a etiqueta da posição de destino.');
+    const btn = g('btn-confirmar'); btn.disabled = true;
+    try {
+      const r = await api('/movimentos', { method: 'POST', body: mov });
+      const s = r.movimento.saldos || {};
+      const resumo = Object.keys(s).map((k) => k + ': ' + num(s[k])).join(' · ');
+      toast(TIPOS_MOV[ctx.tipo] + ' registrada. ' + resumo);
+      S.resumo.movimentos = (S.resumo.movimentos || 0) + 1;
+      S.pilha = [];
+      if (ctx.tipo === 'SAIDA' || ctx.tipo === 'TRANSFERENCIA') abrirProduto(ctx.produto.id, false); else abrirPosicao(mov.destino, false);
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+      else if (!e.status) { enfileirar(mov); toast('Sem rede: movimento guardado na fila e será enviado quando a internet voltar.'); S.pilha = []; ir('inicio'); }
+      else falha(e.message);
+    } finally { btn.disabled = false; }
+  }
+
+  // Movimentos
+  TELAS.movimentos = (ctx) => `
+    ${ctx.produto_id || ctx.posicao ? '<button class="voltar" id="btn-voltar">‹ Voltar</button>' : ''}
+    <h1>Movimentos<small>${ctx.titulo ? esc(ctx.titulo) : 'últimos registros deste galpão'}</small></h1>
+    <div class="lista" id="lista-mov"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.movimentos = async (ctx) => {
+    const v = document.getElementById('btn-voltar'); if (v) v.addEventListener('click', voltar);
+    const qs = ctx.produto_id ? '?produto_id=' + ctx.produto_id : ctx.posicao ? '?posicao=' + encodeURIComponent(ctx.posicao) : '?limite=80';
+    try {
+      const r = await api('/movimentos' + qs);
+      const el = document.getElementById('lista-mov');
+      el.innerHTML = r.movimentos.map((m) => `
+        <div class="item" data-pid="${m.produto_id}">
+          <div class="cod">${TIPOS_MOV[m.tipo] || m.tipo} · ${esc(m.produto_descricao)}</div>
+          <div class="qtd">${num(m.quantidade)}<small>${esc(m.produto_unidade || 'UN')}</small></div>
+          <div class="meta"><span class="mono">${m.posicao_origem ? esc(m.posicao_origem) + ' → ' : ''}${esc(m.posicao_destino || '—')}</span>${m.lote ? ' · lote ' + esc(m.lote) : ''}${m.validade ? ' · val. ' + dataBr(m.validade) : ''} · ${dataHoraBr(m.criado_em)} · ${esc(m.operador_nome || '?')}${m.observacao ? ' · ' + esc(m.observacao) : ''}</div>
+        </div>`).join('') || '<div class="vazio">Nenhum movimento ainda.</div>';
+      el.querySelectorAll('[data-pid]').forEach((x) => x.addEventListener('click', () => abrirProduto(Number(x.dataset.pid))));
+    } catch (e) { toast(e.message, true); }
+  };
+
+  // Posições / áreas / etiquetas
+  TELAS.posicoes = (ctx) => `
+    <h1>Posições<small>áreas do galpão, criação em lote e etiquetas 10 × 5 cm</small></h1>
+    <div class="lista">${S.areas.map((a) => `
+      <div class="item" data-area="${a.codigo}" style="${ctx.area === a.codigo ? 'border-color:var(--acento);box-shadow:0 0 0 1px var(--acento)' : ''}">
+        <div class="cod"><span class="mono">${a.codigo}</span> · ${esc(a.nome)}</div>
+        <div class="qtd">${a.n_ocupadas}<small>de ${a.n_posicoes}</small></div>
+        <div class="meta">${esc(TIPOS_AREA[a.tipo] || a.tipo)} · ${esc((a.temperatura || '').toLowerCase())}</div>
+      </div>`).join('')}</div>
+    <div id="area-detalhe"></div>
+    <details class="cartao" ${ctx.abrirNova ? 'open' : ''}><summary style="font-weight:700;cursor:pointer">Nova área ou gerar posições em lote</summary>
+      <div class="duas">
+        <div class="campo"><label>Código da área</label><input type="text" id="a-codigo" placeholder="C7, CG1, CR2" style="text-transform:uppercase" value="${esc(ctx.area || '')}"></div>
+        <div class="campo"><label>Tipo</label><select id="a-tipo"><option value="CONTAINER">Container</option><option value="CAM_CONGELADA">Câmara congelada</option><option value="CAM_REFRIGERADA">Câmara refrigerada</option></select></div>
+      </div>
+      <div class="grade-num">
+        <div class="campo"><label>Estantes</label><input type="number" id="a-estantes" inputmode="numeric" min="0" value="5"></div>
+        <div class="campo"><label>Níveis</label><input type="number" id="a-niveis" inputmode="numeric" min="0" value="4"></div>
+        <div class="campo"><label>Pallets</label><input type="number" id="a-pallets" inputmode="numeric" min="0" value="0"></div>
+      </div>
+      <div class="ajuda">Gera E1..E<i>n</i> × N1..N<i>n</i> e P1..P<i>n</i>. Posições que já existem são mantidas.</div>
+      <div class="botoes"><button class="botao" id="btn-gerar">Criar / gerar posições</button></div>
+    </details>
+    <div class="cartao"><div class="rotulo">Posição avulsa</div>
+      <div class="com-botao" style="display:grid;grid-template-columns:1fr auto;gap:8px"><input type="text" id="p-codigo" placeholder="Ex.: C5-P7" style="text-transform:uppercase;font-size:17px;padding:10px 12px;border:1px solid var(--borda);border-radius:10px;background:var(--superficie);color:var(--texto)"><button type="button" class="botao secundario" id="btn-criar-pos" style="min-height:44px">Criar</button></div>
+    </div>`;
+  TELAS_POS.posicoes = (ctx) => {
+    app.querySelectorAll('[data-area]').forEach((el) => el.addEventListener('click', () => { S.ctx.area = el.dataset.area; render(); carregarArea(el.dataset.area); }));
+    if (ctx.area) carregarArea(ctx.area);
+    document.getElementById('btn-gerar').addEventListener('click', async () => {
+      const g = (id) => document.getElementById(id);
+      const body = { codigo: g('a-codigo').value.trim().toUpperCase(), tipo: g('a-tipo').value, estantes: Number(g('a-estantes').value || 0), niveis: Number(g('a-niveis').value || 0), pallets: Number(g('a-pallets').value || 0) };
+      if (!body.codigo) return toast('Informe o código da área', true);
+      if (!confirm('Criar/atualizar a área ' + body.codigo + ' e gerar ' + (body.estantes * body.niveis + body.pallets) + ' posições?')) return;
+      try {
+        const r = await api('/areas', { method: 'POST', body });
+        S.areas = r.areas; toast(r.geradas.criadas.length + ' posições criadas (' + r.geradas.existentes + ' já existiam)');
+        S.ctx.area = body.codigo; render();
+      } catch (e) { toast(e.message, true); }
+    });
+    document.getElementById('btn-criar-pos').addEventListener('click', async () => {
+      const cod = document.getElementById('p-codigo').value.trim().toUpperCase();
+      if (!cod) return;
+      try { const r = await api('/posicoes', { method: 'POST', body: { codigo: cod } }); toast('Posição ' + r.posicao.codigo + ' criada'); const b = await api('/bootstrap'); S.areas = b.areas; S.ctx.area = r.posicao.area_codigo; render(); }
+      catch (e) { toast(e.message, true); }
+    });
+  };
+  async function carregarArea(area) {
+    const el = document.getElementById('area-detalhe'); if (!el) return;
+    el.innerHTML = '<div class="vazio">Carregando ' + esc(area) + '…</div>';
+    try {
+      const r = await api('/posicoes?area=' + encodeURIComponent(area));
+      const a = S.areas.find((x) => x.codigo === area) || {};
+      el.innerHTML = `<div class="cartao">
+        <div class="rotulo">${esc(a.nome || area)} · ${r.posicoes.length} posições</div>
+        <div class="botoes linha" style="margin:6px 0 10px">
+          <a class="botao" href="${BASE_PATH}/wms/etiquetas.pdf?area=${encodeURIComponent(area)}" target="_blank" ${r.posicoes.length ? '' : 'style="pointer-events:none;opacity:.5"'}>Etiquetas da área (PDF)</a>
+          <button class="botao neutro" id="btn-gerar-aqui">Gerar mais posições</button>
+        </div>
+        <div class="ocupacao">${r.posicoes.map((p) => `<div class="pos ${p.n_itens ? 'cheia' : ''}" data-pos="${p.codigo}"><span class="mono">${p.codigo.slice(area.length + 1)}</span><small>${p.n_itens ? p.n_itens + ' item(ns)' : 'vazia'}</small></div>`).join('') || '<div class="vazio" style="grid-column:1/-1">Sem posições ainda. Gere abaixo.</div>'}</div>
+      </div>`;
+      el.querySelectorAll('[data-pos]').forEach((x) => x.addEventListener('click', () => abrirPosicao(x.dataset.pos)));
+      document.getElementById('btn-gerar-aqui').addEventListener('click', () => { S.ctx.abrirNova = true; render(); document.getElementById('a-codigo').value = area; document.getElementById('a-tipo').value = a.tipo || 'CONTAINER'; document.getElementById('a-codigo').scrollIntoView({ behavior: 'smooth' }); });
+    } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+  }
+
+  // Produto manual
+  TELAS.novoProduto = (ctx) => `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Cadastro rápido<small>produto que não está no catálogo do Stokki ainda</small></h1>
+    <div class="cartao atencao"><div class="sub">Fica marcado como <b>manual</b>. Quando o produto aparecer no Stokki, o Hugo concilia.</div></div>
+    <div class="campo"><label>EAN (código de barras)</label><input type="text" id="n-ean" inputmode="numeric" value="${esc(ctx.ean || '')}" placeholder="13 dígitos" autocomplete="off"></div>
+    <div class="campo"><label>Descrição</label><input type="text" id="n-desc" data-foco placeholder="Nome como está na embalagem" autocomplete="off"></div>
+    <div class="campo"><label>Embarcador (dono do produto)</label><input type="text" id="n-emb" placeholder="opcional" autocomplete="off"></div>
+    <div class="duas">
+      <div class="campo"><label>Unidade</label><select id="n-unid"><option>UN</option><option>CX</option><option>KG</option><option>PC</option></select></div>
+      <div class="campo"><label>Unid. por caixa</label><input type="number" id="n-cx" inputmode="numeric" min="0" placeholder="opcional"></div>
+    </div>
+    <div class="botoes"><button class="botao" id="btn-salvar-prod">Salvar e usar</button></div>`;
+  TELAS_POS.novoProduto = () => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    document.getElementById('btn-salvar-prod').addEventListener('click', async () => {
+      const g = (id) => document.getElementById(id);
+      try {
+        const r = await api('/produtos/manual', { method: 'POST', body: { ean: g('n-ean').value, descricao: g('n-desc').value, embarcador: g('n-emb').value, unidade: g('n-unid').value, qtd_por_caixa: g('n-cx').value || null } });
+        toast('Produto cadastrado'); S.pilha = []; ir('mov', { tipo: 'ENTRADA', produto: r.produto });
+      } catch (e) { toast(e.message, true); }
+    });
+  };
+
+  // ── leitura de códigos ────────────────────────────────────────────────
+  async function abrirProduto(id, empilhar) {
+    try { const p = await api('/produtos/' + id); ir('produto', { produto: p }, empilhar); } catch (e) { toast(e.message, true); }
+  }
+  async function abrirPosicao(codigo, empilhar) {
+    try { const p = await api('/posicoes/' + encodeURIComponent(codigo)); ir('posicao', { posicao: p }, empilhar); } catch (e) { toast(e.message, true); }
+  }
+  async function lerCodigo(codigo) {
+    codigo = String(codigo || '').trim(); if (!codigo) return;
+    let r;
+    try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
+    // dentro de um formulário de movimento, a leitura preenche o campo certo
+    if (S.tela === 'mov') {
+      if (r.tipo === 'produto') { return escolherProdutoParaMov(r.produtos); }
+      if (r.tipo === 'posicao') {
+        const fd = document.getElementById('f-destino'); const fo = document.getElementById('f-origem');
+        const alvo = (S.ctx.tipo === 'TRANSFERENCIA' && fo && !fo.value) ? fo : fd || fo;
+        if (alvo) { alvo.value = r.posicao.codigo; alvo.dispatchEvent(new Event('change')); toast('Posição ' + r.posicao.codigo); }
+        return;
+      }
+    }
+    if (S.tela === 'busca' && S.ctx.paraMov && r.tipo === 'produto') return escolherProdutoParaMov(r.produtos);
+    if (r.tipo === 'posicao') { const p = await api('/posicoes/' + encodeURIComponent(r.posicao.codigo)); return ir('posicao', { posicao: p }); }
+    if (r.tipo === 'produto') {
+      if (r.produtos.length === 1) return abrirProduto(r.produtos[0].id).then(() => { S.ctx.produto.lido_como = r.produtos[0].lido_como; render(); });
+      return ir('busca', { q: codigo });
+    }
+    if (r.tipo === 'posicao_inexistente') {
+      if (confirm('A posição ' + r.codigo + ' não existe. Criar agora?')) {
+        try { const c = await api('/posicoes', { method: 'POST', body: { codigo: r.codigo } }); toast('Posição criada'); abrirPosicao(c.posicao.codigo); } catch (e) { toast(e.message, true); }
+      }
+      return;
+    }
+    if (r.tipo === 'desconhecido') {
+      if (r.parece_ean) { if (confirm('Código ' + r.codigo + ' não está no catálogo. Cadastrar produto manual?')) ir('novoProduto', { ean: r.codigo }); }
+      else ir('busca', { q: codigo });
+      return;
+    }
+    toast(r.erro || 'Código não reconhecido', true);
+  }
+  function escolherProdutoParaMov(produtos) {
+    const aplicar = (p) => {
+      const ctx = S.tela === 'mov' ? S.ctx : (S.pilha.length ? S.pilha.pop().ctx : { tipo: 'ENTRADA' });
+      ctx.produto = p; ctx.unidadeLida = p.lido_como === 'DUN' ? 'CX' : 'UN';
+      ctx.lotes = (ctx.tipo !== 'ENTRADA') ? (p.saldos || []) : []; ctx.loteSel = null;
+      if (ctx.origem && ctx.lotes.length) { ctx.lotes = ctx.lotes.filter((l) => l.posicao === ctx.origem); }
+      ir('mov', ctx, false); toast(p.descricao);
+    };
+    if (produtos.length === 1) return aplicar(produtos[0]);
+    // mesmo EAN em mais de um embarcador: pergunta
+    const escolha = prompt(produtos.map((p, i) => (i + 1) + ') ' + p.descricao + ' — ' + (p.embarcador || '')).join('\n') + '\n\nQual? (número)');
+    const p = produtos[Number(escolha) - 1]; if (p) aplicar(p);
+  }
+
+  // leitor externo (teclado): junta teclas rápidas e dispara no Enter
+  let buf = '', bufT = 0;
+  document.addEventListener('keydown', (e) => {
+    const alvo = e.target; const tag = alvo && alvo.tagName;
+    const emCampo = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    if (emCampo && !(alvo.id === 'campo-leitura' || alvo.id === 'f-produto')) return;
+    if (emCampo) return; // esses campos tratam o próprio Enter
+    const agora = Date.now(); if (agora - bufT > 400) buf = ''; bufT = agora;
+    if (e.key === 'Enter') { if (buf.length >= 3) { e.preventDefault(); const v = buf; buf = ''; lerCodigo(v); } return; }
+    if (e.key.length === 1) buf += e.key;
+  });
+
+  // câmera: BarcodeDetector nativo; senão, ZXing carregado sob demanda
+  let camStream = null, camLoop = null, zxingReader = null;
+  async function abrirCamera(onCodigo) {
+    const modal = document.getElementById('modal-cam'); const video = document.getElementById('video'); const st = document.getElementById('cam-status');
+    modal.classList.add('on'); st.textContent = 'Abrindo câmera…';
+    const fechar = () => { modal.classList.remove('on'); if (camLoop) cancelAnimationFrame(camLoop); camLoop = null; if (zxingReader) { try { zxingReader.reset(); } catch (e) {} } if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; } };
+    document.getElementById('btn-fechar-cam').onclick = fechar;
+    let ultimo = '', ultimoT = 0;
+    const achou = (texto) => { const t = Date.now(); if (texto === ultimo && t - ultimoT < 2500) return; ultimo = texto; ultimoT = t; if (navigator.vibrate) navigator.vibrate(60); fechar(); onCodigo(texto); };
+    try {
+      if ('BarcodeDetector' in window) {
+        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+        video.srcObject = camStream; await video.play();
+        const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'itf', 'qr_code'] });
+        st.textContent = 'Aponte para o código de barras ou QR';
+        const tick = async () => { if (!camStream) return; try { const cods = await det.detect(video); if (cods.length && cods[0].rawValue) return achou(cods[0].rawValue); } catch (e) {} camLoop = requestAnimationFrame(tick); };
+        tick();
+      } else {
+        st.textContent = 'Carregando leitor…';
+        if (!window.ZXing) await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+        zxingReader = new ZXing.BrowserMultiFormatReader();
+        st.textContent = 'Aponte para o código de barras ou QR';
+        zxingReader.decodeFromVideoDevice(undefined, video, (result) => { if (result) achou(result.getText()); });
+      }
+    } catch (e) { st.textContent = 'Não consegui abrir a câmera: ' + e.message + '. Use o leitor ou digite o código.'; }
+  }
+
+  // ── fila offline ──────────────────────────────────────────────────────
+  function carregarFila() { try { return JSON.parse(localStorage.getItem('wms_fila') || '[]'); } catch (e) { return []; } }
+  function salvarFila() { try { localStorage.setItem('wms_fila', JSON.stringify(S.fila)); } catch (e) {} atualizarTopo(); }
+  function enfileirar(mov) { S.fila.push(mov); salvarFila(); }
+  let reenviando = false;
+  async function reenviarFila() {
+    if (reenviando || !S.fila.length || !navigator.onLine) return;
+    reenviando = true;
+    try {
+      const r = await api('/movimentos/lote', { method: 'POST', body: { movimentos: S.fila } });
+      const falhas = r.resultados.filter((x) => !x.ok);
+      S.fila = S.fila.filter((m) => falhas.some((f) => f.uuid === m.uuid));
+      salvarFila();
+      if (falhas.length) toast(falhas.length + ' movimento(s) da fila foram recusados: ' + falhas[0].erro, true);
+      else toast('Fila enviada.');
+      if (S.tela === 'inicio') { try { const b = await api('/bootstrap'); S.resumo = b.resumo; render(); } catch (e) {} }
+    } catch (e) {
+      if (e.status === 409) { toast('Identifique o operador pra enviar a fila', true); ir('operador'); }
+      else if (e.status) { toast('Fila: ' + e.message, true); }
+    } finally { reenviando = false; }
+  }
+  document.getElementById('btn-reenviar').addEventListener('click', reenviarFila);
+
+  // ── PWA ───────────────────────────────────────────────────────────────
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register(BASE_PATH + '/wms/sw.js', { scope: BASE_PATH + '/wms' }).catch(() => {}); }
+
+  // ── início ────────────────────────────────────────────────────────────
+  render();
+  if (!S.operador) ir('operador', {}, false);
+  if (S.fila.length && navigator.onLine) setTimeout(reenviarFila, 1500);
+})();
+</script>
+</body>
+</html>

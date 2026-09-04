@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Espelha o catalogo de produtos do Stokki em wms_produtos (enderecamento do galpao)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/sincronizar_produtos_stokki.py
