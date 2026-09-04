@@ -270,20 +270,46 @@
     box-shadow: inset 0 0 0 1px var(--acento);
     background: rgba(47,217,174,0.12);
   }
-  .controle-mapa { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px; max-width: 90vw; }
-  .controle-mapa button {
+  /* Barra de camadas do mapa (04/09): antes eram 5 botões soltos com
+     rótulo longo ("● Agendados (futuro): no mapa") que quebravam em 2
+     linhas e cobriam o mapa na coluna de ~700px. Agora é UMA barra
+     compacta: chips sem borda dentro de um único fundo, rótulo curto
+     (o estado vale pelo ● / ○ + cor), tooltip segue com a explicação. */
+  .controle-mapa {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin: 8px 8px 0;
+    padding: 3px;
+    max-width: calc(100% - 16px);
     background: var(--superficie);
-    color: var(--texto);
     border: 1px solid var(--borda);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  .controle-mapa button {
+    background: transparent;
+    color: var(--texto-suave);
+    border: 0;
     border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-    min-height: 36px;
-    padding: 8px 14px;
-    font-size: 12px;
+    min-height: 26px;
+    padding: 4px 9px;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
     cursor: pointer;
   }
-  .controle-mapa button:hover { background: var(--fundo); }
-  .controle-mapa button.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .controle-mapa button:hover { background: var(--fundo); color: var(--texto); }
+  .controle-mapa button.ativo { background: rgba(47,217,174,0.16); color: var(--acento); }
+  .controle-mapa .separador-controle {
+    width: 1px;
+    height: 18px;
+    margin: 0 3px;
+    background: var(--borda);
+  }
+  .controle-mapa button.controle-area.ativo { background: var(--acento); color: #fff; }
   .item-parada .numero {
     display: inline-block;
     min-width: 18px;
@@ -2600,9 +2626,9 @@
   }
 
   function grupoVisivelNoMapa(rascunhoId) {
-    // "Alocados: no mapa" manda no geral; dentro disso, rota já
-    // ENVIADA (motorista a caminho, card marcado ".enviada") só some
-    // se o toggle "Enviadas: no mapa" estiver desligado (Hugo, 14/08)
+    // toggle "Alocados" da barra do mapa manda no geral; dentro disso, rota
+    // já ENVIADA (motorista a caminho, card marcado ".enviada") só some
+    // se o toggle "Enviadas" estiver desligado (Hugo, 14/08)
     if (!mostrarAlocadosNoMapa) return false;
     const card = document.getElementById(`card-rota-${rascunhoId}`);
     const enviada = !!card && card.classList.contains("enviada");
@@ -2908,6 +2934,41 @@
     document.getElementById("botao-filtros-pool").classList.toggle("ativo", ativos > 0);
   }
 
+  // ---- Persistência dos filtros do pool (Hugo, 31/08) ----
+  // Quase toda ação (cancelar pedido, criar/enviar/descartar rota...)
+  // termina em location.reload(), e os filtros viviam só nos inputs --
+  // sumiam a cada ação. Guardamos busca/flag/CEP/caixas no sessionStorage
+  // POR DATA em edição: sobrevivem aos reloads da mesma aba, mas trocar
+  // de data ou abrir aba nova começa limpo (filtro de um dia não vaza
+  // pro planejamento de outro).
+  const CHAVE_FILTROS_POOL = "planejamento.filtrosPool." + DATA_ALVO_ISO;
+
+  function salvarFiltrosPool() {
+    const dados = {
+      busca: document.getElementById("busca-pool").value,
+      flag: document.getElementById("flag-precisa-sair").checked,
+      cepDe: document.getElementById("cep-de").value,
+      cepAte: document.getElementById("cep-ate").value,
+      caixasDe: document.getElementById("caixas-de").value,
+      caixasAte: document.getElementById("caixas-ate").value,
+    };
+    try { sessionStorage.setItem(CHAVE_FILTROS_POOL, JSON.stringify(dados)); } catch (e) { /* storage cheio/bloqueado: segue sem persistir */ }
+  }
+
+  function restaurarFiltrosPool() {
+    // devolve true se algum filtro foi restaurado (o initMap reaplica na lista)
+    let dados = null;
+    try { dados = JSON.parse(sessionStorage.getItem(CHAVE_FILTROS_POOL) || "null"); } catch (e) {}
+    if (!dados) return false;
+    document.getElementById("busca-pool").value = dados.busca || "";
+    document.getElementById("flag-precisa-sair").checked = !!dados.flag;
+    document.getElementById("cep-de").value = dados.cepDe || "";
+    document.getElementById("cep-ate").value = dados.cepAte || "";
+    document.getElementById("caixas-de").value = dados.caixasDe || "";
+    document.getElementById("caixas-ate").value = dados.caixasAte || "";
+    return !!(dados.busca || dados.flag || dados.cepDe || dados.cepAte || dados.caixasDe || dados.caixasAte);
+  }
+
   function renumerarPool() {
     // numera os cards VISÍVEIS do pool em sequência (1..N) -- o mesmo
     // número vai pro ponto do pedido no mapa. Badge verde = selecionado,
@@ -2934,7 +2995,7 @@
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
       const selecionado = SELECIONADOS.has(id);
       // agendado pra depois de hoje só entra no mapa se o toggle
-      // "Agendados (futuro): no mapa" estiver ligado, ou se já estiver
+      // "Futuros" da barra do mapa estiver ligado, ou se já estiver
       // selecionado (seleção explícita sempre aparece, mesmo filtrada)
       const ocultoPorFuturo = li.dataset.urgencia === "futuro" && !mostrarFuturosNoMapa;
       const mostrar = !isNaN(lat) && !isNaN(lng) &&
@@ -3359,7 +3420,7 @@
     mostrarPoolNoMapa = valor;
     localStorage.setItem("planejamento.mostrarPoolNoMapa", valor ? "1" : "0");
     if (botaoPoolMapa) {
-      botaoPoolMapa.textContent = valor ? "● Não alocados: no mapa" : "○ Não alocados: ocultos";
+      botaoPoolMapa.textContent = valor ? "● Não alocados" : "○ Não alocados";
       botaoPoolMapa.classList.toggle("ativo", valor);
     }
     atualizarPreviewPool();
@@ -3378,7 +3439,7 @@
     mostrarAlocadosNoMapa = valor;
     localStorage.setItem("planejamento.mostrarAlocadosNoMapa", valor ? "1" : "0");
     if (botaoAlocadosMapa) {
-      botaoAlocadosMapa.textContent = valor ? "● Alocados: no mapa" : "○ Alocados: ocultos";
+      botaoAlocadosMapa.textContent = valor ? "● Alocados" : "○ Alocados";
       botaoAlocadosMapa.classList.toggle("ativo", valor);
     }
     aplicarVisibilidadeGrupos();
@@ -3388,7 +3449,7 @@
     mostrarFuturosNoMapa = valor;
     localStorage.setItem("planejamento.mostrarFuturosNoMapa", valor ? "1" : "0");
     if (botaoFuturosMapa) {
-      botaoFuturosMapa.textContent = valor ? "● Agendados (futuro): no mapa" : "○ Agendados (futuro): ocultos";
+      botaoFuturosMapa.textContent = valor ? "● Futuros" : "○ Futuros";
       botaoFuturosMapa.classList.toggle("ativo", valor);
     }
     atualizarPreviewPool();
@@ -3398,7 +3459,7 @@
     mostrarEnviadasNoMapa = valor;
     localStorage.setItem("planejamento.mostrarEnviadasNoMapa", valor ? "1" : "0");
     if (botaoEnviadasMapa) {
-      botaoEnviadasMapa.textContent = valor ? "● Enviadas: no mapa" : "○ Enviadas: ocultas";
+      botaoEnviadasMapa.textContent = valor ? "● Enviadas" : "○ Enviadas";
       botaoEnviadasMapa.classList.toggle("ativo", valor);
     }
     aplicarVisibilidadeGrupos();
@@ -3421,6 +3482,7 @@
     definirCliqueNosMarcadores(true);
     if (botaoPoligono) {
       botaoPoligono.textContent = "⬠ Selecionar área";
+      botaoPoligono.title = "Selecionar por área: cada clique no mapa é um vértice do polígono; duplo clique (ou este botão) conclui, Esc cancela";
       botaoPoligono.classList.remove("ativo");
     }
   }
@@ -3428,7 +3490,8 @@
   function alternarDesenhoPoligono() {
     if (desenhandoPoligono) { concluirPoligono(); return; }
     desenhandoPoligono = true;
-    botaoPoligono.textContent = "✓ Concluir área (Esc cancela)";
+    botaoPoligono.textContent = "✓ Concluir área";
+    botaoPoligono.title = "Clique no mapa pra marcar os vértices; duplo clique ou este botão conclui a seleção, Esc cancela";
     botaoPoligono.classList.add("ativo");
     // sem os pontos visíveis não dá pra saber o que o laço vai pegar --
     // liga a exibição dos não alocados junto
@@ -3506,13 +3569,18 @@
 
     botaoPoligono = document.createElement("button");
     botaoPoligono.type = "button";
-    botaoPoligono.title = "Selecionar por área: cada clique no mapa é um vértice do polígono; duplo clique (ou este botão) conclui, Esc cancela";
+    botaoPoligono.className = "controle-area";  // ação, não camada: destaque cheio quando ativo
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
+
+    // 4 toggles de camada | ação de seleção por área (separador visual)
+    const separador = document.createElement("span");
+    separador.className = "separador-controle";
 
     container.appendChild(botaoPoolMapa);
     container.appendChild(botaoAlocadosMapa);
     container.appendChild(botaoFuturosMapa);
     container.appendChild(botaoEnviadasMapa);
+    container.appendChild(separador);
     container.appendChild(botaoPoligono);
     map.controls[google.maps.ControlPosition.TOP_CENTER].push(container);
 
@@ -4918,8 +4986,18 @@
     inicializarSecoesPool();
     atualizarContagensSecoesPool();
     renderizarRetiradas(POOL_RETIRADAS);
+    // filtros persistem através dos reloads das ações (cancelar, criar
+    // rota, enviar...) -- restaura ANTES das aplicações iniciais; a
+    // busca é reaplicada mais abaixo, depois do listener dela existir
+    const filtrosRestaurados = restaurarFiltrosPool();
     aplicarFiltroFlag();  // inicializa o contador de "precisa sair no dia"
     atualizarBadgeFiltrosPool();
+    if (filtrosRestaurados) {
+      aplicarFiltroCep();
+      aplicarFiltroCaixas();
+      aplicarFiltrosRetiradas();
+      atualizarPreviewPool();
+    }
     criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)
 
     // clique (sem drag) num card do pool = (des)seleciona pra rota nova
@@ -4954,6 +5032,7 @@
       atualizarPreviewPool();
       if (filtroCepAtivo() || filtroCaixasAtivo()) enquadrarPreview();
       atualizarBadgeFiltrosPool();
+      salvarFiltrosPool();  // só o que foi APLICADO persiste (Fechar sem aplicar não salva)
       document.getElementById("modal-filtros-pool").classList.remove("aberto");
     });
 
@@ -5312,7 +5391,13 @@
       });
       atualizarPreviewPool();  // visibilidade mudou -- preview acompanha
       aplicarFiltrosRetiradas();  // a busca vale na seção de retiradas também
+      salvarFiltrosPool();
     });
+    // busca restaurada do sessionStorage só vira filtro de verdade via o
+    // listener acima -- reaplica agora que ele existe
+    if (document.getElementById("busca-pool").value.trim()) {
+      document.getElementById("busca-pool").dispatchEvent(new Event("input"));
+    }
 
     document.getElementById("busca-rotas").addEventListener("input", (e) => {
       const texto = e.target.value.trim().toLowerCase();

@@ -578,7 +578,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         manualmente nem achar o pedido pela busca). O front marca esse
         caso (badge "Agendado dd/mm" cinza + urgência "futuro") e tem
         um filtro próprio pra ocultá-los do MAPA (não da lista) --
-        ver "Agendados (futuro): no mapa" em planejamento_rotas.html.
+        ver o toggle "Futuros" da barra do mapa em planejamento_rotas.html.
         O pipeline automático (criar_rotas_diarias.py/incrementar_
         rotas.py) continua respeitando elegivel_para_data normalmente;
         só a tela manual de planejamento passou a mostrar tudo. Cada
