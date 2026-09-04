@@ -2334,6 +2334,14 @@ def wms_etiquetas_pdf():
     paisagem muda o giro."""
     conn = wms.conectar()
     orientacao = request.args.get("orientacao", "retrato")
+    # Ajuste fino pra térmica (Elgin L42 Pro): ?margem=2 (mm nos 4 lados),
+    # ?dx=1&dy=-1 (deslocamento em mm). Aceita vírgula decimal.
+    def _mm(nome):
+        try:
+            return float(str(request.args.get(nome, "0")).replace(",", "."))
+        except ValueError:
+            abort(400, f"Parâmetro {nome} inválido.")
+    margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
     try:
         area = request.args.get("area")
         if area:
@@ -2343,7 +2351,7 @@ def wms_etiquetas_pdf():
             codigos = [c for c in (request.args.get("codigos") or "").split(",") if c.strip()]
             nome = "etiquetas_" + (wms.normalizar_codigo(codigos[0]) if codigos else "vazio") + ".pdf"
         try:
-            pdf = wms.gerar_etiquetas_pdf(conn, codigos, orientacao)
+            pdf = wms.gerar_etiquetas_pdf(conn, codigos, orientacao, margem, dx, dy)
         except wms.ErroWMS as e:
             abort(400, str(e))
     finally:

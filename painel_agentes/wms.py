@@ -935,7 +935,23 @@ def desenhar_etiqueta(posicao: dict):
 ORIENTACOES_ETIQUETA = ("retrato", "retrato-inv", "paisagem")
 
 
-def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "retrato") -> bytes:
+def _aplicar_margem(img, margem_mm: float, desloc_x_mm: float, desloc_y_mm: float):
+    """Encolhe a arte dentro da página (margem branca igual nos 4 lados) e a
+    desloca em mm -- ajuste fino pra impressora térmica sem mexer no driver."""
+    from PIL import Image
+    if not margem_mm and not desloc_x_mm and not desloc_y_mm:
+        return img
+    px_mm = _DPI / 25.4
+    W, H = img.size
+    m = max(0, int(round(margem_mm * px_mm)))
+    arte = img.resize((max(1, W - 2 * m), max(1, H - 2 * m)))
+    pagina = Image.new("L", (W, H), 255)
+    pagina.paste(arte, (m + int(round(desloc_x_mm * px_mm)), m + int(round(desloc_y_mm * px_mm))))
+    return pagina
+
+
+def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "retrato", margem_mm: float = 0,
+                        desloc_x_mm: float = 0, desloc_y_mm: float = 0) -> bytes:
     """PDF com uma etiqueta por página, no tamanho exato da mídia térmica.
 
     orientacao:
@@ -962,6 +978,9 @@ def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "retrato") -
         imagens = [im.rotate(-90, expand=True) for im in imagens]
     elif orientacao == "retrato-inv":
         imagens = [im.rotate(90, expand=True) for im in imagens]
+    if margem_mm < 0 or margem_mm > 15 or abs(desloc_x_mm) > 15 or abs(desloc_y_mm) > 15:
+        raise ErroWMS("Margem e deslocamento devem ficar entre 0 e 15 mm.")
+    imagens = [_aplicar_margem(im, margem_mm, desloc_x_mm, desloc_y_mm) for im in imagens]
     buf = io.BytesIO()
     imagens[0].save(buf, "PDF", resolution=float(_DPI), save_all=True, append_images=imagens[1:],
                     title="Etiquetas de posição Freshlog")
