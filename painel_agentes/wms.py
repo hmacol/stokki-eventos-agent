@@ -950,18 +950,20 @@ def _aplicar_margem(img, margem_mm: float, desloc_x_mm: float, desloc_y_mm: floa
     return pagina
 
 
-def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "retrato", margem_mm: float = 0,
+def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "paisagem", margem_mm: float = 0,
                         desloc_x_mm: float = 0, desloc_y_mm: float = 0) -> bytes:
     """PDF com uma etiqueta por página, no tamanho exato da mídia térmica.
 
     orientacao:
-      retrato      (padrão) página 5 × 10 cm em pé, arte girada 90° no sentido
-                   horário -- é como a impressora do galpão puxa a etiqueta
-                   (foto do Hugo, 04/09: a faixa da área sai no topo). Imprimir
-                   em 100% / "tamanho real", sem "ajustar à página".
-      retrato-inv  mesma página em pé, girada pro outro lado (se a impressora
-                   puxar a etiqueta pelo outro lado).
-      paisagem     página 10 × 5 cm deitada, arte sem girar.
+      paisagem     (padrão) página 10 × 5 cm deitada, arte sem girar -- é como
+                   a Elgin L42 Pro do galpão puxa a etiqueta (2ª foto do Hugo,
+                   04/09: mídia de 10 cm de largura, faixa da área à esquerda).
+                   Imprimir em 100% / "tamanho real", sem "ajustar à página".
+      retrato      página 5 × 10 cm em pé, arte girada 90° no sentido horário
+                   (mídia com 5 cm de largura).
+      retrato-inv  mesma página em pé, girada pro outro lado.
+    A margem/deslocamento são aplicados DEPOIS do giro, ou seja, no sentido
+    em que a etiqueta sai da impressora: dx > 0 direita, dy > 0 desce.
     """
     if orientacao not in ORIENTACOES_ETIQUETA:
         raise ErroWMS(f"Orientação inválida: {orientacao!r}. Use retrato, retrato-inv ou paisagem.")
