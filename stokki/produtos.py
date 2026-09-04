@@ -107,7 +107,8 @@ def listar_produtos(sess, tamanho_pagina: int = 500, estado: str = "", pausa: fl
             "order[0][column]": 2, "order[0][dir]": "asc",
             "client": "", "state": estado, "input_search": "",
         }
-        resp = sess.get(URL_TABELA, params=params, headers=_HEADERS_AJAX, timeout=120)
+        # StokkiSession já fixa timeout=30 por dentro (passar de novo dá TypeError).
+        resp = sess.get(URL_TABELA, params=params, headers=_HEADERS_AJAX)
         resp.raise_for_status()
         j = resp.json()
         linhas = j.get("aaData") or j.get("data") or []
@@ -154,7 +155,7 @@ def _numero(texto: str | None) -> float | None:
 def ler_perfil(sess, stokki_id: int) -> dict:
     """Lê a página show/{id} e devolve os campos úteis pro WMS. A página é
     rótulo numa linha e valor na próxima; 'Não informado' vira None."""
-    resp = sess.get(URL_PERFIL.format(id=int(stokki_id)), headers=_HEADERS_HTML, timeout=60)
+    resp = sess.get(URL_PERFIL.format(id=int(stokki_id)), headers=_HEADERS_HTML)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     corpo = soup.find("section", class_="content") or soup.body or soup
