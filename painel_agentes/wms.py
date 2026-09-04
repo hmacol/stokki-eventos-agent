@@ -927,8 +927,8 @@ def desenhar_etiqueta(posicao: dict):
     rodape = f"{PREFIXO_QR}{posicao['codigo']}  ·  {(posicao.get('temperatura') or '').capitalize()}  ·  Freshlog"
     f_rod = _ajustar_fonte(draw, rodape, largura_texto, 30, negrito=False)
     draw.text((x0, H - 75), rodape, fill=0, font=f_rod)
-    # borda de corte
-    draw.rectangle([0, 0, W - 1, H - 1], outline=0, width=2)
+    # Sem borda de corte: na térmica ela aparecia como uma linha torta na
+    # etiqueta real (Hugo, 04/09).
     return img
 
 
