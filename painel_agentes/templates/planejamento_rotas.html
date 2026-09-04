@@ -2,6 +2,20 @@
 {% block titulo %}Planejamento de Rotas{% endblock %}
 
 {% block estilo_extra %}
+<script>
+  // Modo celular (Opção A "Abas", Hugo 04/09): a MESMA tela, com o mesmo
+  // JS e os mesmos IDs/endpoints, reorganizada em abas Pool / Rotas /
+  // Mapa / Mais quando a viewport é estreita (ou ?modo=mobile força;
+  // ?modo=desktop força o contrário). A classe entra no <head>, antes do
+  // primeiro paint, pra não piscar o layout de 3 colunas.
+  (function() {
+    var modo = new URLSearchParams(location.search).get("modo");
+    var estreita = window.matchMedia && window.matchMedia("(max-width: 820px)").matches;
+    if (modo === "mobile" || (modo !== "desktop" && estreita)) {
+      document.documentElement.classList.add("modo-mobile");
+    }
+  })();
+</script>
 <style>
   /* Tema "Torre" (console escuro) -- as variáveis globais em si (--fundo/
      --superficie/--borda/--texto/--texto-suave/--erro/--sucesso/--rodando/
@@ -1316,18 +1330,148 @@
   .modal-confirmar-envio .acoes button.confirmar:hover { background: #26C49A; }
   .modal-confirmar-envio .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-confirmar-envio .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* ====================== MODO CELULAR (Opção A, Hugo 04/09) ======================
+     Tudo abaixo só vale com html.modo-mobile (ver script no topo do bloco).
+     Sidebar some; as 3 colunas viram painéis de página inteira e só o da
+     aba ativa (html[data-aba]) aparece; o mapa ocupa a tela toda na aba
+     Mapa (fica sempre com tamanho real, só invisível nas outras abas, pra
+     o Google Maps não inicializar com 0x0); as barras de seleção viram
+     rodapé fixo acima das abas; cada card ganha o botão "⋯" (menu de
+     contexto -- não há botão direito no touch) e a seleção do pool ganha
+     "Adicionar à rota…" (substitui o arrastar pool→rota). */
+  .abas-mobile, .painel-mais-mobile, .botao-menu-parada, #select-adicionar-rota { display: none; }
+  html.modo-mobile .sidebar { display: none; }
+  html.modo-mobile .area-conteudo { width: 100%; }
+  html.modo-mobile main, html.modo-mobile.tema-escuro main {
+    max-width: none; border-radius: 0;
+    padding: 0 8px calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+  html.modo-mobile main h1 { display: none !important; }  /* o h1 tem display:flex inline */
+  /* topo fixo: data + chips de KPI numa linha que rola de lado */
+  html.modo-mobile .barra-controle {
+    position: sticky; top: 0; z-index: 70;
+    flex-wrap: nowrap; overflow-x: auto; gap: 8px;
+    padding: 8px 10px; margin: 0 -8px 8px; border-radius: 0; border-width: 0 0 1px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  html.modo-mobile .barra-controle::-webkit-scrollbar { display: none; }
+  html.modo-mobile .barra-controle > label[for="data"],
+  html.modo-mobile .barra-controle > button.botao,
+  html.modo-mobile .barra-controle .toggle-compacto,
+  html.modo-mobile .resumo-regioes-ofertas { display: none; }
+  html.modo-mobile .barra-controle input[type=date] { font-size: 16px; padding: 5px 8px; flex: none; }
+  html.modo-mobile .chips-kpi { flex-wrap: nowrap; margin-left: 0; }
+  /* blocos que ficam FORA das colunas (agentes, importação, expedição,
+     resumo de agendados) moram na aba Mais */
+  html.modo-mobile:not([data-aba="mais"]) #barra-agentes-planejamento,
+  html.modo-mobile:not([data-aba="mais"]) #painel-importacao-filtro,
+  html.modo-mobile:not([data-aba="mais"]) #painel-expedicao-selecao,
+  html.modo-mobile:not([data-aba="mais"]) #resumo-agendados-container { display: none !important; }
+  html.modo-mobile[data-aba="mais"] .painel-mais-mobile { display: block; }
+  html.modo-mobile .painel-mais-mobile .cartao-mais {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 12px; margin-bottom: 10px;
+  }
+  html.modo-mobile .painel-mais-mobile h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); }
+  html.modo-mobile .painel-mais-mobile .linha { display: flex; flex-wrap: wrap; gap: 8px; }
+  html.modo-mobile .painel-mais-mobile .linha > a,
+  html.modo-mobile .painel-mais-mobile .linha > button {
+    flex: 1 1 45%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); color: var(--texto);
+    text-decoration: none; font-size: 13px; font-family: inherit; cursor: pointer; padding: 6px 10px;
+  }
+  html.modo-mobile .painel-mais-mobile .linha > button.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  html.modo-mobile .painel-mais-mobile form { display: contents; }
+  /* colunas viram painéis */
+  html.modo-mobile .layout-planejamento { display: block !important; }
+  html.modo-mobile .divisor, html.modo-mobile .botao-colapsar-coluna,
+  html.modo-mobile #botao-colapsar-todas, html.modo-mobile .rotulo-vertical { display: none !important; }
+  html.modo-mobile .coluna { max-height: none; overflow: visible; padding: 0; border: none; background: transparent; border-radius: 0; height: auto; }
+  html.modo-mobile:not([data-aba="pool"]) #coluna-pool { display: none !important; }
+  html.modo-mobile:not([data-aba="rotas"]) #coluna-rotas { display: none !important; }
+  html.modo-mobile #map {
+    /* !important: o Google Maps grava position:relative inline no container */
+    position: fixed !important; left: 0; right: 0; top: var(--altura-topo-mobile, 56px);
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    width: auto; height: auto; border-radius: 0; border: none; z-index: 40;
+  }
+  html.modo-mobile:not([data-aba="mapa"]) #map { visibility: hidden; pointer-events: none; z-index: -1; }
+  /* abas fixas no rodapé */
+  html.modo-mobile .abas-mobile {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: var(--superficie); border-top: 1px solid var(--borda);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html.modo-mobile .abas-mobile button {
+    flex: 1; min-height: 58px; border: none; background: none; color: var(--texto-suave);
+    font-family: inherit; font-size: 10.5px; font-weight: 600; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; cursor: pointer; position: relative; padding: 0;
+  }
+  html.modo-mobile .abas-mobile button svg { width: 20px; height: 20px; }
+  html.modo-mobile .abas-mobile button.ativo { color: var(--acento); }
+  html.modo-mobile .abas-mobile .cont {
+    position: absolute; top: 7px; left: calc(50% + 8px); min-width: 16px; height: 16px; line-height: 16px;
+    padding: 0 4px; border-radius: 100px; background: var(--erro); color: #fff; font-size: 10px; font-weight: 700; text-align: center;
+  }
+  html.modo-mobile .abas-mobile .cont.neutro { background: var(--texto-suave); }
+  html.modo-mobile .abas-mobile .cont.zero { display: none; }
+  /* barras de seleção viram rodapé flutuante acima das abas; a do pool só
+     aparece com algo selecionado (body.tem-selecao-pool) e vale também na
+     aba Mapa (seleção por toque/laço) */
+  html.modo-mobile .barra-selecao, html.modo-mobile #barra-selecao-rotas {
+    position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 75;
+    margin: 0; padding: 8px; flex-wrap: wrap; gap: 6px;
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  }
+  html.modo-mobile .barra-selecao { display: none; }
+  html.modo-mobile body.tem-selecao-pool .barra-selecao { display: flex; }
+  html.modo-mobile[data-aba="rotas"] .barra-selecao,
+  html.modo-mobile[data-aba="mais"] .barra-selecao,
+  html.modo-mobile:not([data-aba="rotas"]) #barra-selecao-rotas { display: none !important; }
+  html.modo-mobile .barra-selecao button, html.modo-mobile #barra-selecao-rotas button { flex: 1 1 30%; min-height: 40px; font-size: 12px; }
+  html.modo-mobile #barra-selecao-rotas select { flex: 1 1 100%; min-height: 40px; font-size: 14px; }
+  html.modo-mobile #select-adicionar-rota {
+    display: block; flex: 1 1 100%; min-height: 40px; font-size: 14px; border-radius: 6px;
+    border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  html.modo-mobile body.tem-selecao-pool main { padding-bottom: calc(230px + env(safe-area-inset-bottom, 0px)); }
+  /* cards: alvo de toque maior + botão "⋯" (fica escondido no modo "só número") */
+  html.modo-mobile .item-parada { padding-right: 34px; font-size: 12.5px; }
+  html.modo-mobile body.cards-compactos .item-parada { padding-right: 34px; }
+  html.modo-mobile body.cards-numeros .item-parada { padding-right: 0; }
+  html.modo-mobile .botao-menu-parada {
+    display: flex; position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    width: 30px; height: 30px; align-items: center; justify-content: center; z-index: 3;
+    border: none; background: none; color: var(--texto-suave); font-size: 18px; line-height: 1; border-radius: 6px; cursor: pointer; padding: 0;
+  }
+  html.modo-mobile body.cards-numeros .botao-menu-parada { display: none; }
+  html.modo-mobile .item-parada .botao-cancelar-pedido { right: 34px; }
+  html.modo-mobile .card-rota .acoes button, html.modo-mobile .toolbar-rotas > button,
+  html.modo-mobile .toolbar-rotas .menu-toggle, html.modo-mobile .barra-selecao button { min-height: 40px; }
+  html.modo-mobile .menu-rotas .menu-drop { max-width: calc(100vw - 24px); }
+  html.modo-mobile .menu-rotas .menu-drop button { padding: 11px 10px; font-size: 13px; }
+  html.modo-mobile .menu-contexto button { padding: 11px 12px; font-size: 13.5px; }
+  /* 16px nos campos evita o zoom automático do iOS ao focar */
+  html.modo-mobile .campo-busca, html.modo-mobile [class^="modal-"] input,
+  html.modo-mobile [class^="modal-"] select, html.modo-mobile [class^="modal-"] textarea { font-size: 16px; }
 </style>
 {% endblock %}
 
 {% block conteudo %}
 <h1 style="font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:12px;">
   Planejamento de Rotas
-  <a href="{{ url_for('planejamento_mobile', data=data_alvo_input) }}" title="Versão mobile" style="font-size:12px;font-weight:600;color:var(--acento);text-decoration:none;">📱 mobile</a>
+  <a href="{{ url_for('planejamento', data=data_alvo_input, modo='mobile') }}" title="Versão celular (a mesma tela em abas Pool / Rotas / Mapa / Mais; no celular entra sozinha)" style="font-size:12px;font-weight:600;color:var(--acento);text-decoration:none;">📱 mobile</a>
 </h1>
 
 <form class="barra-controle" method="GET" action="{{ url_for('planejamento') }}">
   <label for="data">Data:</label>
   <input type="date" id="data" name="data" value="{{ data_alvo_input }}">
+  {% if request.args.get('modo') in ('mobile', 'desktop') %}
+  {# modo forçado por URL sobrevive ao Buscar (e aos reloads das ações) #}
+  <input type="hidden" name="modo" value="{{ request.args.get('modo') }}">
+  {% endif %}
   <button type="submit" class="botao">Buscar</button>
   {% if dados %}
   {% set total_alocados = dados.rascunhos | map(attribute='paradas') | map('length') | sum %}
@@ -1368,6 +1512,30 @@
   {% endif %}
   {% endif %}
 </form>
+
+{# Aba "Mais" do modo celular (Opção A, 04/09): atalhos que no desktop
+   moram na sidebar (tema, sair, outras telas) + densidade dos cards; os
+   blocos de agentes/importação/expedição/resumo de agendados logo abaixo
+   também só aparecem nesta aba (CSS). #}
+<div class="painel-mais-mobile" id="painel-mais-mobile">
+  <div class="cartao-mais">
+    <h3>Cards de pedido</h3>
+    <div class="linha densidade-mobile">
+      <button type="button" data-densidade="normal">Normais</button>
+      <button type="button" data-densidade="compacto">Compactos</button>
+      <button type="button" data-densidade="numeros">Só número</button>
+    </div>
+  </div>
+  <div class="cartao-mais">
+    <h3>Painel</h3>
+    <div class="linha">
+      <a href="{{ url_for('torre_mobile') }}">Torre de Controle</a>
+      <a href="{{ url_for('planejamento', data=data_alvo_input, modo='desktop') }}">Versão desktop</a>
+      <button type="button" id="botao-tema-mobile">Alternar tema</button>
+      <form method="post" action="{{ url_for('logout') }}"><button type="submit">Sair</button></form>
+    </div>
+  </div>
+</div>
 
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
 
@@ -1786,6 +1954,72 @@
 </div>
 {% endif %}
 
+{# Abas do modo celular -- fora do if/elif principal de propósito: mesmo
+   sem rascunho/pool (só aviso) a aba Mais continua acessível. Só aparecem
+   com html.modo-mobile (CSS). Ícones = os mesmos da sidebar. #}
+<nav class="abas-mobile" id="abas-mobile">
+  <button type="button" data-aba="pool" title="Pedidos não alocados">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h14v11H3z"/><path d="M3 11h4l1.5 2h3L13 11h4"/></svg>
+    Pool<span class="cont zero" id="aba-cont-pool">{{ dados.pool|length if dados else 0 }}</span>
+  </button>
+  <button type="button" data-aba="rotas" title="Rascunhos de rota">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/></svg>
+    Rotas<span class="cont neutro zero" id="aba-cont-rotas">{{ dados.rascunhos|length if dados else 0 }}</span>
+  </button>
+  <button type="button" data-aba="mapa" title="Mapa">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/></svg>
+    Mapa
+  </button>
+  <button type="button" data-aba="mais" title="Agentes, agendados e atalhos">
+    <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
+    Mais
+  </button>
+</nav>
+<script>
+  // Troca de aba do modo celular. Independe do script principal (que só
+  // existe com dados + chave do Maps): sem layout, cai na aba Mais.
+  (function() {
+    var html = document.documentElement;
+    if (!html.classList.contains("modo-mobile")) return;
+    var nav = document.getElementById("abas-mobile");
+    // o layout vem DEPOIS deste script no HTML -- decide pelo mesmo
+    // critério do {% raw %}{% else %}{% endraw %} que o renderiza
+    var temLayout = {{ 'true' if (dados and not erro and (dados.rascunhos or dados.pool) and dados.google_maps_key) else 'false' }};
+    var CHAVE = "planejamento.abaMobile";
+    function alturaTopo() {
+      var barra = document.querySelector(".barra-controle");
+      html.style.setProperty("--altura-topo-mobile", (barra ? barra.offsetHeight : 0) + "px");
+    }
+    function definirAba(aba, salvar) {
+      if (!temLayout && aba !== "mais") aba = "mais";
+      html.dataset.aba = aba;
+      nav.querySelectorAll("button").forEach(function(b) { b.classList.toggle("ativo", b.dataset.aba === aba); });
+      if (salvar) { try { sessionStorage.setItem(CHAVE, aba); } catch (e) {} }
+      alturaTopo();
+      window.scrollTo(0, 0);
+    }
+    nav.addEventListener("click", function(e) {
+      var b = e.target.closest("button[data-aba]");
+      if (b) definirAba(b.dataset.aba, true);
+    });
+    var inicial = null;
+    try { inicial = sessionStorage.getItem(CHAVE); } catch (e) {}
+    if (!inicial || !nav.querySelector('button[data-aba="' + inicial + '"]')) inicial = temLayout ? "pool" : "mais";
+    definirAba(inicial, false);
+    window.addEventListener("resize", alturaTopo);
+    ["aba-cont-pool", "aba-cont-rotas"].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.toggle("zero", !(Number(el.textContent) > 0));
+    });
+    // atalhos da aba Mais
+    var tema = document.getElementById("botao-tema-mobile");
+    var alternador = document.getElementById("alterna-tema");
+    if (tema && alternador) tema.addEventListener("click", function() { alternador.click(); });
+    var campoData = document.getElementById("data");
+    if (campoData) campoData.addEventListener("change", function() { campoData.form.submit(); });
+  })();
+</script>
+
 {% if erro %}
 <div class="aviso">Não consegui montar o planejamento: {{ erro }}</div>
 {% elif not dados %}
@@ -1819,6 +2053,9 @@
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      {# só no modo celular (CSS): põe os selecionados numa rota existente,
+         no lugar do arrastar pool→rota, que não existe entre abas #}
+      <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
     </div>
     <div id="lista-pool">
       <div class="secao-pool" data-secao="hoje" id="secao-pool-hoje">
@@ -1943,6 +2180,8 @@
 
 <script>
   const PODE_EDITAR = {{ pode_editar | tojson }};
+  // modo celular (abas) -- decidido no <head>, ver bloco estilo_extra
+  const MODO_MOBILE = document.documentElement.classList.contains("modo-mobile");
   const RASCUNHOS = {{ dados.rascunhos | tojson }};
   const POOL = {{ dados.pool | tojson }};
   const POOL_RETIRADAS = {{ (dados.pool_retiradas or []) | tojson }};
@@ -2141,6 +2380,8 @@
     li.dataset.busca = [p.codigo, p.remetente_nome || p.remetente, p.destinatario_nome, p.endereco, p.numero_nf]
       .filter(Boolean).join(" ").toLowerCase();
     li.innerHTML = itemParadaHtml({ ...p, remetente: p.remetente_nome || p.remetente }, opts);
+    // celular: "⋯" abre o mesmo menu do botão direito (ver iniciarModoMobile)
+    if (MODO_MOBILE) li.insertAdjacentHTML("beforeend", '<button type="button" class="botao-menu-parada" title="Mais ações">⋯</button>');
     return li;
   }
 
@@ -2543,7 +2784,9 @@
   }
 
   function mostrarTooltipParada(li) {
-    if (!tooltipParada) return;
+    // celular: não há hover, e o mouseover sintético do toque abriria o
+    // tooltip em cima do card -- "Ver detalhes" no menu "⋯" faz esse papel
+    if (!tooltipParada || MODO_MOBILE) return;
     liTooltip = li;
     tooltipParada.innerHTML = montarTooltipParada(li);
     tooltipParada.style.display = "block";
@@ -3085,6 +3328,16 @@
     document.getElementById("botao-editar-endereco-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
+    // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
+    // "Adicionar à rota…" com os rascunhos ainda editáveis
+    document.body.classList.toggle("tem-selecao-pool", SELECIONADOS.size > 0);
+    const selectAdicionar = document.getElementById("select-adicionar-rota");
+    if (selectAdicionar) {
+      const opcoes = RASCUNHOS.filter(r => r.status === "RASCUNHO")
+        .map(r => `<option value="${r.id}">${escaparHtml(r.nome)}</option>`).join("");
+      selectAdicionar.innerHTML = `<option value="">Adicionar à rota…</option>${opcoes}`;
+      selectAdicionar.disabled = SELECIONADOS.size === 0 || !opcoes;
+    }
   }
 
   function alternarSelecao(serviceId) {
@@ -3595,6 +3848,82 @@
     });
   }
 
+  // ---- Modo celular (Opção A "Abas", Hugo 04/09) ----
+  // Tudo que o touch não tem: botão direito (vira "⋯"), hover de ajuda
+  // (vira alerta), arrastar pool→rota entre abas (vira "Adicionar à
+  // rota…"). O resto da tela é o mesmo código do desktop.
+  function iniciarModoMobile() {
+    if (!MODO_MOBILE) return;
+    // coluna colapsada no desktop (persistida) esconderia o painel inteiro
+    document.querySelectorAll(".coluna.colapsada").forEach(c => c.classList.remove("colapsada"));
+    // contadores das abas espelham os da tela (pool muda sem reload no
+    // arrastar/remover; rotas sempre recarregam)
+    const origem = document.getElementById("contagem-pool"), destino = document.getElementById("aba-cont-pool");
+    if (origem && destino) {
+      const aplicar = () => { const n = Number(origem.textContent) || 0; destino.textContent = n; destino.classList.toggle("zero", n === 0); };
+      aplicar();
+      new MutationObserver(aplicar).observe(origem, { childList: true, characterData: true, subtree: true });
+    }
+    // "⋯" do card -- captura pra não virar clique de seleção no card
+    document.addEventListener("click", (e) => {
+      const botao = e.target.closest(".botao-menu-parada");
+      if (!botao) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const li = botao.closest(".item-parada");
+      const r = botao.getBoundingClientRect();
+      if (li) abrirMenuContexto(li, r.left - 160, r.bottom + 4);
+    }, true);
+    // "?" de ajuda: o title não aparece no toque -- mostra como alerta
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("button.botao-mini");
+      if (b && b.textContent.trim() === "?" && b.title) { e.preventDefault(); alert(b.title); }
+    });
+    // densidade dos cards pela aba Mais (mesmo select do desktop, escondido)
+    const selectDensidade = document.getElementById("densidade-cards");
+    const botoesDensidade = document.querySelectorAll(".densidade-mobile button");
+    // lê a variável persistida (densidadeCards), não o select: este código
+    // roda antes de o initMap sincronizar o select com o localStorage
+    const marcarDensidade = () => botoesDensidade.forEach(b => b.classList.toggle("ativo", b.dataset.densidade === densidadeCards));
+    botoesDensidade.forEach(b => b.addEventListener("click", () => {
+      if (!selectDensidade) return;
+      selectDensidade.value = b.dataset.densidade;
+      selectDensidade.dispatchEvent(new Event("change"));
+      marcarDensidade();
+    }));
+    marcarDensidade();
+    // Adicionar selecionados a uma rota existente
+    const select = document.getElementById("select-adicionar-rota");
+    if (select) select.addEventListener("change", () => {
+      const rascunhoId = Number(select.value);
+      select.value = "";
+      if (rascunhoId && SELECIONADOS.size) adicionarSelecionadosARota(rascunhoId);
+    });
+  }
+
+  async function adicionarSelecionadosARota(rascunhoId) {
+    // mesma chamada do soltar um card do pool numa rota (onDragEnd), só
+    // que pra vários de uma vez, ao fim da rota; recarrega no final
+    const ids = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .map(li => Number(li.dataset.serviceId)).filter(id => SELECIONADOS.has(id));
+    const rota = RASCUNHOS.find(r => r.id === rascunhoId);
+    if (!ids.length || !rota) return;
+    if (!confirm(`Adicionar ${ids.length} pedido(s) ao fim da rota "${rota.nome}"?`)) return;
+    const select = document.getElementById("select-adicionar-rota");
+    select.disabled = true;
+    try {
+      for (const id of ids) {
+        const parada = POOL_BY_ID[id];
+        if (!parada) continue;
+        await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada, ordem: null });
+      }
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao adicionar à rota: ${e.message}. Recarregue a página.`);
+      select.disabled = false;
+    }
+  }
+
   async function criarRotaComSelecionados(botao) {
     // paradas na ordem em que aparecem no pool (dá pra ajustar depois
     // arrastando ou com "Otimizar sequência" no card novo)
@@ -3736,7 +4065,10 @@
       // clicar no campo de posição (modo "digitando a posição") ou no
       // "x" de cancelar não pode iniciar um drag -- preventOnFilter:false
       // deixa o clique neles funcionar normalmente
-      filter: "input, .botao-cancelar-pedido", preventOnFilter: false,
+      filter: "input, .botao-cancelar-pedido, .botao-menu-parada", preventOnFilter: false,
+      // touch: segurar 250ms pra começar a arrastar (senão não dá pra
+      // rolar a lista); no mouse continua imediato
+      delay: 250, delayOnTouchOnly: true, touchStartThreshold: 5,
       onStart: () => { dragRecente = true; esconderTooltipParada(); removerDestaqueMapa(); },
       onEnd: (evt) => { onDragEnd(evt); setTimeout(() => { dragRecente = false; }, 0); },
     });
@@ -4963,7 +5295,12 @@
     function estiloMapaAtual() {
       return document.documentElement.classList.contains("tema-escuro") ? ESTILO_MAPA_ESCURO : [];
     }
-    map = new google.maps.Map(document.getElementById("map"), { center: BASE, zoom: 11, styles: estiloMapaAtual() });
+    map = new google.maps.Map(document.getElementById("map"), {
+      center: BASE, zoom: 11, styles: estiloMapaAtual(),
+      // celular: o mapa ocupa a tela toda na aba Mapa, então um dedo já
+      // arrasta (sem o "use dois dedos" do modo cooperativo)
+      gestureHandling: MODO_MOBILE ? "greedy" : "auto",
+    });
     document.addEventListener("tema:alterado", () => map.setOptions({ styles: estiloMapaAtual() }));
     infoWindow = new google.maps.InfoWindow();
 
@@ -4999,6 +5336,7 @@
       atualizarPreviewPool();
     }
     criarControlesMapa(); // toggle "não alocados" + seleção por polígono (depois do pool montado)
+    iniciarModoMobile();  // celular: "⋯", "Adicionar à rota…", contadores das abas (no-op no desktop)
 
     // clique (sem drag) num card do pool = (des)seleciona pra rota nova
     // e centraliza o mapa no ponto do pedido

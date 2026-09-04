@@ -592,27 +592,13 @@ def planejamento():
 @app.route("/planejamento/mobile")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def planejamento_mobile():
-    """Versão mobile de /planejamento (Hugo, 17/08) -- mesmos dados
-    (buscar_dados_planejamento), template próprio sem drag-and-drop/mapa
-    editável: só leitura + ações básicas (trocar motorista, confirmar
-    envio, cancelar rota, descartar rascunho, alocar/desalocar
-    motoristas). Consome os MESMOS endpoints /api/planejamento/* do
-    desktop -- nenhuma lógica nova."""
+    """Antiga versão mobile "lite" de /planejamento (17/08, só leitura +
+    ações básicas, sem mapa). Desde 04/09 a própria tela /planejamento
+    tem o modo celular completo (abas Pool / Rotas / Mapa / Mais, mesmo
+    JS e endpoints do desktop) -- esta rota só redireciona pra lá, pra
+    não quebrar a barra inferior da torre mobile e links salvos."""
     data_alvo = _parse_data_param()
-    try:
-        dados = buscar_dados_planejamento(data_alvo)
-        erro = None
-    except Exception as e:
-        logging.getLogger(__name__).exception("Falha ao montar dados de planejamento (mobile)")
-        dados = None
-        erro = str(e)
-
-    return render_template(
-        "planejamento_mobile.html", dados=dados, erro=erro,
-        data_alvo_input=data_alvo.isoformat(),
-        pode_editar=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
-        endpoint_desktop="planejamento",
-    )
+    return redirect(url_for("planejamento", data=data_alvo.isoformat(), modo="mobile"))
 
 
 # IDs dos agentes acionáveis pela barra de botões do planejamento --
