@@ -2328,9 +2328,12 @@ def api_wms_criar_area():
 @app.route("/wms/etiquetas.pdf")
 @requer_auth(niveis=_NIVEIS_WMS)
 def wms_etiquetas_pdf():
-    """PDF 10 × 5 cm, uma etiqueta por página. ?area=C5 imprime a área toda,
-    ?codigos=C5-E3-N2,C5-P1 imprime só essas."""
+    """PDF com uma etiqueta por página no tamanho da mídia (5 × 10 cm em pé
+    por padrão, ver wms.gerar_etiquetas_pdf). ?area=C5 imprime a área toda,
+    ?codigos=C5-E3-N2,C5-P1 imprime só essas; ?orientacao=retrato|retrato-inv|
+    paisagem muda o giro."""
     conn = wms.conectar()
+    orientacao = request.args.get("orientacao", "retrato")
     try:
         area = request.args.get("area")
         if area:
@@ -2340,7 +2343,7 @@ def wms_etiquetas_pdf():
             codigos = [c for c in (request.args.get("codigos") or "").split(",") if c.strip()]
             nome = "etiquetas_" + (wms.normalizar_codigo(codigos[0]) if codigos else "vazio") + ".pdf"
         try:
-            pdf = wms.gerar_etiquetas_pdf(conn, codigos)
+            pdf = wms.gerar_etiquetas_pdf(conn, codigos, orientacao)
         except wms.ErroWMS as e:
             abort(400, str(e))
     finally:

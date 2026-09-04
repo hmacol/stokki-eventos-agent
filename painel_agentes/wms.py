@@ -932,8 +932,23 @@ def desenhar_etiqueta(posicao: dict):
     return img
 
 
-def gerar_etiquetas_pdf(conn, codigos: list[str]) -> bytes:
-    """PDF com uma etiqueta 10 × 5 cm por página (mídia da impressora térmica)."""
+ORIENTACOES_ETIQUETA = ("retrato", "retrato-inv", "paisagem")
+
+
+def gerar_etiquetas_pdf(conn, codigos: list[str], orientacao: str = "retrato") -> bytes:
+    """PDF com uma etiqueta por página, no tamanho exato da mídia térmica.
+
+    orientacao:
+      retrato      (padrão) página 5 × 10 cm em pé, arte girada 90° no sentido
+                   horário -- é como a impressora do galpão puxa a etiqueta
+                   (foto do Hugo, 04/09: a faixa da área sai no topo). Imprimir
+                   em 100% / "tamanho real", sem "ajustar à página".
+      retrato-inv  mesma página em pé, girada pro outro lado (se a impressora
+                   puxar a etiqueta pelo outro lado).
+      paisagem     página 10 × 5 cm deitada, arte sem girar.
+    """
+    if orientacao not in ORIENTACOES_ETIQUETA:
+        raise ErroWMS(f"Orientação inválida: {orientacao!r}. Use retrato, retrato-inv ou paisagem.")
     posicoes = []
     for c in codigos:
         p = obter_posicao(conn, c)
@@ -943,6 +958,10 @@ def gerar_etiquetas_pdf(conn, codigos: list[str]) -> bytes:
     if not posicoes:
         raise ErroWMS("Nenhuma posição pra imprimir.")
     imagens = [desenhar_etiqueta(p) for p in posicoes]
+    if orientacao == "retrato":
+        imagens = [im.rotate(-90, expand=True) for im in imagens]
+    elif orientacao == "retrato-inv":
+        imagens = [im.rotate(90, expand=True) for im in imagens]
     buf = io.BytesIO()
     imagens[0].save(buf, "PDF", resolution=float(_DPI), save_all=True, append_images=imagens[1:],
                     title="Etiquetas de posição Freshlog")
