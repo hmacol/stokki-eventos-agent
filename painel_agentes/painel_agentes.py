@@ -2334,11 +2334,21 @@ def wms_etiquetas_pdf():
     paisagem muda o giro."""
     conn = wms.conectar()
     orientacao = request.args.get("orientacao", "retrato")
-    # Ajuste fino pra térmica (Elgin L42 Pro): ?margem=2 (mm nos 4 lados),
-    # ?dx=1&dy=-1 (deslocamento em mm). Aceita vírgula decimal.
+    # Ajuste fino pra térmica (Elgin L42 Pro do galpão): ?margem=2 (mm nos 4
+    # lados), ?dx=1&dy=-1 (deslocamento em mm). Aceita vírgula decimal. Sem
+    # parâmetro na URL vale o padrão do config.yaml (wms.etiqueta_margem_mm,
+    # etiqueta_dx_mm, etiqueta_dy_mm), calibrado com o Hugo em 04/09 -- assim
+    # os botões da tela já saem certos e afinar não exige deploy.
+    cfg_wms = _carregar_config().get("wms", {}) or {}
+    padrao = {"margem": cfg_wms.get("etiqueta_margem_mm", 0), "dx": cfg_wms.get("etiqueta_dx_mm", 0),
+              "dy": cfg_wms.get("etiqueta_dy_mm", 0)}
+
     def _mm(nome):
+        bruto = request.args.get(nome)
+        if bruto in (None, ""):
+            bruto = padrao[nome]
         try:
-            return float(str(request.args.get(nome, "0")).replace(",", "."))
+            return float(str(bruto).replace(",", "."))
         except ValueError:
             abort(400, f"Parâmetro {nome} inválido.")
     margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
