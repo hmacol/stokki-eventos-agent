@@ -2313,6 +2313,21 @@ def api_wms_posicao_ativo(codigo):
         conn.close()
 
 
+@app.route("/api/wms/posicoes/<codigo>", methods=["DELETE"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_excluir_posicao(codigo):
+    """Exclui de verdade uma posição VAZIA (sem saldo). Mesmo nível de quem
+    pode desativar; a regra de "vazia" fica em wms.excluir_posicao."""
+    conn = wms.conectar()
+    try:
+        return jsonify({"ok": True, "posicao": wms.excluir_posicao(conn, codigo)})
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
 @app.route("/api/wms/areas", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem

@@ -305,6 +305,28 @@ def desativar_posicao(conn, codigo: str, ativo: bool = False) -> dict:
     return obter_posicao(conn, codigo)
 
 
+def excluir_posicao(conn, codigo: str) -> dict:
+    """Apaga a posição de verdade (não só desativa). Só vale pra posição
+    vazia: nenhum saldo diferente de zero. O histórico em wms_movimentos
+    fica intacto (guarda o código como texto), então a rastreabilidade não
+    se perde; se a posição for recriada depois, o histórico reaparece nela."""
+    codigo = normalizar_codigo(codigo)
+    p = obter_posicao(conn, codigo)
+    if not p:
+        raise ErroWMS(f"Posição {codigo} não existe.")
+    saldo = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(quantidade),0) AS q FROM wms_saldos WHERE posicao = ? AND quantidade <> 0",
+        (codigo,)).fetchone()
+    if saldo["n"]:
+        raise ErroWMS(f"{codigo} não está vazia (saldo {saldo['q']:g}). Mova ou dê saída antes de excluir.")
+    p["n_movimentos"] = conn.execute(
+        "SELECT COUNT(*) FROM wms_movimentos WHERE posicao_origem = ? OR posicao_destino = ?", (codigo, codigo)).fetchone()[0]
+    conn.execute("DELETE FROM wms_saldos WHERE posicao = ?", (codigo,))
+    conn.execute("DELETE FROM wms_posicoes WHERE codigo = ?", (codigo,))
+    conn.commit()
+    return p
+
+
 def obter_posicao(conn, codigo: str) -> dict | None:
     row = conn.execute("""
         SELECT p.*, a.nome AS area_nome, a.temperatura, a.tipo AS area_tipo

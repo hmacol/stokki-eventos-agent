@@ -425,7 +425,8 @@
       <button class="botao secundario" data-mov="SAIDA" ${itens.length ? '' : 'disabled'}>Saída daqui</button>
       <a class="botao neutro" href="${BASE_PATH}/wms/etiquetas.pdf?codigos=${encodeURIComponent(p.codigo)}" target="_blank">Etiqueta</a>
     </div>
-    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos nesta posição</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td>${esc(m.produto_descricao).slice(0, 28)}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
+    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos nesta posição</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td>${esc(m.produto_descricao).slice(0, 28)}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}
+    ${S.podeAdministrar && !itens.length ? `<div class="botoes" style="margin-top:18px"><button class="botao perigo" id="btn-excluir-pos">Excluir posição</button><div class="ajuda">Só posição vazia pode ser excluída. O histórico de movimentos é mantido.</div></div>` : ''}`;
   };
   TELAS_POS.posicao = (ctx) => {
     const p = ctx.posicao;
@@ -435,6 +436,17 @@
       const tipo = b.dataset.mov;
       ir('mov', tipo === 'ENTRADA' ? { tipo, destino: p.codigo } : { tipo, origem: p.codigo, conteudo: p.conteudo });
     }));
+    const ex = document.getElementById('btn-excluir-pos');
+    if (ex) ex.addEventListener('click', async () => {
+      if (!confirm('Excluir a posição ' + p.codigo + '? Ela some da área e das etiquetas; o histórico de movimentos fica.')) return;
+      ex.disabled = true;
+      try {
+        await api('/posicoes/' + encodeURIComponent(p.codigo), { method: 'DELETE' });
+        toast('Posição ' + p.codigo + ' excluída');
+        try { const b = await api('/bootstrap'); S.areas = b.areas; S.resumo = b.resumo; } catch (e) { /* só atualiza contadores */ }
+        voltar();
+      } catch (e) { toast(e.message, true); ex.disabled = false; }
+    });
   };
 
   // Movimento (Entrada / Transferência / Saída)
