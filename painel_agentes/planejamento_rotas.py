@@ -326,7 +326,14 @@ def _badges_trava(rascunho: dict) -> list[str]:
             badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
 
         niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
-        if len(paradas) > 1 and any(n >= 4 for n in niveis):
+        # Nível 4 só pode dividir rota com outro nível 4 do MESMO
+        # endereço e MESMO embarcador (roteirizacao_dados._chave_nivel4,
+        # Hugo 17/08 + 09/09) -- grupo assim não é aviso.
+        grupo_nivel4_legitimo = (
+            all(n >= 4 for n in niveis)
+            and len({(p["endereco"], p.get("sender_id")) for p in paradas}) == 1
+        )
+        if len(paradas) > 1 and any(n >= 4 for n in niveis) and not grupo_nivel4_legitimo:
             badges.append("entrega nível 4 dividindo rota com outras")
         else:
             # MESMO estimador que formou a rota (roteirizacao_dados.

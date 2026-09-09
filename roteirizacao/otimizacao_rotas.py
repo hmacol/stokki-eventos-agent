@@ -36,11 +36,13 @@ das rotas do Clarke-Wright acima de 9h; ver selecao_modelo.py):
     cada um custando o seu tempo, mesma regra do modelo Atual desde
     20/08); pedido "gigante" (mais caixas que o limite) fica
     em rota exclusiva; nível 4 fica exclusivo TAMBÉM, exceto quando
-    junta com outro nível 4 do MESMO endereço de entrega (e mesma data
-    de agendamento, quando ambos têm agendamento -- pedido do Hugo,
-    15/08, ajustado 17/08) -- os 5 modelos usam a MESMA pré-separação
-    (roteirizacao_dados.separar_pedidos_exclusivos) pra essa regra não
-    divergir entre eles.
+    junta com outro nível 4 do MESMO endereço de entrega e MESMO
+    embarcador (e mesma data de agendamento, quando ambos têm
+    agendamento -- pedido do Hugo, 15/08, ajustado 17/08 e 09/09);
+    grupo assim que soma volume de veículo grande sai como 1 rota
+    desse tipo, sem teto de 100 caixas -- os 5 modelos usam a MESMA
+    pré-separação (roteirizacao_dados.separar_pedidos_exclusivos) pra
+    essa regra não divergir entre eles.
 
 Diferenciação Grande SP x Viagem (regra 3 do doc): quem chama pode
 passar `eh_viagem_fn` (normalmente alocacao_motoristas.

@@ -246,17 +246,20 @@ def extrair_horario_atendimento(servico: dict) -> tuple[str, str]:
     )
 
 
-def _chave_nivel4(servico: dict) -> tuple[object, object]:
+def _chave_nivel4(servico: dict) -> tuple[object, object, object]:
     """Chave de junção de pedidos nível 4 -- ver separar_pedidos_exclusivos:
-    (endereço, dia de agendamento). Dois nível 4 só dividem rota com o
-    MESMO endereço de entrega; a data de agendamento só entra na
-    comparação quando AMBOS têm agendamento (pedido do Hugo, 17/08 --
-    substitui a regra anterior de "mesma rede", que juntava endereços
-    diferentes por raiz de CNPJ). Sem agendamento (`_dia_agendamento`
-    retorna None pros dois) junta só por endereço; um agendado + um sem
-    agendamento nunca junta (chaves com `dia` None x data nunca batem),
-    mesmo endereço igual."""
-    return (servico.get("address"), _dia_agendamento(servico))
+    (endereço, embarcador, dia de agendamento). Dois nível 4 só dividem
+    rota com o MESMO endereço de entrega E o MESMO embarcador
+    (`sender_id` -- pedido do Hugo, 09/09: nível 4 de embarcadores
+    diferentes sai em rotas independentes, mesmo indo pro mesmo CD;
+    até então embarcador não entrava na chave, regra de 17/08, que por
+    sua vez substituiu a "mesma rede" por raiz de CNPJ). A data de
+    agendamento só entra na comparação quando AMBOS têm agendamento.
+    Sem agendamento (`_dia_agendamento` retorna None pros dois) junta
+    só por endereço+embarcador; um agendado + um sem agendamento nunca
+    junta (chaves com `dia` None x data nunca batem), mesmo endereço
+    igual."""
+    return (servico.get("address"), servico.get("sender_id"), _dia_agendamento(servico))
 
 
 def _dia_agendamento(servico: dict):
@@ -506,7 +509,21 @@ def fundir_sublotes_pequenos(
       - compativel(pequeno, candidato) -> bool (opcional): predicado
         extra -- só tenta fundir esse par se retornar True, além das
         travas numéricas de sempre. Sem isso (None), qualquer par pode
-        tentar, como sempre foi."""
+        tentar, como sempre foi.
+
+    Nível 4 é rota exclusiva (NIVEL_ROTA_EXCLUSIVA): sublote que tenha
+    qualquer pedido nível 4 nunca entra numa fusão, nem como "pequeno"
+    nem como receptor (pedido do Hugo, 09/09 -- achado real: a fusão
+    pós-hoc entre macro-regiões juntou um nível 4 de 1 caixa com um
+    nível 4 de 75 caixas de OUTRO embarcador, porque só as travas
+    numéricas eram checadas). Sublote de veículo grande também fica de
+    fora (as travas dele são as do próprio tipo, não as de última
+    milha -- na prática o teto de `volume_maximo` já barrava)."""
+    def _exclusivo(sublote: list[dict]) -> bool:
+        if any(extrair_nivel_dificuldade(s) == NIVEL_ROTA_EXCLUSIVA for s in sublote):
+            return True
+        return classificar_tipo_veiculo(*caixas_e_enderecos(sublote)) is not None
+
     def _limite(sublote_candidato: list[dict]) -> tuple[float | None, float | None]:
         eh_viagem = eh_viagem_fn is not None and eh_viagem_fn(sublote_candidato)
         dist = distancia_maxima_viagem_km if eh_viagem else distancia_maxima_km
@@ -517,11 +534,11 @@ def fundir_sublotes_pequenos(
     i = 0
     while i < len(resultado):
         pequeno = resultado[i]
-        if len(pequeno) >= tamanho_minimo:
+        if len(pequeno) >= tamanho_minimo or _exclusivo(pequeno):
             i += 1
             continue
         centro_pequeno = _centroide_coords(pequeno, api_key)
-        outros = [j for j in range(len(resultado)) if j != i]
+        outros = [j for j in range(len(resultado)) if j != i and not _exclusivo(resultado[j])]
         if centro_pequeno:
             outros.sort(key=lambda j: (
                 _distancia_km(*centro_pequeno, *_centroide_coords(resultado[j], api_key))
@@ -670,15 +687,23 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 #
 # Nível 4 nunca divide rota com nenhum pedido de nível 1/2/3 (ver
 # NIVEL_ROTA_EXCLUSIVA) -- mas PODE dividir rota com OUTRO nível 4 do
-# MESMO ENDEREÇO de entrega (embarcador igual ou diferente não
-# importa), até NIVEL_4_TAMANHO_MAXIMO_ROTA (pedido do Hugo, 17/08 --
-# substitui a regra anterior de "mesma rede/raiz de CNPJ", que juntava
-# endereços diferentes da mesma empresa). Quando ambos têm agendamento
-# (`scheduled_start`), a data também precisa bater; sem agendamento nos
-# dois, junta só pelo endereço; um agendado + um sem agendamento nunca
-# junta -- ver _chave_nivel4. Esse teto (nível 4) continua sendo por
-# QUANTIDADE, não por horas -- é rota exclusiva, sem parada normal
-# competindo pelo mesmo orçamento de tempo.
+# MESMO ENDEREÇO de entrega e do MESMO EMBARCADOR (pedido do Hugo,
+# 09/09: embarcadores diferentes saem em rotas independentes; 17/08:
+# junção por endereço substituiu a regra anterior de "mesma rede/raiz
+# de CNPJ", que juntava endereços diferentes da mesma empresa). Quando
+# ambos têm agendamento (`scheduled_start`), a data também precisa
+# bater; sem agendamento nos dois, junta só pelo endereço+embarcador;
+# um agendado + um sem agendamento nunca junta -- ver _chave_nivel4.
+# Grupo cujo volume SOMADO já cabe num tipo de veículo grande (regras/
+# tipo_veiculo.py) sai como 1 rota só desse tipo, sem teto de 100
+# caixas nem de NIVEL_4_TAMANHO_MAXIMO_ROTA pedidos (pedido do Hugo,
+# 09/09 -- caso real: 5 pedidos KHAPPY pro CD do GPA, 573 caixas, saíam
+# em 5 rotas e eram juntados à mão todo dia). Grupo que NÃO chega a
+# veículo grande segue a regra de última milha de sempre: até
+# NIVEL_4_TAMANHO_MAXIMO_ROTA pedidos e 100 caixas, "gigante" isolado.
+# Esse teto (nível 4) continua sendo por QUANTIDADE, não por horas --
+# é rota exclusiva, sem parada normal competindo pelo mesmo orçamento
+# de tempo.
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3
 NIVEL_ROTA_EXCLUSIVA = 4
 NIVEL_4_TAMANHO_MAXIMO_ROTA = 4
@@ -1305,18 +1330,26 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
     esquema de roteirização (grade, sweep, savings, cep, kmeans -- ver
     otimizacao_rotas.py), os pedidos que sempre saem "prontos" e não
     participam da comparação de proximidade de quem chama:
-      - pedido "gigante" (mais caixas que `volume_maximo`): sempre
-        isolado;
+      - pedido "gigante" (mais caixas que `volume_maximo`) de nível
+        1/2/3: sempre isolado;
       - nível 4 sem par possível (nenhum outro nível 4 do MESMO
-        endereço, com a mesma condição de agendamento -- ver
-        _chave_nivel4): isolado, como sempre foi;
-      - nível 4 do MESMO endereço de entrega (`address`) -- e, quando
-        AMBOS têm agendamento (`scheduled_start`), também mesma data --
-        agrupados entre si até `tamanho_maximo_nivel4`, respeitando a
-        mesma trava de distância dos demais sublotes (Grande SP x
-        Viagem, via `eh_viagem_fn`/`distancia_maxima_viagem_km`, igual
-        aos outros modelos deste pacote); embarcador igual ou diferente
-        não importa (pedido do Hugo, 17/08);
+        endereço e MESMO embarcador, com a mesma condição de
+        agendamento -- ver _chave_nivel4): isolado, como sempre foi;
+      - nível 4 do MESMO endereço de entrega (`address`) e MESMO
+        embarcador (`sender_id`) -- e, quando AMBOS têm agendamento
+        (`scheduled_start`), também mesma data -- formam um GRUPO
+        (pedido do Hugo, 17/08 e 09/09). Se o volume somado do grupo já
+        classifica em algum tipo de veículo grande (regras/tipo_veiculo.
+        classificar_tipo_veiculo, 1 endereço), o grupo inteiro sai como
+        1 rota desse tipo -- sem teto de `volume_maximo` caixas nem de
+        `tamanho_maximo_nivel4` pedidos, "gigante" incluído (pedido do
+        Hugo, 09/09; ver _empacotar_grupo_nivel4). Senão, vale a regra
+        de última milha de sempre: "gigante" isolado, até
+        `tamanho_maximo_nivel4` pedidos e `volume_maximo` caixas por
+        rota, respeitando a mesma trava de distância dos demais
+        sublotes (Grande SP x Viagem, via `eh_viagem_fn`/
+        `distancia_maxima_viagem_km`, igual aos outros modelos deste
+        pacote);
       - grupo de até 4 endereços diferentes (ou até 2, quando o volume
         já exige Truck -- ver regras/tipo_veiculo.py) cujo volume
         COMBINADO já justifica um veículo maior que o de última milha
@@ -1378,6 +1411,45 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
             caixas += cx_pedido
         if atual:
             sublotes_grupo.append(atual)
+        return sublotes_grupo
+
+    def _empacotar_grupo_nivel4(servicos_grupo: list[dict]) -> list[list[dict]]:
+        """Grupo de nível 4 do mesmo endereço/embarcador (ver
+        _chave_nivel4) -> sublotes. Pedido do Hugo, 09/09:
+          1. volume somado classifica em algum tipo de veículo grande
+             (1 endereço -> VAN/HR, VUC, 3/4 ou Truck): 1 rota só, sem
+             teto de caixas/pedidos de última milha;
+          2. senão, tenta o maior "prefixo" (pedidos em ordem de caixas
+             DECRESCENTE) que classifica em algum tipo -- ex: 13 pedidos
+             de 100cx = 1300cx não cabe em nada (3/4 vai até 1200, Truck
+             começa em 1500), mas os 12 primeiros fecham um 3/4 e o
+             último segue sozinho pela regra de última milha;
+          3. o que sobra sem chegar a veículo grande (ou o grupo inteiro,
+             quando nenhum prefixo classifica) segue a regra de sempre:
+             "gigante" (> volume_maximo) isolado, demais empacotados por
+             _empacotar_grupo (até tamanho_maximo_nivel4 pedidos e
+             volume_maximo caixas).
+        Mesmo endereço por construção -- a trava de distância entre
+        pares não tem o que checar no caso 1/2."""
+        restante = sorted(servicos_grupo, key=lambda s: -extrair_volume_caixas(s))
+        sublotes_grupo: list[list[dict]] = []
+        while restante:
+            acumulado = 0
+            melhor_prefixo = None
+            for i, servico in enumerate(restante):
+                acumulado += extrair_volume_caixas(servico)
+                if classificar_tipo_veiculo(acumulado, 1) is not None:
+                    melhor_prefixo = i
+            if melhor_prefixo is None:
+                break
+            sublotes_grupo.append(restante[:melhor_prefixo + 1])
+            restante = restante[melhor_prefixo + 1:]
+        if restante:
+            gigantes_grupo = [s for s in restante if extrair_volume_caixas(s) > volume_maximo]
+            comuns_grupo = [s for s in restante if extrair_volume_caixas(s) <= volume_maximo]
+            sublotes_grupo.extend([g] for g in gigantes_grupo)
+            if comuns_grupo:
+                sublotes_grupo.extend(_empacotar_grupo(comuns_grupo))
         return sublotes_grupo
 
     def _agrupar_por_endereco(candidatos: list[dict]) -> list[dict]:
@@ -1480,11 +1552,15 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
     demais: list[dict] = []
 
     for servico in servicos:
-        if extrair_volume_caixas(servico) > volume_maximo:
-            gigantes.append(servico)
-            continue
+        # Nível 4 ANTES do "gigante": um nível 4 gigante pertence ao
+        # grupo do seu endereço/embarcador (pode fechar um veículo
+        # grande com os irmãos -- ver _empacotar_grupo_nivel4); isolado
+        # só se o grupo não chegar a veículo grande.
         if extrair_nivel_dificuldade(servico) == NIVEL_ROTA_EXCLUSIVA:
             grupos_nivel4.setdefault(_chave_nivel4(servico), []).append(servico)
+            continue
+        if extrair_volume_caixas(servico) > volume_maximo:
+            gigantes.append(servico)
             continue
         demais.append(servico)
 
@@ -1492,7 +1568,7 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
 
     sublotes_prontos: list[list[dict]] = [[s] for s in gigantes]
     for grupo in grupos_nivel4.values():
-        sublotes_prontos.extend(_empacotar_grupo(grupo))
+        sublotes_prontos.extend(_empacotar_grupo_nivel4(grupo))
     sublotes_prontos.extend(grupos_veiculo_grande)
 
     return sublotes_prontos, demais
@@ -1572,12 +1648,13 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     `volume_maximo` caixas nunca cabe junto com nenhum outro -- aloca
     uma rota exclusiva isolada só pra ele.
 
-    Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08 e 17/08): nunca
-    divide rota com pedido de nível 1/2/3. Mas PODE dividir rota com
-    OUTRO nível 4 do MESMO endereço de entrega (e mesma data de
-    agendamento, quando ambos têm agendamento) -- ver _chave_nivel4 e
-    separar_pedidos_exclusivos, chamada abaixo, compartilhada por TODOS
-    os esquemas de roteirização (não só este).
+    Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08, 17/08 e 09/09):
+    nunca divide rota com pedido de nível 1/2/3. Mas PODE dividir rota
+    com OUTRO nível 4 do MESMO endereço de entrega e MESMO embarcador
+    (e mesma data de agendamento, quando ambos têm agendamento); grupo
+    que soma volume de veículo grande sai como 1 rota desse tipo -- ver
+    _chave_nivel4 e separar_pedidos_exclusivos, chamada abaixo,
+    compartilhada por TODOS os esquemas de roteirização (não só este).
     """
     def _chave_ordenacao(servico: dict):
         coords = obter_coordenadas(servico, api_key)
