@@ -136,7 +136,7 @@ def requer_cliente(f):
                 return jsonify({"erro": "Sessão expirada. Entre de novo."}), 401
             if g.get("equipe"):
                 return redirect(url_for("equipe_cliente"))
-            return redirect(url_for("login", proximo=request.full_path.rstrip("?")))
+            return redirect(url_for("login", proximo=request.script_root + request.full_path.rstrip("?")))
         return f(*args, **kwargs)
     return wrapper
 
@@ -169,8 +169,14 @@ def exige_mesma_origem(f):
 
 
 def _proximo_seguro(valor: str | None) -> str:
-    """Só caminho relativo dentro do próprio app (anti open-redirect)."""
-    if valor and valor.startswith("/") and not valor.startswith("//"):
+    """Só caminho relativo dentro do próprio app (anti open-redirect), SEMPRE
+    com o prefixo do Caddy (/cliente) na frente -- redirect("/") sem o
+    prefixo manda o navegador pra raiz do site (achado no 1º teste em
+    produção, 08/09)."""
+    raiz = request.script_root or ""
+    if valor and valor.startswith("/") and not valor.startswith("//") and "\\" not in valor:
+        if raiz and not (valor == raiz or valor.startswith(raiz + "/")):
+            valor = raiz + valor
         return valor
     return url_for("inicio")
 
