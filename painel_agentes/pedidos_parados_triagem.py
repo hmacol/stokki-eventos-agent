@@ -51,7 +51,7 @@ import email_utils
 import tratativas
 from vuupt_client import VuuptClient, VuuptAPIError
 from freshhub.auth import FreshHubSession
-from freshhub.pedidos_parados import listar_pedidos_parados
+from freshhub.pedidos_parados import listar_pedidos_parados, normalizar_order_number
 from freshhub.tasks import criar_demanda_para_tratativa
 
 logger = logging.getLogger(__name__)
@@ -210,7 +210,47 @@ def _conectar():
         )
     """)
     conn.commit()
+    _migrar_chaves_com_prefixo_ps(conn)
     return conn
+
+
+_chaves_ps_migradas = False
+_TABELAS_POR_ORDER_NUMBER = (
+    "pedidos_parados_classificacao",
+    "pedidos_parados_id_stokki",
+    "pedidos_parados_stokki",
+    "pedidos_parados_vuupt",
+)
+
+
+def _migrar_chaves_com_prefixo_ps(conn) -> None:
+    """Uma vez por processo: chaves gravadas antes de 09/09 com o prefixo
+    digitado no Fresh Hub ("PS-36327", "PS.36327") viram só o número,
+    igual ao que listar_pedidos_parados devolve agora -- senão a
+    classificação feita naquele dia sumiria da tela. Se já existir linha
+    com a chave limpa, a antiga é descartada (a limpa é a mais recente)."""
+    global _chaves_ps_migradas
+    if _chaves_ps_migradas:
+        return
+    _chaves_ps_migradas = True
+    for tabela in _TABELAS_POR_ORDER_NUMBER:
+        linhas = conn.execute(f"SELECT order_number FROM {tabela}").fetchall()
+        for linha in linhas:
+            bruto = linha["order_number"]
+            limpo = normalizar_order_number(bruto)
+            if limpo == bruto:
+                continue
+            existe = conn.execute(
+                f"SELECT 1 FROM {tabela} WHERE order_number = ?", (limpo,)
+            ).fetchone()
+            if existe:
+                conn.execute(f"DELETE FROM {tabela} WHERE order_number = ?", (bruto,))
+            else:
+                conn.execute(
+                    f"UPDATE {tabela} SET order_number = ? WHERE order_number = ?", (limpo, bruto)
+                )
+            logger.info(f"[pedidos-parados] {tabela}: chave {bruto!r} -> {limpo!r}")
+    conn.commit()
 
 
 def _sessao_freshhub() -> FreshHubSession:
