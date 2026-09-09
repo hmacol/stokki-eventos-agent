@@ -1,0 +1,527 @@
+{% extends "base_cliente.html" %}
+{% block titulo %}Acompanhamento de entregas{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; margin: 0 auto; padding: 20px 28px 48px; display: flex; flex-direction: column; gap: 16px; }
+  .barra-topo { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .data-nav { display: inline-flex; align-items: center; gap: 4px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 3px; }
+  .data-nav button { width: 30px; height: 30px; border: none; background: transparent; color: var(--texto-suave); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .data-nav button:hover { background: var(--fundo); color: var(--texto); }
+  .data-nav button svg { width: 14px; height: 14px; }
+  .data-nav .dia { font-weight: 700; font-size: 13px; padding: 0 8px; min-width: 150px; text-align: center; }
+  .data-nav input[type=date] { border: none; background: transparent; color: var(--texto); font-family: inherit; font-size: 13px; font-weight: 700; width: 0; opacity: 0; position: absolute; }
+  .carimbo { color: var(--texto-suave); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .carimbo svg { width: 13px; height: 13px; }
+  .carimbo.erro { color: var(--erro); font-weight: 600; }
+  .grade { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  .coluna { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  @media (max-width: 980px) { .grade { grid-template-columns: minmax(0, 1fr); } main { padding: 16px 14px 40px; } }
+
+  /* Precisa da sua atenção */
+  .atencao { border-color: var(--st-falha); background: var(--erro-bg); display: flex; flex-direction: column; gap: 10px; }
+  .atencao h3 { color: var(--st-falha); display: flex; align-items: center; gap: 8px; margin: 0; }
+  .atencao h3 svg { width: 16px; height: 16px; }
+  .card-ins { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .card-ins .topo { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .card-ins .codigos { display: flex; flex-wrap: wrap; gap: 6px; }
+  .card-ins .codigos span { font-family: 'Cascadia Code', Consolas, monospace; font-weight: 700; font-size: 12.5px; background: var(--fundo); padding: 2px 8px; border-radius: 6px; }
+  .card-ins .pergunta { font-size: 13px; }
+  .card-ins .acoes { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .reagendar { display: none; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; background: var(--fundo); border-radius: 8px; }
+  .reagendar.aberto { display: flex; }
+  .reagendar input { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 13px; background: var(--superficie); color: var(--texto); }
+  .aviso-resposta { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; }
+  .aviso-resposta.ok { background: var(--sucesso-bg); color: var(--sucesso); }
+  .aviso-resposta.erro { background: var(--erro-bg); color: var(--erro); }
+
+  /* KPIs */
+  .grade-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 760px) { .grade-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile { background: var(--fundo); border-radius: 8px; padding: 10px 12px; border: 1px solid transparent; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+  .tile:hover { border-color: var(--borda); }
+  .tile .rotulo { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); }
+  .tile .valor { font-size: 23px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 11px; color: var(--texto-suave); }
+  .tile.bom .valor { color: var(--st-sucesso); }
+  .tile.rota .valor { color: var(--st-rota); }
+  .tile.ruim { background: var(--erro-bg); border-color: var(--st-falha); } .tile.ruim .valor { color: var(--st-falha); }
+
+  /* Tabela */
+  .card-tabela { padding: 0; }
+  .ferramentas { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--borda); position: relative; flex-wrap: wrap; }
+  .abas { display: inline-flex; background: var(--fundo); border-radius: 8px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+  .abas button { border: none; background: transparent; color: var(--texto-suave); font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .abas button.ativa { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,0.08); }
+  .abas button em { font-style: normal; font-size: 11px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .busca { display: flex; align-items: center; gap: 8px; border: 1px solid var(--borda); border-radius: 6px; padding: 5px 10px; background: var(--superficie); margin-left: auto; min-width: 240px; flex: 1; max-width: 320px; }
+  .busca svg { width: 14px; height: 14px; color: var(--texto-suave); flex: none; }
+  .busca input { border: none; background: transparent; font-family: inherit; font-size: 12.5px; color: var(--texto); width: 100%; outline: none; }
+  .rolagem { overflow-x: auto; padding: 0 8px 6px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+  td { padding: 10px 10px; border-bottom: 1px solid var(--borda); vertical-align: middle; font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  td.nw { white-space: nowrap; }
+  td.col-dest { min-width: 240px; }
+  td .dest { font-weight: 600; color: var(--texto); }
+  td .end { font-size: 11.5px; color: var(--texto-suave); margin-top: 1px; }
+  td .link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  td .link svg { width: 13px; height: 13px; }
+  td .falha { color: var(--st-falha); font-weight: 600; }
+  .vazio { padding: 28px 18px; color: var(--texto-suave); text-align: center; font-size: 13px; }
+  .rodape-tabela { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--borda); color: var(--texto-suave); font-size: 12px; flex-wrap: wrap; }
+  .paginacao { display: inline-flex; gap: 4px; align-items: center; }
+  .paginacao button { border: 1px solid var(--borda); background: none; color: var(--texto); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 12px; }
+  .paginacao button:disabled { opacity: 0.4; cursor: default; }
+
+  /* Seletor de colunas */
+  .botao-linha.ativo { border-color: var(--acento); color: var(--acento); }
+  .popover { position: absolute; right: 18px; top: 52px; width: 320px; max-width: calc(100vw - 40px); background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); z-index: 5; display: none; flex-direction: column; }
+  .popover.aberto { display: flex; }
+  .popover .cabeca { padding: 12px 16px 8px; border-bottom: 1px solid var(--borda); display: flex; align-items: baseline; justify-content: space-between; }
+  .popover .cabeca b { font-size: 13px; }
+  .popover .cabeca span { font-size: 11.5px; color: var(--texto-suave); }
+  .popover .grupo { padding: 8px 16px; display: flex; flex-direction: column; }
+  .popover .grupo + .grupo { border-top: 1px dashed var(--borda); }
+  .popover .grupo .rot { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); padding: 4px 0; }
+  .popover .item { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px; }
+  .popover .item label { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; }
+  .popover .item input { width: 16px; height: 16px; accent-color: var(--acento); margin: 0; }
+  .popover .item .mover { display: inline-flex; gap: 2px; }
+  .popover .item .mover button { border: 1px solid var(--borda); background: none; color: var(--texto-suave); border-radius: 4px; width: 22px; height: 22px; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
+  .popover .item .mover button:hover { color: var(--texto); border-color: var(--texto-suave); }
+  .popover .item .mover button:disabled { opacity: 0.3; cursor: default; }
+  .popover .item .mover svg { width: 12px; height: 12px; }
+  .popover .item.disponivel { color: var(--texto-suave); }
+  .popover .pe { padding: 10px 16px; border-top: 1px solid var(--borda); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .popover .pe a { font-size: 12px; font-weight: 600; cursor: pointer; }
+
+  /* Lateral */
+  .barra { display: flex; height: 12px; border-radius: 100px; overflow: hidden; background: var(--trilha); }
+  .legenda { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--texto-suave); }
+  .legenda span { display: inline-flex; align-items: center; gap: 6px; }
+  .legenda i { width: 9px; height: 9px; border-radius: 100px; display: inline-block; }
+  .legenda b { color: var(--texto); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .lista-lateral { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+  .lista-lateral .linha { display: flex; justify-content: space-between; gap: 8px; }
+  .lista-lateral .linha .mono { font-weight: 600; }
+  .lista-lateral .linha .suave { color: var(--texto-suave); white-space: nowrap; }
+  .lista-lateral .linha b { font-variant-numeric: tabular-nums; }
+  .lista-lateral .vazio-lat { color: var(--texto-suave); font-size: 12.5px; }
+  .carregando { color: var(--texto-suave); font-size: 13px; padding: 12px 0; }
+  .atualizando { opacity: 0.55; transition: opacity 0.2s; }
+  .oculto { display: none !important; }
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .pulsando { animation: pulso 1.2s ease-in-out infinite; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<main>
+  <div class="barra-topo">
+    <div class="data-nav">
+      <button type="button" id="dia-ant" title="Dia anterior"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
+      <span class="dia" id="dia-rotulo" style="position: relative; cursor: pointer;" title="Escolher data">—<input type="date" id="dia-input"></span>
+      <button type="button" id="dia-prox" title="Dia seguinte"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button>
+    </div>
+    <button type="button" class="botao-linha" id="hoje">Hoje</button>
+    <span class="carimbo" id="carimbo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+      <span id="carimbo-texto">Carregando…</span>
+    </span>
+    <button type="button" class="botao-linha" id="atualizar" title="Buscar agora">Atualizar</button>
+    <a class="botao-linha" id="exportar" href="#" style="margin-left: auto;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+      <span>Exportar planilha do dia</span>
+    </a>
+  </div>
+
+  <div class="grade">
+    <div class="coluna" id="principal">
+      <div class="card atencao oculto" id="atencao"></div>
+
+      <div class="card" style="padding: 14px 18px;">
+        <div class="grade-tiles" id="tiles"><div class="carregando">Carregando os pedidos do dia…</div></div>
+      </div>
+
+      <div class="card card-tabela">
+        <div class="ferramentas">
+          <div class="abas" id="abas"></div>
+          <div class="busca">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="search" id="busca" placeholder="Buscar por pedido, NF ou destinatário">
+          </div>
+          <button type="button" class="botao-linha" id="btn-colunas">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+            <span>Colunas</span>
+          </button>
+          <div class="popover" id="popover-colunas">
+            <div class="cabeca"><b>Colunas da tabela</b><span>use as setas pra reordenar</span></div>
+            <div class="grupo" id="colunas-visiveis"></div>
+            <div class="grupo" id="colunas-disponiveis"></div>
+            <div class="pe">
+              <a id="colunas-padrao">Restaurar padrão</a>
+              <button type="button" class="botao" id="colunas-fechar" style="padding: 7px 14px; font-size: 12px;">Fechar</button>
+            </div>
+          </div>
+        </div>
+        <div class="rolagem"><table id="tabela"><thead></thead><tbody></tbody></table></div>
+        <div class="vazio oculto" id="tabela-vazia"></div>
+        <div class="rodape-tabela"><span id="contagem"></span><span class="paginacao" id="paginacao"></span></div>
+      </div>
+    </div>
+
+    <aside class="coluna" id="lateral">
+      <div class="card" id="card-hoje">
+        <h3 id="hoje-titulo">Hoje</h3>
+        <div style="display: flex; align-items: baseline; gap: 8px;">
+          <span class="num" id="hoje-entregues" style="font-size: 34px; font-weight: 700; line-height: 1;">–</span>
+          <span style="color: var(--texto-suave); font-size: 13px;" id="hoje-de">de – entregues</span>
+        </div>
+        <div class="barra" id="hoje-barra" style="margin: 12px 0;"></div>
+        <div class="legenda" id="hoje-legenda"></div>
+        <div id="hoje-nota" style="border-top: 1px dashed var(--borda); padding-top: 10px; margin-top: 12px; font-size: 12.5px; color: var(--texto-suave);"></div>
+      </div>
+      <div class="card">
+        <h3 id="saida-titulo">Aguardando saída</h3>
+        <div class="lista-lateral" id="lista-saida"></div>
+      </div>
+      <div class="card">
+        <h3>Próximos dias</h3>
+        <div class="lista-lateral" id="lista-proximos"></div>
+      </div>
+      <div class="card" id="card-historico">
+        <h3 id="historico-titulo">Últimos 30 dias</h3>
+        <div class="lista-lateral" id="lista-historico"></div>
+      </div>
+    </aside>
+  </div>
+
+  {# Máscara de envio de pedidos (XML → Stokki), 08/09 -- mesma tela, outra vista #}
+  {% include "_envios.html" %}
+</main>
+{% endblock %}
+
+{% block script_extra %}
+<script>
+(function () {
+  const BASE = {{ request.script_root | tojson }};
+  const HOJE = {{ hoje | tojson }};
+  let dataAtual = {{ data_inicial | tojson }};
+
+  // ── Colunas ────────────────────────────────────────────────────────────────
+  const COLUNAS = [
+    { id: 'codigo',                rotulo: 'Pedido',                  padrao: true },
+    { id: 'nf',                    rotulo: 'NF',                      padrao: true },
+    { id: 'destinatario',          rotulo: 'Destinatário',            padrao: true },
+    { id: 'volumes',               rotulo: 'Vol.',                    padrao: true },
+    { id: 'situacao',              rotulo: 'Situação',                padrao: true },
+    { id: 'motorista',             rotulo: 'Motorista / rota',        padrao: true },
+    { id: 'detalhe',               rotulo: 'Previsão / conclusão',    padrao: true },
+    { id: 'comprovante',           rotulo: 'Comprovante',             padrao: true },
+    { id: 'endereco_completo',     rotulo: 'Endereço completo' },
+    { id: 'ordem',                 rotulo: 'Parada na rota' },
+    { id: 'placa',                 rotulo: 'Placa do veículo' },
+    { id: 'janela_atendimento',    rotulo: 'Janela de atendimento' },
+    { id: 'telefone_destinatario', rotulo: 'Telefone do destinatário' },
+    { id: 'criado_em',             rotulo: 'Data do pedido' },
+    { id: 'observacoes',           rotulo: 'Observações' },
+  ];
+  const PADRAO = COLUNAS.filter(c => c.padrao).map(c => c.id);
+  const CHAVE_COLUNAS = 'portal_colunas_v1';
+  let visiveis = carregarColunas();
+
+  function carregarColunas() {
+    try {
+      const salvo = JSON.parse(localStorage.getItem(CHAVE_COLUNAS) || 'null');
+      if (Array.isArray(salvo) && salvo.length && salvo.every(id => COLUNAS.some(c => c.id === id))) return salvo;
+    } catch (e) {}
+    return PADRAO.slice();
+  }
+  function salvarColunas() { try { localStorage.setItem(CHAVE_COLUNAS, JSON.stringify(visiveis)); } catch (e) {} }
+
+  // ── Estado ─────────────────────────────────────────────────────────────────
+  let dados = null, aba = 'todos', busca = '', pagina = 1;
+  const POR_PAGINA = 25;
+  let timerAuto = null;
+
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const ICO_CAM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>';
+  const ICO_ALERTA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+  const ICO_CAMINHAO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>';
+  const ICO_CIMA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+  const ICO_BAIXO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+  // ── Carga ──────────────────────────────────────────────────────────────────
+  async function carregar(forcar) {
+    $('principal').classList.add('atualizando');
+    $('carimbo').classList.remove('erro');
+    $('carimbo-texto').textContent = 'Atualizando…';
+    try {
+      const r = await fetch(`${BASE}/api/dia?data=${dataAtual}${forcar ? '&atualizar=1' : ''}`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = `${BASE}/login?proximo=${encodeURIComponent(location.pathname + location.search)}`; return; }
+      const corpo = await r.json();
+      if (!r.ok) throw new Error(corpo.erro || 'Falha ao carregar.');
+      dados = corpo;
+      pagina = 1;
+      renderTudo();
+      $('carimbo-texto').textContent = `Atualizado às ${dados.atualizado_em} · sincroniza a cada 5 min`;
+    } catch (e) {
+      $('carimbo').classList.add('erro');
+      $('carimbo-texto').textContent = e.message || 'Falha ao carregar.';
+      if (!dados) $('tiles').innerHTML = `<div class="carregando">${esc(e.message)}</div>`;
+    } finally {
+      $('principal').classList.remove('atualizando');
+    }
+    clearTimeout(timerAuto);
+    timerAuto = setTimeout(() => carregar(false), 5 * 60 * 1000);
+  }
+
+  function irPara(iso) {
+    dataAtual = iso;
+    history.replaceState(null, '', `${location.pathname}?data=${iso}`);
+    $('exportar').href = `${BASE}/exportar.xlsx?data=${iso}`;
+    carregar(false);
+  }
+  function somaDias(iso, n) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  function renderTudo() {
+    const d = dados, k = d.kpis;
+    $('dia-rotulo').firstChild.textContent = (d.hoje ? 'Hoje · ' : '') + d.data_rotulo;
+    $('dia-input').value = d.data;
+    $('exportar').href = `${BASE}/exportar.xlsx?data=${d.data}`;
+
+    // atenção
+    const at = $('atencao');
+    if (d.atencao && d.atencao.length) {
+      at.classList.remove('oculto');
+      at.innerHTML = `<h3>${ICO_ALERTA}<span>Precisa da sua atenção (${d.atencao.reduce((n, g) => n + g.codigos.length, 0)})</span></h3>` +
+        d.atencao.map(g => `
+          <div class="card-ins" data-motivo="${g.failed_reason_id}">
+            <div class="topo">
+              <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px;">
+                <div style="font-weight:700; font-size:14px;">${esc(g.motivo)}</div>
+                <div class="codigos">${g.codigos.map(c => `<span>${esc(c)}</span>`).join('')}</div>
+              </div>
+              <span class="badge b-insucesso"><span class="pt"></span>Insucesso</span>
+            </div>
+            <div class="pergunta">${esc(g.pergunta)}</div>
+            <div class="acoes">
+              <button type="button" class="botao" data-acao="manter">Reentregar na próxima rota</button>
+              <button type="button" class="botao-linha" data-acao="abrir-reagendar">Escolher outra data</button>
+              <button type="button" class="botao-linha" data-acao="cancelar">Não reenviar</button>
+            </div>
+            <div class="reagendar">
+              <label>Data <input type="date" class="rg-data" min="${HOJE}"></label>
+              <label>A partir das <input type="time" class="rg-hora" value="08:00"></label>
+              <button type="button" class="botao" data-acao="reagendar" style="padding:7px 14px;font-size:12px;">Confirmar reagendamento</button>
+            </div>
+            <div class="aviso-resposta oculto"></div>
+          </div>`).join('');
+    } else {
+      at.classList.add('oculto'); at.innerHTML = '';
+    }
+
+    // tiles
+    const pend = k.programados + k.aguardando_saida;
+    $('tiles').innerHTML = `
+      <div class="tile" data-aba="todos"><span class="rotulo">Pedidos no dia</span><span class="valor">${k.total}</span><span class="sub">${k.volumes} volume${k.volumes === 1 ? '' : 's'}</span></div>
+      <div class="tile bom" data-aba="entregues"><span class="rotulo">Entregues</span><span class="valor">${k.entregues}</span><span class="sub">${k.total ? Math.round(100 * k.entregues / k.total) + '% do dia' : '—'}</span></div>
+      <div class="tile rota" data-aba="em_rota"><span class="rotulo">Em rota</span><span class="valor">${k.em_rota}</span><span class="sub">${k.rotas_em_andamento ? k.rotas_em_andamento + ' rota' + (k.rotas_em_andamento > 1 ? 's' : '') + ' em andamento' : '—'}</span></div>
+      <div class="tile" data-aba="pendentes"><span class="rotulo">Aguardando saída</span><span class="valor">${pend}</span><span class="sub">${k.programados ? k.programados + ' já em rota programada' : 'sem rota ainda'}</span></div>
+      <div class="tile ${k.insucessos ? 'ruim' : ''}" data-aba="insucesso"><span class="rotulo">Insucesso</span><span class="valor">${k.insucessos}</span><span class="sub">${k.aguardando_resposta ? k.aguardando_resposta + ' aguarda' + (k.aguardando_resposta > 1 ? 'm' : '') + ' sua resposta' : (k.insucessos ? 'tratado pela Fresh Log' : '—')}</span></div>`;
+
+    // abas
+    const ag = (d.agendados_futuros || []).length;
+    const abas = [['todos', 'Todos', k.total], ['em_rota', 'Em rota', k.em_rota], ['entregues', 'Entregues', k.entregues],
+                  ['pendentes', 'Pendentes', pend], ['insucesso', 'Insucesso', k.insucessos], ['agendados', 'Agendados', ag]];
+    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
+
+    renderTabela();
+    renderLateral();
+  }
+
+  function pedidosFiltrados() {
+    let lista = aba === 'agendados' ? (dados.agendados_futuros || []) : dados.pedidos;
+    if (aba === 'em_rota') lista = lista.filter(p => p.situacao === 'em_rota');
+    else if (aba === 'entregues') lista = lista.filter(p => p.situacao === 'entregue');
+    else if (aba === 'pendentes') lista = lista.filter(p => p.situacao === 'programado' || p.situacao === 'aguardando_saida');
+    else if (aba === 'insucesso') lista = lista.filter(p => p.situacao === 'insucesso');
+    const q = busca.trim().toLowerCase();
+    if (q) lista = lista.filter(p => [p.codigo, p.nf, p.destinatario, p.endereco, p.motorista, p.rota].join(' ').toLowerCase().includes(q));
+    return lista;
+  }
+
+  function celula(p, id) {
+    switch (id) {
+      case 'codigo': return `<td class="nw"><span class="mono" style="font-weight:600;">${esc(p.codigo)}</span></td>`;
+      case 'nf': return `<td class="nw"><span class="mono num">${esc(p.nf) || '<span style="color:var(--texto-suave)">—</span>'}</span></td>`;
+      case 'destinatario': return `<td class="col-dest"><div class="dest">${esc(p.destinatario)}</div><div class="end">${esc(p.endereco)}</div></td>`;
+      case 'volumes': return `<td class="num nw" style="text-align:center;">${p.volumes}</td>`;
+      case 'situacao': return `<td class="nw"><span class="badge b-${p.situacao}"><span class="pt"></span>${esc(p.situacao_rotulo)}</span></td>`;
+      case 'motorista': return `<td class="nw">${p.motorista ? esc(p.motorista) + (p.rota ? ' · ' + esc(p.rota) : '') : '<span style="color:var(--texto-suave)">—</span>'}</td>`;
+      case 'detalhe': return `<td class="nw ${p.situacao === 'insucesso' ? 'falha' : ''}">${esc(p.detalhe)}</td>`;
+      case 'comprovante':
+        if (p.situacao === 'entregue') return `<td class="nw"><a class="link" href="${BASE}/api/canhoto/${p.service_id}" target="_blank" rel="noopener">${ICO_CAM}<span>Canhoto</span></a></td>`;
+        if (p.situacao === 'insucesso' && dados.atencao.some(g => g.codigos.includes(p.codigo))) return `<td class="nw"><a class="link falha" href="#atencao" data-ir-atencao="1">${ICO_ALERTA}<span>Responder</span></a></td>`;
+        return `<td class="nw" style="color:var(--texto-suave)">—</td>`;
+      case 'ordem': return `<td class="nw num">${p.ordem ? p.ordem + ' de ' + p.total_paradas : '—'}</td>`;
+      default: return `<td>${esc(p[id]) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
+    }
+  }
+
+  function renderTabela() {
+    const lista = pedidosFiltrados();
+    const total = lista.length, paginas = Math.max(1, Math.ceil(total / POR_PAGINA));
+    if (pagina > paginas) pagina = paginas;
+    const fatia = lista.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
+    const cols = visiveis.map(id => COLUNAS.find(c => c.id === id));
+    $('tabela').querySelector('thead').innerHTML = `<tr>${cols.map(c => `<th${c.id === 'volumes' ? ' style="text-align:center;"' : ''}>${esc(c.rotulo)}</th>`).join('')}</tr>`;
+    $('tabela').querySelector('tbody').innerHTML = fatia.map(p => `<tr>${cols.map(c => celula(p, c.id)).join('')}</tr>`).join('');
+    const vazio = $('tabela-vazia');
+    if (!total) {
+      vazio.classList.remove('oculto');
+      vazio.textContent = busca ? 'Nenhum pedido bate com a busca.' : (aba === 'agendados' ? 'Nenhum pedido agendado pra frente.' : 'Nenhum pedido nessa situação.');
+    } else vazio.classList.add('oculto');
+    $('contagem').textContent = total ? `Mostrando ${(pagina - 1) * POR_PAGINA + 1}–${Math.min(pagina * POR_PAGINA, total)} de ${total} pedido${total > 1 ? 's' : ''}` : '';
+    $('paginacao').innerHTML = paginas > 1 ? `<button type="button" data-pg="${pagina - 1}" ${pagina <= 1 ? 'disabled' : ''}>‹</button><span>Página ${pagina} de ${paginas}</span><button type="button" data-pg="${pagina + 1}" ${pagina >= paginas ? 'disabled' : ''}>›</button>` : '';
+  }
+
+  function renderLateral() {
+    const d = dados, k = d.kpis, total = k.total || 0;
+    $('hoje-titulo').textContent = d.hoje ? 'Hoje' : d.data_rotulo;
+    $('hoje-entregues').textContent = k.entregues;
+    $('hoje-de').textContent = `de ${total} entregue${k.entregues === 1 ? '' : 's'}`;
+    const pend = k.programados + k.aguardando_saida;
+    const pct = n => total ? (100 * n / total) + '%' : '0%';
+    $('hoje-barra').innerHTML = `<div style="width:${pct(k.entregues)};background:var(--st-sucesso);"></div><div style="width:${pct(k.em_rota)};background:var(--st-rota);"></div><div style="width:${pct(pend)};background:var(--st-neutro);"></div><div style="width:${pct(k.insucessos)};background:var(--st-falha);"></div>`;
+    $('hoje-legenda').innerHTML = `
+      <span><i style="background:var(--st-sucesso)"></i>Entregues <b>${k.entregues}</b></span>
+      <span><i style="background:var(--st-rota)"></i>Em rota <b>${k.em_rota}</b></span>
+      <span><i style="background:var(--st-neutro)"></i>Aguardando saída <b>${pend}</b></span>
+      <span><i style="background:var(--st-falha)"></i>Insucesso <b>${k.insucessos}</b></span>`;
+    const emRota = d.pedidos.filter(p => p.situacao === 'em_rota');
+    $('hoje-nota').innerHTML = emRota.length
+      ? `${ICO_CAMINHAO} ${[...new Set(emRota.map(p => p.motorista + (p.rota ? ' · ' + p.rota : '')))].map(esc).join('<br>')}`
+      : (total ? 'Nenhuma rota em andamento agora.' : 'Sem pedidos nessa data.');
+
+    const saida = d.aguardando_saida || [];
+    $('saida-titulo').textContent = `Aguardando saída (${saida.length})`;
+    $('lista-saida').innerHTML = saida.length ? saida.slice(0, 8).map(p => `<div class="linha"><span><span class="mono">${esc(p.codigo)}</span> ${esc(p.destinatario)}</span><span class="suave">${esc(p.situacao === 'programado' ? (p.detalhe.split('·').pop() || '').trim() : 'sem rota')}</span></div>`).join('') + (saida.length > 8 ? `<div class="vazio-lat">e mais ${saida.length - 8}…</div>` : '') : '<div class="vazio-lat">Nada aguardando saída.</div>';
+
+    const prox = d.proximos_dias || [];
+    $('lista-proximos').innerHTML = prox.length ? prox.map(x => `<div class="linha"><a href="#" data-ir-data="${x.data}">${esc(x.rotulo)}</a><b>${x.pedidos} pedido${x.pedidos > 1 ? 's' : ''}</b></div>`).join('') : '<div class="vazio-lat">Nenhum pedido agendado pra frente.</div>';
+
+    const h = d.historico;
+    if (h) {
+      $('card-historico').classList.remove('oculto');
+      $('historico-titulo').textContent = `Últimos ${h.dias} dias`;
+      $('lista-historico').innerHTML = `
+        <div class="linha"><span class="suave">Pedidos entregues</span><b>${h.entregues}</b></div>
+        <div class="linha"><span class="suave">Entregues na 1ª tentativa</span><b style="color:var(--st-sucesso)">${h.primeira_tentativa_pct == null ? '—' : h.primeira_tentativa_pct + '%'}</b></div>
+        <div class="linha"><span class="suave">Insucessos</span><b>${h.insucessos}</b></div>`;
+    } else $('card-historico').classList.add('oculto');
+  }
+
+  // ── Seletor de colunas ─────────────────────────────────────────────────────
+  function renderColunas() {
+    const vis = $('colunas-visiveis'), disp = $('colunas-disponiveis');
+    vis.innerHTML = `<div class="rot">Visíveis (${visiveis.length})</div>` + visiveis.map((id, i) => {
+      const c = COLUNAS.find(x => x.id === id);
+      return `<div class="item"><label><input type="checkbox" checked data-col="${id}"><span>${esc(c.rotulo)}</span></label>
+        <span class="mover"><button type="button" data-mover="${id}" data-dir="-1" ${i === 0 ? 'disabled' : ''} title="Subir">${ICO_CIMA}</button><button type="button" data-mover="${id}" data-dir="1" ${i === visiveis.length - 1 ? 'disabled' : ''} title="Descer">${ICO_BAIXO}</button></span></div>`;
+    }).join('');
+    const restantes = COLUNAS.filter(c => !visiveis.includes(c.id));
+    disp.innerHTML = `<div class="rot">Disponíveis</div>` + (restantes.length ? restantes.map(c => `<div class="item disponivel"><label><input type="checkbox" data-col="${c.id}"><span>${esc(c.rotulo)}</span></label></div>`).join('') : '<div class="item disponivel">Todas as colunas estão visíveis.</div>');
+  }
+  function abrirColunas(abrir) {
+    $('popover-colunas').classList.toggle('aberto', abrir);
+    $('btn-colunas').classList.toggle('ativo', abrir);
+    if (abrir) renderColunas();
+  }
+  $('btn-colunas').addEventListener('click', () => abrirColunas(!$('popover-colunas').classList.contains('aberto')));
+  $('colunas-fechar').addEventListener('click', () => abrirColunas(false));
+  $('colunas-padrao').addEventListener('click', () => { visiveis = PADRAO.slice(); salvarColunas(); renderColunas(); renderTabela(); });
+  document.addEventListener('click', e => {
+    // composedPath: o clique num botão do popover re-renderiza o conteúdo,
+    // então e.target já pode estar fora do DOM quando o evento chega aqui.
+    const caminho = e.composedPath();
+    if (!caminho.includes($('popover-colunas')) && !caminho.includes($('btn-colunas'))) abrirColunas(false);
+  });
+  $('popover-colunas').addEventListener('change', e => {
+    const id = e.target.dataset.col;
+    if (!id) return;
+    if (e.target.checked) { if (!visiveis.includes(id)) visiveis.push(id); }
+    else { if (visiveis.length <= 1) { e.target.checked = true; return; } visiveis = visiveis.filter(x => x !== id); }
+    salvarColunas(); renderColunas(); renderTabela();
+  });
+  $('popover-colunas').addEventListener('click', e => {
+    const b = e.target.closest('[data-mover]');
+    if (!b) return;
+    const i = visiveis.indexOf(b.dataset.mover), j = i + Number(b.dataset.dir);
+    if (i < 0 || j < 0 || j >= visiveis.length) return;
+    [visiveis[i], visiveis[j]] = [visiveis[j], visiveis[i]];
+    salvarColunas(); renderColunas(); renderTabela();
+  });
+
+  // ── Responder insucesso ────────────────────────────────────────────────────
+  $('atencao').addEventListener('click', async e => {
+    const b = e.target.closest('[data-acao]');
+    if (!b) return;
+    const card = b.closest('.card-ins');
+    const acao = b.dataset.acao;
+    if (acao === 'abrir-reagendar') { card.querySelector('.reagendar').classList.toggle('aberto'); return; }
+    if (acao === 'cancelar' && !confirm('Confirma que NÃO quer reenviar esses pedidos? A Fresh Log vai entrar em contato pra combinar a devolução.')) return;
+    const corpo = { failed_reason_id: Number(card.dataset.motivo), acao };
+    if (acao === 'reagendar') {
+      corpo.data = card.querySelector('.rg-data').value;
+      corpo.hora = card.querySelector('.rg-hora').value;
+      if (!corpo.data) { mostrarAviso(card, 'Escolha a data do reagendamento.', true); return; }
+    }
+    card.querySelectorAll('button').forEach(x => x.disabled = true);
+    mostrarAviso(card, 'Aplicando sua resposta…', false, true);
+    try {
+      const r = await fetch(`${BASE}/api/responder`, { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao aplicar.');
+      const txt = { reenviado: 'reenviado', reagendado: 'reagendado', cancelado: 'não será reenviado', falha: 'falhou — a Fresh Log foi avisada' };
+      mostrarAviso(card, 'Resposta registrada: ' + j.resultados.map(x => `${x.code.replace(/^#?/, '#')} ${txt[x.resultado] || x.resultado}${x.data ? ' pra ' + x.data.split('-').reverse().join('/') : ''}`).join(' · '), false);
+      setTimeout(() => carregar(true), 1500);
+    } catch (err) {
+      mostrarAviso(card, err.message, true);
+      card.querySelectorAll('button').forEach(x => x.disabled = false);
+    }
+  });
+  function mostrarAviso(card, texto, erro, pulsando) {
+    const a = card.querySelector('.aviso-resposta');
+    a.classList.remove('oculto', 'ok', 'erro', 'pulsando');
+    a.classList.add(erro ? 'erro' : 'ok');
+    if (pulsando) a.classList.add('pulsando');
+    a.textContent = texto;
+  }
+
+  // ── Eventos gerais ─────────────────────────────────────────────────────────
+  $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; pagina = 1; renderTudo(); });
+  $('tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; pagina = 1; renderTudo(); });
+  $('busca').addEventListener('input', e => { busca = e.target.value; pagina = 1; renderTabela(); });
+  $('paginacao').addEventListener('click', e => { const b = e.target.closest('[data-pg]'); if (!b || b.disabled) return; pagina = Number(b.dataset.pg); renderTabela(); });
+  document.addEventListener('click', e => {
+    const a = e.target.closest('[data-ir-data]'); if (a) { e.preventDefault(); irPara(a.dataset.irData); return; }
+    const b = e.target.closest('[data-ir-atencao]'); if (b) { e.preventDefault(); $('atencao').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
+  $('dia-ant').addEventListener('click', () => irPara(somaDias(dataAtual, -1)));
+  $('dia-prox').addEventListener('click', () => irPara(somaDias(dataAtual, 1)));
+  $('hoje').addEventListener('click', () => irPara(HOJE));
+  $('atualizar').addEventListener('click', () => carregar(true));
+  $('dia-rotulo').addEventListener('click', () => { const i = $('dia-input'); if (i.showPicker) { try { i.showPicker(); return; } catch (e) {} } i.click(); });
+  $('dia-input').addEventListener('change', e => { if (e.target.value) irPara(e.target.value); });
+
+  $('exportar').href = `${BASE}/exportar.xlsx?data=${dataAtual}`;
+  carregar(false);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}{{ titulo }}{% endblock %}
+{% block conteudo %}
+<h1>{{ titulo }}</h1>
+{% if texto %}<p>{{ texto }}</p>{% endif %}
+{% if detalhes %}
+<ul class="lista">{% for d in detalhes %}<li>{{ d }}</li>{% endfor %}</ul>
+{% endif %}
+{% if voltar %}<div class="links"><a href="{{ voltar }}">{{ voltar_rotulo or 'Voltar' }}</a></div>{% endif %}
+{% endblock %}

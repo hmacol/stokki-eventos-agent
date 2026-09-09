@@ -1,0 +1,18 @@
+[Unit]
+Description=Fresh Log - Portal do cliente (acompanhamento de entregas, app.freshhub.com.br/cliente)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/stokki-eventos/portal_cliente
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/stokki-eventos/venv/bin/waitress-serve --host=127.0.0.1 --port=8074 --threads=6 app:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

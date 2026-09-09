@@ -1,0 +1,448 @@
+{# Máscara de envio de pedidos (XML → fila → Stokki) -- pedido do Hugo,
+   08/09/2026. Incluído por acompanhamento.html; a mesma tela ganha o
+   seletor "Acompanhamento | Enviar pedidos". Conversa com /api/envios/*
+   (app.py) e com o worker enviar_stokki.py por meio do status na tabela. #}
+<style>
+  .vistas { display: inline-flex; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 3px; gap: 2px; }
+  .vistas button { border: none; background: transparent; color: var(--texto-suave); font-size: 13px; font-weight: 700; padding: 6px 14px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 7px; align-items: center; }
+  .vistas button.ativa { background: var(--botao-bg); color: var(--botao-texto); }
+  .vistas button em { font-style: normal; font-size: 11px; background: var(--st-falha); color: #fff; border-radius: 100px; padding: 1px 7px; display: none; }
+  .vistas button em.on { display: inline-block; }
+  #vista-envios { display: flex; flex-direction: column; gap: 16px; }
+  .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+  @media (max-width: 980px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
+  .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
+  .zona b { color: var(--texto); }
+  .zona svg { width: 26px; height: 26px; margin-bottom: 6px; color: var(--acento); }
+  .zona input { display: none; }
+  .b-NA_FILA { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .b-ENVIANDO { background: var(--rota-bg); color: var(--st-rota); }
+  .b-CRIADO { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .b-DUPLICADO { background: var(--sucesso-bg); color: var(--st-sucesso); opacity: .8; }
+  .b-ERRO { background: var(--erro-bg); color: var(--st-falha); }
+  .b-CANCELADO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 100px; background: var(--rodando-bg); color: var(--rodando-texto); white-space: nowrap; }
+  .chip.falha { background: var(--erro-bg); color: var(--st-falha); }
+  .previa { display: none; flex-direction: column; gap: 14px; }
+  .previa.aberta { display: flex; }
+  .previa h4 { margin: 0; font-size: 13px; }
+  .previa .rej { background: var(--erro-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; color: var(--st-falha); display: flex; flex-direction: column; gap: 4px; }
+  .previa .avisos { color: var(--rodando-texto); font-size: 11.5px; }
+  .dest { border: 1px solid var(--borda); border-radius: 8px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; background: var(--fundo); }
+  .dest .linha1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+  .dest .linha1 b { font-size: 13px; }
+  .dest .campos { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+  .dest input[type=time], .dest input[type=date], .ag input[type=time], .ag input[type=date], .modal input, .modal textarea { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 13px; background: var(--superficie); color: var(--texto); }
+  .dest.pede { border-color: var(--rodando-borda); }
+  .ag { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+  .ag label { display: inline-flex; align-items: center; gap: 4px; }
+  .barra-confirmar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 4px; }
+  .msg { font-size: 12.5px; padding: 9px 12px; border-radius: 8px; display: none; }
+  .msg.ok { display: block; background: var(--sucesso-bg); color: var(--sucesso); }
+  .msg.erro { display: block; background: var(--erro-bg); color: var(--erro); }
+  .msg.info { display: block; background: var(--rodando-bg); color: var(--rodando-texto); }
+  .acoes-linha { display: flex; gap: 4px; flex-wrap: wrap; }
+  .acoes-linha button { border: 1px solid var(--borda); background: none; color: var(--texto); border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .acoes-linha button:hover { border-color: var(--acento); color: var(--acento); }
+  .acoes-linha button.perigo:hover { border-color: var(--st-falha); color: var(--st-falha); }
+  .modal-fundo { position: fixed; inset: 0; background: rgba(10,10,20,.45); display: none; align-items: center; justify-content: center; z-index: 20; padding: 16px; }
+  .modal-fundo.aberto { display: flex; }
+  .modal { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 20px 22px; width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 12px; }
+  .modal h3 { margin: 0; font-size: 14px; color: var(--texto); text-transform: none; letter-spacing: 0; }
+  .modal p { margin: 0; font-size: 12.5px; color: var(--texto-suave); }
+  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
+  .modal .pe { display: flex; justify-content: flex-end; gap: 8px; }
+  .modal textarea { min-height: 60px; resize: vertical; }
+  .lista-env .linha .suave { color: var(--texto-suave); }
+  .atencao-env { border-color: var(--rodando-borda); background: var(--rodando-bg); }
+  .atencao-env h3 { color: var(--rodando-texto); }
+  .atencao-env .item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--rodando-borda); }
+  .atencao-env .item:first-of-type { border-top: none; }
+  .erro-txt { color: var(--st-falha); font-size: 11.5px; }
+</style>
+
+<section id="vista-envios" class="oculto" data-aba-inicial="{{ aba_inicial }}" data-pode-enviar="{{ 1 if pode_enviar else 0 }}">
+  <div class="card atencao-env oculto" id="env-atencao"></div>
+
+  <div class="env-grade">
+    <div class="coluna">
+      <div class="card" id="card-enviar" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+          <h3 style="margin:0;">Enviar novos pedidos</h3>
+          <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
+        </div>
+        <label class="zona" id="zona">
+          <input type="file" id="arquivos" multiple accept=".xml,.zip,text/xml,application/xml,application/zip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          <div><b>Arraste os XMLs das notas aqui</b> ou clique pra escolher</div>
+          <div style="font-size:11.5px; margin-top:4px;">Aceita vários .xml de uma vez ou um .zip com os XMLs. Só NF-e de saída emitidas pela sua empresa.</div>
+        </label>
+        <div class="msg" id="env-msg"></div>
+        <div class="previa" id="previa">
+          <div class="rej oculto" id="previa-rej"></div>
+          <div>
+            <h4 id="previa-titulo"></h4>
+            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
+          </div>
+          <div id="previa-dest" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <div class="barra-confirmar">
+            <button type="button" class="botao" id="btn-confirmar">Confirmar envio</button>
+            <button type="button" class="botao-linha" id="btn-limpar">Descartar</button>
+            <span style="font-size:12px; color:var(--texto-suave);">Depois de confirmar, os pedidos entram na fila e são criados na Stokki automaticamente.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:14px 18px;">
+        <div class="grade-tiles" id="env-tiles"><div class="carregando">Carregando os envios…</div></div>
+      </div>
+
+      <div class="card card-tabela">
+        <div class="ferramentas">
+          <div class="abas" id="env-abas"></div>
+          <div class="busca">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="search" id="env-busca" placeholder="Buscar por NF, destinatário ou pedido">
+          </div>
+          <button type="button" class="botao-linha" id="env-atualizar">Atualizar</button>
+        </div>
+        <div class="rolagem"><table id="env-tabela"><thead><tr><th>Enviado em</th><th>NF</th><th>Destinatário</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Pedido</th><th>Entrega</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+        <div class="vazio oculto" id="env-vazia"></div>
+        <div class="rodape-tabela"><span id="env-contagem"></span><span id="env-carimbo" style="font-size:12px;"></span></div>
+      </div>
+    </div>
+
+    <aside class="coluna">
+      <div class="card">
+        <h3>Como funciona</h3>
+        <div class="lista-lateral" style="font-size:12.5px; color:var(--texto-suave); gap:10px;">
+          <div><b style="color:var(--texto)">1.</b> Você sobe o XML da NF-e (ou um ZIP com vários).</div>
+          <div><b style="color:var(--texto)">2.</b> A gente confere a nota: precisa ser NF-e de saída da sua empresa e não pode ter sido enviada antes.</div>
+          <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
+          <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Fila de envio</h3>
+        <div class="lista-lateral lista-env" id="env-fila"></div>
+      </div>
+      <div class="card">
+        <h3>Pendências com a Fresh Log</h3>
+        <div class="lista-lateral lista-env" id="env-pendencias"></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<div class="modal-fundo" id="modal">
+  <div class="modal" id="modal-caixa"></div>
+</div>
+
+<script>
+(function () {
+  const BASE = {{ request.script_root | tojson }};
+  const secao = document.getElementById('vista-envios');
+  const PODE_ENVIAR = secao.dataset.podeEnviar === '1';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const dataBr = iso => iso ? iso.split('-').reverse().join('/') : '';
+
+  // ── Vistas (Acompanhamento | Enviar pedidos) ────────────────────────────────
+  const barra = document.querySelector('.barra-topo');
+  const vistas = document.createElement('div');
+  vistas.className = 'vistas';
+  vistas.innerHTML = '<button type="button" data-vista="acompanhamento">Acompanhamento</button><button type="button" data-vista="envios">Enviar pedidos <em id="vistas-badge"></em></button>';
+  barra.insertBefore(vistas, barra.firstChild);
+  const soAcomp = ['dia-ant', 'hoje', 'carimbo', 'atualizar', 'exportar'].map(id => $(id)).filter(Boolean);
+  const dataNav = document.querySelector('.data-nav');
+  let vista = 'acompanhamento';
+  function mostrar(v) {
+    vista = v;
+    vistas.querySelectorAll('button').forEach(b => b.classList.toggle('ativa', b.dataset.vista === v));
+    document.querySelector('.grade').classList.toggle('oculto', v !== 'acompanhamento');
+    secao.classList.toggle('oculto', v !== 'envios');
+    [dataNav, ...soAcomp].forEach(el => el && el.classList.toggle('oculto', v !== 'acompanhamento'));
+    const url = new URL(location.href);
+    if (v === 'envios') url.searchParams.set('aba', 'envios'); else url.searchParams.delete('aba');
+    history.replaceState(null, '', url);
+    if (v === 'envios') carregar();
+  }
+  vistas.addEventListener('click', e => { const b = e.target.closest('[data-vista]'); if (b) mostrar(b.dataset.vista); });
+
+  // ── Estado ─────────────────────────────────────────────────────────────────
+  let dados = null, aba = 'todos', busca = '', timer = null, previa = null;
+
+  async function carregar() {
+    try {
+      const r = await fetch(`${BASE}/api/envios`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = `${BASE}/login?proximo=${encodeURIComponent(location.pathname + location.search)}`; return; }
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao carregar os envios.');
+      dados = j;
+      render();
+    } catch (e) {
+      $('env-carimbo').textContent = e.message;
+    }
+    clearTimeout(timer);
+    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    timer = setTimeout(carregar, ativo ? 20000 : 120000);
+  }
+
+  function render() {
+    const d = dados, k = d.resumo;
+    $('env-regra').textContent = d.regra_xml && d.regra_xml !== 'nenhuma' ? `Regra aplicada ao XML: ${d.regra_xml_rotulo}` : '';
+    if (!d.envio_ativo) mensagem('O envio de pedidos está temporariamente desativado pra sua empresa. Fale com a Fresh Log.', 'info');
+    if (!PODE_ENVIAR) { $('card-enviar').classList.add('oculto'); }
+    const badge = k.erros + k.agendamento_pendente;
+    $('vistas-badge').textContent = badge; $('vistas-badge').classList.toggle('on', badge > 0);
+
+    $('env-tiles').innerHTML = `
+      <div class="tile" data-aba="todos"><span class="rotulo">Enviados hoje</span><span class="valor">${k.hoje}</span><span class="sub">${k.total} nos últimos ${d.dias} dias</span></div>
+      <div class="tile rota" data-aba="fila"><span class="rotulo">Na fila</span><span class="valor">${k.na_fila}</span><span class="sub">${k.na_fila ? 'sendo criados na Stokki' : 'nada pendente'}</span></div>
+      <div class="tile bom" data-aba="criados"><span class="rotulo">Criados na Stokki</span><span class="valor">${k.criados}</span><span class="sub">últimos ${d.dias} dias</span></div>
+      <div class="tile ${k.erros ? 'ruim' : ''}" data-aba="erros"><span class="rotulo">Com erro</span><span class="valor">${k.erros}</span><span class="sub">${k.erros ? 'precisam de correção' : '—'}</span></div>
+      <div class="tile" data-aba="pendencias"><span class="rotulo">Pendências</span><span class="valor">${k.agendamento_pendente + k.solicitacoes_pendentes}</span><span class="sub">${k.agendamento_pendente ? k.agendamento_pendente + ' agendamento' + (k.agendamento_pendente > 1 ? 's' : '') + ' pendente' + (k.agendamento_pendente > 1 ? 's' : '') : (k.solicitacoes_pendentes ? 'com a Fresh Log' : '—')}</span></div>`;
+    const abas = [['todos', 'Todos', k.total], ['fila', 'Na fila', k.na_fila], ['criados', 'Criados', k.criados], ['erros', 'Com erro', k.erros], ['pendencias', 'Pendências', k.agendamento_pendente + k.solicitacoes_pendentes]];
+    $('env-abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
+    renderTabela();
+    renderLateral();
+    renderAtencao();
+    $('env-carimbo').textContent = `Atualizado às ${d.atualizado_em}` + (d.fila ? ` · Stokki em uso por ${d.fila}` : '');
+  }
+
+  function filtrados() {
+    let lista = dados.envios;
+    if (aba === 'fila') lista = lista.filter(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    else if (aba === 'criados') lista = lista.filter(x => x.status === 'CRIADO' || x.status === 'DUPLICADO');
+    else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
+    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length);
+    const q = busca.trim().toLowerCase();
+    if (q) lista = lista.filter(x => [x.numero_nf, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
+    return lista;
+  }
+
+  function entrega(x) {
+    if (x.agendamento_pendente && x.status !== 'CANCELADO') return '<span class="chip">Agendamento pendente</span>';
+    if (x.agendamento_data) return `<span class="num">${esc(x.agendamento_data_br)}</span> <span style="color:var(--texto-suave)">${esc(x.agendamento_hora_inicio || '')}${x.agendamento_hora_fim ? '–' + esc(x.agendamento_hora_fim) : ''}</span>`;
+    return `<span style="color:var(--texto-suave)">${esc(x.horario_inicio || '')}${x.horario_fim ? '–' + esc(x.horario_fim) : ''}</span>`;
+  }
+
+  function renderTabela() {
+    const lista = filtrados();
+    $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
+      <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
+      <td class="nw"><span class="mono num" style="font-weight:600">${esc(x.numero_nf)}</span></td>
+      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
+      <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
+      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
+      <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
+      <td class="nw">${entrega(x)}</td>
+      <td><div class="acoes-linha">
+        ${PODE_ENVIAR && x.pode_reagendar ? `<button type="button" data-acao="reagendar" data-id="${x.id}">${x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar'}</button>` : ''}
+        ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
+        ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
+        ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
+        <button type="button" data-acao="xml" data-id="${x.id}" title="Baixar o XML enviado">XML</button>
+      </div></td></tr>`).join('');
+    const vazio = $('env-vazia');
+    if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.envios.length ? 'Nenhum pedido nessa situação.' : 'Você ainda não enviou nenhum pedido por aqui.'); }
+    else vazio.classList.add('oculto');
+    $('env-contagem').textContent = lista.length ? `${lista.length} pedido${lista.length > 1 ? 's' : ''}` : '';
+  }
+
+  function renderLateral() {
+    const fila = dados.envios.filter(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    $('env-fila').innerHTML = fila.length ? fila.slice(0, 8).map(x => `<div class="linha"><span><span class="mono">NF ${esc(x.numero_nf)}</span> ${esc(x.destinatario_nome)}</span><span class="suave">${x.status === 'ENVIANDO' ? 'enviando…' : 'na fila'}</span></div>`).join('') + (fila.length > 8 ? `<div class="vazio-lat">e mais ${fila.length - 8}…</div>` : '') + (dados.fila ? `<div class="vazio-lat">A Stokki está em uso por ${esc(dados.fila)} -- seus pedidos entram assim que liberar.</div>` : '') : '<div class="vazio-lat">Nada na fila agora.</div>';
+    const pend = dados.envios.flatMap(x => x.solicitacoes_pendentes.map(s => ({ x, s })));
+    $('env-pendencias').innerHTML = pend.length ? pend.map(({ x, s }) => `<div class="linha"><span><span class="mono">NF ${esc(x.numero_nf)}</span> ${esc(s.rotulo)}</span><span class="suave">${esc(s.criado_em_br.slice(0, 5))}</span></div>`).join('') : '<div class="vazio-lat">Nenhuma solicitação aberta.</div>';
+  }
+
+  function renderAtencao() {
+    const pend = dados.envios.filter(x => x.agendamento_pendente && x.status !== 'CANCELADO');
+    const erros = dados.envios.filter(x => x.status === 'ERRO');
+    const card = $('env-atencao');
+    if (!pend.length && !erros.length) { card.classList.add('oculto'); card.innerHTML = ''; return; }
+    card.classList.remove('oculto');
+    card.innerHTML = `<h3>Precisa da sua atenção (${pend.length + erros.length})</h3>` +
+      pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>NF ${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
+      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>NF ${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
+  }
+
+  // ── Upload → prévia ────────────────────────────────────────────────────────
+  function mensagem(texto, tipo) { const m = $('env-msg'); m.className = 'msg' + (texto ? ' ' + tipo : ''); m.textContent = texto || ''; }
+
+  async function analisar(arquivos) {
+    if (!arquivos || !arquivos.length) return;
+    const fd = new FormData();
+    for (const f of arquivos) fd.append('arquivos', f);
+    mensagem(`Lendo ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}…`, 'info');
+    try {
+      const r = await fetch(`${BASE}/api/envios/analisar`, { method: 'POST', credentials: 'same-origin', body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao ler os arquivos.');
+      previa = j;
+      mensagem('', '');
+      renderPrevia();
+    } catch (e) {
+      mensagem(e.message, 'erro');
+    }
+    $('arquivos').value = '';
+  }
+
+  function renderPrevia() {
+    const p = previa, box = $('previa');
+    if (!p.itens.length && !p.rejeitados.length) { box.classList.remove('aberta'); return; }
+    box.classList.add('aberta');
+    const rej = $('previa-rej');
+    if (p.rejeitados.length) {
+      rej.classList.remove('oculto');
+      rej.innerHTML = `<b>${p.rejeitados.length} arquivo${p.rejeitados.length > 1 ? 's' : ''} não pode${p.rejeitados.length > 1 ? 'm' : ''} ser enviado${p.rejeitados.length > 1 ? 's' : ''}:</b>` +
+        p.rejeitados.map(r => `<div>• ${esc(r.numero_nf ? 'NF ' + r.numero_nf : r.arquivo)} — ${esc(r.erro)}</div>`).join('');
+    } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
+    $('previa-titulo').textContent = p.itens.length ? `${p.itens.length} nota${p.itens.length > 1 ? 's' : ''} pronta${p.itens.length > 1 ? 's' : ''} pra enviar` : 'Nenhuma nota válida neste lote';
+    $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
+      const d = p.destinatarios[it.destinatario_doc] || {};
+      return `<tr data-i="${i}">
+        <td class="nw"><span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
+        <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
+        <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div></td>
+        <td class="num nw" style="text-align:center">${it.volumes}</td>
+        <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
+        <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
+        <td class="nw">${d.requer_agendamento ? `<div class="ag"><label><input type="date" class="ag-data" min="${p.hoje}"></label><label>das <input type="time" class="ag-ini" value="${esc(d.horario_inicio || '08:00')}"></label><label>às <input type="time" class="ag-fim" value="${esc(d.horario_fim || '12:00')}"></label><label><input type="checkbox" class="ag-pend"> pendente</label></div>` : '<span style="color:var(--texto-suave)">—</span>'}</td>
+      </tr>`;
+    }).join('');
+    const docs = [...new Set(p.itens.map(it => it.destinatario_doc))];
+    $('previa-dest').innerHTML = docs.map(doc => {
+      const d = p.destinatarios[doc] || {};
+      const pede = !d.conhecido;
+      return `<div class="dest ${pede ? 'pede' : ''}" data-doc="${esc(doc)}">
+        <div class="linha1"><b>${esc(d.nome)}</b><span style="color:var(--texto-suave)">${esc(d.documento_formatado)}</span>${pede ? '<span class="chip">informe o horário de recebimento (só desta vez)</span>' : `<span style="color:var(--texto-suave)">recebe das ${esc(d.horario_inicio)} às ${esc(d.horario_fim)}${d.origem === 'cadastro' ? ' (cadastro Fresh Log)' : ''}</span>`}</div>
+        <div class="campos"><label>Recebe das <input type="time" class="h-ini" value="${esc(d.horario_inicio || '')}" ${pede ? 'required' : ''}></label><label>às <input type="time" class="h-fim" value="${esc(d.horario_fim || '')}" ${pede ? 'required' : ''}></label>
+        <label style="display:inline-flex;align-items:center;gap:5px;"><input type="checkbox" class="h-ag" ${d.requer_agendamento ? 'checked' : ''}> só recebe com agendamento</label></div>
+      </div>`;
+    }).join('');
+    $('btn-confirmar').disabled = !p.itens.length;
+    $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+  }
+
+  // mudar "só recebe com agendamento" reflete nas linhas daquele destinatário
+  $('previa-dest').addEventListener('change', e => {
+    if (!e.target.classList.contains('h-ag')) return;
+    const doc = e.target.closest('.dest').dataset.doc;
+    if (previa.destinatarios[doc]) previa.destinatarios[doc].requer_agendamento = e.target.checked;
+    const ini = e.target.closest('.dest').querySelector('.h-ini').value, fim = e.target.closest('.dest').querySelector('.h-fim').value;
+    previa.itens.forEach((it, i) => {
+      if (it.destinatario_doc !== doc) return;
+      const td = $('previa-tabela').querySelector(`tr[data-i="${i}"] td:last-child`);
+      td.innerHTML = e.target.checked ? `<div class="ag"><label><input type="date" class="ag-data" min="${previa.hoje}"></label><label>das <input type="time" class="ag-ini" value="${esc(ini || '08:00')}"></label><label>às <input type="time" class="ag-fim" value="${esc(fim || '12:00')}"></label><label><input type="checkbox" class="ag-pend"> pendente</label></div>` : '<span style="color:var(--texto-suave)">—</span>';
+    });
+  });
+
+  async function confirmar() {
+    const p = previa;
+    const horarios = {};
+    for (const el of $('previa-dest').querySelectorAll('.dest')) {
+      horarios[el.dataset.doc] = { ini: el.querySelector('.h-ini').value, fim: el.querySelector('.h-fim').value, ag: el.querySelector('.h-ag').checked };
+    }
+    const itens = [];
+    for (let i = 0; i < p.itens.length; i++) {
+      const it = p.itens[i], h = horarios[it.destinatario_doc] || {};
+      if (!h.ini || !h.fim) { mensagem(`Informe o horário de recebimento de ${it.destinatario_nome}.`, 'erro'); return; }
+      const tr = $('previa-tabela').querySelector(`tr[data-i="${i}"]`);
+      const item = { token: it.token, horario_inicio: h.ini, horario_fim: h.fim, requer_agendamento: h.ag };
+      if (h.ag) {
+        const pend = tr.querySelector('.ag-pend'), data = tr.querySelector('.ag-data');
+        item.agendamento_pendente = !!(pend && pend.checked);
+        item.agendamento_data = data ? data.value : '';
+        item.agendamento_hora_inicio = (tr.querySelector('.ag-ini') || {}).value;
+        item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
+        if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`NF ${it.numero_nf}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
+      }
+      itens.push(item);
+    }
+    $('btn-confirmar').disabled = true;
+    mensagem('Registrando os pedidos…', 'info');
+    try {
+      const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
+      previa = null; $('previa').classList.remove('aberta');
+      mensagem(j.mensagem, 'ok');
+      aba = 'fila';
+      carregar();
+    } catch (e) {
+      mensagem(e.message, 'erro');
+      $('btn-confirmar').disabled = false;
+    }
+  }
+
+  // ── Ações sobre pedidos ────────────────────────────────────────────────────
+  function modal(html) { $('modal-caixa').innerHTML = html; $('modal').classList.add('aberto'); }
+  function fecharModal() { $('modal').classList.remove('aberto'); }
+  $('modal').addEventListener('click', e => { if (e.target === $('modal') || e.target.closest('[data-fechar]')) fecharModal(); });
+
+  async function enviarAcao(id, corpo) {
+    const r = await fetch(`${BASE}/api/envios/${id}/acao`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'Falha ao aplicar.');
+    return j;
+  }
+
+  function abrirAcao(tipo, id) {
+    const x = dados.envios.find(e => e.id === Number(id));
+    if (!x) return;
+    if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
+    const cab = `<p>NF <b>${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
+    const textos = {
+      cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
+      em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
+      reenviar: ['Reenviar pedido', 'O pedido volta pra fila e será criado na Stokki de novo.'],
+      reagendar: [x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar entrega', 'Informe a data combinada com o destinatário e a janela de horário.'],
+    }[tipo];
+    modal(`<h3>${textos[0]}</h3>${cab}<p>${textos[1]}</p>
+      ${tipo === 'reagendar' ? `<label>Data <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}" value="${esc(x.agendamento_data || '')}"></label>
+        <div style="display:flex;gap:8px;"><label style="flex:1">Das <input type="time" id="m-ini" value="${esc(x.agendamento_hora_inicio || x.horario_inicio || '08:00')}"></label><label style="flex:1">Às <input type="time" id="m-fim" value="${esc(x.agendamento_hora_fim || x.horario_fim || '12:00')}"></label></div>` : ''}
+      ${tipo === 'cancelar' || tipo === 'em_espera' ? '<label>Motivo (opcional) <textarea id="m-motivo" maxlength="300"></textarea></label>' : ''}
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">${textos[0]}</button></div>`);
+    $('m-ok').addEventListener('click', async () => {
+      const corpo = { tipo };
+      if (tipo === 'reagendar') { corpo.data = $('m-data').value; corpo.hora_inicio = $('m-ini').value; corpo.hora_fim = $('m-fim').value; }
+      if ($('m-motivo')) corpo.motivo = $('m-motivo').value;
+      $('m-ok').disabled = true;
+      try {
+        const j = await enviarAcao(id, corpo);
+        fecharModal();
+        mensagem(j.mensagem, j.aplicado ? 'ok' : 'info');
+        carregar();
+      } catch (e) {
+        const m = $('m-msg'); m.className = 'msg erro'; m.textContent = e.message; $('m-ok').disabled = false;
+      }
+    });
+  }
+
+  // ── Eventos ────────────────────────────────────────────────────────────────
+  const zona = $('zona');
+  $('arquivos').addEventListener('change', e => analisar(e.target.files));
+  ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
+  ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));
+  zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
+  $('btn-confirmar').addEventListener('click', confirmar);
+  $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
+  $('env-abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; render(); });
+  $('env-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
+  $('env-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });
+  $('env-atualizar').addEventListener('click', () => carregar());
+  secao.addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (b) abrirAcao(b.dataset.acao, b.dataset.id); });
+
+  // badge na aba mesmo sem abrir a vista
+  fetch(`${BASE}/api/envios`, { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j) return;
+    if (!dados) { dados = j; const n = j.resumo.erros + j.resumo.agendamento_pendente; $('vistas-badge').textContent = n; $('vistas-badge').classList.toggle('on', n > 0); }
+  }).catch(() => {});
+  mostrar(secao.dataset.abaInicial === 'envios' ? 'envios' : 'acompanhamento');
+})();
+</script>

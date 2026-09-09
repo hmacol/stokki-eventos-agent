@@ -1,0 +1,16 @@
+# Bloco a colar DENTRO do site app.freshhub.com.br já existente em
+# /etc/caddy/Caddyfile (ao lado de /painel, /insucesso e /motorista) --
+# depois `systemctl reload caddy`.
+#
+# handle_path tira o prefixo /cliente antes de repassar ao Flask; o
+# X-Forwarded-Prefix + ProxyFix(x_prefix=1) em portal_cliente/app.py faz
+# url_for()/redirect() voltarem com o prefixo certo.
+
+# app.freshhub.com.br {
+    redir /cliente /cliente/ permanent
+    handle_path /cliente/* {
+        reverse_proxy 127.0.0.1:8074 {
+            header_up X-Forwarded-Prefix /cliente
+        }
+    }
+# }

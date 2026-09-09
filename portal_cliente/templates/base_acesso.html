@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block titulo %}Acesso{% endblock %} — Fresh Log</title>
+<style>
+  :root { --primaria: #141428; --primaria-clara: #1F1F3D; --acento: #0EA575; --erro: #E1483D; --texto: #1F2937; --texto-suave: #6B7280; --borda: #E5E7EB; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+         font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; background: var(--primaria); color: var(--texto); }
+  .caixa { background: #fff; border-radius: 12px; padding: 36px 32px; width: 100%; max-width: 400px; box-shadow: 0 20px 50px rgba(0,0,0,0.35); }
+  .marca { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+  .marca .mini { width: 38px; height: 38px; border-radius: 9px; background: var(--acento); color: #fff; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .marca .nome { font-size: 18px; font-weight: 800; color: var(--primaria); letter-spacing: 0.3px; display: block; }
+  .marca .subtitulo { font-size: 12.5px; color: var(--texto-suave); display: block; margin-top: 2px; }
+  h1 { font-size: 16px; margin: 0 0 6px; color: var(--primaria); }
+  p { font-size: 13.5px; line-height: 1.5; color: var(--texto); margin: 0 0 16px; }
+  p.suave { color: var(--texto-suave); font-size: 12.5px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--primaria); margin-bottom: 6px; }
+  input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 7px; font-size: 15px; margin-bottom: 16px; font-family: inherit; }
+  input:focus { outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento); }
+  input.pin { letter-spacing: 6px; font-size: 20px; text-align: center; font-family: 'Cascadia Code', Consolas, monospace; }
+  button.principal { width: 100%; background: var(--acento); color: #fff; border: none; padding: 12px; border-radius: 7px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  button.principal:hover { opacity: 0.92; }
+  .erro { background: #FDEBEA; color: var(--erro); font-size: 13px; padding: 10px 12px; border-radius: 7px; margin-bottom: 16px; }
+  .links { margin-top: 18px; font-size: 13px; text-align: center; }
+  .links a { color: var(--acento); text-decoration: none; font-weight: 600; }
+  .links a:hover { text-decoration: underline; }
+  .lista { list-style: none; padding: 0; margin: 0 0 16px; font-size: 13px; }
+  .lista li { padding: 6px 0; border-bottom: 1px dashed var(--borda); }
+  a.botao-link { display: inline-block; background: var(--acento); color: #fff; padding: 11px 18px; border-radius: 7px; font-size: 14px; font-weight: 700; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="caixa">
+  <div class="marca">
+    <div class="mini">FL</div>
+    <div><span class="nome">Fresh Log</span><span class="subtitulo">Acompanhamento de entregas</span></div>
+  </div>
+  {% block conteudo %}{% endblock %}
+</div>
+{% block script_extra %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Tema antes do primeiro paint (mesmo truque do painel) -- padrão claro.
+  try { if (localStorage.getItem('portal_tema') === 'escuro') document.documentElement.classList.add('tema-escuro'); } catch (e) {}
+</script>
+<title>{% block titulo %}Acompanhamento de entregas{% endblock %} — Fresh Log</title>
+{% include "_paleta_cores.html" %}
+<style>
+  :root {
+    --st-sucesso: #0ca30c; --st-rota: #2a78d6; --st-atencao: #eda100; --st-falha: #d03b3b; --st-neutro: #8A8F98;
+    --trilha: #ECEEF1; --rota-bg: #E8F0FB; --botao-bg: #141428; --botao-texto: #FFFFFF;
+  }
+  html.tema-escuro {
+    --st-sucesso: #3ccf3c; --st-rota: #5B9BE6; --st-atencao: #F0AA45; --st-falha: #FF5C50; --st-neutro: #7C89A0;
+    --trilha: #1A2130; --rota-bg: rgba(91,155,230,0.16); --botao-bg: #2FD9AE; --botao-texto: #0B0E14;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; background: var(--fundo); color: var(--texto); font-size: 13px; }
+  a { color: var(--acento); text-decoration: none; } a:hover { text-decoration: underline; }
+  .mono { font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', Menlo, monospace; }
+  .num { font-variant-numeric: tabular-nums; }
+  button { font-family: inherit; }
+  .card { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 12px; font-size: 12.5px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap; }
+  .badge .pt { width: 7px; height: 7px; border-radius: 100px; background: currentColor; }
+  .b-entregue { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .b-em_rota { background: var(--rota-bg); color: var(--st-rota); }
+  .b-programado { background: var(--rota-bg); color: var(--st-rota); opacity: 0.85; }
+  .b-aguardando_saida { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .b-agendado { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .b-insucesso { background: var(--erro-bg); color: var(--st-falha); }
+  .botao { display: inline-flex; align-items: center; gap: 7px; background: var(--botao-bg); color: var(--botao-texto); border: none; padding: 9px 18px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .botao:disabled { opacity: 0.5; cursor: not-allowed; }
+  .botao-linha { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--borda); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--texto); }
+  .botao-linha:hover { border-color: var(--acento); color: var(--acento); }
+  .botao-linha svg, .botao svg { width: 14px; height: 14px; flex: none; }
+
+  .cab { display: flex; align-items: center; gap: 16px; padding: 12px 28px; background: var(--primaria); color: #fff; }
+  .cab .marca { display: flex; align-items: center; gap: 10px; }
+  .cab .marca .mini { width: 32px; height: 32px; border-radius: 8px; background: #0EA575; color: #fff; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .cab .marca .nome { font-size: 15px; font-weight: 800; letter-spacing: 0.3px; display: block; }
+  .cab .marca .sub { font-size: 11.5px; color: #A3A3C2; display: block; }
+  .cab .cliente { display: flex; flex-direction: column; gap: 1px; padding-left: 16px; border-left: 1px solid rgba(255,255,255,0.14); min-width: 0; }
+  .cab .cliente .rot { font-size: 10.5px; color: #A3A3C2; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; }
+  .cab .cliente .nm { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cab .acoes { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .cab .botao-cab { display: inline-flex; align-items: center; gap: 7px; background: none; border: 1px solid #3A3A5C; color: #C7C7E0; font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer; text-decoration: none; }
+  .cab .botao-cab:hover { color: #fff; border-color: #C7C7E0; text-decoration: none; }
+  .cab .botao-cab svg { width: 14px; height: 14px; }
+  @media (max-width: 640px) {
+    .cab { padding: 10px 14px; gap: 10px; }
+    .cab .marca .sub, .cab .botao-cab .rotulo { display: none; }
+    .cab .cliente { padding-left: 10px; }
+  }
+</style>
+{% block estilo_extra %}{% endblock %}
+</head>
+<body>
+<header class="cab">
+  <div class="marca">
+    <div class="mini">FL</div>
+    <div><span class="nome">Fresh Log</span><span class="sub">Acompanhamento de entregas</span></div>
+  </div>
+  {% if cliente %}
+  <div class="cliente">
+    <span class="rot">{% if equipe %}Cliente · operando como equipe ({{ equipe.usuario }}){% else %}Cliente{% endif %}</span>
+    {% if equipe %}
+    <a class="nm" href="{{ url_for('equipe_cliente') }}" title="Trocar de cliente" style="color:#fff;">{{ cliente.nome }} <span style="color:#A3A3C2;font-size:11px;">▾ trocar</span></a>
+    {% else %}
+    <span class="nm" title="CNPJ {{ cliente.cnpj_formatado }}">{{ cliente.nome }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+  <div class="acoes">
+    <button type="button" class="botao-cab" id="alterna-tema" title="Tema claro / escuro">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      <span class="rotulo">Tema</span>
+    </button>
+    {% if cliente %}
+    <a class="botao-cab" href="{{ url_for('sair') }}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+      <span class="rotulo">Sair</span>
+    </a>
+    {% endif %}
+  </div>
+</header>
+{% block conteudo %}{% endblock %}
+<script>
+  document.getElementById('alterna-tema').addEventListener('click', function () {
+    const escuro = document.documentElement.classList.toggle('tema-escuro');
+    try { localStorage.setItem('portal_tema', escuro ? 'escuro' : 'claro'); } catch (e) {}
+  });
+</script>
+{% block script_extra %}{% endblock %}
+</body>
+</html>
