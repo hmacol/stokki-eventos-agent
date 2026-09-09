@@ -895,7 +895,7 @@ def reparar_sublotes_por_horas(sublotes: list[list[dict]], api_key: str | None =
 # Até 09/09 a roteirização só olhava a DATA do agendamento
 # (elegivel_para_data); a HORA era descartada em todo ponto do cálculo
 # -- um cliente que "recebe só até 11h" podia sair como última parada
-# de uma rota que começa às 10h. A partir daqui a janela entra em 3
+# de uma rota que começava às 10h. A partir daqui a janela entra em 3
 # lugares: (1) sequenciamento (ordenar_com_janelas: 2-opt + realocação
 # com objetivo km + atraso + espera), (2) formação/fusão de sublotes
 # (janela_viavel: existe sequência que respeita as janelas?) e (3)
@@ -913,11 +913,24 @@ def reparar_sublotes_por_horas(sublotes: list[list[dict]], api_key: str | None =
 # Quando há agendamento E cadastro, vale a interseção; interseção vazia
 # -> vale o agendamento (o cliente confirmou aquela hora explicitamente).
 #
-# Hora de saída da base: 10:00 BRT, espelho do start_at "T13:00:00Z"
-# que criar_rotas_diarias.py grava em toda rota (e mediana real das
-# rotas do nucleo_rotas: 09h-10h). Configurável em config.yaml
-# (roteirizacao.hora_saida_base) via definir_hora_saida_base.
-HORA_SAIDA_BASE = 10.0
+# Hora de INÍCIO das rotas (BRT) -- fonte única do start_at que
+# criar_rotas_diarias.py/rascunhos_rota.py gravam em toda rota
+# (start_at_rota, abaixo) e da hora de saída do simulador de janelas.
+# Hugo, 09/09: 06:00 (até então 10:00, o antigo "T13:00:00Z" fixo; a
+# mediana real das rotas em nucleo_rotas era 09h-10h). Configurável em
+# config.yaml (roteirizacao.hora_saida_base) via definir_hora_saida_base
+# -- vale só pro simulador; o start_at segue HORA_INICIO_ROTA.
+HORA_INICIO_ROTA = "06:00"
+HORA_SAIDA_BASE = 6.0
+
+
+def start_at_rota(data_alvo) -> str:
+    """start_at da rota na Vuupt em UTC ("YYYY-MM-DDTHH:MM:SSZ") pra
+    HORA_INICIO_ROTA em Brasília (UTC-3, sem horário de verão desde
+    2019): 06:00 BRT -> "T09:00:00Z". `data_alvo` é um date."""
+    horas = _hhmm_para_horas(HORA_INICIO_ROTA) + 3.0
+    total = int(round(horas * 60))
+    return f"{data_alvo.strftime('%Y-%m-%d')}T{total // 60:02d}:{total % 60:02d}:00Z"
 TOLERANCIA_JANELA_HORAS = 0.25
 # Objetivo do 2-opt com janelas, em "km equivalentes": 1h de atraso
 # (chegar depois da janela fechar) custa 60 km; 1h esperando o cliente

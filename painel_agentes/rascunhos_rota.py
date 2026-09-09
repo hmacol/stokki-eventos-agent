@@ -896,13 +896,14 @@ def referencia_para_rascunho_manual(data_alvo: date) -> dict:
             "lote_id", "particao", "tipo_rota",
             "start_location_base_id", "end_location_base_id", "start_at",
         )}
+    from roteirizacao_dados import start_at_rota  # mesma hora de início do criador diário (06:00 BRT)
     return {
         "lote_id": f"{data_alvo.isoformat()}-{uuid.uuid4().hex[:8]}",
         "particao": "Seco",
         "tipo_rota": "GRANDE_SP",
         "start_location_base_id": BASE_LOCATION_ID,
         "end_location_base_id": BASE_LOCATION_ID,
-        "start_at": f"{data_alvo.isoformat()}T13:00:00Z",
+        "start_at": start_at_rota(data_alvo),
     }
 
 

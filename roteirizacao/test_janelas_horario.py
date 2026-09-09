@@ -55,6 +55,16 @@ class HorasTestCase(unittest.TestCase):
         self.assertEqual(rd.normalizar_hhmm("8h"), "08:00")
         self.assertEqual(rd._horas_para_hhmm(13.75), "13:45")
 
+    def test_start_at_rota_segue_hora_de_inicio(self):
+        from datetime import date
+        with mock.patch.object(rd, "HORA_INICIO_ROTA", "06:00"):
+            self.assertEqual(rd.start_at_rota(date(2026, 9, 10)), "2026-09-10T09:00:00Z")
+        with mock.patch.object(rd, "HORA_INICIO_ROTA", "10:00"):
+            self.assertEqual(rd.start_at_rota(date(2026, 9, 10)), "2026-09-10T13:00:00Z")
+        # padrão de produção: início às 06:00 e simulador saindo na mesma hora
+        self.assertEqual(rd.HORA_INICIO_ROTA, "06:00")
+        self.assertEqual(rd.HORA_SAIDA_BASE, rd._hhmm_para_horas(rd.HORA_INICIO_ROTA))
+
     def test_janela_util_ignora_padroes(self):
         self.assertIsNone(rd._janela_util("08:00", "18:00"))
         self.assertIsNone(rd._janela_util("08:00", "16:00"))
@@ -112,12 +122,15 @@ class ResolverJanelaTestCase(unittest.TestCase):
 
 class _SemGeocodificar(unittest.TestCase):
     """obter_coordenadas lê latitude/longitude do próprio dict -- nenhum
-    teste bate no cache/Google (mesmo padrão de test_orcamento_horas)."""
+    teste bate no cache/Google (mesmo padrão de test_orcamento_horas).
+    Saída da base fixada em 10:00 nos cenários (as janelas dos testes
+    foram desenhadas em torno dela; produção sai às HORA_INICIO_ROTA)."""
 
     def setUp(self):
         self._patches = [
             mock.patch.object(rd, "obter_coordenadas", lambda s, k=None: _coords(s)),
             mock.patch.object(ot, "obter_coordenadas", lambda s, k=None: _coords(s)),
+            mock.patch.object(rd, "HORA_SAIDA_BASE", 10.0),
         ]
         for p in self._patches:
             p.start()

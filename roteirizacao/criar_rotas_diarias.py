@@ -88,6 +88,7 @@ from roteirizacao_dados import (
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
     injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
+    start_at_rota, HORA_INICIO_ROTA,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -171,10 +172,10 @@ def _preparar_janelas(servicos: list[dict], config: dict) -> int:
     agendamentos_pedido > scheduled_start/end real da Vuupt > horário de
     atendimento já injetado em '_horario_atendimento_*') e registra a
     hora de saída da base do simulador (config.yaml roteirizacao.
-    hora_saida_base, padrão 10:00 = o start_at das rotas). Chamar DEPOIS
+    hora_saida_base, padrão HORA_INICIO_ROTA = o start_at das rotas). Chamar DEPOIS
     do laço que injeta nível/horário de atendimento. Retorna quantos
     pedidos ficaram com janela (só pra log)."""
-    definir_hora_saida_base((config.get("roteirizacao") or {}).get("hora_saida_base"))
+    definir_hora_saida_base((config.get("roteirizacao") or {}).get("hora_saida_base") or HORA_INICIO_ROTA)
     com_janela = injetar_janelas(servicos, carregar_janelas_confirmadas(DB_PATH))
     if com_janela:
         logger.info(f"{com_janela} de {len(servicos)} pedido(s) com janela de horário de entrega -- "
@@ -360,7 +361,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     contagem = contagem_alocacoes_dia if contagem_alocacoes_dia is not None else {}
 
     data_alvo_br = data_alvo.strftime("%d/%m/%Y")
-    start_at = f"{data_alvo.strftime('%Y-%m-%d')}T13:00:00Z"
+    start_at = start_at_rota(data_alvo)  # HORA_INICIO_ROTA (06:00 BRT, Hugo 09/09)
 
     # mesma classificação do main(): nível de dificuldade (CNPJ do
     # destinatário) e tipo de carga (sender_id), injetados no dict
@@ -493,7 +494,6 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
 
         agora_brasilia = datetime.now(TZ_BRASILIA)
         data_alvo = _data_alvo_rotas(agora_brasilia)
-        data_alvo_str = data_alvo.strftime("%Y-%m-%d")
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
         ajustes_disponibilidade = carregar_ajustes_dia(data_alvo)
         logger.info(
@@ -627,7 +627,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         for label, servicos_particao in particoes:
             logger.info(f"Partição '{label}': {len(servicos_particao)} pedido(s).")
 
-        start_at = f"{data_alvo_str}T13:00:00Z"
+        start_at = start_at_rota(data_alvo)  # HORA_INICIO_ROTA (06:00 BRT, Hugo 09/09)
 
         # Base pra seleção diária de modelo e sequenciamento (mais
         # LONGE -> mais PERTO, pedido do Hugo, 03/08). Geocodificada
