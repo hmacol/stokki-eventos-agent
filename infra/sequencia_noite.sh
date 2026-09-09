@@ -23,3 +23,10 @@ cd "$RAIZ" && "$PY" executar_tudo.py --sem-impressao
 cd "$RAIZ" && "$PY" verificar_pedidos_duplicados_vuupt.py
 cd "$RAIZ/roteirizacao" && "$PY" enviar_rascunhos_pendentes.py
 cd "$RAIZ/roteirizacao" && "$PY" incrementar_rotas.py
+
+# 09/09 (pedido do Hugo): documentos tambem a noite. Pedido criado depois
+# das 18h (ex.: PS-38783/38784 de 08/09 as 20:50) so ganhava DANFE anexada
+# -- e NF no portal do cliente -- na sequencia da tarde do dia seguinte.
+# Fica por ultimo e roda mesmo se o incrementar_rotas.py falhar de
+# proposito (este script nao usa set -e).
+cd "$RAIZ/documentos_pedido" && "$PY" processar_documentos.py
