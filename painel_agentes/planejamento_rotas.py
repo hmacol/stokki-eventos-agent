@@ -37,6 +37,7 @@ from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from roteirizacao_dados import (
     extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
     ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
+    resolver_janela, carregar_janelas_confirmadas, simular_horarios, tem_janela, _horas_para_hhmm,
 )
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.complexidade_entrega import (
@@ -241,6 +242,31 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _simular_rascunho(paradas: list[dict]) -> dict | None:
+    """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
+    de um rascunho, na ordem em que estão. None quando nenhuma parada
+    tem janela (não há o que avisar nem prever) ou quando a simulação
+    falhar (a tela nunca cai por causa disso)."""
+    if not paradas:
+        return None
+    pseudo = [
+        {"code": p.get("codigo"), "_nivel_dificuldade": p.get("nivel_dificuldade") or 1,
+         "latitude": p.get("latitude"), "longitude": p.get("longitude"),
+         "_janela_inicio": p.get("janela_inicio"), "_janela_fim": p.get("janela_fim")}
+        for p in paradas
+    ]
+    if not tem_janela(pseudo):
+        return None
+    try:
+        return simular_horarios(
+            pseudo, coords_base=_garantir_coords_base(),
+            coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+        )
+    except Exception as e:
+        logger.warning(f"Falha ao simular horários do rascunho (tela segue sem previsão): {e}")
+        return None
+
+
 def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
@@ -265,6 +291,23 @@ def _badges_trava(rascunho: dict) -> list[str]:
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
+
+    # Janela de horário do cliente (Hugo, 09/09): na ordem atual do
+    # rascunho, alguma parada chega depois da janela fechar? Mesmo
+    # simulador que sequencia/forma as rotas (roteirizacao_dados.
+    # simular_horarios); atraso intrínseco (janela que já fechou antes
+    # da saída da base) também aparece -- aqui é aviso, não trava.
+    sim = _simular_rascunho(paradas)
+    if sim and sim["fora_janela"]:
+        fora = ", ".join(
+            f"{paradas[i]['codigo']} chega ~{_horas_para_hhmm(sim['chegadas'][i])} "
+            f"(janela {paradas[i]['janela_inicio']}–{paradas[i]['janela_fim']})"
+            for i in sim["fora_janela"][:3]
+        )
+        extra = f" e mais {len(sim['fora_janela']) - 3}" if len(sim["fora_janela"]) > 3 else ""
+        badges.append(f"fora da janela de horário: {fora}{extra}")
+    elif sim and sim["espera_h"] > 1.0:
+        badges.append(f"motorista espera ~{sim['espera_h']:.1f}h por cliente abrir (ordem atual)")
     tipo_veiculo = tipo_por_codigo(rascunho.get("tipo_veiculo"))
 
     if tipo_veiculo:
@@ -406,13 +449,24 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
                         tipo_area: str | None = None,
                         mapa_niveis: dict[str, int] | None = None,
                         mapa_horarios: dict[str, tuple[str, str]] | None = None,
-                        ajustes_manuais: dict[str, dict] | None = None) -> dict:
+                        ajustes_manuais: dict[str, dict] | None = None,
+                        janelas_confirmadas: dict[str, tuple[str, str]] | None = None) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
     agendado = _data_agendada(servico)
     codigo = servico.get("code", "")
     documento = (servico.get("customer") or {}).get("code", "")
     horario_inicio, horario_fim = horario_efetivo(documento, mapa_horarios or {}, ajustes_manuais or {})
+    # janela efetiva (09/09) -- mesma resolução do pipeline automático
+    # (roteirizacao_dados.resolver_janela), sobre o serviço bruto com o
+    # horário de atendimento já resolvido acima
+    janela_inicio, janela_fim, janela_fonte = resolver_janela(
+        {**servico, "_horario_atendimento_inicio": horario_inicio, "_horario_atendimento_fim": horario_fim},
+        janelas_confirmadas,
+    )
     return {
+        "janela_inicio": janela_inicio,
+        "janela_fim": janela_fim,
+        "janela_fonte": janela_fonte,
         "agendado_para": agendado.isoformat() if agendado else None,
         "tipo_area": tipo_area,  # None | "sp_nao_atendido" | "fora_sp" (ver identificar_area_nao_atendida)
         "service_id": servico["id"],
@@ -639,6 +693,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     mapa_niveis = carregar_niveis(caminho_niveis)
     mapa_horarios = carregar_horarios(caminho_niveis)
     ajustes_manuais = carregar_ajustes_manuais()
+    janelas_confirmadas = carregar_janelas_confirmadas(rascunhos_rota.DB_PATH)
 
     # Mesma classificação usada pelo pipeline automático pra excluir da
     # roteirização (roteirizacao/notificar_area_nao_atendida.py) -- aqui só
@@ -663,7 +718,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     else:
         pool = [
             _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]),
-                                mapa_niveis, mapa_horarios, ajustes_manuais)
+                                mapa_niveis, mapa_horarios, ajustes_manuais, janelas_confirmadas)
             for s in servicos_brutos
             if s["id"] not in ids_em_rascunho
         ]
@@ -785,12 +840,17 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     nf_por_codigo_rascunho = rascunhos_rota.carregar_nf_por_codigo_pedido(
         {c for r in rascunhos for p in r["paradas"] for c in _codigos_base_lista(p["codigo"])})
     for r in rascunhos:
-        for p in r["paradas"]:
+        # previsão de chegada por parada na ordem atual (Hugo, 09/09) --
+        # só pra rota com alguma janela (é quando a hora importa)
+        sim = _simular_rascunho(r["paradas"])
+        for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
             p["numero_nf"] = ", ".join(filter(None, (
                 nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
             )))
+            p["chegada_prevista"] = _horas_para_hhmm(sim["chegadas"][i]) if sim else None
+            p["fora_janela"] = bool(sim and i in sim["fora_janela"])
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))

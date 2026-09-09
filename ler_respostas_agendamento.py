@@ -75,17 +75,59 @@ def _marcar_processado(message_id: str, remetente_email: str, origem: str = "AGE
     conn.close()
 
 
-def _extrair_pedido_do_corpo(corpo: str) -> str:
+def _extrair_pedidos_do_corpo(corpo: str) -> list[str]:
     """
-    Procura o marcador oculto [[PEDIDO:PS-XXXXX]] no corpo (quoted text).
+    Procura os marcadores ocultos [[PEDIDO:PS-XXXXX]] no corpo (quoted
+    text). Um só = resposta ao e-mail de solicitação por pedido
+    (agendamento_confirmacao.py); vários = resposta ao e-mail URGENTE
+    de agendamento pendente (roteirizacao/notificar_agendamento_
+    pendente.py, que lista N pedidos -- passou a levar o marcador em
+    09/09; antes a resposta dele era ignorada por completo).
     '#' opcional na frente do código — o agente_relatorio usa códigos
     com '#' (ex: #PS-XXXXX), mas este projeto (agente_stokki_eventos)
     NUNCA usa '#' no codigo_ps (extrair_codigo_ps_da_linha sempre monta
     "PS-{id}" puro) — sem essa flexibilização, o marcador que a gente
     mesma coloca no e-mail nunca seria reconhecido de volta.
     """
-    match = re.search(r"\[\[PEDIDO:(#?PS-[\w.]+)\]\]", corpo)
-    return match.group(1) if match else ""
+    vistos: list[str] = []
+    for codigo in re.findall(r"\[\[PEDIDO:(#?PS-[\w.]+)\]\]", corpo):
+        if codigo not in vistos:
+            vistos.append(codigo)
+    return vistos
+
+
+def _normalizar_hhmm(texto) -> str | None:
+    """'14h' -> '14:00', '8:00' -> '08:00'; None quando não é hora."""
+    m = re.match(r"^\s*(\d{1,2})(?::(\d{2})|h(\d{2})?)?\s*$", str(texto or ""), re.IGNORECASE)
+    if not m:
+        return None
+    hora, minuto = int(m.group(1)), int(m.group(2) or m.group(3) or 0)
+    if hora > 23 or minuto > 59:
+        return None
+    return f"{hora:02d}:{minuto:02d}"
+
+
+def _janela_informada(item: dict) -> tuple[str | None, str | None]:
+    """(inicio, fim) a gravar a partir do que a IA extraiu. Hora NÃO
+    informada pelo embarcador fica (None, None) -- desde 09/09 o banco
+    guarda NULL em vez do chute 08:00-18:00 (a roteirização respeita a
+    janela e não pode tratar chute como janela real; quem aplica na
+    VUUPT usa o padrão só no payload). Só um dos lados: 'só início'
+    vira janela de 1h; 'só fim' ("até 11h") vira 00:00-fim."""
+    inicio = _normalizar_hhmm(item.get("inicio"))
+    fim = _normalizar_hhmm(item.get("fim"))
+    if inicio and fim:
+        return (inicio, fim) if inicio < fim else (inicio, _mais_uma_hora(inicio))
+    if inicio:
+        return inicio, _mais_uma_hora(inicio)
+    if fim:
+        return "00:00", fim
+    return None, None
+
+
+def _mais_uma_hora(hhmm: str) -> str:
+    hora, minuto = map(int, hhmm.split(":"))
+    return f"{min(hora + 1, 23):02d}:{minuto:02d}"
 
 
 def _extrair_embarcador_do_corpo(corpo: str) -> str:
@@ -110,14 +152,60 @@ Resposta do embarcador:
 {texto_resposta.strip()[:2000]}
 \"\"\"
 
-Extraia a DATA e o HORÁRIO de entrega agendados para esse pedido. Se o embarcador mencionar só um horário (sem intervalo), use o mesmo valor para início e fim, ou um intervalo razoável de 1 hora se fizer sentido pelo contexto.
+Extraia a DATA de entrega agendada para esse pedido e, SE o embarcador informar, o HORÁRIO (janela de recebimento).
+{_REGRAS_HORARIO}
 
 Responda APENAS com um JSON válido neste formato exato, sem texto antes ou depois:
 {{"data": "DD/MM/YYYY", "inicio": "HH:MM", "fim": "HH:MM", "nao_entendido": false}}
 
-Se não conseguir identificar uma data e horário claros na resposta, retorne: {{"data": "", "inicio": "", "fim": "", "nao_entendido": true}}
+Se não conseguir identificar uma DATA clara na resposta (o horário é opcional), retorne: {{"data": "", "inicio": "", "fim": "", "nao_entendido": true}}
 """
+    return _chamar_claude(prompt, api_key, {"data": "", "inicio": "", "fim": "", "nao_entendido": True})
 
+
+_REGRAS_HORARIO = """Regras do horário:
+- Horário NÃO mencionado -> "inicio": "" e "fim": "" (NUNCA invente um horário padrão; a data continua valendo).
+- Intervalo ("das 8h às 12h", "entre 13 e 17h") -> inicio e fim.
+- Um horário só ("às 14h") -> inicio = esse horário, fim = uma hora depois.
+- Só limite superior ("até as 11h", "antes do meio-dia") -> inicio = "00:00", fim = o limite.
+- Só limite inferior ("após 14h", "a partir das 15h") -> inicio = o limite, fim = "23:59".
+- Período vago: "manhã" -> 08:00-12:00, "tarde" -> 13:00-18:00."""
+
+
+def _extrair_agendamentos_multiplos_via_claude(texto_resposta: str, pendentes: list[dict], api_key: str) -> dict:
+    """
+    Versão pra resposta ao e-mail URGENTE (vários pedidos num e-mail
+    só, 09/09): devolve {"agendamentos": [{"pedido", "data", "inicio",
+    "fim"}], "nao_entendido": bool}. Uma data/horário só, sem citar
+    pedido, vale pra todos os pedidos listados.
+    """
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    lista = "\n".join(f"- {p['pedido']}: {p.get('nome_destinatario') or ''}"
+                      f"{' (NF ' + str(p['numero_nf']) + ')' if p.get('numero_nf') else ''}" for p in pendentes)
+    prompt = f"""Você vai analisar a resposta de um embarcador a um e-mail que pedia a DATA e o HORÁRIO de AGENDAMENTO DE ENTREGA de VÁRIOS pedidos.
+
+Pedidos listados no e-mail original:
+{lista}
+
+A data de hoje é {hoje}. Se o embarcador mencionar apenas o dia (ex: "dia 25"), assuma o mês/ano correntes ou o próximo mais próximo se a data já tiver passado.
+
+Resposta do embarcador:
+\"\"\"
+{texto_resposta.strip()[:3000]}
+\"\"\"
+
+Para cada pedido que a resposta cobre, extraia a DATA de entrega agendada e, SE informado, o HORÁRIO. Se a resposta der uma única data (e horário) sem citar pedido específico, ela vale para TODOS os pedidos listados. Pedido que a resposta não cobre fica de fora da lista. Identifique o pedido pelo código (PS-xxxxx), pelo nome do destinatário ou pelo número da NF.
+{_REGRAS_HORARIO}
+
+Responda APENAS com um JSON válido neste formato exato, sem texto antes ou depois:
+{{"agendamentos": [{{"pedido": "PS-00000", "data": "DD/MM/YYYY", "inicio": "HH:MM", "fim": "HH:MM"}}], "nao_entendido": false}}
+
+Se não conseguir identificar nenhuma DATA clara na resposta, retorne: {{"agendamentos": [], "nao_entendido": true}}
+"""
+    return _chamar_claude(prompt, api_key, {"agendamentos": [], "nao_entendido": True})
+
+
+def _chamar_claude(prompt: str, api_key: str, resposta_falha: dict) -> dict:
     try:
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -128,7 +216,7 @@ Se não conseguir identificar uma data e horário claros na resposta, retorne: {
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
+                "max_tokens": 800,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=30,
@@ -140,10 +228,12 @@ Se não conseguir identificar uma data e horário claros na resposta, retorne: {
 
     except Exception as e:
         logger.error(f"Erro ao extrair agendamento via Claude: {e}")
-        return {"data": "", "inicio": "", "fim": "", "nao_entendido": True}
+        return dict(resposta_falha)
 
 
-def _atualizar_agendamento(pedido_id: int, data: str, inicio: str, fim: str, resposta_texto: str):
+def _atualizar_agendamento(pedido_id: int, data: str, inicio: str | None, fim: str | None, resposta_texto: str):
+    """inicio/fim None = embarcador não informou hora (fica NULL, ver
+    _janela_informada)."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         UPDATE agendamentos_pedido
@@ -209,7 +299,12 @@ def processar_respostas_agendamento(config: dict) -> dict:
             msg_header = email.message_from_bytes(entrada[1])
             assunto = _decodificar_header(msg_header.get("Subject", ""))
             assunto_normalizado = _remover_acentos(assunto.lower())
-            if "agendamento de entrega" not in assunto_normalizado:
+            # "agendamento de entrega" = solicitação por pedido
+            # (agendamento_confirmacao.py); "confirmacao de agendamento" =
+            # e-mail URGENTE de vários pedidos (notificar_agendamento_
+            # pendente.py) -- a resposta dele era descartada aqui até 09/09.
+            if ("agendamento de entrega" not in assunto_normalizado
+                    and "confirmacao de agendamento" not in assunto_normalizado):
                 continue
 
             message_id = msg_header.get("Message-ID", "")
@@ -246,12 +341,52 @@ def processar_respostas_agendamento(config: dict) -> dict:
             corpo_sem_citacao = _remover_texto_citado(corpo)
             processados += 1
 
-            pedido_thread = _extrair_pedido_do_corpo(corpo)
+            pedidos_thread = _extrair_pedidos_do_corpo(corpo)
             cnpj_emb = _extrair_embarcador_do_corpo(corpo)
 
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
 
+            if len(pedidos_thread) > 1:
+                # Resposta ao e-mail URGENTE (vários pedidos): a IA devolve
+                # um agendamento por pedido coberto; cada um atualiza a
+                # própria linha PENDENTE (registrada no envio do urgente).
+                marcadores = ",".join("?" for _ in pedidos_thread)
+                pendentes = [dict(r) for r in conn.execute(
+                    f"SELECT * FROM agendamentos_pedido WHERE status = 'PENDENTE' AND pedido IN ({marcadores})",
+                    pedidos_thread,
+                ).fetchall()]
+                conn.close()
+                if not pendentes:
+                    logger.info(f"Resposta de {remetente_email} cita {len(pedidos_thread)} pedido(s), "
+                                f"nenhum pendente de agendamento — ignorando.")
+                    _marcar_processado(message_id, remetente_email)
+                    continue
+                por_pedido = {p["pedido"].lstrip("#"): p for p in pendentes}
+                resultado_ia = _extrair_agendamentos_multiplos_via_claude(corpo_sem_citacao, pendentes, api_key)
+                aplicados = 0
+                for item in resultado_ia.get("agendamentos") or []:
+                    row = por_pedido.get(str(item.get("pedido") or "").lstrip("#").strip())
+                    if not row or not item.get("data"):
+                        continue
+                    inicio, fim = _janela_informada(item)
+                    _atualizar_agendamento(row["id"], item["data"], inicio, fim, corpo_sem_citacao)
+                    aplicados += 1
+                    logger.info(
+                        f"✅ Agendamento confirmado (e-mail urgente): pedido {row['pedido']} "
+                        f"({row['nome_destinatario']}) -> {item['data']} "
+                        f"{(inicio + '-' + fim) if inicio else 'sem horário informado'}"
+                    )
+                if aplicados:
+                    atualizados += aplicados
+                else:
+                    nao_entendidos += 1
+                    logger.warning(f"Não foi possível extrair data de agendamento da resposta de "
+                                   f"{remetente_email} ({len(pendentes)} pedido(s) pendente(s)).")
+                _marcar_processado(message_id, remetente_email)
+                continue
+
+            pedido_thread = pedidos_thread[0] if pedidos_thread else ""
             agendamento = None
             if pedido_thread:
                 agendamento = conn.execute("""
@@ -320,14 +455,14 @@ def processar_respostas_agendamento(config: dict) -> dict:
                 continue
 
             data_agendada = resultado_ia["data"]
-            inicio        = resultado_ia.get("inicio", "") or "08:00"
-            fim           = resultado_ia.get("fim", "") or "18:00"
+            inicio, fim = _janela_informada(resultado_ia)
 
             _atualizar_agendamento(agendamento["id"], data_agendada, inicio, fim, corpo_sem_citacao)
             atualizados += 1
             logger.info(
                 f"✅ Agendamento confirmado: pedido {agendamento['pedido']} "
-                f"({agendamento['nome_destinatario']}) -> {data_agendada} {inicio}-{fim}"
+                f"({agendamento['nome_destinatario']}) -> {data_agendada} "
+                f"{(inicio + '-' + fim) if inicio else 'sem horário informado'}"
             )
 
             _marcar_processado(message_id, remetente_email)

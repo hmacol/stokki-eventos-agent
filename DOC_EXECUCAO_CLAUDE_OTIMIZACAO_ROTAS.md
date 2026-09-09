@@ -508,3 +508,44 @@ Após rodar o benchmark, validar nos resultados:
 - [ ] Assertions de integridade (travas, cobertura de pedidos) passam em todos os modelos.
 - [ ] NENHUM arquivo de produção (`roteirizacao_dados.py`, `criar_rotas_diarias.py`, `incrementar_rotas.py`) foi alterado.
 - [ ] Zero dependências externas novas (sem pip install de nada).
+
+---
+
+## 8. Janela de horário de entrega do cliente (implementado 09/09)
+
+Até 09/09 a roteirização só respeitava a **data** do agendamento (`elegivel_para_data`); a **hora** era descartada em todo ponto do cálculo. Pedido do Hugo: passar a considerar o horário, "tanto dos e-mails quanto no algoritmo".
+
+### 8.1. Fonte da janela de cada pedido (`roteirizacao_dados.resolver_janela` / `injetar_janelas`)
+
+Prioridade, por pedido (chaves injetadas `_janela_inicio`, `_janela_fim`, `_janela_fonte`):
+
+1. **Agendamento confirmado com hora** em `agendamentos_pedido` (resposta do embarcador por e-mail, portal do cliente) — `carregar_janelas_confirmadas`. Hora **não informada** fica `NULL` desde 09/09 (antes virava o chute 08:00-18:00).
+2. **`scheduled_start`/`scheduled_end`** do serviço na Vuupt quando a hora é "real" — pares padrão que o pipeline grava sem ninguém informar hora (`08:00-18:00`, `08:00-16:00`, `00:00-23:59`) são ignorados (`JANELAS_PADRAO_IGNORADAS`). `scheduled_start == scheduled_end` ("às 11h") vira janela de 1h.
+3. **Horário de atendimento** do cadastro (`BD_CLIENTES.xlsx` / ajuste manual da tela de Planejamento, já injetado em `_horario_atendimento_*`; `customer.operating_hour_*` da Vuupt como reserva). `00:00-23:59` = sem janela.
+
+Agendamento **e** cadastro: vale a interseção; interseção vazia → vale o agendamento (fonte `agendamento`).
+
+### 8.2. Onde a janela entra no algoritmo
+
+| Ponto | Função | Regra |
+|---|---|---|
+| Simulação | `simular_horarios(sublote)` | Linha do tempo na ordem dada: saída da base às `HORA_SAIDA_BASE` (10:00 BRT = o `start_at T13:00:00Z` das rotas; `config.yaml` → `roteirizacao.hora_saida_base`), mesmas pernas/tempos de parada de `estimar_tempo_rota`; chegar antes da janela → **espera**, depois → **atraso**. |
+| Sequenciamento | `ordenar_com_janelas` (chamada por `otimizacao_rotas.ordenar_2opt`) | Sem janela em nenhum pedido: 2-opt de sempre, byte a byte. Com janela: objetivo `km + 60·atraso_h + 30·espera_h`, 2-opt + realocação de parada (or-opt); posição 0 (mais distante) fixa numa 1ª passada e liberada numa 2ª só se ainda sobrar atraso/espera acima da tolerância (15 min). |
+| Formação/fusão | `janela_viavel(candidato)` em `dividir_em_sublotes`, `_empacotar_ganancioso` (Sweep/CEP/K-means), `_fusao_valida` (Clarke-Wright), `fundir_sublotes_pequenos` | Sequencia o candidato com janelas e exige atraso evitável ≤ 15 min e duração **com esperas** ≤ 9h. Custo zero quando nenhum pedido do candidato tem janela. |
+| Ordem final | `janela_respeitada` em `reparar_sublotes_por_horas` e `selecao_modelo._validar` | Mesma regra na ordem final; rota que falha é quebrada em pedaços que respeitam. |
+| Incremento por hora | `incrementar_rotas.py` | Rota candidata precisa continuar viável com o pedido novo (`_cabe_na_janela`); resequenciamento passou a usar `ordenar_2opt` (era farthest-first puro). |
+| Tela de Planejamento | `planejamento_rotas._simular_rascunho` | Badge "fora da janela de horário: …" no card da rota, chegada prevista por parada e selo "⏱ agendado/atende HH–HH" no pedido; botão "Otimizar sequência" respeita a janela. |
+
+**Atraso intrínseco** (`_atraso_intrinseco`): pedido que, sozinho e saindo direto da base, já chega depois da própria janela (ex.: cliente que recebe só até 10h com saída às 10h) **não bloqueia** agrupamento nem reprova candidato — fragmentar não resolve. Mesmo princípio de `_orcamento_inviavel_por_distancia`. Aparece como aviso na tela.
+
+### 8.3. Lado dos e-mails (a hora precisa chegar inteira ao banco)
+
+- `ler_respostas_agendamento.py`: a IA extrai a data e, **se informado**, o horário; hora não informada fica `NULL` (não descarta mais a resposta inteira por falta de hora). Responde também ao e-mail **URGENTE** de vários pedidos (assunto "Confirmação de agendamento", marcadores `[[PEDIDO:…]]` por pedido, prompt de lista).
+- `roteirizacao/notificar_agendamento_pendente.py`: o e-mail urgente passou a levar os marcadores ocultos, o pedido explícito de "data e horário" e a registrar cada pedido como `PENDENTE` em `agendamentos_pedido`.
+- `ler_planilha_entregas_nuu.py`: `extrair_hora_agenda` lê hora do texto da coluna AGENDA ("às 14h", "entre 8h e 12h", "até 11h", "manhã"…); sem hora → `NULL` (migração idempotente zera o antigo chute 08:00-18:00 de origem `PLANILHA_NUU`).
+- `regras/endereco.py`: `horario_entrega` do LLM normalizado pra `HH:MM` e mantido mesmo quando o endereço da mesma mensagem é rejeitado.
+
+### 8.4. Validação
+
+- `py -3.11 -m unittest roteirizacao.test_janelas_horario test_janela_horario_email roteirizacao.test_orcamento_horas` (44 testes).
+- Dados reais de 09/09 (92 not_assigned, 35 com janela): 18 rotas nas duas rodadas, 2105 → 2098 km, 18 s → 28 s; zero atraso evitável — as 5 paradas "fora" restantes são intrínsecas (janela que fecha às 10h/11h com saída às 10h) ou dentro dos 15 min de tolerância.

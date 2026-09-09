@@ -194,6 +194,13 @@ def resolver_endereco_entrega(
     cnpj_transportadora = "".join(c for c in cnpj_transportadora if c.isdigit())
     resultado_transp = catalogo.resolver(nome_transportadora, cnpj=cnpj_transportadora) if nome_transportadora else None
 
+    # Janela de horário extraída das mensagens (09/09): normalizada pra
+    # HH:MM e mantida MESMO quando o endereço da mesma mensagem não
+    # passa na validação (antes ia embora junto com o endereço) -- a
+    # roteirização passou a respeitar a janela, e "só entrega até 11h"
+    # é instrução válida independente do endereço estar confuso.
+    horario_llm = None
+
     # ── Prioridade 1: Mensagens interpretadas pelo LLM ────────────────────────
     if mensagens and anthropic_api_key:
         resultado_llm = _interpretar_mensagens_llm(mensagens, anthropic_api_key)
@@ -201,6 +208,7 @@ def resolver_endereco_entrega(
             confianca = resultado_llm.get("confianca", "baixa")
             transp_alternativa = resultado_llm.get("transportadora_alternativa")
             end_llm = resultado_llm.get("endereco")
+            horario_llm = _normalizar_horario_entrega(resultado_llm.get("horario_entrega"))
 
             # Resolve a transportadora alternativa (se houver) ANTES de
             # validar o endereço -- se ela for TERCEIROS com endereço de
@@ -248,7 +256,7 @@ def resolver_endereco_entrega(
 
             if not endereco_invalido:
                 endereco_final = end_llm or _bloco_para_dict(destino)
-                horario_entrega = resultado_llm.get("horario_entrega")
+                horario_entrega = horario_llm
                 observacao = resultado_llm.get("observacao", "")
                 if transp_resolvida and transp_resolvida.conflito:
                     observacao += f" | CONFLITO na planilha: {transp_resolvida.motivo}"
@@ -285,6 +293,7 @@ def resolver_endereco_entrega(
                 endereco=_bloco_para_dict(local_entrega),
                 fonte="local_entrega",
                 transportadora=_transp_para_dict(resultado_transp),
+                horario_entrega=horario_llm,
             )
         logger.info(
             f"Local de Entrega fora da área atendida "
@@ -306,6 +315,7 @@ def resolver_endereco_entrega(
                 endereco=_redespacho_para_dict(resultado_transp.endereco_redespacho),
                 fonte="redespacho",
                 transportadora=_transp_para_dict(resultado_transp),
+                horario_entrega=horario_llm,
                 requer_revisao=resultado_transp.conflito,
                 observacao=observacao,
             )
@@ -348,9 +358,41 @@ def resolver_endereco_entrega(
         endereco=_bloco_para_dict(destino),
         fonte="destino",
         transportadora=_transp_para_dict(resultado_transp),
+        horario_entrega=horario_llm,
         requer_revisao=bool(observacao),
         observacao=observacao,
     )
+
+
+def _normalizar_hhmm(texto) -> str | None:
+    """'14h' -> '14:00', '8:00' -> '08:00', '14h30' -> '14:30'; None quando
+    não é hora reconhecível (o LLM às vezes devolve '8h' ou '14:00h';
+    vuupt_client._converter_data_para_iso só entende HH:MM e, sem isso,
+    o campo sumia do payload em silêncio)."""
+    m = re.match(r"^\s*(\d{1,2})(?::(\d{2})|h(\d{2})?)?\s*h?\s*$", str(texto or ""), re.IGNORECASE)
+    if not m:
+        return None
+    hora, minuto = int(m.group(1)), int(m.group(2) or m.group(3) or 0)
+    if hora > 23 or minuto > 59:
+        return None
+    return f"{hora:02d}:{minuto:02d}"
+
+
+def _normalizar_horario_entrega(horario: dict | None) -> dict | None:
+    """Janela {"inicio","fim","observacao"} do LLM com as horas em HH:MM
+    válidas e inicio < fim; None quando não há janela aproveitável."""
+    if not isinstance(horario, dict):
+        return None
+    inicio = _normalizar_hhmm(horario.get("inicio"))
+    fim = _normalizar_hhmm(horario.get("fim"))
+    if not inicio and not fim:
+        return None
+    inicio = inicio or "00:00"
+    fim = fim or "23:59"
+    if inicio >= fim:
+        logger.warning(f"Janela de horário das mensagens ignorada (início >= fim): {horario}")
+        return None
+    return {"inicio": inicio, "fim": fim, "observacao": str(horario.get("observacao") or "")}
 
 
 # ── LLM ───────────────────────────────────────────────────────────────────────

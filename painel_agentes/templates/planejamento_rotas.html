@@ -446,6 +446,23 @@
   .item-parada .agendamento.atrasado { background: rgba(255,92,80,0.18); color: var(--erro); }
   .item-parada .agendamento.atrasado::before { border-radius: 0; clip-path: polygon(50% 0, 0 100%, 100% 100%); }
   .item-parada .agendamento.futuro { background: rgba(124,137,160,0.18); color: var(--texto-suave); }
+  /* janela de horário do cliente (09/09): neutra quando é só o horário
+     de atendimento, azul quando é agendamento confirmado com hora,
+     vermelha quando a chegada prevista cai fora dela */
+  .item-parada .janela {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(124,137,160,0.18);
+    color: var(--texto-suave);
+  }
+  .item-parada .janela.agendada { background: rgba(111,160,255,0.16); color: #6FA0FF; }
+  .item-parada .janela.fora { background: rgba(255,92,80,0.18); color: var(--erro); font-weight: 700; }
+  body.cards-compactos .item-parada .janela { margin-top: 0; margin-left: 4px; }
   .item-parada .badge-caixas {
     display: inline-flex;
     align-items: center;
@@ -2310,6 +2327,19 @@
     if ((p.volume_caixas || 0) > LIMITE_ALERTA_CAIXAS) {
       partes.push(`<span class="badge-caixas">⚠ ${p.volume_caixas} caixas</span>`);
     }
+    // janela de horário do cliente (Hugo, 09/09): agendamento confirmado
+    // com hora / scheduled real / horário de atendimento -- é o que o
+    // sequenciador respeita. Dentro da rota mostra também a chegada
+    // prevista na ordem atual e avisa quando cai fora da janela.
+    if (p.janela_inicio && p.janela_fim) {
+      const fonte = p.janela_fonte === "agendamento" ? "agendado" : "atende";
+      if (p.fora_janela) {
+        partes.push(`<span class="janela fora" title="Chegada prevista fora da janela do cliente">⚠ ${fonte} ${p.janela_inicio}–${p.janela_fim} · chega ~${escaparHtml(p.chegada_prevista || "?")}</span>`);
+      } else {
+        const chegada = p.chegada_prevista ? ` · chega ~${escaparHtml(p.chegada_prevista)}` : "";
+        partes.push(`<span class="janela${p.janela_fonte === "agendamento" ? " agendada" : ""}" title="Janela de horário considerada na roteirização">⏱ ${fonte} ${p.janela_inicio}–${p.janela_fim}${chegada}</span>`);
+      }
+    }
     return partes.length ? `<br>${partes.join(" ")}` : "";
   }
 
@@ -2364,6 +2394,11 @@
     li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
     li.dataset.horarioInicio = p.horario_atendimento_inicio || "";
     li.dataset.horarioFim = p.horario_atendimento_fim || "";
+    // janela efetiva + chegada prevista (09/09) -- pro tooltip/resumo
+    li.dataset.janela = (p.janela_inicio && p.janela_fim) ? `${p.janela_inicio}–${p.janela_fim}` : "";
+    li.dataset.janelaFonte = p.janela_fonte || "";
+    li.dataset.chegadaPrevista = p.chegada_prevista || "";
+    li.dataset.foraJanela = p.fora_janela ? "1" : "";
     // urgência do agendamento pro CSS do modo "só número" (selo do chip:
     // vermelho = atrasado, azul = agendado pra data em edição, cinza =
     // agendado pra depois -- Hugo, 14/08)
@@ -2751,7 +2786,19 @@
       nivel: li.dataset.nivelDificuldade || "",
       horarioInicio: li.dataset.horarioInicio || "",
       horarioFim: li.dataset.horarioFim || "",
+      janela: li.dataset.janela || "",
+      janelaFonte: li.dataset.janelaFonte || "",
+      chegadaPrevista: li.dataset.chegadaPrevista || "",
+      foraJanela: li.dataset.foraJanela === "1",
     };
+  }
+
+  function textoJanelaParada(d) {
+    if (!d.janela) return "";
+    const rotulo = d.janelaFonte === "agendamento" ? "janela agendada" : "janela";
+    let texto = `${rotulo} ${d.janela}`;
+    if (d.chegadaPrevista) texto += ` (chega ~${d.chegadaPrevista}${d.foraJanela ? ", FORA da janela" : ""})`;
+    return texto;
   }
 
   function montarTooltipParada(li) {
@@ -2764,6 +2811,7 @@
     if (d.agendamento) extras.push(d.agendamento);
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
+    if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
   }
@@ -2780,6 +2828,7 @@
     if (d.agendamento) extras.push(d.agendamento);
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
+    if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
     linhas.push(extras.join(" — "));
     return linhas.join("\n");
   }

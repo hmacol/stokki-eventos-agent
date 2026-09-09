@@ -79,11 +79,18 @@ from vuupt_client import VuuptClient
 from geocodificacao import geocodificar
 from notificar_execucao_agente import notificar_execucao
 
-from roteirizacao_dados import obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km, ordenar_por_distancia_base, macro_regiao_do_servico
+from roteirizacao_dados import (
+    obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
+    macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
+)
+from otimizacao_rotas import ordenar_2opt
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas,
+    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas,
+)
+from regras.complexidade_entrega import (
+    carregar_niveis, carregar_horarios, carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
 )
 from notificar_agendamento_pendente import identificar_pendentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
@@ -302,7 +309,10 @@ def main(modo_teste: bool = False):
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
 
         filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-        servicos = vuupt.listar_servicos(filtro, per_page=100)
+        # include=customer (09/09): o CNPJ do destinatário (customer.code)
+        # resolve nível de dificuldade e horário de atendimento do cadastro
+        # -- mesma listagem que criar_rotas_diarias.py já fazia.
+        servicos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
 
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
@@ -459,6 +469,8 @@ def main(modo_teste: bool = False):
             coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
         except Exception as e:
             logger.warning(f"Não consegui geocodificar a base pra ordenar as rotas: {e}")
+        if coords_base:
+            definir_coords_base(*coords_base)  # simulador de janelas/orçamento de horas
 
         rotas_hoje = [r for r in todas_rotas if r.get("name", "").startswith(prefixo_hoje)]
 
@@ -537,6 +549,42 @@ def main(modo_teste: bool = False):
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
 
+        # Janela de horário do cliente (Hugo, 09/09): nível/horário de
+        # atendimento do cadastro pros pedidos NOVOS (vêm com customer) e
+        # a janela efetiva pra todos -- novos e os que já estão nas rotas
+        # (esses vêm de include=services, sem customer: a janela deles sai
+        # do agendamento confirmado no banco ou do scheduled_* da Vuupt).
+        # Falha aqui não derruba o incremento: segue sem janela, como antes.
+        try:
+            caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
+            mapa_niveis = carregar_niveis(caminho_niveis)
+            mapa_horarios = carregar_horarios(caminho_niveis)
+            ajustes_manuais = carregar_ajustes_manuais()
+            for s in novos:
+                cnpj_destino = (s.get("customer") or {}).get("code", "")
+                s["_nivel_dificuldade"] = nivel_efetivo(cnpj_destino, mapa_niveis, ajustes_manuais)
+                s["_horario_atendimento_inicio"], s["_horario_atendimento_fim"] = \
+                    horario_efetivo(cnpj_destino, mapa_horarios, ajustes_manuais)
+            _preparar_janelas(novos + list(todos_servicos_por_id.values()), config)
+        except Exception as e:
+            logger.warning(f"Falha ao preparar janelas de horário (incremento segue sem janela): {e}")
+
+        def _servicos_da_rota_info(rota_info: dict) -> list[dict]:
+            return [todos_servicos_por_id[sid] for sid in rota_info["service_ids"] if sid in todos_servicos_por_id]
+
+        def _cabe_na_janela(rota_info: dict, pedido: dict) -> bool:
+            """Rota candidata continua respeitando as janelas (dela e do
+            pedido novo) em alguma sequência -- ver janela_viavel. Sem
+            janela em ninguém: True sem custo."""
+            candidato = _servicos_da_rota_info(rota_info) + [pedido]
+            if not tem_janela(candidato):
+                return True
+            try:
+                return janela_viavel(candidato, gmaps_key)
+            except Exception as e:
+                logger.warning(f"  Falha ao checar janela na rota '{rota_info['nome']}' (não bloqueia): {e}")
+                return True
+
         alocados = 0
         rotas_afetadas: set[int] = set()
         orfaos = []
@@ -597,6 +645,7 @@ def main(modo_teste: bool = False):
                     r for r in info_rotas
                     if _cabe_na_rota(r, cx_pedido, pedido.get("address"))
                     and (r["macro"] is None or r["macro"] == pedido_macro)
+                    and _cabe_na_janela(r, pedido)
                     and (
                         not pedido_eh_viagem
                         or r["agent_id"] is None
@@ -703,7 +752,11 @@ def main(modo_teste: bool = False):
         # LONGE pra mais PERTO da base) -- só nas rotas que JÁ
         # EXISTIAM antes desse run e ganharam pedido novo (rotas
         # criadas agora mesmo já nasceram na ordem certa, na etapa
-        # acima -- reaplicar aqui seria desnecessário).
+        # acima -- reaplicar aqui seria desnecessário). Desde 09/09 usa
+        # o MESMO ordenar_2opt do criador diário (farthest-first + 2-opt,
+        # e janela de horário quando algum pedido tem) em vez do
+        # farthest-first puro -- a rota incrementada volta a respeitar
+        # as janelas que o rascunho do dia já respeitava.
         if not modo_teste and coords_base:
             for rota_info in info_rotas:
                 if rota_info["id"] not in rotas_afetadas or rota_info["id"] not in ids_rotas_existentes_desde_inicio:
@@ -717,7 +770,7 @@ def main(modo_teste: bool = False):
                         logger.warning(f"  Rota '{rota_info['nome']}': faltam dados de algum serviço pra "
                                       f"reordenar -- mantendo ordem atual.")
                         continue
-                    ordenados = ordenar_por_distancia_base(servicos_da_rota, coords_base[0], coords_base[1], gmaps_key)
+                    ordenados = ordenar_2opt(servicos_da_rota, coords_base[0], coords_base[1], gmaps_key)
                     ordem_ids = [s["id"] for s in ordenados]
                     if ordem_ids != rota_info["service_ids"]:
                         atualizar_rota(token, rota_info["id"], ordem_ids)

@@ -58,6 +58,7 @@ from roteirizacao_dados import (
     extrair_volume_caixas, extrair_nivel_dificuldade,
     calcular_km_estimado, separar_pedidos_exclusivos, caixas_e_enderecos,
     estimar_tempo_rota, ROTA_TEMPO_MAXIMO_HORAS, _orcamento_inviavel_por_distancia,
+    janela_viavel, ordenar_com_janelas, coords_do_servico, MAX_ITERACOES_2OPT,
 )
 from regras.tipo_veiculo import classificar_tipo_veiculo
 
@@ -142,8 +143,11 @@ def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_max
         candidato = sublote_atual + [servico]
         cabe_tempo = (estimar_tempo_rota(candidato, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
                      or _orcamento_inviavel_por_distancia(candidato, api_key))
+        # Janela de horário (Hugo, 09/09) -- paridade com dividir_em_sublotes.
+        cabe_janela = janela_viavel(candidato, api_key)
 
-        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo):
+        if sublote_atual and not (cabe_entregas and cabe_caixas and cabe_distancia and cabe_tempo
+                                  and cabe_janela):
             sublotes.append(sublote_atual)
             sublote_atual = []
             caixas_atual = 0
@@ -269,8 +273,11 @@ def agrupar_por_savings(servicos: list[dict], base_lat: float, base_lng: float,
         # exceto quando já é inviável só por distância (destino muito
         # longe da base): nesse caso não bloqueia a fusão, ver
         # _orcamento_inviavel_por_distancia.
-        return (estimar_tempo_rota(sublote, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
-               or _orcamento_inviavel_por_distancia(sublote, api_key))
+        if not (estimar_tempo_rota(sublote, api_key) <= ROTA_TEMPO_MAXIMO_HORAS
+                or _orcamento_inviavel_por_distancia(sublote, api_key)):
+            return False
+        # Janela de horário (Hugo, 09/09) -- só custa quando há janela no sublote.
+        return janela_viavel(sublote, api_key)
 
     for s_ij, i, j in savings:
         ra, rb = rota_de[i], rota_de[j]
@@ -306,17 +313,7 @@ def _distancia_da_base(servico: dict, base_lat: float, base_lng: float,
     return -1.0
 
 
-def _coords_do_servico(servico: dict, api_key: str | None) -> tuple[float, float] | None:
-    lat, lng = servico.get("latitude"), servico.get("longitude")
-    if lat and lng:
-        try:
-            return (float(lat), float(lng))
-        except (TypeError, ValueError):
-            pass
-    return obter_coordenadas(servico, api_key)
-
-
-MAX_ITERACOES_2OPT = 100
+_coords_do_servico = coords_do_servico  # mantido pelo nome antigo (benchmark/laboratório)
 
 
 def ordenar_2opt(servicos: list[dict], base_lat: float, base_lng: float,
@@ -332,60 +329,16 @@ def ordenar_2opt(servicos: list[dict], base_lat: float, base_lng: float,
     "esvaziando" no caminho de volta. Serviço sem coordenada permanece
     na posição do farthest-first (segmento que o contenha não é
     candidato a reversão).
+
+    Desde 09/09 (janela de horário do cliente, pedido do Hugo) o miolo
+    vive em roteirizacao_dados.ordenar_com_janelas -- que é ESTE 2-opt
+    quando nenhum pedido tem janela, e um 2-opt + realocação com
+    objetivo km + atraso + espera quando tem (o BUG de 14/08 do
+    serviço sem coordenada em j+1 continua coberto lá). Esta função
+    fica como ponto de entrada de sempre pra selecao_modelo/
+    criar_rotas_diarias/rascunhos_rota/benchmark.
     """
-    ordem_inicial = sorted(servicos, key=lambda s: _distancia_da_base(s, base_lat, base_lng, api_key),
-                           reverse=True)
-    if len(ordem_inicial) <= 2:
-        return ordem_inicial
-
-    coords = [_coords_do_servico(s, api_key) for s in ordem_inicial]
-
-    def _ponto(rota: list[int], pos: int) -> tuple[float, float]:
-        """Ponto na posição `pos` do trajeto; fora dos limites = base."""
-        if pos < 0 or pos >= len(rota):
-            return (base_lat, base_lng)
-        return coords[rota[pos]]
-
-    def _delta_2opt(rota: list[int], i: int, j: int) -> float:
-        """Variação de km ao reverter o segmento [i, j]: troca as
-        arestas (i-1 -> i) e (j -> j+1) por (i-1 -> j) e (i -> j+1)."""
-        a, b = _ponto(rota, i - 1), _ponto(rota, i)
-        c, d = _ponto(rota, j), _ponto(rota, j + 1)
-        antes = _distancia_km(*a, *b) + _distancia_km(*c, *d)
-        depois = _distancia_km(*a, *c) + _distancia_km(*b, *d)
-        return depois - antes
-
-    rota = list(range(len(ordem_inicial)))
-    melhorou = True
-    iteracoes = 0
-    while melhorou and iteracoes < MAX_ITERACOES_2OPT:
-        melhorou = False
-        iteracoes += 1
-        for i in range(1, len(rota) - 1):
-            for j in range(i + 1, len(rota)):
-                # todo o segmento (e os vizinhos das arestas trocadas,
-                # i-1 e j+1 -- é ISSO que _delta_2opt lê de verdade)
-                # precisa de coordenada -- serviço sem coordenada nunca
-                # participa de reversão. BUG corrigido 14/08: o range
-                # checado era só (i, j+1) -- não cobria i-1 nem j+1,
-                # que _delta_2opt acessa via _ponto(); quando a posição
-                # j+1 (dentro dos limites da rota) não tinha coordenada,
-                # _distancia_km(*d) estourava TypeError ("Value after *
-                # must be an iterable, not NoneType") -- descoberto pelo
-                # teste isolado dos modelos novos (agrupar_por_cep/
-                # agrupar_por_kmeans), mas o bug já existia nos 3
-                # modelos originais (afeta qualquer rota cujo pedido
-                # mais PRÓXIMO da base -- último da ordem farthest-first
-                # -- não tenha coordenada geocodificada).
-                vizinhos = [k for k in (i - 1, j + 1) if 0 <= k < len(rota)]
-                if any(coords[rota[k]] is None for k in range(i, j + 1)) or \
-                   any(coords[rota[k]] is None for k in vizinhos):
-                    continue
-                if _delta_2opt(rota, i, j) < -0.01:  # melhoria significativa (> 10m)
-                    rota[i:j + 1] = reversed(rota[i:j + 1])
-                    melhorou = True
-
-    return [ordem_inicial[idx] for idx in rota]
+    return ordenar_com_janelas(servicos, base_lat, base_lng, api_key)
 
 
 def agrupar_por_cep(servicos: list[dict], base_lat: float, base_lng: float,

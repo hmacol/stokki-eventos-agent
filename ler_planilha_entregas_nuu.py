@@ -136,6 +136,16 @@ def _garantir_tabelas():
     except sqlite3.OperationalError as e:
         if "duplicate column" not in str(e).lower():
             raise
+    # Migração 09/09: a planilha nunca informou hora, mas até aqui todo
+    # registro dela saía com 08:00-18:00 chumbado. Agora hora não
+    # informada fica NULL (a roteirização passou a respeitar a janela e
+    # não pode tratar chute como janela real). Idempotente: só zera o
+    # par chumbado de origem PLANILHA_NUU; hora real extraída do texto
+    # da AGENDA (extrair_hora_agenda) nunca é 08:00-18:00 exatos.
+    conn.execute("""
+        UPDATE agendamentos_pedido SET horario_inicio_agendado = NULL, horario_fim_agendado = NULL
+        WHERE origem = 'PLANILHA_NUU' AND horario_inicio_agendado = '08:00' AND horario_fim_agendado = '18:00'
+    """)
     conn.commit()
     conn.close()
 
@@ -388,6 +398,75 @@ def extrair_data_agenda(texto: str, hoje: date | None = None) -> str | None:
     return resultado.strftime("%d/%m/%Y")
 
 
+# Hora dentro do texto da coluna AGENDA (09/09 -- até então a hora era
+# CHUTADA como 08:00-18:00 pra todo agendamento da planilha, e a
+# roteirização passou a respeitar a janela de horário; um chute
+# gravado como se fosse janela real distorceria as rotas). Padrões:
+# "às 14h", "14:30", "14h30", "entre 8h e 12h", "8h às 12h", "até 11h",
+# "após 14h"/"a partir das 14h", "manhã", "tarde". Nada disso no texto
+# -> None (hora NÃO informada, fica NULL no banco).
+_PADRAO_HORA = r"(\d{1,2})(?::(\d{2})|h(\d{2})?)"
+# 1º lado de um intervalo pode vir sem "h"/":" ("das 8 as 12h")
+_PADRAO_HORA_OPC = r"(\d{1,2})(?::(\d{2})|h(\d{2})?)?"
+
+
+def _hhmm(h: str, m: str | None) -> str | None:
+    hora, minuto = int(h), int(m or 0)
+    if hora > 23 or minuto > 59:
+        return None
+    return f"{hora:02d}:{minuto:02d}"
+
+
+def _mais_uma_hora(hhmm: str) -> str:
+    hora, minuto = map(int, hhmm.split(":"))
+    return f"{min(hora + 1, 23):02d}:{minuto:02d}"
+
+
+def extrair_hora_agenda(texto: str) -> tuple[str, str] | None:
+    """(inicio, fim) em HH:MM quando o texto da AGENDA traz hora; None
+    quando não traz (a NUU normalmente só informa o dia)."""
+    texto = _remover_acentos((texto or "").lower())
+    if not texto:
+        return None
+    # célula Excel com tipo Data vira '2026-08-12 00:00:00' -- o
+    # '00:00:00' é só meia-noite implícita, não hora informada; hora
+    # diferente de meia-noite nessa célula é hora de verdade
+    m_iso = re.search(r"\d{4}-\d{1,2}-\d{1,2}(?:[ t](\d{2}):(\d{2})(?::\d{2})?)?", texto)
+    if m_iso:
+        texto = texto[:m_iso.start()] + " " + texto[m_iso.end():]
+        if m_iso.group(1) and (m_iso.group(1), m_iso.group(2)) != ("00", "00"):
+            ini = _hhmm(m_iso.group(1), m_iso.group(2))
+            return (ini, _mais_uma_hora(ini)) if ini else None
+    # intervalo: "entre 8h e 12h", "8h as 12h", "08:00 - 12:00", "das 8 as 12h"
+    # (?<![\d/.:]) impede que o "08" de "13/08 as 14h" vire início do intervalo
+    m = re.search(rf"(?<![\d/.:]){_PADRAO_HORA_OPC}\s*(?:as|a|-|e|ate)\s*(?:as\s+)?{_PADRAO_HORA}\b", texto)
+    if m:
+        ini = _hhmm(m.group(1), m.group(2) or m.group(3))
+        fim = _hhmm(m.group(4), m.group(5) or m.group(6))
+        if ini and fim and ini < fim:
+            return ini, fim
+    m = re.search(rf"\bate\s+(?:as\s+)?{_PADRAO_HORA}\b", texto)
+    if m:
+        fim = _hhmm(m.group(1), m.group(2) or m.group(3))
+        return ("00:00", fim) if fim else None
+    m = re.search(rf"\b(?:apos|a partir(?: das| de)?|depois das)\s+{_PADRAO_HORA}\b", texto)
+    if m:
+        ini = _hhmm(m.group(1), m.group(2) or m.group(3))
+        return (ini, "23:59") if ini else None
+    # hora única: "às 14h", "14:30", "14h30" (o "h" ou ":" evita casar
+    # com os dígitos da data "13/08")
+    m = re.search(rf"(?:\bas\s+)?\b(\d{{1,2}})(?::(\d{{2}})|h(\d{{2}})?)\b", texto)
+    if m and (m.group(2) is not None or "h" in m.group(0)):
+        ini = _hhmm(m.group(1), m.group(2) or m.group(3))
+        if ini:
+            return ini, _mais_uma_hora(ini)
+    if "manha" in texto:
+        return "08:00", "12:00"
+    if "tarde" in texto:
+        return "13:00", "18:00"
+    return None
+
+
 def extrair_endereco_novo(texto: str) -> str | None:
     """
     Extrai o endereço de entrega quando a OBSERVAÇÃO indica que é
@@ -509,7 +588,8 @@ def _cnpj_e_email_embarcador_nuu() -> tuple[str, str]:
 
 
 def _registrar_agendamento_confirmado(codigo_pedido: str, data_agendada: str, servico: dict,
-                                      vuupt: VuuptClient, cnpj_emb: str, email_emb: str) -> bool:
+                                      vuupt: VuuptClient, cnpj_emb: str, email_emb: str,
+                                      hora_agendada: tuple[str, str] | None = None) -> bool:
     """
     Grava em agendamentos_pedido como já CONFIRMADO (status='RESPONDIDO')
     -- reaproveita a mesma tabela/coluna que agendamento_confirmacao.py e
@@ -517,6 +597,11 @@ def _registrar_agendamento_confirmado(codigo_pedido: str, data_agendada: str, se
     serviço) e atualizar_agendamentos_confirmados.py (em serviço já
     existente) aplicam essa data no VUUPT automaticamente, sem duplicar
     essa lógica aqui.
+
+    `hora_agendada` (09/09): (inicio, fim) quando o texto da AGENDA
+    trouxe hora (extrair_hora_agenda); None = hora NÃO informada, fica
+    NULL (quem aplica na VUUPT usa o padrão 08:00-18:00 só no payload; a
+    roteirização sabe que NULL não é janela).
 
     Uma confirmação já recebida por e-mail (resposta humana real, origem
     != 'PLANILHA_NUU') NUNCA é sobrescrita pela planilha -- a planilha só
@@ -544,12 +629,14 @@ def _registrar_agendamento_confirmado(codigo_pedido: str, data_agendada: str, se
             cnpj_destinatario = customer.get("code", "") or ""
 
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hora_ini, hora_fim = hora_agendada if hora_agendada else (None, None)
+    texto_hora = f" {hora_ini}-{hora_fim}" if hora_agendada else ""
     conn.execute("""
         INSERT INTO agendamentos_pedido
             (pedido, cnpj_destinatario, nome_destinatario, cnpj_embarcador, email_embarcador,
              status, data_agendada, horario_inicio_agendado, horario_fim_agendado,
              resposta_texto, solicitado_em, respondido_em, origem)
-        VALUES (?, ?, ?, ?, ?, 'RESPONDIDO', ?, '08:00', '18:00', ?, ?, ?, 'PLANILHA_NUU')
+        VALUES (?, ?, ?, ?, ?, 'RESPONDIDO', ?, ?, ?, ?, ?, ?, 'PLANILHA_NUU')
         ON CONFLICT(pedido) DO UPDATE SET
             status = 'RESPONDIDO', data_agendada = excluded.data_agendada,
             horario_inicio_agendado = excluded.horario_inicio_agendado,
@@ -557,7 +644,7 @@ def _registrar_agendamento_confirmado(codigo_pedido: str, data_agendada: str, se
             resposta_texto = excluded.resposta_texto, respondido_em = excluded.respondido_em,
             origem = 'PLANILHA_NUU'
     """, (codigo_pedido, cnpj_destinatario, nome_destinatario, cnpj_emb, email_emb,
-         data_agendada, f"[Planilha NUU] AGENDA={data_agendada}", agora, agora))
+         data_agendada, hora_ini, hora_fim, f"[Planilha NUU] AGENDA={data_agendada}{texto_hora}", agora, agora))
     conn.commit()
     conn.close()
     return True
@@ -628,6 +715,7 @@ def _reprocessar_pendencias(vuupt: VuuptClient, cnpj_emb: str, email_emb: str, m
         # 24/04' que já foi aceito como 24/04/2027) mesmo quando o
         # casamento com o pedido ainda não resolve nesta tentativa.
         data_agenda = extrair_data_agenda(row["agenda_bruto"])
+        hora_agenda = extrair_hora_agenda(row["agenda_bruto"])
         correspondencia = casar_nf_com_pedido(row["numero_nf"], vuupt)
         codigo_pedido = correspondencia["codigo_pedido"] if correspondencia else None
         metodo = correspondencia["metodo"] if correspondencia else None
@@ -653,10 +741,10 @@ def _reprocessar_pendencias(vuupt: VuuptClient, cnpj_emb: str, email_emb: str, m
                        f"aplicaria agendamento {data_agenda}.")
             aplicados += 1
         elif _registrar_agendamento_confirmado(codigo_pedido, data_agenda, correspondencia["servico"], vuupt,
-                                               cnpj_emb, email_emb):
+                                               cnpj_emb, email_emb, hora_agenda):
             aplicados += 1
             logger.info(f"  [retentativa] NF {row['numero_nf']} -> {codigo_pedido}: agendamento "
-                       f"{data_agenda} registrado.")
+                       f"{data_agenda}{' ' + '-'.join(hora_agenda) if hora_agenda else ''} registrado.")
     return aplicados
 
 
@@ -693,6 +781,7 @@ def processar_planilhas_entregas(config: dict, modo_teste: bool = False) -> dict
                 casados += 1
 
             data_agenda = extrair_data_agenda(linha["agenda_bruto"])
+            hora_agenda = extrair_hora_agenda(linha["agenda_bruto"])
             endereco = extrair_endereco_novo(linha["observacao_bruto"])
 
             item = {**linha, "data_agendamento_extraida": data_agenda, "endereco_extraido": endereco,
@@ -709,10 +798,10 @@ def processar_planilhas_entregas(config: dict, modo_teste: bool = False) -> dict
                                f"aplicaria agendamento {data_agenda}.")
                     agendamentos_aplicados += 1
                 elif _registrar_agendamento_confirmado(codigo_pedido, data_agenda, servico, vuupt,
-                                                       cnpj_emb, email_emb):
+                                                       cnpj_emb, email_emb, hora_agenda):
                     agendamentos_aplicados += 1
-                    logger.info(f"  NF {linha['numero_nf']} -> {codigo_pedido}: agendamento {data_agenda} "
-                               f"registrado (via planilha).")
+                    logger.info(f"  NF {linha['numero_nf']} -> {codigo_pedido}: agendamento {data_agenda}"
+                               f"{' ' + '-'.join(hora_agenda) if hora_agenda else ''} registrado (via planilha).")
             elif data_agenda and not codigo_pedido:
                 logger.warning(f"  NF {linha['numero_nf']}: tem data de agendamento ({data_agenda}) na "
                               f"planilha mas não casou com nenhum pedido no VUUPT -- revisão manual.")

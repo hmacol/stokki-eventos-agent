@@ -88,6 +88,11 @@ def identificar_pendentes(servicos: list[dict], conjunto_agendamento: set[str],
             continue
         documento = customer.get("code", "")
         if tem_agendamento_fn(documento, conjunto_agendamento):
+            # destinatário guardado no próprio dict (09/09): o e-mail
+            # urgente registra a solicitação em agendamentos_pedido, pra
+            # resposta dele ser lida (ler_respostas_agendamento.py)
+            s["_destinatario_doc"] = documento
+            s["_destinatario_nome"] = customer.get("name", "") or ""
             pendentes.append(s)
     return pendentes
 
@@ -98,25 +103,41 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT sender_id, nome_remetente, apelido, email FROM interno WHERE sender_id IS NOT NULL"
+        "SELECT sender_id, nome_remetente, apelido, email, cnpj_embarcador FROM interno WHERE sender_id IS NOT NULL"
     ).fetchall()
     conn.close()
     embs = {}
     for r in rows:
         raw = r["email"] or ""
         emails = [e.strip() for e in re.split(r"[,;\t]+", raw) if e.strip() and "@" in e]
-        embs[r["sender_id"]] = {"nome": r["apelido"] or r["nome_remetente"] or "", "emails": emails}
+        embs[r["sender_id"]] = {"nome": r["apelido"] or r["nome_remetente"] or "", "emails": emails,
+                                "cnpj": "".join(c for c in str(r["cnpj_embarcador"] or "") if c.isdigit())}
     return embs
 
 
-def _montar_conteudo(nome_remetente: str, pedidos: list[dict]) -> str:
+def _codigo_pedido(servico: dict) -> str:
+    return (servico.get("code", "") or "").lstrip("#")
+
+
+def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "") -> str:
     linhas = "".join(f"""
     <tr>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (p.get('code','') or '').lstrip('#'))}</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + _codigo_pedido(p))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((p.get('title','') or '')[:60])}</td>
     </tr>""" for p in pedidos)
 
-    return f"""
+    # Marcadores ocultos (09/09): mesmo formato do e-mail de solicitação
+    # por pedido (agendamento_confirmacao.py) -- ler_respostas_agendamento
+    # .py acha a thread pelo(s) pedido(s) e aplica a resposta. Sem isso a
+    # resposta a ESTE e-mail era ignorada.
+    marcador = (
+        '<div style="display:none">'
+        + (f"[[AGENTE_AGENDAMENTO_EMBARCADOR:{cnpj_emb}]]" if cnpj_emb else "")
+        + "".join(f"[[PEDIDO:{_codigo_pedido(p)}]]" for p in pedidos)
+        + "</div>"
+    )
+
+    return f"""{marcador}
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">URGENTE</p>
 <p style="margin:0 0 16px 0;font-size:20px;font-weight:800;color:{COR_PRIMARIA};">
   Confirmação de agendamento pendente
@@ -133,6 +154,11 @@ def _montar_conteudo(nome_remetente: str, pedidos: list[dict]) -> str:
 <th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Pedido</th>
 <th style="padding:8px 14px;text-align:left;font-size:11px;color:{COR_PRIMARIA};">Descrição</th>
 </tr></thead><tbody>{linhas}</tbody></table>
+<p style="margin:16px 0 0 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
+  Por favor, <strong>responda este e-mail</strong> informando, para cada pedido, a <strong>data</strong> e o
+  <strong>horário</strong> em que o destinatário recebe (ex: "PS-12345 dia 25/06 das 8h às 12h") — nosso
+  sistema atualiza os pedidos automaticamente e a rota é montada respeitando esse horário.
+</p>
 <p style="margin:20px 0 0 0;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
   Atenciosamente,<br><strong>Freshlog Logística</strong>
 </p>
@@ -159,7 +185,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
             continue
 
         assunto = f"[URGENTE] Confirmação de agendamento necessária — {len(pedidos)} pedido(s)"
-        conteudo = _montar_conteudo(emb["nome"], pedidos)
+        conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""))
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
                               cor_acento=COR_ERRO)
         destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
@@ -170,7 +196,28 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            if not modo_teste:
+                _registrar_pendentes(pedidos, emb)
         else:
             falhas += 1
 
     return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email}
+
+
+def _registrar_pendentes(pedidos: list[dict], emb: dict) -> None:
+    """Registra cada pedido do e-mail urgente como solicitação PENDENTE em
+    agendamentos_pedido (mesma tabela/limitador de agendamento_
+    confirmacao.py) -- é o que permite ler_respostas_agendamento.py
+    casar a resposta com o pedido. Pedido já RESPONDIDO não muda de
+    status (ON CONFLICT só atualiza solicitado_em/e-mail). Falha aqui
+    não afeta o envio, que já aconteceu."""
+    try:
+        from agendamento_confirmacao import _registrar_solicitacao
+        for p in pedidos:
+            _registrar_solicitacao(
+                _codigo_pedido(p), p.get("_destinatario_doc", "") or "", p.get("_destinatario_nome", "") or "",
+                emb.get("cnpj", "") or "", (emb.get("emails") or [""])[0],
+            )
+    except Exception as e:
+        logger.warning(f"Falha ao registrar os pedidos do e-mail urgente como pendentes (resposta pode "
+                       f"não casar automaticamente): {e}")

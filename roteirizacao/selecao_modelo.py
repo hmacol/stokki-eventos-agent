@@ -46,6 +46,7 @@ from roteirizacao_dados import (
     calcular_km_estimado, extrair_volume_caixas, particionar_por_macro_regiao,
     caixas_e_enderecos, definir_coords_base, estimar_tempo_rota,
     exige_orcamento_horas, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
+    janela_respeitada, simular_horarios, _horas_para_hhmm,
 )
 from otimizacao_rotas import (
     agrupar_por_sweep, agrupar_por_savings, agrupar_por_cep, agrupar_por_kmeans, ordenar_2opt,
@@ -87,6 +88,17 @@ def _validar(servicos, sublotes, tamanho_maximo, volume_maximo, api_key=None):
             tempo = estimar_tempo_rota(sublote, api_key)
             assert tempo <= ROTA_TEMPO_MAXIMO_HORAS, \
                 f"sublote com {tempo:.1f}h estimadas (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h)"
+            # Janela de horário do cliente (Hugo, 09/09): na ordem FINAL,
+            # nenhuma parada com janela pode ficar fora dela além da
+            # tolerância (exceto atraso intrínseco, ver janela_respeitada).
+            if not janela_respeitada(sublote, api_key):
+                sim = simular_horarios(sublote, api_key)
+                fora = ", ".join(
+                    f"{sublote[i].get('code', '?')} chega ~{_horas_para_hhmm(sim['chegadas'][i])} "
+                    f"(janela {sublote[i].get('_janela_inicio')}-{sublote[i].get('_janela_fim')})"
+                    for i in sim["fora_janela"]
+                )
+                raise AssertionError(f"sublote com parada fora da janela de horário: {fora or 'duração com esperas acima do orçamento'}")
     ids_originais = {s["id"] for s in servicos}
     ids_alocados = [s["id"] for sub in sublotes for s in sub]
     assert len(ids_alocados) == len(set(ids_alocados)), "pedido duplicado entre sublotes"

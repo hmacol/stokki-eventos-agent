@@ -87,6 +87,7 @@ from roteirizacao_dados import (
     elegivel_para_data, calcular_km_estimado, particionar_por_macro_regiao, caixas_e_enderecos,
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
+    injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -161,6 +162,24 @@ SEM_LIMITE_PARADAS = 10_000
 def _carregar_config() -> dict:
     with open(_RAIZ_PROJETO / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _preparar_janelas(servicos: list[dict], config: dict) -> int:
+    """Janela de horário de entrega por pedido (Hugo, 09/09): injeta
+    '_janela_inicio/_fim/_fonte' em cada serviço (roteirizacao_dados.
+    injetar_janelas -- agendamento confirmado com hora em
+    agendamentos_pedido > scheduled_start/end real da Vuupt > horário de
+    atendimento já injetado em '_horario_atendimento_*') e registra a
+    hora de saída da base do simulador (config.yaml roteirizacao.
+    hora_saida_base, padrão 10:00 = o start_at das rotas). Chamar DEPOIS
+    do laço que injeta nível/horário de atendimento. Retorna quantos
+    pedidos ficaram com janela (só pra log)."""
+    definir_hora_saida_base((config.get("roteirizacao") or {}).get("hora_saida_base"))
+    com_janela = injetar_janelas(servicos, carregar_janelas_confirmadas(DB_PATH))
+    if com_janela:
+        logger.info(f"{com_janela} de {len(servicos)} pedido(s) com janela de horário de entrega -- "
+                    f"sequenciamento e travas vão respeitá-la.")
+    return com_janela
 
 
 TZ_BRASILIA = timezone(timedelta(hours=-3))
@@ -357,6 +376,9 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             horario_efetivo(cnpj_destino, mapa_horarios, ajustes_manuais)
         tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
         s["_tipo_carga"] = tipo_carga
+    # janela de horário do cliente (Hugo, 09/09) -- agendamento confirmado
+    # com hora > scheduled_* real > horário de atendimento acima
+    _preparar_janelas(servicos, config)
 
     particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
 
@@ -589,6 +611,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
 
             tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
             s["_tipo_carga"] = tipo_carga
+        _preparar_janelas(servicos, config)
 
         # Partição por tipo de carga (pedido do Hugo, 10/08: "as entregas
         # Secas deveriam ser roteirizadas separadas das refrigeradas e

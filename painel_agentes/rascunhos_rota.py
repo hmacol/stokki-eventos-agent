@@ -123,6 +123,15 @@ def _conectar() -> sqlite3.Connection:
     if "horario_atendimento_fim" not in colunas:
         conn.execute("ALTER TABLE rascunhos_parada ADD COLUMN horario_atendimento_fim TEXT")
 
+    # Migração 09/09: janela EFETIVA de horário do pedido (agendamento
+    # confirmado com hora / scheduled_* real / horário de atendimento --
+    # ver roteirizacao_dados.resolver_janela) -- é o que o sequenciador
+    # e as travas respeitam; horario_atendimento_* acima continua sendo
+    # só o cadastro do cliente (editável no modal da tela).
+    for coluna in ("janela_inicio", "janela_fim", "janela_fonte"):
+        if coluna not in colunas:
+            conn.execute(f"ALTER TABLE rascunhos_parada ADD COLUMN {coluna} TEXT")
+
     # Migração pra banco criado antes de 15/08 (tipo de veículo grande,
     # ver regras/tipo_veiculo.py).
     colunas_rota = {row["name"] for row in conn.execute("PRAGMA table_info(rascunhos_rota)")}
@@ -219,7 +228,35 @@ def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict
         "volume_caixas": extrair_volume_caixas(servico),
         "horario_atendimento_inicio": horario_inicio,
         "horario_atendimento_fim": horario_fim,
+        # janela efetiva (roteirizacao_dados.injetar_janelas, 09/09)
+        "janela_inicio": servico.get("_janela_inicio"),
+        "janela_fim": servico.get("_janela_fim"),
+        "janela_fonte": servico.get("_janela_fonte"),
     }
+
+
+def _inserir_parada(conn: sqlite3.Connection, rascunho_id: int, ordem: int, parada: dict) -> None:
+    """INSERT único de rascunhos_parada (09/09 -- antes eram 6 cópias do
+    mesmo INSERT, uma por ação; a coluna nova de janela precisava entrar
+    em todas). `parada` pode ser um sqlite3.Row (mover/duplicar) ou um
+    dict processado (_parada_de_servico/_servico_para_pool)."""
+    p = dict(parada)
+    conn.execute("""
+        INSERT INTO rascunhos_parada (
+            rascunho_id, ordem, service_id, codigo, titulo, endereco,
+            latitude, longitude, sender_id, remetente_nome, destinatario_nome,
+            nivel_dificuldade, volume_caixas,
+            horario_atendimento_inicio, horario_atendimento_fim,
+            janela_inicio, janela_fim, janela_fonte
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        rascunho_id, ordem, p["service_id"], p["codigo"], p["titulo"],
+        p["endereco"], p["latitude"], p["longitude"], p["sender_id"],
+        p["remetente_nome"], p.get("destinatario_nome") or "",
+        p["nivel_dificuldade"], p["volume_caixas"],
+        p.get("horario_atendimento_inicio") or "00:00", p.get("horario_atendimento_fim") or "23:59",
+        p.get("janela_inicio"), p.get("janela_fim"), p.get("janela_fonte"),
+    ))
 
 
 def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None) -> str:
@@ -262,21 +299,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
             ))
             rascunho_id = cursor.lastrowid
             for ordem, servico in enumerate(r["sublote"]):
-                parada = _parada_de_servico(servico, remetentes_por_id)
-                conn.execute("""
-                    INSERT INTO rascunhos_parada (
-                        rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                        latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                        nivel_dificuldade, volume_caixas,
-                        horario_atendimento_inicio, horario_atendimento_fim
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
-                    parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
-                    parada["remetente_nome"], parada["destinatario_nome"],
-                    parada["nivel_dificuldade"], parada["volume_caixas"],
-                    parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
-                ))
+                _inserir_parada(conn, rascunho_id, ordem, _parada_de_servico(servico, remetentes_por_id))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
         return lote_id
@@ -417,20 +440,7 @@ def mover_parada(service_id: int, rascunho_origem_id: int, rascunho_destino_id: 
             UPDATE rascunhos_parada SET ordem = ordem + 1
             WHERE rascunho_id = ? AND ordem >= ?
         """, (rascunho_destino_id, nova_ordem))
-        conn.execute("""
-            INSERT INTO rascunhos_parada (
-                rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                nivel_dificuldade, volume_caixas,
-                horario_atendimento_inicio, horario_atendimento_fim
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            rascunho_destino_id, nova_ordem, parada["service_id"], parada["codigo"], parada["titulo"],
-            parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
-            parada["remetente_nome"], parada["destinatario_nome"],
-            parada["nivel_dificuldade"], parada["volume_caixas"],
-            parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
-        ))
+        _inserir_parada(conn, rascunho_destino_id, nova_ordem, parada)
         _tocar(conn, rascunho_origem_id)
         _tocar(conn, rascunho_destino_id)
         _recalcular_km_silencioso(conn, rascunho_origem_id)
@@ -533,7 +543,16 @@ def otimizar_sequencia(rascunho_id: int):
         if not base:
             raise ValueError("Não consegui geocodificar a base -- não dá pra otimizar sem ela.")
 
-        servicos_fake = [{"id": p["service_id"], "latitude": p["latitude"], "longitude": p["longitude"]} for p in paradas]
+        # janela/nível entram no 2-opt (09/09): mesma sequência que o
+        # pipeline automático produziria pra essas paradas
+        servicos_fake = [
+            {"id": p["service_id"], "latitude": p["latitude"], "longitude": p["longitude"],
+             "code": p["codigo"], "_nivel_dificuldade": p["nivel_dificuldade"],
+             "_janela_inicio": p["janela_inicio"], "_janela_fim": p["janela_fim"]}
+            for p in paradas
+        ]
+        from roteirizacao_dados import definir_coords_base
+        definir_coords_base(*base)
         nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
         for ordem, s in enumerate(nova_ordem):
             conn.execute(
@@ -613,20 +632,7 @@ def mover_paradas(itens: list[dict], rascunho_destino_id: int) -> int:
             if not parada:
                 continue
             conn.execute("DELETE FROM rascunhos_parada WHERE id = ?", (parada["id"],))
-            conn.execute("""
-                INSERT INTO rascunhos_parada (
-                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas,
-                    horario_atendimento_inicio, horario_atendimento_fim
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                rascunho_destino_id, prox + movidas, parada["service_id"], parada["codigo"], parada["titulo"],
-                parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
-                parada["remetente_nome"], parada["destinatario_nome"],
-                parada["nivel_dificuldade"], parada["volume_caixas"],
-                parada["horario_atendimento_inicio"], parada["horario_atendimento_fim"],
-            ))
+            _inserir_parada(conn, rascunho_destino_id, prox + movidas, parada)
             ids_destino.add(service_id)
             origens_tocadas.add(origem_id)
             movidas += 1
@@ -764,20 +770,7 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
                 (rascunho_id,),
             ).fetchone()
             ordem = row["prox"]
-        conn.execute("""
-            INSERT INTO rascunhos_parada (
-                rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                nivel_dificuldade, volume_caixas,
-                horario_atendimento_inicio, horario_atendimento_fim
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
-            parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
-            parada["remetente_nome"], parada.get("destinatario_nome", ""),
-            parada["nivel_dificuldade"], parada["volume_caixas"],
-            parada.get("horario_atendimento_inicio", "00:00"), parada.get("horario_atendimento_fim", "23:59"),
-        ))
+        _inserir_parada(conn, rascunho_id, ordem, parada)
         _tocar(conn, rascunho_id)
         _recalcular_km_silencioso(conn, rascunho_id)
         conn.commit()
@@ -976,20 +969,7 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
         ))
         rascunho_id = cursor.lastrowid
         for ordem, parada in enumerate(paradas):
-            conn.execute("""
-                INSERT INTO rascunhos_parada (
-                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas,
-                    horario_atendimento_inicio, horario_atendimento_fim
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                rascunho_id, ordem, parada["service_id"], parada["codigo"], parada["titulo"],
-                parada["endereco"], parada["latitude"], parada["longitude"], parada["sender_id"],
-                parada["remetente_nome"], parada.get("destinatario_nome", ""),
-                parada["nivel_dificuldade"], parada["volume_caixas"],
-                parada.get("horario_atendimento_inicio", "00:00"), parada.get("horario_atendimento_fim", "23:59"),
-            ))
+            _inserir_parada(conn, rascunho_id, ordem, parada)
         _recalcular_km_silencioso(conn, rascunho_id)
         conn.commit()
         return rascunho_id
@@ -1071,20 +1051,7 @@ def duplicar_rascunho(rascunho_id: int) -> int:
         ))
         novo_id = cursor.lastrowid
         for p in origem["paradas"]:
-            conn.execute("""
-                INSERT INTO rascunhos_parada (
-                    rascunho_id, ordem, service_id, codigo, titulo, endereco,
-                    latitude, longitude, sender_id, remetente_nome, destinatario_nome,
-                    nivel_dificuldade, volume_caixas,
-                    horario_atendimento_inicio, horario_atendimento_fim
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                novo_id, p["ordem"], p["service_id"], p["codigo"], p["titulo"],
-                p["endereco"], p["latitude"], p["longitude"], p["sender_id"],
-                p["remetente_nome"], p["destinatario_nome"],
-                p["nivel_dificuldade"], p["volume_caixas"],
-                p.get("horario_atendimento_inicio", "00:00"), p.get("horario_atendimento_fim", "23:59"),
-            ))
+            _inserir_parada(conn, novo_id, p["ordem"], p)
         conn.commit()
         logger.info(f"Rascunho {rascunho_id} duplicado -> {novo_id} ('{nome_copia}').")
         return novo_id
