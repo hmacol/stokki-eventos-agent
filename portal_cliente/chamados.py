@@ -130,17 +130,20 @@ _avisou_senha_vazia = False
 
 def cfg_email_chamados(config: dict) -> dict:
     """Caixa que envia e RECEBE os e-mails dos chamados. Decisão do Hugo
-    (09/09): entregas@freshlogbr.com. Enquanto a senha de app dessa caixa
-    não estiver no config, cai na seção `email:` (hugo@)."""
+    (09/09): remetente entregas@freshlogbr.com, que é ALIAS de hugo@ --
+    então o login (SMTP e IMAP) continua sendo hugo@ com a senha de app
+    dela (`usuario_login` + `senha_app` da seção email:), e o que chega em
+    entregas@ já cai na mesma caixa lida pelo leitor."""
     global _avisou_senha_vazia
     base = dict(config.get("email", {}) or {})
     propria = cfg_chamados(config).get("email", {}) or {}
-    if propria.get("remetente") and propria.get("senha_app"):
-        base.update({k: v for k, v in propria.items() if v})
-    elif propria.get("remetente") and not _avisou_senha_vazia:
+    base.update({k: v for k, v in propria.items() if v})
+    if not base.get("usuario_login"):
+        # sem usuario_login explícito, autentica com a conta da seção email:
+        base["usuario_login"] = (config.get("email", {}) or {}).get("remetente") or base.get("remetente")
+    if propria.get("remetente") and not (propria.get("senha_app") or base.get("senha_app")) and not _avisou_senha_vazia:
         _avisou_senha_vazia = True
-        logger.warning("portal_cliente.chamados.email.senha_app vazio -- usando a caixa da seção email: (%s)",
-                       base.get("remetente"))
+        logger.warning("chamados: sem senha_app nem na seção email: -- e-mails dos chamados não vão sair")
     return base
 
 
@@ -1006,7 +1009,7 @@ def processar_emails(config: dict | None = None, dias: int | None = None) -> dic
     chamados e reencaminha pro outro lado quando preciso."""
     config = config or carregar_config()
     cfg = cfg_email_chamados(config)
-    usuario, senha = cfg.get("remetente", ""), cfg.get("senha_app") or cfg.get("senha", "")
+    usuario, senha = cfg.get("usuario_login") or cfg.get("remetente", ""), cfg.get("senha_app") or cfg.get("senha", "")
     if not usuario or not senha:
         logger.warning("leitor de chamados desativado: remetente/senha_app ausentes")
         return {"lidos": 0, "gravados": 0, "ignorados": 0}

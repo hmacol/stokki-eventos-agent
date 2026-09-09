@@ -176,8 +176,11 @@ py -3 portal_cliente/chamados.py resolver <id>
 1. `git pull` e `venv/bin/pip install anthropic==1.4.0`.
 2. Colar no `config.yaml` da VPS: `portal_cliente.chamados:` (horário,
    e-mail, `forcar_destino`) e `painel_agentes.usuario_atendimento`/`senha_atendimento`.
-   Gerar a senha de app de `entregas@freshlogbr.com` e preencher
-   `chamados.email.senha_app` (enquanto vazio, usa a caixa de `email:`).
+   `entregas@` é alias de `hugo@`: `chamados.email.remetente: entregas@`,
+   `usuario_login: hugo@` e a senha de app da seção `email:` (nada novo a
+   gerar). Pra o From sair como entregas@, o alias precisa estar em
+   "Enviar e-mail como" no Gmail da hugo@; sem isso o Gmail reescreve o
+   remetente pra hugo@ (o Reply-To já vai como entregas@ de qualquer jeito).
 3. `systemctl restart portal-cliente painel-agentes` (nomes reais dos
    services do portal e do painel).
 4. `cp portal_cliente/infra/portal-cliente-chamados.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now portal-cliente-chamados`.

@@ -132,7 +132,10 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
             anexo.add_header("Content-Disposition", "attachment", filename=nome_arquivo)
             msg.attach(anexo)
 
-        usuario = config_email.get("remetente", "hugo@freshlogbr.com")
+        # usuario_login: conta que autentica no SMTP quando o remetente é um
+        # alias dela (09/09: entregas@ é alias de hugo@ -- login hugo@,
+        # From entregas@). Sem a chave, login = remetente como sempre foi.
+        usuario = config_email.get("usuario_login") or config_email.get("remetente", "hugo@freshlogbr.com")
         senha   = config_email.get("senha_app") or config_email.get("senha", "")
         host    = config_email.get("smtp_host", "smtp.gmail.com")
         port    = int(config_email.get("smtp_port", 587))
