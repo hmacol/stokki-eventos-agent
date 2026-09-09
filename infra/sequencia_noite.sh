@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
-# sequencia_noite.sh -- equivalente ao rodar_sequencial_noite.ps1
-# (StokkiEventos_SequenciaNoite, 22:00). incrementar_rotas.py FALHA DE
-# PROPOSITO se o rascunho do dia nao foi confirmado em /planejamento --
-# comportamento esperado, nao e bug (ver DOC_EXECUCAO_CLAUDE_MIGRACAO_VPS.md).
+# sequencia_noite.sh -- rodada das 22:00 na VPS (stokki-sequencia-noite.timer).
 #
-# enviar_rascunhos_pendentes.py revivido em 23/08 (Fase 3 do roadmap de
-# roteirizacao, portao automatico): roda ANTES do incrementar_rotas.py
-# de proposito -- manda pra VUUPT so o rascunho pendente aprovado na
-# nota de qualidade, o resto fica em RASCUNHO e o incrementar_rotas.py
-# continua falhando de proposito pra esses (mesma rede de seguranca de
-# antes). Nunca sai com erro por causa de rascunho reprovado -- so loga
-# e notifica por e-mail -- entao nao quebra o "set -e" da sequencia.
+# 09/09 (pedido do Hugo, a noite): a sequencia da noite DEIXOU de
+# roteirizar. Antes rodava executar_tudo.py --sem-impressao +
+# verificar_pedidos_duplicados_vuupt.py + enviar_rascunhos_pendentes.py +
+# incrementar_rotas.py. Agora roda SO estas cinco etapas, nesta ordem:
+#
+#   1. Impressao de pedidos  -- Estacao de Impressao (Em espera ->
+#                               Aguardando Transportador). Volta a rodar
+#                               a noite (o --sem-impressao de 31/08 caiu).
+#   2. Importacao de pedidos -- pipeline.py (Stokki -> VUUPT), sem filtro.
+#   3. Expedicao de pedidos  -- expedir_pedidos.py (entregues expedem na
+#                               Stokki; insucessos tratados a parte). O
+#                               e-mail de "dia limpo" tem trava de 1/dia,
+#                               entao nao repete o das 19h30.
+#   4. Documentacoes         -- processar_documentos.py (NF/boleto/CC/
+#                               agendamento -> GCS; NF no portal do cliente).
+#   5. Geracao de PDFs       -- gerar_pdf_romaneios.py --data amanha
+#                               (romaneios das rotas do dia seguinte; o
+#                               job das 04h continua regenerando "hoje").
+#
+# Sem set -e de proposito: cada etapa notifica sozinha por e-mail
+# (notificar_execucao) e uma falha nao deve impedir as seguintes --
+# em especial documentos e PDFs, que sao o motivo de rodar a noite.
 RAIZ="/opt/stokki-eventos"
 PY="$RAIZ/venv/bin/python"
 
-# 31/08 (pedido do Hugo): --sem-impressao SO AQUI na sequencia da noite --
-# a etapa da Estacao de Impressao (Em espera -> Aguardando Transportador)
-# continua rodando as 18h (sequencia_tarde.sh) e as 08:20/15:20
-# (notificar_pedidos_em_espera.py); pedidos faturados a noite ficam em
-# espera ate a rodada das 08:20 do dia seguinte.
-cd "$RAIZ" && "$PY" executar_tudo.py --sem-impressao
-cd "$RAIZ" && "$PY" verificar_pedidos_duplicados_vuupt.py
-cd "$RAIZ/roteirizacao" && "$PY" enviar_rascunhos_pendentes.py
-cd "$RAIZ/roteirizacao" && "$PY" incrementar_rotas.py
-
-# 09/09 (pedido do Hugo): documentos tambem a noite. Pedido criado depois
-# das 18h (ex.: PS-38783/38784 de 08/09 as 20:50) so ganhava DANFE anexada
-# -- e NF no portal do cliente -- na sequencia da tarde do dia seguinte.
-# Fica por ultimo e roda mesmo se o incrementar_rotas.py falhar de
-# proposito (este script nao usa set -e).
+cd "$RAIZ" && "$PY" somente_impressao.py
+cd "$RAIZ" && "$PY" pipeline.py
+cd "$RAIZ" && "$PY" expedir_pedidos.py
 cd "$RAIZ/documentos_pedido" && "$PY" processar_documentos.py
+cd "$RAIZ/roteirizacao" && "$PY" gerar_pdf_romaneios.py --data amanha

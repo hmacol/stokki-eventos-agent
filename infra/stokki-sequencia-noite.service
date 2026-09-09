@@ -1,5 +1,5 @@
 [Unit]
-Description=Stokki Eventos - Sequencia da noite (ExecutarTudo, VerificarDuplicados, IncrementarRotas)
+Description=Stokki Eventos - Sequencia da noite (Impressao, Importacao, Expedicao, Documentos, PDFs de romaneio)
 
 [Service]
 Type=oneshot
