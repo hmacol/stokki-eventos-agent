@@ -127,6 +127,63 @@ Deploy adicional: `cp portal_cliente/infra/portal-cliente-envios.service /etc/sy
 (precisa do repo `agente_importacao_stokki` em `/opt/agente-importacao-stokki` e do Chromium do Playwright no venv).
 Rodar `enviar_stokki.py --uma-vez --simular` NÃO toca a Stokki (marca como criado) — só pra teste.
 
+## Atendimento: chat, assistente e chamados (09/09)
+
+Desenho aprovado: https://claude.ai/code/artifact/f947025c-4465-464c-be0b-7d1db42f1f06
+
+- **Chat no canto da tela** (`templates/_widget_atendimento.html` +
+  `static/atendimento.js`): o cliente fala com a Fresh Log sem sair do
+  acompanhamento. Rotas em `chamados_web.py`; regras e dados em
+  `chamados.py` (tabelas `portal_chamados`, `portal_chamados_mensagens`,
+  `portal_atendentes`; anexos em `dados/chamados/<id>/`).
+- **Assistente de triagem** (`assistente.py`, Claude via SDK `anthropic`,
+  chave `anthropic.api_key`): pergunta a área e o pedido/NF, consulta os
+  dados do próprio cliente (`dados_cliente.montar_dia`) e tenta resolver
+  sozinho; se não der, monta assunto + resumo e chama o atendente. Nunca
+  promete ação operacional. Modelo em `portal_cliente.chamados.modelo_assistente`.
+- **Horário** (`portal_cliente.chamados.horario`): seg a sex 08:30–17:00,
+  almoço 13:00–14:00. Fora disso, ou sem atendente ONLINE na tela do
+  painel (heartbeat de 3 min), o chat avisa e sugere **deixar um chamado**.
+- **Tela interna** `/painel/atendimento` (`painel_agentes/atendimento_chamados.py`
+  + `templates/atendimento.html`): fila (chat + e-mail), conversa com o
+  resumo do assistente, contexto do cliente e do pedido. Níveis `total`,
+  `operador` e o novo `atendimento` (`painel_agentes.usuario_atendimento`).
+  O atendente informa o nome na tela e o status Online / Almoço / Offline.
+- **E-mail**: mensagem do cliente que ninguém está vendo ao vivo → aviso
+  pra `chamados.email_atendimento` (entregas@); resposta da equipe que o
+  cliente não está vendo ao vivo → e-mail pro cliente; ao resolver →
+  histórico completo. Assunto `[Chamado #N] …` + marcador `[[CHAMADO:N]]`.
+  Quem responde o e-mail (cliente ou equipe) é lido por IMAP da caixa
+  `chamados.email.remetente` pelo worker `chamados.py ler --loop`
+  (`infra/portal-cliente-chamados.service`, a cada 3 min). Só aceita
+  remetente do cliente do chamado ou dos `dominios_equipe`.
+- **Piloto**: `chamados.forcar_destino` redireciona TODOS os e-mails dos
+  chamados pra um endereço só; esvaziar quando liberar pros clientes.
+
+Situações: `COM_ASSISTENTE` → `NA_FILA` → `EM_ATENDIMENTO` (chat ao vivo)
+ou `AGUARDANDO_FL` ↔ `RESPONDIDO` (assíncrono) → `RESOLVIDO` (nova
+mensagem reabre).
+
+```
+py -3 portal_cliente/chamados.py listar [--todos]
+py -3 portal_cliente/chamados.py ler                # uma leitura da caixa
+py -3 portal_cliente/chamados.py responder <id> "texto" --nome Ana
+py -3 portal_cliente/chamados.py resolver <id>
+```
+
+### Deploy do atendimento (VPS)
+
+1. `git pull` e `venv/bin/pip install anthropic==1.4.0`.
+2. Colar no `config.yaml` da VPS: `portal_cliente.chamados:` (horário,
+   e-mail, `forcar_destino`) e `painel_agentes.usuario_atendimento`/`senha_atendimento`.
+   Gerar a senha de app de `entregas@freshlogbr.com` e preencher
+   `chamados.email.senha_app` (enquanto vazio, usa a caixa de `email:`).
+3. `systemctl restart portal-cliente painel-agentes` (nomes reais dos
+   services do portal e do painel).
+4. `cp portal_cliente/infra/portal-cliente-chamados.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now portal-cliente-chamados`.
+5. Conferir: `curl -s https://app.freshhub.com.br/cliente/api/atendimento/estado` (401 esperado sem login) e
+   `journalctl -u portal-cliente-chamados -n 20`.
+
 ## Limites conhecidos (v1)
 
 - Máscara de envio: o `PS-xxxxx` do pedido recém-criado depende da busca na

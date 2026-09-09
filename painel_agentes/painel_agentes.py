@@ -150,6 +150,13 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_galpao and senha_galpao and hmac.compare_digest(usuario, usuario_galpao) \
             and hmac.compare_digest(senha, senha_galpao):
         return "galpao"
+    # Nível "atendimento" (09/09, Hugo): só a tela /atendimento (chat e
+    # chamados do portal do cliente). Total e operador também a acessam.
+    usuario_atendimento = cfg_painel.get("usuario_atendimento")
+    senha_atendimento = cfg_painel.get("senha_atendimento")
+    if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
+            and hmac.compare_digest(senha, senha_atendimento):
+        return "atendimento"
     return None
 
 
@@ -356,7 +363,8 @@ def login():
             session["usuario"] = usuario
             # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
             # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms")}.get(nivel) or url_for("torre")
+            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
+                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -2368,6 +2376,14 @@ def wms_etiquetas_pdf():
     finally:
         conn.close()
     return Response(pdf, mimetype="application/pdf", headers={"Content-Disposition": f'inline; filename="{nome}"'})
+
+
+# ── Atendimento (chat + chamados do portal do cliente), 09/09 ─────────────────
+# Rotas em atendimento_chamados.py (mesmo padrão do portal: módulo separado
+# que recebe os decoradores daqui; "atendimento" a seco colide com o
+# pacote atendimento/ da raiz, o WhatsApp+e-mail).
+import atendimento_chamados as _atendimento_web
+_atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem, carregar_config=_carregar_config)
 
 
 if __name__ == "__main__":

@@ -702,6 +702,11 @@ def exportar_xlsx():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ── Atendimento (chat + chamados), 09/09 -- rotas em chamados_web.py ──────────
+import chamados_web
+chamados_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=exige_mesma_origem, config=_CONFIG)
+
+
 @app.errorhandler(404)
 def _404(_e):
     if request.path.startswith("/api/"):

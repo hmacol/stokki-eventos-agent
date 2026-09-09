@@ -87,7 +87,8 @@ def envelope_html(conteudo: str, rodape: str = "Esta e uma mensagem automatica d
 
 
 def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config_email: dict,
-                 cc: list[str] | None = None, anexos: list[tuple[Path, str]] | None = None) -> bool:
+                 cc: list[str] | None = None, anexos: list[tuple[Path, str]] | None = None,
+                 cabecalhos_extra: dict | None = None) -> bool:
     """
     Envia um e-mail HTML via SMTP (mesmo padrão de notificar_pedidos_em_espera.py).
 
@@ -95,9 +96,12 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
     smtp_host, smtp_port). cc: e-mails em cópia (opcional). anexos: lista de
     (caminho_arquivo, nome_arquivo) pra anexar como MIMEApplication (opcional
     -- pedido do Hugo, 13/08, pra notificação de transportadoras com XML da
-    NF-e, ver notificacao_transportadoras/). Retorna True em sucesso, False
-    em falha (logada, nunca levanta exceção — quem chama decide o que fazer
-    com o retorno).
+    NF-e, ver notificacao_transportadoras/). cabecalhos_extra: cabeçalhos
+    adicionais (Message-ID, In-Reply-To, References, Reply-To...) -- usado
+    pelos chamados do portal do cliente (09/09) pra manter a conversa
+    encadeada no e-mail; valores passam por sanitizar_cabecalho. Retorna
+    True em sucesso, False em falha (logada, nunca levanta exceção — quem
+    chama decide o que fazer com o retorno).
     """
     try:
         msg = MIMEMultipart("related")
@@ -106,6 +110,9 @@ def enviar_email(destinatarios: list[str], assunto: str, corpo_html: str, config
         msg["To"]      = ", ".join(destinatarios)
         if cc:
             msg["Cc"] = ", ".join(cc)
+        for chave, valor in (cabecalhos_extra or {}).items():
+            if valor:
+                msg[chave] = sanitizar_cabecalho(valor)
 
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(corpo_html, "html", "utf-8"))

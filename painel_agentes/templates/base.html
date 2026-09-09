@@ -290,7 +290,7 @@
         <span class="rotulo">Agentes</span>
       </a>
       {% endif %}
-      {% if session.get('nivel_acesso') != 'expedicao' %}
+      {% if session.get('nivel_acesso') not in ('expedicao', 'atendimento') %}
       <a href="{{ url_for('torre') }}" class="{{ 'ativo' if request.endpoint == 'torre' else '' }}" title="Torre de Controle">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 8v9M10 8a2 2 0 100-4 2 2 0 000 4z"/><path d="M6.5 6.5a5 5 0 000 7M13.5 6.5a5 5 0 010 7"/><path d="M4 4a8 8 0 000 12M16 4a8 8 0 010 12"/></svg></span>
         <span class="rotulo">Torre de Controle</span>
@@ -300,17 +300,25 @@
         <span class="rotulo">Planejamento de Rotas</span>
       </a>
       {% endif %}
+      {% if session.get('nivel_acesso') != 'atendimento' %}
       <a href="{{ url_for('expedicao') }}" class="{{ 'ativo' if request.endpoint == 'expedicao' else '' }}" title="Expedição">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="1.5"/><path d="M7 8h6M7 11.2h6M7 14.4h3.5"/></svg></span>
         <span class="rotulo">Expedição</span>
       </a>
+      {% endif %}
       {% if session.get('nivel_acesso') in ('total', 'operador') %}
       <a href="{{ url_for('wms') }}" class="{{ 'ativo' if request.endpoint == 'wms' else '' }}" title="Galpão (endereçamento)">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L10 4l6.5 4.5V16h-13z"/><path d="M7 16v-4.5h6V16"/><path d="M8.5 9.2h3"/></svg></span>
         <span class="rotulo">Galpão</span>
       </a>
       {% endif %}
-      {% if session.get('nivel_acesso') != 'expedicao' %}
+      {% if session.get('nivel_acesso') in ('total', 'operador', 'atendimento') %}
+      <a href="{{ url_for('atendimento') }}" class="{{ 'ativo' if request.endpoint == 'atendimento' else '' }}" title="Atendimento">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 12.5a1.5 1.5 0 01-1.5 1.5H7l-3.5 3V5A1.5 1.5 0 015 3.5h10.5A1.5 1.5 0 0117 5z"/><path d="M7 8h6M7 10.8h4"/></svg></span>
+        <span class="rotulo">Atendimento</span>
+      </a>
+      {% endif %}
+      {% if session.get('nivel_acesso') not in ('expedicao', 'atendimento') %}
       <a href="{{ url_for('motoristas') }}" class="{{ 'ativo' if request.endpoint == 'motoristas' else '' }}" title="Motoristas">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/></svg></span>
         <span class="rotulo">Motoristas</span>

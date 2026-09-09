@@ -200,6 +200,7 @@
   {# Máscara de envio de pedidos (XML → Stokki), 08/09 -- mesma tela, outra vista #}
   {% include "_envios.html" %}
 </main>
+{% if cliente and not equipe %}{% include "_widget_atendimento.html" %}{% endif %}
 {% endblock %}
 
 {% block script_extra %}

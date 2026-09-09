@@ -1,0 +1,126 @@
+{# Widget de atendimento (chat no canto da tela) -- pedido do Hugo, 09/09.
+   Incluído no fim do acompanhamento.html só pra cliente logado (não pra
+   equipe operando como cliente). Lógica em static/atendimento.js; dados
+   em chamados_web.py. #}
+<style>
+  .atd-balao { position: fixed; right: 24px; bottom: 22px; z-index: 40; display: flex; align-items: center; gap: 10px; }
+  .atd-balao .dica { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 8px 12px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.14); display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+  .atd-balao .dica b { font-weight: 700; } .atd-balao .dica span { color: var(--texto-suave); font-size: 11.5px; }
+  .atd-balao .bola { width: 56px; height: 56px; border-radius: 100px; background: #141428; color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 28px rgba(0,0,0,0.28); position: relative; cursor: pointer; border: none; }
+  .atd-balao .bola svg { width: 24px; height: 24px; }
+  .atd-badge { position: absolute; top: -2px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 100px; background: var(--acento); color: #0B0E14; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; border: 2px solid var(--fundo); }
+  .atd-widget { position: fixed; right: 24px; bottom: 22px; z-index: 41; width: 380px; height: 620px; max-height: calc(100vh - 40px); max-width: calc(100vw - 24px); background: var(--fundo); border: 1px solid var(--borda); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 18px 48px rgba(0,0,0,0.28); font-size: 12.5px; color: var(--texto); }
+  .atd-cab { background: #141428; color: #fff; padding: 12px 14px; display: flex; align-items: center; gap: 10px; flex: none; }
+  .atd-cab .av { width: 34px; height: 34px; border-radius: 9px; background: #0EA575; color: #fff; font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .atd-cab .tit { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .atd-cab .tit b { font-size: 13.5px; font-weight: 700; }
+  .atd-cab .st { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #2FD9AE; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .atd-cab .st i { width: 8px; height: 8px; border-radius: 100px; background: currentColor; flex: none; }
+  .atd-cab .st.almoco, .atd-cab .st.ausente { color: #F0AA45; } .atd-cab .st.fechado { color: #A9B4C7; }
+  .atd-cab button { background: none; border: none; color: #C7C7E0; cursor: pointer; padding: 4px; display: flex; }
+  .atd-cab button svg { width: 16px; height: 16px; }
+  .atd-abas { display: flex; border-bottom: 1px solid var(--borda); background: var(--superficie); flex: none; }
+  .atd-abas button { flex: 1; text-align: center; font-size: 12px; font-weight: 600; padding: 9px 0; color: var(--texto-suave); border: none; background: none; border-bottom: 2px solid transparent; cursor: pointer; display: inline-flex; justify-content: center; gap: 6px; align-items: center; }
+  .atd-abas button.ativa { color: var(--texto); border-bottom-color: var(--acento); }
+  .atd-abas button em { font-style: normal; font-size: 10.5px; background: var(--acento); color: #0B0E14; border-radius: 100px; padding: 0 6px; font-weight: 800; }
+  .atd-corpo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+  .atd-msg { display: flex; gap: 8px; max-width: 88%; align-self: flex-start; }
+  .atd-msg.eu { flex-direction: column; align-items: flex-end; align-self: flex-end; max-width: 84%; gap: 3px; }
+  .atd-msg .av { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: none; margin-top: 2px; font-weight: 800; font-size: 11px; }
+  .atd-msg .av.bot { background: var(--rota-bg); color: var(--st-rota); } .atd-msg .av.bot svg { width: 15px; height: 15px; }
+  .atd-msg .av.fl { background: #0EA575; color: #fff; }
+  .atd-msg .col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .atd-bolha { background: var(--superficie); border: 1px solid var(--borda); border-radius: 4px 14px 14px 14px; padding: 9px 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .atd-msg.eu .atd-bolha { background: var(--botao-bg); color: var(--botao-texto); border-color: transparent; border-radius: 14px 14px 4px 14px; }
+  .atd-meta { font-size: 10.5px; color: var(--texto-suave); display: flex; gap: 5px; align-items: center; }
+  .atd-sistema { align-self: center; text-align: center; font-size: 11px; color: var(--texto-suave); background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px; padding: 4px 12px; max-width: 94%; }
+  .atd-opcoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .atd-chip { font-size: 12px; padding: 5px 11px; border-radius: 100px; border: 1px solid var(--borda); color: var(--texto); background: var(--superficie); cursor: pointer; font-family: inherit; }
+  .atd-chip:hover { border-color: var(--acento); color: var(--acento); }
+  .atd-chip.principal { background: var(--botao-bg); color: var(--botao-texto); border-color: transparent; font-weight: 600; border-radius: 7px; }
+  .atd-anexo { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; padding: 5px 9px; border-radius: 7px; background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 11.5px; text-decoration: none; }
+  .atd-msg.eu .atd-anexo { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); color: inherit; }
+  .atd-anexo svg { width: 12px; height: 12px; }
+  .atd-aviso { border: 1px solid var(--rodando-texto); background: var(--rodando-bg); border-radius: 8px; padding: 10px 12px; display: flex; gap: 9px; align-items: flex-start; color: var(--texto); }
+  .atd-aviso svg { width: 15px; height: 15px; color: var(--rodando-texto); flex: none; margin-top: 1px; }
+  .atd-aviso .t { display: flex; flex-direction: column; gap: 3px; }
+  .atd-pe { padding: 10px 12px 12px; border-top: 1px solid var(--borda); background: var(--superficie); display: flex; flex-direction: column; gap: 8px; flex: none; }
+  .atd-pe .linha { display: flex; align-items: flex-end; gap: 8px; }
+  .atd-pe textarea { flex: 1; border: 1px solid var(--borda); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit; background: var(--superficie); color: var(--texto); resize: none; min-height: 36px; max-height: 110px; outline: none; }
+  .atd-pe textarea:focus { border-color: var(--acento); }
+  .atd-pe .ico { background: none; border: none; color: var(--texto-suave); cursor: pointer; padding: 6px 4px; display: flex; }
+  .atd-pe .ico svg { width: 16px; height: 16px; }
+  .atd-pe .enviar { width: 34px; height: 34px; border-radius: 8px; background: var(--botao-bg); color: var(--botao-texto); border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+  .atd-pe .enviar:disabled { opacity: 0.5; cursor: default; } .atd-pe .enviar svg { width: 14px; height: 14px; }
+  .atd-pe .rodape { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--texto-suave); }
+  .atd-pe .rodape a { font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .atd-pendentes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .atd-pendentes span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--fundo); border: 1px solid var(--borda); }
+  .atd-pendentes span b { cursor: pointer; color: var(--texto-suave); }
+  .atd-item { display: flex; gap: 9px; padding: 11px 12px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 9px; cursor: pointer; }
+  .atd-item:hover { border-color: var(--acento); }
+  .atd-item .pt { width: 7px; height: 7px; border-radius: 100px; flex: none; margin-top: 5px; background: transparent; }
+  .atd-item.nl .pt { background: var(--acento); }
+  .atd-item .c { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+  .atd-item .l1 { display: flex; align-items: baseline; gap: 6px; }
+  .atd-item .l1 .n { font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: var(--texto-suave); font-weight: 600; }
+  .atd-item .l1 .a { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .atd-item .l1 .q { font-size: 10.5px; color: var(--texto-suave); white-space: nowrap; }
+  .atd-item .l2 { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .atd-item .l3 { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--texto-suave); }
+  .atd-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 100px; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap; }
+  .atd-pill i { width: 6px; height: 6px; border-radius: 100px; background: currentColor; }
+  .atd-pill.AGUARDANDO_FL, .atd-pill.NA_FILA { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .atd-pill.RESPONDIDO, .atd-pill.COM_ASSISTENTE { background: var(--rota-bg); color: var(--st-rota); }
+  .atd-pill.EM_ATENDIMENTO { background: var(--sucesso-bg); color: var(--acento); }
+  .atd-pill.RESOLVIDO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .atd-form { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .atd-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
+  .atd-form input, .atd-form select, .atd-form textarea { border: 1px solid var(--borda); border-radius: 7px; padding: 8px 10px; font-size: 12.5px; font-family: inherit; background: var(--superficie); color: var(--texto); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .atd-form .g2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .atd-form .acoes { display: flex; align-items: center; gap: 8px; }
+  .atd-form .erro { color: var(--erro); font-size: 12px; }
+  .atd-botao { display: inline-flex; align-items: center; gap: 7px; background: var(--botao-bg); color: var(--botao-texto); border: 1px solid transparent; padding: 7px 14px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .atd-botao.linha { background: none; color: var(--texto); border-color: var(--borda); }
+  .atd-botao svg { width: 13px; height: 13px; }
+  .atd-botao:disabled { opacity: 0.5; cursor: default; }
+  .atd-vazio { text-align: center; color: var(--texto-suave); padding: 16px 8px; font-size: 12px; }
+  .atd-digitando { font-size: 11px; color: var(--texto-suave); padding-left: 34px; animation: atdpulso 1.2s ease-in-out infinite; }
+  @keyframes atdpulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @media (max-width: 640px) { .atd-widget { right: 8px; bottom: 8px; width: calc(100vw - 16px); height: calc(100vh - 16px); } .atd-balao { right: 14px; bottom: 14px; } .atd-balao .dica { display: none; } }
+</style>
+
+<div class="atd-balao" id="atd-balao">
+  <div class="dica" id="atd-dica"><b>Precisa de ajuda?</b><span id="atd-dica-st">Atendimento Fresh Log</span></div>
+  <button type="button" class="bola" id="atd-abrir" title="Atendimento Fresh Log">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+    <span class="atd-badge oculto" id="atd-badge">0</span>
+  </button>
+</div>
+
+<div class="atd-widget oculto" id="atd-widget">
+  <div class="atd-cab">
+    <div class="av">FL</div>
+    <div class="tit"><b>Atendimento Fresh Log</b><span class="st" id="atd-status"><i></i><span>Carregando…</span></span></div>
+    <button type="button" id="atd-minimizar" title="Minimizar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
+  </div>
+  <div class="atd-abas">
+    <button type="button" class="ativa" data-aba="conversa">Conversa</button>
+    <button type="button" data-aba="chamados">Meus chamados <em class="oculto" id="atd-aba-badge">0</em></button>
+  </div>
+  <div class="atd-corpo" id="atd-corpo"></div>
+  <div class="atd-pe oculto" id="atd-pe">
+    <div class="atd-pendentes oculto" id="atd-pendentes"></div>
+    <div class="linha">
+      <button type="button" class="ico" id="atd-anexar" title="Anexar foto ou PDF"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg></button>
+      <input type="file" id="atd-arquivos" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.xlsx,.xls,.csv,.txt,.xml" class="oculto">
+      <textarea id="atd-texto" rows="1" placeholder="Escreva sua mensagem…"></textarea>
+      <button type="button" class="enviar" id="atd-enviar" title="Enviar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
+    </div>
+    <div class="rodape"><span id="atd-rodape-txt"></span><span style="display:flex; gap:10px;"><a id="atd-nova" class="oculto">Nova conversa</a><a id="atd-encerrar" class="oculto">Encerrar conversa</a></span></div>
+  </div>
+</div>
+<script>
+  window.ATD_CONFIG = { base: {{ request.script_root | tojson }}, chamadoInicial: {{ (request.args.get('chamado') or '') | tojson }} };
+</script>
+<script src="{{ url_for('static', filename='atendimento.js') }}?v=1"></script>
