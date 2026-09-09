@@ -77,6 +77,12 @@
   </div>
   {% endif %}
   <div class="acoes">
+    {% if cliente %}
+    <button type="button" class="botao-cab" id="tour-abrir" data-tour="portal" title="Guia da tela: passo a passo de cada campo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      <span class="rotulo">Guia</span>
+    </button>
+    {% endif %}
     <button type="button" class="botao-cab" id="alterna-tema" title="Tema claro / escuro">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
       <span class="rotulo">Tema</span>
@@ -90,6 +96,8 @@
   </div>
 </header>
 {% block conteudo %}{% endblock %}
+{# Motor do "Guia da tela" (tour guiado), compartilhado com o painel interno. #}
+{% include "_tour.html" %}
 <script>
   document.getElementById('alterna-tema').addEventListener('click', function () {
     const escuro = document.documentElement.classList.toggle('tema-escuro');

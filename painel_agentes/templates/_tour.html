@@ -1,0 +1,327 @@
+{# Guia da tela (tour guiado) -- pedido do Hugo, 09/09/2026.
+   Motor genérico, sem biblioteca externa: escurece a tela, recorta o
+   elemento em destaque, rola até ele e mostra um balão com título e
+   texto; a pessoa avança com Próximo/Voltar (ou setas do teclado).
+   Fica em painel_agentes/templates pra ser incluído tanto pelo painel
+   interno quanto pelo portal do cliente (mesmo ChoiceLoader que já
+   compartilha _paleta_cores.html). O ROTEIRO de cada tela fica num
+   arquivo próprio que chama window.Tour.registrar(...).
+
+   Uso:
+     {% include "_tour.html" %}            (no fim do <body> da base)
+     <button data-tour="portal">Guia</button>  (abre o tour "portal")
+     window.Tour.registrar('portal', passos, { auto: true, pronto: fn, aoSair: fn })
+
+   Passo: { alvo: '#id' | function -> element | null (balão centralizado),
+            titulo, texto (HTML ou function), capitulo?,
+            antes?: function (roda antes de mostrar; pode devolver Promise),
+            quando?: function -> bool (false = pula o passo) }
+   Passos cujo alvo não existe ou está escondido são pulados sozinhos. #}
+<style>
+  .tour-veu { position: fixed; inset: 0; z-index: 900; background: rgba(10, 10, 24, 0.62); }
+  .tour-foco { position: absolute; z-index: 901; border-radius: 9px; pointer-events: auto;
+               box-shadow: 0 0 0 3px var(--acento, #0EA575), 0 0 0 6px rgba(14, 165, 117, 0.25);
+               transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
+  .tour-balao { position: absolute; z-index: 902; width: 360px; max-width: calc(100vw - 24px);
+                background: var(--superficie, #fff); color: var(--texto, #1F2937); border: 1px solid var(--borda, #E5E7EB);
+                border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32); padding: 16px 18px 14px;
+                font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; font-size: 13px; line-height: 1.5;
+                display: flex; flex-direction: column; gap: 10px; }
+  .tour-balao.centro { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  .tour-balao::before { content: ""; position: absolute; width: 12px; height: 12px; background: var(--superficie, #fff);
+                        border: 1px solid var(--borda, #E5E7EB); transform: rotate(45deg); display: none; }
+  .tour-balao.pos-baixo::before { display: block; top: -7px; left: var(--seta, 50%); margin-left: -6px; border-right: none; border-bottom: none; }
+  .tour-balao.pos-cima::before { display: block; bottom: -7px; left: var(--seta, 50%); margin-left: -6px; border-left: none; border-top: none; }
+  .tour-balao.pos-direita::before { display: block; left: -7px; top: var(--seta, 24px); margin-top: -6px; border-right: none; border-top: none; }
+  .tour-balao.pos-esquerda::before { display: block; right: -7px; top: var(--seta, 24px); margin-top: -6px; border-left: none; border-bottom: none; }
+  .tour-balao .tour-cab { display: flex; align-items: center; gap: 8px; }
+  .tour-balao .capitulo { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--acento, #0EA575); }
+  .tour-balao .contagem { margin-left: auto; font-size: 11px; color: var(--texto-suave, #6B7280); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tour-balao .fechar { background: none; border: none; color: var(--texto-suave, #6B7280); cursor: pointer; padding: 2px; display: flex; border-radius: 6px; }
+  .tour-balao .fechar:hover { color: var(--texto, #1F2937); background: var(--fundo, #F3F4F6); }
+  .tour-balao .fechar svg { width: 16px; height: 16px; }
+  .tour-balao h4 { margin: 0; font-size: 15px; font-weight: 700; color: var(--texto, #1F2937); }
+  .tour-balao .texto { color: var(--texto, #1F2937); }
+  .tour-balao .texto b { font-weight: 700; }
+  .tour-balao .texto p { margin: 0 0 6px; } .tour-balao .texto p:last-child { margin-bottom: 0; }
+  .tour-balao .texto ul { margin: 4px 0 0; padding-left: 18px; } .tour-balao .texto li { margin: 2px 0; }
+  .tour-balao .barra { height: 4px; border-radius: 100px; background: var(--fundo, #F3F4F6); overflow: hidden; }
+  .tour-balao .barra i { display: block; height: 100%; background: var(--acento, #0EA575); border-radius: 100px; transition: width .25s ease; }
+  .tour-balao .pe { display: flex; align-items: center; gap: 8px; }
+  .tour-balao .pular { background: none; border: none; color: var(--texto-suave, #6B7280); font-size: 12px; cursor: pointer; padding: 6px 0; font-family: inherit; }
+  .tour-balao .pular:hover { color: var(--texto, #1F2937); text-decoration: underline; }
+  .tour-balao .botoes { margin-left: auto; display: flex; gap: 6px; }
+  .tour-balao .botoes button { font-family: inherit; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 7px 14px; cursor: pointer; }
+  .tour-balao .voltar { background: none; border: 1px solid var(--borda, #E5E7EB); color: var(--texto, #1F2937); }
+  .tour-balao .voltar:disabled { opacity: 0.4; cursor: default; }
+  .tour-balao .proximo { background: var(--acento, #0EA575); border: 1px solid transparent; color: #fff; }
+  html.tema-escuro .tour-balao .proximo { color: #0B0E14; }
+  .tour-balao .proximo:hover { filter: brightness(1.06); }
+  @media (max-width: 640px) {
+    .tour-balao, .tour-balao.centro { position: fixed; left: 8px !important; right: 8px; bottom: 8px; top: auto !important; width: auto; max-width: none; transform: none; }
+    .tour-balao::before { display: none !important; }
+  }
+</style>
+<script>
+(function () {
+  if (window.Tour) return;
+  var tours = {};
+  var st = null;               // estado do tour em andamento
+  var veu, foco, balao;
+  var MOBILE = function () { return window.innerWidth <= 640; };
+  var PAD = 6, DIST = 14, MARGEM = 12;
+
+  function chave(id) { return 'tour_visto:' + id; }
+  function visto(id) { try { return localStorage.getItem(chave(id)) === '1'; } catch (e) { return false; } }
+  function marcarVisto(id) { try { localStorage.setItem(chave(id), '1'); } catch (e) {} }
+
+  function elemento(alvo) {
+    if (!alvo) return null;
+    var el = typeof alvo === 'function' ? alvo() : document.querySelector(alvo);
+    if (!el) return null;
+    if (!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) return null;
+    return el;
+  }
+
+  function montar() {
+    if (veu) return;
+    veu = document.createElement('div'); veu.className = 'tour-veu';
+    foco = document.createElement('div'); foco.className = 'tour-foco';
+    balao = document.createElement('div'); balao.className = 'tour-balao'; balao.setAttribute('role', 'dialog');
+    balao.innerHTML =
+      '<div class="tour-cab"><span class="capitulo"></span><span class="contagem"></span>' +
+      '<button type="button" class="fechar" title="Sair do guia" aria-label="Sair do guia"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>' +
+      '<h4></h4><div class="texto"></div><div class="barra"><i></i></div>' +
+      '<div class="pe"><button type="button" class="pular">Pular guia</button><div class="botoes">' +
+      '<button type="button" class="voltar">Voltar</button><button type="button" class="proximo">Próximo</button></div></div>';
+    document.body.appendChild(veu); document.body.appendChild(foco); document.body.appendChild(balao);
+    veu.addEventListener('click', function (e) { e.stopPropagation(); });
+    balao.querySelector('.fechar').addEventListener('click', function () { sair(false); });
+    balao.querySelector('.pular').addEventListener('click', function () { sair(false); });
+    balao.querySelector('.voltar').addEventListener('click', function () { adiar(function () { ir(st.i - 1, -1); }); });
+    balao.querySelector('.proximo').addEventListener('click', function () { adiar(function () { ir(st.i + 1, 1); }); });
+    window.addEventListener('resize', reposicionar);
+    window.addEventListener('scroll', reposicionar, true);
+    document.addEventListener('keydown', function (e) {
+      if (!st) return;
+      if (e.key === 'Escape') { sair(false); }
+      else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); adiar(function () { ir(st.i + 1, 1); }); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); adiar(function () { ir(st.i - 1, -1); }); }
+    });
+  }
+
+  // Deixa o clique atual terminar de propagar antes de agir: handlers de
+  // "clicou fora, fecha" das telas (popover de colunas, por ex.) rodam no
+  // document e fechariam o que o passo acabou de abrir.
+  function adiar(fn) { setTimeout(fn, 0); }
+
+  var pendenteReposicao = false;
+  function reposicionar() {
+    if (!st || pendenteReposicao) return;
+    pendenteReposicao = true;
+    requestAnimationFrame(function () { pendenteReposicao = false; if (st) posicionar(false); });
+  }
+
+  // Retângulo do elemento recortado ao que está visível: dentro dos
+  // ancestrais com rolagem (tabela larga dentro de .rolagem) e da janela.
+  // Sem isso o anel de destaque de uma tabela de 1100px extrapola a página
+  // e, no celular, o navegador "abre" a viewport pra caber (visto 09/09).
+  function retanguloVisivel(el) {
+    var r = el.getBoundingClientRect();
+    var x1 = r.left, y1 = r.top, x2 = r.right, y2 = r.bottom;
+    for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      var cs = getComputedStyle(p);
+      if (/(auto|scroll|hidden)/.test(cs.overflowX + ' ' + cs.overflowY)) {
+        var pr = p.getBoundingClientRect();
+        x1 = Math.max(x1, pr.left); y1 = Math.max(y1, pr.top); x2 = Math.min(x2, pr.right); y2 = Math.min(y2, pr.bottom);
+      }
+    }
+    x1 = Math.max(x1, 0); y1 = Math.max(y1, 0);
+    x2 = Math.max(Math.min(x2, window.innerWidth), x1); y2 = Math.max(Math.min(y2, window.innerHeight), y1);
+    return { left: x1, top: y1, right: x2, bottom: y2, width: x2 - x1, height: y2 - y1 };
+  }
+
+  function posicionar(rolar) {
+    var passo = st.tour.passos[st.i];
+    var el = elemento(passo.alvo);
+    balao.className = 'tour-balao';
+    balao.style.cssText = '';
+    if (!el) {
+      veu.style.clipPath = ''; foco.style.display = 'none';
+      balao.classList.add('centro');
+      return;
+    }
+    foco.style.display = '';
+    if (rolar) {
+      // elemento mais alto que a tela (tabela longa): mostra o começo dele
+      var alto = el.getBoundingClientRect().height > window.innerHeight * 0.6;
+      try { el.scrollIntoView({ block: alto ? 'start' : 'center', inline: 'nearest', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); }
+    }
+    var r = retanguloVisivel(el), sx = window.scrollX, sy = window.scrollY;
+    foco.style.top = (r.top + sy - PAD) + 'px'; foco.style.left = (r.left + sx - PAD) + 'px';
+    foco.style.width = (r.width + PAD * 2) + 'px'; foco.style.height = (r.height + PAD * 2) + 'px';
+    // "buraco" no véu escuro em volta do elemento (coordenadas da janela)
+    var x1 = r.left - PAD, y1 = r.top - PAD, x2 = r.right + PAD, y2 = r.bottom + PAD;
+    veu.style.clipPath = 'polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' +
+      x1 + 'px ' + y1 + 'px, ' + x1 + 'px ' + y2 + 'px, ' + x2 + 'px ' + y2 + 'px, ' + x2 + 'px ' + y1 + 'px, ' + x1 + 'px ' + y1 + 'px)';
+    if (MOBILE()) return;   // no celular o balão fica fixo embaixo (CSS)
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var bw = Math.min(360, vw - 24), bh = balao.offsetHeight;
+    var top, left, pos, seta;
+    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var clampX = function (x) { return Math.max(MARGEM, Math.min(x, vw - bw - MARGEM)); };
+    var clampY = function (y) { return Math.max(MARGEM, Math.min(y, vh - bh - MARGEM)); };
+    var pref = passo.posicao;
+    var cabeBaixo = r.bottom + PAD + DIST + bh <= vh - MARGEM;
+    var cabeCima = r.top - PAD - DIST - bh >= MARGEM;
+    var cabeDireita = r.right + PAD + DIST + bw <= vw - MARGEM;
+    var cabeEsquerda = r.left - PAD - DIST - bw >= MARGEM;
+    if (pref === 'cima' && cabeCima) pos = 'cima';
+    else if (pref === 'direita' && cabeDireita) pos = 'direita';
+    else if (pref === 'esquerda' && cabeEsquerda) pos = 'esquerda';
+    else if (pref === 'baixo' && cabeBaixo) pos = 'baixo';
+    else pos = cabeBaixo ? 'baixo' : cabeCima ? 'cima' : cabeDireita ? 'direita' : cabeEsquerda ? 'esquerda' : null;
+    if (!pos) {
+      // Não coube em lugar nenhum com folga: usa o lado com mais espaço,
+      // deixando o balão encostar no elemento (nunca cobrir o centro dele).
+      var sobraBaixo = vh - r.bottom, sobraCima = r.top, sobraDir = vw - r.right, sobraEsq = r.left;
+      var bwMenor = Math.max(260, Math.min(bw, Math.max(sobraDir, sobraEsq) - PAD - DIST - MARGEM));
+      if (Math.max(sobraBaixo, sobraCima) >= bh * 0.5) pos = sobraBaixo >= sobraCima ? 'baixo' : 'cima';
+      else if (Math.max(sobraDir, sobraEsq) >= 260 + PAD + DIST + MARGEM) { pos = sobraDir >= sobraEsq ? 'direita' : 'esquerda'; bw = bwMenor; }
+      else pos = 'sobre';
+    }
+    if (pos === 'baixo') { top = clampY(r.bottom + PAD + DIST); left = clampX(cx - bw / 2); seta = cx - left; }
+    else if (pos === 'cima') { top = clampY(r.top - PAD - DIST - bh); left = clampX(cx - bw / 2); seta = cx - left; }
+    else if (pos === 'direita') { left = clampX(r.right + PAD + DIST); top = clampY(cy - Math.min(bh / 2, 40)); seta = cy - top; }
+    else if (pos === 'esquerda') { left = clampX(r.left - PAD - DIST - bw); top = clampY(cy - Math.min(bh / 2, 40)); seta = cy - top; }
+    else {
+      // "sobre": elemento ocupa a tela toda (tabela longa) -- balão fixo
+      // embaixo, à direita, por cima do rodapé do elemento.
+      balao.classList.add('sobre');
+      balao.style.position = 'fixed'; balao.style.width = bw + 'px';
+      balao.style.left = (vw - bw - MARGEM) + 'px'; balao.style.top = (vh - bh - MARGEM) + 'px';
+      return;
+    }
+    balao.classList.add('pos-' + pos);
+    balao.style.top = (top + sy) + 'px'; balao.style.left = (left + sx) + 'px'; balao.style.width = bw + 'px';
+    balao.style.setProperty('--seta', Math.max(14, Math.min(seta, (pos === 'baixo' || pos === 'cima' ? bw : bh) - 14)) + 'px');
+  }
+
+  function renderizar() {
+    var passos = st.tour.passos, passo = passos[st.i];
+    balao.querySelector('.capitulo').textContent = passo.capitulo || st.tour.opcoes.titulo || '';
+    balao.querySelector('.contagem').textContent = (st.i + 1) + ' de ' + passos.length;
+    balao.querySelector('h4').textContent = passo.titulo || '';
+    var texto = typeof passo.texto === 'function' ? passo.texto() : (passo.texto || '');
+    balao.querySelector('.texto').innerHTML = /<[a-z][\s\S]*>/i.test(texto) ? texto : '<p>' + texto + '</p>';
+    balao.querySelector('.barra i').style.width = Math.round(100 * (st.i + 1) / passos.length) + '%';
+    balao.querySelector('.voltar').disabled = !temAnterior(st.i);
+    balao.querySelector('.proximo').textContent = temProximo(st.i) ? 'Próximo' : 'Concluir';
+    balao.querySelector('.pular').style.visibility = temProximo(st.i) ? '' : 'hidden';
+  }
+
+  // Um passo "vale" se quando() não vetar e (sem alvo OU alvo visível).
+  // Os que dependem de antes() (trocar de vista, abrir chat) só dão pra
+  // avaliar depois de rodar o antes -- por isso o ir() roda antes() e
+  // reavalia; aqui é a checagem barata pra saber se há próximo/anterior.
+  function candidato(passo) {
+    if (passo.quando && !passo.quando()) return false;
+    if (!passo.alvo) return true;
+    return !!elemento(passo.alvo) || !!passo.antes;
+  }
+  function temProximo(i) { for (var j = i + 1; j < st.tour.passos.length; j++) if (candidato(st.tour.passos[j])) return true; return false; }
+  function temAnterior(i) { for (var j = i - 1; j >= 0; j--) if (candidato(st.tour.passos[j])) return true; return false; }
+
+  function ir(i, direcao) {
+    if (!st) return;
+    var passos = st.tour.passos;
+    if (i >= passos.length) { sair(true); return; }
+    if (i < 0) i = 0;
+    var passo = passos[i];
+    if (passo.quando && !passo.quando()) { pular(); return; }
+    var prosseguir = function () {
+      if (!st) return;
+      if (passo.alvo && !elemento(passo.alvo)) { pular(); return; }
+      st.i = i;
+      renderizar();
+      posicionar(true);
+      // depois da rolagem suave, ajusta de novo
+      setTimeout(function () { if (st && st.i === i) posicionar(false); }, 380);
+    };
+    function pular() {
+      if (direcao < 0 && i === 0) { return; }
+      if (direcao > 0 && i + 1 >= passos.length) { sair(true); return; }
+      ir(i + direcao, direcao);
+    }
+    if (passo.antes) {
+      var r;
+      try { r = passo.antes(); } catch (e) { r = null; }
+      if (r && typeof r.then === 'function') { r.then(prosseguir, prosseguir); return; }
+      // dá um instante pro DOM reagir (troca de vista, abrir chat)
+      setTimeout(prosseguir, 60);
+      return;
+    }
+    prosseguir();
+  }
+
+  function iniciar(id) {
+    var tour = tours[id];
+    if (!tour || !tour.passos.length) return false;
+    if (st) sair(false);
+    montar();
+    st = { tour: tour, i: -1, id: id };
+    document.documentElement.classList.add('tour-ativo');
+    veu.style.display = ''; foco.style.display = ''; balao.style.display = '';
+    ir(0, 1);
+    return true;
+  }
+
+  function sair(concluiu) {
+    if (!st) return;
+    var tour = st.tour, id = st.id;
+    st = null;
+    veu.style.display = 'none'; foco.style.display = 'none'; balao.style.display = 'none';
+    document.documentElement.classList.remove('tour-ativo');
+    marcarVisto(id);
+    if (tour.opcoes.aoSair) { try { tour.opcoes.aoSair(concluiu); } catch (e) {} }
+  }
+
+  function autoIniciar(id) {
+    var tour = tours[id], params;
+    try { params = new URLSearchParams(location.search); } catch (e) { params = null; }
+    var forcar = params && params.get('tour') === '1';
+    if (params && params.get('tour') === '0') return;
+    if (!forcar && (!tour.opcoes.auto || visto(id))) return;
+    var tentativas = 0;
+    (function espera() {
+      if (st) return;
+      var ok = true;
+      try { ok = !tour.opcoes.pronto || !!tour.opcoes.pronto(); } catch (e) { ok = false; }
+      if (ok) { iniciar(id); return; }
+      if (++tentativas < 60) setTimeout(espera, 300);
+    })();
+  }
+
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-tour]');
+    if (!b) return;
+    e.preventDefault();
+    var id = b.getAttribute('data-tour') || Object.keys(tours)[0];
+    adiar(function () { iniciar(id); });
+  });
+
+  window.Tour = {
+    registrar: function (id, passos, opcoes) {
+      tours[id] = { passos: passos || [], opcoes: opcoes || {} };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { autoIniciar(id); });
+      else autoIniciar(id);
+    },
+    iniciar: iniciar,
+    sair: function () { sair(false); },
+    visto: visto,
+    esquecer: function (id) { try { localStorage.removeItem(chave(id)); } catch (e) {} },
+    ativo: function () { return !!st; }
+  };
+})();
+</script>
