@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Documentos por pedido, rodada INCREMENTAL de dia (so pedidos em aberto ainda sem NF; e-mail incremental; sem retentativa)
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/documentos_pedido
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/documentos_pedido/processar_documentos.py --incremental

@@ -20,8 +20,25 @@ Fluxo:
   4. Documento que não casa com nenhum pedido -- fica marcado como
      REVISAO_MANUAL (fingerprint_documentos.py), não trava o resto
 
+MODOS (10/09, pedido do Hugo -- "deixar os documentos estocados
+durante o dia em vez de baixar tudo só no fim do dia"):
+  - COMPLETO (padrão, sequências das 18h/22h/04h): e-mail + todos os
+    pedidos em aberto na Stokki + e-mail de embarcadores + retentativa
+    de REVISAO_MANUAL. 14-25 min.
+  - INCREMENTAL (--incremental, timer de 2 em 2 h em dia útil): e-mail
+    + só os pedidos em aberto que AINDA NÃO TÊM Nota Fiscal no banco
+    (embarcador sem NF / DANFE só por e-mail ficam de fora) + e-mail de
+    embarcadores. Sem retentativa. Segura a trava cooperativa da Stokki
+    (stokki/sessao_uso.py) enquanto navega. Notifica só se der erro.
+  - ESCOPADO (pedidos_stokki=[...]: documentação automática da rota e
+    botão "Imprimir rota" do planejamento): SÓ a etapa da Stokki pros
+    pedidos informados -- e-mail e retentativa são trabalho das rodadas
+    completa/incremental, e a retentativa sozinha custava ~3 min por
+    rota (94 documentos presos re-tentados a cada chamada).
+
 COMO USAR:
     py -3.11 processar_documentos.py --modo-teste
+    py -3.11 processar_documentos.py --incremental
     py -3.11 processar_documentos.py --modo-teste --pedidos PS-35471,PS-35472
 """
 import argparse
@@ -63,7 +80,7 @@ from matcher import (casar_documento_com_pedido, extrair_nf_da_danfe,
 from boleto_parser import extrair_metadados_boleto
 from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
                                     pedidos_nf_pendentes, atualizar_nf_pedido,
-                                    listar_pendentes_revisao)
+                                    listar_pendentes_revisao, pedidos_com_documento_enviado)
 from email_documentos import buscar_pdfs_por_email
 import storage_gcs
 
@@ -358,14 +375,82 @@ def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf:
     return contadores
 
 
-def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True):
+# Trava cooperativa da Stokki (stokki/sessao_uso.py) no modo incremental:
+# quanto esperar a vez (documentação de rota, portal...) e validade da
+# trava (folga sobre os 2-4 min esperados da rodada).
+DONO_TRAVA_INCREMENTAL = "documentos-incremental"
+ESPERA_TRAVA_INCREMENTAL_SEGUNDOS = 5 * 60
+TTL_TRAVA_INCREMENTAL_SEGUNDOS = 25 * 60
+
+
+def _filtrar_pedidos_sem_nf(lista_pedidos: list[str], pedidos_sem_nf: set[str],
+                            pedidos_danfe_somente_email: set[str]) -> list[str]:
+    """Modo incremental: dos pedidos que a rodada completa visitaria,
+    fica só quem ainda pode ganhar NF pela Stokki e ainda não tem
+    nenhuma no banco (Nota Fiscal ou Pedido de Venda ENVIADO). Pedido
+    que já tem NF só seria revisitado por causa de boleto/outros anexos
+    -- isso fica pras rodadas completas."""
+    com_nf = pedidos_com_documento_enviado()
+    return [c for c in lista_pedidos
+            if c not in pedidos_sem_nf and c not in pedidos_danfe_somente_email and c not in com_nf]
+
+
+def _etapas_email_embarcadores(config: dict, vuupt, modo_teste: bool, indexador_nf: IndexadorNF,
+                               contadores: dict, resumo_etapas: dict) -> None:
+    """Etapa 3: e-mail de embarcadores conhecidos (Boleto).
+    Diferente da Etapa 1 (busca ampla): remetentes específicos (Dourado,
+    Maria Dolores/NUU), pasta "Todos os e-mails". Por enquanto só trata
+    Boleto -- pedido do Hugo, 10/08 ("só Boleto por enquanto"). Um PDF
+    que junte vários boletos e/ou NFs num arquivo só (ex: "BOLETOS.pdf"
+    da Dourado, "NFs FRESH DD.MM.pdf" do De Tommaso, ou
+    "DANFEs_Boletos_DD-MM.pdf" da Vida Veg -- esse último mistura NF e
+    boleto no mesmo arquivo) é separado em 1 arquivo por documento
+    antes de classificar/casar -- ver documento_splitter.py. Os tipos
+    aproveitados variam por embarcador (item["tipos_permitidos"], ver
+    REMETENTES_EMBARCADORES em email_documentos.py)."""
+    from email_documentos import buscar_pdfs_por_email_embarcadores
+    from documento_splitter import separar_documentos_mistos
+
+    pasta_boletos_separados = Path(__file__).parent / "dados" / "boletos_separados"
+    pasta_nfs_separadas = Path(__file__).parent / "dados" / "nfs_separadas"
+
+    itens_embarcadores = buscar_pdfs_por_email_embarcadores(config, modo_teste=modo_teste)
+    logger.info(f"{len(itens_embarcadores)} PDF(s) encontrado(s) de embarcadores conhecidos.")
+
+    total_boletos = 0
+    for item in itens_embarcadores:
+        partes = separar_documentos_mistos(item["caminho_local"], pasta_nfs_separadas, pasta_boletos_separados)
+        for caminho_separado, _tipo_detectado in partes:
+            sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
+            status = processar_um_documento(sub_item, vuupt, config, modo_teste,
+                                           tipos_permitidos=item.get("tipos_permitidos") or {"Boleto"},
+                                           indexador_nf=indexador_nf)
+            if status != "FORA_DE_ESCOPO":
+                contadores[status] = contadores.get(status, 0) + 1
+                total_boletos += 1
+
+    resumo_etapas["Documentos (e-mail embarcadores)"] = {
+        "status": "ok",
+        "detalhe": f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)",
+    }
+
+
+def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True,
+         incremental: bool = False):
     inicio = time.time()
-    logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Processamento de documentos iniciado.")
+    escopado = pedidos_stokki is not None
+    modo = "[MODO TESTE] " if modo_teste else ""
+    if escopado:
+        modo += "[ESCOPADO] "
+    elif incremental:
+        modo += "[INCREMENTAL] "
+    logger.info(f"{modo}Processamento de documentos iniciado.")
 
     config = _carregar_config()
     resumo_etapas = {}
 
     contadores = {"JA_PROCESSADO": 0, "ENVIADO": 0, "REVISAO_MANUAL": 0, "ERRO": 0}
+    trava_stokki = False
 
     try:
         vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
@@ -377,17 +462,20 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         indexador_nf.carregar_do_banco()
 
         # ── Etapa 1: e-mail ──────────────────────────────────────────────
-        itens_email = buscar_pdfs_por_email(config, modo_teste=modo_teste)
-        logger.info(f"{len(itens_email)} PDF(s) encontrado(s) por e-mail.")
-        for item in itens_email:
-            status = processar_um_documento(item, vuupt, config, modo_teste,
-                                           indexador_nf=indexador_nf)
-            contadores[status] = contadores.get(status, 0) + 1
+        # (não no modo escopado: a rota precisa só dos pedidos dela na
+        # Stokki; o e-mail é coberto pelas rodadas completa/incremental)
+        if not escopado:
+            itens_email = buscar_pdfs_por_email(config, modo_teste=modo_teste)
+            logger.info(f"{len(itens_email)} PDF(s) encontrado(s) por e-mail.")
+            for item in itens_email:
+                status = processar_um_documento(item, vuupt, config, modo_teste,
+                                               indexador_nf=indexador_nf)
+                contadores[status] = contadores.get(status, 0) + 1
 
-        resumo_etapas["Documentos (e-mail)"] = {
-            "status": "ok",
-            "detalhe": f"{len(itens_email)} encontrado(s)",
-        }
+            resumo_etapas["Documentos (e-mail)"] = {
+                "status": "ok",
+                "detalhe": f"{len(itens_email)} encontrado(s)",
+            }
 
         # ── Etapa 2: Stokki ────────────────────────────────────────────────
         # Lista de pedidos: se --pedidos foi passado explicitamente, usa ela
@@ -409,7 +497,7 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         # então o DANFE é gerado normalmente.
         pedidos_sem_nf: set[str] = set()
         pedidos_danfe_somente_email: set[str] = set()
-        if pedidos_stokki is not None:
+        if escopado:
             lista_pedidos = pedidos_stokki
         else:
             from selecionar_pedidos import descobrir_pedidos
@@ -420,6 +508,27 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
             if pedidos_danfe_somente_email:
                 logger.info(f"{len(pedidos_danfe_somente_email)} pedido(s) de embarcador com DANFE "
                             f"somente por e-mail -- geração pela Stokki bloqueada.")
+            if incremental:
+                total = len(lista_pedidos)
+                lista_pedidos = _filtrar_pedidos_sem_nf(lista_pedidos, pedidos_sem_nf,
+                                                        pedidos_danfe_somente_email)
+                logger.info(f"Modo incremental: {len(lista_pedidos)} de {total} pedido(s) ainda sem NF "
+                            f"no banco -- só esses serão visitados na Stokki.")
+
+        if lista_pedidos and incremental:
+            # Rodada de dia, no meio do expediente: espera a vez se a
+            # documentação de rota / portal / painel estiverem na Stokki.
+            from stokki import sessao_uso
+            trava_stokki = sessao_uso.adquirir(DONO_TRAVA_INCREMENTAL,
+                                               ttl_segundos=TTL_TRAVA_INCREMENTAL_SEGUNDOS,
+                                               esperar_segundos=ESPERA_TRAVA_INCREMENTAL_SEGUNDOS)
+            if not trava_stokki:
+                logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
+                               f"{ESPERA_TRAVA_INCREMENTAL_SEGUNDOS // 60} min -- etapa da Stokki pulada "
+                               f"nesta rodada ({len(lista_pedidos)} pedido(s) ficam pra próxima).")
+                resumo_etapas["Documentos (Stokki)"] = {"status": "ok",
+                                                        "detalhe": "Stokki ocupada -- pulada nesta rodada"}
+                lista_pedidos = []
 
         if lista_pedidos:
             from playwright.sync_api import sync_playwright
@@ -455,72 +564,57 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                 "status": "ok",
                 "detalhe": f"{total_stokki} encontrado(s) em {len(lista_pedidos)} pedido(s)",
             }
-        else:
+        elif "Documentos (Stokki)" not in resumo_etapas:
             logger.info("Nenhum pedido pra buscar documentos na Stokki nesta execução.")
             resumo_etapas["Documentos (Stokki)"] = {"status": "ok", "detalhe": "Nenhum pedido elegível"}
 
-        # ── Etapa 3: e-mail de embarcadores conhecidos (Boleto) ──────────────
-        # Diferente da Etapa 1 (busca ampla): remetentes específicos (Dourado,
-        # Maria Dolores/NUU), pasta "Todos os e-mails". Por enquanto só trata
-        # Boleto -- pedido do Hugo, 10/08 ("só Boleto por enquanto"). Um PDF
-        # que junte vários boletos e/ou NFs num arquivo só (ex: "BOLETOS.pdf"
-        # da Dourado, "NFs FRESH DD.MM.pdf" do De Tommaso, ou
-        # "DANFEs_Boletos_DD-MM.pdf" da Vida Veg -- esse último mistura NF e
-        # boleto no mesmo arquivo) é separado em 1 arquivo por documento
-        # antes de classificar/casar -- ver documento_splitter.py. Os tipos
-        # aproveitados variam por embarcador (item["tipos_permitidos"], ver
-        # REMETENTES_EMBARCADORES em email_documentos.py).
-        from email_documentos import buscar_pdfs_por_email_embarcadores
-        from documento_splitter import separar_documentos_mistos
+        if trava_stokki:
+            from stokki import sessao_uso
+            sessao_uso.liberar(DONO_TRAVA_INCREMENTAL)
+            trava_stokki = False
 
-        PASTA_BOLETOS_SEPARADOS = Path(__file__).parent / "dados" / "boletos_separados"
-        PASTA_NFS_SEPARADAS = Path(__file__).parent / "dados" / "nfs_separadas"
-
-        itens_embarcadores = buscar_pdfs_por_email_embarcadores(config, modo_teste=modo_teste)
-        logger.info(f"{len(itens_embarcadores)} PDF(s) encontrado(s) de embarcadores conhecidos.")
-
-        total_boletos = 0
-        for item in itens_embarcadores:
-            partes = separar_documentos_mistos(item["caminho_local"], PASTA_NFS_SEPARADAS, PASTA_BOLETOS_SEPARADOS)
-            for caminho_separado, _tipo_detectado in partes:
-                sub_item = {**item, "caminho_local": caminho_separado, "nome_arquivo": caminho_separado.name}
-                status = processar_um_documento(sub_item, vuupt, config, modo_teste,
-                                               tipos_permitidos=item.get("tipos_permitidos") or {"Boleto"},
-                                               indexador_nf=indexador_nf)
-                if status != "FORA_DE_ESCOPO":
-                    contadores[status] = contadores.get(status, 0) + 1
-                    total_boletos += 1
-
-        resumo_etapas["Documentos (e-mail embarcadores)"] = {
-            "status": "ok",
-            "detalhe": f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)",
-        }
+        # Modo escopado termina aqui: e-mail de embarcadores e retentativa
+        # são das rodadas completa/incremental.
+        if not escopado:
+            _etapas_email_embarcadores(config, vuupt, modo_teste, indexador_nf, contadores, resumo_etapas)
 
         # ── Etapa 4: retentativa de REVISAO_MANUAL ────────────────────────
         # Cobre a corrida comum entre o documento chegar e o pedido ser
-        # importado no VUUPT -- ver retentar_revisao_manual().
-        retentativa = retentar_revisao_manual(vuupt, config, modo_teste, indexador_nf)
-        contadores["ENVIADO"] = contadores.get("ENVIADO", 0) + retentativa["resolvidos"]
-        resumo_etapas["Documentos (retentativa revisão manual)"] = {
-            "status": "ok",
-            "detalhe": f"{retentativa['resolvidos']} resolvido(s), {retentativa['ainda_pendente']} ainda "
-                      f"pendente(s), {retentativa['sem_arquivo']} sem arquivo em cache",
-        }
-
-        resumo_etapas["Resumo geral"] = {
-            "status": "erro" if contadores["ERRO"] else "ok",
-            "detalhe": f"{contadores['ENVIADO']} enviado(s), {contadores['REVISAO_MANUAL']} pra revisão manual, "
-                      f"{contadores['JA_PROCESSADO']} já processado(s) antes, {contadores['ERRO']} erro(s)",
-        }
+        # importado no VUUPT -- ver retentar_revisao_manual(). Só na
+        # rodada completa: são ~130 documentos presos re-tentados contra
+        # a Vuupt (3-6 min e rajadas de HTTP 429), não cabe de 2 em 2 h
+        # nem a cada rota.
+        if not escopado and not incremental:
+            retentativa = retentar_revisao_manual(vuupt, config, modo_teste, indexador_nf)
+            contadores["ENVIADO"] = contadores.get("ENVIADO", 0) + retentativa["resolvidos"]
+            resumo_etapas["Documentos (retentativa revisão manual)"] = {
+                "status": "ok",
+                "detalhe": f"{retentativa['resolvidos']} resolvido(s), {retentativa['ainda_pendente']} ainda "
+                          f"pendente(s), {retentativa['sem_arquivo']} sem arquivo em cache",
+            }
 
     except Exception as e:
         logger.exception(f"Erro no processamento de documentos: {e}")
         resumo_etapas["Erro geral"] = {"status": "erro", "detalhe": str(e)}
+    finally:
+        if trava_stokki:
+            try:
+                from stokki import sessao_uso
+                sessao_uso.liberar(DONO_TRAVA_INCREMENTAL)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"Falha ao liberar a trava da Stokki: {e}")
+
+    resumo_etapas["Resumo geral"] = {
+        "status": "erro" if contadores["ERRO"] or "Erro geral" in resumo_etapas else "ok",
+        "detalhe": f"{contadores['ENVIADO']} enviado(s), {contadores['REVISAO_MANUAL']} pra revisão manual, "
+                  f"{contadores['JA_PROCESSADO']} já processado(s) antes, {contadores['ERRO']} erro(s)",
+    }
 
     duracao = time.time() - inicio
-    logger.info(f"Processamento de documentos finalizado em {duracao:.1f}s. Contadores: {contadores}")
+    logger.info(f"{modo}Processamento de documentos finalizado em {duracao:.1f}s. Contadores: {contadores}")
 
-    if notificar:
+    # Incremental roda 5x por dia: e-mail de execução só quando deu erro.
+    if notificar and (not incremental or resumo_etapas["Resumo geral"]["status"] == "erro"):
         try:
             notificar_execucao(resumo_etapas, duracao, modo_teste, config)
         except Exception as e:
@@ -535,8 +629,12 @@ if __name__ == "__main__":
                         help="Mostra o que seria feito, sem enviar nada pro GCS de verdade")
     parser.add_argument("--pedidos", type=str, default="",
                         help="Códigos de pedido pra buscar documentos na Stokki, separados por vírgula "
-                             "(ex: PS-1,PS-2). Se omitido, descobre sozinho (ver selecionar_pedidos.py).")
+                             "(ex: PS-1,PS-2) -- modo ESCOPADO: só a etapa da Stokki, sem e-mail nem "
+                             "retentativa. Se omitido, descobre sozinho (ver selecionar_pedidos.py).")
+    parser.add_argument("--incremental", action="store_true",
+                        help="Rodada leve de dia: só pedidos em aberto ainda sem NF no banco, sem "
+                             "retentativa de revisão manual, segurando a trava da Stokki.")
     args = parser.parse_args()
 
     lista_pedidos = [p.strip() for p in args.pedidos.split(",") if p.strip()] if args.pedidos else None
-    main(modo_teste=args.modo_teste, pedidos_stokki=lista_pedidos)
+    main(modo_teste=args.modo_teste, pedidos_stokki=lista_pedidos, incremental=args.incremental)

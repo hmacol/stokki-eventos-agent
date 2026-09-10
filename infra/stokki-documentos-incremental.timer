@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-documentos-incremental.service em dia util as 09:10, 11:10, 13:10, 15:10 e 17:10 (fora dos :00/:30 da expedicao frequente e dos :35/:45 das importacoes)
+
+[Timer]
+OnCalendar=Mon..Fri 09,11,13,15,17:10:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

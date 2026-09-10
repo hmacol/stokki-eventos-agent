@@ -168,6 +168,26 @@ def ja_enviado_para_pedido(codigo_pedido: str, tipo: str) -> bool:
     return row is not None
 
 
+def pedidos_com_documento_enviado(tipos: tuple[str, ...] = ("Nota Fiscal", "Pedido de Venda")) -> set[str]:
+    """Códigos de pedido que já têm pelo menos um documento de um dos
+    `tipos` ENVIADO -- versão em lote de ja_enviado_para_pedido(), pra
+    filtrar centenas de pedidos de uma vez (modo incremental de
+    processar_documentos.py, 10/09). 'Pedido de Venda' entra por padrão
+    porque substitui a NF pra De Tommaso (ver SENDERS_PEDIDO_VENDA_
+    SUBSTITUI_NF em roteirizacao/gerar_pdf_romaneios.py)."""
+    if not tipos:
+        return set()
+    conn = _conectar()
+    marcadores = ",".join("?" for _ in tipos)
+    rows = conn.execute(
+        f"SELECT DISTINCT codigo_pedido FROM documentos_processados "
+        f"WHERE status = 'ENVIADO' AND codigo_pedido IS NOT NULL AND tipo IN ({marcadores})",
+        tuple(tipos),
+    ).fetchall()
+    conn.close()
+    return {r["codigo_pedido"] for r in rows}
+
+
 def listar_pendentes_revisao(limite: int = 100) -> list[dict]:
     """Documentos que não conseguiram ser casados com nenhum pedido --
     pra revisão manual do Hugo."""
