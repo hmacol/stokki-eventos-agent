@@ -325,7 +325,24 @@ def main(modo_teste: bool, data_str: str) -> int:
         # a trava, eles esperam a vez -- e este agente espera se alguém já
         # estiver no meio de uma execução.
         if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=600, esperar_segundos=1200):
-            logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de 20 min -- seguindo assim mesmo.")
+            # Desiste em vez de atropelar: o login derrubaria a sessão de quem
+            # está usando (401 em massa no importador/painel). O e-mail de
+            # execução avisa e a próxima rodada tenta de novo (fingerprint
+            # garante que nada se perde).
+            ocupante = sessao_uso.em_uso()
+            logger.error(f"Stokki ocupada por '{ocupante}' há mais de 20 min -- desistindo desta rodada.")
+            resumo_etapas["Resumo geral"] = {
+                "status": "erro",
+                "detalhe": f"Stokki ocupada por '{ocupante}' há mais de 20 min; {total_pedidos} pedido(s) "
+                           f"de {len(grupos)} transportadora(s) ficaram sem notificação nesta rodada.",
+            }
+            duracao = time.time() - inicio
+            if not modo_teste:
+                try:
+                    notificar_execucao(resumo_etapas, duracao, modo_teste, config)
+                except Exception as e:
+                    logger.warning(f"Falha ao notificar execução (não afeta o resultado): {e}")
+            return 1
 
         try:
             with sync_playwright() as pw:
