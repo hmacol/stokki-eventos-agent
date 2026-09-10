@@ -20,6 +20,19 @@ Resultado por XML:
   ERRO       -- recusa da Stokki (vai pra tela + e-mail na hora) ou falha
                 técnica repetida 3x (antes disso volta pra fila)
 
+Pedidos de PLANILHA (origem='planilha', pedido do Hugo em 09/09/2026) vão
+por OUTRO caminho da Stokki, o wizard de importação por Excel
+(inventory/outbound/create/excel, descoberto por sondagem read-only em
+09/09): um xlsx SKU/Quantidade/Valor Unitário por pedido + os campos do
+formulário (client_id, origin_id, po, destination_id, type_transport,
+packaging, delivery, carrier_id, expedition_date) num POST multipart em
+inventory/outbound/create/store. O destinatário precisa existir no
+cadastro de endereços do cliente na Stokki: procuramos em
+/address/search/{client_id}/Destination e, se não achar, cadastramos em
+client/transport/address/store. Tudo pelo contexto do navegador logado
+(page.context.request), sem clicar no wizard. NUNCA rodou contra a
+Stokki real -- formatos de resposta são best-effort (ver executar_wizard_excel).
+
 COMO RODAR:
     py -3 portal_cliente/enviar_stokki.py --loop            # serviço (VPS)
     py -3 portal_cliente/enviar_stokki.py --uma-vez         # um ciclo
@@ -27,6 +40,7 @@ COMO RODAR:
     py -3 portal_cliente/enviar_stokki.py --uma-vez --visivel   # navegador na tela
 """
 import argparse
+import json
 import logging
 import re
 import shutil
@@ -215,6 +229,230 @@ def executar_wizard(cfg: dict, usuario: str, senha: str, arquivos: list[Path], p
     return resultados, respostas, codigos
 
 
+# ── Wizard Excel da Stokki (pedidos de planilha) ───────────────────────────────
+
+URL_BASE_STOKKI = "https://freshlog.stokki.com.br"
+URL_STORE_EXCEL = f"{URL_BASE_STOKKI}/pt-br/administrator/inventory/outbound/create/store"
+URL_BUSCA_DESTINO = f"{URL_BASE_STOKKI}/pt-br/address/search/{{client_id}}/Destination"
+URL_CADASTRO_ENDERECO = f"{URL_BASE_STOKKI}/pt-br/administrator/client/transport/address/store"
+_HEADERS_AJAX = {"X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/javascript, */*; q=0.01"}
+
+
+def _json_ou_none(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return None
+
+
+def _erros_da_resposta(resp) -> str:
+    """Laravel devolve 422 {"message":..., "errors": {campo: [msgs]}}."""
+    dados = _json_ou_none(resp)
+    partes = []
+    if isinstance(dados, dict):
+        errs = dados.get("errors")
+        if isinstance(errs, dict):
+            for v in errs.values():
+                partes.extend(v if isinstance(v, list) else [str(v)])
+        elif isinstance(errs, list):
+            partes.extend(str(v) for v in errs)
+        if not partes and dados.get("message"):
+            partes.append(str(dados["message"]))
+    if not partes:
+        texto = re.sub(r"<[^>]+>", " ", resp.text() or "")
+        partes.append(f"HTTP {resp.status}: {' '.join(texto.split())[:200]}")
+    return "; ".join(str(p) for p in partes)[:900]
+
+
+def _achar_id(dados) -> str:
+    """id num JSON de formato desconhecido: {id}, {data:{id}}, [{id}, ...]."""
+    if isinstance(dados, dict):
+        for k in ("id", "address_id", "destination_id"):
+            if dados.get(k) not in (None, ""):
+                return str(dados[k])
+        for k in ("data", "address", "destination", "result"):
+            if k in dados:
+                achado = _achar_id(dados[k])
+                if achado:
+                    return achado
+    elif isinstance(dados, list) and dados:
+        return _achar_id(dados[0])
+    return ""
+
+
+def _resolver_destinatario(page, client_id: str, envio: dict, token_csrf: str) -> tuple[str, str]:
+    """(destination_id, erro). Procura pelo CNPJ/CPF (com e sem pontuação);
+    se não existir, cadastra o endereço do pedido no cliente da Stokki."""
+    doc = ep._so_digitos(envio.get("destinatario_doc"))
+    for busca in (ep.formatar_documento(doc), doc, (envio.get("destinatario_nome") or "")[:40]):
+        if not busca:
+            continue
+        try:
+            r = page.context.request.get(URL_BUSCA_DESTINO.format(client_id=client_id), params={"search": busca},
+                                         headers=_HEADERS_AJAX, timeout=30000)
+        except Exception as e:
+            return "", f"busca de destinatário falhou: {e}"
+        if r.ok:
+            dest_id = _achar_id(_json_ou_none(r))
+            if dest_id:
+                logger.info(f"   destinatário {doc} encontrado na Stokki (id {dest_id}, busca '{busca}')")
+                return dest_id, ""
+    extra = {}
+    try:
+        extra = json.loads(envio.get("itens_json") or "{}").get("destinatario") or {}
+    except Exception:
+        pass
+    nome = (envio.get("destinatario_nome") or "")[:120]
+    partes_nome = nome.split(" ", 1)
+    pj = len(doc) == 14
+    cep = ep._so_digitos(envio.get("destinatario_cep"))
+    uf = (envio.get("destinatario_uf") or "").upper()
+    campos = {
+        "_token": token_csrf, "client_id": client_id, "page": "create", "type_address": "Destination",
+        "type_account_address": "company" if pj else "personal",
+        "brand_name_address": nome, "company_name_address": nome if pj else "",
+        "name_address": partes_nome[0] if not pj else "", "last_name_address": (partes_nome[1] if len(partes_nome) > 1 else "") if not pj else "",
+        "cnpj_address": ep.formatar_documento(doc) if pj else "", "cpf_address": ep.formatar_documento(doc) if not pj else "",
+        "state_registration_address": "", "telephone_address": envio.get("destinatario_telefone") or "",
+        "email_address": extra.get("destinatario_email") or "",
+        "zip_address": f"{cep[:5]}-{cep[5:]}" if len(cep) == 8 else cep,
+        "street_address": extra.get("destinatario_logradouro") or (envio.get("destinatario_endereco") or "").split(",")[0],
+        "number_address": extra.get("destinatario_numero") or "0",
+        "complement_address": extra.get("destinatario_complemento") or "",
+        "district_address": envio.get("destinatario_bairro") or "", "city_address": envio.get("destinatario_municipio") or "",
+        "state_address": ep.NOMES_UF.get(uf, uf), "country_address": "Brasil", "latitude": "0", "longitude": "0",
+    }
+    try:
+        r = page.context.request.post(URL_CADASTRO_ENDERECO, multipart=campos, headers=_HEADERS_AJAX, timeout=60000)
+    except Exception as e:
+        return "", f"cadastro do destinatário falhou: {e}"
+    if not r.ok:
+        return "", f"a Stokki recusou o cadastro do destinatário {nome}: {_erros_da_resposta(r)}"
+    dest_id = _achar_id(_json_ou_none(r))
+    if not dest_id:
+        # cadastrou mas não devolveu id reconhecível: procura de novo
+        try:
+            r2 = page.context.request.get(URL_BUSCA_DESTINO.format(client_id=client_id), params={"search": ep.formatar_documento(doc)},
+                                          headers=_HEADERS_AJAX, timeout=30000)
+            dest_id = _achar_id(_json_ou_none(r2)) if r2.ok else ""
+        except Exception:
+            dest_id = ""
+    if not dest_id:
+        return "", f"destinatário {nome} cadastrado na Stokki mas sem id na resposta ({(r.text() or '')[:160]})"
+    logger.info(f"   destinatário {doc} cadastrado na Stokki (id {dest_id})")
+    return dest_id, ""
+
+
+def _escolher_transportadora(page, cfg: dict) -> str:
+    """carrier_id é obrigatório no wizard Excel e o select é carregado por
+    cliente: usa o configurado, senão a opção cujo texto casa com
+    carrier_nome (config), senão a primeira."""
+    if cfg.get("carrier_id"):
+        return str(cfg["carrier_id"])
+    opcoes = page.evaluate("() => Array.from(document.querySelectorAll('#carrier_id option')).map(o => [o.value, o.textContent.trim()])")
+    opcoes = [(v, t) for v, t in opcoes if v]
+    if not opcoes:
+        return ""
+    alvo = (cfg.get("carrier_nome") or "").strip().lower()
+    if alvo:
+        for v, t in opcoes:
+            if alvo in t.lower():
+                return v
+    return opcoes[0][0]
+
+
+def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict], arquivos: dict[str, Path], pasta_logs: Path, wiz,
+                          headless: bool = True) -> tuple[list[dict], dict, dict[str, str]]:
+    """Cria na Stokki os pedidos de planilha. Devolve (resultados por chave
+    [{arquivo, criado, erro}], respostas por chave {status, body}, códigos
+    por chave) -- mesmo contrato de executar_wizard, com a chave sintética
+    no lugar do nome do XML."""
+    from playwright.sync_api import sync_playwright
+
+    pasta_logs.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    resultados: list[dict] = []
+    respostas: dict = {}
+    codigos: dict[str, str] = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        try:
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            page = context.new_page()
+            wiz.fazer_login(page, usuario, senha, modo_automatico=True)
+            page.goto(cfg["url_importacao_excel"], wait_until="networkidle")
+            page.wait_for_timeout(1500)
+            token_csrf = page.evaluate("() => (document.querySelector('meta[name=csrf-token]') || {}).content || ''")
+            if not token_csrf:
+                token_csrf = page.evaluate("() => (document.querySelector('input[name=_token]') || {}).value || ''")
+            wiz.selecionar_valor_select(page, "#client_id", cfg["client_id"])
+            wiz.selecionar_valor_select(page, "#warehouse_id", cfg["warehouse_id"], aguardar_opcoes=True)
+            wiz.selecionar_valor_select(page, "#type_transport", cfg["tipo_transporte"])
+            page.wait_for_timeout(500)
+            try:
+                wiz.selecionar_valor_select(page, "#packaging", cfg["embalagem"])
+            except Exception as e:
+                logger.info(f"   (embalagem '{cfg['embalagem']}' não selecionável no wizard Excel: {e})")
+            page.wait_for_timeout(500)
+            carrier = _escolher_transportadora(page, cfg)
+            page.screenshot(path=str(pasta_logs / f"{ts}_excel_form.png"), full_page=True)
+            if not carrier:
+                raise RuntimeError("O wizard Excel da Stokki exige transportadora (carrier_id) e o cliente não tem nenhuma cadastrada -- "
+                                   "cadastre na Stokki ou informe portal_cliente.stokki_padrao.carrier_id.")
+            for e in envios:
+                chave = e["chave_nfe"]
+                arquivo = arquivos[chave]
+                dest_id, erro = _resolver_destinatario(page, cfg["client_id"], e, token_csrf)
+                if not dest_id:
+                    resultados.append({"arquivo": arquivo.name, "criado": False, "erro": erro})
+                    respostas[chave] = {"status": 0, "body": erro}
+                    continue
+                data_exp = e.get("data_expedicao") or datetime.now().strftime("%Y-%m-%d")
+                if data_exp < datetime.now().strftime("%Y-%m-%d"):
+                    data_exp = datetime.now().strftime("%Y-%m-%d")
+                campos = {
+                    "_token": token_csrf, "position": "0", "motion": "sale", "client_id": cfg["client_id"],
+                    "origin_id": cfg["warehouse_id"], "po": (e.get("referencia") or "")[:60], "destination_id": dest_id,
+                    "type_transport": cfg["tipo_transporte"], "packaging": cfg["embalagem"], "delivery": cfg.get("prioridade") or "",
+                    "carrier_id": carrier, "expedition_date": "/".join(reversed(data_exp.split("-"))), "check_declaration": "0",
+                    "file_excel[]": {"name": arquivo.name,
+                                     "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                     "buffer": arquivo.read_bytes()},
+                }
+                try:
+                    r = page.context.request.post(URL_STORE_EXCEL, multipart=campos, headers=_HEADERS_AJAX, timeout=120000)
+                except Exception as ex:
+                    resultados.append({"arquivo": arquivo.name, "criado": False, "erro": f"falha ao enviar à Stokki: {ex}"})
+                    respostas[chave] = {"status": 0, "body": str(ex)}
+                    continue
+                corpo = r.text() or ""
+                respostas[chave] = {"status": r.status, "body": corpo[:4000]}
+                if r.ok:
+                    resultados.append({"arquivo": arquivo.name, "criado": True, "erro": ""})
+                    codigo = _codigo_da_resposta(respostas[chave])
+                    if codigo:
+                        codigos[chave] = codigo
+                    logger.info(f"   pedido {e.get('referencia')} criado (HTTP {r.status})")
+                else:
+                    resultados.append({"arquivo": arquivo.name, "criado": False, "erro": _erros_da_resposta(r)})
+                    logger.info(f"   pedido {e.get('referencia')} recusado (HTTP {r.status}): {resultados[-1]['erro'][:200]}")
+            criados = [e for e in envios if codigos.get(e["chave_nfe"]) is None and respostas.get(e["chave_nfe"], {}).get("status", 0) in range(200, 300)]
+            if criados:
+                try:
+                    achados = _buscar_codigos_na_listagem(page, [x["referencia"] for x in criados if x.get("referencia")])
+                    for x in criados:
+                        if achados.get(x.get("referencia")):
+                            codigos[x["chave_nfe"]] = achados[x["referencia"]]
+                except Exception as ex:
+                    logger.info(f"   (não consegui consultar a listagem pra achar os códigos: {ex})")
+            page.screenshot(path=str(pasta_logs / f"{ts}_excel_final.png"), full_page=True)
+        finally:
+            browser.close()
+    return resultados, respostas, codigos
+
+
 # ── Processamento de um lote (um embarcador) ───────────────────────────────────
 
 def _e_duplicado(erro: str) -> bool:
@@ -267,33 +505,50 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
 
     pasta_lote = PASTA_LOTES / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cfg['cnpj']}"
     pasta_lote.mkdir(parents=True, exist_ok=True)
-    arquivos: list[Path] = []
+    arquivos: list[Path] = []              # XMLs prontos pro wizard de NF-e
+    arquivos_plan: dict[str, Path] = {}    # chave -> xlsx da Stokki (pedidos de planilha)
     prontos: list[dict] = []
+    prontos_xml: list[dict] = []
+    prontos_plan: list[dict] = []
     try:
         wiz = px = None
         if not simular:
             wiz, px = carregar_importador(config)
         for e in envios:
-            destino = pasta_lote / f"{e['chave_nfe']}.xml"
+            planilha = (e.get("origem") or ep.ORIGEM_XML) == ep.ORIGEM_PLANILHA
             try:
-                if simular:
-                    shutil.copyfile(ep.caminho_xml(e), destino)
+                if planilha:
+                    itens = (json.loads(e.get("itens_json") or "{}") or {}).get("itens") or []
+                    if not itens:
+                        raise ValueError("pedido de planilha sem itens")
+                    destino = pasta_lote / f"{e['chave_nfe']}.xlsx"
+                    destino.write_bytes(ep.xlsx_pedido_stokki(itens))
+                    arquivos_plan[e["chave_nfe"]] = destino
+                    prontos_plan.append(e)
                 else:
-                    transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px)
-                arquivos.append(destino)
+                    destino = pasta_lote / f"{e['chave_nfe']}.xml"
+                    if simular:
+                        shutil.copyfile(ep.caminho_xml(e), destino)
+                    else:
+                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px)
+                    arquivos.append(destino)
+                    prontos_xml.append(e)
                 prontos.append(e)
             except Exception as ex:
-                logger.warning(f"[{cfg['nome']}] NF {e['numero_nf']}: falha ao preparar o XML ({ex})")
-                _marcar(conn, e["id"], status=ep.STATUS_ERRO, erro=f"Falha ao preparar o XML ({cfg['regra_xml']}): {ex}"[:900])
+                o_que = "o arquivo do pedido" if planilha else f"o XML ({cfg['regra_xml']})"
+                logger.warning(f"[{cfg['nome']}] {ep.rotulo_envio(e)}: falha ao preparar {o_que} ({ex})")
+                _marcar(conn, e["id"], status=ep.STATUS_ERRO, erro=f"Falha ao preparar {o_que}: {ex}"[:900])
                 conn.commit()
-                _avisar_erros(config, cfg, [{**e, "erro": str(ex)}], "O XML não pôde ser preparado pra Stokki.")
+                _avisar_erros(config, cfg, [{**e, "erro": str(ex)}], "O pedido não pôde ser preparado pra Stokki.")
                 resumo["erros"] += 1
         if not prontos:
             return resumo
 
         if simular:
-            logger.info(f"[{cfg['nome']}] SIMULAÇÃO: {len(prontos)} XML(s) marcados como criados sem tocar a Stokki.")
+            logger.info(f"[{cfg['nome']}] SIMULAÇÃO: {len(prontos_xml)} XML(s) e {len(prontos_plan)} pedido(s) de planilha "
+                        f"marcados como criados sem tocar a Stokki.")
             resultados = [{"arquivo": p.name, "criado": True, "erro": ""} for p in arquivos]
+            resultados += [{"arquivo": p.name, "criado": True, "erro": ""} for p in arquivos_plan.values()]
             respostas, codigos = {}, {}
         else:
             espera = int(_cfg_portal(config).get("espera_stokki_minutos") or 45) * 60
@@ -307,8 +562,19 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 return resumo
             try:
                 usuario, senha = _credenciais(config)
-                logger.info(f"[{cfg['nome']}] enviando {len(arquivos)} XML(s) à Stokki (client_id={cfg['client_id']}, regra={cfg['regra_xml']})...")
-                resultados, respostas, codigos = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless)
+                resultados, respostas, codigos = [], {}, {}
+                if arquivos:
+                    logger.info(f"[{cfg['nome']}] enviando {len(arquivos)} XML(s) à Stokki (client_id={cfg['client_id']}, regra={cfg['regra_xml']})...")
+                    r1, resp1, cod1 = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless)
+                    resultados += r1
+                    respostas.update(resp1)
+                    codigos.update(cod1)
+                if prontos_plan:
+                    logger.info(f"[{cfg['nome']}] enviando {len(prontos_plan)} pedido(s) de planilha à Stokki (wizard Excel, client_id={cfg['client_id']})...")
+                    r2, resp2, cod2 = executar_wizard_excel(cfg, usuario, senha, prontos_plan, arquivos_plan, pasta_lote, wiz, headless=headless)
+                    resultados += r2
+                    respostas.update(resp2)
+                    codigos.update(cod2)
             finally:
                 sessao_uso.liberar(DONO_TRAVA)
 
@@ -323,7 +589,8 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resumo["erros"] += 1
                 continue
             if r["criado"]:
-                codigo = codigos.get(e["numero_nf"]) or _codigo_da_resposta(resposta) or None
+                codigo = (codigos.get(e["numero_nf"]) if e.get("numero_nf") else None) or codigos.get(e["chave_nfe"]) \
+                    or _codigo_da_resposta(resposta) or None
                 _marcar(conn, e["id"], status=ep.STATUS_CRIADO, erro=None, resposta_stokki=resposta_txt,
                         criado_stokki_em=ep._agora(), codigo_pedido=codigo)
                 resumo["criados"] += 1
@@ -368,7 +635,7 @@ def _avisar_erros(config: dict, cfg: dict, envios: list[dict], cabecalho: str) -
         return
     url = (_cfg_portal(config).get("url_base") or "https://app.freshhub.com.br/cliente").rstrip("/")
     linhas = "".join(
-        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #E5E7EB'><b>NF {e.get('numero_nf') or '?'}</b></td>"
+        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #E5E7EB'><b>{ep.rotulo_envio(e)}</b></td>"
         f"<td style='padding:6px 10px;border-bottom:1px solid #E5E7EB'>{e.get('destinatario_nome') or ''}</td>"
         f"<td style='padding:6px 10px;border-bottom:1px solid #E5E7EB;color:#B91C1C'>{(e.get('erro') or '')[:300]}</td></tr>"
         for e in envios)

@@ -127,6 +127,51 @@ Deploy adicional: `cp portal_cliente/infra/portal-cliente-envios.service /etc/sy
 (precisa do repo `agente_importacao_stokki` em `/opt/agente-importacao-stokki` e do Chromium do Playwright no venv).
 Rodar `enviar_stokki.py --uma-vez --simular` NÃO toca a Stokki (marca como criado) — só pra teste.
 
+### Importação por planilha (XLS/XLSX) — 09/09
+
+Mesma zona de upload, mesma fila. Pra quem não tem o XML da nota: o cliente
+baixa o **modelo Fresh Log** (`GET /api/envios/modelo-planilha`, gerado por
+`envio_pedidos.gerar_modelo_planilha`), preenche **uma linha por item** e
+sobe o `.xlsx` (`.xls` só com `xlrd` instalado; senão pede pra salvar como
+.xlsx). Linhas com o mesmo valor em "Pedido" viram um pedido; destinatário,
+endereço e data de expedição vêm da primeira linha do grupo. O cabeçalho é
+casado por apelidos (`COLUNAS_PLANILHA`: "CNPJ", "Cliente", "Qtd", "Código"…
+valem), sem acento/caixa, em qualquer ordem.
+
+Validação por pedido (`ler_planilha` + `validar_item` + `validar_skus`):
+referência, CNPJ/CPF (11/14 dígitos), nome, CEP, rua, número, bairro,
+cidade, UF, ≥1 item com SKU e quantidade > 0, data de expedição não
+passada, pedido não enviado antes (chave sintética
+`PLANILHA-<cnpj>-<ref>-<hash>` em `chave_nfe`) e SKU no catálogo local
+(`wms_produtos`, por `embarcador_id` = `stkkc_id` ou nome) — sem catálogo do
+embarcador é só aviso. Pedidos com problema são listados com o motivo e os
+válidos seguem.
+
+Gravação: a planilha original vai pra
+`dados/portal_envios/<cnpj>/planilhas/<ts>_<nome>.xlsx` (uma vez por
+arquivo; todos os pedidos apontam pra ela em `xml_path`), e cada pedido é uma
+linha em `portal_envios` com `origem='planilha'`, `referencia`,
+`itens_json` (itens + logradouro/número/complemento/e-mail),
+`data_expedicao`, `linhas_planilha`. Botão "Planilha" na lista baixa o
+arquivo (`/api/envios/<id>/arquivo`).
+
+Worker (`enviar_stokki.executar_wizard_excel`): a Stokki NÃO aceita esses
+pedidos pelo wizard de XML — usa o **wizard de importação por Excel**
+(`inventory/outbound/create/excel`, sondado read-only em 09/09): por pedido
+gera o xlsx do modelo da Stokki (`SKU | Quantidade | Valor Unitário`,
+`xlsx_pedido_stokki`), resolve o destinatário em
+`/address/search/{client_id}/Destination?search=<cnpj>` (cadastra em
+`client/transport/address/store` se não existir) e faz o POST multipart em
+`inventory/outbound/create/store` (`client_id`, `origin_id`, `po`=referência,
+`destination_id`, `type_transport`, `packaging`, `delivery`, `carrier_id`,
+`expedition_date`, `file_excel[]`) pelo `page.context.request` do navegador
+logado. `carrier_id` é obrigatório lá: `stokki_padrao.carrier_id` /
+`gerenciar_clientes.py envio --carrier`, ou automático pelo nome
+(`carrier_nome`, senão a primeira transportadora do cliente). **Nunca rodou
+contra a Stokki real** — formato das respostas (id do endereço, erros 422) é
+best-effort; conferir na 1ª rodada com `--visivel`. Testes:
+`py -3 -m pytest portal_cliente/test_envio_planilha.py`.
+
 ## Atendimento: chat, assistente e chamados (09/09)
 
 Desenho aprovado: https://claude.ai/code/artifact/f947025c-4465-464c-be0b-7d1db42f1f06

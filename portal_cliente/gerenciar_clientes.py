@@ -16,6 +16,7 @@ Máscara de envio de pedidos (08/09):
     py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100                       # mostra os parâmetros da Stokki
     py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100 --regra muai          # regra de transformação do XML
     py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100 --desativar|--ativar  # pausa/libera o envio
+    py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100 --carrier 12          # transportadora do wizard Excel (planilha, 09/09)
     py -3 portal_cliente/gerenciar_clientes.py solicitacoes                               # pendências (cancelar/em espera/reagendar)
     py -3 portal_cliente/gerenciar_clientes.py concluir 12 "cancelado na Stokki"         # marca a solicitação 12 como atendida
     py -3 portal_cliente/gerenciar_clientes.py fila                                       # o que está NA_FILA/ENVIANDO/ERRO
@@ -51,6 +52,10 @@ def _comandos_envio(args, cfg: dict) -> int:
                 mudancas["tipo_transporte"] = args.transporte
             if args.embalagem:
                 mudancas["embalagem"] = args.embalagem
+            if args.carrier is not None:
+                mudancas["carrier_id"] = args.carrier
+            if args.prioridade is not None:
+                mudancas["prioridade"] = args.prioridade
             if args.ativar or args.desativar:
                 mudancas["envio_ativo"] = bool(args.ativar)
             if mudancas:
@@ -60,6 +65,8 @@ def _comandos_envio(args, cfg: dict) -> int:
             print(f"  client_id (interno.stkkc_id): {c['client_id'] or '(FALTA -- cadastre em interno.stkkc_id)'}")
             print(f"  regra_xml: {c['regra_xml']} -- {envios.REGRAS_XML[c['regra_xml']]}")
             print(f"  warehouse_id: {c['warehouse_id']}  transporte: {c['tipo_transporte']}  embalagem: {c['embalagem']}")
+            print(f"  planilha (wizard Excel): carrier_id: {c['carrier_id'] or '(automático: ' + (c['carrier_nome'] or 'primeira transportadora do cliente') + ')'}"
+                  f"  prioridade: {c['prioridade'] or '(nenhuma)'}")
             print(f"  envio {'ATIVO' if c['envio_ativo'] else 'DESATIVADO'}  e-mails: {', '.join(c['emails']) or '(nenhum)'}")
             return 0
         if args.cmd == "solicitacoes":
@@ -68,7 +75,7 @@ def _comandos_envio(args, cfg: dict) -> int:
                 print("Nenhuma solicitação pendente.")
             for s in itens:
                 print(f"#{s['id']:<4} {s['criado_em'][:16]}  {envios.ROTULOS_SOLICITACAO.get(s['tipo'], s['tipo']):<26} "
-                      f"NF {s['numero_nf']:<8} {s['codigo_pedido'] or '(sem código)':<10} {s['destinatario_nome']}  "
+                      f"{envios.rotulo_envio(s):<16} {s['codigo_pedido'] or '(sem código)':<10} {s['destinatario_nome']}  "
                       f"[{s['status_envio']}] {s['detalhes'] or ''}  (por {s['solicitado_por']})")
             return 0
         if args.cmd == "concluir":
@@ -76,14 +83,14 @@ def _comandos_envio(args, cfg: dict) -> int:
             print(f"Solicitação #{args.id} marcada como {'RECUSADA' if args.recusar else 'CONCLUÍDA'}.")
             return 0
         if args.cmd == "fila":
-            rows = conn.execute("SELECT e.id, e.status, e.criado_em, e.numero_nf, e.destinatario_nome, e.tentativas, e.erro, "
+            rows = conn.execute("SELECT e.id, e.status, e.criado_em, e.numero_nf, e.referencia, e.destinatario_nome, e.tentativas, e.erro, "
                                 "COALESCE(i.apelido, i.nome_remetente, e.cnpj_embarcador) AS emb FROM portal_envios e "
                                 "LEFT JOIN interno i ON i.cnpj_embarcador = e.cnpj_embarcador "
                                 "WHERE e.status IN ('NA_FILA','ENVIANDO','ERRO') ORDER BY e.status, e.criado_em").fetchall()
             if not rows:
                 print("Fila vazia e sem erros.")
             for r in rows:
-                print(f"#{r['id']:<5} {r['status']:<9} {r['criado_em'][:16]}  {r['emb'][:28]:<28} NF {r['numero_nf']:<8} "
+                print(f"#{r['id']:<5} {r['status']:<9} {r['criado_em'][:16]}  {r['emb'][:28]:<28} {envios.rotulo_envio(dict(r)):<16} "
                       f"{(r['destinatario_nome'] or '')[:30]:<30} tent.{r['tentativas']}  {(r['erro'] or '')[:80]}")
             try:
                 from stokki.sessao_uso import em_uso
@@ -124,6 +131,8 @@ def main(argv=None) -> int:
     ev.add_argument("--warehouse")
     ev.add_argument("--transporte")
     ev.add_argument("--embalagem")
+    ev.add_argument("--carrier", help="carrier_id da transportadora na Stokki pro wizard Excel (planilha); '' = automático")
+    ev.add_argument("--prioridade", help="delivery do wizard Excel: marketplace|same_day_delivery|express_delivery|... ; '' = nenhuma")
     g = ev.add_mutually_exclusive_group()
     g.add_argument("--ativar", action="store_true")
     g.add_argument("--desativar", action="store_true")

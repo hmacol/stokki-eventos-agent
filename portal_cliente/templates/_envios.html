@@ -73,17 +73,21 @@
           <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
         </div>
         <label class="zona" id="zona">
-          <input type="file" id="arquivos" multiple accept=".xml,.zip,text/xml,application/xml,application/zip">
+          <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          <div><b>Arraste os XMLs das notas aqui</b> ou clique pra escolher</div>
-          <div style="font-size:11.5px; margin-top:4px;">Aceita vários .xml de uma vez ou um .zip com os XMLs. Só NF-e de saída emitidas pela sua empresa.</div>
+          <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
+          <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log, uma linha por item.</div>
         </label>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
+          <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
+          <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
+        </div>
         <div class="msg" id="env-msg"></div>
         <div class="previa" id="previa">
           <div class="rej oculto" id="previa-rej"></div>
           <div>
             <h4 id="previa-titulo"></h4>
-            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
+            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF / Pedido</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
           </div>
           <div id="previa-dest" style="display:flex; flex-direction:column; gap:8px;"></div>
           <div class="barra-confirmar">
@@ -107,7 +111,7 @@
           </div>
           <button type="button" class="botao-linha" id="env-atualizar">Atualizar</button>
         </div>
-        <div class="rolagem"><table id="env-tabela"><thead><tr><th>Enviado em</th><th>NF</th><th>Destinatário</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Pedido</th><th>Entrega</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+        <div class="rolagem"><table id="env-tabela"><thead><tr><th>Enviado em</th><th>NF / Pedido</th><th>Destinatário</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Pedido</th><th>Entrega</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
         <div class="vazio oculto" id="env-vazia"></div>
         <div class="rodape-tabela"><span id="env-contagem"></span><span id="env-carimbo" style="font-size:12px;"></span></div>
       </div>
@@ -117,8 +121,8 @@
       <div class="card">
         <h3>Como funciona</h3>
         <div class="lista-lateral" style="font-size:12.5px; color:var(--texto-suave); gap:10px;">
-          <div><b style="color:var(--texto)">1.</b> Você sobe o XML da NF-e (ou um ZIP com vários).</div>
-          <div><b style="color:var(--texto)">2.</b> A gente confere a nota: precisa ser NF-e de saída da sua empresa e não pode ter sido enviada antes.</div>
+          <div><b style="color:var(--texto)">1.</b> Você sobe o XML da NF-e (ou um ZIP com vários) -- ou, se não tem nota, uma planilha .xlsx no modelo Fresh Log (uma linha por item; linhas com o mesmo "Pedido" viram um pedido).</div>
+          <div><b style="color:var(--texto)">2.</b> A gente confere: NF-e precisa ser de saída da sua empresa e não pode ter sido enviada antes; na planilha, cada pedido precisa de destinatário, endereço completo e pelo menos um SKU com quantidade.</div>
           <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
           <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
         </div>
@@ -219,8 +223,16 @@
     else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
     else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length);
     const q = busca.trim().toLowerCase();
-    if (q) lista = lista.filter(x => [x.numero_nf, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
     return lista;
+  }
+
+  // "NF 123" (XML) ou "PED-1 · planilha" (importação por planilha, 09/09)
+  function docCurto(x) {
+    const plan = x.origem === 'planilha';
+    return `<span class="mono num" style="font-weight:600">${esc(x.documento_curto || x.numero_nf || x.referencia || '—')}</span>` +
+      (plan ? ` <span class="chip" title="Pedido importado de planilha${x.numero_nf ? '' : ' (sem NF-e)'}">planilha</span>` : '') +
+      (plan && x.numero_nf && x.referencia ? `<div class="end">${esc(x.referencia)}</div>` : '');
   }
 
   function entrega(x) {
@@ -233,7 +245,7 @@
     const lista = filtrados();
     $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
       <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
-      <td class="nw"><span class="mono num" style="font-weight:600">${esc(x.numero_nf)}</span></td>
+      <td class="nw">${docCurto(x)}</td>
       <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
       <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
@@ -244,7 +256,7 @@
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
-        <button type="button" data-acao="xml" data-id="${x.id}" title="Baixar o XML enviado">XML</button>
+        <button type="button" data-acao="xml" data-id="${x.id}" title="${x.origem === 'planilha' ? 'Baixar a planilha enviada' : 'Baixar o XML enviado'}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
       </div></td></tr>`).join('');
     const vazio = $('env-vazia');
     if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.envios.length ? 'Nenhum pedido nessa situação.' : 'Você ainda não enviou nenhum pedido por aqui.'); }
@@ -254,9 +266,9 @@
 
   function renderLateral() {
     const fila = dados.envios.filter(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
-    $('env-fila').innerHTML = fila.length ? fila.slice(0, 8).map(x => `<div class="linha"><span><span class="mono">NF ${esc(x.numero_nf)}</span> ${esc(x.destinatario_nome)}</span><span class="suave">${x.status === 'ENVIANDO' ? 'enviando…' : 'na fila'}</span></div>`).join('') + (fila.length > 8 ? `<div class="vazio-lat">e mais ${fila.length - 8}…</div>` : '') + (dados.fila ? `<div class="vazio-lat">A Stokki está em uso por ${esc(dados.fila)} -- seus pedidos entram assim que liberar.</div>` : '') : '<div class="vazio-lat">Nada na fila agora.</div>';
+    $('env-fila').innerHTML = fila.length ? fila.slice(0, 8).map(x => `<div class="linha"><span><span class="mono">${esc(x.rotulo || 'NF ' + x.numero_nf)}</span> ${esc(x.destinatario_nome)}</span><span class="suave">${x.status === 'ENVIANDO' ? 'enviando…' : 'na fila'}</span></div>`).join('') + (fila.length > 8 ? `<div class="vazio-lat">e mais ${fila.length - 8}…</div>` : '') + (dados.fila ? `<div class="vazio-lat">A Stokki está em uso por ${esc(dados.fila)} -- seus pedidos entram assim que liberar.</div>` : '') : '<div class="vazio-lat">Nada na fila agora.</div>';
     const pend = dados.envios.flatMap(x => x.solicitacoes_pendentes.map(s => ({ x, s })));
-    $('env-pendencias').innerHTML = pend.length ? pend.map(({ x, s }) => `<div class="linha"><span><span class="mono">NF ${esc(x.numero_nf)}</span> ${esc(s.rotulo)}</span><span class="suave">${esc(s.criado_em_br.slice(0, 5))}</span></div>`).join('') : '<div class="vazio-lat">Nenhuma solicitação aberta.</div>';
+    $('env-pendencias').innerHTML = pend.length ? pend.map(({ x, s }) => `<div class="linha"><span><span class="mono">${esc(x.rotulo || 'NF ' + x.numero_nf)}</span> ${esc(s.rotulo)}</span><span class="suave">${esc(s.criado_em_br.slice(0, 5))}</span></div>`).join('') : '<div class="vazio-lat">Nenhuma solicitação aberta.</div>';
   }
 
   function renderAtencao() {
@@ -266,8 +278,8 @@
     if (!pend.length && !erros.length) { card.classList.add('oculto'); card.innerHTML = ''; return; }
     card.classList.remove('oculto');
     card.innerHTML = `<h3>Precisa da sua atenção (${pend.length + erros.length})</h3>` +
-      pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>NF ${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
-      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>NF ${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
+      pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
+      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
   }
 
   // ── Upload → prévia ────────────────────────────────────────────────────────
@@ -298,14 +310,20 @@
     const rej = $('previa-rej');
     if (p.rejeitados.length) {
       rej.classList.remove('oculto');
-      rej.innerHTML = `<b>${p.rejeitados.length} arquivo${p.rejeitados.length > 1 ? 's' : ''} não pode${p.rejeitados.length > 1 ? 'm' : ''} ser enviado${p.rejeitados.length > 1 ? 's' : ''}:</b>` +
-        p.rejeitados.map(r => `<div>• ${esc(r.numero_nf ? 'NF ' + r.numero_nf : r.arquivo)} — ${esc(r.erro)}</div>`).join('');
+      rej.innerHTML = `<b>${p.rejeitados.length} ${p.rejeitados.length > 1 ? 'itens não podem ser enviados' : 'item não pode ser enviado'}:</b>` +
+        p.rejeitados.map(r => `<div>• ${esc(r.rotulo || (r.numero_nf ? 'NF ' + r.numero_nf : r.arquivo))}${r.rotulo && r.arquivo && r.arquivo !== r.rotulo ? ` <span style="opacity:.7">(${esc(r.arquivo)})</span>` : ''} — ${esc(r.erro)}</div>`).join('');
     } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
-    $('previa-titulo').textContent = p.itens.length ? `${p.itens.length} nota${p.itens.length > 1 ? 's' : ''} pronta${p.itens.length > 1 ? 's' : ''} pra enviar` : 'Nenhuma nota válida neste lote';
+    const nPlan = p.itens.filter(it => it.origem === 'planilha').length;
+    $('previa-titulo').textContent = p.itens.length ? `${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''} pronto${p.itens.length > 1 ? 's' : ''} pra enviar${nPlan ? ` (${nPlan} de planilha)` : ''}` : 'Nenhum pedido válido neste lote';
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
+      const plan = it.origem === 'planilha';
+      const doc = plan
+        ? `<span class="mono num" style="font-weight:600">${esc(it.referencia)}</span> <span class="chip" title="Pedido lido da planilha${it.linhas && it.linhas.length ? ' (linhas ' + it.linhas.join(', ') + ')' : ''}">planilha</span>` +
+          `<div class="end">${it.numero_nf ? 'NF ' + esc(it.numero_nf) + ' · ' : ''}${it.itens} ${it.itens > 1 ? 'itens' : 'item'}${it.data_expedicao ? ' · expede ' + dataBr(it.data_expedicao) : ''}</div>`
+        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>`;
       return `<tr data-i="${i}">
-        <td class="nw"><span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
+        <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
         <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div></td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
@@ -351,6 +369,7 @@
     for (let i = 0; i < p.itens.length; i++) {
       const it = p.itens[i], h = horarios[it.destinatario_doc] || {};
       if (!h.ini || !h.fim) { mensagem(`Informe o horário de recebimento de ${it.destinatario_nome}.`, 'erro'); return; }
+      const rotuloIt = it.rotulo || ('NF ' + it.numero_nf);
       const tr = $('previa-tabela').querySelector(`tr[data-i="${i}"]`);
       const item = { token: it.token, horario_inicio: h.ini, horario_fim: h.fim, requer_agendamento: h.ag };
       if (h.ag) {
@@ -359,7 +378,7 @@
         item.agendamento_data = data ? data.value : '';
         item.agendamento_hora_inicio = (tr.querySelector('.ag-ini') || {}).value;
         item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
-        if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`NF ${it.numero_nf}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
+        if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`${rotuloIt}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
       }
       itens.push(item);
     }
@@ -395,7 +414,7 @@
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
     if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
-    const cab = `<p>NF <b>${esc(x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
+    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
@@ -426,6 +445,7 @@
 
   // ── Eventos ────────────────────────────────────────────────────────────────
   const zona = $('zona');
+  $('btn-modelo').addEventListener('click', e => e.stopPropagation());
   $('arquivos').addEventListener('change', e => analisar(e.target.files));
   ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
   ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));

@@ -96,8 +96,8 @@
       antes: function () { chat(true); } },
 
     // ── Enviar pedidos ───────────────────────────────────────────────────────
-    { alvo: '#zona', capitulo: E, titulo: 'Enviar notas fiscais',
-      texto: '<p>Arraste os XMLs das NF-e pra cá, ou clique pra escolher os arquivos. Aceita vários XMLs de uma vez ou um ZIP com todos.</p><p>Só valem NF-e de saída emitidas pela sua empresa e que ainda não foram enviadas.</p>',
+    { alvo: '#zona', capitulo: E, titulo: 'Enviar notas fiscais ou planilha',
+      texto: '<p>Arraste os XMLs das NF-e pra cá, ou clique pra escolher os arquivos. Aceita vários XMLs de uma vez ou um ZIP com todos.</p><p>Só valem NF-e de saída emitidas pela sua empresa e que ainda não foram enviadas.</p><p>Sem nota? Suba uma <b>planilha .xlsx</b> no modelo Fresh Log (botão <i>Baixar modelo de planilha</i>): uma linha por item, e as linhas com o mesmo "Pedido" viram um pedido só.</p>',
       antes: function () { chat(false); envios(); } },
     { alvo: '#card-enviar', capitulo: E, titulo: 'Conferência antes de enviar',
       texto: '<p>Depois de subir os arquivos, aparece uma prévia com cada nota: destinatário, endereço, volumes, peso e valor. Arquivos com problema são listados com o motivo.</p><p>Na primeira vez que um destinatário aparece, você informa o <b>horário em que ele recebe</b> e se <b>só aceita com agendamento</b>. Nas próximas vezes isso já vem preenchido. Quem exige agendamento pede a data, ou fica como <i>agendamento pendente</i>.</p><p>Confira e clique em <b>Confirmar envio</b>. Os pedidos entram na fila e são criados na Stokki em instantes.</p>', antes: envios },

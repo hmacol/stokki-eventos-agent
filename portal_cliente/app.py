@@ -509,8 +509,9 @@ def api_envios_analisar():
     _exige_pode_enviar()
     arquivos = request.files.getlist("arquivos")
     if not arquivos:
-        return jsonify({"erro": "Selecione pelo menos um arquivo XML (ou ZIP com XMLs)."}), 400
+        return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e (ou ZIP com XMLs) ou planilha .xlsx no modelo Fresh Log."}), 400
     itens, rejeitados, vistos = [], [], set()
+    n_planilhas = 0
     conn = envios.conectar()
     try:
         cfg = envios.config_stokki_cliente(conn, g.cliente["cnpj"], _CONFIG)
@@ -521,22 +522,54 @@ def api_envios_analisar():
                 rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
                 continue
             for nome, conteudo in partes:
+                if envios.e_planilha(nome, conteudo):
+                    # Planilha no modelo Fresh Log (09/09): vários pedidos por
+                    # arquivo; cada pedido vira um item da prévia com token
+                    # próprio (JSON temporário) apontando pra planilha original.
+                    n_planilhas += 1
+                    try:
+                        pedidos, rej = envios.ler_planilha(conteudo, nome, g.cliente["cnpj"])
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                        continue
+                    rejeitados.extend(rej)
+                    token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
+                    for ped in pedidos:
+                        rotulo = f"Pedido {ped['referencia']}"
+                        if ped["chave_nfe"] in vistos:
+                            rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetido dentro do mesmo envio."})
+                            continue
+                        vistos.add(ped["chave_nfe"])
+                        v = envios.validar_item(conn, ped, g.cliente["cnpj"])
+                        erros_sku, avisos_sku = envios.validar_skus(conn, ped, cfg)
+                        if not v["ok"] or erros_sku:
+                            rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"] + erros_sku)})
+                            continue
+                        token = envios.guardar_temporario_pedido(ped, token_plan)
+                        item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
+                        item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                                     "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
+                        itens.append(item)
+                    continue
                 try:
                     nfe = envios.ler_nfe(conteudo, nome)
                 except envios.ErroEnvio as e:
                     rejeitados.append({"arquivo": nome, "erro": str(e)})
                     continue
+                nfe["origem"] = envios.ORIGEM_XML
                 if nfe["chave_nfe"] in vistos:
-                    rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "erro": "Repetida dentro do mesmo envio."})
+                    rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "rotulo": f"NF {nfe['numero_nf']}",
+                                       "erro": "Repetida dentro do mesmo envio."})
                     continue
                 vistos.add(nfe["chave_nfe"])
                 v = envios.validar_item(conn, nfe, g.cliente["cnpj"])
                 if not v["ok"]:
-                    rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "erro": " ".join(v["erros"])})
+                    rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "rotulo": f"NF {nfe['numero_nf']}",
+                                       "erro": " ".join(v["erros"])})
                     continue
                 token = envios.guardar_temporario(conteudo)
                 item = {k: v_ for k, v_ in nfe.items() if k not in ("emitente_cnpj",)}
-                item.update({"token": token, "avisos": v["avisos"],
+                item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
         destinatarios = envios.info_destinatarios(conn, g.cliente["cnpj"], itens, _CONFIG)
@@ -544,10 +577,19 @@ def api_envios_analisar():
         return _json_erro_envio(e)
     finally:
         conn.close()
-    logger.info(f"analisar cnpj={g.cliente['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)}")
+    logger.info(f"analisar cnpj={g.cliente['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat()})
+
+
+@app.route("/api/envios/modelo-planilha")
+@requer_cliente
+def api_envios_modelo_planilha():
+    """Modelo .xlsx da Fresh Log pra importação por planilha (09/09)."""
+    conteudo = envios.gerar_modelo_planilha(g.cliente.get("nome") or "")
+    return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="modelo_pedidos_freshlog.xlsx", max_age=0)
 
 
 @app.route("/api/envios/confirmar", methods=["POST"])
@@ -627,8 +669,11 @@ def _avisar_operacao_solicitacao(envio: dict, tipo: str, corpo: dict) -> None:
 
 
 @app.route("/api/envios/<int:envio_id>/xml")
+@app.route("/api/envios/<int:envio_id>/arquivo")
 @requer_cliente
 def api_envios_xml(envio_id):
+    """Arquivo original do envio: o XML da NF-e ou a planilha de onde o
+    pedido foi lido (09/09)."""
     conn = envios.conectar()
     try:
         envio = envios.buscar_envio(conn, envio_id, g.cliente["cnpj"])
@@ -639,6 +684,10 @@ def api_envios_xml(envio_id):
     caminho = envios.caminho_xml(envio)
     if not caminho.is_file():
         abort(404)
+    if (envio.get("origem") or envios.ORIGEM_XML) == envios.ORIGEM_PLANILHA:
+        tipos = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel"}
+        return send_file(caminho, mimetype=tipos.get(caminho.suffix.lower(), "application/octet-stream"), as_attachment=True,
+                         download_name=caminho.name.split("_", 3)[-1] if caminho.name.count("_") >= 3 else caminho.name, max_age=0)
     return send_file(caminho, mimetype="application/xml", as_attachment=True, download_name=f"{envio['chave_nfe']}.xml", max_age=0)
 
 
