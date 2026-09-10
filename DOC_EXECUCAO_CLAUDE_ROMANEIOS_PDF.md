@@ -64,6 +64,30 @@ Notas Fiscais do pedido, seguidas de todos os Boletos.
    (parada, pedido, nº NF, embarcador, cliente) e campos em branco de
    Recebedor / Assinatura / Data.
 
+4. **CANHOTEIRA DE TRANSPORTADORA** (pedido do Hugo, 10/09): **1 folha
+   por transportadora de redespacho** presente na rota, depois da
+   canhoteira de embarcador. Um pedido é "via transportadora" quando o
+   **endereço do serviço na VUUPT** bate com um ponto de redespacho
+   TERCEIROS da `dados/BD_TRANSPORTADORAS.xlsx`
+   (`regras/transportadoras.py::resolver_por_endereco` — CEP + número,
+   com fallback rua + número + cidade; o mesmo critério da notificação
+   de transportadoras). A folha traz o nome completo e o endereço do
+   galpão, motorista e dia, uma linha por pedido na ordem da rota
+   (parada, pedido + nº NF, embarcador, destinatário final, volumes,
+   caixa OK pra conferência) e um bloco de recebimento (nome legível,
+   documento, data/hora, assinatura e carimbo, ocorrências). Lote
+   grande quebra em folhas de continuação; o bloco de recebimento fica
+   sempre inteiro na última. A capa avisa quais transportadoras têm
+   folha (nome curto normalizado: "DAFRAN", "TAC", "TRANSFRIOS"…).
+   - Vale igual pro job das 04h, pro botão "Imprimir rota", pra
+     expedição e pra documentação automática da rota (`montar_pdf_rota`
+     carrega a planilha sozinho quando o chamador não passa
+     `catalogo_transportadoras`). Planilha ausente/ilegível → warning e
+     o romaneio sai sem essa folha.
+   - Pedido de Padrão Puro/Quatro Estrelas/Pedramoura entregue em galpão
+     de transportadora aparece nas **duas** canhoteiras (a de embarcador
+     não foi alterada).
+
 Páginas geradas com Pillow (A4 a 150 dpi, Arial do Windows, checks/X
 desenhados) e mescladas com pypdf — sem dependência nova.
 
@@ -133,6 +157,9 @@ Logs: `dados\sequencia_romaneios.log` (resumo),
 - [x] Canhoteira nas páginas finais quando houver entrega de Padrão
   Puro / Quatro Estrelas / Pedramoura, na ordem da rota, com motorista,
   rota e dia no cabeçalho.
+- [x] Canhoteira de transportadora: 1 folha por galpão de redespacho da
+  rota, identificado pelo endereço do serviço na VUUPT
+  (`roteirizacao/test_canhoteira_transportadora.py`).
 - [x] Pendências granulares por pedido (X na capa), no `_resumo.txt` e
   na notificação.
 - [x] Idempotência por data e por `--rota`.

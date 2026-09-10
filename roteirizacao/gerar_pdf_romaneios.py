@@ -27,6 +27,15 @@ os documentos):
   3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
      recebedor/data/assinatura, identificando motorista, rota e dia.
+  4. CANHOTEIRA DE TRANSPORTADORA (pedido do Hugo, 10/09): 1 folha por
+     transportadora de redespacho presente na rota, listando só os
+     pedidos que o motorista entrega naquele galpão (pedido, NF,
+     embarcador, destinatário final, volumes) com bloco de recebimento
+     (nome, documento, data/hora, assinatura e carimbo). O pedido é
+     "via transportadora" quando o ENDEREÇO do serviço na VUUPT bate
+     com um ponto de redespacho TERCEIROS da BD_TRANSPORTADORAS
+     (regras/transportadoras.py::resolver_por_endereco -- o mesmo
+     critério da notificação de transportadoras).
 
 Pendências (sem NF, sem boleto, arquivo ilegível) aparecem como X
 vermelho na capa e listadas no _resumo.txt + notificação.
@@ -87,10 +96,13 @@ from avisar_motoristas_rotas import (
 from localizar_arquivos import resolver_arquivo_local
 from notificar_execucao_agente import notificar_execucao
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
 
 PASTA_ROMANEIOS = _RAIZ_LOCAL / "dados" / "romaneios"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 LOGO_PATH = _RAIZ_PROJETO / "assets" / "logo_freshlog.png"
+# Mesma planilha do pipeline e da notificação de transportadoras.
+TRANSPORTADORAS_PATH = _RAIZ_PROJETO / "dados" / "BD_TRANSPORTADORAS.xlsx"
 
 # Embarcadores cujas entregas geram folha de CANHOTEIRA no fim do
 # romaneio (pedido do Hugo, 11/08). sender_id do VUUPT (tabela interno).
@@ -245,6 +257,57 @@ def carregar_embarcadores() -> tuple[dict[int, str], dict[int, float]]:
     except Exception as e:
         logger.warning(f"Falha ao carregar embarcadores da tabela interno: {e}")
         return {}, {}
+
+
+def carregar_catalogo_transportadoras() -> CatalogoTransportadoras | None:
+    """Catálogo da BD_TRANSPORTADORAS pra identificar pedido "via
+    transportadora" pelo endereço (canhoteira de transportadora). None
+    quando a planilha não existe/não abre -- o romaneio sai sem essa
+    folha, nunca deixa de sair por causa dela."""
+    try:
+        return CatalogoTransportadoras.carregar(TRANSPORTADORAS_PATH)
+    except Exception as e:
+        logger.warning(f"BD_TRANSPORTADORAS indisponível ({e}) -- romaneio sai sem canhoteira "
+                       f"de transportadora.")
+        return None
+
+
+_CONECTIVOS_FINAIS = {"E", "DE", "DA", "DO", "DAS", "DOS"}
+
+
+def nome_curto_transportadora(ponto: PontoRedespacho) -> str:
+    """'DAFRAN TRANSPORTES E SERVICOS LTDA EPP' -> 'DAFRAN' (o normalizador
+    da planilha já tira TRANSPORTES/SERVICOS/LTDA/EPP, mas deixa a
+    conjunção solta no fim: 'DAFRAN E'). Pra capa e resumo; a folha em si
+    leva o nome completo."""
+    tokens = (ponto.nome_normalizado or "").split()
+    while tokens and tokens[-1] in _CONECTIVOS_FINAIS:
+        tokens.pop()
+    return " ".join(tokens) or (ponto.nome or "").strip().upper() or "TRANSPORTADORA"
+
+
+def agrupar_por_transportadora(itens: list[dict],
+                               catalogo: CatalogoTransportadoras | None) -> list[tuple[PontoRedespacho, list[dict]]]:
+    """Pedidos da rota entregues em galpão de transportadora (TERCEIROS),
+    agrupados por ponto de redespacho na ordem em que o galpão aparece na
+    rota. Critério = ENDEREÇO do serviço na VUUPT (item['endereco_vuupt'])
+    batido contra a planilha, o mesmo da notificação de transportadoras:
+    pega tanto o redespacho automático do pipeline quanto o endereço do
+    galpão digitado à mão pelo cliente. Nunca levanta -- falha vira
+    warning e a rota sai sem a folha."""
+    if catalogo is None:
+        return []
+    grupos: dict[str, tuple[PontoRedespacho, list[dict]]] = {}
+    for item in itens:
+        try:
+            ponto = catalogo.resolver_por_endereco(item.get("endereco_vuupt") or "")
+        except Exception as e:
+            logger.warning(f"  {item.get('codigo')}: falha no batimento de transportadora ({e}).")
+            continue
+        if ponto is None:
+            continue
+        grupos.setdefault(ponto.chave, (ponto, []))[1].append(item)
+    return list(grupos.values())
 
 
 def _nf_norm(numero_nf) -> str | None:
@@ -595,7 +658,8 @@ def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
 
 
 def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
-               data_alvo: date, tem_canhoteira: bool) -> list[Image.Image]:
+               data_alvo: date, tem_canhoteira: bool,
+               transportadoras: list[str] | None = None) -> list[Image.Image]:
     """Capa em PAISAGEM: identidade Freshlog + resumo da rota + tabela
     com 1 linha por pedido (ordem de visita) mostrando embarcador,
     cliente, endereço de entrega, volumes, peso e status de NF/boleto."""
@@ -613,9 +677,16 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
     _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
     _info(760, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 540))
     _info(A4_PAISAGEM[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
+    avisos = []
     if tem_canhoteira:
-        draw.text((MARGEM, y + 100), "Inclui CANHOTEIRA nas páginas finais",
-                  font=_fonte(22, True), fill=VERDE_OK, anchor="ls")
+        avisos.append("Inclui CANHOTEIRA nas páginas finais")
+    if transportadoras:
+        avisos.append("Inclui CANHOTEIRA DE TRANSPORTADORA: " + " · ".join(transportadoras))
+    if avisos:
+        fonte_aviso = _fonte(22, True)
+        draw.text((MARGEM, y + 100),
+                  _truncar(draw, "   |   ".join(avisos), fonte_aviso, A4_PAISAGEM[0] - 2 * MARGEM),
+                  font=fonte_aviso, fill=VERDE_OK, anchor="ls")
     y += 130
 
     paginas = [img]
@@ -734,6 +805,138 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
     return paginas
 
 
+# Colunas da canhoteira de transportadora (retrato, página de 1240).
+_CT_COL_N, _CT_COL_PED, _CT_COL_EMB, _CT_COL_DEST = 118, 170, 470, 690
+_CT_COL_VOL_CX, _CT_COL_OK_CX = 1010, 1100
+_CT_LARG_PED, _CT_LARG_EMB, _CT_LARG_DEST = 285, 205, 280
+_CT_ALTURA_LINHA = 72
+_CT_ALTURA_RECEBIMENTO = 300
+
+
+def _somar_volumes(entregas: list[dict]) -> str:
+    """'12' quando todos os pedidos têm volumes; '12 (parcial)' quando
+    algum não tem (a transportadora confere no físico)."""
+    conhecidos = [e["volumes"] for e in entregas if e.get("volumes")]
+    if not conhecidos:
+        return "—"
+    total = str(sum(conhecidos))
+    return total if len(conhecidos) == len(entregas) else f"{total} (parcial)"
+
+
+def gerar_canhoteira_transportadora(rota: dict, ponto: PontoRedespacho, entregas: list[dict],
+                                    nome_motorista: str, data_alvo: date) -> list[Image.Image]:
+    """Folha(s) de canhoteira de UMA transportadora de redespacho: só os
+    pedidos da rota que o motorista entrega naquele galpão, na ordem da
+    rota, com pedido/NF, embarcador, destinatário final e volumes, e um
+    bloco de recebimento (nome, documento, data/hora, assinatura e
+    carimbo) no fim -- a transportadora assina o lote inteiro, e a
+    coluna OK serve pra ela conferir pedido a pedido (pedido do Hugo,
+    10/09: 1 canhoteira por transportadora)."""
+    data_br = data_alvo.strftime("%d/%m/%Y")
+    nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
+    nome_transp = (ponto.nome or "").strip().upper() or "TRANSPORTADORA"
+    endereco_galpao = str(ponto.endereco)
+    total_volumes = _somar_volumes(entregas)
+
+    def _nova_pagina(continuacao: bool = False):
+        img, draw = _pagina_branca()
+        titulo = "CANHOTEIRA · TRANSPORTADORA" + (" (cont.)" if continuacao else "")
+        y = _cabecalho(img, draw, titulo, nome_rota)
+        largura = A4_RETRATO[0] - 2 * MARGEM
+        draw.text((MARGEM, y + 24), _truncar(draw, nome_transp, _fonte(36, True), largura),
+                  font=_fonte(36, True), fill=NAVY, anchor="ls")
+        draw.text((MARGEM, y + 60), _truncar(draw, endereco_galpao, _fonte(21), largura),
+                  font=_fonte(21), fill=CINZA_TXT, anchor="ls")
+        # a rota já está no subtítulo do cabeçalho -- aqui só motorista e dia
+        draw.text((MARGEM, y + 104),
+                  _truncar(draw, f"Motorista: {nome_motorista}   ·   {data_br}",
+                           _fonte(24, True), largura),
+                  font=_fonte(24, True), fill=NAVY, anchor="ls")
+        draw.text((MARGEM, y + 140),
+                  f"Conferir e assinar o recebimento dos pedidos abaixo — "
+                  f"{len(entregas)} pedido(s), {total_volumes} volume(s)",
+                  font=_fonte(21), fill=CINZA_TXT, anchor="ls")
+        y += 170
+        draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + 48)], fill=NAVY)
+        f = _fonte(22, True)
+        meio = y + 24
+        draw.text((_CT_COL_N, meio), "#", font=f, fill="white", anchor="lm")
+        draw.text((_CT_COL_PED, meio), "PEDIDO / NF", font=f, fill="white", anchor="lm")
+        draw.text((_CT_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
+        draw.text((_CT_COL_DEST, meio), "DESTINATÁRIO", font=f, fill="white", anchor="lm")
+        draw.text((_CT_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
+        draw.text((_CT_COL_OK_CX, meio), "OK", font=f, fill="white", anchor="mm")
+        return img, draw, y + 48
+
+    paginas = []
+    img, draw, y = _nova_pagina()
+    paginas.append(img)
+    limite_y = A4_RETRATO[1] - 130
+    fonte_ped, fonte_nf, fonte_txt = _fonte(23, True), _fonte(19), _fonte(21)
+
+    for n, entrega in enumerate(entregas):
+        if y + _CT_ALTURA_LINHA > limite_y:
+            _rodape(img, draw)
+            img, draw, y = _nova_pagina(continuacao=True)
+            paginas.append(img)
+        if n % 2 == 0:
+            draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
+                           fill=CINZA_ZEBRA)
+        meio = y + _CT_ALTURA_LINHA // 2
+        draw.text((_CT_COL_N, meio), str(entrega["posicao"]), font=fonte_txt,
+                  fill=CINZA_TXT, anchor="lm")
+        draw.text((_CT_COL_PED, y + 30), _truncar(draw, entrega["codigo"], fonte_ped, _CT_LARG_PED),
+                  font=fonte_ped, fill=NAVY, anchor="ls")
+        rotulo_nf = "PV" if entrega.get("veio_de_pedido_venda") else "NF"
+        draw.text((_CT_COL_PED, y + 56),
+                  _truncar(draw, f"{rotulo_nf} {entrega['nfs']}" if entrega["nfs"] else "sem NF",
+                           fonte_nf, _CT_LARG_PED),
+                  font=fonte_nf, fill=CINZA_TXT, anchor="ls")
+        draw.text((_CT_COL_EMB, meio), _truncar(draw, entrega["embarcador"], fonte_txt, _CT_LARG_EMB),
+                  font=fonte_txt, fill=NAVY, anchor="lm")
+        draw.text((_CT_COL_DEST, meio), _truncar(draw, entrega["cliente"], fonte_txt, _CT_LARG_DEST),
+                  font=fonte_txt, fill=NAVY, anchor="lm")
+        draw.text((_CT_COL_VOL_CX, meio), str(entrega["volumes"]) if entrega["volumes"] else "—",
+                  font=fonte_txt, fill=NAVY, anchor="mm")
+        draw.rectangle([(_CT_COL_OK_CX - 15, meio - 15), (_CT_COL_OK_CX + 15, meio + 15)],
+                       outline=CINZA_TXT, width=2)
+        draw.line([(MARGEM, y + _CT_ALTURA_LINHA), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
+                  fill=CINZA_LINHA, width=1)
+        y += _CT_ALTURA_LINHA
+
+    # Bloco de recebimento -- sempre na última folha, inteiro.
+    if y + _CT_ALTURA_RECEBIMENTO > limite_y:
+        _rodape(img, draw)
+        img, draw, y = _nova_pagina(continuacao=True)
+        paginas.append(img)
+    y += 40
+    fonte_rotulo = _fonte(20)
+    x_dir = A4_RETRATO[0] - MARGEM
+    draw.text((MARGEM, y), "RECEBIMENTO PELA TRANSPORTADORA", font=_fonte(22, True),
+              fill=NAVY, anchor="ls")
+    draw.text((x_dir, y), f"Total: {len(entregas)} pedido(s) · {total_volumes} volume(s)",
+              font=_fonte(20, True), fill=NAVY, anchor="rs")
+    draw.line([(MARGEM, y + 12), (x_dir, y + 12)], fill=TEAL, width=3)
+    y += 70
+    draw.text((MARGEM, y), "Recebido por (nome legível):", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+    draw.line([(MARGEM + 270, y + 4), (MARGEM + 620, y + 4)], fill=CINZA_LINHA, width=2)
+    draw.text((MARGEM + 650, y), "Documento:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+    draw.line([(MARGEM + 760, y + 4), (x_dir, y + 4)], fill=CINZA_LINHA, width=2)
+    y += 70
+    draw.text((MARGEM, y), "Data:  ____ / ____ / ________      Hora:  ____ : ____",
+              font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+    draw.text((MARGEM + 650, y), "Assinatura e carimbo:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+    draw.rectangle([(MARGEM + 650, y + 20), (x_dir, y + 130)], outline=CINZA_LINHA, width=2)
+    y += 70
+    draw.text((MARGEM, y), "Ocorrências (avaria, falta, recusa):", font=fonte_rotulo,
+              fill=CINZA_TXT, anchor="ls")
+    draw.line([(MARGEM, y + 44), (MARGEM + 600, y + 44)], fill=CINZA_LINHA, width=2)
+    draw.line([(MARGEM, y + 84), (MARGEM + 600, y + 84)], fill=CINZA_LINHA, width=2)
+
+    _rodape(img, draw)
+    return paginas
+
+
 def _paginas_pillow(imagens: list[Image.Image], buffers_vivos: list) -> list:
     """Converte páginas Pillow em páginas pypdf. O BytesIO precisa
     continuar vivo até o writer.write() (pypdf lê o stream de forma
@@ -777,7 +980,13 @@ def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], l
 
 def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
                     embarcadores: dict[int, str], fatores: dict[int, float],
-                    nome_motorista: str, data_alvo: date, caminho_saida: Path) -> dict:
+                    nome_motorista: str, data_alvo: date, caminho_saida: Path,
+                    catalogo_transportadoras: CatalogoTransportadoras | None = None) -> dict:
+    """catalogo_transportadoras: BD_TRANSPORTADORAS já carregada (job das
+    04h carrega uma vez pra todas as rotas). Omitido -> carrega aqui
+    (botão "Imprimir rota", expedição, documentação automática)."""
+    if catalogo_transportadoras is None:
+        catalogo_transportadoras = carregar_catalogo_transportadoras()
     writer = PdfWriter()
     buffers_vivos: list = []        # BytesIO das páginas Pillow -- vivos até o write()
     readers_vivos: list = []        # PdfReaders dos arquivos -- idem
@@ -837,6 +1046,8 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             "embarcador": embarcador, "cliente": _nome_cliente(titulo_limpo),
             "sender_id": sender_id,
             "endereco": _endereco_entrega(s),
+            # bruto (com CEP): é o que o batimento de transportadora usa
+            "endereco_vuupt": str(s.get("address") or ""),
             "volumes": volumes, "peso": peso,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "veio_de_pedido_venda": veio_de_pedido_venda,
@@ -851,10 +1062,18 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     for i in entregas_canhoteira:               # nome padronizado na canhoteira
         i["embarcador"] = SENDERS_CANHOTEIRA[i["sender_id"]]
 
+    # Pedidos entregues em galpão de transportadora (1 folha por galpão)
+    grupos_transportadora = agrupar_por_transportadora(itens, catalogo_transportadoras)
+    # Nome curto (sem LTDA/TRANSPORTES...) pra capa e resumo -- a folha em
+    # si leva o nome completo da planilha. Mesma chave do fingerprint da
+    # notificação de transportadoras.
+    nomes_transportadoras = [nome_curto_transportadora(p) for p, _e in grupos_transportadora]
+
     # Capa
     for pagina in _paginas_pillow(
             gerar_capa(rota, itens, nome_motorista, data_alvo,
-                       tem_canhoteira=bool(entregas_canhoteira)),
+                       tem_canhoteira=bool(entregas_canhoteira),
+                       transportadoras=nomes_transportadoras),
             buffers_vivos):
         writer.add_page(pagina)
 
@@ -878,13 +1097,23 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
                 buffers_vivos):
             writer.add_page(pagina)
 
+    # Canhoteira de transportadora: 1 folha (ou mais) por galpão da rota
+    for ponto, entregas in grupos_transportadora:
+        for pagina in _paginas_pillow(
+                gerar_canhoteira_transportadora(rota, ponto, entregas, nome_motorista, data_alvo),
+                buffers_vivos):
+            writer.add_page(pagina)
+
     caminho_saida.parent.mkdir(parents=True, exist_ok=True)
     with open(caminho_saida, "wb") as f:
         writer.write(f)
 
     return {"pedidos": total, "paginas": len(writer.pages),
             "nfs": total_nfs, "boletos": total_boletos,
-            "canhoteira": len(entregas_canhoteira), "pendencias": pendencias}
+            "canhoteira": len(entregas_canhoteira), "pendencias": pendencias,
+            # [(nome da transportadora, nº de pedidos)] na ordem da rota
+            "canhoteira_transportadoras": [(nome, len(e)) for nome, (_p, e)
+                                           in zip(nomes_transportadoras, grupos_transportadora)]}
 
 
 def nome_arquivo_saida(rota: dict, nome_motorista: str, data_alvo: date) -> str:
@@ -910,6 +1139,7 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
     )
     nome_por_agent_id = {m.agent_id: m.nome for m in catalogo.motoristas}
     embarcadores, fatores = carregar_embarcadores()
+    catalogo_transp = carregar_catalogo_transportadoras()
 
     data_alvo = _parse_data(data_str)
     data_br = data_alvo.strftime("%d/%m/%Y")
@@ -962,13 +1192,18 @@ def main(modo_teste: bool, data_str: str, rota_id: int | None) -> int:
         caminho_saida = pasta / nome_arquivo_saida(rota, nome_motorista, data_alvo)
         try:
             stats = montar_pdf_rota(rota, servicos, docs_por_pedido, embarcadores,
-                                    fatores, nome_motorista, data_alvo, caminho_saida)
+                                    fatores, nome_motorista, data_alvo, caminho_saida,
+                                    catalogo_transportadoras=catalogo_transp)
             gerados += 1
+            transp = stats.get("canhoteira_transportadoras") or []
             detalhe = (f"{stats['pedidos']} pedido(s), {stats['nfs']} NF(s), "
                        f"{stats['boletos']} boleto(s), {stats['paginas']} página(s), "
                        f"{len(stats['pendencias'])} pendência(s)"
                        + (f", canhoteira com {stats['canhoteira']} entrega(s)"
-                          if stats["canhoteira"] else ""))
+                          if stats["canhoteira"] else "")
+                       + (", canhoteira de transportadora: "
+                          + ", ".join(f"{nome} ({qtd})" for nome, qtd in transp)
+                          if transp else ""))
             resumo_etapas[etiqueta] = {"status": "ok", "detalhe": detalhe}
             linhas_resumo.append(f"[OK] {etiqueta}: {detalhe} -> {caminho_saida.name}")
             todas_pendencias.extend(stats["pendencias"])
