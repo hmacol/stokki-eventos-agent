@@ -284,7 +284,6 @@ def main(modo_teste: bool, data_str: str) -> int:
     config_email = config.get("email", {})
 
     catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
-    sess_stokki = StokkiSession(config)
 
     data_alvo = _parse_data(data_str)
     data_br = data_alvo.strftime("%d/%m/%Y")
@@ -345,35 +344,49 @@ def main(modo_teste: bool, data_str: str) -> int:
             return 1
 
         try:
+            # 1ª passada, SEM Playwright (só requests via StokkiSession):
+            # NÃO ENVIAR, fingerprint e conferência na Stokki. Tem que vir
+            # ANTES do login do Playwright abaixo -- esse login derruba a
+            # sessão de requests do mesmo usuário, e a renovação automática
+            # da StokkiSession (que também abre Playwright) não funciona
+            # dentro de um sync_playwright() já aberto (teste de 10/09 19:16:
+            # "Playwright Sync API inside the asyncio loop" nos 3 pedidos).
+            sess_stokki = StokkiSession(config)
+            pendentes: list[tuple[PontoRedespacho, list[str], dict[str, str], list[str]]] = []
+            for chave_ponto, codigos in grupos.items():
+                ponto = pontos[chave_ponto]
+                nome_exibicao = ponto.nome
+                if ponto.nao_enviar:
+                    # Coluna T = "NÃO ENVIAR": transportadora que não pede XML
+                    # (Hugo, 10/09). Não conta como "sem e-mail" nem gera teste.
+                    logger.info(f"  {nome_exibicao}: marcada como NÃO ENVIAR na planilha -- "
+                                f"{len(codigos)} pedido(s) ignorado(s) de propósito.")
+                    contadores["nao_enviar"] += len(codigos)
+                    continue
+                ja_notificados = pedidos_ja_notificados_hoje(ponto.nome_normalizado)
+                codigos_novos = [c for c in codigos if c not in ja_notificados]
+                if not codigos_novos:
+                    logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
+                    continue
+                observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
+                for codigo, obs in observacoes.items():
+                    if obs:
+                        logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
+                        divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
+                emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
+                pendentes.append((ponto, codigos_novos, observacoes, emails_transp))
+
+            # 2ª passada, Playwright: baixa os XMLs e envia.
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
                 page = nova_pagina(browser)
-                _login(page, config)
+                if pendentes:
+                    _login(page, config)
 
-                for chave_ponto, codigos in grupos.items():
+                for ponto, codigos_novos, observacoes, emails_transp in pendentes:
                     sessao_uso.renovar(DONO_TRAVA, ttl_segundos=600)
-                    ponto = pontos[chave_ponto]
                     chave_transp = ponto.nome_normalizado  # chave do fingerprint
                     nome_exibicao = ponto.nome
-                    if ponto.nao_enviar:
-                        # Coluna T = "NÃO ENVIAR": transportadora que não pede XML
-                        # (Hugo, 10/09). Não conta como "sem e-mail" nem gera teste.
-                        logger.info(f"  {nome_exibicao}: marcada como NÃO ENVIAR na planilha -- "
-                                    f"{len(codigos)} pedido(s) ignorado(s) de propósito.")
-                        contadores["nao_enviar"] += len(codigos)
-                        continue
-                    ja_notificados = pedidos_ja_notificados_hoje(chave_transp)
-                    codigos_novos = [c for c in codigos if c not in ja_notificados]
-                    if not codigos_novos:
-                        logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
-                        continue
-
-                    observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
-                    for codigo, obs in observacoes.items():
-                        if obs:
-                            logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
-                            divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
-                    emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
 
                     itens = []
                     for codigo in codigos_novos:
