@@ -44,14 +44,28 @@ def _catalogo():
                  complemento="REDESPACHO - RECEBEM DE SEGUNDA A QUARTA", cep=""),
         _entrada("LOGGI TECNOLOGIA LTDA", municipio="São Paulo", bairro="Casa Verde Alta",
                  logradouro="Rua Zilda", numero="675", complemento="LOGGI", cep="02545-000"),
+        _entrada("TAC LOGISTICA LTDA", municipio="São Paulo", bairro="Parque Ipe",
+                 logradouro="Av. Arterial Sul", numero="451", complemento="TAC/SUPERFRIO",
+                 cep="06149-000", email="NÃO ENVIAR"),
+        _entrada("TAC LOGISTICA LTDA SP", municipio="São Paulo", bairro="Parque Ipe",
+                 logradouro="Av. Arterial Sul", numero="451", complemento="TAC/SUPERFRIO",
+                 cep="06149-000"),
         _entrada("CLIENTE RETIRA", tipo="RETIRADA"),
         _entrada("FRESHLOG", tipo="ENTREGA"),
     ])
 
 
+def test_nao_enviar_marca_o_ponto_inteiro():
+    pontos = {p.chave: p for p in _catalogo().pontos_redespacho()}
+    tac = pontos["06149000-451"]
+    assert tac.nao_enviar is True
+    assert tac.emails == []          # o marcador não vira e-mail
+    assert pontos["06885160-591"].nao_enviar is False
+
+
 def test_pontos_agrupam_linhas_do_mesmo_galpao():
     pontos = {p.chave: p for p in _catalogo().pontos_redespacho()}
-    assert len(pontos) == 5
+    assert len(pontos) == 6
     transfrios = pontos["06885160-591"]
     assert transfrios.nome == "Transfrios Transportes Ltda"
     assert transfrios.emails == ["sp01@transfrios.com.br", "pr02@transfrios.com.br"]

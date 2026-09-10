@@ -300,7 +300,7 @@ def main(modo_teste: bool, data_str: str) -> int:
 
     resumo_etapas: dict = {}
     contadores = {"transportadoras_notificadas": 0, "pedidos_enviados": 0,
-                 "sem_email": 0, "sem_xml": 0, "falhas": 0}
+                 "sem_email": 0, "sem_xml": 0, "falhas": 0, "nao_enviar": 0}
     divergencias: list[str] = []
 
     if not modo_teste and not notificacoes_automaticas_ativas(config):
@@ -338,6 +338,13 @@ def main(modo_teste: bool, data_str: str) -> int:
                     ponto = pontos[chave_ponto]
                     chave_transp = ponto.nome_normalizado  # chave do fingerprint
                     nome_exibicao = ponto.nome
+                    if ponto.nao_enviar:
+                        # Coluna T = "NÃO ENVIAR": transportadora que não pede XML
+                        # (Hugo, 10/09). Não conta como "sem e-mail" nem gera teste.
+                        logger.info(f"  {nome_exibicao}: marcada como NÃO ENVIAR na planilha -- "
+                                    f"{len(codigos)} pedido(s) ignorado(s) de propósito.")
+                        contadores["nao_enviar"] += len(codigos)
+                        continue
                     ja_notificados = pedidos_ja_notificados_hoje(chave_transp)
                     codigos_novos = [c for c in codigos if c not in ja_notificados]
                     if not codigos_novos:
@@ -419,6 +426,7 @@ def main(modo_teste: bool, data_str: str) -> int:
                       f"{contadores['pedidos_enviados']} pedido(s) enviado(s), "
                       f"{contadores['sem_email']} transportadora(s) sem e-mail, "
                       f"{contadores['sem_xml']} pedido(s) sem XML, "
+                      f"{contadores['nao_enviar']} pedido(s) de transportadora marcada NÃO ENVIAR, "
                       f"{contadores['falhas']} falha(s) de envio.",
         }
         if divergencias:

@@ -12,7 +12,9 @@ Fonte de verdade: BD_TRANSPORTADORAS.xlsx (colunas A-I, S, T).
   C-I: Destinatário - UF, Municipio, Bairro, Endereço, Numero, Complemento, CEP
   S: CNPJ (posição dinâmica, ver varredura em carregar())
   T: E-mail (pedido do Hugo, 13/08 -- notificação de transportadoras com
-     XML da NF-e, ver notificacao_transportadoras/)
+     XML da NF-e, ver notificacao_transportadoras/). Vários e-mails
+     separados por vírgula; o texto "NÃO ENVIAR" marca transportadora que
+     não pede XML (fica fora da notificação de propósito).
 
 Enquanto isso, o matching é feito por nome normalizado (sem acentos,
 sem maiúsculas, sem sufixos jurídicos) quando o CNPJ não está preenchido.
@@ -121,6 +123,10 @@ class PontoRedespacho:
     endereco:         endereço da planilha (primeira linha do grupo)
     nomes:            todas as grafias/transportadoras que usam esse ponto
     emails:           e-mails (coluna T) de todas as linhas do grupo, sem repetição
+    nao_enviar:       True quando a coluna T traz "NÃO ENVIAR" em alguma linha do
+                      ponto -- transportadora que não pede XML (Hugo, 10/09:
+                      Dafran e TAC não costumam solicitar). Diferente de
+                      "sem e-mail": é decisão, não cadastro faltando.
     """
     chave: str
     nome: str
@@ -128,6 +134,7 @@ class PontoRedespacho:
     endereco: EnderecoRedespacho
     nomes: list[str] = field(default_factory=list)
     emails: list[str] = field(default_factory=list)
+    nao_enviar: bool = False
 
 
 class CatalogoTransportadoras:
@@ -486,10 +493,18 @@ def _rua_sem_tipo(logradouro: str) -> str:
     return " ".join(tokens)
 
 
+MARCADOR_NAO_ENVIAR = "NAO ENVIAR"
+
+
 def _separar_emails(raw: str) -> list[str]:
     """Coluna T pode trazer vários e-mails separados por vírgula, ponto e
     vírgula, quebra de linha ou tab."""
     return [e.strip() for e in re.split(r"[,;\s]+", raw or "") if e.strip() and "@" in e]
+
+
+def _marcado_nao_enviar(raw: str) -> bool:
+    """Coluna T = 'NÃO ENVIAR' (com ou sem acento, qualquer caixa)."""
+    return MARCADOR_NAO_ENVIAR in _normalizar_endereco(raw)
 
 
 def _chave_ponto(end: EnderecoRedespacho) -> str | None:
@@ -552,6 +567,7 @@ def _montar_pontos_redespacho(entradas: list[_Entrada]) -> list[PontoRedespacho]
             endereco=end,
             nomes=nomes,
             emails=emails,
+            nao_enviar=any(_marcado_nao_enviar(e.email) for e in grupo),
         ))
     return pontos
 

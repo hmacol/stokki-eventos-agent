@@ -50,7 +50,10 @@ Roda em `notificacao_transportadoras\notificar_transportadoras.py`.
   rua/município) fica fora do batimento.
 - **E-mail da transportadora**: coluna **T** da planilha, união de todas
   as linhas do ponto (aceita vários, separados por vírgula/;/quebra de
-  linha). Se vier vazia, cai no fallback do e-mail de contato cadastrado
+  linha). O texto **`NÃO ENVIAR`** nessa coluna marca transportadora que
+  não pede XML (Hugo, 10/09: Dafran e TAC) — o ponto é pulado de
+  propósito, sem contar como "sem e-mail" e sem e-mail de teste.
+  Se vier vazia, cai no fallback do e-mail de contato cadastrado
   no próprio Stokki para aquele pedido (`detalhe["transportadora"]["email"]`).
   Sem nenhuma das duas fontes, o grupo inteiro fica sem notificação
   (contabilizado no resumo, tenta de novo na próxima execução).
