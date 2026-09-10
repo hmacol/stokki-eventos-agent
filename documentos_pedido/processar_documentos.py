@@ -85,6 +85,23 @@ def _extrair_texto_pdf_completo(caminho_pdf: Path) -> str:
         return ""
 
 
+# DANFE renderizada do XML PLACEHOLDER da Stokki (ver docstring de
+# stokki_documentos.py): chave de acesso começando em 99 (cUF
+# inexistente) -- no texto da DANFE vem em grupos de 4 ("CHAVE DE ACESSO
+# 9908 2623 ..."). gerar_danfes() já não gera essa DANFE; a trava aqui
+# vale pra qualquer outra porta de entrada (DANFE subida à mão na aba
+# Documentos, e-mail, cache local antigo em retentar_revisao_manual).
+_RE_CHAVE_PLACEHOLDER_DANFE = re.compile(r"CHAVE\s+DE\s+ACESSO\s*99\d{2}\s?\d{4}", re.IGNORECASE)
+
+
+def _motivo_danfe_placeholder(texto_danfe: str) -> str | None:
+    if _RE_CHAVE_PLACEHOLDER_DANFE.search(texto_danfe or ""):
+        return ("DANFE gerada do XML placeholder da Stokki (chave de acesso 99..., valor R$ 0,00): "
+                "o cliente não subiu a NF-e real no pedido. Não é Nota Fiscal -- conferir se o "
+                "XML real está anexado na aba Documentos ou pedir ao embarcador.")
+    return None
+
+
 def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
                              cnpj_destinatario: str | None) -> str | None:
     """
@@ -186,6 +203,14 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     metadados_boleto = None
     if classificacao["tipo"] == "Nota Fiscal":
         numero_nf, cnpj_contraparte = extrair_nf_da_danfe(texto_completo)
+        motivo_placeholder = _motivo_danfe_placeholder(texto_completo)
+        if motivo_placeholder:
+            logger.warning(f"  {nome_arquivo}: {motivo_placeholder}")
+            if not modo_teste:
+                marcar_processado(hash_conteudo, "email" if assunto_email is not None else "stokki",
+                                 nome_arquivo, classificacao["tipo"], None,
+                                 "REVISAO_MANUAL", motivo=motivo_placeholder, numero_nf=numero_nf)
+            return "REVISAO_MANUAL"
     elif classificacao["tipo"] == "Pedido de Venda":
         numero_nf, cnpj_contraparte = extrair_numero_e_cnpj_pedido_venda(texto_completo)
     elif classificacao["tipo"] == "Boleto":

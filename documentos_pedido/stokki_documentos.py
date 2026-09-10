@@ -32,6 +32,27 @@ pelo CONTEÚDO do PDF -- linha digitável, vencimento, código de
 barras) decidir. O único item que listar_documentos_da_aba() ignora
 de propósito é o XML da NF-e (link "/xml/nfe/...", não é PDF) -- esse
 já é tratado à parte por gerar_danfe().
+
+XML PLACEHOLDER DA STOKKI (achado 10/09, investigando a Fruta Fina):
+quando o cliente cria o pedido SEM subir a NF-e no campo próprio, a
+Stokki fabrica um XML de mentira pra ele -- chave de acesso começando
+com "99" (cUF 99 não existe), nNF = id interno de venda da Stokki,
+vNF 0, tpNF 0 (entrada), destinatário = o próprio embarcador. O botão
+".btn_danfe" renderiza esse lixo numa DANFE "válida" na aparência
+(R$ 0,00, "RECEBEMOS DE <cliente>... DESTINATÁRIO: <embarcador>"), que
+o agente aceitava como NF e imprimia no romaneio (Fruta Fina, DANSKEN,
+CIAO, TIE, BURIN, AÇAÍ MOTION -- confirmado por amostragem no GCS). Foi
+isso que motivou o bloqueio da Fruta Fina em 20/08 (c03622b), sem que
+a causa tivesse sido identificada na época.
+Nesse cenário, alguns clientes (Fruta Fina, sempre) sobem o XML REAL
+como anexo genérico da aba Documentos (rótulo "xml"/"XML", href
+/document/download/document/<base64 de users/.../<id>.xml>). O
+gerador de DANFE da Stokki aceita QUALQUER caminho de XML em file_url
+(testado ao vivo em 10/09 com PS-38851: DANFE certa, NF 24059) -- então
+xml_placeholder() + localizar_xmls_anexados() fazem a DANFE (e o XML
+anexado na notificação de transportadoras) sair do XML real em vez do
+placeholder. Sem XML real anexado, o pedido fica SEM NF (pendência
+honesta no romaneio) em vez de uma NF falsa.
 """
 import base64
 import logging
@@ -47,6 +68,90 @@ URL_PROVIDER_SHW = f"{STOKKI_BASE}/pt-br/provider/inventory/outbound/show"
 URL_DANFE = f"{STOKKI_BASE}/pt-br/document/danfe"
 
 PASTA_TEMP_DOWNLOADS = Path(__file__).parent / "dados" / "downloads_stokki_temp"
+
+# Chave de acesso de NF-e tem 44 dígitos e começa pelo código IBGE da
+# UF (11..53). A Stokki nomeia o XML placeholder com uma "chave" que
+# começa em 99 -- ver docstring do módulo.
+_RE_CHAVE_PLACEHOLDER = re.compile(r"(?:^|/)99\d{42}\.xml$", re.IGNORECASE)
+_RE_ID_NFE = re.compile(r'Id="NFe(\d{44})"')
+
+
+def _decodificar_caminho(href_ou_caminho: str) -> str:
+    """Os links de documento da Stokki terminam num base64 do caminho
+    interno do arquivo ('users/clients/inventories/.../x.xml'). Devolve
+    esse caminho; se o valor já for um caminho (data-url do botão DANFE)
+    ou não decodificar, devolve como veio."""
+    valor = (href_ou_caminho or "").strip()
+    ultimo = valor.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        decodificado = base64.b64decode(ultimo + "=" * (-len(ultimo) % 4)).decode("utf-8")
+    except Exception:
+        return valor
+    return decodificado if decodificado.startswith("users/") else valor
+
+
+def xml_placeholder(href_ou_caminho: str) -> bool:
+    """True se o XML da NF-e apontado (href do link "/xml/nfe/" ou o
+    data-url do botão DANFE) é o placeholder gerado pela Stokki."""
+    return bool(_RE_CHAVE_PLACEHOLDER.search(_decodificar_caminho(href_ou_caminho)))
+
+
+def _chave_do_xml(caminho_xml: Path) -> str | None:
+    """Chave de acesso (Id="NFe...") do XML em disco; None se não for
+    NF-e ou se for placeholder (chave 99...)."""
+    try:
+        texto = caminho_xml.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    m = _RE_ID_NFE.search(texto)
+    if not m or m.group(1).startswith("99"):
+        return None
+    return m.group(1)
+
+
+def localizar_xmls_anexados(page) -> list[dict]:
+    """
+    XMLs de NF-e subidos como ANEXO GENÉRICO na aba Documentos (não o
+    link "/xml/nfe/" do campo próprio). Identificado pelo CAMINHO
+    decodificado terminar em ".xml", não pelo rótulo (texto livre --
+    visto "xml", "XML"). Retorna [{"href", "caminho"}] na ordem da aba.
+    """
+    if not page.query_selector("#document"):
+        return []
+    resultado = []
+    for callout in page.query_selector_all("#document .callout"):
+        link_el = callout.query_selector("a.btn")
+        if not link_el:
+            continue
+        href = link_el.get_attribute("href") or ""
+        if not href or "/xml/nfe/" in href:
+            continue
+        caminho = _decodificar_caminho(href)
+        if caminho.lower().endswith(".xml"):
+            resultado.append({"href": href, "caminho": caminho})
+    return resultado
+
+
+def baixar_xmls_reais_anexados(page, codigo_ps: str) -> list[dict]:
+    """Baixa os XMLs anexados (localizar_xmls_anexados) e devolve só os
+    que são NF-e de verdade, sem repetir chave: [{"caminho_local",
+    "caminho", "chave"}]. Anexo que não é NF-e (ou é placeholder) fica
+    de fora com aviso."""
+    resultado = []
+    vistas: set[str] = set()
+    for i, anexo in enumerate(localizar_xmls_anexados(page), start=1):
+        caminho_local = baixar_documento(page, anexo["href"], f"{codigo_ps}_anexo{i}.xml")
+        if not caminho_local:
+            continue
+        chave = _chave_do_xml(caminho_local)
+        if not chave:
+            logger.warning(f"  {codigo_ps}: anexo XML {anexo['caminho']!r} não é NF-e válida -- ignorado.")
+            continue
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        resultado.append({"caminho_local": caminho_local, "caminho": anexo["caminho"], "chave": chave})
+    return resultado
 
 
 def _extrair_id(codigo_ps: str) -> str:
@@ -205,29 +310,85 @@ def localizar_link_xml_nfe(page) -> str | None:
 def baixar_xml_nfe(page, codigo_ps: str) -> Path | None:
     """Baixa o XML cru da NF-e do pedido (a page já precisa estar na tela
     /provider/.../show/{id} desse pedido). Retorna None se o pedido não
-    tem XML anexado -- não é erro, só não tem o que baixar."""
+    tem XML anexado -- não é erro, só não tem o que baixar.
+
+    Se o XML do campo próprio é o placeholder da Stokki (ver docstring
+    do módulo), usa o primeiro XML REAL anexado na aba Documentos; sem
+    nenhum, devolve None -- mandar o placeholder pra transportadora
+    (aconteceu com a TAFF em 24-25/08, Fruta Fina) é pior que não
+    mandar nada."""
     href = localizar_link_xml_nfe(page)
-    if not href:
+    if href and not xml_placeholder(href):
+        return baixar_documento(page, href, f"{codigo_ps}_NFe.xml")
+
+    reais = baixar_xmls_reais_anexados(page, codigo_ps)
+    if not reais:
+        if href:
+            logger.warning(f"  {codigo_ps}: XML da NF-e na Stokki é placeholder e não há XML real "
+                           f"anexado na aba Documentos -- sem XML.")
         return None
-    return baixar_documento(page, href, f"{codigo_ps}_NFe.xml")
+    if len(reais) > 1:
+        logger.warning(f"  {codigo_ps}: {len(reais)} XMLs reais anexados -- usando o primeiro "
+                       f"(chave {reais[0]['chave']}).")
+    caminho_final = PASTA_TEMP_DOWNLOADS / f"{codigo_ps}_NFe.xml"
+    caminho_final.write_bytes(reais[0]["caminho_local"].read_bytes())
+    logger.info(f"  {codigo_ps}: XML da NF-e tomado do anexo da aba Documentos (placeholder no campo próprio).")
+    return caminho_final
 
 
-def gerar_danfe(page, codigo_ps: str) -> Path | None:
+def gerar_danfes(page, codigo_ps: str) -> list[Path]:
     """
-    Gera o PDF do DANFE pro pedido (a page já precisa estar na tela
+    Gera o(s) PDF(s) de DANFE pro pedido (a page já precisa estar na tela
     /provider/.../show/{id} desse pedido -- ver buscar_documentos_do_pedido).
-    Retorna None se o pedido não tem NF-e/XML anexado (botão ".btn_danfe"
+    Lista vazia se o pedido não tem NF-e/XML anexado (botão ".btn_danfe"
     não existe na página nesse caso -- não é erro, só não tem o que gerar).
+
+    XML do campo próprio placeholder (ver docstring do módulo): NUNCA
+    gera a DANFE dele; gera uma DANFE por XML real anexado na aba
+    Documentos (normalmente 1; PS-37130 tinha o mesmo XML subido 2x --
+    chave repetida é deduplicada em baixar_xmls_reais_anexados). Sem XML
+    real, lista vazia -- o pedido fica sem NF de verdade.
     """
     if not page.query_selector(".btn_danfe"):
-        return None
+        return []
 
     file_url = page.eval_on_selector(".btn_danfe", "el => el.dataset.url")
     token = page.eval_on_selector("#form_danfe input[name='_token']", "el => el.value")
     if not file_url or not token:
         logger.warning(f"  {codigo_ps}: botão DANFE presente mas sem data-url/_token -- pulando.")
-        return None
+        return []
 
+    if not xml_placeholder(file_url):
+        caminho = _gerar_danfe_por_file_url(page, codigo_ps, file_url, token, f"{codigo_ps}_DANFE.pdf")
+        return [caminho] if caminho else []
+
+    reais = baixar_xmls_reais_anexados(page, codigo_ps)
+    if not reais:
+        logger.warning(f"  {codigo_ps}: XML da NF-e na Stokki é placeholder (cliente não subiu a NF-e) "
+                       f"e não há XML real anexado na aba Documentos -- DANFE não gerada.")
+        return []
+    logger.info(f"  {codigo_ps}: XML da NF-e na Stokki é placeholder -- DANFE gerada a partir de "
+                f"{len(reais)} XML real(is) anexado(s) na aba Documentos.")
+    caminhos = []
+    for i, real in enumerate(reais, start=1):
+        sufixo = "" if i == 1 else f"_{i}"
+        caminho = _gerar_danfe_por_file_url(page, codigo_ps, real["caminho"], token,
+                                            f"{codigo_ps}_DANFE{sufixo}.pdf")
+        if caminho:
+            caminhos.append(caminho)
+    return caminhos
+
+
+def gerar_danfe(page, codigo_ps: str) -> Path | None:
+    """Compatibilidade: primeira DANFE de gerar_danfes(), ou None."""
+    caminhos = gerar_danfes(page, codigo_ps)
+    return caminhos[0] if caminhos else None
+
+
+def _gerar_danfe_por_file_url(page, codigo_ps: str, file_url: str, token: str,
+                              nome_arquivo: str) -> Path | None:
+    """POST /pt-br/document/danfe (form_danfe: _token + file_url) via
+    fetch() no contexto da página; salva o PDF em PASTA_TEMP_DOWNLOADS."""
     try:
         resultado = page.evaluate("""async ({url, fileUrl, token}) => {
             const fd = new FormData();
@@ -250,7 +411,7 @@ def gerar_danfe(page, codigo_ps: str) -> Path | None:
         return None
 
     PASTA_TEMP_DOWNLOADS.mkdir(parents=True, exist_ok=True)
-    caminho_local = PASTA_TEMP_DOWNLOADS / f"{codigo_ps}_DANFE.pdf"
+    caminho_local = PASTA_TEMP_DOWNLOADS / nome_arquivo
     caminho_local.write_bytes(base64.b64decode(resultado["b64"]))
     return caminho_local
 
@@ -289,8 +450,7 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
     baixados = []
 
     if buscar_nf and not ja_enviado_para_pedido(codigo_ps, "Nota Fiscal"):
-        caminho_danfe = gerar_danfe(page, codigo_ps)
-        if caminho_danfe:
+        for caminho_danfe in gerar_danfes(page, codigo_ps):
             baixados.append({"caminho_local": caminho_danfe, "nome_arquivo": caminho_danfe.name})
 
     for doc in listar_documentos_da_aba(page):

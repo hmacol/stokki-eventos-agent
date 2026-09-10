@@ -432,13 +432,15 @@ REMETENTES_EMBARCADORES: dict[str, dict] = {
                           "tipos": {"Boleto", "Nota Fiscal", "Pedido de Venda"}},
     "@vidaveg.com.br": {"nome": "Vida Veg",
                         "tipos": {"Boleto", "Nota Fiscal"}},
-    # Pedido do Hugo, 20/08: NF da Fruta Fina só por e-mail (mesmo
-    # tratamento da Dourado/Muai -- ver EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS
-    # em selecionar_pedidos.py). Endereço tirado do cadastro (tabela
-    # interno) -- ainda não confirmado contra e-mail real recebido, como
-    # foi feito pros outros (ex: "pedro@" da De Tommaso, 11/08).
-    "frutafina.urubici@gmail.com": {"nome": "Fruta Fina",
-                                    "tipos": {"Boleto", "Nota Fiscal"}},
+    # Fruta Fina: de 20/08 a 10/09 era o ÚNICO canal de NF dela, e nunca
+    # chegou nada (0 e-mails em 45 dias, checado na caixa em 10/09). Desde
+    # 10/09 a NF sai do XML real anexado na Stokki (stokki_documentos.py)
+    # e o e-mail fica só como reforço. Substring "frutafina" cobre os 4
+    # endereços do onboarding (21/05): frutafina.urubici@,
+    # frutafinacomercial.urubici@, financeiro.frutafina@ e
+    # fiscal.frutafina@ (todos @gmail.com).
+    "frutafina": {"nome": "Fruta Fina",
+                  "tipos": {"Boleto", "Nota Fiscal"}},
     # Pedido do Hugo, 20/08: boleto da Jersey Vale sempre por e-mail (a
     # NF continua vindo normalmente da Stokki, só o boleto não). Domínio
     # inteiro (não um endereço só) -- mesmo padrão da De Tommaso/Vida Veg,

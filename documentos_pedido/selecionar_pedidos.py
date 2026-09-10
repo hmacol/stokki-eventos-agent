@@ -108,11 +108,14 @@ def _pedido_sem_nf(linha) -> bool:
 # fallback por nome, sujeito ao mesmo risco de truncamento até isso
 # ser confirmado com um pedido real dela.
 #
-# Fruta Fina (id 94, pedido do Hugo, 20/08): NF exclusivamente por
-# e-mail -- mesmo tratamento da Dourado/Muai (boleto continua tentando
-# pela Stokki também, ver EMBARCADORES_DANFE_SOMENTE_EMAIL não impede
-# a busca de Boleto na aba Documentos).
-EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS = {"18", "94"}  # Dourado, Fruta Fina
+# Fruta Fina (id 94) ficou aqui de 20/08 a 10/09 ("NF só por e-mail").
+# Tirada em 10/09 (aprovado pelo Hugo): a "DANFE errada" que motivou o
+# bloqueio era o XML PLACEHOLDER da Stokki (ver docstring de
+# stokki_documentos.py), e o e-mail nunca chegou (0 e-mails de qualquer
+# endereço dela em 45 dias) -- ela ficou 3 semanas sem NF nenhuma.
+# Agora a DANFE dela sai do XML real anexado na aba Documentos
+# (gerar_danfes), e o e-mail continua só como reforço.
+EMBARCADORES_DANFE_SOMENTE_EMAIL_IDS = {"18"}  # Dourado
 EMBARCADORES_DANFE_SOMENTE_EMAIL = ("MUAI",)   # sem ID mapeado ainda
 
 

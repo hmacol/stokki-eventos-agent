@@ -23,6 +23,10 @@ Fluxo:
      reentram).
   4. Baixa o XML de cada pedido novo (Playwright, só pros pedidos que
      sobraram -- ver documentos_pedido/stokki_documentos.py::baixar_xml_nfe).
+     XML placeholder da Stokki (cliente não subiu a NF-e; chave 99...)
+     NUNCA é anexado -- baixar_xml_nfe troca pelo XML real da aba
+     Documentos quando existe, senão o pedido conta como "sem_xml"
+     (10/09: a TAFF recebeu placeholder da Fruta Fina em 24-25/08).
   5. Envia 1 e-mail por transportadora (To = e-mail da transportadora,
      Cc = e-mail(s) do(s) embarcador(es) dos pedidos do grupo), com os
      XMLs anexados.
