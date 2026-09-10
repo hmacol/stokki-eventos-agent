@@ -1115,8 +1115,16 @@ def reverter_para_rascunho(rascunho_id: int):
     conn = _conectar()
     try:
         row = conn.execute(
-            "SELECT lalamove_order_id, lalamove_status, lalamove_share_link "
+            "SELECT lalamove_order_id, lalamove_status, lalamove_share_link, vuupt_route_id, data_alvo "
             "FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        # A rota da VUUPT deixou de existir: o romaneio preparado em
+        # segundo plano (documentacao_rota) virou órfão -- some junto.
+        if row and row["vuupt_route_id"]:
+            try:
+                from documentacao_rota import descartar as _descartar_documentacao
+                _descartar_documentacao(row["vuupt_route_id"], row["data_alvo"])
+            except Exception as e:
+                logger.warning(f"Romaneio da rota {row['vuupt_route_id']} não descartado: {e}")
         corrida_aberta = bool(row and row["lalamove_order_id"]
                               and (row["lalamove_status"] or "") not in STATUS_FINAIS)
         if corrida_aberta:
@@ -1261,6 +1269,13 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     # Motorista virtual LALAMOVE: a corrida NÃO é mais criada aqui
     # (Hugo, 30/08) -- o envio só cria a rota na VUUPT; a corrida (paga)
     # sai pelo botão "Lançar na Lalamove" do card (lancar_lalamove).
+
+    # Documentação da rota preparada em segundo plano (Hugo, 09/09):
+    # romaneio com NFs/boletos já fica pronto na pasta da data, sem
+    # aparecer em tela. agendar() nunca levanta -- a rota já existe na
+    # VUUPT e nada daqui pode desfazer isso.
+    from documentacao_rota import agendar as _agendar_documentacao
+    _agendar_documentacao(rota["id"], rascunho["data_alvo"], motivo=f"rota enviada ({rascunho['nome']})")
     return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
 
 

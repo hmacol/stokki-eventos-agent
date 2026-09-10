@@ -212,6 +212,14 @@ def main(modo_teste: bool = False):
         logger.exception(f"Erro no envio de rascunhos pendentes: {e}")
         resumo_etapas["Envio de rascunhos pendentes"] = {"status": "erro", "detalhe": str(e)}
 
+    # enviar_rascunho() enfileira o romaneio de cada rota enviada em
+    # segundo plano (documentacao_rota) -- espera terminar antes de sair.
+    try:
+        from documentacao_rota import aguardar as aguardar_documentacao
+        aguardar_documentacao()
+    except Exception as e:
+        logger.warning(f"Espera pela documentação das rotas falhou (não afeta o envio): {e}")
+
     duracao = time.time() - inicio
     logger.info(f"Envio de rascunhos pendentes finalizado em {duracao:.1f}s.")
 

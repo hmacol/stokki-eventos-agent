@@ -85,6 +85,7 @@ from roteirizacao_dados import (
 )
 from otimizacao_rotas import ordenar_2opt
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
+from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas,
@@ -779,6 +780,12 @@ def main(modo_teste: bool = False):
                     logger.warning(f"  Falha ao reordenar a rota '{rota_info['nome']}' "
                                   f"(rota continua com a ordem atual): {e}")
 
+        # Rota que ganhou pedido mudou de conteúdo: o romaneio preparado
+        # antes ficou desatualizado -- regenera em segundo plano (Hugo,
+        # 09/09). A data de cada rota é lida do start_at dela na VUUPT.
+        if not modo_teste and rotas_afetadas:
+            agendar_documentacao_varias(sorted(rotas_afetadas), None, motivo="rota incrementada")
+
         prefixo_teste = "[Teste] " if modo_teste else ""
         resumo_etapas["Incremento de rotas"] = {
             "status": "ok",
@@ -790,6 +797,8 @@ def main(modo_teste: bool = False):
     except Exception as e:
         logger.exception(f"Erro no incremento de rotas: {e}")
         resumo_etapas["Incremento de rotas"] = {"status": "erro", "detalhe": str(e)}
+
+    aguardar_documentacao()
 
     duracao = time.time() - inicio
     logger.info(f"Incremento de rotas finalizado em {duracao:.1f}s.")

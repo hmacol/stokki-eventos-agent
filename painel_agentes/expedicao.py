@@ -16,6 +16,7 @@ rota": reflete o estado atual dos documentos, não o que o job das 04h
 viu), gravando no MESMO caminho que o job das 04h usaria -- o
 print-agent local não precisa saber a diferença.
 """
+import logging
 import re
 import sqlite3
 import sys
@@ -439,4 +440,16 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
 
     _registrar_exclusao(data_alvo, rota_id, rota.get("name") or "", service_id,
                         servico_alvo.get("code") or "", motivo, observacao, usuario)
+
+    # Romaneio preparado em segundo plano (documentacao_rota, Hugo 09/09):
+    # rota que perdeu parada é regenerada; rota que sumiu tem o PDF
+    # descartado. Best-effort, a exclusão já aconteceu na VUUPT.
+    try:
+        import documentacao_rota
+        if ids_restantes:
+            documentacao_rota.agendar(rota_id, data_alvo, motivo="pedido excluído da rota")
+        else:
+            documentacao_rota.descartar(rota_id, data_alvo)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Documentação da rota {rota_id} não atualizada: {e}")
     return {"ok": True, "rota_cancelada": not ids_restantes}

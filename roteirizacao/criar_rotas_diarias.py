@@ -94,6 +94,7 @@ from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
+from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
 from rascunhos_rota import criar_lote_rascunhos
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
@@ -795,6 +796,9 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                                f"motorista: {motorista_str}: {codigos_finais}")
                     for s in sublote_criado:
                         marcar_alocado(s["id"], rota["id"])
+                    # Romaneio da rota preparado em segundo plano (Hugo,
+                    # 09/09) -- main() espera a fila esvaziar antes de sair.
+                    agendar_documentacao(rota["id"], data_alvo, motivo=f"rota criada ({nome_rota})")
                     rotas_criadas += 1
                     pedidos_alocados += len(sublote_criado)
                     if motorista:
@@ -843,6 +847,10 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
     except Exception as e:
         logger.exception(f"Erro na criação de rotas diárias: {e}")
         resumo_etapas["Criação de rotas"] = {"status": "erro", "detalhe": str(e)}
+
+    # Romaneios das rotas recém-criadas (documentacao_rota) terminam
+    # antes de o processo encerrar -- sem isso a thread morreria junto.
+    aguardar_documentacao()
 
     duracao = time.time() - inicio
     logger.info(f"Criação de rotas diárias finalizada em {duracao:.1f}s.")
