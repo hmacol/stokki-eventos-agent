@@ -95,6 +95,7 @@ from fingerprint_notificacao_transportadora import pedidos_ja_notificados_hoje, 
 TRANSPORTADORAS = _RAIZ_PROJETO / "dados" / "BD_TRANSPORTADORAS.xlsx"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 EMAIL_TESTE = "hugo@freshlogbr.com"
+DONO_TRAVA = "notificar-transportadoras"  # stokki/sessao_uso.py
 
 
 def _carregar_config() -> dict:
@@ -315,89 +316,102 @@ def main(modo_teste: bool, data_str: str) -> int:
         embarcadores = _carregar_embarcadores_por_sender_id()
 
         from playwright.sync_api import sync_playwright
+        from stokki import sessao_uso
         from stokki_documentos import URL_PROVIDER_SHW, _extrair_id, _login, baixar_xml_nfe, nova_pagina
 
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            page = nova_pagina(browser)
-            _login(page, config)
+        # Trava cooperativa da Stokki (stokki/sessao_uso.py): o login do
+        # Playwright abaixo derruba a sessão de quem estiver usando o mesmo
+        # usuário (importadores :35/:45, documentos incremental, portal). Com
+        # a trava, eles esperam a vez -- e este agente espera se alguém já
+        # estiver no meio de uma execução.
+        if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=600, esperar_segundos=1200):
+            logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de 20 min -- seguindo assim mesmo.")
 
-            for chave_ponto, codigos in grupos.items():
-                ponto = pontos[chave_ponto]
-                chave_transp = ponto.nome_normalizado  # chave do fingerprint
-                nome_exibicao = ponto.nome
-                ja_notificados = pedidos_ja_notificados_hoje(chave_transp)
-                codigos_novos = [c for c in codigos if c not in ja_notificados]
-                if not codigos_novos:
-                    logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
-                    continue
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                page = nova_pagina(browser)
+                _login(page, config)
 
-                observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
-                for codigo, obs in observacoes.items():
-                    if obs:
-                        logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
-                        divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
-                emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
-
-                itens = []
-                for codigo in codigos_novos:
-                    page.goto(f"{URL_PROVIDER_SHW}/{_extrair_id(codigo)}",
-                             wait_until="networkidle", timeout=30_000)
-                    page.wait_for_timeout(400)
-                    caminho_xml = baixar_xml_nfe(page, codigo)
-                    if not caminho_xml:
-                        logger.warning(f"  {codigo}: sem XML de NF-e anexado na Stokki -- pulado.")
-                        contadores["sem_xml"] += 1
+                for chave_ponto, codigos in grupos.items():
+                    sessao_uso.renovar(DONO_TRAVA, ttl_segundos=600)
+                    ponto = pontos[chave_ponto]
+                    chave_transp = ponto.nome_normalizado  # chave do fingerprint
+                    nome_exibicao = ponto.nome
+                    ja_notificados = pedidos_ja_notificados_hoje(chave_transp)
+                    codigos_novos = [c for c in codigos if c not in ja_notificados]
+                    if not codigos_novos:
+                        logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
                         continue
-                    sender_id = detalhes[codigo]["sender_id"]
-                    embarcador = embarcadores.get(sender_id, {})
-                    itens.append({
-                        "codigo": codigo,
-                        "caminho_xml": caminho_xml,
-                        "nf": _extrair_nnf(caminho_xml),
-                        "embarcador": embarcador.get("nome", ""),
-                        "emails_embarcador": embarcador.get("emails", []),
-                    })
 
-                if not itens:
-                    continue
+                    observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
+                    for codigo, obs in observacoes.items():
+                        if obs:
+                            logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
+                            divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
+                    emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
 
-                cc = sorted({e for i in itens for e in i["emails_embarcador"]})
+                    itens = []
+                    for codigo in codigos_novos:
+                        page.goto(f"{URL_PROVIDER_SHW}/{_extrair_id(codigo)}",
+                                 wait_until="networkidle", timeout=30_000)
+                        page.wait_for_timeout(400)
+                        caminho_xml = baixar_xml_nfe(page, codigo)
+                        if not caminho_xml:
+                            logger.warning(f"  {codigo}: sem XML de NF-e anexado na Stokki -- pulado.")
+                            contadores["sem_xml"] += 1
+                            continue
+                        sender_id = detalhes[codigo]["sender_id"]
+                        embarcador = embarcadores.get(sender_id, {})
+                        itens.append({
+                            "codigo": codigo,
+                            "caminho_xml": caminho_xml,
+                            "nf": _extrair_nnf(caminho_xml),
+                            "embarcador": embarcador.get("nome", ""),
+                            "emails_embarcador": embarcador.get("emails", []),
+                        })
 
-                if not emails_transp and not modo_teste:
-                    logger.warning(f"  {nome_exibicao}: sem e-mail cadastrado (planilha nem Stokki) -- "
-                                   f"{len(itens)} pedido(s) não notificado(s).")
-                    contadores["sem_email"] += 1
-                    continue
+                    if not itens:
+                        continue
 
-                assunto = f"[Freshlog] Notas fiscais para entrega — {data_br} — {len(itens)} pedido(s)"
-                conteudo = _montar_conteudo(nome_exibicao, data_br, itens)
-                if modo_teste:
-                    assunto = f"[TESTE] {assunto} — {nome_exibicao}"
-                    conteudo = _bloco_teste(ponto, emails_transp, cc, itens, observacoes) + conteudo
-                    if not emails_transp:
+                    cc = sorted({e for i in itens for e in i["emails_embarcador"]})
+
+                    if not emails_transp and not modo_teste:
+                        logger.warning(f"  {nome_exibicao}: sem e-mail cadastrado (planilha nem Stokki) -- "
+                                       f"{len(itens)} pedido(s) não notificado(s).")
                         contadores["sem_email"] += 1
-                corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
-                anexos = [(i["caminho_xml"], f"{i['codigo']}_NFe.xml") for i in itens]
+                        continue
 
-                destinos = [EMAIL_TESTE] if modo_teste else emails_transp
-                cc_final = [] if modo_teste else cc
+                    assunto = f"[Freshlog] Notas fiscais para entrega — {data_br} — {len(itens)} pedido(s)"
+                    conteudo = _montar_conteudo(nome_exibicao, data_br, itens)
+                    if modo_teste:
+                        assunto = f"[TESTE] {assunto} — {nome_exibicao}"
+                        conteudo = _bloco_teste(ponto, emails_transp, cc, itens, observacoes) + conteudo
+                        if not emails_transp:
+                            contadores["sem_email"] += 1
+                    corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
+                    anexos = [(i["caminho_xml"], f"{i['codigo']}_NFe.xml") for i in itens]
 
-                if modo_teste:
-                    logger.info(f"  [TESTE] {nome_exibicao} -> {EMAIL_TESTE} "
-                               f"(original: {emails_transp or 'SEM E-MAIL'}, cc original: {cc}) | "
-                               f"{len(itens)} pedido(s): {[i['codigo'] for i in itens]}")
+                    destinos = [EMAIL_TESTE] if modo_teste else emails_transp
+                    cc_final = [] if modo_teste else cc
 
-                if enviar_email(destinos, assunto, corpo, config_email, cc=cc_final, anexos=anexos):
-                    contadores["transportadoras_notificadas"] += 1
-                    contadores["pedidos_enviados"] += len(itens)
-                    if not modo_teste:
-                        for i in itens:
-                            registrar_notificacao(i["codigo"], chave_transp)
-                else:
-                    contadores["falhas"] += 1
+                    if modo_teste:
+                        logger.info(f"  [TESTE] {nome_exibicao} -> {EMAIL_TESTE} "
+                                   f"(original: {emails_transp or 'SEM E-MAIL'}, cc original: {cc}) | "
+                                   f"{len(itens)} pedido(s): {[i['codigo'] for i in itens]}")
 
-            browser.close()
+                    if enviar_email(destinos, assunto, corpo, config_email, cc=cc_final, anexos=anexos):
+                        contadores["transportadoras_notificadas"] += 1
+                        contadores["pedidos_enviados"] += len(itens)
+                        if not modo_teste:
+                            for i in itens:
+                                registrar_notificacao(i["codigo"], chave_transp)
+                    else:
+                        contadores["falhas"] += 1
+
+                browser.close()
+        finally:
+            sessao_uso.liberar(DONO_TRAVA)
 
         resumo_etapas["Resumo geral"] = {
             "status": "erro" if contadores["falhas"] else "ok",
