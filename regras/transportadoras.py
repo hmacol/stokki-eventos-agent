@@ -101,6 +101,35 @@ class _Entrada:
     email: str = ""
 
 
+@dataclass
+class PontoRedespacho:
+    """
+    Um endereço físico de redespacho (galpão de transportadora TERCEIROS),
+    agregando todas as linhas da planilha que apontam pra ele -- KANEJO e
+    IMG TRANSPORTES, por exemplo, são a mesma Rua Osaka 880; CENTROSUL,
+    ANDREA BELOTTO, FREZZE e GESSY LOPES são a mesma Rua Makita Brasil 300.
+
+    Usado pela notificação de transportadoras (notificacao_transportadoras/)
+    pra bater o endereço do serviço na VUUPT contra a planilha, em vez de
+    confiar no bloco "Transportadora" da Stokki (pedido do Hugo, 10/09: o
+    cliente às vezes esquece de informar a transportadora na Stokki, mas o
+    endereço de entrega já é o do galpão).
+
+    chave:            identidade do ponto (CEP+número, ou rua+número+cidade sem CEP)
+    nome:             transportadora "dona" do ponto, pra exibição
+    nome_normalizado: _normalizar(nome) -- chave estável pra fingerprint
+    endereco:         endereço da planilha (primeira linha do grupo)
+    nomes:            todas as grafias/transportadoras que usam esse ponto
+    emails:           e-mails (coluna T) de todas as linhas do grupo, sem repetição
+    """
+    chave: str
+    nome: str
+    nome_normalizado: str
+    endereco: EnderecoRedespacho
+    nomes: list[str] = field(default_factory=list)
+    emails: list[str] = field(default_factory=list)
+
+
 class CatalogoTransportadoras:
     """
     Catálogo carregado da planilha BD_TRANSPORTADORAS.xlsx.
@@ -128,6 +157,69 @@ class CatalogoTransportadoras:
                 f"esses precisarão de resolução manual: "
                 f"{list(conflitos.keys())}"
             )
+
+        self._pontos: list[PontoRedespacho] = _montar_pontos_redespacho(entradas)
+
+    # ── Batimento por endereço ────────────────────────────────────────────
+
+    def pontos_redespacho(self) -> list[PontoRedespacho]:
+        """Endereços físicos de redespacho (TERCEIROS), 1 por galpão."""
+        return list(self._pontos)
+
+    def resolver_por_endereco(self, endereco: str) -> PontoRedespacho | None:
+        """
+        Dado um endereço formatado (ex.: campo 'address' do serviço na VUUPT,
+        "Est. Francisco Hengles, 591, Potuvera, Itapecerica da Serra - SP,
+        06885-160, Brasil"), devolve o ponto de redespacho correspondente ou
+        None se o endereço não for de nenhuma transportadora TERCEIROS.
+
+        Dois níveis, do mais pro menos confiável:
+          1. CEP (8 dígitos) igual E número do imóvel presente no endereço.
+          2. Rua (sem o tipo de logradouro: R./RUA/AV./ESTRADA...) contida no
+             endereço E número presente E município presente -- cobre
+             endereço digitado pelo cliente com CEP diferente/ausente e
+             transportadora cadastrada sem CEP na planilha.
+
+        O número é comparado como inteiro ('059' == '59') e só conta se
+        aparecer como token isolado fora do CEP -- número de apartamento
+        igual ao do galpão no mesmo CEP é o único falso positivo possível,
+        e exige coincidência dupla.
+        """
+        if not endereco or not endereco.strip():
+            return None
+        cep_end = _extrair_cep(endereco)
+        texto_sem_cep = endereco
+        if cep_end:
+            texto_sem_cep = re.sub(r"\d{5}-?\d{3}", " ", endereco)
+        numeros = _numeros_isolados(texto_sem_cep)
+        texto_norm = _normalizar_endereco(texto_sem_cep)
+
+        candidatos_cep: list[PontoRedespacho] = []
+        candidatos_rua: list[PontoRedespacho] = []
+        for p in self._pontos:
+            end = p.endereco
+            numero = _numero_int(end.numero)
+            if numero is None or numero not in numeros:
+                continue
+            cep_p = _somente_digitos(end.cep)
+            if cep_end and len(cep_p) == 8 and cep_p == cep_end:
+                candidatos_cep.append(p)
+                continue
+            rua = _rua_sem_tipo(end.logradouro)
+            municipio = _normalizar_endereco(end.municipio)
+            if (rua and f" {rua} " in f" {texto_norm} "
+                    and municipio and f" {municipio} " in f" {texto_norm} "):
+                candidatos_rua.append(p)
+
+        candidatos = candidatos_cep or candidatos_rua
+        if not candidatos:
+            return None
+        if len(candidatos) > 1:
+            logger.warning(
+                f"Endereço {endereco!r} bate com mais de um ponto de redespacho "
+                f"({[c.nome for c in candidatos]}) -- usando o primeiro."
+            )
+        return candidatos[0]
 
     @classmethod
     def carregar(cls, caminho: Path) -> "CatalogoTransportadoras":
@@ -336,6 +428,132 @@ class CatalogoTransportadoras:
         Útil para detecção proativa de transportadoras novas.
         """
         return [n for n in nomes if _normalizar(n) not in self._indice]
+
+
+# ── Pontos de redespacho (batimento por endereço) ─────────────────────────────
+
+_TIPOS_LOGRADOURO = {
+    "R", "RUA", "AV", "AVENIDA", "AL", "ALAMEDA", "EST", "ESTRADA", "TRAV",
+    "TRAVESSA", "ROD", "RODOVIA", "PC", "PCA", "PRACA", "LGO", "LARGO", "VL", "VILA",
+}
+
+
+def _somente_digitos(s: str | None) -> str:
+    return re.sub(r"\D", "", str(s or ""))
+
+
+def _numero_int(numero: str | None) -> int | None:
+    """'591' -> 591, '341\xa0' -> 341, 'S/N' -> None. Usa a primeira
+    sequência de dígitos (a planilha às vezes traz '300 ' ou '1505')."""
+    m = re.search(r"\d+", str(numero or ""))
+    return int(m.group()) if m else None
+
+
+def _extrair_cep(texto: str) -> str:
+    """CEP de 8 dígitos dentro de um endereço formatado -- mesmos 2 formatos
+    de roteirizacao_dados.extrair_cep ('12345-678' em qualquer posição ou
+    '12345678' no fim)."""
+    m = re.search(r"(\d{5})-(\d{3})", texto or "")
+    if m:
+        return m.group(1) + m.group(2)
+    m = re.search(r"(\d{8})\s*$", (texto or "").strip())
+    return m.group(1) if m else ""
+
+
+def _numeros_isolados(texto: str) -> set[int]:
+    """Todos os números que aparecem como token isolado no texto (número do
+    imóvel, apartamento, loja...). 'RUA SIMAO ALVARES 059' -> {59}."""
+    return {int(n) for n in re.findall(r"(?<!\d)(\d{1,6})(?!\d)", texto or "")}
+
+
+def _normalizar_endereco(texto: str) -> str:
+    """Maiúsculas, sem acento, pontuação vira espaço, espaços colapsados."""
+    s = unicodedata.normalize("NFKD", str(texto or "").upper())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _rua_sem_tipo(logradouro: str) -> str:
+    """'Est. Francisco Hengles' -> 'FRANCISCO HENGLES'; 'RUA CONS CANDIDO DE
+    OLIVEIRA, 341' -> 'CONS CANDIDO DE OLIVEIRA' (número no fim também sai,
+    a planilha às vezes repete o número dentro do logradouro)."""
+    tokens = _normalizar_endereco(logradouro).split()
+    while tokens and tokens[0] in _TIPOS_LOGRADOURO:
+        tokens = tokens[1:]
+    while tokens and tokens[-1].isdigit():
+        tokens = tokens[:-1]
+    return " ".join(tokens)
+
+
+def _separar_emails(raw: str) -> list[str]:
+    """Coluna T pode trazer vários e-mails separados por vírgula, ponto e
+    vírgula, quebra de linha ou tab."""
+    return [e.strip() for e in re.split(r"[,;\s]+", raw or "") if e.strip() and "@" in e]
+
+
+def _chave_ponto(end: EnderecoRedespacho) -> str | None:
+    numero = _numero_int(end.numero)
+    if numero is None:
+        return None
+    cep = _somente_digitos(end.cep)
+    if len(cep) == 8:
+        return f"{cep}-{numero}"
+    rua = _rua_sem_tipo(end.logradouro)
+    municipio = _normalizar_endereco(end.municipio)
+    if not rua or not municipio:
+        return None
+    return f"{rua}|{numero}|{municipio}"
+
+
+def _escolher_nome_do_ponto(entradas: list[_Entrada], end: EnderecoRedespacho) -> _Entrada:
+    """Transportadora 'dona' do galpão: a que aparece no complemento da
+    planilha (que costuma trazer o nome do galpão -- 'Rua Osaka 880 KANEJO'),
+    senão a primeira com e-mail, senão a primeira na ordem da planilha."""
+    complemento = _normalizar_endereco(end.complemento)
+    for e in entradas:
+        if e.nome_normalizado and f" {e.nome_normalizado} " in f" {complemento} ":
+            return e
+    for e in entradas:
+        if e.email:
+            return e
+    return entradas[0]
+
+
+def _montar_pontos_redespacho(entradas: list[_Entrada]) -> list[PontoRedespacho]:
+    grupos: dict[str, list[_Entrada]] = {}
+    for e in entradas:
+        if e.tipo != "TERCEIROS" or not e.endereco:
+            continue
+        chave = _chave_ponto(e.endereco)
+        if not chave:
+            logger.debug(f"Transportadora {e.nome_original!r} sem número/CEP/rua utilizável -- "
+                         f"fora do batimento por endereço.")
+            continue
+        grupos.setdefault(chave, []).append(e)
+
+    pontos = []
+    for chave, grupo in grupos.items():
+        end = grupo[0].endereco
+        dona = _escolher_nome_do_ponto(grupo, end)
+        emails: list[str] = []
+        for e in grupo:
+            for em in _separar_emails(e.email):
+                if em.lower() not in {x.lower() for x in emails}:
+                    emails.append(em)
+        nomes: list[str] = []
+        for e in grupo:
+            if e.nome_original not in nomes:
+                nomes.append(e.nome_original)
+        pontos.append(PontoRedespacho(
+            chave=chave,
+            nome=dona.nome_original,
+            nome_normalizado=dona.nome_normalizado,
+            endereco=end,
+            nomes=nomes,
+            emails=emails,
+        ))
+    return pontos
 
 
 # ── Normalização ──────────────────────────────────────────────────────────────

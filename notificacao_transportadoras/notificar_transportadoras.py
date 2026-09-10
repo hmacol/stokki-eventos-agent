@@ -12,12 +12,16 @@ Fluxo:
   1. Rotas do dia no VUUPT (mesmo buscar_rotas_do_dia de
      gerar_pdf_romaneios.py/avisar_motoristas_rotas.py) -- todo pedido
      roteirizado pra hoje.
-  2. Pra cada pedido, confere o bloco "Transportadora" na Stokki
-     (stokki_pedidos.obter_detalhe -- leve, via requests, não Playwright)
-     e resolve contra o catálogo (regras/transportadoras.py). Só entra
-     nesta notificação quem resolve como tipo TERCEIROS -- mesma regra
-     que pipeline.py já usa pra decidir o redespacho na importação.
-  3. Agrupa por transportadora, descarta pedidos já notificados hoje
+  2. Pra cada pedido, bate o ENDEREÇO do serviço na VUUPT contra os
+     pontos de redespacho da planilha (regras/transportadoras.py::
+     resolver_por_endereco -- CEP + número, com fallback rua + número +
+     cidade). Pedido do Hugo, 10/09: o cliente às vezes esquece de
+     informar a transportadora na Stokki, mas o endereço de entrega já é
+     o do galpão -- o bloco "Transportadora" da Stokki virou só uma
+     conferência informativa (divergência entra no log e no resumo, e o
+     e-mail de contato de lá serve de fallback quando a planilha não tem).
+  3. Agrupa por ponto de redespacho (galpão -- KANEJO e IMG são o mesmo
+     endereço), descarta pedidos já notificados hoje
      (fingerprint_notificacao_transportadora.py -- rate-limit incremental:
      só os pedidos NOVOS do grupo geram e-mail, os já enviados hoje não
      reentram).
@@ -27,9 +31,13 @@ Fluxo:
      NUNCA é anexado -- baixar_xml_nfe troca pelo XML real da aba
      Documentos quando existe, senão o pedido conta como "sem_xml"
      (10/09: a TAFF recebeu placeholder da Fruta Fina em 24-25/08).
-  5. Envia 1 e-mail por transportadora (To = e-mail da transportadora,
+  5. Envia 1 e-mail por transportadora (To = e-mail(s) da transportadora,
      Cc = e-mail(s) do(s) embarcador(es) dos pedidos do grupo), com os
      XMLs anexados.
+
+--modo-teste redireciona tudo pra hugo@ (sem Cc), não marca fingerprint e
+IGNORA a chave-mestra notificacoes_automaticas.ativo (só bloqueia envio
+real) -- senão não dá pra ensaiar com a chave desligada.
 
 COMO USAR:
     py -3.11 notificacao_transportadoras/notificar_transportadoras.py --modo-teste --data hoje
@@ -78,7 +86,7 @@ from email_utils import (
     COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacoes_automaticas_ativas,
 )
 from notificar_execucao_agente import notificar_execucao
-from regras.transportadoras import CatalogoTransportadoras
+from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
 from stokki import pedidos as stokki_pedidos
 from stokki.auth import StokkiSession
 
@@ -139,53 +147,99 @@ def _extrair_nnf(caminho_xml: Path) -> str:
     return ""
 
 
-def identificar_pedidos_transportadora(rotas: list[dict], sess_stokki: StokkiSession,
-                                       catalogo: CatalogoTransportadoras) -> tuple[dict, dict]:
+def identificar_pedidos_transportadora(rotas: list[dict],
+                                       catalogo: CatalogoTransportadoras) -> tuple[dict, dict, dict]:
     """
-    Varre os serviços das rotas do dia e reconfirma, pedido a pedido, contra
-    o bloco "Transportadora" da Stokki -- mesma lógica de pipeline.py na
-    importação (não dá pra confiar só no endereço do serviço no VUUPT, que
-    já veio substituído pelo endereço de redespacho e não identifica QUAL
-    transportadora é).
+    Varre os serviços das rotas do dia e bate o ENDEREÇO de cada um contra
+    os pontos de redespacho da planilha (catalogo.resolver_por_endereco).
+    Não depende do bloco "Transportadora" da Stokki: tanto o pedido que
+    veio pelo redespacho automático (endereço trocado pelo pipeline) quanto
+    o que o cliente digitou o endereço do galpão à mão caem aqui.
 
-    Retorna (grupos, detalhes):
-      grupos: {nome_normalizado_transportadora: [codigo_ps, ...]}
-      detalhes: {codigo_ps: {"sender_id", "nome_transportadora", "email_transportadora"}}
+    Retorna (grupos, pontos, detalhes):
+      grupos:   {chave_ponto: [codigo_ps, ...]}
+      pontos:   {chave_ponto: PontoRedespacho}
+      detalhes: {codigo_ps: {"sender_id", "endereco_vuupt"}}
     """
     grupos: dict[str, list[str]] = defaultdict(list)
+    pontos: dict[str, PontoRedespacho] = {}
     detalhes: dict[str, dict] = {}
 
     for rota in rotas:
         for s in _extrair_servicos_da_rota(rota):
             codigo = (s.get("code") or "").lstrip("#")
-            id_stokki = _id_stokki(codigo)
-            if not codigo or id_stokki is None:
+            if not codigo or _id_stokki(codigo) is None:
                 continue
-
-            try:
-                detalhe = stokki_pedidos.obter_detalhe(sess_stokki, id_stokki)
-            except Exception as e:
-                logger.warning(f"  {codigo}: falha ao buscar detalhe na Stokki -- {e}")
+            endereco = s.get("address") or ""
+            ponto = catalogo.resolver_por_endereco(endereco)
+            if ponto is None:
                 continue
+            if codigo in detalhes:
+                continue  # mesmo serviço em 2 rotas do dia (não deveria) -- conta 1x
+            grupos[ponto.chave].append(codigo)
+            pontos[ponto.chave] = ponto
+            detalhes[codigo] = {"sender_id": s.get("sender_id"), "endereco_vuupt": endereco}
+            logger.info(f"  {codigo} -> {ponto.nome} ({endereco})")
 
-            transp = detalhe.get("transportadora") or {}
-            nome_transp = transp.get("nome", "")
-            if not nome_transp:
-                continue
+    return dict(grupos), pontos, detalhes
 
-            resultado = catalogo.resolver(nome_transp, transp.get("documento", ""))
-            if resultado.tipo != "TERCEIROS":
-                continue
 
-            chave = resultado.nome_normalizado
-            grupos[chave].append(codigo)
-            detalhes[codigo] = {
-                "sender_id": s.get("sender_id"),
-                "nome_transportadora": resultado.nome_original or nome_transp,
-                "email_transportadora": resultado.email or transp.get("email", ""),
-            }
+def conferir_na_stokki(sess_stokki: StokkiSession, catalogo: CatalogoTransportadoras,
+                       codigos: list[str], ponto: PontoRedespacho) -> tuple[dict[str, str], str]:
+    """
+    Conferência informativa do bloco "Transportadora" da Stokki pros pedidos
+    já identificados pelo endereço: devolve ({codigo: observação}, e-mail de
+    fallback). A observação fica vazia quando a transportadora da Stokki
+    resolve pro mesmo galpão; senão descreve a divergência (sem informar,
+    outra transportadora, desconhecida) -- vai pro log e pro resumo interno,
+    nunca trava o envio. O e-mail é o contato cadastrado na Stokki, usado
+    só quando a planilha não tem e-mail pro ponto.
+    """
+    observacoes: dict[str, str] = {}
+    email_fallback = ""
+    for codigo in codigos:
+        try:
+            detalhe = stokki_pedidos.obter_detalhe(sess_stokki, _id_stokki(codigo))
+        except Exception as e:
+            logger.warning(f"  {codigo}: falha ao conferir na Stokki (segue pelo endereço) -- {e}")
+            observacoes[codigo] = "Stokki indisponível na conferência"
+            continue
+        transp = detalhe.get("transportadora") or {}
+        nome_transp = (transp.get("nome") or "").strip()
+        if not email_fallback and transp.get("email"):
+            email_fallback = transp["email"].strip()
+        if not nome_transp:
+            observacoes[codigo] = "Stokki sem transportadora informada"
+            continue
+        resultado = catalogo.resolver(nome_transp, transp.get("documento", ""))
+        ponto_stokki = (catalogo.resolver_por_endereco(str(resultado.endereco_redespacho))
+                        if resultado.endereco_redespacho else None)
+        if ponto_stokki is not None and ponto_stokki.chave == ponto.chave:
+            observacoes[codigo] = ""
+        elif resultado.desconhecida:
+            observacoes[codigo] = f"Stokki: transportadora desconhecida ({nome_transp})"
+        else:
+            observacoes[codigo] = f"Stokki: {nome_transp} ({resultado.tipo or 'conflito'})"
+    return observacoes, email_fallback
 
-    return dict(grupos), detalhes
+
+def _bloco_teste(ponto: PontoRedespacho, destinos: list[str], cc: list[str],
+                 itens: list[dict], observacoes: dict[str, str]) -> str:
+    """Cabeçalho só do --modo-teste: mostra pra quem o e-mail iria e o que
+    a conferência na Stokki achou, pra avaliar o batimento por endereço."""
+    obs = "".join(
+        f"<li>{html.escape(i['codigo'])}: {html.escape(observacoes.get(i['codigo']) or 'Stokki confere')}</li>"
+        for i in itens)
+    return f"""
+<div style="margin:0 0 20px 0;padding:12px 14px;border:2px dashed #b45309;border-radius:8px;
+            background:#fffbeb;font-size:12px;color:#78350f;line-height:1.6;">
+  <strong>MODO TESTE</strong> — este e-mail iria para <strong>{html.escape(', '.join(destinos) or '(sem e-mail cadastrado)')}</strong>
+  com cópia para {html.escape(', '.join(cc) or '(ninguém)')}.<br>
+  Ponto de redespacho: {html.escape(str(ponto.endereco))}<br>
+  Grafias na planilha: {html.escape(' / '.join(ponto.nomes))}<br>
+  Conferência do bloco Transportadora na Stokki:<ul style="margin:4px 0 0 0;">{obs}</ul>
+</div>
+"""
 
 
 def _montar_conteudo(nome_transportadora: str, data_br: str, itens: list[dict]) -> str:
@@ -238,15 +292,17 @@ def main(modo_teste: bool, data_str: str) -> int:
     rotas = buscar_rotas_do_dia(token, data_alvo)
     logger.info(f"{len(rotas)} rota(s) para {data_br}.")
 
-    grupos, detalhes = identificar_pedidos_transportadora(rotas, sess_stokki, catalogo)
+    grupos, pontos, detalhes = identificar_pedidos_transportadora(rotas, catalogo)
     total_pedidos = sum(len(v) for v in grupos.values())
-    logger.info(f"{len(grupos)} transportadora(s) com entrega(s) hoje ({total_pedidos} pedido(s)).")
+    logger.info(f"{len(grupos)} transportadora(s) com entrega(s) hoje ({total_pedidos} pedido(s)) "
+                f"-- batimento pelo endereço do serviço na VUUPT.")
 
     resumo_etapas: dict = {}
     contadores = {"transportadoras_notificadas": 0, "pedidos_enviados": 0,
                  "sem_email": 0, "sem_xml": 0, "falhas": 0}
+    divergencias: list[str] = []
 
-    if not notificacoes_automaticas_ativas(config):
+    if not modo_teste and not notificacoes_automaticas_ativas(config):
         resumo_etapas["Resumo geral"] = {
             "status": "ok",
             "detalhe": "Notificação automática desativada (config.yaml: notificacoes_automaticas.ativo=false).",
@@ -266,17 +322,22 @@ def main(modo_teste: bool, data_str: str) -> int:
             page = nova_pagina(browser)
             _login(page, config)
 
-            for chave_transp, codigos in grupos.items():
+            for chave_ponto, codigos in grupos.items():
+                ponto = pontos[chave_ponto]
+                chave_transp = ponto.nome_normalizado  # chave do fingerprint
+                nome_exibicao = ponto.nome
                 ja_notificados = pedidos_ja_notificados_hoje(chave_transp)
                 codigos_novos = [c for c in codigos if c not in ja_notificados]
                 if not codigos_novos:
-                    logger.info(f"  {chave_transp}: {len(codigos)} pedido(s), todos já notificados hoje.")
+                    logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
                     continue
 
-                nome_exibicao = detalhes[codigos_novos[0]]["nome_transportadora"]
-                email_transp = next(
-                    (detalhes[c]["email_transportadora"] for c in codigos_novos
-                     if detalhes[c]["email_transportadora"]), "")
+                observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
+                for codigo, obs in observacoes.items():
+                    if obs:
+                        logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
+                        divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
+                emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
 
                 itens = []
                 for codigo in codigos_novos:
@@ -301,25 +362,30 @@ def main(modo_teste: bool, data_str: str) -> int:
                 if not itens:
                     continue
 
-                if not email_transp:
+                cc = sorted({e for i in itens for e in i["emails_embarcador"]})
+
+                if not emails_transp and not modo_teste:
                     logger.warning(f"  {nome_exibicao}: sem e-mail cadastrado (planilha nem Stokki) -- "
                                    f"{len(itens)} pedido(s) não notificado(s).")
                     contadores["sem_email"] += 1
                     continue
 
-                cc = sorted({e for i in itens for e in i["emails_embarcador"]})
-
                 assunto = f"[Freshlog] Notas fiscais para entrega — {data_br} — {len(itens)} pedido(s)"
                 conteudo = _montar_conteudo(nome_exibicao, data_br, itens)
+                if modo_teste:
+                    assunto = f"[TESTE] {assunto} — {nome_exibicao}"
+                    conteudo = _bloco_teste(ponto, emails_transp, cc, itens, observacoes) + conteudo
+                    if not emails_transp:
+                        contadores["sem_email"] += 1
                 corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
                 anexos = [(i["caminho_xml"], f"{i['codigo']}_NFe.xml") for i in itens]
 
-                destinos = [EMAIL_TESTE] if modo_teste else [email_transp]
+                destinos = [EMAIL_TESTE] if modo_teste else emails_transp
                 cc_final = [] if modo_teste else cc
 
                 if modo_teste:
                     logger.info(f"  [TESTE] {nome_exibicao} -> {EMAIL_TESTE} "
-                               f"(original: {email_transp}, cc original: {cc}) | "
+                               f"(original: {emails_transp or 'SEM E-MAIL'}, cc original: {cc}) | "
                                f"{len(itens)} pedido(s): {[i['codigo'] for i in itens]}")
 
                 if enviar_email(destinos, assunto, corpo, config_email, cc=cc_final, anexos=anexos):
@@ -341,6 +407,11 @@ def main(modo_teste: bool, data_str: str) -> int:
                       f"{contadores['sem_xml']} pedido(s) sem XML, "
                       f"{contadores['falhas']} falha(s) de envio.",
         }
+        if divergencias:
+            resumo_etapas["Transportadora na Stokki diverge do endereço"] = {
+                "status": "ok",
+                "detalhe": "; ".join(divergencias),
+            }
 
     duracao = time.time() - inicio
     logger.info(f"Concluído em {duracao:.1f}s: {resumo_etapas['Resumo geral']['detalhe']}")

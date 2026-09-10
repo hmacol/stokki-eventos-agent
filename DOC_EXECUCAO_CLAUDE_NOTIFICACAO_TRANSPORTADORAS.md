@@ -12,15 +12,23 @@ Roda em `notificacao_transportadoras\notificar_transportadoras.py`.
 
 1. **Busca** as rotas do dia no VUUPT (`buscar_rotas_do_dia`, mesma fonte
    de `gerar_pdf_romaneios.py`/`avisar_motoristas_rotas.py`).
-2. **Reconfirma** pedido a pedido, contra o bloco "Transportadora" da
-   própria página do pedido na Stokki (`stokki_pedidos.obter_detalhe` —
-   leve, via `requests`, não Playwright), e resolve o nome/CNPJ contra o
-   catálogo (`regras/transportadoras.py`). Só entra na notificação quem
-   resolve como tipo **TERCEIROS** — a mesma regra que `pipeline.py` já
-   usa pra decidir o redespacho na importação (o endereço de entrega
-   desses pedidos já é o endereço fixo da transportadora, não do
-   destinatário final).
-3. **Agrupa** os pedidos por transportadora e descarta os que já foram
+2. **Bate o endereço** do serviço na VUUPT (campo `address`) contra os
+   pontos de redespacho da planilha (`regras/transportadoras.py::
+   resolver_por_endereco`): CEP + número do imóvel; se não casar, rua
+   (sem R./AV./ESTRADA) + número + município. **Mudança de 10/09 (pedido
+   do Hugo):** o critério deixou de ser o bloco "Transportadora" da
+   Stokki, porque o cliente às vezes esquece de informar a transportadora
+   lá, mas o endereço de entrega já é o do galpão (caso #PS-38850, TAFF).
+   Assim tanto o pedido que veio pelo redespacho automático quanto o que o
+   cliente digitou o endereço do galpão à mão entram.
+   O bloco "Transportadora" da Stokki continua sendo consultado
+   (`conferir_na_stokki`), mas só como **conferência informativa**: se
+   divergir (sem transportadora, outra, desconhecida) vai pro log e pro
+   resumo interno, nunca trava o envio; o e-mail de contato de lá vira
+   fallback quando a planilha não tem e-mail pro ponto.
+3. **Agrupa** os pedidos por **ponto de redespacho** (galpão — KANEJO e
+   IMG são a mesma Rua Osaka 880; CENTROSUL, ANDREA BELOTTO, FREZZE e
+   GESSY LOPES a mesma Rua Makita Brasil 300) e descarta os que já foram
    notificados hoje (rate-limit incremental — ver abaixo).
 4. **Baixa o XML** cru da NF-e de cada pedido novo, direto da aba
    Documentos do pedido na Stokki (Playwright — `documentos_pedido/
@@ -33,12 +41,17 @@ Roda em `notificacao_transportadoras\notificar_transportadoras.py`.
 
 ## Como identifica "transportadora" e resolve os e-mails
 
-- **Tipo TERCEIROS**: mesmo campo já usado pelo redespacho
-  (`regras/transportadoras.py`, planilha `BD_TRANSPORTADORAS.xlsx`).
-- **E-mail da transportadora**: coluna **T** da planilha (nova, adicionada
-  nesta rotina — precisa ser preenchida manualmente por transportadora).
-  Se vier vazia, cai no fallback do e-mail de contato cadastrado no
-  próprio Stokki para aquele pedido (`detalhe["transportadora"]["email"]`).
+- **Ponto de redespacho**: endereço (colunas C-I) das linhas tipo
+  **TERCEIROS** da planilha `BD_TRANSPORTADORAS.xlsx`. Linhas com o mesmo
+  CEP + número viram 1 ponto só; a transportadora "dona" do ponto (nome
+  exibido no e-mail e chave do fingerprint) é a que aparece no complemento
+  da planilha (`Rua Osaka 880 KANEJO` → KANEJO), senão a primeira com
+  e-mail, senão a primeira linha. Linha sem número (ou sem CEP e sem
+  rua/município) fica fora do batimento.
+- **E-mail da transportadora**: coluna **T** da planilha, união de todas
+  as linhas do ponto (aceita vários, separados por vírgula/;/quebra de
+  linha). Se vier vazia, cai no fallback do e-mail de contato cadastrado
+  no próprio Stokki para aquele pedido (`detalhe["transportadora"]["email"]`).
   Sem nenhuma das duas fontes, o grupo inteiro fica sem notificação
   (contabilizado no resumo, tenta de novo na próxima execução).
 - **E-mail do(s) embarcador(es) (Cc)**: `sender_id` de cada pedido →
@@ -79,8 +92,12 @@ py -3.11 notificacao_transportadoras\notificar_transportadoras.py --data 15/08/2
 ```
 
 Em `--modo-teste`, todo e-mail é redirecionado (sem Cc) para
-`hugo@freshlogbr.com`, com o destino/Cc originais logados — mesmo padrão
-de `notificar_agendamento_dia_fixo.py`.
+`hugo@freshlogbr.com`, com um bloco "MODO TESTE" no topo mostrando o
+destino/Cc originais, o ponto de redespacho e o que a conferência na
+Stokki achou por pedido — e o modo de teste **ignora a chave-mestra**
+`notificacoes_automaticas.ativo` (que só bloqueia envio real), senão não
+dá pra ensaiar com ela desligada. Na VPS: `sudo -u www-data venv/bin/python
+notificacao_transportadoras/notificar_transportadoras.py --modo-teste --data hoje`.
 
 Agendamento: tarefa `StokkiEventos_NotificarTransportadoras`, diária às
 **04:10** — 10 min depois de `StokkiEventos_RomaneiosManha` (04:00), só
