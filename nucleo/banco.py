@@ -18,8 +18,10 @@ reaproveitada como cadastro de login do app -- ganha colunas novas por
 ALTER TABLE, sem mexer nas existentes.
 
 journal_mode NÃO é alterado aqui (é uma mudança persistente no arquivo,
-feita uma vez na VPS antes do piloto: `PRAGMA journal_mode=WAL` -- ver
-seção 2.6 do doc). Só se aplica busy_timeout pra conviver com os jobs.
+feita uma vez na VPS em 11/09/2026: `PRAGMA journal_mode=WAL` como
+www-data -- ver seção 2.6 do doc). Só se aplica busy_timeout pra conviver
+com os jobs. Scripts manuais na VPS: sempre `sudo -u www-data`, senão o
+-wal/-shm nasce de root e os serviços ficam "readonly database".
 """
 import logging
 import sqlite3

@@ -314,7 +314,7 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
 4. `mkdir -p dados/comprovantes && chown www-data`. (`gcs` do config já sobe as fotos pro bucket `freshlog-documentos-pedidos`, caminho `pedidos/{codigo}/Canhoto/...`, o mesmo dos documentos.)
 5. Usuário do Hugo: `python nucleo/motoristas_cli.py criar --cpf <cpf real ou 00000000000> --nome "Hugo" --pin <6 dígitos> --perfil TESTE`; replicar uma rota do dia: `python nucleo/motoristas_cli.py replicar-rota --vuupt-route-id <id> --para-cpf <cpf>`.
 6. No celular: Expo Go + `npx expo start` na máquina do Hugo (apiUrl já aponta pra produção no `app.json`). Build de verdade só com as contas das lojas.
-7. **WAL antes do piloto com motoristas reais** (seção 2.6).
+7. ~~**WAL antes do piloto com motoristas reais** (seção 2.6).~~ **Feito em 11/09** (`PRAGMA journal_mode=WAL` como `www-data`, persistiu; todos os units rodam como www-data). ARMADILHA: rodar script na mão como `root` pode criar `dados.db-wal`/`-shm` de root e travar os serviços com "readonly database" — sempre `sudo -u www-data`.
 
 ### Fase C — Piloto real rota a rota (2-4 semanas)
 - Coluna `provedor` em `rascunhos_rota` + escolha no Planejamento; Torre com as duas fontes; `validar_checklists.py` lendo `nucleo_comprovantes`; `expedir_pedidos.py` expedindo no Stokki a partir do núcleo.
@@ -388,3 +388,9 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   rodoviários × 16,5 em linha reta — a linha reta subestimava ~35%).
   Mudança no app precisa de OTA (`eas update --channel preview`), que
   exige token do Expo do Hugo.
+- **11/09 (tarde)** — Pendências curtas: **WAL ligado na VPS** (608 rotas
+  no núcleo, API/painel/escrita como www-data validados depois da troca).
+  OTA do app preparada (`tsc` limpo, árvore limpa) e **aguardando
+  `EXPO_TOKEN`** do Hugo; até publicar, o APK não mostra a seção Pedágios.
+  Depois: Hugo testa um pedágio real no celular e aprova em
+  `/financeiro/pedagios`; aí começa a Fase C.
