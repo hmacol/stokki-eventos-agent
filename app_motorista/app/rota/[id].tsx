@@ -34,6 +34,21 @@ function abrirNavegacao(p: Parada) {
   ]);
 }
 
+// WhatsApp exige só dígitos com DDI. Telefone cadastrado costuma vir como
+// "(11) 91234-5678" ou "11912345678"; sem DDI a gente assume Brasil (55).
+function numeroWhatsapp(telefone: string | null | undefined): string | null {
+  const digitos = (telefone ?? '').replace(/\D/g, '');
+  if (digitos.length < 10) return null;
+  return digitos.startsWith('55') && digitos.length >= 12 ? digitos : `55${digitos}`;
+}
+
+function abrirWhatsapp(p: Parada) {
+  const numero = numeroWhatsapp(p.telefone);
+  if (!numero) return;
+  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}).`);
+  Linking.openURL(`https://wa.me/${numero}?text=${texto}`).catch(() => Alert.alert('WhatsApp', 'Não foi possível abrir o WhatsApp neste aparelho.'));
+}
+
 function rotuloRetorno(p: Parada): string | null {
   if (!p.reagendado_para) return null;
   if (p.reagendado_para === 'FIM') return 'Reagendada: depois das outras';
@@ -273,7 +288,8 @@ export default function DetalheRota() {
             {ehPendente(p) ? (
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                 <Botao titulo="Navegar" tipo="secundario" onPress={() => abrirNavegacao(p)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} />
-                {p.telefone ? <Botao titulo="Ligar" tipo="secundario" onPress={() => void Linking.openURL(`tel:${p.telefone}`)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} /> : null}
+                <Botao titulo="Ligar" tipo="secundario" desabilitado={!p.telefone} onPress={() => void Linking.openURL(`tel:${p.telefone}`)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} />
+                <Botao titulo="WhatsApp" tipo="secundario" desabilitado={!numeroWhatsapp(p.telefone)} onPress={() => abrirWhatsapp(p)} estilo={{ flex: 1, minHeight: 42, paddingVertical: 8 }} />
               </View>
             ) : null}
             <View style={{ marginTop: 10 }}>{controleParada(p)}</View>
