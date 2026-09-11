@@ -139,7 +139,8 @@ AGENTES = [
     {
         "id": "incrementar_rotas",
         "nome": "Incrementar Rotas",
-        "descricao": "Aloca pedidos novos nas rotas do dia já criadas (job de hora em hora).",
+        "descricao": "Complementa as rotas já confirmadas da data alvo com os pedidos novos que chegaram "
+                    "até as 19h do dia útil anterior, sem teto de pedidos por rota (só caixas).",
         "script": "roteirizacao/incrementar_rotas.py",
         "cwd": "roteirizacao",
         "suporta_teste": True,

@@ -2,14 +2,32 @@
 """
 incrementar_rotas.py
 
-Job de hora em hora, das 14h às 20h (pedido do Hugo, 01/08): pega
-pedidos not_assigned NOVOS e aloca cada um na rota de HOJE mais
-PRÓXIMA geograficamente que ainda tenha espaço (< 15 pedidos) --
-usando POST /routes/{id}/activities com position="end" (achado em
-produção, 06/08: "optimize" exige veículo atribuído na rota, que
-essas rotas nunca têm -- a ordem final não importa de qualquer
-forma, o bloco de resequenciamento mais abaixo reordena tudo por
-distância da base depois).
+Complementa as rotas VIGENTES (as já confirmadas na VUUPT pra data
+alvo) com os pedidos not_assigned NOVOS: cada um vai pra rota mais
+PRÓXIMA geograficamente que ainda o comporte -- usando POST
+/routes/{id}/activities com position="end" (achado em produção,
+06/08: "optimize" exige veículo atribuído na rota, que essas rotas
+nunca têm -- a ordem final não importa de qualquer forma, o bloco de
+resequenciamento mais abaixo reordena tudo por distância da base
+depois).
+
+Dois padrões fixos (pedido do Hugo, 10/09 -- valem sempre, sem flag):
+
+  - CORTE DE 19h POR PEDIDO (HORA_CORTE_PEDIDO): só entra no
+    incremento pedido que chegou na VUUPT (created_at) até as 19h do
+    último dia útil ANTERIOR à data alvo. Quem chegou depois das 19h
+    fica not_assigned e vai pro rascunho do dia seguinte
+    (criar_rotas_diarias.py). Ex.: rodada de quarta 20h mira quinta ->
+    corte = quarta 19h; rodada de sexta 20h mira segunda -> corte =
+    sexta 19h (pedido de sábado espera o rascunho de segunda 18h);
+    rodada de quarta 15h mira quinta -> corte = quarta 19h, ainda no
+    futuro, então nada é barrado por horário.
+
+  - SEM TETO DE PEDIDOS POR ROTA: o incremento não aplica mais o
+    limite de entregas por rota (TAMANHO_MAXIMO_ROTA do criador
+    diário). Continuam valendo o teto de caixas (VOLUME_MAXIMO_ROTA),
+    os limites do tipo de veículo grande, o raio de 20 km, macro-região,
+    zona, viagem e janela de horário.
 
 "Novo" é decidido CONTRA A API, não por um fingerprint local (mudado
 06/08, pedido do Hugo): busca todas as rotas existentes com
@@ -49,7 +67,7 @@ import re
 import sys
 import time
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 
 _RAIZ_LOCAL   = Path(__file__).parent
@@ -87,7 +105,7 @@ from otimizacao_rotas import ordenar_2opt
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from criar_rotas_diarias import (
-    ENDERECO_BASE, PREFIXO_NOME_ROTA, TAMANHO_MAXIMO_ROTA, VOLUME_MAXIMO_ROTA,
+    ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas,
 )
 from regras.complexidade_entrega import (
@@ -114,6 +132,57 @@ def _carregar_config() -> dict:
 
 
 PADRAO_DATA_ROTA = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
+
+# Corte de horário do pedido (pedido do Hugo, 10/09): pedido que chegou
+# na VUUPT depois das 19h do último dia útil anterior à data alvo NÃO
+# entra no incremento -- fica pro rascunho do dia seguinte. Ver docstring
+# do módulo pros exemplos.
+HORA_CORTE_PEDIDO = 19
+
+
+def _dia_util_anterior(data: date) -> date:
+    """Último dia útil (seg-sex) ESTRITAMENTE anterior a `data` -- mesmo
+    critério simples, sem feriados, de criar_rotas_diarias._proximo_dia_util."""
+    anterior = data - timedelta(days=1)
+    while anterior.weekday() >= 5:
+        anterior -= timedelta(days=1)
+    return anterior
+
+
+def limite_corte_pedidos(data_alvo: date) -> datetime:
+    """Instante-limite (Brasília, com fuso) de chegada do pedido pra
+    entrar nas rotas de `data_alvo`: HORA_CORTE_PEDIDO do último dia
+    útil anterior à data alvo."""
+    return datetime.combine(_dia_util_anterior(data_alvo), dt_time(HORA_CORTE_PEDIDO), tzinfo=TZ_BRASILIA)
+
+
+def _data_criacao(servico: dict) -> datetime | None:
+    """created_at do serviço VUUPT como datetime COM fuso. A API devolve
+    ISO com offset ('2026-09-08T10:42:00-03:00') ou 'AAAA-MM-DD HH:MM:SS'
+    (sem fuso -- assumido Brasília, mesmo tratamento do portal do
+    cliente). None se ausente ou irreconhecível."""
+    valor = servico.get("created_at")
+    if not valor:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(valor).replace(" ", "T").replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ_BRASILIA)
+    return dt
+
+
+def chegou_dentro_do_corte(servico: dict, data_alvo: date) -> bool:
+    """True se o pedido chegou na VUUPT até o limite de corte pra
+    `data_alvo` (ver limite_corte_pedidos). Pedido sem created_at
+    reconhecível NÃO é barrado -- mais seguro deixar entrar do que
+    segurar um pedido por causa de 1 campo malformado (mesma postura
+    de elegivel_para_data)."""
+    criado = _data_criacao(servico)
+    if criado is None:
+        return True
+    return criado <= limite_corte_pedidos(data_alvo)
 
 # Achado em produção, 06/08: rota com data de amanhã (passa pela trava de
 # segurança de data numa boa) mas com STATUS "Cancelada" no VUUPT (ex:
@@ -266,17 +335,21 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
     Rota já classificada como veículo grande (`rota["tipo_veiculo"]`,
     ver regras/tipo_veiculo.py) respeita o teto de caixas E de
     endereços diferentes do PRÓPRIO tipo -- em vez do teto genérico de
-    última milha (`TAMANHO_MAXIMO_ROTA`/`VOLUME_MAXIMO_ROTA`), que não
-    faz sentido pra uma rota dessas (pode ter dezenas de pedidos pro
-    MESMO endereço, e cabe bem mais que 100 caixas). Rota comum segue a
-    trava genérica de sempre, sem mudança nenhuma.
+    última milha (`VOLUME_MAXIMO_ROTA`), que não faz sentido pra uma
+    rota dessas (pode ter dezenas de pedidos pro MESMO endereço, e cabe
+    bem mais que 100 caixas). Rota comum só respeita o teto de caixas.
+
+    SEM TETO DE PEDIDOS (pedido do Hugo, 10/09): o incremento não olha
+    mais a quantidade de entregas da rota (antes: < TAMANHO_MAXIMO_ROTA)
+    -- a ideia é COMPLEMENTAR as rotas vigentes com tudo que chegou
+    dentro do corte, e não deixar pedido pra trás por causa do teto.
     """
     tipo = rota["tipo_veiculo"]
     if tipo is not None:
         caixas_cabe = rota["caixas"] + cx_pedido <= tipo.volume_maximo_cx
         enderecos_cabe = len(rota["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos
         return caixas_cabe and enderecos_cabe
-    return rota["qtd"] < TAMANHO_MAXIMO_ROTA and rota["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+    return rota["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
 
 
 def main(modo_teste: bool = False):
@@ -418,6 +491,15 @@ def main(modo_teste: bool = False):
         # -- é o único filtro que ainda não tinha um "ids_..." próprio.
         ids_nao_elegivel_data = {s["id"] for s in servicos if not elegivel_para_data(s, data_alvo)}
 
+        # Corte de 19h (pedido do Hugo, 10/09): pedido que chegou na VUUPT
+        # depois de HORA_CORTE_PEDIDO do último dia útil anterior à data
+        # alvo fica pro rascunho do dia seguinte -- ver chegou_dentro_do_corte.
+        limite_corte = limite_corte_pedidos(data_alvo)
+        ids_apos_corte = {s["id"] for s in servicos if not chegou_dentro_do_corte(s, data_alvo)}
+        logger.info(f"Corte de chegada do pedido pra {data_alvo_br}: até {limite_corte.strftime('%d/%m/%Y %H:%M')} "
+                    f"-- {len(ids_apos_corte)} pedido(s) chegaram depois e ficam pro rascunho seguinte"
+                    + (f": {[s.get('code') for s in servicos if s['id'] in ids_apos_corte]}" if ids_apos_corte else "."))
+
         # BUG CORRIGIDO (06/08, achado no log real do Hugo -- "já em alguma
         # rota ativa: 197" sendo MAIOR que o total de 76 not_assigned, óbvio
         # sinal de erro): `ids_ja_em_alguma_rota` é o conjunto de TODOS os
@@ -434,6 +516,7 @@ def main(modo_teste: bool = False):
             if s["id"] not in ids_ja_em_alguma_rota and elegivel_para_data(s, data_alvo)
             and s["id"] not in ids_pendentes_agendamento
             and s["id"] not in ids_area_nao_atendida
+            and s["id"] not in ids_apos_corte
         ]
 
         # Detalhamento completo do que aconteceu com CADA pedido not_assigned
@@ -451,7 +534,8 @@ def main(modo_teste: bool = False):
                 f"já em alguma rota ativa: {len(ids_ja_em_rota_deste_lote)} | "
                 f"agendamento com data futura: {len(ids_nao_elegivel_data)} | "
                 f"aguardando confirmação de agendamento: {len(ids_pendentes_agendamento)} | "
-                f"área não atendida/fora de SP: {len(ids_area_nao_atendida)}."
+                f"área não atendida/fora de SP: {len(ids_area_nao_atendida)} | "
+                f"chegou depois do corte das {HORA_CORTE_PEDIDO}h: {len(ids_apos_corte)}."
             )
         logger.info(f"{len(novos)} pedido(s) novo(s) e elegível(is) pra alocar (de {len(servicos)} not_assigned no total, "
                    f"{len(ids_ja_em_rota_deste_lote)} já em alguma rota).")
@@ -681,20 +765,21 @@ def main(modo_teste: bool = False):
                         )
                 elif not pedido_eh_viagem and candidatas_com_espaco:
                     # sem coordenada do pedido (ou nenhuma rota com centroide
-                    # disponível) -- pega a rota com mais espaço livre, último
-                    # recurso. Pedido de VIAGEM nunca usa esse caminho (trava
-                    # de macro-região, pedido do Hugo, 12/08): sem coordenada
-                    # não dá pra verificar proximidade, mas a CIDADE já diz
-                    # que ele é fora da Grande SP -- entrar na rota "com mais
-                    # espaço" misturaria Sorocaba com rota urbana. Vira órfão
-                    # e se agrupa com a própria macro-região logo abaixo.
-                    rota_escolhida = max(candidatas_com_espaco, key=lambda r: TAMANHO_MAXIMO_ROTA - r["qtd"])
+                    # disponível) -- pega a rota com MENOS pedidos, último
+                    # recurso (sem teto de pedidos desde 10/09, "mais espaço
+                    # livre" virou simplesmente "menos entregas"). Pedido de
+                    # VIAGEM nunca usa esse caminho (trava de macro-região,
+                    # pedido do Hugo, 12/08): sem coordenada não dá pra
+                    # verificar proximidade, mas a CIDADE já diz que ele é
+                    # fora da Grande SP -- entrar na rota com menos pedidos
+                    # misturaria Sorocaba com rota urbana. Vira órfão.
+                    rota_escolhida = min(candidatas_com_espaco, key=lambda r: r["qtd"])
 
                 if not rota_escolhida:
                     break  # nenhuma candidata restante -- vira órfão
 
                 logger.info(f"  {pedido.get('code')} -> rota existente '{rota_escolhida['nome']}' "
-                           f"({rota_escolhida['qtd']}/{TAMANHO_MAXIMO_ROTA})")
+                           f"({rota_escolhida['qtd']} pedido(s), {rota_escolhida['caixas']} cx)")
 
                 if modo_teste:
                     alocado_em_existente = True
