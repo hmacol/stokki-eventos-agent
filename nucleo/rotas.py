@@ -63,13 +63,15 @@ def _inserir_rota(conn: sqlite3.Connection, rascunho: dict, provedor: str,
     cur = conn.execute("""
         INSERT INTO nucleo_rotas (data_rota, nome, provedor, vuupt_route_id, rascunho_id, agent_id, vehicle_id,
                                   motorista_nome, tipo_veiculo, start_at, start_location_base_id,
-                                  end_location_base_id, km_estimado, km_fonte, status, total_paradas, dados_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  end_location_base_id, km_estimado, km_volta_estimado, km_fonte_estimativa,
+                                  km_fonte, status, total_paradas, dados_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         data_rota, rascunho.get("nome"), provedor, vuupt_route_id, rascunho.get("id"),
         rascunho.get("agent_id"), rascunho.get("vehicle_id"), rascunho.get("motorista_nome"),
         rascunho.get("tipo_veiculo"), start_at, rascunho.get("start_location_base_id"),
         rascunho.get("end_location_base_id"), rascunho.get("km_estimado"),
+        rascunho.get("km_volta_estimado"), rascunho.get("km_fonte_estimativa"),
         "ESTIMADO" if rascunho.get("km_estimado") is not None else None,
         banco.ROTA_PLANEJADA, len(rascunho.get("paradas") or []),
         _json({"rascunho": {k: v for k, v in rascunho.items() if k != "paradas"}}),

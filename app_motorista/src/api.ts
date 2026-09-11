@@ -132,7 +132,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, Checklist, Extrato, Motorista, Oferta, Rota } from './tipos';
+import type { Ajuste, Checklist, Extrato, Motorista, Oferta, Pedagio, Rota } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -164,14 +164,23 @@ export const disponibilidade = (de: string, ate: string) => chamar<{ ajustes: Aj
 export const definirDisponibilidade = (corpo: object) => chamar<{ dias: number; ajustes: Ajuste[] }>('/disponibilidade', { metodo: 'PUT', corpo });
 export const registrarPushToken = (token: string) => chamar<{ ok: boolean }>('/push-token', { metodo: 'POST', corpo: { token } });
 
-export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string) {
+function formComFoto(uri: string, campos: Record<string, string>): FormData {
   const form = new FormData();
   const nome = uri.split('/').pop() ?? 'foto.jpg';
   const ext = (nome.split('.').pop() ?? 'jpg').toLowerCase();
   // React Native aceita {uri, name, type} como arquivo em FormData
   form.append('arquivo', { uri, name: nome, type: ext === 'png' ? 'image/png' : 'image/jpeg' } as unknown as Blob);
-  form.append('tipo', tipo);
-  form.append('uuid', uuid);
-  form.append('capturado_em', capturadoEm);
+  for (const [k, v] of Object.entries(campos)) form.append(k, v);
+  return form;
+}
+
+export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string) {
+  const form = formComFoto(uri, { tipo, uuid, capturado_em: capturadoEm });
   return chamar<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, { metodo: 'POST', form });
+}
+
+/** Pedágio da rota: valor + foto do recibo (Hugo, 11/09). Fica pendente até o painel aprovar. */
+export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string) {
+  const form = formComFoto(uri, { valor: String(valor), uuid, capturado_em: capturadoEm });
+  return chamar<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, { metodo: 'POST', form });
 }

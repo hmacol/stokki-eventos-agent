@@ -58,6 +58,12 @@ PEDIDO_ENTREGUE = "ENTREGUE"
 PEDIDO_INSUCESSO = "INSUCESSO"
 PEDIDO_CANCELADO = "CANCELADO"
 
+# nucleo_pedagios.status (Hugo, 11/09: pedágio reembolsado à parte,
+# informado com foto no app e aprovado no painel antes de entrar no extrato)
+PEDAGIO_PENDENTE = "PENDENTE"
+PEDAGIO_APROVADO = "APROVADO"
+PEDAGIO_REJEITADO = "REJEITADO"
+
 # nucleo_eventos.origem
 ORIGEM_APP = "APP"
 ORIGEM_VUUPT_SYNC = "VUUPT_SYNC"
@@ -206,6 +212,28 @@ CREATE TABLE IF NOT EXISTS nucleo_comprovantes (
 );
 CREATE INDEX IF NOT EXISTS idx_nucleo_comprovantes_parada ON nucleo_comprovantes(parada_id);
 
+CREATE TABLE IF NOT EXISTS nucleo_pedagios (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid                    TEXT UNIQUE,                    -- gerado no aparelho (fila offline reenvia sem duplicar)
+    rota_id                 INTEGER NOT NULL REFERENCES nucleo_rotas(id) ON DELETE CASCADE,
+    agent_id                INTEGER,
+    valor_informado         REAL NOT NULL,                  -- digitado pelo motorista
+    caminho_local           TEXT,                           -- foto do comprovante (disco)
+    caminho_gcs             TEXT,                           -- foto no bucket (best-effort)
+    sha256                  TEXT,
+    tamanho_bytes           INTEGER,
+    capturado_em            TEXT,
+    enviado_em              TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    status                  TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | REJEITADO
+    valor_aprovado          REAL,                           -- o que entra no extrato (pode diferir do informado)
+    revisado_em             TEXT,
+    revisado_por            TEXT,                           -- usuário do painel
+    observacao_revisao      TEXT,
+    dados_json              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_rota ON nucleo_pedagios(rota_id);
+CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_status ON nucleo_pedagios(status, enviado_em);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,
@@ -254,6 +282,15 @@ _COLUNAS_PARADAS_NOVAS = [
 ]
 
 
+# Colunas novas de nucleo_rotas (11/09): km estimado rodoviário com o
+# trecho de volta separado -- a volta só é paga com insucesso/parcial ou
+# parada fora da Grande SP (regras/km_cobrado.py).
+_COLUNAS_ROTAS_NOVAS = [
+    ("km_volta_estimado", "REAL"),      # última parada -> base (mesma fonte do km_estimado)
+    ("km_fonte_estimativa", "TEXT"),    # GOOGLE_ROUTES | HAVERSINE
+]
+
+
 def agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -272,6 +309,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
+    _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
     conn.commit()
 

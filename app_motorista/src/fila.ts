@@ -17,6 +17,7 @@ const CHAVE_DESCARTADOS = 'motorista.fila.descartados.v1';
 export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number }
+  | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'ROTA'; rotaId: number; acao: 'aceitar' | 'iniciar' | 'finalizar'; corpo: Record<string, unknown>; criadoEm: string; tentativas: number };
 
@@ -96,6 +97,9 @@ async function enviar(item: ItemFila): Promise<void> {
       return;
     case 'COMPROVANTE':
       await api.enviarComprovante(item.paradaId, item.uri, item.tipoComprovante, item.uuid, item.capturadoEm);
+      return;
+    case 'PEDAGIO':
+      await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm);
       return;
     case 'GPS':
       await api.enviarGps(item.pontos);

@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block titulo %}Pedágios{% endblock %}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  .abas-pedagio { display: flex; gap: 6px; flex-wrap: wrap; }
+  .abas-pedagio a { padding: 6px 12px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font-size: 12.5px; text-decoration: none; }
+  .abas-pedagio a.ativa { background: var(--primaria, #141428); color: #fff; border-color: var(--primaria, #141428); }
+  .abas-pedagio a .n { opacity: 0.7; margin-left: 4px; }
+  table.tabela-pedagios { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  table.tabela-pedagios th, table.tabela-pedagios td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  table.tabela-pedagios th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-pedagios tr:last-child td { border-bottom: none; }
+  .foto-pedagio { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; background: var(--fundo); }
+  .valor-mono { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .campo-aprovado { width: 96px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; background: var(--fundo); color: var(--texto); }
+  .campo-obs { width: 180px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); }
+  .acoes-pedagio { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acoes-pedagio button { padding: 6px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
+  .acoes-pedagio button.aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .acoes-pedagio button.rejeitar { color: var(--erro); border-color: var(--erro); }
+  .acoes-pedagio button:disabled { opacity: 0.5; cursor: default; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .erro-linha { color: var(--erro); font-size: 12px; margin-top: 4px; display: none; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Pedágios dos motoristas</h1>
+    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista (com o valor aprovado).</p>
+  </div>
+  <div class="abas-pedagio">
+    {% for chave, rotulo in (("PENDENTE", "Pendentes"), ("APROVADO", "Aprovados"), ("REJEITADO", "Rejeitados"), ("TODOS", "Todos")) %}
+    <a href="{{ url_for('pedagios', status=chave) }}" class="{{ 'ativa' if status == chave else '' }}">{{ rotulo }}{% if chave != 'TODOS' %}<span class="n">{{ contagem.get(chave, 0) }}</span>{% endif %}</a>
+    {% endfor %}
+  </div>
+</div>
+
+<table class="tabela-pedagios">
+  <thead>
+    <tr>
+      <th>Recibo</th><th>Rota</th><th>Motorista</th><th>Informado</th><th>Situação</th>{% if pode_editar %}<th>Revisar</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in itens %}
+    <tr data-id="{{ p.id }}">
+      <td>
+        {% if p.caminho_local %}
+        <a href="{{ url_for('pedagio_foto', pedagio_id=p.id) }}" target="_blank" rel="noopener"><img class="foto-pedagio" src="{{ url_for('pedagio_foto', pedagio_id=p.id) }}" alt="recibo"></a>
+        {% else %}<span class="suave">sem foto</span>{% endif %}
+        <div class="suave">{{ (p.capturado_em or p.enviado_em or '')[:16] }}</div>
+      </td>
+      <td>{{ p.data_rota }}<br><span class="suave">{{ p.rota_nome or ('Rota #' ~ p.rota_id) }} · {{ p.rota_status }}</span></td>
+      <td>{{ p.motorista_nome or p.agent_id }}</td>
+      <td class="valor-mono">R$ {{ "%.2f"|format(p.valor_informado) | replace('.', ',') }}</td>
+      <td>
+        {% if p.status == 'APROVADO' %}<span class="badge badge-sucesso">Aprovado</span> <span class="valor-mono">R$ {{ "%.2f"|format(p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado) | replace('.', ',') }}</span>
+        {% elif p.status == 'REJEITADO' %}<span class="badge badge-erro">Rejeitado</span>
+        {% else %}<span class="badge">Pendente</span>{% endif %}
+        {% if p.revisado_por %}<div class="suave">{{ p.revisado_por }} · {{ (p.revisado_em or '')[:16] }}</div>{% endif %}
+        {% if p.observacao_revisao %}<div class="suave">{{ p.observacao_revisao }}</div>{% endif %}
+      </td>
+      {% if pode_editar %}
+      <td>
+        <div class="acoes-pedagio">
+          <input type="text" class="campo-aprovado" placeholder="Valor" value="{{ '%.2f'|format(p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado) }}" title="Valor aprovado (padrão: o informado)">
+          <input type="text" class="campo-obs" placeholder="Observação (opcional)" value="{{ p.observacao_revisao or '' }}">
+          <button type="button" class="aprovar" data-acao="APROVADO">Aprovar</button>
+          <button type="button" class="rejeitar" data-acao="REJEITADO">Rejeitar</button>
+          {% if p.status != 'PENDENTE' %}<button type="button" data-acao="PENDENTE" title="Volta pra fila de pendentes">Reabrir</button>{% endif %}
+        </div>
+        <div class="erro-linha"></div>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 6 if pode_editar else 5 }}" class="suave">Nenhum pedágio {{ 'nesta situação' if status != 'TODOS' else 'registrado' }}.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<script>
+document.querySelectorAll('.tabela-pedagios tr[data-id]').forEach((linha) => {
+  const id = linha.dataset.id;
+  const erro = linha.querySelector('.erro-linha');
+  linha.querySelectorAll('button[data-acao]').forEach((botao) => {
+    botao.addEventListener('click', async () => {
+      const status = botao.dataset.acao;
+      const valor = linha.querySelector('.campo-aprovado')?.value ?? '';
+      const observacao = linha.querySelector('.campo-obs')?.value ?? '';
+      if (status === 'REJEITADO' && !observacao.trim() && !confirm('Rejeitar sem observação? O motorista não vai saber o motivo.')) return;
+      linha.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      if (erro) erro.style.display = 'none';
+      try {
+        const r = await fetch(`{{ url_for('revisar_pedagio', pedagio_id=0) }}`.replace('/0/', `/${id}/`), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, valor_aprovado: status === 'APROVADO' ? valor : null, observacao }),
+        });
+        const dados = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(dados.erro || `Erro ${r.status}`);
+        window.location.reload();
+      } catch (e) {
+        if (erro) { erro.textContent = e.message; erro.style.display = 'block'; }
+        linha.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      }
+    });
+  });
+});
+</script>
+{% endblock %}

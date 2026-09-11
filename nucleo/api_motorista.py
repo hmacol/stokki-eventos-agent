@@ -226,6 +226,32 @@ def criar_app(config: dict | None = None) -> Flask:
         resultado = operacao.registrar_evento_parada(conn(), parada_id, agent_id(), corpo())
         return jsonify(resultado), (200 if resultado["ja_registrado"] else 201)
 
+    def _extensao_foto(arquivo) -> str:
+        ext = (arquivo.filename.rsplit(".", 1)[-1] if "." in arquivo.filename else "jpg").lower()
+        if ext not in EXTENSOES_FOTO:
+            raise OperacaoInvalida(f"Extensão não aceita: .{ext}")
+        return ext
+
+    def _guardar_foto(conteudo: bytes, codigo_pasta: str, tipo: str, uuid: str, ext: str) -> tuple[str, str | None]:
+        """Grava em disco (pasta_comprovantes/<codigo>/) e, best-effort, no
+        GCS. Devolve (caminho relativo em disco, caminho GCS ou None)."""
+        sha = hashlib.sha256(conteudo).hexdigest()
+        pasta = app.config["PASTA_COMPROVANTES"] / secure_filename(codigo_pasta)
+        pasta.mkdir(parents=True, exist_ok=True)
+        nome = f"{tipo.lower()}_{secure_filename(uuid or sha[:16])}.{ext}"
+        caminho = pasta / nome
+        caminho.write_bytes(conteudo)
+
+        caminho_gcs = None
+        if app.config["GCS_ATIVO"] and app.config["CONFIG_PROJETO"].get("gcs"):
+            try:
+                from documentos_pedido.storage_gcs import enviar_documento
+                caminho_gcs = enviar_documento(app.config["CONFIG_PROJETO"], caminho, codigo_pasta, tipo.capitalize())
+            except Exception as e:
+                logger.warning(f"Foto {nome} salva em disco, mas não subiu pro GCS: {e}")
+        relativo = str(caminho.relative_to(_RAIZ)) if _RAIZ in caminho.parents else str(caminho)
+        return relativo, caminho_gcs
+
     @app.post("/api/paradas/<int:parada_id>/comprovantes")
     @requer_motorista
     def comprovante(parada_id):
@@ -235,9 +261,7 @@ def criar_app(config: dict | None = None) -> Flask:
         tipo = (request.form.get("tipo") or "CANHOTO").upper()
         uuid = (request.form.get("uuid") or "").strip()
         capturado_em = request.form.get("capturado_em") or banco.agora()
-        ext = (arquivo.filename.rsplit(".", 1)[-1] if "." in arquivo.filename else "jpg").lower()
-        if ext not in EXTENSOES_FOTO:
-            raise OperacaoInvalida(f"Extensão não aceita: .{ext}")
+        ext = _extensao_foto(arquivo)
 
         # Valida posse/idempotência ANTES de gravar em disco
         ja = conn().execute("SELECT id FROM nucleo_comprovantes WHERE uuid = ?", (uuid,)).fetchone() if uuid else None
@@ -251,25 +275,38 @@ def criar_app(config: dict | None = None) -> Flask:
         conteudo = arquivo.read()
         sha = hashlib.sha256(conteudo).hexdigest()
         codigo = p["codigo"] or f"parada-{parada_id}"
-        pasta = app.config["PASTA_COMPROVANTES"] / secure_filename(codigo)
-        pasta.mkdir(parents=True, exist_ok=True)
-        nome = f"{tipo.lower()}_{secure_filename(uuid or sha[:16])}.{ext}"
-        caminho = pasta / nome
-        caminho.write_bytes(conteudo)
-
-        caminho_gcs = None
-        if app.config["GCS_ATIVO"] and app.config["CONFIG_PROJETO"].get("gcs"):
-            try:
-                from documentos_pedido.storage_gcs import enviar_documento
-                caminho_gcs = enviar_documento(app.config["CONFIG_PROJETO"], caminho, codigo, tipo.capitalize())
-            except Exception as e:
-                logger.warning(f"Comprovante {nome} salvo em disco, mas não subiu pro GCS: {e}")
-
+        caminho, caminho_gcs = _guardar_foto(conteudo, codigo, tipo, uuid or sha[:16], ext)
         resultado = operacao.registrar_comprovante(
-            conn(), parada_id, agent_id(), tipo, uuid or sha, str(caminho.relative_to(_RAIZ)) if _RAIZ in caminho.parents else str(caminho),
-            sha, len(conteudo), capturado_em, caminho_gcs,
+            conn(), parada_id, agent_id(), tipo, uuid or sha, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None}), 201
+
+    @app.post("/api/rotas/<int:rota_id>/pedagios")
+    @requer_motorista
+    def pedagio(rota_id):
+        """Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por
+        recibo. Fica PENDENTE até o painel aprovar. Multipart: arquivo
+        (foto, obrigatória), valor, uuid, capturado_em."""
+        arquivo = request.files.get("arquivo")
+        if arquivo is None or not arquivo.filename:
+            raise OperacaoInvalida("Envie a foto do recibo no campo 'arquivo' (multipart).")
+        uuid = (request.form.get("uuid") or "").strip()
+        valor = request.form.get("valor")
+        capturado_em = request.form.get("capturado_em") or banco.agora()
+        ext = _extensao_foto(arquivo)
+
+        ja = conn().execute("SELECT id FROM nucleo_pedagios WHERE uuid = ?", (uuid,)).fetchone() if uuid else None
+        if ja:
+            return jsonify({"id": ja["id"], "ja_registrado": True})
+        rota = operacao.rota_do_motorista(conn(), rota_id, agent_id())
+
+        conteudo = arquivo.read()
+        sha = hashlib.sha256(conteudo).hexdigest()
+        caminho, caminho_gcs = _guardar_foto(conteudo, f"rota-{rota['id']}", "PEDAGIO", uuid or sha[:16], ext)
+        resultado = operacao.registrar_pedagio(
+            conn(), rota_id, agent_id(), uuid or sha, valor, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
+        )
+        return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 
     @app.post("/api/gps")
     @requer_motorista

@@ -42,6 +42,20 @@ export type Parada = {
   comprovantes: Comprovante[];
 };
 
+// Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por recibo;
+// PENDENTE até o painel aprovar. Só o aprovado entra no extrato.
+export type Pedagio = {
+  id: number;
+  uuid: string;
+  valor_informado: number;
+  status: 'PENDENTE' | 'APROVADO' | 'REJEITADO';
+  valor_aprovado: number | null;
+  capturado_em: string | null;
+  enviado_em: string;
+  observacao_revisao: string | null;
+  tem_foto: boolean;
+};
+
 export type Rota = {
   id: number;
   data_rota: string;
@@ -51,6 +65,7 @@ export type Rota = {
   status: StatusRota;
   start_at: string | null;
   km_estimado: number | null;
+  km_volta_estimado?: number | null;
   km_real: number | null;
   km_fonte: string | null;
   total_paradas: number;
@@ -60,6 +75,7 @@ export type Rota = {
   concluida_em: string | null;
   confirmacao: { status: string; respondido_em: string | null; motivo_recusa: string | null } | null;
   paradas: Parada[];
+  pedagios?: Pedagio[];
 };
 
 export type CampoChecklist = {
@@ -95,14 +111,25 @@ export type LinhaExtrato = {
   km: number | null;
   km_fonte: string | null;
   km_provisorio: boolean;
+  // Regra do km (regras/km_cobrado.py): a volta ao CD só conta com
+  // insucesso/parcial ou parada fora da Grande SP.
+  km_detalhe?: { volta_conta: boolean; motivo_volta: 'INSUCESSO' | 'PARCIAL' | 'FORA_GRANDE_SP' | null; km_volta: number | null; volta_estimada: boolean } | null;
   sem_tarifa: boolean;
   valor: number | null;
+  pedagio_aprovado?: number;
+  pedagio_pendente?: number;
+  pedagio_rejeitado?: number;
+  pedagios?: number;
+  valor_com_pedagio?: number | null;
 };
 
 export type Extrato = {
   linhas: LinhaExtrato[];
-  por_dia: { data: string; rotas: number; valor: number; km: number; sem_tarifa: number; provisorio: boolean }[];
+  por_dia: { data: string; rotas: number; valor: number; km: number; sem_tarifa: number; provisorio: boolean; pedagio_aprovado?: number; pedagio_pendente?: number }[];
   total: number;
+  total_rotas?: number;
+  total_pedagio?: number;
+  pedagio_pendente?: number;
   rotas_sem_tarifa: number;
   valores_provisorios: boolean;
   tarifa: { nome_tarifa: string; valor_base: number; km_franquia: number; valor_km_adicional: number } | null;

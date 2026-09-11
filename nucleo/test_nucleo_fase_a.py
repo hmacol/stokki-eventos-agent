@@ -20,7 +20,10 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
 from nucleo import banco, financeiro, metricas, pedidos, rotas, sincronizar_vuupt, tempos
-from regras import tarifa_motorista
+from regras import km_cobrado, tarifa_motorista
+
+sys.path.insert(0, str(_RAIZ / "roteirizacao"))
+import km_rodoviario  # noqa: E402
 
 
 class _BaseTemp(unittest.TestCase):
@@ -74,8 +77,13 @@ class TestTarifa(unittest.TestCase):
         self.assertEqual(tarifa_motorista.calcular_valor_rota("VAN/HR", 120).valor_total, 570.0)
         self.assertEqual(tarifa_motorista.calcular_valor_rota("HR", 20).valor_total, 550.0)
 
+    def test_vuc(self):
+        # Hugo, 11/09: R$ 700 até 120 km + R$ 1,25/km
+        self.assertEqual(tarifa_motorista.calcular_valor_rota("VUC", 120).valor_total, 700.0)
+        self.assertEqual(tarifa_motorista.calcular_valor_rota("vuc", 160).valor_total, 750.0)
+
     def test_sem_tarifa_definida(self):
-        for tipo in ("VUC", "TRES_QUARTOS", "3/4", "TRUCK", "ZEPPELIN"):
+        for tipo in ("TRES_QUARTOS", "3/4", "TRUCK", "ZEPPELIN"):
             self.assertIsNone(tarifa_motorista.calcular_valor_rota(tipo, 10), tipo)
 
     def test_km_desconhecido_paga_so_base(self):
@@ -88,6 +96,7 @@ class TestTarifa(unittest.TestCase):
             conn = banco.conectar(Path(d) / "t.db")
             tarifa_motorista.semear_tarifas_padrao(conn)
             tarifa_motorista.semear_tarifas_padrao(conn)  # idempotente
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tarifas_motorista").fetchone()[0], 3)
             conn.execute("UPDATE tarifas_motorista SET valor_base = 400 WHERE tipo_veiculo = 'FIORINO'")
             tarifas = tarifa_motorista.carregar_tarifas(conn)
             self.assertEqual(tarifa_motorista.calcular_valor_rota("FIORINO", 10, tarifas).valor_total, 400.0)
@@ -347,32 +356,125 @@ class TestTempos(_BaseTemp):
         conn.close()
 
 
+class TestKmCobrado(unittest.TestCase):
+    """regras/km_cobrado.py -- decisão do Hugo (11/09): a volta ao CD só
+    conta com insucesso/parcial ou parada fora da Grande SP."""
+    PARADAS_SP = [{"situacao": "ENTREGUE", "latitude": -23.5, "longitude": -46.6},
+                  {"situacao": "ENTREGUE", "latitude": -23.6, "longitude": -46.7}]
+
+    def test_estimado_sem_volta_desconta_trecho_de_volta(self):
+        r = km_cobrado.calcular_km_cobrado({"km_estimado": 80.0, "km_volta_estimado": 10.0}, self.PARADAS_SP)
+        self.assertEqual((r.km, r.fonte, r.provisorio, r.volta_conta, r.km_volta), (70.0, "ESTIMADO", True, False, 10.0))
+
+    def test_insucesso_e_parcial_contam_a_volta(self):
+        paradas = [{**self.PARADAS_SP[0], "situacao": "INSUCESSO"}, self.PARADAS_SP[1]]
+        r = km_cobrado.calcular_km_cobrado({"km_estimado": 80.0, "km_volta_estimado": 10.0}, paradas)
+        self.assertEqual((r.km, r.volta_conta, r.motivo_volta), (80.0, True, "INSUCESSO"))
+        paradas = [{**self.PARADAS_SP[0], "situacao": "PARCIAL"}, self.PARADAS_SP[1]]
+        self.assertEqual(km_cobrado.calcular_km_cobrado({"km_estimado": 80.0, "km_volta_estimado": 10.0}, paradas).motivo_volta, "PARCIAL")
+
+    def test_parada_fora_da_grande_sp_conta_a_volta(self):
+        paradas = [self.PARADAS_SP[0], {"situacao": "ENTREGUE", "latitude": -23.02, "longitude": -47.05}]   # ~50 km (Campinas)
+        r = km_cobrado.calcular_km_cobrado({"km_estimado": 150.0, "km_volta_estimado": 60.0}, paradas)
+        self.assertEqual((r.km, r.motivo_volta), (150.0, "FORA_GRANDE_SP"))
+
+    def test_gps_para_na_ultima_parada_e_soma_volta_estimada_quando_conta(self):
+        rota = {"km_real": 40.0, "km_fonte": "GPS_APP", "km_estimado": 55.0, "km_volta_estimado": 10.0}
+        r = km_cobrado.calcular_km_cobrado(rota, self.PARADAS_SP)
+        self.assertEqual((r.km, r.fonte, r.provisorio, r.volta_conta), (40.0, "GPS_APP", False, False))
+        paradas = [{**self.PARADAS_SP[0], "situacao": "INSUCESSO"}, self.PARADAS_SP[1]]
+        r = km_cobrado.calcular_km_cobrado(rota, paradas)
+        self.assertEqual((r.km, r.volta_estimada), (50.0, True))
+
+    def test_sem_km_volta_gravado_usa_linha_reta_ate_o_cd(self):
+        r = km_cobrado.calcular_km_cobrado({"km_estimado": 80.0}, self.PARADAS_SP)
+        self.assertIsNotNone(r.km_volta)
+        self.assertLess(r.km, 80.0)
+        # última parada (-23.6, -46.7) -> CD (-23.497, -46.66): ~12 km
+        self.assertAlmostEqual(r.km_volta, 12.2, delta=0.5)
+
+    def test_km_desconhecido(self):
+        r = km_cobrado.calcular_km_cobrado({}, self.PARADAS_SP)
+        self.assertIsNone(r.km)
+
+
+class TestKmRodoviario(unittest.TestCase):
+    """roteirizacao/km_rodoviario.py com a Routes API simulada."""
+    def test_google_separa_volta_e_encadeia_acima_de_25_paradas(self):
+        chamadas = []
+
+        def fake_post(corpo, api_key, timeout):
+            n = len(corpo["intermediates"])
+            chamadas.append(n)
+            return {"routes": [{"distanceMeters": 1000 * (n + 1), "legs": [{"distanceMeters": 1000}] * (n + 1)}]}
+
+        with mock.patch.object(km_rodoviario, "_post", side_effect=fake_post):
+            r = km_rodoviario.calcular_km((-23.5, -46.66), [(-23.5, -46.6), (-23.55, -46.65)], "chave")
+            self.assertEqual((r.total_km, r.ida_km, r.volta_km, r.fonte), (3.0, 2.0, 1.0, "GOOGLE_ROUTES"))
+            self.assertEqual(chamadas, [2])
+            chamadas.clear()
+            coords = [(-23.5 + i * 0.001, -46.6) for i in range(30)]
+            r = km_rodoviario.calcular_km((-23.5, -46.66), coords, "chave")
+            self.assertEqual(chamadas, [25, 4])       # 32 pontos = 31 pernas: 26 na 1ª chamada + 5 na 2ª
+            self.assertEqual(r.total_km, 31.0)
+            self.assertEqual(r.volta_km, 1.0)
+
+    def test_sem_chave_ou_api_fora_cai_na_linha_reta(self):
+        r = km_rodoviario.calcular_km((-23.5, -46.66), [(-23.5, -46.6)], None)
+        self.assertEqual(r.fonte, "HAVERSINE")
+        self.assertAlmostEqual(r.ida_km, r.volta_km)
+        with mock.patch.object(km_rodoviario, "_post", side_effect=RuntimeError("403")):
+            r = km_rodoviario.calcular_km((-23.5, -46.66), [(-23.5, -46.6)], "chave")
+        self.assertEqual(r.fonte, "HAVERSINE")
+        self.assertIsNone(km_rodoviario.calcular_km(None, [(-23.5, -46.6)], "chave"))
+
+
 class TestFinanceiro(_BaseTemp):
     def test_extrato_soma_por_dia_e_ignora_cancelada(self):
         conn = banco.conectar()
-        r1 = rotas.materializar_rascunho(_rascunho_fake(1, km=80.0), "VUUPT", 1, conn=conn)       # 340 + 15
-        r2 = rotas.materializar_rascunho({**_rascunho_fake(2, km=30.0), "data_alvo": "2026-08-27"}, "VUUPT", 2, conn=conn)  # 340
+        # r1: 80 km estimados, volta de 10 km NÃO conta (paradas pendentes, dentro da Grande SP) -> 70 km -> 340 + 5
+        r1 = rotas.materializar_rascunho({**_rascunho_fake(1, km=80.0), "km_volta_estimado": 10.0, "km_fonte_estimativa": "GOOGLE_ROUTES"}, "VUUPT", 1, conn=conn)
+        r2 = rotas.materializar_rascunho({**_rascunho_fake(2, km=30.0), "data_alvo": "2026-08-27"}, "VUUPT", 2, conn=conn)
         r3 = rotas.materializar_rascunho(_rascunho_fake(3, km=999.0), "VUUPT", 3, conn=conn)
         rotas.marcar_cancelada_por_vuupt_route_id(3, conn=conn)
-        conn.execute("UPDATE nucleo_rotas SET km_real = 70.0, km_fonte = 'GPS_APP' WHERE id = ?", (r2,))
+        conn.execute("UPDATE nucleo_rotas SET km_real = 70.0, km_fonte = 'GPS_APP' WHERE id = ?", (r2,))   # 340 + 5
         conn.commit()
+        self.assertEqual(rotas.buscar_rota(r1, conn=conn)["km_fonte_estimativa"], "GOOGLE_ROUTES")
 
         extrato = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)
         self.assertEqual(len(extrato["linhas"]), 2)
-        self.assertEqual(extrato["total"], 355.0 + 345.0)
+        self.assertEqual(extrato["total"], 345.0 + 345.0)
+        self.assertEqual(extrato["linhas"][0]["km_detalhe"]["km_volta"], 10.0)
         por_dia = {d["data"]: d for d in extrato["por_dia"]}
-        self.assertEqual(por_dia["2026-08-26"]["valor"], 355.0)
+        self.assertEqual(por_dia["2026-08-26"]["valor"], 345.0)
         self.assertTrue(por_dia["2026-08-26"]["provisorio"])      # km estimado
         self.assertFalse(por_dia["2026-08-27"]["provisorio"])     # km real do app
         self.assertEqual(por_dia["2026-08-27"]["valor"], 345.0)
 
-        sem = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "VUC", conn=conn)
-        self.assertEqual(sem["total"], 0.0)
+        # Insucesso na r1: a volta passa a contar (80 km -> 340 + 15); rota paga integral
+        conn.execute("UPDATE nucleo_paradas SET situacao = 'INSUCESSO' WHERE rota_id = ? AND ordem = 2", (r1,))
+        conn.commit()
+        extrato = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)
+        self.assertEqual(extrato["linhas"][0]["valor"], 355.0)
+        self.assertEqual(extrato["linhas"][0]["km_detalhe"]["motivo_volta"], "INSUCESSO")
+
+        # Pedágio: só o aprovado entra no total; pendente fica à parte
+        conn.execute("INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, status) VALUES ('a', ?, 1234, 20.0, 'PENDENTE')", (r1,))
+        conn.execute("INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, status, valor_aprovado) VALUES ('b', ?, 1234, 8.0, 'APROVADO', 7.5)", (r2,))
+        conn.execute("INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, status) VALUES ('c', ?, 1234, 99.0, 'REJEITADO')", (r2,))
+        conn.commit()
+        extrato = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)
+        self.assertEqual((extrato["total"], extrato["total_rotas"], extrato["total_pedagio"], extrato["pedagio_pendente"]), (707.5, 700.0, 7.5, 20.0))
+        por_dia = {d["data"]: d for d in extrato["por_dia"]}
+        self.assertEqual((por_dia["2026-08-27"]["valor"], por_dia["2026-08-27"]["pedagio_aprovado"]), (352.5, 7.5))
+
+        sem = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "TRUCK", conn=conn)
+        self.assertEqual(sem["total"], 7.5)      # só o pedágio aprovado
         self.assertEqual(sem["rotas_sem_tarifa"], 2)
 
         fechamento = financeiro.fechamento_periodo("2026-08-26", "2026-08-31", {1234: "VAN_HR"}, conn=conn)
         self.assertEqual(len(fechamento), 1)
-        self.assertEqual(fechamento[0]["total"], 550.0 + 550.0)
+        self.assertEqual(fechamento[0]["total_rotas"], 550.0 + 550.0)
         conn.close()
 
 

@@ -53,7 +53,10 @@ export default function Financeiro() {
           <Cartao estilo={{ backgroundColor: cores.primaria, borderColor: cores.primaria }}>
             <Text style={s.totalRotulo}>{intervalo(periodo).rotulo}</Text>
             <Text style={s.total}>{formatarReal(extrato.total)}</Text>
-            <Text style={s.totalSub}>{extrato.linhas.length} rota(s)</Text>
+            <Text style={s.totalSub}>
+              {extrato.linhas.length} rota(s){(extrato.total_pedagio ?? 0) > 0 ? ` · inclui ${formatarReal(extrato.total_pedagio)} de pedágio` : ''}
+            </Text>
+            {(extrato.pedagio_pendente ?? 0) > 0 ? <Text style={s.totalSub}>⏳ {formatarReal(extrato.pedagio_pendente)} de pedágio aguardando aprovação (fora do total).</Text> : null}
             {extrato.valores_provisorios ? <Text style={s.totalSub}>⚠ Parte dos km é estimada — o valor final sai com o km real.</Text> : null}
             {extrato.rotas_sem_tarifa > 0 ? <Text style={s.totalSub}>⚠ {extrato.rotas_sem_tarifa} rota(s) com tarifa a definir.</Text> : null}
           </Cartao>
@@ -63,6 +66,7 @@ export default function Financeiro() {
               <Linha rotulo="Valor da saída" valor={formatarReal(extrato.tarifa.valor_base)} />
               <Linha rotulo="Km inclusos" valor={`${extrato.tarifa.km_franquia} km`} />
               <Linha rotulo="Km adicional" valor={`${formatarReal(extrato.tarifa.valor_km_adicional)} / km`} />
+              <Text style={s.regra}>A volta ao galpão só conta no km quando há insucesso, entrega parcial ou parada fora da Grande SP. Pedágio é reembolsado à parte, com foto do recibo.</Text>
             </Cartao>
           ) : null}
           {extrato.por_dia.length === 0 ? <Vazio texto="Nenhuma rota no período." /> : null}
@@ -76,7 +80,9 @@ export default function Financeiro() {
                 <View key={l.rota_id} style={s.rota}>
                   <Text style={s.rotaNome} numberOfLines={1}>{l.nome ?? `Rota #${l.rota_id}`}</Text>
                   <Text style={s.rotaDetalhe}>
-                    {l.entregues}/{l.total_paradas} entregues · {l.km !== null ? `${l.km.toFixed(1)} km${l.km_provisorio ? ' (est.)' : ''}` : 'km —'} · {l.sem_tarifa ? 'a definir' : formatarReal(l.valor)}
+                    {l.entregues}/{l.total_paradas} entregues · {l.km !== null ? `${l.km.toFixed(1)} km${l.km_provisorio ? ' (est.)' : ''}${l.km_detalhe?.volta_conta ? ' c/ volta' : ''}` : 'km —'} · {l.sem_tarifa ? 'a definir' : formatarReal(l.valor)}
+                    {(l.pedagio_aprovado ?? 0) > 0 ? ` + ${formatarReal(l.pedagio_aprovado)} pedágio` : ''}
+                    {(l.pedagio_pendente ?? 0) > 0 ? ` · pedágio ${formatarReal(l.pedagio_pendente)} pendente` : ''}
                   </Text>
                 </View>
               ))}
@@ -99,6 +105,7 @@ const s = StyleSheet.create({
   total: { color: cores.acentoLogo, fontSize: 34, fontWeight: '900', marginVertical: 4 },
   totalSub: { color: cores.textoSuaveSobrePrimaria, marginTop: 2 },
   secao: { fontWeight: '800', color: cores.textoSuave, marginBottom: 6 },
+  regra: { color: cores.textoSuave, fontSize: 12, marginTop: 8, lineHeight: 17 },
   diaCab: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   dia: { fontWeight: '800', color: cores.texto, fontSize: 16 },
   diaValor: { fontWeight: '800', color: cores.primaria, fontSize: 16 },

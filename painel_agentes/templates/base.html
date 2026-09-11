@@ -323,6 +323,10 @@
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/></svg></span>
         <span class="rotulo">Motoristas</span>
       </a>
+      <a href="{{ url_for('pedagios') }}" class="{{ 'ativo' if request.endpoint == 'pedagios' else '' }}" title="Pedágios (app de motoristas)">
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M3 8.5h14"/><path d="M6.5 12h3"/></svg></span>
+        <span class="rotulo">Pedágios</span>
+      </a>
       <a href="{{ url_for('mapa_rotas') }}" class="{{ 'ativo' if request.endpoint == 'mapa_rotas' else '' }}" title="Mapa de Rotas">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/></svg></span>
         <span class="rotulo">Mapa de Rotas</span>

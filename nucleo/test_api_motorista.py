@@ -205,14 +205,55 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(len(rota["paradas"][0]["comprovantes"]), 1)
 
         # Finalizar de novo é idempotente (já concluída)
-        r = self.cli.post(f"/api/rotas/{rota_id}/finalizar", json={"pedagio": 12.5}, headers=h)
+        r = self.cli.post(f"/api/rotas/{rota_id}/finalizar", json={}, headers=h)
         self.assertEqual(r.get_json()["status"], "CONCLUIDA")
 
-        # Financeiro: VAN_HR, km real ~3-4 km -> base 550
+        # Pedágio (Hugo, 11/09): foto + valor, fica PENDENTE; idempotente por uuid
+        recibo = (io.BytesIO(b"\xff\xd8\xff recibo"), "recibo.jpg")
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h,
+                          data={"arquivo": recibo, "valor": "12,50", "uuid": "ped1"}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 201, r.get_json())
+        self.assertEqual(r.get_json()["pedagios"][0]["status"], "PENDENTE")
+        self.assertEqual(r.get_json()["pedagios"][0]["valor_informado"], 12.5)
+        self.assertEqual(len(list((Path(self._tmp.name) / "fotos" / f"rota-{rota_id}").glob("pedagio_*.jpg"))), 1)
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h,
+                          data={"arquivo": (io.BytesIO(b"x"), "r.jpg"), "valor": "12.5", "uuid": "ped1"}, content_type="multipart/form-data")
+        self.assertTrue(r.get_json()["ja_registrado"])
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h,
+                          data={"arquivo": (io.BytesIO(b"x"), "r.jpg"), "valor": "abc", "uuid": "ped2"}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(len(self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()["pedagios"]), 1)
+
+        # Financeiro: VAN_HR, km real ~3-4 km + volta estimada (rota teve
+        # INSUCESSO -> volta conta) -> ainda dentro da franquia: base 550.
+        # Pedágio pendente aparece separado e NÃO entra no total.
         fin = self.cli.get(f"/api/financeiro?de={date.today()}&ate={date.today()}", headers=h).get_json()
         self.assertEqual(fin["total"], 550.0)
+        self.assertEqual(fin["pedagio_pendente"], 12.5)
         self.assertFalse(fin["valores_provisorios"])
         self.assertEqual(fin["tarifa"]["tipo_tarifa"], "VAN_HR")
+        linha = fin["linhas"][0]
+        self.assertEqual(linha["km_detalhe"]["motivo_volta"], "INSUCESSO")
+        self.assertTrue(linha["km_detalhe"]["volta_estimada"])
+        self.assertGreater(linha["km"], rota["km_real"])
+
+        # Painel aprova com outro valor -> entra no total
+        from nucleo import operacao
+        conn = banco.conectar()
+        ped_id = conn.execute("SELECT id FROM nucleo_pedagios WHERE uuid = 'ped1'").fetchone()[0]
+        operacao.revisar_pedagio(conn, ped_id, "APROVADO", "hugo", 12.0, "recibo ok")
+        conn.close()
+        fin = self.cli.get(f"/api/financeiro?de={date.today()}&ate={date.today()}", headers=h).get_json()
+        self.assertEqual((fin["total"], fin["total_rotas"], fin["total_pedagio"], fin["pedagio_pendente"]), (562.0, 550.0, 12.0, 0.0))
+        self.assertEqual(fin["por_dia"][0]["valor"], 562.0)
+
+    def test_pedagio_so_em_rota_em_andamento_ou_concluida(self):
+        h = self._auth()
+        rota_id = self._rota_app()
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h,
+                          data={"arquivo": (io.BytesIO(b"x"), "r.jpg"), "valor": "5", "uuid": "p-cedo"}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()["pedagios"], [])
 
     def test_rota_vuupt_e_somente_leitura_mas_aceite_alimenta_confirmacao(self):
         h = self._auth()

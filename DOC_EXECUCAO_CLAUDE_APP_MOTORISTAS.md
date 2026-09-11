@@ -209,29 +209,28 @@ além da VUUPT.
 
 ---
 
-## 4. Regra financeira (confirmada 25/08)
+## 4. Regra financeira (confirmada 25/08; decisões pendentes fechadas em 11/09)
 
 | Veículo do motorista (`TIPO_VEICULO`) | Base | Franquia | Adicional |
 |---|---|---|---|
 | Fiorino / utilitário pequeno (`FIORINO`, ou coluna vazia) | R$ 340,00 | 65 km | R$ 1,00/km |
 | HR / Van (`VAN_HR`) | R$ 550,00 | 100 km | R$ 1,00/km |
-| VUC, 3/4, Truck | **sem tarifa definida** — `valor=None`, extrato mostra "a definir" | — | — |
+| VUC (`VUC`) — **11/09** | R$ 700,00 | 120 km | R$ 1,25/km |
+| 3/4, Truck | **sem tarifa definida** (Hugo, 11/09: "deixar a definir") — `valor=None`, extrato mostra "a definir" | — | — |
 
 Implementação: `regras/tarifa_motorista.py` (`calcular_valor_rota(tipo_veiculo, km)`),
 valores em `tarifas_motorista` (editável) com os defaults acima no código.
 
-**Km considerado:** `km_real` do app quando existir (GPS, Fase B); até lá,
-`km_estimado` do rascunho (`rascunhos_rota.km_estimado`, Google Directions
-ida + paradas). Coluna `km_fonte` guarda qual foi usado.
+### 4.1. Decisões do Hugo em 11/09 (todas implementadas)
 
-**A confirmar com o Hugo** (não bloqueia a Fase A):
-1. O km é ida + volta ao CD sempre, ou a volta só conta com insucesso /
-   parada fora da Grande SP (regra do desenho de junho)?
-2. Pedágio: reembolsado à parte, informado pelo motorista no fechamento?
-3. Rota com insucesso paga integral? Reentrega (`-R1`) conta como rota nova?
-4. Tarifas de VUC / 3/4 / Truck.
-5. Coluna `TIPO_VEICULO` da planilha hoje só tem os códigos de veículo
-   grande; "FIORINO" passa a ser aceito como valor explícito (vazio = Fiorino).
+| Pergunta | Decisão | Onde |
+|---|---|---|
+| Km da franquia: ida + volta? | **Volta ao CD só conta com insucesso ou entrega parcial (produto volta) ou parada fora da Grande SP** (`RAIO_GRANDE_SP_KM` = 35 km do centro). Rota limpa e urbana termina na última parada. | `regras/km_cobrado.py` (`calcular_km_cobrado`), usado por `nucleo/financeiro.py`. Cada linha do extrato traz `km_detalhe` (volta_conta, motivo_volta, km_volta). |
+| Fonte do km estimado | **Rodoviário pela Google Routes API** (mesma chave do Geocoding; nível "Pro" até 25 paradas/chamada, 5.000 grátis/mês; rotas maiores encadeiam chamadas). Linha reta (haversine) só como reserva, marcada `HAVERSINE`. Testado em 11/09: a API já está habilitada na chave; rota de teste deu 25,9 km rodoviários × 16,5 em linha reta. | `roteirizacao/km_rodoviario.py`; `rascunhos_rota.recalcular_km` grava `km_estimado`, `km_volta_estimado`, `km_fonte_estimativa` (colunas novas em `rascunhos_rota` e `nucleo_rotas`); `marcar_enviado` recalcula antes de espelhar no núcleo; backfill `nucleo/recalcular_km_rotas.py --dias 30`. |
+| Km real (GPS) e a volta | O GPS do app **para na última parada** (a rota conclui sozinha no último resultado). Quando a volta conta, soma-se o `km_volta_estimado`; a linha marca `volta_estimada=true`. | `regras/km_cobrado.py` |
+| Pedágio | **Reembolsado à parte.** Motorista informa valor + **foto do recibo** no app (um por recibo, com a rota em andamento ou concluída, fila offline). Fica PENDENTE; o Hugo **aprova no painel** (`/financeiro/pedagios`, pode ajustar o valor ou rejeitar com observação). Só o APROVADO entra no total do extrato; o pendente aparece separado. | `nucleo_pedagios` (`nucleo/banco.py`), `operacao.registrar_pedagio/revisar_pedagio`, `POST /api/rotas/{id}/pedagios`, painel `pedagios.html` + menu "Pedágios", app `rota/[id].tsx` (seção Pedágios) e `financeiro.tsx`. |
+| Insucesso e reentrega | **Rota paga integral** (insucesso não desconta). **Reentrega `-R` é parada normal** da rota em que for roteirizada — não é rota nova nem paga à parte. | Nada a mudar no cálculo (documentado em `nucleo/financeiro.py`). |
+| `TIPO_VEICULO` = "FIORINO" explícito | Aceito (vazio = Fiorino). | `regras/tarifa_motorista.py` |
 
 ---
 
@@ -279,7 +278,7 @@ Entregáveis:
 - [x] **APK v1.0.0 gerado (26/08, build `a41b9050`)**: https://expo.dev/artifacts/eas/0VgatpBWFYnCwoD6Adeg2ZEQrCyJK0fkMSyRJyL_yTE.apk — conta Expo `freshlogbr`, projeto `89779e04-…`, keystore na nuvem. Builds 1-2 falharam por `package-lock.json` dessincronizado (`npm ci` da nuvem) — corrigido com `.npmrc` (`legacy-peer-deps=true`) + lock regenerado; **sempre rodar `npm ci --include=dev` local antes de `eas build`**.
 - [ ] Atualizações OTA: `npx eas-cli update --channel preview --message "..."` publica mudança de JS sem novo APK (o `preview` do `eas.json` já aponta pro canal; o APK acima já embute `expo-updates`).
 - [ ] Login do EAS nesta máquina não persiste: usar `EXPO_TOKEN` (token criado em expo.dev → Account settings → Access tokens) por sessão; revogar o token usado em 26/08.
-- [ ] Decisões pendentes da seção 4 (km ida/volta, pedágio, VUC/3-4/Truck).
+- [x] Decisões pendentes da seção 4 (km ida/volta, pedágio, VUC/3-4/Truck) — **fechadas e implementadas em 11/09 (seção 4.1)**. Falta só a tarifa de 3/4 e Truck (Hugo deixou "a definir").
 
 **Ajustes de design (26/08, pedidos do Hugo):** paleta da marca (mesma
 do painel) + logo no login + ícones/splash da folha; na tela da rota as
@@ -369,3 +368,23 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   PIN passado no chat) + rota real de hoje replicada como APP #407
   (17 paradas). Login público testado. Falta: Hugo testar no celular
   (Expo Go), D-U-N-S/contas, decisões de km/pedágio, WAL antes do piloto real.
+- **11/09** — Retomada. Estado encontrado: API e timer no ar, 605 rotas
+  no núcleo, o teste do Hugo de 26/08 chegou ao servidor (aceite, início,
+  3 chegadas, 2 entregas, 39 pontos GPS) e o app não foi mais usado; Fase
+  C não começou; banco ainda em `journal_mode=delete`. Hugo escolheu
+  **fechar as decisões financeiras** (seção 4.1): volta só com insucesso/
+  parcial/fora da Grande SP, km rodoviário pela Google Routes API,
+  pedágio à parte com foto e aprovação no painel, insucesso paga
+  integral, reentrega é parada normal, VUC R$700/120 km/R$1,25, 3/4 e
+  Truck a definir. Implementado: `regras/km_cobrado.py`,
+  `roteirizacao/km_rodoviario.py`, colunas `km_volta_estimado`/
+  `km_fonte_estimativa` (rascunhos_rota + nucleo_rotas), tabela
+  `nucleo_pedagios`, endpoint `POST /api/rotas/{id}/pedagios`, painel
+  `/financeiro/pedagios` (menu "Pedágios"), app (seção Pedágios na rota,
+  extrato com pedágio e regra da volta; o `Alert.prompt` de pedágio, que
+  só existia no iOS, saiu), backfill `nucleo/recalcular_km_rotas.py`.
+  Testes: 35 do núcleo/API + 45 do painel verdes, `tsc` limpo. Achado:
+  a Routes API já estava habilitada na chave (rota de teste 25,9 km
+  rodoviários × 16,5 em linha reta — a linha reta subestimava ~35%).
+  Mudança no app precisa de OTA (`eas update --channel preview`), que
+  exige token do Expo do Hugo.

@@ -6,8 +6,9 @@
 // Reagendar). Só uma parada "em andamento" por vez -- os outros cards
 // ficam travados até ela ser resolvida ou reagendada.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import * as api from '../../src/api';
 import * as fila from '../../src/fila';
 import * as gps from '../../src/gps';
@@ -19,6 +20,8 @@ import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } fr
 import type { Parada, Rota, SituacaoParada } from '../../src/tipos';
 
 const FINAIS: SituacaoParada[] = ['ENTREGUE', 'PARCIAL', 'INSUCESSO', 'CANCELADA'];
+const PEDAGIO_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado' };
+const PEDAGIO_COR: Record<string, string> = { PENDENTE: cores.alerta, APROVADO: cores.sucesso, REJEITADO: cores.perigo };
 const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
 const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
 
@@ -46,6 +49,12 @@ export default function DetalheRota() {
   const [ocupado, setOcupado] = useState(false);
   const [motivoRecusa, setMotivoRecusa] = useState('');
   const [recusando, setRecusando] = useState(false);
+  // Pedágio (Hugo, 11/09): reembolso à parte -- valor + foto do recibo,
+  // um por recibo, enviado pela fila offline; aprovado no painel.
+  const [pedagioAberto, setPedagioAberto] = useState(false);
+  const [pedagioValor, setPedagioValor] = useState('');
+  const [pedagioFoto, setPedagioFoto] = useState<string | null>(null);
+  const [pedagiosNaFila, setPedagiosNaFila] = useState<{ uuid: string; valor: number }[]>([]);
 
   const carregar = useCallback(async () => {
     try {
@@ -128,9 +137,28 @@ export default function DetalheRota() {
 
   const finalizar = () => {
     if (pendentes.length > 0) return Alert.alert('Ainda faltam paradas', `${pendentes.length} parada(s) sem resultado.`);
-    Alert.prompt?.('Pedágio (R$)', 'Informe o total de pedágio da rota, ou deixe em branco.', (valor) => {
-      void acaoRota('finalizar', 'CONCLUIDA', { pedagio: valor ? Number(String(valor).replace(',', '.')) : null });
-    }) ?? void acaoRota('finalizar', 'CONCLUIDA', { pedagio: null });
+    void acaoRota('finalizar', 'CONCLUIDA');
+  };
+
+  const fotografarPedagio = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o recibo.');
+    const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
+    if (!r.canceled && r.assets[0]) setPedagioFoto(r.assets[0].uri);
+  };
+
+  const enviarPedagio = async () => {
+    const valor = Number(pedagioValor.replace(',', '.'));
+    if (!pedagioValor.trim() || !Number.isFinite(valor) || valor <= 0) return Alert.alert('Informe o valor do pedágio.');
+    if (!pedagioFoto) return Alert.alert('Falta a foto', 'Fotografe o recibo do pedágio -- sem foto não dá pra aprovar.');
+    const uuid = fila.novoUuid();
+    const agora = fila.agoraIso();
+    await fila.enfileirar({ uuid, tipo: 'PEDAGIO', rotaId: rota.id, uri: pedagioFoto, valor, capturadoEm: agora, criadoEm: agora, tentativas: 0 });
+    setPedagiosNaFila((l) => [...l, { uuid, valor }]);
+    setPedagioValor('');
+    setPedagioFoto(null);
+    setPedagioAberto(false);
+    await carregar();
   };
 
   /** O único controle do card, conforme o estado da parada. */
@@ -188,6 +216,41 @@ export default function DetalheRota() {
         {rota.confirmacao ? <Text style={s.sub}>Confirmação: {rota.confirmacao.status.toLowerCase()}</Text> : null}
       </Cartao>
 
+      {rota.editavel && (rota.status === 'EM_ROTA' || rota.status === 'CONCLUIDA') ? (
+        <Cartao>
+          <Text style={s.secao}>Pedágios</Text>
+          <Text style={s.sub}>Pagou pedágio nesta rota? Informe o valor e fotografe o recibo. O reembolso entra no extrato depois de aprovado.</Text>
+          {(rota.pedagios ?? []).map((p) => (
+            <View key={p.id} style={s.pedagioLinha}>
+              <Text style={s.pedagioValor}>R$ {p.valor_informado.toFixed(2).replace('.', ',')}</Text>
+              <Text style={[s.pedagioStatus, { color: PEDAGIO_COR[p.status] }]}>
+                {PEDAGIO_ROTULO[p.status]}{p.status === 'APROVADO' && p.valor_aprovado !== null && p.valor_aprovado !== p.valor_informado ? ` (R$ ${p.valor_aprovado.toFixed(2).replace('.', ',')})` : ''}
+              </Text>
+              {p.observacao_revisao ? <Text style={s.paradaMeta}>{p.observacao_revisao}</Text> : null}
+            </View>
+          ))}
+          {pedagiosNaFila.filter((f) => !(rota.pedagios ?? []).some((p) => p.uuid === f.uuid)).map((f) => (
+            <View key={f.uuid} style={s.pedagioLinha}>
+              <Text style={s.pedagioValor}>R$ {f.valor.toFixed(2).replace('.', ',')}</Text>
+              <Text style={[s.pedagioStatus, { color: cores.textoSuave }]}>na fila de envio</Text>
+            </View>
+          ))}
+          {pedagioAberto ? (
+            <View style={{ marginTop: 12 }}>
+              <TextInput style={s.campoCurto} placeholder="Valor do pedágio (R$)" placeholderTextColor="#9CA3AF" keyboardType="decimal-pad" value={pedagioValor} onChangeText={setPedagioValor} />
+              {pedagioFoto ? <Image source={{ uri: pedagioFoto }} style={s.fotoPedagio} /> : null}
+              <Botao titulo={pedagioFoto ? 'Tirar outra foto' : '📷  Fotografar recibo'} tipo={pedagioFoto ? 'secundario' : 'primario'} onPress={() => void fotografarPedagio()} estilo={{ marginTop: 8 }} />
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <Botao titulo="Cancelar" tipo="secundario" onPress={() => { setPedagioAberto(false); setPedagioFoto(null); }} estilo={{ flex: 1 }} />
+                <Botao titulo="Enviar pedágio" onPress={() => void enviarPedagio()} estilo={{ flex: 1 }} />
+              </View>
+            </View>
+          ) : (
+            <Botao titulo="+ Adicionar pedágio" tipo="secundario" onPress={() => setPedagioAberto(true)} estilo={{ marginTop: 10, minHeight: 46, paddingVertical: 10 }} />
+          )}
+        </Cartao>
+      ) : null}
+
       {paradasOrdenadas.map((p) => {
         const destaque = ativa?.id === p.id;
         const retorno = rotuloRetorno(p);
@@ -232,6 +295,12 @@ const s = StyleSheet.create({
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
+  campoCurto: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, color: cores.texto, fontSize: 18, fontWeight: '700' },
+  secao: { fontWeight: '800', color: cores.texto, fontSize: 16 },
+  pedagioLinha: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: cores.borda, marginTop: 8 },
+  pedagioValor: { fontWeight: '800', color: cores.texto, fontSize: 15 },
+  pedagioStatus: { fontWeight: '600', fontSize: 13 },
+  fotoPedagio: { width: '100%', height: 180, borderRadius: 10, marginTop: 8, backgroundColor: cores.borda },
   paradaCab: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   ordem: { width: 32, height: 32, borderRadius: 16, backgroundColor: cores.primaria, alignItems: 'center', justifyContent: 'center' },
   ordemTexto: { color: '#fff', fontWeight: '800' },

@@ -155,6 +155,15 @@ def _conectar() -> sqlite3.Connection:
     if "lalamove_lancar_tentativas" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN lalamove_lancar_tentativas INTEGER NOT NULL DEFAULT 0")
 
+    # Migração 11/09: km estimado passa a ser RODOVIÁRIO (Google Routes,
+    # roteirizacao/km_rodoviario.py) e guarda o trecho de VOLTA ao CD
+    # separado -- a volta só é paga com insucesso/parcial ou parada fora
+    # da Grande SP (regras/km_cobrado.py). km_fonte_estimativa:
+    # GOOGLE_ROUTES | HAVERSINE (linha reta = reserva quando a API falha).
+    for coluna, tipo in (("km_volta_estimado", "REAL"), ("km_fonte_estimativa", "TEXT")):
+        if coluna not in colunas_rota:
+            conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} {tipo}")
+
     conn.commit()
     return conn
 
@@ -395,18 +404,23 @@ def _recalcular_km_silencioso(conn: sqlite3.Connection, rascunho_id: int):
 
 
 def recalcular_km(conn: sqlite3.Connection, rascunho_id: int, api_key: str) -> float | None:
-    """Recalcula e grava o km_estimado do rascunho a partir das paradas
-    atuais. NÃO reaproveita roteirizacao_dados.calcular_km_estimado
-    aqui de propósito: aquela função busca coordenada via
-    obter_coordenadas(), que geocodifica pelo campo 'address' (cache de
-    geocodificacao.py) e ignora latitude/longitude já presentes no
-    dict -- correto pro pipeline automático (só tem endereço bruto da
-    VUUPT), mas em rascunhos_parada as coordenadas JÁ estão resolvidas
-    e gravadas; usar aquela função aqui geocodificaria 'None' e
-    zeraria o km. Soma a MESMA fórmula (haversine, base -> p1 -> ... ->
-    pN -> base) direto sobre as coordenadas salvas."""
-    from roteirizacao_dados import _distancia_km
+    """Recalcula e grava km_estimado / km_volta_estimado /
+    km_fonte_estimativa do rascunho a partir das paradas atuais
+    (base -> p1 -> ... -> pN -> base).
+
+    Desde 11/09 o km é RODOVIÁRIO pela Google Routes API
+    (roteirizacao/km_rodoviario.py; decisão do Hugo -- a linha reta
+    subestimava 25-35% o km pago ao motorista). Sem chave / API fora, cai
+    na linha reta e marca a fonte como HAVERSINE.
+
+    NÃO reaproveita roteirizacao_dados.calcular_km_estimado aqui de
+    propósito: aquela função busca coordenada via obter_coordenadas(), que
+    geocodifica pelo campo 'address' e ignora latitude/longitude já
+    presentes no dict -- em rascunhos_parada as coordenadas JÁ estão
+    resolvidas e gravadas; usar aquela função aqui geocodificaria 'None'
+    e zeraria o km."""
     from geocodificacao import geocodificar
+    from km_rodoviario import calcular_km
 
     paradas = conn.execute(
         "SELECT latitude, longitude FROM rascunhos_parada WHERE rascunho_id = ? ORDER BY ordem",
@@ -414,16 +428,15 @@ def recalcular_km(conn: sqlite3.Connection, rascunho_id: int, api_key: str) -> f
     ).fetchall()
     base = geocodificar(ENDERECO_BASE, api_key or "")
     coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] and p["longitude"]]
-    if not base or not coords:
+    resultado = calcular_km(base, coords, api_key)
+    if resultado is None:
         return None
 
-    km = _distancia_km(base[0], base[1], *coords[0])
-    for i in range(len(coords) - 1):
-        km += _distancia_km(*coords[i], *coords[i + 1])
-    km += _distancia_km(*coords[-1], base[0], base[1])
-
-    conn.execute("UPDATE rascunhos_rota SET km_estimado = ? WHERE id = ?", (km, rascunho_id))
-    return km
+    conn.execute(
+        "UPDATE rascunhos_rota SET km_estimado = ?, km_volta_estimado = ?, km_fonte_estimativa = ? WHERE id = ?",
+        (resultado.total_km, resultado.volta_km, resultado.fonte, rascunho_id),
+    )
+    return resultado.total_km
 
 
 def mover_parada(service_id: int, rascunho_origem_id: int, rascunho_destino_id: int, nova_ordem: int):
@@ -1182,6 +1195,19 @@ def marcar_enviado(rascunho_id: int, vuupt_route_id: int):
         conn.commit()
     finally:
         conn.close()
+
+    # Km rodoviário definitivo antes de espelhar (11/09): rascunho que veio
+    # do pipeline e nunca foi editado ainda está com o km em linha reta.
+    # Best-effort -- o envio já aconteceu.
+    try:
+        conn = _conectar()
+        try:
+            recalcular_km(conn, rascunho_id, _gmaps_key())
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Rota VUUPT {vuupt_route_id} (rascunho {rascunho_id}): km não recalculado no envio: {e}")
 
     # Espelho no núcleo próprio (Fase A do app de motoristas, ver
     # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: qualquer

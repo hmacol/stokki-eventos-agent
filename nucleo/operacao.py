@@ -102,6 +102,7 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     d["editavel"] = rota["provedor"] == banco.PROVEDOR_APP
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
     d["paradas"] = [montar_parada(conn, p) for p in paradas]
+    d["pedagios"] = listar_pedagios(conn, rota["id"])
     # Confirmação (badge do Planejamento) quando a rota é da VUUPT
     d["confirmacao"] = None
     if rota["vuupt_route_id"] and _tem_tabela(conn, "confirmacoes_rota"):
@@ -128,6 +129,95 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
         for c in conn.execute("SELECT id, tipo, uuid, capturado_em FROM nucleo_comprovantes WHERE parada_id = ? ORDER BY id", (p["id"],))
     ]
     return d
+
+
+# ── Pedágio (Hugo, 11/09: reembolso à parte, foto + valor, aprovação no painel) ──
+
+def listar_pedagios(conn: sqlite3.Connection, rota_id: int) -> list[dict]:
+    return [
+        {"id": r["id"], "uuid": r["uuid"], "valor_informado": r["valor_informado"], "status": r["status"],
+         "valor_aprovado": r["valor_aprovado"], "capturado_em": r["capturado_em"], "enviado_em": r["enviado_em"],
+         "observacao_revisao": r["observacao_revisao"], "tem_foto": bool(r["caminho_local"] or r["caminho_gcs"])}
+        for r in conn.execute("SELECT * FROM nucleo_pedagios WHERE rota_id = ? ORDER BY id", (rota_id,))
+    ]
+
+
+def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uuid: str, valor: float | None,
+                      caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
+                      capturado_em: str | None, caminho_gcs: str | None = None) -> dict:
+    """Um comprovante de pedágio da rota (o motorista pode mandar vários).
+    Aceito em rota APP EM_ROTA ou CONCLUIDA (ele fecha a rota e depois
+    fotografa os recibos, ou manda no caminho). Entra como PENDENTE; só
+    o painel aprova (revisar_pedagio)."""
+    rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_provedor_app(rota)
+    if rota["status"] not in (banco.ROTA_EM_ROTA, banco.ROTA_CONCLUIDA):
+        raise OperacaoInvalida("Pedágio só pode ser informado com a rota em andamento ou concluída.", 409)
+    if not uuid:
+        raise OperacaoInvalida("Pedágio sem uuid.")
+    try:
+        valor_f = round(float(str(valor).replace(",", ".")), 2)
+    except (TypeError, ValueError):
+        raise OperacaoInvalida("Informe o valor do pedágio.")
+    if valor_f <= 0 or valor_f > 2000:
+        raise OperacaoInvalida("Valor de pedágio fora do esperado (entre R$ 0,01 e R$ 2.000,00).")
+    ja = conn.execute("SELECT id FROM nucleo_pedagios WHERE uuid = ?", (uuid,)).fetchone()
+    if ja:
+        return {"id": ja["id"], "ja_registrado": True}
+    cur = conn.execute("""
+        INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, caminho_local, caminho_gcs, sha256,
+                                     tamanho_bytes, capturado_em, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (uuid, rota_id, agent_id, valor_f, caminho_local, caminho_gcs, sha256, tamanho_bytes,
+          capturado_em, banco.PEDAGIO_PENDENTE))
+    registrar_evento(conn, "PEDAGIO", banco.ORIGEM_APP, capturado_em, rota_id=rota_id, agent_id=agent_id,
+                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "sha256": sha256})
+    conn.commit()
+    return {"id": cur.lastrowid, "ja_registrado": False}
+
+
+def revisar_pedagio(conn: sqlite3.Connection, pedagio_id: int, status: str, revisor: str,
+                    valor_aprovado: float | None = None, observacao: str | None = None) -> dict:
+    """Painel: aprova (com o valor que vale, por padrão o informado) ou
+    rejeita. Pode ser refeito (reabrir = PENDENTE)."""
+    status = str(status or "").upper()
+    if status not in (banco.PEDAGIO_APROVADO, banco.PEDAGIO_REJEITADO, banco.PEDAGIO_PENDENTE):
+        raise OperacaoInvalida(f"Status de pedágio inválido: {status!r}.")
+    row = conn.execute("SELECT * FROM nucleo_pedagios WHERE id = ?", (pedagio_id,)).fetchone()
+    if not row:
+        raise OperacaoInvalida("Pedágio não encontrado.", 404)
+    aprovado = None
+    if status == banco.PEDAGIO_APROVADO:
+        aprovado = float(row["valor_informado"]) if valor_aprovado is None else round(float(valor_aprovado), 2)
+        if aprovado < 0:
+            raise OperacaoInvalida("Valor aprovado não pode ser negativo.")
+    agora = banco.agora()
+    conn.execute("""
+        UPDATE nucleo_pedagios SET status = ?, valor_aprovado = ?, revisado_em = ?, revisado_por = ?, observacao_revisao = ?
+        WHERE id = ?
+    """, (status, aprovado, None if status == banco.PEDAGIO_PENDENTE else agora,
+          None if status == banco.PEDAGIO_PENDENTE else revisor, observacao, pedagio_id))
+    registrar_evento(conn, "PEDAGIO_REVISADO", banco.ORIGEM_PAINEL, agora, rota_id=row["rota_id"], agent_id=row["agent_id"],
+                     dados={"pedagio_id": pedagio_id, "status": status, "valor_aprovado": aprovado, "revisor": revisor})
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM nucleo_pedagios WHERE id = ?", (pedagio_id,)).fetchone())
+
+
+def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.PEDAGIO_PENDENTE,
+                           limite: int = 300) -> list[dict]:
+    """Fila de revisão do painel: pedágios (por padrão só PENDENTES) com
+    rota e motorista, mais recentes primeiro."""
+    sql = """
+        SELECT p.*, r.data_rota, r.nome AS rota_nome, r.motorista_nome, r.status AS rota_status
+        FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
+    """
+    params: list = []
+    if status:
+        sql += " WHERE p.status = ?"
+        params.append(status)
+    sql += " ORDER BY p.id DESC LIMIT ?"
+    params.append(limite)
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def _atualizar_confirmacao_vuupt(conn: sqlite3.Connection, rota: sqlite3.Row, status: str, motivo: str | None):

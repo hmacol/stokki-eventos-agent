@@ -128,7 +128,8 @@ class _Contexto:
         if not self.tem_rascunhos:
             return None
         return self.conn.execute(
-            "SELECT id, km_estimado, tipo_veiculo, motorista_nome FROM rascunhos_rota WHERE vuupt_route_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, km_estimado, km_volta_estimado, km_fonte_estimativa, tipo_veiculo, motorista_nome "
+            "FROM rascunhos_rota WHERE vuupt_route_id = ? ORDER BY id DESC LIMIT 1",
             (vuupt_route_id,),
         ).fetchone()
 
@@ -181,15 +182,17 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
         rascunho_id = rascunho["id"] if rascunho else None
         cur = conn.execute("""
             INSERT INTO nucleo_rotas (data_rota, nome, provedor, vuupt_route_id, rascunho_id, agent_id, vehicle_id,
-                                      motorista_nome, tipo_veiculo, start_at, km_estimado, km_fonte, status,
-                                      status_provedor, dados_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      motorista_nome, tipo_veiculo, start_at, km_estimado, km_volta_estimado,
+                                      km_fonte_estimativa, km_fonte, status, status_provedor, dados_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data_rota, rota.get("name"), banco.PROVEDOR_VUUPT, vuupt_route_id,
             rascunho["id"] if rascunho else None, agent_id, rota.get("vehicle_id"),
             ctx.nomes.get(agent_id) or (rascunho["motorista_nome"] if rascunho else None),
             rascunho["tipo_veiculo"] if rascunho else None, start_at,
             rascunho["km_estimado"] if rascunho else None,
+            rascunho["km_volta_estimado"] if rascunho else None,
+            rascunho["km_fonte_estimativa"] if rascunho else None,
             "ESTIMADO" if rascunho and rascunho["km_estimado"] is not None else None,
             banco.ROTA_PLANEJADA, rota.get("status"),
             _json({k: v for k, v in rota.items() if k != "services"}),

@@ -144,12 +144,14 @@ def cmd_replicar_rota(args):
         cur = conn.execute("""
             INSERT INTO nucleo_rotas (data_rota, nome, provedor, vuupt_route_id, rascunho_id, agent_id, vehicle_id,
                                       motorista_nome, motorista_cpf, tipo_veiculo, start_at, start_location_base_id,
-                                      end_location_base_id, km_estimado, km_fonte, status, total_paradas, dados_json)
-            VALUES (?, ?, 'APP', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANEJADA', ?, ?)
+                                      end_location_base_id, km_estimado, km_volta_estimado, km_fonte_estimativa,
+                                      km_fonte, status, total_paradas, dados_json)
+            VALUES (?, ?, 'APP', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANEJADA', ?, ?)
         """, (
             data_rota, f"[TESTE] {origem['nome']}", alvo["agent_id"], alvo.get("vehicle_id"), alvo["nome"], alvo["cpf"],
             origem["tipo_veiculo"], start_at, origem["start_location_base_id"], origem["end_location_base_id"],
-            origem["km_estimado"], "ESTIMADO" if origem["km_estimado"] is not None else None, 0,
+            origem["km_estimado"], origem["km_volta_estimado"], origem["km_fonte_estimativa"],
+            "ESTIMADO" if origem["km_estimado"] is not None else None, 0,
             json.dumps({"replica_de": {"rota_id": origem["id"], "vuupt_route_id": origem["vuupt_route_id"]}}),
         ))
         nova_id = cur.lastrowid

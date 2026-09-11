@@ -1621,6 +1621,79 @@ def motoristas():
     return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador"))
 
 
+# ── Pedágios dos motoristas (app de motoristas; Hugo, 11/09) ─────────────────
+# O motorista informa valor + foto do recibo no app (nucleo_pedagios,
+# PENDENTE). Aqui o Hugo aprova (com o valor que vale) ou rejeita; só o
+# APROVADO entra no extrato (nucleo/financeiro.py). Lógica em
+# nucleo/operacao.py; aqui só HTTP.
+
+@app.route("/financeiro/pedagios")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def pedagios():
+    from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
+    status = (request.args.get("status") or "PENDENTE").upper()
+    if status == "TODOS":
+        status_filtro = None
+    elif status in (nucleo_banco.PEDAGIO_PENDENTE, nucleo_banco.PEDAGIO_APROVADO, nucleo_banco.PEDAGIO_REJEITADO):
+        status_filtro = status
+    else:
+        status, status_filtro = "PENDENTE", nucleo_banco.PEDAGIO_PENDENTE
+    conn = nucleo_banco.conectar()
+    try:
+        itens = nucleo_operacao.listar_pedagios_painel(conn, status_filtro)
+        contagem = {r[0]: r[1] for r in conn.execute("SELECT status, COUNT(*) FROM nucleo_pedagios GROUP BY status")}
+    finally:
+        conn.close()
+    return render_template("pedagios.html", itens=itens, status=status, contagem=contagem,
+                           pode_editar=g.nivel_acesso in ("total", "operador"))
+
+
+@app.route("/financeiro/pedagios/<int:pedagio_id>/foto")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def pedagio_foto(pedagio_id):
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        row = conn.execute("SELECT caminho_local FROM nucleo_pedagios WHERE id = ?", (pedagio_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["caminho_local"]:
+        abort(404)
+    caminho = Path(row["caminho_local"])
+    if not caminho.is_absolute():
+        caminho = _RAIZ / caminho
+    if not caminho.exists():
+        abort(404)
+    return send_file(caminho)
+
+
+@app.route("/api/financeiro/pedagios/<int:pedagio_id>/revisar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+def revisar_pedagio(pedagio_id):
+    from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
+    from nucleo.operacao import OperacaoInvalida
+    body = request.get_json(silent=True) or {}
+    valor = body.get("valor_aprovado")
+    try:
+        valor_f = None if valor in (None, "") else float(str(valor).replace(",", "."))
+    except ValueError:
+        return jsonify({"erro": "Valor aprovado inválido."}), 400
+    conn = nucleo_banco.conectar()
+    try:
+        resultado = nucleo_operacao.revisar_pedagio(
+            conn, pedagio_id, body.get("status", ""), session.get("usuario") or g.nivel_acesso,
+            valor_f, (body.get("observacao") or "").strip() or None,
+        )
+    except OperacaoInvalida as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao revisar pedágio")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "pedagio": resultado})
+
+
 @app.route("/api/motoristas/vuupt-disponiveis")
 @requer_auth(niveis=("total", "operador"))
 def api_motoristas_vuupt_disponiveis():

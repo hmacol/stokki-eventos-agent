@@ -7,6 +7,7 @@ Remuneração do motorista por rota -- regra confirmada pelo Hugo em
 
     Fiorino:   R$ 340,00 até 65 km  + R$ 1,00 por km adicional
     HR / Van:  R$ 550,00 até 100 km + R$ 1,00 por km adicional
+    VUC:       R$ 700,00 até 120 km + R$ 1,25 por km adicional   (Hugo, 11/09)
 
 A tarifa é do VEÍCULO DO MOTORISTA (coluna TIPO_VEICULO da planilha
 BD_MOTORISTAS.xlsx / motoristas.tipo_veiculo), não da classificação da
@@ -14,24 +15,31 @@ rota. Coluna vazia = Fiorino (é o veículo padrão da última milha; a
 planilha só registra tipo pra veículo grande -- ver
 regras/preferencias_motoristas.py). "FIORINO" também é aceito explícito.
 
-VUC, 3/4 e Truck NÃO têm tarifa definida ainda (pendência com o Hugo):
-calcular_valor_rota devolve None e o extrato mostra "a definir" -- nunca
-inventa um valor.
+3/4 e Truck NÃO têm tarifa definida ainda (Hugo, 11/09: "deixar a
+definir"): calcular_valor_rota devolve None e o extrato mostra "a
+definir" -- nunca inventa um valor.
 
 Os valores padrão abaixo são o fallback; em produção a fonte editável é
 a tabela `tarifas_motorista` (nucleo/banco.py), semeada com estes mesmos
 números por `semear_tarifas_padrao`. O mesmo 340/65/1,00 já constava em
 `roteirizacao_config` desde o desenho de junho/2026 -- consistente.
 
-Ainda A CONFIRMAR (não bloqueia): km ida+volta sempre ou volta só com
-insucesso/parada fora da Grande SP; pedágio à parte; rota com insucesso
-paga integral. Por ora: km informado = km cobrado, sem pedágio.
+Decisões do Hugo em 11/09 sobre o que é "km" (implementadas em
+regras/km_cobrado.py e nucleo/financeiro.py, não aqui):
+  - a volta ao CD só conta quando a rota teve insucesso/parcial (produto
+    volta) ou parada fora da Grande SP; senão a rota termina na última
+    parada;
+  - km estimado é RODOVIÁRIO (Google Routes API, roteirizacao/km_rodoviario.py),
+    linha reta só como reserva;
+  - pedágio é reembolsado à parte (foto + valor no app, aprovação no painel);
+  - rota com insucesso paga integral; reentrega (-R) é parada normal.
 """
 import sqlite3
 from dataclasses import dataclass
 
 TIPO_FIORINO = "FIORINO"
 TIPO_VAN_HR = "VAN_HR"
+TIPO_VUC = "VUC"
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,7 @@ class Tarifa:
 TARIFAS_PADRAO: dict[str, Tarifa] = {
     TIPO_FIORINO: Tarifa(TIPO_FIORINO, "Fiorino / utilitário pequeno", 340.00, 65.0, 1.00),
     TIPO_VAN_HR: Tarifa(TIPO_VAN_HR, "HR / Van", 550.00, 100.0, 1.00),
+    TIPO_VUC: Tarifa(TIPO_VUC, "VUC", 700.00, 120.0, 1.25),
 }
 
 # Apelidos aceitos na planilha/cadastro (já normalizados: maiúsculo,
@@ -128,9 +137,10 @@ def semear_tarifas_padrao(conn: sqlite3.Connection):
     for t in TARIFAS_PADRAO.values():
         conn.execute("""
             INSERT INTO tarifas_motorista (tipo_veiculo, nome, valor_base, km_franquia, valor_km_adicional, vigencia_inicio)
-            VALUES (?, ?, ?, ?, ?, '2026-08-25')
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(tipo_veiculo) DO NOTHING
-        """, (t.tipo_veiculo, t.nome, t.valor_base, t.km_franquia, t.valor_km_adicional))
+        """, (t.tipo_veiculo, t.nome, t.valor_base, t.km_franquia, t.valor_km_adicional,
+              "2026-09-11" if t.tipo_veiculo == TIPO_VUC else "2026-08-25"))
     conn.commit()
 
 
