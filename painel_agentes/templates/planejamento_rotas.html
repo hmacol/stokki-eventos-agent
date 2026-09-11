@@ -419,6 +419,9 @@
      (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
      pode gerar várias rotas, confundir os dois seria fácil */
   #botao-roteirizar-selecao { border-color: #6FA0FF; color: #6FA0FF; font-weight: 700; }
+  /* laranja: complementa rascunhos JÁ existentes (não cria rota nenhuma),
+     terceira ação da família Criar rota / Roteirizar / Incrementar */
+  #botao-incrementar-selecao { border-color: #F2A65A; color: #F2A65A; font-weight: 700; }
   .filtro-flag {
     display: flex;
     align-items: center;
@@ -2069,6 +2072,7 @@
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
+      <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — sem teto de pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
@@ -3376,6 +3380,12 @@
     const botaoRoteirizar = document.getElementById("botao-roteirizar-selecao");
     botaoRoteirizar.disabled = SELECIONADOS.size === 0;
     botaoRoteirizar.textContent = SELECIONADOS.size ? `Roteirizar (${SELECIONADOS.size})` : "Roteirizar";
+    // Incrementar só faz sentido com rascunho editável na tela (rota já
+    // enviada à VUUPT nunca é candidata)
+    const botaoIncrementar = document.getElementById("botao-incrementar-selecao");
+    const temRascunhoEditavel = RASCUNHOS.some(r => r.status === "RASCUNHO");
+    botaoIncrementar.disabled = SELECIONADOS.size === 0 || !temRascunhoEditavel;
+    botaoIncrementar.textContent = SELECIONADOS.size ? `Incrementar (${SELECIONADOS.size})` : "Incrementar";
     document.getElementById("botao-editar-endereco-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
@@ -4043,6 +4053,39 @@
       location.reload();
     } catch (e) {
       alert(`Falha ao roteirizar: ${e.message}`);
+      atualizarBarraSelecao();
+    }
+  }
+
+  async function incrementarSelecionados(botao) {
+    // "Incrementar" (Hugo, 10/09): manda os itens do pool selecionados
+    // (mesmo formato de "Adicionar à rota…"/"Criar rota") e o servidor
+    // distribui cada um no rascunho mais próximo que o comporte -- só
+    // rascunhos com status RASCUNHO, nunca rota já enviada à VUUPT.
+    const paradas = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .map(li => Number(li.dataset.serviceId))
+      .filter(id => SELECIONADOS.has(id))
+      .map(id => POOL_BY_ID[id])
+      .filter(Boolean);
+    if (!paradas.length) return;
+    const qtdRascunhos = RASCUNHOS.filter(r => r.status === "RASCUNHO").length;
+    if (!confirm(`Distribuir ${paradas.length} pedido(s) entre as ${qtdRascunhos} rota(s) em rascunho? ` +
+      `Quem não couber em nenhuma (distância, caixas, seco/frio, janela ou motorista) continua no pool.`)) return;
+    botao.disabled = true;
+    botao.textContent = "Incrementando...";
+    try {
+      const resp = await postJSON("/api/planejamento/incrementar-selecionados", { data_alvo: DATA_ALVO_ISO, paradas });
+      const porRota = {};
+      resp.alocados.forEach(a => { porRota[a.rascunho_nome] = (porRota[a.rascunho_nome] || 0) + 1; });
+      const linhas = Object.entries(porRota).map(([nome, n]) => `  • ${nome}: +${n}`).join("\n");
+      let msg = `${resp.alocados.length} pedido(s) adicionado(s) em ${resp.rotas_afetadas} rascunho(s).`;
+      if (linhas) msg += `\n${linhas}`;
+      if (resp.orfaos.length) msg += `\n\n${resp.orfaos.length} pedido(s) ficaram no pool (sem rascunho compatível): ${resp.orfaos.join(", ")}`;
+      if (resp.pedidos_indisponiveis) msg += `\n\n${resp.pedidos_indisponiveis} pedido(s) já estavam em rascunho.`;
+      alert(msg);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao incrementar: ${e.message}`);
       atualizarBarraSelecao();
     }
   }
@@ -5532,6 +5575,7 @@
     document.getElementById("botao-limpar-selecao").addEventListener("click", limparSelecao);
     document.getElementById("botao-criar-rota-selecao").addEventListener("click", (e) => criarRotaComSelecionados(e.target));
     document.getElementById("botao-roteirizar-selecao").addEventListener("click", (e) => abrirModalTipoRoteirizacao(e.target));
+    document.getElementById("botao-incrementar-selecao").addEventListener("click", (e) => incrementarSelecionados(e.target));
     document.getElementById("botao-editar-endereco-selecao").addEventListener("click", () => {
       abrirModalEditarEnderecoLote(itensDoPoolSelecionado());
     });

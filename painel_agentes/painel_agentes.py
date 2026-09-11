@@ -62,7 +62,7 @@ from mapa_rotas import buscar_rotas_para_mapa
 from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
-    carregar_documentos_do_rascunho, roteirizar_selecionados,
+    carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido,
@@ -1731,6 +1731,32 @@ def api_roteirizar_selecionados():
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao roteirizar a seleção")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/planejamento/incrementar-selecionados", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_incrementar_selecionados():
+    """Botão "Incrementar" da seleção do pool (Hugo, 10/09): põe cada
+    pedido selecionado no rascunho (status RASCUNHO, nunca rota já
+    enviada à VUUPT) mais próximo que o comporte, com as travas do
+    incremento automático e sem teto de pedidos por rota. Recebe os
+    itens do pool como a tela já os tem (mesmo contrato de
+    /adicionar-parada)."""
+    body = request.get_json(force=True)
+    try:
+        data_alvo = datetime.strptime(body["data_alvo"], "%Y-%m-%d").date()
+        paradas = body["paradas"]
+        if not paradas:
+            return jsonify({"erro": "Nenhum pedido selecionado."}), 400
+        resultado = incrementar_rascunhos_com_selecionados(data_alvo, paradas)
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao incrementar rascunhos com a seleção")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, **resultado})
 

@@ -24,6 +24,7 @@ import logging
 import re
 import statistics
 import sys
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
@@ -38,7 +39,10 @@ from roteirizacao_dados import (
     extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
     ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
     resolver_janela, carregar_janelas_confirmadas, simular_horarios, tem_janela, _horas_para_hhmm,
+    macro_regiao_do_servico, obter_coordenadas, janela_viavel,
 )
+from alocacao_motoristas import classificar_rota_viagem
+from zonas_sp import classificar_zona
 from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
@@ -49,7 +53,7 @@ from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
 from regras.disponibilidade_motoristas import (
     carregar_ajustes_dia, definir_disponibilidade_dia, definir_disponibilidade_periodo, limpar_ajuste,
 )
-from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender
+from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
@@ -1009,6 +1013,225 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
         "rotas_criadas": len(rascunhos_novos),
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
+    }
+
+
+def _servico_de_parada(parada: dict) -> dict:
+    """Dict no formato bruto da VUUPT (chaves que as regras de
+    roteirização leem: address/latitude/longitude/sender_id/dimension_3
+    + as '_...' injetadas) a partir de um item do pool ou de uma parada
+    de rascunho -- as duas têm as MESMAS chaves (rascunhos_rota.
+    _parada_de_servico / _servico_para_pool)."""
+    return {
+        "id": parada["service_id"],
+        "code": parada.get("codigo", ""),
+        "address": parada.get("endereco", ""),
+        "latitude": parada.get("latitude"),
+        "longitude": parada.get("longitude"),
+        "sender_id": parada.get("sender_id"),
+        "dimension_3": parada.get("volume_caixas"),
+        "_nivel_dificuldade": parada.get("nivel_dificuldade"),
+        "_horario_atendimento_inicio": parada.get("horario_atendimento_inicio"),
+        "_horario_atendimento_fim": parada.get("horario_atendimento_fim"),
+        "_janela_inicio": parada.get("janela_inicio"),
+        "_janela_fim": parada.get("janela_fim"),
+    }
+
+
+def _classe_carga(sender_id, mapa_tipos_carga: dict) -> str:
+    """'frio' (Refrigerado/Congelado) ou 'seco' pelo cadastro do
+    embarcador -- mesma classificação da partição do criador diário."""
+    tipo_carga, _ = classificar_tipo_carga(sender_id, mapa_tipos_carga)
+    return "frio" if tipo_carga in TIPOS_CARGA_FRIA else "seco"
+
+
+def _carga_compativel(classes_rota: set[str], classe_pedido: str) -> bool:
+    """Pedido só entra num rascunho que já leva carga da MESMA classe
+    (ou rota vazia, ou rota já mista) -- decidido pelo CONTEÚDO da rota,
+    não pelo rótulo 'particao' (rota manual nasce rotulada 'Seco' mesmo
+    quando o Hugo montou ela com pedidos frios)."""
+    return not classes_rota or classe_pedido in classes_rota
+
+
+def _cabe_no_rascunho(info: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
+    """Mesma regra de incrementar_rotas._cabe_na_rota (10/09, sem teto
+    de pedidos): rota comum só respeita o teto de caixas; rota
+    classificada como veículo grande respeita caixas + endereços
+    distintos do PRÓPRIO tipo."""
+    tipo = info["tipo_veiculo"]
+    if tipo is not None:
+        return (info["caixas"] + cx_pedido <= tipo.volume_maximo_cx
+                and len(info["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos)
+    return info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+
+
+def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict]) -> dict:
+    """
+    Botão "Incrementar" da barra de seleção do pool (Hugo, 10/09):
+    complementa as rotas EM RASCUNHO do lote ativo da data com os
+    pedidos selecionados -- versão "de tela" do incrementar_rotas.py,
+    só que sobre os rascunhos locais (status RASCUNHO), nunca sobre
+    rota já enviada à VUUPT (ENVIADO) nem ofertada a motorista
+    (OFERTADA -- mexer nela mudaria a oferta já publicada).
+
+    Cada pedido vai pro rascunho mais próximo (centroide das paradas
+    dentro de DISTANCIA_MAXIMA_ROTA_KM) que ainda o comporte, com as
+    MESMAS travas do incremento automático, sem teto de pedidos por
+    rota: caixas (VOLUME_MAXIMO_ROTA ou o do tipo de veículo grande do
+    rascunho), macro-região, classe de carga (seco x frio, pelo conteúdo
+    da rota), janela de horário, e viagem/zona contra o motorista já
+    escolhido no rascunho (rascunho sem motorista não restringe).
+    Pedido sem coordenada e que não é viagem cai no rascunho com menos
+    pedidos. Quem não coube em nenhum fica no pool ("orfaos").
+
+    O corte de 19h do incremento automático NÃO se aplica: a seleção é
+    uma decisão explícita de quem está na tela.
+
+    `paradas` são os itens do pool tal como a tela já os carregou
+    (_servico_para_pool -- mesmo contrato de /adicionar-parada), então
+    não bate na VUUPT. Rascunhos que ganharam pedido são reordenados com
+    o 2-opt (rascunhos_rota.otimizar_sequencia), como o incremento
+    automático faz na VUUPT.
+
+    Retorna {"alocados": [{codigo, rascunho_id, rascunho_nome}],
+    "orfaos": [codigos], "pedidos_indisponiveis": N, "rotas_afetadas": N}.
+    """
+    if not paradas:
+        raise ValueError("Nenhum pedido selecionado.")
+    config = _carregar_config()
+    gmaps_key = config.get("google_maps", {}).get("api_key", "")
+
+    rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+    candidatos = [r for r in rascunhos if r.get("status") == rascunhos_rota.STATUS_RASCUNHO]
+    if not candidatos:
+        raise ValueError("Nenhuma rota em rascunho pra complementar nessa data -- rotas já enviadas à VUUPT "
+                         "não entram. Crie ou roteirize uma rota primeiro.")
+
+    ids_em_rascunho = {p["service_id"] for r in rascunhos for p in r["paradas"]}
+    novos = [p for p in paradas if p.get("service_id") not in ids_em_rascunho]
+    indisponiveis = len(paradas) - len(novos)
+    if not novos:
+        raise ValueError("Todos os pedidos selecionados já estão em algum rascunho. Atualize a página.")
+
+    cfg_motoristas = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
+    motoristas_por_id = {m.agent_id: m for m in catalogo.motoristas}
+    mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
+
+    from geocodificacao import geocodificar
+    try:
+        coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
+        if coords_base:
+            definir_coords_base(*coords_base)  # simulador de janelas
+    except Exception as e:
+        logger.warning(f"Incrementar rascunhos: base sem coordenada ({e}) -- janela julgada na ordem dada.")
+
+    info_rotas = []
+    for r in candidatos:
+        servicos_rota = [_servico_de_parada(p) for p in r["paradas"]]
+        coords = [(float(p["latitude"]), float(p["longitude"])) for p in r["paradas"]
+                  if p.get("latitude") not in (None, "") and p.get("longitude") not in (None, "")]
+        centroide = (sum(c[0] for c in coords) / len(coords), sum(c[1] for c in coords) / len(coords)) if coords else None
+        macros = [macro_regiao_do_servico(s, gmaps_key) for s in servicos_rota]
+        info_rotas.append({
+            "id": r["id"], "nome": r["nome"],
+            "centroide": centroide, "qtd": len(servicos_rota),
+            "caixas": sum(int(p.get("volume_caixas") or 1) for p in r["paradas"]),
+            "enderecos": {p.get("endereco") for p in r["paradas"]},
+            "tipo_veiculo": tipo_por_codigo(r.get("tipo_veiculo")),
+            "classes_carga": {_classe_carga(p.get("sender_id"), mapa_tipos_carga) for p in r["paradas"]},
+            "macro": Counter(macros).most_common(1)[0][0] if macros else None,
+            "agent_id": r.get("agent_id"),
+            "servicos": servicos_rota,
+        })
+
+    def _cabe_na_janela(info: dict, servico: dict) -> bool:
+        candidato = info["servicos"] + [servico]
+        if not tem_janela(candidato):
+            return True
+        try:
+            return janela_viavel(candidato, gmaps_key)
+        except Exception as e:
+            logger.warning(f"  Falha ao checar janela no rascunho '{info['nome']}' (não bloqueia): {e}")
+            return True
+
+    alocados, orfaos = [], []
+    rotas_afetadas: set[int] = set()
+    for parada in novos:
+        servico = _servico_de_parada(parada)
+        lat, lng = parada.get("latitude"), parada.get("longitude")
+        coords_pedido = (float(lat), float(lng)) if lat not in (None, "") and lng not in (None, "") \
+            else obter_coordenadas(servico, gmaps_key)
+        cx_pedido = int(parada.get("volume_caixas") or 1)
+        eh_viagem = classificar_rota_viagem([servico], gmaps_key)
+        macro_pedido = macro_regiao_do_servico(servico, gmaps_key)
+        zona_pedido = None if eh_viagem else classificar_zona(servico, gmaps_key)
+        classe_pedido = _classe_carga(parada.get("sender_id"), mapa_tipos_carga)
+
+        def _motorista_ok(info: dict) -> bool:
+            if info["agent_id"] is None:
+                return True
+            m = motoristas_por_id.get(info["agent_id"])
+            if m is None:
+                return True  # motorista fora do catálogo: sem preferência conhecida, não restringe
+            if eh_viagem and not m.aceita_viagens:
+                return False
+            if zona_pedido is not None and zona_pedido not in m.zonas_preferidas:
+                return False
+            return True
+
+        candidatas = [
+            info for info in info_rotas
+            if _cabe_no_rascunho(info, cx_pedido, parada.get("endereco"))
+            and (info["macro"] is None or info["macro"] == macro_pedido)
+            and _carga_compativel(info["classes_carga"], classe_pedido)
+            and _motorista_ok(info)
+            and _cabe_na_janela(info, servico)
+        ]
+        escolhida = None
+        if coords_pedido:
+            no_raio = [info for info in candidatas if info["centroide"]
+                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM]
+            if no_raio:
+                escolhida = min(no_raio, key=lambda info: _distancia_km(*coords_pedido, *info["centroide"]))
+        elif not eh_viagem and candidatas:
+            escolhida = min(candidatas, key=lambda info: info["qtd"])
+
+        if escolhida is None:
+            orfaos.append(parada.get("codigo", ""))
+            continue
+
+        rascunhos_rota.adicionar_parada(escolhida["id"], parada, None)
+        escolhida["qtd"] += 1
+        escolhida["caixas"] += cx_pedido
+        escolhida["enderecos"].add(parada.get("endereco"))
+        escolhida["classes_carga"].add(classe_pedido)
+        escolhida["servicos"].append(servico)
+        if coords_pedido:
+            n = escolhida["qtd"]
+            c = escolhida["centroide"] or coords_pedido
+            escolhida["centroide"] = (
+                (c[0] * (n - 1) + coords_pedido[0]) / n, (c[1] * (n - 1) + coords_pedido[1]) / n,
+            )
+        rotas_afetadas.add(escolhida["id"])
+        alocados.append({"codigo": parada.get("codigo", ""), "rascunho_id": escolhida["id"],
+                         "rascunho_nome": escolhida["nome"]})
+        logger.info(f"  Incrementar rascunhos: {parada.get('codigo')} -> '{escolhida['nome']}' "
+                    f"({escolhida['qtd']} pedido(s), {escolhida['caixas']} cx)")
+
+    for rascunho_id in sorted(rotas_afetadas):
+        try:
+            rascunhos_rota.otimizar_sequencia(rascunho_id)
+        except Exception as e:
+            logger.warning(f"  Rascunho {rascunho_id} incrementado mas não reordenado: {e}")
+
+    if orfaos:
+        logger.info(f"Incrementar rascunhos: {len(orfaos)} pedido(s) sem rascunho compatível: {orfaos}")
+    return {
+        "alocados": alocados,
+        "orfaos": orfaos,
+        "pedidos_indisponiveis": indisponiveis,
+        "rotas_afetadas": len(rotas_afetadas),
     }
 
 
