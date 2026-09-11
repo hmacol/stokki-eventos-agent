@@ -67,7 +67,7 @@ import re
 import sys
 import time
 from collections import Counter
-from datetime import date, datetime, time as dt_time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 
 _RAIZ_LOCAL   = Path(__file__).parent
@@ -157,10 +157,13 @@ def limite_corte_pedidos(data_alvo: date) -> datetime:
 
 
 def _data_criacao(servico: dict) -> datetime | None:
-    """created_at do serviço VUUPT como datetime COM fuso. A API devolve
-    ISO com offset ('2026-09-08T10:42:00-03:00') ou 'AAAA-MM-DD HH:MM:SS'
-    (sem fuso -- assumido Brasília, mesmo tratamento do portal do
-    cliente). None se ausente ou irreconhecível."""
+    """created_at do serviço VUUPT como datetime COM fuso. CONFIRMADO em
+    produção (10/09, 21:51 de Brasília): a API devolve 'AAAA-MM-DD
+    HH:MM:SS' SEM fuso e em UTC (pedido recém-criado veio com
+    '2026-09-10 22:56:20' = 19:56 de Brasília) -- mesmo padrão do
+    start_at das rotas ('2026-09-08 13:00:00' pra rota das 10h). Valor
+    sem fuso é tratado como UTC; ISO com offset ou 'Z' é respeitado.
+    None se ausente ou irreconhecível."""
     valor = servico.get("created_at")
     if not valor:
         return None
@@ -169,7 +172,7 @@ def _data_criacao(servico: dict) -> datetime | None:
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TZ_BRASILIA)
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
 

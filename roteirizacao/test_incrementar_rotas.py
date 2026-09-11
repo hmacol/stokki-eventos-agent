@@ -14,7 +14,7 @@ Rodar (da raiz):
 """
 import sys
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -59,11 +59,19 @@ class TestCorte19h(unittest.TestCase):
         s = {"id": 1, "created_at": "2026-09-11T17:30:00-03:00"}
         self.assertTrue(inc.chegou_dentro_do_corte(s, date(2026, 9, 14)))
 
-    def test_formato_sem_fuso_assume_brasilia(self):
-        entra = {"id": 1, "created_at": "2026-09-10 18:30:00"}
-        sai = {"id": 2, "created_at": "2026-09-10 19:30:00"}
+    def test_formato_sem_fuso_e_utc(self):
+        # Formato real da API (confirmado 10/09): 'AAAA-MM-DD HH:MM:SS'
+        # sem fuso, em UTC. 21:30 UTC = 18:30 Brasília -> entra;
+        # 22:56 UTC = 19:56 Brasília (caso real PS-38969) -> sai.
+        entra = {"id": 1, "created_at": "2026-09-10 21:30:00"}
+        sai = {"id": 2, "created_at": "2026-09-10 22:56:20"}
         self.assertTrue(inc.chegou_dentro_do_corte(entra, date(2026, 9, 11)))
         self.assertFalse(inc.chegou_dentro_do_corte(sai, date(2026, 9, 11)))
+
+    def test_19h16_utc_e_16h16_brasilia_entra(self):
+        # Caso real PS-38515: '2026-09-10 19:16:52' (UTC) = 16:16 Brasília
+        s = {"id": 1, "created_at": "2026-09-10 19:16:52"}
+        self.assertTrue(inc.chegou_dentro_do_corte(s, date(2026, 9, 11)))
 
     def test_formato_utc_e_convertido(self):
         # 21:30Z = 18:30 Brasília -> entra; 22:30Z = 19:30 -> sai
