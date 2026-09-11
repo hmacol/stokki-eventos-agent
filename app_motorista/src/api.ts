@@ -8,6 +8,7 @@
 // - Sem rede/timeout -> ErroRede (a fila offline usa isso pra decidir
 //   se guarda pra depois).
 import Constants from 'expo-constants';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 
 export const API_URL: string =
@@ -98,15 +99,13 @@ async function tentarRenovar(): Promise<boolean> {
   return renovando;
 }
 
-type Opcoes = { metodo?: 'GET' | 'POST' | 'PUT'; corpo?: unknown; form?: FormData; semAuth?: boolean };
+type Opcoes = { metodo?: 'GET' | 'POST' | 'PUT'; corpo?: unknown; semAuth?: boolean };
 
 export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = false): Promise<T> {
   const headers: Record<string, string> = {};
   if (!op.semAuth && acesso) headers.Authorization = `Bearer ${acesso}`;
   let body: BodyInit | undefined;
-  if (op.form) {
-    body = op.form;
-  } else if (op.corpo !== undefined) {
+  if (op.corpo !== undefined) {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify(op.corpo);
   }
@@ -164,23 +163,56 @@ export const disponibilidade = (de: string, ate: string) => chamar<{ ajustes: Aj
 export const definirDisponibilidade = (corpo: object) => chamar<{ dias: number; ajustes: Ajuste[] }>('/disponibilidade', { metodo: 'PUT', corpo });
 export const registrarPushToken = (token: string) => chamar<{ ok: boolean }>('/push-token', { metodo: 'POST', corpo: { token } });
 
-function formComFoto(uri: string, campos: Record<string, string>): FormData {
-  const form = new FormData();
+// Upload de foto (11/09): pelo uploader NATIVO do expo-file-system, não
+// pelo fetch + FormData do RN. Motivo: no teste do Hugo nenhuma foto
+// (canhoto/pedágio) chegou ao servidor, e como a fila é sequencial a
+// foto travada segurava as chegadas/entregas atrás dela. O uploader
+// nativo lê o arquivo direto do disco, sem timeout de JS, e devolve o
+// status HTTP como qualquer chamada.
+async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false): Promise<T> {
+  const info = await FileSystem.getInfoAsync(uri).catch(() => ({ exists: false }));
+  if (!info.exists) {
+    // Foto sumiu do cache do aparelho: não adianta insistir (vira "recusado" na fila)
+    throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
+  }
   const nome = uri.split('/').pop() ?? 'foto.jpg';
   const ext = (nome.split('.').pop() ?? 'jpg').toLowerCase();
-  // React Native aceita {uri, name, type} como arquivo em FormData
-  form.append('arquivo', { uri, name: nome, type: ext === 'png' ? 'image/png' : 'image/jpeg' } as unknown as Blob);
-  for (const [k, v] of Object.entries(campos)) form.append(k, v);
-  return form;
+  let r: FileSystem.FileSystemUploadResult;
+  try {
+    r = await FileSystem.uploadAsync(`${API_URL}${caminho}`, uri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'arquivo',
+      mimeType: ext === 'png' ? 'image/png' : 'image/jpeg',
+      parameters: campos,
+      headers: acesso ? { Authorization: `Bearer ${acesso}` } : {},
+    });
+  } catch (e) {
+    throw new ErroRede((e as Error).message || 'falha no envio da foto');
+  }
+  if (r.status === 401 && !repetiu) {
+    if (await tentarRenovar()) return enviarArquivo<T>(caminho, uri, campos, true);
+    await limparTokens();
+    ouvintesSessaoCaiu.forEach((f) => f());
+  }
+  let dados: unknown = null;
+  try {
+    dados = JSON.parse(r.body);
+  } catch {
+    dados = null;
+  }
+  if (r.status < 200 || r.status >= 300) {
+    const msg = (dados as { erro?: string } | null)?.erro ?? `Erro ${r.status}`;
+    throw new ErroApi(r.status, msg);
+  }
+  return dados as T;
 }
 
 export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string) {
-  const form = formComFoto(uri, { tipo, uuid, capturado_em: capturadoEm });
-  return chamar<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, { metodo: 'POST', form });
+  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, uri, { tipo, uuid, capturado_em: capturadoEm });
 }
 
 /** Pedágio da rota: valor + foto do recibo (Hugo, 11/09). Fica pendente até o painel aprovar. */
 export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string) {
-  const form = formComFoto(uri, { valor: String(valor), uuid, capturado_em: capturadoEm });
-  return chamar<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, { metodo: 'POST', form });
+  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, uri, { valor: String(valor), uuid, capturado_em: capturadoEm });
 }

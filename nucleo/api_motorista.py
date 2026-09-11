@@ -30,6 +30,7 @@ import hashlib
 import logging
 import secrets
 import sys
+import time
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -102,13 +103,35 @@ def criar_app(config: dict | None = None) -> Flask:
         if c is not None:
             c.close()
 
+    # ── log de requisições (11/09: pra enxergar o que o celular manda) ───────
+    # waitress não loga requisição; sem isso o piloto fica cego (o teste do
+    # Hugo mandou eventos que nunca chegaram e não havia como saber se
+    # bateram na API). Uma linha por request, exceto /api/saude.
+    logger.setLevel(logging.INFO)
+
+    @app.before_request
+    def _marcar_inicio():
+        g.inicio = time.monotonic()
+
+    @app.after_request
+    def _logar(resp):
+        if request.path != "/api/saude":
+            ms = int((time.monotonic() - getattr(g, "inicio", time.monotonic())) * 1000)
+            agente = (getattr(g, "motorista", None) or {}).get("agent_id")
+            logger.info("%s %s -> %s %dms agent=%s ip=%s len=%s",
+                        request.method, request.full_path.rstrip("?"), resp.status_code, ms, agente,
+                        request.remote_addr, request.content_length)
+        return resp
+
     # ── erros ────────────────────────────────────────────────────────────────
     @app.errorhandler(OperacaoInvalida)
     def _erro_operacao(e):
+        logger.info("Regra recusou %s %s: %s", request.method, request.path, e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
     @app.errorhandler(AutenticacaoInvalida)
     def _erro_auth(e):
+        logger.info("Auth recusou %s %s: %s", request.method, request.path, e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
     @app.errorhandler(404)

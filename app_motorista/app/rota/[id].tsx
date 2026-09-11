@@ -158,7 +158,7 @@ export default function DetalheRota() {
   const fotografarPedagio = async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o recibo.');
-    const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
+    const r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
     if (!r.canceled && r.assets[0]) setPedagioFoto(r.assets[0].uri);
   };
 
