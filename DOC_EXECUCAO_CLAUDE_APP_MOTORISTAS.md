@@ -394,3 +394,10 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   `EXPO_TOKEN`** do Hugo; até publicar, o APK não mostra a seção Pedágios.
   Depois: Hugo testa um pedágio real no celular e aprova em
   `/financeiro/pedagios`; aí começa a Fase C.
+- **11/09 (noite)** — Ícone do app trocado pro símbolo da FreshLog em
+  **fundo escuro** (`#0B0B1A`, `tema.primariaEscura`; commit `576667b`):
+  `icon.png`, favicon e adaptive icon (foreground/background +
+  `backgroundColor`) regenerados; símbolo nas cores originais, splash
+  intocado. **Ícone é recurso nativo: não vai por OTA** — só aparece no
+  celular depois de um novo `eas build --profile preview` (subir
+  `android.versionCode`) e reinstalar o APK.
