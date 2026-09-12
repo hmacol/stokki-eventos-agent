@@ -38,13 +38,47 @@ A tabela padrão das regiões atendidas ficou **em pausa** (decisão do Hugo).
   (itsdangerous, sem login). Aceite abre chamado no atendimento (área
   "Coleta / retirada", AGUARDANDO_FL) e avisa `email_comercial` com o PDF.
 
+## O que o cliente vê (Hugo, 11/09 — 2ª rodada)
+
+- **E-mail da proposta = objetivo**: número da cotação, validade, o **valor
+  final** numa caixa e o botão **Aprovar proposta**. Sem lista de entregas e
+  sem composição — o detalhamento vai no PDF anexo.
+- **PDF = detalhado**, mas a composição do valor tem só 3 ou 4 linhas:
+  1. `Frete dedicado <veículo> · <km> km (ida e volta) · pedágio incluso`
+     — frete base **menos** desconto de carga seca, **mais** km adicional,
+     **mais** pedágio, tudo já somado (`resultado.frete_com_pedagio`);
+  2. `Ad valorem` (separado);
+  3. `Urgência same-day` (só quando marcada);
+  4. `Impostos` (separado).
+- **Km e pedágio são sempre de IDA E VOLTA** ao galpão: a Routes API é chamada
+  com o retorno dentro do trajeto (`voltar=True`), então a estimativa de
+  pedágio já é do percurso inteiro — não é o pedágio da ida dobrado.
+- A composição fica num lugar só: `cotacao.linhas_composicao(r)`, usada pelo
+  PDF e pelos e-mails; a tela repete a mesma lógica em JS (cotacao.html).
+  `detalhado=True` abre base/desconto/km/pedágio e é usado **só** no e-mail
+  interno do aceite (comercial precisa ver a abertura).
+- Vocabulário pro cliente virou "aprovar / aprovada" (e-mail, página do link e
+  botões da tela); o status no banco continua `ACEITA`.
+
 ## Premissas: todas confirmadas pelo Hugo (11/09)
 
 1. ~~Fiorino = 200 caixas~~ → **100 caixas** (Hugo: "varia muito do tamanho delas").
 2. Ad valorem entra no gross-up dos 12% (compõe o frete); pedágio não. ✔
 3. Same-day incide sobre frete + ad valorem, antes do gross-up. ✔
-4. ~~Km só de ida~~ → **sempre considerar o retorno** ao galpão.
+4. ~~Km só de ida~~ → **sempre considerar o retorno** ao galpão (km e pedágio).
 5. Caixas e peso são totais da cotação, não por entrega. ✔
+
+### Premissas NOVAS da 2ª rodada (12/09) — confirmar
+
+6. **Urgência same-day em linha separada** no PDF: não estava na lista de
+   itens a fundir e o cliente escolheu esse adicional na hora de cotar.
+   Se for pra entrar na linha do frete, é uma linha de código.
+7. **O desconto de carga seca sumiu da vista do cliente** (entra abatido na
+   linha do frete). Se o desconto for argumento de venda, volto a mostrar
+   "Desconto carga seca − R$ 150".
+8. **O valor do pedágio não aparece separado** pro cliente em lugar nenhum:
+   as condições dizem que está incluso e que é cobrado pelo valor real, sem
+   dizer quanto foi estimado.
 
 ## Piloto
 

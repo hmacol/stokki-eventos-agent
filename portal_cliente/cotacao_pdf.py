@@ -213,7 +213,7 @@ def gerar(cot: dict, regras: dict) -> bytes:
     condicoes = [
         f"Proposta válida até {_data(cot.get('valido_ate'))}. Aprovação pelo botão do e-mail ou pelo portal do cliente.",
         f"Veículo dedicado, saindo do galpão Fresh Log; {trajeto}.",
-        f"A linha do frete já inclui a diária do veículo, o km adicional além da franquia de "
+        f"A linha do frete já inclui o veículo dedicado, o km adicional além da franquia de "
         f"{r['franquia_km']:.0f} km (por km inteiro, arredondado pra cima) e o pedágio do trajeto {ida_volta}.",
         "Pedágio repassado pelo valor real do trajeto; o valor incluso acima é a estimativa do Google Maps.",
         f"Ad valorem de {pct_av}% sobre o valor da(s) nota(s) fiscal(is) transportada(s).",

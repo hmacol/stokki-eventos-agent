@@ -694,7 +694,7 @@ def linhas_composicao(r: dict, detalhado: bool = False) -> list[tuple[str, str]]
             linhas.append(("Desconto carga seca", "- " + _fmt_brl(r["desconto_seco"])))
         if r.get("km_excedente"):
             linhas.append((f"Km adicional ({r['km_excedente']} km × {_fmt_brl(r['km_adicional_unitario'])})", _fmt_brl(r["valor_km"])))
-        linhas.append((f"Pedágio estimado ({rotulo_trajeto(r)})",
+        linhas.append((f"Pedágio estimado ({'ida e volta' if r.get('km_volta') else 'só ida'})",
                        _fmt_brl(r["pedagio"]) if r.get("pedagio") is not None else "não estimado"))
     else:
         rotulo = f"Frete dedicado {r['veiculo_nome']} · {rotulo_trajeto(r)}"
