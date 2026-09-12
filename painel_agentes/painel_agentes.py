@@ -1789,6 +1789,80 @@ def revisar_canhoto(comprovante_id):
     return jsonify({"ok": True, "comprovante": resultado})
 
 
+# ── Consulta de rotas e pedidos (Hugo, 12/09) ────────────────────────────────
+# A Torre e o Planejamento são sempre do DIA. Esta tela é o HISTÓRICO:
+# "o que aconteceu com o pedido PS-12345 na semana passada?". Lê só o
+# núcleo próprio (dados/dados.db), que o timer do sincronizar_vuupt vem
+# enchendo a cada 30 min -- não bate na VUUPT, então é instantânea.
+# Toda a lógica de busca/recorte está em nucleo/consulta.py; aqui só HTTP.
+
+def _arg_data(chave: str) -> str | None:
+    """Data ISO do query string; valor inválido é ignorado em vez de
+    quebrar a tela (mesmo critério da tela de pedágios)."""
+    bruto = (request.args.get(chave) or "").strip()
+    try:
+        return date.fromisoformat(bruto).isoformat() if bruto else None
+    except ValueError:
+        return None
+
+
+@app.route("/consulta")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def consulta():
+    from nucleo import banco as nucleo_banco, consulta as nucleo_consulta
+    termo = (request.args.get("q") or "").strip()
+    aba = "pedidos" if (request.args.get("aba") or "").lower() == "pedidos" else "rotas"
+    de, ate = _arg_data("de"), _arg_data("ate")
+    status = (request.args.get("status") or "").strip().upper() or None
+    provedor = (request.args.get("provedor") or "").strip().upper() or None
+    try:
+        agent_id = int(request.args.get("motorista") or "") or None
+    except ValueError:
+        agent_id = None
+
+    conn = nucleo_banco.conectar()
+    try:
+        cobertura = nucleo_consulta.cobertura(conn=conn)
+        motoristas = nucleo_consulta.motoristas_com_rota(de, ate, conn=conn)
+        if termo:
+            # Busca manda na tela: ignora aba e filtros de listagem
+            resultado = nucleo_consulta.buscar(termo, de=de, ate=ate, conn=conn)
+        elif aba == "pedidos":
+            resultado = nucleo_consulta.listar_pedidos(de, ate, status=status, conn=conn)
+            resultado["rotas"] = []
+        else:
+            resultado = nucleo_consulta.listar_rotas(de, ate, status=status, provedor=provedor,
+                                                     agent_id=agent_id, conn=conn)
+            resultado["pedidos"] = []
+    finally:
+        conn.close()
+
+    filtros = {"q": termo, "de": de or "", "ate": ate or "", "status": status or "",
+               "provedor": provedor or "", "motorista": agent_id or ""}
+    return render_template("consulta.html", r=resultado, filtros=filtros, aba=aba,
+                           cobertura=cobertura, motoristas=motoristas)
+
+
+@app.route("/consulta/rota/<int:rota_id>")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def consulta_rota(rota_id):
+    from nucleo import consulta as nucleo_consulta
+    rota = nucleo_consulta.detalhar_rota(rota_id)
+    if not rota:
+        abort(404)
+    return render_template("consulta_rota.html", rota=rota)
+
+
+@app.route("/consulta/pedido/<codigo>")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def consulta_pedido(codigo):
+    from nucleo import consulta as nucleo_consulta
+    detalhe = nucleo_consulta.detalhar_pedido(codigo)
+    if not detalhe:
+        abort(404)
+    return render_template("consulta_pedido.html", d=detalhe)
+
+
 @app.route("/api/motoristas/vuupt-disponiveis")
 @requer_auth(niveis=("total", "operador"))
 def api_motoristas_vuupt_disponiveis():

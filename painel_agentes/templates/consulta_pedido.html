@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block titulo %}{{ d.codigo }}{% endblock %}
+{#
+  Detalhe de um pedido no histórico (Hugo, 12/09): por onde ele passou.
+
+  "Passagens" no plural de propósito -- pedido com insucesso e reentrega
+  aparece em MAIS DE UMA rota, e é justamente esse caso que a gente
+  precisa enxergar de uma vez.
+
+  Pedido de antes de 26/08 pode não ter linha em nucleo_pedidos (a tabela
+  só começou a ser alimentada ali); a parada existe do mesmo jeito, então
+  a tela se monta com o que tem.
+#}
+{% block estilo_extra %}
+<style>
+  .voltar { font-size: 12.5px; color: var(--texto-suave); text-decoration: none; }
+  .voltar:hover { color: var(--texto); }
+  .cabecalho-pedido { margin: 8px 0 18px; }
+  .cabecalho-pedido h1 { font-size: 20px; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+  .grade-dados { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1px; background: var(--borda); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; margin-top: 12px; }
+  .grade-dados div { background: var(--superficie); padding: 10px 14px; }
+  .grade-dados .rotulo { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 600; }
+  .grade-dados .valor { font-size: 13.5px; margin-top: 2px; }
+  .titulo-secao { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); font-weight: 600; margin: 22px 0 8px; }
+  .passagem { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+  .passagem-topo { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .passagem h2 { font-size: 14px; margin: 0 0 2px; }
+  .passagem h2 a { color: var(--texto); text-decoration: none; }
+  .passagem h2 a:hover { text-decoration: underline; }
+  .horarios { text-align: right; font-size: 12px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .chip { display: inline-block; padding: 2px 9px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; white-space: nowrap; }
+  .chip.ok { border-color: var(--acento); color: var(--acento); }
+  .chip.ruim { border-color: var(--erro); color: var(--erro); }
+  .chip.app { border-color: #7c6cf0; color: #7c6cf0; }
+  .motivo { color: var(--erro); font-size: 12.5px; margin-top: 4px; }
+  .fotos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .fotos img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; background: var(--fundo); }
+  .fotos figure { margin: 0; }
+  .fotos figcaption { font-size: 10.5px; color: var(--texto-suave); margin-top: 2px; text-align: center; }
+  table.eventos { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.eventos th, table.eventos td { padding: 5px 8px; font-size: 12px; text-align: left; border-bottom: 1px solid var(--borda); font-variant-numeric: tabular-nums; }
+  table.eventos th { color: var(--texto-suave); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.3px; }
+  table.eventos tr:last-child td { border-bottom: none; }
+  .aviso { background: var(--superficie); border: 1px dashed var(--borda); border-radius: 8px; padding: 14px; color: var(--texto-suave); font-size: 12.5px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+{% macro chip_situacao(valor) %}
+  {% if valor in ('ENTREGUE', 'CONCLUIDA') %}<span class="chip ok">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% elif valor in ('INSUCESSO', 'CANCELADA', 'CANCELADO') %}<span class="chip ruim">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% elif valor %}<span class="chip">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% else %}<span class="suave">—</span>{% endif %}
+{% endmacro %}
+
+{% set p = d.pedido %}
+{% set ultima = d.paradas[0] if d.paradas else none %}
+
+<a class="voltar" href="{{ url_for('consulta') }}">← Consulta</a>
+
+<div class="cabecalho-pedido">
+  <h1>{{ d.codigo }}</h1>
+  <div class="suave">
+    {{ (p.destinatario_nome if p else (ultima.destinatario_nome if ultima else '')) or 'destinatário não registrado' }}
+    {% if p and p.status %}· {{ chip_situacao(p.status) }}
+    {% elif ultima %}· {{ chip_situacao(ultima.situacao) }}{% endif %}
+  </div>
+
+  <div class="grade-dados">
+    <div>
+      <div class="rotulo">Endereço</div>
+      <div class="valor">{{ (p.endereco if p else (ultima.endereco if ultima else '')) or '—' }}</div>
+    </div>
+    <div>
+      <div class="rotulo">Embarcador</div>
+      <div class="valor">{{ (p.remetente_nome if p else (ultima.remetente_nome if ultima else '')) or '—' }}</div>
+    </div>
+    {% if p %}
+    <div>
+      <div class="rotulo">CNPJ/CPF</div>
+      <div class="valor">{{ p.destinatario_codigo or '—' }}</div>
+    </div>
+    <div>
+      <div class="rotulo">Volume</div>
+      <div class="valor">{% if p.caixas %}{{ p.caixas }} cx{% else %}—{% endif %}</div>
+    </div>
+    <div>
+      <div class="rotulo">Agendamento</div>
+      <div class="valor">{{ (p.agendamento_inicio or '—')[:16] }}</div>
+    </div>
+    <div>
+      <div class="rotulo">Origem do cadastro</div>
+      <div class="valor">{{ p.origem|lower if p.origem else '—' }}
+        {% if p.vuupt_service_id %}<span class="suave">· VUUPT {{ p.vuupt_service_id }}</span>{% endif %}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if not p %}
+  <p class="aviso" style="margin-top: 12px">
+    Este pedido não tem cadastro próprio no núcleo — <code>nucleo_pedidos</code> só passou a ser
+    alimentado em 26/08/2026. O que aparece abaixo vem da parada da rota, que foi preservada.
+  </p>
+  {% endif %}
+</div>
+
+<p class="titulo-secao">
+  {{ d.paradas|length }} passagem(ns) por rota
+  {% if d.paradas|length > 1 %}<span class="suave">— houve reentrega ou nova tentativa</span>{% endif %}
+</p>
+
+{% if not d.paradas %}
+<div class="aviso">Este pedido nunca entrou numa rota registrada no núcleo.</div>
+{% endif %}
+
+{% for s in d.paradas %}
+<div class="passagem">
+  <div class="passagem-topo">
+    <div style="flex: 1 1 260px; min-width: 0">
+      <h2>
+        <a href="{{ url_for('consulta_rota', rota_id=s.rota_id) }}">{{ s.rota_nome or ('Rota #' ~ s.rota_id) }}</a>
+        {{ chip_situacao(s.situacao) }}
+      </h2>
+      <div class="suave">
+        {{ s.data_rota or '' }} · parada {{ s.ordem }}
+        {% if s.motorista_nome %}· {{ s.motorista_nome }}{% endif %}
+        {% if s.provedor == 'APP' %}<span class="chip app">app</span>{% endif %}
+      </div>
+      {% if s.motivo_texto %}<div class="motivo">{{ s.motivo_texto }}</div>{% endif %}
+      {% if s.reagendado_para %}<div class="suave">Retorno marcado para {{ s.reagendado_para[:16] }}</div>{% endif %}
+
+      {% if s.comprovantes %}
+      <div class="fotos">
+        {% for c in s.comprovantes %}
+        <figure>
+          {% if c.caminho_local %}
+          <a href="{{ url_for('canhoto_foto', comprovante_id=c.id) }}" target="_blank" rel="noopener">
+            <img src="{{ url_for('canhoto_foto', comprovante_id=c.id) }}" alt="{{ c.tipo|lower }}">
+          </a>
+          {% else %}<div class="suave">sem arquivo</div>{% endif %}
+          <figcaption>{{ c.tipo|capitalize }}{% if c.resultado_validacao %}<br>{{ c.resultado_validacao|lower }}{% endif %}</figcaption>
+        </figure>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="horarios">
+      {% if s.started_at %}<div>saiu {{ s.started_at[11:16] }}</div>{% endif %}
+      {% if s.arrived_at %}<div>chegou {{ s.arrived_at[11:16] }}</div>{% endif %}
+      {% if s.completed_at %}<div><strong>{{ s.completed_at[11:16] }}</strong></div>{% endif %}
+      {% if s.tempo_no_local_s %}<div>{{ (s.tempo_no_local_s / 60)|round|int }} min no local</div>{% endif %}
+    </div>
+  </div>
+
+  {% if s.eventos %}
+  <table class="eventos">
+    <thead><tr><th>Aconteceu</th><th>Vimos</th><th>Evento</th><th>Origem</th></tr></thead>
+    <tbody>
+      {% for e in s.eventos %}
+      <tr>
+        <td>{{ (e.ocorrido_em or '')[:16] }}</td>
+        <td>{{ (e.recebido_em or '')[:16] }}</td>
+        <td>{{ e.tipo|replace('_',' ')|capitalize }}</td>
+        <td class="suave">{{ e.origem|lower }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}
