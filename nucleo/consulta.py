@@ -116,9 +116,11 @@ def resolver_placa(placa: str) -> list[int]:
         import yaml
         from regras.preferencias_motoristas import CatalogoMotoristas
         config = yaml.safe_load((_RAIZ / "config.yaml").read_text(encoding="utf-8")) or {}
-        caminhos = config.get("caminhos", {}) or {}
-        catalogo = CatalogoMotoristas.carregar(caminhos.get("planilha_motoristas"),
-                                               caminhos.get("base_motoristas_json"))
+        # Mesma seção que sincronizar_vuupt.py:377 e planejamento_rotas.py
+        # usam -- errei as chaves na primeira versão e a busca por placa
+        # nunca achava nada (a planilha vinha como None, sem erro nenhum).
+        cfg = config.get("motoristas", {}) or {}
+        catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
     except Exception:
         logger.exception("Busca por placa: não foi possível carregar o catálogo de motoristas")
         return []
