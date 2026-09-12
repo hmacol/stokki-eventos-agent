@@ -128,7 +128,10 @@ export default function RegistroParada() {
     setFotos((f) => ({ ...f, [chave]: (f[chave] ?? []).filter((_, i) => i !== indice) }));
   const fotosDe = (chave: string) => fotos[chave] ?? [];
 
-  const campos: CampoChecklist[] = fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [];
+  // O modelo do servidor (checklist_modelo) traz `vinculo_outro` como card
+  // próprio; aqui ele é desenhado dentro do card de vínculo, só com "Outro".
+  const campos: CampoChecklist[] = (fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [])
+    .filter((c) => c.chave !== 'vinculo_outro');
   const exigeMotivo = fluxo === 'NAO_ENTREGUE' || fluxo === 'PARCIAL';
   const motivos = checklist.motivos;
   // "Descreva quem recebeu" só existe (e só é exigido) quando o vínculo
