@@ -85,6 +85,17 @@ ORIGEM_SISTEMA = "sistema"
 CANAL_PORTAL = "portal"
 CANAL_EMAIL = "email"
 
+# Quem abriu o chamado (Hugo, 12/09/2026: o motorista ganhou chat no app e
+# cai na MESMA fila da tela /atendimento, numa aba própria). O cliente é o
+# embarcador (portal); o motorista é quem está na rua (app de motoristas).
+TIPO_CLIENTE = "CLIENTE"
+TIPO_MOTORISTA = "MOTORISTA"
+
+# Perfil de atendimento: cada um tem horário e caixa de e-mail próprios
+# (o motorista roda cedo, o cliente fala em horário comercial).
+PERFIL_CLIENTE = "cliente"
+PERFIL_LOGISTICA = "logistica"
+
 AREAS = {
     "entrega": "Entrega",
     "coleta": "Coleta / retirada",
@@ -94,6 +105,23 @@ AREAS = {
     "cadastro": "Cadastro / acesso",
     "outro": "Outro",
 }
+
+# Assuntos do motorista (Hugo, 12/09) -- o que ele escolhe ao abrir a conversa.
+AREAS_MOTORISTA = {
+    "entrega_problema": "Problema na entrega",
+    "veiculo": "Veículo, acidente ou atraso",
+    "pagamento": "Pagamento (rota, km, pedágio)",
+    "app": "Problema no app",
+    "outro": "Outro",
+}
+
+
+def areas_do_tipo(tipo: str | None) -> dict:
+    return AREAS_MOTORISTA if tipo == TIPO_MOTORISTA else AREAS
+
+
+def perfil_do_tipo(tipo: str | None) -> str:
+    return PERFIL_LOGISTICA if tipo == TIPO_MOTORISTA else PERFIL_CLIENTE
 
 EXTENSOES_ANEXO = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".xlsx", ".xls", ".csv", ".txt", ".xml"}
 MAX_ANEXO_BYTES = 10 * 1024 * 1024
@@ -161,9 +189,14 @@ def em_segundo_plano(fn, *args, **kwargs) -> None:
     threading.Thread(target=alvo, daemon=True, name=f"chamados-{getattr(fn, '__name__', 'bg')}").start()
 
 
-def emails_atendimento(config: dict) -> list[str]:
+def emails_atendimento(config: dict, perfil: str = PERFIL_CLIENTE) -> list[str]:
+    """Caixa da equipe. A logística pode ter a própria
+    (chamados.email_logistica); sem ela, cai na do atendimento."""
     c = cfg_chamados(config)
-    lista = c.get("email_atendimento") or (config.get("email", {}) or {}).get("email_atendimento") \
+    lista = None
+    if perfil == PERFIL_LOGISTICA:
+        lista = c.get("email_logistica")
+    lista = lista or c.get("email_atendimento") or (config.get("email", {}) or {}).get("email_atendimento") \
         or (config.get("email", {}) or {}).get("email_responsavel")
     if isinstance(lista, str):
         lista = [e.strip() for e in re.split(r"[,;]", lista) if e.strip()]
@@ -245,8 +278,31 @@ def conectar() -> sqlite3.Connection:
             UNIQUE(message_id, origem)
         );
     """)
+    _migrar(conn)
     conn.commit()
     return conn
+
+
+# Colunas novas de portal_chamados (12/09: chamado aberto pelo MOTORISTA no
+# app). Migração aditiva -- banco criado em 09/09 não tem essas colunas.
+# `cnpj_embarcador` (NOT NULL desde o desenho do portal) fica '' no chamado
+# de motorista: nenhuma consulta de cliente casa com string vazia.
+_COLUNAS_NOVAS = [
+    ("tipo", f"TEXT NOT NULL DEFAULT '{TIPO_CLIENTE}'"),
+    ("motorista_cpf", "TEXT"),
+    ("agent_id", "INTEGER"),
+    ("rota_id", "INTEGER"),          # nucleo_rotas.id em foco, quando houver
+    ("parada_id", "INTEGER"),        # nucleo_paradas.id em foco, quando houver
+]
+
+
+def _migrar(conn: sqlite3.Connection) -> None:
+    existentes = {r[1] for r in conn.execute("PRAGMA table_info(portal_chamados)")}
+    for nome, tipo in _COLUNAS_NOVAS:
+        if nome not in existentes:
+            conn.execute(f"ALTER TABLE portal_chamados ADD COLUMN {nome} {tipo}")
+            logger.info("chamados: coluna portal_chamados.%s adicionada", nome)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_chamados_tipo ON portal_chamados (tipo, status, atualizado_em)")
 
 
 def _agora() -> str:
@@ -305,14 +361,31 @@ def _hm(txt, padrao: str) -> tuple[int, int]:
         return int(h), int(m)
 
 
-def horario_config(config: dict) -> dict:
-    h = cfg_chamados(config).get("horario", {}) or {}
+# Horário da logística (Hugo, 12/09): o motorista sai antes das 7h e roda
+# sábado; o atendimento dele é mais largo que o do cliente e sem almoço
+# (a equipe reveza). Editável em portal_cliente.chamados.horario_logistica.
+_HORARIO_PADRAO = {
+    PERFIL_CLIENTE: {"dias": [0, 1, 2, 3, 4], "inicio": "08:30", "fim": "17:00",
+                     "almoco_inicio": "13:00", "almoco_fim": "14:00"},
+    PERFIL_LOGISTICA: {"dias": [0, 1, 2, 3, 4, 5], "inicio": "06:00", "fim": "19:00",
+                       "almoco_inicio": "", "almoco_fim": ""},
+}
+
+
+def horario_config(config: dict, perfil: str = PERFIL_CLIENTE) -> dict:
+    padrao = _HORARIO_PADRAO.get(perfil, _HORARIO_PADRAO[PERFIL_CLIENTE])
+    chave = "horario_logistica" if perfil == PERFIL_LOGISTICA else "horario"
+    h = cfg_chamados(config).get(chave, {}) or {}
+    # Sem almoço configurado (logística): janela vazia -- _hm devolve o
+    # padrão, então um almoço de 00:00 a 00:00 nunca pega.
+    almoco_ini = h.get("almoco_inicio", padrao["almoco_inicio"]) or "00:00"
+    almoco_fim = h.get("almoco_fim", padrao["almoco_fim"]) or "00:00"
     return {
-        "dias": [int(d) for d in (h.get("dias") or [0, 1, 2, 3, 4])],   # 0 = segunda
-        "inicio": _hm(h.get("inicio"), "08:30"),
-        "fim": _hm(h.get("fim"), "17:00"),
-        "almoco_inicio": _hm(h.get("almoco_inicio"), "13:00"),
-        "almoco_fim": _hm(h.get("almoco_fim"), "14:00"),
+        "dias": [int(d) for d in (h.get("dias") or padrao["dias"])],   # 0 = segunda
+        "inicio": _hm(h.get("inicio"), padrao["inicio"]),
+        "fim": _hm(h.get("fim"), padrao["fim"]),
+        "almoco_inicio": _hm(almoco_ini, "00:00"),
+        "almoco_fim": _hm(almoco_fim, "00:00"),
     }
 
 
@@ -321,21 +394,25 @@ def _fmt_hm(hm: tuple[int, int]) -> str:
     return f"{h}h{m:02d}" if m else f"{h}h"
 
 
-def texto_horario(config: dict) -> str:
-    hc = horario_config(config)
+def texto_horario(config: dict, perfil: str = PERFIL_CLIENTE) -> str:
+    hc = horario_config(config, perfil)
     dias = hc["dias"]
     if dias == [0, 1, 2, 3, 4]:
         d = "seg a sex"
+    elif dias == [0, 1, 2, 3, 4, 5]:
+        d = "seg a sáb"
     else:
         d = ", ".join(DIAS_SEMANA[i] for i in dias)
-    return (f"{d}, {_fmt_hm(hc['inicio'])} às {_fmt_hm(hc['fim'])} · almoço "
-            f"{_fmt_hm(hc['almoco_inicio'])}–{_fmt_hm(hc['almoco_fim'])}")
+    texto = f"{d}, {_fmt_hm(hc['inicio'])} às {_fmt_hm(hc['fim'])}"
+    if hc["almoco_inicio"] != hc["almoco_fim"]:
+        texto += f" · almoço {_fmt_hm(hc['almoco_inicio'])}–{_fmt_hm(hc['almoco_fim'])}"
+    return texto
 
 
-def situacao_horario(config: dict, agora: datetime | None = None) -> dict:
+def situacao_horario(config: dict, agora: datetime | None = None, perfil: str = PERFIL_CLIENTE) -> dict:
     """{dentro: bool, motivo: None|'almoco'|'antes'|'depois'|'fora_dia', volta_em: str}."""
     agora = agora or datetime.now()
-    hc = horario_config(config)
+    hc = horario_config(config, perfil)
     minutos = agora.hour * 60 + agora.minute
     ini, fim = hc["inicio"][0] * 60 + hc["inicio"][1], hc["fim"][0] * 60 + hc["fim"][1]
     ai, af = hc["almoco_inicio"][0] * 60 + hc["almoco_inicio"][1], hc["almoco_fim"][0] * 60 + hc["almoco_fim"][1]
@@ -387,9 +464,11 @@ def atendentes_online(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def situacao_atendimento(conn: sqlite3.Connection, config: dict, agora: datetime | None = None) -> dict:
-    """O que o widget do cliente mostra no cabeçalho."""
-    h = situacao_horario(config, agora)
+def situacao_atendimento(conn: sqlite3.Connection, config: dict, agora: datetime | None = None,
+                         perfil: str = PERFIL_CLIENTE) -> dict:
+    """O que o chat (widget do cliente / aba Ajuda do app) mostra no
+    cabeçalho. `perfil` escolhe o horário: cliente ou logística."""
+    h = situacao_horario(config, agora, perfil)
     online = atendentes_online(conn)
     dentro = h["dentro"]
     if dentro and online:
@@ -401,7 +480,7 @@ def situacao_atendimento(conn: sqlite3.Connection, config: dict, agora: datetime
     else:
         estado, texto = "fechado", f"Fora do horário · voltamos {h['volta_em']}"
     return {"estado": estado, "texto": texto, "dentro_horario": dentro, "motivo": h["motivo"], "volta_em": h["volta_em"],
-            "horario": texto_horario(config), "atendentes_online": len(online),
+            "horario": texto_horario(config, perfil), "atendentes_online": len(online), "perfil": perfil,
             "nomes_online": [a["nome"] or a["usuario"] for a in online]}
 
 
@@ -409,8 +488,14 @@ def situacao_atendimento(conn: sqlite3.Connection, config: dict, agora: datetime
 
 def _chamado_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
+    d.setdefault("tipo", TIPO_CLIENTE)
+    d["tipo"] = d.get("tipo") or TIPO_CLIENTE
+    d["de_motorista"] = d["tipo"] == TIPO_MOTORISTA
     d["status_rotulo"] = ROTULOS_STATUS.get(d["status"], d["status"])
-    d["area_rotulo"] = AREAS.get(d.get("area") or "", d.get("area") or "")
+    d["area_rotulo"] = areas_do_tipo(d["tipo"]).get(d.get("area") or "", d.get("area") or "")
+    # Nome de quem abriu -- é o que a fila e os e-mails mostram, seja
+    # embarcador ou motorista.
+    d["solicitante"] = d.get("nome_cliente") or (d.get("motorista_cpf") if d["de_motorista"] else d.get("cnpj_embarcador")) or ""
     d["quando"] = rotulo_quando(d.get("ultima_msg_em") or d.get("criado_em"))
     d["espera"] = _espera(d.get("fila_desde") or d.get("ultima_msg_em"))
     d["aberto"] = d["status"] in STATUS_ABERTOS
@@ -421,26 +506,73 @@ def _chamado_dict(r: sqlite3.Row) -> dict:
     return d
 
 
-def criar_chamado(conn: sqlite3.Connection, cliente: dict, origem: str, status: str, assunto: str = "",
+def criar_chamado(conn: sqlite3.Connection, solicitante: dict, origem: str, status: str, assunto: str = "",
                   area: str = "", pedido_ref: str = "", etapa_assistente: str | None = None) -> dict:
+    """`solicitante`: cliente do portal ({cnpj, sender_id, nome}) ou motorista
+    do app ({tipo: MOTORISTA, cpf, agent_id, nome, rota_id})."""
     agora = _agora()
+    tipo = solicitante.get("tipo") or TIPO_CLIENTE
     cur = conn.execute("""
         INSERT INTO portal_chamados (cnpj_embarcador, sender_id, nome_cliente, assunto, area, pedido_ref, status, origem,
-                                     etapa_assistente, fila_desde, criado_em, atualizado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (cliente["cnpj"], cliente.get("sender_id"), cliente.get("nome"), assunto[:120], area, pedido_ref[:40],
-          status, origem, etapa_assistente, agora if status in (STATUS_NA_FILA, STATUS_AGUARDANDO_FL) else None,
-          agora, agora))
+                                     etapa_assistente, fila_desde, criado_em, atualizado_em,
+                                     tipo, motorista_cpf, agent_id, rota_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (solicitante.get("cnpj") or "", solicitante.get("sender_id"), solicitante.get("nome"), assunto[:120], area,
+          pedido_ref[:40], status, origem, etapa_assistente,
+          agora if status in (STATUS_NA_FILA, STATUS_AGUARDANDO_FL) else None, agora, agora,
+          tipo, solicitante.get("cpf"), solicitante.get("agent_id"), solicitante.get("rota_id")))
     conn.commit()
     return buscar_chamado(conn, cur.lastrowid)
 
 
+def buscar_chamado_motorista(conn: sqlite3.Connection, chamado_id: int, cpf: str) -> dict | None:
+    r = conn.execute("SELECT * FROM portal_chamados WHERE id = ? AND tipo = ? AND motorista_cpf = ?",
+                     (chamado_id, TIPO_MOTORISTA, cpf)).fetchone()
+    return _chamado_dict(r) if r else None
+
+
+def listar_chamados_motorista(conn: sqlite3.Connection, cpf: str) -> list[dict]:
+    limite = (datetime.now() - timedelta(days=DIAS_LISTAGEM_CLIENTE)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = conn.execute("""
+        SELECT c.*, (SELECT COUNT(*) FROM portal_chamados_mensagens m
+                     WHERE m.chamado_id = c.id AND m.origem IN ('equipe','assistente','sistema') AND m.lido_cliente = 0) AS nao_lidas,
+               (SELECT texto FROM portal_chamados_mensagens m WHERE m.chamado_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultima_texto,
+               (SELECT origem FROM portal_chamados_mensagens m WHERE m.chamado_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultima_origem_msg
+        FROM portal_chamados c
+        WHERE c.tipo = ? AND c.motorista_cpf = ? AND c.criado_em >= ?
+        ORDER BY (c.status = 'RESOLVIDO'), c.atualizado_em DESC
+    """, (TIPO_MOTORISTA, cpf, limite)).fetchall()
+    return [_chamado_dict(r) for r in rows]
+
+
+def chamado_ativo_motorista(conn: sqlite3.Connection, cpf: str) -> dict | None:
+    r = conn.execute("""
+        SELECT * FROM portal_chamados WHERE tipo = ? AND motorista_cpf = ? AND status != 'RESOLVIDO'
+        ORDER BY atualizado_em DESC LIMIT 1
+    """, (TIPO_MOTORISTA, cpf)).fetchone()
+    return _chamado_dict(r) if r else None
+
+
+def nao_lidas_motorista(conn: sqlite3.Connection, cpf: str) -> int:
+    """Badge da aba Ajuda: só conta o que é RESPOSTA (equipe ou assistente).
+    Aviso de sistema ("entrou na conversa", "você está na fila") não acende
+    badge -- o motorista está dirigindo, o badge tem que significar
+    "responderam você"."""
+    return conn.execute("""
+        SELECT COUNT(*) FROM portal_chamados_mensagens m JOIN portal_chamados c ON c.id = m.chamado_id
+        WHERE c.tipo = ? AND c.motorista_cpf = ? AND m.origem IN ('equipe','assistente') AND m.lido_cliente = 0
+    """, (TIPO_MOTORISTA, cpf)).fetchone()[0]
+
+
 def buscar_chamado(conn: sqlite3.Connection, chamado_id: int, cnpj: str | None = None) -> dict | None:
+    """Com `cnpj`, só devolve chamado DE CLIENTE daquele embarcador -- o
+    chamado de motorista guarda cnpj_embarcador vazio e nunca pode aparecer
+    pra um cliente."""
     sql = "SELECT * FROM portal_chamados WHERE id = ?"
     args: list = [chamado_id]
     if cnpj:
-        sql += " AND cnpj_embarcador = ?"
-        args.append(cnpj)
+        sql += " AND cnpj_embarcador = ? AND tipo = ?"
+        args += [cnpj, TIPO_CLIENTE]
     r = conn.execute(sql, args).fetchone()
     return _chamado_dict(r) if r else None
 
@@ -464,9 +596,9 @@ def listar_chamados_cliente(conn: sqlite3.Connection, cnpj: str) -> list[dict]:
                (SELECT texto FROM portal_chamados_mensagens m WHERE m.chamado_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultima_texto,
                (SELECT origem FROM portal_chamados_mensagens m WHERE m.chamado_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultima_origem_msg
         FROM portal_chamados c
-        WHERE c.cnpj_embarcador = ? AND c.criado_em >= ?
+        WHERE c.cnpj_embarcador = ? AND c.tipo = ? AND c.criado_em >= ?
         ORDER BY (c.status = 'RESOLVIDO'), c.atualizado_em DESC
-    """, (cnpj, limite)).fetchall()
+    """, (cnpj, TIPO_CLIENTE, limite)).fetchall()
     return [_chamado_dict(r) for r in rows]
 
 
@@ -474,9 +606,9 @@ def chamado_ativo_cliente(conn: sqlite3.Connection, cnpj: str) -> dict | None:
     """A conversa que o widget abre por padrão: o chamado aberto mais
     recente do cliente (chat ao vivo ou chamado aguardando)."""
     r = conn.execute("""
-        SELECT * FROM portal_chamados WHERE cnpj_embarcador = ? AND status != 'RESOLVIDO'
+        SELECT * FROM portal_chamados WHERE cnpj_embarcador = ? AND tipo = ? AND status != 'RESOLVIDO'
         ORDER BY atualizado_em DESC LIMIT 1
-    """, (cnpj,)).fetchone()
+    """, (cnpj, TIPO_CLIENTE)).fetchone()
     return _chamado_dict(r) if r else None
 
 
@@ -489,6 +621,7 @@ def listar_fila(conn: sqlite3.Connection, aba: str = "fila", atendente: str | No
         "meus": "c.status = 'EM_ATENDIMENTO'" + (" AND c.atendente = ?" if atendente else ""),
         "email": "c.status IN ('AGUARDANDO_FL', 'RESPONDIDO') AND c.origem IN ('chamado', 'email')",
         "assistente": "c.status = 'COM_ASSISTENTE'",
+        "motoristas": f"c.tipo = '{TIPO_MOTORISTA}' AND c.status != 'RESOLVIDO'",
         "resolvidos": "c.status = 'RESOLVIDO'",
         "abertos": "c.status != 'RESOLVIDO'",
         "todos": "1 = 1",
@@ -517,6 +650,8 @@ def contagens_fila(conn: sqlite3.Connection, atendente: str | None = None) -> di
         "em_atendimento": q("SELECT COUNT(*) FROM portal_chamados WHERE status = 'EM_ATENDIMENTO'"),
         "email": q("SELECT COUNT(*) FROM portal_chamados WHERE status IN ('AGUARDANDO_FL','RESPONDIDO') AND origem IN ('chamado','email')"),
         "assistente": q("SELECT COUNT(*) FROM portal_chamados WHERE status = 'COM_ASSISTENTE'"),
+        "motoristas": q("SELECT COUNT(*) FROM portal_chamados WHERE tipo = ? AND status != 'RESOLVIDO'", TIPO_MOTORISTA),
+        "motoristas_na_fila": q("SELECT COUNT(*) FROM portal_chamados WHERE tipo = ? AND status IN ('NA_FILA','AGUARDANDO_FL')", TIPO_MOTORISTA),
         "resolvidos": q("SELECT COUNT(*) FROM portal_chamados WHERE status = 'RESOLVIDO'"),
         "resolvidos_hoje": q("SELECT COUNT(*) FROM portal_chamados WHERE status = 'RESOLVIDO' AND resolvido_em >= ?", hoje),
         "assistente_resolveu_hoje": q("SELECT COUNT(*) FROM portal_chamados WHERE status = 'RESOLVIDO' AND resolvido_por = 'assistente' AND resolvido_em >= ?", hoje),
@@ -528,8 +663,8 @@ def contagens_fila(conn: sqlite3.Connection, atendente: str | None = None) -> di
 def nao_lidas_cliente(conn: sqlite3.Connection, cnpj: str) -> int:
     return conn.execute("""
         SELECT COUNT(*) FROM portal_chamados_mensagens m JOIN portal_chamados c ON c.id = m.chamado_id
-        WHERE c.cnpj_embarcador = ? AND m.origem IN ('equipe','assistente','sistema') AND m.lido_cliente = 0
-    """, (cnpj,)).fetchone()[0]
+        WHERE c.cnpj_embarcador = ? AND c.tipo = ? AND m.origem IN ('equipe','assistente','sistema') AND m.lido_cliente = 0
+    """, (cnpj, TIPO_CLIENTE)).fetchone()[0]
 
 
 # ── Mensagens ──────────────────────────────────────────────────────────────────
@@ -656,9 +791,10 @@ def mensagem_sistema(conn, chamado: dict, texto: str) -> dict:
 
 
 def entrar_na_fila(conn: sqlite3.Connection, chamado: dict, config: dict) -> dict:
-    """Cliente pediu atendente (ou o assistente encaminhou). Online -> NA_FILA;
-    fora do horário / sem atendente -> AGUARDANDO_FL (vira chamado por e-mail)."""
-    sit = situacao_atendimento(conn, config)
+    """Solicitante pediu atendente (ou o assistente encaminhou). Online ->
+    NA_FILA; fora do horário / sem atendente -> AGUARDANDO_FL (vira chamado
+    por e-mail). O horário considerado é o do perfil do chamado."""
+    sit = situacao_atendimento(conn, config, perfil=perfil_do_tipo(chamado.get("tipo")))
     if sit["estado"] == "online":
         posicao = conn.execute("SELECT COUNT(*) FROM portal_chamados WHERE status = 'NA_FILA'").fetchone()[0] + 1
         atualizar_chamado(conn, chamado["id"], status=STATUS_NA_FILA, fila_desde=_agora())
@@ -666,11 +802,12 @@ def entrar_na_fila(conn: sqlite3.Connection, chamado: dict, config: dict) -> dic
         mensagem_sistema(conn, chamado, f"Você está na fila ({posicao}º). {nomes or 'A equipe'} vai assumir em instantes.")
         return {"status": STATUS_NA_FILA, "posicao": posicao, "online": True}
     atualizar_chamado(conn, chamado["id"], status=STATUS_AGUARDANDO_FL, fila_desde=_agora())
+    onde = "aqui" if chamado.get("tipo") == TIPO_MOTORISTA else "aqui e no seu e-mail"
     if sit["estado"] == "ausente":
-        txt = "Nossos atendentes estão ocupados agora. Deixamos seu chamado registrado: a equipe responde aqui e no seu e-mail assim que possível."
+        txt = f"Nossos atendentes estão ocupados agora. Deixamos seu chamado registrado: a equipe responde {onde} assim que possível."
     else:
-        txt = (f"{sit['texto']}. Deixamos seu chamado registrado: a equipe responde aqui e no seu e-mail "
-               f"quando voltar ({texto_horario(config)}).")
+        txt = (f"{sit['texto']}. Deixamos seu chamado registrado: a equipe responde {onde} "
+               f"quando voltar ({sit['horario']}).")
     mensagem_sistema(conn, chamado, txt)
     return {"status": STATUS_AGUARDANDO_FL, "online": False}
 
@@ -703,7 +840,7 @@ def resolver(conn: sqlite3.Connection, chamado: dict, por: str, resolucao: str =
 def reabrir(conn: sqlite3.Connection, chamado: dict, config: dict, motivo: str = "") -> dict:
     """Nova mensagem num chamado resolvido reabre; vai pra fila se online,
     senão aguarda por e-mail."""
-    sit = situacao_atendimento(conn, config)
+    sit = situacao_atendimento(conn, config, perfil=perfil_do_tipo(chamado.get("tipo")))
     novo = STATUS_NA_FILA if sit["estado"] == "online" else STATUS_AGUARDANDO_FL
     atualizar_chamado(conn, chamado["id"], status=novo, resolvido_em=None, resolvido_por=None, fila_desde=_agora(),
                       historico_enviado_em=None)
@@ -796,9 +933,20 @@ def _bloco_mensagem(msg: dict, cor: str) -> str:
 
 
 def _rodape(chamado: dict, config: dict) -> str:
-    return (f"Fresh Log · Portal do cliente · chamado #{chamado['id']} · {url_base(config)}<br>"
+    onde = "App do motorista" if chamado.get("tipo") == TIPO_MOTORISTA else "Portal do cliente"
+    return (f"Fresh Log · {onde} · chamado #{chamado['id']} · {url_base(config)}<br>"
             f"<span style='color:#9CA3AF'>Mantenha o número do chamado no assunto ao responder. "
             f"<span style='font-family:Consolas,monospace'>[[CHAMADO:{chamado['id']}]]</span></span>")
+
+
+def _botao_ver(chamado: dict, config: dict, rotulo: str = "Ver o chamado no portal") -> str:
+    """Botão 'abrir no portal'. O motorista não tem portal: ele acompanha a
+    conversa na aba Ajuda do app, então o e-mail dele vai sem botão."""
+    if chamado.get("tipo") == TIPO_MOTORISTA:
+        return "<p style='margin:8px 0 2px;font-size:13px;color:#6B7280'>A conversa também está na aba <b>Ajuda</b> do app do motorista.</p>"
+    return (f"<p style='margin:8px 0 2px'><a href='{url_base(config)}/?chamado={chamado['id']}' "
+            f"style='display:inline-block;background:#0EA575;color:#fff;padding:12px 22px;border-radius:7px;"
+            f"text-decoration:none;font-weight:700'>{rotulo}</a></p>")
 
 
 def _anexos_email(chamado_id: int, msg: dict) -> list[tuple[Path, str]]:
@@ -832,26 +980,39 @@ def _mandar(conn, chamado: dict, msg: dict | None, destinatarios: list[str], ass
 
 
 def email_para_atendimento(conn, chamado: dict, msg: dict, config: dict, novo: bool = False) -> bool:
-    """Aviso pro atendimento (entregas@): chamado novo deixado fora do
-    horário, ou mensagem do cliente num chamado que ninguém está vendo."""
+    """Aviso pra equipe: chamado novo deixado fora do horário, ou mensagem do
+    solicitante num chamado que ninguém está vendo. Chamado de motorista vai
+    pra caixa da logística (chamados.email_logistica)."""
+    perfil = perfil_do_tipo(chamado.get("tipo"))
+    de_motorista = chamado.get("tipo") == TIPO_MOTORISTA
     titulo = ("deixou o chamado" if novo else "mandou uma mensagem no chamado")
     ctx = "" if not chamado.get("resumo_assistente") else \
         f"<tr><td style='padding:6px 0;color:#6B7280;vertical-align:top'>Triagem do assistente</td><td style='padding:6px 0'>{_html_texto(chamado['resumo_assistente'])}</td></tr>"
+    quem = "motorista" if de_motorista else "cliente"
+    onde = "app" if de_motorista else "portal"
+    linha_rota = ""
+    if de_motorista and chamado.get("rota_id"):
+        linha_rota = (f"<tr><td style='padding:6px 0;color:#6B7280'>Rota</td>"
+                      f"<td style='padding:6px 0'>#{chamado['rota_id']}</td></tr>")
     corpo = envelope_html(
-        f"<p style='margin:0 0 12px'><b>{html.escape(chamado.get('nome_cliente') or chamado['cnpj_embarcador'])}</b> {titulo} "
-        f"<b>#{chamado['id']}</b> pelo {'e-mail' if msg.get('canal') == CANAL_EMAIL else 'portal'}"
+        f"<p style='margin:0 0 12px'>O {quem} <b>{html.escape(chamado.get('solicitante') or '')}</b> {titulo} "
+        f"<b>#{chamado['id']}</b> pelo {'e-mail' if msg.get('canal') == CANAL_EMAIL else onde}"
         f"{' <b>fora do horário de atendimento</b>' if novo and chamado.get('origem') == 'chamado' else ''}.</p>"
         f"<table style='border-collapse:collapse;font-size:13px;width:100%'>"
         f"<tr><td style='padding:6px 0;color:#6B7280;width:150px'>Assunto</td><td style='padding:6px 0;font-weight:600'>{html.escape(chamado.get('assunto') or '(sem assunto)')}</td></tr>"
         f"<tr><td style='padding:6px 0;color:#6B7280'>Área</td><td style='padding:6px 0'>{html.escape(chamado.get('area_rotulo') or '-')}</td></tr>"
-        f"<tr><td style='padding:6px 0;color:#6B7280'>Pedido / NF</td><td style='padding:6px 0;font-family:Consolas,monospace'>{html.escape(chamado.get('pedido_ref') or '-')}</td></tr>"
+        f"<tr><td style='padding:6px 0;color:#6B7280'>{'Parada / pedido' if de_motorista else 'Pedido / NF'}</td><td style='padding:6px 0;font-family:Consolas,monospace'>{html.escape(chamado.get('pedido_ref') or '-')}</td></tr>"
+        f"{linha_rota}"
         f"<tr><td style='padding:6px 0;color:#6B7280'>Situação</td><td style='padding:6px 0'>{chamado['status_rotulo']}</td></tr>{ctx}</table>"
         f"<div style='margin:14px 0'>{_bloco_mensagem(msg, '#F5A623')}</div>"
         f"<p style='margin:8px 0 2px'><a href='{url_painel(config)}/atendimento?chamado={chamado['id']}' style='display:inline-block;background:#141428;color:#fff;padding:12px 22px;border-radius:7px;text-decoration:none;font-weight:700'>Abrir na tela de Atendimento</a></p>"
-        f"<div style='background:#E6FBF5;border-radius:8px;padding:12px 16px;font-size:13px;margin-top:14px'><b>Pra responder ao cliente, é só responder este e-mail.</b> "
-        f"O texto vai pro cliente e entra no chamado em alguns minutos. Anexos também vão. Ou responda pela tela de Atendimento do painel.</div>",
+        f"<div style='background:#E6FBF5;border-radius:8px;padding:12px 16px;font-size:13px;margin-top:14px'><b>Pra responder ao {quem}, é só responder este e-mail.</b> "
+        + (f"O texto aparece no app do motorista em alguns minutos." if de_motorista
+           else "O texto vai pro cliente e entra no chamado em alguns minutos. Anexos também vão.")
+        + " Ou responda pela tela de Atendimento do painel.</div>",
         rodape=_rodape(chamado, config), cor_acento="#F5A623")
-    return _mandar(conn, chamado, msg, emails_atendimento(config), _assunto_email(chamado) + f" · {chamado.get('nome_cliente') or ''}".rstrip(" ·"),
+    return _mandar(conn, chamado, msg, emails_atendimento(config, perfil),
+                   _assunto_email(chamado) + f" · {chamado.get('solicitante') or ''}".rstrip(" ·"),
                    corpo, config, anexos=_anexos_email(chamado["id"], msg))
 
 
@@ -862,9 +1023,10 @@ def email_confirmacao_cliente(conn, chamado: dict, msg: dict, emails: list[str],
         f"<p style='margin:0 0 12px'>Olá, <b>{html.escape(chamado.get('nome_cliente') or '')}</b>. Recebemos seu chamado "
         f"<b>#{chamado['id']} · {html.escape(chamado.get('assunto') or '')}</b>.</p>"
         f"<div style='margin:14px 0'>{_bloco_mensagem(msg, '#2A78D6')}</div>"
-        f"<p style='margin:0 0 12px;font-size:13.5px'>A equipe Fresh Log responde aqui por e-mail e no portal. Nosso horário: {html.escape(texto_horario(config))}. "
+        f"<p style='margin:0 0 12px;font-size:13.5px'>A equipe Fresh Log responde aqui por e-mail e no portal. Nosso horário: "
+        f"{html.escape(texto_horario(config, perfil_do_tipo(chamado.get('tipo'))))}. "
         f"Pra complementar, é só <b>responder este e-mail</b>.</p>"
-        f"<p style='margin:8px 0 2px'><a href='{url_base(config)}/?chamado={chamado['id']}' style='display:inline-block;background:#0EA575;color:#fff;padding:12px 22px;border-radius:7px;text-decoration:none;font-weight:700'>Ver o chamado no portal</a></p>",
+        + _botao_ver(chamado, config),
         rodape=_rodape(chamado, config))
     return _mandar(conn, chamado, None, emails, _assunto_email(chamado), corpo, config)
 
@@ -874,9 +1036,9 @@ def email_resposta_cliente(conn, chamado: dict, msg: dict, emails: list[str], co
         f"<p style='margin:0 0 12px'>Olá, <b>{html.escape(chamado.get('nome_cliente') or '')}</b>. A Fresh Log respondeu ao seu chamado "
         f"<b>#{chamado['id']} · {html.escape(chamado.get('assunto') or '')}</b>:</p>"
         f"<div style='margin:14px 0'>{_bloco_mensagem(msg, '#00C896')}</div>"
-        f"<p style='margin:0 0 12px;font-size:13.5px'>Pra continuar a conversa, <b>responda este e-mail</b> ou abra o chamado no portal. Fotos e PDF anexados também entram no chamado.</p>"
-        f"<p style='margin:8px 0 2px'><a href='{url_base(config)}/?chamado={chamado['id']}' style='display:inline-block;background:#0EA575;color:#fff;padding:12px 22px;border-radius:7px;text-decoration:none;font-weight:700'>Ver o chamado no portal</a></p>"
-        f"<p style='margin:12px 0 0;font-size:12.5px;color:#6B7280'>Quando o assunto estiver resolvido, marque o chamado como resolvido no portal. Uma nova mensagem reabre o chamado.</p>",
+        f"<p style='margin:0 0 12px;font-size:13.5px'>Pra continuar a conversa, <b>responda este e-mail</b>. Fotos e PDF anexados também entram no chamado.</p>"
+        + _botao_ver(chamado, config)
+        + f"<p style='margin:12px 0 0;font-size:12.5px;color:#6B7280'>Quando o assunto estiver resolvido, marque o chamado como resolvido. Uma nova mensagem reabre o chamado.</p>",
         rodape=_rodape(chamado, config))
     return _mandar(conn, chamado, msg, emails, _assunto_email(chamado, "Re: "), corpo, config,
                    anexos=_anexos_email(chamado["id"], msg))
@@ -915,8 +1077,8 @@ def email_historico(conn, chamado: dict, emails: list[str], config: dict) -> boo
         + (f"<tr><td style='padding:7px 12px;color:#6B7280'>Resolução</td><td style='padding:7px 12px'>{_html_texto(chamado['resolucao'])}</td></tr>" if chamado.get("resolucao") else "")
         + f"</table><div style='font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6B7280;margin:16px 0 4px'>Conversa</div>"
         f"<div style='border-bottom:1px solid #E5E7EB'>{''.join(linhas)}</div>"
-        f"<p style='margin:14px 0 0;font-size:13px'>Ficou algo pendente? <b>Responda este e-mail</b> e o chamado #{chamado['id']} reabre automaticamente — ou fale com a gente pelo chat do portal.</p>"
-        f"<p style='margin:12px 0 2px'><a href='{url_base(config)}/?chamado={chamado['id']}' style='display:inline-block;background:#0EA575;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:700'>Ver o chamado no portal</a></p>",
+        f"<p style='margin:14px 0 0;font-size:13px'>Ficou algo pendente? <b>Responda este e-mail</b> e o chamado #{chamado['id']} reabre automaticamente — ou fale com a gente pelo chat.</p>"
+        + _botao_ver(chamado, config),
         rodape=_rodape(chamado, config))
     ok = _mandar(conn, chamado, None, emails, f"[Chamado #{chamado['id']}] Histórico do atendimento · {chamado.get('assunto') or ''}".rstrip(" ·"),
                  corpo, config)
@@ -929,6 +1091,27 @@ def emails_do_cliente(conn: sqlite3.Connection, cnpj: str) -> list[str]:
     import auth_cliente
     emb = auth_cliente.buscar_embarcador(conn, cnpj)
     return list(emb["emails"]) if emb else []
+
+
+def emails_do_motorista(conn: sqlite3.Connection, cpf: str) -> list[str]:
+    """E-mail do motorista, quando houver (motoristas.email é opcional --
+    a maioria só usa o app). Sem e-mail, a conversa vive só no app."""
+    if not cpf:
+        return []
+    try:
+        r = conn.execute("SELECT email FROM motoristas WHERE cpf = ?", (cpf,)).fetchone()
+    except sqlite3.OperationalError:
+        return []
+    email = (r["email"] or "").strip() if r else ""
+    return [email] if email and "@" in email else []
+
+
+def emails_do_solicitante(conn: sqlite3.Connection, chamado: dict) -> list[str]:
+    """Pra quem vai a resposta da equipe por e-mail: o embarcador ou o
+    motorista do chamado."""
+    if chamado.get("tipo") == TIPO_MOTORISTA:
+        return emails_do_motorista(conn, chamado.get("motorista_cpf") or "")
+    return emails_do_cliente(conn, chamado["cnpj_embarcador"])
 
 
 # ── Leitor IMAP ────────────────────────────────────────────────────────────────
@@ -957,16 +1140,18 @@ def _numero_chamado(assunto: str, corpo: str) -> int | None:
 
 
 def _classificar_remetente(conn, chamado: dict, remetente: str, config: dict) -> str | None:
-    """'cliente' se o e-mail é do cliente do chamado; 'equipe' se é da Fresh
-    Log; None = desconhecido (ignora, por segurança)."""
+    """'cliente' se o e-mail é de quem abriu o chamado (embarcador ou
+    motorista); 'equipe' se é da Fresh Log; None = desconhecido (ignora, por
+    segurança)."""
     remetente = (remetente or "").lower()
     if not remetente:
         return None
-    emails_cli = [e.lower() for e in emails_do_cliente(conn, chamado["cnpj_embarcador"])]
+    emails_cli = [e.lower() for e in emails_do_solicitante(conn, chamado)]
     if remetente in emails_cli:
         return ORIGEM_CLIENTE
     dominio = remetente.split("@")[-1]
-    internos = {e.lower() for e in emails_atendimento(config)}
+    internos = {e.lower() for e in emails_atendimento(config, perfil_do_tipo(chamado.get("tipo")))}
+    internos |= {e.lower() for e in emails_atendimento(config)}
     internos.add((cfg_email_chamados(config).get("remetente") or "").lower())
     internos.add(((config.get("email", {}) or {}).get("remetente") or "").lower())
     dominios_equipe = {d.lower() for d in (cfg_chamados(config).get("dominios_equipe") or ["freshlogbr.com", "freshhub.com.br"])}
@@ -1085,17 +1270,19 @@ def processar_emails(config: dict | None = None, dias: int | None = None) -> dic
             nome_remetente = parseaddr(decodificar_header(msg.get("From", "")))[0] or remetente
             try:
                 if origem == ORIGEM_CLIENTE:
-                    cliente = {"cnpj": chamado["cnpj_embarcador"], "nome": chamado.get("nome_cliente"), "sender_id": chamado.get("sender_id")}
-                    m, chamado, avisar = registrar_mensagem_cliente(conn, chamado, cliente, texto, anexos, config,
+                    solicitante = {"cnpj": chamado["cnpj_embarcador"], "nome": chamado.get("solicitante"),
+                                   "sender_id": chamado.get("sender_id"), "tipo": chamado.get("tipo")}
+                    m, chamado, avisar = registrar_mensagem_cliente(conn, chamado, solicitante, texto, anexos, config,
                                                                     canal=CANAL_EMAIL, message_id=message_id, email_remetente=remetente)
-                    alvo = [e for e in emails_atendimento(config) if e.lower() not in destinatarios_ja]
+                    alvo = [e for e in emails_atendimento(config, perfil_do_tipo(chamado.get("tipo")))
+                            if e.lower() not in destinatarios_ja]
                     if avisar and alvo:
                         email_para_atendimento(conn, chamado, m, config)
                 else:
                     m, chamado, mandar = registrar_mensagem_equipe(conn, chamado, remetente, nome_remetente.split("<")[0].strip(),
                                                                    texto, anexos, config, canal=CANAL_EMAIL,
                                                                    message_id=message_id, email_remetente=remetente)
-                    alvo = [e for e in emails_do_cliente(conn, chamado["cnpj_embarcador"]) if e.lower() not in destinatarios_ja]
+                    alvo = [e for e in emails_do_solicitante(conn, chamado) if e.lower() not in destinatarios_ja]
                     if mandar and alvo:
                         email_resposta_cliente(conn, chamado, m, alvo, config)
                 resultado["gravados"] += 1
@@ -1152,8 +1339,9 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "listar":
             for c in listar_fila(conn, "todos" if args.todos else "abertos"):
-                print(f"#{c['id']:<5} {c['status_rotulo']:<22} {c['quando']:<12} {c.get('nome_cliente') or c['cnpj_embarcador']:<28} "
-                      f"{c.get('area_rotulo') or '':<22} {c.get('assunto') or ''}")
+                print(f"#{c['id']:<5} {'motorista' if c['de_motorista'] else 'cliente':<10} {c['status_rotulo']:<22} "
+                      f"{c['quando']:<12} {(c.get('solicitante') or '')[:26]:<28} "
+                      f"{c.get('area_rotulo') or '':<24} {c.get('assunto') or ''}")
         elif args.cmd == "responder":
             ch = buscar_chamado(conn, args.id)
             if not ch:
@@ -1161,8 +1349,9 @@ def main(argv=None) -> int:
                 return 2
             m, ch, mandar = registrar_mensagem_equipe(conn, ch, "cli", args.nome, args.texto, [], config)
             if mandar:
-                ok = email_resposta_cliente(conn, ch, m, emails_do_cliente(conn, ch["cnpj_embarcador"]), config)
-                print("e-mail pro cliente:", "ok" if ok else "FALHOU")
+                alvo = emails_do_solicitante(conn, ch)
+                ok = email_resposta_cliente(conn, ch, m, alvo, config) if alvo else False
+                print("e-mail pro solicitante:", "ok" if ok else ("sem e-mail" if not alvo else "FALHOU"))
             print("gravado")
         elif args.cmd == "resolver":
             ch = buscar_chamado(conn, args.id)
@@ -1170,8 +1359,9 @@ def main(argv=None) -> int:
                 print("chamado não existe")
                 return 2
             ch = resolver(conn, ch, "cli")
-            ok = email_historico(conn, ch, emails_do_cliente(conn, ch["cnpj_embarcador"]), config)
-            print("resolvido; histórico:", "ok" if ok else "FALHOU")
+            alvo = emails_do_solicitante(conn, ch)
+            ok = email_historico(conn, ch, alvo, config) if alvo else False
+            print("resolvido; histórico:", "ok" if ok else ("sem e-mail" if not alvo else "FALHOU"))
         return 0
     finally:
         conn.close()

@@ -161,3 +161,77 @@ export type Extrato = {
 };
 
 export type Ajuste = { data: string; disponivel: boolean; motivo: string | null };
+
+// ── Atendimento (aba Ajuda) ────────────────────────────────────────────────
+// Chat do motorista com o assistente e com a logística. Mesmo chamado que a
+// equipe vê na tela /atendimento do painel (portal_cliente/chamados.py).
+
+export type StatusChamado = 'COM_ASSISTENTE' | 'NA_FILA' | 'EM_ATENDIMENTO' | 'AGUARDANDO_FL' | 'RESPONDIDO' | 'RESOLVIDO';
+
+export type OpcaoMensagem = {
+  rotulo: string;
+  valor?: string;
+  acao: 'chip' | 'atendente' | 'resolvido';
+  estilo?: 'principal' | 'linha';
+};
+
+export type AnexoChamado = { nome: string; arquivo: string; tamanho: number; tipo: string };
+
+export type MensagemChamado = {
+  id: number;
+  origem: 'cliente' | 'equipe' | 'assistente' | 'sistema';
+  autor: string | null;
+  canal: string;
+  texto: string;
+  anexos: AnexoChamado[];
+  opcoes: OpcaoMensagem[];
+  hora: string;
+  quando: string;
+};
+
+export type Chamado = {
+  id: number;
+  assunto: string | null;
+  area: string | null;
+  area_rotulo: string | null;
+  pedido_ref: string | null;
+  status: StatusChamado;
+  status_rotulo: string;
+  origem: string;
+  etapa_assistente: string | null;
+  atendente: string | null;
+  criado_em: string;
+  ultima_msg_em: string | null;
+  resolvido_em: string | null;
+  quando: string;
+  aberto: boolean;
+  nao_lidas?: number;
+  ultima_texto?: string | null;
+  ultima_origem_msg?: string | null;
+  rota_id: number | null;
+};
+
+export type SituacaoAtendimento = {
+  estado: 'online' | 'ausente' | 'almoco' | 'fechado';
+  texto: string;
+  dentro_horario: boolean;
+  volta_em: string;
+  horario: string;
+  atendentes_online: number;
+  nomes_online: string[];
+};
+
+export type EstadoAtendimento = {
+  situacao: SituacaoAtendimento;
+  ativo: { chamado: Chamado; mensagens: MensagemChamado[] } | null;
+  chamados: Chamado[];
+  nao_lidas: number;
+  areas: { valor: string; rotulo: string }[];
+  agora: string;
+};
+
+export type RespostaChamado = {
+  chamado: Chamado;
+  mensagens: MensagemChamado[];
+  situacao?: SituacaoAtendimento;
+};

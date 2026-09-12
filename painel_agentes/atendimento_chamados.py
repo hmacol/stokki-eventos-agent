@@ -49,7 +49,45 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
             ch.gravar_status_atendente(conn, _usuario(), _nome(), atual["status"])
         return ch.status_atendente(conn, _usuario())
 
+    def _contexto_motorista(conn, chamado: dict) -> dict:
+        """Painel lateral de um chamado aberto pelo motorista: quem é ele, a
+        rota de hoje com as paradas e o extrato curto -- o mesmo que o
+        assistente enxerga, pra equipe não precisar abrir outra tela."""
+        from nucleo import assistente_motorista
+        cpf = chamado.get("motorista_cpf") or ""
+        m = conn.execute("SELECT cpf, nome, telefone, email, agent_id, tipo_veiculo, perfil FROM motoristas WHERE cpf = ?",
+                         (cpf,)).fetchone()
+        motorista = dict(m) if m else {"cpf": cpf, "nome": chamado.get("nome_cliente"),
+                                       "agent_id": chamado.get("agent_id")}
+        ctx = assistente_motorista.contexto_motorista(motorista, _config())
+        outros = conn.execute("""
+            SELECT id, assunto, status, atualizado_em FROM portal_chamados
+            WHERE tipo = ? AND motorista_cpf = ? AND id != ? ORDER BY atualizado_em DESC LIMIT 6
+        """, (ch.TIPO_MOTORISTA, cpf, chamado["id"])).fetchall()
+        em30 = conn.execute("""
+            SELECT COUNT(*), SUM(status = 'RESOLVIDO') FROM portal_chamados
+            WHERE tipo = ? AND motorista_cpf = ? AND criado_em >= datetime('now', 'localtime', '-30 days')
+        """, (ch.TIPO_MOTORISTA, cpf)).fetchone()
+        pendentes = assistente_motorista.paradas_pendentes(ctx)
+        return {
+            "tipo": ch.TIPO_MOTORISTA,
+            "motorista": {"nome": motorista.get("nome"), "cpf": cpf, "telefone": motorista.get("telefone"),
+                          "email": motorista.get("email"), "agent_id": motorista.get("agent_id"),
+                          "tipo_veiculo": motorista.get("tipo_veiculo"), "perfil": motorista.get("perfil"),
+                          "chamados_30d": em30[0] or 0, "resolvidos_30d": em30[1] or 0},
+            "rota": ctx.get("rota"),
+            "paradas_pendentes": len(pendentes),
+            "parada": chamado.get("pedido_dados"),
+            "extrato": ctx.get("extrato"),
+            "tarifa": ctx.get("tarifa"),
+            "outros": [{"id": r["id"], "assunto": r["assunto"], "status": r["status"],
+                        "status_rotulo": ch.ROTULOS_STATUS.get(r["status"], r["status"]),
+                        "quando": ch.rotulo_quando(r["atualizado_em"])} for r in outros],
+        }
+
     def _contexto(conn, chamado: dict, config: dict) -> dict:
+        if chamado.get("tipo") == ch.TIPO_MOTORISTA:
+            return _contexto_motorista(conn, chamado)
         import auth_cliente
         emb = auth_cliente.buscar_embarcador(conn, chamado["cnpj_embarcador"]) or {}
         outros = conn.execute("""
@@ -78,6 +116,7 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
             except Exception as e:
                 logger.warning("contexto do chamado %s: %s", chamado["id"], e)
         return {
+            "tipo": ch.TIPO_CLIENTE,
             "cliente": {"nome": emb.get("nome") or chamado.get("nome_cliente"), "cnpj": auth_cliente.formatar_cnpj(chamado["cnpj_embarcador"]),
                         "emails": emb.get("emails") or [], "sender_id": chamado.get("sender_id"),
                         "chamados_30d": em30[0] or 0, "resolvidos_30d": em30[1] or 0, "kpis": kpis},
@@ -108,7 +147,8 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
                 "horario": ch.texto_horario(config),
                 "situacao": ch.situacao_atendimento(conn, config),
                 "contagens": ch.contagens_fila(conn, _usuario()),
-                "areas": ch.AREAS, "status_rotulos": ch.ROTULOS_STATUS,
+                "horario_logistica": ch.texto_horario(config, ch.PERFIL_LOGISTICA),
+                "areas": ch.AREAS, "areas_motorista": ch.AREAS_MOTORISTA, "status_rotulos": ch.ROTULOS_STATUS,
                 "chamado_inicial": request.args.get("chamado", type=int),
                 "url_portal": ch.url_base(config),
                 "respostas_rapidas": ch.cfg_chamados(config).get("respostas_rapidas") or [
@@ -116,6 +156,14 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
                     "O comprovante (canhoto) já está disponível no portal, na linha do pedido.",
                     "A reentrega vai na rota da tarde de hoje.",
                     "Pode me mandar uma foto ou a NF pra eu conferir?",
+                ],
+                "respostas_rapidas_motorista": ch.cfg_chamados(config).get("respostas_rapidas_motorista") or [
+                    "Já estou falando com o cliente, aguarda aí que te retorno.",
+                    "Pode dar o insucesso e seguir pra próxima parada.",
+                    "Aguarda 10 minutos no local, por favor.",
+                    "Pode voltar pro galpão com a mercadoria.",
+                    "Manda uma foto do local e da fachada, por favor.",
+                    "Segue a rota que eu resolvo essa parada com o cliente.",
                 ],
             }
         finally:
@@ -192,12 +240,14 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
                 return jsonify({"erro": str(e)}), 400
             email_ok = False
             if mandar:
-                emails = ch.emails_do_cliente(conn, chamado["cnpj_embarcador"])
+                emails = ch.emails_do_solicitante(conn, chamado)
                 if emails:
                     ch.em_segundo_plano(ch.email_resposta_cliente, chamado, m, emails, config)
                     email_ok = "enviando"
                 else:
-                    email_ok = "sem_email"
+                    # Motorista quase nunca tem e-mail: a resposta aparece na
+                    # aba Ajuda do app dele, não é erro.
+                    email_ok = "so_app" if chamado.get("tipo") == ch.TIPO_MOTORISTA else "sem_email"
             logger.info("chamado %s: resposta de %s (e-mail=%s)", chamado_id, _nome(), email_ok)
             return jsonify({**_payload(conn, chamado, ultima), "email_enviado": email_ok})
         finally:
@@ -239,7 +289,7 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
 
         def fn(conn, c):
             c = ch.resolver(conn, c, _nome(), corpo.get("resolucao") or "")
-            emails = ch.emails_do_cliente(conn, c["cnpj_embarcador"])
+            emails = ch.emails_do_solicitante(conn, c)
             if emails:
                 ch.em_segundo_plano(ch.email_historico, c, emails, config)
             logger.info("chamado %s resolvido por %s; histórico pra %s", c["id"], _nome(), emails)

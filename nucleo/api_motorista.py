@@ -486,6 +486,19 @@ def criar_app(config: dict | None = None) -> Flask:
             ex["tarifa"] = ex["tarifa"].como_dict()
         return jsonify(ex)
 
+    # ── atendimento (aba Ajuda do app) ───────────────────────────────────────
+    # Chat do motorista com o assistente e com a logística. Cai na mesma fila
+    # da tela /atendimento do painel (aba "Motoristas"). Módulo separado:
+    # nucleo/chamados_motorista.py. Best-effort no registro -- se o
+    # atendimento não estiver disponível (dependência faltando), o resto da
+    # API do motorista continua no ar.
+    try:
+        from nucleo import chamados_motorista
+        chamados_motorista.registrar(app, requer_motorista=requer_motorista,
+                                     carregar_config=lambda: app.config["CONFIG_PROJETO"])
+    except Exception as e:
+        logger.exception("atendimento do motorista não registrado: %s", e)
+
     return app
 
 

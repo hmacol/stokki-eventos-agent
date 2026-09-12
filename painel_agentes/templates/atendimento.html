@@ -87,12 +87,14 @@
   .mono { font-family: 'Cascadia Code', Consolas, monospace; }
   .aviso-topo { display: none; align-items: center; gap: 8px; font-size: 12px; padding: 8px 12px; border-radius: 8px; background: var(--rodando-bg); color: var(--rodando-texto); border: 1px solid var(--rodando-borda); }
   .aviso-topo.mostrar { display: flex; }
+  /* Chamado que veio do app do motorista (logística) */
+  .tag-mot { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 100px; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; background: var(--rodando-bg); color: var(--rodando-texto); }
 </style>
 {% endblock %}
 
 {% block conteudo %}
 <div class="topo">
-  <div><h1>Atendimento</h1><div class="sub">Chat do portal do cliente e chamados por e-mail, numa fila só.</div></div>
+  <div><h1>Atendimento</h1><div class="sub">Clientes (portal e e-mail) e motoristas (app), numa fila só.</div></div>
   <div style="display:flex; align-items:center; gap:10px; margin-left:12px; flex-wrap:wrap;">
     <span class="rot">Meu status</span>
     <div class="seg" id="seg-status">
@@ -144,6 +146,8 @@
   const ICO_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
   const ICO_MAIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>';
   const ICO_BOT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:13px;height:13px"><rect x="3" y="8" width="18" height="12" rx="3"></rect><circle cx="9" cy="14" r="1.5"></circle><circle cx="15" cy="14" r="1.5"></circle><line x1="12" y1="4" x2="12" y2="8"></line></svg>';
+  // Volante: marca, na fila, o chamado que veio do app do motorista.
+  const ICO_VOLANTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:13px;height:13px;flex:none;color:var(--rodando-texto)"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3"></circle><line x1="12" y1="3" x2="12" y2="9"></line><line x1="4.3" y1="16.5" x2="9.4" y2="13.5"></line><line x1="19.7" y1="16.5" x2="14.6" y2="13.5"></line></svg>';
   const st = { aba: 'fila', fila: [], contagens: BOOT.contagens, meuStatus: BOOT.status, nome: BOOT.nome, chamado: null, mensagens: [], contexto: null,
                ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao };
 
@@ -159,9 +163,10 @@
   function renderTopo() {
     document.querySelectorAll('#seg-status button').forEach(b => { b.className = (b.dataset.st === st.meuStatus ? 'ativo ' + st.meuStatus : ''); });
     $('nome-atd').value = st.nome || '';
-    $('horario-txt').textContent = `Horário divulgado ao cliente: ${BOOT.horario} · fora disso o portal sugere deixar chamado`;
+    $('horario-txt').textContent = `Cliente: ${BOOT.horario} · Motoristas: ${BOOT.horario_logistica}`;
     const c = st.contagens || {};
     $('kpis').innerHTML = `<span class="chip-kpi"><b>${c.na_fila || 0}</b> na fila</span><span class="chip-kpi"><b>${c.em_atendimento || 0}</b> em atendimento</span>` +
+      `<span class="chip-kpi"><b>${c.motoristas || 0}</b> de motorista</span>` +
       `<span class="chip-kpi"><b>${c.email || 0}</b> por e-mail</span><span class="chip-kpi">assistente resolveu <b>${c.assistente_resolveu_hoje || 0}</b> hoje</span>`;
     const av = $('aviso-topo');
     if (st.meuStatus !== 'ONLINE') { av.textContent = st.meuStatus === 'ALMOCO' ? 'Você está em almoço: o portal mostra o cliente como fora do atendimento e sugere deixar chamado.' : 'Você está offline: novas conversas viram chamado por e-mail até alguém ficar online.'; av.classList.add('mostrar'); }
@@ -188,17 +193,17 @@
   }
   function renderFila() {
     const c = st.contagens || {};
-    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos]];
+    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos]];
     $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
     const q = st.busca.trim().toLowerCase();
     let lista = st.fila;
-    if (q) lista = lista.filter(x => [x.id, x.nome_cliente, x.assunto, x.pedido_ref, x.cnpj_embarcador].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(x => [x.id, x.solicitante, x.assunto, x.pedido_ref, x.cnpj_embarcador].join(' ').toLowerCase().includes(q));
     $('fila').innerHTML = lista.length ? lista.map(x => `
       <div class="item ${st.chamado && st.chamado.id === x.id ? 'ativo' : ''} ${x.nao_lidas ? 'nl' : ''}" data-id="${x.id}"><span class="pt"></span><div class="c">
-        <div class="l1"><b>${esc(x.nome_cliente || x.cnpj_embarcador)}</b><span class="q">${x.origem === 'chat' ? ICO_CHAT : ICO_MAIL}${esc(x.status === 'NA_FILA' ? 'esperando ' + (x.espera || '') : x.quando)}</span></div>
+        <div class="l1">${x.de_motorista ? ICO_VOLANTE : ''}<b>${esc(x.solicitante)}</b><span class="q">${x.origem === 'chat' ? ICO_CHAT : ICO_MAIL}${esc(x.status === 'NA_FILA' ? 'esperando ' + (x.espera || '') : x.quando)}</span></div>
         <div class="l2">#${x.id} · ${esc(x.assunto || x.area_rotulo || 'Conversa com o assistente')}</div>
         <div class="l3">${esc(x.resumo_assistente ? 'Assistente: ' + x.resumo_assistente : previa(x))}</div>
-        <div class="l4"><span class="pill ${x.status}"><i></i>${esc(x.status_rotulo)}</span><span>${esc(x.area_rotulo || '')}</span>${x.atendente ? `<span>· ${esc(x.atendente)}</span>` : ''}</div>
+        <div class="l4"><span class="pill ${x.status}"><i></i>${esc(x.status_rotulo)}</span>${x.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(x.area_rotulo || '')}</span>${x.atendente ? `<span>· ${esc(x.atendente)}</span>` : ''}</div>
       </div></div>`).join('') : '<div class="vazio">Nada por aqui.</div>';
   }
   function previa(x) { const quem = x.ultima_origem_msg === 'cliente' ? 'Cliente: ' : (x.ultima_origem_msg === 'equipe' ? 'Fresh Log: ' : ''); return quem + (x.ultima_texto || '').replace(/\s+/g, ' '); }
@@ -228,10 +233,16 @@
     agendarConv();
   }
   function agendarConv() { clearTimeout(st.timerConv); if (st.chamado) st.timerConv = setTimeout(pollConv, st.chamado.status === 'EM_ATENDIMENTO' || st.chamado.status === 'NA_FILA' ? 3000 : 10000); }
-  function notaPe(clienteOnline) {
-    const c = st.chamado; const mail = (st.contexto && st.contexto.cliente.emails[0]) || 'o e-mail do cliente';
+  function notaPe(solicitanteOnline) {
+    const c = st.chamado;
+    if (c.de_motorista) {
+      const mail = (st.contexto && st.contexto.motorista && st.contexto.motorista.email) || '';
+      if (c.status === 'RESOLVIDO') return 'Chamado resolvido. Responder aqui reabre o chamado e o motorista vê de novo no app.';
+      return 'A resposta aparece na aba Ajuda do app do motorista.' + (mail ? ` Ele também recebe em ${mail}.` : ' Ele não tem e-mail cadastrado, então o app é o único canal.');
+    }
+    const mail = (st.contexto && st.contexto.cliente && st.contexto.cliente.emails[0]) || 'o e-mail do cliente';
     if (c.status === 'RESOLVIDO') return 'Chamado resolvido. Responder aqui reabre o chamado e avisa o cliente por e-mail.';
-    if (c.status === 'EM_ATENDIMENTO' && clienteOnline) return 'Cliente está com o chat aberto agora. Se ele fechar o portal, a resposta vai pro e-mail dele e fica no chamado.';
+    if (c.status === 'EM_ATENDIMENTO' && solicitanteOnline) return 'Cliente está com o chat aberto agora. Se ele fechar o portal, a resposta vai pro e-mail dele e fica no chamado.';
     return `Cliente não está no chat: a resposta vai pra ${mail} e fica no chamado.`;
   }
   function renderConversa() {
@@ -247,14 +258,15 @@
     }
     $('conv-cab').innerHTML = `
       <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;"><span class="mono" style="font-size:12.5px;color:var(--texto-suave);font-weight:600">#${c.id}</span><h2>${esc(c.assunto || c.area_rotulo || 'Conversa com o assistente')}</h2><span class="pill ${c.status}"><i></i>${esc(c.status_rotulo)}</span></div>
-      <div class="meta"><span><b style="color:var(--texto)">${esc(c.nome_cliente || c.cnpj_embarcador)}</b></span><span>${esc(c.area_rotulo || '')}</span>${c.pedido_ref ? `<span>Pedido <b class="mono" style="color:var(--texto)">${esc(c.pedido_ref)}</b></span>` : ''}<span>Aberto ${esc(c.quando)} pelo ${c.origem === 'chat' ? 'chat' : (c.origem === 'email' ? 'e-mail' : 'portal')}</span>${c.atendente ? `<span>Com ${esc(c.atendente)}${c.assumido_em ? ' desde ' + c.assumido_em.slice(11, 16) : ''}</span>` : ''}<span class="acoes">${acoes}</span></div>`;
+      <div class="meta"><span>${c.de_motorista ? ICO_VOLANTE + ' ' : ''}<b style="color:var(--texto)">${esc(c.solicitante)}</b></span>${c.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(c.area_rotulo || '')}</span>${c.pedido_ref ? `<span>${c.de_motorista ? 'Parada' : 'Pedido'} <b class="mono" style="color:var(--texto)">${esc(c.pedido_ref)}</b></span>` : ''}<span>Aberto ${esc(c.quando)} pelo ${c.origem === 'chat' ? (c.de_motorista ? 'app' : 'chat') : (c.origem === 'email' ? 'e-mail' : 'portal')}</span>${c.atendente ? `<span>Com ${esc(c.atendente)}${c.assumido_em ? ' desde ' + c.assumido_em.slice(11, 16) : ''}</span>` : ''}<span class="acoes">${acoes}</span></div>`;
     const partes = [];
     if (c.resumo_assistente) partes.push(`<div class="resumo"><div class="t">${ICO_BOT}<span>Resumo do assistente</span></div><div><span style="color:var(--texto-suave)">Área:</span> <b>${esc(c.area_rotulo || '-')}</b> &nbsp;·&nbsp; <span style="color:var(--texto-suave)">Pedido:</span> <b class="mono">${esc(c.pedido_ref || '-')}</b></div><div>${esc(c.resumo_assistente)}</div></div>`);
     for (const m of st.mensagens) partes.push(bolha(m));
     $('conv-corpo').innerHTML = partes.join('');
     $('conv-corpo').scrollTop = $('conv-corpo').scrollHeight;
-    $('macros').innerHTML = `<span class="rot" style="font-size:10.5px">Respostas rápidas</span>` + BOOT.respostas_rapidas.map(r => `<button type="button" class="macro" data-macro="${esc(r)}">${esc(r.length > 38 ? r.slice(0, 36) + '…' : r)}</button>`).join('');
-    $('texto').placeholder = `Responder a ${c.nome_cliente || 'cliente'}…`;
+    const macros = c.de_motorista ? BOOT.respostas_rapidas_motorista : BOOT.respostas_rapidas;
+    $('macros').innerHTML = `<span class="rot" style="font-size:10.5px">Respostas rápidas</span>` + macros.map(r => `<button type="button" class="macro" data-macro="${esc(r)}">${esc(r.length > 38 ? r.slice(0, 36) + '…' : r)}</button>`).join('');
+    $('texto').placeholder = `Responder a ${c.solicitante || (c.de_motorista ? 'motorista' : 'cliente')}…`;
     $('nota-pe').textContent = notaPe(false);
     renderPendentes();
   }
@@ -264,7 +276,7 @@
     if (m.origem === 'sistema') return `<div class="sistema">${esc(m.texto)} · ${esc(m.hora)}</div>`;
     if (m.origem === 'equipe') return `<div class="msg eu"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
     if (m.origem === 'assistente') return `<div class="msg bot"><div class="bolha">${esc(m.texto)}</div><div class="meta-msg">Assistente · ${esc(m.hora)}</div></div>`;
-    const quem = (m.autor && m.autor !== st.chamado.nome_cliente) ? `${esc(m.autor)} · ${esc(st.chamado.nome_cliente || '')}` : esc(st.chamado.nome_cliente || m.autor || 'Cliente');
+    const quem = (m.autor && m.autor !== st.chamado.solicitante) ? `${esc(m.autor)} · ${esc(st.chamado.solicitante || '')}` : esc(st.chamado.solicitante || m.autor || 'Cliente');
     return `<div class="msg"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
   }
   function renderPendentes() { const el = $('pendentes'); el.classList.toggle('oculto', !st.arquivos.length); el.innerHTML = st.arquivos.map((f, i) => `<span>${esc(f.name)}<b data-rm="${i}">×</b></span>`).join(''); }
@@ -281,7 +293,8 @@
       $('texto').value = ''; $('texto').style.height = 'auto'; st.arquivos = []; $('arquivos').value = '';
       renderConversa(); carregarFila();
       if (j.email_enviado === 'sem_email') $('nota-pe').textContent = 'Gravado no chamado, mas o cliente não tem e-mail cadastrado (tabela interno).';
-      else if (j.email_enviado === 'enviando') $('nota-pe').textContent = 'Gravado no chamado e enviado por e-mail pro cliente.';
+      else if (j.email_enviado === 'so_app') $('nota-pe').textContent = 'Enviado: aparece na aba Ajuda do app do motorista.';
+      else if (j.email_enviado === 'enviando') $('nota-pe').textContent = 'Gravado no chamado e enviado por e-mail.';
     } catch (e) { alert(e.message); }
     st.enviando = false; $('enviar').disabled = false;
   }
@@ -306,10 +319,53 @@
   $('pendentes').addEventListener('click', e => { const b = e.target.closest('[data-rm]'); if (b) { st.arquivos.splice(Number(b.dataset.rm), 1); renderPendentes(); } });
 
   // ── lateral ───────────────────────────────────────────────────────────────
+  // Contexto de um chamado do app do motorista: quem é ele, a rota de hoje,
+  // a parada em foco e o quanto já rendeu -- o mesmo que o assistente viu.
+  function renderLateralMotorista(cx, kv) {
+    const m = cx.motorista, r = cx.rota, p = cx.parada, e = cx.extrato;
+    const real = v => v == null ? '—' : 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+    let html = `<div class="card"><span class="rot">Motorista</span><div style="font-size:14px;font-weight:700">${esc(m.nome || '—')}</div>` +
+      kv('CPF', esc(m.cpf || '—')) + kv('Telefone', m.telefone ? `<a href="tel:${esc(m.telefone)}">${esc(m.telefone)}</a>` : '—') +
+      kv('Veículo', esc(m.tipo_veiculo || 'Fiorino (padrão)')) + kv('Agente na VUUPT', esc(m.agent_id || '—')) +
+      kv('E-mail', esc(m.email || 'sem e-mail (só app)')) +
+      kv('Chamados em 30 dias', `${m.chamados_30d} · ${m.resolvidos_30d} resolvidos`) +
+      (m.perfil === 'TESTE' ? '<div class="nota">Usuário de TESTE.</div>' : '') + `</div>`;
+    if (r) {
+      html += `<div class="card"><span class="rot">Rota de hoje</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">` +
+        `<span class="mono" style="font-weight:700;font-size:14px">#${r.id}</span><span class="pill ${r.status === 'EM_ROTA' ? 'EM_ATENDIMENTO' : 'RESPONDIDO'}"><i></i>${esc(r.status)}</span></div>` +
+        kv('Nome', esc(r.nome || '—')) + kv('Saída', esc((r.start_at || '').slice(11, 16) || '—')) +
+        kv('Progresso', `${r.entregues || 0} de ${r.total_paradas || 0} · ${cx.paradas_pendentes} pendente(s)`) +
+        (r.insucessos ? kv('Insucessos', r.insucessos) : '') +
+        kv('Km', `${r.km_real != null ? r.km_real + ' km reais' : (r.km_estimado != null ? Number(r.km_estimado).toFixed(0) + ' km estimados' : '—')}`) +
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><a class="botao-linha" href="${BASE}/torre" target="_blank" rel="noopener">Abrir a Torre</a></div></div>`;
+    } else {
+      html += `<div class="card"><span class="rot">Rota de hoje</span><div class="nota">Nenhuma rota do app pra hoje. Se a rota dele está na VUUPT, ele opera por lá.</div></div>`;
+    }
+    if (p) {
+      html += `<div class="card"><span class="rot">Parada citada</span><div style="font-weight:700">${esc(p.ordem != null ? p.ordem + '. ' : '')}${esc(p.destinatario_nome || p.codigo || '')}</div>` +
+        (p.codigo ? kv('Pedido', `<span class="mono">${esc(p.codigo)}</span>`) : '') + (p.endereco ? kv('Endereço', esc(p.endereco)) : '') +
+        (p.situacao ? kv('Situação', esc(p.situacao)) : '') + (p.volume_caixas ? kv('Caixas', esc(p.volume_caixas)) : '') +
+        (p.janela_inicio ? kv('Janela', `${esc(p.janela_inicio)}–${esc(p.janela_fim || '')}`) : '') +
+        (p.motivo_texto ? kv('Motivo', esc(p.motivo_texto)) : '') + (p.tentativas ? kv('Tentativas', esc(p.tentativas)) : '') + `</div>`;
+    } else if (st.chamado.pedido_ref) {
+      html += `<div class="card"><span class="rot">Parada citada</span><div class="mono" style="font-weight:700">${esc(st.chamado.pedido_ref)}</div><div class="nota">Não achei essa parada na rota de hoje dele.</div></div>`;
+    }
+    if (e) {
+      html += `<div class="card"><span class="rot">Pagamento (${esc(e.periodo)})</span>` + kv('Rotas', e.rotas) + kv('Total', real(e.total)) +
+        (e.total_pedagio ? kv('Pedágio aprovado', real(e.total_pedagio)) : '') +
+        (e.pedagio_pendente ? kv('Pedágio pendente', `<b style="color:var(--rodando-texto)">${real(e.pedagio_pendente)}</b>`) : '') +
+        (cx.tarifa ? kv('Tarifa', `${real(cx.tarifa.valor_base)} + ${cx.tarifa.km_franquia} km`) : '') +
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><a class="botao-linha" href="${BASE}/financeiro/pedagios" target="_blank" rel="noopener">Pedágios</a></div></div>`;
+    }
+    html += `<div class="card"><span class="rot">Outros chamados deste motorista</span>${cx.outros.length ? cx.outros.map(o => `<div class="kv" style="cursor:pointer" data-id="${o.id}"><span><span class="mono" style="color:var(--texto-suave)">#${o.id}</span> ${esc(o.assunto || '')}</span><span class="pill ${o.status}"><i></i>${esc(o.status_rotulo)}</span></div>`).join('') : '<div class="nota">Nenhum outro chamado.</div>'}</div>`;
+    $('lateral').innerHTML = html;
+  }
+
   function renderLateral() {
     const cx = st.contexto; if (!cx) return;
-    const cl = cx.cliente, p = cx.pedido, k = cl.kpis;
     const kv = (a, b) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+    if (cx.tipo === 'MOTORISTA') return renderLateralMotorista(cx, kv);
+    const cl = cx.cliente, p = cx.pedido, k = cl.kpis;
     let html = `<div class="card"><span class="rot">Cliente</span><div style="font-size:14px;font-weight:700">${esc(cl.nome)}</div>${kv('CNPJ', esc(cl.cnpj))}${kv('E-mail', esc(cl.emails.join(', ') || '—'))}${kv('Chamados em 30 dias', `${cl.chamados_30d} · ${cl.resolvidos_30d} resolvidos`)}${k ? kv('Pedidos hoje', `${k.total} · ${k.entregues} entregues`) : ''}</div>`;
     if (p) {
       html += `<div class="card"><span class="rot">Pedido citado</span><div style="display:flex;align-items:center;gap:8px"><span class="mono" style="font-weight:700;font-size:14px">${esc(p.codigo)}</span><span class="pill EM_ATENDIMENTO" style="background:var(--teste-bg);color:var(--teste-texto)"><i></i>${esc(p.situacao_rotulo || '')}</span></div>` +

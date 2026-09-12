@@ -131,7 +131,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, Checklist, Extrato, Motorista, Oferta, Pedagio, ResultadoValidacao, Rota } from './tipos';
+import type { Ajuste, Checklist, EstadoAtendimento, Extrato, Motorista, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -172,7 +172,7 @@ export const cancelarPedagio = (rotaId: number, pedagioId: number) =>
 // foto travada segurava as chegadas/entregas atrás dela. O uploader
 // nativo lê o arquivo direto do disco, sem timeout de JS, e devolve o
 // status HTTP como qualquer chamada.
-async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false): Promise<T> {
+async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false, campoArquivo = 'arquivo'): Promise<T> {
   const info = await FileSystem.getInfoAsync(uri).catch(() => ({ exists: false }));
   if (!info.exists) {
     // Foto sumiu do cache do aparelho: não adianta insistir (vira "recusado" na fila)
@@ -185,7 +185,7 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
     r = await FileSystem.uploadAsync(`${API_URL}${caminho}`, uri, {
       httpMethod: 'POST',
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: 'arquivo',
+      fieldName: campoArquivo,
       mimeType: ext === 'png' ? 'image/png' : 'image/jpeg',
       parameters: campos,
       headers: acesso ? { Authorization: `Bearer ${acesso}` } : {},
@@ -194,7 +194,7 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
     throw new ErroRede((e as Error).message || 'falha no envio da foto');
   }
   if (r.status === 401 && !repetiu) {
-    if (await tentarRenovar()) return enviarArquivo<T>(caminho, uri, campos, true);
+    if (await tentarRenovar()) return enviarArquivo<T>(caminho, uri, campos, true, campoArquivo);
     await limparTokens();
     ouvintesSessaoCaiu.forEach((f) => f());
   }
@@ -239,3 +239,20 @@ export async function validarFoto(
 export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string) {
   return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, uri, { valor: String(valor), uuid, capturado_em: capturadoEm });
 }
+
+// ── Atendimento (aba Ajuda) ────────────────────────────────────────────────
+// Texto vai em JSON; mensagem COM foto vai pelo uploader nativo (o FormData
+// do React Native não é confiável -- ver src/fila.ts).
+
+export const atendimentoEstado = (chamadoId?: number) =>
+  chamar<EstadoAtendimento>(`/atendimento/estado${chamadoId ? `?chamado=${chamadoId}` : ''}`);
+export const atendimentoNaoLidas = () => chamar<{ nao_lidas: number }>('/atendimento/nao-lidas');
+export const iniciarConversa = () => chamar<RespostaChamado>('/atendimento/conversas', { metodo: 'POST' });
+export const verChamado = (id: number, desde = 0) =>
+  chamar<RespostaChamado>(`/atendimento/chamados/${id}?desde=${desde}`);
+export const enviarMensagemChamado = (id: number, texto: string, chip?: string | null) =>
+  chamar<RespostaChamado>(`/atendimento/chamados/${id}/mensagens`, { metodo: 'POST', corpo: { texto, chip: chip ?? '' } });
+export const enviarFotoChamado = (id: number, uri: string, texto: string) =>
+  enviarArquivo<RespostaChamado>(`/atendimento/chamados/${id}/mensagens`, uri, { texto }, false, 'anexos');
+export const acaoChamado = (id: number, tipo: 'atendente' | 'resolvido') =>
+  chamar<RespostaChamado>(`/atendimento/chamados/${id}/acao`, { metodo: 'POST', corpo: { tipo } });
