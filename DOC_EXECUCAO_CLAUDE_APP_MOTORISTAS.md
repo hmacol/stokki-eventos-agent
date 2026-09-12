@@ -520,4 +520,15 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   pediu conferência de nitidez do canhoto e do recibo de pedágio, e que
   o canhoto **contenha obrigatoriamente o número da NF**; decidiu deixar
   **inativa** por enquanto ("não quero esse custo"), com Haiku 4.5 como
-  modelo e **um canhoto por NF**. Ver a seção 4.2.
+  modelo e **um canhoto por NF**. Ver a seção 4.2.- **12/09 — Chat do motorista com a logística (aba Ajuda): DEPLOYADO.**
+  Hugo: "uma sessão chat linkada com o nosso atendimento; será um
+  atendimento para logística". Reaproveita o atendimento do portal
+  (`portal_cliente/chamados.py`): o chamado ganhou `tipo` MOTORISTA e cai na
+  mesma tela `/atendimento`, aba "Motoristas", com a rota/parada/pagamento
+  do motorista na lateral. Assistente próprio
+  (`nucleo/assistente_motorista.py`) que conhece a rota dele e nunca
+  autoriza insucesso, volta, pagamento ou guincho; veículo/acidente vai
+  direto pra fila. Horário da logística seg-sáb 06h-19h
+  (`chamados.horario_logistica`). API em `nucleo/chamados_motorista.py`;
+  app em `app/(tabs)/ajuda.tsx`. Validado em produção com o usuário TESTE
+  (chamado #5 deixado aberto). **Falta publicar a OTA** do app.
