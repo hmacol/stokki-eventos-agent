@@ -331,6 +331,13 @@ def criar_app(config: dict | None = None) -> Flask:
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 
+    @app.post("/api/rotas/<int:rota_id>/pedagios/<int:pedagio_id>/cancelar")
+    @requer_motorista
+    def cancelar_pedagio(rota_id, pedagio_id):
+        """Motorista desiste de um pedágio que mandou por engano. Só enquanto
+        PENDENTE (409 se o painel já revisou). Devolve a lista atualizada."""
+        return jsonify({"pedagios": operacao.cancelar_pedagio(conn(), rota_id, pedagio_id, agent_id())})
+
     @app.post("/api/gps")
     @requer_motorista
     def gps():

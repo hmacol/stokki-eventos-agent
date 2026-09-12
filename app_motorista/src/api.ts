@@ -162,6 +162,9 @@ export const financeiro = (de: string, ate: string) => chamar<Extrato>(`/finance
 export const disponibilidade = (de: string, ate: string) => chamar<{ ajustes: Ajuste[] }>(`/disponibilidade?de=${de}&ate=${ate}`).then((r) => r.ajustes);
 export const definirDisponibilidade = (corpo: object) => chamar<{ dias: number; ajustes: Ajuste[] }>('/disponibilidade', { metodo: 'PUT', corpo });
 export const registrarPushToken = (token: string) => chamar<{ ok: boolean }>('/push-token', { metodo: 'POST', corpo: { token } });
+/** Desiste de um pedágio já enviado (só enquanto PENDENTE; 409 se o painel já revisou). */
+export const cancelarPedagio = (rotaId: number, pedagioId: number) =>
+  chamar<{ pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios/${pedagioId}/cancelar`, { metodo: 'POST' }).then((r) => r.pedagios);
 
 // Upload de foto (11/09): pelo uploader NATIVO do expo-file-system, não
 // pelo fetch + FormData do RN. Motivo: no teste do Hugo nenhuma foto

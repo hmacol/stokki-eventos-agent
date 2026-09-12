@@ -20,8 +20,8 @@ import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } fr
 import type { Parada, Rota, SituacaoParada } from '../../src/tipos';
 
 const FINAIS: SituacaoParada[] = ['ENTREGUE', 'PARCIAL', 'INSUCESSO', 'CANCELADA'];
-const PEDAGIO_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado' };
-const PEDAGIO_COR: Record<string, string> = { PENDENTE: cores.alerta, APROVADO: cores.sucesso, REJEITADO: cores.perigo };
+const PEDAGIO_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado', CANCELADO: 'cancelado por você' };
+const PEDAGIO_COR: Record<string, string> = { PENDENTE: cores.alerta, APROVADO: cores.sucesso, REJEITADO: cores.perigo, CANCELADO: cores.textoSuave };
 const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
 const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
 
@@ -176,6 +176,39 @@ export default function DetalheRota() {
     await carregar();
   };
 
+  // Cancelar um pedágio (errou o valor, foto errada, mandou 2x). Dois casos:
+  // ainda na fila de envio -> só tira da fila; já no servidor e PENDENTE ->
+  // pede pro servidor cancelar (precisa de sinal; aprovado/rejeitado não dá).
+  const cancelarPedagioNaFila = (uuid: string, valor: number) => {
+    Alert.alert('Cancelar este pedágio?', `R$ ${valor.toFixed(2).replace('.', ',')} ainda não foi enviado. Ele será descartado.`, [
+      { text: 'Voltar', style: 'cancel' },
+      { text: 'Cancelar pedágio', style: 'destructive', onPress: async () => {
+        await fila.descartarItem(uuid);
+        setPedagiosNaFila((l) => l.filter((f) => f.uuid !== uuid));
+        await carregar();
+      } },
+    ]);
+  };
+
+  const cancelarPedagioEnviado = (pedagioId: number, valor: number) => {
+    Alert.alert('Cancelar este pedágio?', `R$ ${valor.toFixed(2).replace('.', ',')} vai sair da fila de aprovação e não será reembolsado.`, [
+      { text: 'Voltar', style: 'cancel' },
+      { text: 'Cancelar pedágio', style: 'destructive', onPress: async () => {
+        setOcupado(true);
+        try {
+          const pedagios = await api.cancelarPedagio(rota.id, pedagioId);
+          setRota((r) => (r ? { ...r, pedagios } : r));
+          await carregar();
+        } catch (e) {
+          Alert.alert('Não deu', e instanceof api.ErroRede ? 'Sem conexão. Cancelar precisa de sinal -- tente de novo mais tarde.' : (e as Error).message);
+          await carregar();
+        } finally {
+          setOcupado(false);
+        }
+      } },
+    ]);
+  };
+
   /** O único controle do card, conforme o estado da parada. */
   const controleParada = (p: Parada) => {
     if (!operavel || !ehPendente(p)) return null;
@@ -236,18 +269,26 @@ export default function DetalheRota() {
           <Text style={s.secao}>Pedágios</Text>
           <Text style={s.sub}>Pagou pedágio nesta rota? Informe o valor e fotografe o recibo. O reembolso entra no extrato depois de aprovado.</Text>
           {(rota.pedagios ?? []).map((p) => (
-            <View key={p.id} style={s.pedagioLinha}>
-              <Text style={s.pedagioValor}>R$ {p.valor_informado.toFixed(2).replace('.', ',')}</Text>
+            <View key={p.id} style={[s.pedagioLinha, p.status === 'CANCELADO' && { opacity: 0.55 }]}>
+              <Text style={[s.pedagioValor, p.status === 'CANCELADO' && { textDecorationLine: 'line-through' }]}>R$ {p.valor_informado.toFixed(2).replace('.', ',')}</Text>
               <Text style={[s.pedagioStatus, { color: PEDAGIO_COR[p.status] }]}>
                 {PEDAGIO_ROTULO[p.status]}{p.status === 'APROVADO' && p.valor_aprovado !== null && p.valor_aprovado !== p.valor_informado ? ` (R$ ${p.valor_aprovado.toFixed(2).replace('.', ',')})` : ''}
               </Text>
-              {p.observacao_revisao ? <Text style={s.paradaMeta}>{p.observacao_revisao}</Text> : null}
+              {p.status === 'PENDENTE' ? (
+                <Pressable onPress={() => cancelarPedagioEnviado(p.id, p.valor_informado)} disabled={ocupado} hitSlop={8} style={s.pedagioCancelar}>
+                  <Text style={s.pedagioCancelarTexto}>✕ Cancelar</Text>
+                </Pressable>
+              ) : null}
+              {p.observacao_revisao && p.status !== 'CANCELADO' ? <Text style={s.paradaMeta}>{p.observacao_revisao}</Text> : null}
             </View>
           ))}
           {pedagiosNaFila.filter((f) => !(rota.pedagios ?? []).some((p) => p.uuid === f.uuid)).map((f) => (
             <View key={f.uuid} style={s.pedagioLinha}>
               <Text style={s.pedagioValor}>R$ {f.valor.toFixed(2).replace('.', ',')}</Text>
               <Text style={[s.pedagioStatus, { color: cores.textoSuave }]}>na fila de envio</Text>
+              <Pressable onPress={() => cancelarPedagioNaFila(f.uuid, f.valor)} hitSlop={8} style={s.pedagioCancelar}>
+                <Text style={s.pedagioCancelarTexto}>✕ Cancelar</Text>
+              </Pressable>
             </View>
           ))}
           {pedagioAberto ? (
@@ -316,6 +357,8 @@ const s = StyleSheet.create({
   pedagioLinha: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: cores.borda, marginTop: 8 },
   pedagioValor: { fontWeight: '800', color: cores.texto, fontSize: 15 },
   pedagioStatus: { fontWeight: '600', fontSize: 13 },
+  pedagioCancelar: { marginLeft: 'auto', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: cores.perigo },
+  pedagioCancelarTexto: { color: cores.perigo, fontWeight: '700', fontSize: 12 },
   fotoPedagio: { width: '100%', height: 180, borderRadius: 10, marginTop: 8, backgroundColor: cores.borda },
   paradaCab: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   ordem: { width: 32, height: 32, borderRadius: 16, backgroundColor: cores.primaria, alignItems: 'center', justifyContent: 'center' },

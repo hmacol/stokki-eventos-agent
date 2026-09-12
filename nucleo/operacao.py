@@ -176,6 +176,30 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
     return {"id": cur.lastrowid, "ja_registrado": False}
 
 
+def cancelar_pedagio(conn: sqlite3.Connection, rota_id: int, pedagio_id: int, agent_id: int) -> list[dict]:
+    """Motorista desiste de um pedágio que ele mesmo mandou (errou o valor,
+    foto errada, mandou duas vezes). Só enquanto PENDENTE: aprovado já está
+    no extrato e rejeitado já foi decidido pelo painel. Cancelar de novo é
+    idempotente. Devolve a lista de pedágios da rota."""
+    rota_do_motorista(conn, rota_id, agent_id)
+    row = conn.execute("SELECT * FROM nucleo_pedagios WHERE id = ? AND rota_id = ?", (pedagio_id, rota_id)).fetchone()
+    if not row or row["agent_id"] != agent_id:
+        raise OperacaoInvalida("Pedágio não encontrado.", 404)
+    if row["status"] == banco.PEDAGIO_CANCELADO:
+        return listar_pedagios(conn, rota_id)
+    if row["status"] != banco.PEDAGIO_PENDENTE:
+        raise OperacaoInvalida("Esse pedágio já foi revisado pelo escritório e não pode mais ser cancelado.", 409)
+    agora = banco.agora()
+    conn.execute("""
+        UPDATE nucleo_pedagios SET status = ?, valor_aprovado = NULL, revisado_em = ?, revisado_por = ?, observacao_revisao = ?
+        WHERE id = ?
+    """, (banco.PEDAGIO_CANCELADO, agora, "MOTORISTA", "Cancelado pelo motorista no app", pedagio_id))
+    registrar_evento(conn, "PEDAGIO_CANCELADO", banco.ORIGEM_APP, agora, rota_id=rota_id, agent_id=agent_id,
+                     dados={"pedagio_id": pedagio_id, "valor": row["valor_informado"]})
+    conn.commit()
+    return listar_pedagios(conn, rota_id)
+
+
 def revisar_pedagio(conn: sqlite3.Connection, pedagio_id: int, status: str, revisor: str,
                     valor_aprovado: float | None = None, observacao: str | None = None) -> dict:
     """Painel: aprova (com o valor que vale, por padrão o informado) ou
@@ -203,21 +227,68 @@ def revisar_pedagio(conn: sqlite3.Connection, pedagio_id: int, status: str, revi
     return dict(conn.execute("SELECT * FROM nucleo_pedagios WHERE id = ?", (pedagio_id,)).fetchone())
 
 
+def _filtro_pedagios_painel(status: str | None, data_inicio: str | None, data_fim: str | None,
+                            agent_id: int | None) -> tuple[str, list]:
+    """WHERE compartilhado entre a lista e as contagens das abas do painel,
+    pra que as duas sempre concordem com os mesmos filtros. As datas são
+    da ROTA (r.data_rota, ISO), não do envio -- é assim que o Hugo fecha
+    o extrato do motorista."""
+    clausulas, params = [], []
+    if status:
+        clausulas.append("p.status = ?")
+        params.append(status)
+    if data_inicio:
+        clausulas.append("r.data_rota >= ?")
+        params.append(data_inicio)
+    if data_fim:
+        clausulas.append("r.data_rota <= ?")
+        params.append(data_fim)
+    if agent_id is not None:
+        clausulas.append("p.agent_id = ?")
+        params.append(int(agent_id))
+    return (" WHERE " + " AND ".join(clausulas)) if clausulas else "", params
+
+
 def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.PEDAGIO_PENDENTE,
-                           limite: int = 300) -> list[dict]:
+                           limite: int = 300, data_inicio: str | None = None, data_fim: str | None = None,
+                           agent_id: int | None = None) -> list[dict]:
     """Fila de revisão do painel: pedágios (por padrão só PENDENTES) com
-    rota e motorista, mais recentes primeiro."""
-    sql = """
+    rota e motorista, mais recentes primeiro. Filtros opcionais por período
+    da rota (ISO, inclusive) e motorista (agent_id)."""
+    where, params = _filtro_pedagios_painel(status, data_inicio, data_fim, agent_id)
+    sql = f"""
         SELECT p.*, r.data_rota, r.nome AS rota_nome, r.motorista_nome, r.status AS rota_status
         FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
+        {where} ORDER BY r.data_rota DESC, p.id DESC LIMIT ?
     """
-    params: list = []
-    if status:
-        sql += " WHERE p.status = ?"
-        params.append(status)
-    sql += " ORDER BY p.id DESC LIMIT ?"
-    params.append(limite)
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    return [dict(r) for r in conn.execute(sql, params + [limite]).fetchall()]
+
+
+def contar_pedagios_painel(conn: sqlite3.Connection, data_inicio: str | None = None, data_fim: str | None = None,
+                           agent_id: int | None = None) -> dict[str, int]:
+    """Quantos pedágios por status dentro dos mesmos filtros da lista
+    (números das abas Pendentes/Aprovados/...)."""
+    where, params = _filtro_pedagios_painel(None, data_inicio, data_fim, agent_id)
+    sql = f"""
+        SELECT p.status, COUNT(*) FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
+        {where} GROUP BY p.status
+    """
+    return {r[0]: r[1] for r in conn.execute(sql, params).fetchall()}
+
+
+def motoristas_com_pedagio(conn: sqlite3.Connection) -> list[dict]:
+    """Opções do filtro de motorista do painel: só quem já mandou algum
+    pedágio, com o nome mais recente que apareceu na rota."""
+    rows = conn.execute("""
+        SELECT p.agent_id, r.motorista_nome
+        FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
+        WHERE p.agent_id IS NOT NULL
+        ORDER BY p.id DESC
+    """).fetchall()
+    vistos: dict[int, str] = {}
+    for r in rows:
+        vistos.setdefault(r["agent_id"], r["motorista_nome"] or f"Agente {r['agent_id']}")
+    return sorted(({"agent_id": k, "nome": v} for k, v in vistos.items()), key=lambda m: m["nome"].lower())
 
 
 def _atualizar_confirmacao_vuupt(conn: sqlite3.Connection, rota: sqlite3.Row, status: str, motivo: str | None):

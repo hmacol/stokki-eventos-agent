@@ -1634,7 +1634,8 @@ def pedagios():
     status = (request.args.get("status") or "PENDENTE").upper()
     if status == "TODOS":
         status_filtro = None
-    elif status in (nucleo_banco.PEDAGIO_PENDENTE, nucleo_banco.PEDAGIO_APROVADO, nucleo_banco.PEDAGIO_REJEITADO):
+    elif status in (nucleo_banco.PEDAGIO_PENDENTE, nucleo_banco.PEDAGIO_APROVADO, nucleo_banco.PEDAGIO_REJEITADO,
+                    nucleo_banco.PEDAGIO_CANCELADO):
         status_filtro = status
     else:
         status, status_filtro = "PENDENTE", nucleo_banco.PEDAGIO_PENDENTE

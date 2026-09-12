@@ -44,11 +44,12 @@ export type Parada = {
 
 // Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por recibo;
 // PENDENTE até o painel aprovar. Só o aprovado entra no extrato.
+// CANCELADO = o motorista desistiu do envio pelo app (só de PENDENTE).
 export type Pedagio = {
   id: number;
   uuid: string;
   valor_informado: number;
-  status: 'PENDENTE' | 'APROVADO' | 'REJEITADO';
+  status: 'PENDENTE' | 'APROVADO' | 'REJEITADO' | 'CANCELADO';
   valor_aprovado: number | null;
   capturado_em: string | null;
   enviado_em: string;

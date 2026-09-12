@@ -31,10 +31,10 @@
 <div class="cabecalho-pagina">
   <div>
     <h1>Pedágios dos motoristas</h1>
-    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista (com o valor aprovado).</p>
+    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista (com o valor aprovado). O motorista pode cancelar um envio pelo app enquanto ele estiver pendente.</p>
   </div>
   <div class="abas-pedagio">
-    {% for chave, rotulo in (("PENDENTE", "Pendentes"), ("APROVADO", "Aprovados"), ("REJEITADO", "Rejeitados"), ("TODOS", "Todos")) %}
+    {% for chave, rotulo in (("PENDENTE", "Pendentes"), ("APROVADO", "Aprovados"), ("REJEITADO", "Rejeitados"), ("CANCELADO", "Cancelados"), ("TODOS", "Todos")) %}
     <a href="{{ url_for('pedagios', status=chave) }}" class="{{ 'ativa' if status == chave else '' }}">{{ rotulo }}{% if chave != 'TODOS' %}<span class="n">{{ contagem.get(chave, 0) }}</span>{% endif %}</a>
     {% endfor %}
   </div>
@@ -61,6 +61,7 @@
       <td>
         {% if p.status == 'APROVADO' %}<span class="badge badge-sucesso">Aprovado</span> <span class="valor-mono">R$ {{ "%.2f"|format(p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado) | replace('.', ',') }}</span>
         {% elif p.status == 'REJEITADO' %}<span class="badge badge-erro">Rejeitado</span>
+        {% elif p.status == 'CANCELADO' %}<span class="badge" title="O motorista desistiu deste envio pelo app">Cancelado pelo motorista</span>
         {% else %}<span class="badge">Pendente</span>{% endif %}
         {% if p.revisado_por %}<div class="suave">{{ p.revisado_por }} · {{ (p.revisado_em or '')[:16] }}</div>{% endif %}
         {% if p.observacao_revisao %}<div class="suave">{{ p.observacao_revisao }}</div>{% endif %}

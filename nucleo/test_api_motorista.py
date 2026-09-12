@@ -247,6 +247,43 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual((fin["total"], fin["total_rotas"], fin["total_pedagio"], fin["pedagio_pendente"]), (562.0, 550.0, 12.0, 0.0))
         self.assertEqual(fin["por_dia"][0]["valor"], 562.0)
 
+    def test_motorista_cancela_pedagio_pendente(self):
+        h = self._auth()
+        rota_id = self._rota_app()
+        self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={}, headers=h)
+        self.cli.post(f"/api/rotas/{rota_id}/iniciar", json={}, headers=h)
+        for uuid in ("pc1", "pc2"):
+            r = self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h,
+                              data={"arquivo": (io.BytesIO(b"x"), "r.jpg"), "valor": "10", "uuid": uuid}, content_type="multipart/form-data")
+            self.assertEqual(r.status_code, 201, r.get_json())
+        ped = {p["uuid"]: p["id"] for p in self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()["pedagios"]}
+        fin = self.cli.get(f"/api/financeiro?de={date.today()}&ate={date.today()}", headers=h).get_json()
+        self.assertEqual(fin["pedagio_pendente"], 20.0)
+
+        # Cancela o 1º: vira CANCELADO, sai do pendente do extrato, idempotente
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios/{ped['pc1']}/cancelar", headers=h)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        por_uuid = {p["uuid"]: p for p in r.get_json()["pedagios"]}
+        self.assertEqual((por_uuid["pc1"]["status"], por_uuid["pc2"]["status"]), ("CANCELADO", "PENDENTE"))
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios/{ped['pc1']}/cancelar", headers=h)
+        self.assertEqual(r.status_code, 200)
+        fin = self.cli.get(f"/api/financeiro?de={date.today()}&ate={date.today()}", headers=h).get_json()
+        self.assertEqual((fin["pedagio_pendente"], fin["linhas"][0]["pedagios"]), (10.0, 1))
+
+        # Painel já aprovou o 2º -> não cancela mais (409); pedágio de outra rota -> 404
+        from nucleo import operacao
+        conn = banco.conectar()
+        operacao.revisar_pedagio(conn, ped["pc2"], "APROVADO", "hugo")
+        conn.close()
+        r = self.cli.post(f"/api/rotas/{rota_id}/pedagios/{ped['pc2']}/cancelar", headers=h)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("revisado", r.get_json()["erro"])
+        r = self.cli.post(f"/api/rotas/{rota_id + 1}/pedagios/{ped['pc2']}/cancelar", headers=h)
+        self.assertEqual(r.status_code, 404)
+        conn = banco.conectar()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM nucleo_eventos WHERE tipo = 'PEDAGIO_CANCELADO'").fetchone()[0], 1)
+        conn.close()
+
     def test_pedagio_so_em_rota_em_andamento_ou_concluida(self):
         h = self._auth()
         rota_id = self._rota_app()

@@ -65,6 +65,7 @@ PEDIDO_CANCELADO = "CANCELADO"
 PEDAGIO_PENDENTE = "PENDENTE"
 PEDAGIO_APROVADO = "APROVADO"
 PEDAGIO_REJEITADO = "REJEITADO"
+PEDAGIO_CANCELADO = "CANCELADO"   # o próprio motorista desistiu (só de PENDENTE); não entra no extrato
 
 # nucleo_eventos.origem
 ORIGEM_APP = "APP"
@@ -226,7 +227,7 @@ CREATE TABLE IF NOT EXISTS nucleo_pedagios (
     tamanho_bytes           INTEGER,
     capturado_em            TEXT,
     enviado_em              TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    status                  TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | REJEITADO
+    status                  TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | REJEITADO | CANCELADO (pelo motorista)
     valor_aprovado          REAL,                           -- o que entra no extrato (pode diferir do informado)
     revisado_em             TEXT,
     revisado_por            TEXT,                           -- usuário do painel

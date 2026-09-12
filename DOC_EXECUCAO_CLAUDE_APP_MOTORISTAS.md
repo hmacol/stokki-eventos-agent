@@ -401,6 +401,18 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   intocado. **Ícone é recurso nativo: não vai por OTA** — só aparece no
   celular depois de um novo `eas build --profile preview` (subir
   `android.versionCode`) e reinstalar o APK.
+- **12/09** — **Cancelar envio de pedágio** (pedido do Hugo): o motorista
+  pode desistir de um pedágio que mandou por engano. Dois casos no app
+  (seção Pedágios da rota, botão "✕ Cancelar" na linha): ainda **na fila
+  de envio** → só tira da fila (`fila.descartarItem`); já **no servidor e
+  PENDENTE** → `POST /api/rotas/{id}/pedagios/{pedagio_id}/cancelar`
+  (precisa de sinal), status vira `CANCELADO` (`revisado_por=MOTORISTA`,
+  evento `PEDAGIO_CANCELADO`), idempotente; APROVADO/REJEITADO devolve
+  409 (o painel já decidiu). Cancelado não conta como pendente no
+  extrato (`financeiro._pedagios_da_rota`) e aparece riscado no app.
+  Painel `/financeiro/pedagios` ganhou a aba "Cancelados" (o painel
+  ainda pode "Reabrir" um cancelado, se precisar). Teste
+  `test_motorista_cancela_pedagio_pendente`. Mudança do app vai por OTA.
 - **12/09 (madrugada)** — Checklist da parada (relato do Hugo no teste
   real): (1) **bug** — ao escolher vínculo "Outro" a validação cobrava
   "Descreva quem recebeu", mas o campo `vinculo_outro` nunca era

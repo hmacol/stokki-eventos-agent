@@ -43,6 +43,8 @@ def _pedagios_da_rota(conn: sqlite3.Connection, rota_id: int) -> dict:
     aprovado = pendente = rejeitado = 0.0
     n = 0
     for r in conn.execute("SELECT status, valor_informado, valor_aprovado FROM nucleo_pedagios WHERE rota_id = ?", (rota_id,)):
+        if r["status"] == banco.PEDAGIO_CANCELADO:
+            continue    # o motorista desistiu: não conta nem como pendente
         n += 1
         if r["status"] == banco.PEDAGIO_APROVADO:
             aprovado += float(r["valor_aprovado"] if r["valor_aprovado"] is not None else r["valor_informado"])
