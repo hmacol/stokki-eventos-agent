@@ -154,6 +154,32 @@ def registrar_validacao(conn: sqlite3.Connection, sha256: str, tipo: str, result
 
 # ── NF do pedido ───────────────────────────────────────────────────────────────
 
+_PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
+
+
+def codigos_base(codigo: str | None) -> list[str]:
+    """'#PS-36623-R2' -> ['PS-36623'].
+
+    O `codigo` da parada vem da VUUPT com '#' na frente e sufixo de
+    reentrega/recoleta ('-R1', '-C1', e empilhado '-R1-R1'), enquanto
+    `documentos_processados.codigo_pedido` guarda sempre o código BASE
+    sem '#'. Sem isso a NF nunca casa: medido na VPS em 12/09, só 3 de
+    1.017 paradas dos últimos 15 dias achavam a nota.
+
+    Extrai o PREFIXO em vez de tirar sufixo do fim (achado 20/08 do
+    fluxo irmão: regex ancorada em '$' só tira o ÚLTIMO sufixo e
+    devolve 'PS-36741-R1'), e quebra por vírgula porque o code da VUUPT
+    pode agrupar pedidos combinados. Mesma normalização de
+    painel_agentes/planejamento_rotas.py::_codigo_base."""
+    saida = []
+    for pedaco in (codigo or "").split(","):
+        m = _PADRAO_CODIGO_BASE.match(pedaco.strip().lstrip("#"))
+        base = m.group(0).upper() if m else pedaco.strip().lstrip("#").upper()
+        if base and base not in saida:
+            saida.append(base)
+    return saida
+
+
 def normalizar_nf(valor) -> str:
     """Só dígitos, sem zeros à esquerda: '000.012.345' == '12345'."""
     digitos = re.sub(r"\D", "", str(valor or ""))
@@ -173,20 +199,22 @@ def nfs_do_pedido(conn: sqlite3.Connection, codigo: str | None) -> list[str]:
     nota que não existe na entrega -- então só entra a NF que pertence a
     ESTE pedido e a mais nenhum.
     """
-    if not codigo:
+    bases = codigos_base(codigo)
+    if not bases:
         return []
     existe = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documentos_processados'").fetchone()
     if not existe:
         return []
+    marcadores = ",".join("?" for _ in bases)
     try:
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT DISTINCT d.numero_nf FROM documentos_processados d
-            WHERE d.codigo_pedido = ? AND d.tipo = 'Nota Fiscal'
+            WHERE UPPER(d.codigo_pedido) IN ({marcadores}) AND d.tipo = 'Nota Fiscal'
               AND d.numero_nf IS NOT NULL AND d.numero_nf != ''
               AND (SELECT COUNT(DISTINCT o.codigo_pedido) FROM documentos_processados o
                    WHERE o.numero_nf = d.numero_nf AND o.tipo = 'Nota Fiscal' AND o.codigo_pedido IS NOT NULL) = 1
             ORDER BY d.numero_nf
-        """, (codigo,)).fetchall()
+        """, bases).fetchall()
     except sqlite3.OperationalError:
         return []   # banco antigo sem a coluna numero_nf
     vistos, saida = set(), []

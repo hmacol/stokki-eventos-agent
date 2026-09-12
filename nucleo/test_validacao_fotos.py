@@ -242,6 +242,27 @@ class TestNfsDoPedido(unittest.TestCase):
         self.assertEqual(vf.nfs_do_pedido(self.conn, None), [])
         self.assertEqual(vf.nfs_do_pedido(self.conn, "PS-INEXISTENTE"), [])
 
+    def test_codigo_da_parada_vem_com_cerquilha_e_sufixo(self):
+        # Achado na VPS em 12/09: a parada traz '#PS-36623-R2' e o
+        # documento guarda 'PS-36623'. Sem normalizar, só 3 de 1.017
+        # paradas de 15 dias achavam a nota.
+        self._doc("h1", "PS-36623", "5482")
+        for codigo in ("#PS-36623", "PS-36623-R2", "#PS-36623-R1", "#PS-36623-R1-R1", "#PS-36623-C1", "ps-36623"):
+            self.assertEqual(vf.nfs_do_pedido(self.conn, codigo), ["5482"], codigo)
+
+    def test_code_agrupando_pedidos_combinados(self):
+        # O `code` da VUUPT pode juntar pedidos por vírgula.
+        self._doc("h1", "PS-36100", "11")
+        self._doc("h2", "PS-36200", "22")
+        self.assertEqual(sorted(vf.nfs_do_pedido(self.conn, "#PS-36100,#PS-36200-R1")), ["11", "22"])
+
+    def test_codigos_base(self):
+        self.assertEqual(vf.codigos_base("#PS-36623-R2"), ["PS-36623"])
+        self.assertEqual(vf.codigos_base("#PS-36100, #PS-36100-R1"), ["PS-36100"])   # dedupe
+        self.assertEqual(vf.codigos_base(None), [])
+        # Código que não é PS-NNNNN (Lalamove, teste) passa como veio.
+        self.assertEqual(vf.codigos_base("LALA-TESTE-1"), ["LALA-TESTE-1"])
+
 
 class TestApiValidacao(unittest.TestCase):
     def setUp(self):
