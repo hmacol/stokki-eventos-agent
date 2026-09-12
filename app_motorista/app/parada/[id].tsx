@@ -1,21 +1,21 @@
 // Resultado da parada (Hugo, 26/08): quatro ações, todas por ARRASTAR pra
 // direita -- Entregue / Entregue parcial / Não entregue / Reagendar. As
 // três de entrega perguntam "tem certeza?" antes de abrir o checklist
-// (checklist_modelo); fotos pela câmera, assinatura na tela, motivo do
+// (checklist_modelo); fotos pela câmera (várias por campo), motivo do
 // motivos_ocorrencia. Reagendar marca um horário de retorno pra mesma
 // entrega (a parada volta pra pendente). Tudo entra na fila offline.
+// Assinatura na tela foi desconsiderada pelo Hugo em 11/09 (o canhoto
+// fotografado já é a prova de entrega); src/assinatura.tsx fica sem uso.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { File, Paths } from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from '../../src/api';
 import * as fila from '../../src/fila';
 import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
-import { ModalAssinatura } from '../../src/assinatura';
 import { Deslizar } from '../../src/deslizar';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, hoje } from '../../src/tema';
@@ -68,29 +68,6 @@ async function carregarChecklist(): Promise<Checklist> {
   return cache ? (JSON.parse(cache) as Checklist) : CHECKLIST_PADRAO;
 }
 
-async function salvarBase64(dataUrl: string, nome: string): Promise<string> {
-  const base64 = dataUrl.split(',')[1] ?? dataUrl;
-  const arquivo = new File(Paths.cache, nome);
-  arquivo.write(base64ParaBytes(base64));
-  return arquivo.uri;
-}
-
-function base64ParaBytes(b64: string): Uint8Array {
-  const alfabeto = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const limpo = b64.replace(/[^A-Za-z0-9+/]/g, '');
-  const saida = new Uint8Array(Math.floor((limpo.length * 3) / 4));
-  let acumulado = 0, bits = 0, i = 0;
-  for (const ch of limpo) {
-    acumulado = (acumulado << 6) | alfabeto.indexOf(ch);
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      saida[i++] = (acumulado >> bits) & 0xff;
-    }
-  }
-  return saida.slice(0, i);
-}
-
 function horaMaisMinutos(min: number): string {
   const d = new Date(Date.now() + min * 60000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -105,10 +82,10 @@ export default function RegistroParada() {
   const [checklist, setChecklist] = useState<Checklist | null>(null);
   const [fluxo, setFluxo] = useState<Fluxo | null>(null);
   const [respostas, setRespostas] = useState<Record<string, string>>({});
-  const [fotos, setFotos] = useState<Record<string, string>>({});
-  const [assinatura, setAssinatura] = useState<string | null>(null);
+  // Várias fotos por campo (canhoto de frente e verso, mais de um
+  // comprovante...): cada uma vira um COMPROVANTE separado na fila.
+  const [fotos, setFotos] = useState<Record<string, string[]>>({});
   const [motivoId, setMotivoId] = useState<number | null>(null);
-  const [assinando, setAssinando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   // Reagendar
   const [horaRetorno, setHoraRetorno] = useState<string | 'FIM' | null>(null);
@@ -138,24 +115,34 @@ export default function RegistroParada() {
       );
     });
 
-  const tirarFoto = async (chave: string) => {
+  // substituir=true (documento): a nova foto toma o lugar da anterior;
+  // senão ela é acrescentada à lista do campo.
+  const tirarFoto = async (chave: string, substituir = false) => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o comprovante.');
     const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
-    if (!r.canceled && r.assets[0]) setFotos((f) => ({ ...f, [chave]: r.assets[0].uri }));
+    const uri = !r.canceled ? r.assets[0]?.uri : null;
+    if (uri) setFotos((f) => ({ ...f, [chave]: substituir ? [uri] : [...(f[chave] ?? []), uri] }));
   };
+  const removerFoto = (chave: string, indice: number) =>
+    setFotos((f) => ({ ...f, [chave]: (f[chave] ?? []).filter((_, i) => i !== indice) }));
+  const fotosDe = (chave: string) => fotos[chave] ?? [];
 
   const campos: CampoChecklist[] = fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [];
   const exigeMotivo = fluxo === 'NAO_ENTREGUE' || fluxo === 'PARCIAL';
   const motivos = checklist.motivos;
+  // "Descreva quem recebeu" só existe (e só é exigido) quando o vínculo
+  // escolhido é "Outro" -- antes a validação cobrava um campo que a tela
+  // nunca mostrava, travando a finalização.
+  const pedeVinculoOutro = respostas.vinculo === 'Outro';
 
   const validar = (): string | null => {
     for (const c of campos) {
       if (!c.obrigatorio) continue;
-      if (c.tipo === 'FOTO' && !fotos[c.chave]) return `Falta: ${c.rotulo}`;
+      if (c.tipo === 'FOTO' && fotosDe(c.chave).length === 0) return `Falta: ${c.rotulo}`;
       if (c.tipo !== 'FOTO' && c.tipo !== 'DOCUMENTO' && !(respostas[c.chave] ?? '').trim()) return `Falta: ${c.rotulo}`;
     }
-    if (respostas.vinculo === 'Outro' && !(respostas.vinculo_outro ?? '').trim()) return 'Descreva quem recebeu.';
+    if (pedeVinculoOutro && !(respostas.vinculo_outro ?? '').trim()) return 'Descreva quem recebeu.';
     if (exigeMotivo && motivos.length > 0 && motivoId === null) return 'Escolha o motivo.';
     return null;
   };
@@ -170,17 +157,17 @@ export default function RegistroParada() {
       const tipoEvento = fluxo === 'NAO_ENTREGUE' ? 'INSUCESSO' : fluxo;
       const situacao: SituacaoParada = tipoEvento === 'INSUCESSO' ? 'INSUCESSO' : tipoEvento === 'PARCIAL' ? 'PARCIAL' : 'ENTREGUE';
       await local.marcarParada(parada.id, situacao);
+      const { vinculo_outro, ...demais } = respostas;
+      const fotosQtd = Object.fromEntries(Object.entries(fotos).filter(([, lista]) => lista.length > 0).map(([chave, lista]) => [chave, lista.length]));
       await fila.enfileirar({
         uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: parada.id, criadoEm: agora, tentativas: 0,
         corpo: { tipo: tipoEvento, ocorrido_em: agora, ...pos, motivo_id: motivoId, observacoes: respostas.observacoes ?? null,
-                 checklist: { ...respostas, fotos: Object.keys(fotos), assinatura: !!assinatura } },
+                 checklist: { ...demais, ...(pedeVinculoOutro ? { vinculo_outro } : {}), fotos: Object.keys(fotosQtd), fotos_qtd: fotosQtd, assinatura: false } },
       });
-      for (const [chave, uri] of Object.entries(fotos)) {
-        await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: TIPO_COMPROVANTE[chave] ?? 'CANHOTO', capturadoEm: agora, criadoEm: agora, tentativas: 0 });
-      }
-      if (assinatura) {
-        const uri = await salvarBase64(assinatura, `assinatura_${parada.id}_${Date.now()}.png`);
-        await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: 'ASSINATURA', capturadoEm: agora, criadoEm: agora, tentativas: 0 });
+      for (const [chave, lista] of Object.entries(fotos)) {
+        for (const uri of lista) {
+          await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: TIPO_COMPROVANTE[chave] ?? 'CANHOTO', capturadoEm: agora, criadoEm: agora, tentativas: 0 });
+        }
       }
       router.back();
     } finally {
@@ -281,6 +268,13 @@ export default function RegistroParada() {
                   ))}
                 </View>
               ) : null}
+              {c.chave === 'vinculo' && pedeVinculoOutro ? (
+                <>
+                  <Text style={[s.rotulo, { marginTop: 12 }]}>Descreva quem recebeu *</Text>
+                  <TextInput style={s.campo} placeholder="Ex.: vizinho, funcionário da loja" placeholderTextColor="#9CA3AF" value={respostas.vinculo_outro ?? ''}
+                    onChangeText={(v) => setRespostas((r) => ({ ...r, vinculo_outro: v }))} />
+                </>
+              ) : null}
               {c.tipo === 'SELECAO' && !c.opcoes && c.chave.startsWith('motivo') ? <Text style={s.sub}>(usa o motivo escolhido acima)</Text> : null}
               {c.tipo === 'TEXTO' || c.tipo === 'NUMERO' ? (
                 <TextInput style={s.campo} value={respostas[c.chave] ?? ''} onChangeText={(v) => setRespostas((r) => ({ ...r, [c.chave]: v }))}
@@ -289,28 +283,28 @@ export default function RegistroParada() {
               {c.tipo === 'DOCUMENTO' ? (
                 <>
                   <TextInput style={s.campo} placeholder="Número do documento (RG/CPF)" placeholderTextColor="#9CA3AF" value={respostas[c.chave] ?? ''} onChangeText={(v) => setRespostas((r) => ({ ...r, [c.chave]: v }))} />
-                  <Botao titulo={fotos[c.chave] ? 'Foto do documento ✓ (refazer)' : 'Fotografar documento'} tipo="secundario" onPress={() => tirarFoto(c.chave)} estilo={{ marginTop: 8 }} />
+                  <Botao titulo={fotosDe(c.chave).length > 0 ? 'Foto do documento ✓ (refazer)' : 'Fotografar documento'} tipo="secundario" onPress={() => tirarFoto(c.chave, true)} estilo={{ marginTop: 8 }} />
                 </>
               ) : null}
               {c.tipo === 'FOTO' ? (
                 <>
-                  {fotos[c.chave] ? <Image source={{ uri: fotos[c.chave] }} style={s.foto} /> : null}
-                  <Botao titulo={fotos[c.chave] ? 'Tirar outra' : '📷  Tirar foto'} tipo={fotos[c.chave] ? 'secundario' : 'primario'} onPress={() => tirarFoto(c.chave)} />
+                  {fotosDe(c.chave).map((uri, i) => (
+                    <View key={uri} style={s.fotoBloco}>
+                      <Image source={{ uri }} style={s.foto} />
+                      <Pressable onPress={() => removerFoto(c.chave, i)} style={s.fotoRemover} hitSlop={8}>
+                        <Text style={s.fotoRemoverTexto}>✕ remover</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                  {fotosDe(c.chave).length > 0 ? <Text style={s.sub}>{fotosDe(c.chave).length} foto(s). Pode tirar mais (frente e verso, outro comprovante...).</Text> : null}
+                  <Botao titulo={fotosDe(c.chave).length > 0 ? '📷  Tirar mais uma foto' : '📷  Tirar foto'} tipo={fotosDe(c.chave).length > 0 ? 'secundario' : 'primario'} onPress={() => tirarFoto(c.chave)} estilo={fotosDe(c.chave).length > 0 ? { marginTop: 8 } : undefined} />
                 </>
               ) : null}
             </Cartao>
           ))}
-          {fluxo !== 'NAO_ENTREGUE' ? (
-            <Cartao>
-              <Text style={s.rotulo}>Assinatura de quem recebeu</Text>
-              {assinatura ? <Image source={{ uri: assinatura }} style={[s.foto, { height: 120, backgroundColor: '#fff' }]} resizeMode="contain" /> : null}
-              <Botao titulo={assinatura ? 'Assinar de novo' : '✍  Coletar assinatura'} tipo="secundario" onPress={() => setAssinando(true)} />
-            </Cartao>
-          ) : null}
           <Deslizar titulo={`Confirmar: ${TITULO_FLUXO[fluxo]}`} icone="checkmark-done" cor={fluxo === 'NAO_ENTREGUE' ? cores.perigo : fluxo === 'PARCIAL' ? cores.alerta : cores.acento} onConfirmar={confirmarEntrega} desabilitado={enviando} />
         </>
       )}
-      <ModalAssinatura visivel={assinando} onFechar={() => setAssinando(false)} onAssinou={(d) => { setAssinatura(d); setAssinando(false); }} />
     </ScrollView>
   );
 }
@@ -329,4 +323,7 @@ const s = StyleSheet.create({
   opcaoAtiva: { backgroundColor: cores.primaria, borderColor: cores.primaria },
   opcaoTexto: { color: cores.texto, fontWeight: '600' },
   foto: { width: '100%', height: 200, borderRadius: 10, marginBottom: 10, backgroundColor: cores.borda },
+  fotoBloco: { position: 'relative' },
+  fotoRemover: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.65)', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999 },
+  fotoRemoverTexto: { color: '#fff', fontWeight: '700', fontSize: 12 },
 });

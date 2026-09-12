@@ -401,3 +401,18 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   intocado. **Ícone é recurso nativo: não vai por OTA** — só aparece no
   celular depois de um novo `eas build --profile preview` (subir
   `android.versionCode`) e reinstalar o APK.
+- **12/09 (madrugada)** — Checklist da parada (relato do Hugo no teste
+  real): (1) **bug** — ao escolher vínculo "Outro" a validação cobrava
+  "Descreva quem recebeu", mas o campo `vinculo_outro` nunca era
+  desenhado na tela, travando a finalização; agora o campo aparece só
+  com "Outro" selecionado, logo abaixo das opções, e só aí é exigido/
+  enviado. (2) **Várias fotos por campo FOTO** (canhoto frente/verso,
+  mais de um comprovante): `fotos` virou `Record<chave, uri[]>`, botão
+  "Tirar mais uma foto", "✕ remover" por foto, cada foto vira um
+  COMPROVANTE separado na fila; o checklist do evento leva
+  `fotos_qtd` por chave. Documento continua 1 foto (refazer substitui).
+  (3) **Assinatura desconsiderada**: card e modal saíram da tela,
+  `checklist.assinatura` vai sempre `false`; `src/assinatura.tsx` e o
+  tipo ASSINATURA na API ficam sem uso (não removidos). `tsc` limpo.
+  **Precisa de OTA** (`eas update --channel preview --environment
+  preview`) — sem login/token do Expo nesta máquina.
