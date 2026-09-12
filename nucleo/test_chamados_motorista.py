@@ -178,6 +178,30 @@ class TestChatMotorista(unittest.TestCase):
         self.assertIn("PADARIA SOL", sistema)
         self.assertIn("R$ 340", sistema.replace("340.0", "340"))
 
+    def test_texto_livre_na_etapa_parada_nao_vira_referencia(self):
+        # Achado em produção (12/09): o motorista respondeu "qual parada?"
+        # contando o problema, e o texto virou a "parada" do chamado.
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        self.cli.post(f"/api/atendimento/chamados/{chamado_id}/mensagens", headers=h,
+                      json={"texto": "Problema na entrega", "chip": "entrega_problema"})
+        patch, _ = self._modelo(resposta="Qual parada?", precisa_atendente=True)
+        with patch:
+            self.cli.post(f"/api/atendimento/chamados/{chamado_id}/mensagens", headers=h,
+                          json={"texto": "O cliente esta fechado, ja esperei 15 minutos"})
+        conn = ch.conectar()
+        c = ch.buscar_chamado(conn, chamado_id)
+        conn.close()
+        self.assertEqual(c["pedido_ref"], "")
+        self.assertEqual(c["etapa_assistente"], "livre")
+        # mas citar a parada no texto ainda casa
+        with self._modelo(resposta="Ok")[0]:
+            self.cli.post(f"/api/atendimento/chamados/{chamado_id}/mensagens", headers=h,
+                          json={"texto": "é o PS-200 da padaria"})
+        conn = ch.conectar()
+        self.assertEqual(ch.buscar_chamado(conn, chamado_id)["pedido_ref"], "PS-200")
+        conn.close()
+
     def test_assunto_urgente_pula_a_triagem(self):
         h = self._auth()
         chamado_id = self._iniciar(h)["chamado"]["id"]

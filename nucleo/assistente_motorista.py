@@ -232,8 +232,11 @@ def _responder(conn, chamado, motorista, texto, chip, config) -> list[dict]:
                 return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
                                               f"{_cartao_parada(p)} O que aconteceu nessa parada?")]
             return _conversar(conn, chamado, motorista, ctx, config)
-        ref = (chip or texto or "").strip()[:40]
-        ch.atualizar_chamado(conn, chamado["id"], pedido_ref=ref, etapa_assistente=ETAPA_LIVRE)
+        # Não casou com nenhuma parada: o motorista respondeu contando o
+        # problema em vez de escolher. NÃO grava esse texto como referência
+        # (achado no teste em produção de 12/09: "O cliente está fechado..."
+        # virou a "parada" do chamado na tela da equipe). Segue a conversa.
+        ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE)
         chamado = ch.buscar_chamado(conn, chamado["id"])
         return _conversar(conn, chamado, motorista, ctx, config)
 
