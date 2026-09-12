@@ -292,6 +292,38 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(r.status_code, 409)
         self.assertEqual(self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()["pedagios"], [])
 
+    def test_painel_pedagios_filtra_por_periodo_e_motorista(self):
+        from nucleo import operacao
+        ontem = (date.today() - timedelta(days=1)).isoformat()
+        semana = (date.today() - timedelta(days=8)).isoformat()
+        r_hoje = self._rota_app(rascunho_id=1)
+        r_ontem = self._rota_app(rascunho_id=2, data=ontem)
+        r_outro = self._rota_app(rascunho_id=3, data=semana, agent_id=999)
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_rotas SET motorista_nome = 'Zé Outro' WHERE id = ?", (r_outro,))
+        for uuid, rota_id, agent, valor, status in (("a", r_hoje, AGENT, 10.0, "PENDENTE"), ("b", r_ontem, AGENT, 20.0, "APROVADO"),
+                                                     ("c", r_outro, 999, 30.0, "PENDENTE")):
+            conn.execute("""INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, status, valor_aprovado)
+                            VALUES (?, ?, ?, ?, ?, ?)""", (uuid, rota_id, agent, valor, status, valor if status == "APROVADO" else None))
+        conn.commit()
+
+        # Sem filtro: só pendentes por padrão; TODOS traz os 3, mais recente (data da rota) primeiro
+        self.assertEqual([p["uuid"] for p in operacao.listar_pedagios_painel(conn)], ["a", "c"])
+        self.assertEqual([p["uuid"] for p in operacao.listar_pedagios_painel(conn, None)], ["a", "b", "c"])
+        # Período da rota (inclusive) e motorista
+        self.assertEqual([p["uuid"] for p in operacao.listar_pedagios_painel(conn, None, data_inicio=ontem)], ["a", "b"])
+        self.assertEqual([p["uuid"] for p in operacao.listar_pedagios_painel(conn, None, data_inicio=ontem, data_fim=ontem)], ["b"])
+        self.assertEqual([p["uuid"] for p in operacao.listar_pedagios_painel(conn, None, agent_id=999)], ["c"])
+        self.assertEqual(operacao.listar_pedagios_painel(conn, "PENDENTE", data_inicio=ontem, agent_id=999), [])
+        # Contagens das abas respeitam os mesmos filtros
+        self.assertEqual(operacao.contar_pedagios_painel(conn), {"PENDENTE": 2, "APROVADO": 1})
+        self.assertEqual(operacao.contar_pedagios_painel(conn, data_inicio=ontem), {"PENDENTE": 1, "APROVADO": 1})
+        self.assertEqual(operacao.contar_pedagios_painel(conn, agent_id=999), {"PENDENTE": 1})
+        # Opções do filtro de motorista: quem já mandou pedágio, em ordem alfabética
+        self.assertEqual(operacao.motoristas_com_pedagio(conn),
+                         [{"agent_id": AGENT, "nome": "Teste"}, {"agent_id": 999, "nome": "Zé Outro"}])
+        conn.close()
+
     def test_rota_vuupt_e_somente_leitura_mas_aceite_alimenta_confirmacao(self):
         h = self._auth()
         conn = banco.conectar()

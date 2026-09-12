@@ -2,28 +2,133 @@
 {% block titulo %}Pedágios{% endblock %}
 {% block estilo_extra %}
 <style>
-  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
-  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
-  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
-  .abas-pedagio { display: flex; gap: 6px; flex-wrap: wrap; }
-  .abas-pedagio a { padding: 6px 12px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font-size: 12.5px; text-decoration: none; }
-  .abas-pedagio a.ativa { background: var(--primaria, #141428); color: #fff; border-color: var(--primaria, #141428); }
-  .abas-pedagio a .n { opacity: 0.7; margin-left: 4px; }
-  table.tabela-pedagios { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
-  table.tabela-pedagios th, table.tabela-pedagios td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
-  table.tabela-pedagios th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  /* ── Cabeçalho ─────────────────────────────────────────────────────── */
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  .cabecalho-pagina h1 { font-size: 21px; margin: 0; letter-spacing: -0.2px; }
+  .cabecalho-pagina p { margin: 5px 0 0; color: var(--texto-suave); font-size: 12.5px; max-width: 640px; line-height: 1.45; }
+  .abas-pedagio { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px; }
+  .abas-pedagio a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px; color: var(--texto-suave); font-size: 12.5px; font-weight: 600; text-decoration: none; transition: background 0.12s, color 0.12s; }
+  .abas-pedagio a:hover { background: var(--fundo); color: var(--texto); }
+  .abas-pedagio a.ativa { background: var(--primaria); color: #fff; }
+  html.tema-escuro .abas-pedagio a.ativa { background: var(--acento); color: #06170F; }
+  .abas-pedagio a .n { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 100px; background: var(--fundo); color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .abas-pedagio a.ativa .n { background: rgba(255,255,255,0.22); color: inherit; }
+  html.tema-escuro .abas-pedagio a.ativa .n { background: rgba(0,0,0,0.18); }
+  .abas-pedagio a.ativa[data-status="PENDENTE"] .n { background: rgba(255,255,255,0.28); }
+
+  /* ── Barra de filtros ──────────────────────────────────────────────── */
+  .barra-filtros { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+  .barra-filtros .campo { display: flex; flex-direction: column; gap: 4px; }
+  .barra-filtros label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .barra-filtros input[type="date"], .barra-filtros select { height: 34px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13px; font-family: inherit; min-width: 150px; color-scheme: light; }
+  html.tema-escuro .barra-filtros input[type="date"], html.tema-escuro .barra-filtros select { color-scheme: dark; }
+  .barra-filtros select { min-width: 220px; }
+  .barra-filtros input:focus, .barra-filtros select:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
+  .barra-filtros .atalhos { display: flex; gap: 4px; flex-wrap: wrap; }
+  .barra-filtros .atalhos button, .barra-filtros a.limpar { height: 34px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--borda); background: transparent; color: var(--texto); font-size: 12.5px; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; }
+  .barra-filtros .atalhos button:hover, .barra-filtros a.limpar:hover { background: var(--fundo); }
+  .barra-filtros .atalhos button.ativo { border-color: var(--acento); color: var(--acento); font-weight: 600; }
+  .barra-filtros a.limpar { color: var(--texto-suave); margin-left: auto; gap: 6px; }
+  .barra-filtros a.limpar svg { width: 13px; height: 13px; }
+  .barra-filtros .separador { width: 1px; height: 34px; background: var(--borda); }
+
+  /* ── Resumo ────────────────────────────────────────────────────────── */
+  .resumo-pedagios { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .resumo-pedagios .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px 14px; }
+  .resumo-pedagios .rotulo { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .resumo-pedagios .valor { font-size: 20px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -0.3px; }
+  .resumo-pedagios .valor.ok { color: var(--sucesso); }
+  .resumo-pedagios .sub { font-size: 11.5px; color: var(--texto-suave); margin-top: 2px; }
+
+  /* ── Tabela ────────────────────────────────────────────────────────── */
+  .envelope-tabela { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; overflow: auto; }
+  table.tabela-pedagios { width: 100%; border-collapse: collapse; min-width: 760px; }
+  table.tabela-pedagios th, table.tabela-pedagios td { padding: 12px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  table.tabela-pedagios th { background: var(--fundo); color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.5px; white-space: nowrap; }
+  table.tabela-pedagios tbody tr { transition: background 0.12s; }
+  table.tabela-pedagios tbody tr:hover { background: var(--superficie-hover); }
   table.tabela-pedagios tr:last-child td { border-bottom: none; }
-  .foto-pedagio { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; background: var(--fundo); }
-  .valor-mono { font-variant-numeric: tabular-nums; font-weight: 700; }
-  .campo-aprovado { width: 96px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; background: var(--fundo); color: var(--texto); }
-  .campo-obs { width: 180px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); }
-  .acoes-pedagio { display: flex; gap: 6px; flex-wrap: wrap; }
-  .acoes-pedagio button { padding: 6px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
-  .acoes-pedagio button.aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
-  .acoes-pedagio button.rejeitar { color: var(--erro); border-color: var(--erro); }
-  .acoes-pedagio button:disabled { opacity: 0.5; cursor: default; }
+  table.tabela-pedagios td.num { text-align: right; }
+  table.tabela-pedagios th.num { text-align: right; }
+
+  .miniatura { position: relative; width: 64px; height: 64px; border-radius: 8px; border: 1px solid var(--borda); background: var(--fundo); overflow: hidden; padding: 0; cursor: zoom-in; display: block; }
+  .miniatura img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.18s; }
+  .miniatura:hover img { transform: scale(1.06); }
+  .miniatura::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.45), transparent 55%); opacity: 0; transition: opacity 0.15s; }
+  .miniatura:hover::after { opacity: 1; }
+  .miniatura svg { position: absolute; right: 5px; bottom: 5px; width: 14px; height: 14px; color: #fff; z-index: 1; opacity: 0; transition: opacity 0.15s; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+  .miniatura:hover svg { opacity: 1; }
+  .sem-foto { width: 64px; height: 64px; border-radius: 8px; border: 1px dashed var(--borda); display: flex; align-items: center; justify-content: center; color: var(--texto-suave); font-size: 10.5px; text-align: center; line-height: 1.2; }
+  .celula-recibo { display: flex; align-items: center; gap: 12px; }
+  .celula-recibo .meta { display: flex; flex-direction: column; gap: 2px; }
+  .celula-recibo .meta .quando { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+
+  .rota-principal { font-weight: 600; white-space: nowrap; }
+  .rota-nome { color: var(--texto-suave); font-size: 12px; margin-top: 2px; }
+  .chip-rota { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 1px 7px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); margin-left: 4px; vertical-align: 1px; }
+  .motorista { font-weight: 600; }
+  .valor-mono { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+  .valor-mono .moeda { font-weight: 500; color: var(--texto-suave); font-size: 11.5px; margin-right: 2px; }
+  .valor-mono.riscado { text-decoration: line-through; color: var(--texto-suave); font-weight: 500; }
+  .situacao { display: flex; flex-direction: column; gap: 4px; }
+  .situacao .linha1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge-pendente { background: var(--rodando-bg); color: var(--rodando-texto); }
   .suave { color: var(--texto-suave); font-size: 12px; }
-  .erro-linha { color: var(--erro); font-size: 12px; margin-top: 4px; display: none; }
+  .obs-revisao { font-size: 12px; color: var(--texto); background: var(--fundo); border-left: 2px solid var(--borda); padding: 3px 8px; border-radius: 0 6px 6px 0; max-width: 260px; }
+
+  /* Coluna de revisão */
+  .revisar { display: flex; flex-direction: column; gap: 6px; min-width: 300px; }
+  .revisar .entradas { display: flex; gap: 6px; }
+  .grupo-valor { display: flex; align-items: center; height: 32px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); overflow: hidden; }
+  .grupo-valor span { padding: 0 8px; font-size: 12px; color: var(--texto-suave); border-right: 1px solid var(--borda); height: 100%; display: flex; align-items: center; }
+  .grupo-valor input { width: 78px; border: none; background: transparent; color: var(--texto); padding: 0 8px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; font-family: inherit; height: 100%; }
+  .grupo-valor:focus-within { border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
+  .campo-obs { flex: 1; min-width: 120px; height: 32px; padding: 0 9px; border: 1px solid var(--borda); border-radius: 7px; font-size: 12.5px; background: var(--fundo); color: var(--texto); font-family: inherit; }
+  .campo-obs:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
+  .acoes-pedagio { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acoes-pedagio button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--borda); background: transparent; color: var(--texto); font-family: inherit; display: inline-flex; align-items: center; gap: 5px; transition: background 0.12s, border-color 0.12s, opacity 0.12s; }
+  .acoes-pedagio button svg { width: 13px; height: 13px; }
+  .acoes-pedagio button:hover { background: var(--fundo); }
+  .acoes-pedagio button.aprovar { background: var(--acento); color: #06170F; border-color: transparent; font-weight: 700; }
+  .acoes-pedagio button.aprovar:hover { filter: brightness(1.06); background: var(--acento); }
+  .acoes-pedagio button.rejeitar { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 45%, transparent); }
+  .acoes-pedagio button.rejeitar:hover { background: var(--erro-bg); }
+  .acoes-pedagio button:disabled { opacity: 0.5; cursor: default; filter: none; }
+  .erro-linha { color: var(--erro); font-size: 12px; display: none; }
+
+  .vazio { padding: 44px 20px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+  .vazio strong { display: block; color: var(--texto); font-size: 14px; margin-bottom: 4px; }
+
+  /* ── Lightbox da foto ──────────────────────────────────────────────── */
+  .lightbox { position: fixed; inset: 0; z-index: 1000; display: none; align-items: center; justify-content: center; background: rgba(6, 8, 14, 0.82); backdrop-filter: blur(4px); padding: 24px; }
+  .lightbox.aberto { display: flex; }
+  .lightbox .caixa { position: relative; display: flex; flex-direction: column; max-width: min(92vw, 1000px); max-height: 92vh; background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.5); animation: lb-entrar 0.16s ease-out; }
+  @keyframes lb-entrar { from { transform: scale(0.96); opacity: 0; } to { transform: none; opacity: 1; } }
+  .lightbox .topo { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--borda); }
+  .lightbox .topo .titulo { font-weight: 700; font-size: 14px; }
+  .lightbox .topo .sub { font-size: 12px; color: var(--texto-suave); }
+  .lightbox .topo .direita { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .lightbox .topo .valor-mono { font-size: 15px; margin-right: 8px; }
+  .lightbox .topo a, .lightbox .topo button { height: 32px; min-width: 32px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--borda); background: transparent; color: var(--texto); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; text-decoration: none; font-family: inherit; }
+  .lightbox .topo a:hover, .lightbox .topo button:hover { background: var(--fundo); }
+  .lightbox .topo svg { width: 15px; height: 15px; }
+  .lightbox .palco { position: relative; flex: 1; min-height: 240px; background: #05070B; display: flex; align-items: center; justify-content: center; overflow: auto; }
+  .lightbox .palco img { max-width: 100%; max-height: calc(92vh - 110px); object-fit: contain; display: block; cursor: zoom-in; transition: transform 0.15s; }
+  .lightbox .palco.ampliado img { max-height: none; max-width: none; width: auto; cursor: zoom-out; }
+  .lightbox .seta { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.18); background: rgba(12,16,24,0.7); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .lightbox .seta:hover { background: rgba(12,16,24,0.95); }
+  .lightbox .seta:disabled { opacity: 0.25; cursor: default; }
+  .lightbox .seta svg { width: 18px; height: 18px; }
+  .lightbox .seta.ant { left: 12px; } .lightbox .seta.prox { right: 12px; }
+  .lightbox .rodape { padding: 8px 16px; border-top: 1px solid var(--borda); font-size: 12px; color: var(--texto-suave); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .lightbox kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--borda); border-radius: 4px; padding: 0 5px; background: var(--fundo); }
+
+  @media (max-width: 720px) {
+    .barra-filtros a.limpar { margin-left: 0; }
+    .barra-filtros .separador { display: none; }
+    .lightbox { padding: 8px; }
+    .lightbox .caixa { max-width: 100vw; max-height: 96vh; }
+  }
 </style>
 {% endblock %}
 
@@ -31,61 +136,257 @@
 <div class="cabecalho-pagina">
   <div>
     <h1>Pedágios dos motoristas</h1>
-    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista (com o valor aprovado). O motorista pode cancelar um envio pelo app enquanto ele estiver pendente.</p>
+    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista, com o valor aprovado. O motorista pode cancelar um envio pelo app enquanto ele estiver pendente.</p>
   </div>
   <div class="abas-pedagio">
     {% for chave, rotulo in (("PENDENTE", "Pendentes"), ("APROVADO", "Aprovados"), ("REJEITADO", "Rejeitados"), ("CANCELADO", "Cancelados"), ("TODOS", "Todos")) %}
-    <a href="{{ url_for('pedagios', status=chave) }}" class="{{ 'ativa' if status == chave else '' }}">{{ rotulo }}{% if chave != 'TODOS' %}<span class="n">{{ contagem.get(chave, 0) }}</span>{% endif %}</a>
+    <a href="{{ url_for('pedagios', status=chave, de=filtros.de or None, ate=filtros.ate or None, motorista=filtros.motorista or None) }}"
+       class="{{ 'ativa' if status == chave else '' }}" data-status="{{ chave }}">{{ rotulo }}{% if chave != 'TODOS' %}<span class="n">{{ contagem.get(chave, 0) }}</span>{% endif %}</a>
     {% endfor %}
   </div>
 </div>
 
+<form class="barra-filtros" method="get" id="form-filtros">
+  <input type="hidden" name="status" value="{{ status }}">
+  <div class="campo">
+    <label for="f-de">Rota de</label>
+    <input type="date" id="f-de" name="de" value="{{ filtros.de }}">
+  </div>
+  <div class="campo">
+    <label for="f-ate">até</label>
+    <input type="date" id="f-ate" name="ate" value="{{ filtros.ate }}">
+  </div>
+  <div class="campo">
+    <label>Período</label>
+    <div class="atalhos">
+      <button type="button" data-atalho="hoje">Hoje</button>
+      <button type="button" data-atalho="7">7 dias</button>
+      <button type="button" data-atalho="mes">Este mês</button>
+      <button type="button" data-atalho="mes-1">Mês passado</button>
+    </div>
+  </div>
+  <div class="separador"></div>
+  <div class="campo">
+    <label for="f-motorista">Motorista</label>
+    <select id="f-motorista" name="motorista">
+      <option value="">Todos os motoristas</option>
+      {% for m in motoristas %}
+      <option value="{{ m.agent_id }}" {% if filtros.motorista|string == m.agent_id|string %}selected{% endif %}>{{ m.nome }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% if filtros.de or filtros.ate or filtros.motorista %}
+  <a class="limpar" href="{{ url_for('pedagios', status=status) }}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    Limpar filtros
+  </a>
+  {% endif %}
+</form>
+
+<div class="resumo-pedagios">
+  <div class="cartao">
+    <div class="rotulo">Recibos na lista</div>
+    <div class="valor">{{ resumo.quantidade }}</div>
+    <div class="sub">{% if status == 'TODOS' %}todas as situações{% else %}{{ {'PENDENTE': 'aguardando revisão', 'APROVADO': 'aprovados', 'REJEITADO': 'rejeitados', 'CANCELADO': 'cancelados pelo motorista'}[status] }}{% endif %}</div>
+  </div>
+  <div class="cartao">
+    <div class="rotulo">Valor informado</div>
+    <div class="valor"><span class="suave" style="font-size:13px;font-weight:600;">R$</span> {{ "%.2f"|format(resumo.informado) | replace('.', ',') }}</div>
+    <div class="sub">soma do que os motoristas digitaram</div>
+  </div>
+  <div class="cartao">
+    <div class="rotulo">Valor aprovado</div>
+    <div class="valor ok"><span class="suave" style="font-size:13px;font-weight:600;">R$</span> {{ "%.2f"|format(resumo.aprovado) | replace('.', ',') }}</div>
+    <div class="sub">o que entra no extrato</div>
+  </div>
+</div>
+
+<div class="envelope-tabela">
 <table class="tabela-pedagios">
   <thead>
     <tr>
-      <th>Recibo</th><th>Rota</th><th>Motorista</th><th>Informado</th><th>Situação</th>{% if pode_editar %}<th>Revisar</th>{% endif %}
+      <th>Recibo</th><th>Rota</th><th>Motorista</th><th class="num">Informado</th><th>Situação</th>{% if pode_editar %}<th>Revisar</th>{% endif %}
     </tr>
   </thead>
   <tbody>
     {% for p in itens %}
+    {% set valor_ap = p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado %}
     <tr data-id="{{ p.id }}">
       <td>
-        {% if p.caminho_local %}
-        <a href="{{ url_for('pedagio_foto', pedagio_id=p.id) }}" target="_blank" rel="noopener"><img class="foto-pedagio" src="{{ url_for('pedagio_foto', pedagio_id=p.id) }}" alt="recibo"></a>
-        {% else %}<span class="suave">sem foto</span>{% endif %}
-        <div class="suave">{{ (p.capturado_em or p.enviado_em or '')[:16] }}</div>
+        <div class="celula-recibo">
+          {% if p.caminho_local %}
+          <button type="button" class="miniatura" data-foto="{{ url_for('pedagio_foto', pedagio_id=p.id) }}"
+                  data-titulo="{{ p.motorista_nome or p.agent_id }}" data-sub="{{ p.data_rota }} · {{ p.rota_nome or ('Rota #' ~ p.rota_id) }}"
+                  data-valor="R$ {{ '%.2f'|format(p.valor_informado) | replace('.', ',') }}"
+                  data-quando="{{ (p.capturado_em or p.enviado_em or '')[:16] | replace('T', ' ') }}"
+                  title="Ver recibo">
+            <img src="{{ url_for('pedagio_foto', pedagio_id=p.id) }}" alt="recibo" loading="lazy">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg>
+          </button>
+          {% else %}<div class="sem-foto">sem<br>foto</div>{% endif %}
+          <div class="meta">
+            <span class="quando">{{ (p.capturado_em or p.enviado_em or '')[:10] }}</span>
+            <span class="suave">{{ (p.capturado_em or p.enviado_em or '')[11:16] }}</span>
+          </div>
+        </div>
       </td>
-      <td>{{ p.data_rota }}<br><span class="suave">{{ p.rota_nome or ('Rota #' ~ p.rota_id) }} · {{ p.rota_status }}</span></td>
-      <td>{{ p.motorista_nome or p.agent_id }}</td>
-      <td class="valor-mono">R$ {{ "%.2f"|format(p.valor_informado) | replace('.', ',') }}</td>
       <td>
-        {% if p.status == 'APROVADO' %}<span class="badge badge-sucesso">Aprovado</span> <span class="valor-mono">R$ {{ "%.2f"|format(p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado) | replace('.', ',') }}</span>
-        {% elif p.status == 'REJEITADO' %}<span class="badge badge-erro">Rejeitado</span>
-        {% elif p.status == 'CANCELADO' %}<span class="badge" title="O motorista desistiu deste envio pelo app">Cancelado pelo motorista</span>
-        {% else %}<span class="badge">Pendente</span>{% endif %}
-        {% if p.revisado_por %}<div class="suave">{{ p.revisado_por }} · {{ (p.revisado_em or '')[:16] }}</div>{% endif %}
-        {% if p.observacao_revisao %}<div class="suave">{{ p.observacao_revisao }}</div>{% endif %}
+        <div class="rota-principal">{{ p.data_rota }}<span class="chip-rota">{{ p.rota_status }}</span></div>
+        <div class="rota-nome">{{ p.rota_nome or ('Rota #' ~ p.rota_id) }}</div>
+      </td>
+      <td class="motorista">{{ p.motorista_nome or p.agent_id }}</td>
+      <td class="num">
+        <span class="valor-mono {{ 'riscado' if p.status == 'APROVADO' and p.valor_aprovado is not none and p.valor_aprovado != p.valor_informado else '' }}"><span class="moeda">R$</span>{{ "%.2f"|format(p.valor_informado) | replace('.', ',') }}</span>
+      </td>
+      <td>
+        <div class="situacao">
+          <div class="linha1">
+            {% if p.status == 'APROVADO' %}<span class="badge badge-sucesso">Aprovado</span><span class="valor-mono"><span class="moeda">R$</span>{{ "%.2f"|format(valor_ap) | replace('.', ',') }}</span>
+            {% elif p.status == 'REJEITADO' %}<span class="badge badge-erro">Rejeitado</span>
+            {% elif p.status == 'CANCELADO' %}<span class="badge badge-nunca" title="O motorista desistiu deste envio pelo app">Cancelado</span>
+            {% else %}<span class="badge badge-pendente">Pendente</span>{% endif %}
+          </div>
+          {% if p.revisado_por %}<div class="suave">{{ p.revisado_por }} · {{ (p.revisado_em or '')[:16] }}</div>{% endif %}
+          {% if p.observacao_revisao %}<div class="obs-revisao">{{ p.observacao_revisao }}</div>{% endif %}
+        </div>
       </td>
       {% if pode_editar %}
       <td>
-        <div class="acoes-pedagio">
-          <input type="text" class="campo-aprovado" placeholder="Valor" value="{{ '%.2f'|format(p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado) }}" title="Valor aprovado (padrão: o informado)">
-          <input type="text" class="campo-obs" placeholder="Observação (opcional)" value="{{ p.observacao_revisao or '' }}">
-          <button type="button" class="aprovar" data-acao="APROVADO">Aprovar</button>
-          <button type="button" class="rejeitar" data-acao="REJEITADO">Rejeitar</button>
-          {% if p.status != 'PENDENTE' %}<button type="button" data-acao="PENDENTE" title="Volta pra fila de pendentes">Reabrir</button>{% endif %}
+        <div class="revisar">
+          <div class="entradas">
+            <label class="grupo-valor" title="Valor aprovado (padrão: o informado)"><span>R$</span><input type="text" class="campo-aprovado" inputmode="decimal" value="{{ '%.2f'|format(valor_ap) }}"></label>
+            <input type="text" class="campo-obs" placeholder="Observação (opcional)" value="{{ p.observacao_revisao or '' }}">
+          </div>
+          <div class="acoes-pedagio">
+            <button type="button" class="aprovar" data-acao="APROVADO"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>Aprovar</button>
+            <button type="button" class="rejeitar" data-acao="REJEITADO"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>Rejeitar</button>
+            {% if p.status != 'PENDENTE' %}<button type="button" data-acao="PENDENTE" title="Volta pra fila de pendentes">Reabrir</button>{% endif %}
+          </div>
+          <div class="erro-linha"></div>
         </div>
-        <div class="erro-linha"></div>
       </td>
       {% endif %}
     </tr>
     {% else %}
-    <tr><td colspan="{{ 6 if pode_editar else 5 }}" class="suave">Nenhum pedágio {{ 'nesta situação' if status != 'TODOS' else 'registrado' }}.</td></tr>
+    <tr><td colspan="{{ 6 if pode_editar else 5 }}">
+      <div class="vazio">
+        <strong>Nenhum pedágio {{ 'nesta situação' if status != 'TODOS' else 'registrado' }}</strong>
+        {% if filtros.de or filtros.ate or filtros.motorista %}com os filtros atuais. <a href="{{ url_for('pedagios', status=status) }}">Limpar filtros</a>{% else %}por enquanto.{% endif %}
+      </div>
+    </td></tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
+
+<!-- Popup da foto do recibo (fica na mesma página) -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Recibo do pedágio">
+  <div class="caixa">
+    <div class="topo">
+      <div>
+        <div class="titulo" id="lb-titulo"></div>
+        <div class="sub" id="lb-sub"></div>
+      </div>
+      <div class="direita">
+        <span class="valor-mono" id="lb-valor"></span>
+        <a id="lb-abrir" href="#" target="_blank" rel="noopener" title="Abrir a imagem em nova aba">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+        </a>
+        <button type="button" id="lb-fechar" title="Fechar (Esc)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="palco" id="lb-palco">
+      <button type="button" class="seta ant" id="lb-ant" title="Anterior (←)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg></button>
+      <img id="lb-img" alt="Recibo do pedágio">
+      <button type="button" class="seta prox" id="lb-prox" title="Próximo (→)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></button>
+    </div>
+    <div class="rodape">
+      <span id="lb-quando"></span>
+      <span><kbd>←</kbd> <kbd>→</kbd> navega · clique na foto amplia · <kbd>Esc</kbd> fecha</span>
+    </div>
+  </div>
+</div>
 
 <script>
+// ── Filtros: submete ao mudar; atalhos de período preenchem as datas ─────
+(function () {
+  const form = document.getElementById('form-filtros');
+  const de = document.getElementById('f-de'), ate = document.getElementById('f-ate');
+  const iso = (d) => d.toISOString().slice(0, 10);
+  form.querySelectorAll('input[type="date"], select').forEach((el) => el.addEventListener('change', () => form.submit()));
+  form.querySelectorAll('button[data-atalho]').forEach((b) => b.addEventListener('click', () => {
+    const hoje = new Date(); hoje.setHours(12, 0, 0, 0);
+    let ini = new Date(hoje), fim = new Date(hoje);
+    switch (b.dataset.atalho) {
+      case '7': ini.setDate(hoje.getDate() - 6); break;
+      case 'mes': ini.setDate(1); break;
+      case 'mes-1': ini = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1, 12); fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0, 12); break;
+    }
+    de.value = iso(ini); ate.value = iso(fim);
+    form.submit();
+  }));
+  // marca o atalho que corresponde ao período atual
+  const hoje = new Date(); hoje.setHours(12, 0, 0, 0);
+  const alvos = {
+    'hoje': [iso(hoje), iso(hoje)],
+    '7': [iso(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 6, 12)), iso(hoje)],
+    'mes': [iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1, 12)), iso(hoje)],
+    'mes-1': [iso(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1, 12)), iso(new Date(hoje.getFullYear(), hoje.getMonth(), 0, 12))],
+  };
+  Object.entries(alvos).forEach(([k, [a, b]]) => {
+    if (de.value === a && ate.value === b) form.querySelector(`button[data-atalho="${k}"]`)?.classList.add('ativo');
+  });
+})();
+
+// ── Lightbox: abre a foto na mesma página, com anterior/próximo ─────────
+(function () {
+  const caixa = document.getElementById('lightbox');
+  const img = document.getElementById('lb-img'), palco = document.getElementById('lb-palco');
+  const titulo = document.getElementById('lb-titulo'), sub = document.getElementById('lb-sub');
+  const valor = document.getElementById('lb-valor'), quando = document.getElementById('lb-quando');
+  const abrir = document.getElementById('lb-abrir'), ant = document.getElementById('lb-ant'), prox = document.getElementById('lb-prox');
+  const minis = Array.from(document.querySelectorAll('.miniatura'));
+  let atual = -1, ultimoFoco = null;
+
+  function mostrar(i) {
+    const m = minis[i]; if (!m) return;
+    atual = i;
+    palco.classList.remove('ampliado');
+    img.src = m.dataset.foto; abrir.href = m.dataset.foto;
+    titulo.textContent = m.dataset.titulo; sub.textContent = m.dataset.sub;
+    valor.textContent = m.dataset.valor; quando.textContent = m.dataset.quando ? `Foto tirada em ${m.dataset.quando}` : '';
+    ant.disabled = i <= 0; prox.disabled = i >= minis.length - 1;
+  }
+  function abrirEm(i) {
+    ultimoFoco = document.activeElement;
+    mostrar(i);
+    caixa.classList.add('aberto');
+    document.body.style.overflow = 'hidden';
+    document.getElementById('lb-fechar').focus();
+  }
+  function fechar() {
+    caixa.classList.remove('aberto');
+    document.body.style.overflow = '';
+    img.src = '';
+    ultimoFoco?.focus?.();
+  }
+  minis.forEach((m, i) => m.addEventListener('click', () => abrirEm(i)));
+  document.getElementById('lb-fechar').addEventListener('click', fechar);
+  ant.addEventListener('click', () => mostrar(atual - 1));
+  prox.addEventListener('click', () => mostrar(atual + 1));
+  img.addEventListener('click', () => palco.classList.toggle('ampliado'));
+  caixa.addEventListener('click', (e) => { if (e.target === caixa) fechar(); });
+  document.addEventListener('keydown', (e) => {
+    if (!caixa.classList.contains('aberto')) return;
+    if (e.key === 'Escape') fechar();
+    else if (e.key === 'ArrowLeft' && !ant.disabled) mostrar(atual - 1);
+    else if (e.key === 'ArrowRight' && !prox.disabled) mostrar(atual + 1);
+  });
+})();
+
+// ── Revisão (aprovar / rejeitar / reabrir) ──────────────────────────────
 document.querySelectorAll('.tabela-pedagios tr[data-id]').forEach((linha) => {
   const id = linha.dataset.id;
   const erro = linha.querySelector('.erro-linha');
@@ -95,7 +396,7 @@ document.querySelectorAll('.tabela-pedagios tr[data-id]').forEach((linha) => {
       const valor = linha.querySelector('.campo-aprovado')?.value ?? '';
       const observacao = linha.querySelector('.campo-obs')?.value ?? '';
       if (status === 'REJEITADO' && !observacao.trim() && !confirm('Rejeitar sem observação? O motorista não vai saber o motivo.')) return;
-      linha.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      linha.querySelectorAll('button[data-acao]').forEach((b) => { b.disabled = true; });
       if (erro) erro.style.display = 'none';
       try {
         const r = await fetch(`{{ url_for('revisar_pedagio', pedagio_id=0) }}`.replace('/0/', `/${id}/`), {
@@ -107,7 +408,7 @@ document.querySelectorAll('.tabela-pedagios tr[data-id]').forEach((linha) => {
         window.location.reload();
       } catch (e) {
         if (erro) { erro.textContent = e.message; erro.style.display = 'block'; }
-        linha.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        linha.querySelectorAll('button[data-acao]').forEach((b) => { b.disabled = false; });
       }
     });
   });

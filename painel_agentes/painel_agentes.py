@@ -1639,14 +1639,39 @@ def pedagios():
         status_filtro = status
     else:
         status, status_filtro = "PENDENTE", nucleo_banco.PEDAGIO_PENDENTE
+
+    # Filtros opcionais: período da ROTA (ISO) e motorista (agent_id).
+    # Valor inválido é ignorado em vez de quebrar a tela.
+    def _data(chave):
+        bruto = (request.args.get(chave) or "").strip()
+        try:
+            return date.fromisoformat(bruto).isoformat() if bruto else None
+        except ValueError:
+            return None
+    data_inicio, data_fim = _data("de"), _data("ate")
+    if data_inicio and data_fim and data_fim < data_inicio:
+        data_inicio, data_fim = data_fim, data_inicio
+    try:
+        agent_id = int(request.args.get("motorista") or "") or None
+    except ValueError:
+        agent_id = None
+
     conn = nucleo_banco.conectar()
     try:
-        itens = nucleo_operacao.listar_pedagios_painel(conn, status_filtro)
-        contagem = {r[0]: r[1] for r in conn.execute("SELECT status, COUNT(*) FROM nucleo_pedagios GROUP BY status")}
+        itens = nucleo_operacao.listar_pedagios_painel(conn, status_filtro, data_inicio=data_inicio,
+                                                       data_fim=data_fim, agent_id=agent_id)
+        contagem = nucleo_operacao.contar_pedagios_painel(conn, data_inicio, data_fim, agent_id)
+        motoristas = nucleo_operacao.motoristas_com_pedagio(conn)
     finally:
         conn.close()
-    return render_template("pedagios.html", itens=itens, status=status, contagem=contagem,
-                           pode_editar=g.nivel_acesso in ("total", "operador"))
+    filtros = {"de": data_inicio or "", "ate": data_fim or "", "motorista": agent_id or ""}
+    resumo = {
+        "quantidade": len(itens),
+        "informado": sum(float(p["valor_informado"] or 0) for p in itens),
+        "aprovado": sum(float(p["valor_aprovado"] or 0) for p in itens if p["status"] == nucleo_banco.PEDAGIO_APROVADO),
+    }
+    return render_template("pedagios.html", itens=itens, status=status, contagem=contagem, motoristas=motoristas,
+                           filtros=filtros, resumo=resumo, pode_editar=g.nivel_acesso in ("total", "operador"))
 
 
 @app.route("/financeiro/pedagios/<int:pedagio_id>/foto")
