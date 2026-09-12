@@ -68,17 +68,15 @@ A tabela padrão das regiões atendidas ficou **em pausa** (decisão do Hugo).
 4. ~~Km só de ida~~ → **sempre considerar o retorno** ao galpão (km e pedágio).
 5. Caixas e peso são totais da cotação, não por entrega. ✔
 
-### Premissas NOVAS da 2ª rodada (12/09) — confirmar
+### 2ª rodada: confirmadas pelo Hugo (12/09)
 
-6. **Urgência same-day em linha separada** no PDF: não estava na lista de
-   itens a fundir e o cliente escolheu esse adicional na hora de cotar.
-   Se for pra entrar na linha do frete, é uma linha de código.
-7. **O desconto de carga seca sumiu da vista do cliente** (entra abatido na
-   linha do frete). Se o desconto for argumento de venda, volto a mostrar
-   "Desconto carga seca − R$ 150".
-8. **O valor do pedágio não aparece separado** pro cliente em lugar nenhum:
-   as condições dizem que está incluso e que é cobrado pelo valor real, sem
-   dizer quanto foi estimado.
+6. **Urgência same-day em linha separada** no PDF (não entra na linha do
+   frete). ✔
+7. **Desconto de carga seca invisível** pro cliente — entra abatido dentro da
+   linha do frete, sem linha própria em lugar nenhum. ✔
+8. **Valor do pedágio embutido na linha do frete** — o cliente nunca vê o
+   valor estimado separado; as condições só dizem que está incluso e que é
+   cobrado pelo valor real. ✔
 
 ## Piloto
 
