@@ -14,7 +14,25 @@ export type Motorista = {
 export type SituacaoParada = 'PENDENTE' | 'EM_DESLOCAMENTO' | 'EM_ROTA' | 'ENTREGUE' | 'PARCIAL' | 'INSUCESSO' | 'CANCELADA';
 export type StatusRota = 'PLANEJADA' | 'ACEITA' | 'EM_ROTA' | 'CONCLUIDA' | 'CANCELADA';
 
-export type Comprovante = { id: number; tipo: string; uuid: string; capturado_em: string | null };
+export type Comprovante = { id: number; tipo: string; uuid: string; capturado_em: string | null; validacao?: string | null };
+
+// Validação automática da foto (nucleo/validacao_fotos.py, Hugo 12/09).
+// pode_seguir=false trava a conclusão da parada; depois de max_tentativas
+// o servidor devolve pode_seguir=true e revisao_humana=true.
+export type ResultadoValidacao = {
+  resultado: 'APROVADO' | 'REPROVADO' | 'NAO_VERIFICADO';
+  motivo: string | null;
+  nitidez: number | null;
+  pode_seguir: boolean;
+  revisao_humana: boolean;
+  tentativa: number;
+  tentativas_restantes: number;
+  sha256?: string;
+  nf_lidas?: string[];
+  nf_confere?: boolean | null;
+  avisos?: string[];
+  valor_lido?: number | null;
+};
 
 export type Parada = {
   id: number;
@@ -40,6 +58,9 @@ export type Parada = {
   reagendado_para: string | null;   // "YYYY-MM-DD HH:MM" ou "FIM" (depois das outras)
   tentativas: number;
   comprovantes: Comprovante[];
+  // NFs do pedido (documentos_processados): um canhoto por NF (Hugo, 12/09).
+  // Vazio = pedido sem NF conhecida, um canhoto só e sem cobrar número.
+  nfs?: string[];
 };
 
 // Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por recibo;
@@ -55,6 +76,7 @@ export type Pedagio = {
   enviado_em: string;
   observacao_revisao: string | null;
   tem_foto: boolean;
+  validacao?: string | null;
 };
 
 export type Rota = {
@@ -91,6 +113,8 @@ export type CampoChecklist = {
 export type Checklist = {
   fluxos: Record<string, CampoChecklist[]>;
   motivos: { id: number; motivo_texto: string; categoria: string }[];
+  // Conferência automática das fotos; ativo=false (padrão) = tudo como antes.
+  validacao_fotos?: { ativo: boolean; max_tentativas: number; exigir_nf: boolean };
 };
 
 export type Oferta = {

@@ -42,7 +42,7 @@ from flask import Flask, g, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from nucleo import auth_motorista as auth, banco, financeiro, operacao
+from nucleo import auth_motorista as auth, banco, financeiro, operacao, validacao_fotos
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
 from regras import tarifa_motorista
@@ -90,6 +90,12 @@ def criar_app(config: dict | None = None) -> Flask:
     app.config["SECRET_TOKENS"] = secret
     app.config["PASTA_COMPROVANTES"] = Path(cfg.get("pasta_comprovantes") or (_RAIZ / "dados" / "comprovantes"))
     app.config["GCS_ATIVO"] = bool(cfg.get("gcs_ativo", True))
+    # Validação automática de nitidez/NF das fotos (Hugo, 12/09):
+    # DESLIGADA por padrão -- liga em api_motorista.validacao_fotos.ativo.
+    app.config["VALIDACAO_FOTOS"] = validacao_fotos.config_validacao(config)
+    if app.config["VALIDACAO_FOTOS"]["ativo"]:
+        logger.info("Validação automática de fotos LIGADA (modelo %s, nitidez mínima %s).",
+                    app.config["VALIDACAO_FOTOS"]["modelo"], app.config["VALIDACAO_FOTOS"]["nitidez_minima"])
 
     # ── conexão por request ──────────────────────────────────────────────────
     def conn():
@@ -200,7 +206,8 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.get("/api/checklist")
     @requer_motorista
     def checklist():
-        return jsonify(operacao.carregar_checklist(conn()))
+        return jsonify({**operacao.carregar_checklist(conn()),
+                        "validacao_fotos": validacao_fotos.publico(app.config["VALIDACAO_FOTOS"])})
 
     @app.get("/api/rotas")
     @requer_motorista
@@ -275,6 +282,78 @@ def criar_app(config: dict | None = None) -> Flask:
         relativo = str(caminho.relative_to(_RAIZ)) if _RAIZ in caminho.parents else str(caminho)
         return relativo, caminho_gcs
 
+    def _validar_conteudo(tipo: str, conteudo: bytes, sha: str, *, parada=None, rota_id=None,
+                          nf=None, valor=None, no_ato=True) -> dict | None:
+        """Roda (ou reaproveita) a validação da foto. Devolve o dict do
+        resultado ou None quando não há nada a registrar.
+
+        Reaproveita por sha256: a foto conferida no ato (POST /api/fotos/validar,
+        com o motorista ainda no cliente) chega depois pela fila offline e
+        NÃO é cobrada de novo no modelo."""
+        cfg = app.config["VALIDACAO_FOTOS"]
+        ja = validacao_fotos.buscar_validacao(conn(), sha)
+        if ja:
+            return {"resultado": ja["resultado"], "motivo": ja["motivo"], "nitidez": ja["nitidez"],
+                    "modelo": ja["modelo"], "no_ato": bool(ja["no_ato"]), **ja.get("dados", {})}
+        if not cfg["ativo"]:
+            return None
+        nfs = validacao_fotos.nfs_do_pedido(conn(), parada["codigo"]) if parada is not None else []
+        r = validacao_fotos.validar_foto(cfg, tipo, conteudo, nfs_esperadas=nfs, nf_alvo=nf, valor_informado=valor)
+        validacao_fotos.registrar_validacao(
+            conn(), sha, tipo, r, agent_id(),
+            f"parada:{parada['id']}" if parada is not None else (f"rota:{rota_id}" if rota_id else None),
+            no_ato=no_ato)
+        conn().commit()
+        return {**r, "no_ato": no_ato}
+
+    @app.post("/api/fotos/validar")
+    @requer_motorista
+    def validar_foto_endpoint():
+        """Confere a foto ANTES do envio definitivo, com o motorista ainda
+        no cliente (Hugo, 12/09). Multipart: arquivo, tipo (CANHOTO |
+        PEDAGIO), parada_id (canhoto) ou rota_id (pedágio), nf (a NF que
+        ESTA foto deve mostrar -- um canhoto por NF), valor (pedágio),
+        tentativa (1, 2, ...).
+
+        Nunca grava a foto: só devolve o veredito e guarda o resultado
+        por sha256 pra a fila não pagar o modelo de novo. Com a validação
+        desligada devolve NAO_VERIFICADO e pode_seguir=true -- o app segue
+        exatamente como hoje."""
+        cfg = app.config["VALIDACAO_FOTOS"]
+        arquivo = request.files.get("arquivo")
+        if arquivo is None or not arquivo.filename:
+            raise OperacaoInvalida("Envie o arquivo no campo 'arquivo' (multipart).")
+        tipo = (request.form.get("tipo") or validacao_fotos.TIPO_CANHOTO).upper()
+        _extensao_foto(arquivo)
+        try:
+            tentativa = int(request.form.get("tentativa") or 1)
+        except ValueError:
+            tentativa = 1
+
+        parada = None
+        rota_id = None
+        if request.form.get("parada_id"):
+            parada = conn().execute("SELECT id, codigo, rota_id FROM nucleo_paradas WHERE id = ?",
+                                    (request.form["parada_id"],)).fetchone()
+            if not parada:
+                raise OperacaoInvalida("Parada não encontrada.", 404)
+            operacao.rota_do_motorista(conn(), parada["rota_id"], agent_id())
+        elif request.form.get("rota_id"):
+            rota_id = operacao.rota_do_motorista(conn(), int(request.form["rota_id"]), agent_id())["id"]
+
+        conteudo = arquivo.read()
+        sha = hashlib.sha256(conteudo).hexdigest()
+        valor = request.form.get("valor")
+        try:
+            valor_f = float(str(valor).replace(",", ".")) if valor else None
+        except ValueError:
+            valor_f = None
+        r = _validar_conteudo(tipo, conteudo, sha, parada=parada, rota_id=rota_id,
+                              nf=request.form.get("nf"), valor=valor_f, no_ato=True)
+        if r is None:
+            r = {"resultado": validacao_fotos.NAO_VERIFICADO, "motivo": "Validação automática desligada."}
+        return jsonify({**validacao_fotos.aplicar_tentativas(cfg, r, tentativa), "sha256": sha})
+
     @app.post("/api/paradas/<int:parada_id>/comprovantes")
     @requer_motorista
     def comprovante(parada_id):
@@ -290,7 +369,7 @@ def criar_app(config: dict | None = None) -> Flask:
         ja = conn().execute("SELECT id FROM nucleo_comprovantes WHERE uuid = ?", (uuid,)).fetchone() if uuid else None
         if ja:
             return jsonify({"id": ja["id"], "ja_registrado": True})
-        p = conn().execute("SELECT codigo, rota_id FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()
+        p = conn().execute("SELECT id, codigo, rota_id FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()
         if not p:
             raise OperacaoInvalida("Parada não encontrada.", 404)
         operacao.rota_do_motorista(conn(), p["rota_id"], agent_id())
@@ -298,11 +377,18 @@ def criar_app(config: dict | None = None) -> Flask:
         conteudo = arquivo.read()
         sha = hashlib.sha256(conteudo).hexdigest()
         codigo = p["codigo"] or f"parada-{parada_id}"
+        # Já validada no ato? reaproveita. Senão (motorista sem sinal na
+        # hora), valida agora marcando no_ato=false -- o painel vê que a
+        # conferência não aconteceu com o motorista no cliente.
+        validacao = _validar_conteudo(tipo, conteudo, sha, parada=p, nf=request.form.get("nf"), no_ato=False) \
+            if tipo == validacao_fotos.TIPO_CANHOTO else None
         caminho, caminho_gcs = _guardar_foto(conteudo, codigo, tipo, uuid or sha[:16], ext)
         resultado = operacao.registrar_comprovante(
             conn(), parada_id, agent_id(), tipo, uuid or sha, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
+            validacao=validacao,
         )
-        return jsonify({**resultado, "gcs": caminho_gcs is not None}), 201
+        return jsonify({**resultado, "gcs": caminho_gcs is not None,
+                        "validacao": (validacao or {}).get("resultado")}), 201
 
     @app.post("/api/rotas/<int:rota_id>/pedagios")
     @requer_motorista
@@ -325,9 +411,16 @@ def criar_app(config: dict | None = None) -> Flask:
 
         conteudo = arquivo.read()
         sha = hashlib.sha256(conteudo).hexdigest()
+        try:
+            valor_f = float(str(valor).replace(",", ".")) if valor else None
+        except ValueError:
+            valor_f = None
+        validacao = _validar_conteudo(validacao_fotos.TIPO_PEDAGIO, conteudo, sha, rota_id=rota["id"],
+                                      valor=valor_f, no_ato=False)
         caminho, caminho_gcs = _guardar_foto(conteudo, f"rota-{rota['id']}", "PEDAGIO", uuid or sha[:16], ext)
         resultado = operacao.registrar_pedagio(
             conn(), rota_id, agent_id(), uuid or sha, valor, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
+            validacao=validacao,
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 

@@ -131,7 +131,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, Checklist, Extrato, Motorista, Oferta, Pedagio, Rota } from './tipos';
+import type { Ajuste, Checklist, Extrato, Motorista, Oferta, Pedagio, ResultadoValidacao, Rota } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -211,8 +211,28 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
   return dados as T;
 }
 
-export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string) {
-  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, uri, { tipo, uuid, capturado_em: capturadoEm });
+export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string, nf?: string | null) {
+  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, uri, {
+    tipo, uuid, capturado_em: capturadoEm, ...(nf ? { nf } : {}),
+  });
+}
+
+/** Confere a foto ANTES de enviar, com o motorista ainda no cliente
+ * (Hugo, 12/09): nitidez + legibilidade + número da NF no canhoto.
+ * A foto NÃO é gravada aqui -- o envio de verdade segue pela fila. Com a
+ * validação desligada no servidor volta NAO_VERIFICADO/pode_seguir. */
+export async function validarFoto(
+  uri: string,
+  campos: { tipo: 'CANHOTO' | 'PEDAGIO'; paradaId?: number; rotaId?: number; nf?: string | null; valor?: number; tentativa: number },
+): Promise<ResultadoValidacao> {
+  return enviarArquivo<ResultadoValidacao>('/fotos/validar', uri, {
+    tipo: campos.tipo,
+    tentativa: String(campos.tentativa),
+    ...(campos.paradaId ? { parada_id: String(campos.paradaId) } : {}),
+    ...(campos.rotaId ? { rota_id: String(campos.rotaId) } : {}),
+    ...(campos.nf ? { nf: campos.nf } : {}),
+    ...(campos.valor !== undefined ? { valor: String(campos.valor) } : {}),
+  });
 }
 
 /** Pedágio da rota: valor + foto do recibo (Hugo, 11/09). Fica pendente até o painel aprovar. */

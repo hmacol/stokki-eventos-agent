@@ -1720,6 +1720,75 @@ def revisar_pedagio(pedagio_id):
     return jsonify({"ok": True, "pedagio": resultado})
 
 
+# ── Canhotos: conferência das fotos do app (Hugo, 12/09) ─────────────────────
+# A validação automática (nucleo/validacao_fotos.py) marca cada foto de
+# canhoto APROVADO/REPROVADO. Aqui o Hugo vê as reprovadas (e as que
+# chegaram sem conferência) e dá a palavra final. Enquanto a validação
+# estiver desligada no config, a aba "Sem conferência" tem tudo.
+
+@app.route("/canhotos")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def canhotos():
+    from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
+    filtro = (request.args.get("resultado") or "REPROVADO").upper()
+    if filtro == "TODOS":
+        resultado = None
+    elif filtro in ("REPROVADO", "APROVADO", "PENDENTE"):
+        resultado = filtro
+    else:
+        filtro, resultado = "REPROVADO", "REPROVADO"
+    conn = nucleo_banco.conectar()
+    try:
+        itens = nucleo_operacao.listar_comprovantes_painel(conn, resultado)
+        contagem = {(r[0] or "PENDENTE"): r[1] for r in conn.execute(
+            "SELECT resultado_validacao, COUNT(*) FROM nucleo_comprovantes GROUP BY resultado_validacao")}
+    finally:
+        conn.close()
+    return render_template("canhotos.html", itens=itens, resultado=filtro, contagem=contagem,
+                           pode_editar=g.nivel_acesso in ("total", "operador"))
+
+
+@app.route("/canhotos/<int:comprovante_id>/foto")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def canhoto_foto(comprovante_id):
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        row = conn.execute("SELECT caminho_local FROM nucleo_comprovantes WHERE id = ?", (comprovante_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["caminho_local"]:
+        abort(404)
+    caminho = Path(row["caminho_local"])
+    if not caminho.is_absolute():
+        caminho = _RAIZ / caminho
+    if not caminho.exists():
+        abort(404)
+    return send_file(caminho)
+
+
+@app.route("/api/canhotos/<int:comprovante_id>/revisar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+def revisar_canhoto(comprovante_id):
+    from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
+    from nucleo.operacao import OperacaoInvalida
+    body = request.get_json(silent=True) or {}
+    conn = nucleo_banco.conectar()
+    try:
+        resultado = nucleo_operacao.revisar_comprovante(
+            conn, comprovante_id, body.get("resultado", ""), session.get("usuario") or g.nivel_acesso,
+            (body.get("observacao") or "").strip() or None,
+        )
+    except OperacaoInvalida as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao revisar canhoto")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "comprovante": resultado})
+
+
 @app.route("/api/motoristas/vuupt-disponiveis")
 @requer_auth(niveis=("total", "operador"))
 def api_motoristas_vuupt_disponiveis():

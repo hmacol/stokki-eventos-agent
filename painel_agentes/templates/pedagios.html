@@ -248,6 +248,17 @@
           </div>
           {% if p.revisado_por %}<div class="suave">{{ p.revisado_por }} · {{ (p.revisado_em or '')[:16] }}</div>{% endif %}
           {% if p.observacao_revisao %}<div class="obs-revisao">{{ p.observacao_revisao }}</div>{% endif %}
+          {# Conferência automática do recibo (nucleo/validacao_fotos.py).
+             Só aparece quando a validação está ligada no config. #}
+          {% set v = p.validacao or {} %}
+          {% if v.resultado %}
+            <div class="suave">
+              Conferência: {{ 'recibo ok' if v.resultado == 'APROVADO' else 'reprovada' }}
+              {%- if v.valor_lido %} · recibo mostra R$ {{ "%.2f"|format(v.valor_lido) | replace('.', ',') }}{% endif %}
+            </div>
+            {% if 'VALOR_DIVERGE' in (v.avisos or []) %}<div class="obs-revisao">⚠ O valor do recibo não bate com o digitado.</div>{% endif %}
+            {% if v.resultado == 'REPROVADO' and v.motivo %}<div class="obs-revisao">{{ v.motivo }}</div>{% endif %}
+          {% endif %}
         </div>
       </td>
       {% if pode_editar %}

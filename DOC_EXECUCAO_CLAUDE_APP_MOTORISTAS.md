@@ -232,6 +232,87 @@ valores em `tarifas_motorista` (editável) com os defaults acima no código.
 | Insucesso e reentrega | **Rota paga integral** (insucesso não desconta). **Reentrega `-R` é parada normal** da rota em que for roteirizada — não é rota nova nem paga à parte. | Nada a mudar no cálculo (documentado em `nucleo/financeiro.py`). |
 | `TIPO_VEICULO` = "FIORINO" explícito | Aceito (vazio = Fiorino). | `regras/tarifa_motorista.py` |
 
+### 4.2. Validação automática das fotos (Hugo, 12/09) — PRONTA, DESLIGADA
+
+Conferir a foto do **canhoto** e a do **recibo de pedágio** na hora em que
+o motorista tira, com o cliente ainda na frente. Código todo escrito e
+testado; **desligado por padrão** — o Hugo não quer o custo agora.
+
+**Como ligar** (só isso; nada de deploy de código novo):
+
+```yaml
+api_motorista:
+  validacao_fotos:
+    ativo: true                 # padrão false -- tudo se comporta como hoje
+    modelo: claude-haiku-4-5    # decisão do Hugo; Sonnet 5 custa 2x
+    nitidez_minima: 40
+    max_tentativas: 2
+    exigir_nf: true
+    exigir_assinatura: false    # true reprova canhoto sem assinatura
+```
+
+Usa a `anthropic.api_key` que já está no `config.yaml` (a mesma do
+assistente do portal). Depois de ligar, **reiniciar `motorista-api`**.
+
+**Duas camadas, nessa ordem** (`nucleo/validacao_fotos.py`):
+
+1. **Nitidez, sem modelo**: variância do Laplaciano na imagem em cinza
+   reduzida a 1000 px. Abaixo de `nitidez_minima` reprova na hora —
+   foto tremida não gasta modelo. Calibrado em 12/09 com 40 canhotos
+   reais: foto boa mede 158–2.390 (mediana ~680); a mesma foto com
+   desfoque de raio 3 cai pra 4–50. Refazer com fotos do próprio app:
+   `py -3.11 nucleo/calibrar_nitidez.py`.
+2. **Visão do Claude** (saída estruturada): legibilidade real (reflexo,
+   corte, escuro), que documento é, e **lê os números de NF da foto**.
+   No pedágio: se é recibo de pedágio e qual o valor impresso.
+
+**Regra da NF (um canhoto por NF).** As NFs do pedido vêm de
+`documentos_processados.numero_nf` casando por `codigo_pedido` = o
+`codigo` da parada. Pedido com mais de uma NF vira **um bloco de foto
+por nota** na tela da parada ("Canhoto da NF 12345"), e cada foto é
+conferida contra a sua nota. **Armadilha resolvida:** o extrator às
+vezes lê o número errado e a mesma NF gruda em vários pedidos (`245699`
+em 11 pedidos, `646` em 6) — NF ligada a mais de um pedido é ignorada,
+senão o motorista ficaria travado pedindo canhoto de nota inexistente.
+Pedido sem NF conhecida (Fruta Fina / placeholder da Stokki) passa só
+pela nitidez.
+
+**Regra das tentativas.** Foto reprovada **trava** a conclusão da parada.
+Depois de `max_tentativas` o servidor devolve `pode_seguir=true` e o app
+oferece "Não consigo melhorar" — a foto segue marcada pra revisão
+humana. Sem sinal, ou com a validação desligada, **nunca trava**.
+
+**Custo** (imagem reduzida a 1600 px ≈ 2.200 tokens + 600 de instrução +
+150 de resposta; ~4.000 fotos/mês estimadas a partir de 3.620 paradas em
+30 dias, 1,3 foto/parada e 15% de repetição):
+
+| Modelo | Por foto | Por mês |
+|---|---|---|
+| Haiku 4.5 (escolhido) | US$ 0,0036 | ~US$ 14 (R$ 78) |
+| Sonnet 5 | US$ 0,0071 | ~US$ 28 (R$ 153) |
+
+Trocar de modelo é uma linha do config. **O resultado é guardado por
+`sha256`** (`nucleo_validacoes_foto`): a foto conferida no ato e depois
+enviada pela fila **não paga o modelo duas vezes**.
+
+**Onde ficou cada parte:**
+
+| Peça | Arquivo |
+|---|---|
+| Nitidez, prompts, decisão, config | `nucleo/validacao_fotos.py` |
+| Calibração do limiar | `nucleo/calibrar_nitidez.py` |
+| `POST /api/fotos/validar` (não grava a foto) + conferência no envio | `nucleo/api_motorista.py` |
+| Grava em `nucleo_comprovantes` (`validado_por`/`resultado_validacao`) e `nucleo_pedagios.dados_json`; `nfs` da parada; revisão humana | `nucleo/operacao.py` |
+| Tela "Canhotos" (fila da revisão humana) + badge no menu | `painel_agentes/templates/canhotos.html`, `painel_agentes.py`, `contadores_menu.py` |
+| Veredito do recibo na tela de Pedágios | `painel_agentes/templates/pedagios.html` |
+| App: bloco por NF, conferência na captura, "não consigo melhorar" | `app_motorista/app/parada/[id].tsx`, `app/rota/[id].tsx`, `src/api.ts`, `src/tipos.ts`, `src/fila.ts` |
+| Testes (40, sem rede e sem custo) | `nucleo/test_validacao_fotos.py` |
+
+**Antes de ligar:** (1) rodar `calibrar_nitidez.py` com fotos do app;
+(2) OTA do app (a tela precisa do bloco por NF e do botão de conferir);
+(3) olhar a aba Canhotos na primeira semana pra medir o acerto do
+modelo — cada revisão humana guarda o que a IA tinha dito.
+
 ---
 
 ## 5. Fases
@@ -435,3 +516,8 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   Fix: refs pra `onConfirmar` e `desabilitado/ocupado` lidas na hora do
   gesto (também consertou o trava-duplo-arrasto). Vale pra TODOS os
   Deslizar (aceitar/iniciar/reagendar/finalizar).
+- **12/09 — Validação automática das fotos: PRONTA E DESLIGADA.** Hugo
+  pediu conferência de nitidez do canhoto e do recibo de pedágio, e que
+  o canhoto **contenha obrigatoriamente o número da NF**; decidiu deixar
+  **inativa** por enquanto ("não quero esse custo"), com Haiku 4.5 como
+  modelo e **um canhoto por NF**. Ver a seção 4.2.

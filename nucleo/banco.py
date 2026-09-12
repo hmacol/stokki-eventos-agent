@@ -314,6 +314,13 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
+    # documentos_processados é de outro módulo (documentos_pedido/), mas o
+    # núcleo lê a NF do pedido por codigo_pedido a cada parada montada
+    # (validacao_fotos.nfs_do_pedido) -- sem índice isso vira varredura
+    # da tabela inteira por parada. Só cria se a tabela já existir.
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documentos_processados'").fetchone():
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documentos_codigo_pedido ON documentos_processados(codigo_pedido)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documentos_nf ON documentos_processados(numero_nf)")
     conn.commit()
 
 

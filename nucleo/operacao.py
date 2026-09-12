@@ -25,7 +25,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, pedidos as nucleo_pedidos, tempos
+from nucleo import banco, pedidos as nucleo_pedidos, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -69,6 +69,14 @@ def _tem_tabela(conn: sqlite3.Connection, nome: str) -> bool:
 
 def _json(v) -> str | None:
     return json.dumps(v, ensure_ascii=False, default=str) if v is not None else None
+
+
+def _ler_json(v) -> dict:
+    try:
+        d = json.loads(v) if v else {}
+    except (TypeError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 # ── Rotas ──────────────────────────────────────────────────────────────────────
@@ -125,9 +133,15 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
             d["janela_fim"] = d["janela_fim"] or ped["horario_fim"]
             d["destinatario_nome"] = d["destinatario_nome"] or ped["destinatario_nome"]
     d["comprovantes"] = [
-        {"id": c["id"], "tipo": c["tipo"], "uuid": c["uuid"], "capturado_em": c["capturado_em"]}
-        for c in conn.execute("SELECT id, tipo, uuid, capturado_em FROM nucleo_comprovantes WHERE parada_id = ? ORDER BY id", (p["id"],))
+        {"id": c["id"], "tipo": c["tipo"], "uuid": c["uuid"], "capturado_em": c["capturado_em"],
+         "validacao": c["resultado_validacao"]}
+        for c in conn.execute("SELECT id, tipo, uuid, capturado_em, resultado_validacao FROM nucleo_comprovantes "
+                              "WHERE parada_id = ? ORDER BY id", (p["id"],))
     ]
+    # NFs do pedido: o app pede UM CANHOTO POR NF (Hugo, 12/09). Lista
+    # vazia = pedido sem NF conhecida (Fruta Fina/placeholder da Stokki),
+    # aí é um canhoto só, sem cobrança de número.
+    d["nfs"] = validacao_fotos.nfs_do_pedido(conn, p["codigo"])
     return d
 
 
@@ -137,14 +151,16 @@ def listar_pedagios(conn: sqlite3.Connection, rota_id: int) -> list[dict]:
     return [
         {"id": r["id"], "uuid": r["uuid"], "valor_informado": r["valor_informado"], "status": r["status"],
          "valor_aprovado": r["valor_aprovado"], "capturado_em": r["capturado_em"], "enviado_em": r["enviado_em"],
-         "observacao_revisao": r["observacao_revisao"], "tem_foto": bool(r["caminho_local"] or r["caminho_gcs"])}
+         "observacao_revisao": r["observacao_revisao"], "tem_foto": bool(r["caminho_local"] or r["caminho_gcs"]),
+         "validacao": (_ler_json(r["dados_json"]).get("validacao") or {}).get("resultado")}
         for r in conn.execute("SELECT * FROM nucleo_pedagios WHERE rota_id = ? ORDER BY id", (rota_id,))
     ]
 
 
 def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uuid: str, valor: float | None,
                       caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
-                      capturado_em: str | None, caminho_gcs: str | None = None) -> dict:
+                      capturado_em: str | None, caminho_gcs: str | None = None,
+                      validacao: dict | None = None) -> dict:
     """Um comprovante de pedágio da rota (o motorista pode mandar vários).
     Aceito em rota APP EM_ROTA ou CONCLUIDA (ele fecha a rota e depois
     fotografa os recibos, ou manda no caminho). Entra como PENDENTE; só
@@ -166,10 +182,11 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
         return {"id": ja["id"], "ja_registrado": True}
     cur = conn.execute("""
         INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, caminho_local, caminho_gcs, sha256,
-                                     tamanho_bytes, capturado_em, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     tamanho_bytes, capturado_em, status, dados_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (uuid, rota_id, agent_id, valor_f, caminho_local, caminho_gcs, sha256, tamanho_bytes,
-          capturado_em, banco.PEDAGIO_PENDENTE))
+          capturado_em, banco.PEDAGIO_PENDENTE,
+          _json({"validacao": validacao}) if validacao else None))
     registrar_evento(conn, "PEDAGIO", banco.ORIGEM_APP, capturado_em, rota_id=rota_id, agent_id=agent_id,
                      dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "sha256": sha256})
     conn.commit()
@@ -261,7 +278,14 @@ def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.
         FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
         {where} ORDER BY r.data_rota DESC, p.id DESC LIMIT ?
     """
-    return [dict(r) for r in conn.execute(sql, params + [limite]).fetchall()]
+    saida = []
+    for r in conn.execute(sql, params + [limite]).fetchall():
+        d = dict(r)
+        # Veredito da conferência automática do recibo, quando houver
+        # (nucleo/validacao_fotos.py) -- o painel mostra junto do valor.
+        d["validacao"] = _ler_json(d.get("dados_json")).get("validacao") or {}
+        saida.append(d)
+    return saida
 
 
 def contar_pedagios_painel(conn: sqlite3.Connection, data_inicio: str | None = None, data_fim: str | None = None,
@@ -515,7 +539,8 @@ def finalizar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, km_inf
 
 def registrar_comprovante(conn: sqlite3.Connection, parada_id: int, agent_id: int, tipo: str, uuid: str,
                           caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
-                          capturado_em: str | None, caminho_gcs: str | None = None) -> dict:
+                          capturado_em: str | None, caminho_gcs: str | None = None,
+                          validacao: dict | None = None) -> dict:
     p = conn.execute("SELECT * FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()
     if not p:
         raise OperacaoInvalida("Parada não encontrada.", 404)
@@ -529,15 +554,80 @@ def registrar_comprovante(conn: sqlite3.Connection, parada_id: int, agent_id: in
     ja = conn.execute("SELECT id FROM nucleo_comprovantes WHERE uuid = ?", (uuid,)).fetchone()
     if ja:
         return {"id": ja["id"], "ja_registrado": True}
+    # Validação automática (nucleo/validacao_fotos.py): preenche as colunas
+    # que já existiam vazias desde a Fase A. NAO_VERIFICADO (validação
+    # desligada, sem chave, sem sinal) não marca validado_em.
+    resultado_v = (validacao or {}).get("resultado")
+    conferida = resultado_v in ("APROVADO", "REPROVADO")
     cur = conn.execute("""
         INSERT INTO nucleo_comprovantes (uuid, rota_id, parada_id, tipo, caminho_gcs, caminho_local, sha256,
-                                         tamanho_bytes, capturado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (uuid, rota["id"], parada_id, tipo, caminho_gcs, caminho_local, sha256, tamanho_bytes, capturado_em))
+                                         tamanho_bytes, capturado_em, validado_em, validado_por,
+                                         resultado_validacao, dados_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (uuid, rota["id"], parada_id, tipo, caminho_gcs, caminho_local, sha256, tamanho_bytes, capturado_em,
+          banco.agora() if conferida else None, "IA" if conferida else None,
+          resultado_v, _json(validacao) if validacao else None))
     registrar_evento(conn, "FOTO", banco.ORIGEM_APP, capturado_em, rota_id=rota["id"], parada_id=parada_id,
-                     agent_id=agent_id, dados={"tipo": tipo, "comprovante_id": cur.lastrowid, "sha256": sha256})
+                     agent_id=agent_id, dados={"tipo": tipo, "comprovante_id": cur.lastrowid, "sha256": sha256,
+                                               "validacao": resultado_v})
     conn.commit()
     return {"id": cur.lastrowid, "ja_registrado": False}
+
+
+def listar_comprovantes_painel(conn: sqlite3.Connection, resultado: str | None = "REPROVADO",
+                               limite: int = 300) -> list[dict]:
+    """Fila de conferência de canhotos do painel (Hugo, 12/09). Por padrão
+    só os REPROVADOS pela validação automática -- é o que precisa de olho
+    humano. `resultado=None` traz todos; "PENDENTE" traz os que chegaram
+    sem conferência (validação desligada, sem sinal, sem chave)."""
+    sql = """
+        SELECT c.*, p.codigo, p.destinatario_nome, p.ordem, r.data_rota, r.nome AS rota_nome, r.motorista_nome
+        FROM nucleo_comprovantes c
+        JOIN nucleo_paradas p ON p.id = c.parada_id
+        LEFT JOIN nucleo_rotas r ON r.id = c.rota_id
+    """
+    params: list = []
+    if resultado == "PENDENTE":
+        sql += " WHERE c.resultado_validacao IS NULL"
+    elif resultado:
+        sql += " WHERE c.resultado_validacao = ?"
+        params.append(resultado)
+    sql += " ORDER BY c.id DESC LIMIT ?"
+    params.append(limite)
+    saida = []
+    for r in conn.execute(sql, params):
+        d = dict(r)
+        d["validacao"] = _ler_json(d.pop("dados_json", None))
+        saida.append(d)
+    return saida
+
+
+def revisar_comprovante(conn: sqlite3.Connection, comprovante_id: int, resultado: str, revisor: str,
+                        observacao: str | None = None) -> dict:
+    """Painel: a palavra final do humano sobre a foto. Sobrescreve o
+    veredito da IA (validado_por vira HUMANO) e guarda o que a IA tinha
+    dito em `dados_json.ia` -- serve pra medir o acerto do modelo antes
+    de confiar mais nele."""
+    resultado = str(resultado or "").upper()
+    if resultado not in ("APROVADO", "REPROVADO"):
+        raise OperacaoInvalida(f"Resultado inválido: {resultado!r} (use APROVADO ou REPROVADO).")
+    row = conn.execute("SELECT * FROM nucleo_comprovantes WHERE id = ?", (comprovante_id,)).fetchone()
+    if not row:
+        raise OperacaoInvalida("Comprovante não encontrado.", 404)
+    dados = _ler_json(row["dados_json"])
+    if row["validado_por"] == "IA" and "ia" not in dados:
+        dados = {"ia": {k: v for k, v in dados.items() if k != "ia"},
+                 "ia_resultado": row["resultado_validacao"]}
+    dados["revisao"] = {"resultado": resultado, "revisor": revisor, "observacao": observacao, "em": banco.agora()}
+    conn.execute("""
+        UPDATE nucleo_comprovantes SET resultado_validacao = ?, validado_em = ?, validado_por = 'HUMANO', dados_json = ?
+        WHERE id = ?
+    """, (resultado, banco.agora(), _json(dados), comprovante_id))
+    registrar_evento(conn, "FOTO_REVISADA", banco.ORIGEM_PAINEL, banco.agora(), rota_id=row["rota_id"],
+                     parada_id=row["parada_id"],
+                     dados={"comprovante_id": comprovante_id, "resultado": resultado, "revisor": revisor})
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM nucleo_comprovantes WHERE id = ?", (comprovante_id,)).fetchone())
 
 
 # ── GPS / km ───────────────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ export type UltimoErro = { em: string; tipo: ItemFila['tipo']; uuid: string; men
 
 export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
-  | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number }
+  | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number; nf?: string | null }
   | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'ROTA'; rotaId: number; acao: 'aceitar' | 'iniciar' | 'finalizar'; corpo: Record<string, unknown>; criadoEm: string; tentativas: number };
@@ -126,7 +126,7 @@ export async function listar(): Promise<{ uuid: string; tipo: ItemFila['tipo']; 
   return (await ler()).map((i) => ({
     uuid: i.uuid, tipo: i.tipo, criadoEm: i.criadoEm, tentativas: i.tentativas ?? 0,
     detalhe: i.tipo === 'EVENTO_PARADA' ? `${String(i.corpo.tipo ?? '')} parada ${i.paradaId}`
-      : i.tipo === 'COMPROVANTE' ? `${i.tipoComprovante} parada ${i.paradaId}`
+      : i.tipo === 'COMPROVANTE' ? `${i.tipoComprovante}${i.nf ? ` NF ${i.nf}` : ''} parada ${i.paradaId}`
       : i.tipo === 'PEDAGIO' ? `R$ ${i.valor.toFixed(2).replace('.', ',')} rota ${i.rotaId}`
       : i.tipo === 'GPS' ? `${i.pontos.length} ponto(s)`
       : `${i.acao} rota ${i.rotaId}`,
@@ -148,7 +148,7 @@ async function enviar(item: ItemFila): Promise<void> {
       await api.eventoParada(item.paradaId, { ...item.corpo, uuid: item.uuid });
       return;
     case 'COMPROVANTE':
-      await api.enviarComprovante(item.paradaId, item.uri, item.tipoComprovante, item.uuid, item.capturadoEm);
+      await api.enviarComprovante(item.paradaId, item.uri, item.tipoComprovante, item.uuid, item.capturadoEm, item.nf);
       return;
     case 'PEDAGIO':
       await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm);
