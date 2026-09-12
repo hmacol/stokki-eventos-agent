@@ -24,13 +24,22 @@ export function Deslizar({
   const x = useRef(new Animated.Value(0)).current;
   const maxRef = useRef(0);
   maxRef.current = Math.max(0, largura - BOTAO - MARGEM * 2);
+  // O PanResponder é criado UMA vez (useRef); se lesse onConfirmar/
+  // desabilitado direto das props, ficaria com a versão da 1ª renderização
+  // -- foi o bug de 12/09: o checklist validava o formulário VAZIO e
+  // dizia "Falta: Nome de quem recebeu" com tudo preenchido. Refs sempre
+  // apontam pra versão atual.
+  const onConfirmarRef = useRef(onConfirmar);
+  onConfirmarRef.current = onConfirmar;
+  const bloqueadoRef = useRef(false);
+  bloqueadoRef.current = !!desabilitado || ocupado;
 
   const voltar = () => Animated.spring(x, { toValue: 0, useNativeDriver: false, bounciness: 6 }).start();
 
   const pan = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => !desabilitado && !ocupado,
-      onMoveShouldSetPanResponder: (_e, g) => !desabilitado && !ocupado && Math.abs(g.dx) > 4,
+      onStartShouldSetPanResponder: () => !bloqueadoRef.current,
+      onMoveShouldSetPanResponder: (_e, g) => !bloqueadoRef.current && Math.abs(g.dx) > 4,
       onPanResponderMove: (_e, g) => {
         x.setValue(Math.min(Math.max(0, g.dx), maxRef.current));
       },
@@ -39,8 +48,9 @@ export function Deslizar({
         if (max > 0 && g.dx >= max * 0.82) {
           Animated.timing(x, { toValue: max, duration: 120, useNativeDriver: false }).start();
           setOcupado(true);
+          bloqueadoRef.current = true;
           try {
-            await onConfirmar();
+            await onConfirmarRef.current();
           } finally {
             setOcupado(false);
             x.setValue(0);

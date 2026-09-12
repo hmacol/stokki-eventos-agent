@@ -414,5 +414,12 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   (3) **Assinatura desconsiderada**: card e modal saíram da tela,
   `checklist.assinatura` vai sempre `false`; `src/assinatura.tsx` e o
   tipo ASSINATURA na API ficam sem uso (não removidos). `tsc` limpo.
-  **Precisa de OTA** (`eas update --channel preview --environment
-  preview`) — sem login/token do Expo nesta máquina.
+  OTAs `90333825` e `11f06350` (esta esconde o card `vinculo_outro` que
+  o `checklist_modelo` de produção — em **`dados/dados.db`**, não na
+  raiz — manda separado). **Causa real do "Falta: Nome de quem recebeu"
+  com tudo preenchido:** `src/deslizar.tsx` criava o PanResponder uma
+  vez (`useRef`) e guardava o `onConfirmar` da 1ª renderização, quando
+  `respostas` era `{}`; a validação rodava sobre o formulário vazio.
+  Fix: refs pra `onConfirmar` e `desabilitado/ocupado` lidas na hora do
+  gesto (também consertou o trava-duplo-arrasto). Vale pra TODOS os
+  Deslizar (aceitar/iniciar/reagendar/finalizar).
