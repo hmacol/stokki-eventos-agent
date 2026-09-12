@@ -755,6 +755,11 @@ def exportar_xlsx():
 import chamados_web
 chamados_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=exige_mesma_origem, config=_CONFIG)
 
+# ── Calculadora de frete dedicado, 11/09 -- rotas em cotacao_web.py ──────────
+import cotacao_web
+cotacao_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=exige_mesma_origem, config=_CONFIG,
+                      secret=_SECRET, url_base=_URL_BASE)
+
 
 @app.errorhandler(404)
 def _404(_e):

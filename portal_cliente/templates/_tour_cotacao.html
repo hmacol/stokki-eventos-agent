@@ -1,0 +1,58 @@
+{# Roteiro do "Guia da tela" da calculadora de frete (portal do cliente),
+   11/09. Só o conteúdo; o motor é painel_agentes/templates/_tour.html,
+   incluído pelo base_cliente.html. Mesmo padrão do _tour_portal.html. #}
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var C = 'Carga', E = 'Entregas', R = 'Resultado', G = 'Geral';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Calculadora de frete dedicado',
+      texto: '<p>Aqui você cota um <b>veículo exclusivo</b> saindo do galpão Fresh Log até os seus endereços de entrega, com o valor fechado na hora.</p><p>Use <b>Próximo</b> e <b>Voltar</b>. Dá pra reabrir este guia pelo botão <b>Guia</b>, no topo.</p>' },
+    { alvo: '.vistas', capitulo: G, titulo: 'As áreas do portal',
+      texto: '<p><b>Acompanhamento</b> e <b>Enviar pedidos</b> continuam onde estavam. <b>Cotação de frete</b> é esta tela.</p>' },
+
+    { alvo: '#card-carga', capitulo: C, titulo: 'A carga', posicao: 'direita',
+      texto: '<p>Informe <b>caixas</b> e <b>peso total</b>: o veículo é escolhido automaticamente pelo menor que comporta os dois.</p><p>O <b>valor da NF</b> é opcional e serve pro ad valorem (0,5% da nota).</p>' },
+    { alvo: '#tipo-carga', capitulo: C, titulo: 'Seco, refrigerado ou congelado',
+      texto: 'Carga <b>seca</b> sai mais barata (carro sem refrigeração). Refrigerado e congelado têm o mesmo valor.' },
+    { alvo: '#urgente', capitulo: C, titulo: 'Same-day',
+      texto: 'Marque quando a entrega precisa acontecer <b>hoje</b>. Entra um adicional de 40% sobre o frete.' },
+
+    { alvo: '#entregas', capitulo: E, titulo: 'Os endereços', posicao: 'direita',
+      texto: '<p>Digite o <b>CEP</b>: rua, bairro e cidade são preenchidos sozinhos. Depois é só o <b>número</b> (e o complemento, se tiver).</p><p>Se o CEP não vier completo, clique em <b>editar endereço</b> e preencha à mão.</p><p>A ordem das entregas é a ordem em que o veículo vai passar, e é ela que define a quilometragem.</p>' },
+    { alvo: '#add-entrega', capitulo: E, titulo: 'Mais de uma entrega',
+      texto: 'Adicione quantas entregas precisar no mesmo veículo. O km vai do galpão até a última parada, passando por todas, e soma o <b>retorno ao galpão</b>.' },
+    { alvo: '#btn-lista', capitulo: E, titulo: 'Subir uma lista',
+      texto: 'Muitos endereços? Baixe o <b>Modelo</b>, preencha CEP e número de cada entrega e suba o arquivo (.xlsx ou .csv).' },
+    { alvo: '#calcular', capitulo: E, titulo: 'Calcular',
+      texto: 'Calcula a distância rodoviária real (Google Maps) e o pedágio estimado, escolhe o veículo e monta o valor. Leva alguns segundos.' },
+
+    { alvo: '#card-resultado', capitulo: R, titulo: 'O resultado', posicao: 'esquerda',
+      texto: '<p>Veículo escolhido, quilometragem (ida mais o retorno ao galpão) e a composição linha a linha: frete base, km adicional, ad valorem, urgência, impostos e pedágio.</p><p>Os <b>impostos já estão inclusos</b> no total. O <b>pedágio</b> aqui é estimativa: na fatura entra o valor real do trajeto.</p><p>A proposta vale <b>7 dias</b>.</p>' },
+    { alvo: '#res-emails-box', capitulo: R, titulo: 'Enviar a proposta', posicao: 'esquerda',
+      texto: 'Manda a proposta em PDF por e-mail, com um botão de <b>aceite</b> dentro do e-mail. Os e-mails do seu cadastro já vêm preenchidos; pode acrescentar outros.',
+      antes: function () { var r = $('res'); if (r && r.classList.contains('oculto')) { r.classList.remove('oculto'); $('res-vazio').classList.add('oculto'); r.dataset.tourAbriu = '1'; } } },
+    { alvo: '#btn-aceitar', capitulo: R, titulo: 'Aceitar', posicao: 'esquerda',
+      texto: 'Aceita a proposta na hora. A equipe Fresh Log recebe o pedido, abre o atendimento e entra em contato pra programar a coleta.' },
+
+    { alvo: '#card-historico', capitulo: G, titulo: 'Cotações anteriores', posicao: 'cima',
+      texto: 'Todas as cotações feitas ficam aqui, com situação (simulada, proposta enviada, aceita, expirada). <b>Ver</b> recarrega a cotação no formulário pra refazer com ajustes; <b>PDF</b> abre a proposta.' },
+    { alvo: '#tour-abrir', capitulo: G, titulo: 'Rever este guia',
+      texto: 'Pra ver este passo a passo de novo, a qualquer momento, clique aqui.' },
+    { alvo: null, capitulo: G, titulo: 'Pronto!',
+      texto: '<p>Carga acima da capacidade do VUC (600 caixas ou 2 toneladas)? A tela avisa e você pede a cotação pelo atendimento, no chat da tela de acompanhamento.</p>' }
+    // nota: a capacidade em caixas é referência -- caixa muito grande pode
+    // mudar o veículo na conferência da operação (Hugo, 11/09).
+  ];
+
+  window.Tour.registrar('portal', passos, {
+    auto: true,
+    titulo: 'Guia',
+    pronto: function () { return !!$('entregas'); },
+    aoSair: function () {
+      var r = $('res');
+      if (r && r.dataset.tourAbriu) { delete r.dataset.tourAbriu; r.classList.add('oculto'); $('res-vazio').classList.remove('oculto'); }
+    }
+  });
+})();
+</script>

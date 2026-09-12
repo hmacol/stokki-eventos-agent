@@ -157,7 +157,8 @@
   const barra = document.querySelector('.barra-topo');
   const vistas = document.createElement('div');
   vistas.className = 'vistas';
-  vistas.innerHTML = '<button type="button" data-vista="acompanhamento">Acompanhamento</button><button type="button" data-vista="envios">Enviar pedidos <em id="vistas-badge"></em></button>';
+  vistas.innerHTML = '<button type="button" data-vista="acompanhamento">Acompanhamento</button><button type="button" data-vista="envios">Enviar pedidos <em id="vistas-badge"></em></button>'
+    + '<a href="{{ url_for('cotacao_pagina') }}" style="border:none;color:var(--texto-suave);font-size:13px;font-weight:700;padding:6px 14px;border-radius:6px;display:inline-flex;align-items:center;text-decoration:none;">Cotação de frete</a>';
   barra.insertBefore(vistas, barra.firstChild);
   const soAcomp = ['dia-ant', 'hoje', 'carimbo', 'atualizar', 'exportar'].map(id => $(id)).filter(Boolean);
   const dataNav = document.querySelector('.data-nav');

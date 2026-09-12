@@ -1,0 +1,468 @@
+{% extends "base_cliente.html" %}
+{% block titulo %}Cotação de frete{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; margin: 0 auto; padding: 20px 28px 48px; display: flex; flex-direction: column; gap: 16px; }
+  .barra-topo { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .vistas { display: inline-flex; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 3px; gap: 2px; }
+  .vistas a { border: none; background: transparent; color: var(--texto-suave); font-size: 13px; font-weight: 700; padding: 6px 14px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 7px; align-items: center; text-decoration: none; }
+  .vistas a.ativa { background: var(--botao-bg); color: var(--botao-texto); }
+  .vistas a:hover { text-decoration: none; }
+  .grade { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; align-items: start; }
+  .coluna { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  @media (max-width: 1080px) { .grade { grid-template-columns: minmax(0, 1fr); } main { padding: 16px 14px 40px; } }
+
+  .campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .campo { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .campo label { font-size: 11.5px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
+  .campo .dica { font-size: 11px; color: var(--texto-suave); }
+  input[type=text], input[type=number], input[type=email], textarea, select {
+    width: 100%; border: 1px solid var(--borda); border-radius: 7px; padding: 8px 10px; font-family: inherit; font-size: 13px; background: var(--superficie); color: var(--texto); }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento); }
+  textarea { resize: vertical; min-height: 56px; }
+  .campo.dupla { grid-column: span 2; }
+  @media (max-width: 480px) { .campo.dupla { grid-column: span 1; } }
+  .campo label.check { text-transform: none; font-size: 13px; font-weight: 500; color: var(--texto); letter-spacing: 0; }
+  .segmento { display: inline-flex; flex-wrap: wrap; align-self: flex-start; background: var(--fundo); border: 1px solid var(--borda); border-radius: 8px; padding: 3px; gap: 2px; }
+  .segmento button { border: none; background: transparent; color: var(--texto-suave); font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  .segmento button.ativa { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,0.1); }
+  .check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding: 8px 0; }
+  .check input { width: 16px; height: 16px; }
+
+  .entregas { display: flex; flex-direction: column; gap: 10px; }
+  .entrega { border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; background: var(--fundo); display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; gap: 10px; align-items: start; }
+  .entrega .n { width: 26px; height: 26px; border-radius: 100px; background: var(--botao-bg); color: var(--botao-texto); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; margin-top: 18px; }
+  .entrega .linhas { display: grid; grid-template-columns: 120px 90px minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px; }
+  .entrega .linhas .campo.largo { grid-column: 1 / -1; }
+  .entrega .end { grid-column: 1 / -1; font-size: 12px; color: var(--texto-suave); min-height: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .entrega .end.erro { color: var(--st-falha); }
+  .entrega .end button { background: none; border: none; color: var(--acento); font-size: 12px; cursor: pointer; padding: 0; font-family: inherit; text-decoration: underline; }
+  .entrega .manual { grid-column: 1 / -1; display: none; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 60px; gap: 8px; }
+  .entrega.manual-aberto .manual { display: grid; }
+  .entrega .remover { background: none; border: none; color: var(--texto-suave); cursor: pointer; margin-top: 20px; padding: 2px; border-radius: 6px; }
+  .entrega .remover:hover { color: var(--st-falha); background: var(--erro-bg); }
+  .entrega .remover svg { width: 16px; height: 16px; }
+  @media (max-width: 720px) { .entrega .linhas { grid-template-columns: 1fr 1fr; } .entrega .manual { grid-template-columns: 1fr 1fr; } }
+  .acoes-entregas { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .acoes-entregas .sep { margin-left: auto; }
+
+  .rodape-form { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .aviso { font-size: 12.5px; padding: 9px 12px; border-radius: 8px; display: none; }
+  .aviso.on { display: block; }
+  .aviso.erro { background: var(--erro-bg); color: var(--st-falha); }
+  .aviso.ok { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .aviso.info { background: var(--rota-bg); color: var(--st-rota); }
+
+  /* Resultado */
+  .resultado { position: sticky; top: 16px; }
+  .vazio { color: var(--texto-suave); font-size: 13px; line-height: 1.5; }
+  .veiculo { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; background: var(--fundo); margin-bottom: 12px; }
+  .veiculo .ico { width: 40px; height: 40px; border-radius: 8px; background: var(--botao-bg); color: var(--botao-texto); display: flex; align-items: center; justify-content: center; flex: none; }
+  .veiculo .ico svg { width: 22px; height: 22px; }
+  .veiculo .nm { font-size: 15px; font-weight: 700; }
+  .veiculo .sub { font-size: 11.5px; color: var(--texto-suave); }
+  .comp { width: 100%; border-collapse: collapse; }
+  .comp td { padding: 6px 0; font-size: 12.5px; border-bottom: 1px dashed var(--borda); vertical-align: top; }
+  .comp td:first-child { color: var(--texto-suave); }
+  .comp td:last-child { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .comp tr.sub td { font-weight: 700; color: var(--texto); border-bottom: 1px solid var(--borda); }
+  .total { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 0 6px; }
+  .total .rot { font-size: 12px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.4px; }
+  .total .val { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .total .val small { font-size: 12px; color: var(--texto-suave); font-weight: 600; display: block; text-align: right; }
+  .validade { font-size: 11.5px; color: var(--texto-suave); margin-bottom: 12px; }
+  .acoes-res { display: flex; flex-direction: column; gap: 8px; }
+  .acoes-res .linha { display: flex; gap: 8px; flex-wrap: wrap; }
+  .acoes-res .linha .botao, .acoes-res .linha .botao-linha { flex: 1; justify-content: center; }
+  .emails { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--borda); border-radius: 8px; }
+  .emails label { font-size: 11px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; }
+  .status-cot { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+  .s-SIMULADA { background: var(--fundo); color: var(--texto-suave); border: 1px solid var(--borda); }
+  .s-PROPOSTA_ENVIADA { background: var(--rota-bg); color: var(--st-rota); }
+  .s-ACEITA { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .s-FORA_DA_TABELA { background: var(--erro-bg); color: var(--st-falha); }
+  .s-EXPIRADA { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+
+  /* Histórico */
+  .card-tabela { padding: 0; }
+  .card-tabela h3 { padding: 14px 18px 0; }
+  .rolagem { overflow-x: auto; padding: 0 8px 6px; }
+  table.hist { border-collapse: collapse; width: 100%; }
+  table.hist th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); padding: 8px 10px; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+  table.hist td { padding: 9px 10px; font-size: 12.5px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  table.hist tr:hover td { background: var(--fundo); }
+  table.hist td.num { text-align: right; white-space: nowrap; }
+  table.hist .acoes { display: flex; gap: 6px; white-space: nowrap; }
+  .oculto { display: none !important; }
+  .girando { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 100px; animation: gira .7s linear infinite; }
+  @keyframes gira { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
+{% block conteudo %}
+<main>
+  <div class="barra-topo">
+    <div class="vistas">
+      <a href="{{ url_for('inicio') }}">Acompanhamento</a>
+      <a href="{{ url_for('inicio', aba='envios') }}">Enviar pedidos</a>
+      <a class="ativa" href="{{ url_for('cotacao_pagina') }}">Cotação de frete</a>
+    </div>
+    <span class="vazio" style="font-size:12px;">Frete dedicado: veículo exclusivo saindo do galpão Fresh Log em {{ regras.origem_endereco }}{% if regras.considerar_retorno %}, com retorno ao galpão{% endif %}.</span>
+  </div>
+
+  <div class="grade">
+    <div class="coluna">
+      <div class="card" id="card-carga">
+        <h3>1. A carga</h3>
+        <div class="campos">
+          <div class="campo"><label for="caixas">Caixas</label><input type="number" id="caixas" min="0" step="1" placeholder="0"><span class="dica">volumes a transportar (caixa padrão)</span></div>
+          <div class="campo"><label for="peso">Peso total (kg)</label><input type="number" id="peso" min="0" step="0.1" placeholder="0"><span class="dica">o veículo é escolhido por caixas e peso</span></div>
+          <div class="campo"><label for="valor-nf">Valor da NF (R$)</label><input type="text" id="valor-nf" inputmode="decimal" placeholder="opcional"><span class="dica">ad valorem de 0,5% sobre a nota</span></div>
+          <div class="campo dupla"><label>Tipo de carga</label>
+            <div class="segmento" id="tipo-carga">
+              {% for cod, rot in regras.tipos_carga.items() %}<button type="button" data-v="{{ cod }}" class="{{ 'ativa' if loop.first else '' }}">{{ rot }}</button>{% endfor %}
+            </div>
+            <span class="dica">carro seco sai R$ {{ '%.0f'|format(regras.desconto_seco) }} mais barato</span>
+          </div>
+          <div class="campo"><label>Urgência</label>
+            <label class="check"><input type="checkbox" id="urgente"> Same-day (hoje) · +{{ (regras.urgencia_same_day * 100)|round|int }}%</label>
+          </div>
+        </div>
+        <div class="campo" style="margin-top:12px;"><label for="obs">Observações (opcional)</label><textarea id="obs" maxlength="500" placeholder="Horário de coleta, restrições no destino, quem recebe…"></textarea></div>
+      </div>
+
+      <div class="card" id="card-entregas">
+        <h3>2. As entregas <span style="font-weight:400;text-transform:none;letter-spacing:0;">— na ordem em que o veículo vai passar{% if regras.considerar_retorno %}; a quilometragem inclui o retorno ao galpão{% endif %}</span></h3>
+        <div class="entregas" id="entregas"></div>
+        <div class="acoes-entregas">
+          <button type="button" class="botao-linha" id="add-entrega">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Adicionar entrega
+          </button>
+          <span class="sep"></span>
+          <label class="botao-linha" for="arquivo-lista" id="btn-lista" style="cursor:pointer;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            Subir lista (.xlsx / .csv)
+          </label>
+          <input type="file" id="arquivo-lista" accept=".xlsx,.csv,.txt" class="oculto">
+          <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/cotacao/modelo-lista" download style="text-decoration:none;">Modelo</a>
+        </div>
+        <div class="aviso" id="aviso-lista" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="rodape-form">
+        <button type="button" class="botao" id="calcular">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><line x1="8" y1="6" x2="16" y2="6"></line><line x1="8" y1="10" x2="8" y2="10.01"></line><line x1="12" y1="10" x2="12" y2="10.01"></line><line x1="16" y1="10" x2="16" y2="10.01"></line><line x1="8" y1="14" x2="8" y2="14.01"></line><line x1="12" y1="14" x2="12" y2="14.01"></line><line x1="16" y1="14" x2="16" y2="18"></line><line x1="8" y1="18" x2="12" y2="18"></line></svg>
+          Calcular frete
+        </button>
+        <span class="vazio" id="calc-estado"></span>
+      </div>
+      <div class="aviso" id="aviso-calc"></div>
+    </div>
+
+    <div class="coluna">
+      <div class="card resultado" id="card-resultado">
+        <h3>Resultado</h3>
+        <div id="res-vazio" class="vazio">
+          <p style="margin:0 0 8px;">Preencha a carga e as entregas e clique em <b>Calcular frete</b>.</p>
+          <p style="margin:0;">Tabela de veículos:</p>
+          <ul style="margin:6px 0 0;padding-left:18px;">
+            {% for v in regras.veiculos %}<li><b>{{ v.nome }}</b>: até {{ v.caixas_max }} cx / {{ '%.0f'|format(v.peso_max_kg) }} kg · R$ {{ '%.0f'|format(v.base) }} até {{ '%.0f'|format(v.franquia_km) }} km · + R$ {{ '%.2f'|format(v.km_adicional)|replace('.', ',') }}/km</li>{% endfor %}
+          </ul>
+          <p style="margin:8px 0 0;">Acima disso, solicite cotação pelo atendimento.</p>
+          <p style="margin:8px 0 0;">A capacidade em caixas é uma referência: caixa muito grande pode mudar o veículo na conferência da carga.</p>
+        </div>
+        <div id="res" class="oculto">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+            <span class="mono" id="res-numero" style="font-weight:700;"></span>
+            <span id="res-status" class="status-cot"></span>
+          </div>
+          <div class="veiculo">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg></div>
+            <div><div class="nm" id="res-veiculo"></div><div class="sub" id="res-veiculo-sub"></div></div>
+          </div>
+          <table class="comp" id="res-comp"></table>
+          <div class="total"><span class="rot">Total</span><span class="val" id="res-total"></span></div>
+          <div class="validade" id="res-validade"></div>
+          <div class="acoes-res" id="res-acoes">
+            <div class="emails" id="res-emails-box">
+              <label for="res-emails">Enviar proposta (PDF) para</label>
+              <input type="text" id="res-emails" placeholder="e-mails separados por vírgula">
+            </div>
+            <div class="linha">
+              <button type="button" class="botao-linha" id="btn-proposta" {% if not pode_agir %}disabled{% endif %}>Enviar proposta por e-mail</button>
+              <a class="botao-linha" id="btn-pdf" href="#" target="_blank" style="text-decoration:none;">Ver PDF</a>
+            </div>
+            <div class="linha">
+              <button type="button" class="botao" id="btn-aceitar" {% if not pode_agir %}disabled{% endif %}>Aprovar proposta</button>
+            </div>
+            <div class="aviso" id="aviso-res"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card card-tabela" id="card-historico">
+    <h3>Cotações anteriores</h3>
+    <div class="rolagem">
+      <table class="hist">
+        <thead><tr><th>Nº</th><th>Data</th><th>Veículo</th><th>Carga</th><th>Entregas</th><th class="num">Km</th><th class="num">Total</th><th>Situação</th><th></th></tr></thead>
+        <tbody id="hist-corpo"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+{% endblock %}
+{% block script_extra %}
+{# depois do motor (_tour.html, incluído pelo base no fim do body) #}
+{% include "_tour_cotacao.html" %}
+<script>
+(function () {
+  const BASE = {{ request.script_root | tojson }};
+  const REGRAS = {{ regras | tojson }};
+  const EMAILS_CADASTRO = {{ emails_cliente | tojson }};
+  const PODE_AGIR = {{ pode_agir | tojson }};
+  const VER_INICIAL = {{ ver_inicial | tojson }};
+  const $ = id => document.getElementById(id);
+
+  const brl = v => v == null ? '—' : 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const km = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' km';
+  const dataBr = iso => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—';
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function aviso(id, tipo, texto) { const el = $(id); el.className = 'aviso' + (texto ? ' on ' + tipo : ''); el.innerHTML = texto || ''; }
+
+  // ── Entregas ──────────────────────────────────────────────────────────
+  let paradas = [];
+  let seq = 0;
+  function novaParada(p) { return Object.assign({ _id: ++seq, cep: '', numero: '', complemento: '', referencia: '', logradouro: '', bairro: '', cidade: '', uf: '', _erro: '', _manual: false }, p || {}); }
+  function render() {
+    const cont = $('entregas');
+    cont.innerHTML = '';
+    paradas.forEach((p, i) => {
+      const div = document.createElement('div');
+      div.className = 'entrega' + (p._manual ? ' manual-aberto' : '');
+      div.dataset.id = p._id;
+      const end = [p.logradouro, p.bairro, p.cidade ? p.cidade + (p.uf ? ' - ' + p.uf : '') : ''].filter(Boolean).join(', ');
+      div.innerHTML = `
+        <div class="n">${i + 1}</div>
+        <div class="linhas">
+          <div class="campo"><label>CEP</label><input type="text" data-k="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(p.cep)}"></div>
+          <div class="campo"><label>Número</label><input type="text" data-k="numero" maxlength="20" value="${esc(p.numero)}"></div>
+          <div class="campo"><label>Complemento</label><input type="text" data-k="complemento" maxlength="60" placeholder="sala, loja, bloco…" value="${esc(p.complemento)}"></div>
+          <div class="campo"><label>Referência / destinatário</label><input type="text" data-k="referencia" maxlength="80" placeholder="opcional" value="${esc(p.referencia)}"></div>
+          <div class="end ${p._erro ? 'erro' : ''}">${p._erro ? esc(p._erro) : (end ? esc(end) : 'Digite o CEP pra preencher o endereço')}
+            <button type="button" data-acao="manual">${p._manual ? 'ocultar endereço' : 'editar endereço'}</button></div>
+          <div class="manual">
+            <div class="campo"><label>Logradouro</label><input type="text" data-k="logradouro" maxlength="120" value="${esc(p.logradouro)}"></div>
+            <div class="campo"><label>Bairro</label><input type="text" data-k="bairro" maxlength="80" value="${esc(p.bairro)}"></div>
+            <div class="campo"><label>Cidade</label><input type="text" data-k="cidade" maxlength="80" value="${esc(p.cidade)}"></div>
+            <div class="campo"><label>UF</label><input type="text" data-k="uf" maxlength="2" value="${esc(p.uf)}"></div>
+          </div>
+        </div>
+        <button type="button" class="remover" title="Remover entrega" data-acao="remover">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
+        </button>`;
+      cont.appendChild(div);
+    });
+  }
+  function paradaDe(el) { const id = Number(el.closest('.entrega').dataset.id); return paradas.find(p => p._id === id); }
+  $('entregas').addEventListener('input', e => {
+    const k = e.target.dataset.k; if (!k) return;
+    const p = paradaDe(e.target); p[k] = e.target.value;
+    if (k === 'cep') {
+      const d = e.target.value.replace(/\D/g, '').slice(0, 8);
+      e.target.value = d.length > 5 ? d.slice(0, 5) + '-' + d.slice(5) : d;
+      p.cep = e.target.value;
+      if (d.length === 8) buscarCep(p, e.target);
+    }
+  });
+  $('entregas').addEventListener('click', e => {
+    const b = e.target.closest('[data-acao]'); if (!b) return;
+    const p = paradaDe(b);
+    if (b.dataset.acao === 'remover') { paradas = paradas.filter(x => x !== p); if (!paradas.length) paradas.push(novaParada()); render(); }
+    if (b.dataset.acao === 'manual') { p._manual = !p._manual; render(); }
+  });
+  async function buscarCep(p, input) {
+    const cep = p.cep.replace(/\D/g, '');
+    p._erro = '';
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/cep/${cep}`, { credentials: 'same-origin' });
+      const d = await r.json();
+      if (!r.ok) { p._erro = d.erro || 'CEP não encontrado'; p._manual = true; }
+      else { p.logradouro = d.logradouro; p.bairro = d.bairro; p.cidade = d.cidade; p.uf = d.uf; p._erro = ''; if (!d.logradouro) p._manual = true; }
+    } catch (e) { p._erro = 'Falha ao consultar o CEP'; p._manual = true; }
+    const foco = input && input.dataset.k;
+    render();
+    // devolve o foco pro campo Número da mesma entrega
+    const div = document.querySelector(`.entrega[data-id="${p._id}"]`);
+    if (div && foco === 'cep') { const n = div.querySelector('[data-k="numero"]'); if (n) n.focus(); }
+  }
+  $('add-entrega').addEventListener('click', () => { paradas.push(novaParada()); render(); const ult = document.querySelector('.entrega:last-child [data-k="cep"]'); if (ult) ult.focus(); });
+  paradas.push(novaParada()); render();
+
+  $('arquivo-lista').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    aviso('aviso-lista', 'info', '<span class="girando"></span> Lendo a lista…');
+    const fd = new FormData(); fd.append('arquivo', f);
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/lista`, { method: 'POST', credentials: 'same-origin', body: fd });
+      const d = await r.json();
+      if (!r.ok) { aviso('aviso-lista', 'erro', esc(d.erro || 'Falha ao ler a lista')); return; }
+      paradas = d.paradas.map(p => novaParada({ cep: p.cep || '', numero: p.numero || '', complemento: p.complemento || '', referencia: p.referencia || '', logradouro: p.logradouro || '', bairro: p.bairro || '', cidade: p.cidade || '', uf: p.uf || '', _manual: !p.cidade }));
+      render();
+      aviso('aviso-lista', 'ok', `${paradas.length} entrega(s) carregada(s). Confira números e endereços antes de calcular.`);
+    } catch (err) { aviso('aviso-lista', 'erro', 'Falha ao enviar o arquivo.'); }
+    e.target.value = '';
+  });
+
+  // ── Carga ─────────────────────────────────────────────────────────────
+  let tipoCarga = Object.keys(REGRAS.tipos_carga)[0];
+  $('tipo-carga').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    tipoCarga = b.dataset.v;
+    $('tipo-carga').querySelectorAll('button').forEach(x => x.classList.toggle('ativa', x === b));
+  });
+  function numeroBr(s) { s = String(s || '').trim(); if (!s) return null; if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return isNaN(n) ? NaN : n; }
+
+  // ── Calcular ──────────────────────────────────────────────────────────
+  let atual = null;
+  $('calcular').addEventListener('click', async () => {
+    aviso('aviso-calc', '', '');
+    const nf = numeroBr($('valor-nf').value);
+    if (Number.isNaN(nf)) { aviso('aviso-calc', 'erro', 'Valor da NF inválido.'); return; }
+    const corpo = {
+      caixas: Number($('caixas').value || 0), peso_kg: Number($('peso').value || 0), tipo_carga: tipoCarga,
+      urgente: $('urgente').checked, valor_nf: nf, observacoes: $('obs').value,
+      paradas: paradas.map(p => ({ cep: p.cep, numero: p.numero, complemento: p.complemento, referencia: p.referencia, logradouro: p.logradouro, bairro: p.bairro, cidade: p.cidade, uf: p.uf })),
+    };
+    $('calcular').disabled = true; $('calc-estado').innerHTML = '<span class="girando"></span> Calculando distância e pedágio…';
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/calcular`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const d = await r.json();
+      if (!r.ok) {
+        aviso('aviso-calc', d.fora_da_tabela ? 'info' : 'erro', esc(d.erro || 'Falha ao calcular'));
+        if (d.fora_da_tabela) carregarHistorico();
+        return;
+      }
+      mostrarResultado(d.cotacao, d.emails_cliente, d.url_pdf);
+      carregarHistorico();
+      if (window.innerWidth <= 1080) $('card-resultado').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) { aviso('aviso-calc', 'erro', 'Falha de rede ao calcular.'); }
+    finally { $('calcular').disabled = false; $('calc-estado').textContent = ''; }
+  });
+
+  function statusDe(c) { return c.expirada && c.status !== 'ACEITA' ? { cls: 'EXPIRADA', rot: 'Expirada' } : { cls: c.status, rot: c.status_rotulo }; }
+
+  function mostrarResultado(c, emails, urlPdf) {
+    atual = c;
+    const r = c.resultado;
+    $('res-vazio').classList.add('oculto'); $('res').classList.remove('oculto');
+    $('res-numero').textContent = c.numero;
+    const st = statusDe(c); $('res-status').className = 'status-cot s-' + st.cls; $('res-status').textContent = st.rot;
+    $('res-veiculo').textContent = r.veiculo_nome + (r.urgente ? ' · same-day' : '');
+    $('res-veiculo-sub').textContent = `${r.caixas} cx · ${Number(r.peso_kg).toLocaleString('pt-BR')} kg · ${r.tipo_carga_rotulo} · até ${r.capacidade.caixas_max} cx / ${Number(r.capacidade.peso_max_kg).toLocaleString('pt-BR')} kg`;
+    const n = c.entrada.paradas.length;
+    const rotuloKm = r.km_volta ? `Distância (galpão → ${n} entrega${n > 1 ? 's' : ''} → galpão)` : `Distância (galpão → ${n} entrega${n > 1 ? 's' : ''})`;
+    const detalheKm = r.km_volta ? ` <span style="color:var(--texto-suave);">(${km(r.km_ida)} + ${km(r.km_volta)} de retorno)</span>` : '';
+    // Mesma composição do PDF e do e-mail (cotacao.linhas_composicao): frete
+    // base, desconto de carga seca, km adicional e pedágio numa linha só, já
+    // somada; só ad valorem, urgência e impostos ficam à parte (Hugo, 11/09).
+    const freteLinha = r.frete_com_pedagio != null ? r.frete_com_pedagio : (r.frete + (r.pedagio || 0));
+    const idaVolta = r.km_volta ? ' (ida e volta)' : ' (só ida)';
+    const linhas = [
+      [rotuloKm, km(r.km_total) + (r.km_fonte === 'HAVERSINE' ? ' (linha reta)' : ''), '', detalheKm],
+      [`Frete dedicado ${r.veiculo_nome} · ${km(r.km_total)}${idaVolta}` + (r.pedagio == null ? '' : ' · pedágio incluso'), brl(freteLinha)],
+    ];
+    if (r.ad_valorem) linhas.push([`Ad valorem: 0,5% de ${brl(r.valor_nf)}`, brl(r.ad_valorem)]);
+    if (r.urgencia) linhas.push([`Urgência same-day (+${Math.round((r.urgencia_pct || 0.4) * 100)}%)`, brl(r.urgencia)]);
+    linhas.push([`Impostos (${Math.round(r.impostos_pct * 100)}%, inclusos)`, brl(r.impostos)]);
+    $('res-comp').innerHTML = linhas.map(l => `<tr class="${l[2] || ''}"><td>${esc(l[0])}</td><td>${esc(l[1])}${l[3] || ''}</td></tr>`).join('');
+    $('res-total').innerHTML = esc(brl(r.total)) + `<small>${r.pedagio == null ? 'impostos inclusos' : 'impostos e pedágio estimado inclusos'}</small>`;
+    $('res-validade').textContent = c.status === 'ACEITA' ? `Aprovada em ${c.aceita_em} por ${c.aceita_por}.` : `Proposta válida até ${dataBr(c.valido_ate)}.` + (c.proposta_enviada_em ? ` Enviada em ${c.proposta_enviada_em} para ${c.proposta_para}.` : '');
+    $('res-emails').value = (emails && emails.length ? emails : EMAILS_CADASTRO).join(', ');
+    $('btn-pdf').href = urlPdf || `${BASE}/cotacao/${c.id}/pdf`;
+    const aceita = c.status === 'ACEITA', morta = c.expirada && !aceita;
+    $('btn-aceitar').disabled = !PODE_AGIR || aceita || morta;
+    $('btn-aceitar').textContent = aceita ? 'Proposta aprovada' : (morta ? 'Proposta expirada' : 'Aprovar proposta');
+    $('btn-proposta').disabled = !PODE_AGIR || morta;
+    aviso('aviso-res', '', '');
+  }
+
+  $('btn-proposta').addEventListener('click', async () => {
+    if (!atual) return;
+    const emails = $('res-emails').value.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    if (!emails.length) { aviso('aviso-res', 'erro', 'Informe pelo menos um e-mail.'); return; }
+    $('btn-proposta').disabled = true; aviso('aviso-res', 'info', '<span class="girando"></span> Gerando PDF e enviando…');
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/${atual.id}/proposta`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails }) });
+      const d = await r.json();
+      if (!r.ok) { aviso('aviso-res', 'erro', esc(d.erro || 'Falha ao enviar')); return; }
+      mostrarResultado(d.cotacao, emails, $('btn-pdf').getAttribute('href'));
+      aviso('aviso-res', 'ok', `Proposta enviada para ${esc(emails.join(', '))}` + (d.redirecionado ? ' <i>(piloto: redirecionada pra caixa interna da Fresh Log)</i>' : '') + '. O e-mail tem o valor final, o botão de aprovar e o PDF com o detalhamento.');
+      carregarHistorico();
+    } catch (e) { aviso('aviso-res', 'erro', 'Falha de rede.'); }
+    finally { $('btn-proposta').disabled = !PODE_AGIR; }
+  });
+
+  $('btn-aceitar').addEventListener('click', async () => {
+    if (!atual) return;
+    if (!confirm(`Aprovar a proposta ${atual.numero} no valor de ${brl(atual.resultado.total)}? A equipe Fresh Log recebe o pedido e entra em contato pra programar a coleta.`)) return;
+    $('btn-aceitar').disabled = true; aviso('aviso-res', 'info', '<span class="girando"></span> Registrando a aprovação…');
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/${atual.id}/aceitar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const d = await r.json();
+      if (!r.ok) { aviso('aviso-res', 'erro', esc(d.erro || 'Falha ao aprovar')); $('btn-aceitar').disabled = false; return; }
+      mostrarResultado(d.cotacao, null, $('btn-pdf').getAttribute('href'));
+      aviso('aviso-res', 'ok', 'Proposta aprovada! Nossa equipe entra em contato pra programar a coleta. Você recebe a confirmação por e-mail.');
+      carregarHistorico();
+    } catch (e) { aviso('aviso-res', 'erro', 'Falha de rede.'); $('btn-aceitar').disabled = false; }
+  });
+
+  // ── Histórico ─────────────────────────────────────────────────────────
+  async function carregarHistorico() {
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/historico`, { credentials: 'same-origin' });
+      const d = await r.json();
+      const corpo = $('hist-corpo');
+      if (!d.cotacoes || !d.cotacoes.length) { corpo.innerHTML = '<tr><td colspan="9" class="vazio">Nenhuma cotação ainda.</td></tr>'; return; }
+      corpo.innerHTML = d.cotacoes.map(c => {
+        const r = c.resultado, e = c.entrada, st = statusDe(c);
+        return `<tr>
+          <td class="mono">${esc(c.numero)}</td>
+          <td>${esc((c.criado_em || '').slice(0, 16).replace('T', ' '))}</td>
+          <td>${r ? esc(r.veiculo_nome) + (r.urgente ? ' · same-day' : '') : '—'}</td>
+          <td>${esc(e.caixas)} cx · ${Number(e.peso_kg || 0).toLocaleString('pt-BR')} kg · ${esc((REGRAS.tipos_carga[e.tipo_carga] || e.tipo_carga || '').toLowerCase())}</td>
+          <td>${(e.paradas || []).length}</td>
+          <td class="num">${r ? esc(km(r.km_total)) : '—'}</td>
+          <td class="num"><b>${r ? esc(brl(r.total)) : '—'}</b></td>
+          <td><span class="status-cot s-${st.cls}">${esc(st.rot)}</span></td>
+          <td class="acoes">${r ? `<button type="button" class="botao-linha" data-ver="${c.id}">Ver</button><a class="botao-linha" href="${esc(c.url_pdf)}" target="_blank" style="text-decoration:none;">PDF</a>` : ''}</td>
+        </tr>`;
+      }).join('');
+    } catch (e) { $('hist-corpo').innerHTML = '<tr><td colspan="9" class="vazio">Não foi possível carregar o histórico.</td></tr>'; }
+  }
+  $('hist-corpo').addEventListener('click', async e => {
+    const b = e.target.closest('[data-ver]'); if (!b) return;
+    await abrir(Number(b.dataset.ver));
+    $('card-resultado').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  async function abrir(id) {
+    try {
+      const r = await fetch(`${BASE}/api/cotacao/${id}`, { credentials: 'same-origin' });
+      const d = await r.json();
+      if (!r.ok) { aviso('aviso-calc', 'erro', esc(d.erro || 'Cotação não encontrada')); return; }
+      mostrarResultado(d.cotacao, d.emails_cliente, d.url_pdf);
+      // recarrega o formulário com os dados dela (pra refazer com ajustes)
+      const c = d.cotacao, en = c.entrada;
+      $('caixas').value = en.caixas || ''; $('peso').value = en.peso_kg || ''; $('valor-nf').value = en.valor_nf ? Number(en.valor_nf).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
+      $('urgente').checked = !!en.urgente; $('obs').value = en.observacoes || '';
+      tipoCarga = en.tipo_carga || tipoCarga;
+      $('tipo-carga').querySelectorAll('button').forEach(x => x.classList.toggle('ativa', x.dataset.v === tipoCarga));
+      paradas = (en.paradas || []).map(p => novaParada(p)); if (!paradas.length) paradas.push(novaParada()); render();
+    } catch (e) { aviso('aviso-calc', 'erro', 'Falha de rede.'); }
+  }
+  carregarHistorico();
+  if (VER_INICIAL) abrir(VER_INICIAL);
+})();
+</script>
+{% endblock %}

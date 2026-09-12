@@ -1,0 +1,34 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Aprovação da proposta{% endblock %}
+{% block conteudo %}
+{% if estado == 'ok' %}
+  <h1>Aprovar a proposta {{ cotacao.numero }}</h1>
+  <p class="suave">{{ cotacao.nome_cliente }} · válida até {{ cotacao.valido_ate[8:10] }}/{{ cotacao.valido_ate[5:7] }}/{{ cotacao.valido_ate[:4] }}</p>
+  <ul class="lista">
+    <li><b>Total:</b> R$ {{ '{:,.2f}'.format(cotacao.resultado.total)|replace(',', 'X')|replace('.', ',')|replace('X', '.') }}
+      <span style="color:var(--texto-suave);font-size:12px;">(impostos e pedágio estimado inclusos)</span></li>
+  </ul>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  <form method="post">
+    <label for="nome">Seu nome (quem está aprovando)</label>
+    <input type="text" id="nome" name="nome" maxlength="120" autofocus required>
+    <button type="submit" class="principal">Aprovar proposta</button>
+  </form>
+  <p class="suave" style="margin-top:14px;">O detalhamento está no PDF que veio junto com o e-mail. Ao aprovar, a equipe Fresh Log
+  recebe o pedido e entra em contato pra programar a coleta.</p>
+{% elif estado == 'aceita_agora' %}
+  <h1>Proposta {{ cotacao.numero }} aprovada</h1>
+  <p>Obrigado! Registramos a aprovação em nome de <b>{{ cotacao.aceita_por }}</b>. Nossa equipe entra em contato pra programar a coleta e confirmar as entregas.</p>
+  <p class="suave">Você recebe a confirmação por e-mail com a proposta em PDF.</p>
+{% elif estado == 'aceita' %}
+  <h1>Proposta {{ cotacao.numero }} já aprovada</h1>
+  <p>Esta proposta foi aprovada em {{ cotacao.aceita_em }} por {{ cotacao.aceita_por }}. Não precisa fazer nada.</p>
+{% elif estado == 'expirado' %}
+  <h1>Proposta expirada</h1>
+  <p>Este link venceu{% if cotacao %} (a proposta {{ cotacao.numero }} valia até {{ cotacao.valido_ate[8:10] }}/{{ cotacao.valido_ate[5:7] }}/{{ cotacao.valido_ate[:4] }}){% endif %}. Faça uma nova cotação no portal.</p>
+{% else %}
+  <h1>Link inválido</h1>
+  <p>Este link de aprovação não é válido. Se você recebeu a proposta por e-mail, abra o link mais recente ou aprove pelo portal.</p>
+{% endif %}
+<div class="links"><a href="{{ url_for('cotacao_pagina') }}">Ir pro portal do cliente</a></div>
+{% endblock %}

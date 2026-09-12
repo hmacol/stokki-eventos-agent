@@ -1,0 +1,60 @@
+# Calculadora de frete dedicado no portal do cliente
+
+Pedido do Hugo, 11/09/2026: o cliente cota online um veículo dedicado
+(Fiorino, Van/HR ou VUC) saindo do galpão até os endereços dele, recebe a
+proposta em PDF por e-mail com botão de aceite e a equipe recebe o aceite.
+A tabela padrão das regiões atendidas ficou **em pausa** (decisão do Hugo).
+
+## Onde está
+
+| Arquivo | O quê |
+|---|---|
+| `portal_cliente/cotacao.py` | regras (`calcular`, `escolher_veiculo`, `km_excedente`), CEP (ViaCEP/BrasilAPI), lista .xlsx/.csv, geocodificação + km, tabela `portal_cotacoes`, token de aceite, e-mails |
+| `portal_cliente/cotacao_pdf.py` | PDF da proposta (Pillow, mesmo padrão dos romaneios) |
+| `portal_cliente/cotacao_web.py` | rotas Flask (`/cotacao`, `/api/cotacao/*`, `/cotacao/aceite/<token>`) |
+| `portal_cliente/templates/cotacao.html`, `cotacao_aceite.html`, `_tour_cotacao.html` | tela, página pública de aceite, guia da tela |
+| `roteirizacao/km_rodoviario.py` | `calcular_trajeto()` novo: km (ida, volta e total) + pedágio (`extraComputations: TOLLS`) |
+| `config.yaml` → `portal_cliente.cotacao` | tabela de veículos, percentuais, origem, e-mails, `forcar_destino` |
+| `portal_cliente/test_cotacao.py` | 22 testes (`py -3 -m pytest portal_cliente/test_cotacao.py -q`) |
+
+## Regras (decisões do Hugo, 11/09)
+
+- Veículo escolhido automaticamente: o menor que comporta **caixas e peso**.
+  Fiorino 100 cx/550 kg · Van/HR 400 cx/1.300 kg · VUC 600 cx/2.000 kg.
+  Acima disso: "solicite cotação" (fica registrado como FORA_DA_TABELA).
+  O Hugo avisou (11/09) que a capacidade em caixas **varia muito com o
+  tamanho da caixa** — a tela diz isso ao cliente, mas a conferência real
+  é da operação.
+- Base: Fiorino R$ 650 até 65 km (+R$ 2/km) · Van/HR R$ 850 até 100 km
+  (+R$ 2/km) · VUC R$ 1.300 até 120 km (+R$ 2,50/km).
+- Carga seca: R$ 150 a menos na saída. Refrigerado = congelado.
+- Km: Google Routes, galpão → entregas na ordem → **galpão** (o retorno
+  sempre conta, Hugo 11/09; `considerar_retorno` no config desliga);
+  excedente em km inteiro arredondado pra cima.
+- Ad valorem 0,5% da NF (campo opcional). Same-day +40% sobre frete + ad valorem.
+- Impostos 12% por gross-up (total = líquido / 0,88). Pedágio fora do gross-up,
+  estimado pela Routes API e cobrado pelo valor real.
+- Proposta vale 7 dias. Aceite pelo portal ou pelo link assinado do e-mail
+  (itsdangerous, sem login). Aceite abre chamado no atendimento (área
+  "Coleta / retirada", AGUARDANDO_FL) e avisa `email_comercial` com o PDF.
+
+## Premissas: todas confirmadas pelo Hugo (11/09)
+
+1. ~~Fiorino = 200 caixas~~ → **100 caixas** (Hugo: "varia muito do tamanho delas").
+2. Ad valorem entra no gross-up dos 12% (compõe o frete); pedágio não. ✔
+3. Same-day incide sobre frete + ad valorem, antes do gross-up. ✔
+4. ~~Km só de ida~~ → **sempre considerar o retorno** ao galpão.
+5. Caixas e peso são totais da cotação, não por entrega. ✔
+
+## Piloto
+
+`portal_cliente.cotacao.forcar_destino: hugo@freshlogbr.com` — enquanto
+preenchido, TODO e-mail da cotação (proposta, aceite, confirmação) vai só
+pro Hugo. Esvaziar (`''`) pra liberar aos clientes.
+
+## Deploy
+
+`git pull` na VPS + `systemctl restart portal-cliente`. Precisa da seção
+`portal_cliente.cotacao` no config.yaml da VPS (copiar do local). A Routes
+API precisa aceitar `extraComputations: TOLLS` (mesma chave; se falhar cai
+em linha reta sem pedágio e a tela avisa "linha reta").
