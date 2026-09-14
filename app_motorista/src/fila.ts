@@ -133,6 +133,11 @@ export async function listar(): Promise<{ uuid: string; tipo: ItemFila['tipo']; 
   }));
 }
 
+/** Pedágios ainda não enviados (Financeiro mostra junto dos já enviados). */
+export async function pedagiosNaFila(): Promise<{ uuid: string; rotaId: number; valor: number }[]> {
+  return (await ler()).flatMap((i) => (i.tipo === 'PEDAGIO' ? [{ uuid: i.uuid, rotaId: i.rotaId, valor: i.valor }] : []));
+}
+
 /** Tira um item da fila na mão (motorista/teste decidiu desistir dele). */
 export async function descartarItem(uuid: string): Promise<void> {
   const itens = await ler();

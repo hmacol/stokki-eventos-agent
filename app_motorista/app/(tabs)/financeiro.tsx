@@ -1,10 +1,16 @@
 import React, { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as api from '../../src/api';
+import * as local from '../../src/local';
 import { Cartao, Linha, Vazio } from '../../src/componentes';
+import { LancarPedagio, aceitaPedagio } from '../../src/pedagios';
 import { cores, formatarData, formatarReal, hoje, somarDias } from '../../src/tema';
-import type { Extrato } from '../../src/tipos';
+import type { Extrato, Rota } from '../../src/tipos';
+
+// Rotas que aparecem no lançamento de pedágio: recibo costuma ser
+// fotografado no fim do dia ou dias depois.
+const DIAS_PEDAGIO = 14;
 
 type Periodo = 'semana' | 'mes' | 'anterior';
 
@@ -23,10 +29,26 @@ export default function Financeiro() {
   const [extrato, setExtrato] = useState<Extrato | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [rotasPedagio, setRotasPedagio] = useState<Rota[]>([]);
+  // ?rota=ID: veio do atalho da tela da rota -- já seleciona essa rota.
+  const { rota: rotaParam } = useLocalSearchParams<{ rota?: string }>();
+
+  const carregarRotasPedagio = useCallback(async () => {
+    try {
+      const rotas = await local.mesclar(await api.rotas(somarDias(hoje(), -DIAS_PEDAGIO), hoje()));
+      setRotasPedagio(rotas.filter(aceitaPedagio).sort((a, b) => b.data_rota.localeCompare(a.data_rota)));
+    } catch (e) {
+      if (!(e instanceof api.ErroRede)) return;
+      // Sem sinal: as rotas salvas no aparelho (o pedágio vai pela fila).
+      const cache = await local.mesclar((await local.cacheRotas()) ?? []);
+      setRotasPedagio(cache.filter(aceitaPedagio));
+    }
+  }, []);
 
   const carregar = useCallback(async () => {
     setErro(null);
     const { de, ate } = intervalo(periodo);
+    void carregarRotasPedagio();
     try {
       setExtrato(await api.financeiro(de, ate));
     } catch (e) {
@@ -34,12 +56,14 @@ export default function Financeiro() {
     } finally {
       setCarregando(false);
     }
-  }, [periodo]);
+  }, [periodo, carregarRotasPedagio]);
   useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
 
   return (
     <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
       refreshControl={<RefreshControl refreshing={carregando} onRefresh={carregar} />}>
+      {/* Pedágio fica aqui, com a rota escolhida no cartão (Hugo, 14/09). */}
+      <LancarPedagio rotas={rotasPedagio} rotaInicial={rotaParam ? Number(rotaParam) : null} aoMudar={carregar} />
       <View style={s.abas}>
         {(['semana', 'mes', 'anterior'] as Periodo[]).map((p) => (
           <Pressable key={p} onPress={() => setPeriodo(p)} style={[s.aba, periodo === p && s.abaAtiva]}>

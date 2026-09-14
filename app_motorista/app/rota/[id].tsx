@@ -12,10 +12,9 @@
 // ações e o deslizar) e as outras viram linhas de uma altura que abrem no
 // toque. Com 14 paradas a rota inteira cabe em pouco mais de uma tela.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import * as api from '../../src/api';
 import * as fila from '../../src/fila';
 import * as gps from '../../src/gps';
@@ -37,8 +36,6 @@ const TOM_JANELA = {
   perigo: { fundo: cores.perigoBg, forte: cores.perigo, suave: cores.perigo, icone: cores.perigo },
   ausente: { fundo: cores.fundo, forte: cores.textoSuave, suave: cores.textoSuave, icone: cores.textoSuave },
 };
-const PEDAGIO_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado', CANCELADO: 'cancelado por você' };
-const PEDAGIO_COR: Record<string, string> = { PENDENTE: cores.alerta, APROVADO: cores.sucesso, REJEITADO: cores.perigo, CANCELADO: cores.textoSuave };
 const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
 const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
 
@@ -85,18 +82,6 @@ export default function DetalheRota() {
   const [aberta, setAberta] = useState<number | null>(null);
   // Relógio da contagem regressiva da janela -- de minuto em minuto basta.
   const [agora, setAgora] = useState(() => Date.now());
-  // Pedágio (Hugo, 11/09): reembolso à parte -- valor + foto do recibo,
-  // um por recibo, enviado pela fila offline; aprovado no painel.
-  const [pedagioAberto, setPedagioAberto] = useState(false);
-  const [pedagioValor, setPedagioValor] = useState('');
-  const [pedagioFoto, setPedagioFoto] = useState<string | null>(null);
-  const [pedagiosNaFila, setPedagiosNaFila] = useState<{ uuid: string; valor: number }[]>([]);
-  // Conferência automática do recibo (Hugo, 12/09) -- só roda se o
-  // servidor disser que está ligada (carregada junto do checklist).
-  const [validacaoAtiva, setValidacaoAtiva] = useState(false);
-  const [conferindoPedagio, setConferindoPedagio] = useState(false);
-  const [tentativasPedagio, setTentativasPedagio] = useState(0);
-  const [avisoPedagio, setAvisoPedagio] = useState('');
 
   const carregar = useCallback(async () => {
     try {
@@ -113,11 +98,6 @@ export default function DetalheRota() {
     if (rota?.status === 'EM_ROTA' && rota.editavel) void gps.iniciar(rota.id);
     if (rota && rota.status !== 'EM_ROTA' && gps.rotaRastreada() === rota.id) void gps.parar();
   }, [rota]);
-
-  useEffect(() => {
-    // Sem rede a conferência fica desligada e o fluxo é o de sempre.
-    api.checklist().then((c) => setValidacaoAtiva(c.validacao_fotos?.ativo === true)).catch(() => setValidacaoAtiva(false));
-  }, []);
 
   useEffect(() => {
     const t = setInterval(() => setAgora(Date.now()), 60000);
@@ -197,78 +177,6 @@ export default function DetalheRota() {
   const finalizar = () => {
     if (pendentes.length > 0) return Alert.alert('Ainda faltam paradas', `${pendentes.length} parada(s) sem resultado.`);
     void acaoRota('finalizar', 'CONCLUIDA');
-  };
-
-  /** Conferência automática do recibo (Hugo, 12/09): nitidez + "isto é
-   * mesmo um recibo de pedágio?". Reprovado trava até o limite de
-   * tentativas; depois o motorista pode seguir e o Hugo confere no
-   * painel. Sem sinal ou com a validação desligada, aceita direto. */
-  const fotografarPedagio = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o recibo.');
-    const r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
-    if (r.canceled || !r.assets[0]) return;
-    const uri = r.assets[0].uri;
-    if (!validacaoAtiva) return setPedagioFoto(uri);
-
-    const tentativa = tentativasPedagio + 1;
-    setTentativasPedagio(tentativa);
-    setConferindoPedagio(true);
-    try {
-      const valor = Number(pedagioValor.replace(',', '.'));
-      const v = await api.validarFoto(uri, {
-        tipo: 'PEDAGIO', rotaId: rota.id, tentativa,
-        ...(Number.isFinite(valor) && valor > 0 ? { valor } : {}),
-      });
-      if (v.resultado !== 'REPROVADO') {
-        setPedagioFoto(uri);
-        setAvisoPedagio(v.avisos?.includes('VALOR_DIVERGE')
-          ? `O recibo mostra R$ ${(v.valor_lido ?? 0).toFixed(2).replace('.', ',')} — confira o valor digitado.`
-          : v.resultado === 'NAO_VERIFICADO' ? 'Foto não conferida — vai pra revisão.' : '');
-        return;
-      }
-      const motivo = v.motivo ?? 'A foto não ficou boa.';
-      if (!v.pode_seguir) return Alert.alert('Foto não serve', `${motivo}\n\nTire outra foto.`);
-      Alert.alert('Ainda não ficou boa', `${motivo}\n\nVocê pode tentar de novo ou seguir assim — o pedágio vai pra conferência manual.`, [
-        { text: 'Tirar de novo', style: 'cancel' },
-        { text: 'Não consigo melhorar', onPress: () => { setPedagioFoto(uri); setAvisoPedagio('Segue pra conferência manual.'); } },
-      ]);
-    } catch {
-      setPedagioFoto(uri);
-      setAvisoPedagio('Sem sinal pra conferir agora — será conferida no envio.');
-    } finally {
-      setConferindoPedagio(false);
-    }
-  };
-
-  const enviarPedagio = async () => {
-    const valor = Number(pedagioValor.replace(',', '.'));
-    if (!pedagioValor.trim() || !Number.isFinite(valor) || valor <= 0) return Alert.alert('Informe o valor do pedágio.');
-    if (!pedagioFoto) return Alert.alert('Falta a foto', 'Fotografe o recibo do pedágio -- sem foto não dá pra aprovar.');
-    const uuid = fila.novoUuid();
-    const agora = fila.agoraIso();
-    await fila.enfileirar({ uuid, tipo: 'PEDAGIO', rotaId: rota.id, uri: pedagioFoto, valor, capturadoEm: agora, criadoEm: agora, tentativas: 0 });
-    setPedagiosNaFila((l) => [...l, { uuid, valor }]);
-    setPedagioValor('');
-    setPedagioFoto(null);
-    setPedagioAberto(false);
-    setAvisoPedagio('');
-    setTentativasPedagio(0);
-    await carregar();
-  };
-
-  // Cancelar um pedágio (errou o valor, foto errada, mandou 2x). Dois casos:
-  // ainda na fila de envio -> só tira da fila; já no servidor e PENDENTE ->
-  // pede pro servidor cancelar (precisa de sinal; aprovado/rejeitado não dá).
-  const cancelarPedagioNaFila = (uuid: string, valor: number) => {
-    Alert.alert('Cancelar este pedágio?', `R$ ${valor.toFixed(2).replace('.', ',')} ainda não foi enviado. Ele será descartado.`, [
-      { text: 'Voltar', style: 'cancel' },
-      { text: 'Cancelar pedágio', style: 'destructive', onPress: async () => {
-        await fila.descartarItem(uuid);
-        setPedagiosNaFila((l) => l.filter((f) => f.uuid !== uuid));
-        await carregar();
-      } },
-    ]);
   };
 
   const cancelarPedagioEnviado = (pedagioId: number, valor: number) => {
@@ -496,54 +404,16 @@ export default function DetalheRota() {
       </Cartao>
 
       {rota.editavel && (rota.status === 'EM_ROTA' || rota.status === 'CONCLUIDA') ? (
-        <Cartao>
-          <Text style={s.secao}>Pedágios</Text>
-          <Text style={s.sub}>Pagou pedágio nesta rota? Informe o valor e fotografe o recibo. O reembolso entra no extrato depois de aprovado.</Text>
-          {(rota.pedagios ?? []).map((p) => (
-            <View key={p.id} style={[s.pedagioLinha, p.status === 'CANCELADO' && { opacity: 0.55 }]}>
-              <Text style={[s.pedagioValor, p.status === 'CANCELADO' && { textDecorationLine: 'line-through' }]}>R$ {p.valor_informado.toFixed(2).replace('.', ',')}</Text>
-              <Text style={[s.pedagioStatus, { color: PEDAGIO_COR[p.status] }]}>
-                {PEDAGIO_ROTULO[p.status]}{p.status === 'APROVADO' && p.valor_aprovado !== null && p.valor_aprovado !== p.valor_informado ? ` (R$ ${p.valor_aprovado.toFixed(2).replace('.', ',')})` : ''}
-              </Text>
-              {p.status === 'PENDENTE' ? (
-                <Pressable onPress={() => cancelarPedagioEnviado(p.id, p.valor_informado)} disabled={ocupado} hitSlop={8} style={s.pedagioCancelar}>
-                  <Text style={s.pedagioCancelarTexto}>✕ Cancelar</Text>
-                </Pressable>
-              ) : null}
-              {p.observacao_revisao && p.status !== 'CANCELADO' ? <Text style={s.paradaMeta}>{p.observacao_revisao}</Text> : null}
-            </View>
-          ))}
-          {pedagiosNaFila.filter((f) => !(rota.pedagios ?? []).some((p) => p.uuid === f.uuid)).map((f) => (
-            <View key={f.uuid} style={s.pedagioLinha}>
-              <Text style={s.pedagioValor}>R$ {f.valor.toFixed(2).replace('.', ',')}</Text>
-              <Text style={[s.pedagioStatus, { color: cores.textoSuave }]}>na fila de envio</Text>
-              <Pressable onPress={() => cancelarPedagioNaFila(f.uuid, f.valor)} hitSlop={8} style={s.pedagioCancelar}>
-                <Text style={s.pedagioCancelarTexto}>✕ Cancelar</Text>
-              </Pressable>
-            </View>
-          ))}
-          {pedagioAberto ? (
-            <View style={{ marginTop: 12 }}>
-              <TextInput style={s.campoCurto} placeholder="Valor do pedágio (R$)" placeholderTextColor="#9CA3AF" keyboardType="decimal-pad" value={pedagioValor} onChangeText={setPedagioValor} />
-              {pedagioFoto ? <Image source={{ uri: pedagioFoto }} style={s.fotoPedagio} /> : null}
-              {avisoPedagio ? <Text style={[s.sub, { color: cores.alerta, fontWeight: '600' }]}>{avisoPedagio}</Text> : null}
-              <Botao
-                titulo={conferindoPedagio ? 'Conferindo a foto…' : pedagioFoto ? 'Tirar outra foto' : '📷  Fotografar recibo'}
-                tipo={pedagioFoto ? 'secundario' : 'primario'}
-                carregando={conferindoPedagio}
-                desabilitado={conferindoPedagio}
-                onPress={() => void fotografarPedagio()}
-                estilo={{ marginTop: 8 }}
-              />
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <Botao titulo="Cancelar" tipo="secundario" onPress={() => { setPedagioAberto(false); setPedagioFoto(null); setAvisoPedagio(''); }} estilo={{ flex: 1 }} />
-                <Botao titulo="Enviar pedágio" onPress={() => void enviarPedagio()} estilo={{ flex: 1 }} />
-              </View>
-            </View>
-          ) : (
-            <Botao titulo="+ Adicionar pedágio" tipo="secundario" onPress={() => setPedagioAberto(true)} estilo={{ marginTop: 10, minHeight: 46, paddingVertical: 10 }} />
-          )}
-        </Cartao>
+        // Pedágio é lançado no Financeiro, escolhendo a rota (Hugo, 14/09);
+        // aqui fica só o atalho já com esta rota selecionada.
+        <Pressable style={({ pressed }) => [s.atalhoPedagio, pressed && { backgroundColor: cores.fundo }]}
+          onPress={() => router.push({ pathname: '/financeiro', params: { rota: String(rota.id) } })} accessibilityRole="button">
+          <Ionicons name="receipt-outline" size={18} color={cores.primaria} />
+          <Text style={s.atalhoPedagioTexto}>
+            Pedágio desta rota{(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length ? ` · ${(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length} lançado(s)` : ''}
+          </Text>
+          <Text style={s.atalhoPedagioLink}>Lançar no Financeiro ›</Text>
+        </Pressable>
       ) : null}
 
       {atual ? cartaoAtual(atual) : null}
@@ -576,15 +446,9 @@ const s = StyleSheet.create({
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
-  campoCurto: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, color: cores.texto, fontSize: 18, fontWeight: '700' },
-  secao: { fontWeight: '800', color: cores.texto, fontSize: 16 },
-  pedagioLinha: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: cores.borda, marginTop: 8 },
-  pedagioValor: { fontWeight: '800', color: cores.texto, fontSize: 15 },
-  pedagioStatus: { fontWeight: '600', fontSize: 13 },
-  pedagioCancelar: { marginLeft: 'auto', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: cores.perigo },
-  pedagioCancelarTexto: { color: cores.perigo, fontWeight: '700', fontSize: 12 },
-  fotoPedagio: { width: '100%', height: 180, borderRadius: 10, marginTop: 8, backgroundColor: cores.borda },
-  paradaMeta: { color: cores.textoSuave, fontSize: 12, marginTop: 6 },
+  atalhoPedagio: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12 },
+  atalhoPedagioTexto: { flex: 1, color: cores.texto, fontWeight: '600', fontSize: 14 },
+  atalhoPedagioLink: { color: cores.info, fontWeight: '700', fontSize: 13 },
 
   // --- cartão da parada da vez ---
   cartaoAtual: { padding: 0, overflow: 'hidden', borderWidth: 2, borderColor: cores.acento },
