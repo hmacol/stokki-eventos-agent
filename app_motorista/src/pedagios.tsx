@@ -7,7 +7,7 @@
 // Estacionamento, Descarga ou Outros. Outros exige descrição; Estacionamento
 // e Descarga exigem o pedido de referência (parada da rota escolhida).
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
@@ -37,18 +37,22 @@ const codigoLimpo = (c?: string | null) => (c ?? '').replace(/^#/, '');
 const rotuloParada = (p: Parada) => `${p.ordem} · ${nomeExibicao(p)}${p.codigo ? ` · ${codigoLimpo(p.codigo)}` : ''}`;
 
 /** Menu suspenso simples: o campo mostra a escolha; o toque abre a lista logo abaixo. */
-function Seletor<T extends string | number>({ rotulo, placeholder, valor, opcoes, aoEscolher }: {
+function Seletor<T extends string | number>({ rotulo, placeholder, valor, opcoes, aoEscolher, mostrarSub = false, estilo }: {
   rotulo: string; placeholder: string; valor: T | null;
   opcoes: { valor: T; rotulo: string; sub?: string }[]; aoEscolher: (v: T) => void;
+  mostrarSub?: boolean; estilo?: object;
 }) {
   const [aberto, setAberto] = useState(false);
   const atual = opcoes.find((o) => o.valor === valor);
   return (
-    <View style={{ marginTop: 10 }}>
+    <View style={[{ marginTop: 10 }, estilo]}>
       <Text style={s.rotulo}>{rotulo}</Text>
       <Pressable onPress={() => setAberto((a) => !a)} style={[s.seletor, aberto && { borderColor: cores.primaria }]}
         accessibilityRole="button" accessibilityLabel={rotulo} accessibilityState={{ expanded: aberto }}>
-        <Text style={[s.seletorTexto, !atual && { color: '#9CA3AF', fontWeight: '500' }]} numberOfLines={1}>{atual?.rotulo ?? placeholder}</Text>
+        <View style={{ flex: 1, paddingVertical: 8 }}>
+          <Text style={[s.seletorTexto, !atual && { color: '#9CA3AF', fontWeight: '500' }]} numberOfLines={1}>{atual?.rotulo ?? placeholder}</Text>
+          {atual?.sub && mostrarSub ? <Text style={s.opcaoSub} numberOfLines={1}>{atual.sub}</Text> : null}
+        </View>
         <Ionicons name={aberto ? 'chevron-up' : 'chevron-down'} size={18} color={cores.textoSuave} />
       </Pressable>
       {aberto ? (
@@ -222,19 +226,20 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
         <Text style={s.vazio}>Nenhuma rota em andamento ou concluída nos últimos dias pra lançar despesa.</Text>
       ) : (
         <>
-          <Text style={[s.rotulo, { marginTop: 12 }]}>Rota</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-            {rotas.map((r) => {
-              const ativa = r.id === rotaId;
-              return (
-                <Pressable key={r.id} onPress={() => trocarRota(r.id)} style={[s.chip, ativa && s.chipAtivo]}
-                  accessibilityRole="button" accessibilityState={{ selected: ativa }}>
-                  <Text style={[s.chipData, ativa && { color: '#fff' }]}>{formatarData(r.data_rota)}{r.status === 'EM_ROTA' ? ' · em andamento' : ''}</Text>
-                  <Text style={[s.chipNome, ativa && { color: '#fff' }]} numberOfLines={1}>{r.nome ?? `Rota #${r.id}`}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          {/* Rota num menu suspenso, igual ao tipo de despesa (Hugo, 14/09). */}
+          <Seletor<number>
+            rotulo="Rota"
+            placeholder="Escolha a rota"
+            valor={rotaId}
+            opcoes={rotas.map((r) => ({
+              valor: r.id,
+              rotulo: `${formatarData(r.data_rota)} · ${r.nome ?? `Rota #${r.id}`}`,
+              sub: [r.status === 'EM_ROTA' ? 'em andamento' : 'concluída', `${r.paradas.filter((p) => p.situacao !== 'CANCELADA').length} pedidos`].join(' · '),
+            }))}
+            aoEscolher={trocarRota}
+            mostrarSub
+            estilo={{ marginTop: 12 }}
+          />
 
           {enviados.map((p) => {
             const extra = [p.pedido_codigo ? `Pedido ${codigoLimpo(p.pedido_codigo)}${p.pedido_nome ? ` · ${p.pedido_nome}` : ''}` : null, p.descricao].filter(Boolean).join(' · ');
@@ -333,10 +338,6 @@ const s = StyleSheet.create({
   sub: { color: cores.textoSuave, marginTop: 4 },
   vazio: { color: cores.textoSuave, marginTop: 10, fontStyle: 'italic' },
   rotulo: { fontSize: 10.5, color: cores.textoSuave, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 6 },
-  chip: { borderWidth: 1, borderColor: cores.borda, backgroundColor: cores.fundo, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, maxWidth: 220 },
-  chipAtivo: { backgroundColor: cores.primaria, borderColor: cores.primaria },
-  chipData: { fontSize: 12, fontWeight: '700', color: cores.texto },
-  chipNome: { fontSize: 12, color: cores.textoSuave, marginTop: 1 },
   seletor: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, paddingHorizontal: 12, minHeight: 48 },
   seletorTexto: { flex: 1, color: cores.texto, fontSize: 15, fontWeight: '600' },
   lista: { marginTop: 4, borderWidth: 1, borderColor: cores.borda, borderRadius: 10, backgroundColor: '#fff', overflow: 'hidden' },
