@@ -790,10 +790,17 @@ def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
     return {"abertas": abertas, "minhas": minhas}
 
 
-def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int) -> dict:
-    """Claim atômico (UPDATE ... WHERE status='ABERTA'), mesmo padrão de
-    confirmacao_motoristas/app.py::_tentar_escolher. sincronizado_em=NULL
-    pra a escolha ser empurrada pra página pública também."""
+def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int, marketplace=None) -> dict:
+    """Escolha de oferta pelo app.
+
+    Com `marketplace` (nucleo/marketplace_remoto.ClienteMarketplace --
+    produção, Hugo 14/09): a disputa acontece na PÁGINA PÚBLICA, que é a
+    dona da escolha (mesmo claim atômico de quem escolhe pelo link/CPF);
+    só depois de ganhar lá a escolha é espelhada aqui. Antes o app gravava
+    só local, a página seguia ABERTA e a reconciliação de 15 em 15 min
+    (roteirizacao/sincronizar_respostas_confirmacao.py) desfazia a escolha.
+
+    Sem `marketplace` (dev/testes): claim atômico só no banco local."""
     if agent_id is None:
         raise OperacaoInvalida("Motorista sem agent_id -- não pode escolher rota.", 403)
     o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
@@ -813,6 +820,30 @@ def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id:
         raise OperacaoInvalida(
             f"Você já escolheu {ja_escolhidas} rota(s) pra esse dia -- é o máximo do seu cadastro. "
             f"Cancele uma escolha se quiser trocar.", 409)
+    if marketplace is not None:
+        from nucleo.marketplace_remoto import SemConexaoMarketplace
+        try:
+            status_http, corpo = marketplace.escolher(rascunho_id, agent_id)
+        except SemConexaoMarketplace:
+            raise OperacaoInvalida("Não consegui falar com o marketplace agora -- tente de novo em instantes.", 503)
+        if status_http != 200:
+            if status_http == 409 and "outro motorista" in (corpo.get("erro") or ""):
+                # Espelha o que já aconteceu lá, pra lista do app parar de oferecer.
+                conn.execute("UPDATE ofertas_rota SET status = 'ESCOLHIDA' WHERE rascunho_id = ? AND status = 'ABERTA'", (rascunho_id,))
+                conn.commit()
+            raise OperacaoInvalida(corpo.get("erro") or "Essa rota não está disponível pra você.",
+                                   404 if status_http == 404 else 409)
+        # Ganhou na página pública: espelha. sincronizado_em preenchido -- a
+        # VPS já sabe, não há o que empurrar.
+        conn.execute("""
+            UPDATE ofertas_rota SET status = 'ESCOLHIDA', escolhido_por = ?, escolhido_em = ?, sincronizado_em = ?
+            WHERE rascunho_id = ?
+        """, (agent_id, corpo.get("escolhido_em") or banco.agora(), banco.agora(), rascunho_id))
+        registrar_evento(conn, "OFERTA_ESCOLHIDA", banco.ORIGEM_APP, agent_id=agent_id,
+                         dados={"rascunho_id": rascunho_id, "via": "marketplace"})
+        conn.commit()
+        return listar_ofertas(conn, agent_id)
+
     cur = conn.execute("""
         UPDATE ofertas_rota SET status = 'ESCOLHIDA', escolhido_por = ?, escolhido_em = ?, sincronizado_em = NULL
         WHERE rascunho_id = ? AND status = 'ABERTA'
@@ -825,7 +856,31 @@ def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id:
     return listar_ofertas(conn, agent_id)
 
 
-def cancelar_escolha_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int) -> dict:
+def cancelar_escolha_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int, marketplace=None) -> dict:
+    """Desiste da escolha pelo app. Só antes de a escolha ser aplicada no
+    planejamento (aplicado_em). Com `marketplace`, cancela primeiro na
+    página pública (dona da escolha) e espelha aqui."""
+    if marketplace is not None:
+        from nucleo.marketplace_remoto import SemConexaoMarketplace
+        o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
+        if not o or o["status"] != "ESCOLHIDA" or o["escolhido_por"] != agent_id or o["aplicado_em"] is not None:
+            raise OperacaoInvalida("Essa escolha já foi aplicada no planejamento -- fale com a operação pra desfazer.", 409)
+        try:
+            status_http, corpo = marketplace.cancelar(rascunho_id, agent_id)
+        except SemConexaoMarketplace:
+            raise OperacaoInvalida("Não consegui falar com o marketplace agora -- tente de novo em instantes.", 503)
+        if status_http != 200 and corpo.get("status") == "ESCOLHIDA" and corpo.get("escolhido_por") not in (None, agent_id):
+            raise OperacaoInvalida(corpo.get("erro") or "Essa escolha não é mais sua.", 409)
+        # 200, ou lá já não estava escolhida por ele (cancelada/retirada): espelha.
+        conn.execute("""
+            UPDATE ofertas_rota SET status = 'ABERTA', escolhido_por = NULL, escolhido_em = NULL, sincronizado_em = ?
+            WHERE rascunho_id = ? AND status = 'ESCOLHIDA' AND escolhido_por = ? AND aplicado_em IS NULL
+        """, (banco.agora(), rascunho_id, agent_id))
+        registrar_evento(conn, "OFERTA_CANCELADA", banco.ORIGEM_APP, agent_id=agent_id,
+                         dados={"rascunho_id": rascunho_id, "via": "marketplace"})
+        conn.commit()
+        return listar_ofertas(conn, agent_id)
+
     cur = conn.execute("""
         UPDATE ofertas_rota SET status = 'ABERTA', escolhido_por = NULL, escolhido_em = NULL, sincronizado_em = NULL
         WHERE rascunho_id = ? AND status = 'ESCOLHIDA' AND escolhido_por = ? AND aplicado_em IS NULL

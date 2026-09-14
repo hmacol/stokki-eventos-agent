@@ -43,6 +43,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from nucleo import auth_motorista as auth, banco, financeiro, operacao, validacao_fotos
+from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
 from regras import tarifa_motorista
@@ -459,12 +460,15 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.post("/api/ofertas/<int:rascunho_id>/escolher")
     @requer_motorista
     def escolher(rascunho_id):
-        return jsonify(operacao.escolher_oferta(conn(), agent_id(), rascunho_id))
+        # A disputa é na página pública do marketplace (Hugo, 14/09).
+        return jsonify(operacao.escolher_oferta(conn(), agent_id(), rascunho_id,
+                                                marketplace=ClienteMarketplace.do_config(app.config["CONFIG_PROJETO"])))
 
     @app.post("/api/ofertas/<int:rascunho_id>/cancelar")
     @requer_motorista
     def cancelar_escolha(rascunho_id):
-        return jsonify(operacao.cancelar_escolha_oferta(conn(), agent_id(), rascunho_id))
+        return jsonify(operacao.cancelar_escolha_oferta(conn(), agent_id(), rascunho_id,
+                                                        marketplace=ClienteMarketplace.do_config(app.config["CONFIG_PROJETO"])))
 
     @app.get("/api/disponibilidade")
     @requer_motorista

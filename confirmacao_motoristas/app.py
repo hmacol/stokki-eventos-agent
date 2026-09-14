@@ -599,5 +599,59 @@ def api_sync_ofertas_status():
     return jsonify({"ofertas": [dict(linha) for linha in linhas]})
 
 
+def _agent_e_rascunho_do_corpo():
+    corpo = request.get_json(silent=True) or {}
+    try:
+        return int(corpo["agent_id"]), int(corpo["rascunho_id"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+
+@app.route("/api/sync/ofertas/escolher", methods=["POST"])
+@_exige_segredo_sync
+def api_sync_ofertas_escolher():
+    """Escolha feita pelo APP do motorista (Hugo, 14/09). Antes o app só
+    gravava a escolha no banco local: esta página seguia com a oferta
+    ABERTA (outro motorista podia pegar) e a reconciliação local
+    (_reconciliar_escolhas_revertidas) via ABERTA aqui e desfazia a
+    escolha em até 15 min. Agora o app disputa a oferta AQUI, com o
+    mesmo claim atômico da página -- esta VPS é a única dona da escolha.
+    O agent_id vem do token do app, validado pela API do motorista (que
+    é quem tem o segredo de sync); telefone não é cobrado."""
+    agent_id, rascunho_id = _agent_e_rascunho_do_corpo()
+    if agent_id is None:
+        return jsonify({"erro": "agent_id e rascunho_id obrigatórios."}), 400
+    conn = _conectar()
+    try:
+        if conn.execute("SELECT 1 FROM ofertas WHERE rascunho_id = ?", (rascunho_id,)).fetchone() is None:
+            return jsonify({"erro": "Essa rota não está disponível pra você.", "motivo": "nao_publicada"}), 404
+        erro = _tentar_escolher(conn, agent_id, rascunho_id, "", verificar_telefone=False)
+        if erro:
+            return jsonify({"erro": erro}), 409
+        linha = conn.execute("SELECT escolhido_em FROM ofertas WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "escolhido_em": linha["escolhido_em"]})
+
+
+@app.route("/api/sync/ofertas/cancelar", methods=["POST"])
+@_exige_segredo_sync
+def api_sync_ofertas_cancelar():
+    """Espelho de api_sync_ofertas_escolher pro "Cancelar escolha" do app."""
+    agent_id, rascunho_id = _agent_e_rascunho_do_corpo()
+    if agent_id is None:
+        return jsonify({"erro": "agent_id e rascunho_id obrigatórios."}), 400
+    conn = _conectar()
+    try:
+        erro = _cancelar_escolha(conn, agent_id, rascunho_id)
+        if erro:
+            linha = conn.execute("SELECT status, escolhido_por FROM ofertas WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
+            return jsonify({"erro": erro, "status": linha["status"] if linha else None,
+                            "escolhido_por": linha["escolhido_por"] if linha else None}), 409
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 8090)), debug=False)

@@ -424,6 +424,69 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.get_json()["abertas"]), 1)
 
+    def test_ofertas_escolha_passa_pela_pagina_publica(self):
+        # Hugo, 14/09: com o marketplace configurado, a disputa é na página
+        # pública; aqui só espelha. Sem isso a reconciliação desfazia a escolha.
+        from nucleo import marketplace_remoto, operacao
+        h = self._auth()
+        import json as _json
+        conn = banco.conectar()
+        conn.execute("""CREATE TABLE ofertas_rota (id INTEGER PRIMARY KEY, rascunho_id INTEGER UNIQUE, data_alvo TEXT,
+                        resumo_json TEXT, agent_ids_elegiveis TEXT, status TEXT DEFAULT 'ABERTA', escolhido_por INTEGER,
+                        escolhido_em TEXT, criado_em TEXT, sincronizado_em TEXT, aplicado_em TEXT)""")
+        hoje = date.today().isoformat()
+        for rid in (20, 21, 22):
+            conn.execute("INSERT INTO ofertas_rota (rascunho_id, data_alvo, resumo_json, agent_ids_elegiveis, sincronizado_em) VALUES (?, ?, '{}', ?, 'x')",
+                         (rid, hoje, _json.dumps([{"agent_id": AGENT, "vagas_restantes": 3}])))
+        conn.commit()
+        conn.close()
+
+        remoto = mock.Mock()
+        self.app.config["CONFIG_PROJETO"]["confirmacao_rotas"] = {"url_base": "https://x", "sync_secret": "s"}
+        with mock.patch.object(marketplace_remoto.ClienteMarketplace, "do_config", return_value=remoto):
+            # ganhou lá -> espelha aqui, já sincronizado
+            remoto.escolher.return_value = (200, {"ok": True, "escolhido_em": "2026-09-14 10:00:00"})
+            r = self.cli.post("/api/ofertas/20/escolher", headers=h)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            remoto.escolher.assert_called_once_with(20, AGENT)
+            conn = banco.conectar()
+            row = conn.execute("SELECT status, escolhido_por, escolhido_em, sincronizado_em FROM ofertas_rota WHERE rascunho_id = 20").fetchone()
+            conn.close()
+            self.assertEqual((row[0], row[1], row[2]), ("ESCOLHIDA", AGENT, "2026-09-14 10:00:00"))
+            self.assertIsNotNone(row[3])
+
+            # outro motorista ganhou lá -> 409 e a oferta sai da lista do app
+            remoto.escolher.return_value = (409, {"erro": "Essa rota não está mais disponível -- outro motorista já escolheu (ou ela foi retirada)."})
+            r = self.cli.post("/api/ofertas/21/escolher", headers=h)
+            self.assertEqual(r.status_code, 409)
+            self.assertNotIn(21, [o["rascunho_id"] for o in self.cli.get("/api/ofertas", headers=h).get_json()["abertas"]])
+
+            # página pública fora do ar -> 503 e NADA muda aqui
+            remoto.escolher.side_effect = marketplace_remoto.SemConexaoMarketplace("timeout")
+            self.assertEqual(self.cli.post("/api/ofertas/22/escolher", headers=h).status_code, 503)
+            conn = banco.conectar()
+            self.assertEqual(conn.execute("SELECT status FROM ofertas_rota WHERE rascunho_id = 22").fetchone()[0], "ABERTA")
+            conn.close()
+
+            # cancelar: passa lá e espelha
+            remoto.cancelar.return_value = (200, {"ok": True})
+            r = self.cli.post("/api/ofertas/20/cancelar", headers=h)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            remoto.cancelar.assert_called_once_with(20, AGENT)
+            self.assertIn(20, [o["rascunho_id"] for o in r.get_json()["abertas"]])
+
+            # já aplicada no planejamento -> não cancela nem chama a página
+            remoto.escolher.side_effect = None
+            remoto.escolher.return_value = (200, {"ok": True})
+            self.cli.post("/api/ofertas/20/escolher", headers=h)
+            conn = banco.conectar()
+            conn.execute("UPDATE ofertas_rota SET aplicado_em = 'x' WHERE rascunho_id = 20")
+            conn.commit()
+            conn.close()
+            remoto.cancelar.reset_mock()
+            self.assertEqual(self.cli.post("/api/ofertas/20/cancelar", headers=h).status_code, 409)
+            remoto.cancelar.assert_not_called()
+
     def test_disponibilidade(self):
         h = self._auth()
         hoje = date.today()
