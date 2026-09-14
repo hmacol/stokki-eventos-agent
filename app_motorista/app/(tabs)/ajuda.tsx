@@ -142,7 +142,11 @@ export default function Ajuda() {
   if (!estado) return <Carregando texto="Abrindo o atendimento…" />;
 
   const sit = estado.situacao;
-  const opcoes = [...mensagens].reverse().find((m) => m.opcoes && m.opcoes.length)?.opcoes ?? [];
+  // Botões só da última fala (aviso de sistema não conta). O servidor apaga as
+  // opções antigas a cada mensagem nova, mas a cópia local não é atualizada:
+  // buscar "a última com opções" deixava os chips da saudação na tela depois
+  // de escolhidos, e o motorista tocava de novo (Hugo, 13/09).
+  const opcoes = [...mensagens].reverse().find((m) => m.origem !== 'sistema')?.opcoes ?? [];
   const naFila = chamado && ['NA_FILA', 'AGUARDANDO_FL'].includes(chamado.status);
   const resolvido = chamado?.status === 'RESOLVIDO';
 
