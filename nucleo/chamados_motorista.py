@@ -140,9 +140,29 @@ def registrar(app, *, requer_motorista, carregar_config):
         conn = ch.conectar()
         try:
             mot = _motorista()
-            chamado = ch.criar_chamado(conn, mot, origem="chat", status=ch.STATUS_COM_ASSISTENTE,
-                                       etapa_assistente=assistente.ETAPA_AREA)
-            assistente.iniciar(conn, chamado, mot)
+            # "Solicitar ajuda para este pedido" (Hugo, 13/09): o botão do
+            # cartão da parada abre a conversa já no pedido.
+            parada_id = (request.get_json(silent=True) or {}).get("parada_id")
+            parada = None
+            if parada_id:
+                parada = assistente.parada_do_motorista(conn, int(parada_id), mot.get("agent_id")) \
+                    if str(parada_id).isdigit() else None
+                if not parada:
+                    return _erro("Pedido não encontrado nas suas rotas.", 404)
+                aberto = conn.execute("""
+                    SELECT id FROM portal_chamados WHERE tipo = ? AND motorista_cpf = ? AND parada_id = ?
+                      AND status != ? ORDER BY id DESC LIMIT 1
+                """, (ch.TIPO_MOTORISTA, mot["cpf"], parada["id"], ch.STATUS_RESOLVIDO)).fetchone()
+                if aberto:   # tocou de novo: volta pra conversa desse pedido
+                    chamado = ch.buscar_chamado(conn, aberto[0])
+                    ch.marcar_lidas(conn, chamado["id"], "cliente")
+                    return jsonify({**_payload(conn, chamado), "situacao": _situacao(conn, carregar_config())})
+            chamado = ch.criar_chamado(conn, {**mot, "rota_id": parada["rota_id"] if parada else None}, origem="chat",
+                                       status=ch.STATUS_COM_ASSISTENTE, etapa_assistente=assistente.ETAPA_AREA)
+            if parada:
+                assistente.iniciar_com_parada(conn, chamado, mot, parada)
+            else:
+                assistente.iniciar(conn, chamado, mot)
             # Ele está olhando a tela agora: a saudação não pode acender badge.
             ch.marcar_lidas(conn, chamado["id"], "cliente")
             chamado = ch.buscar_chamado(conn, chamado["id"])

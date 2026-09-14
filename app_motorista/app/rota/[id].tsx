@@ -337,6 +337,20 @@ export default function DetalheRota() {
     </View>
   );
 
+  /** "Solicitar ajuda para este pedido" (Hugo, 13/09): abre o chat da aba
+   *  Ajuda já neste pedido -- o motorista não precisa achá-lo na lista. */
+  const botaoAjuda = (p: Parada) => (
+    <Pressable
+      style={({ pressed }) => [s.ajuda, pressed && { backgroundColor: cores.fundo }]}
+      onPress={() => router.push({ pathname: '/ajuda', params: { parada: String(p.id) } })}
+      accessibilityRole="button"
+      accessibilityLabel="Solicitar ajuda para este pedido"
+    >
+      <Ionicons name="chatbubble-ellipses" size={17} color={cores.info} />
+      <Text style={s.ajudaTexto}>Solicitar ajuda para este pedido</Text>
+    </Pressable>
+  );
+
   /** Avisos que valem tanto no cartão da vez quanto na linha aberta. */
   const avisosParada = (p: Parada) => {
     const retorno = rotuloRetorno(p);
@@ -389,6 +403,7 @@ export default function DetalheRota() {
           {avisosParada(p)}
           {acoesContato(p)}
           <View style={{ marginTop: 12 }}>{controleParada(p)}</View>
+          {botaoAjuda(p)}
         </View>
       </Cartao>
     );
@@ -434,6 +449,7 @@ export default function DetalheRota() {
             {avisosParada(p)}
             {ehPendente(p) ? acoesContato(p) : null}
             {controle ? <View style={{ marginTop: 10 }}>{controle}</View> : null}
+            {p.situacao !== 'CANCELADA' ? botaoAjuda(p) : null}
           </View>
         ) : null}
       </View>
@@ -593,6 +609,8 @@ const s = StyleSheet.create({
   acao: { flex: 1, height: 50, borderRadius: 12, backgroundColor: cores.fundo, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   acaoTexto: { fontSize: 13, fontWeight: '700', color: cores.texto },
   acaoInativa: { opacity: 0.4 },
+  ajuda: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 10, minHeight: 46, borderRadius: 12, borderWidth: 1, borderColor: cores.info },
+  ajudaTexto: { fontSize: 14, fontWeight: '700', color: cores.info },
 
   // --- lista compacta ---
   tituloSecao: { fontSize: 11, fontWeight: '800', color: cores.textoSuave, textTransform: 'uppercase', letterSpacing: 0.9, marginBottom: 8, marginTop: 4 },

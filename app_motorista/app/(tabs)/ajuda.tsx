@@ -7,7 +7,7 @@
 // sempre que dá, e um aviso claro de quando a logística está no ar.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from '../../src/api';
@@ -97,7 +97,36 @@ export default function Ajuda() {
     }
   }, [aplicar]);
 
-  useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
+  // Vindo do botão "Solicitar ajuda para este pedido" (?parada=ID): abre a
+  // conversa já no pedido. O parâmetro é limpo depois, e o foco seguinte a
+  // essa limpeza não recarrega (senão trocaria pela conversa "ativa").
+  const { parada } = useLocalSearchParams<{ parada?: string }>();
+  const router = useRouter();
+  const vemDoPedido = useRef(false);
+  const abrirPedido = useCallback(async (paradaId: number) => {
+    vemDoPedido.current = true;
+    setVerLista(false);
+    try {
+      const e = await api.atendimentoEstado();
+      setEstado(e);
+      const r = await api.iniciarConversa(paradaId);
+      aplicar(r.chamado, r.mensagens, true);
+      if (r.situacao) setEstado((x) => (x ? { ...x, situacao: r.situacao as SituacaoAtendimento } : x));
+      setErro(null);
+    } catch (err) {
+      vemDoPedido.current = false;
+      Alert.alert('Não deu', err instanceof api.ErroRede ? 'Sem conexão. O chat precisa de sinal.' : (err as Error).message);
+      void carregar();
+    } finally {
+      router.setParams({ parada: '' });
+    }
+  }, [aplicar, carregar, router]);
+
+  useFocusEffect(useCallback(() => {
+    if (parada) { void abrirPedido(Number(parada)); return; }
+    if (vemDoPedido.current) { vemDoPedido.current = false; return; }
+    void carregar();
+  }, [carregar, abrirPedido, parada]));
 
   // Enquanto a conversa está aberta, busca só o que chegou depois da última
   // mensagem -- é o que traz a resposta da logística sem recarregar tudo.

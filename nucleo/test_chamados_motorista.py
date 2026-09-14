@@ -302,6 +302,29 @@ class TestChatMotorista(unittest.TestCase):
         self.assertEqual(msg["texto"], "Ele recusou tudo ou só parte?")
         self.assertEqual(self._chamado(chamado_id)["pedido_ref"], "PS-200")
 
+    def test_ajuda_pelo_cartao_do_pedido(self):
+        # "Solicitar ajuda para este pedido" no cartão da parada (Hugo, 13/09)
+        conn = banco.conectar()
+        parada_id = conn.execute("SELECT id FROM nucleo_paradas WHERE codigo = 'PS-200'").fetchone()[0]
+        conn.close()
+        h = self._auth()
+        r = self.cli.post("/api/atendimento/conversas", headers=h, json={"parada_id": parada_id})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        j = r.get_json()
+        msg = j["mensagens"][-1]
+        self.assertIn("PADARIA SOL", msg["texto"])
+        self.assertEqual(msg["opcoes"][0]["valor"], "problema:fechado")
+        c = self._chamado(j["chamado"]["id"])
+        self.assertEqual((c["pedido_ref"], c["parada_id"], c["area"], c["etapa_assistente"]),
+                         ("PS-200", parada_id, "entrega_problema", "problema"))
+        self.assertIsNotNone(c["rota_id"])
+        # tocar de novo volta pra mesma conversa, não abre outra
+        r2 = self.cli.post("/api/atendimento/conversas", headers=h, json={"parada_id": parada_id}).get_json()
+        self.assertEqual(r2["chamado"]["id"], j["chamado"]["id"])
+        # pedido de outro motorista não abre
+        h2 = self._auth(CPF2, PIN2)
+        self.assertEqual(self.cli.post("/api/atendimento/conversas", headers=h2, json={"parada_id": parada_id}).status_code, 404)
+
     def test_sem_rota_pede_o_numero_do_pedido(self):
         h = self._auth(CPF2, PIN2)
         chamado_id = self._iniciar(h)["chamado"]["id"]

@@ -247,7 +247,9 @@ export async function enviarPedagio(rotaId: number, uri: string, valor: number, 
 export const atendimentoEstado = (chamadoId?: number) =>
   chamar<EstadoAtendimento>(`/atendimento/estado${chamadoId ? `?chamado=${chamadoId}` : ''}`);
 export const atendimentoNaoLidas = () => chamar<{ nao_lidas: number }>('/atendimento/nao-lidas');
-export const iniciarConversa = () => chamar<RespostaChamado>('/atendimento/conversas', { metodo: 'POST' });
+// Com paradaId: "Solicitar ajuda para este pedido" -- a conversa já nasce no pedido.
+export const iniciarConversa = (paradaId?: number) =>
+  chamar<RespostaChamado>('/atendimento/conversas', { metodo: 'POST', ...(paradaId ? { corpo: { parada_id: paradaId } } : {}) });
 export const verChamado = (id: number, desde = 0) =>
   chamar<RespostaChamado>(`/atendimento/chamados/${id}?desde=${desde}`);
 export const enviarMensagemChamado = (id: number, texto: string, chip?: string | null) =>

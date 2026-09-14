@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ColorValue } from 'react-native';
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../src/api';
+import { useSessao } from '../../src/sessao';
 import { cores } from '../../src/tema';
 
 type Icone = React.ComponentProps<typeof Ionicons>['name'];
@@ -15,6 +16,8 @@ const INTERVALO_NAO_LIDAS_MS = 60000;
 
 export default function Abas() {
   const [naoLidas, setNaoLidas] = useState(0);
+  const { motorista } = useSessao();
+  const router = useRouter();
 
   useEffect(() => {
     let vivo = true;
@@ -29,10 +32,26 @@ export default function Abas() {
     return () => { vivo = false; clearInterval(t); sub.remove(); };
   }, []);
 
+  // Perfil no alto (Hugo, 13/09): o nome do motorista fica à vista em toda
+  // aba e o toque abre a tela de perfil -- saiu da barra de baixo.
+  const perfilNoTopo = () => {
+    const partes = (motorista?.nome ?? '').replace(/\(.*?\)/g, '').trim().split(/\s+/).filter(Boolean);
+    const primeiro = partes[0] ?? 'Perfil';
+    const iniciais = ((partes[0]?.[0] ?? '') + (partes.length > 1 ? partes[partes.length - 1][0] : '')).toUpperCase() || '?';
+    return (
+      <Pressable onPress={() => router.push('/perfil')} hitSlop={8} style={s.perfil}
+        accessibilityRole="button" accessibilityLabel={`Perfil de ${motorista?.nome ?? 'motorista'}`}>
+        <Text style={s.perfilNome} numberOfLines={1}>{primeiro}</Text>
+        <View style={s.avatar}><Text style={s.avatarTexto}>{iniciais}</Text></View>
+      </Pressable>
+    );
+  };
+
   return (
     <Tabs
       screenOptions={{
         headerStyle: { backgroundColor: cores.primaria }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' },
+        headerRight: perfilNoTopo,
         tabBarActiveTintColor: cores.acento, tabBarInactiveTintColor: cores.textoSuave,
         tabBarLabelStyle: { fontSize: 12, fontWeight: '600' }, tabBarStyle: { height: 64, paddingBottom: 8, paddingTop: 6 },
       }}
@@ -44,7 +63,14 @@ export default function Abas() {
       {/* Ajuda (Hugo, 12/09): chat com o assistente e com a logística.
           O badge mostra o que a equipe respondeu e o motorista ainda não viu. */}
       <Tabs.Screen name="ajuda" options={{ title: 'Ajuda', tabBarIcon: icone('chatbubble-ellipses'), tabBarBadge: naoLidas || undefined }} />
-      <Tabs.Screen name="perfil" options={{ title: 'Perfil', tabBarIcon: icone('person') }} />
+      <Tabs.Screen name="perfil" options={{ title: 'Perfil', href: null, headerRight: undefined }} />
     </Tabs>
   );
 }
+
+const s = StyleSheet.create({
+  perfil: { flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 14, maxWidth: 180 },
+  perfilNome: { color: '#fff', fontWeight: '700', fontSize: 14, flexShrink: 1 },
+  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  avatarTexto: { color: cores.primaria, fontWeight: '800', fontSize: 13 },
+});

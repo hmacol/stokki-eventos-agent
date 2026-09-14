@@ -261,6 +261,29 @@ def iniciar(conn, chamado: dict, motorista: dict) -> dict:
     return ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", texto, opcoes=_opcoes_areas())
 
 
+def parada_do_motorista(conn, parada_id: int, agent_id) -> dict | None:
+    """A parada só vale se for de uma rota DESTE motorista."""
+    if agent_id is None:
+        return None
+    r = conn.execute("""
+        SELECT p.* FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id
+        WHERE p.id = ? AND r.agent_id = ?
+    """, (parada_id, agent_id)).fetchone()
+    return dict(r) if r else None
+
+
+def iniciar_com_parada(conn, chamado: dict, motorista: dict, parada: dict) -> dict:
+    """Conversa aberta pelo botão do cartão da parada: assunto e pedido já
+    sabidos, começa direto no "o que aconteceu?"."""
+    nome = (motorista.get("nome") or "").strip().split(" ")[0]
+    ch.atualizar_chamado(conn, chamado["id"], area="entrega_problema", rota_id=parada.get("rota_id"),
+                         pedido_ref=codigo_base(parada.get("codigo"))[:40], parada_id=parada.get("id"),
+                         pedido_dados=_resumo_parada(parada), etapa_assistente=ETAPA_PROBLEMA)
+    chamado = ch.buscar_chamado(conn, chamado["id"])
+    texto = f"{nome.title() + ', ' if nome else ''}{_cartao_parada(parada)} O que aconteceu?"
+    return ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", texto, opcoes=_opcoes_problemas())
+
+
 def responder(conn, chamado: dict, motorista: dict, texto: str, chip: str | None, config: dict) -> list[dict]:
     """Processa a fala do motorista (já gravada) e devolve as mensagens novas
     do assistente. Nunca levanta -- em erro, oferece a logística."""
