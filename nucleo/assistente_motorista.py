@@ -312,10 +312,13 @@ def _responder(conn, chamado, motorista, texto, chip, config) -> list[dict]:
             return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", "Certo. Me conta o que você precisa.")]
         p = localizar_parada(chip or texto, ctx.get("paradas") or [])
         if p:
-            ch.atualizar_chamado(conn, chamado["id"], pedido_ref=(p.get("codigo") or "")[:40], parada_id=p.get("id"),
+            ch.atualizar_chamado(conn, chamado["id"], pedido_ref=codigo_base(p.get("codigo"))[:40], parada_id=p.get("id"),
                                  pedido_dados=_resumo_parada(p))
             chamado = ch.buscar_chamado(conn, chamado["id"])
-            if chip or not _tem_relato(texto, p):
+            # Já contou o problema antes de dizer o pedido (texto livre -> lista):
+            # não pergunta "o que aconteceu?" de novo.
+            relatou = _tem_relato(texto, p) if not chip else _ja_relatou(conn, chamado)
+            if not relatou:
                 return _perguntar_problema(conn, chamado, _cartao_parada(p))
             ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE)
             return _conversar(conn, ch.buscar_chamado(conn, chamado["id"]), motorista, ctx, config)
@@ -364,6 +367,13 @@ def _tem_relato(texto: str | None, p: dict | None) -> bool:
                 t = t.replace(x.upper(), " ")
     t = re.sub(r"#?PS-?\s*\d+(-R\d+)?|\d+|PEDIDO|PARADA|[^\wÀ-Ú ]", " ", t)
     return len([w for w in t.split() if len(w) >= 3]) >= 2
+
+
+def _ja_relatou(conn, chamado: dict) -> bool:
+    """Alguma fala do motorista antes da escolha do pedido já descreve o
+    problema (não conta o toque no assunto nem no pedido)."""
+    falas = [m["texto"] for m in ch.mensagens(conn, chamado["id"]) if m["origem"] == ch.ORIGEM_CLIENTE]
+    return any(_tem_relato(t, None) for t in falas[:-1] if t not in ch.AREAS_MOTORISTA.values())
 
 
 def _perguntar_problema(conn, chamado: dict, cartao: str) -> list[dict]:
@@ -445,7 +455,7 @@ def _conversar(conn, chamado, motorista, ctx, config, primeira: bool = False) ->
     if not chamado.get("pedido_ref"):
         p = localizar_parada(hist[-1]["content"], ctx.get("paradas") or [])
         if p:
-            ch.atualizar_chamado(conn, chamado["id"], pedido_ref=(p.get("codigo") or "")[:40], parada_id=p.get("id"),
+            ch.atualizar_chamado(conn, chamado["id"], pedido_ref=codigo_base(p.get("codigo"))[:40], parada_id=p.get("id"),
                                  pedido_dados=_resumo_parada(p))
             chamado = ch.buscar_chamado(conn, chamado["id"])
     client = _cliente_anthropic(config)
@@ -477,9 +487,8 @@ def _conversar(conn, chamado, motorista, ctx, config, primeira: bool = False) ->
     if (dados.get("pedir_pedido") and not chamado.get("pedido_ref") and paradas_para_escolha(ctx)
             and not any(TEXTO_TOQUE_PEDIDO in m["texto"] for m in ch.mensagens(conn, chamado["id"])
                         if m["origem"] == ch.ORIGEM_ASSISTENTE)):
-        if TEXTO_TOQUE_PEDIDO.lower() not in resposta.lower():
-            resposta = f"{resposta} {TEXTO_TOQUE_PEDIDO}"
-        return _perguntar_pedido(conn, chamado, ctx, resposta)
+        # Texto fixo: o do modelo repetia a instrução ("toca no pedido...").
+        return _perguntar_pedido(conn, chamado, ctx, f"Entendi. Qual pedido? {TEXTO_TOQUE_PEDIDO}")
     sugestoes = []
     for s in dados.get("sugestoes") or []:
         s = (s or "").strip()[:40]

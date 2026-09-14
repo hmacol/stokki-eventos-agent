@@ -289,6 +289,19 @@ class TestChatMotorista(unittest.TestCase):
         self.assertFalse(any(o.get("pedido") for o in msg["opcoes"]))
         self.assertEqual(self._chamado(chamado_id)["etapa_assistente"], "livre")
 
+    def test_ja_contou_o_problema_nao_pergunta_de_novo(self):
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        with self._modelo(resposta="x", pedir_pedido=True)[0]:
+            msg = self._falar(h, chamado_id, "o cliente disse que nao fez esse pedido")["mensagens"][-1]
+        self.assertEqual(msg["texto"], "Entendi. Qual pedido? Toque no cliente na lista.")
+        patch, cliente = self._modelo(resposta="Ele recusou tudo ou só parte?", sugestoes=["Tudo", "Só parte"])
+        with patch:
+            msg = self._falar(h, chamado_id, "2 · PADARIA SOL", "PS-200")["mensagens"][-1]
+        cliente.messages.create.assert_called_once()
+        self.assertEqual(msg["texto"], "Ele recusou tudo ou só parte?")
+        self.assertEqual(self._chamado(chamado_id)["pedido_ref"], "PS-200")
+
     def test_sem_rota_pede_o_numero_do_pedido(self):
         h = self._auth(CPF2, PIN2)
         chamado_id = self._iniciar(h)["chamado"]["id"]
