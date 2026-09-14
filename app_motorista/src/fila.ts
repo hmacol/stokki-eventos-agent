@@ -10,6 +10,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import { ErroApi, ErroRede } from './api';
+import type { TipoDespesa } from './tipos';
 
 const CHAVE = 'motorista.fila.v1';
 const CHAVE_DESCARTADOS = 'motorista.fila.descartados.v1';
@@ -25,7 +26,8 @@ export type UltimoErro = { em: string; tipo: ItemFila['tipo']; uuid: string; men
 export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number; nf?: string | null }
-  | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number }
+  | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number;
+      tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'ROTA'; rotaId: number; acao: 'aceitar' | 'iniciar' | 'finalizar'; corpo: Record<string, unknown>; criadoEm: string; tentativas: number };
 
@@ -127,15 +129,17 @@ export async function listar(): Promise<{ uuid: string; tipo: ItemFila['tipo']; 
     uuid: i.uuid, tipo: i.tipo, criadoEm: i.criadoEm, tentativas: i.tentativas ?? 0,
     detalhe: i.tipo === 'EVENTO_PARADA' ? `${String(i.corpo.tipo ?? '')} parada ${i.paradaId}`
       : i.tipo === 'COMPROVANTE' ? `${i.tipoComprovante}${i.nf ? ` NF ${i.nf}` : ''} parada ${i.paradaId}`
-      : i.tipo === 'PEDAGIO' ? `R$ ${i.valor.toFixed(2).replace('.', ',')} rota ${i.rotaId}`
+      : i.tipo === 'PEDAGIO' ? `${i.tipoDespesa && i.tipoDespesa !== 'PEDAGIO' ? `${i.tipoDespesa.toLowerCase()} ` : ''}R$ ${i.valor.toFixed(2).replace('.', ',')} rota ${i.rotaId}`
       : i.tipo === 'GPS' ? `${i.pontos.length} ponto(s)`
       : `${i.acao} rota ${i.rotaId}`,
   }));
 }
 
 /** Pedágios ainda não enviados (Financeiro mostra junto dos já enviados). */
-export async function pedagiosNaFila(): Promise<{ uuid: string; rotaId: number; valor: number }[]> {
-  return (await ler()).flatMap((i) => (i.tipo === 'PEDAGIO' ? [{ uuid: i.uuid, rotaId: i.rotaId, valor: i.valor }] : []));
+export async function pedagiosNaFila(): Promise<{ uuid: string; rotaId: number; valor: number; tipoDespesa: TipoDespesa; paradaId: number | null; descricao: string | null }[]> {
+  return (await ler()).flatMap((i) => (i.tipo === 'PEDAGIO'
+    ? [{ uuid: i.uuid, rotaId: i.rotaId, valor: i.valor, tipoDespesa: i.tipoDespesa ?? 'PEDAGIO', paradaId: i.paradaId ?? null, descricao: i.descricao ?? null }]
+    : []));
 }
 
 /** Tira um item da fila na mão (motorista/teste decidiu desistir dele). */
@@ -156,7 +160,8 @@ async function enviar(item: ItemFila): Promise<void> {
       await api.enviarComprovante(item.paradaId, item.uri, item.tipoComprovante, item.uuid, item.capturadoEm, item.nf);
       return;
     case 'PEDAGIO':
-      await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm);
+      await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm,
+        { tipo: item.tipoDespesa, descricao: item.descricao, paradaId: item.paradaId });
       return;
     case 'GPS':
       await api.enviarGps(item.pontos);

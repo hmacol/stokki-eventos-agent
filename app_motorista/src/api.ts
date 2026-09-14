@@ -131,7 +131,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, Checklist, EstadoAtendimento, Extrato, Motorista, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota } from './tipos';
+import type { Ajuste, Checklist, EstadoAtendimento, Extrato, Motorista, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -235,9 +235,15 @@ export async function validarFoto(
   });
 }
 
-/** Pedágio da rota: valor + foto do recibo (Hugo, 11/09). Fica pendente até o painel aprovar. */
-export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string) {
-  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, uri, { valor: String(valor), uuid, capturado_em: capturadoEm });
+/** Pedágio / despesa da rota: valor + foto do recibo (Hugo, 11/09 e 14/09). Fica pendente até o painel aprovar.
+ *  `extra`: tipo (sem = pedágio), descricao (Outros) e paradaId (Estacionamento/Descarga). */
+export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string,
+  extra: { tipo?: TipoDespesa; descricao?: string | null; paradaId?: number | null } = {}) {
+  const campos: Record<string, string> = { valor: String(valor), uuid, capturado_em: capturadoEm };
+  if (extra.tipo) campos.tipo = extra.tipo;
+  if (extra.descricao) campos.descricao = extra.descricao;
+  if (extra.paradaId) campos.parada_id = String(extra.paradaId);
+  return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean; pedagios: Pedagio[] }>(`/rotas/${rotaId}/pedagios`, uri, campos);
 }
 
 // ── Atendimento (aba Ajuda) ────────────────────────────────────────────────

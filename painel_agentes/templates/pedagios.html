@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titulo %}Pedágios{% endblock %}
+{% block titulo %}Pedágios e despesas{% endblock %}
 {% block estilo_extra %}
 <style>
   /* ── Cabeçalho ─────────────────────────────────────────────────────── */
@@ -129,14 +129,17 @@
     .lightbox { padding: 8px; }
     .lightbox .caixa { max-width: 100vw; max-height: 96vh; }
   }
+  .tipo-despesa { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--fundo, #f1f5f9); color: var(--texto-suave, #64748b); }
+  .tipo-despesa.outro { background: #fff4e0; color: #9a6716; }
+  .descricao-despesa { font-size: 12px; margin-top: 2px; max-width: 220px; margin-left: auto; white-space: normal; }
 </style>
 {% endblock %}
 
 {% block conteudo %}
 <div class="cabecalho-pagina">
   <div>
-    <h1>Pedágios dos motoristas</h1>
-    <p>Recibos enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista, com o valor aprovado. O motorista pode cancelar um envio pelo app enquanto ele estiver pendente.</p>
+    <h1>Pedágios e despesas dos motoristas</h1>
+    <p>Recibos de pedágio, estacionamento, descarga e outras despesas enviados pelo app. Só o que for <strong>aprovado</strong> entra no extrato do motorista, com o valor aprovado. O motorista pode cancelar um envio pelo app enquanto ele estiver pendente.</p>
   </div>
   <div class="abas-pedagio">
     {% for chave, rotulo in (("PENDENTE", "Pendentes"), ("APROVADO", "Aprovados"), ("REJEITADO", "Rejeitados"), ("CANCELADO", "Cancelados"), ("TODOS", "Todos")) %}
@@ -205,18 +208,19 @@
 <table class="tabela-pedagios">
   <thead>
     <tr>
-      <th>Recibo</th><th>Rota</th><th>Motorista</th><th class="num">Informado</th><th>Situação</th>{% if pode_editar %}<th>Revisar</th>{% endif %}
+      <th>Recibo</th><th>Rota</th><th>Motorista</th><th class="num">Informado / tipo</th><th>Situação</th>{% if pode_editar %}<th>Revisar</th>{% endif %}
     </tr>
   </thead>
   <tbody>
     {% for p in itens %}
     {% set valor_ap = p.valor_aprovado if p.valor_aprovado is not none else p.valor_informado %}
+    {% set tipo_rotulo = {'PEDAGIO': 'Pedágio', 'ESTACIONAMENTO': 'Estacionamento', 'DESCARGA': 'Descarga', 'OUTROS': 'Outros'}.get(p.tipo or 'PEDAGIO', p.tipo) %}
     <tr data-id="{{ p.id }}">
       <td>
         <div class="celula-recibo">
           {% if p.caminho_local %}
           <button type="button" class="miniatura" data-foto="{{ url_for('pedagio_foto', pedagio_id=p.id) }}"
-                  data-titulo="{{ p.motorista_nome or p.agent_id }}" data-sub="{{ p.data_rota }} · {{ p.rota_nome or ('Rota #' ~ p.rota_id) }}"
+                  data-titulo="{{ p.motorista_nome or p.agent_id }}" data-sub="{{ tipo_rotulo }}{{ ' (' ~ p.descricao ~ ')' if p.descricao else '' }}{{ ' · pedido ' ~ (p.pedido_codigo | replace('#', '')) if p.pedido_codigo else '' }} · {{ p.data_rota }} · {{ p.rota_nome or ('Rota #' ~ p.rota_id) }}"
                   data-valor="R$ {{ '%.2f'|format(p.valor_informado) | replace('.', ',') }}"
                   data-quando="{{ (p.capturado_em or p.enviado_em or '')[:16] | replace('T', ' ') }}"
                   title="Ver recibo">
@@ -237,6 +241,10 @@
       <td class="motorista">{{ p.motorista_nome or p.agent_id }}</td>
       <td class="num">
         <span class="valor-mono {{ 'riscado' if p.status == 'APROVADO' and p.valor_aprovado is not none and p.valor_aprovado != p.valor_informado else '' }}"><span class="moeda">R$</span>{{ "%.2f"|format(p.valor_informado) | replace('.', ',') }}</span>
+        {# Tipo da despesa (Hugo, 14/09): pedágio ou despesa adicional #}
+        <div class="tipo-despesa {{ 'outro' if (p.tipo or 'PEDAGIO') != 'PEDAGIO' else '' }}">{{ tipo_rotulo }}</div>
+        {% if p.pedido_codigo %}<div class="suave descricao-despesa">Pedido {{ p.pedido_codigo | replace('#', '') }}{{ ' · ' ~ p.pedido_nome if p.pedido_nome else '' }}</div>{% endif %}
+        {% if p.descricao %}<div class="suave descricao-despesa">{{ p.descricao }}</div>{% endif %}
       </td>
       <td>
         <div class="situacao">

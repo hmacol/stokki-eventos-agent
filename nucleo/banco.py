@@ -67,6 +67,18 @@ PEDAGIO_APROVADO = "APROVADO"
 PEDAGIO_REJEITADO = "REJEITADO"
 PEDAGIO_CANCELADO = "CANCELADO"   # o próprio motorista desistiu (só de PENDENTE); não entra no extrato
 
+# nucleo_pedagios.tipo (Hugo, 14/09): além do pedágio, despesas adicionais
+# da rota com o MESMO fluxo (foto + aprovação no painel + extrato).
+# OUTROS exige descrição; ESTACIONAMENTO e DESCARGA exigem o pedido de
+# referência (parada da própria rota).
+DESPESA_PEDAGIO = "PEDAGIO"
+DESPESA_ESTACIONAMENTO = "ESTACIONAMENTO"
+DESPESA_DESCARGA = "DESCARGA"
+DESPESA_OUTROS = "OUTROS"
+TIPOS_DESPESA = {DESPESA_PEDAGIO: "Pedágio", DESPESA_ESTACIONAMENTO: "Estacionamento",
+                 DESPESA_DESCARGA: "Descarga", DESPESA_OUTROS: "Outros"}
+DESPESAS_COM_PEDIDO = {DESPESA_ESTACIONAMENTO, DESPESA_DESCARGA}
+
 # nucleo_eventos.origem
 ORIGEM_APP = "APP"
 ORIGEM_VUUPT_SYNC = "VUUPT_SYNC"
@@ -221,6 +233,9 @@ CREATE TABLE IF NOT EXISTS nucleo_pedagios (
     rota_id                 INTEGER NOT NULL REFERENCES nucleo_rotas(id) ON DELETE CASCADE,
     agent_id                INTEGER,
     valor_informado         REAL NOT NULL,                  -- digitado pelo motorista
+    tipo                    TEXT NOT NULL DEFAULT 'PEDAGIO', -- PEDAGIO | ESTACIONAMENTO | DESCARGA | OUTROS (TIPOS_DESPESA)
+    descricao               TEXT,                           -- obrigatória em OUTROS
+    parada_id               INTEGER,                        -- pedido de referência (obrigatório em ESTACIONAMENTO/DESCARGA)
     caminho_local           TEXT,                           -- foto do comprovante (disco)
     caminho_gcs             TEXT,                           -- foto no bucket (best-effort)
     sha256                  TEXT,
@@ -313,6 +328,8 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
+    _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),
+                                              ("parada_id", "INTEGER")])
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
     # documentos_processados é de outro módulo (documentos_pedido/), mas o
     # núcleo lê a NF do pedido por codigo_pedido a cada parada montada

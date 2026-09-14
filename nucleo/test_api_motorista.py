@@ -284,6 +284,50 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM nucleo_eventos WHERE tipo = 'PEDAGIO_CANCELADO'").fetchone()[0], 1)
         conn.close()
 
+    def test_despesas_adicionais_estacionamento_descarga_outros(self):
+        # Hugo, 14/09: mesmo fluxo do pedágio, com tipo; Outros exige descrição.
+        h = self._auth()
+        rota_id = self._rota_app()
+        self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={}, headers=h)
+        self.cli.post(f"/api/rotas/{rota_id}/iniciar", json={}, headers=h)
+
+        def enviar(uuid, **campos):
+            return self.cli.post(f"/api/rotas/{rota_id}/pedagios", headers=h, content_type="multipart/form-data",
+                                 data={"arquivo": (io.BytesIO(uuid.encode()), "r.jpg"), "valor": "15", "uuid": uuid, **campos})
+
+        conn = banco.conectar()
+        paradas = [x[0] for x in conn.execute("SELECT id FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota_id,))]
+        conn.close()
+        # Estacionamento e Descarga exigem o pedido de referência, desta rota
+        r = enviar("d0", tipo="ESTACIONAMENTO")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("pedido de referência", r.get_json()["erro"])
+        r = enviar("d0b", tipo="DESCARGA", parada_id="999999")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("não é desta rota", r.get_json()["erro"])
+        self.assertEqual(enviar("d1", tipo="ESTACIONAMENTO", parada_id=str(paradas[0])).status_code, 201)
+        self.assertEqual(enviar("d2", tipo="descarga", parada_id=str(paradas[-1])).status_code, 201)
+        r = enviar("d3", tipo="OUTROS")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Descreva", r.get_json()["erro"])
+        self.assertEqual(enviar("d4", tipo="OUTROS", descricao="Balsa").status_code, 201)
+        self.assertEqual(enviar("d5", tipo="GASOLINA").status_code, 400)
+        self.assertEqual(enviar("d6").status_code, 201)             # app antigo: sem tipo = pedágio
+
+        por_uuid = {p["uuid"]: p for p in self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()["pedagios"]}
+        self.assertEqual(sorted(por_uuid), ["d1", "d2", "d4", "d6"])
+        self.assertEqual((por_uuid["d1"]["tipo"], por_uuid["d1"]["tipo_rotulo"]), ("ESTACIONAMENTO", "Estacionamento"))
+        self.assertEqual(por_uuid["d1"]["parada_id"], paradas[0])
+        self.assertTrue(por_uuid["d1"]["pedido_codigo"])
+        self.assertEqual(por_uuid["d2"]["tipo"], "DESCARGA")
+        self.assertEqual((por_uuid["d4"]["tipo"], por_uuid["d4"]["descricao"]), ("OUTROS", "Balsa"))
+        self.assertEqual(por_uuid["d6"]["tipo"], "PEDAGIO")
+        pasta = Path(self._tmp.name) / "fotos" / f"rota-{rota_id}"
+        self.assertEqual(len(list(pasta.glob("estacionamento_*.jpg"))), 1)
+        # tudo pendente entra no pendente do extrato, como o pedágio
+        fin = self.cli.get(f"/api/financeiro?de={date.today()}&ate={date.today()}", headers=h).get_json()
+        self.assertEqual(fin["pedagio_pendente"], 60.0)
+
     def test_pedagio_so_em_rota_em_andamento_ou_concluida(self):
         h = self._auth()
         rota_id = self._rota_app()

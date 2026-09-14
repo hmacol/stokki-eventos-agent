@@ -395,7 +395,8 @@ def criar_app(config: dict | None = None) -> Flask:
     def pedagio(rota_id):
         """Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por
         recibo. Fica PENDENTE até o painel aprovar. Multipart: arquivo
-        (foto, obrigatória), valor, uuid, capturado_em."""
+        (foto, obrigatória), valor, uuid, capturado_em; despesas adicionais
+        (14/09): tipo, descricao (Outros), parada_id (Estacionamento/Descarga)."""
         arquivo = request.files.get("arquivo")
         if arquivo is None or not arquivo.filename:
             raise OperacaoInvalida("Envie a foto do recibo no campo 'arquivo' (multipart).")
@@ -415,12 +416,23 @@ def criar_app(config: dict | None = None) -> Flask:
             valor_f = float(str(valor).replace(",", ".")) if valor else None
         except ValueError:
             valor_f = None
+        # Despesa adicional (Hugo, 14/09): mesmo endpoint, `tipo` +
+        # `descricao`. A conferência automática só sabe ler recibo de pedágio.
+        tipo = (request.form.get("tipo") or banco.DESPESA_PEDAGIO).strip().upper()
+        descricao = request.form.get("descricao")
+        if tipo not in banco.TIPOS_DESPESA:
+            raise OperacaoInvalida("Tipo de despesa inválido.")
+        if tipo == banco.DESPESA_OUTROS and not (descricao or "").strip():
+            raise OperacaoInvalida("Descreva a despesa (tipo Outros).")
+        parada_id = (request.form.get("parada_id") or "").strip() or None
+        if tipo in banco.DESPESAS_COM_PEDIDO and not parada_id:
+            raise OperacaoInvalida(f"Informe o pedido de referência ({banco.TIPOS_DESPESA[tipo]}).")
         validacao = _validar_conteudo(validacao_fotos.TIPO_PEDAGIO, conteudo, sha, rota_id=rota["id"],
-                                      valor=valor_f, no_ato=False)
-        caminho, caminho_gcs = _guardar_foto(conteudo, f"rota-{rota['id']}", "PEDAGIO", uuid or sha[:16], ext)
+                                      valor=valor_f, no_ato=False) if tipo == banco.DESPESA_PEDAGIO else None
+        caminho, caminho_gcs = _guardar_foto(conteudo, f"rota-{rota['id']}", tipo, uuid or sha[:16], ext)
         resultado = operacao.registrar_pedagio(
             conn(), rota_id, agent_id(), uuid or sha, valor, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
-            validacao=validacao,
+            validacao=validacao, tipo=tipo, descricao=descricao, parada_id=parada_id,
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 

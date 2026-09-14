@@ -150,45 +150,75 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
 def listar_pedagios(conn: sqlite3.Connection, rota_id: int) -> list[dict]:
     return [
         {"id": r["id"], "uuid": r["uuid"], "valor_informado": r["valor_informado"], "status": r["status"],
+         "tipo": r["tipo"] or banco.DESPESA_PEDAGIO, "tipo_rotulo": banco.TIPOS_DESPESA.get(r["tipo"] or banco.DESPESA_PEDAGIO, r["tipo"]),
+         "descricao": r["descricao"], "parada_id": r["parada_id"], "pedido_codigo": r["pedido_codigo"],
+         "pedido_nome": r["pedido_nome"],
          "valor_aprovado": r["valor_aprovado"], "capturado_em": r["capturado_em"], "enviado_em": r["enviado_em"],
          "observacao_revisao": r["observacao_revisao"], "tem_foto": bool(r["caminho_local"] or r["caminho_gcs"]),
          "validacao": (_ler_json(r["dados_json"]).get("validacao") or {}).get("resultado")}
-        for r in conn.execute("SELECT * FROM nucleo_pedagios WHERE rota_id = ? ORDER BY id", (rota_id,))
+        for r in conn.execute("""
+            SELECT p.*, pa.codigo AS pedido_codigo, pa.destinatario_nome AS pedido_nome
+            FROM nucleo_pedagios p LEFT JOIN nucleo_paradas pa ON pa.id = p.parada_id
+            WHERE p.rota_id = ? ORDER BY p.id
+        """, (rota_id,))
     ]
 
 
 def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uuid: str, valor: float | None,
                       caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
                       capturado_em: str | None, caminho_gcs: str | None = None,
-                      validacao: dict | None = None) -> dict:
+                      validacao: dict | None = None, tipo: str | None = None, descricao: str | None = None,
+                      parada_id: int | str | None = None) -> dict:
     """Um comprovante de pedágio da rota (o motorista pode mandar vários).
     Aceito em rota APP EM_ROTA ou CONCLUIDA (ele fecha a rota e depois
     fotografa os recibos, ou manda no caminho). Entra como PENDENTE; só
-    o painel aprova (revisar_pedagio)."""
+    o painel aprova (revisar_pedagio).
+
+    `tipo` (Hugo, 14/09): PEDAGIO (padrão, app antigo não manda) ou despesa
+    adicional ESTACIONAMENTO / DESCARGA / OUTROS -- mesmo fluxo; OUTROS
+    exige `descricao`; ESTACIONAMENTO e DESCARGA exigem `parada_id` (pedido
+    de referência, parada desta rota)."""
     rota = rota_do_motorista(conn, rota_id, agent_id)
     _exigir_provedor_app(rota)
     if rota["status"] not in (banco.ROTA_EM_ROTA, banco.ROTA_CONCLUIDA):
-        raise OperacaoInvalida("Pedágio só pode ser informado com a rota em andamento ou concluída.", 409)
+        raise OperacaoInvalida("Pedágio e despesas só podem ser informados com a rota em andamento ou concluída.", 409)
+    tipo = (tipo or banco.DESPESA_PEDAGIO).strip().upper()
+    if tipo not in banco.TIPOS_DESPESA:
+        raise OperacaoInvalida("Tipo de despesa inválido.")
+    descricao = (descricao or "").strip()[:200] or None
+    if tipo == banco.DESPESA_OUTROS and not descricao:
+        raise OperacaoInvalida("Descreva a despesa (tipo Outros).")
+    if parada_id not in (None, ""):
+        try:
+            parada_id = int(parada_id)
+        except (TypeError, ValueError):
+            raise OperacaoInvalida("Pedido de referência inválido.")
+        if not conn.execute("SELECT 1 FROM nucleo_paradas WHERE id = ? AND rota_id = ?", (parada_id, rota_id)).fetchone():
+            raise OperacaoInvalida("O pedido de referência não é desta rota.")
+    else:
+        parada_id = None
+    if tipo in banco.DESPESAS_COM_PEDIDO and parada_id is None:
+        raise OperacaoInvalida(f"Informe o pedido de referência ({banco.TIPOS_DESPESA[tipo]}).")
     if not uuid:
         raise OperacaoInvalida("Pedágio sem uuid.")
     try:
         valor_f = round(float(str(valor).replace(",", ".")), 2)
     except (TypeError, ValueError):
-        raise OperacaoInvalida("Informe o valor do pedágio.")
+        raise OperacaoInvalida("Informe o valor.")
     if valor_f <= 0 or valor_f > 2000:
         raise OperacaoInvalida("Valor de pedágio fora do esperado (entre R$ 0,01 e R$ 2.000,00).")
     ja = conn.execute("SELECT id FROM nucleo_pedagios WHERE uuid = ?", (uuid,)).fetchone()
     if ja:
         return {"id": ja["id"], "ja_registrado": True}
     cur = conn.execute("""
-        INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, caminho_local, caminho_gcs, sha256,
-                                     tamanho_bytes, capturado_em, status, dados_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (uuid, rota_id, agent_id, valor_f, caminho_local, caminho_gcs, sha256, tamanho_bytes,
+        INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, tipo, descricao, parada_id, caminho_local,
+                                     caminho_gcs, sha256, tamanho_bytes, capturado_em, status, dados_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (uuid, rota_id, agent_id, valor_f, tipo, descricao, parada_id, caminho_local, caminho_gcs, sha256, tamanho_bytes,
           capturado_em, banco.PEDAGIO_PENDENTE,
           _json({"validacao": validacao}) if validacao else None))
     registrar_evento(conn, "PEDAGIO", banco.ORIGEM_APP, capturado_em, rota_id=rota_id, agent_id=agent_id,
-                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "sha256": sha256})
+                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "tipo": tipo, "sha256": sha256})
     conn.commit()
     return {"id": cur.lastrowid, "ja_registrado": False}
 
@@ -274,8 +304,10 @@ def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.
     da rota (ISO, inclusive) e motorista (agent_id)."""
     where, params = _filtro_pedagios_painel(status, data_inicio, data_fim, agent_id)
     sql = f"""
-        SELECT p.*, r.data_rota, r.nome AS rota_nome, r.motorista_nome, r.status AS rota_status
+        SELECT p.*, r.data_rota, r.nome AS rota_nome, r.motorista_nome, r.status AS rota_status,
+               pa.codigo AS pedido_codigo, pa.destinatario_nome AS pedido_nome
         FROM nucleo_pedagios p JOIN nucleo_rotas r ON r.id = p.rota_id
+        LEFT JOIN nucleo_paradas pa ON pa.id = p.parada_id
         {where} ORDER BY r.data_rota DESC, p.id DESC LIMIT ?
     """
     saida = []
