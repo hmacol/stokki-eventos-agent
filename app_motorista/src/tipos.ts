@@ -168,11 +168,23 @@ export type Ajuste = { data: string; disponivel: boolean; motivo: string | null 
 
 export type StatusChamado = 'COM_ASSISTENTE' | 'NA_FILA' | 'EM_ATENDIMENTO' | 'AGUARDANDO_FL' | 'RESPONDIDO' | 'RESOLVIDO';
 
+export type PedidoOpcao = {
+  ordem: number;
+  nome: string;
+  codigo: string;
+  bairro: string;
+  caixas: number | null;
+  situacao: string;
+  situacao_rotulo: string;
+  janela: string;
+};
+
 export type OpcaoMensagem = {
   rotulo: string;
   valor?: string;
   acao: 'chip' | 'atendente' | 'resolvido';
   estilo?: 'principal' | 'linha';
+  pedido?: PedidoOpcao;   // "qual pedido?": o app mostra como cartão
 };
 
 export type AnexoChamado = { nome: string; arquivo: string; tamanho: number; tipo: string };

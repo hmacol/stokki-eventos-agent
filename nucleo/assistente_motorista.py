@@ -9,11 +9,18 @@ que está na rua, e o que o modelo sabe é a ROTA DELE de hoje, as paradas, a
 tarifa e os pedágios.
 
 Fluxo em etapas (chamado.etapa_assistente):
-    area   -> motorista escolhe o assunto (chips) ou escreve livre
-    parada -> quando o assunto é entrega: qual parada (chips com as paradas
-              pendentes da rota de hoje) ou "não é sobre uma parada"
-    livre  -> conversa com o modelo (Claude), que responde e decide se
-              resolveu ou se precisa da logística
+    area     -> motorista escolhe o assunto (chips) ou escreve livre
+    parada   -> quando o assunto é entrega: qual pedido (TODAS as paradas da
+                rota, pendentes primeiro, com cliente/código/bairro/caixas)
+                ou "não é sobre um pedido". Sem rota: pede o código PS-.
+    problema -> o que aconteceu naquele pedido (chips de ocorrência)
+    livre    -> conversa com o modelo (Claude), que faz UMA pergunta por vez
+                com respostas prontas pra tocar e decide se resolveu ou se
+                precisa da logística
+
+Objetivo (Hugo, 13/09): o motorista na rua escreve pouco e mal; o chat tem
+que levá-lo por toque até "qual pedido + o que houve" antes de qualquer
+texto livre.
 
 O modelo NUNCA autoriza nada operacional (liberar insucesso, mandar voltar,
 prometer pagamento, autorizar guincho, reagendar entrega): isso é sempre
@@ -38,10 +45,29 @@ from regras import tarifa_motorista  # noqa: E402
 logger = logging.getLogger("nucleo.assistente_motorista")
 
 MODELO_PADRAO = "claude-opus-5"
-ETAPA_AREA, ETAPA_PARADA, ETAPA_LIVRE = "area", "parada", "livre"
+ETAPA_AREA, ETAPA_PARADA, ETAPA_PROBLEMA, ETAPA_LIVRE = "area", "parada", "problema", "livre"
 SEM_PARADA = "__sem_parada__"
 OPCAO_ATENDENTE = {"rotulo": "Falar com a logística", "acao": "atendente", "estilo": "principal"}
 OPCAO_RESOLVEU = {"rotulo": "Resolveu, obrigado", "acao": "resolvido"}
+MAX_PEDIDOS_OPCOES = 40
+MAX_SUGESTOES = 4
+TEXTO_TOQUE_PEDIDO = "Toque no cliente na lista."
+
+# "O que aconteceu?" depois de escolher o pedido. Espelha os motivos de
+# ocorrência mais comuns (motivos_ocorrencia) em linguagem de rua.
+PREFIXO_PROBLEMA = "problema:"
+PROBLEMAS_ENTREGA = {
+    "fechado": "Local fechado / ninguém atende",
+    "recusou": "Cliente recusou ou não reconhece",
+    "endereco": "Não achei o endereço",
+    "produto": "Produto faltando ou avariado",
+    "espera": "Demora pra receber / fora do horário",
+    "documento": "Nota, boleto ou canhoto",
+    "outro": "Outro",
+}
+SITUACAO_ROTULO = {"PENDENTE": "Pendente", "EM_DESLOCAMENTO": "A caminho", "EM_ROTA": "No local",
+                   "ENTREGUE": "Entregue", "PARCIAL": "Parcial", "INSUCESSO": "Não entregue",
+                   "CANCELADA": "Cancelada"}
 
 # Assuntos que NÃO passam pelo assistente: vão direto pra fila humana.
 AREAS_URGENTES = {"veiculo"}
@@ -55,8 +81,11 @@ _SCHEMA_RESPOSTA = {
         "resumo": {"type": "string", "description": "Resumo pra logística: o que o motorista precisa, com rota/parada/pedido se houver."},
         "resolvido": {"type": "boolean", "description": "true se a dúvida foi respondida por completo com os dados disponíveis."},
         "precisa_atendente": {"type": "boolean", "description": "true se precisa de decisão humana (autorizar, liberar, pagar, mandar voltar, avisar cliente) ou se faltam dados."},
+        "sugestoes": {"type": "array", "items": {"type": "string"},
+                      "description": "Até 4 respostas curtas (até 30 caracteres cada) que o motorista pode TOCAR pra responder a sua pergunta. Vazio se você não fez pergunta."},
+        "pedir_pedido": {"type": "boolean", "description": "true quando o assunto é um pedido/entrega específico e a parada em foco é 'nenhuma': o app mostra a lista de pedidos da rota pra ele tocar."},
     },
-    "required": ["resposta", "area", "assunto", "resumo", "resolvido", "precisa_atendente"],
+    "required": ["resposta", "area", "assunto", "resumo", "resolvido", "precisa_atendente", "sugestoes", "pedir_pedido"],
     "additionalProperties": False,
 }
 
@@ -126,15 +155,45 @@ def paradas_pendentes(ctx: dict) -> list[dict]:
     return [p for p in ctx.get("paradas") or [] if (p.get("situacao") or "") not in finais]
 
 
+def paradas_para_escolha(ctx: dict) -> list[dict]:
+    """Ordem da lista "qual pedido?": onde ele está agora, depois o que falta
+    (na ordem da rota), depois o que já foi feito (mais recente primeiro) --
+    problema de canhoto ou avaria aparece DEPOIS da entrega."""
+    em_curso = {banco.PARADA_EM_ROTA: 0, banco.PARADA_EM_DESLOCAMENTO: 1, banco.PARADA_PENDENTE: 2}
+    todas = [p for p in ctx.get("paradas") or [] if p.get("situacao") != banco.PARADA_CANCELADA]
+    abertas = sorted((p for p in todas if p.get("situacao") in em_curso),
+                     key=lambda p: (em_curso[p["situacao"]], p.get("ordem") or 0))
+    feitas = sorted((p for p in todas if p.get("situacao") not in em_curso),
+                    key=lambda p: -(p.get("ordem") or 0))
+    return abertas + feitas
+
+
+def codigo_base(codigo: str | None) -> str:
+    """'#PS-38905-R2' -> 'PS-38905' (o código da parada vem com # e sufixo de
+    reentrega; o motorista digita só o número ou PS-número)."""
+    m = re.search(r"PS-?\s*(\d{3,})", (codigo or "").upper())
+    return f"PS-{m.group(1)}" if m else (codigo or "").lstrip("#").strip()
+
+
+def _bairro(endereco: str | None) -> str:
+    partes = [x.strip() for x in (endereco or "").split(",")]
+    return partes[1] if len(partes) >= 3 and not partes[1][:1].isdigit() else ""
+
+
 def localizar_parada(texto: str, paradas: list[dict]) -> dict | None:
-    """Acha a parada citada pelo código do pedido, pelo nome do destinatário
-    ou pelo número da ordem."""
+    """Acha a parada citada pelo código do pedido (com ou sem '#', 'PS-' ou
+    sufixo de reentrega), pelo nome do destinatário ou pelo número da ordem."""
     t = (texto or "").upper().strip()
     if not t or not paradas:
         return None
     for p in paradas:
         cod = (p.get("codigo") or "").upper()
         if cod and cod in t:
+            return p
+    numeros = set(re.findall(r"\d{3,}", t))       # ordem tem até 2 dígitos; 3+ é código
+    for p in paradas:
+        m = re.search(r"(\d{3,})", codigo_base(p.get("codigo")))
+        if m and m.group(1) in numeros:
             return p
     for p in paradas:
         nome = (p.get("destinatario_nome") or "").upper()
@@ -156,10 +215,41 @@ def _opcoes_areas() -> list[dict]:
 
 
 def _opcoes_paradas(paradas: list[dict]) -> list[dict]:
-    ops = [{"rotulo": f"{p.get('ordem')}. {(p.get('destinatario_nome') or p.get('codigo') or '')[:24]}",
-            "valor": p.get("codigo") or str(p.get("ordem")), "acao": "chip"} for p in paradas[:6]]
-    ops.append({"rotulo": "Não é sobre uma parada", "valor": SEM_PARADA, "acao": "chip"})
+    """Um chip por pedido. `pedido` leva o que o app mostra no cartão; app
+    antigo ignora e usa só o rótulo."""
+    ops = []
+    for p in paradas[:MAX_PEDIDOS_OPCOES]:
+        nome = (p.get("destinatario_nome") or codigo_base(p.get("codigo")) or "").strip()
+        ops.append({
+            "rotulo": f"{p.get('ordem')} · {nome[:26]}",
+            "valor": p.get("codigo") or str(p.get("ordem")),
+            "acao": "chip",
+            "pedido": {
+                "ordem": p.get("ordem"), "nome": nome, "codigo": codigo_base(p.get("codigo")),
+                "bairro": _bairro(p.get("endereco")), "caixas": p.get("volume_caixas"),
+                "situacao": p.get("situacao"), "situacao_rotulo": SITUACAO_ROTULO.get(p.get("situacao") or "", ""),
+                "janela": f"{p['janela_inicio']}-{p['janela_fim']}" if p.get("janela_inicio") and p.get("janela_fim") else "",
+            },
+        })
+    ops.append({"rotulo": "Não é sobre um pedido", "valor": SEM_PARADA, "acao": "chip"})
     return ops
+
+
+def _opcoes_problemas() -> list[dict]:
+    return [{"rotulo": r, "valor": PREFIXO_PROBLEMA + k, "acao": "chip"} for k, r in PROBLEMAS_ENTREGA.items()]
+
+
+def _perguntar_pedido(conn, chamado: dict, ctx: dict, texto: str | None = None) -> list[dict]:
+    """Mostra a lista de pedidos da rota (ou pede o código, sem rota)."""
+    ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_PARADA)
+    chamado = ch.buscar_chamado(conn, chamado["id"])
+    lista = paradas_para_escolha(ctx)
+    if lista:
+        return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
+                                      texto or f"Qual pedido? {TEXTO_TOQUE_PEDIDO}", opcoes=_opcoes_paradas(lista))]
+    return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
+                                  "Não achei rota sua hoje. Qual o número do pedido? (ex.: PS-38905)",
+                                  opcoes=[{"rotulo": "Não é sobre um pedido", "valor": SEM_PARADA, "acao": "chip"}])]
 
 
 def iniciar(conn, chamado: dict, motorista: dict) -> dict:
@@ -208,15 +298,13 @@ def _responder(conn, chamado, motorista, texto, chip, config) -> list[dict]:
             return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
                                           "Entendi, isso é urgente. Me conta em uma frase o que aconteceu e onde você está "
                                           "-- já vou chamar a logística.", opcoes=[OPCAO_ATENDENTE])]
-        pendentes = paradas_pendentes(ctx)
-        if area == "entrega_problema" and pendentes:
-            return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
-                                          "Qual parada? Toque na que está com problema.", opcoes=_opcoes_paradas(pendentes))]
+        if area == "entrega_problema":
+            return _perguntar_pedido(conn, chamado, ctx)
         ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE)
         chamado = ch.buscar_chamado(conn, chamado["id"])
         return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", "Certo. Me conta o que houve.")]
 
-    # ── etapa parada ──
+    # ── etapa parada (qual pedido?) ──
     if etapa == ETAPA_PARADA:
         if chip == SEM_PARADA:
             ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE, pedido_ref="")
@@ -225,13 +313,20 @@ def _responder(conn, chamado, motorista, texto, chip, config) -> list[dict]:
         p = localizar_parada(chip or texto, ctx.get("paradas") or [])
         if p:
             ch.atualizar_chamado(conn, chamado["id"], pedido_ref=(p.get("codigo") or "")[:40], parada_id=p.get("id"),
-                                 pedido_dados=_resumo_parada(p), etapa_assistente=ETAPA_LIVRE)
+                                 pedido_dados=_resumo_parada(p))
             chamado = ch.buscar_chamado(conn, chamado["id"])
-            so_chip = bool(chip)
-            if so_chip:
-                return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
-                                              f"{_cartao_parada(p)} O que aconteceu nessa parada?")]
-            return _conversar(conn, chamado, motorista, ctx, config)
+            if chip or not _tem_relato(texto, p):
+                return _perguntar_problema(conn, chamado, _cartao_parada(p))
+            ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE)
+            return _conversar(conn, ch.buscar_chamado(conn, chamado["id"]), motorista, ctx, config)
+        # Sem rota carregada: vale o número do pedido digitado.
+        numero = re.search(r"\d{4,}", texto or "")
+        if not ctx.get("paradas") and numero:
+            ref = f"PS-{numero.group(0)}"
+            ch.atualizar_chamado(conn, chamado["id"], pedido_ref=ref[:40])
+            chamado = ch.buscar_chamado(conn, chamado["id"])
+            if not _tem_relato(texto, None):
+                return _perguntar_problema(conn, chamado, f"Pedido {ref}.")
         # Não casou com nenhuma parada: o motorista respondeu contando o
         # problema em vez de escolher. NÃO grava esse texto como referência
         # (achado no teste em produção de 12/09: "O cliente está fechado..."
@@ -240,8 +335,42 @@ def _responder(conn, chamado, motorista, texto, chip, config) -> list[dict]:
         chamado = ch.buscar_chamado(conn, chamado["id"])
         return _conversar(conn, chamado, motorista, ctx, config)
 
+    # ── etapa problema (o que aconteceu?) ──
+    if etapa == ETAPA_PROBLEMA:
+        chave = chip[len(PREFIXO_PROBLEMA):] if chip and chip.startswith(PREFIXO_PROBLEMA) else None
+        ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_LIVRE)
+        chamado = ch.buscar_chamado(conn, chamado["id"])
+        if chave == "outro":
+            return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
+                                          "Me conta em uma frase o que houve.")]
+        if chave in PROBLEMAS_ENTREGA:
+            # Título provisório (fica se o modelo falhar); o modelo refina.
+            ref = codigo_base(chamado.get("pedido_ref"))
+            ch.atualizar_chamado(conn, chamado["id"], assunto=f"{PROBLEMAS_ENTREGA[chave]} · {ref}"[:120] if ref else PROBLEMAS_ENTREGA[chave])
+            chamado = ch.buscar_chamado(conn, chamado["id"])
+        return _conversar(conn, chamado, motorista, ctx, config)
+
     # ── etapa livre ──
     return _conversar(conn, chamado, motorista, ctx, config)
+
+
+def _tem_relato(texto: str | None, p: dict | None) -> bool:
+    """O motorista já contou o problema junto com o pedido ("PS-38905 tá
+    fechado")? Tira código, número e nome do cliente e vê se sobra frase."""
+    t = (texto or "").upper()
+    if p:
+        for x in (p.get("codigo"), codigo_base(p.get("codigo")), (p.get("destinatario_nome") or "")[:18]):
+            if x:
+                t = t.replace(x.upper(), " ")
+    t = re.sub(r"#?PS-?\s*\d+(-R\d+)?|\d+|PEDIDO|PARADA|[^\wÀ-Ú ]", " ", t)
+    return len([w for w in t.split() if len(w) >= 3]) >= 2
+
+
+def _perguntar_problema(conn, chamado: dict, cartao: str) -> list[dict]:
+    ch.atualizar_chamado(conn, chamado["id"], etapa_assistente=ETAPA_PROBLEMA)
+    chamado = ch.buscar_chamado(conn, chamado["id"])
+    return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente",
+                                  f"{cartao} O que aconteceu?", opcoes=_opcoes_problemas())]
 
 
 def _cartao_parada(p: dict) -> str:
@@ -249,7 +378,7 @@ def _cartao_parada(p: dict) -> str:
     if p.get("destinatario_nome"):
         partes.append(p["destinatario_nome"])
     if p.get("codigo"):
-        partes.append(p["codigo"])
+        partes.append(codigo_base(p["codigo"]))
     return " · ".join(partes) + "."
 
 
@@ -270,14 +399,20 @@ O QUE VOCÊ PODE RESOLVER SOZINHO (com os dados abaixo):
 
 O QUE VOCÊ NÃO FAZ (marque precisa_atendente=true e diga em uma frase que vai chamar a logística): autorizar insucesso ou recusa, mandar voltar ou pular parada, falar com o cliente/destinatário, liberar reentrega ou reagendamento com o cliente, prometer pagamento, valor ou prazo, autorizar guincho, socorro, combustível ou qualquer gasto, resolver acidente, roubo, avaria ou falta de produto, mexer em rota, e qualquer coisa que dependa de decisão da empresa. Nunca invente dado que não está aqui.
 
-Assunto escolhido: {chamado.get('area_rotulo') or 'não informado'}. Parada em foco: {json.dumps(parada_foco, ensure_ascii=False) if parada_foco else 'nenhuma'}.
+COMO CONVERSAR (o motorista está na rua e escreve pouco; seu trabalho é deixar o caso OBJETIVO pra logística):
+- Faça UMA pergunta por vez, a que mais falta pra logística decidir, e ofereça em sugestoes de 2 a 4 respostas curtas pra ele tocar (ex.: "Há quanto tempo está esperando?" -> "Menos de 10 min", "10 a 30 min", "Mais de 30 min"). Nunca pergunte o que já está nos dados abaixo ou no que ele já disse.
+- O que a logística precisa saber, conforme o caso: local fechado -> há quanto tempo espera e se ligou/tocou; recusa -> o motivo que o cliente deu e se recusou tudo ou parte; endereço -> se o número/local existe; produto faltando/avariado -> quais itens e quantas caixas, e peça foto (ícone da câmera); demora -> quanto tempo e se o cliente deu previsão; nota/boleto/canhoto -> o que falta.
+- Quando já tiver o essencial (pedido + o que houve + o detalhe), não pergunte mais: diga que vai chamar a logística, sugestoes vazio, precisa_atendente=true.
+- Se ele fala de um pedido/entrega e a parada em foco é "nenhuma", marque pedir_pedido=true e peça pra tocar no pedido na lista (não peça pra digitar código).
+
+Assunto escolhido: {chamado.get('area_rotulo') or 'não informado'}. Pedido citado: {chamado.get('pedido_ref') or 'nenhum'}. Parada em foco: {json.dumps(parada_foco, ensure_ascii=False) if parada_foco else 'nenhuma'}.
 
 Rota de hoje: {json.dumps(rota, ensure_ascii=False) if rota else 'nenhuma rota encontrada pra hoje'}.
 Paradas (campos: ordem, codigo, destinatario_nome, endereco, situacao, volume_caixas, janela_inicio/fim, motivo_texto, reagendado_para):
 {paradas or '- (nenhuma parada carregada)'}
 Extrato do motorista: {json.dumps(ctx.get('extrato'), ensure_ascii=False) if ctx.get('extrato') else 'sem dados'}.
 
-Preencha o JSON: resposta (o que dizer), area (classifique o assunto), assunto (título curto do chamado), resumo (pra logística: o que ele precisa, com rota e parada), resolvido (true só se a dúvida foi respondida por completo e não há nada pra empresa decidir), precisa_atendente."""
+Preencha o JSON: resposta (o que dizer), area (classifique o assunto), assunto (título curto do chamado), resumo (pra logística: pedido, o que houve e os detalhes que ele deu, em uma linha objetiva), resolvido (true só se a dúvida foi respondida por completo e não há nada pra empresa decidir), precisa_atendente, sugestoes, pedir_pedido."""
 
 
 def _historico(conn, chamado: dict) -> list[dict]:
@@ -335,11 +470,30 @@ def _conversar(conn, chamado, motorista, ctx, config, primeira: bool = False) ->
         campos["rota_id"] = ctx["rota"]["id"]
     ch.atualizar_chamado(conn, chamado["id"], **campos)
     chamado = ch.buscar_chamado(conn, chamado["id"])
-    if dados.get("precisa_atendente"):
+    resposta = dados["resposta"].strip()
+    # Falou de entrega sem dizer qual: a lista de pedidos no lugar de digitar.
+    # Uma vez só por conversa e só com rota: se ele já viu a lista e seguiu
+    # escrevendo, insistir vira um laço.
+    if (dados.get("pedir_pedido") and not chamado.get("pedido_ref") and paradas_para_escolha(ctx)
+            and not any(TEXTO_TOQUE_PEDIDO in m["texto"] for m in ch.mensagens(conn, chamado["id"])
+                        if m["origem"] == ch.ORIGEM_ASSISTENTE)):
+        if TEXTO_TOQUE_PEDIDO.lower() not in resposta.lower():
+            resposta = f"{resposta} {TEXTO_TOQUE_PEDIDO}"
+        return _perguntar_pedido(conn, chamado, ctx, resposta)
+    sugestoes = []
+    for s in dados.get("sugestoes") or []:
+        s = (s or "").strip()[:40]
+        if s and s not in sugestoes:
+            sugestoes.append(s)
+    chips = [{"rotulo": s, "valor": s, "acao": "chip"} for s in sugestoes[:MAX_SUGESTOES]]
+    if chips:
+        # Perguntou algo: as respostas vêm primeiro; a logística fica à mão.
+        opcoes = chips + [{**OPCAO_ATENDENTE, "estilo": "linha"}]
+    elif dados.get("precisa_atendente"):
         opcoes = [OPCAO_ATENDENTE, OPCAO_RESOLVEU]
     else:
         opcoes = [OPCAO_RESOLVEU, {**OPCAO_ATENDENTE, "estilo": "linha"}]
-    return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", dados["resposta"].strip(), opcoes=opcoes)]
+    return [ch.adicionar_mensagem(conn, chamado, ch.ORIGEM_ASSISTENTE, "Assistente", resposta, opcoes=opcoes)]
 
 
 def garantir_resumo(conn, chamado: dict, motorista: dict, config: dict) -> dict:

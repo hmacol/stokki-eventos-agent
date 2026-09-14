@@ -146,16 +146,21 @@ class TestChatMotorista(unittest.TestCase):
         self.assertEqual(msgs[-1]["origem"], "assistente")
         rotulos = [o["rotulo"] for o in msgs[-1]["opcoes"]]
         self.assertTrue(any("MERCADO CENTRAL" in x for x in rotulos), rotulos)
-        self.assertEqual(rotulos[-1], "Não é sobre uma parada")
+        self.assertEqual(rotulos[-1], "Não é sobre um pedido")
+        cartao = msgs[-1]["opcoes"][0]["pedido"]
+        self.assertEqual((cartao["codigo"], cartao["caixas"], cartao["situacao_rotulo"]), ("PS-100", 4, "Pendente"))
 
-        # 2) parada por chip -> vira a parada em foco do chamado
+        # 2) pedido por chip -> vira a parada em foco e pergunta o que houve
         r = self.cli.post(f"/api/atendimento/chamados/{chamado_id}/mensagens", headers=h,
-                          json={"texto": "1. MERCADO CENTRAL", "chip": "PS-100"})
-        self.assertIn("Parada 1", r.get_json()["mensagens"][-1]["texto"])
+                          json={"texto": "1 · MERCADO CENTRAL", "chip": "PS-100"})
+        ultima = r.get_json()["mensagens"][-1]
+        self.assertIn("Parada 1", ultima["texto"])
+        self.assertEqual(ultima["opcoes"][0]["valor"], "problema:fechado")
         conn = ch.conectar()
         c = ch.buscar_chamado(conn, chamado_id)
         self.assertEqual(c["pedido_ref"], "PS-100")
         self.assertEqual(c["area"], "entrega_problema")
+        self.assertEqual(c["etapa_assistente"], "problema")
         self.assertIsNotNone(c["rota_id"])
         conn.close()
 
@@ -201,6 +206,104 @@ class TestChatMotorista(unittest.TestCase):
         conn = ch.conectar()
         self.assertEqual(ch.buscar_chamado(conn, chamado_id)["pedido_ref"], "PS-200")
         conn.close()
+
+    def _marcar(self, codigo, situacao):
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_paradas SET situacao = ? WHERE codigo = ?", (situacao, codigo))
+        conn.commit()
+        conn.close()
+
+    def _falar(self, h, chamado_id, texto, chip=None):
+        r = self.cli.post(f"/api/atendimento/chamados/{chamado_id}/mensagens", headers=h,
+                          json={"texto": texto, **({"chip": chip} if chip else {})})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        return r.get_json()
+
+    def _chamado(self, chamado_id):
+        conn = ch.conectar()
+        try:
+            return ch.buscar_chamado(conn, chamado_id)
+        finally:
+            conn.close()
+
+    def test_lista_de_pedidos_traz_todos_pendentes_primeiro(self):
+        # Hugo, 13/09: antes só as 6 pendentes -- problema de canhoto/avaria
+        # depois da entrega não tinha como apontar o pedido.
+        self._marcar("PS-100", "ENTREGUE")
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        msg = self._falar(h, chamado_id, "Problema na entrega", "entrega_problema")["mensagens"][-1]
+        codigos = [o["pedido"]["codigo"] for o in msg["opcoes"] if o.get("pedido")]
+        self.assertEqual(codigos, ["PS-200", "PS-100"])
+        self.assertIn("Toque no cliente", msg["texto"])
+
+    def test_pedido_pelo_numero_e_com_relato_vai_direto_pro_modelo(self):
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        self._falar(h, chamado_id, "Problema na entrega", "entrega_problema")
+        # só o número: acha a parada e pergunta o que houve
+        msg = self._falar(h, chamado_id, "200")["mensagens"][-1]
+        self.assertIn("PADARIA SOL", msg["texto"])
+        self.assertEqual(self._chamado(chamado_id)["pedido_ref"], "PS-200")
+
+        # número + relato na etapa parada: não pergunta de novo, conversa
+        outro = self._iniciar(h)["chamado"]["id"]
+        self._falar(h, outro, "Problema na entrega", "entrega_problema")
+        patch, cliente = self._modelo(resposta="Há quanto tempo?", sugestoes=["Menos de 10 min", "Mais de 30 min"])
+        with patch:
+            msg = self._falar(h, outro, "o PS-200 ta fechado ninguem atende")["mensagens"][-1]
+        self.assertEqual(self._chamado(outro)["pedido_ref"], "PS-200")
+        cliente.messages.create.assert_called_once()
+        self.assertEqual([o["rotulo"] for o in msg["opcoes"]], ["Menos de 10 min", "Mais de 30 min", "Falar com a logística"])
+
+    def test_chip_de_problema_vira_assunto_e_modelo_pergunta_com_sugestoes(self):
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        self._falar(h, chamado_id, "Problema na entrega", "entrega_problema")
+        self._falar(h, chamado_id, "2 · PADARIA SOL", "PS-200")
+        patch, cliente = self._modelo(resposta="Há quanto tempo está esperando?",
+                                      sugestoes=["Menos de 10 min", "10 a 30 min", "Mais de 30 min", "x", "y"])
+        with patch:
+            msg = self._falar(h, chamado_id, "Local fechado / ninguém atende", "problema:fechado")["mensagens"][-1]
+        self.assertEqual(len([o for o in msg["opcoes"] if o["acao"] == "chip"]), 4)
+        sistema = cliente.messages.create.call_args.kwargs["system"]
+        self.assertIn("UMA pergunta por vez", sistema)
+        self.assertIn("Pedido citado: PS-200", sistema)
+        self.assertEqual(cliente.messages.create.call_args.kwargs["messages"][-1]["content"], "Local fechado / ninguém atende")
+        # "Outro" não gasta modelo: pede a frase
+        outro = self._iniciar(h)["chamado"]["id"]
+        self._falar(h, outro, "Problema na entrega", "entrega_problema")
+        self._falar(h, outro, "1 · MERCADO CENTRAL", "PS-100")
+        self.assertIn("uma frase", self._falar(h, outro, "Outro", "problema:outro")["mensagens"][-1]["texto"])
+
+    def test_modelo_pede_pedido_mostra_lista_uma_vez_so(self):
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        patch, _ = self._modelo(resposta="Qual pedido?", pedir_pedido=True)
+        with patch:
+            msg = self._falar(h, chamado_id, "o cliente nao quer receber")["mensagens"][-1]
+            self.assertTrue(any(o.get("pedido") for o in msg["opcoes"]))
+            self.assertEqual(self._chamado(chamado_id)["etapa_assistente"], "parada")
+            # escreveu de novo sem escolher: não insiste com a lista
+            msg = self._falar(h, chamado_id, "ele disse que nao pediu")["mensagens"][-1]
+        self.assertFalse(any(o.get("pedido") for o in msg["opcoes"]))
+        self.assertEqual(self._chamado(chamado_id)["etapa_assistente"], "livre")
+
+    def test_sem_rota_pede_o_numero_do_pedido(self):
+        h = self._auth(CPF2, PIN2)
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        msg = self._falar(h, chamado_id, "Problema na entrega", "entrega_problema")["mensagens"][-1]
+        self.assertIn("número do pedido", msg["texto"])
+        msg = self._falar(h, chamado_id, "38905")["mensagens"][-1]
+        self.assertIn("PS-38905", msg["texto"])
+        self.assertEqual(self._chamado(chamado_id)["pedido_ref"], "PS-38905")
+
+    def test_codigo_base_e_localizar_por_numero(self):
+        self.assertEqual(assistente_motorista.codigo_base("#PS-38905-R2"), "PS-38905")
+        paradas = [{"ordem": 3, "codigo": "#PS-38905-R2", "destinatario_nome": "EZEQUIEL"}]
+        self.assertIs(assistente_motorista.localizar_parada("ps 38905", paradas), paradas[0])
+        self.assertIs(assistente_motorista.localizar_parada("38905", paradas), paradas[0])
+        self.assertIsNone(assistente_motorista.localizar_parada("3890", paradas))
 
     def test_assunto_urgente_pula_a_triagem(self):
         h = self._auth()

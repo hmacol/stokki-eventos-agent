@@ -22,6 +22,31 @@ function Ponto({ cor }: { cor: string }) {
   return <View style={[s.ponto, { backgroundColor: cor }]} />;
 }
 
+const COR_SITUACAO: Record<string, string> = {
+  EM_ROTA: cores.info, EM_DESLOCAMENTO: cores.info, PENDENTE: cores.alerta,
+  ENTREGUE: cores.sucesso, PARCIAL: cores.alerta, INSUCESSO: '#B42318',
+};
+
+// "Qual pedido?": um cartão por parada, com o que ele reconhece na rua
+// (ordem, cliente, bairro, caixas) -- tocar é mais rápido que digitar código.
+function CartaoPedido({ o, onPress, desativado }: { o: OpcaoMensagem; onPress: () => void; desativado: boolean }) {
+  const p = o.pedido!;
+  const detalhes = [p.codigo, p.bairro, p.caixas ? `${p.caixas} cx` : '', p.janela].filter(Boolean).join(' · ');
+  return (
+    <Pressable onPress={onPress} disabled={desativado}
+      style={({ pressed }) => [s.pedido, pressed && { backgroundColor: cores.fundo }, desativado && { opacity: 0.5 }]}>
+      <View style={s.pedidoOrdem}><Text style={s.pedidoOrdemTexto}>{p.ordem}</Text></View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.pedidoNome} numberOfLines={1}>{p.nome}</Text>
+        <Text style={s.pedidoDetalhe} numberOfLines={1}>{detalhes}</Text>
+      </View>
+      {p.situacao_rotulo ? (
+        <Text style={[s.pedidoSituacao, { color: COR_SITUACAO[p.situacao] ?? cores.textoSuave }]}>{p.situacao_rotulo}</Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
 function Bolha({ m }: { m: MensagemChamado }) {
   if (m.origem === 'sistema') return <Text style={s.sistema}>{m.texto}</Text>;
   const meu = m.origem === 'cliente';
@@ -49,6 +74,7 @@ export default function Ajuda() {
   const [verLista, setVerLista] = useState(false);
   const rolagem = useRef<ScrollView | null>(null);
   const ultimoId = useRef(0);
+  const topoPedidos = useRef<number | null>(null);
 
   const aplicar = useCallback((c: Chamado, msgs: MensagemChamado[], substituir: boolean) => {
     setChamado(c);
@@ -146,7 +172,9 @@ export default function Ajuda() {
   // opções antigas a cada mensagem nova, mas a cópia local não é atualizada:
   // buscar "a última com opções" deixava os chips da saudação na tela depois
   // de escolhidos, e o motorista tocava de novo (Hugo, 13/09).
-  const opcoes = [...mensagens].reverse().find((m) => m.origem !== 'sistema')?.opcoes ?? [];
+  const todasOpcoes = [...mensagens].reverse().find((m) => m.origem !== 'sistema')?.opcoes ?? [];
+  const pedidos = todasOpcoes.filter((o) => o.pedido);
+  const opcoes = todasOpcoes.filter((o) => !o.pedido);
   const naFila = chamado && ['NA_FILA', 'AGUARDANDO_FL'].includes(chamado.status);
   const resolvido = chamado?.status === 'RESOLVIDO';
 
@@ -202,7 +230,12 @@ export default function Ajuda() {
         ref={rolagem}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 14, paddingBottom: 20, gap: 10 }}
-        onContentSizeChange={() => rolagem.current?.scrollToEnd({ animated: true })}
+        onContentSizeChange={() => {
+          // Com a lista de pedidos na tela, para no começo dela (a pergunta e o
+          // pedido atual à vista), não no fim da rota.
+          if (pedidos.length && topoPedidos.current !== null) rolagem.current?.scrollTo({ y: Math.max(0, topoPedidos.current - 90), animated: true });
+          else rolagem.current?.scrollToEnd({ animated: true });
+        }}
       >
         {naFila ? (
           <Text style={s.aviso}>
@@ -210,7 +243,17 @@ export default function Ajuda() {
           </Text>
         ) : null}
         {mensagens.map((m) => <Bolha key={m.id} m={m} />)}
-        {ocupado ? <ActivityIndicator color={cores.acento} style={{ marginTop: 6 }} /> : null}
+        {pedidos.length && !resolvido ? (
+          <View style={s.pedidos} onLayout={(e) => {
+            topoPedidos.current = e.nativeEvent.layout.y;
+            rolagem.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 90), animated: true });
+          }}>
+            {pedidos.map((o, i) => (
+              <CartaoPedido key={`${o.valor}-${i}`} o={o} onPress={() => tocarOpcao(o)} desativado={ocupado} />
+            ))}
+          </View>
+        ) : null}
+        {ocupado ?<ActivityIndicator color={cores.acento} style={{ marginTop: 6 }} /> : null}
       </ScrollView>
 
       {opcoes.length && !resolvido ? (
@@ -271,6 +314,13 @@ const s = StyleSheet.create({
   metaMsg: { color: cores.textoSuave, fontSize: 11.5 },
   sistema: { alignSelf: 'center', textAlign: 'center', color: cores.textoSuave, fontSize: 12.5, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 5, overflow: 'hidden' },
   aviso: { backgroundColor: cores.alertaBg, color: '#7A5211', borderRadius: 10, padding: 10, fontSize: 13, textAlign: 'center', fontWeight: '600' },
+  pedidos: { gap: 8 },
+  pedido: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, minHeight: 60 },
+  pedidoOrdem: { width: 34, height: 34, borderRadius: 17, backgroundColor: cores.primaria, alignItems: 'center', justifyContent: 'center' },
+  pedidoOrdemTexto: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  pedidoNome: { color: cores.texto, fontWeight: '700', fontSize: 15.5 },
+  pedidoDetalhe: { color: cores.textoSuave, fontSize: 12.5, marginTop: 2 },
+  pedidoSituacao: { fontSize: 12, fontWeight: '700' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, paddingBottom: 6 },
   chip: { borderWidth: 1, borderColor: cores.borda, backgroundColor: cores.cartao, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10 },
   chipPrincipal: { backgroundColor: cores.primaria, borderColor: cores.primaria },
