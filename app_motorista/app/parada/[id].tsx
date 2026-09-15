@@ -50,6 +50,13 @@ const TIPO_COMPROVANTE: Record<string, string> = {
   foto_canhoto: 'CANHOTO', foto_nf_devolucao: 'NF_DEVOLUCAO', foto_produto_devolvido: 'PRODUTO', foto_ocorrencia: 'OCORRENCIA', documento: 'DOCUMENTO',
 };
 
+// Um canhoto por NF (Hugo, 12/09): quando o pedido tem mais de uma nota,
+// o campo foto_canhoto vira um bloco por NF. A chave da foto carrega a
+// nota: "foto_canhoto::12345" -- `chaveBase` volta pro campo original.
+const SEP_NF = '::';
+const chaveBase = (chave: string) => chave.split(SEP_NF)[0];
+const nfDaChave = (chave: string) => (chave.includes(SEP_NF) ? chave.split(SEP_NF)[1] : null);
+
 const TITULO_FLUXO: Record<Fluxo, string> = {
   ENTREGUE: 'Entregue', PARCIAL: 'Entregue parcial', NAO_ENTREGUE: 'Não entregue', REAGENDAR: 'Reagendar',
 };
@@ -87,6 +94,12 @@ export default function RegistroParada() {
   const [fotos, setFotos] = useState<Record<string, string[]>>({});
   const [motivoId, setMotivoId] = useState<number | null>(null);
   const [enviando, setEnviando] = useState(false);
+  // Conferência automática da foto (Hugo, 12/09). `conferindo` é a chave
+  // do campo sendo conferido agora; `tentativas` conta por campo pra o
+  // servidor liberar o "não consigo melhorar" depois do limite.
+  const [conferindo, setConferindo] = useState<string | null>(null);
+  const [tentativas, setTentativas] = useState<Record<string, number>>({});
+  const [avisosFoto, setAvisosFoto] = useState<Record<string, string>>({});
   // Reagendar
   const [horaRetorno, setHoraRetorno] = useState<string | 'FIM' | null>(null);
   const [horaManual, setHoraManual] = useState('');
@@ -102,6 +115,11 @@ export default function RegistroParada() {
 
   if (!parada || !checklist) return <Carregando />;
 
+  // Conferência automática das fotos: só existe se o servidor disser que
+  // está ligada (config api_motorista.validacao_fotos.ativo). Desligada,
+  // a tela se comporta exatamente como antes.
+  const validacaoAtiva = checklist.validacao_fotos?.ativo === true;
+
   const escolherComConfirmacao = (f: Fluxo) =>
     new Promise<void>((resolve) => {
       Alert.alert(
@@ -115,6 +133,47 @@ export default function RegistroParada() {
       );
     });
 
+  const guardarFoto = (chave: string, uri: string, substituir: boolean) =>
+    setFotos((f) => ({ ...f, [chave]: substituir ? [uri] : [...(f[chave] ?? []), uri] }));
+
+  /** Pergunta ao servidor se a foto serve (nitidez, legibilidade e, no
+   * canhoto, o número da NF). Reprovada trava; depois de max_tentativas
+   * o servidor libera o "seguir assim" e a foto vai pra revisão humana.
+   * Sem rede / validação desligada nunca trava o motorista. */
+  const conferirFoto = async (chave: string, uri: string, substituir: boolean) => {
+    const nf = nfDaChave(chave);
+    const tentativa = (tentativas[chave] ?? 0) + 1;
+    setTentativas((t) => ({ ...t, [chave]: tentativa }));
+    setConferindo(chave);
+    try {
+      const r = await api.validarFoto(uri, { tipo: 'CANHOTO', paradaId: parada.id, nf, tentativa });
+      if (r.resultado !== 'REPROVADO') {
+        guardarFoto(chave, uri, substituir);
+        setAvisosFoto((a) => ({ ...a, [chave]: r.resultado === 'NAO_VERIFICADO' ? 'Foto não conferida — vai pra revisão.' : '' }));
+        return;
+      }
+      const motivo = r.motivo ?? 'A foto não ficou boa.';
+      if (!r.pode_seguir) {
+        Alert.alert('Foto não serve', `${motivo}\n\nTire outra foto.`);
+        return;
+      }
+      // Tentativas esgotadas: o motorista decide seguir (revisão humana).
+      Alert.alert('Ainda não ficou boa', `${motivo}\n\nVocê pode tentar de novo ou seguir assim — nesse caso a foto vai pra conferência manual.`, [
+        { text: 'Tirar de novo', style: 'cancel' },
+        { text: 'Não consigo melhorar', onPress: () => {
+          guardarFoto(chave, uri, substituir);
+          setAvisosFoto((a) => ({ ...a, [chave]: 'Segue pra conferência manual.' }));
+        } },
+      ]);
+    } catch {
+      // Sem sinal na hora: aceita a foto; o servidor confere quando ela chegar.
+      guardarFoto(chave, uri, substituir);
+      setAvisosFoto((a) => ({ ...a, [chave]: 'Sem sinal pra conferir agora — será conferida no envio.' }));
+    } finally {
+      setConferindo(null);
+    }
+  };
+
   // substituir=true (documento): a nova foto toma o lugar da anterior;
   // senão ela é acrescentada à lista do campo.
   const tirarFoto = async (chave: string, substituir = false) => {
@@ -122,7 +181,9 @@ export default function RegistroParada() {
     if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o comprovante.');
     const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
     const uri = !r.canceled ? r.assets[0]?.uri : null;
-    if (uri) setFotos((f) => ({ ...f, [chave]: substituir ? [uri] : [...(f[chave] ?? []), uri] }));
+    if (!uri) return;
+    if (validacaoAtiva && chaveBase(chave) === 'foto_canhoto') return conferirFoto(chave, uri, substituir);
+    guardarFoto(chave, uri, substituir);
   };
   const removerFoto = (chave: string, indice: number) =>
     setFotos((f) => ({ ...f, [chave]: (f[chave] ?? []).filter((_, i) => i !== indice) }));
@@ -130,10 +191,42 @@ export default function RegistroParada() {
 
   // O modelo do servidor (checklist_modelo) traz `vinculo_outro` como card
   // próprio; aqui ele é desenhado dentro do card de vínculo, só com "Outro".
-  const campos: CampoChecklist[] = (fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [])
-    .filter((c) => c.chave !== 'vinculo_outro');
+  // Ele traz também um campo de motivo (motivo_ocorrencia / motivo_devolucao)
+  // como SELEÇÃO sem opções: isso era um segundo bloco "Motivo da ocorrência"
+  // impossível de preencher (e obrigatório, travando a finalização). O motivo
+  // é o card do topo, vindo de motivos_ocorrencia -- aqui esse campo some.
+  const camposBase: CampoChecklist[] = (fluxo && fluxo !== 'REAGENDAR' ? (checklist.fluxos[fluxo] ?? CHECKLIST_PADRAO.fluxos[fluxo]) : [])
+    .filter((c) => c.chave !== 'vinculo_outro' && !(c.tipo === 'SELECAO' && !c.opcoes && c.chave.startsWith('motivo')));
+  // Um canhoto por NF (Hugo, 12/09): pedido com mais de uma nota vira um
+  // bloco de canhoto por nota. Com uma NF só (ou nenhuma conhecida) fica
+  // o bloco único de sempre, que já aceita várias fotos.
+  const nfsPedido = parada.nfs ?? [];
+  const campos: CampoChecklist[] = nfsPedido.length > 1
+    ? camposBase.flatMap((c) => (c.chave !== 'foto_canhoto' ? [c] : nfsPedido.map((nf) => ({
+        ...c,
+        chave: `foto_canhoto${SEP_NF}${nf}`,
+        rotulo: `Canhoto da NF ${nf}`,
+        aviso: c.aviso ?? 'Enquadre o número da nota e a assinatura de quem recebeu.',
+      }))))
+    : camposBase;
   const exigeMotivo = fluxo === 'NAO_ENTREGUE' || fluxo === 'PARCIAL';
   const motivos = checklist.motivos;
+  const rotuloMotivo = fluxo === 'PARCIAL' ? 'Motivo da devolução parcial' : 'Motivo da não entrega';
+
+  // O motivo vai direto pro cliente (Hugo, 12/09): confirmar antes de gravar,
+  // deixando claro que não é uma anotação interna.
+  const escolherMotivo = (id: number, texto: string) => {
+    if (motivoId === id) return;
+    Alert.alert(
+      'Tem certeza do motivo?',
+      `Você escolheu "${texto}".\n\nEsse motivo é enviado direto para o cliente, do jeito que está escrito. Confira se é mesmo o que aconteceu.`,
+      [
+        { text: 'Escolher outro', style: 'cancel' },
+        { text: 'Sim, é esse', onPress: () => setMotivoId(id) },
+      ],
+      { cancelable: true },
+    );
+  };
   // "Descreva quem recebeu" só existe (e só é exigido) quando o vínculo
   // escolhido é "Outro" -- antes a validação cobrava um campo que a tela
   // nunca mostrava, travando a finalização.
@@ -146,7 +239,7 @@ export default function RegistroParada() {
       if (c.tipo !== 'FOTO' && c.tipo !== 'DOCUMENTO' && !(respostas[c.chave] ?? '').trim()) return `Falta: ${c.rotulo}`;
     }
     if (pedeVinculoOutro && !(respostas.vinculo_outro ?? '').trim()) return 'Descreva quem recebeu.';
-    if (exigeMotivo && motivos.length > 0 && motivoId === null) return 'Escolha o motivo.';
+    if (exigeMotivo && motivos.length > 0 && motivoId === null) return `Escolha o ${rotuloMotivo.toLowerCase()}.`;
     return null;
   };
 
@@ -169,7 +262,7 @@ export default function RegistroParada() {
       });
       for (const [chave, lista] of Object.entries(fotos)) {
         for (const uri of lista) {
-          await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: TIPO_COMPROVANTE[chave] ?? 'CANHOTO', capturadoEm: agora, criadoEm: agora, tentativas: 0 });
+          await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: TIPO_COMPROVANTE[chaveBase(chave)] ?? 'CANHOTO', nf: nfDaChave(chave), capturadoEm: agora, criadoEm: agora, tentativas: 0 });
         }
       }
       router.back();
@@ -248,10 +341,11 @@ export default function RegistroParada() {
           <Pressable onPress={() => setFluxo(null)}><Text style={s.trocar}>← trocar resultado ({TITULO_FLUXO[fluxo]})</Text></Pressable>
           {exigeMotivo && motivos.length > 0 ? (
             <Cartao>
-              <Text style={s.rotulo}>Motivo *</Text>
+              <Text style={s.rotulo}>{rotuloMotivo} *</Text>
+              <Text style={[s.sub, { marginTop: 0, marginBottom: 8 }]}>O motivo escolhido aqui é mostrado para o cliente.</Text>
               <View style={s.opcoes}>
                 {motivos.map((m) => (
-                  <Pressable key={m.id} onPress={() => setMotivoId(m.id)} style={[s.opcao, motivoId === m.id && s.opcaoAtiva]}>
+                  <Pressable key={m.id} onPress={() => escolherMotivo(m.id, m.motivo_texto)} style={[s.opcao, motivoId === m.id && s.opcaoAtiva]}>
                     <Text style={[s.opcaoTexto, motivoId === m.id && { color: '#fff' }]}>{m.motivo_texto}</Text>
                   </Pressable>
                 ))}
@@ -278,7 +372,6 @@ export default function RegistroParada() {
                     onChangeText={(v) => setRespostas((r) => ({ ...r, vinculo_outro: v }))} />
                 </>
               ) : null}
-              {c.tipo === 'SELECAO' && !c.opcoes && c.chave.startsWith('motivo') ? <Text style={s.sub}>(usa o motivo escolhido acima)</Text> : null}
               {c.tipo === 'TEXTO' || c.tipo === 'NUMERO' ? (
                 <TextInput style={s.campo} value={respostas[c.chave] ?? ''} onChangeText={(v) => setRespostas((r) => ({ ...r, [c.chave]: v }))}
                   keyboardType={c.tipo === 'NUMERO' ? 'numeric' : 'default'} multiline={c.chave === 'observacoes'} />
@@ -300,7 +393,15 @@ export default function RegistroParada() {
                     </View>
                   ))}
                   {fotosDe(c.chave).length > 0 ? <Text style={s.sub}>{fotosDe(c.chave).length} foto(s). Pode tirar mais (frente e verso, outro comprovante...).</Text> : null}
-                  <Botao titulo={fotosDe(c.chave).length > 0 ? '📷  Tirar mais uma foto' : '📷  Tirar foto'} tipo={fotosDe(c.chave).length > 0 ? 'secundario' : 'primario'} onPress={() => tirarFoto(c.chave)} estilo={fotosDe(c.chave).length > 0 ? { marginTop: 8 } : undefined} />
+                  {avisosFoto[c.chave] ? <Text style={s.aviso}>{avisosFoto[c.chave]}</Text> : null}
+                  <Botao
+                    titulo={conferindo === c.chave ? 'Conferindo a foto…' : fotosDe(c.chave).length > 0 ? '📷  Tirar mais uma foto' : '📷  Tirar foto'}
+                    tipo={fotosDe(c.chave).length > 0 ? 'secundario' : 'primario'}
+                    carregando={conferindo === c.chave}
+                    desabilitado={conferindo !== null}
+                    onPress={() => tirarFoto(c.chave)}
+                    estilo={fotosDe(c.chave).length > 0 ? { marginTop: 8 } : undefined}
+                  />
                 </>
               ) : null}
             </Cartao>
