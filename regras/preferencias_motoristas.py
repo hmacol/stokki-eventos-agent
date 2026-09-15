@@ -200,11 +200,14 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         logger.warning(f"Linha de motorista sem AGENT_ID_VUUPT válido -- ignorada: {registro}")
         return None
 
-    nome = str(registro.get("NOME_MOTORISTA") or "").strip() or f"Motorista {agent_id}"
+    # Célula vazia do Excel chega como NaN (float, truthy): str() direto
+    # virava o texto "nan" -- 24 de 28 motoristas com e-mail "nan" e aviso
+    # tentando enviar pra ele (achado 14/09). Mesmo tratamento do telefone.
+    nome = _parse_texto_numerico(registro.get("NOME_MOTORISTA")) or f"Motorista {agent_id}"
     max_rotas_dia = _parse_int_opcional(registro.get("MAX_ROTAS_DIA")) or 1
 
     telefone = _parse_texto_numerico(registro.get("TELEFONE_MOTORISTA"))
-    email = str(registro.get("EMAIL_MOTORISTA") or "").strip() or None
+    email = _parse_texto_numerico(registro.get("EMAIL_MOTORISTA"))
 
     placa_bruta = registro.get("PLACA")
     if placa_bruta is None or (isinstance(placa_bruta, float) and pd.isna(placa_bruta)):
