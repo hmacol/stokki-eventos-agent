@@ -14,6 +14,7 @@ Endpoints:
 """
 import logging
 import re
+import time
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -26,6 +27,8 @@ URL_PRINTING = f"{BASE_URL}/pt-br/provider/operation/order/printing"
 URL_ORDER    = f"{BASE_URL}/pt-br/provider/operation/order/printing/order"
 URL_SEARCH   = f"{BASE_URL}/pt-br/provider/operation/order/printing/search"
 LIMITE_SEGURANCA_IMPRESSAO = 300  # trava de segurança: máx. de cliques em "Imprimir" por execução
+# Botões 'Imprimir' da fila de verdade ('Pedidos faturados'); ver comentário em imprimir_pedidos_pendentes.
+_SEL_BOTAO_FILA = "#div_billed button.btn_finish"
 
 _RAIZ_DADOS = Path(__file__).resolve().parent.parent / "dados"
 
@@ -266,69 +269,152 @@ def _login_provider(page, usuario, senha):
     logger.info(f"Login OK. URL atual: {page.url}")
 
 
-def _fechar_popup_pular_impressao(page, max_cliques=5):
+# Stub do print-js instalado em TODA página do contexto (add_init_script),
+# antes dos scripts da Stokki rodarem -- achado em produção (15/09):
+#
+# O popup 'Imprimir' da Estação de Impressão é uma sequência de etapas
+# (Danfe Simplificada, NF-e complementar, Danfe A4, etiqueta, declaração,
+# carta de correção, ...). Em cada etapa a página da Stokki clica SOZINHA
+# em 'Sim' ~1,4s depois de mostrar a etapa e chama printJS(pdf, {
+# onLoadingStart, onPrintDialogClose, onError }). O onLoadingStart
+# DESABILITA o botão 'Pular Impressão'; o fluxo só avança quando o
+# print-js chama onPrintDialogClose -- e o print-js 1.6 só faz isso
+# quando a janela recebe um evento 'focus' depois do diálogo de impressão
+# fechar. No Chromium headless não existe diálogo nem evento de foco, e o
+# modal fica preso pra sempre em "Imprimindo Danfe Simplificada ..." com
+# o 'Pular Impressão' desabilitado. Era exatamente isso que travava os
+# pedidos com DANFE simplificada habilitada (33430, 33436, 33466, 34071,
+# 34792 desde 23/08; 39222 em 15/09), e os que "funcionavam" só
+# funcionavam porque nosso clique em 'Pular Impressão' ganhava a corrida
+# de 1,4s contra o 'Sim' automático.
+#
+# O stub faz o que 'Pular Impressão' faria em cada etapa: dispara
+# onLoadingStart e, em seguida, onPrintDialogClose -- sem imprimir nada
+# (nada é impresso na VPS de qualquer jeito). A página então percorre
+# todas as etapas sozinha até 'Finalizar' (POST /printing/store) e
+# recarrega a lista -- é isso que move o pedido de 'Em espera' pra
+# 'Aguardando Transportador'.
+#
+# defineProperty com setter vazio: o vendor/print-js/print.min.js carrega
+# DEPOIS do init script e tentaria sobrescrever window.printJS; com a
+# propriedade não-configurável a atribuição é ignorada (ou lança dentro
+# do próprio print.min.js, sem afetar o resto da página). Vale também
+# depois de cada navegação/reload, sem precisar reinstalar.
+_STUB_PRINTJS_JS = """
+(() => {
+  const stub = function (params) {
+    try { if (params && params.onLoadingStart) params.onLoadingStart(); } catch (e) {}
+    setTimeout(() => {
+      try { if (params && params.onPrintDialogClose) params.onPrintDialogClose(); } catch (e) {}
+    }, 50);
+  };
+  stub.__stokki_stub = true;
+  try {
+    Object.defineProperty(window, 'printJS', {
+      get: () => stub, set: () => {}, configurable: false, enumerable: true
+    });
+  } catch (e) {
+    window.printJS = stub;
+  }
+})();
+"""
+
+# Estado do modal 'Imprimir', lido a cada meio segundo por _aguardar_fluxo_impressao.
+_JS_ESTADO_MODAL = """
+() => {
+  const m = document.querySelector('#modal_finish_hide');
+  if (!m || !m.classList.contains('show')) return {aberto: false};
+  const visivel = (el) => !!el && el.offsetParent !== null;
+  const etapas = [...m.querySelectorAll('.div_reset')].filter(visivel).map(d => d.id);
+  const pular = [...m.querySelectorAll('button')].find(
+    b => visivel(b) && !b.disabled && (b.dataset.text || b.textContent || '').trim() === 'Pular Impressão');
+  return {
+    aberto: true,
+    etapas: etapas,
+    pular_id: pular ? pular.id : null,
+    pagina_hide: visivel(m.querySelector('#div_page_hide')),
+    texto: (m.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+    stub: !!(window.printJS && window.printJS.__stokki_stub),
+  };
+}
+"""
+
+
+def _aguardar_fluxo_impressao(page, data_id: str, timeout_s: int = 60) -> bool:
     """
-    Depois de clicar em 'Imprimir', aguarda o popup aparecer e clica em
-    'Pular Impressão' — é isso que efetivamente aciona a transição de
-    status. Retorna True se pelo menos um popup foi fechado (ou já não
-    havia nenhum aberto), False se ficou preso mesmo depois de Esc E de
-    recarregar a página.
-
-    Timeouts alargados (06/08, achado em produção): o clique em 'Pular
-    Impressão' e o fechamento do modal em si podem levar mais que os
-    3-5s originais (o modal tem uma barra de progresso — parece um
-    processamento interno do Stokki, não uma simples animação) — com
-    timeout curto, a função desistia achando que falhou, mas o popup
-    continuava ABERTO de verdade, bloqueando o clique de TODOS os
-    pedidos seguintes por até 30s cada (Playwright ficava tentando a
-    mesma ação até estourar o timeout, "intercepts pointer events").
-
-    RELOAD como último recurso (07/08, achado em produção): confirmado
-    que existe modal GENUINAMENTE travado -- nem o fluxo normal nem Esc
-    fecham (barra de progresso trava de vez, não é só demora). Sem
-    reload, TODO pedido seguinte da fila herdava o mesmo modal preso e
-    pagava os mesmos ~30-40s tentando (em vão) fechar + mais 30s
-    tentando clicar -- lote inteiro efetivamente perdido. Reload limpa
-    qualquer modal preso incondicionalmente; o próprio pedido que
-    disparou o modal preso fica com resultado incerto (contado como
-    falha), mas os pedidos SEGUINTES voltam a processar normalmente.
+    Depois de clicar em 'Imprimir', acompanha o popup até a Stokki
+    finalizar o pedido (POST /printing/store + reload da lista). Com o
+    stub do print-js instalado (ver _STUB_PRINTJS_JS) o popup percorre as
+    etapas sozinho; aqui só damos um empurrão onde a página espera um
+    humano:
+      - 'Pular Impressão' habilitado e visível -> clica (evita até baixar
+        o PDF; também é o caminho antigo, caso o stub não tenha pegado);
+      - etapa 'páginas impressas' (div_page_hide, sem clique automático)
+        -> 'Não'.
+    Retorna True quando o modal fechou (pedido finalizado), False se
+    ficou preso até o timeout -- nesse caso recarrega a página pra não
+    contaminar os pedidos seguintes da fila (achado de 07/08: um modal
+    preso fazia TODO o resto do lote falhar).
     """
-    fechou_algum = False
-    for _ in range(max_cliques):
+    inicio = time.time()
+    ultimo_texto = None
+    try:
+        # O modal abre depois do POST /printing/search (~0,5s); sem esta
+        # espera a primeira leitura viria antes dele existir e o loop
+        # concluiria "fechou" sem nada ter acontecido.
+        page.wait_for_selector("#modal_finish_hide.show", timeout=10_000)
+    except Exception:
+        logger.warning(f"  Popup do pedido data-id={data_id} não apareceu em 10s.")
+        return False
+    while time.time() - inicio < timeout_s:
         try:
-            page.wait_for_selector("#modal_finish_hide.show", timeout=5000)
-            page.click("button:has-text('Pular Impressão')", timeout=5000)
-            page.wait_for_selector("#modal_finish_hide.show", state="hidden", timeout=15000)
-            page.wait_for_timeout(300)
-            fechou_algum = True
+            estado = page.evaluate(_JS_ESTADO_MODAL)
         except Exception:
-            break
+            # Contexto destruído = a página está navegando (reload depois
+            # do /printing/store). Espera e lê de novo.
+            page.wait_for_timeout(500)
+            continue
 
-    # Último recurso se o modal ainda estiver aberto de verdade -- Esc
-    # costuma fechar esse padrão de modal (role="dialog" aria-modal,
-    # visual de Bootstrap). Evita deixar um popup preso bloqueando o
-    # resto da fila.
-    if page.query_selector("#modal_finish_hide.show"):
-        logger.warning("  Popup não fechou pelo fluxo normal -- tentando Esc como recuperação.")
+        if not estado.get("aberto"):
+            return True
+
+        if estado.get("texto") != ultimo_texto:
+            logger.info(
+                f"    +{time.time() - inicio:4.1f}s etapa={estado.get('etapas')} "
+                f"pular={estado.get('pular_id')} texto={estado.get('texto')!r}"
+            )
+            ultimo_texto = estado.get("texto")
+
         try:
-            page.keyboard.press("Escape")
-            page.wait_for_selector("#modal_finish_hide.show", state="hidden", timeout=5000)
-            fechou_algum = True
-            logger.warning("  Popup fechou via Esc.")
+            if estado.get("pagina_hide"):
+                page.click("#btn_no_page_hide", timeout=1000)
+            elif estado.get("pular_id"):
+                page.click(f"#{estado['pular_id']}", timeout=1000)
         except Exception:
-            logger.error("  Popup CONTINUA aberto mesmo depois de Esc -- recarregando a página.")
-            try:
-                page.reload(wait_until="networkidle", timeout=30000)
-                fechou_algum = False  # resultado do pedido que causou o travamento fica incerto
-                logger.warning("  Página recarregada -- modal preso foi limpo, seguindo pros próximos pedidos.")
-            except Exception as e2:
-                logger.error(f"  Falha ao recarregar a página: {e2} -- fila pode continuar travada.")
+            pass  # botão mudou de estado entre a leitura e o clique -- o loop lê de novo
 
-    return fechou_algum
+        page.wait_for_timeout(500)
+
+    logger.error(
+        f"  Popup do pedido data-id={data_id} não fechou em {timeout_s}s "
+        f"(último estado: {ultimo_texto!r}) -- recarregando a página pra não "
+        f"travar os pedidos seguintes."
+    )
+    try:
+        _RAIZ_DADOS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(_RAIZ_DADOS / f"erro_impressao_{data_id}.png"))
+    except Exception:
+        pass
+    try:
+        page.reload(wait_until="networkidle", timeout=30000)
+    except Exception as e:
+        logger.error(f"  Falha ao recarregar a página: {e} -- fila pode continuar travada.")
+    return False
 
 
 def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
-                               visivel: bool = False) -> dict:
+                               visivel: bool = False,
+                               apenas_ids: set | None = None) -> dict:
     """
     Processa TODOS os pedidos pendentes na Estação de Impressão, clicando
     de verdade em 'Imprimir' (botão button.btn_finish) e fechando o popup
@@ -358,6 +444,9 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
     agente_relatorio) — este projeto roda via pipeline agendado, sem
     terminal interativo; quem chama esta função já decidiu processar.
 
+    apenas_ids: se informado, processa só esses data-ids da fila (uso
+    avulso/diagnóstico: `somente_impressao.py --id 39222`).
+
     Retorna dict: {"pendentes": int, "processados": int, "ignorados": list[str], "falhas": list[str]}
     """
     usuario, senha = _credenciais_provider(config)
@@ -377,11 +466,45 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not visivel)
         context = _novo_contexto_disfarcado(browser)
+        # Stub do print-js em toda página deste contexto (ver _STUB_PRINTJS_JS).
+        context.add_init_script(_STUB_PRINTJS_JS)
         page = context.new_page()
+
+        # Registra as respostas da Stokki que decidem o resultado de cada
+        # pedido (busca ao abrir o popup e o 'Finalizar' que grava) -- sem
+        # isso um erro do /printing/store só aparecia como toastr na tela.
+        def _registrar_resposta(response):
+            url = response.url
+            if "/printing/store" in url or "/printing/search" in url:
+                try:
+                    corpo = response.text()[:300].replace("\n", " ")
+                except Exception:
+                    corpo = "<sem corpo>"
+                nivel = logging.INFO if response.ok else logging.WARNING
+                logger.log(nivel, f"    Stokki {url.rsplit('/', 1)[-1]}: HTTP {response.status} {corpo}")
+
+        page.on("response", _registrar_resposta)
         try:
             _login_provider(page, usuario, senha)
+            try:
+                stub_ok = page.evaluate("() => !!(window.printJS && window.printJS.__stokki_stub)")
+            except Exception:
+                stub_ok = False
+            if stub_ok:
+                logger.info("Stub do print-js instalado na página (etapas de impressão fecham sozinhas).")
+            else:
+                logger.warning(
+                    "Stub do print-js NÃO pegou -- a página pode travar em "
+                    "'Imprimindo Danfe...' (fluxo antigo de 'Pular Impressão' segue como fallback)."
+                )
 
-            botoes = page.query_selector_all("button.btn_finish")
+            # Só a tabela 'Pedidos faturados' (#div_billed). A tabela
+            # 'Últimos pedidos impressos' (#div_printing) também tem botão
+            # 'Imprimir' (reimpressão) com a mesma classe btn_finish -- sem
+            # o escopo, um pedido já impresso hoje era contado como
+            # pendente, clicado de novo e, na conferência, dado como
+            # "ainda na fila" (achado 15/09 com o 39222).
+            botoes = page.query_selector_all(_SEL_BOTAO_FILA)
             resultado["pendentes"] = len(botoes)
             logger.info(f"{len(botoes)} pedido(s) pendente(s) na Estação de Impressão.")
 
@@ -389,6 +512,9 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                 return resultado
 
             ids_para_processar = [b.get_attribute("data-id") for b in botoes]
+            if apenas_ids:
+                apenas = {str(i) for i in apenas_ids}
+                ids_para_processar = [i for i in ids_para_processar if i in apenas]
             logger.info(f"IDs a processar: {ids_para_processar}")
 
             if ids_ignorados_config:
@@ -428,11 +554,11 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                         f"  Popup de um pedido anterior ainda estava aberto -- "
                         f"tentando fechar antes de continuar com data-id={data_id}."
                     )
-                    _fechar_popup_pular_impressao(page)
+                    _aguardar_fluxo_impressao(page, "anterior", timeout_s=30)
 
                 # re-busca o botão pelo data-id específico — se já saiu da
                 # fila (processado por outra via nesse meio-tempo), pula
-                botao = page.query_selector(f"button.btn_finish[data-id='{data_id}']")
+                botao = page.query_selector(f"{_SEL_BOTAO_FILA}[data-id='{data_id}']")
                 if not botao:
                     logger.info(f"  Pedido data-id={data_id} já saiu da fila, pulando.")
                     continue
@@ -448,14 +574,27 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                 # screenshot pra diagnóstico, e o loop continua pro próximo.
                 try:
                     botao.click()
-                    sucesso = _fechar_popup_pular_impressao(page)
-                    if sucesso:
+                    inicio_pedido = time.time()
+                    fechou = _aguardar_fluxo_impressao(page, data_id)
+                    # Depois do 'Finalizar' a própria Stokki recarrega a
+                    # lista -- confirma que o pedido realmente saiu da fila
+                    # em vez de confiar só no modal ter sumido (o modal
+                    # também some se o /printing/store falhar e a página
+                    # for recarregada pelo fallback).
+                    _aguardar_pagina_acalmar(page)
+                    ainda_na_fila = page.query_selector(f"{_SEL_BOTAO_FILA}[data-id='{data_id}']")
+                    if fechou and not ainda_na_fila:
                         resultado["processados"] += 1
+                        logger.info(
+                            f"  Pedido data-id={data_id} finalizado "
+                            f"({time.time() - inicio_pedido:.0f}s) -- saiu da fila."
+                        )
                     else:
                         resultado["falhas"].append(data_id)
                         logger.warning(
                             f"  AVISO: pedido data-id={data_id} não processou corretamente "
-                            f"— popup não apareceu ou não fechou. Conferir manualmente."
+                            f"(modal fechou={fechou}, ainda na fila={bool(ainda_na_fila)}). "
+                            f"Conferir manualmente."
                         )
                 except Exception as e:
                     resultado["falhas"].append(data_id)

@@ -53,17 +53,19 @@ def _carregar_config():
         return yaml.safe_load(f) or {}
 
 
-def main(modo_teste: bool = False):
+def main(modo_teste: bool = False, apenas_ids: set | None = None):
     inicio = time.time()
     logger.info("=" * 60)
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Estação de Impressão (avulsa) iniciada.")
+    if apenas_ids:
+        logger.info(f"Restrita aos data-ids: {sorted(apenas_ids)}")
     logger.info("=" * 60)
 
     resumo_etapas = {}
     config = _carregar_config()
 
     try:
-        resultado = imprimir_pedidos_pendentes(config, dry_run=modo_teste)
+        resultado = imprimir_pedidos_pendentes(config, dry_run=modo_teste, apenas_ids=apenas_ids)
         if modo_teste:
             logger.info(
                 f"[MODO TESTE] {resultado['pendentes']} pedido(s) na fila "
@@ -102,5 +104,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Roda só a Estação de Impressão, separada do fluxo completo")
     parser.add_argument("--modo-teste", action="store_true",
                         help="Simula sem clicar em nada -- só conta quantos pedidos estão na fila")
+    parser.add_argument("--id", action="append", dest="ids", default=[],
+                        help="Processa só este data-id da fila (repetível). Sem --id, processa a fila toda.")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste)
+    main(modo_teste=args.modo_teste, apenas_ids=set(args.ids) or None)
