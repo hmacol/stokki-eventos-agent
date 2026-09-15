@@ -77,6 +77,7 @@ import rascunhos_rota
 import torre_controle
 import tratativas
 import pedidos_parados_triagem
+import contadores_menu
 import wms
 
 def _carregar_config() -> dict:
@@ -475,6 +476,16 @@ def encerrar_tudo():
 def historico():
     execucoes = listar_execucoes_recentes(100)
     return render_template("historico.html", execucoes=execucoes)
+
+
+@app.route("/api/sidebar/contadores")
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "galpao", "atendimento"))
+def api_sidebar_contadores():
+    """Números dos badges do menu lateral (base.html). Chamado pelo JS
+    depois do load de qualquer página e a cada poucos minutos -- nunca
+    na renderização. Toda a lógica (o que é barato, o que é caro, o que
+    cada nível pode ver) está em contadores_menu.py."""
+    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
 
 
 @app.route("/mapa-rotas")

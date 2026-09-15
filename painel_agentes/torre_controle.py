@@ -116,6 +116,16 @@ _cache_stokki: dict = {"quando": 0.0, "dados": None}
 _cache_tendencia: dict = {}  # data_iso -> {"quando": monotonic, "dados": [...]}
 _cache_kpis_periodo: dict = {}  # "dia_atual:..."/"semana_anterior:..." -> {"quando": monotonic, "dados": [rotas_brutas]}
 _lock_caches = threading.Lock()
+
+# Último tamanho conhecido da Fila de ação, publicado por buscar_dados_torre
+# (11/09): é o que alimenta o badge da Torre no menu lateral
+# (contadores_menu.py). buscar_dados_torre NÃO tem cache de topo -- cada
+# chamada é uma coleta ao vivo na VUUPT de vários segundos --, então o
+# badge NUNCA a chama por dentro de um request: lê este snapshot, que sai
+# de graça de toda carga da própria tela da Torre (que já se atualiza
+# sozinha) e, quando ninguém está com ela aberta, de uma renovação em
+# segundo plano disparada por contadores_menu.
+_snapshot_fila_acao: dict = {"quando": 0.0, "data_iso": None, "qtd": None, "criticas": 0}
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
 
@@ -1349,6 +1359,14 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     qtd_atencao = len(excecoes) - qtd_criticos
     semaforo = "critico" if qtd_criticos else ("atencao" if qtd_atencao else "ok")
 
+    # Badge da Torre no menu lateral aproveita esta coleta (ver
+    # _snapshot_fila_acao) -- de graça, sem nenhuma chamada a mais.
+    with _lock_caches:
+        _snapshot_fila_acao.update({
+            "quando": time.monotonic(), "data_iso": data_alvo.isoformat(),
+            "qtd": len(excecoes), "criticas": qtd_criticos,
+        })
+
     return {
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
         "data_alvo_iso": data_alvo.isoformat(),
@@ -1369,3 +1387,18 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "tratadas": tratadas,
         "base": base,
     }
+
+
+def snapshot_fila_acao(data_alvo: date) -> dict | None:
+    """Último tamanho conhecido da Fila de ação pra `data_alvo`, sem
+    disparar coleta nenhuma (ver _snapshot_fila_acao). Devolve None se
+    ainda não há leitura, ou se a última é de outro dia.
+
+    {"qtd": int, "criticas": int, "idade_seg": float}
+    """
+    with _lock_caches:
+        snap = dict(_snapshot_fila_acao)
+    if snap["qtd"] is None or snap["data_iso"] != data_alvo.isoformat():
+        return None
+    return {"qtd": snap["qtd"], "criticas": snap["criticas"],
+            "idade_seg": time.monotonic() - snap["quando"]}
