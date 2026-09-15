@@ -21,6 +21,7 @@ Uso:
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -39,6 +40,12 @@ COOKIES_PATH = Path(__file__).parent / "sessao_stokki.json"
 
 # Quantas vezes tentar renovar a sessão antes de desistir.
 MAX_TENTATIVAS_RENOVACAO = 2
+
+# Quanto um login novo espera a trava cooperativa (stokki/sessao_uso.py)
+# ficar livre antes de seguir mesmo assim. Só vale na thread principal
+# (jobs agendados); dentro do painel web (threads do waitress) não espera:
+# falha na hora com "Stokki em uso", que as telas já tratam.
+ESPERA_TRAVA_LOGIN_SEGUNDOS = 15 * 60
 
 
 class SessaoExpiradaError(Exception):
@@ -178,12 +185,35 @@ class StokkiSession:
             pass
         logger.info(f"Cookies salvos em {COOKIES_PATH} ({len(playwright_cookies)} cookies).")
 
+    def _aguardar_trava_stokki(self):
+        """Um login novo derruba a sessão de quem já está logado com o mesmo
+        usuário (importador por e-mail, máscara do portal...). Se outro
+        processo segura a trava, espera a vez. Problema na própria trava
+        (banco sem permissão, lock do SQLite) nunca impede o login."""
+        try:
+            from stokki import sessao_uso
+            em_thread_principal = threading.current_thread() is threading.main_thread()
+            espera = ESPERA_TRAVA_LOGIN_SEGUNDOS if em_thread_principal else 0
+            ocupante = sessao_uso.aguardar_vez_para_login(espera)
+        except Exception as e:
+            logger.warning(f"Trava de sessão da Stokki indisponível ({e}) -- seguindo com o login.")
+            return
+        if not ocupante:
+            return
+        if not em_thread_principal:
+            raise SessaoExpiradaError(
+                f"Stokki em uso por '{ocupante}' -- login adiado pra não derrubar a sessão dele."
+            )
+        logger.warning(f"Stokki ainda em uso por '{ocupante}' após {ESPERA_TRAVA_LOGIN_SEGUNDOS // 60} min "
+                       f"-- seguindo com o login mesmo assim.")
+
     def _fazer_login_playwright(self):
         """
         Abre o Playwright em modo headless, faz login no Stokki e salva
         os cookies resultantes. Também captura o CSRF token da página
         e o adiciona como header padrão da session (exigido pelo Laravel).
         """
+        self._aguardar_trava_stokki()
         logger.info("Fazendo login no Stokki via Playwright...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)

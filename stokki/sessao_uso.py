@@ -38,6 +38,11 @@ DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 _CHAVE = "principal"
 _FMT = "%Y-%m-%d %H:%M:%S"
 
+# Donos adquiridos por ESTE processo -- o login da StokkiSession (auth.py)
+# não pode esperar por uma trava que o próprio processo segura (ex.:
+# notificar_transportadoras adquire e depois abre a sessão).
+_DONOS_DESTE_PROCESSO: set[str] = set()
+
 
 def _conectar() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -114,6 +119,7 @@ def adquirir(dono: str, ttl_segundos: int = 900, esperar_segundos: int = 0, inte
                                                      expira_em = excluded.expira_em
                 """, (_CHAVE, dono, agora.strftime(_FMT), (agora + timedelta(seconds=ttl_segundos)).strftime(_FMT)))
                 conn.commit()
+                _DONOS_DESTE_PROCESSO.add(dono)
                 if avisado:
                     logger.info(f"[sessao_uso] Stokki liberada por '{avisado}' -- '{dono}' assumiu.")
                 return True
@@ -138,9 +144,52 @@ def renovar(dono: str, ttl_segundos: int = 900) -> None:
 
 
 def liberar(dono: str) -> None:
+    _DONOS_DESTE_PROCESSO.discard(dono)
     conn = _conectar()
     try:
         conn.execute("DELETE FROM stokki_sessao_uso WHERE chave = ? AND dono = ?", (_CHAVE, dono))
         conn.commit()
     finally:
         conn.close()
+
+
+def ocupante_externo() -> str | None:
+    """Dono da trava (a linha, válida) quando ela é de OUTRO processo.
+    Diferente de em_uso(), ignora execuções do painel em RODANDO: quem
+    chama isto costuma ser o próprio agente do painel."""
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT dono, expira_em FROM stokki_sessao_uso WHERE chave = ?", (_CHAVE,)).fetchone()
+    finally:
+        conn.close()
+    if not row or row["dono"] in _DONOS_DESTE_PROCESSO:
+        return None
+    try:
+        if datetime.strptime(row["expira_em"], _FMT) <= _agora():
+            return None
+    except ValueError:
+        return None
+    return row["dono"]
+
+
+def aguardar_vez_para_login(esperar_segundos: int, intervalo: float = 10.0) -> str | None:
+    """Chamado antes de um login novo na Stokki (stokki/auth.py): espera
+    enquanto outro processo segura a trava -- o login derrubaria a sessão
+    dele (14/09/2026: acompanhar_retiradas e sincronizar_produtos_stokki
+    derrubavam o importador da Quatro Estrelas no meio do upload e 22 NFs
+    não viraram pedido). Devolve None quando está livre, ou o dono que
+    ainda segura a trava ao fim da espera."""
+    limite = time.monotonic() + max(0, esperar_segundos)
+    avisado = None
+    while True:
+        ocupante = ocupante_externo()
+        if not ocupante:
+            if avisado:
+                logger.info(f"[sessao_uso] Stokki liberada por '{avisado}' -- seguindo com o login.")
+            return None
+        if ocupante != avisado:
+            logger.info(f"[sessao_uso] Stokki em uso por '{ocupante}' -- login aguardando a vez.")
+            avisado = ocupante
+        if time.monotonic() >= limite:
+            return ocupante
+        time.sleep(min(intervalo, max(0.0, limite - time.monotonic())) or 0.1)
