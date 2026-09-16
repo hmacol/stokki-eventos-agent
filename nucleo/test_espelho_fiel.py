@@ -206,8 +206,14 @@ class TestMigracao(_BaseTemp):
                                      '2026-09-14 09:00:00', '2026-09-14 20:00:00',
                                      '{"finished_at": "2026-09-14 20:00:00"}')""")
         self.conn.execute("""INSERT INTO nucleo_paradas (id, rota_id, ordem, service_id, codigo, situacao,
-                                                         arrived_at, completed_at)
-                             VALUES (1, 1, 1, 9001, '#PS-1', 'ENTREGUE', '2026-09-14 12:30:00', '2026-09-14 13:00:00')""")
+                                                         arrived_at, completed_at, dados_json)
+                             VALUES (1, 1, 1, 9001, '#PS-1', 'ENTREGUE', '2026-09-14 12:30:00', '2026-09-14 13:00:00',
+                                     '{"arrived_at": "2026-09-14 12:30:00", "completed_at": "2026-09-14 13:00:00"}')""")
+        # parada que o sync novo já regravou em hora local: não pode converter de novo
+        self.conn.execute("""INSERT INTO nucleo_paradas (id, rota_id, ordem, service_id, codigo, situacao,
+                                                         completed_at, dados_json)
+                             VALUES (2, 1, 2, 9002, 'PS-2', 'ENTREGUE', '2026-09-14 10:00:00',
+                                     '{"completed_at": "2026-09-14 13:00:00"}')""")
         self.conn.execute("""INSERT INTO nucleo_eventos (rota_id, parada_id, tipo, origem, ocorrido_em, recebido_em)
                              VALUES (1, 1, 'ENTREGUE', 'VUUPT_SYNC', '2026-09-14 13:00:00', '2026-09-14 10:15:00')""")
         self.conn.execute("""INSERT INTO nucleo_eventos (rota_id, tipo, origem, ocorrido_em, recebido_em)
@@ -242,8 +248,10 @@ class TestMigracao(_BaseTemp):
         rota = self.conn.execute("SELECT * FROM nucleo_rotas").fetchone()
         self.assertEqual(rota["start_at"], "2026-09-14 06:00:00")
         self.assertEqual(rota["concluida_em"], "2026-09-14 17:00:00")
-        parada = self.conn.execute("SELECT * FROM nucleo_paradas").fetchone()
+        parada = self.conn.execute("SELECT * FROM nucleo_paradas WHERE id = 1").fetchone()
         self.assertEqual((parada["codigo"], parada["completed_at"]), ("PS-1", "2026-09-14 10:00:00"))
+        ja_local = self.conn.execute("SELECT completed_at FROM nucleo_paradas WHERE id = 2").fetchone()[0]
+        self.assertEqual(ja_local, "2026-09-14 10:00:00")     # intacta, não virou 07:00
         eventos = {e["tipo"]: e["ocorrido_em"] for e in self.conn.execute("SELECT tipo, ocorrido_em FROM nucleo_eventos")}
         self.assertEqual(eventos["ENTREGUE"], "2026-09-14 10:00:00")
         self.assertEqual(eventos["ROTA_IMPORTADA_VUUPT"], "2026-09-14 10:15:02")   # hora do sync, não converte

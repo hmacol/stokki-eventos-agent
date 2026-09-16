@@ -41,7 +41,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from nucleo import banco
-from nucleo.normalizacao import normalizar_codigo, vuupt_para_local
+from nucleo.normalizacao import vuupt_para_local
 
 logger = logging.getLogger("nucleo.migrar_espelho")
 
@@ -168,20 +168,37 @@ def passo_fuso_rotas(conn: sqlite3.Connection) -> dict:
 
 
 def passo_fuso_paradas(conn: sqlite3.Connection) -> dict:
+    """Converte só o valor que ainda é IGUAL ao bruto do serviço guardado em
+    dados_json. Parada que o sync novo já regravou (em hora local) tem valor
+    diferente do bruto e fica quieta -- é o que impede tirar 3 h duas vezes
+    se a migração rodar depois de uma rodada do sync."""
     n = 0
-    linhas = conn.execute("""SELECT p.id, p.started_at, p.arrived_at, p.completed_at
+    puladas = 0
+    linhas = conn.execute("""SELECT p.id, p.started_at, p.arrived_at, p.completed_at, p.dados_json
                              FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id
                              WHERE r.provedor = ? AND (p.started_at IS NOT NULL OR p.arrived_at IS NOT NULL
                                                        OR p.completed_at IS NOT NULL)""",
                           (banco.PROVEDOR_VUUPT,)).fetchall()
     for p in linhas:
-        novos = {c: vuupt_para_local(p[c]) for c in ("started_at", "arrived_at", "completed_at") if p[c]}
-        novos = {c: v for c, v in novos.items() if v and v != p[c]}
+        try:
+            bruto = json.loads(p["dados_json"] or "{}")
+        except ValueError:
+            bruto = {}
+        bruto = bruto.get("service", bruto) if isinstance(bruto, dict) else {}
+        novos = {}
+        for coluna in ("started_at", "arrived_at", "completed_at"):
+            atual = p[coluna]
+            if not atual or atual != bruto.get(coluna):
+                puladas += 1 if atual else 0
+                continue
+            local = vuupt_para_local(atual)
+            if local and local != atual:
+                novos[coluna] = local
         if novos:
             conn.execute(f"UPDATE nucleo_paradas SET {', '.join(f'{c} = ?' for c in novos)} WHERE id = ?",
                          list(novos.values()) + [p["id"]])
             n += 1
-    return {"paradas_convertidas": n, "paradas_olhadas": len(linhas)}
+    return {"paradas_convertidas": n, "paradas_olhadas": len(linhas), "carimbos_ja_locais": puladas}
 
 
 def passo_fuso_eventos(conn: sqlite3.Connection) -> dict:
