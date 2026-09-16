@@ -68,8 +68,8 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 
 ### Etapa 0 — Blindar e parar de aumentar a dependência
 - [x] Ensaio de restauração cronometrado (`ensaiar_restauracao_backup.py` + timer semanal). **Rodado em produção 15/09: snapshot de 70,2 MB, download 0,8 s, integrity_check ok, 92 tabelas, núcleo sobe e lê — 1,8 s até o banco utilizável.**
-- [x] Backup de hora em hora + fotos de `dados/comprovantes` (`backup_dados_gcs.py --horario`, retenção 48 h); diário com `Persistent=true`. *(falta deploy)*
-- [x] Alerta por e-mail quando job crítico falhar: `alertar_falha_job.py` + `infra/stokki-alerta-falha@.service`, `OnFailure=` em 18 unidades, janela anti-enxurrada de 2 h. *(falta deploy)*
+- [x] Backup de hora em hora + fotos de `dados/comprovantes` (`backup_dados_gcs.py --horario`, retenção 48 h); diário com `Persistent=true`. **No ar 15/09 (timer :22): 1ª rodada subiu snapshot de 67,6 MB + a foto do pedágio.**
+- [x] Alerta por e-mail quando job crítico falhar: `alertar_falha_job.py` + `infra/stokki-alerta-falha@.service`, `OnFailure=` em 18 unidades, janela anti-enxurrada de 2 h. **Testado em produção 15/09 (e-mail recebido).**
 - [x] Trava branda: `nucleo/test_acoplamento_vuupt.py` (lista congelada de 49 arquivos; arquivo novo chamando a Vuupt reprova).
 - [x] Infra no git (`stokki-reconciliar-retirada.*`, que só existia na VPS); `sincronizar_painel_vps.py` aposentado.
 - [ ] (antes do piloto real) Backup contínuo (Litestream) + cópia em bucket separado — decisão 3 do Hugo.
@@ -83,7 +83,8 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 - [x] Comparador Vuupt × núcleo, pedido a pedido (`nucleo/comparar_vuupt.py`, só leitura dos dois lados).
 - [x] Corrigidos os defeitos 1–6 da seção 2 (`nucleo/normalizacao.py`, `pedidos.py`, `sincronizar_vuupt.py`, `operacao.py`, `rotas.py`, `consulta.py`) + migração do que já estava gravado (`nucleo/migrar_espelho_15_09.py`, passo a passo, registrado em `nucleo_migracoes`, não roda duas vezes).
 - [x] **Provado numa cópia do banco de produção (15/09):** 10 dias, 84 rotas, 687 paradas, 630 pedidos — **687 divergências → 203 (migração) → 0 (sync novo com janela de 8 dias)**.
-- [ ] Deploy + backfill `--dias 10` em produção e comparador rodando diariamente.
+- [x] **DEPLOYADO 15/09** (commits `52fa39f`, `9083b4d`, `fdce49a`; VPS em `8a67b63`). Migração em produção: 3.756 paradas e 2.989 pedidos com código normalizado, 22 pares mesclados, 6.468 carimbos convertidos, 5.813 eventos, 1.264 agendamentos, 49 status corrigidos. Backfill de 11 dias (9 paradas fora da rota fechadas). **Comparador em produção: 0 divergências** em 84 rotas / 687 paradas / 630 pedidos.
+- [ ] Comparador rodando diariamente (timer) com o histórico dos 10 dias úteis — falta criar a unit.
 - [ ] Sync incremental de serviços (pool, cancelados, reagendados, retiradas, reentregas) — em vez de gancho em cada escrita.
 - [ ] Ponte núcleo → Vuupt para rotas do app (decisão de 12/09): criar/atribuir/fechar serviços, anexar foto; testar fechamento da rota e e-mail ao embarcador numa rota de teste.
 - **Critério:** 10 dias úteis seguidos sem divergência sem explicação.
