@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Acompanhar retiradas no galpao (Stokki Enviado/Cancelado -> VUUPT)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

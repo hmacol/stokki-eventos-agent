@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Checagem diaria de entregues sem expedicao na Stokki (verificar_entregues_nao_expedidos.py)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

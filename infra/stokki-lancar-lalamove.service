@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Lanca na Lalamove as corridas com horario programado no /planejamento
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

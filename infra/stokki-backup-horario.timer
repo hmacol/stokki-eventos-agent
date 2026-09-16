@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-backup-horario.service de hora em hora (minuto 22, fora dos :00/:15/:30/:45 dos outros jobs)
+
+[Timer]
+OnCalendar=*-*-* *:22:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

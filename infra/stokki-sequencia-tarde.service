@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Sequencia da tarde (ExecutarTudo, VerificarDuplicados, CriarRotasDiarias, Notificador, ProcessarDocumentos)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

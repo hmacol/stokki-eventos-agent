@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Cancelar rotas de hoje sem motorista (cancelar_rotas_sem_motorista.py)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

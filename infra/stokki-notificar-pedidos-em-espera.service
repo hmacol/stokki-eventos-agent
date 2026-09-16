@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Notificador de pedidos em espera (cobranca de XML por embarcador + faturados na Estacao de Impressao)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Espelha rotas/paradas da VUUPT no nucleo proprio (Fase A do app de motoristas)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

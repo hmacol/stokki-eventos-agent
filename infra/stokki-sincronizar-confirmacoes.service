@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Sincroniza respostas de confirmacao de rota dos motoristas
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

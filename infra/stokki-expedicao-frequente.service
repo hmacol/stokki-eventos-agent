@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Expedicao (expedir_pedidos.py)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

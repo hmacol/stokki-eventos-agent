@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Geracao de romaneios da manha (gerar_pdf_romaneios.py --data hoje)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

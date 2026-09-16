@@ -3,7 +3,7 @@ Description=Dispara stokki-backup-gcs.service todo dia as 03:00
 
 [Timer]
 OnCalendar=*-*-* 03:00:00
-Persistent=false
+Persistent=true
 AccuracySec=1min
 
 [Install]

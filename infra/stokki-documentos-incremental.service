@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Documentos por pedido, rodada INCREMENTAL de dia (so pedidos em aberto ainda sem NF; e-mail incremental; sem retentativa)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Espelha o catalogo de produtos do Stokki em wms_produtos (enderecamento do galpao)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

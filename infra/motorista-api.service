@@ -1,5 +1,6 @@
 [Unit]
 Description=API do app de motoristas (nucleo/api_motorista.py) - Freshlog
+OnFailure=stokki-alerta-falha@%n.service
 After=network.target
 
 [Service]

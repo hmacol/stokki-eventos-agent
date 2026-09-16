@@ -1,0 +1,13 @@
+[Unit]
+Description=Stokki Eventos - Alerta por e-mail de job que falhou (%i)
+# Sem OnFailure aqui de proposito: um alerta que falha nao pode disparar outro alerta.
+
+[Service]
+Type=oneshot
+User=www-data
+# Ler o journal da execucao que falhou (journalctl _SYSTEMD_INVOCATION_ID=...)
+SupplementaryGroups=systemd-journal
+# Estado anti-enxurrada (um e-mail por unidade a cada 2 h) em /var/lib/stokki-alertas
+StateDirectory=stokki-alertas
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/alertar_falha_job.py %i

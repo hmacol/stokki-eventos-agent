@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Notificar transportadoras (notificar_transportadoras.py --data hoje)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

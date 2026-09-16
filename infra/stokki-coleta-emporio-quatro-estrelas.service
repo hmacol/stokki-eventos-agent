@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Lançar coleta diária do Empório Quatro Estrelas na VUUPT (lancar_coleta.py)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

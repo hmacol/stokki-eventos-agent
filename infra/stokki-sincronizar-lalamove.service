@@ -1,5 +1,6 @@
 [Unit]
 Description=Stokki Eventos - Sincroniza pedidos Lalamove (status + conclusao dos servicos na VUUPT)
+OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
 Type=oneshot

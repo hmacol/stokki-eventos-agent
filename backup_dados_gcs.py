@@ -15,8 +15,20 @@ processo ao mesmo tempo (ExpedicaoFrequente roda a cada 30 min, 08h-19h35).
 Reaproveita a MESMA credencial/bucket de documentos_pedido/storage_gcs.py
 (gcs.bucket_name / gcs.credenciais_json no config.yaml), só que num prefixo
 próprio (backups/) pra não misturar com os documentos de pedido.
+
+15/09 (Etapa 0 do DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md): o diário deixava
+até 24 h de entregas, eventos e despesas do app sem cópia. Agora há dois
+modos, cada um no seu timer:
+  - padrão (03:00): snapshot + planilhas, retenção de 30 dias;
+  - --horario (de hora em hora): só os bancos, em backups/*_horario/,
+    retenção de 48 h.
+Os dois sobem as fotos novas de dados/comprovantes (canhotos e recibos do
+app) pra backups/comprovantes/ -- o upload que a API faz na hora é
+best-effort e sem reenvio. As fotos não mudam depois de gravadas (nome com
+uuid), então basta subir o que ainda não subiu (manifesto local).
 """
 import argparse
+import json
 import logging
 import sqlite3
 import sys
@@ -39,6 +51,9 @@ PASTA_TMP = PASTA_DADOS / "backup_tmp"
 
 ARQUIVOS_PLANILHA = ["BD_MOTORISTAS.xlsx", "BD_CLIENTES.xlsx", "BD_TRANSPORTADORAS.xlsx"]
 DIAS_RETENCAO = 30
+HORAS_RETENCAO_HORARIO = 48
+PASTA_COMPROVANTES = PASTA_DADOS / "comprovantes"
+MANIFESTO_COMPROVANTES = PASTA_TMP / "comprovantes_no_gcs.json"
 
 _clientes_gcs = {}
 
@@ -109,33 +124,77 @@ def enviar_para_gcs(config: dict, caminho_local: Path, caminho_gcs: str):
     logger.info(f"  Enviado: {caminho_local.name} -> gs://{bucket_name}/{caminho_gcs}")
 
 
-def limpar_backups_antigos(config: dict, prefixo: str, dias_retencao: int):
-    """Apaga do bucket os backups desse prefixo com mais de N dias -- sem
-    isso o bucket cresce pra sempre com um snapshot novo por dia."""
+def limpar_backups_antigos(config: dict, prefixo: str, dias_retencao: int = 0, horas_retencao: int = 0):
+    """Apaga do bucket os backups desse prefixo mais velhos que a retenção
+    (dias OU horas) -- sem isso o bucket cresce pra sempre."""
+    janela = timedelta(days=dias_retencao, hours=horas_retencao)
+    if janela <= timedelta(0):
+        raise ValueError("retenção precisa ser positiva")
+
     cfg_gcs = config.get("gcs", {})
     bucket_name = cfg_gcs.get("bucket_name", "")
     cliente = _cliente_gcs(config)
-
-    limite = datetime.now(timezone.utc) - timedelta(days=dias_retencao)
+    limite = datetime.now(timezone.utc) - janela
     apagados = 0
     for blob in cliente.list_blobs(bucket_name, prefix=prefixo):
         if blob.time_created and blob.time_created < limite:
             blob.delete()
             apagados += 1
     if apagados:
-        logger.info(f"  Retenção: {apagados} backup(s) com mais de {dias_retencao} dias apagado(s) de {prefixo}")
+        logger.info(f"  Retenção: {apagados} backup(s) mais velhos que {janela} apagado(s) de {prefixo}")
+
+
+def _ler_manifesto() -> dict[str, int]:
+    try:
+        return json.loads(MANIFESTO_COMPROVANTES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def comprovantes_pendentes(manifesto: dict[str, int]) -> list[tuple[Path, str]]:
+    """Fotos de dados/comprovantes que ainda não subiram (ou mudaram de
+    tamanho): [(caminho_local, caminho_relativo)]."""
+    if not PASTA_COMPROVANTES.exists():
+        return []
+    pendentes = []
+    for arquivo in sorted(PASTA_COMPROVANTES.rglob("*")):
+        if not arquivo.is_file():
+            continue
+        relativo = arquivo.relative_to(PASTA_COMPROVANTES).as_posix()
+        if manifesto.get(relativo) != arquivo.stat().st_size:
+            pendentes.append((arquivo, relativo))
+    return pendentes
+
+
+def enviar_comprovantes(config: dict) -> int:
+    """Sobe as fotos novas pra backups/comprovantes/ e grava o manifesto a
+    cada arquivo (uma falha no meio não faz reenviar tudo). Devolve quantas
+    subiram."""
+    manifesto = _ler_manifesto()
+    pendentes = comprovantes_pendentes(manifesto)
+    if not pendentes:
+        return 0
+    MANIFESTO_COMPROVANTES.parent.mkdir(parents=True, exist_ok=True)
+    for arquivo, relativo in pendentes:
+        enviar_para_gcs(config, arquivo, f"backups/comprovantes/{relativo}")
+        manifesto[relativo] = arquivo.stat().st_size
+        MANIFESTO_COMPROVANTES.write_text(json.dumps(manifesto, ensure_ascii=False), encoding="utf-8")
+    return len(pendentes)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--modo-teste", action="store_true",
                          help="Gera o snapshot local mas não envia pro GCS nem apaga nada.")
+    parser.add_argument("--horario", action="store_true",
+                        help="Backup de hora em hora: só os bancos (retenção de 48 h) + fotos novas.")
     args = parser.parse_args()
 
     config = carregar_config()
     carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sufixo = "_horario" if args.horario else ""
 
-    logger.info("=== Backup de dados.db + planilhas pro GCS ===")
+    logger.info("=== Backup %s pro GCS ===", "HORÁRIO de dados.db" if args.horario else "de dados.db + planilhas")
 
     logger.info("Gerando snapshot consistente de dados.db (VACUUM INTO)...")
     snapshot = snapshot_dados_db(carimbo)
@@ -151,14 +210,26 @@ def main():
         logger.info("  atendimento.db ainda não existe -- pulando (normal antes da central de atendimento entrar no ar).")
 
     if args.modo_teste:
-        logger.info("--modo-teste: não envia pro GCS. Snapshot fica em dados/backup_tmp/ pra inspeção manual.")
+        pendentes = comprovantes_pendentes(_ler_manifesto())
+        logger.info("--modo-teste: não envia pro GCS. Snapshot fica em dados/backup_tmp/ pra inspeção manual. "
+                    "%d foto(s) de comprovante subiriam.", len(pendentes))
         return
 
-    enviar_para_gcs(config, snapshot, f"backups/dados_db/dados_{carimbo}.db")
+    enviar_para_gcs(config, snapshot, f"backups/dados_db{sufixo}/dados_{carimbo}.db")
     snapshot.unlink()
     if snapshot_atendimento:
-        enviar_para_gcs(config, snapshot_atendimento, f"backups/atendimento_db/atendimento_{carimbo}.db")
+        enviar_para_gcs(config, snapshot_atendimento, f"backups/atendimento_db{sufixo}/atendimento_{carimbo}.db")
         snapshot_atendimento.unlink()
+
+    logger.info("Enviando fotos novas de dados/comprovantes...")
+    logger.info("  %d foto(s) enviada(s).", enviar_comprovantes(config))
+
+    if args.horario:
+        logger.info("Limpando backups horários antigos (retenção de %d h)...", HORAS_RETENCAO_HORARIO)
+        limpar_backups_antigos(config, "backups/dados_db_horario/", horas_retencao=HORAS_RETENCAO_HORARIO)
+        limpar_backups_antigos(config, "backups/atendimento_db_horario/", horas_retencao=HORAS_RETENCAO_HORARIO)
+        logger.info("=== Backup horário concluído ===")
+        return
 
     for nome in ARQUIVOS_PLANILHA:
         caminho = PASTA_DADOS / nome
@@ -168,9 +239,9 @@ def main():
         enviar_para_gcs(config, caminho, f"backups/planilhas/{carimbo}/{nome}")
 
     logger.info("Limpando backups antigos (retenção de %d dias)...", DIAS_RETENCAO)
-    limpar_backups_antigos(config, "backups/dados_db/", DIAS_RETENCAO)
-    limpar_backups_antigos(config, "backups/atendimento_db/", DIAS_RETENCAO)
-    limpar_backups_antigos(config, "backups/planilhas/", DIAS_RETENCAO)
+    limpar_backups_antigos(config, "backups/dados_db/", dias_retencao=DIAS_RETENCAO)
+    limpar_backups_antigos(config, "backups/atendimento_db/", dias_retencao=DIAS_RETENCAO)
+    limpar_backups_antigos(config, "backups/planilhas/", dias_retencao=DIAS_RETENCAO)
 
     logger.info("=== Backup concluído ===")
 
