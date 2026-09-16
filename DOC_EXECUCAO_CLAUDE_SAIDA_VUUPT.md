@@ -76,15 +76,18 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 - **Critério:** restauração ensaiada com sucesso ✅ + alerta testado (depois do deploy).
 
 ### Etapa 1 — Exportar o histórico da Vuupt (agora, não no fim)
-- [ ] Exportador resumível e com limite de velocidade: rotas, serviços, customers, agentes, veículos, checklists (JSON) e PDFs dos checklists → GCS `arquivo_vuupt/`.
-- **Critério:** contagens batem 100% com `meta.pagination.total`.
+- [x] `nucleo/exportar_historico_vuupt.py`: retomável, com limite de velocidade (2 req/s) e lote por noite (`stokki-exportar-vuupt.timer`, 01:30). Sai em `gs://<bucket>/arquivo_vuupt/`: rotas e serviços por mês, clientes, usuários, veículos, checklists (com os campos preenchidos) e o **PDF de cada checklist** — é onde a foto do canhoto mora, porque a imagem só sai por URL assinada da CDN da Vuupt.
+- Volume medido (16/09): 7.844 rotas, 62.527 serviços, 11.948 clientes, 150 veículos, 95 usuários, **59.740 checklists** (PDF de ~349 KB e ~2,3 s cada → ~21 GB, ~8 noites de lote).
+- **Critério:** contagens batem com `meta.pagination.total` (o manifesto marca `ATENCAO` quando não bate).
+- [ ] Rodar até o fim e conferir o manifesto.
+- [ ] Com a Vuupt: fim de contrato, exportação oficial, acesso só-leitura depois.
 
 ### Etapa 2 — Espelho fiel e comprovado
 - [x] Comparador Vuupt × núcleo, pedido a pedido (`nucleo/comparar_vuupt.py`, só leitura dos dois lados).
 - [x] Corrigidos os defeitos 1–6 da seção 2 (`nucleo/normalizacao.py`, `pedidos.py`, `sincronizar_vuupt.py`, `operacao.py`, `rotas.py`, `consulta.py`) + migração do que já estava gravado (`nucleo/migrar_espelho_15_09.py`, passo a passo, registrado em `nucleo_migracoes`, não roda duas vezes).
 - [x] **Provado numa cópia do banco de produção (15/09):** 10 dias, 84 rotas, 687 paradas, 630 pedidos — **687 divergências → 203 (migração) → 0 (sync novo com janela de 8 dias)**.
 - [x] **DEPLOYADO 15/09** (commits `52fa39f`, `9083b4d`, `fdce49a`; VPS em `8a67b63`). Migração em produção: 3.756 paradas e 2.989 pedidos com código normalizado, 22 pares mesclados, 6.468 carimbos convertidos, 5.813 eventos, 1.264 agendamentos, 49 status corrigidos. Backfill de 11 dias (9 paradas fora da rota fechadas). **Comparador em produção: 0 divergências** em 84 rotas / 687 paradas / 630 pedidos.
-- [ ] Comparador rodando diariamente (timer) com o histórico dos 10 dias úteis — falta criar a unit.
+- [x] Comparador diário: `stokki-comparar-vuupt.timer` (07:40) roda `--dias 3 --salvar --email`, grava uma linha por dia em `nucleo_reconciliacoes` (a última avaliação do dia manda) e o e-mail traz a **sequência de dias limpos** — é o placar do critério. `--historico N` mostra o placar no terminal.
 - [ ] Sync incremental de serviços (pool, cancelados, reagendados, retiradas, reentregas) — em vez de gancho em cada escrita.
 - [ ] Ponte núcleo → Vuupt para rotas do app (decisão de 12/09): criar/atribuir/fechar serviços, anexar foto; testar fechamento da rota e e-mail ao embarcador numa rota de teste.
 - **Critério:** 10 dias úteis seguidos sem divergência sem explicação.

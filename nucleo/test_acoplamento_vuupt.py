@@ -46,6 +46,7 @@ PERMITIDOS = {
     "lalamove_integracao.py",
     "ler_planilha_entregas_nuu.py",
     "nucleo/comparar_vuupt.py",             # 15/09: compara os dois lados; some quando a Vuupt sair
+    "nucleo/exportar_historico_vuupt.py",   # 16/09: tira o historico da Vuupt pro nosso bucket (Etapa 1)
     "nucleo/sincronizar_vuupt.py",          # a ponte Vuupt -> núcleo (morre na virada)
     "painel_agentes/expedicao.py",
     "painel_agentes/laboratorio_rotas.py",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Stokki Eventos - Exporta o historico da Vuupt pro GCS, um lote por noite (Etapa 1 da saida da Vuupt)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+# Sao ~59.700 PDFs de checklist a 2 req/s: o lote da noite leva horas.
+TimeoutStartSec=infinity
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/exportar_historico_vuupt.py --fase auto --limite 8000

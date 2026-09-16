@@ -293,6 +293,29 @@ class TestComparador(_BaseTemp):
         self.assertEqual(len(d["rota_ausente_no_nucleo"]), 0)
 
 
+class TestHistoricoDaComparacao(_BaseTemp):
+    def _salvar(self, dia, divergencias, rotas=10):
+        comparar_vuupt.salvar([{"dia": dia, "contagem": {"rotas": rotas, "paradas": 100, "pedidos": 90},
+                                "divergencias": {c: ([{"x": 1}] * divergencias if c == "parada_sobrando" else [])
+                                                 for c in comparar_vuupt.CATEGORIAS}}], self.conn)
+
+    def test_conta_dias_limpos_seguidos_ignorando_dia_sem_rota(self):
+        self._salvar("2026-09-09", 3)
+        self._salvar("2026-09-10", 0)
+        self._salvar("2026-09-11", 0)
+        self._salvar("2026-09-12", 0, rotas=0)      # fim de semana: não conta nem quebra
+        self._salvar("2026-09-14", 0)
+        self.assertEqual(comparar_vuupt.dias_limpos_seguidos(self.conn), 3)
+
+    def test_rodar_o_mesmo_dia_de_novo_substitui(self):
+        self._salvar("2026-09-14", 5)
+        self._salvar("2026-09-14", 0)
+        linhas = comparar_vuupt.historico(self.conn, 10)
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["total_divergencias"], 0)
+        self.assertEqual(comparar_vuupt.dias_limpos_seguidos(self.conn), 1)
+
+
 class TestNormalizacao(unittest.TestCase):
     def test_codigo(self):
         self.assertEqual(normalizacao.normalizar_codigo("#ps-1"), "PS-1")

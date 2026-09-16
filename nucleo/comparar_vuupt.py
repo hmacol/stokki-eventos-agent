@@ -31,7 +31,14 @@ COMO USAR (VPS, como www-data):
     venv/bin/python nucleo/comparar_vuupt.py --dias 7           # últimos 7 dias até ontem
     venv/bin/python nucleo/comparar_vuupt.py --data 2026-09-11 --exemplos 10
     venv/bin/python nucleo/comparar_vuupt.py --dias 7 --json > comparacao.json
+    venv/bin/python nucleo/comparar_vuupt.py --dias 3 --salvar --email   # o que o timer diário roda
+    venv/bin/python nucleo/comparar_vuupt.py --historico 20             # a sequência de dias limpos
 Saída 0 = nenhuma divergência; 2 = houve divergência.
+
+`--salvar` grava uma linha por dia em `nucleo_reconciliacoes` (a última
+avaliação de cada dia manda, porque o dia melhora conforme o sync alcança
+as mudanças atrasadas). É dali que sai o critério de passagem da Etapa 2:
+**10 dias úteis seguidos sem divergência sem explicação**.
 """
 import argparse
 import json
@@ -188,6 +195,72 @@ def resumir(resultados: list[dict], exemplos: int) -> str:
     return "\n".join(linhas)
 
 
+def _garantir_tabela(conn: sqlite3.Connection):
+    conn.execute("""CREATE TABLE IF NOT EXISTS nucleo_reconciliacoes (
+                        dia               TEXT PRIMARY KEY,
+                        rodado_em         TEXT NOT NULL,
+                        rotas             INTEGER NOT NULL DEFAULT 0,
+                        paradas           INTEGER NOT NULL DEFAULT 0,
+                        pedidos           INTEGER NOT NULL DEFAULT 0,
+                        total_divergencias INTEGER NOT NULL DEFAULT 0,
+                        divergencias_json TEXT)""")
+
+
+def salvar(resultados: list[dict], conn: sqlite3.Connection):
+    """Uma linha por dia; rodar de novo o mesmo dia SUBSTITUI (o dia se
+    conserta sozinho quando o sync alcança o que mudou depois)."""
+    _garantir_tabela(conn)
+    for r in resultados:
+        contagens = {c: len(v) for c, v in r["divergencias"].items() if v}
+        conn.execute("""INSERT INTO nucleo_reconciliacoes (dia, rodado_em, rotas, paradas, pedidos,
+                                                           total_divergencias, divergencias_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(dia) DO UPDATE SET rodado_em = excluded.rodado_em, rotas = excluded.rotas,
+                            paradas = excluded.paradas, pedidos = excluded.pedidos,
+                            total_divergencias = excluded.total_divergencias,
+                            divergencias_json = excluded.divergencias_json""",
+                     (r["dia"], banco.agora(), r["contagem"]["rotas"], r["contagem"]["paradas"],
+                      r["contagem"]["pedidos"], sum(contagens.values()),
+                      json.dumps(contagens, ensure_ascii=False)))
+    conn.commit()
+
+
+def historico(conn: sqlite3.Connection, limite: int = 20) -> list[dict]:
+    _garantir_tabela(conn)
+    return [dict(r) for r in conn.execute(
+        """SELECT dia, rodado_em, rotas, paradas, pedidos, total_divergencias, divergencias_json
+           FROM nucleo_reconciliacoes ORDER BY dia DESC LIMIT ?""", (limite,))]
+
+
+def dias_limpos_seguidos(conn: sqlite3.Connection) -> int:
+    """Quantos dias COM ROTA, do mais recente pra trás, fecharam sem
+    divergência. Dia sem rota (fim de semana) não conta nem quebra."""
+    seguidos = 0
+    for linha in historico(conn, limite=60):
+        if linha["rotas"] == 0:
+            continue
+        if linha["total_divergencias"]:
+            break
+        seguidos += 1
+    return seguidos
+
+
+def _enviar_email(resultados: list[dict], conn: sqlite3.Connection, config: dict, exemplos: int):
+    from email_utils import COR_ACENTO, COR_ERRO, envelope_html, enviar_email
+
+    total = sum(len(v) for r in resultados for v in r["divergencias"].values())
+    limpos = dias_limpos_seguidos(conn)
+    destino = (config.get("notificacao_execucao", {}) or {}).get("destinatario") or "hugo@freshlogbr.com"
+    titulo = (f"Espelho da Vuupt: {total} divergência(s)" if total
+              else f"Espelho da Vuupt: sem divergência ({limpos} dia(s) limpos seguidos)")
+    corpo = [f"<h2 style='margin:0 0 12px'>{titulo}</h2>",
+             f"<p>Critério da Etapa 2: 10 dias úteis seguidos sem divergência. Hoje: <b>{limpos}</b>.</p>",
+             "<pre style='white-space:pre-wrap;font-size:12px;background:#F3F4F6;padding:12px;border-radius:6px'>",
+             resumir(resultados, exemplos), "</pre>"]
+    enviar_email([destino], titulo, envelope_html("".join(corpo), cor_acento=COR_ERRO if total else COR_ACENTO),
+                 config.get("email", {}))
+
+
 def _listar_rotas_dia_local(token: str, dia: date) -> list[dict]:
     from rotas_client import listar_rotas
     inicio, fim = janela_utc_do_dia(dia)
@@ -203,8 +276,26 @@ def main(argv=None) -> int:
     parser.add_argument("--exemplos", type=int, default=5)
     parser.add_argument("--json", action="store_true", help="imprime o resultado completo em JSON")
     parser.add_argument("--db", help="caminho do banco (padrão: dados/dados.db) -- pra comparar uma cópia")
+    parser.add_argument("--salvar", action="store_true", help="grava o resultado em nucleo_reconciliacoes")
+    parser.add_argument("--email", action="store_true", help="manda o resumo por e-mail (sempre, com ou sem divergência)")
+    parser.add_argument("--historico", type=int, metavar="N",
+                        help="só mostra as últimas N comparações salvas (não vai na Vuupt)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    caminho = Path(args.db) if args.db else banco.DB_PATH
+    if args.historico:
+        conn = banco.conectar(caminho)
+        try:
+            for linha in historico(conn, args.historico):
+                marca = "OK " if not linha["total_divergencias"] else "!! "
+                print(f"{marca}{linha['dia']}  rotas={linha['rotas']:3d} paradas={linha['paradas']:4d} "
+                      f"pedidos={linha['pedidos']:4d}  divergências={linha['total_divergencias']:4d} "
+                      f"{linha['divergencias_json'] if linha['total_divergencias'] else ''}")
+            print(f"\nDias com rota, seguidos, sem divergência: {dias_limpos_seguidos(conn)} (critério da Etapa 2: 10)")
+        finally:
+            conn.close()
+        return 0
 
     import yaml
     # Aceita rodar de uma cópia fora do repo (ex.: /tmp) desde que o
@@ -225,11 +316,20 @@ def main(argv=None) -> int:
         ontem = date.today() - timedelta(days=1)
         dias = [ontem - timedelta(days=i) for i in range(args.dias)][::-1]
 
-    caminho = Path(args.db) if args.db else banco.DB_PATH
-    conn = sqlite3.connect(f"{caminho.resolve().as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    # Só abre pra escrita quando vai gravar/mandar e-mail; o padrão é
+    # somente leitura, pra comparar nunca poder estragar nada.
+    precisa_escrever = args.salvar or args.email
+    if precisa_escrever:
+        conn = banco.conectar(caminho)
+    else:
+        conn = sqlite3.connect(f"{caminho.resolve().as_uri()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
     try:
         resultados = [comparar_dia(d, _listar_rotas_dia_local(token, d), conn) for d in dias]
+        if args.salvar:
+            salvar(resultados, conn)
+        if args.email:
+            _enviar_email(resultados, conn, config, args.exemplos)
     finally:
         conn.close()
 
