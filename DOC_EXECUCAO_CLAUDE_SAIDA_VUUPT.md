@@ -129,6 +129,7 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 ## 5. Log de status
 
 - **12/09** — Levantamento completo (3 sub-agentes + consultas somente leitura na VPS e na API da Vuupt). Plano de 7 etapas entregue no chat. Hugo: replicar tudo na Vuupt até a virada (relatórios do financeiro).
+- **16/09 (tarde)** — Sync do pedido fora da rota DEPLOYADO (`b014d31`, timer a cada 15 min, painel e motorista-api reiniciados). Em produção: 579 serviços de 3 dias, 21 pedidos novos no espelho, 22 retiradas identificadas, 9 pedidos apagados na Vuupt viraram CANCELADO, 1 pedido do pipeline ligado ao serviço pelo código. **Pool do núcleo = pool da Vuupt (74 = 74)** e o comparador seguiu em 0 divergências (sem regressão no espelho das rotas).
 - **16/09** — Comparador diário e exportador do histórico DEPLOYADOS (`1445f52`). Provas em produção: comparador 0 divergências em 13-15/09 (27 rotas / 277 paradas / 236 pedidos), e-mail com o placar (2 dias limpos seguidos); exportador gravou `arquivo_vuupt/usuarios|veiculos/completo.jsonl.gz` e o `manifesto.json` com linhas == total_api. Timers: exportar 01:30 (1º lote grande hoje), comparar 07:40, backup horário :22, ensaio dom 05:30. **Próximos:** sync incremental de serviços (pool, retiradas, reentregas) e a ponte núcleo → Vuupt do financeiro.
 - **15/09** — Hugo: nosso cálculo de km é a base (ignorar Vuupt); relatórios ficam pra depois; seguir com o plano.
   Etapa 0 e primeira metade da Etapa 2 escritas e testadas (163 testes verdes), **aguardando o Hugo autorizar commit e deploy**.
