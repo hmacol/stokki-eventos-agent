@@ -68,6 +68,16 @@ TIPO_SERVICO = {"delivery": "Entrega", "pickup": "Coleta"}
 FORA_DO_RAIO = {0: "Não", 1: "Sim (baixa precisão)", 2: "Sim (alta precisão)", 3: "dados insuficientes"}
 
 
+# Colunas em que diferir é ESPERADO, então não contam na conferência:
+#   - custos: é o R$ 25,00 fixo configurado na Vuupt, que não paga ninguém.
+#     Hugo, 16/09: "pode ignorar esse 25 reais". A conta real do motorista é
+#     regras/tarifa_motorista.py (340/550/700 + km + pedágio aprovado).
+#   - link do mapa: a Vuupt assina com hash próprio (public-map?signature=),
+#     impossível de reproduzir; o nosso aponta pra tela de consulta da rota.
+def _coluna_ignorada(coluna: str) -> bool:
+    return coluna.startswith("Custos (") or coluna == "Estatísticas - Link para mapa"
+
+
 # ── Formatação (igual à exportação da Vuupt) ──────────────────────────────────
 
 def _dt(bruto, com_segundos: bool = False) -> str:
@@ -619,7 +629,7 @@ def comparar(caminho_vuupt: Path, colunas: list[str], nossas: list[dict], chave:
     so_deles = sorted(set(por_chave_deles) - set(por_chave_nossas))
     so_nossas = sorted(set(por_chave_nossas) - set(por_chave_deles))
     comuns = sorted(set(por_chave_deles) & set(por_chave_nossas))
-    diferencas = {}
+    diferencas, esperadas = {}, {}
     for c in colunas:
         divergentes = []
         for k in comuns:
@@ -627,13 +637,16 @@ def comparar(caminho_vuupt: Path, colunas: list[str], nossas: list[dict], chave:
             if a != b:
                 divergentes.append({"chave": k, "vuupt": a[:40], "nosso": b[:40]})
         if divergentes:
-            diferencas[c] = {"linhas": len(divergentes), "exemplos": divergentes[:exemplos]}
-    celulas = len(comuns) * len(colunas)
+            alvo = esperadas if _coluna_ignorada(c) else diferencas
+            alvo[c] = {"linhas": len(divergentes), "exemplos": divergentes[:exemplos]}
+    conferidas = [c for c in colunas if not _coluna_ignorada(c)]
+    celulas = len(comuns) * len(conferidas)
     divergentes = sum(d["linhas"] for d in diferencas.values())
     return {"celulas": celulas, "celulas_iguais": celulas - divergentes,
             "linhas_vuupt": len(deles), "linhas_nossas": len(nossas), "comuns": len(comuns),
             "so_na_vuupt": so_deles[:20], "so_nossas": so_nossas[:20],
-            "colunas_iguais": len(colunas) - len(diferencas), "colunas": len(colunas), "diferencas": diferencas}
+            "colunas_iguais": len(conferidas) - len(diferencas), "colunas": len(conferidas),
+            "ignoradas": len(colunas) - len(conferidas), "diferencas": diferencas, "esperadas": esperadas}
 
 
 def imprimir_comparacao(titulo: str, resultado: dict, exemplos: int = 3):
@@ -645,8 +658,12 @@ def imprimir_comparacao(titulo: str, resultado: dict, exemplos: int = 3):
     if resultado["so_nossas"]:
         print(f"  só nossas ({len(resultado['so_nossas'])}): {resultado['so_nossas'][:8]}")
     iguais, total = resultado["celulas_iguais"], resultado["celulas"]
-    print(f"colunas idênticas: {resultado['colunas_iguais']}/{resultado['colunas']} | "
+    print(f"colunas conferidas: {resultado['colunas_iguais']}/{resultado['colunas']} idênticas "
+          f"({resultado['ignoradas']} ignoradas: custo da Vuupt e link do mapa) | "
           f"células idênticas: {iguais}/{total} ({100 * iguais / total:.2f}%)" if total else "")
+    if resultado.get("esperadas"):
+        print(f"  (diferenças esperadas, não contadas: {', '.join(sorted(resultado['esperadas'])[:3])}"
+              f"{' e mais ' + str(len(resultado['esperadas']) - 3) if len(resultado['esperadas']) > 3 else ''})")
     for coluna, info in sorted(resultado["diferencas"].items(), key=lambda kv: -kv[1]["linhas"]):
         print(f"  {coluna[:58]:58s} {info['linhas']:5d} linha(s)")
         for ex in info["exemplos"][:exemplos]:
