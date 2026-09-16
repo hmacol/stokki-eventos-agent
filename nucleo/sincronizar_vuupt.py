@@ -433,23 +433,36 @@ def _rota_do_corpo(dados) -> dict:
 
 
 def reconciliar_rotas_sumidas(conn: sqlite3.Connection, token: str, dias: list[date],
-                              vistas: set[int], nomes: dict[int, str] | None = None) -> dict:
+                              vistas: set[int], nomes: dict[int, str] | None = None,
+                              ids: list[int] | None = None) -> dict:
     """Rota VUUPT que o núcleo tem em aberto num dos dias sincronizados mas
     que a listagem daquele dia não trouxe: ou foi EXCLUÍDA na VUUPT (404),
     ou foi REMARCADA pra outro dia. Sem isso a rota ficava PLANEJADA pra
-    sempre aqui -- e ainda aparecia pro motorista no app."""
+    sempre aqui -- e ainda aparecia pro motorista no app.
+
+    `ids` força a conferência dessas rotas, ignorando a janela de dias --
+    é como o espelho de SERVIÇOS pede a rota de um pedido que mudou fora da
+    janela (rota antiga finalizada dias depois)."""
     from requests.exceptions import HTTPError
     from rotas_client import buscar_rota
 
     stats = {"excluidas": 0, "remarcadas": 0, "erros": 0}
-    if not dias:
+    if ids:
+        marcadores = ",".join("?" * len(ids))
+        alvo = conn.execute(f"""SELECT id, vuupt_route_id, data_rota FROM nucleo_rotas
+                                WHERE vuupt_route_id IN ({marcadores}) AND provedor = ?""",
+                            (*ids, banco.PROVEDOR_VUUPT)).fetchall()
+        faltando = set(ids) - {linha["vuupt_route_id"] for linha in alvo}
+        alvo = list(alvo) + [{"id": None, "vuupt_route_id": rid, "data_rota": None} for rid in sorted(faltando)]
+    elif not dias:
         return stats
-    alvo = conn.execute("""
-        SELECT id, vuupt_route_id, data_rota FROM nucleo_rotas
-        WHERE provedor = ? AND vuupt_route_id IS NOT NULL
-          AND data_rota BETWEEN ? AND ? AND status NOT IN (?, ?)
-    """, (banco.PROVEDOR_VUUPT, min(dias).isoformat(), max(dias).isoformat(),
-          banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA)).fetchall()
+    else:
+        alvo = conn.execute("""
+            SELECT id, vuupt_route_id, data_rota FROM nucleo_rotas
+            WHERE provedor = ? AND vuupt_route_id IS NOT NULL
+              AND data_rota BETWEEN ? AND ? AND status NOT IN (?, ?)
+        """, (banco.PROVEDOR_VUUPT, min(dias).isoformat(), max(dias).isoformat(),
+              banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA)).fetchall()
     for row in alvo:
         if row["vuupt_route_id"] in vistas:
             continue
@@ -458,6 +471,8 @@ def reconciliar_rotas_sumidas(conn: sqlite3.Connection, token: str, dias: list[d
         except HTTPError as e:
             resposta = getattr(e, "response", None)
             if resposta is not None and resposta.status_code == 404:
+                if row["id"] is None:          # nem existe aqui: nada a fechar
+                    continue
                 agora = banco.agora()
                 conn.execute("UPDATE nucleo_rotas SET status = ?, cancelada_em = COALESCE(cancelada_em, ?), "
                              "status_provedor = 'excluida', atualizado_em = ? WHERE id = ?",

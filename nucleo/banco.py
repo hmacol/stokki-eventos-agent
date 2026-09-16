@@ -308,6 +308,12 @@ _COLUNAS_PEDIDOS_NOVAS = [
     ("excluido_em", "TEXT"),                # deleted_at / sumiu da VUUPT
     ("reentrega_de_service_id", "INTEGER"),  # recreated_order_origin_id
     ("reentrega_de_codigo", "TEXT"),        # o código do pedido original, quando dá pra resolver
+    # 16/09: vêm do include=zone/sender do serviço -- é o que o relatório de
+    # serviços do financeiro mostra em "Zona - Nome" e "Remetente".
+    ("zona", "TEXT"),
+    ("zona_id", "INTEGER"),
+    ("qtd_checklists", "INTEGER"),   # canhoto preenchido no app da Vuupt (vira nucleo_comprovantes no nosso)
+    ("qtd_anexos", "INTEGER"),
 ]
 
 FLUXO_ENTREGA = "ENTREGA"

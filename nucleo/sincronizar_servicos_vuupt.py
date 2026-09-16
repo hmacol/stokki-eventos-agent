@@ -42,7 +42,7 @@ import logging
 import re
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 _RAIZ = Path(__file__).resolve().parent.parent
@@ -93,13 +93,25 @@ def fluxo_do_servico(s: dict) -> str:
     return banco.FLUXO_RETIRADA if titulo.startswith("[RETIRADA]") else banco.FLUXO_ENTREGA
 
 
+def _embutido(s: dict, chave: str) -> dict:
+    """include=customer,sender,zone traz o objeto inteiro (às vezes dentro
+    de {"data": {...}})."""
+    valor = s.get(chave) or {}
+    if isinstance(valor, dict) and isinstance(valor.get("data"), dict):
+        valor = valor["data"]
+    return valor if isinstance(valor, dict) else {}
+
+
 def _campos(s: dict) -> dict:
-    """Serviço da VUUPT -> colunas de nucleo_pedidos. `customer` vem
-    embutido quando a listagem usa include=customer."""
-    customer = s.get("customer") or {}
-    if isinstance(customer, dict) and isinstance(customer.get("data"), dict):
-        customer = customer["data"]
+    """Serviço da VUUPT -> colunas de nucleo_pedidos."""
+    customer = _embutido(s, "customer")
+    sender = _embutido(s, "sender")
+    zona = _embutido(s, "zone")
     return {
+        "remetente_nome": sender.get("name"),
+        "remetente_codigo": sender.get("code"),
+        "zona": zona.get("name"),
+        "zona_id": zona.get("id") or s.get("zone_id"),
         "titulo": s.get("title"),
         "tipo": s.get("type"),
         "destinatario_nome": customer.get("name"),
@@ -126,7 +138,20 @@ def _campos(s: dict) -> dict:
         "atualizado_em_provedor": vuupt_para_local(s.get("updated_at")),
         "excluido_em": vuupt_para_local(s.get("deleted_at")),
         "reentrega_de_service_id": s.get("recreated_order_origin_id"),
+        "qtd_checklists": _contar(s, "checklistAnswers"),
+        "qtd_anexos": _contar(s, "attachments"),
     }
+
+
+def _contar(s: dict, chave: str) -> int | None:
+    """include=checklistAnswers,attachments devolve {"data": [...]}. None
+    quando o include não veio (não dá pra dizer que é zero)."""
+    valor = s.get(chave)
+    if isinstance(valor, dict) and isinstance(valor.get("data"), list):
+        return len(valor["data"])
+    if isinstance(valor, list):
+        return len(valor)
+    return None
 
 
 def _codigo_por_service_id(conn: sqlite3.Connection, service_id) -> str | None:
@@ -178,6 +203,25 @@ def sincronizar_servicos(servicos: list[dict], conn: sqlite3.Connection) -> dict
             stats["eventos"] += 1
     conn.commit()
     return stats
+
+
+def rotas_a_ressincronizar(servicos: list[dict], conn: sqlite3.Connection) -> list[int]:
+    """Rotas das quais algum serviço mudou e que o espelho de ROTAS pode não
+    ter alcançado: a janela dele é de 8 dias, e rota antiga fechada depois
+    disso ficava congelada aqui (achado 16/09: a rota 5168818, de 03/09, foi
+    finalizada 13 dias depois -- o relatório do financeiro mostrava
+    'Finalizada' e o núcleo, 'Atribuída').
+
+    Devolve só o que vale a pena buscar: rota que o núcleo tem em aberto
+    (nem concluída nem cancelada) ou que ele nem conhece."""
+    ids = {s.get("route_id") for s in servicos if s.get("route_id")}
+    if not ids:
+        return []
+    marcadores = ",".join("?" * len(ids))
+    conhecidas = {linha["vuupt_route_id"]: linha["status"] for linha in conn.execute(
+        f"SELECT vuupt_route_id, status FROM nucleo_rotas WHERE vuupt_route_id IN ({marcadores})", tuple(ids))}
+    return sorted(rid for rid in ids
+                  if conhecidas.get(rid) not in (banco.ROTA_CONCLUIDA, banco.ROTA_CANCELADA))
 
 
 def vincular_sem_service_id(conn: sqlite3.Connection, buscar_por_codigo, limite: int = 50) -> dict:
@@ -282,6 +326,8 @@ def main(argv=None) -> int:
     parser.add_argument("--desde", help="ignora o cursor e varre a partir de 'YYYY-MM-DD HH:MM:SS' (hora local)")
     parser.add_argument("--sem-pool", action="store_true", help="pula a reconciliação do pool")
     parser.add_argument("--limite-sumidos", type=int, default=LIMITE_SUMIDOS)
+    parser.add_argument("--limite-rotas", type=int, default=20,
+                        help="máximo de rotas ressincronizadas por rodada (pedido que mudou fora da janela)")
     parser.add_argument("--modo-teste", action="store_true", help="lê a VUUPT e mostra o resumo, sem gravar")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -306,7 +352,7 @@ def main(argv=None) -> int:
             inicio = (cursor if cursor else (agora_utc - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"))
         logger.info(f"Serviços alterados desde {inicio} (UTC).")
         servicos = vuupt.listar_servicos([{"field": "updated_at", "operator": "gte", "value": inicio}],
-                                         include=["customer"])
+                                         include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
         logger.info(f"{len(servicos)} serviço(s) alterado(s).")
         if args.modo_teste:
             por_status = {}
@@ -319,9 +365,18 @@ def main(argv=None) -> int:
 
         stats = sincronizar_servicos(servicos, conn)
         logger.info(f"Incremental: {stats}")
+
+        alvo = rotas_a_ressincronizar(servicos, conn)[:args.limite_rotas]
+        if alvo:
+            from nucleo.sincronizar_vuupt import reconciliar_rotas_sumidas
+            # `vistas=set()` de propósito: aqui a gente QUER buscar cada uma
+            # dessas rotas por id, mesmo que a listagem do dia não as traga.
+            resultado = reconciliar_rotas_sumidas(conn, config["vuupt_api"]["token"], [date.today()],
+                                                  set(), nomes=None, ids=alvo)
+            logger.info(f"Rotas tocadas por serviço que mudou: {len(alvo)} -> {resultado}")
         if not args.sem_pool:
             pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}],
-                                         include=["customer"])
+                                         include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
             stats_pool = reconciliar_pool(pool, conn, lambda sid: _buscar_servico(vuupt, sid),
                                           limite=args.limite_sumidos)
             # O pool inteiro também entra no espelho (pedido que nunca passou

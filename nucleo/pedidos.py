@@ -92,7 +92,8 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
         # quem não souber o valor manda None e o que está gravado fica.
         "status_provedor", "status_done_provedor", "customer_id", "vuupt_route_id", "driver_id",
         "nota", "complemento", "fluxo", "criado_em_provedor", "atualizado_em_provedor",
-        "excluido_em", "reentrega_de_service_id", "reentrega_de_codigo",
+        "excluido_em", "reentrega_de_service_id", "reentrega_de_codigo", "zona", "zona_id",
+        "qtd_checklists", "qtd_anexos",
     ]
     valores = [campos.get(c) for c in colunas]
     tipo = campos.get("tipo")
