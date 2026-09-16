@@ -1122,6 +1122,9 @@
     padding: 10px 14px; margin: -8px 0 16px; font-size: 12px;
   }
   .painel-importacao-filtro.aberto { display: flex; }
+  /* scrollIntoView de abrirPainelAgente: no celular as abas fixas do
+     rodapé (58px + safe-area) cobririam o painel recém-aberto */
+  html.modo-mobile .painel-importacao-filtro { scroll-margin-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
   .painel-importacao-filtro strong { flex: none; }
   .painel-importacao-filtro label { display: flex; flex-direction: column; gap: 3px; color: var(--texto-suave); font-size: 11px; }
   .painel-importacao-filtro input { padding: 7px 9px; min-height: 32px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; background: var(--fundo); color: var(--texto); }
@@ -1909,8 +1912,20 @@
     }
   }
 
+  // Abre o painel de filtro/seleção e o traz pra tela. No celular (aba
+  // Mais) o painel fica abaixo da barra de agentes, fora da dobra e por
+  // trás das abas fixas do rodapé -- Hugo (16/09) tocava em "▶ rodar" e
+  // "nada acontecia". Rola até ele (scroll-margin cobre as abas) e foca o
+  // primeiro campo, que no celular também abre o teclado.
+  function abrirPainelAgente(idPainel) {
+    const painel = document.getElementById(idPainel);
+    painel.classList.add("aberto");
+    painel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const campo = painel.querySelector("input");
+    if (campo) campo.focus({ preventScroll: true });
+  }
   function abrirPainelImportacao() {
-    document.getElementById("painel-importacao-filtro").classList.add("aberto");
+    abrirPainelAgente("painel-importacao-filtro");
   }
   function fecharPainelImportacao() {
     document.getElementById("painel-importacao-filtro").classList.remove("aberto");
@@ -1932,7 +1947,7 @@
   // painel da Importação. Vazio roda a expedição completa (igual ao
   // clique antigo direto no card, que virou este painel).
   function abrirPainelExpedicao() {
-    document.getElementById("painel-expedicao-selecao").classList.add("aberto");
+    abrirPainelAgente("painel-expedicao-selecao");
   }
   function fecharPainelExpedicao() {
     document.getElementById("painel-expedicao-selecao").classList.remove("aberto");
