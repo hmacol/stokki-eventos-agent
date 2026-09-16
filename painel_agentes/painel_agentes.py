@@ -52,7 +52,7 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from agentes import AGENTES, buscar_agente, categorias_ordenadas
+from agentes import AGENTES, buscar_agente, categorias_ordenadas, montar_args_parametros
 from executor import (
     iniciar_execucao, iniciar_execucao_com_fila, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
     listar_execucoes_recentes, ha_execucao_rodando, ha_execucao_pendente, ler_log, limpar_execucoes_travadas,
@@ -399,6 +399,8 @@ def index():
     return render_template(
         "index.html", categorias=categorias, ha_algo_rodando=ha_algo_rodando,
         quantidade_encerrada=encerrado_param,
+        # valor inicial dos campos de data (agentes com 'parametros' tipo date)
+        hoje_iso=date.today().isoformat(),
     )
 
 
@@ -413,7 +415,12 @@ def rodar(agente_id):
         return "Esse agente já está rodando -- espera terminar antes de rodar de novo.", 409
 
     modo_teste = request.form.get("modo_teste") == "on"
-    execucao_id = iniciar_execucao(agente, modo_teste)
+    # Campos extras do cartão (ex: data dos romaneios) -> argv do script.
+    try:
+        args_extra = montar_args_parametros(agente, request.form) or None
+    except ValueError as e:
+        return str(e), 400
+    execucao_id = iniciar_execucao(agente, modo_teste, args_extra=args_extra)
     return redirect(url_for("execucao", execucao_id=execucao_id))
 
 
@@ -696,6 +703,14 @@ def api_planejamento_agentes_rodar():
                                     f"-- use o formato PS-XXXXX."}), 400
         if codigos:
             args_extra = ["--pedido"] + codigos
+    elif agente.get("parametros"):
+        # Agentes com campos declarados em agentes.py (hoje: Gerar
+        # Romaneios com "data" -> --data). O front pode mandar a data
+        # da tela (DATA_ALVO_ISO) pra gerar os PDFs do dia planejado.
+        try:
+            args_extra = montar_args_parametros(agente, body) or None
+        except ValueError as e:
+            return jsonify({"erro": str(e)}), 400
 
     # Se outra etapa da barra já está rodando (ou na fila), entra na
     # fila em vez de disparar em paralelo -- pedido do Hugo, 26/08:

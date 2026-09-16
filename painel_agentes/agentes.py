@@ -20,9 +20,20 @@ Cada entrada:
                    a maioria usa --modo-teste, um usa --teste)
   args_fixos    -- argumentos sempre incluídos (ex: relatório precisa
                    de --diario ou --semanal, não tem um modo "geral")
+  parametros    -- (opcional) campos que o operador preenche na hora de
+                   rodar e viram argumentos do script. Cada item:
+                     campo  -- name do input no formulário / chave no JSON
+                     rotulo -- texto mostrado ao lado do campo
+                     tipo   -- hoje só "date" (input type=date, AAAA-MM-DD)
+                     flag   -- flag do script que recebe o valor (ex: --data)
+                     ajuda  -- tooltip
+                   Vazio = o script usa o próprio padrão (a flag não é
+                   passada). Pedido do Hugo, 16/09: escolher a data dos
+                   romaneios em vez de sair sempre "hoje".
   categoria     -- agrupamento visual no painel
 """
 import sys
+from datetime import datetime
 
 # agente_importacao_stokki é outro projeto/repositório inteiro (ver
 # entrada abaixo) -- em produção roda na VPS em /opt/agente-importacao-stokki
@@ -151,12 +162,17 @@ AGENTES = [
     {
         "id": "gerar_romaneios",
         "nome": "Gerar PDFs de Romaneio",
-        "descricao": "Gera 1 PDF por rota do dia com NFs e boletos na ordem de visita (job das 04h).",
+        "descricao": "Gera 1 PDF por rota da data escolhida com NFs e boletos na ordem de visita "
+                     "(o job das 04h gera as de hoje; o das 22h, as de amanhã).",
         "script": "roteirizacao/gerar_pdf_romaneios.py",
         "cwd": "roteirizacao",
         "suporta_teste": True,
         "flag_teste": "--modo-teste",
         "args_fixos": [],
+        "parametros": [
+            {"campo": "data", "rotulo": "Data das rotas", "tipo": "date", "flag": "--data",
+             "ajuda": "Dia das rotas cujos PDFs serão gerados. Em branco = hoje."},
+        ],
         "categoria": "Roteirização",
     },
     {
@@ -253,6 +269,27 @@ AGENTES = [
 
 def buscar_agente(agente_id: str) -> dict | None:
     return next((a for a in AGENTES if a["id"] == agente_id), None)
+
+
+def montar_args_parametros(agente: dict, valores: dict) -> list[str]:
+    """Traduz o que o operador preencheu (form do painel ou JSON da barra
+    do planejamento) nos argumentos extras do script, seguindo a lista
+    'parametros' do agente. Campo em branco é ignorado (o script usa o
+    próprio padrão). Valor inválido levanta ValueError com mensagem
+    pronta pra mostrar na tela -- melhor barrar aqui do que deixar o
+    argparse do script estourar no log."""
+    args: list[str] = []
+    for parametro in agente.get("parametros") or []:
+        valor = (valores.get(parametro["campo"]) or "").strip()
+        if not valor:
+            continue
+        if parametro["tipo"] == "date":
+            try:
+                valor = datetime.strptime(valor, "%Y-%m-%d").date().isoformat()
+            except ValueError:
+                raise ValueError(f"{parametro['rotulo']}: data inválida ({valor!r}), use AAAA-MM-DD.")
+        args += [parametro["flag"], valor]
+    return args
 
 
 def categorias_ordenadas() -> list[str]:

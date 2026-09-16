@@ -31,8 +31,14 @@
   .cartao h3 { margin: 0; font-size: 15px; font-weight: 700; }
   .cartao p.descricao { margin: 0; font-size: 13px; color: var(--texto-suave); line-height: 1.5; }
   .cartao .ultima-execucao { font-size: 12px; color: var(--texto-suave); }
-  .cartao form { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .cartao form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
   .cartao label.teste { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  /* Campos extras do agente (agentes.py -> "parametros"), ex: data dos romaneios */
+  .cartao label.parametro { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: 6px; }
+  .cartao label.parametro input {
+    padding: 5px 8px; min-height: 30px; border: 1px solid var(--borda); border-radius: 6px;
+    background: var(--fundo); color: var(--texto); font-size: 12px; font-family: inherit;
+  }
 
   .progresso-container { display: none; }
   .progresso-container.visivel { display: block; }
@@ -100,6 +106,13 @@
                {% if agente.rodando %}disabled{% endif %}>
           {% if agente.rodando %}Rodando…{% else %}Rodar{% endif %}
         </button>
+        {% for parametro in agente.parametros or [] %}
+        <label class="parametro" title="{{ parametro.ajuda }}">
+          {{ parametro.rotulo }}
+          <input type="{{ parametro.tipo }}" name="{{ parametro.campo }}"
+                 value="{{ hoje_iso if parametro.tipo == 'date' else '' }}">
+        </label>
+        {% endfor %}
         {% if agente.suporta_teste %}
         <label class="teste">
           <input type="checkbox" name="modo_teste">
