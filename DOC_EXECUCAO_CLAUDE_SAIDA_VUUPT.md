@@ -98,6 +98,10 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 - **Critério:** 10 dias úteis seguidos sem divergência sem explicação.
 
 ### Etapa 3 — Leituras passam para o núcleo, uma de cada vez
+- [x] **Relatórios do financeiro (cópia fiel)** — `nucleo/relatorios_financeiro.py`, DEPLOYADO 16/09 (`1648ffd`). Gera os dois que o financeiro exporta hoje (Rotas 77 colunas, Serviços 84) a partir do núcleo, com modo de conferência (`--comparar-rotas/--comparar-servicos`) que casa linha a linha com a exportação da Vuupt. **Medido contra a exportação real de 01-16/09: rotas 175/175 linhas e 98,36% das células idênticas; serviços 1.090 linhas e 99,12%.**
+  - Regras da exportação descobertas célula a célula (travadas em teste): custo/duração sem valor saem `0,00`/`00:00:00`; dimensão, ocupação e percentual zerados saem VAZIOS; milhar com ponto (`1.500,000`); duração passa de 24 h; `outside_radius` 2 = ALTA precisão e 1 = baixa; "previsão atual" só em rota que ainda não rodou; o relatório de ROTAS filtra por data de CRIAÇÃO; o de SERVIÇOS é por serviço (código recriado tem dois).
+  - **Não reproduzível:** o link do mapa é assinado pela Vuupt (`public-map?signature=`); vai o link da nossa /consulta. Os 76 custos por agente no serviço são o rateio do R$ 25,00 configurado lá.
+  - Antes de mostrar ao financeiro: rodar um mês fechado e pedir a conferência contra o que ele usou.
 - Cada job/tela ganha `fonte: vuupt | nucleo` no config e roda em sombra até zerar diferenças.
 - Ordem: romaneios e transportadoras → relatórios → Torre → portal → pedidos parados → **expedição na Stokki por último**.
 
@@ -129,6 +133,8 @@ Etapas 0, 1 e 2 começam juntas. Estimativa total com os critérios: 4 a 6 meses
 ## 5. Log de status
 
 - **12/09** — Levantamento completo (3 sub-agentes + consultas somente leitura na VPS e na API da Vuupt). Plano de 7 etapas entregue no chat. Hugo: replicar tudo na Vuupt até a virada (relatórios do financeiro).
+- **16/09 (noite)** — Hugo mandou os dois relatórios que o financeiro usa e pediu **cópia fiel**. DEPLOYADO (`1648ffd`): gerador + conferência, 98,36% (rotas) e 99,12% (serviços) das células idênticas. No mesmo commit: o espelho de pedidos passou a trazer remetente, **zona** e contagem de canhoto/anexo, e pedido que muda ressincroniza a ROTA dele mesmo fora da janela de 8 dias (a rota 5168818, de 03/09, só foi finalizada em 16/09 e o núcleo não tinha visto). Em produção: 1.741 pedidos com zona, 294 retiradas, 180 rotas e 1.131 serviços no relatório de 01-16/09.
+  **Achado que muda a conversa do financeiro:** as colunas de custo da Vuupt são um R$ 25,00 fixo de configuração — a tarifa real (340/550/700 + km + pedágio) nunca esteve lá. O financeiro usa os relatórios como contagem e faz a conta fora.
 - **16/09 (tarde)** — Sync do pedido fora da rota DEPLOYADO (`b014d31`, timer a cada 15 min, painel e motorista-api reiniciados). Em produção: 579 serviços de 3 dias, 21 pedidos novos no espelho, 22 retiradas identificadas, 9 pedidos apagados na Vuupt viraram CANCELADO, 1 pedido do pipeline ligado ao serviço pelo código. **Pool do núcleo = pool da Vuupt (74 = 74)** e o comparador seguiu em 0 divergências (sem regressão no espelho das rotas).
 - **16/09** — Comparador diário e exportador do histórico DEPLOYADOS (`1445f52`). Provas em produção: comparador 0 divergências em 13-15/09 (27 rotas / 277 paradas / 236 pedidos), e-mail com o placar (2 dias limpos seguidos); exportador gravou `arquivo_vuupt/usuarios|veiculos/completo.jsonl.gz` e o `manifesto.json` com linhas == total_api. Timers: exportar 01:30 (1º lote grande hoje), comparar 07:40, backup horário :22, ensaio dom 05:30. **Próximos:** sync incremental de serviços (pool, retiradas, reentregas) e a ponte núcleo → Vuupt do financeiro.
 - **15/09** — Hugo: nosso cálculo de km é a base (ignorar Vuupt); relatórios ficam pra depois; seguir com o plano.
