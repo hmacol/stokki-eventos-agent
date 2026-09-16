@@ -1393,6 +1393,14 @@
   html.modo-mobile:not([data-aba="mais"]) #painel-expedicao-selecao,
   html.modo-mobile:not([data-aba="mais"]) #resumo-agendados-container { display: none !important; }
   html.modo-mobile[data-aba="mais"] .painel-mais-mobile { display: block; }
+  /* "▶ rodar" das pílulas: no desktop é um botãozinho de 18px de altura;
+     no celular vira alvo de toque de verdade (Hugo, 16/09) */
+  html.modo-mobile .barra-agentes-planejamento .etapa { padding: 4px 6px 4px 11px; gap: 9px; }
+  html.modo-mobile .barra-agentes-planejamento .etapa button.rodar {
+    min-height: 40px; min-width: 84px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    border-color: var(--acento); color: var(--acento-texto, var(--acento));
+  }
+  html.modo-mobile .barra-agentes-planejamento .etapa-tudo button { min-height: 44px; }
   html.modo-mobile .painel-mais-mobile .cartao-mais {
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
     padding: 12px; margin-bottom: 10px;
