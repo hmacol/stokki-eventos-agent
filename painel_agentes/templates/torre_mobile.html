@@ -180,6 +180,14 @@
      no backend) -- destaque sutil pra explicar por que uma rota
      "Concluída"/"Vazia" aparece antes de rotas em andamento */
   .cartao-rota.recente { background: var(--rodando-bg); border-radius: 8px; padding: 9px 10px; margin: 0 -10px 0; border-bottom: none; }
+  /* Torre acumulada (15/09): grupos por dia + rota atrasada. */
+  .cabecalho-dia { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); padding: 10px 0 4px; border-bottom: 1px solid var(--borda); }
+  .cabecalho-dia.passado { color: var(--st-atencao); }
+  .cartao-rota.atrasada { border-left: 3px solid var(--st-atencao); padding-left: 8px; }
+  .nota-atrasada, .nota-pendencia { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; margin-top: 4px; margin-right: 8px; }
+  .nota-atrasada { color: var(--st-atencao); }
+  .nota-pendencia { color: var(--st-falha); }
+  .botao-encerrar { display: inline-block; margin-top: 4px; font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); }
   .nota-recente {
     display: block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.2px; color: var(--rodando-texto); margin-top: 3px;
@@ -261,9 +269,9 @@
 
 {% block conteudo %}
 <div class="linha-data">
-  <form method="get" action="{{ url_for('torre_mobile') }}" style="flex:1;">
-    <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
-  </form>
+  {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
+     abertas de qualquer dia; rota concluída vai pro Histórico. #}
+  <a class="botao-icone" href="{{ url_for('consulta') }}" title="Histórico de Rotas" style="flex:1;text-decoration:none;text-align:left;">📚 Histórico de Rotas</a>
   <button type="button" class="botao-icone" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button type="button" class="botao-icone" onclick="carregarTudo()" title="Atualizar agora">↻</button>
 </div>
@@ -289,7 +297,7 @@
 
 {% if google_maps_key %}
 <div class="cartao">
-  <h2><span>Mapa do dia</span><a href="#" id="link-mapa-completo" style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">mapa completo</a></h2>
+  <h2><span>Mapa das rotas abertas</span><a href="#" id="link-mapa-completo" style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">mapa completo</a></h2>
   <div id="mini-mapa"></div>
   <div class="legenda-mapa">
     <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregue</span>
@@ -313,7 +321,7 @@
 </div>
 
 <div class="cartao">
-  <h2>Pedidos do dia por status</h2>
+  <h2>Pedidos das rotas abertas</h2>
   <div id="pedidos-status"><div class="carregando">Carregando…</div></div>
 </div>
 
@@ -359,13 +367,14 @@
 
 {% block script_extra %}
 <script>
-const DATA_ALVO = {{ data_alvo_input | tojson }};
+const HOJE_ISO = {{ hoje_iso | tojson }};
 const PODE_EDITAR = {{ pode_editar | tojson }};
 // "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo mecanismo do
 // desktop/Expedição, mas aqui sem hover: toque no chip pendente/em
 // rota já abre o modal de motivo direto (ver abrirModalExcluir).
 const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
-const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido', data=data_alvo_input) }}";
+const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido') }}";
+const URL_TORRE_ENCERRAR_ROTA = "{{ url_for('api_torre_encerrar_rota') }}";
 
 const STATUS_PEDIDO = [
   { chave: "sucesso",      rotulo: "Entregues",              cor: "var(--st-sucesso)" },
@@ -639,14 +648,24 @@ function chipsPedidosHtml(pedidos, rotaId) {
   return `<div class="chips-pedidos">${partes.join("")}</div>`;
 }
 
+// Cabeçalho de dia entre os grupos de rotas (torre acumulada, Hugo,
+// 15/09): hoje primeiro, dias anteriores abaixo.
+function cabecalhoDiaHtml(r, d) {
+  const hoje = r.data_rota === d.data_alvo_iso;
+  return `<div class="cabecalho-dia${hoje ? "" : " passado"}">${hoje ? "Hoje · " : ""}${esc(r.data_rota_br)}</div>`;
+}
+
 function renderRotas(d) {
   const alvo = document.getElementById("rotas");
   renderLegendaRotas();
   if (!d.rotas.length) {
-    alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
+    alvo.innerHTML = `<div class="carregando">Nenhuma rota aberta. Rotas concluídas estão no Histórico de Rotas.</div>`;
     return;
   }
+  let diaAnterior = null;
   alvo.innerHTML = d.rotas.map(r => {
+    let cabecalho = "";
+    if (r.data_rota !== diaAnterior) { cabecalho = cabecalhoDiaHtml(r, d); diaAnterior = r.data_rota; }
     const finalizados = r.entregues + r.insucessos;
     let meio;
     if (visaoRotas === "chips") {
@@ -667,14 +686,34 @@ function renderRotas(d) {
     // torre_controle.py -- só rótulo, o backend é a fonte da verdade.
     const notaRecente = r.excluido_recente
       ? `<span class="nota-recente">fixada · exclusão recente</span>` : "";
-    return `<div class="cartao-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}">
+    const notaPendencia = r.pendencias
+      ? `<span class="nota-pendencia">${r.pendencias} pendência(s)</span>` : "";
+    const notaAtrasada = r.atrasada
+      ? `<span class="nota-atrasada">atrasada</span>` +
+        (PODE_EDITAR ? `<button type="button" class="botao-encerrar" onclick="encerrarRota(${r.id})">Encerrar</button>` : "")
+      : "";
+    return cabecalho + `<div class="cartao-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}${r.atrasada ? " atrasada" : ""}">
         <div class="ident-rota"><span class="nome-rota">${esc(r.nome)}</span><span class="contagem-rota">${finalizados}/${r.total} <span class="pct">${r.percentual}%</span></span></div>
         ${motorista}
         ${meio}
         <span class="estado-rota ${r.estado}">${rotuloEstado}</span>
-        ${notaRecente}
+        ${notaPendencia}${notaAtrasada}${notaRecente}
       </div>`;
   }).join("");
+}
+
+async function encerrarRota(rotaId) {
+  const r = (dadosAtuais && dadosAtuais.rotas || []).find(x => x.id === rotaId);
+  if (!r) return;
+  if (!confirm(`Encerrar "${r.nome}" (${r.data_rota_br}) na torre?\n\nA rota some daqui e continua no Histórico como está. Não mexe na VUUPT.`)) return;
+  try {
+    const resp = await fetch(URL_TORRE_ENCERRAR_ROTA, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rota_id: r.id, nome: r.nome, data_rota: r.data_rota }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao encerrar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao encerrar: " + e); }
 }
 
 // ── "Excluir da Rota" do chip (Hugo, 25/08) -- toque no chip acionável
@@ -747,7 +786,7 @@ function renderPedidosStatus(d) {
   const soma = Object.values(valores).reduce((a, b) => a + b, 0);
   let html;
   if (!soma) {
-    html = `<div class="carregando">Nenhum pedido agendado para ${esc(d.data_alvo)}.</div>`;
+    html = `<div class="carregando">Nenhum pedido em rota aberta.</div>`;
   } else {
     const segs = STATUS_PEDIDO.filter(s => valores[s.chave] > 0)
       .map(s => `<div class="seg" style="flex:${valores[s.chave]};background:${s.cor}"></div>`).join("");
@@ -828,7 +867,7 @@ async function tratarExcecao(id) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id, motivo: motivo.trim(),
-        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : DATA_ALVO,
+        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO,
         tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
         motorista: x ? x.motorista : null, rota: x ? x.rota : null,
       }),
@@ -987,7 +1026,7 @@ function renderSemaforo(d) {
 
 async function carregarDados() {
   try {
-    const resp = await fetch(`${BASE_PATH}/api/torre/dados?data=${DATA_ALVO}`);
+    const resp = await fetch(`${BASE_PATH}/api/torre/dados`);
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;

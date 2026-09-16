@@ -72,7 +72,8 @@ from regras.preferencias_motoristas import CatalogoMotoristas
 from mapa_util import extrair_servicos_da_rota
 from executor import buscar_ultima_execucao
 from motivos_falha import texto_do_motivo
-from expedicao import _exclusoes_por_rota, _rota_ids_com_exclusao_no_dia, _rota_do_corpo
+from expedicao import _exclusoes_por_rota, _exclusoes_da_rota, _rota_ids_com_exclusao_no_dia, _rota_do_corpo
+from nucleo.normalizacao import janela_utc_do_dia, vuupt_para_local
 import rascunhos_rota
 import tratativas
 
@@ -463,7 +464,7 @@ def contar_sem_rota(data_alvo: date | None = None) -> dict:
 def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
     """
     Visão de pedidos do dia = paradas das rotas do dia (agregado de
-    _coletar_rotas_dia) + atrasados sem rota. NÃO usa /services por
+    _coletar_rotas_abertas) + atrasados sem rota. NÃO usa /services por
     scheduled_start: só pedido com agendamento tem esse campo com a
     data certa (achado 12/08 -- o filtro enxergava 15 pedidos num dia
     de ~100 paradas).
@@ -567,25 +568,220 @@ def _montar_card_rota_cancelada(token: str, data_alvo: date, rota_id: int,
 
     return {
         "id": rota_id, "nome": nome, "motorista": motorista,
+        "data_rota": data_alvo.isoformat(), "data_rota_br": data_alvo.strftime("%d/%m/%Y"),
         "total": 0, "entregues": 0, "insucessos": 0, "restantes": 0, "percentual": 0,
         "estado": "vazia", "paradas": [], "pedidos": pedidos_chip, "cancelada": True,
         "excluido_recente": _teve_exclusao_recente(exclusoes, datetime.now()),
     }
 
 
-def _coletar_rotas_dia(token: str, data_alvo: date,
-                       nomes_motoristas: dict[int, str]) -> tuple[list[dict], dict, list[dict]]:
-    """Progresso parada a parada de cada rota do dia (todas as rotas da
-    data, não só as com prefixo 'Planejamento' do mapa -- a torre
-    precisa enxergar também rota criada na mão).
+# ── Torre acumulada: o que fica e o que vai pro Histórico ────────────────────
 
-    Retorna (rotas, agregado, rotas_brutas): o agregado soma as paradas
-    de TODAS as rotas do dia e é a base da visão de pedidos
-    (_montar_pedidos_dia); rotas_brutas é devolvido também pra
-    alimentar _estatisticas_periodo do KPI "hoje" sem 2ª chamada à API.
+# Quantos dias pra trás a torre procura rota ainda aberta (Hugo, 15/09:
+# "a torre não é filtrada por data, é um acúmulo das datas"). Rota mais
+# velha que isso e ainda sem encerrar é caso pra olhar no Histórico
+# (/consulta), não pra ficar na tela pra sempre.
+DIAS_JANELA_TORRE = 14
+
+
+def classificar_rota_torre(rota: dict, hoje: date, ids_tratadas: set[str],
+                           ids_encerradas: set[int]) -> dict:
+    """Regra pura (Hugo, 15/09, opção A): a rota FICA na torre enquanto
+    tiver parada por resolver OU insucesso ainda não tratado na Fila de
+    ação. Sai (já está no Histórico pelo espelho do núcleo) quando tudo
+    resolvido e sem pendência, ou quando alguém clicou "Encerrar".
+
+    `ids_tratadas` são os ids de torre_excecoes_tratadas ('insucesso:
+    <codigo>'); `ids_encerradas` são os rota_id de torre_rotas_encerradas.
+    Devolve {"fica", "atrasada", "pendencias"} -- atrasada = rota de dia
+    anterior que ainda não fechou (destaque + botão Encerrar na tela).
     """
-    inicio = data_alvo.strftime("%Y-%m-%d") + " 00:00:00"
-    fim = (data_alvo + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
+    data_rota = date.fromisoformat(rota["data_rota"]) if rota.get("data_rota") else hoje
+    pendencias = sum(
+        1 for p in rota.get("pedidos", [])
+        if p.get("situacao") == "insucesso" and f"insucesso:{p.get('codigo')}" not in ids_tratadas
+    )
+    if rota.get("id") in ids_encerradas:
+        return {"fica": False, "atrasada": False, "pendencias": pendencias}
+
+    if rota.get("cancelada"):
+        # Card reconstruído só pra manter o chip excluído visível: vale
+        # no próprio dia, depois é história.
+        return {"fica": data_rota == hoje, "atrasada": False, "pendencias": 0}
+
+    aberta = rota.get("estado") in ("em_andamento", "nao_iniciada")
+    fica = aberta or pendencias > 0
+    return {"fica": fica, "atrasada": fica and data_rota < hoje, "pendencias": pendencias}
+
+
+def _data_local_da_rota(rota: dict, padrao: date) -> date:
+    """Dia LOCAL em que a rota começa. start_at da VUUPT vem em UTC sem
+    fuso (armadilha conhecida: rota das 22h de SP cai no dia seguinte
+    em UTC) -- mesma conversão que o espelho do núcleo usa."""
+    local = vuupt_para_local(rota.get("start_at"))
+    try:
+        return date.fromisoformat(str(local)[:10])
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _contrib_vazia() -> dict:
+    return {"total": 0, "entregues": 0, "insucessos": 0, "em_rota": 0,
+            "aceitos": 0, "cancelados": 0, "insucessos_lista": []}
+
+
+def _montar_card_rota(rota: dict, data_rota: date, nomes_motoristas: dict[int, str],
+                      agora: datetime) -> tuple[dict, dict]:
+    """Card de UMA rota (formato Torre) + a contribuição dela pro agregado
+    de pedidos. Separado da coleta (15/09) porque a torre acumulada só
+    soma no agregado as rotas que FICAM na tela (ver classificar_rota_
+    torre) -- a decisão vem depois de montar o card."""
+    contrib = _contrib_vazia()
+    # Motorista resolvido antes do loop de paradas: é ele quem
+    # registra a atualização de status no app -- cada insucesso da
+    # fila de ação carrega o responsável (pedido do Hugo, 13/08).
+    agent_id = rota.get("agent_id")
+    motorista = nomes_motoristas.get(agent_id) if agent_id else None
+    servicos = extrair_servicos_da_rota(rota)
+    contrib["cancelados"] += sum(1 for s in servicos if s.get("status") == "canceled")
+    validos = [s for s in servicos if s.get("status") != "canceled"]
+    total = len(validos)
+    entregues = insucessos = em_rota = 0
+    paradas_mapa = []
+    pedidos_chip = []
+    for ordem, s in enumerate(validos, start=1):
+        status = s.get("status")
+        if status == "done":
+            if s.get("status_done") == "failed":
+                insucessos += 1
+                contrib["insucessos_lista"].append({
+                    **_resumir_servico(s),
+                    "motorista": motorista,
+                    "rota": rota.get("name", ""),
+                    "motivo_insucesso": texto_do_motivo(s.get("failed_reason_id")),
+                })
+                # Preenche motorista das tratativas já registradas pra
+                # este pedido, se ainda não tinha (pedido do Hugo,
+                # 14/08: "capturar motorista daqui pra frente") --
+                # aproveita o que a Torre já resolveu (agent_id->nome)
+                # sem nenhuma chamada nova à VUUPT.
+                if s.get("code") and motorista:
+                    tratativas.enriquecer_motorista(s["code"], motorista, rota.get("name", ""))
+                situacao = "insucesso"
+            else:
+                entregues += 1
+                situacao = "entregue"
+        elif status == "on_route":
+            em_rota += 1
+            situacao = "em_rota"
+        else:
+            if status == "accepted":
+                contrib["aceitos"] += 1
+            situacao = "pendente"
+
+        # Chip por pedido (visão alternativa da torre, pedido do
+        # Hugo, 23/08) -- ao contrário de paradas_mapa, entra TODO
+        # pedido válido, com ou sem coordenada. `ordem` é a posição
+        # da parada dentro da rota (1, 2, 3...), a MESMA numeração
+        # exibida no planejamento -- é o que o Hugo chama de
+        # "Número da Ordem de Entrega" (não confundir com `codigo`,
+        # o PS-XXXXX interno da VUUPT).
+        pedidos_chip.append({
+            "ordem": ordem,
+            "codigo": s.get("code", ""),
+            "titulo": (s.get("title") or "")[:70],
+            "situacao": situacao,
+            "service_id": s.get("id"),
+        })
+
+        # Parada georreferenciada pro mini mapa -- serviço sem
+        # coordenada fica fora do mapa, mas conta em tudo acima.
+        lat, lng = s.get("latitude"), s.get("longitude")
+        try:
+            if lat not in (None, "") and lng not in (None, ""):
+                paradas_mapa.append({
+                    "lat": float(lat), "lng": float(lng),
+                    "codigo": s.get("code", ""),
+                    "titulo": (s.get("title") or "")[:70],
+                    "situacao": situacao,
+                })
+        except (TypeError, ValueError):
+            pass
+
+    # Pedido excluído da rota por aqui ("Excluir da Rota" do menu de
+    # contexto do chip, pedido do Hugo, 25/08 -- mesmo botão da
+    # Expedição, ver expedicao.excluir_pedido_da_rota chamado com
+    # permitir_rota_em_andamento=True) nunca some do chip: mesma
+    # regra da Expedição, fica marcado "excluido" (motivo no hover)
+    # em vez de sumir. Se era a ÚLTIMA parada ATIVA da rota, ela é
+    # cancelada de vez na VUUPT e some desta listagem -- reconstruída
+    # à parte (ver _montar_card_rota_cancelada). Exclusões de QUALQUER
+    # dia: rota de ontem ainda aberta pode ter exclusão feita hoje.
+    exclusoes_rota = _exclusoes_da_rota(rota.get("id"))
+    ids_ativos = {p["service_id"] for p in pedidos_chip}
+    vistos_excluidos = set()
+    for ex in exclusoes_rota:
+        sid = ex["service_id"]
+        if sid in ids_ativos or sid in vistos_excluidos:
+            continue
+        vistos_excluidos.add(sid)
+        pedidos_chip.append({
+            "ordem": None, "codigo": ex["codigo_pedido"] or "", "titulo": "",
+            "situacao": "excluido", "service_id": sid,
+            "motivo": ex["motivo"], "observacao": ex["observacao"],
+        })
+
+    finalizados = entregues + insucessos
+    contrib["total"] += total
+    contrib["entregues"] += entregues
+    contrib["insucessos"] += insucessos
+    contrib["em_rota"] += em_rota
+
+    if total == 0:
+        estado = "vazia"
+    elif finalizados >= total:
+        estado = "concluida"
+    elif finalizados > 0 or em_rota > 0:
+        estado = "em_andamento"
+    else:
+        estado = "nao_iniciada"
+
+    card = {
+        "id": rota.get("id"),
+        "nome": rota.get("name", ""),
+        "motorista": motorista,
+        "data_rota": data_rota.isoformat(),
+        "data_rota_br": data_rota.strftime("%d/%m/%Y"),
+        "total": total,
+        "entregues": entregues,
+        "insucessos": insucessos,
+        "restantes": max(0, total - finalizados),
+        "percentual": round(finalizados / total * 100) if total else 0,
+        "estado": estado,
+        "paradas": paradas_mapa,
+        "pedidos": pedidos_chip,
+        "cancelada": False,
+        "excluido_recente": _teve_exclusao_recente(exclusoes_rota, agora),
+    }
+    return card, contrib
+
+
+def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, str],
+                           ids_encerradas: set[int]) -> tuple[list[dict], dict, list[dict]]:
+    """Rotas ainda ABERTAS de qualquer dia da janela (Hugo, 15/09: a
+    torre deixa de ser filtrada por data e acumula; rota concluída sem
+    pendência já está no Histórico pelo espelho do núcleo). Todas as
+    rotas da VUUPT na janela, não só as com prefixo 'Planejamento' do
+    mapa -- a torre precisa enxergar também rota criada na mão.
+
+    Retorna (rotas, agregado, rotas_brutas_hoje): o agregado soma as
+    paradas só das rotas que FICARAM (é a base da visão de pedidos,
+    _montar_pedidos_dia); rotas_brutas_hoje são as rotas cruas de HOJE
+    (canceladas inclusas, _estatisticas_periodo filtra) pra alimentar o
+    KPI "dia" sem 2ª chamada à API.
+    """
+    inicio, _ = janela_utc_do_dia(hoje - timedelta(days=DIAS_JANELA_TORRE))
+    _, fim = janela_utc_do_dia(hoje)
     filtro = [
         {"field": "start_at", "operator": "gte", "value": inicio},
         {"field": "start_at", "operator": "lt", "value": fim},
@@ -593,167 +789,66 @@ def _coletar_rotas_dia(token: str, data_alvo: date,
     rotas_brutas = listar_rotas(token, include=["services"], filtro=filtro)
 
     agora = datetime.now()
-    rotas = []
-    agregado = {"total": 0, "entregues": 0, "insucessos": 0, "em_rota": 0,
-                "aceitos": 0, "cancelados": 0, "insucessos_lista": []}
+    candidatas: list[tuple[dict, dict]] = []
+    rotas_brutas_hoje = []
     for rota in rotas_brutas:
+        data_rota = _data_local_da_rota(rota, hoje)
+        if data_rota == hoje:
+            rotas_brutas_hoje.append(rota)
         if rota.get("status") == "canceled":
             continue
-        # Motorista resolvido antes do loop de paradas: é ele quem
-        # registra a atualização de status no app -- cada insucesso da
-        # fila de ação carrega o responsável (pedido do Hugo, 13/08).
-        agent_id = rota.get("agent_id")
-        motorista = nomes_motoristas.get(agent_id) if agent_id else None
-        servicos = extrair_servicos_da_rota(rota)
-        agregado["cancelados"] += sum(1 for s in servicos if s.get("status") == "canceled")
-        validos = [s for s in servicos if s.get("status") != "canceled"]
-        total = len(validos)
-        entregues = insucessos = em_rota = 0
-        paradas_mapa = []
-        pedidos_chip = []
-        for ordem, s in enumerate(validos, start=1):
-            status = s.get("status")
-            if status == "done":
-                if s.get("status_done") == "failed":
-                    insucessos += 1
-                    agregado["insucessos_lista"].append({
-                        **_resumir_servico(s),
-                        "motorista": motorista,
-                        "rota": rota.get("name", ""),
-                        "motivo_insucesso": texto_do_motivo(s.get("failed_reason_id")),
-                    })
-                    # Preenche motorista das tratativas já registradas pra
-                    # este pedido, se ainda não tinha (pedido do Hugo,
-                    # 14/08: "capturar motorista daqui pra frente") --
-                    # aproveita o que a Torre já resolveu (agent_id->nome)
-                    # sem nenhuma chamada nova à VUUPT.
-                    if s.get("code") and motorista:
-                        tratativas.enriquecer_motorista(s["code"], motorista, rota.get("name", ""))
-                    situacao = "insucesso"
-                else:
-                    entregues += 1
-                    situacao = "entregue"
-            elif status == "on_route":
-                em_rota += 1
-                situacao = "em_rota"
-            else:
-                if status == "accepted":
-                    agregado["aceitos"] += 1
-                situacao = "pendente"
-
-            # Chip por pedido (visão alternativa da torre, pedido do
-            # Hugo, 23/08) -- ao contrário de paradas_mapa, entra TODO
-            # pedido válido, com ou sem coordenada. `ordem` é a posição
-            # da parada dentro da rota (1, 2, 3...), a MESMA numeração
-            # exibida no planejamento -- é o que o Hugo chama de
-            # "Número da Ordem de Entrega" (não confundir com `codigo`,
-            # o PS-XXXXX interno da VUUPT).
-            pedidos_chip.append({
-                "ordem": ordem,
-                "codigo": s.get("code", ""),
-                "titulo": (s.get("title") or "")[:70],
-                "situacao": situacao,
-                "service_id": s.get("id"),
-            })
-
-            # Parada georreferenciada pro mini mapa -- serviço sem
-            # coordenada fica fora do mapa, mas conta em tudo acima.
-            lat, lng = s.get("latitude"), s.get("longitude")
-            try:
-                if lat not in (None, "") and lng not in (None, ""):
-                    paradas_mapa.append({
-                        "lat": float(lat), "lng": float(lng),
-                        "codigo": s.get("code", ""),
-                        "titulo": (s.get("title") or "")[:70],
-                        "situacao": situacao,
-                    })
-            except (TypeError, ValueError):
-                pass
-
-        # Pedido excluído da rota por aqui ("Excluir da Rota" do menu de
-        # contexto do chip, pedido do Hugo, 25/08 -- mesmo botão da
-        # Expedição, ver expedicao.excluir_pedido_da_rota chamado com
-        # permitir_rota_em_andamento=True) nunca some do chip: mesma
-        # regra da Expedição, fica marcado "excluido" (motivo no hover)
-        # em vez de sumir. Se era a ÚLTIMA parada ATIVA da rota, ela é
-        # cancelada de vez na VUUPT e some desta listagem -- reconstruída
-        # à parte mais abaixo (ver _montar_card_rota_cancelada).
-        exclusoes_rota = _exclusoes_por_rota(data_alvo, rota.get("id"))
-        ids_ativos = {p["service_id"] for p in pedidos_chip}
-        vistos_excluidos = set()
-        for ex in exclusoes_rota:
-            sid = ex["service_id"]
-            if sid in ids_ativos or sid in vistos_excluidos:
-                continue
-            vistos_excluidos.add(sid)
-            pedidos_chip.append({
-                "ordem": None, "codigo": ex["codigo_pedido"] or "", "titulo": "",
-                "situacao": "excluido", "service_id": sid,
-                "motivo": ex["motivo"], "observacao": ex["observacao"],
-            })
-
-        finalizados = entregues + insucessos
-
-        agregado["total"] += total
-        agregado["entregues"] += entregues
-        agregado["insucessos"] += insucessos
-        agregado["em_rota"] += em_rota
-
-        if total == 0:
-            estado = "vazia"
-        elif finalizados >= total:
-            estado = "concluida"
-        elif finalizados > 0 or em_rota > 0:
-            estado = "em_andamento"
-        else:
-            estado = "nao_iniciada"
-
-        rotas.append({
-            "id": rota.get("id"),
-            "nome": rota.get("name", ""),
-            "motorista": motorista,
-            "total": total,
-            "entregues": entregues,
-            "insucessos": insucessos,
-            "restantes": max(0, total - finalizados),
-            "percentual": round(finalizados / total * 100) if total else 0,
-            "estado": estado,
-            "paradas": paradas_mapa,
-            "pedidos": pedidos_chip,
-            "cancelada": False,
-            "excluido_recente": _teve_exclusao_recente(exclusoes_rota, agora),
-        })
+        candidatas.append(_montar_card_rota(rota, data_rota, nomes_motoristas, agora))
 
     # Rota que perdeu a ÚLTIMA parada ATIVA por uma exclusão feita por
-    # aqui (chip -> "Excluir da Rota") vira "canceled" na VUUPT (ver
-    # excluir_pedido_da_rota) e por isso foi pulada no loop acima --
-    # reconstrói um card mínimo só pra manter visível o(s) chip(s)
-    # excluído(s), mesmo padrão da Expedição (ver expedicao.
-    # _montar_card_rota_cancelada). Só entra rota_id que teve exclusão
-    # HOJE e não ficou de pé em `rotas` (a maioria das exclusões não
-    # cancela a rota inteira -- só tira 1 pedido de uma rota que segue
-    # ativa, essa já foi tratada dentro do loop acima).
-    ids_com_dados = {r["id"] for r in rotas}
-    for rota_id in _rota_ids_com_exclusao_no_dia(data_alvo) - ids_com_dados:
-        rotas.append(_montar_card_rota_cancelada(token, data_alvo, rota_id, nomes_motoristas))
+    # aqui (chip -> "Excluir da Rota") vira "canceled" na VUUPT e por
+    # isso foi pulada no loop acima -- reconstrói um card mínimo só pra
+    # manter visível o(s) chip(s) excluído(s), mesmo padrão da Expedição
+    # (ver expedicao._montar_card_rota_cancelada). Só de HOJE: depois
+    # disso é história (classificar_rota_torre também descarta).
+    ids_com_dados = {card["id"] for card, _ in candidatas}
+    for rota_id in _rota_ids_com_exclusao_no_dia(hoje) - ids_com_dados:
+        candidatas.append((_montar_card_rota_cancelada(token, hoje, rota_id, nomes_motoristas), _contrib_vazia()))
+
+    # Insucesso já tratado na Fila de ação não segura a rota na torre
+    # (opção A do Hugo, 15/09) -- 1 leitura no SQLite pra todos os ids.
+    ids_insucesso = sorted({
+        f"insucesso:{p.get('codigo')}" for card, _ in candidatas
+        for p in card["pedidos"] if p.get("situacao") == "insucesso"
+    })
+    ids_tratadas = set(_buscar_tratadas(ids_insucesso))
+
+    rotas = []
+    agregado = _contrib_vazia()
+    for card, contrib in candidatas:
+        veredito = classificar_rota_torre(card, hoje, ids_tratadas, ids_encerradas)
+        if not veredito["fica"]:
+            continue
+        card["atrasada"] = veredito["atrasada"]
+        card["pendencias"] = veredito["pendencias"]
+        rotas.append(card)
+        for chave in ("total", "entregues", "insucessos", "em_rota", "aceitos", "cancelados"):
+            agregado[chave] += contrib[chave]
+        agregado["insucessos_lista"].extend(contrib["insucessos_lista"])
 
     # Rota com exclusão recente primeiro de tudo (ver MINUTOS_DESTAQUE_
     # EXCLUSAO acima) -- excluir o último pendente fecha a rota em
     # "Concluída" na hora, que sem isso pularia direto pro fim da
     # lista, dando a impressão de ter sumido (achado do Hugo, 25/08).
-    # Dentro de cada grupo: em andamento primeiro (é onde a atenção
-    # deve estar), depois as que ainda nem saíram, concluídas por
+    # Depois por dia, hoje primeiro (a tela agrupa por data); dentro de
+    # cada dia: em andamento primeiro (é onde a atenção deve estar),
+    # depois as que ainda nem saíram, concluídas com pendência por
     # último; empate por nome em ordem NUMÉRICA (_chave_ordem_natural),
-    # não alfabética -- nome de rota tem o formato 'Planejamento -
-    # DD/MM/AAAA - #N' e ordenação de string pura colocava '#11' antes
-    # de '#2' (achado do Hugo, 23/08).
+    # não alfabética -- 'Planejamento - DD/MM/AAAA - #N' ordenava '#11'
+    # antes de '#2' (achado do Hugo, 23/08).
     ordem_estado = {"em_andamento": 0, "nao_iniciada": 1, "concluida": 2, "vazia": 3}
     rotas.sort(key=lambda r: (
         0 if r.get("excluido_recente") else 1,
+        r["data_rota"] != hoje.isoformat(),
+        -date.fromisoformat(r["data_rota"]).toordinal(),
         ordem_estado.get(r["estado"], 9),
         _chave_ordem_natural(r["nome"]),
     ))
-    return rotas, agregado, rotas_brutas
+    return rotas, agregado, rotas_brutas_hoje
 
 
 # ── Tendência (7 dias úteis, com cache) ───────────────────────────────────────
@@ -858,9 +953,9 @@ def _duracao_rota_min(start_at_bruto, completed_ats: list[str]) -> float | None:
 def _estatisticas_periodo(rotas_brutas: list[dict]) -> dict:
     """Agregado leve sobre rotas cruas da API -- sem chips, mini mapa,
     badges nem gravação de tratativas (isso é só da visão rica de
-    "hoje", _coletar_rotas_dia). Usado pra semana/mês/trimestre (atual
+    "hoje", _coletar_rotas_abertas). Usado pra semana/mês/trimestre (atual
     e anterior) e também pro "hoje", reaproveitando as MESMAS
-    rotas_brutas que _coletar_rotas_dia já buscou (0 chamadas extras)."""
+    rotas_brutas que _coletar_rotas_abertas já buscou (0 chamadas extras)."""
     total = entregues = insucessos = 0
     rotas_total = rotas_concluidas = rotas_com_carga = 0
     motivos = Counter()
@@ -941,7 +1036,7 @@ def _bloco_periodo(token: str, inicio_atual: date, data_alvo: date,
     """{"atual": ..., "anterior": ...} -- estatísticas do período atual
     (segunda até hoje, dia 1 até hoje, etc.) e do período anterior
     equivalente (_janela_anterior_equivalente). rotas_brutas_atual
-    reaproveita o que _coletar_rotas_dia já buscou pro "hoje"; None faz
+    reaproveita o que _coletar_rotas_abertas já buscou pro "hoje"; None faz
     a busca própria (cacheada por `ttl` segundos)."""
     fim_atual_exclusivo = data_alvo + timedelta(days=1)
     if rotas_brutas_atual is None:
@@ -1006,8 +1101,45 @@ def _conectar_tratadas():
             tratado_em  TEXT NOT NULL
         )
     """)
+    # Rota encerrada na mão pela torre acumulada (Hugo, 15/09): rota de
+    # dia anterior que nunca saiu (ou nunca vai fechar) sumiria só
+    # quando a janela DIAS_JANELA_TORRE passasse -- o botão "Encerrar"
+    # tira ela da tela na hora. Não mexe na VUUPT nem no núcleo: é só
+    # a torre deixando de mostrar.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS torre_rotas_encerradas (
+            rota_id      INTEGER PRIMARY KEY,
+            rota_nome    TEXT,
+            data_rota    TEXT,
+            usuario      TEXT,
+            encerrada_em TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
+
+
+def encerrar_rota_torre(rota_id: int, rota_nome: str, data_rota: str, usuario: str) -> None:
+    conn = _conectar_tratadas()
+    conn.execute("""
+        INSERT INTO torre_rotas_encerradas (rota_id, rota_nome, data_rota, usuario, encerrada_em)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(rota_id) DO UPDATE SET usuario = excluded.usuario, encerrada_em = excluded.encerrada_em
+    """, (int(rota_id), (rota_nome or "")[:200], (data_rota or "")[:10], (usuario or "")[:100],
+          datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+
+def _buscar_encerradas() -> set[int]:
+    try:
+        conn = _conectar_tratadas()
+        rows = conn.execute("SELECT rota_id FROM torre_rotas_encerradas").fetchall()
+        conn.close()
+        return {int(r["rota_id"]) for r in rows}
+    except Exception as e:
+        logger.warning(f"[torre] Falha ao ler rotas encerradas: {e}")
+        return set()
 
 
 def _pedido_code_da_excecao(excecao_id: str) -> str | None:
@@ -1173,7 +1305,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "tipo": "Sem motorista",
             "descricao": f"Rota '{r['nome']}' ({r['total']} parada(s)) sem motorista atribuído.",
             "quando": None,
-            "acao": {"tipo": "link", "url": f"/mapa-rotas?data={data_iso}", "rotulo": "Ver rota"},
+            "acao": {"tipo": "link", "url": f"/mapa-rotas?data={r.get('data_rota') or data_iso}", "rotulo": "Ver rota"},
             "_epoch": 0.0,
         })
 
@@ -1316,7 +1448,12 @@ def buscar_funil_stokki(forcar: bool = False) -> dict:
 def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     """Tudo que a torre mostra, menos o funil Stokki (endpoint próprio,
     com cache e trava de sessão) -- 1 fetch de serviços + 1 de rotas +
-    tendência cacheada + leituras locais."""
+    tendência cacheada + leituras locais.
+
+    Desde 15/09 (Hugo) a torre não é filtrada por data: as rotas são as
+    ainda abertas de qualquer dia da janela (_coletar_rotas_abertas);
+    `data_alvo` é só a âncora de HOJE pros KPIs de período, tendência,
+    "sem rota" e "amanhã" (default: date.today())."""
     data_alvo = data_alvo or date.today()
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -1333,7 +1470,8 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         nomes_motoristas = {}
     motoristas_ativos = sum(1 for m in catalogo.motoristas if m.ativo) if catalogo else 0
 
-    rotas, agregado, rotas_brutas_hoje = _coletar_rotas_dia(token, data_alvo, nomes_motoristas)
+    rotas, agregado, rotas_brutas_hoje = _coletar_rotas_abertas(
+        token, data_alvo, nomes_motoristas, _buscar_encerradas())
     backlog = _coletar_backlog(vuupt, data_alvo)
     pedidos = _montar_pedidos_dia(agregado, backlog)
     _badges_insucessos(pedidos["insucessos"])
@@ -1378,7 +1516,9 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
             "concluidas": rotas_por_estado.get("concluida", 0),
             "em_andamento": rotas_por_estado.get("em_andamento", 0),
             "nao_iniciadas": rotas_por_estado.get("nao_iniciada", 0),
+            "atrasadas": sum(1 for r in rotas if r.get("atrasada")),
         },
+        "janela_dias": DIAS_JANELA_TORRE,
         "etapas": etapas,
         "amanha": amanha,
         "tendencia": tendencia,

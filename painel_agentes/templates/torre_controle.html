@@ -238,6 +238,15 @@
      no backend) -- destaque sutil pra explicar por que uma rota
      "Concluída"/"Vazia" aparece antes de rotas em andamento */
   .linha-rota.recente { background: var(--rodando-bg); border-radius: 8px; padding: 7px 10px; margin: 0 -10px; }
+  /* Torre acumulada (15/09): grupos por dia + rota atrasada. */
+  .cabecalho-dia { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); padding: 10px 0 4px; border-bottom: 1px solid var(--borda); margin-bottom: 2px; }
+  .cabecalho-dia.passado { color: var(--st-atencao); }
+  .linha-rota.atrasada { border-left: 3px solid var(--st-atencao); padding-left: 8px; }
+  .nota-atrasada, .nota-pendencia { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; margin-top: 3px; margin-left: 4px; }
+  .nota-atrasada { color: var(--st-atencao); }
+  .nota-pendencia { color: var(--st-falha); }
+  .botao-encerrar { display: inline-block; margin-left: 6px; margin-top: 3px; font-size: 10.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); cursor: pointer; }
+  .botao-encerrar:hover { border-color: var(--st-atencao); color: var(--st-atencao); }
   .nota-recente {
     display: block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.2px; color: var(--rodando-texto); margin-top: 2px; white-space: nowrap;
@@ -446,14 +455,14 @@
 {% block conteudo %}
 <div class="faixa-saude">
   <strong>Torre de Controle</strong>
-  <form method="get" action="{{ url_for('torre') }}" style="display:inline-flex;gap:8px;align-items:center;">
-    <input type="date" name="data" value="{{ data_alvo_input }}" onchange="this.form.submit()">
-  </form>
+  {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
+     abertas de qualquer dia; rota concluída vai pro Histórico. #}
+  <a class="botao-refresh" href="{{ url_for('consulta') }}" title="Rotas concluídas e dias passados" style="text-decoration:none;">📚 Histórico de Rotas</a>
   <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
   <span class="carimbo" id="carimbo">Carregando dados…</span>
   <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
-  <a class="botao-refresh" href="{{ url_for('torre_mobile', data=data_alvo_input) }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
+  <a class="botao-refresh" href="{{ url_for('torre_mobile') }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
 </div>
 
 <div class="card card-kpis" id="kpis"><div class="carregando">Carregando indicadores…</div></div>
@@ -496,7 +505,7 @@
     {% if google_maps_key %}
     <div class="fundo-mapa" id="fundo-mapa" onclick="alternarMapa(false)"></div>
     <div class="card card-mapa" id="card-mapa">
-      <h3><span>Mapa do dia</span><a href="#" id="botao-expandir" onclick="alternarMapa(); return false;">expandir</a></h3>
+      <h3><span>Mapa das rotas abertas</span><a href="#" id="botao-expandir" onclick="alternarMapa(); return false;">expandir</a></h3>
       <div id="mini-mapa"></div>
       <div class="legenda-mapa">
         <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregue</span>
@@ -509,7 +518,7 @@
     {% endif %}
 
     <div class="card">
-      <h3>Pedidos do dia por status</h3>
+      <h3>Pedidos das rotas abertas</h3>
       <div id="pedidos-status"><div class="carregando">Carregando…</div></div>
     </div>
 
@@ -550,16 +559,16 @@
 </div>
 
 <script>
-const DATA_ALVO = {{ data_alvo_input | tojson }};
+const HOJE_ISO = {{ hoje_iso | tojson }};
 const PODE_EDITAR = {{ pode_editar | tojson }};
 // "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo botão da Expedição,
 // mas aqui a rota pode estar rodando (ver painel_agentes.py::
-// api_torre_excluir_pedido, permitir_rota_em_andamento=True). Dia
-// passado é só consulta aqui (mesma regra do pode_excluir da
-// Expedição) -- some a opção em vez de deixar tentar e levar erro do
-// servidor.
+// api_torre_excluir_pedido, permitir_rota_em_andamento=True). Desde a
+// torre acumulada (15/09) toda rota na tela ainda está aberta, então a
+// opção vale sempre que o nível de acesso permitir.
 const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
-const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido', data=data_alvo_input) }}";
+const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido') }}";
+const URL_TORRE_ENCERRAR_ROTA = "{{ url_for('api_torre_encerrar_rota') }}";
 
 // Rótulos/cores dos status de pedido -- MESMA ordem em que os
 // segmentos se tocam na barra empilhada (ordem validada contra CVD).
@@ -951,14 +960,25 @@ function chipsPedidosHtml(pedidos, rotaId) {
   return `<div class="chips-pedidos">${partes.join("")}</div>`;
 }
 
+// Cabeçalho de dia entre os grupos de rotas (torre acumulada, Hugo,
+// 15/09): hoje primeiro, dias anteriores abaixo. Rota de dia anterior
+// ainda aberta é "atrasada" e ganha o botão Encerrar.
+function cabecalhoDiaHtml(r, d) {
+  const hoje = r.data_rota === d.data_alvo_iso;
+  return `<div class="cabecalho-dia${hoje ? "" : " passado"}">${hoje ? "Hoje · " : ""}${esc(r.data_rota_br)}</div>`;
+}
+
 function renderRotas(d) {
   const alvo = document.getElementById("rotas");
   renderLegendaRotas();
   if (!d.rotas.length) {
-    alvo.innerHTML = `<div class="carregando">Nenhuma rota criada para ${esc(d.data_alvo)}.</div>`;
+    alvo.innerHTML = `<div class="carregando">Nenhuma rota aberta. Rotas concluídas estão no Histórico de Rotas.</div>`;
     return;
   }
+  let diaAnterior = null;
   alvo.innerHTML = d.rotas.map(r => {
+    let cabecalho = "";
+    if (r.data_rota !== diaAnterior) { cabecalho = cabecalhoDiaHtml(r, d); diaAnterior = r.data_rota; }
     const finalizados = r.entregues + r.insucessos;
     let meio;
     if (visaoRotas === "chips") {
@@ -984,8 +1004,15 @@ function renderRotas(d) {
     const notaRecente = r.excluido_recente
       ? `<span class="nota-recente" title="Teve um pedido excluído da rota nos últimos 30 min -- fixada no topo até então">fixada · exclusão recente</span>`
       : "";
-    return `
-      <div class="linha-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}">
+    const notaPendencia = r.pendencias
+      ? `<span class="nota-pendencia" title="Insucesso(s) ainda sem tratativa na Fila de ação -- a rota fica na torre até tratar">${r.pendencias} pendência(s)</span>`
+      : "";
+    const notaAtrasada = r.atrasada
+      ? `<span class="nota-atrasada" title="Rota de dia anterior que ainda não fechou">atrasada</span>` +
+        (PODE_EDITAR ? `<button type="button" class="botao-encerrar" onclick="encerrarRota(${r.id})" title="Tira a rota da torre (não mexe na VUUPT). Ela continua no Histórico.">Encerrar</button>` : "")
+      : "";
+    return cabecalho + `
+      <div class="linha-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}${r.atrasada ? " atrasada" : ""}">
         <div class="ident">
           <div class="nome" title="${esc(r.nome)}">${esc(r.nome)}</div>
           ${motorista}
@@ -993,10 +1020,24 @@ function renderRotas(d) {
         ${meio}
         <div class="contagem">${finalizados}/${r.total}<span class="pct">${r.percentual}%</span>
           <span class="estado-rota ${r.estado}">${rotuloEstado}</span>
-          ${notaRecente}
+          ${notaPendencia}${notaAtrasada}${notaRecente}
         </div>
       </div>`;
   }).join("");
+}
+
+async function encerrarRota(rotaId) {
+  const r = (dadosAtuais && dadosAtuais.rotas || []).find(x => x.id === rotaId);
+  if (!r) return;
+  if (!confirm(`Encerrar "${r.nome}" (${r.data_rota_br}) na torre?\n\nA rota some daqui e continua no Histórico como está. Não mexe na VUUPT.`)) return;
+  try {
+    const resp = await fetch(URL_TORRE_ENCERRAR_ROTA, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rota_id: r.id, nome: r.nome, data_rota: r.data_rota }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao encerrar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao encerrar: " + e); }
 }
 
 // ── "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo mecanismo da
@@ -1103,7 +1144,7 @@ function renderPedidosStatus(d) {
 
   let html;
   if (!soma) {
-    html = `<div class="carregando">Nenhum pedido agendado para ${esc(d.data_alvo)}.</div>`;
+    html = `<div class="carregando">Nenhum pedido em rota aberta.</div>`;
   } else {
     const segs = STATUS_PEDIDO
       .filter(s => valores[s.chave] > 0)
@@ -1216,7 +1257,7 @@ async function tratarExcecao(id) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id, motivo: motivo.trim(),
-        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : DATA_ALVO,
+        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO,
         tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
         motorista: x ? x.motorista : null, rota: x ? x.rota : null,
       }),
@@ -1418,7 +1459,7 @@ async function carregarDados() {
   const corpo = document.querySelector(".corpo");
   corpo.classList.add("atualizando");
   try {
-    const resp = await fetch(`${BASE_PATH}/api/torre/dados?data=${DATA_ALVO}`);
+    const resp = await fetch(`${BASE_PATH}/api/torre/dados`);
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;

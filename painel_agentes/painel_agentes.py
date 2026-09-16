@@ -960,17 +960,21 @@ def api_pedidos_parados_verificar_vuupt():
 def torre():
     """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
     sobe só com a casca; os dados chegam por /api/torre/* via JS (a
-    coleta na VUUPT leva alguns segundos e não deve segurar o load)."""
-    data_alvo = _parse_data_param()
+    coleta na VUUPT leva alguns segundos e não deve segurar o load).
+
+    Desde 15/09 (Hugo) a torre não recebe data: mostra as rotas ainda
+    abertas de qualquer dia (torre_controle._coletar_rotas_abertas);
+    consulta de dia passado é o Histórico (/consulta)."""
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
+    pode_editar = g.nivel_acesso in ("total", "operador")
     return render_template(
-        "torre_controle.html", data_alvo_input=data_alvo.isoformat(),
-        google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
+        "torre_controle.html", hoje_iso=date.today().isoformat(),
+        google_maps_key=gmaps_key, pode_editar=pode_editar,
         motivos_exclusao=MOTIVOS_EXCLUSAO,
-        # "Excluir da Rota" do chip (25/08, mesmo botão da Expedição) só
-        # faz sentido de hoje em diante -- dia passado é só consulta,
-        # mesma regra de pode_excluir da Expedição.
-        pode_excluir_pedido=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+        # "Excluir da Rota" do chip (25/08, mesmo botão da Expedição):
+        # sem data na torre, toda rota mostrada é "de hoje em diante"
+        # do ponto de vista da operação (ainda aberta).
+        pode_excluir_pedido=pode_editar,
     )
 
 
@@ -981,23 +985,22 @@ def torre_mobile():
     "casca vazia + JS" do desktop, só que consumindo os mesmos
     /api/torre/* endpoints com uma renderização em cards (em vez de
     tabela/grid) pensada pra tela estreita. Nenhum endpoint novo."""
-    data_alvo = _parse_data_param()
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
+    pode_editar = g.nivel_acesso in ("total", "operador")
     return render_template(
-        "torre_mobile.html", data_alvo_input=data_alvo.isoformat(),
-        google_maps_key=gmaps_key, pode_editar=g.nivel_acesso in ("total", "operador"),
+        "torre_mobile.html", hoje_iso=date.today().isoformat(),
+        google_maps_key=gmaps_key, pode_editar=pode_editar,
         endpoint_desktop="torre",
         motivos_exclusao=MOTIVOS_EXCLUSAO,
-        pode_excluir_pedido=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+        pode_excluir_pedido=pode_editar,
     )
 
 
 @app.route("/api/torre/dados")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def api_torre_dados():
-    data_alvo = _parse_data_param()
     try:
-        return jsonify(torre_controle.buscar_dados_torre(data_alvo))
+        return jsonify(torre_controle.buscar_dados_torre())
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao montar dados da torre")
         return jsonify({"erro": str(e)}), 500
@@ -1032,13 +1035,35 @@ def api_torre_excluir_pedido():
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
     observacao = (body.get("observacao") or "").strip()
-    data_alvo = _parse_data_param()
-
-    resultado = excluir_pedido_da_rota(data_alvo, rota_id, service_id, motivo, observacao,
+    # Torre acumulada (15/09): a rota pode ser de ontem e ainda estar
+    # aberta. A exclusão é registrada com a data de HOJE (é quando ela
+    # aconteceu, e excluir_pedido_da_rota recusa data passada); a torre
+    # acha o chip excluído pelo rota_id, de qualquer dia
+    # (expedicao._exclusoes_da_rota).
+    resultado = excluir_pedido_da_rota(date.today(), rota_id, service_id, motivo, observacao,
                                        session.get("usuario", ""), permitir_rota_em_andamento=True)
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify(resultado)
+
+
+@app.route("/api/torre/encerrar-rota", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_torre_encerrar_rota():
+    """Botão "Encerrar" de uma rota atrasada na torre acumulada (Hugo,
+    15/09): tira a rota da tela sem mexer na VUUPT nem no núcleo -- ela
+    continua no Histórico como estiver. Válvula de escape pra rota de
+    dia anterior que nunca saiu (caso Rafael/Iago de 14/09) não ficar
+    acumulando na torre até a janela passar."""
+    body = request.get_json(force=True)
+    try:
+        rota_id = int(body["rota_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "rota_id ausente ou inválido."}), 400
+    torre_controle.encerrar_rota_torre(
+        rota_id, body.get("nome") or "", body.get("data_rota") or "", session.get("usuario", ""))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/torre/etapas")

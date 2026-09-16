@@ -172,6 +172,29 @@ def _exclusoes_por_rota(data_alvo: date, rota_id: int) -> list[dict]:
         conn.close()
 
 
+def _exclusoes_da_rota(rota_id: int) -> list[dict]:
+    """Mesma lista de _exclusoes_por_rota, mas de QUALQUER dia -- a Torre
+    acumulada (Hugo, 15/09) mostra rota de dias anteriores ainda aberta,
+    e uma exclusao feita hoje numa rota de ontem e gravada com data_alvo
+    de hoje (excluir_pedido_da_rota recusa data passada). rota_id e
+    unico na VUUPT, entao filtrar so por ele e seguro."""
+    conn = _conectar_db()
+    try:
+        linhas = conn.execute("""
+            SELECT service_id, codigo_pedido, motivo, observacao, usuario, criado_em, rota_nome
+            FROM expedicao_exclusoes
+            WHERE rota_id = ?
+            ORDER BY id DESC
+        """, (rota_id,)).fetchall()
+        return [
+            {"service_id": sid, "codigo_pedido": codigo, "motivo": motivo,
+             "observacao": observacao, "usuario": usuario, "criado_em": criado_em, "rota_nome": rota_nome}
+            for sid, codigo, motivo, observacao, usuario, criado_em, rota_nome in linhas
+        ]
+    finally:
+        conn.close()
+
+
 def _catalogo_motoristas() -> dict:
     """agent_id -> MotoristaPreferencias, pra resolver nome e placa."""
     cfg_motoristas = _carregar_config().get("motoristas", {})
