@@ -88,6 +88,15 @@ def rota_do_motorista(conn: sqlite3.Connection, rota_id: int, agent_id: int | No
     return row
 
 
+def eh_rota_replica(rota: sqlite3.Row) -> bool:
+    """Rota criada por `motoristas_cli.py replicar-rota` pro piloto: ela
+    COPIA os códigos dos pedidos reais. O resultado registrado nela vale
+    pra rota de teste, mas não pode mexer no pedido de verdade -- em 12/09
+    uma entrega parcial e um insucesso de teste sobrescreveram o status de
+    dois pedidos já entregues (o sync desfez 30 min depois, por sorte)."""
+    return "replica_de" in _ler_json(rota["dados_json"])
+
+
 def _exigir_provedor_app(rota: sqlite3.Row):
     if rota["provedor"] != banco.PROVEDOR_APP:
         raise OperacaoInvalida("Essa rota é operada pelo app da VUUPT -- registre a entrega por lá.", 409)
@@ -501,7 +510,7 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
                    arrived_at = COALESCE(arrived_at, ?), atualizado_em = ?
             WHERE id = ?
         """, (situacao, ocorrido_em, motivo_id, motivo_texto, ocorrido_em, agora, parada_id))
-        if p["codigo"]:
+        if p["codigo"] and not eh_rota_replica(rota):
             nucleo_pedidos.upsert_pedido(conn, p["codigo"], {}, origem=banco.ORIGEM_APP,
                                          status=_STATUS_PEDIDO_DA_SITUACAO[situacao])
 

@@ -31,6 +31,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from nucleo import banco
+from nucleo.normalizacao import normalizar_codigo
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,10 @@ TERMO_VAZIO = "VAZIO"
 
 # AAA0000 (antiga) e AAA0A00 (Mercosul), com ou sem hífen/espaço.
 _RE_PLACA = re.compile(r"^[A-Z]{3}[- ]?\d[A-Z0-9]\d{2}$")
-# PS-12345, e também o número solto do código quando vier sem prefixo.
-_RE_CODIGO = re.compile(r"^[A-Z]{1,4}-?\d{2,}$")
+# PS-12345, #PS-12345, "ps 12345" e a reentrega PS-12345-R1. O '#' é a
+# forma que a VUUPT usa desde 20/08 e vai colado no que o usuário copia da
+# tela dela; sem aceitá-lo aqui, a busca caía em "texto" e não achava nada.
+_RE_CODIGO = re.compile(r"^#?\s*[A-Z]{1,4}[-\s]?\d{2,}(?:-[A-Z0-9]+)*$")
 
 
 def _ler_json(bruto):
@@ -97,7 +100,9 @@ def classificar_termo(termo: str | None) -> tuple[str, str]:
     if alto.isdigit():
         return TERMO_ROTA, alto
     if _RE_CODIGO.match(alto):
-        return TERMO_PEDIDO, alto
+        # Chave do núcleo: sem '#', com hífen entre prefixo e número.
+        codigo = normalizar_codigo(alto.replace(" ", ""))
+        return TERMO_PEDIDO, re.sub(r"^([A-Z]{1,4})(\d)", r"\1-\2", codigo or "")
     return TERMO_TEXTO, limpo
 
 
@@ -326,13 +331,16 @@ def buscar(termo: str | None, de=None, ate=None, sender_id: int | None = None,
                           [f"%{limpo}"] + p_na_parada + [limite])
 
         elif tipo == TERMO_PEDIDO:
-            add_pedidos("SELECT * FROM nucleo_pedidos WHERE codigo = ?"
+            # Aceita as duas grafias enquanto houver linha antiga gravada com
+            # '#' (a migração de 15/09 normaliza o que já existe).
+            grafias = [limpo, "#" + limpo]
+            add_pedidos("SELECT * FROM nucleo_pedidos WHERE codigo IN (?, ?)"
                         + (" AND sender_id = ?" if sender_id is not None else ""),
-                        [limpo] + ([int(sender_id)] if sender_id is not None else []))
+                        grafias + ([int(sender_id)] if sender_id is not None else []))
             add_rotas(f"""SELECT DISTINCT r.* FROM nucleo_rotas r
                           JOIN nucleo_paradas p ON p.rota_id = r.id
-                          WHERE p.codigo = ?{na_parada}""",
-                      [limpo] + p_na_parada)
+                          WHERE p.codigo IN (?, ?){na_parada}""",
+                      grafias + p_na_parada)
 
         elif tipo == TERMO_PLACA:
             ids = resolver_placa(limpo)
@@ -439,13 +447,15 @@ def detalhar_pedido(codigo: str, sender_id: int | None = None,
     """Um pedido e por onde ele passou. Devolve as paradas (plural de
     propósito: pedido reentregue/duplicado aparece em mais de uma rota),
     cada uma com a rota, a timeline e as fotos."""
-    codigo = (codigo or "").strip().upper()
+    codigo = normalizar_codigo(codigo)
     if not codigo:
         return None
+    grafias = [codigo, "#" + codigo]   # linha antiga gravada com '#'
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
-        pedido_row = conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+        pedido_row = conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo IN (?, ?) ORDER BY atualizado_em DESC",
+                                  grafias).fetchone()
         pedido = _linha(pedido_row, com_json=True) if pedido_row else None
         if pedido and sender_id is not None and pedido.get("sender_id") != int(sender_id):
             return None
@@ -453,8 +463,8 @@ def detalhar_pedido(codigo: str, sender_id: int | None = None,
         sql = """SELECT p.*, r.data_rota, r.nome AS rota_nome, r.status AS rota_status,
                         r.motorista_nome, r.provedor, r.agent_id
                  FROM nucleo_paradas p LEFT JOIN nucleo_rotas r ON r.id = p.rota_id
-                 WHERE p.codigo = ?"""
-        params: list = [codigo]
+                 WHERE p.codigo IN (?, ?)"""
+        params: list = list(grafias)
         if sender_id is not None:
             sql += " AND p.sender_id = ?"
             params.append(int(sender_id))

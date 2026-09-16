@@ -42,6 +42,7 @@ if hasattr(sys.stdout, "reconfigure"):
 logger = logging.getLogger("nucleo.sincronizar_vuupt")
 
 from nucleo import banco, pedidos as nucleo_pedidos, tempos
+from nucleo.normalizacao import janela_utc_do_dia, normalizar_codigo, vuupt_para_local
 from nucleo.rotas import registrar_evento
 
 # Status brutos da VUUPT -> status do núcleo (rota). O que não bate cai
@@ -168,7 +169,8 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
         return
     servicos = extrair_servicos(rota)
     agent_id = rota.get("agent_id")
-    start_at = rota.get("start_at") or ""
+    # Tudo que vem da VUUPT é UTC sem fuso -- no núcleo, hora local (15/09).
+    start_at = vuupt_para_local(rota.get("start_at")) or ""
     data_rota = start_at[:10]
     agora = banco.agora()
 
@@ -232,10 +234,10 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
             entregues += 1
         elif situacao == banco.PARADA_INSUCESSO:
             insucessos += 1
-        completed_at = s.get("completed_at")
+        completed_at = vuupt_para_local(s.get("completed_at"))
         if completed_at and (completed_max is None or completed_at > completed_max):
             completed_max = completed_at
-        started_at = s.get("started_at")
+        started_at = vuupt_para_local(s.get("started_at"))
         if started_at and (started_min is None or started_at < started_min):
             started_min = started_at
 
@@ -250,10 +252,10 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
         nivel = extra["nivel_dificuldade"] if extra else None
         caixas = (extra["volume_caixas"] if extra else None) or s.get("dimension_3")
         campos = (
-            s.get("code"), s.get("title"), s.get("address"), s.get("latitude"), s.get("longitude"),
+            normalizar_codigo(s.get("code")), s.get("title"), s.get("address"), s.get("latitude"), s.get("longitude"),
             s.get("sender_id"), situacao, s.get("status"), s.get("status_done"),
             motivo[0] if motivo else None, motivo[1] if motivo else None, failed_reason_id,
-            started_at, s.get("arrived_at"), completed_at, _json(s), agora,
+            started_at, vuupt_para_local(s.get("arrived_at")), completed_at, _json(s), agora,
             destinatario_nome, remetente_nome, nivel, caixas, s.get("customer_id"),
         )
         anterior = paradas_existentes.get(service_id)
@@ -306,7 +308,9 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                 conn, s["code"],
                 {"titulo": s.get("title"), "endereco": s.get("address"), "latitude": s.get("latitude"),
                  "longitude": s.get("longitude"), "sender_id": s.get("sender_id"), "caixas": s.get("dimension_3"),
-                 "agendamento_inicio": s.get("scheduled_start"), "agendamento_fim": s.get("scheduled_end")},
+                 "tipo": s.get("type"),
+                 "agendamento_inicio": vuupt_para_local(s.get("scheduled_start")),
+                 "agendamento_fim": vuupt_para_local(s.get("scheduled_end"))},
                 origem=banco.ORIGEM_VUUPT_SYNC, dados_json={"service": s},
                 # Rota cancelada não diz nada sobre o pedido (ele segue em
                 # outra rota): status None = COALESCE mantém o que já havia.
@@ -314,19 +318,41 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                 vuupt_service_id=service_id,
             )
 
+    # Parada que SAIU da rota na VUUPT (movida pra outra rota, desatribuída
+    # ou cancelada) continuava ativa aqui pra sempre: o laço só fazia upsert
+    # do que veio, nunca olhava o que sumiu. Achado em 12/09 -- 27 serviços
+    # "vivos" em duas rotas ao mesmo tempo. O include=services traz a lista
+    # completa (conferido em 576 rotas), então o que não veio saiu mesmo.
+    ids_atuais = {s.get("id") for s in servicos}
+    for service_id, anterior in paradas_existentes.items():
+        if service_id is None or service_id in ids_atuais or anterior["situacao"] == banco.PARADA_CANCELADA:
+            continue
+        conn.execute("""UPDATE nucleo_paradas SET situacao = ?, status_provedor = 'fora_da_rota',
+                        motivo_texto = COALESCE(motivo_texto, 'Retirada desta rota na VUUPT'), atualizado_em = ?
+                        WHERE id = ?""", (banco.PARADA_CANCELADA, agora, anterior["id"]))
+        registrar_evento(conn, "PARADA_REMOVIDA", banco.ORIGEM_VUUPT_SYNC, rota_id=rota_id,
+                         parada_id=anterior["id"], agent_id=agent_id,
+                         dados={"service_id": service_id, "situacao_anterior": anterior["situacao"]})
+        stats["eventos"] += 1
+        stats["paradas_removidas"] += 1
+
     # Cabeçalho da rota -------------------------------------------------------
-    # A rota da VUUPT traz started_at / finished_at / canceled_at próprios
-    # (confirmado no payload real, 26/08) -- preferidos ao min/max das
-    # paradas, que sofrem da confirmação em lote.
+    # A rota da VUUPT traz os carimbos próprios (done_started_at /
+    # done_finished_at / canceled_at, confirmados no payload real) --
+    # preferidos ao min/max das paradas, que sofrem da confirmação em lote.
     status_novo = _derivar_status_rota(rota.get("status"), situacoes)
     total_ativas = len(situacoes) if rota_cancelada else sum(1 for x in situacoes if x != banco.PARADA_CANCELADA)
-    iniciada = rota.get("started_at") or started_min
-    concluida = rota.get("finished_at") or completed_max
-    cancelada = rota.get("canceled_at")
+    iniciada = vuupt_para_local(rota.get("started_at") or rota.get("done_started_at")) or started_min
+    concluida = vuupt_para_local(rota.get("finished_at") or rota.get("done_finished_at")) or completed_max
+    cancelada = vuupt_para_local(rota.get("canceled_at"))
+    # agent_id/vehicle_id vão CRUS (sem COALESCE): motorista tirado da rota
+    # na VUUPT tem que sumir aqui também, senão a rota fica com dono errado.
+    motorista_nome = ctx.nomes.get(agent_id) if agent_id else None
     conn.execute("""
         UPDATE nucleo_rotas SET
-            nome = COALESCE(?, nome), agent_id = COALESCE(?, agent_id), vehicle_id = COALESCE(?, vehicle_id),
-            motorista_nome = COALESCE(?, motorista_nome), start_at = COALESCE(NULLIF(?, ''), start_at),
+            nome = COALESCE(?, nome), agent_id = ?, vehicle_id = ?,
+            motorista_nome = ?, start_at = COALESCE(NULLIF(?, ''), start_at),
+            data_rota = COALESCE(NULLIF(?, ''), data_rota),
             status = ?, status_provedor = ?, total_paradas = ?, entregues = ?, insucessos = ?,
             iniciada_em = COALESCE(iniciada_em, ?),
             concluida_em = CASE WHEN ? = ? THEN COALESCE(concluida_em, ?, ?) ELSE concluida_em END,
@@ -334,7 +360,7 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
             dados_json = ?, atualizado_em = ?
         WHERE id = ?
     """, (
-        rota.get("name"), agent_id, rota.get("vehicle_id"), ctx.nomes.get(agent_id), start_at,
+        rota.get("name"), agent_id, rota.get("vehicle_id"), motorista_nome, start_at, data_rota,
         status_novo, rota.get("status"), total_ativas, entregues, insucessos,
         iniciada,
         status_novo, banco.ROTA_CONCLUIDA, concluida, agora,
@@ -355,7 +381,7 @@ def sincronizar_rotas(rotas_brutas: list[dict], conn: sqlite3.Connection,
                       nomes_motoristas: dict[int, str] | None = None) -> dict:
     """Aplica uma lista de rotas (formato GET /routes?include=services) no
     núcleo. Puro em relação à rede -- é o que os testes exercitam."""
-    stats = {"rotas": 0, "rotas_novas": 0, "paradas_novas": 0, "eventos": 0}
+    stats = {"rotas": 0, "rotas_novas": 0, "paradas_novas": 0, "paradas_removidas": 0, "eventos": 0}
     ctx = _Contexto(conn, nomes_motoristas)
     for rota in rotas_brutas:
         _sincronizar_rota(ctx, rota, stats)
@@ -383,9 +409,11 @@ def _nomes_motoristas(config: dict) -> dict[int, str]:
 
 
 def _listar_rotas_do_dia(token: str, dia: date) -> list[dict]:
+    """Rotas cujo start_at cai no dia LOCAL. O filtro da VUUPT trabalha em
+    UTC, então os limites são convertidos (00:00 de SP = 03:00 UTC) -- com
+    limites em UTC puro, rota que sai à noite caía no dia seguinte."""
     from rotas_client import listar_rotas
-    inicio = dia.strftime("%Y-%m-%d") + " 00:00:00"
-    fim = (dia + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
+    inicio, fim = janela_utc_do_dia(dia)
     filtro = [
         {"field": "start_at", "operator": "gte", "value": inicio},
         {"field": "start_at", "operator": "lt", "value": fim},
@@ -393,10 +421,76 @@ def _listar_rotas_do_dia(token: str, dia: date) -> list[dict]:
     return listar_rotas(token, include=["services"], filtro=filtro)
 
 
+def _rota_do_corpo(dados) -> dict:
+    """GET /routes/{id} às vezes embrulha em 'route'/'data' (mesmo
+    tratamento de painel_agentes/rascunhos_rota.py)."""
+    if not isinstance(dados, dict):
+        return {}
+    for chave in ("route", "data"):
+        if isinstance(dados.get(chave), dict):
+            return dados[chave]
+    return dados
+
+
+def reconciliar_rotas_sumidas(conn: sqlite3.Connection, token: str, dias: list[date],
+                              vistas: set[int], nomes: dict[int, str] | None = None) -> dict:
+    """Rota VUUPT que o núcleo tem em aberto num dos dias sincronizados mas
+    que a listagem daquele dia não trouxe: ou foi EXCLUÍDA na VUUPT (404),
+    ou foi REMARCADA pra outro dia. Sem isso a rota ficava PLANEJADA pra
+    sempre aqui -- e ainda aparecia pro motorista no app."""
+    from requests.exceptions import HTTPError
+    from rotas_client import buscar_rota
+
+    stats = {"excluidas": 0, "remarcadas": 0, "erros": 0}
+    if not dias:
+        return stats
+    alvo = conn.execute("""
+        SELECT id, vuupt_route_id, data_rota FROM nucleo_rotas
+        WHERE provedor = ? AND vuupt_route_id IS NOT NULL
+          AND data_rota BETWEEN ? AND ? AND status NOT IN (?, ?)
+    """, (banco.PROVEDOR_VUUPT, min(dias).isoformat(), max(dias).isoformat(),
+          banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA)).fetchall()
+    for row in alvo:
+        if row["vuupt_route_id"] in vistas:
+            continue
+        try:
+            rota = _rota_do_corpo(buscar_rota(token, int(row["vuupt_route_id"]), include=["services"]))
+        except HTTPError as e:
+            resposta = getattr(e, "response", None)
+            if resposta is not None and resposta.status_code == 404:
+                agora = banco.agora()
+                conn.execute("UPDATE nucleo_rotas SET status = ?, cancelada_em = COALESCE(cancelada_em, ?), "
+                             "status_provedor = 'excluida', atualizado_em = ? WHERE id = ?",
+                             (banco.ROTA_CANCELADA, agora, agora, row["id"]))
+                registrar_evento(conn, "ROTA_EXCLUIDA_VUUPT", banco.ORIGEM_VUUPT_SYNC, rota_id=row["id"],
+                                 dados={"vuupt_route_id": row["vuupt_route_id"]})
+                stats["excluidas"] += 1
+                continue
+            logger.warning(f"rota {row['vuupt_route_id']}: falha ao consultar na VUUPT ({e}).")
+            stats["erros"] += 1
+            continue
+        except Exception as e:  # noqa: BLE001 -- rede/JSON: loga e segue, nunca derruba o sync
+            logger.warning(f"rota {row['vuupt_route_id']}: erro inesperado ({e}).")
+            stats["erros"] += 1
+            continue
+        if rota:
+            sincronizar_rotas([rota], conn, nomes)
+            stats["remarcadas"] += 1
+    conn.commit()
+    return stats
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Espelha rotas da VUUPT no núcleo próprio.")
-    parser.add_argument("--dias", type=int, default=2, help="quantos dias pra trás, contando hoje (padrão 2)")
+    # 15/09: era 2 (hoje e ontem) e mudança feita DEPOIS disso nunca chegava
+    # -- 9 rotas de 08 e 09/09 foram fechadas na VUUPT dias depois e o núcleo
+    # não viu. Com 8 dias, a janela cobre a semana; o que for mais velho que
+    # isso aparece no comparar_vuupt.py.
+    parser.add_argument("--dias", type=int, default=8, help="quantos dias pra trás, contando hoje (padrão 8)")
+    parser.add_argument("--futuro", type=int, default=1, help="quantos dias à frente (padrão 1: a rota de amanhã)")
     parser.add_argument("--data", type=str, help="um dia só (YYYY-MM-DD)")
+    parser.add_argument("--sem-reconciliar", action="store_true",
+                        help="não checa rota que sumiu da listagem (excluída/remarcada na VUUPT)")
     parser.add_argument("--modo-teste", action="store_true", help="lê a VUUPT e mostra o resumo, sem gravar")
     args = parser.parse_args(argv)
 
@@ -417,13 +511,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         hoje = date.today()
         dias = [hoje - timedelta(days=i) for i in range(args.dias)]
+        dias += [hoje + timedelta(days=i) for i in range(1, max(args.futuro, 0) + 1)]
 
     nomes = _nomes_motoristas(config)
-    total = {"rotas": 0, "rotas_novas": 0, "paradas_novas": 0, "eventos": 0}
+    total = {"rotas": 0, "rotas_novas": 0, "paradas_novas": 0, "paradas_removidas": 0, "eventos": 0}
+    vistas: set[int] = set()
     conn = None if args.modo_teste else banco.conectar()
     try:
         for dia in sorted(dias):
             rotas = _listar_rotas_do_dia(token, dia)
+            vistas.update(r["id"] for r in rotas if r.get("id") is not None)
             if args.modo_teste:
                 logger.info(f"[TESTE] {dia}: {len(rotas)} rota(s) na VUUPT -- "
                             + ", ".join(f"{r.get('name')}({r.get('status')}, {len(extrair_servicos(r))} paradas)" for r in rotas))
@@ -432,6 +529,10 @@ def main(argv: list[str] | None = None) -> int:
             logger.info(f"{dia}: {stats}")
             for k in total:
                 total[k] += stats[k]
+        if conn is not None and not args.sem_reconciliar:
+            sumidas = reconciliar_rotas_sumidas(conn, token, sorted(dias), vistas, nomes)
+            if any(sumidas.values()):
+                logger.info(f"Rotas que sumiram da listagem: {sumidas}")
     finally:
         if conn is not None:
             conn.close()

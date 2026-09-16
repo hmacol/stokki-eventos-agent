@@ -200,7 +200,8 @@ class TestSincronizarVuupt(_BaseTemp):
         self.assertEqual(rota["status"], "CONCLUIDA")
         self.assertEqual(rota["entregues"], 1)
         self.assertEqual(rota["insucessos"], 1)
-        self.assertEqual(rota["concluida_em"], "2026-08-26 10:00:00")
+        # A VUUPT manda UTC sem fuso; o núcleo grava hora local (15/09).
+        self.assertEqual(rota["concluida_em"], "2026-08-26 07:00:00")
         p2 = rota["paradas"][1]
         self.assertEqual(p2["situacao"], "INSUCESSO")
         self.assertEqual(p2["motivo_texto"], "Local fechado")
@@ -251,11 +252,11 @@ class TestSincronizarVuupt(_BaseTemp):
         por_id = {r["vuupt_route_id"]: r for r in rotas.listar_rotas_dia("2026-08-26", conn=conn)}
         cancelada, ativa = por_id[1], por_id[2]
         self.assertEqual(cancelada["status"], "CANCELADA")
-        self.assertEqual(cancelada["cancelada_em"], "2026-08-25 23:15:17")
+        self.assertEqual(cancelada["cancelada_em"], "2026-08-25 20:15:17")   # 23:15:17 UTC
         self.assertEqual((cancelada["entregues"], cancelada["insucessos"]), (0, 0))
         self.assertEqual(cancelada["paradas"][0]["situacao"], "CANCELADA")
         self.assertEqual(ativa["status"], "CONCLUIDA")
-        self.assertEqual(ativa["concluida_em"], "2026-08-26 11:00:00")
+        self.assertEqual(ativa["concluida_em"], "2026-08-26 08:00:00")   # 11:00:00 UTC
         self.assertEqual(ativa["entregues"], 1)
 
         n_entregue = conn.execute("SELECT COUNT(*) FROM nucleo_eventos WHERE tipo = 'ENTREGUE'").fetchone()[0]

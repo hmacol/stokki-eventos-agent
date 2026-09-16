@@ -30,7 +30,7 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "painel_agentes"))
 
-from nucleo import banco
+from nucleo import banco, normalizacao
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,8 @@ def _inserir_rota(conn: sqlite3.Connection, rascunho: dict, provedor: str,
                                         volume_caixas, janela_inicio, janela_fim, dados_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            rota_id, p.get("ordem"), p.get("service_id"), p.get("codigo"), p.get("titulo"),
+            rota_id, p.get("ordem"), p.get("service_id"), normalizacao.normalizar_codigo(p.get("codigo")),
+            p.get("titulo"),
             p.get("destinatario_nome"), p.get("endereco"), p.get("latitude"), p.get("longitude"),
             p.get("sender_id"), p.get("remetente_nome"), p.get("nivel_dificuldade"), p.get("volume_caixas"),
             p.get("horario_atendimento_inicio"), p.get("horario_atendimento_fim"), _json(p),
