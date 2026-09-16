@@ -290,6 +290,30 @@ _COLUNAS_MOTORISTAS_NOVAS = [
 ]
 
 
+# Colunas novas de nucleo_pedidos (16/09): o pedido passa a ser espelhado
+# FORA da rota também (pool, retirada no galpão, reentrega -R, cancelamento)
+# por nucleo/sincronizar_servicos_vuupt.py -- até aqui o núcleo só via
+# pedido que estivesse dentro de uma rota sincronizada.
+_COLUNAS_PEDIDOS_NOVAS = [
+    ("status_provedor", "TEXT"),            # status bruto do serviço na VUUPT
+    ("status_done_provedor", "TEXT"),
+    ("customer_id", "INTEGER"),
+    ("vuupt_route_id", "INTEGER"),          # rota em que o serviço está agora (NULL = sem rota)
+    ("driver_id", "INTEGER"),               # agente atribuído (retirada: o agente fixo do galpão)
+    ("nota", "TEXT"),                       # note do serviço (a retirada guarda a previsão da Stokki aqui)
+    ("complemento", "TEXT"),                # address_complement
+    ("fluxo", "TEXT"),                      # ENTREGA | RETIRADA (título "[RETIRADA]")
+    ("criado_em_provedor", "TEXT"),         # created_at da VUUPT, em hora local
+    ("atualizado_em_provedor", "TEXT"),     # updated_at da VUUPT, em hora local (cursor do incremental)
+    ("excluido_em", "TEXT"),                # deleted_at / sumiu da VUUPT
+    ("reentrega_de_service_id", "INTEGER"),  # recreated_order_origin_id
+    ("reentrega_de_codigo", "TEXT"),        # o código do pedido original, quando dá pra resolver
+]
+
+FLUXO_ENTREGA = "ENTREGA"
+FLUXO_RETIRADA = "RETIRADA"
+
+
 # Colunas novas de nucleo_paradas (bancos criados antes de 26/08) -- migração aditiva.
 _COLUNAS_PARADAS_NOVAS = [
     ("tempo_deslocamento_s", "INTEGER"),
@@ -326,6 +350,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
     conn.executescript(_DDL)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),

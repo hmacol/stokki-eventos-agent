@@ -88,6 +88,11 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
         "endereco", "latitude", "longitude", "horario_inicio", "horario_fim",
         "remetente_nome", "remetente_codigo", "sender_id", "caixas",
         "agendamento_inicio", "agendamento_fim",
+        # 16/09: o que o espelho de SERVIÇOS (fora de rota) traz --
+        # quem não souber o valor manda None e o que está gravado fica.
+        "status_provedor", "status_done_provedor", "customer_id", "vuupt_route_id", "driver_id",
+        "nota", "complemento", "fluxo", "criado_em_provedor", "atualizado_em_provedor",
+        "excluido_em", "reentrega_de_service_id", "reentrega_de_codigo",
     ]
     valores = [campos.get(c) for c in colunas]
     tipo = campos.get("tipo")

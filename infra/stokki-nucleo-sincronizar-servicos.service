@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Espelha no nucleo o pedido FORA da rota (pool, retirada no galpao, reentrega, cancelamento)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/sincronizar_servicos_vuupt.py
