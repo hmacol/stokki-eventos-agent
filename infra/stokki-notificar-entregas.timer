@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-notificar-entregas.service a cada 5 min, das 06h as 23h
+
+[Timer]
+OnCalendar=*-*-* 06..23:00/5:00
+Persistent=false
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

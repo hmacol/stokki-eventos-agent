@@ -36,6 +36,28 @@ def data_prevista_do_servico(servico: dict) -> str:
     return m.group(1) if m else ""
 
 
+# Leitura de volta do que montar_payload_retirada carimba na nota. O
+# destinatário pode ter parênteses no nome ("MERCADO (FILIAL 2)"): só conta
+# como documento o par final com cara de CNPJ/CPF (dígitos e pontuação).
+_REGEX_NOTA_RETIRADA = re.compile(
+    r"Quem retira:\s*(?P<quem>.+?)(?:\s*\(CNPJ\s*(?P<cnpj>\d+)\))?\.\s*"
+    r"Destinat[áa]rio final:\s*(?P<dest>.+?)(?:\s*\((?P<doc>[\d.\-/ ]+)\))?\.\s*Fechado automaticamente"
+)
+
+
+def dados_da_nota(servico: dict) -> dict:
+    """{'quem_retira', 'cnpj_quem_retira', 'destinatario'} lidos da nota do
+    serviço de retirada -- o customer do serviço é o próprio galpão, então
+    é só aqui que esses dados existem na VUUPT. Tudo '' se a nota não
+    estiver no formato (usado pelo e-mail de "retirado" ao embarcador,
+    notificacao_entregas/). Coberto por ida e volta em test_regras_retirada.py."""
+    m = _REGEX_NOTA_RETIRADA.search(servico.get("note") or "")
+    if not m:
+        return {"quem_retira": "", "cnpj_quem_retira": "", "destinatario": ""}
+    return {"quem_retira": m.group("quem").strip(), "cnpj_quem_retira": m.group("cnpj") or "",
+            "destinatario": m.group("dest").strip()}
+
+
 def config_retiradas(config: dict) -> dict:
     """{'ativo', 'agent_id', 'customer_id'} -- ativo só quando agent_id e
     customer_id estão preenchidos (sem eles o pipeline mantém o

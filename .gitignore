@@ -30,6 +30,7 @@ roteirizacao/dados/
 painel_agentes/dados/
 dashboard_embarcadores/dados/
 notificacao_transportadoras/dados/
+notificacao_entregas/dados/
 print_agent/dados/
 coleta_emporio_quatro_estrelas/dados/
 dashboard_embarcadores/debug/
