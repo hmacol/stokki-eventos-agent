@@ -217,6 +217,10 @@
   .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
   .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
   .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  /* Modal "Marcar como tratada" (Hugo, 16/09): mesma casca do de
+     exclusão, botão de confirmar sem vermelho (tratar não destrói nada). */
+  .modal-excluir.modal-tratar .acoes button.confirmar { background: var(--primaria); }
+  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); }
   #card-rotas select#visao-rotas {
     font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
     background: var(--fundo); color: var(--texto);
@@ -360,6 +364,27 @@
     <div class="acoes">
       <button type="button" class="cancelar" onclick="fecharModalExcluir()">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-exclusao" onclick="confirmarExclusaoChip(this)">Excluir da rota</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-excluir" id="modal-tratar">
+  <div class="modal-excluir modal-tratar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tratar">
+    <h2 id="titulo-modal-tratar">Marcar como tratada</h2>
+    <p class="descricao-excecao" id="tratar-descricao">—</p>
+    <div class="campo">
+      <label for="tratar-resposta">O que foi feito</label>
+      <select id="tratar-resposta" onchange="aoMudarRespostaTratar()">
+        <option value="">Selecione...</option>
+      </select>
+    </div>
+    <div class="campo">
+      <label for="tratar-complemento" id="tratar-complemento-rotulo">Complemento (opcional)</label>
+      <textarea id="tratar-complemento" placeholder="Ex.: reagendado para 19/09, cliente avisado por WhatsApp..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalTratar()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-tratar" onclick="confirmarTratar(this)">✓ Tratar</button>
     </div>
   </div>
 </div>
@@ -857,24 +882,70 @@ function renderExcecoes(d) {
   alvo.innerHTML = partes.join("");
 }
 
-async function tratarExcecao(id) {
+// "Tratar" com dropdown de respostas prontas (Hugo, 16/09) -- mesma
+// lista e mesmo modal do desktop (torre_controle.RESPOSTAS_TRATATIVA).
+let excecaoPendenteTratar = null;
+
+function tratarExcecao(id) {
   const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
-  const motivo = prompt(`Marcar como tratada:\n${x ? x.descricao : id}\n\nMotivo / o que foi feito (obrigatório):`);
-  if (motivo === null) return;
-  if (!motivo.trim()) { alert("Informe o motivo — é ele que vira o histórico."); return; }
+  excecaoPendenteTratar = x || { id, descricao: id, tipo: "", motorista: null, rota: null };
+  const respostas = (dadosAtuais && dadosAtuais.respostas_tratativa) || ["Outro"];
+  const select = document.getElementById("tratar-resposta");
+  select.innerHTML = `<option value="">Selecione...</option>` +
+    respostas.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
+  document.getElementById("tratar-descricao").textContent = excecaoPendenteTratar.descricao;
+  document.getElementById("tratar-complemento").value = "";
+  aoMudarRespostaTratar();
+  document.getElementById("modal-tratar").classList.add("aberto");
+}
+
+function aoMudarRespostaTratar() {
+  const outro = document.getElementById("tratar-resposta").value === "Outro";
+  document.getElementById("tratar-complemento-rotulo").textContent =
+    outro ? "O que foi feito (obrigatório)" : "Complemento (opcional)";
+  if (outro) document.getElementById("tratar-complemento").focus();
+}
+
+function fecharModalTratar() {
+  document.getElementById("modal-tratar").classList.remove("aberto");
+  excecaoPendenteTratar = null;
+}
+
+document.getElementById("modal-tratar").addEventListener("click", (e) => {
+  if (e.target.id === "modal-tratar") fecharModalTratar();
+});
+
+async function confirmarTratar(botao) {
+  const x = excecaoPendenteTratar;
+  if (!x) return;
+  const resposta = document.getElementById("tratar-resposta").value;
+  const complemento = document.getElementById("tratar-complemento").value.trim();
+  if (!resposta) { alert("Selecione o que foi feito."); return; }
+  if (resposta === "Outro" && !complemento) { alert("Descreva o que foi feito — é isso que vira o histórico."); return; }
+  const motivo = resposta === "Outro" ? complemento : (complemento ? `${resposta} / ${complemento}` : resposta);
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Marcando...";
   try {
     const resp = await fetch(`${BASE_PATH}/api/torre/tratar`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id, motivo: motivo.trim(),
+        id: x.id, motivo,
         data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO,
-        tipo: x ? x.tipo : "", descricao: x ? x.descricao : "",
-        motorista: x ? x.motorista : null, rota: x ? x.rota : null,
+        tipo: x.tipo || "", descricao: x.descricao || "",
+        motorista: x.motorista || null, rota: x.rota || null,
       }),
     });
-    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao marcar."); return; }
+    if (!resp.ok) { const j = await resp.json(); throw new Error(j.erro || "Falha ao marcar."); }
+    fecharModalTratar();
     carregarDados();
-  } catch (e) { alert("Falha ao marcar: " + e); }
+  } catch (e) {
+    alert("Falha ao marcar: " + e.message);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
 }
 async function destratarExcecao(id) {
   try {

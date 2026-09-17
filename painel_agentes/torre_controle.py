@@ -94,6 +94,29 @@ ETAPAS_PIPELINE = [
     {"agente_id": "relatorio_diario",            "titulo": "Relatório",    "detalhe": "resumo por e-mail"},
 ]
 
+# Respostas prontas do botão "Tratar" da Fila de ação (Hugo, 16/09:
+# "criar dropdown de respostas ao apertar o botão tratar"). Lista
+# montada com o que a operação mais escreveu no campo livre em
+# produção (165 tratativas de 12/08 a 16/09: "Reagendado" 57x, "Já
+# havia sido enviado" 14x, "Não coletado" 13x, "Duplicado por engano"
+# 10x...). "Outro" fica por último e abre o campo livre -- a lista
+# orienta, não engessa. As duas telas da torre (desktop e celular)
+# leem daqui via buscar_dados_torre, uma fonte só.
+RESPOSTAS_TRATATIVA = [
+    "Reagendado",
+    "Já havia sido enviado",
+    "Já entregue",
+    "Não coletado",
+    "Coletado pelo cliente",
+    "Cliente ausente",
+    "Fora do horário de recebimento",
+    "Local fechado",
+    "Duplicado por engano",
+    "Pedido cancelado",
+    "Devolvido ao embarcador",
+    "Outro",
+]
+
 # Rótulos do funil outbound da Stokki, na ordem do fluxo (o que ainda
 # não chegou na VUUPT). Chaves confirmadas ao vivo em 12/08.
 FUNIL_STOKKI = [
@@ -220,6 +243,24 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
         service_id=service_id, motorista_nome=motorista, rota_nome=rota,
         texto=f"Duplicado manualmente pela Torre → {novo_code}",
     )
+    # Duplicar É a tratativa (Hugo, 16/09): o insucesso sai da Fila de
+    # ação na hora e vai pro histórico de tratadas, sem precisar clicar
+    # "Tratar" depois -- e a rota deixa de ficar presa na torre por
+    # causa dele (classificar_rota_torre). O log de tratativas já tem
+    # o REENVIO_MANUAL acima, então não registra EXCECAO_TRATADA em
+    # cima com o mesmo texto. "Desfazer" na lista de tratadas continua
+    # valendo: devolve o item pra fila (com o badge 'Duplicado').
+    try:
+        titulo = (servico_original.get("title") or "")[:90]
+        marcar_excecao_tratada(
+            f"insucesso:{codigo}", date.today().isoformat(), "Insucesso",
+            f"{codigo} — {titulo}", f"Duplicado → {novo_code}",
+            motorista_nome=motorista, rota_nome=rota, registrar_tratativa=False,
+        )
+    except Exception as e:
+        # A reentrega já existe na VUUPT; falhar aqui só deixa o item na
+        # fila (com o badge 'Duplicado') pra alguém tratar na mão.
+        logger.warning(f"[torre] Reentrega {novo_code} criada, mas falhou ao marcar {codigo} como tratado: {e}")
     return {"ok": True, "novo_code": novo_code}
 
 
@@ -1154,7 +1195,11 @@ def _pedido_code_da_excecao(excecao_id: str) -> str | None:
 
 def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
                            descricao: str, motivo: str,
-                           motorista_nome: str | None = None, rota_nome: str | None = None):
+                           motorista_nome: str | None = None, rota_nome: str | None = None,
+                           registrar_tratativa: bool = True):
+    """`registrar_tratativa=False` só grava a tabela da torre, sem o
+    evento EXCECAO_TRATADA no log de tratativas -- pra quem já registrou
+    a ação de outro jeito (duplicar_pedido_manual → REENVIO_MANUAL)."""
     conn = _conectar_tratadas()
     conn.execute("""
         INSERT INTO torre_excecoes_tratadas (id, data_alvo, tipo, descricao, motivo, tratado_em)
@@ -1166,7 +1211,7 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
     conn.close()
 
     pedido_code = _pedido_code_da_excecao(excecao_id)
-    if pedido_code:
+    if pedido_code and registrar_tratativa:
         tratativas.registrar_evento(
             pedido_code, "TORRE", "EXCECAO_TRATADA",
             motorista_nome=motorista_nome, rota_nome=rota_nome, texto=motivo,
@@ -1525,6 +1570,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "kpis_periodo": kpis_periodo,
         "excecoes": excecoes,
         "tratadas": tratadas,
+        "respostas_tratativa": RESPOSTAS_TRATATIVA,
         "base": base,
     }
 
