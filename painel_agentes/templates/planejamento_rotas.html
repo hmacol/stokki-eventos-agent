@@ -2289,7 +2289,7 @@
           <button id="botao-disponibilidade-motoristas" type="button" title="Marca quem está disponível pra rota nesse dia (folga, férias, atestado) -- Alocar motoristas sempre respeita essa seleção.">Disponibilidade de motoristas</button>
           <button id="botao-alocar-motoristas" type="button" title="Sugere motorista pras rotas que ainda estão sem — mesma alocação do criador de rotas: disponibilidade no dia, zonas preferidas, viagens, rodízio de placa e equilíbrio de carga. Rota que já tem motorista não é alterada.">Alocar motoristas</button>
           <button id="botao-desalocar-motoristas" type="button" class="perigo" title="Remove o motorista de todas as rotas ainda não enviadas -- rota já enviada à VUUPT não é alterada.">Desalocar motoristas</button>
-          <button id="botao-copiar-escala" type="button" title="Copia a lista de quem está escalado no dia (motorista → rota, nº de entregas), já formatada pra colar no grupo de WhatsApp dos motoristas. Rotas da Lalamove e sem motorista ficam de fora.">Copiar escala pro WhatsApp</button>
+          <button id="botao-copiar-escala" type="button" title="Copia a lista de quem está escalado no dia (Nome do motorista - Rota X), já formatada pra colar no grupo de WhatsApp dos motoristas. Rotas da Lalamove e sem motorista ficam de fora.">Copiar escala pro WhatsApp</button>
         </div>
       </div>
       <div class="menu-rotas" id="menu-lote">
@@ -5386,17 +5386,17 @@
     } catch (e) { return false; }
   }
 
-  // Escala do dia pro grupo de WhatsApp dos motoristas (Hugo, 09/09):
-  // MESMO formato da mensagem de grupo que o aviso de rotas já gera
-  // (roteirizacao/avisar_motoristas_rotas.py, _mensagem_grupo), só que
+  // Escala do dia pro grupo de WhatsApp dos motoristas (Hugo, 09/09),
   // montada a partir dos rascunhos da tela -- todo rascunho do dia que
   // já tem motorista (rascunho, ofertada-escolhida, enviada ou com erro
-  // de envio), agrupado por motorista em ordem alfabética. Rotas da
-  // Lalamove e sem motorista NÃO entram na mensagem (o grupo é só de
-  // motoristas); o que ficou de fora vai no toast, pra quem opera.
+  // de envio), agrupado por motorista em ordem alfabética. Cada linha é
+  // só "Nome do motorista - Rota X" (Hugo, 16/09: sem zona e sem nº de
+  // entregas). Rotas da Lalamove e sem motorista NÃO entram na mensagem
+  // (o grupo é só de motoristas); o que ficou de fora vai no toast, pra
+  // quem opera.
   function rotuloCurtoRota(nome) {
     const m = /#(\d+)/.exec(nome || "");
-    if (m) return `Rota #${m[1]}`;
+    if (m) return `Rota ${m[1]}`;
     const semPrefixo = (nome || "").replace(/^Planejamento\s*-\s*\d{2}\/\d{2}\/\d{4}\s*-\s*/i, "").trim();
     return semPrefixo ? `Rota ${semPrefixo}` : "Rota";
   }
@@ -5410,15 +5410,12 @@
       if (!r.agent_id) { semMotorista++; return; }
       const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
       const nome = (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
-      if (!porMotorista.has(r.agent_id)) porMotorista.set(r.agent_id, { nome, zonas: [], rotas: 0, entregas: 0 });
+      if (!porMotorista.has(r.agent_id)) porMotorista.set(r.agent_id, { nome, rotas: [] });
       const m = porMotorista.get(r.agent_id);
-      // zona da rota quando o roteirizador gravou; senão "Rota #N" (o
-      // nome completo é "Planejamento - dd/mm/aaaa - #N", longo demais
-      // pro grupo), pra linha nunca ficar sem referência
-      const zona = (r.zona || "").trim() || rotuloCurtoRota(r.nome);
-      if (zona && !m.zonas.includes(zona)) m.zonas.push(zona);
-      m.rotas += 1;
-      m.entregas += r.paradas.length;
+      // "Rota N" (o nome completo é "Planejamento - dd/mm/aaaa - #N",
+      // longo demais pro grupo)
+      const rotulo = rotuloCurtoRota(r.nome);
+      if (!m.rotas.includes(rotulo)) m.rotas.push(rotulo);
     });
     const motoristas = [...porMotorista.values()].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
     const dataObj = new Date(`${DATA_ALVO_ISO}T12:00:00`);
@@ -5429,9 +5426,9 @@
       linhas.push("Nenhum motorista escalado ainda.");
     } else {
       motoristas.forEach(m => {
-        linhas.push(`✅ ${m.nome} - ${m.zonas.join(", ")} (${m.entregas} ${m.entregas === 1 ? "entrega" : "entregas"})`);
+        linhas.push(`${m.nome} - ${m.rotas.join(", ")}`);
       });
-      linhas.push("", "⚠️ Motoristas escalados, por favor confirmem o ciente no privado!");
+      linhas.push("", "⚠️ Motoristas escalados, por favor confirmem com ✅!");
     }
     return { texto: linhas.join("\n"), qtdMotoristas: motoristas.length, semMotorista, lalamove };
   }
