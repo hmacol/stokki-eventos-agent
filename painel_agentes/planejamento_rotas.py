@@ -1908,6 +1908,80 @@ def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:
     return {"ok": True, "falhas": falhas}
 
 
+# ── Transportadora de redespacho (Hugo, 16/09) ───────────────────────────────
+# "Alterar a transportadora" de um pedido na tela de planejamento. Não
+# existe campo de transportadora no serviço da VUUPT nem em
+# nucleo_pedidos: o que identifica o redespacho no resto do sistema
+# (canhoteira do romaneio, notificação de XML pra transportadora) é o
+# ENDEREÇO do serviço batendo com o galpão da planilha
+# (regras.transportadoras.resolver_por_endereco). Então "trocar a
+# transportadora" = trocar o endereço do pedido pelo endereço do galpão
+# da TERCEIROS escolhida, pelo mesmo caminho do "Editar endereço".
+
+CAMINHO_BD_TRANSPORTADORAS = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
+
+
+def _catalogo_transportadoras():
+    """Catálogo da BD_TRANSPORTADORAS (mesmo do pipeline) -- None se a
+    planilha não abrir. Recarrega a cada chamada de propósito: o Hugo
+    edita a planilha na mão e a tela tem que ver a linha nova sem
+    reiniciar o painel."""
+    try:
+        from regras.transportadoras import CatalogoTransportadoras
+        return CatalogoTransportadoras.carregar(CAMINHO_BD_TRANSPORTADORAS)
+    except Exception as e:
+        logger.warning(f"[planejamento] Sem catálogo de transportadoras ({e}).")
+        return None
+
+
+def listar_transportadoras_terceiros() -> list[dict]:
+    """Opções do select "Transportadora (redespacho)": só as TERCEIROS
+    com endereço de galpão, [{"nome", "endereco"}] em ordem alfabética.
+    Lista vazia se a planilha não abrir (a tela avisa)."""
+    catalogo = _catalogo_transportadoras()
+    return catalogo.listar_terceiros() if catalogo else []
+
+
+def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dict:
+    """
+    Troca o endereço dos pedidos de `itens` ({"service_id", "rascunho_id"})
+    pelo endereço de redespacho da transportadora TERCEIROS escolhida --
+    menu de contexto (1 pedido) e barras de seleção (lote) da tela de
+    planejamento. Só vale pra TERCEIROS da BD_TRANSPORTADORAS: ENTREGA,
+    RETIRADA ou nome desconhecido são recusados antes de tocar na VUUPT.
+
+    A gravação em si é a de editar_endereco_pedidos (VUUPT no nível raiz
+    do serviço, contato best-effort, cópia local do rascunho, falha por
+    pedido não aborta os demais). Devolve o mesmo formato dela mais
+    "endereco" (o texto aplicado), ou {"ok": False, "erro"} sem tentar
+    nenhum pedido.
+    """
+    transportadora = (transportadora or "").strip()
+    if not transportadora:
+        return {"ok": False, "erro": "Escolha a transportadora."}
+    if not itens:
+        return {"ok": False, "erro": "Nenhum pedido selecionado."}
+
+    catalogo = _catalogo_transportadoras()
+    if catalogo is None:
+        return {"ok": False, "erro": "Não foi possível abrir a planilha BD_TRANSPORTADORAS.xlsx."}
+
+    endereco = catalogo.endereco_terceiros(transportadora)
+    if endereco is None:
+        return {
+            "ok": False,
+            "erro": (f"Transportadora {transportadora!r} não é TERCEIROS com endereço "
+                     f"de redespacho na BD_TRANSPORTADORAS.xlsx."),
+        }
+
+    texto = str(endereco)
+    resultado = editar_endereco_pedidos(itens, texto)
+    if resultado["ok"]:
+        resultado["endereco"] = texto
+        logger.info(f"Redespacho via {transportadora}: {len(itens)} pedido(s) -> {texto}")
+    return resultado
+
+
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"
 
 

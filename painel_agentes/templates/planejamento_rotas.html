@@ -76,9 +76,9 @@
     padding: 5px 12px; font-variant-numeric: tabular-nums;
   }
   .chip-kpi .kpi-valor { font-size: 14px; font-weight: 700; color: var(--texto); }
-  .chip-kpi .kpi-rotulo { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
+  .chip-kpi .kpi-rotulo { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--texto-suave); }
   .chip-kpi.alerta { border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
-  .chip-kpi.alerta .kpi-valor { color: var(--erro); }
+  .chip-kpi.alerta .kpi-valor { color: var(--erro-texto); }
   /* Resumo do marketplace por região (Hugo, 23/08) -- linha de chips
      logo abaixo da tira de KPI, só aparece com alguma rota publicada. */
   .resumo-regioes-ofertas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--texto-suave); }
@@ -126,7 +126,9 @@
     white-space: nowrap;
   }
   .botoes-h3 { display: inline-flex; gap: 6px; }
-  .coluna h3 {
+  /* h2 (15/09): eram h3 direto abaixo do h1, pulando um nível -- quem
+     navega por títulos via um h1 e três h3 soltos. Visual não muda. */
+  .coluna h2 {
     margin: 0 0 10px;
     font-size: 13px;
     color: var(--texto-suave);
@@ -164,18 +166,18 @@
     padding: 4px 0 6px;
   }
   .cabecalho-secao-pool .titulo-secao-pool { flex: 1; }
-  .cabecalho-secao-pool .seta-secao { font-size: 10px; }
+  .cabecalho-secao-pool .seta-secao { font-size: 11px; }
   .secao-pool.colapsada .lista-paradas { display: none; }
   /* 3º bloco, "Fora da área de atendimento" (Hugo, 20/08): mesmo padrão
      visual dos outros 2, só com o título na cor de erro pra não passar
      despercebido -- são pedidos que o pipeline automático já exclui da
      roteirização (notificar_area_nao_atendida.py), então só aparecem
      aqui pra decisão manual (cotação dedicada / redespacho / etc). */
-  .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro); }
+  .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro-texto); }
   /* 4º bloco, "A retirar no galpão" (Hugo, 28/08): só leitura -- cards
      sem cursor de arrasto, com o status do acompanhamento como badge. */
   .secao-pool-retirada { margin-top: 10px; border-top: 1px dashed var(--borda); padding-top: 4px; }
-  .secao-pool-retirada .cabecalho-secao-pool { color: var(--acento, #2FD9AE); }
+  .secao-pool-retirada .cabecalho-secao-pool { color: var(--acento-texto, #2FD9AE); }
   .item-retirada {
     background: var(--fundo);
     border: 1px dashed var(--borda);
@@ -183,22 +185,21 @@
     padding: 7px 9px;
     margin-bottom: 6px;
     font-size: 12px;
-    opacity: 0.9;
   }
   .item-retirada .codigo { font-weight: 700; }
   .item-retirada .transportadora { color: var(--texto-suave); }
   .item-retirada .badge-retirada {
     display: inline-block; margin-top: 3px; padding: 1px 6px; border-radius: 10px;
-    font-size: 10px; font-weight: 700; text-transform: uppercase;
-    background: rgba(47, 217, 174, 0.15); color: var(--acento, #2FD9AE);
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    background: rgba(47, 217, 174, 0.15); color: var(--acento-texto, #2FD9AE);
   }
   .item-retirada .datas-retirada { display: block; margin-top: 2px; font-size: 11px; color: var(--texto-suave); }
   /* Seleção pra expedir (Hugo, 31/08): checkbox no canto do card + botão
      "Expedir marcadas" no cabeçalho da seção -- dispara o agente
      Expedição com --pedido só pros códigos marcados. */
   .item-retirada .check-retirada { float: right; margin-left: 8px; cursor: pointer; }
-  .item-retirada .check-retirada input { cursor: pointer; width: 15px; height: 15px; accent-color: var(--acento, #2FD9AE); }
-  .item-retirada.marcada-expedir { border-style: solid; border-color: var(--acento, #2FD9AE); opacity: 1; }
+  .item-retirada .check-retirada input { cursor: pointer; width: 18px; height: 18px; accent-color: var(--acento, #2FD9AE); }
+  .item-retirada.marcada-expedir { border-style: solid; border-color: var(--acento, #2FD9AE); }
   /* Filtros do pool (busca/flag/CEP/caixas) valem na seção de retiradas
      também (Hugo, 31/08) -- classe única, calculada em aplicarFiltrosRetiradas. */
   .item-retirada.filtro-oculta { display: none; }
@@ -206,7 +207,7 @@
      direita); "Expedir marcadas" só é visível quando há marcada, e nesse
      caso "Marcar todas" também está -- nunca fica órfão sem o auto. */
   #botao-marcar-retiradas { margin-left: auto; }
-  .botao-expedir-retiradas { border-color: var(--acento, #2FD9AE); color: var(--acento, #2FD9AE); }
+  .botao-expedir-retiradas { border-color: var(--acento, #2FD9AE); color: var(--acento-texto, #2FD9AE); }
   .item-parada {
     position: relative;
     background: var(--fundo);
@@ -219,8 +220,10 @@
     line-height: 1.4;
   }
   .item-parada .codigo { font-weight: 700; }
-  .item-parada .remetente { color: #6FA0FF; }
-  .item-parada .destinatario { color: #E0B15C; }
+  /* tokens com variante por tema (15/09): os hex fixos do tema escuro
+     davam 2,3:1 e 1,8:1 no claro -- ver _paleta_cores.html */
+  .item-parada .remetente { color: var(--remetente); }
+  .item-parada .destinatario { color: var(--destinatario); }
   .item-parada .endereco { color: var(--texto-suave); font-size: 11px; }
   .item-parada.sortable-ghost { opacity: 0.3; }
   .item-parada.sortable-chosen { box-shadow: 0 0 0 2px var(--acento); }
@@ -250,13 +253,16 @@
     border: 1px solid var(--borda);
     border-radius: 50%;
     background: var(--superficie);
-    color: var(--erro);
+    color: var(--erro-texto);
     font-size: 12px;
     font-weight: 700;
     text-align: center;
     cursor: pointer;
     z-index: 2;
   }
+  /* alvo de toque de 28px em volta do "x" de 16px (WCAG 2.5.8 pede 24)
+     sem mudar o desenho -- o pseudo-elemento recebe o clique pelo pai */
+  .botao-cancelar-pedido::before { content: ""; position: absolute; inset: -6px; }
   .botao-cancelar-pedido:hover { background: var(--erro); border-color: var(--erro); color: #fff; }
   /* "só número": sem espaço pro selo de cancelar num chip de 26px --
      cancelamento nessa densidade continua disponível trocando pro
@@ -316,7 +322,7 @@
     cursor: pointer;
   }
   .controle-mapa button:hover { background: var(--fundo); color: var(--texto); }
-  .controle-mapa button.ativo { background: rgba(47,217,174,0.16); color: var(--acento); }
+  .controle-mapa button.ativo { background: rgba(47,217,174,0.16); color: var(--acento-texto); }
   .controle-mapa .separador-controle {
     width: 1px;
     height: 18px;
@@ -332,9 +338,9 @@
     text-align: center;
     border-radius: 100px;
     padding: 0 4px;
-    background: #6B7280;
+    background: var(--numero-fundo);
     color: #fff;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     margin-right: 6px;
     vertical-align: text-bottom;
@@ -386,7 +392,7 @@
     cursor: pointer;
   }
   .botao-filtros:hover { background: var(--fundo); }
-  .botao-filtros.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .botao-filtros.ativo { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
   .badge-filtros {
     display: inline-flex;
     align-items: center;
@@ -397,7 +403,7 @@
     border-radius: 100px;
     background: var(--acento);
     color: #06170F;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
   }
   .barra-selecao { display: flex; gap: 8px; margin-bottom: 10px; }
@@ -414,14 +420,14 @@
   }
   .barra-selecao button:hover { background: var(--fundo); }
   .barra-selecao button:disabled { opacity: 0.5; cursor: default; }
-  #botao-criar-rota-selecao { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  #botao-criar-rota-selecao { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
   /* azul de propósito (mesmo tom do remetente) -- verde é do "Criar rota"
      (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
      pode gerar várias rotas, confundir os dois seria fácil */
-  #botao-roteirizar-selecao { border-color: #6FA0FF; color: #6FA0FF; font-weight: 700; }
+  #botao-roteirizar-selecao { border-color: var(--remetente); color: var(--remetente); font-weight: 700; }
   /* laranja: complementa rascunhos JÁ existentes (não cria rota nenhuma),
      terceira ação da família Criar rota / Roteirizar / Incrementar */
-  #botao-incrementar-selecao { border-color: #F2A65A; color: #F2A65A; font-weight: 700; }
+  #botao-incrementar-selecao { border-color: var(--laranja-texto); color: var(--laranja-texto); font-weight: 700; }
   .filtro-flag {
     display: flex;
     align-items: center;
@@ -438,15 +444,15 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10.5px;
+    font-size: 11px;
     padding: 1px 7px;
     border-radius: 100px;
     margin-top: 3px;
     background: rgba(111,160,255,0.16);
-    color: #6FA0FF;
+    color: var(--remetente);
   }
   .item-parada .agendamento::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 100%; background: currentColor; }
-  .item-parada .agendamento.atrasado { background: rgba(255,92,80,0.18); color: var(--erro); }
+  .item-parada .agendamento.atrasado { background: rgba(255,92,80,0.18); color: var(--erro-texto); }
   .item-parada .agendamento.atrasado::before { border-radius: 0; clip-path: polygon(50% 0, 0 100%, 100% 100%); }
   .item-parada .agendamento.futuro { background: rgba(124,137,160,0.18); color: var(--texto-suave); }
   /* janela de horário do cliente (09/09): neutra quando é só o horário
@@ -456,46 +462,46 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10.5px;
+    font-size: 11px;
     padding: 1px 7px;
     border-radius: 100px;
     margin-top: 3px;
     background: rgba(124,137,160,0.18);
     color: var(--texto-suave);
   }
-  .item-parada .janela.agendada { background: rgba(111,160,255,0.16); color: #6FA0FF; }
-  .item-parada .janela.fora { background: rgba(255,92,80,0.18); color: var(--erro); font-weight: 700; }
+  .item-parada .janela.agendada { background: rgba(111,160,255,0.16); color: var(--remetente); }
+  .item-parada .janela.fora { background: rgba(255,92,80,0.18); color: var(--erro-texto); font-weight: 700; }
   body.cards-compactos .item-parada .janela { margin-top: 0; margin-left: 4px; }
   .item-parada .badge-caixas {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 7px;
     border-radius: 100px;
     margin-top: 3px;
     background: rgba(255,92,80,0.18);
-    color: var(--erro);
+    color: var(--erro-texto);
   }
   .item-parada .badge-caixas::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 2px; background: currentColor; }
   .item-parada .badge-fora-area {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 7px;
     border-radius: 100px;
     margin-top: 3px;
     background: rgba(255,92,80,0.18);
-    color: var(--erro);
+    color: var(--erro-texto);
   }
-  .item-parada .nf-pedido { font-size: 10.5px; color: var(--texto-suave); }
+  .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
      inicia um arrasto (mesmo tratamento do numero-input) */
-  .item-parada .check-parada { vertical-align: text-bottom; margin-right: 5px; cursor: pointer; }
+  .item-parada .check-parada { vertical-align: text-bottom; margin-right: 5px; cursor: pointer; width: 18px; height: 18px; }
   .barra-selecao-rotas {
     display: none;
     align-items: center;
@@ -532,7 +538,7 @@
   }
   .barra-selecao-rotas button:hover { background: var(--fundo); }
   .barra-selecao-rotas button:disabled { opacity: 0.5; cursor: default; }
-  .barra-selecao-rotas #botao-mover-selecionados { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .barra-selecao-rotas #botao-mover-selecionados { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
   .card-rota .linha-fundir { display: flex; gap: 6px; margin-top: 6px; }
   .card-rota .linha-fundir select {
     flex: 1;
@@ -599,7 +605,7 @@
   .capacidade .trilha-cap { flex: 1; min-width: 0; }
   .capacidade .rotulo-cap {
     display: flex; justify-content: space-between; gap: 6px;
-    font-size: 10px; color: var(--texto-suave); margin-bottom: 2px;
+    font-size: 11px; color: var(--texto-suave); margin-bottom: 2px;
     font-variant-numeric: tabular-nums;
   }
   .capacidade .barra-cap { height: 4px; border-radius: 4px; background: var(--fundo); overflow: hidden; }
@@ -620,8 +626,8 @@
   .badge-trava {
     display: inline-block;
     background: rgba(255,92,80,0.18);
-    color: var(--erro);
-    font-size: 10.5px;
+    color: var(--erro-texto);
+    font-size: 11px;
     padding: 2px 7px;
     border-radius: 100px;
     margin: 0 4px 4px 0;
@@ -643,16 +649,16 @@
     cursor: pointer;
   }
   .card-rota .acoes button:hover { background: var(--fundo); }
-  .card-rota .acoes button.perigo { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
+  .card-rota .acoes button.perigo { color: var(--erro-texto); border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
   /* "Confirmar e enviar" é a ação primária do card -- ganha o mesmo
      tratamento "contorno colorido" já usado em Criar rota/Roteirizar
      (verde de propósito, mesma linguagem visual do resto da tela). */
-  .card-rota .acoes .botao-enviar { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  .card-rota .acoes .botao-enviar { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
   .card-rota.enviada { opacity: 0.75; background: var(--fundo); }
   .card-rota.ofertada { border-left: 4px solid var(--acento); background: color-mix(in srgb, var(--acento) 6%, var(--fundo)); }
   .oferta-resumo { font-size: 12px; line-height: 1.5; margin: 6px 0; padding: 6px 8px; border-radius: 6px;
                    background: color-mix(in srgb, var(--acento) 10%, transparent); }
-  .card-rota .acoes .botao-publicar-oferta { border-color: var(--acento); color: var(--acento); }
+  .card-rota .acoes .botao-publicar-oferta { border-color: var(--acento); color: var(--acento-texto); }
   /* variante "perigo" do .botao sólido (base.html só define a cor
      primária) -- usada no botão fixo "Cancelar todas as rotas" */
   button.botao.perigo { background: var(--erro); }
@@ -974,8 +980,8 @@
   #botao-nova-rota { border-style: dashed; background: var(--fundo); }
   .menu-rotas { position: relative; flex: 1 1 auto; display: flex; }
   .menu-rotas.aberto .menu-toggle { border-color: var(--acento); color: var(--acento); font-weight: 700; }
-  .menu-rotas .menu-toggle.risco { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
-  .menu-rotas.aberto .menu-toggle.risco { border-color: var(--erro); color: var(--erro); }
+  .menu-rotas .menu-toggle.risco { color: var(--erro-texto); border-color: color-mix(in srgb, var(--erro) 40%, var(--borda)); }
+  .menu-rotas.aberto .menu-toggle.risco { border-color: var(--erro); color: var(--erro-texto); }
   .menu-rotas .menu-drop {
     display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
     min-width: 225px; background: var(--superficie); border: 1px solid var(--borda);
@@ -1026,7 +1032,34 @@
     padding: 14px 18px;
     margin-bottom: 16px;
   }
-  .resumo-agendados h3 {
+  /* estado vazio da coluna de rotas (15/09) */
+  .vazio-rotas {
+    padding: 18px 14px;
+    border: 1px dashed var(--borda);
+    border-radius: 8px;
+    text-align: center;
+    color: var(--texto-suave);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .vazio-rotas p { margin: 0; }
+  .vazio-rotas p + p { margin-top: 6px; }
+  .vazio-rotas .titulo-vazio { color: var(--texto); font-weight: 600; font-size: 13px; }
+  /* ajuda do pool (15/09): painel abaixo do título, aberto pelo botão "?" */
+  .ajuda-pool {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    background: var(--fundo);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--texto);
+  }
+  .ajuda-pool p { margin: 0; }
+  .ajuda-pool p + p { margin-top: 6px; }
+  .ajuda-pool strong { color: var(--texto); }
+  .resumo-agendados h2 {
     margin: 0 0 10px;
     font-size: 13px;
     color: var(--texto-suave);
@@ -1049,9 +1082,9 @@
   .card-dia-agendado:hover { border-color: var(--acento); }
   .card-dia-agendado.atrasado { border-color: var(--erro); }
   .card-dia-agendado .selo-atraso {
-    color: var(--erro);
+    color: var(--erro-texto);
     font-weight: 700;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     cursor: help;
@@ -1103,7 +1136,7 @@
   @keyframes progresso-indeterminado-planejamento { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
   .barra-agentes-planejamento .etapa button.rodar {
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px;
-    font-size: 10px; line-height: 1; padding: 3px 7px; cursor: pointer; color: var(--texto);
+    font-size: 11px; line-height: 1; padding: 3px 7px; cursor: pointer; color: var(--texto);
   }
   .barra-agentes-planejamento .etapa button.rodar:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
   .barra-agentes-planejamento .etapa button.rodar:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1265,6 +1298,17 @@
     border: 1px solid var(--borda); border-radius: 6px;
     font-size: 12.5px; font-family: inherit; background: var(--fundo); color: var(--texto);
   }
+  .modal-editar-endereco select {
+    width: 100%; padding: 6px 8px;
+    border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: var(--fundo); color: var(--texto);
+  }
+  .modal-editar-endereco .transportadora-endereco {
+    margin: 0; padding: 6px 8px; min-height: 30px;
+    border: 1px dashed var(--borda); border-radius: 6px;
+    font-size: 12px; color: var(--texto-suave); background: var(--fundo);
+  }
+  .modal-editar-endereco .acoes button:disabled { opacity: 0.5; cursor: not-allowed; }
   .modal-editar-endereco .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-editar-endereco .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-editar-endereco .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
@@ -1371,7 +1415,12 @@
     max-width: none; border-radius: 0;
     padding: 0 8px calc(76px + env(safe-area-inset-bottom, 0px));
   }
-  html.modo-mobile main h1 { display: none !important; }  /* o h1 tem display:flex inline */
+  /* o h1 some da tela mas fica pro leitor de tela (era display:none, que
+     deixava a página sem h1 no celular) */
+  html.modo-mobile main h1 {
+    position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
   /* topo fixo: data + chips de KPI numa linha que rola de lado */
   html.modo-mobile .barra-controle {
     position: sticky; top: 0; z-index: 70;
@@ -1380,7 +1429,17 @@
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   html.modo-mobile .barra-controle::-webkit-scrollbar { display: none; }
-  html.modo-mobile .barra-controle > label[for="data"],
+  /* degradê na borda direita: a tira rola de lado com a barra de rolagem
+     escondida, sem ele nada indica que há mais chips à direita */
+  html.modo-mobile .barra-controle {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  /* o rótulo "Data:" sai da tela mas continua ligado ao campo pro leitor de tela */
+  html.modo-mobile .barra-controle > label[for="data"] {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
   html.modo-mobile .barra-controle > button.botao,
   html.modo-mobile .barra-controle .toggle-compacto,
   html.modo-mobile .resumo-regioes-ofertas { display: none; }
@@ -1405,7 +1464,7 @@
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
     padding: 12px; margin-bottom: 10px;
   }
-  html.modo-mobile .painel-mais-mobile h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); }
+  html.modo-mobile .painel-mais-mobile h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); }
   html.modo-mobile .painel-mais-mobile .linha { display: flex; flex-wrap: wrap; gap: 8px; }
   html.modo-mobile .painel-mais-mobile .linha > a,
   html.modo-mobile .painel-mais-mobile .linha > button {
@@ -1413,7 +1472,7 @@
     border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); color: var(--texto);
     text-decoration: none; font-size: 13px; font-family: inherit; cursor: pointer; padding: 6px 10px;
   }
-  html.modo-mobile .painel-mais-mobile .linha > button.ativo { border-color: var(--acento); color: var(--acento); font-weight: 700; }
+  html.modo-mobile .painel-mais-mobile .linha > button.ativo { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
   html.modo-mobile .painel-mais-mobile form { display: contents; }
   /* colunas viram painéis */
   html.modo-mobile .layout-planejamento { display: block !important; }
@@ -1437,16 +1496,22 @@
   }
   html.modo-mobile .abas-mobile button {
     flex: 1; min-height: 58px; border: none; background: none; color: var(--texto-suave);
-    font-family: inherit; font-size: 10.5px; font-weight: 600; display: flex; flex-direction: column;
+    font-family: inherit; font-size: 11px; font-weight: 600; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 3px; cursor: pointer; position: relative; padding: 0;
   }
   html.modo-mobile .abas-mobile button svg { width: 20px; height: 20px; }
-  html.modo-mobile .abas-mobile button.ativo { color: var(--acento); }
+  html.modo-mobile .abas-mobile button.ativo { color: var(--acento-texto); }
+  /* traço em cima da aba ativa: cor sozinha não pode ser o único sinal (WCAG 1.4.1) */
+  html.modo-mobile .abas-mobile button.ativo::before {
+    content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 28px; height: 3px; border-radius: 0 0 3px 3px; background: var(--acento);
+  }
   html.modo-mobile .abas-mobile .cont {
     position: absolute; top: 7px; left: calc(50% + 8px); min-width: 16px; height: 16px; line-height: 16px;
-    padding: 0 4px; border-radius: 100px; background: var(--erro); color: #fff; font-size: 10px; font-weight: 700; text-align: center;
+    padding: 0 4px; border-radius: 100px; background: var(--erro); color: #1A0705; font-size: 11px; font-weight: 700; text-align: center;
   }
-  html.modo-mobile .abas-mobile .cont.neutro { background: var(--texto-suave); }
+  /* texto escuro no vermelho (branco dava 4,0:1) e fundo/texto invertidos no neutro */
+  html.modo-mobile .abas-mobile .cont.neutro { background: var(--texto); color: var(--superficie); }
   html.modo-mobile .abas-mobile .cont.zero { display: none; }
   /* barras de seleção viram rodapé flutuante acima das abas; a do pool só
      aparece com algo selecionado (body.tem-selecao-pool) e vale também na
@@ -1494,7 +1559,7 @@
 {% block conteudo %}
 <h1 style="font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:12px;">
   Planejamento de Rotas
-  <a href="{{ url_for('planejamento', data=data_alvo_input, modo='mobile') }}" title="Versão celular (a mesma tela em abas Pool / Rotas / Mapa / Mais; no celular entra sozinha)" style="font-size:12px;font-weight:600;color:var(--acento);text-decoration:none;">📱 mobile</a>
+  <a href="{{ url_for('planejamento', data=data_alvo_input, modo='mobile') }}" title="Versão celular (a mesma tela em abas Pool / Rotas / Mapa / Mais; no celular entra sozinha)" style="font-size:12px;font-weight:600;color:var(--acento-texto);text-decoration:none;">📱 mobile</a>
 </h1>
 
 <form class="barra-controle" method="GET" action="{{ url_for('planejamento') }}">
@@ -1551,7 +1616,7 @@
    também só aparecem nesta aba (CSS). #}
 <div class="painel-mais-mobile" id="painel-mais-mobile">
   <div class="cartao-mais">
-    <h3>Cards de pedido</h3>
+    <h2>Cards de pedido</h2>
     <div class="linha densidade-mobile">
       <button type="button" data-densidade="normal">Normais</button>
       <button type="button" data-densidade="compacto">Compactos</button>
@@ -1559,7 +1624,7 @@
     </div>
   </div>
   <div class="cartao-mais">
-    <h3>Painel</h3>
+    <h2>Painel</h2>
     <div class="linha">
       <a href="{{ url_for('torre_mobile') }}">Torre de Controle</a>
       <a href="{{ url_for('planejamento', data=data_alvo_input, modo='desktop') }}">Versão desktop</a>
@@ -1570,6 +1635,9 @@
 </div>
 
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
+{# região viva (15/09): a barra acima é reescrita inteira a cada
+   consulta, então o leitor de tela recebe só o resumo do que MUDOU #}
+<div id="anuncio-agentes" class="oculto-acessivel" aria-live="polite"></div>
 
 <div class="painel-importacao-filtro" id="painel-importacao-filtro">
   <strong>Importação com filtro</strong>
@@ -1713,6 +1781,28 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-editar-endereco">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-editar-endereco">Salvar endereço</button>
+    </div>
+  </div>
+</div>
+
+{# Transportadora de redespacho (Hugo, 16/09): mesmo esqueleto visual do
+   modal de endereço. Só TERCEIROS da BD_TRANSPORTADORAS entram no select;
+   escolher uma troca o endereço do pedido pelo galpão dela. #}
+<div class="modal-overlay-editar-endereco" id="modal-transportadora">
+  <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-transportadora">
+    <h2 id="titulo-modal-transportadora">Transportadora (redespacho)</h2>
+    <p class="subtitulo"><span id="transportadora-prefixo">Pedido</span> <strong id="transportadora-codigo"></strong> — o endereço de entrega passa a ser o galpão da transportadora escolhida (gravado direto na VUUPT). Só transportadoras TERCEIROS da planilha BD_TRANSPORTADORAS.</p>
+    <div class="campo-reagendar">
+      <label for="transportadora-select">Transportadora</label>
+      <select id="transportadora-select"><option value="">Carregando…</option></select>
+    </div>
+    <div class="campo-reagendar">
+      <label>Endereço que será aplicado</label>
+      <p class="transportadora-endereco" id="transportadora-endereco">—</p>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-transportadora">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-transportadora" disabled>Aplicar redespacho</button>
     </div>
   </div>
 </div>
@@ -1873,7 +1963,22 @@
       </div>` : "";
 
     document.getElementById("barra-agentes-planejamento").innerHTML = cards + etapaTudo;
+
+    // anuncia só a mudança de estado (rodando / na fila / terminou), não
+    // a barra inteira a cada consulta
+    const rodando = etapas.filter(e => e.rodando).map(e => e.titulo);
+    const naFila = etapas.filter(e => e.na_fila).map(e => e.titulo);
+    let resumo = "";
+    if (rodando.length) resumo += `Rodando: ${rodando.join(", ")}.`;
+    if (naFila.length) resumo += ` Na fila: ${naFila.join(", ")}.`;
+    if (!resumo && ultimoAnuncioAgentes) resumo = "Agentes terminaram.";
+    if (resumo !== ultimoAnuncioAgentes) {
+      ultimoAnuncioAgentes = resumo;
+      const anuncio = document.getElementById("anuncio-agentes");
+      if (anuncio) anuncio.textContent = resumo;
+    }
   }
+  let ultimoAnuncioAgentes = "";
 
   async function carregarAgentesPlanejamento() {
     try {
@@ -2037,7 +2142,12 @@
     function definirAba(aba, salvar) {
       if (!temLayout && aba !== "mais") aba = "mais";
       html.dataset.aba = aba;
-      nav.querySelectorAll("button").forEach(function(b) { b.classList.toggle("ativo", b.dataset.aba === aba); });
+      nav.querySelectorAll("button").forEach(function(b) {
+        var ativa = b.dataset.aba === aba;
+        b.classList.toggle("ativo", ativa);
+        // leitor de tela: "Pool, página atual" em vez de quatro botões iguais
+        if (ativa) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+      });
       if (salvar) { try { sessionStorage.setItem(CHAVE, aba); } catch (e) {} }
       alturaTopo();
       window.scrollTo(0, 0);
@@ -2076,13 +2186,20 @@
 <div class="layout-planejamento" id="layout-planejamento">
   <div class="coluna" id="coluna-pool">
     <div class="rotulo-vertical">Pool — não alocados</div>
-    <h3>
+    <h2>
       <span>Pool — não alocados <span id="contagem-pool">{{ dados.pool|length }}</span></span>
       <span class="botoes-h3">
-        <button type="button" class="botao-mini" title='Clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto correspondente no mapa. O pool mostra TODO pedido não alocado, inclusive agendado pra depois da data em edição (badge cinza "Agendado dd/mm") -- pode arrastar pra uma rota normalmente, pra adiantar a entrega. Os pedidos ficam divididos em 2 blocos: "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro) -- cada bloco colapsa e tem seu próprio botão "Selecionar". No mapa: "Não alocados" mostra o pool em vermelho, "Alocados" mostra/oculta os pontos e trajetos das rotas já montadas, "Agendados (futuro)" mostra/oculta especificamente os agendados pra depois (ficam ocultos por padrão pra não poluir o mapa), "Enviadas" mostra/oculta as rotas já enviadas à VUUPT, e "Selecionar área" laça vários de uma vez — cada clique no mapa é um vértice do polígono, duplo clique (ou o próprio botão) conclui, Esc cancela.'>?</button>
-        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+        <button type="button" class="botao-mini" id="botao-ajuda-pool" aria-label="Como usar o pool" aria-expanded="false" aria-controls="ajuda-pool" title="Como usar o pool">?</button>
+        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="pool" aria-label="Colapsar a coluna do pool" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
       </span>
-    </h3>
+    </h2>
+    {# Ajuda do pool (15/09): era um title de 900 caracteres no botão "?"
+       -- não abre no toque e o leitor de tela lia tudo como nome do botão. #}
+    <div class="ajuda-pool" id="ajuda-pool" hidden>
+      <p><strong>Selecionar:</strong> clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto no mapa.</p>
+      <p><strong>Blocos:</strong> "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro, badge cinza). Cada bloco colapsa e tem o próprio "Selecionar". Dá pra arrastar um agendado pra depois pra uma rota, pra adiantar a entrega.</p>
+      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão). "Selecionar área" laça vários de uma vez: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
+    </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <div class="linha-busca-pool">
       <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
@@ -2097,6 +2214,7 @@
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco separado de Refrigerado/Congelado), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
       <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — sem teto de pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
+      <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
          no lugar do arrastar pool→rota, que não existe entre abas #}
@@ -2152,13 +2270,13 @@
 
   <div class="coluna" id="coluna-rotas">
     <div class="rotulo-vertical">Rotas (rascunho)</div>
-    <h3>
+    <h2>
       <span>Rotas (rascunho)</span>
       <span class="botoes-h3">
         <button type="button" id="botao-colapsar-todas" class="botao-mini" title="Colapsa (ou expande) todos os cards de rota de uma vez — cada card também colapsa individualmente clicando no cabeçalho">Colapsar todas</button>
-        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="rotas" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
+        <button type="button" class="botao-mini botao-colapsar-coluna" data-coluna="rotas" aria-label="Colapsar a coluna de rotas" title="Colapsar a coluna — clique na faixa pra reabrir">«</button>
       </span>
-    </h3>
+    </h2>
     {# Cockpit compacto (Hugo, 30/08): a pilha de botões de lote virou
        "+ Nova rota" + 3 menus; só o CTA "Confirmar e enviar todas"
        continua sempre à vista. Os botões são os MESMOS elementos/IDs de
@@ -2213,10 +2331,17 @@
       <select id="select-destino-mover"><option value="">Mover pra...</option></select>
       <button type="button" id="botao-mover-selecionados" disabled>Mover</button>
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
+      <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
+    {# estado vazio (15/09): sem rascunho a coluna era uma toolbar e um
+       vazio; preenchido/escondido pelo JS (initMap) conforme RASCUNHOS #}
+    <div class="vazio-rotas" id="vazio-rotas" hidden>
+      <p class="titulo-vazio">Nenhuma rota rascunho pra <span id="vazio-rotas-data"></span>.</p>
+      <p>Selecione pedidos no pool e clique em <strong>Criar rota</strong>, ou rode <strong>Criar Rotas Diárias (Rascunho)</strong> na barra de agentes pra montar todas de uma vez.</p>
+    </div>
   </div>
 
   <div class="divisor" data-coluna="rotas" title="Arraste pra ajustar a largura das rotas; duplo clique volta pro padrão"></div>
@@ -2257,7 +2382,9 @@
                 "#3F560B", "#5FBB17", "#169549", "#02B1A3", "#00899A",
                 "#16C2F1", "#07608C", "#1C92E7", "#074CDE", "#A39EFC",
                 "#533784", "#A157C4", "#E556E0", "#A52E81", "#F97FB2"];
-  const COR_NAO_ALOCADO = "#E1483D";
+  // 15/09: era #E1483D (branco em cima dava 4,0:1 no número do card); o
+  // tom mais fechado vale pro ponto no mapa também, continua "vermelho"
+  const COR_NAO_ALOCADO = "#C0392B";
   const COR_SELECIONADO = "#2FD9AE";
   const ICONES_NUMERADOS = {};
   const ICONES_DESTAQUE = {};
@@ -2387,7 +2514,7 @@
     // de rota editável (nunca no pool, que já tem o próprio mecanismo de
     // seleção por clique; ver opts.emRota em criarLiParada/criarCardRota)
     const checkSelecao = opts.emRota
-      ? `<input type="checkbox" class="check-parada" title="Selecionar pra mover pra outra rota">`
+      ? `<input type="checkbox" class="check-parada" aria-label="Selecionar ${escaparHtml(p.codigo)} pra mover pra outra rota" title="Selecionar pra mover pra outra rota">`
       : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
@@ -2589,11 +2716,17 @@
     // vira um campo editável -- trocar o número move a parada pra lá.
     const enviada = !!ul.closest(".card-rota.enviada");
     const lis = Array.from(ul.children);
-    const cor = coresPorRascunho[rascunhoId] || "#6B7280";
+    const corRota = coresPorRascunho[rascunhoId] || "#6B7280";
     lis.forEach((li, i) => {
       li.dataset.numero = i + 1;
       const el = li.querySelector(".numero");
       if (!el) return;
+      // pedido selecionado dentro da rota ganha o mesmo verde do pool
+      // (Hugo, 16/09): é o único sinal visível no modo "só número", onde
+      // .selecionada e o checkbox ficam escondidos. Reaplicado a cada
+      // renumeração, que é quem reescreve a cor (arrasto, reordenação).
+      const selecionado = SELECIONADOS_ROTA.has(Number(li.dataset.serviceId));
+      const cor = selecionado ? COR_SELECIONADO : corRota;
       if (modoOrdenacao === "numero" && !enviada && PODE_EDITAR) {
         el.classList.add("como-input");
         el.innerHTML = `<input class="numero-input" type="number" min="1" max="${lis.length}"
@@ -2602,6 +2735,7 @@
         el.classList.remove("como-input");
         el.textContent = i + 1;
         el.style.background = cor;
+        el.style.color = selecionado ? "#06170F" : "";
       }
     });
   }
@@ -3301,7 +3435,10 @@
       if (!el) return;
       el.classList.remove("como-input");
       el.textContent = li.dataset.numero;
-      el.style.background = SELECIONADOS.has(Number(li.dataset.serviceId)) ? COR_SELECIONADO : COR_NAO_ALOCADO;
+      const selecionado = SELECIONADOS.has(Number(li.dataset.serviceId));
+      el.style.background = selecionado ? COR_SELECIONADO : COR_NAO_ALOCADO;
+      // texto escuro sobre o verde-claro (branco dava 1,7:1); branco sobre o vermelho
+      el.style.color = selecionado ? "#06170F" : "#fff";
     });
   }
 
@@ -3410,6 +3547,7 @@
     botaoIncrementar.disabled = SELECIONADOS.size === 0 || !temRascunhoEditavel;
     botaoIncrementar.textContent = SELECIONADOS.size ? `Incrementar (${SELECIONADOS.size})` : "Incrementar";
     document.getElementById("botao-editar-endereco-selecao").disabled = SELECIONADOS.size === 0;
+    document.getElementById("botao-transportadora-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
     // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
@@ -3574,7 +3712,7 @@
       li.dataset.prevista = mPrev ? `${mPrev[3]}-${mPrev[2]}-${mPrev[1]}` : "";
       const check = PODE_EDITAR_AGENTES
         ? `<label class="check-retirada" title="Marcar pra expedir na Stokki (a pessoa veio buscar)">
-             <input type="checkbox" data-codigo="${escaparHtml(p.codigo)}" ${marcada ? "checked" : ""}></label>`
+             <input type="checkbox" data-codigo="${escaparHtml(p.codigo)}" aria-label="Marcar ${escaparHtml(p.codigo)} pra expedir" ${marcada ? "checked" : ""}></label>`
         : "";
       const nf = p.numero_nf ? ` <span class="nf">NF ${escaparHtml(p.numero_nf)}</span>` : "";
       const destinatario = p.destinatario_nome ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>` : "";
@@ -4263,6 +4401,7 @@
     if (valorAtual) select.value = valorAtual;
     document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !select.value;
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    document.getElementById("botao-transportadora-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
   }
 
@@ -4276,16 +4415,28 @@
     li.classList.toggle("selecionada", selecionado);
     const check = li.querySelector(".check-parada");
     if (check) check.checked = selecionado;
+    renumerarRotaDoLi(li);  // repinta o chip (verde = selecionado)
     atualizarBarraSelecaoRotas();
+  }
+
+  // repinta os números da rota que contém o card (cor do chip depende
+  // de SELECIONADOS_ROTA, ver renumerarRotaEl)
+  function renumerarRotaDoLi(li) {
+    const ul = li.closest(".lista-paradas");
+    if (ul && ul.dataset.listId !== "pool") renumerarRotaEl(ul, Number(ul.dataset.listId));
   }
 
   function limparSelecaoRotas() {
     SELECIONADOS_ROTA.clear();
+    const rotasTocadas = new Set();
     document.querySelectorAll("#lista-rotas .item-parada.selecionada").forEach(li => {
       li.classList.remove("selecionada");
       const check = li.querySelector(".check-parada");
       if (check) check.checked = false;
+      const ul = li.closest(".lista-paradas");
+      if (ul) rotasTocadas.add(ul);
     });
+    rotasTocadas.forEach(ul => renumerarRotaEl(ul, Number(ul.dataset.listId)));
     atualizarBarraSelecaoRotas();
   }
 
@@ -5038,6 +5189,83 @@
     }
   }
 
+  // ---- Transportadora de redespacho (Hugo, 16/09) -------------------
+  // "Alterar a transportadora" do pedido: não existe campo de
+  // transportadora na VUUPT nem no núcleo -- o que o resto do sistema
+  // reconhece (canhoteira, notificação de XML) é o ENDEREÇO batendo
+  // com o galpão da planilha. Então escolher a transportadora aplica o
+  // endereço do galpão dela pelo mesmo caminho do "Editar endereço".
+  // Um modal só pra 1 pedido (menu de contexto) ou lote (barras).
+  let transportadoraPendente = null;   // { itens: [{service_id, rascunho_id}] }
+  let TRANSPORTADORAS_TERCEIROS = null; // cache da lista, carregada 1x por página
+
+  async function carregarTransportadorasTerceiros() {
+    if (TRANSPORTADORAS_TERCEIROS) return TRANSPORTADORAS_TERCEIROS;
+    const resp = await fetch(BASE_PATH + "/api/planejamento/transportadoras-terceiros");
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao carregar transportadoras");
+    TRANSPORTADORAS_TERCEIROS = dados.transportadoras || [];
+    return TRANSPORTADORAS_TERCEIROS;
+  }
+
+  function atualizarPreviaTransportadora() {
+    const select = document.getElementById("transportadora-select");
+    const escolhida = (TRANSPORTADORAS_TERCEIROS || []).find(t => t.nome === select.value);
+    document.getElementById("transportadora-endereco").textContent = escolhida ? escolhida.endereco : "—";
+    document.getElementById("botao-confirmar-transportadora").disabled = !escolhida;
+  }
+
+  async function abrirModalTransportadora(itens, rotulo) {
+    if (!itens.length) return;
+    const lote = itens.length > 1 || !rotulo;  // barra de seleção não passa rótulo
+    document.getElementById("transportadora-prefixo").textContent = lote ? "Lote de" : "Pedido";
+    document.getElementById("transportadora-codigo").textContent =
+      lote ? `${itens.length} pedido(s) selecionado(s)` : rotulo;
+    transportadoraPendente = { itens };
+    const select = document.getElementById("transportadora-select");
+    select.innerHTML = `<option value="">Carregando…</option>`;
+    atualizarPreviaTransportadora();
+    document.getElementById("modal-transportadora").classList.add("aberto");
+    try {
+      const lista = await carregarTransportadorasTerceiros();
+      if (!lista.length) {
+        select.innerHTML = `<option value="">Nenhuma TERCEIROS com endereço na BD_TRANSPORTADORAS</option>`;
+        return;
+      }
+      select.innerHTML = `<option value="">Escolha a transportadora…</option>` +
+        lista.map(t => `<option value="${escaparHtml(t.nome)}">${escaparHtml(t.nome)}</option>`).join("");
+      select.focus();
+    } catch (e) {
+      select.innerHTML = `<option value="">Falha ao carregar: ${escaparHtml(e.message)}</option>`;
+    }
+  }
+
+  async function confirmarEditarTransportadora(botao) {
+    const pendente = transportadoraPendente;
+    if (!pendente) return;
+    const transportadora = document.getElementById("transportadora-select").value;
+    if (!transportadora) { alert("Escolha a transportadora."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Aplicando...";
+    try {
+      const resp = await postJSON("/api/planejamento/editar-transportadora", { itens: pendente.itens, transportadora });
+      document.getElementById("modal-transportadora").classList.remove("aberto");
+      const falhas = resp.falhas || [];
+      if (falhas.length) {
+        alert(`Redespacho aplicado, mas ${falhas.length} de ${pendente.itens.length} pedido(s) falharam:\n` +
+          falhas.map(f => `#${f.service_id}: ${f.erro}`).join("\n"));
+      }
+      // recarrega -- mesmo motivo do confirmarEditarEndereco (CEP e
+      // agrupamento por endereço mudam)
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao aplicar a transportadora: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // pedido tendo nível/horário do CLIENTE editados pelo modal -- mesmo
   // padrão de editarEnderecoPendente. Sem versão em lote: diferente de
   // endereço/agendamento, "mesmo nível pra vários pedidos DE CLIENTES
@@ -5125,6 +5353,8 @@
     if (!el) {
       el = document.createElement("div");
       el.id = "toast-planejamento";
+      // leitor de tela anuncia o texto sem roubar o foco (WCAG 4.1.3)
+      el.setAttribute("role", "status");
       // no celular sobe pra não cobrir a barra de abas (Pool/Rotas/...)
       el.style.cssText = `position:fixed;left:50%;bottom:${MODO_MOBILE ? 84 : 24}px;transform:translateX(-50%);z-index:100000;padding:10px 16px;border-radius:8px;font-size:13px;max-width:min(92vw,520px);white-space:pre-line;box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;transition:opacity .25s;`;
       document.body.appendChild(el);
@@ -5279,6 +5509,9 @@
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Editar endereço", acao: () => abrirModalEditarEndereco(li, serviceId, rascunhoId) });
+      itens.push({ rotulo: "Transportadora (redespacho)", acao: () => abrirModalTransportadora(
+        [{ service_id: serviceId, rascunho_id: rascunhoId }],
+        li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Nível / horário de atendimento", acao: () => abrirModalNivelHorario(li, serviceId, rascunhoId) });
@@ -5602,6 +5835,9 @@
     document.getElementById("botao-editar-endereco-selecao").addEventListener("click", () => {
       abrirModalEditarEnderecoLote(itensDoPoolSelecionado());
     });
+    document.getElementById("botao-transportadora-selecao").addEventListener("click", () => {
+      abrirModalTransportadora(itensDoPoolSelecionado());
+    });
     document.getElementById("botao-reagendar-selecao").addEventListener("click", () => {
       abrirModalReagendarLote(itensDoPoolSelecionado());
     });
@@ -5647,6 +5883,14 @@
       { rotulo: "Pendentes de envio", itens: RASCUNHOS.filter(r => r.status !== "ENVIADO") },
       { rotulo: "Enviadas", itens: RASCUNHOS.filter(r => r.status === "ENVIADO") },
     ];
+    const vazioRotas = document.getElementById("vazio-rotas");
+    if (vazioRotas) {
+      vazioRotas.hidden = RASCUNHOS.length > 0;
+      const campoData = document.getElementById("data");
+      const partesData = (campoData && campoData.value || "").split("-");
+      const dataEl = document.getElementById("vazio-rotas-data");
+      if (dataEl) dataEl.textContent = partesData.length === 3 ? `${partesData[2]}/${partesData[1]}` : "essa data";
+    }
     gruposRotas.forEach(({ rotulo, itens }) => {
       if (!itens.length) return;
       const divisorGrupo = document.createElement("div");
@@ -5891,6 +6135,9 @@
     document.getElementById("botao-editar-endereco-selecao-rotas").addEventListener("click", () => {
       abrirModalEditarEnderecoLote(itensDaRotaSelecionada());
     });
+    document.getElementById("botao-transportadora-selecao-rotas").addEventListener("click", () => {
+      abrirModalTransportadora(itensDaRotaSelecionada());
+    });
     document.getElementById("botao-reagendar-selecao-rotas").addEventListener("click", () => {
       abrirModalReagendarLote(itensDaRotaSelecionada());
     });
@@ -5918,6 +6165,12 @@
       editarEnderecoPendente = null;
     });
     document.getElementById("botao-confirmar-editar-endereco").addEventListener("click", (e) => confirmarEditarEndereco(e.target));
+    document.getElementById("botao-cancelar-transportadora").addEventListener("click", () => {
+      document.getElementById("modal-transportadora").classList.remove("aberto");
+      transportadoraPendente = null;
+    });
+    document.getElementById("transportadora-select").addEventListener("change", atualizarPreviaTransportadora);
+    document.getElementById("botao-confirmar-transportadora").addEventListener("click", (e) => confirmarEditarTransportadora(e.target));
     document.getElementById("botao-cancelar-nivel-horario").addEventListener("click", () => {
       document.getElementById("modal-nivel-horario").classList.remove("aberto");
       nivelHorarioPendente = null;
@@ -6037,10 +6290,84 @@
       esconderDetalhesParada();
     });
   }
+
+  // Foco dos diálogos (15/09, auditoria a11y): os 7 modais abrem por
+  // classList.add("aberto") em lugares diferentes, então um observador
+  // de classe cobre todos sem tocar em cada abrir/fechar. Ao abrir: guarda
+  // quem tinha o foco e foca o 1º campo do diálogo; Tab fica preso dentro;
+  // Esc aciona o botão .cancelar (mesmo caminho do clique, com a limpeza
+  // de estado que cada um faz); ao fechar: devolve o foco à origem.
+  (function() {
+    const overlays = document.querySelectorAll('[class^="modal-overlay-"]');
+    if (!overlays.length) return;
+    const FOCAVEIS = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const origemPorOverlay = new WeakMap();
+    function visiveis(dialogo) {
+      return Array.from(dialogo.querySelectorAll(FOCAVEIS)).filter(el => el.offsetParent !== null);
+    }
+    function aoAbrir(overlay) {
+      const dialogo = overlay.querySelector('[role="dialog"]') || overlay;
+      origemPorOverlay.set(overlay, document.activeElement);
+      const alvos = visiveis(dialogo);
+      // 1º campo editável; se não houver, o botão de confirmar; senão o título
+      const primeiro = alvos.find(el => /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== "checkbox" && el.type !== "radio")
+        || alvos.find(el => el.classList.contains("confirmar")) || alvos[0];
+      if (primeiro) setTimeout(() => primeiro.focus(), 0);
+    }
+    function aoFechar(overlay) {
+      const origem = origemPorOverlay.get(overlay);
+      origemPorOverlay.delete(overlay);
+      if (origem && document.contains(origem) && typeof origem.focus === "function") origem.focus();
+    }
+    const observador = new MutationObserver(mutacoes => {
+      mutacoes.forEach(m => {
+        const overlay = m.target;
+        const aberto = overlay.classList.contains("aberto");
+        if (aberto === !!overlay._abertoA11y) return;
+        overlay._abertoA11y = aberto;
+        if (aberto) aoAbrir(overlay); else aoFechar(overlay);
+      });
+    });
+    overlays.forEach(o => { o._abertoA11y = o.classList.contains("aberto"); observador.observe(o, { attributes: true, attributeFilter: ["class"] }); });
+    document.addEventListener("keydown", (e) => {
+      const overlay = Array.from(overlays).find(o => o.classList.contains("aberto"));
+      if (!overlay) return;
+      const dialogo = overlay.querySelector('[role="dialog"]') || overlay;
+      if (e.key === "Escape") {
+        const cancelar = dialogo.querySelector("button.cancelar");
+        if (cancelar) { e.preventDefault(); e.stopPropagation(); cancelar.click(); }
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const alvos = visiveis(dialogo);
+      if (!alvos.length) return;
+      const primeiro = alvos[0], ultimo = alvos[alvos.length - 1];
+      if (!dialogo.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? ultimo : primeiro).focus(); return; }
+      if (e.shiftKey && document.activeElement === primeiro) { e.preventDefault(); ultimo.focus(); }
+      else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primeiro.focus(); }
+    }, true);
+  })();
+
+  // Botão "?" do pool abre/fecha o painel de ajuda (era só title)
+  (function() {
+    const botao = document.getElementById("botao-ajuda-pool");
+    const painel = document.getElementById("ajuda-pool");
+    if (!botao || !painel) return;
+    botao.addEventListener("click", () => {
+      const abrir = painel.hidden;
+      painel.hidden = !abrir;
+      botao.setAttribute("aria-expanded", abrir ? "true" : "false");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !painel.hidden) { painel.hidden = true; botao.setAttribute("aria-expanded", "false"); botao.focus(); }
+    });
+  })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+{# integrity (15/09): hash sha384 do Sortable.min.js 1.15.2 baixado do
+   jsdelivr -- se o CDN entregar outro arquivo, o navegador recusa #}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" integrity="sha384-BSxuMLxX+FCbTdYec3TbXlnMGEEM2QXTFdtDaveen71o+jswm2J36+xFqp8k4VHM" crossorigin="anonymous"></script>
 <script async
-  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap">
+  src="https://maps.googleapis.com/maps/api/js?key={{ dados.google_maps_key }}&callback=initMap&loading=async">
 </script>
 {% endif %}
 {% endblock %}

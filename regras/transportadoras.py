@@ -436,6 +436,49 @@ class CatalogoTransportadoras:
         """
         return [n for n in nomes if _normalizar(n) not in self._indice]
 
+    # ── Escolha manual de redespacho (tela de planejamento) ───────────────
+
+    def _terceiros_com_endereco(self) -> list[_Entrada]:
+        """Linhas TERCEIROS que têm endereço de galpão preenchido (logradouro
+        ou número) -- só essas servem pra trocar o endereço de um pedido."""
+        return [
+            e for e in self._entradas
+            if e.tipo == "TERCEIROS" and e.endereco
+            and (e.endereco.logradouro or e.endereco.numero)
+        ]
+
+    def listar_terceiros(self) -> list[dict]:
+        """
+        Transportadoras TERCEIROS com endereço de redespacho, pra escolher
+        na tela de planejamento (opção "Transportadora (redespacho)" do
+        menu de contexto, Hugo 16/09). Cada item: {"nome", "endereco"}
+        (endereço já formatado como vai pra VUUPT). Uma linha por nome
+        (a planilha repete grafias), em ordem alfabética.
+        """
+        vistos: dict[str, dict] = {}
+        for e in self._terceiros_com_endereco():
+            chave = e.nome_original.strip().casefold()
+            if chave not in vistos:
+                vistos[chave] = {"nome": e.nome_original.strip(), "endereco": str(e.endereco)}
+        return sorted(vistos.values(), key=lambda t: t["nome"].casefold())
+
+    def endereco_terceiros(self, nome: str) -> EnderecoRedespacho | None:
+        """
+        Endereço do galpão da transportadora TERCEIROS escolhida pelo nome
+        exato da planilha (o que listar_terceiros devolve), tolerando
+        caixa e espaços. Nome que não é TERCEIROS, sem endereço ou
+        desconhecido -> None. Diferente de resolver(): aqui não há
+        normalização de sufixos nem CNPJ -- a escolha foi feita numa lista
+        fechada, então o casamento é literal de propósito.
+        """
+        chave = (nome or "").strip().casefold()
+        if not chave:
+            return None
+        for e in self._terceiros_com_endereco():
+            if e.nome_original.strip().casefold() == chave:
+                return e.endereco
+        return None
+
 
 # ── Pontos de redespacho (batimento por endereço) ─────────────────────────────
 

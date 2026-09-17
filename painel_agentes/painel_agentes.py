@@ -65,7 +65,7 @@ from planejamento_rotas import (
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
-    editar_nivel_horario_pedido,
+    editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
@@ -2308,6 +2308,46 @@ def api_editar_endereco_lote():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"]})
+
+
+@app.route("/api/planejamento/transportadoras-terceiros")
+@requer_auth(niveis=("total", "operador"))
+def api_transportadoras_terceiros():
+    """Opções do modal "Transportadora (redespacho)" da tela de
+    planejamento: TERCEIROS da BD_TRANSPORTADORAS com endereço de galpão
+    (ver planejamento_rotas.listar_transportadoras_terceiros)."""
+    return jsonify({"transportadoras": listar_transportadoras_terceiros()})
+
+
+@app.route("/api/planejamento/editar-transportadora", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_editar_transportadora():
+    """Troca o endereço dos pedidos pelo galpão da transportadora TERCEIROS
+    escolhida -- opção "Transportadora (redespacho)" do menu de contexto
+    e das barras de seleção (ver
+    planejamento_rotas.editar_transportadora_pedidos). Mesmo contrato do
+    editar-endereco-lote: itens + falhas por pedido."""
+    body = request.get_json(force=True)
+    try:
+        itens = [
+            {"service_id": int(it["service_id"]),
+             "rascunho_id": int(it["rascunho_id"]) if it.get("rascunho_id") is not None else None}
+            for it in body["itens"]
+        ]
+        transportadora = body["transportadora"]
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+
+    try:
+        resultado = editar_transportadora_pedidos(itens, transportadora)
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao editar transportadora")
+        return jsonify({"erro": str(e)}), 500
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"ok": True, "falhas": resultado["falhas"], "endereco": resultado["endereco"]})
 
 
 # ── Galpão: endereçamento de produtos (WMS, Hugo 04/09) ─────────────────────
