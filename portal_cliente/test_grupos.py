@@ -296,5 +296,37 @@ class ValidarItemDoGrupoTest(unittest.TestCase):
         self.assertTrue(self.ep.validar_item(self.conn, self.item, MEMBRO_A)["ok"])
 
 
+class EnviarLinkParaTest(_BancoTemporario):
+    """`enviar-link --para`: o convite vai pra quem o Hugo indicar (ele repassa
+    ao cliente), nunca pros e-mails do cadastro."""
+
+    def _rodar(self, *args):
+        import gerenciar_clientes as cli
+        cfg = {"portal_cliente": {"secret_key": "segredo-de-teste", "url_base": "https://exemplo/cliente"}, "email": {}}
+        with mock.patch.object(cli, "_config", return_value=cfg), \
+             mock.patch("email_utils.enviar_email", return_value=True) as enviar:
+            codigo = cli.main(list(args))
+        return codigo, enviar
+
+    def test_sem_para_vai_pros_emails_do_cadastro(self):
+        codigo, enviar = self._rodar("enviar-link", AVULSO)
+        self.assertEqual(codigo, 0)
+        self.assertEqual(enviar.call_args.args[0], ["log@vidaveg.com"])
+
+    def test_com_para_vai_so_pro_destino_indicado_e_avisa_de_quem_e_o_convite(self):
+        codigo, enviar = self._rodar("enviar-link", AVULSO, "--para", "hugo@freshlogbr.com")
+        self.assertEqual(codigo, 0)
+        destinos, assunto, corpo = enviar.call_args.args[:3]
+        self.assertEqual(destinos, ["hugo@freshlogbr.com"])
+        self.assertIn("VIDAVEG", assunto)
+        self.assertIn("log@vidaveg.com", corpo)            # diz pra quem repassar
+        self.assertIn("https://exemplo/cliente/definir-pin/", corpo)
+
+    def test_para_invalido_nao_envia(self):
+        codigo, enviar = self._rodar("enviar-link", AVULSO, "--para", "nao-e-email")
+        self.assertEqual(codigo, 2)
+        enviar.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ local -- mesmo dados.db):
 
     py -3 portal_cliente/gerenciar_clientes.py listar
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146
+    py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --para hugo@freshlogbr.com   # convite vai pra quem repassa, não pro cliente
     py -3 portal_cliente/gerenciar_clientes.py definir-pin 29909190000146 123456
     py -3 portal_cliente/gerenciar_clientes.py desativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py ativar 29909190000146
@@ -32,6 +33,7 @@ um embarcador novo, primeiro cadastre CNPJ/sender_id/e-mail lá (é a
 mesma tabela usada pelas notificações de insucesso).
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -134,7 +136,10 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("listar")
     for nome in ("enviar-link", "link", "desativar", "ativar"):
-        sub.add_parser(nome).add_argument("cnpj")
+        sp = sub.add_parser(nome)
+        sp.add_argument("cnpj")
+        if nome == "enviar-link":
+            sp.add_argument("--para", help="manda o convite SÓ pra este e-mail (quem repassa ao cliente), não pros do cadastro")
     sub.add_parser("grupos")
     gp = sub.add_parser("grupo", help="empresas que o login enxerga (grupo econômico)")
     gp.add_argument("cnpj", help="CNPJ que faz o login")
@@ -205,12 +210,24 @@ def main(argv=None) -> int:
         elif args.cmd == "link":
             print(_link(conn, cfg, emb["cnpj"]))
         elif args.cmd == "enviar-link":
-            if not emb["emails"]:
+            para = (args.para or "").strip()
+            if para and not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", para):
+                print(f"--para {para!r} não é um e-mail válido. Nada enviado.")
+                return 2
+            if not para and not emb["emails"]:
                 print("Embarcador sem e-mail em `interno`.")
                 return 2
             from email_utils import enviar_email, envelope_html
             link = _link(conn, cfg, emb["cnpj"])
+            destinos = [para] if para else emb["emails"]
+            # Convite pra repassar (17/09, Hugo: "mandar pra mim os convites"): o
+            # topo diz de quem é e pra quem vai; o resto é o e-mail que o cliente receberia.
+            aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
+                     f"<b>Convite pra repassar.</b> Acesso de <b>{emb['nome']}</b> (CNPJ {auth.formatar_cnpj(emb['cnpj'])}). "
+                     f"E-mail do cadastro: {', '.join(emb['emails']) or '(nenhum)'}. "
+                     f"O link abaixo vale 24 horas e só funciona uma vez -- quem abrir primeiro define o PIN.</p>") if para else ""
             corpo = envelope_html(
+                aviso +
                 f"<p>Olá, <strong>{emb['nome']}</strong>.</p>"
                 f"<p>A Fresh Log liberou o acesso ao portal de acompanhamento de entregas "
                 f"(CNPJ {auth.formatar_cnpj(emb['cnpj'])}). Defina seu PIN pelo botão abaixo:</p>"
@@ -219,8 +236,10 @@ def main(argv=None) -> int:
                 f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas. Depois é só entrar com CNPJ + PIN em "
                 f"{cfg.get('portal_cliente', {}).get('url_base', 'https://app.freshhub.com.br/cliente')}.</p>",
                 rodape="Fresh Log · Portal de acompanhamento de entregas")
-            ok = enviar_email(emb["emails"], "Fresh Log · Seu acesso ao portal de entregas", corpo, cfg.get("email", {}))
-            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(emb["emails"]))
+            assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
+                       else "Fresh Log · Seu acesso ao portal de entregas")
+            ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}))
+            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos))
             return 0 if ok else 1
         elif args.cmd in ("desativar", "ativar"):
             if auth.definir_ativo(conn, emb["cnpj"], args.cmd == "ativar"):
