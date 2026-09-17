@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-notificar-nfs-em-rota.service todo dia as 07:00
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

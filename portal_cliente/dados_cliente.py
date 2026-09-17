@@ -265,13 +265,23 @@ def _linha(servico: dict, situacao: str, nfs: dict[str, str], **extra) -> dict:
 
 # ── Coleta ─────────────────────────────────────────────────────────────────────
 
-def _coletar_rotas(token: str, sender_id: int, data_alvo: date, motoristas: dict, nfs_cache: dict) -> list[dict]:
+def buscar_rotas_do_dia(token: str, data_alvo: date) -> list[dict]:
+    """Rotas da VUUPT com start_at no dia, com services/customer/agent. Separado
+    de linhas_das_rotas pra quem percorre VARIOS embarcadores (e-mail diario
+    notificar_nfs_em_rota.py) buscar na VUUPT uma vez so."""
     inicio = data_alvo.strftime("%Y-%m-%d") + " 00:00:00"
     fim = (data_alvo + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
     filtro = [{"field": "start_at", "operator": "gte", "value": inicio},
               {"field": "start_at", "operator": "lt", "value": fim}]
-    rotas = listar_rotas(token, include=["services", "services.customer", "agent"], filtro=filtro)
+    return listar_rotas(token, include=["services", "services.customer", "agent"], filtro=filtro)
 
+
+def _coletar_rotas(token: str, sender_id: int, data_alvo: date, motoristas: dict, nfs_cache: dict) -> list[dict]:
+    return linhas_das_rotas(buscar_rotas_do_dia(token, data_alvo), sender_id, motoristas, nfs_cache)
+
+
+def linhas_das_rotas(rotas: list[dict], sender_id: int, motoristas: dict, nfs_cache: dict) -> list[dict]:
+    """Pedidos do embarcador nas rotas dadas, com a situação parada a parada."""
     # NF de todos os pedidos do cliente nas rotas, numa query só.
     codigos = set()
     for rota in rotas:
