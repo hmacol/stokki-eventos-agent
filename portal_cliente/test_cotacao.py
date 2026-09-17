@@ -23,7 +23,8 @@ import cotacao as ct  # noqa: E402
 import km_rodoviario  # noqa: E402
 
 CNPJ = "12345678000195"
-CLIENTE = {"cnpj": CNPJ, "sender_id": 1, "nome": "EMB TESTE", "cnpj_formatado": "12.345.678/0001-95", "versao": "x"}
+CLIENTE = {"cnpj": CNPJ, "sender_id": 1, "nome": "EMB TESTE", "cnpj_formatado": "12.345.678/0001-95", "versao": "x",
+           "sender_ids": [1], "empresas": [{"cnpj": CNPJ, "cnpj_formatado": "12.345.678/0001-95", "sender_id": 1, "nome": "EMB TESTE"}]}
 CONFIG = {"google_maps": {"api_key": "chave"}, "email": {"remetente": "hugo@freshlogbr.com", "senha_app": "x"},
           "portal_cliente": {"cotacao": {"forcar_destino": ""}}}
 REGRAS = ct.regras_de(CONFIG)
@@ -356,6 +357,9 @@ def test_pdf_muitas_entregas_pagina(ambiente):
 
 # ── Rotas Flask ───────────────────────────────────────────────────────────────
 
+VISIVEL = {"cliente": True}
+
+
 @pytest.fixture
 def cliente_http(ambiente, monkeypatch):
     conn, enviados = ambiente
@@ -363,6 +367,10 @@ def cliente_http(ambiente, monkeypatch):
     monkeypatch.setattr(portal.auth, "sessao_valida", lambda c, cnpj, v: dict(CLIENTE))
     monkeypatch.setattr(portal, "_CONFIG", CONFIG)
     import cotacao_web
+    # a calculadora nasce oculta do cliente (17/09); os testes das rotas ligam a chave
+    regras_de = ct.regras_de
+    monkeypatch.setattr(ct, "regras_de", lambda cfg: {**regras_de(cfg), "visivel_cliente": VISIVEL["cliente"]})
+    monkeypatch.setitem(VISIVEL, "cliente", True)
     portal.app.config["TESTING"] = True
     with portal.app.test_client() as tc:
         with tc.session_transaction() as s:
@@ -432,3 +440,41 @@ def test_equipe_leitura_nao_aceita(cliente_http, monkeypatch):
         s.clear(); s["equipe"] = {"usuario": "leitor", "nivel": "leitura"}; s["cnpj_equipe"] = CNPJ
     assert tc.post(f"/api/cotacao/{cot['id']}/aceitar", json={}, headers={"Origin": "http://localhost"}).status_code == 403
     assert tc.get("/cotacao").status_code == 200
+
+
+def test_oculta_do_cliente_equipe_continua_vendo(cliente_http, monkeypatch):
+    tc, conn, enviados = cliente_http
+    import app as portal
+    h = {"Origin": "http://localhost"}
+    r = tc.post("/api/cotacao/calcular", json=_entrada(), headers=h)
+    cot = r.get_json()["cotacao"]
+    assert "Cotação de frete" in tc.get("/").get_data(as_text=True)
+
+    monkeypatch.setitem(VISIVEL, "cliente", False)
+    assert ct.REGRAS_PADRAO["visivel_cliente"] is False  # padrão: oculta
+    assert "Cotação de frete" not in tc.get("/").get_data(as_text=True)
+    assert tc.get("/cotacao").status_code == 404
+    assert tc.get(f"/cotacao/{cot['id']}/pdf").status_code == 404
+    for rota in ("/api/cotacao/historico", f"/api/cotacao/{cot['id']}", "/api/cotacao/cep/01310100", "/api/cotacao/modelo-lista"):
+        assert tc.get(rota).status_code == 404, rota
+    for rota in ("/api/cotacao/calcular", f"/api/cotacao/{cot['id']}/proposta", f"/api/cotacao/{cot['id']}/aceitar"):
+        assert tc.post(rota, json=_entrada(), headers=h).status_code == 404, rota
+
+    # equipe operando em nome do cliente: vê o link, usa a tela e manda a proposta
+    monkeypatch.setattr(portal, "_cliente_da_equipe", lambda cnpj: dict(CLIENTE, equipe=True))
+    with tc.session_transaction() as s:
+        s.clear(); s["equipe"] = {"usuario": "op", "nivel": "operador"}; s["cnpj_equipe"] = CNPJ
+    assert "Cotação de frete" in tc.get("/").get_data(as_text=True)
+    assert tc.get("/cotacao").status_code == 200
+    r = tc.post(f"/api/cotacao/{cot['id']}/proposta", json={"emails": ["a@b.com"]}, headers=h)
+    assert r.status_code == 200
+    token = [l for l in enviados[-1]["corpo"].split('"') if "/cotacao/aceite/" in l][0].rsplit("/", 1)[1]
+
+    # cliente aprova pelo link do e-mail mesmo com a tela oculta; a página não aponta pra /cotacao
+    with tc.session_transaction() as s:
+        s.clear()
+    r = tc.get(f"/cotacao/aceite/{token}")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Aprovar a proposta" in html and 'href="/cotacao"' not in html
+    r = tc.post(f"/cotacao/aceite/{token}", data={"nome": "Fulano"})
+    assert r.status_code == 200 and ct.buscar(conn, cot["id"])["status"] == "ACEITA"

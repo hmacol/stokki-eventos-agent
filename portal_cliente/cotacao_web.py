@@ -17,8 +17,14 @@ chamados_web.py. Regras, banco, e-mail e PDF em cotacao.py.
     POST /api/cotacao/<id>/aceitar             aceite logado
     GET  /cotacao/<id>/pdf                     PDF da proposta
     GET|POST /cotacao/aceite/<token>           aceite pelo link do e-mail (PÚBLICO)
+
+Oculta do cliente (Hugo, 17/09): com portal_cliente.cotacao.visivel_cliente
+desligado (padrão), só a equipe Fresh Log operando em nome do cliente vê a
+tela; pro cliente o link some e as rotas logadas dão 404. O aceite pelo link
+do e-mail continua valendo (proposta enviada pela equipe).
 """
 import logging
+from functools import wraps
 
 from flask import abort, g, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -60,10 +66,26 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
     def _url_portal(cot: dict) -> str:
         return f"{url_base}/cotacao?ver={cot['id']}"
 
+    def _visivel() -> bool:
+        return bool(g.get("equipe")) or bool(_regras().get("visivel_cliente"))
+
+    def exige_visivel(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if not _visivel():
+                abort(404)
+            return f(*args, **kwargs)
+        return wrapper
+
+    @app.context_processor
+    def _cotacao_globais():
+        return {"cotacao_visivel": _visivel()}
+
     # ── Tela ────────────────────────────────────────────────────────────────
 
     @app.route("/cotacao")
     @requer_cliente
+    @exige_visivel
     def cotacao_pagina():
         conn = ct.conectar()
         try:
@@ -77,6 +99,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/cep/<cep>")
     @requer_cliente
+    @exige_visivel
     def cotacao_cep(cep):
         d = ct.normalizar_cep(cep)
         if not d:
@@ -88,6 +111,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/modelo-lista")
     @requer_cliente
+    @exige_visivel
     def cotacao_modelo_lista():
         import io
         return send_file(io.BytesIO(ct.modelo_lista()), as_attachment=True, download_name="modelo_entregas_cotacao.xlsx",
@@ -95,6 +119,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/lista", methods=["POST"])
     @requer_cliente
+    @exige_visivel
     @exige_mesma_origem
     def cotacao_lista():
         arq = request.files.get("arquivo")
@@ -120,6 +145,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/calcular", methods=["POST"])
     @requer_cliente
+    @exige_visivel
     @exige_mesma_origem
     def cotacao_calcular():
         dados = request.get_json(silent=True) or {}
@@ -139,6 +165,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/historico")
     @requer_cliente
+    @exige_visivel
     def cotacao_historico():
         conn = ct.conectar()
         try:
@@ -151,6 +178,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/<int:cot_id>")
     @requer_cliente
+    @exige_visivel
     def cotacao_uma(cot_id):
         conn = ct.conectar()
         try:
@@ -164,6 +192,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/<int:cot_id>/proposta", methods=["POST"])
     @requer_cliente
+    @exige_visivel
     @exige_mesma_origem
     def cotacao_proposta(cot_id):
         _exige_pode_agir()
@@ -184,6 +213,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/api/cotacao/<int:cot_id>/aceitar", methods=["POST"])
     @requer_cliente
+    @exige_visivel
     @exige_mesma_origem
     def cotacao_aceitar(cot_id):
         _exige_pode_agir()
@@ -202,6 +232,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
 
     @app.route("/cotacao/<int:cot_id>/pdf")
     @requer_cliente
+    @exige_visivel
     def cotacao_pdf(cot_id):
         conn = ct.conectar()
         try:

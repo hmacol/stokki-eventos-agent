@@ -30,5 +30,5 @@
   <h1>Link inválido</h1>
   <p>Este link de aprovação não é válido. Se você recebeu a proposta por e-mail, abra o link mais recente ou aprove pelo portal.</p>
 {% endif %}
-<div class="links"><a href="{{ url_for('cotacao_pagina') }}">Ir pro portal do cliente</a></div>
+<div class="links"><a href="{{ url_for('cotacao_pagina') if cotacao_visivel else url_for('inicio') }}">Ir pro portal do cliente</a></div>
 {% endblock %}

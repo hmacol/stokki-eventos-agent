@@ -95,6 +95,9 @@ REGRAS_PADRAO = {
     "forcar_destino": "",             # piloto: se preenchido, TODO e-mail vai só pra cá
     "abrir_chamado_no_aceite": True,
     "max_paradas": 25,
+    # Hugo, 17/09: calculadora oculta do cliente (link some, rotas dão 404).
+    # A equipe Fresh Log operando em nome do cliente continua vendo. True reabre.
+    "visivel_cliente": False,
     "veiculos": VEICULOS_PADRAO,
 }
 
