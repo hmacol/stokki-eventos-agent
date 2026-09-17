@@ -12,6 +12,12 @@ local -- mesmo dados.db):
     py -3 portal_cliente/gerenciar_clientes.py ativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py link 29909190000146   # só imprime o link, sem e-mail
 
+Grupo econômico (17/09) -- um login enxerga os pedidos de várias empresas:
+    py -3 portal_cliente/gerenciar_clientes.py grupos                                   # lista os grupos
+    py -3 portal_cliente/gerenciar_clientes.py grupo 54993021000184                     # mostra as empresas do login
+    py -3 portal_cliente/gerenciar_clientes.py grupo 54993021000184 48654566000163 ...  # DEFINE os membros (substitui a lista)
+    py -3 portal_cliente/gerenciar_clientes.py grupo 54993021000184 --desfazer
+
 Máscara de envio de pedidos (08/09):
     py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100                       # mostra os parâmetros da Stokki
     py -3 portal_cliente/gerenciar_clientes.py envio 68146976000100 --regra muai          # regra de transformação do XML
@@ -116,12 +122,24 @@ def _link(conn, cfg, cnpj) -> str:
     return f"{url_base}/definir-pin/{auth.gerar_token_definir_pin(secret, conn, cnpj)}"
 
 
+def _imprimir_grupo(empresas: list[dict]) -> None:
+    login = empresas[0]
+    print(f"{login['nome']} ({auth.formatar_cnpj(login['cnpj'])}) -- login enxerga {len(empresas)} empresa(s):")
+    for e in empresas:
+        print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Contas do portal do cliente")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("listar")
     for nome in ("enviar-link", "link", "desativar", "ativar"):
         sub.add_parser(nome).add_argument("cnpj")
+    sub.add_parser("grupos")
+    gp = sub.add_parser("grupo", help="empresas que o login enxerga (grupo econômico)")
+    gp.add_argument("cnpj", help="CNPJ que faz o login")
+    gp.add_argument("membros", nargs="*", help="CNPJs dos membros como estão em `interno` (substitui a lista atual)")
+    gp.add_argument("--desfazer", action="store_true")
     dp = sub.add_parser("definir-pin")
     dp.add_argument("cnpj")
     dp.add_argument("pin")
@@ -158,10 +176,28 @@ def main(argv=None) -> int:
                       f"último login {e['ultimo_login_em'] or '-':<19}  {e['nome']}  {', '.join(e['emails']) or '(sem e-mail)'}")
             return 0
 
+        if args.cmd == "grupos":
+            grupos = auth.listar_grupos(conn)
+            if not grupos:
+                print("Nenhum grupo cadastrado.")
+            for login in grupos:
+                _imprimir_grupo(auth.empresas_do_login(conn, login))
+            return 0
+
         emb = auth.buscar_embarcador(conn, args.cnpj)
         if not emb:
             print("CNPJ não está em `interno` com sender_id -- cadastre lá primeiro.")
             return 2
+
+        if args.cmd == "grupo":
+            if args.desfazer or args.membros:
+                try:
+                    auth.definir_grupo(conn, args.cnpj, [] if args.desfazer else args.membros)
+                except ValueError as e:
+                    print(f"Nada gravado: {e}")
+                    return 2
+            _imprimir_grupo(auth.empresas_do_login(conn, args.cnpj))
+            return 0
 
         if args.cmd == "definir-pin":
             auth.definir_pin(conn, args.cnpj, args.pin)

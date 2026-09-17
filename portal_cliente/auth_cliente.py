@@ -67,12 +67,53 @@ def conectar() -> sqlite3.Connection:
             ultimo_login_em TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS portal_tentativas (
+            escopo    TEXT NOT NULL,
+            chave     TEXT NOT NULL,
+            criado_em TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_tentativas ON portal_tentativas (escopo, chave, criado_em)")
+    # Grupo economico (17/09): o CNPJ que loga (cnpj_login) enxerga tambem os
+    # pedidos dos membros. Membro continua podendo ter a conta propria dele.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS portal_grupos (
+            cnpj_login  TEXT NOT NULL,
+            cnpj_membro TEXT NOT NULL,
+            PRIMARY KEY (cnpj_login, cnpj_membro)
+        )
+    """)
     conn.commit()
     return conn
 
 
 def _agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ── Trava de tentativas por escopo/chave ───────────────────────────────────────
+# O login do cliente tem a trava dele em clientes_portal (por conta). Isto
+# cobre o que nao tem conta pra pendurar o contador: pedidos de link de PIN
+# (por CNPJ e por IP) e o login da equipe em /equipe (por IP).
+
+def registrar_tentativa(conn: sqlite3.Connection, escopo: str, chave: str) -> None:
+    limite = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("DELETE FROM portal_tentativas WHERE criado_em < ?", (limite,))
+    conn.execute("INSERT INTO portal_tentativas (escopo, chave, criado_em) VALUES (?, ?, ?)",
+                 (escopo, str(chave or ""), _agora()))
+    conn.commit()
+
+
+def contar_tentativas(conn: sqlite3.Connection, escopo: str, chave: str, minutos: int) -> int:
+    desde = (datetime.now() - timedelta(minutes=minutos)).strftime("%Y-%m-%d %H:%M:%S")
+    return conn.execute("SELECT count(*) FROM portal_tentativas WHERE escopo = ? AND chave = ? AND criado_em >= ?",
+                        (escopo, str(chave or ""), desde)).fetchone()[0]
+
+
+def limpar_tentativas(conn: sqlite3.Connection, escopo: str, chave: str) -> None:
+    conn.execute("DELETE FROM portal_tentativas WHERE escopo = ? AND chave = ?", (escopo, str(chave or "")))
+    conn.commit()
 
 
 # ── CNPJ / PIN ─────────────────────────────────────────────────────────────────
@@ -143,6 +184,66 @@ def listar_embarcadores(conn: sqlite3.Connection) -> list[dict]:
         "ativo": r["ativo"] if r["ativo"] is not None else None,
         "ultimo_login_em": r["ultimo_login_em"],
     } for r in rows]
+
+
+# ── Grupo econômico (um login, várias empresas) ────────────────────────────────
+
+def empresas_do_login(conn: sqlite3.Connection, cnpj: str) -> list[dict]:
+    """Embarcadores que o login enxerga: o próprio CNPJ primeiro e depois os
+    membros do grupo (por nome). Sem grupo, só ele. Membro que saiu de
+    `interno` (ou ficou sem sender_id) some da lista sozinho."""
+    principal = buscar_embarcador(conn, cnpj)
+    if not principal:
+        return []
+    membros = []
+    for r in conn.execute("SELECT cnpj_membro FROM portal_grupos WHERE cnpj_login = ?", (principal["cnpj"],)):
+        emb = buscar_embarcador(conn, r["cnpj_membro"])
+        if emb and emb["cnpj"] != principal["cnpj"]:
+            membros.append(emb)
+    return [principal] + sorted(membros, key=lambda e: e["nome"])
+
+
+def definir_grupo(conn: sqlite3.Connection, cnpj_login: str, membros: list[str]) -> list[dict]:
+    """Substitui a lista de membros do grupo (lista vazia desfaz o grupo).
+    Confere TODOS antes de gravar -- CNPJ fora de `interno` levanta ValueError
+    e nada muda. `interno.cnpj_embarcador` tem linha com 13 dígitos (2º
+    remetente do Grupo Trigo), por isso o membro entra como está lá."""
+    principal = buscar_embarcador(conn, cnpj_login)
+    if not principal:
+        raise ValueError(f"CNPJ do login {cnpj_login} não está em `interno` com sender_id.")
+    validos = []
+    for m in membros:
+        emb = buscar_embarcador(conn, m)
+        if not emb:
+            raise ValueError(f"Membro {m} não está em `interno` com sender_id.")
+        if emb["cnpj"] != principal["cnpj"] and emb["cnpj"] not in validos:
+            validos.append(emb["cnpj"])
+    conn.execute("DELETE FROM portal_grupos WHERE cnpj_login = ?", (principal["cnpj"],))
+    conn.executemany("INSERT INTO portal_grupos (cnpj_login, cnpj_membro) VALUES (?, ?)",
+                     [(principal["cnpj"], m) for m in validos])
+    conn.commit()
+    return empresas_do_login(conn, principal["cnpj"])
+
+
+def listar_grupos(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    grupos: dict[str, list[str]] = {}
+    for r in conn.execute("SELECT cnpj_login, cnpj_membro FROM portal_grupos ORDER BY cnpj_login, cnpj_membro"):
+        grupos.setdefault(r["cnpj_login"], []).append(r["cnpj_membro"])
+    return grupos
+
+
+def montar_cliente(conn: sqlite3.Connection, cnpj: str, versao: str) -> dict | None:
+    """O `g.cliente` do portal: a empresa do login + as do grupo. `sender_id`
+    e `cnpj` são sempre os do login; `sender_ids`/`empresas` cobrem o grupo."""
+    empresas = empresas_do_login(conn, cnpj)
+    if not empresas:
+        return None
+    emb = empresas[0]
+    return {"cnpj": emb["cnpj"], "cnpj_formatado": formatar_cnpj(emb["cnpj"]),
+            "sender_id": emb["sender_id"], "nome": emb["nome"], "versao": versao,
+            "sender_ids": [e["sender_id"] for e in empresas],
+            "empresas": [{"cnpj": e["cnpj"], "cnpj_formatado": formatar_cnpj(e["cnpj"]),
+                          "sender_id": e["sender_id"], "nome": e["nome"]} for e in empresas]}
 
 
 # ── Conta do portal ────────────────────────────────────────────────────────────
@@ -225,11 +326,7 @@ def sessao_valida(conn: sqlite3.Connection, cnpj: str, versao: str) -> dict | No
     conta = buscar_conta(conn, cnpj)
     if not conta or not conta.get("ativo") or versao_conta(conta) != versao:
         return None
-    emb = buscar_embarcador(conn, cnpj)
-    if not emb:
-        return None
-    return {"cnpj": emb["cnpj"], "cnpj_formatado": formatar_cnpj(emb["cnpj"]),
-            "sender_id": emb["sender_id"], "nome": emb["nome"], "versao": versao}
+    return montar_cliente(conn, cnpj, versao)
 
 
 # ── Link de definição de PIN (primeiro acesso / esqueci o PIN) ─────────────────

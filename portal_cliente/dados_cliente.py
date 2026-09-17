@@ -242,6 +242,7 @@ def _linha(servico: dict, situacao: str, nfs: dict[str, str], **extra) -> dict:
     endereco = servico.get("address") or ""
     return {
         "service_id": servico.get("id"),
+        "sender_id": servico.get("sender_id"),
         "codigo": "#" + codigo.lstrip("#"),
         "nf": ", ".join(filter(None, (nfs.get(c, "") for c in codigos_base_lista(codigo)))),
         "destinatario": cliente.get("name") or (servico.get("title") or "")[:80],
@@ -265,6 +266,14 @@ def _linha(servico: dict, situacao: str, nfs: dict[str, str], **extra) -> dict:
 
 # ── Coleta ─────────────────────────────────────────────────────────────────────
 
+def _remetentes(sender) -> tuple[int, ...]:
+    """Um sender_id (login avulso) ou vários (login de grupo, 17/09), sempre
+    como tupla ordenada -- serve de chave de cache e de filtro."""
+    if isinstance(sender, (int, str)):
+        return (int(sender),)
+    return tuple(sorted({int(s) for s in sender}))
+
+
 def buscar_rotas_do_dia(token: str, data_alvo: date) -> list[dict]:
     """Rotas da VUUPT com start_at no dia, com services/customer/agent. Separado
     de linhas_das_rotas pra quem percorre VARIOS embarcadores (e-mail diario
@@ -276,17 +285,19 @@ def buscar_rotas_do_dia(token: str, data_alvo: date) -> list[dict]:
     return listar_rotas(token, include=["services", "services.customer", "agent"], filtro=filtro)
 
 
-def _coletar_rotas(token: str, sender_id: int, data_alvo: date, motoristas: dict, nfs_cache: dict) -> list[dict]:
+def _coletar_rotas(token: str, sender_id, data_alvo: date, motoristas: dict, nfs_cache: dict) -> list[dict]:
     return linhas_das_rotas(buscar_rotas_do_dia(token, data_alvo), sender_id, motoristas, nfs_cache)
 
 
-def linhas_das_rotas(rotas: list[dict], sender_id: int, motoristas: dict, nfs_cache: dict) -> list[dict]:
-    """Pedidos do embarcador nas rotas dadas, com a situação parada a parada."""
+def linhas_das_rotas(rotas: list[dict], sender_id, motoristas: dict, nfs_cache: dict) -> list[dict]:
+    """Pedidos do embarcador (ou das empresas do grupo) nas rotas dadas, com a
+    situação parada a parada."""
+    remetentes = _remetentes(sender_id)
     # NF de todos os pedidos do cliente nas rotas, numa query só.
     codigos = set()
     for rota in rotas:
         for s in _servicos_da_rota(rota):
-            if s.get("sender_id") == sender_id:
+            if s.get("sender_id") in remetentes:
                 codigos.update(codigos_base_lista(s.get("code", "")))
     nfs_cache.update(nf_por_codigo(codigos))
 
@@ -307,7 +318,7 @@ def linhas_das_rotas(rotas: list[dict], sender_id: int, motoristas: dict, nfs_ca
         entregues_rota = sum(1 for s in validos if s.get("status") == "done")
 
         for ordem, s in enumerate(validos, start=1):
-            if s.get("sender_id") != sender_id:
+            if s.get("sender_id") not in remetentes:
                 continue
             status = s.get("status")
             if status == "done":
@@ -333,13 +344,16 @@ def linhas_das_rotas(rotas: list[dict], sender_id: int, motoristas: dict, nfs_ca
     return linhas
 
 
-def _coletar_sem_rota(vuupt: VuuptClient, sender_id: int, data_alvo: date, nfs_cache: dict) -> tuple[list[dict], list[dict]]:
+def _coletar_sem_rota(vuupt: VuuptClient, sender_id, data_alvo: date, nfs_cache: dict) -> tuple[list[dict], list[dict]]:
     """(linhas do dia sem rota, agendados futuros). Filtra por sender_id na
-    API e reconfere localmente (a API às vezes ignora filtro)."""
-    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"},
-              {"field": "sender_id", "operator": "eq", "value": sender_id}]
-    servicos = [s for s in vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
-                if s.get("sender_id") == sender_id]
+    API (uma consulta por empresa do grupo) e reconfere localmente (a API às
+    vezes ignora filtro)."""
+    servicos = []
+    for remetente in _remetentes(sender_id):
+        filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"},
+                  {"field": "sender_id", "operator": "eq", "value": remetente}]
+        servicos += [s for s in vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+                     if s.get("sender_id") == remetente]
     nfs_cache.update(nf_por_codigo({c for s in servicos for c in codigos_base_lista(s.get("code", ""))}))
 
     do_dia, futuros = [], []
@@ -359,25 +373,27 @@ def _coletar_sem_rota(vuupt: VuuptClient, sender_id: int, data_alvo: date, nfs_c
     return do_dia, futuros
 
 
-def _coletar_atencao(sender_id: int) -> list[dict]:
-    """Insucessos aguardando decisão do embarcador, agrupados por motivo
-    (é assim que aplicar_decisao aplica a resposta: por grupo
+def _coletar_atencao(sender_id) -> list[dict]:
+    """Insucessos aguardando decisão do embarcador, agrupados por empresa +
+    motivo (é assim que aplicar_decisao aplica a resposta: por grupo
     sender_id + failed_reason_id)."""
+    remetentes = _remetentes(sender_id)
     try:
         conn = _conectar()
         try:
             rows = conn.execute(
-                "SELECT service_id, code, failed_reason_id, primeira_notificacao_em "
-                "FROM insucessos_aguardando_resposta WHERE sender_id = ? AND status = 'PENDENTE' "
-                "ORDER BY primeira_notificacao_em", (sender_id,)).fetchall()
+                "SELECT service_id, code, sender_id, failed_reason_id, primeira_notificacao_em "
+                f"FROM insucessos_aguardando_resposta WHERE sender_id IN ({','.join('?' * len(remetentes))}) "
+                "AND status = 'PENDENTE' ORDER BY primeira_notificacao_em", remetentes).fetchall()
         finally:
             conn.close()
     except sqlite3.Error as e:
         logger.warning(f"[portal] insucessos_aguardando_resposta indisponível: {e}")
         return []
-    grupos: dict[int, dict] = {}
+    grupos: dict[tuple, dict] = {}
     for r in rows:
-        g = grupos.setdefault(r["failed_reason_id"], {
+        g = grupos.setdefault((r["sender_id"], r["failed_reason_id"]), {
+            "sender_id": r["sender_id"],
             "failed_reason_id": r["failed_reason_id"],
             "motivo": texto_do_motivo(r["failed_reason_id"]),
             "pergunta": pergunta_do_motivo(r["failed_reason_id"]),
@@ -404,11 +420,22 @@ def _historico(vuupt: VuuptClient, sender_id: int, hoje: date) -> dict | None:
     entregues = [s for s in servicos if s.get("status_done") != "failed"]
     insucessos = [s for s in servicos if s.get("status_done") == "failed"]
     primeira = sum(1 for s in entregues if not re.search(r"-R\d+", s.get("code") or "", re.IGNORECASE))
+    return {"entregues": len(entregues), "insucessos": len(insucessos), "primeira": primeira}
+
+
+def somar_historico(partes: list[dict | None]) -> dict | None:
+    """Junta as contagens de cada empresa do grupo; o percentual de 1ª
+    tentativa sai do total, não da média. Tudo indisponível -> None (o card
+    some da tela)."""
+    validas = [p for p in partes if p]
+    if not validas:
+        return None
+    entregues = sum(p["entregues"] for p in validas)
     return {
         "dias": HISTORICO_DIAS,
-        "entregues": len(entregues),
-        "insucessos": len(insucessos),
-        "primeira_tentativa_pct": round(100 * primeira / len(entregues)) if entregues else None,
+        "entregues": entregues,
+        "insucessos": sum(p["insucessos"] for p in validas),
+        "primeira_tentativa_pct": round(100 * sum(p["primeira"] for p in validas) / entregues) if entregues else None,
     }
 
 
@@ -419,14 +446,16 @@ _cache_hist: dict[int, tuple[float, dict | None]] = {}
 _lock = threading.Lock()
 
 
-def montar_dia(sender_id: int, data_alvo: date, config: dict | None = None, forcar: bool = False) -> dict:
-    chave = (sender_id, data_alvo.isoformat())
+def montar_dia(sender_id, data_alvo: date, config: dict | None = None, forcar: bool = False) -> dict:
+    """sender_id: um remetente (login avulso) ou a lista do grupo."""
+    remetentes = _remetentes(sender_id)
+    chave = (remetentes, data_alvo.isoformat())
     agora = time.time()
     with _lock:
         hit = _cache_dia.get(chave)
         if hit and not forcar and agora - hit[0] < CACHE_DIA_SEGUNDOS:
             return hit[1]
-    dados = _montar_dia(sender_id, data_alvo, config or carregar_config())
+    dados = _montar_dia(remetentes, data_alvo, config or carregar_config())
     with _lock:
         _cache_dia[chave] = (time.time(), dados)
         # não deixa o cache crescer sem limite (datas antigas navegadas)
@@ -440,11 +469,11 @@ def invalidar_cache(sender_id: int) -> None:
     """Depois de uma ação do cliente (resposta a insucesso) o próximo
     carregamento busca de novo."""
     with _lock:
-        for k in [k for k in _cache_dia if k[0] == sender_id]:
+        for k in [k for k in _cache_dia if int(sender_id) in k[0]]:
             _cache_dia.pop(k, None)
 
 
-def _montar_dia(sender_id: int, data_alvo: date, config: dict) -> dict:
+def _montar_dia(sender_id: tuple[int, ...], data_alvo: date, config: dict) -> dict:
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
     hoje = date.today()
@@ -478,15 +507,19 @@ def _montar_dia(sender_id: int, data_alvo: date, config: dict) -> dict:
     proximos = [{"data": d, "rotulo": f"{_dia_semana(date.fromisoformat(d))} {_ddmm(date.fromisoformat(d))}",
                  "pedidos": len(v)} for d, v in sorted(por_dia.items())][:PROXIMOS_DIAS_MAX]
 
-    # histórico 30 dias (cache 1 h por remetente)
-    with _lock:
-        hit = _cache_hist.get(sender_id)
-    if hit and time.time() - hit[0] < CACHE_HISTORICO_SEGUNDOS:
-        historico = hit[1]
-    else:
-        historico = _historico(vuupt, sender_id, hoje)
+    # histórico 30 dias (cache 1 h por remetente; no grupo soma as empresas)
+    partes = []
+    for remetente in sender_id:
         with _lock:
-            _cache_hist[sender_id] = (time.time(), historico)
+            hit = _cache_hist.get(remetente)
+        if hit and time.time() - hit[0] < CACHE_HISTORICO_SEGUNDOS:
+            partes.append(hit[1])
+            continue
+        parte = _historico(vuupt, remetente, hoje)
+        with _lock:
+            _cache_hist[remetente] = (time.time(), parte)
+        partes.append(parte)
+    historico = somar_historico(partes)
 
     return {
         "data": data_alvo.isoformat(),

@@ -872,16 +872,24 @@ def _caminho_definitivo_planilha(cnpj_embarcador: str, nome_original: str) -> Pa
 
 # ── Validações (item 9: NF-e válida, chave já enviada, emitente = cliente) ─────
 
-def validar_item(conn: sqlite3.Connection, item: dict, cnpj_cliente: str) -> dict:
-    """Devolve {ok, erros[], avisos[], envio_existente} pro item lido."""
+def validar_item(conn: sqlite3.Connection, item: dict, cnpj_cliente: str,
+                 outras_empresas: dict[str, str] | None = None) -> dict:
+    """Devolve {ok, erros[], avisos[], envio_existente} pro item lido.
+    `outras_empresas` ({cnpj: nome}): as demais empresas do login de grupo --
+    o envio acontece numa empresa por vez (cada uma é um cliente na Stokki)."""
     erros, avisos = [], []
     planilha = item.get("origem") == ORIGEM_PLANILHA
     existente = conn.execute(
         "SELECT id, status, criado_em, codigo_pedido FROM portal_envios WHERE chave_nfe = ?", (item["chave_nfe"],)
     ).fetchone()
     if item["emitente_cnpj"] != _so_digitos(cnpj_cliente):
-        erros.append(f"O CNPJ emitente da nota ({formatar_documento(item['emitente_cnpj'])} · {item['emitente_nome']}) "
-                     f"não é o da sua empresa.")
+        do_grupo = (outras_empresas or {}).get(item["emitente_cnpj"])
+        if do_grupo:
+            erros.append(f"Essa nota é da {do_grupo} ({formatar_documento(item['emitente_cnpj'])}). "
+                         f"Troque a empresa no seletor acima e envie de novo.")
+        else:
+            erros.append(f"O CNPJ emitente da nota ({formatar_documento(item['emitente_cnpj'])} · {item['emitente_nome']}) "
+                         f"não é o da sua empresa.")
     if existente and existente["status"] not in (STATUS_ERRO, STATUS_CANCELADO):
         quando = (existente["criado_em"] or "")[:16].replace("-", "/")
         if quando:

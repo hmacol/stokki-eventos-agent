@@ -70,6 +70,12 @@
       <div class="card" id="card-enviar" style="display:flex; flex-direction:column; gap:14px;">
         <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
           <h3 style="margin:0;">Enviar novos pedidos</h3>
+          {% if empresas_envio | length > 1 %}
+          {# Login de grupo (17/09): cada empresa é um cliente na Stokki -- o envio é numa empresa por vez #}
+          <select id="env-empresa" aria-label="Empresa que está enviando os pedidos" style="font-family:inherit; font-size:12.5px; color:var(--texto); background:var(--superficie); border:1px solid var(--borda); border-radius:6px; padding:5px 9px; max-width:280px;">
+            {% for e in empresas_envio %}<option value="{{ e.cnpj }}">{{ e.nome }}</option>{% endfor %}
+          </select>
+          {% endif %}
           <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
         </div>
         <label class="zona" id="zona">
@@ -148,6 +154,12 @@
   const BASE = {{ request.script_root | tojson }};
   const secao = document.getElementById('vista-envios');
   const PODE_ENVIAR = secao.dataset.podeEnviar === '1';
+  // Empresa do envio (login de grupo): vai no cabeçalho de TODA chamada desta
+  // vista -- fila, prévia, confirmação, ações e destinatários são por empresa.
+  const EMPRESAS_ENVIO = {{ empresas_envio | tojson }};
+  let empresaEnvio = EMPRESAS_ENVIO.length ? EMPRESAS_ENVIO[0].cnpj : '';
+  const fetch = (url, o = {}) => window.fetch(url, { ...o, headers: { ...(o.headers || {}), ...(empresaEnvio ? { 'X-Portal-Empresa': empresaEnvio } : {}) } });
+  const comEmpresa = url => empresaEnvio ? `${url}?empresa=${empresaEnvio}` : url;
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -414,7 +426,7 @@
   function abrirAcao(tipo, id) {
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
-    if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
+    if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }
     const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
@@ -453,6 +465,16 @@
   zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
   $('btn-confirmar').addEventListener('click', confirmar);
   $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
+  if ($('env-empresa')) {
+    const trocarEmpresa = () => {
+      empresaEnvio = $('env-empresa').value;
+      previa = null; $('previa').classList.remove('aberta'); mensagem('', '');   // a prévia era da outra empresa
+      $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
+      if (vista === 'envios') carregar();
+    };
+    $('env-empresa').addEventListener('change', trocarEmpresa);
+    $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
+  }
   $('env-abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; render(); });
   $('env-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
   $('env-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });

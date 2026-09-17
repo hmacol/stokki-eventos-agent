@@ -86,6 +86,11 @@ app.config.update(
 )
 
 ACOES_VALIDAS = ("manter", "reagendar", "cancelar")
+# "Primeiro acesso / esqueci o PIN": teto de e-mails por CNPJ e de pedidos por
+# IP, por hora. O de IP é folgado porque um escritório inteiro sai pelo mesmo
+# IP e um grupo (ex.: Marchef) pode pedir link de vários CNPJs em sequência.
+_MAX_LINKS_POR_CNPJ_HORA = 3
+_MAX_PEDIDOS_LINK_POR_IP_HORA = 20
 # Níveis do painel interno que podem entrar no portal em nome de um
 # cliente (decisão do Hugo, 08/09, item 2: "os dois" sobem XML). Leitura
 # só olha.
@@ -95,15 +100,14 @@ _NIVEIS_EQUIPE_ENVIA = ("total", "operador")
 # ── Sessão ─────────────────────────────────────────────────────────────────────
 
 def _cliente_da_equipe(cnpj: str) -> dict | None:
+    """A equipe enxerga o mesmo que o cliente enxergaria -- inclusive as
+    empresas do grupo quando o CNPJ escolhido é o login de um grupo."""
     conn = auth.conectar()
     try:
-        emb = auth.buscar_embarcador(conn, cnpj)
+        cliente = auth.montar_cliente(conn, cnpj, "equipe")
     finally:
         conn.close()
-    if not emb:
-        return None
-    return {"cnpj": emb["cnpj"], "cnpj_formatado": auth.formatar_cnpj(emb["cnpj"]), "sender_id": emb["sender_id"],
-            "nome": emb["nome"], "versao": "equipe", "equipe": True}
+    return {**cliente, "equipe": True} if cliente else None
 
 
 @app.before_request
@@ -204,21 +208,39 @@ def _nivel_equipe(usuario: str, senha: str) -> str | None:
     return None
 
 
+def _ip_cliente() -> str:
+    return request.remote_addr or "?"   # IP real: ProxyFix(x_for=1) atrás do Caddy
+
+
 @app.route("/equipe", methods=["GET", "POST"])
 def equipe_login():
+    """Mesma trava do login do cliente (5 erros -> 15 min), só que por IP:
+    aqui não há conta no banco pra pendurar o contador."""
     erro = None
+    status = 200
     if request.method == "POST":
         usuario = (request.form.get("usuario") or "").strip()
-        nivel = _nivel_equipe(usuario, request.form.get("senha") or "")
-        if nivel is None:
-            erro = "Usuário ou senha incorretos."
-        else:
-            session.clear()
-            session["equipe"] = {"usuario": usuario, "nivel": nivel}
-            session.permanent = True
-            logger.info(f"equipe login usuario={usuario} nivel={nivel}")
-            return redirect(url_for("equipe_cliente"))
-    return render_template("equipe.html", erro=erro, modo="login")
+        ip = _ip_cliente()
+        conn = auth.conectar()
+        try:
+            if auth.contar_tentativas(conn, "equipe_ip", ip, auth.BLOQUEIO_MINUTOS) >= auth.MAX_TENTATIVAS:
+                logger.warning(f"equipe login bloqueado ip={ip} usuario={usuario}")
+                erro, status = "Muitas tentativas. Tente de novo em alguns minutos.", 429
+            else:
+                nivel = _nivel_equipe(usuario, request.form.get("senha") or "")
+                if nivel is None:
+                    auth.registrar_tentativa(conn, "equipe_ip", ip)
+                    erro = "Usuário ou senha incorretos."
+                else:
+                    auth.limpar_tentativas(conn, "equipe_ip", ip)
+                    session.clear()
+                    session["equipe"] = {"usuario": usuario, "nivel": nivel}
+                    session.permanent = True
+                    logger.info(f"equipe login usuario={usuario} nivel={nivel}")
+                    return redirect(url_for("equipe_cliente"))
+        finally:
+            conn.close()
+    return render_template("equipe.html", erro=erro, modo="login"), status
 
 
 @app.route("/equipe/cliente", methods=["GET", "POST"])
@@ -274,40 +296,49 @@ def sair():
     return redirect(url_for("login"))
 
 
-def _mascarar_email(e: str) -> str:
-    usuario, _, dominio = e.partition("@")
-    if len(usuario) <= 2:
-        return usuario[:1] + "***@" + dominio
-    return usuario[:2] + "***@" + dominio
-
-
 @app.route("/primeiro-acesso", methods=["GET", "POST"])
 def primeiro_acesso():
     """Primeiro acesso E 'esqueci o PIN': manda o link de definição de PIN
-    pro(s) e-mail(s) da tabela interno."""
+    pro(s) e-mail(s) da tabela interno.
+
+    A resposta é a MESMA pra CNPJ cadastrado, não cadastrado, sem e-mail ou
+    acima do limite (revisão de segurança de 15/09: as 3 mensagens antigas
+    deixavam enumerar os clientes da Fresh Log, e o e-mail saía sem limite).
+    O motivo real fica só no log."""
     erro = None
     cnpj_digitado = ""
     if request.method == "POST":
         cnpj_digitado = (request.form.get("cnpj") or "").strip()
-        conn = auth.conectar()
-        try:
-            emb = auth.buscar_embarcador(conn, cnpj_digitado)
-            if not emb:
-                erro = "CNPJ não encontrado no nosso cadastro. Fale com a Fresh Log pra liberar o acesso."
-            elif not emb["emails"]:
-                erro = "Esse CNPJ não tem e-mail cadastrado. Fale com a Fresh Log pra liberar o acesso."
-            else:
-                token = auth.gerar_token_definir_pin(_SECRET, conn, emb["cnpj"])
-                link = f"{_URL_BASE}/definir-pin/{token}"
-                if _enviar_link_pin(emb, link):
-                    return render_template("mensagem.html", titulo="Link enviado",
-                                           texto="Enviamos um link pra você definir o PIN de acesso. "
-                                                 "Ele vale por 24 horas.",
-                                           detalhes=[_mascarar_email(e) for e in emb["emails"]],
-                                           voltar=url_for("login"))
-                erro = "Não conseguimos enviar o e-mail agora. Tente de novo em alguns minutos."
-        finally:
-            conn.close()
+        cnpj = auth.normalizar_cnpj(cnpj_digitado)
+        if len(cnpj) != 14:
+            erro = "Confira o CNPJ: são 14 dígitos."
+        else:
+            ip = _ip_cliente()
+            conn = auth.conectar()
+            try:
+                emb = auth.buscar_embarcador(conn, cnpj)
+                if auth.contar_tentativas(conn, "link_pin_ip", ip, 60) >= _MAX_PEDIDOS_LINK_POR_IP_HORA:
+                    logger.warning(f"primeiro acesso: limite por IP ip={ip} cnpj={cnpj}")
+                elif not emb or not emb["emails"]:
+                    auth.registrar_tentativa(conn, "link_pin_ip", ip)
+                    logger.info(f"primeiro acesso: cnpj={cnpj} {'sem e-mail' if emb else 'fora do cadastro'} ip={ip}")
+                elif auth.contar_tentativas(conn, "link_pin_cnpj", cnpj, 60) >= _MAX_LINKS_POR_CNPJ_HORA:
+                    auth.registrar_tentativa(conn, "link_pin_ip", ip)
+                    logger.warning(f"primeiro acesso: limite de links cnpj={cnpj} ip={ip}")
+                else:
+                    auth.registrar_tentativa(conn, "link_pin_ip", ip)
+                    auth.registrar_tentativa(conn, "link_pin_cnpj", cnpj)
+                    token = auth.gerar_token_definir_pin(_SECRET, conn, emb["cnpj"])
+                    if not _enviar_link_pin(emb, f"{_URL_BASE}/definir-pin/{token}"):
+                        logger.error(f"primeiro acesso: FALHA ao enviar o link cnpj={cnpj}")
+            finally:
+                conn.close()
+            return render_template("mensagem.html", titulo="Confira seu e-mail",
+                                   texto="Se esse CNPJ estiver no nosso cadastro, enviamos um link pra definir o PIN "
+                                         "no e-mail que a Fresh Log tem da sua empresa. Ele vale por 24 horas. "
+                                         "Não chegou em alguns minutos? Confira o CNPJ e a caixa de spam, "
+                                         "ou fale com a Fresh Log.",
+                                   voltar=url_for("login"))
     return render_template("primeiro_acesso.html", erro=erro, cnpj=cnpj_digitado)
 
 
@@ -373,11 +404,30 @@ def _data_da_query() -> date:
         return date.today()
 
 
+def _empresas_com_envio() -> list[dict]:
+    """Empresas do login que são cliente na Stokki (interno.stkkc_id) -- são
+    as que aparecem no seletor da vista "Enviar pedidos" do login de grupo.
+    Nenhuma com stkkc_id: devolve a do login, e a tela avisa como sempre."""
+    conn = envios.conectar()
+    try:
+        com_envio = []
+        for e in g.cliente["empresas"]:
+            try:
+                if envios.config_stokki_cliente(conn, e["cnpj"], _CONFIG)["client_id"]:
+                    com_envio.append({"cnpj": e["cnpj"], "nome": e["nome"]})
+            except envios.ErroEnvio:
+                continue
+    finally:
+        conn.close()
+    return com_envio or [{"cnpj": g.cliente["cnpj"], "nome": g.cliente["nome"]}]
+
+
 @app.route("/")
 @requer_cliente
 def inicio():
     aba = request.args.get("aba") or "acompanhamento"
     return render_template("acompanhamento.html", data_inicial=_data_da_query().isoformat(),
+                           empresas_envio=_empresas_com_envio(),
                            hoje=date.today().isoformat(), aba_inicial=aba if aba in ("acompanhamento", "envios") else "acompanhamento",
                            pode_enviar=not (g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA))
 
@@ -395,9 +445,12 @@ def api_dia():
     data_alvo = _data_da_query()
     forcar = request.args.get("atualizar") == "1"
     try:
-        return jsonify(dados.montar_dia(g.cliente["sender_id"], data_alvo, _CONFIG, forcar=forcar))
+        dia = dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG, forcar=forcar)
+        # `empresas` fora do cache: o front usa pra coluna/filtro "Empresa" do grupo.
+        return jsonify({**dia, "empresas": [{"sender_id": e["sender_id"], "nome": e["nome"]}
+                                            for e in g.cliente["empresas"]]})
     except Exception as e:
-        logger.exception(f"api_dia falhou sender_id={g.cliente['sender_id']} data={data_alvo}")
+        logger.exception(f"api_dia falhou sender_ids={g.cliente['sender_ids']} data={data_alvo}")
         return jsonify({"erro": f"Não foi possível carregar os pedidos agora ({type(e).__name__}). Tente de novo."}), 502
 
 
@@ -406,7 +459,7 @@ def api_dia():
 def api_canhoto(service_id):
     token = _CONFIG.get("vuupt_api", {}).get("token", "")
     servico = dados.buscar_servico(token, service_id)
-    if not servico or servico.get("sender_id") != g.cliente["sender_id"]:
+    if not servico or servico.get("sender_id") not in g.cliente["sender_ids"]:
         abort(404)
     checklist_id = dados.checklist_id_do_servico(servico)
     if not checklist_id:
@@ -439,7 +492,14 @@ def api_responder():
     if acao not in ACOES_VALIDAS:
         return jsonify({"erro": "Ação inválida."}), 400
 
-    sender_id = g.cliente["sender_id"]
+    # Login de grupo: o card diz de qual empresa é o insucesso. Sem o campo
+    # (tela antiga em cache, login avulso) vale a empresa do login.
+    try:
+        sender_id = int(corpo.get("sender_id") or g.cliente["sender_id"])
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Empresa inválida."}), 400
+    if sender_id not in g.cliente["sender_ids"]:
+        return jsonify({"erro": "Essa empresa não faz parte do seu acesso."}), 403
     if not buscar_pendentes_por_grupo(sender_id, failed_reason_id):
         return jsonify({"erro": "Esses pedidos já foram respondidos.", "resolvido": True}), 409
 
@@ -463,7 +523,7 @@ def api_responder():
     except Exception as e:
         logger.exception("aplicar_decisao falhou")
         return jsonify({"erro": f"Não foi possível aplicar a resposta ({type(e).__name__})."}), 502
-    logger.info(f"resposta insucesso cnpj={g.cliente['cnpj']} motivo={failed_reason_id} acao={acao} -> {resultados}")
+    logger.info(f"resposta insucesso cnpj={g.cliente['cnpj']} sender_id={sender_id} motivo={failed_reason_id} acao={acao} -> {resultados}")
     dados.invalidar_cache(sender_id)
     return jsonify({"ok": True, "resultados": [{**r, "data": r["data"].isoformat() if r.get("data") else None}
                                                for r in resultados]})
@@ -472,6 +532,26 @@ def api_responder():
 # ── Máscara de envio de pedidos (XML → fila → Stokki) ──────────────────────────
 # Pedido do Hugo, 08/09: ver envio_pedidos.py (dados/validação) e
 # enviar_stokki.py (worker que cria na Stokki respeitando a trava de sessão).
+
+def _empresa_envio() -> dict:
+    """Empresa em que o envio acontece. Login avulso: a própria. Login de
+    grupo: a do seletor da tela (cabeçalho X-Portal-Empresa; `?empresa=` nos
+    links de download) -- cada empresa é um cliente diferente na Stokki, então
+    fila, destinatários e validação do emitente são por empresa."""
+    pedido = auth.normalizar_cnpj(request.headers.get("X-Portal-Empresa") or request.args.get("empresa"))
+    if not pedido:
+        return g.cliente["empresas"][0]
+    for e in g.cliente["empresas"]:
+        if e["cnpj"] == pedido:
+            return e
+    abort(Response(jsonify({"erro": "Essa empresa não faz parte do seu acesso."}).get_data(), status=403,
+                   mimetype="application/json"))
+
+
+def _outras_empresas_envio() -> dict[str, str]:
+    atual = _empresa_envio()["cnpj"]
+    return {e["cnpj"]: e["nome"] for e in g.cliente["empresas"] if e["cnpj"] != atual}
+
 
 def _json_erro_envio(e: Exception, status: int = 400):
     return jsonify({"erro": str(e)}), status
@@ -482,8 +562,8 @@ def _json_erro_envio(e: Exception, status: int = 400):
 def api_envios_listar():
     conn = envios.conectar()
     try:
-        lista = envios.listar_envios(conn, g.cliente["cnpj"])
-        cfg = envios.config_stokki_cliente(conn, g.cliente["cnpj"], _CONFIG)
+        lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
+        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
@@ -514,7 +594,7 @@ def api_envios_analisar():
     n_planilhas = 0
     conn = envios.conectar()
     try:
-        cfg = envios.config_stokki_cliente(conn, g.cliente["cnpj"], _CONFIG)
+        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -528,7 +608,7 @@ def api_envios_analisar():
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, g.cliente["cnpj"])
+                        pedidos, rej = envios.ler_planilha(conteudo, nome, _empresa_envio()['cnpj'])
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
@@ -540,7 +620,7 @@ def api_envios_analisar():
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetido dentro do mesmo envio."})
                             continue
                         vistos.add(ped["chave_nfe"])
-                        v = envios.validar_item(conn, ped, g.cliente["cnpj"])
+                        v = envios.validar_item(conn, ped, _empresa_envio()['cnpj'], _outras_empresas_envio())
                         erros_sku, avisos_sku = envios.validar_skus(conn, ped, cfg)
                         if not v["ok"] or erros_sku:
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"] + erros_sku)})
@@ -562,7 +642,7 @@ def api_envios_analisar():
                                        "erro": "Repetida dentro do mesmo envio."})
                     continue
                 vistos.add(nfe["chave_nfe"])
-                v = envios.validar_item(conn, nfe, g.cliente["cnpj"])
+                v = envios.validar_item(conn, nfe, _empresa_envio()['cnpj'], _outras_empresas_envio())
                 if not v["ok"]:
                     rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "rotulo": f"NF {nfe['numero_nf']}",
                                        "erro": " ".join(v["erros"])})
@@ -572,12 +652,12 @@ def api_envios_analisar():
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
-        destinatarios = envios.info_destinatarios(conn, g.cliente["cnpj"], itens, _CONFIG)
+        destinatarios = envios.info_destinatarios(conn, _empresa_envio()['cnpj'], itens, _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
-    logger.info(f"analisar cnpj={g.cliente['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
+    logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat()})
@@ -587,7 +667,7 @@ def api_envios_analisar():
 @requer_cliente
 def api_envios_modelo_planilha():
     """Modelo .xlsx da Fresh Log pra importação por planilha (09/09)."""
-    conteudo = envios.gerar_modelo_planilha(g.cliente.get("nome") or "")
+    conteudo = envios.gerar_modelo_planilha(_empresa_envio()["nome"] or "")
     return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name="modelo_pedidos_freshlog.xlsx", max_age=0)
 
@@ -605,8 +685,8 @@ def api_envios_confirmar():
         return jsonify({"erro": "Envie no máximo 200 notas por vez."}), 400
     conn = envios.conectar()
     try:
-        cfg = envios.config_stokki_cliente(conn, g.cliente["cnpj"], _CONFIG)
-        criados = envios.confirmar_envios(conn, g.cliente["cnpj"], itens, _quem_envia(), _CONFIG, cfg["regra_xml"])
+        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
+        criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"])
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     except Exception as e:
@@ -614,7 +694,7 @@ def api_envios_confirmar():
         return jsonify({"erro": f"Não foi possível registrar os pedidos ({type(e).__name__})."}), 500
     finally:
         conn.close()
-    logger.info(f"confirmar cnpj={g.cliente['cnpj']} por={_quem_envia()} n={len(criados)}")
+    logger.info(f"confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={len(criados)}")
     n = len(criados)
     return jsonify({"ok": True, "criados": criados,
                     "mensagem": f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
@@ -632,7 +712,7 @@ def api_envios_acao(envio_id):
     tipo = corpo.get("tipo")
     conn = envios.conectar()
     try:
-        envio = envios.buscar_envio(conn, envio_id, g.cliente["cnpj"])
+        envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
         if not envio:
             return jsonify({"erro": "Pedido não encontrado."}), 404
         resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
@@ -640,7 +720,7 @@ def api_envios_acao(envio_id):
         return _json_erro_envio(e)
     finally:
         conn.close()
-    logger.info(f"acao cnpj={g.cliente['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
+    logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
     return jsonify({"ok": True, **resultado})
@@ -659,13 +739,13 @@ def _avisar_operacao_solicitacao(envio: dict, tipo: str, corpo: dict) -> None:
     if corpo.get("motivo"):
         detalhe += f"<p>Motivo informado: {corpo['motivo'][:300]}</p>"
     html = envelope_html(
-        f"<p><b>{g.cliente['nome']}</b> (CNPJ {g.cliente['cnpj_formatado']}) pediu pelo portal: <b>{rotulo}</b>.</p>"
+        f"<p><b>{_empresa_envio()['nome']}</b> (CNPJ {_empresa_envio()['cnpj_formatado']}) pediu pelo portal: <b>{rotulo}</b>.</p>"
         f"<p>Pedido {envio.get('codigo_pedido') or '(código ainda não identificado)'} · NF {envio.get('numero_nf')} · "
         f"{envio.get('destinatario_nome')} · situação no portal: {envios.ROTULOS_STATUS.get(envio['status'], envio['status'])}.</p>"
         f"{detalhe}<p>Ao concluir, marque a solicitação como atendida: "
         f"<code>portal_cliente/gerenciar_clientes.py solicitacoes</code>.</p>",
         rodape="Fresh Log · Portal do cliente · solicitação", cor_acento="#F5A623")
-    enviar_email([destino], f"[Portal] {rotulo} · NF {envio.get('numero_nf')} · {g.cliente['nome']}", html, email_cfg)
+    enviar_email([destino], f"[Portal] {rotulo} · NF {envio.get('numero_nf')} · {_empresa_envio()['nome']}", html, email_cfg)
 
 
 @app.route("/api/envios/<int:envio_id>/xml")
@@ -676,7 +756,7 @@ def api_envios_xml(envio_id):
     pedido foi lido (09/09)."""
     conn = envios.conectar()
     try:
-        envio = envios.buscar_envio(conn, envio_id, g.cliente["cnpj"])
+        envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
     finally:
         conn.close()
     if not envio:
@@ -701,7 +781,7 @@ def api_destinatarios_gravar():
     corpo = request.get_json(silent=True) or {}
     conn = envios.conectar()
     try:
-        envios.gravar_destinatario(conn, g.cliente["cnpj"], corpo.get("documento", ""), corpo.get("nome", ""),
+        envios.gravar_destinatario(conn, _empresa_envio()['cnpj'], corpo.get("documento", ""), corpo.get("nome", ""),
                                    corpo.get("horario_inicio", ""), corpo.get("horario_fim", ""),
                                    bool(corpo.get("requer_agendamento")), _CONFIG)
     except envios.ErroEnvio as e:
@@ -730,17 +810,26 @@ def exportar_xlsx():
     from openpyxl.utils import get_column_letter
 
     data_alvo = _data_da_query()
-    d = dados.montar_dia(g.cliente["sender_id"], data_alvo, _CONFIG)
+    d = dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG)
+    pedidos = d["pedidos"] + d.get("agendados_futuros", [])
+    empresa = request.args.get("empresa", "")   # filtro "Empresa" da tela (login de grupo)
+    if empresa.isdigit() and int(empresa) in g.cliente["sender_ids"]:
+        pedidos = [p for p in pedidos if p.get("sender_id") == int(empresa)]
+    colunas = _COLUNAS_XLSX
+    if len(g.cliente["empresas"]) > 1:   # login de grupo: de qual empresa é cada pedido
+        nomes = {e["sender_id"]: e["nome"] for e in g.cliente["empresas"]}
+        pedidos = [{**p, "empresa": nomes.get(p.get("sender_id"), "")} for p in pedidos]
+        colunas = [("empresa", "Empresa")] + _COLUNAS_XLSX
     wb = Workbook()
     ws = wb.active
     ws.title = data_alvo.strftime("%d-%m-%Y")
-    ws.append([rotulo for _, rotulo in _COLUNAS_XLSX])
+    ws.append([rotulo for _, rotulo in colunas])
     for c in ws[1]:
         c.font = Font(bold=True)
-    for p in d["pedidos"] + d.get("agendados_futuros", []):
-        ws.append([p.get(chave, "") if p.get(chave) is not None else "" for chave, _ in _COLUNAS_XLSX])
-    for i, (chave, rotulo) in enumerate(_COLUNAS_XLSX, start=1):
-        largura = max([len(rotulo)] + [len(str(p.get(chave) or "")) for p in d["pedidos"]] or [10])
+    for p in pedidos:
+        ws.append([p.get(chave, "") if p.get(chave) is not None else "" for chave, _ in colunas])
+    for i, (chave, rotulo) in enumerate(colunas, start=1):
+        largura = max([len(rotulo)] + [len(str(p.get(chave) or "")) for p in pedidos] or [10])
         ws.column_dimensions[get_column_letter(i)].width = min(max(largura + 2, 10), 60)
     ws.freeze_panes = "A2"
     buf = io.BytesIO()
