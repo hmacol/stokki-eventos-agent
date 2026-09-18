@@ -12,8 +12,11 @@ documentos_processados. Entram "em rota" e "programado" (rota do dia que
 ainda nao saiu); entregue, insucesso e pedido sem rota ficam de fora. As
 rotas sao buscadas UMA vez e recortadas por sender_id.
 
-Destinatarios: tabela `interno` (email multivalorado) com notificar_email
-ligado -- mesma regra das outras notificacoes por embarcador.
+Destinatarios: preferencias_notificacao.py (tipo "nfs_em_rota") -- o e-mail
+e o liga/desliga que o cliente escolhe no botao Notificacoes do portal;
+sem preferencia gravada vale o `interno.email` com o aviso ligado.
+interno.notificar_email = 0 nao e veto: so faz o aviso nascer desmarcado
+(o embarcador liga sozinho no portal).
 
 Travas:
   - config.yaml notificacao_nfs_em_rota.ativo (default True) desliga so
@@ -53,7 +56,7 @@ from email_utils import (COR_BORDA, COR_DESTAQUE, COR_PRIMARIA, COR_PRIMARIA_CLA
                          COR_TEXTO_SUAVE, enviar_email, envelope_html, notificacoes_automaticas_ativas)
 from notificar_execucao_agente import notificar_execucao
 from portal_cliente import dados_cliente
-from portal_cliente.auth_cliente import emails_do_campo
+import preferencias_notificacao
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -106,22 +109,17 @@ def resolver_destinos(emails: list[str], modo_teste: bool, forcar_destino: str) 
 # --- Dados --------------------------------------------------------------------
 
 def carregar_embarcadores(db_path: Path = DB_PATH) -> list[dict]:
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT sender_id, nome_remetente, apelido, email, notificar_email "
-            "FROM interno WHERE sender_id IS NOT NULL "
-            "ORDER BY COALESCE(apelido, nome_remetente)"
-        ).fetchall()
-    finally:
-        conn.close()
-    return [{
-        "sender_id": int(r["sender_id"]),
-        "nome": r["apelido"] or r["nome_remetente"] or f"Remetente {r['sender_id']}",
-        "emails": emails_do_campo(r["email"]),
-        "notificar": bool(r["notificar_email"]),
-    } for r in rows]
+    """E-mails e liga/desliga vem das preferencias do portal
+    (preferencias_notificacao.py, botao Notificacoes): o cliente escolhe o
+    e-mail e se quer este aviso; interno.notificar_email = 0 so faz a chave
+    nascer desmarcada (nao e veto)."""
+    embs = preferencias_notificacao.carregar_embarcadores(TIPO_NOTIFICACAO, db_path=db_path)
+    return sorted(({
+        "sender_id": int(sender_id),
+        "nome": emb["nome"] or f"Remetente {sender_id}",
+        "emails": emb["emails"],
+        "notificar": not emb["desligado"],
+    } for sender_id, emb in embs.items()), key=lambda e: e["nome"].lower())
 
 
 def pedidos_saindo_hoje(rotas: list[dict], sender_id: int, motoristas: dict) -> list[dict]:
@@ -295,7 +293,8 @@ def executar(config: dict, data_alvo: date, modo_teste: bool = False, sender_id:
                     r["sem_notas"] += 1
                     continue
                 if not emb["notificar"]:
-                    logger.info(f"  {nome}: {len(pedidos)} nota(s) -- notificar_email desligado.")
+                    logger.info(f"  {nome}: {len(pedidos)} nota(s) -- aviso desligado (pelo cliente no portal "
+                                f"ou nasceu desmarcado por notificar_email = 0).")
                     continue
                 if not emb["emails"]:
                     logger.warning(f"  {nome}: {len(pedidos)} nota(s) -- sem e-mail cadastrado.")

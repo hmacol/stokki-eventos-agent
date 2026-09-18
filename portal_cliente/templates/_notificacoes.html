@@ -1,0 +1,141 @@
+{# Modal "Notificações" do portal -- pedido do Hugo, 17/09. O cliente liga e
+   desliga cada tipo de e-mail e informa o e-mail em que quer recebê-los.
+   Os tipos, rótulos e descrições vêm da API (/api/notificacoes ->
+   preferencias_notificacao.TIPOS); aqui é só a tela. Aberto pelo botão
+   #btn-notificacoes do cabeçalho (base_cliente.html). #}
+<style>
+  #ntf-modal { border: 1px solid var(--borda); border-radius: 12px; padding: 0; width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 32px); background: var(--superficie); color: var(--texto); }
+  #ntf-modal::backdrop { background: rgba(10,12,20,0.55); }
+  #ntf-modal form { display: flex; flex-direction: column; max-height: calc(100vh - 34px); }
+  #ntf-modal .ntf-cab { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 12px; }
+  #ntf-modal .ntf-cab h2 { margin: 0; font-size: 17px; }
+  #ntf-modal .ntf-cab p { margin: 4px 0 0; font-size: 12.5px; color: var(--texto-suave); line-height: 1.5; }
+  /* 36x36: alvo de toque decente no celular (era 2px de padding em volta do ×) */
+  #ntf-modal .ntf-x { margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; background: none; border: none; color: var(--texto-suave); font-size: 22px; line-height: 1; cursor: pointer; border-radius: 8px; }
+  #ntf-modal .ntf-x:hover { color: var(--texto); background: var(--fundo); }
+  #ntf-modal .ntf-corpo { padding: 0 20px 4px; overflow-y: auto; }
+  #ntf-modal .ntf-grupo { margin: 14px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--texto-suave); }
+  #ntf-modal .ntf-item { display: flex; align-items: flex-start; gap: 14px; padding: 11px 0; border-top: 1px solid var(--borda); cursor: pointer; }
+  #ntf-modal .ntf-item .txt { flex: 1; min-width: 0; }
+  #ntf-modal .ntf-item b { display: block; font-size: 13.5px; font-weight: 600; }
+  #ntf-modal .ntf-item span.desc { display: block; margin-top: 2px; font-size: 12.5px; color: var(--texto-suave); line-height: 1.45; }
+  /* Chave liga/desliga: checkbox de verdade (role=switch), só a cara muda. */
+  #ntf-modal .ntf-chave { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 40px; height: 22px; margin: 1px 0 0; border-radius: 100px; background: var(--numero-fundo); cursor: pointer; transition: background 0.15s; }
+  #ntf-modal .ntf-chave::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 100px; background: #fff; transition: transform 0.15s; }
+  #ntf-modal .ntf-chave:checked { background: var(--acento); }
+  #ntf-modal .ntf-chave:checked::after { transform: translateX(18px); }
+  #ntf-modal .ntf-chave:focus-visible, #ntf-modal textarea:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  #ntf-modal .ntf-chave:disabled { opacity: 0.5; cursor: not-allowed; }
+  #ntf-modal label.ntf-email { display: block; margin: 16px 0 6px; font-size: 13.5px; font-weight: 600; }
+  #ntf-modal textarea { width: 100%; min-height: 70px; resize: vertical; padding: 9px 11px; border: 1px solid var(--borda); border-radius: 7px; background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; }
+  #ntf-modal .ntf-ajuda { margin: 6px 0 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; overflow-wrap: anywhere; }
+  #ntf-modal .ntf-pe { display: flex; align-items: center; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--borda); margin-top: 14px; }
+  #ntf-modal .ntf-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--texto-suave); }
+  #ntf-modal .ntf-status.erro { color: var(--erro-texto); font-weight: 600; }
+  #ntf-modal .ntf-status.ok { color: var(--acento-texto); font-weight: 600; }
+  html.tema-escuro #ntf-modal .ntf-status.erro { color: var(--st-falha); }
+  html.tema-escuro #ntf-modal .ntf-status.ok { color: var(--st-sucesso); }
+  @media (prefers-reduced-motion: reduce) { #ntf-modal .ntf-chave, #ntf-modal .ntf-chave::after { transition: none; } }
+</style>
+
+<dialog id="ntf-modal" aria-labelledby="ntf-titulo">
+  <form method="dialog" id="ntf-form">
+    <div class="ntf-cab">
+      <div>
+        <h2 id="ntf-titulo">Notificações por e-mail</h2>
+        <p>Escolha quais avisos a sua empresa recebe e em qual e-mail.</p>
+      </div>
+      <button type="button" class="ntf-x" id="ntf-fechar" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="ntf-corpo">
+      <div id="ntf-lista" aria-live="polite"><p class="ntf-ajuda">Carregando…</p></div>
+      <label class="ntf-email" for="ntf-emails">E-mail para receber as notificações</label>
+      <textarea id="ntf-emails" rows="3" spellcheck="false" autocomplete="off" placeholder="um e-mail por linha"></textarea>
+      <p class="ntf-ajuda" id="ntf-ajuda-email"></p>
+    </div>
+    <div class="ntf-pe">
+      <span class="ntf-status" id="ntf-status" role="status"></span>
+      <button type="button" class="botao-linha" id="ntf-cancelar">Cancelar</button>
+      <button type="submit" class="botao" id="ntf-salvar">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  const URL_API = {{ url_for('api_notificacoes') | tojson }};
+  const GRUPOS = { acompanhamento: 'Acompanhamento das entregas', acao: 'Avisos que pedem uma ação sua' };
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const modal = $('ntf-modal'), botao = $('btn-notificacoes');
+  if (!modal || !botao) return;
+
+  function status(texto, classe) {
+    const el = $('ntf-status');
+    el.textContent = texto || '';
+    el.className = 'ntf-status' + (classe ? ' ' + classe : '');
+  }
+
+  function desenhar(dados) {
+    let html = '', grupoAtual = null;
+    dados.tipos.forEach(function (t) {
+      if (t.grupo !== grupoAtual) { grupoAtual = t.grupo; html += '<div class="ntf-grupo">' + esc(GRUPOS[t.grupo] || '') + '</div>'; }
+      html += '<label class="ntf-item"><span class="txt"><b>' + esc(t.rotulo) + '</b><span class="desc">' + esc(t.descricao) + '</span></span>' +
+              '<input type="checkbox" role="switch" class="ntf-chave" data-tipo="' + esc(t.tipo) + '"' +
+              (t.ligado ? ' checked' : '') + (dados.somente_leitura ? ' disabled' : '') + '></label>';
+    });
+    $('ntf-lista').innerHTML = html;
+    $('ntf-emails').value = (dados.emails || []).join('\n');
+    $('ntf-emails').disabled = !!dados.somente_leitura;
+    $('ntf-salvar').disabled = !!dados.somente_leitura;
+    const cadastro = (dados.emails_cadastro || []).join(', ');
+    $('ntf-ajuda-email').textContent = 'Até ' + dados.max_emails + ' endereços, um por linha. ' +
+      (cadastro ? 'Se deixar em branco, usamos o e-mail do cadastro: ' + cadastro + '.' : 'Sem e-mail aqui nem no cadastro, nenhum aviso é enviado.');
+    status(dados.somente_leitura ? 'Seu usuário só tem acesso de leitura.' : '');
+  }
+
+  async function abrir() {
+    status('');
+    if (typeof modal.showModal === 'function') modal.showModal(); else modal.setAttribute('open', '');
+    try {
+      const r = await fetch(URL_API, { credentials: 'same-origin' });
+      const dados = await r.json();
+      if (!r.ok) throw new Error(dados.erro || 'Não foi possível carregar.');
+      desenhar(dados);
+    } catch (e) {
+      $('ntf-lista').innerHTML = '';
+      $('ntf-salvar').disabled = true;
+      status(e.message || 'Não foi possível carregar.', 'erro');
+    }
+  }
+
+  function fechar() { if (modal.open) modal.close(); botao.focus(); }
+
+  botao.addEventListener('click', abrir);
+  $('ntf-fechar').addEventListener('click', fechar);
+  $('ntf-cancelar').addEventListener('click', fechar);
+  // clique no fundo escuro fecha (o alvo do clique é o próprio <dialog>)
+  modal.addEventListener('click', function (ev) { if (ev.target === modal) fechar(); });
+
+  $('ntf-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const tipos = {};
+    modal.querySelectorAll('.ntf-chave').forEach(function (c) { tipos[c.dataset.tipo] = c.checked; });
+    $('ntf-salvar').disabled = true;
+    status('Salvando…');
+    try {
+      const r = await fetch(URL_API, { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipos: tipos, emails: $('ntf-emails').value }) });
+      const dados = await r.json();
+      if (!r.ok) throw new Error(dados.erro || 'Não foi possível salvar.');
+      desenhar(dados);
+      status('Preferências salvas.', 'ok');
+    } catch (e) {
+      status(e.message || 'Não foi possível salvar.', 'erro');
+    } finally {
+      $('ntf-salvar').disabled = false;
+    }
+  });
+})();
+</script>

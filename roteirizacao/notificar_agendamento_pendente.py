@@ -24,8 +24,6 @@ agendamento em dia.
 """
 import html
 import logging
-import re
-import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -36,10 +34,10 @@ _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
 from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_ERRO, COR_TEXTO, COR_BORDA, COR_FUNDO
+import preferencias_notificacao
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 EMAIL_TESTE = "hugo@freshlogbr.com"
 
 
@@ -98,21 +96,10 @@ def identificar_pendentes(servicos: list[dict], conjunto_agendamento: set[str],
 
 
 def _carregar_embarcadores_por_sender_id() -> dict:
-    if not DB_PATH.exists():
-        raise FileNotFoundError(f"Banco nao encontrado: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT sender_id, nome_remetente, apelido, email, cnpj_embarcador FROM interno WHERE sender_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    embs = {}
-    for r in rows:
-        raw = r["email"] or ""
-        emails = [e.strip() for e in re.split(r"[,;\t]+", raw) if e.strip() and "@" in e]
-        embs[r["sender_id"]] = {"nome": r["apelido"] or r["nome_remetente"] or "", "emails": emails,
-                                "cnpj": "".join(c for c in str(r["cnpj_embarcador"] or "") if c.isdigit())}
-    return embs
+    """Nome, e-mails, cnpj e a chave "desligado" de cada remetente -- vem
+    das preferências do portal (17/09: o embarcador escolhe no botão
+    Notificações o e-mail e se quer receber os avisos de agendamento)."""
+    return preferencias_notificacao.carregar_embarcadores("agendamento")
 
 
 def _codigo_pedido(servico: dict) -> str:
@@ -176,12 +163,17 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
     for s in pendentes:
         grupos[s.get("sender_id")].append(s)
 
-    enviados = falhas = sem_email = 0
+    enviados = falhas = sem_email = desligados = 0
     for sender_id, pedidos in grupos.items():
         emb = embarcadores.get(sender_id)
         if not emb or not emb["emails"]:
             logger.warning(f"  sender_id={sender_id}: {len(pedidos)} pedido(s) pendente(s) -- sem e-mail cadastrado.")
             sem_email += 1
+            continue
+        if emb.get("desligado"):
+            logger.info(f"  {emb['nome']}: {len(pedidos)} pedido(s) pendente(s) -- aviso de agendamento "
+                        f"desligado pelo cliente no portal, e-mail NÃO enviado.")
+            desligados += 1
             continue
 
         assunto = f"[URGENTE] Confirmação de agendamento necessária — {len(pedidos)} pedido(s)"
@@ -201,7 +193,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
         else:
             falhas += 1
 
-    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email}
+    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email, "desligados": desligados}
 
 
 def _registrar_pendentes(pedidos: list[dict], emb: dict) -> None:

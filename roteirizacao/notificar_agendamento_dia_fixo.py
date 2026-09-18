@@ -29,8 +29,6 @@ sender_id + e-mails do BD Interno + envelope visual da Freshlog).
 """
 import html
 import logging
-import re
-import sqlite3
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -43,28 +41,18 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ACENTO,
 )
 from regioes_dia_fixo import nomes_dias
+import preferencias_notificacao
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 EMAIL_TESTE = "hugo@freshlogbr.com"
 
 
 def _carregar_embarcadores_por_sender_id() -> dict:
-    if not DB_PATH.exists():
-        raise FileNotFoundError(f"Banco nao encontrado: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT sender_id, nome_remetente, apelido, email FROM interno WHERE sender_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    embs = {}
-    for r in rows:
-        raw = r["email"] or ""
-        emails = [e.strip() for e in re.split(r"[,;\t]+", raw) if e.strip() and "@" in e]
-        embs[r["sender_id"]] = {"nome": r["apelido"] or r["nome_remetente"] or "", "emails": emails}
-    return embs
+    """Nome, e-mails e a chave "desligado" de cada remetente -- vem das
+    preferências do portal (17/09: o embarcador escolhe no botão
+    Notificações o e-mail e se quer receber os avisos de agendamento)."""
+    return preferencias_notificacao.carregar_embarcadores("agendamento")
 
 
 def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
@@ -130,19 +118,24 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
     "sem_email"} pra quem chama montar um resumo.
     """
     if not agendados:
-        return {"enviados": 0, "falhas": 0, "sem_email": 0}
+        return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
 
     embarcadores = _carregar_embarcadores_por_sender_id()
     grupos = defaultdict(list)
     for item in agendados:
         grupos[item["servico"].get("sender_id")].append(item)
 
-    enviados = falhas = sem_email = 0
+    enviados = falhas = sem_email = desligados = 0
     for sender_id, itens in grupos.items():
         emb = embarcadores.get(sender_id)
         if not emb or not emb["emails"]:
             logger.warning(f"  sender_id={sender_id}: {len(itens)} pedido(s) agendado(s) por dia fixo -- sem e-mail cadastrado.")
             sem_email += 1
+            continue
+        if emb.get("desligado"):
+            logger.info(f"  {emb['nome']}: {len(itens)} pedido(s) agendado(s) por dia fixo -- aviso de agendamento "
+                        f"desligado pelo cliente no portal, e-mail NÃO enviado.")
+            desligados += 1
             continue
 
         assunto = f"[Freshlog] Entrega agendada para o dia da região — {len(itens)} pedido(s)"
@@ -159,4 +152,4 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
         else:
             falhas += 1
 
-    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email}
+    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email, "desligados": desligados}

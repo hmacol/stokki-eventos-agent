@@ -294,8 +294,11 @@ def notificar_ocorrencia_manual(service_id: int, codigo: str) -> dict:
         return {"ok": False, "erro": "Já foi perguntado hoje sobre esse pedido (ou aguardando resposta) "
                                      "-- só é possível notificar de novo amanhã."}
 
+    # ignorar_preferencia: o remetente pode ter desligado este aviso no
+    # portal (17/09), mas o clique aqui é decisão de quem opera.
     resultado = notificar_remetentes(
-        pendentes, config.get("email", {}), config.get("resposta_insucesso", {}), modo_teste=False)
+        pendentes, config.get("email", {}), config.get("resposta_insucesso", {}), modo_teste=False,
+        ignorar_preferencia=True)
 
     if resultado.get("enviados"):
         return {"ok": True, "mensagem": "E-mail de ocorrência enviado."}

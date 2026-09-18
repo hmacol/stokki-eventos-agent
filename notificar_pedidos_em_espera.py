@@ -23,7 +23,6 @@ import argparse
 import html
 import logging
 import re
-import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -37,6 +36,7 @@ _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
 from email_utils import enviar_email, notificacao_pedidos_em_espera_ativa
+import preferencias_notificacao
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
@@ -50,7 +50,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("notificador")
 
 CONFIG_PATH  = _RAIZ / "config.yaml"
-DB_PATH      = _RAIZ / "dados" / "dados.db"
 EMAIL_TESTE  = "hugo@freshlogbr.com"
 
 STATUS_EM_ESPERA_API = "On hold"
@@ -74,24 +73,10 @@ def _carregar_config():
 
 
 def _carregar_embarcadores_do_banco():
-    if not DB_PATH.exists():
-        raise FileNotFoundError(f"Banco nao encontrado: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT stkkc_id, nome_remetente, apelido, email, notificar_email "
-        "FROM interno WHERE stkkc_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    embs = {}
-    for r in rows:
-        raw = r["email"] or ""
-        emails = [e.strip() for e in re.split(r"[,;\t]+", raw) if e.strip() and "@" in e]
-        embs[r["stkkc_id"]] = {
-            "stkkc_id":  r["stkkc_id"],
-            "nome":      r["apelido"] or r["nome_remetente"] or "",
-            "emails":    emails,
-        }
+    """Nome, e-mails e a chave "desligado" por stkkc_id -- vem das
+    preferencias do portal (17/09: o embarcador escolhe no botao
+    Notificacoes o e-mail e se quer receber a cobranca de XML)."""
+    embs = preferencias_notificacao.carregar_embarcadores("pedidos_em_espera", chave="stkkc_id")
     logger.info(f"Banco: {len(embs)} embarcadores com stkkc_id")
     return embs
 
@@ -299,7 +284,7 @@ def main(modo_teste=False):
             for p in sem_stkkc:
                 logger.info(f"  {p['codigo_ps']}")
 
-        enviados = falhas = sem_email = 0
+        enviados = falhas = sem_email = desligados = 0
 
         for stkkc_id, pedidos in grupos.items():
             emb    = embarcadores[stkkc_id]
@@ -310,6 +295,12 @@ def main(modo_teste=False):
             if not emails:
                 logger.warning(f"  {nome}: {qtd} pedido(s) -- sem e-mail cadastrado.")
                 sem_email += 1
+                continue
+
+            if emb.get("desligado"):
+                logger.info(f"  {nome}: {qtd} pedido(s) -- cobranca de XML desligada pelo cliente no portal, "
+                            f"e-mail NAO enviado.")
+                desligados += 1
                 continue
 
             assunto = f"[Freshlog] {qtd} pedido(s) aguardando envio do XML"
@@ -341,6 +332,8 @@ def main(modo_teste=False):
         if detalhe_impressao:
             partes.append(detalhe_impressao)
         partes.append(f"{enviados} enviado(s), {falhas} falha(s), {sem_email} sem e-mail")
+        if desligados:
+            partes.append(f"{desligados} desligado(s) pelo cliente")
         if sem_stkkc:
             partes.append(f"{len(sem_stkkc)} sem embarcador cadastrado")
         resultado["detalhe"] = "; ".join(partes)

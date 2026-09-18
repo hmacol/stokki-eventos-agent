@@ -45,6 +45,7 @@ import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
 from email_utils import enviar_email, envelope_html
+import preferencias_notificacao as preferencias
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 
@@ -529,6 +530,56 @@ def api_responder():
                                                for r in resultados]})
 
 
+# ── Preferências de notificação ────────────────────────────────────────────────
+# Pedido do Hugo, 17/09: botão Notificações -- o próprio cliente liga/desliga
+# cada tipo de e-mail e informa o e-mail em que quer recebê-los. Regra e
+# validação em preferencias_notificacao.py (as rotinas de envio leem de lá).
+
+def _resposta_notificacoes(prefs: dict):
+    return jsonify({
+        "tipos": [{"tipo": tipo, "grupo": info["grupo"], "rotulo": info["rotulo"], "descricao": info["descricao"],
+                   "ligado": prefs["tipos"][tipo]} for tipo, info in preferencias.TIPOS.items()],
+        "emails": prefs["emails"],
+        "emails_cadastro": prefs["emails_cadastro"],
+        "max_emails": preferencias.MAX_EMAILS,
+        "somente_leitura": bool(g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA),
+    })
+
+
+@app.route("/api/notificacoes")
+@requer_cliente
+def api_notificacoes():
+    conn = auth.conectar()
+    try:
+        return _resposta_notificacoes(preferencias.ler(conn, g.cliente["cnpj"]))
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_notificacoes_salvar():
+    """Sempre no CNPJ da sessão -- nada do corpo escolhe o embarcador."""
+    _exige_pode_enviar()
+    corpo = request.get_json(silent=True) or {}
+    emails, tipos = corpo.get("emails", ""), corpo.get("tipos", {})
+    if isinstance(emails, str):
+        emails = emails.replace(";", "\n").replace(",", "\n").splitlines()
+    if not isinstance(emails, list) or not isinstance(tipos, dict):
+        return jsonify({"erro": "Dados inválidos."}), 400
+    conn = auth.conectar()
+    try:
+        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    logger.info(f"notificacoes cnpj={g.cliente['cnpj']} por={_quem_envia()} tipos={prefs['tipos']} "
+                f"emails={len(prefs['emails'])}")
+    return _resposta_notificacoes(prefs)
+
+
 # ── Máscara de envio de pedidos (XML → fila → Stokki) ──────────────────────────
 # Pedido do Hugo, 08/09: ver envio_pedidos.py (dados/validação) e
 # enviar_stokki.py (worker que cria na Stokki respeitando a trava de sessão).
@@ -848,6 +899,10 @@ chamados_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=ex
 import cotacao_web
 cotacao_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=exige_mesma_origem, config=_CONFIG,
                       secret=_SECRET, url_base=_URL_BASE)
+
+# ── Link público do canhoto (e-mail de resumo diário), 17/09 -- link_canhoto.py ──
+import link_canhoto
+link_canhoto.registrar(app, config=_CONFIG, secret=_SECRET)
 
 
 @app.errorhandler(404)

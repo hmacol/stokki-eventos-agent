@@ -194,6 +194,23 @@ class TestExecutar(unittest.TestCase):
                          motoristas={}, enviar=enviar, db_path=self.db)
         self.assertEqual((r["enviados"], r["falhas"]), (1, 1))
 
+    def test_cliente_que_desligou_no_portal_nao_recebe(self):
+        import preferencias_notificacao
+        conn = sqlite3.connect(self.db)
+        preferencias_notificacao.salvar(conn, "1", [], {"nfs_em_rota": False}, "cliente")
+        conn.close()
+        r = self._executar()
+        self.assertEqual(self.enviados, [])
+        self.assertEqual(r["enviados"], 0)
+
+    def test_email_de_notificacoes_do_portal_vence_o_do_cadastro(self):
+        import preferencias_notificacao
+        conn = sqlite3.connect(self.db)
+        preferencias_notificacao.salvar(conn, "1", ["avisos@a.com"], {}, "cliente")
+        conn.close()
+        self._executar()
+        self.assertEqual(self.enviados[0][0], ["avisos@a.com"])
+
     def test_filtro_por_sender_id(self):
         r = self._executar(sender_id=333)
         self.assertEqual(self.enviados, [])

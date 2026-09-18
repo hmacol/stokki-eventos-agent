@@ -49,7 +49,6 @@ embutido de um jeito ligeiramente diferente do resto do projeto.
 """
 import html
 import logging
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -63,6 +62,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
     COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
 )
+import preferencias_notificacao
 import tratativas
 
 logger = logging.getLogger(__name__)
@@ -84,22 +84,10 @@ def identificar_aguardando_resposta(insucessos: list[dict]) -> list[dict]:
 
 
 def _carregar_embarcadores_por_sender_id() -> dict:
-    import sqlite3
-    db_path = _RAIZ_PROJETO / "dados" / "dados.db"
-    if not db_path.exists():
-        raise FileNotFoundError(f"Banco nao encontrado: {db_path}")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT sender_id, nome_remetente, apelido, email FROM interno WHERE sender_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    embs = {}
-    for r in rows:
-        raw = r["email"] or ""
-        emails = [e.strip() for e in re.split(r"[,;\t]+", raw) if e.strip() and "@" in e]
-        embs[r["sender_id"]] = {"nome": r["apelido"] or r["nome_remetente"] or "", "emails": emails}
-    return embs
+    """Nome, e-mails e a chave "desligado" de cada remetente -- vem das
+    preferências do portal (17/09: o embarcador escolhe no botão
+    Notificações o e-mail e se quer receber este aviso)."""
+    return preferencias_notificacao.carregar_embarcadores("insucesso")
 
 
 def _dias_fixos_do_grupo(pedidos: list[dict]) -> tuple[dict[str, str], bool]:
@@ -279,12 +267,17 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
 
 
 def notificar_remetentes(pendentes: list[dict], config_email: dict, config_resposta: dict,
-                         modo_teste: bool = False) -> dict:
+                         modo_teste: bool = False, ignorar_preferencia: bool = False) -> dict:
     """
     Agrupa por (remetente, motivo) -- cada motivo tem pergunta
     diferente -- e manda 1 e-mail por combinação. Marca cada pedido
     como notificado (fingerprint_aguardando_resposta.py), mesmo em
     modo_teste NÃO marca (deixa livre pra testar de novo).
+
+    Remetente que desligou este aviso no portal (17/09) é pulado sem
+    marcar nada -- a pendência continua no portal e na Torre.
+    `ignorar_preferencia` é do botão 'Notificar' da Torre: ação
+    deliberada de quem opera, manda mesmo assim.
     """
     from motivos_falha import texto_do_motivo
     from fingerprint_aguardando_resposta import marcar_notificado
@@ -294,12 +287,17 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
     for s in pendentes:
         grupos[(s.get("sender_id"), s.get("failed_reason_id"))].append(s)
 
-    enviados = falhas = sem_email = 0
+    enviados = falhas = sem_email = desligados = 0
     for (sender_id, failed_reason_id), pedidos in grupos.items():
         emb = embarcadores.get(sender_id)
         if not emb or not emb["emails"]:
             logger.warning(f"  sender_id={sender_id}: {len(pedidos)} pedido(s) aguardando resposta -- sem e-mail cadastrado.")
             sem_email += 1
+            continue
+        if emb.get("desligado") and not ignorar_preferencia:
+            logger.info(f"  {emb['nome']}: {len(pedidos)} pedido(s) aguardando resposta -- aviso desligado "
+                        f"pelo cliente no portal, e-mail NÃO enviado.")
+            desligados += 1
             continue
 
         motivo_texto = texto_do_motivo(failed_reason_id)
@@ -339,4 +337,4 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
         else:
             falhas += 1
 
-    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email}
+    return {"enviados": enviados, "falhas": falhas, "sem_email": sem_email, "desligados": desligados}

@@ -31,8 +31,6 @@ anterior.
 """
 import logging
 import os
-import re
-import sqlite3
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -45,11 +43,10 @@ from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, CO
 from vuupt_client import VuuptClient
 from motivos_falha import texto_do_motivo
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo, marcar_respondido
+import preferencias_notificacao
 import tratativas
 
 logger = logging.getLogger(__name__)
-
-DB_PATH = _RAIZ / "dados" / "dados.db"
 
 # Trava contra aplicação SIMULTÂNEA do mesmo grupo -- um clique duplo
 # (duplo-clique, ou duas abas com o mesmo link) não deve duplicar/
@@ -89,14 +86,13 @@ def _email_do_remetente(sender_id) -> str:
     usada pra mandar o aviso original -- ver
     notificar_insucesso_aguardando_resposta.py::_carregar_embarcadores_por_sender_id).
     Usado só pra endereçar os e-mails de confirmação/aviso depois da
-    resposta -- a resposta em si não depende de e-mail nenhum."""
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT email FROM interno WHERE sender_id = ?", (sender_id,)).fetchone()
-    conn.close()
-    if not row or not row[0]:
-        return ""
-    emails = [e.strip() for e in re.split(r"[,;\t]+", row[0]) if e.strip() and "@" in e]
-    return emails[0] if emails else ""
+    resposta -- a resposta em si não depende de e-mail nenhum.
+
+    17/09: vale o e-mail de notificações que o embarcador informou no
+    portal (cai no do cadastro se vazio). A chave liga/desliga do aviso
+    NÃO vale aqui: é a confirmação de um clique dele."""
+    emb = preferencias_notificacao.carregar_embarcadores("insucesso").get(sender_id)
+    return emb["emails"][0] if emb and emb["emails"] else ""
 
 
 def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
