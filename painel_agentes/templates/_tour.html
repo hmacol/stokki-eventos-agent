@@ -11,6 +11,8 @@
      {% include "_tour.html" %}            (no fim do <body> da base)
      <button data-tour="portal">Guia</button>  (abre o tour "portal")
      window.Tour.registrar('portal', passos, { auto: true, pronto: fn, aoSair: fn })
+     (esperaMs: quanto tempo esperar o pronto() antes de desistir de abrir
+      sozinho; padrão 18s -- a Torre, que busca na Vuupt ao vivo, usa mais)
 
    Passo: { alvo: '#id' | function -> element | null (balão centralizado),
             titulo, texto (HTML ou function), capitulo?,
@@ -60,6 +62,9 @@
   @media (max-width: 640px) {
     .tour-balao, .tour-balao.centro { position: fixed; left: 8px !important; right: 8px; bottom: 8px; top: auto !important; width: auto; max-width: none; transform: none; }
     .tour-balao::before { display: none !important; }
+    /* folga no fim da página enquanto o guia roda: sem ela o último
+       bloco da tela não tem pra onde rolar e fica atrás do balão */
+    html.tour-ativo body::after { content: ""; display: block; height: 55vh; }
   }
 </style>
 <script>
@@ -152,7 +157,16 @@
       return;
     }
     foco.style.display = '';
-    if (rolar) {
+    if (rolar && MOBILE()) {
+      // No celular o balão fica fixo embaixo e cobriria um alvo no meio
+      // da tela (visto 17/09, guias do painel): centraliza o alvo no
+      // espaço que sobra ACIMA do balão; alvo maior que esse espaço mostra
+      // o começo dele, abaixo do cabeçalho fixo da página.
+      try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { el.scrollIntoView(); }
+      var livre = window.innerHeight - balao.offsetHeight - 16;
+      var ra = el.getBoundingClientRect();
+      window.scrollBy(0, ra.top - (ra.height >= livre - 64 ? 64 : (livre - ra.height) / 2));
+    } else if (rolar) {
       // elemento mais alto que a tela (tabela longa): mostra o começo dele
       var alto = el.getBoundingClientRect().height > window.innerHeight * 0.6;
       try { el.scrollIntoView({ block: alto ? 'start' : 'center', inline: 'nearest', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); }
@@ -293,13 +307,13 @@
     var forcar = params && params.get('tour') === '1';
     if (params && params.get('tour') === '0') return;
     if (!forcar && (!tour.opcoes.auto || visto(id))) return;
-    var tentativas = 0;
+    var tentativas = 0, limite = Math.ceil((tour.opcoes.esperaMs || 18000) / 300);
     (function espera() {
       if (st) return;
       var ok = true;
       try { ok = !tour.opcoes.pronto || !!tour.opcoes.pronto(); } catch (e) { ok = false; }
       if (ok) { iniciar(id); return; }
-      if (++tentativas < 60) setTimeout(espera, 300);
+      if (++tentativas < limite) setTimeout(espera, 300);
     })();
   }
 
@@ -318,6 +332,7 @@
       else autoIniciar(id);
     },
     iniciar: iniciar,
+    tem: function (id) { return !!(tours[id] && tours[id].passos.length); },
     sair: function () { sair(false); },
     visto: visto,
     esquecer: function (id) { try { localStorage.removeItem(chave(id)); } catch (e) {} },

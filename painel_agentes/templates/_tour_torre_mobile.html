@@ -1,0 +1,172 @@
+{# Roteiro do "Guia da tela" da Torre de Controle no CELULAR (/torre/mobile)
+   -- pedido do Hugo, 17/09. Mesmo conteúdo do _tour_torre.html, em textos
+   mais curtos: no celular o balão fica fixo embaixo e cobre parte da tela.
+   Entra sozinho pelo base_mobile.html (nome = _tour_<endpoint>.html).
+   Diferenças da tela que o roteiro respeita: cards .cartao/.cartao-rota em
+   vez de .card/.linha-rota, pipeline num <details>, botão Tratar sem
+   classe, e TOCAR num chip já abre o modal de exclusão (sem botão direito).
+   A barra de baixo (Torre / Planejamento) nunca é alvo: o balão ficaria em
+   cima dela.
+
+   O guia NUNCA dispara ação de verdade: os modais abrem como exemplo com o
+   "pendente" zerado (confirmar vira no-op) e o que ele muda de visual volta
+   como estava ao sair. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var q = function (sel) { return function () { return document.querySelector(sel); }; };
+  var cartaoDe = function (id) { return function () { var e = $(id); return e && e.closest('.cartao'); }; };
+  var tituloDe = function (id) { return function () { var e = $(id); return e && e.querySelector('h2'); }; };
+  var podeEditar = function () { return typeof PODE_EDITAR !== 'undefined' && PODE_EDITAR; };
+  var podeExcluir = function () { return typeof PODE_EXCLUIR_PEDIDO !== 'undefined' && PODE_EXCLUIR_PEDIDO; };
+  var temDados = function () { return typeof dadosAtuais !== 'undefined' && !!dadosAtuais; };
+
+  var inicial = null;
+  function guardar() {
+    if (inicial) return;
+    inicial = {
+      visao: $('visao-rotas') ? $('visao-rotas').value : null,
+      pipeline: $('detalhes-pipeline') ? $('detalhes-pipeline').open : false,
+      periodo: typeof periodoKpiAtivo !== 'undefined' ? periodoKpiAtivo : 'dia'
+    };
+  }
+  function fecharModais() {
+    try { fecharModalTratar(); } catch (e) {}
+    try { fecharModalExcluir(); } catch (e) {}
+  }
+  function periodo(p) { if (temDados() && periodoKpiAtivo !== p) trocarPeriodoKpi(p); }
+  function pipeline(abrir) { var d = $('detalhes-pipeline'); if (d) d.open = abrir; }
+  function visao(v) {
+    var s = $('visao-rotas');
+    if (!s || !v || s.value === v) return;
+    s.value = v; alternarVisaoRotas();
+  }
+  function exemploTratar() {
+    fecharModais();
+    tratarExcecao('guia');
+    excecaoPendenteTratar = null;   // sem pendente, confirmar não faz nada
+    $('tratar-descricao').textContent = 'Insucesso #PS-00000 · Cliente Exemplo (exemplo do guia)';
+  }
+  function exemploExcluir() {
+    fecharModais();
+    abrirModalExcluir({ dataset: { codigo: '#PS-00000 (exemplo do guia)', serviceId: '0', rotaId: '0' } });
+    chipPendenteExclusao = null;    // sem pendente, confirmar não faz nada
+  }
+  function restaurar() {
+    fecharModais();
+    if (!inicial) return;
+    try { visao(inicial.visao); pipeline(inicial.pipeline); periodo(inicial.periodo); } catch (e) {}
+    inicial = null;
+  }
+  var limpo = function (extra) { return function () { guardar(); fecharModais(); if (extra) extra(); }; };
+
+  var G = 'Visão geral', K = 'Indicadores', P = 'Pipeline', F = 'Fila de ação', R = 'Rotas', D = 'Resumos';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Torre de Controle no celular',
+      texto: '<p>É a mesma Torre do computador: mostra <b>o que precisa de alguém agora</b> e o andamento das rotas <b>ainda abertas</b>, de hoje e de até 14 dias atrás. Não tem data.</p><p>Toque em <b>Próximo</b> pra seguir. Pra reabrir, o botão <b>?</b> no topo.</p>',
+      antes: limpo() },
+
+    { alvo: '#semaforo', capitulo: G, titulo: 'O semáforo',
+      texto: '<p><b>Verde</b>: nada pendente. <b>Amarelo</b>: só atenção (sem rota, sem motorista). <b>Vermelho</b>: tem <b>insucesso</b> ou <b>rotina que falhou</b>. O número é quantas ações faltam tratar.</p>',
+      antes: limpo() },
+
+    { alvo: '.linha-data', capitulo: G, titulo: 'Histórico, alarme e atualizar',
+      texto: '<p><b>Histórico de Rotas</b>: rota concluída e dia passado se consultam lá. <b>🔔</b> liga ou desliga o bipe de item novo na fila. <b>↻</b> atualiza na hora; sozinha, a tela se atualiza a cada minuto.</p>',
+      antes: limpo() },
+
+    { alvo: '#kpis .abas-periodo', capitulo: K, titulo: 'Hoje, semana ou mês',
+      texto: '<p>Troca o período dos indicadores. A comparação é sempre com o <b>mesmo número de dias</b> do período anterior.</p>',
+      antes: limpo(function () { periodo('dia'); }) },
+
+    { alvo: '#kpis > .grade-kpis', capitulo: K, titulo: 'Os indicadores',
+      texto: '<p><b>Entregues</b>, <b>Sucesso</b> (meta <b>95%</b>), <b>Em rota</b>, <b>Sem rota</b>, <b>Insucessos</b>, rotas, pedidos por rota, duração e uso dos motoristas. Seta <b>verde = melhora</b>.</p><p><b>Sem rota</b> é o que vigiar: pedido pra hoje ou atrasado que não está em nenhuma rota. Resolve-se no Planejamento.</p>',
+      antes: limpo(function () { periodo('dia'); }) },
+
+    { alvo: cartaoDe('pipeline-resumo'), capitulo: P, titulo: 'As rotinas do dia',
+      texto: function () {
+        return '<p>Importação, Roteirização, Romaneios, Documentos, Expedição e Relatório. Bolinha <b>verde</b> rodou bem, <b>vermelha</b> falhou, <b>piscando</b> está rodando.</p>' + (podeEditar()
+          ? '<p>Em <b>Ver / rodar etapas</b> dá pra rodar uma na mão: dispara <b>de verdade</b>, pede confirmação, uma por vez.</p>'
+          : '<p>Em <b>Ver / rodar etapas</b> aparece a hora da última execução de cada uma.</p>');
+      },
+      antes: limpo(function () { pipeline(false); }) },
+
+    { alvo: tituloDe('card-excecoes'), capitulo: F, titulo: 'Fila de ação: comece por aqui',
+      texto: '<p><b>Tudo que precisa de uma pessoa</b>: insucesso de entrega e rotina que falhou (críticos), pedido sem rota, rota sem motorista, rascunho de amanhã estourando limite. <b>O objetivo do dia é zerar esta fila.</b></p>',
+      antes: limpo() },
+
+    { alvo: '#excecoes .excecao-vazia', capitulo: F, titulo: 'Fila zerada',
+      texto: '<p>É assim que fica quando está tudo resolvido. Com o alarme ligado, a Torre avisa quando entrar algo novo.</p>',
+      antes: limpo() },
+
+    { alvo: q('#excecoes > .cartao-excecao'), capitulo: F, titulo: 'Um item da fila',
+      texto: function () {
+        return '<p>Gravidade, quando foi, pedido e cliente, o <b>motorista</b> que marcou e o <b>motivo</b>.</p>' + (podeEditar()
+          ? '<p><b>Duplicar</b>: cria já uma entrega nova na Vuupt (<b>sem desfazer</b>) e tira o item da fila. <b>Notificar</b>: e-mail de verdade pro remetente. <b>Tratar</b>: registra o que foi feito. Todos pedem confirmação.</p>'
+          : '<p>Com o seu acesso aparecem só os links que levam pra tela onde se resolve.</p>');
+      },
+      antes: limpo() },
+
+    { alvo: '#modal-tratar .modal-excluir', capitulo: F, titulo: 'Tratar: dizer o que foi feito',
+      quando: podeEditar,
+      texto: '<p>Escolha <b>o que foi feito</b>; em <b>Outro</b>, escrever é obrigatório. <b>Tratar só registra</b>: faça a ação antes (Vuupt, Planejamento, cliente). Vira o histórico do pedido e libera a rota pra sair da Torre.</p><p style="color:var(--texto-suave)">Exemplo: o guia não grava nada.</p>',
+      antes: function () { guardar(); exemploTratar(); } },
+
+    { alvo: '#excecoes details.tratadas', capitulo: F, titulo: 'Tratadas e o Desfazer',
+      texto: '<p>O que já foi tratado fica aqui, com o motivo. <b>Desfazer</b> devolve pra fila <b>na hora, sem perguntar</b> (e não apaga entrega criada por um Duplicar).</p>',
+      antes: limpo() },
+
+    { alvo: tituloDe('card-rotas'), capitulo: R, titulo: 'Andamento das rotas',
+      texto: '<p>Rotas <b>ainda abertas</b>, hoje em cima. A rota fica na tela enquanto tem <b>parada por fazer</b> ou <b>insucesso sem tratar</b>. <b>Barra</b> é o resumo; <b>Chips</b> mostra cada parada.</p>',
+      antes: limpo() },
+
+    { alvo: q('#rotas .cartao-rota'), capitulo: R, titulo: 'Uma rota, parada por parada',
+      texto: '<p>O <b>número do chip é a Ordem de Entrega</b>. <b>Verde</b> entregue, <b>vermelho</b> insucesso, <b>azul pulsando</b> indo agora, <b>cinza</b> falta, <b>riscado</b> excluído.</p>',
+      antes: limpo(function () { visao('chips'); }) },
+
+    { alvo: q('#rotas .chip-pedido.acionavel'), capitulo: R, titulo: 'Tirar um pedido da rota',
+      quando: podeExcluir,
+      texto: '<p>Chip com <b>contorno tracejado</b> pode ser tirado da rota: é só <b>tocar nele</b>. Funciona mesmo com a rota rodando. Cuidado com toque sem querer: nada acontece antes de confirmar o motivo.</p>',
+      antes: limpo(function () { visao('chips'); }) },
+
+    { alvo: '#modal-excluir .modal-excluir', capitulo: R, titulo: 'Excluir da rota: o que acontece',
+      quando: podeExcluir,
+      texto: '<p>Motivo obrigatório. <b>Excluir não cancela o pedido</b>: ele sai desta rota e volta a ficar <b>sem rota</b>, no pool do Planejamento. Se era a última parada, a rota é cancelada. <b>Não tem desfazer.</b></p><p style="color:var(--texto-suave)">Exemplo: o guia não exclui nada.</p>',
+      antes: function () { guardar(); visao('chips'); exemploExcluir(); } },
+
+    { alvo: q('#rotas .cartao-rota.atrasada'), capitulo: R, titulo: 'Rota atrasada e o Encerrar',
+      texto: '<p>Rota de <b>dia anterior</b> ainda aberta. O certo é resolver a pendência. <b>Encerrar</b> tira da Torre mesmo com pendência, não mexe na Vuupt e <b>não tem volta</b> aqui (a rota segue no Histórico).</p>',
+      antes: limpo(function () { visao('chips'); }) },
+
+    { alvo: cartaoDe('mini-mapa'), capitulo: D, titulo: 'Mapa das rotas abertas',
+      texto: '<p>Cada ponto é uma parada, nas mesmas cores dos chips; o ponto escuro é o galpão. Toque num ponto pra ver o pedido.</p>',
+      antes: limpo() },
+
+    { alvo: cartaoDe('pedidos-status'), capitulo: D, titulo: 'Pedidos das rotas abertas',
+      texto: '<p>A conta dos indicadores em barra: entregues, em rota, aceitos, <b>sem rota</b> e insucessos. A nota embaixo diz o que ficou de fora.</p>',
+      antes: limpo() },
+
+    { alvo: cartaoDe('funil-stokki'), capitulo: D, titulo: 'A caminho (Stokki)',
+      texto: '<p>O que ainda está <b>dentro do galpão</b>, por etapa. <b>"Consulta adiada"</b> = uma rotina está rodando e a Torre espera pra não derrubar o login dela.</p>',
+      antes: limpo() },
+
+    { alvo: cartaoDe('amanha'), capitulo: D, titulo: 'Planejamento de amanhã',
+      texto: '<p>Rascunhos de rota do dia seguinte, quantos já foram enviados e os avisos (sem motorista, limite estourado). <b>abrir</b> leva pro Planejamento.</p>',
+      antes: limpo() },
+
+    { alvo: cartaoDe('tendencia'), capitulo: D, titulo: 'Últimos 7 dias úteis',
+      texto: '<p><b>Verde</b> entregue, <b>vermelho</b> falhou, por dia. Serve pra ver se o volume ou a taxa de falha saiu do normal.</p>',
+      antes: limpo() },
+
+    { alvo: null, capitulo: G, titulo: 'É isso',
+      texto: '<p><b>1.</b> Semáforo. <b>2.</b> Fila de ação de cima pra baixo: agir e depois Tratar. <b>3.</b> Vigiar o Sem rota. <b>4.</b> Rotas atrasadas.</p><p>A barra de baixo troca entre <b>Torre</b> e <b>Planejamento</b>. O <b>?</b> no topo reabre este guia.</p>',
+      antes: limpo() }
+  ];
+
+  window.Tour.registrar('torre_mobile', passos, {
+    auto: true, titulo: 'Torre de Controle',
+    pronto: temDados, esperaMs: 90000,   // a 1ª coleta na Vuupt leva uns 20s
+    aoSair: restaurar
+  });
+})();
+</script>

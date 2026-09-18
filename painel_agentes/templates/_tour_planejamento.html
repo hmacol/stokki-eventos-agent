@@ -1,0 +1,296 @@
+{# Roteiro do "Guia da tela" do Planejamento de Rotas -- pedido do Hugo,
+   17/09 (guias pros funcionários, no molde do portal do cliente).
+   Só o CONTEÚDO (ordem dos passos e textos); o motor está em _tour.html e
+   este arquivo entra sozinho pelo base.html (nome = _tour_<endpoint>.html).
+   Pra mudar um texto, é só editar aqui.
+
+   Vale pro desktop E pro modo celular (abas Pool / Rotas / Mapa / Mais):
+   cada passo diz em que aba o elemento mora (`aba`) e o guia troca de aba
+   antes de mostrar. Passos de elemento que não existe no momento (dia
+   passado, nível leitura, sem rascunho, sem rota enviada...) são pulados
+   sozinhos.
+
+   O guia NUNCA dispara ação de verdade:
+   - painel de importação, menus e modais são abertos só pela CLASSE
+     (.aberto), nunca pela função da tela que arma o "pendente": sem
+     pendente, os botões de confirmar dos modais são no-op;
+   - nunca clica em botão de ação (vários aqui NÃO pedem confirmação:
+     Rodar importação, Alocar motoristas, Publicar, Duplicar, Imprimir...);
+   - o que ele muda de visual (aba do celular, coluna recolhida, painel e
+     menus abertos) volta como estava ao sair. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var q = function (sel) { return function () { return document.querySelector(sel); }; };
+  var visivel = function (el) { return !!(el && (el.offsetWidth || el.offsetHeight)); };
+  var primeiroVisivel = function (sel) { return function () {
+    var l = document.querySelectorAll(sel);
+    for (var i = 0; i < l.length; i++) if (visivel(l[i])) return l[i];
+    return null;
+  }; };
+  var dentroDoCard = function (sel) { return function () {
+    var c = primeiroVisivel('#lista-rotas .card-rota:not(.colapsada)')();
+    return c && c.querySelector(sel);
+  }; };
+  var etapa = function (titulo) { return function () {
+    var l = document.querySelectorAll('#barra-agentes-planejamento .etapa');
+    for (var i = 0; i < l.length; i++) {
+      var t = l[i].querySelector('.titulo');
+      if (t && t.textContent.trim() === titulo) return l[i];
+    }
+    return null;
+  }; };
+  var celular = function () { return document.documentElement.classList.contains('modo-mobile'); };
+  var podeEditar = function () { return typeof PODE_EDITAR !== 'undefined' && PODE_EDITAR; };
+  var podeRodar = function () { return typeof PODE_EDITAR_AGENTES !== 'undefined' && PODE_EDITAR_AGENTES; };
+
+  var MODAIS = ['modal-tipo-roteirizacao', 'modal-transportadora', 'modal-nivel-horario'];
+  var MENUS = ['menu-motoristas', 'menu-lote', 'menu-risco'];
+  var inicial = null;
+  function guardar() {
+    if (inicial) return;
+    var pool = $('coluna-pool'), rotas = $('coluna-rotas');
+    inicial = {
+      aba: document.documentElement.dataset.aba || null,
+      poolColapsada: !!(pool && pool.classList.contains('colapsada')),
+      rotasColapsada: !!(rotas && rotas.classList.contains('colapsada'))
+    };
+  }
+  function coluna(c, colapsar) {
+    var el = $('coluna-' + c);
+    if (!el || celular() || typeof alternarColuna !== 'function') return;
+    if (el.classList.contains('colapsada') !== colapsar) alternarColuna(c, colapsar);
+  }
+  function irPraAba(nome) {
+    if (!celular() || !nome || document.documentElement.dataset.aba === nome) return;
+    var b = document.querySelector('#abas-mobile button[data-aba="' + nome + '"]');
+    if (b) b.click();
+  }
+  function fecharTudo() {
+    MODAIS.forEach(function (id) { var m = $(id); if (m) m.classList.remove('aberto'); });
+    MENUS.forEach(function (id) { var m = $(id); if (m) m.classList.remove('aberto'); });
+    var p = $('painel-importacao-filtro'); if (p) p.classList.remove('aberto');
+    var a = $('ajuda-pool'); if (a) a.hidden = true;
+    try { if (typeof fecharMenuContexto === 'function') fecharMenuContexto(); } catch (e) {}
+  }
+  function abrirModal(id) {
+    var m = $(id); if (!m) return;
+    m.classList.add('aberto');
+    // o observador de acessibilidade da tela dá foco no 1º campo (abre o
+    // teclado no celular e deixa o campo editável pelo teclado): solta.
+    setTimeout(function () { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }, 30);
+  }
+  function restaurar() {
+    fecharTudo();
+    if (!inicial) return;
+    try {
+      coluna('pool', inicial.poolColapsada);
+      coluna('rotas', inicial.rotasColapsada);
+      irPraAba(inicial.aba);
+    } catch (e) {}
+    inicial = null;
+  }
+  // Monta o antes() de cada passo: guarda o estado, fecha o que o passo
+  // anterior abriu, vai pra aba certa (celular), abre a coluna certa
+  // (desktop) e só então roda o extra do passo.
+  function preparar(p) {
+    var extra = p.antes;
+    p.antes = function () {
+      guardar(); fecharTudo(); irPraAba(p.aba);
+      if (p.aba === 'pool') coluna('pool', false);
+      if (p.aba === 'rotas') coluna('rotas', false);
+      if (extra) extra();
+    };
+    return p;
+  }
+
+  var G = 'Geral', A = 'Data e números', B = 'Rotinas', PL = 'Pool de pedidos', RT = 'Rotas', MP = 'Mapa';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Planejamento: onde as rotas nascem',
+      texto: '<p>De um lado fica o <b>pool</b>: os pedidos que estão na Vuupt <b>sem rota</b>. Do outro, as <b>rotas</b> do dia. O trabalho é passar os pedidos do pool pras rotas, escolher o motorista e <b>enviar</b>.</p><p>Duas ideias pra guardar:</p><ul><li><b>Rascunho</b> é só nosso: pode mexer à vontade, o motorista não vê. A rota só existe pra valer depois de <b>Confirmar e enviar</b>.</li><li><b>Dia que já passou é só consulta</b>: os botões de edição somem.</li></ul><p>Use <b>Próximo</b> e <b>Voltar</b> (ou as setas do teclado). Dá pra sair e reabrir pelo botão <b>Guia</b>.</p>' },
+
+    { alvo: '#data', capitulo: A, titulo: 'Dia do plano',
+      texto: '<p>Tudo na tela é <b>deste dia</b>: os rascunhos, as rotas enviadas e o que o pool considera "pra hoje". Normalmente se planeja <b>o dia seguinte</b>.</p><p>Troque a data e clique em <b>Buscar</b> (no celular, trocar já busca).</p>' },
+
+    { alvo: '.chips-kpi', capitulo: A, titulo: 'Os números do dia',
+      texto: '<ul><li><b>Rascunhos</b>: quantas rotas existem no plano.</li><li><b>Alocados</b>: pedidos já dentro de alguma rota.</li><li><b>No pool</b>: pedidos ainda sem rota. <b>Vermelho</b> enquanto for maior que zero.</li><li><b>Total</b>: alocados + pool.</li><li><b>Agendados</b> e <b>Publicadas</b> aparecem quando existem: entregas com data marcada e rotas oferecidas aos motoristas esperando alguém escolher.</li></ul>' },
+
+    { alvo: '#chip-sem-rota-hoje', capitulo: A, titulo: 'Sem rota hoje',
+      texto: '<p>Atenção: este número é sempre de <b>hoje</b>, não importa a data que você está planejando. São pedidos com entrega marcada até hoje que <b>não estão em nenhuma rota</b>. É o mesmo número da Torre de Controle.</p><p>Se não for zero, tem carga que não sai hoje se ninguém encaixar.</p>' },
+
+    { alvo: 'label.toggle-compacto', capitulo: A, titulo: 'Tamanho dos cartões',
+      texto: '<p>Muda como os pedidos aparecem no pool e nas rotas: <b>normais</b> (com cliente, endereço e selos), <b>compactos</b> ou <b>só o número</b>. Em dia cheio, "só número" deixa caber muito mais na tela; parando o mouse no cartão aparecem os detalhes.</p><p>É só visual e fica lembrado no seu navegador.</p>' },
+
+    { alvo: '#barra-agentes-planejamento', capitulo: B, aba: 'mais', titulo: 'As rotinas, na ordem do dia',
+      texto: '<p>Cada pílula é uma rotina, da esquerda pra direita na ordem em que o dia anda: <b>Estação de Impressão</b> (libera na Stokki os pedidos faturados), <b>Importação</b>, <b>Criar Rotas</b>, <b>Incrementar</b>, <b>Processar Documentos</b> (NF e boleto), <b>Gerar PDFs de Romaneio</b> e <b>Expedição</b> (baixa na Stokki o que foi entregue).</p><p>A bolinha diz como foi a última vez: <b>verde</b> ok, <b>vermelha</b> falhou, <b>piscando</b> rodando agora. Embaixo, quando rodou pela última vez.</p>' },
+
+    { alvo: etapa('Importação'), capitulo: B, aba: 'mais', titulo: 'Importação: trazer pedidos da Stokki',
+      quando: podeRodar,
+      texto: '<p>O <b>▶</b> de cada pílula roda a rotina <b>de verdade, na hora</b> (pede confirmação). Só roda <b>uma por vez</b>: se já tem uma rodando, a próxima entra na fila.</p><p>A <b>Importação</b> é a que mais se roda na mão: o cliente mandou pedido atrasado e ele ainda não apareceu no pool. O ▶ dela, em vez de rodar direto, abre um filtro.</p>' },
+
+    { alvo: '#painel-importacao-filtro', capitulo: B, aba: 'mais', titulo: 'Importar só o que interessa',
+      quando: podeRodar,
+      texto: '<p>Preencha o <b>pedido</b> (PS-…) ou o <b>embarcador</b> pra importar só aquilo, que é bem mais rápido. Em branco, importa tudo que está pronto na Stokki.</p><p>Cuidado: <b>Rodar importação começa na hora, sem perguntar.</b> Depois que terminar, clique em <b>Atualizar</b> no pool pra ver os pedidos novos.</p><p style="color:var(--texto-suave)">O guia só abriu o painel; não importou nada.</p>',
+      antes: function () { var p = $('painel-importacao-filtro'); if (p) p.classList.add('aberto'); } },
+
+    { alvo: etapa('Criar Rotas Diárias (Rascunho)'), capitulo: B, aba: 'mais', titulo: 'Criar Rotas Diárias',
+      texto: '<p>Roda o roteirizador em <b>todo o pool</b> e monta as rotas do dia como <b>rascunhos</b>, já com sugestão de motorista. Não envia nada pra Vuupt: é o ponto de partida pra você revisar aqui.</p>' },
+
+    { alvo: etapa('Incrementar Rotas'), capitulo: B, aba: 'mais', titulo: 'Incrementar Rotas (a rotina)',
+      texto: '<p>Encaixa pedidos novos nas rotas que <b>já foram enviadas</b> à Vuupt. Só entram pedidos que chegaram <b>até as 19h do último dia útil</b> antes da data do plano.</p><p>Não confunda com o botão laranja <b>Incrementar</b> do pool, que mexe só nos <b>rascunhos</b> e não tem esse corte de horário. Ele aparece mais à frente.</p>' },
+
+    { alvo: q('#barra-agentes-planejamento .etapa-tudo'), capitulo: B, aba: 'mais', titulo: 'Executar tudo',
+      texto: '<p>Roda a sequência inteira, uma rotina depois da outra: Impressão, Importação (sem filtro), Criar Rotas, Incrementar, Documentos e Romaneios. <b>A Expedição fica de fora.</b></p><p>Demora e ocupa a fila das rotinas até acabar: use quando for refazer o dia inteiro; pra um ajuste, rode só a rotina que falta.</p>' },
+
+    { alvo: '.resumo-agendados', capitulo: A, aba: 'mais', titulo: 'Pedidos agendados, dia a dia',
+      texto: '<p>Um cartão por dia com <b>entregas de data marcada</b> ainda não finalizadas: quantos pedidos, quantas caixas e pra que regiões. Serve pra enxergar o volume dos próximos dias.</p><p><b>"atrasado"</b> = a data já passou e o pedido não foi entregue. <b>⚠</b> = tem pedido com mais de 70 caixas. Clicar no cartão abre o planejamento daquele dia.</p>' },
+
+    { alvo: function () { var c = $('contagem-pool'); return c && (c.closest('.cabecalho-coluna') || c.parentElement); }, capitulo: PL, aba: 'pool', titulo: 'O pool',
+      texto: '<p>É a <b>foto ao vivo</b> dos pedidos que estão na Vuupt <b>sem rota</b> e que ainda não entraram em nenhum rascunho deste plano. O número é quantos faltam alocar.</p><p>Pedido que você tira de uma rota, ou rota que você descarta, <b>volta pro pool sozinho</b>.</p>' },
+
+    { alvo: '#botao-atualizar-pool', capitulo: PL, aba: 'pool', titulo: 'Atualizar o pool',
+      texto: '<p>Busca de novo na Vuupt <b>sem recarregar a tela</b> e sem mexer nas suas rotas: entram os pedidos novos e saem os que já não estão mais disponíveis. Use depois de uma importação, ou quando alguém avisar que mandou pedido.</p>' },
+
+    { alvo: '#busca-pool', capitulo: PL, aba: 'pool', titulo: 'Buscar e filtrar',
+      texto: '<p>A busca acha por <b>código, NF, remetente, destinatário ou endereço</b>. O botão <b>Filtros</b>, ao lado, tem três filtros a mais: <b>só o que precisa sair no dia</b>, faixa de <b>CEP</b> e faixa de <b>caixas</b>.</p><p>Tudo que está filtrado é o que o <b>Selecionar visíveis</b> pega. Os filtros ficam lembrados enquanto a aba estiver aberta.</p>' },
+
+    { alvo: '#secao-pool-hoje .cabecalho-secao-pool', capitulo: PL, aba: 'pool', titulo: 'Os blocos do pool',
+      texto: '<ul><li><b>Pra rotear hoje</b>: agendado pra este dia, atrasado, ou sem agendamento. É o que <b>tem</b> que sair.</li><li><b>Agendados pra depois</b>: começa fechado. Dá pra adiantar um, arrastando pra rota.</li><li><b>Fora da área de atendimento</b>: o roteirizador automático ignora; fica aqui pra você decidir.</li><li><b>A retirar no galpão</b>: o cliente vem buscar. Nunca entra em rota.</li></ul><p>Clique no título pra abrir ou fechar o bloco; <b>Selecionar</b> marca o bloco todo.</p>' },
+
+    { alvo: primeiroVisivel('#coluna-pool .item-parada'), capitulo: PL, aba: 'pool', titulo: 'Um pedido',
+      texto: function () {
+        return '<p>O <b>número</b> é o mesmo do ponto no mapa. Os selos: <b>bolinha azul</b> agendado pro dia, <b>triângulo vermelho</b> atrasado, <b>⚠ N caixas</b> pedido grande, <b>⏱</b> horário em que o cliente recebe.</p>' + (podeEditar()
+          ? '<p><b>Clique</b> seleciona (fica verde, aqui e no mapa). <b>Arraste</b> pra dentro de uma rota pra alocar. <b>Botão direito</b>' + (celular() ? ' (no celular, o <b>⋯</b>)' : '') + ' abre o menu do pedido: agendar, editar endereço, transportadora, nível do cliente.</p><p>O <b>×</b> do cartão <b>cancela o pedido na Vuupt</b>: pede confirmação e <b>não tem volta</b> (e não cancela na Stokki).</p>'
+          : '<p>Clique seleciona e centraliza no mapa. <b>Botão direito</b> abre os detalhes e deixa copiar o código.</p>');
+      } },
+
+    { alvo: '.barra-selecao', capitulo: PL, aba: 'pool', titulo: 'Criar rota, Roteirizar ou Incrementar?',
+      quando: function () { return podeEditar() && !celular(); },
+      texto: '<p>Com pedidos selecionados, três jeitos de virar rota:</p><ul><li><b>Criar rota</b> (verde): <b>uma</b> rota com exatamente o que você marcou, na ordem do pool. Você decide tudo.</li><li><b>Roteirizar</b> (azul): o sistema divide a seleção em <b>quantas rotas precisar</b>, separa seco de frio, ordena e sugere motorista.</li><li><b>Incrementar</b> (laranja): encaixa cada pedido no <b>rascunho mais próximo</b> (até 20 km) que ainda comporte. O que não couber fica no pool.</li></ul><p>Os três mexem só em <b>rascunho</b>: nada vai pra Vuupt, e dá pra desfazer descartando a rota.</p>' },
+
+    { alvo: null, capitulo: PL, aba: 'pool', titulo: 'Criar rota, Roteirizar ou Incrementar?',
+      quando: function () { return podeEditar() && celular(); },
+      texto: '<p>Quando você marca pedidos, aparece embaixo a barra de ações:</p><ul><li><b>Criar rota</b>: <b>uma</b> rota com o que você marcou.</li><li><b>Roteirizar</b>: o sistema divide em <b>quantas rotas precisar</b> e sugere motorista.</li><li><b>Incrementar</b>: encaixa cada pedido no <b>rascunho mais próximo</b> (até 20 km).</li><li><b>Adicionar à rota…</b>: manda pra uma rota que você escolhe.</li></ul><p>Tudo isso mexe só em <b>rascunho</b>. Já <b>endereço, transportadora e agendar</b> gravam direto na Vuupt.</p>' },
+
+    { alvo: '#modal-tipo-roteirizacao .modal-tipo-roteirizacao', capitulo: PL, aba: 'pool', titulo: 'Roteirizar: qual modelo',
+      quando: podeEditar,
+      texto: '<p>Deixe em <b>Automático</b>: ele testa todos os modelos e fica com o que gerar <b>menos rotas</b> (empate, menos km). Os outros servem pra comparar quando o resultado não agradou.</p><p>O <b>limite de pedidos por rota</b> vem em 16. Marque <b>Sem limite</b> pra cargas de muitos pedidos pequenos.</p><p style="color:var(--texto-suave)">Exemplo: o guia não roteirizou nada.</p>',
+      antes: function () { abrirModal('modal-tipo-roteirizacao'); }, posicao: 'direita' },
+
+    { alvo: '.barra-selecao', capitulo: PL, aba: 'pool', titulo: 'Corrigir vários de uma vez',
+      quando: function () { return podeEditar() && !celular(); },
+      texto: '<p>Na mesma barra, mais à direita, três botões aplicam a mesma correção em <b>todos os selecionados</b>: <b>Editar endereço</b>, <b>Transportadora</b> (redespacho) e <b>Agendar</b> (data e horário).</p><p>Atenção: os três <b>gravam direto na Vuupt</b>, não são rascunho. Pra um pedido só, as mesmas opções estão no botão direito dele.</p><p>Se a barra aparecer <b>cortada</b>, alargue a coluna do pool <b>arrastando a divisória</b> entre o pool e as rotas.</p>' },
+
+    { alvo: '#modal-transportadora .modal-editar-endereco', capitulo: PL, aba: 'pool', titulo: 'Transportadora (redespacho)',
+      quando: podeEditar,
+      texto: '<p>Pra pedido que a gente entrega <b>numa transportadora</b>, e ela leva ao destino final. Escolher a transportadora <b>troca o endereço de entrega do pedido pelo galpão dela</b>, direto na Vuupt.</p><p>É por esse endereço que o sistema reconhece o redespacho: o romaneio ganha a <b>canhoteira da transportadora</b>. A lista vem da planilha de transportadoras (só as do tipo TERCEIROS).</p><p style="color:var(--texto-suave)">Exemplo: o guia não alterou nenhum pedido.</p>',
+      antes: function () { abrirModal('modal-transportadora'); }, posicao: 'direita' },
+
+    { alvo: '#modal-nivel-horario .modal-nivel-horario', capitulo: PL, aba: 'pool', titulo: 'Nível e horário do cliente',
+      quando: podeEditar,
+      texto: '<p>Também no botão direito do pedido. Corrige uma característica do <b>cliente</b>, e passa a valer pra <b>todos os pedidos dele</b>:</p><ul><li><b>Nível 1 e 2</b>: entrega normal.</li><li><b>Nível 3</b>: entrega demorada; a rota conta o tempo e avisa quando estoura.</li><li><b>Nível 4</b>: rota exclusiva; só divide caminhão com outro pedido do mesmo endereço.</li></ul><p>O <b>horário de atendimento</b> é a janela em que o cliente recebe: a rota mostra em vermelho quando a chegada estimada cai fora dela.</p><p style="color:var(--texto-suave)">Exemplo: o guia não salvou nada.</p>',
+      antes: function () { abrirModal('modal-nivel-horario'); }, posicao: 'direita' },
+
+    { alvo: '#secao-pool-retirada', capitulo: PL, aba: 'pool', titulo: 'A retirar no galpão',
+      texto: function () {
+        return '<p>Pedidos que o <b>cliente vem buscar</b>. Não vão pro mapa nem pra rota, e saem daqui sozinhos quando a Stokki marca como enviado.</p>' + (podeEditar()
+          ? '<p>Quando o cliente retirar, marque o pedido e clique em <b>Expedir marcadas</b>: isso dá <b>baixa de verdade na Stokki</b> (pede confirmação).</p>' : '');
+      } },
+
+    { alvo: '.toolbar-rotas', capitulo: RT, aba: 'rotas', titulo: 'Ferramentas das rotas',
+      texto: function () {
+        return podeEditar()
+          ? '<p><b>+ Nova rota</b> cria um rascunho vazio pra você encher arrastando. Os três menus ao lado juntam o resto: <b>Motoristas</b>, <b>Lote</b> (ações em todas as rotas) e <b>Risco</b> (o que apaga coisa).</p>'
+          : '<p>Com o seu acesso, os menus têm só o que é de consulta: <b>Copiar escala pro WhatsApp</b>, <b>Salvar rotas em PDF</b> e <b>Imprimir todas</b>.</p>';
+      } },
+
+    { alvo: '#menu-motoristas', capitulo: RT, aba: 'rotas', titulo: 'Menu Motoristas',
+      texto: function () {
+        return (podeEditar()
+          ? '<ul><li><b>Disponibilidade de motoristas</b>: marque quem <b>não roda</b> no dia (folga, férias, atestado). Faça isso <b>antes</b> de alocar; vale também pras rotinas automáticas.</li><li><b>Alocar motoristas</b>: sugere motorista pras rotas que estão <b>sem</b>, respeitando disponibilidade, zona de preferência, rodízio de placa e equilíbrio entre eles. <b>Roda na hora, sem perguntar.</b></li><li><b>Desalocar</b>: tira o motorista de todos os rascunhos.</li>'
+          : '<ul>') + '<li><b>Copiar escala pro WhatsApp</b>: copia a lista "Nome - Rota N" pronta pra colar no grupo dos motoristas. Rota sem motorista e rota Lalamove ficam de fora.</li></ul>';
+      },
+      antes: function () { var m = $('menu-motoristas'); if (m) m.classList.add('aberto'); }, posicao: 'esquerda' },
+
+    { alvo: '#menu-lote', capitulo: RT, aba: 'rotas', titulo: 'Menu Lote',
+      texto: function () {
+        return '<ul>' + (podeEditar()
+          ? '<li><b>Publicar rotas pros motoristas</b>: oferece toda rota <b>sem motorista</b> no aplicativo, pra quem quiser pegar. <b>Avisa os motoristas de verdade</b> (mensagem e e-mail).</li><li><b>Cancelar publicações</b>: recolhe as que ninguém escolheu ainda.</li>' : '')
+          + '<li><b>Salvar rotas em PDF</b> e <b>Imprimir todas</b>: romaneio de todas as rotas. Vai <b>uma rota por vez</b> e demora (busca os documentos na Stokki): não feche a tela.</li></ul>';
+      },
+      antes: function () { var m = $('menu-lote'); if (m) m.classList.add('aberto'); }, posicao: 'esquerda' },
+
+    { alvo: '#menu-risco', capitulo: RT, aba: 'rotas', titulo: 'Menu Risco',
+      quando: podeEditar,
+      texto: '<ul><li><b>Cancelar todas as rotas</b>: cancela <b>na Vuupt</b> toda rota enviada que ainda não saiu. Elas voltam a ser rascunho.</li><li><b>Descartar todos os rascunhos</b>: apaga os rascunhos e devolve os pedidos pro pool. Rota já enviada não é afetada.</li></ul><p>Os dois pedem confirmação. É o "começar de novo" do dia: use sabendo o que está fazendo.</p>',
+      antes: function () { var m = $('menu-risco'); if (m) m.classList.add('aberto'); }, posicao: 'esquerda' },
+
+    { alvo: '#botao-enviar-todas', capitulo: RT, aba: 'rotas', titulo: 'Confirmar e enviar todas',
+      quando: podeEditar,
+      texto: '<p>É o fim do planejamento: cria <b>na Vuupt</b> todas as rotas que estão em rascunho. Antes abre um <b>resumo</b> (rota, motorista, paradas, avisos) pra você conferir e confirmar.</p><p>Depois de enviada, a rota <b>passa a valer pro motorista</b> e fica <b>travada</b> aqui. Se a Vuupt recusar algum pedido (já estava em outra rota), a rota sai sem ele e o pedido volta pro pool com um aviso.</p>' },
+
+    { alvo: '#abas-rotas', capitulo: RT, aba: 'rotas', titulo: 'Rascunhos, Ofertadas, Enviadas, Lalamove',
+      texto: '<p>Filtra as rotas pelo estado: <b>Rascunhos</b> (ainda editáveis), <b>Ofertadas</b> (publicadas, esperando um motorista escolher), <b>Enviadas</b> (já na Vuupt) e <b>Lalamove</b>. O número é quantas tem em cada.</p><p><b>⚠</b> na aba Lalamove = rota enviada que ainda <b>não tem corrida</b> nem horário marcado.</p>' },
+
+    { alvo: '#busca-rotas', capitulo: RT, aba: 'rotas', titulo: 'Achar um pedido nas rotas',
+      texto: '<p>Busca em <b>todas as rotas</b> de uma vez, por nome da rota, código, NF, remetente ou destinatário, inclusive nas que estão fechadas. É o jeito de responder "em que rota foi o pedido tal?".</p>' },
+
+    { alvo: primeiroVisivel('#lista-rotas .card-rota:not(.colapsada)'), capitulo: RT, aba: 'rotas', titulo: 'Uma rota',
+      texto: '<p>Em cima, a <b>cor</b> da rota (a mesma do mapa), o <b>nome</b> e, quando é carga grande, o <b>tipo de veículo</b> (VAN/HR, VUC, 3/4, Truck). Clicar no título fecha ou abre o cartão.</p><p>Embaixo: os <b>km</b>, as barras de <b>ocupação</b>, os avisos, o <b>motorista</b>, as <b>paradas na ordem de entrega</b> e os botões.</p>' },
+
+    { alvo: dentroDoCard('[id^="capacidade-"]'), capitulo: RT, aba: 'rotas', titulo: 'Ocupação e avisos',
+      texto: '<p>As barras comparam a rota com o limite: <b>100 caixas</b> e <b>16 paradas</b> (em veículo grande, o teto do veículo). <b>Verde</b> folgado, <b>amarelo</b> a partir de 90%, <b>vermelho</b> estourou.</p><p>As etiquetas abaixo avisam de coisa fora do padrão: parada a mais de 20 km das outras, tempo estimado alto, chegada fora do horário do cliente, nível 4 misturado.</p><p><b>São avisos, não travas</b>: o sistema deixa enviar. A decisão é sua.</p>' },
+
+    { alvo: dentroDoCard('select.select-motorista'), capitulo: RT, aba: 'rotas', titulo: 'Motorista da rota',
+      texto: function () {
+        return podeEditar()
+          ? '<p>Trocar aqui <b>grava na hora</b> (no rascunho, sem perguntar). Pra redistribuir, escolha <b>Sem motorista</b> e use <b>Motoristas ▸ Alocar</b>.</p><p>Escolher <b>LALAMOVE</b> abre as opções da corrida (veículo e horário). Enviar a rota <b>não chama</b> a Lalamove: a corrida, que é <b>paga</b>, só sai pelo botão <b>Lançar na Lalamove</b> ou no horário marcado.</p>'
+          : '<p>Quem vai levar a rota. Com o seu acesso, é só consulta.</p>';
+      } },
+
+    { alvo: dentroDoCard('ul[id^="lista-parada-"]'), capitulo: RT, aba: 'rotas', titulo: 'As paradas, na ordem',
+      texto: function () {
+        return '<p>A ordem aqui é a <b>ordem de entrega</b> que o motorista recebe, e é o número que sai no romaneio e nos chips da Torre.</p>' + (podeEditar()
+          ? '<p><b>Arraste</b> pra reordenar, pra <b>outra rota</b>, ou de volta <b>pro pool</b>. Prefere digitar a posição? Troque o <b>Reordenar</b>, acima, pra "digitando". No celular, segure o cartão um instante antes de arrastar.</p>' : '');
+      } },
+
+    { alvo: dentroDoCard('.acoes'), capitulo: RT, aba: 'rotas', titulo: 'Os botões da rota',
+      quando: podeEditar,
+      texto: '<ul><li><b>Otimizar sequência</b> e <b>Inverter</b>: reordenam as paradas (otimizar respeita os horários dos clientes).</li><li><b>Publicar pros motoristas</b>: oferece a rota no aplicativo. <b>Avisa na hora, sem perguntar.</b></li><li><b>Confirmar e enviar</b>: cria esta rota na Vuupt (mostra o resumo antes).</li><li><b>Descartar</b>: apaga o rascunho; os pedidos voltam pro pool.</li><li><b>Duplicar</b>, <b>Fundir com outra</b> e <b>Imprimir rota</b> (romaneio em PDF; funciona mesmo antes de enviar).</li></ul>' },
+
+    { alvo: primeiroVisivel('#lista-rotas .card-rota.enviada'), capitulo: RT, aba: 'rotas', titulo: 'Rota enviada',
+      texto: function () {
+        return '<p>Mais apagada e <b>travada</b>: já está na Vuupt e no celular do motorista. Mostra se ele <b>✅ confirmou</b>, <b>❌ não vai poder</b> ou <b>⏳ ainda não respondeu</b>.</p>' + (podeEditar()
+          ? '<p>Precisa mexer? <b>Cancelar rota</b> desfaz o envio <b>se o motorista ainda não saiu</b>: ela volta a ser rascunho com as mesmas paradas, você ajusta e envia de novo. Atenção: cancelar aqui <b>não cancela corrida da Lalamove</b>.</p>' : '');
+      } },
+
+    { alvo: '#map', capitulo: MP, aba: 'mapa', titulo: 'O mapa',
+      texto: '<p>Cada ponto é um pedido, com o <b>mesmo número</b> do cartão. <b>Vermelho</b> = ainda no pool. <b>Cor da rota</b> = alocado, com o trajeto desenhado. <b>Verde</b> = selecionado. O círculo verde é o galpão.</p><p>Clicar num ponto vermelho <b>seleciona o pedido</b>; num ponto de rota, mostra os dados da parada.</p>',
+      posicao: 'esquerda' },
+
+    { alvo: '.controle-mapa', capitulo: MP, aba: 'mapa', titulo: 'O que o mapa mostra',
+      texto: '<p>Liga e desliga camadas: <b>Não alocados</b> (o pool), <b>Alocados</b>, <b>Futuros</b> (agendados pra depois) e <b>Enviadas</b>. Pra montar rota à mão, ligue <b>Não alocados</b>.</p><p><b>⬠ Selecionar área</b>: clique no mapa ponto a ponto contornando uma região e dê <b>duplo clique</b> pra fechar. Todos os pedidos do pool lá dentro ficam selecionados, prontos pra <b>Criar rota</b> ou <b>Roteirizar</b>. Esc cancela.</p>' },
+
+    { alvo: function () { return celular() ? $('tour-abrir-mobile') : $('tour-abrir'); }, capitulo: G, aba: 'mais', titulo: 'O caminho de um dia',
+      texto: '<p><b>1.</b> Conferir a data. <b>2.</b> Importação e <b>Atualizar</b> o pool. <b>3.</b> Criar Rotas (ou Roteirizar a seleção). <b>4.</b> Revisar: avisos, ordem, pedidos que sobraram no pool. <b>5.</b> Disponibilidade e <b>Alocar motoristas</b>. <b>6.</b> <b>Confirmar e enviar</b>. <b>7.</b> Copiar a escala pro WhatsApp.</p><p>Este botão <b>Guia</b> reabre o passo a passo quando precisar.</p>',
+      posicao: 'direita' }
+  ].map(preparar);
+
+  window.Tour.registrar('planejamento', passos, {
+    auto: true, titulo: 'Planejamento',
+    // Abrir SOZINHO só com a tela completa (pool e rotas são desenhados
+    // dentro do initMap, callback do Google Maps) e em dia editável: num
+    // dia passado metade dos passos não existe, e a 1ª visita ficaria
+    // marcada como "guia visto" com um guia pela metade. O botão Guia
+    // funciona sempre.
+    pronto: function () {
+      if (!document.querySelector('.tooltip-parada')) return false;
+      var d = new Date(), hoje = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+      return typeof DATA_ALVO_ISO === 'undefined' || DATA_ALVO_ISO >= hoje;
+    },
+    esperaMs: 45000,
+    aoSair: restaurar
+  });
+})();
+</script>

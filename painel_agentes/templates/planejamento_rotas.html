@@ -1629,6 +1629,10 @@
       <a href="{{ url_for('torre_mobile') }}">Torre de Controle</a>
       <a href="{{ url_for('planejamento', data=data_alvo_input, modo='desktop') }}">Versão desktop</a>
       <button type="button" id="botao-tema-mobile">Alternar tema</button>
+      {# Guia da tela (17/09): no celular a barra lateral some, e com ela
+         o botão Guia do base.html. Nasce escondido; o base mostra quando
+         o roteiro (_tour_planejamento.html) está registrado. #}
+      <button type="button" id="tour-abrir-mobile" data-tour="planejamento" hidden>Guia desta tela</button>
       <form method="post" action="{{ url_for('logout') }}"><button type="submit">Sair</button></form>
     </div>
   </div>

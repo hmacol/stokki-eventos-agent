@@ -241,6 +241,17 @@
   .sidebar button.alterna-tema .icone[hidden] { display: none; }
   .sidebar button.alterna-tema .icone svg { width: 15px; height: 15px; }
 
+  /* Botão "Guia" (tour guiado da tela, 17/09): nasce [hidden] e só
+     aparece em tela que tem roteiro (_tour_<endpoint>.html). Mesmo
+     cuidado do ícone do tema: sem isto o display:flex do botão ganha do
+     [hidden]. */
+  .sidebar .rodape button.abre-guia { flex: none; width: auto; padding: 6px 9px; }
+  .sidebar .rodape button[hidden] { display: none; }
+  /* O guia tem que ficar por cima dos modais das telas (z-index 10000);
+     no portal do cliente o motor fica no 900 de sempre. */
+  html.tour-ativo .tour-veu { z-index: 10010; }
+  html.tour-ativo .tour-foco { z-index: 10011; }
+  html.tour-ativo .tour-balao { z-index: 10012; }
   /* Sidebar recolhida -- classe fica em <html>, aplicada já no <head>
      (ver script inline) pra não piscar a versão larga antes de colapsar. */
   html.sidebar-recolhida .sidebar { width: 68px; }
@@ -290,6 +301,8 @@
   html.sidebar-recolhida .sidebar button.alterna-tema { width: 100%; }
   html.sidebar-recolhida .sidebar button.sair .rotulo-sair { display: none; }
 
+  html.sidebar-recolhida .sidebar .rodape button.abre-guia { width: 100%; padding: 7px 0; }
+  html.sidebar-recolhida .sidebar button.abre-guia .rotulo-guia { display: none; }
   .area-conteudo {
     flex: 1;
     min-width: 0;
@@ -490,6 +503,11 @@
       botao.title = recolhida ? "Expandir menu" : "Recolher menu";
       botao.setAttribute("aria-label", botao.title);
     }
+        <button type="button" class="abre-guia" id="tour-abrir" data-tour="{{ request.endpoint }}" hidden
+                title="Guia da tela: passo a passo de cada campo e botão" aria-label="Abrir o guia desta tela">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M7.9 7.8a2.2 2.2 0 114 1.2c-.6.8-1.8 1.1-1.8 2.3"/><path d="M10.1 14.1v.1"/></svg>
+          <span class="rotulo-guia">Guia</span>
+        </button>
     aplicar(document.documentElement.classList.contains("sidebar-recolhida"));
     botao.addEventListener("click", function() {
       var recolhida = !document.documentElement.classList.contains("sidebar-recolhida");
@@ -574,3 +592,17 @@
 </script>
 </body>
 </html>
+{# Guia da tela (tour guiado, 17/09): o motor é o mesmo do portal do
+   cliente; o ROTEIRO de cada tela fica em _tour_<endpoint>.html e entra
+   sozinho quando existe (tela sem roteiro não ganha nada, nem o botão).
+   Pra criar o guia de uma tela nova basta criar o arquivo. #}
+{% include "_tour.html" %}
+{% include "_tour_" ~ (request.endpoint or "") ~ ".html" ignore missing %}
+<script>
+  (function() {
+    if (!window.Tour) return;
+    document.querySelectorAll("[data-tour][hidden]").forEach(function(botao) {
+      if (window.Tour.tem(botao.getAttribute("data-tour"))) botao.hidden = false;
+    });
+  })();
+</script>

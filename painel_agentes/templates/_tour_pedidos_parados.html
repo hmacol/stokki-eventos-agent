@@ -1,0 +1,73 @@
+{# Roteiro do "Guia da tela" de Pedidos Parados -- pedido do Hugo, 17/09
+   (guias pros funcionários, no mesmo molde do portal do cliente).
+   Só o CONTEÚDO (ordem dos passos e textos); o motor está em _tour.html e
+   este arquivo entra sozinho pelo base.html (nome = _tour_<endpoint>.html).
+   Os critérios de cada classificação vêm de TRATATIVAS_PEDIDOS_PARADOS.md:
+   se a regra mudar lá, atualizar o texto aqui. Passos cujo elemento não
+   está na tela (lista vazia, nível leitura) são pulados sozinhos.
+   O guia NUNCA dispara ação: só destaca; o destaque cobre o elemento, então
+   nem dá pra clicar em Duplicar/Encaminhar por engano durante o guia. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var celula = function (n) { return function () { return document.querySelector('#corpo-tabela tr:first-child td:nth-child(' + n + ')'); }; };
+  var podeEditar = function () { return typeof PODE_EDITAR !== 'undefined' && PODE_EDITAR; };
+
+  var G = 'Geral', B = 'Barra de cima', L = 'A lista', T = 'Classificar e tratar';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Pedidos parados: o que ficou no galpão',
+      texto: '<p>Aqui aparecem os pedidos que o galpão registrou como <b>parados</b> no Fresh Hub (freshhub.com.br/pedidos-parados): carga que devia ter saído e está lá.</p><p>O trabalho nesta tela tem sempre dois tempos: <b>1) classificar</b> o que aconteceu com o pedido e <b>2) disparar a tratativa</b> daquela classificação. Pedido só sai da sua frente quando a tratativa fica concluída.</p><p>Use <b>Próximo</b> e <b>Voltar</b> (ou as setas do teclado). Pra reabrir depois, botão <b>Guia</b> embaixo no menu lateral.</p>' },
+
+    { alvo: '#carimbo', capitulo: B, titulo: 'Quantos são e de quando é a lista',
+      texto: '<p>Mostra <b>quantos pedidos</b> estão na lista e há quanto tempo ela foi atualizada. A tela se atualiza <b>sozinha a cada minuto</b>, não precisa recarregar.</p><p>Se ficar <b>vermelho</b>, a última atualização falhou: o que está na tela pode estar velho.</p>',
+      posicao: 'esquerda' },
+
+    { alvo: function () { var c = $('so-pendentes'); return c && c.closest('label'); }, capitulo: B, titulo: 'Mostrar só não tratados',
+      texto: '<p>Marque pra esconder o que já tem <b>tratativa concluída</b> e ficar só com o que ainda depende de você. É o jeito mais rápido de ver o que falta no dia.</p>' },
+
+    { alvo: '#botao-copiar-tabela', capitulo: B, titulo: 'Copiar tabela',
+      texto: '<p>Copia a lista <b>do jeito que está filtrada</b>, uma linha por pedido no formato <b>Pedido - Volumes - Classificação</b>, pronta pra colar no WhatsApp ou num e-mail.</p>' },
+
+    { alvo: '#botao-verificar-stokki', capitulo: B, titulo: 'Consultar Stokki',
+      texto: '<p>Olha na <b>Stokki</b> cada pedido que está na tela (cerca de 1 segundo por pedido) e classifica sozinho:</p><ul><li>pedido <b>Cancelado</b> na Stokki vira <b>Cancelados</b>;</li><li>transportadora <b>CLIENTE RETIRA</b> vira <b>Cliente Retira</b>;</li><li>transportadora de <b>retirada</b> (terceira que coleta no galpão) também vira Cliente Retira, já como concluída e <b>sem e-mail</b> pro cliente.</li></ul><p>Não mexe em pedido que já tem outra tratativa concluída. <b>Não funciona enquanto um agente estiver rodando</b> no painel (a consulta derrubaria o login dele na Stokki): espere terminar.</p>' },
+
+    { alvo: '#botao-verificar-vuupt', capitulo: B, titulo: 'Consultar Vuupt',
+      texto: '<p>Olha na <b>Vuupt</b> o que aconteceu com cada pedido da tela e classifica sozinho:</p><ul><li>já está com motorista, ou sem agendamento, ou agendado <b>pra hoje</b>: <b>Em Rota</b>;</li><li>agendado <b>pra depois de hoje</b>: <b>Agendado</b>;</li><li>entregue com sucesso: <b>Entregue</b>.</li></ul><p>Insucesso e cancelado ficam <b>sem ação</b> (insucesso se trata na Torre). Só preenche quem está sem classificação ou troca entre essas três; o que você classificou de outro jeito <b>não é sobrescrito</b>.</p><p>Bom hábito: rodar as duas consultas <b>antes</b> de classificar à mão. Elas resolvem boa parte da lista.</p>' },
+
+    { alvo: 'thead tr:nth-child(2)', capitulo: L, titulo: 'Filtros por coluna',
+      texto: '<p>Cada coluna tem o seu filtro. Dá pra combinar, por exemplo <b>Classificação = (sem classificação)</b> pra ver o que ainda ninguém olhou, ou <b>Tratativa = Erro</b> pra ver o que falhou.</p><p>Os botões de cima (copiar e as duas consultas) valem só pro que está <b>visível</b> com o filtro.</p>' },
+
+    { alvo: celula(1), capitulo: L, titulo: 'O pedido',
+      texto: '<p>O <b>número</b> é um link: abre o pedido na <b>Stokki</b> numa aba nova.</p><p><b>Vuupt 🔍</b> procura se esse pedido já tem <b>entrega concluída com sucesso</b> na Vuupt e abre ela. Serve pra tirar a dúvida "isso já não foi entregue?".</p><p>Embaixo aparecem, em letra menor, o que as consultas viram por último na <b>Stokki</b> (situação e transportadora) e na <b>Vuupt</b> (status e agendamento). A etiqueta <b>"2x registrado"</b> avisa que o galpão registrou o mesmo pedido como parado mais de uma vez.</p>',
+      posicao: 'direita' },
+
+    { alvo: celula(4), capitulo: L, titulo: 'Dias parado = prioridade',
+      texto: '<p>Conta desde a <b>primeira vez</b> que o pedido foi registrado como parado, não só hoje.</p><p>Com <b>2 dias ou mais</b> a linha ganha a barra laranja e a etiqueta de prioridade: <b>trate esses primeiro</b>.</p>' },
+
+    { alvo: function () { return document.querySelector('#corpo-tabela tr.urgente'); }, capitulo: L, titulo: 'Linha vermelha: revisão urgente',
+      texto: '<p>Esse pedido foi classificado como <b>Entregue</b> e, <b>depois disso</b>, o galpão registrou ele como parado de novo. Ou não foi entregue de verdade, ou o registro está errado.</p><p>Confira o pedido e <b>classifique de novo</b>: reclassificar tira o alerta.</p>' },
+
+    { alvo: celula(5), capitulo: T, titulo: '1º passo: classificar',
+      texto: function () {
+        var lista = '<ul><li><b>Reenvio</b>: tem que voltar pra rota.</li><li><b>Cancelados</b> / <b>Descartar</b>: pedido cancelado, volta pro estoque.</li><li><b>Devolução Parcial</b>: parte voltou.</li><li><b>Verificar com Cliente</b>: ninguém sabe ainda o que fazer; o atendimento pergunta.</li><li><b>Cliente Retira</b>: o cliente (ou a transportadora dele) vem buscar.</li><li><b>Agendado</b>, <b>Em Rota</b>, <b>Entregue</b>: já está resolvido, só registrar.</li></ul>';
+        return podeEditar()
+          ? '<p>Escolha o que aconteceu com o pedido. <b>Grava na hora</b> que você escolhe, e dá pra trocar depois.</p>' + lista + '<p>Na dúvida, <b>não chute</b>: use Verificar com Cliente.</p>'
+          : '<p>Aqui aparece como o pedido foi classificado. O seu acesso é só de consulta, então a lista de escolha não aparece.</p>' + lista;
+      }, posicao: 'esquerda' },
+
+    { alvo: celula(6), capitulo: T, titulo: '2º passo: disparar a tratativa',
+      texto: '<p>O botão muda conforme a classificação:</p><ul><li><b>Duplicar</b> (Reenvio): cria uma <b>entrega nova de verdade na Vuupt</b>, que cai no pool do planejamento. <b>Não dá pra desfazer</b>, então antes confira com o Vuupt 🔍 se já não foi entregue. Nunca duplique cancelado ou devolução.</li><li><b>Encaminhar (Operações)</b> (Cancelados, Descartar, Devolução Parcial): abre uma <b>Demanda no Fresh Hub</b> pra equipe de Operações (cancelamento e retorno ao estoque).</li><li><b>Encaminhar (Atendimento)</b> (Verificar com Cliente): abre a Demanda pro atendimento falar com o cliente.</li><li><b>Notificar embarcador</b> (Cliente Retira): manda <b>e-mail</b> avisando que o pedido ainda não foi retirado.</li><li><b>Agendado / Em Rota / Entregue</b>: não tem botão, já fica como <b>✓ revisado</b>.</li></ul><p>Todo botão <b>pede confirmação</b> antes. Deu certo, aparece <b>✓</b> com o que foi feito; deu errado, <b>✗</b> com o motivo.</p>',
+      quando: podeEditar, posicao: 'esquerda' },
+
+    { alvo: '#tour-abrir', capitulo: G, titulo: 'Resumo da rotina',
+      texto: '<p><b>1.</b> Consultar Stokki e Vuupt. <b>2.</b> Filtrar "(sem classificação)" e classificar o resto, começando pelos de prioridade. <b>3.</b> Disparar a tratativa de cada um. <b>4.</b> Marcar "só não tratados" e conferir que a lista zerou.</p><p>Este botão <b>Guia</b> reabre o passo a passo quando precisar.</p>',
+      posicao: 'direita' }
+  ];
+
+  window.Tour.registrar('pedidos_parados', passos, {
+    auto: true, titulo: 'Pedidos Parados',
+    pronto: function () { return typeof ultimoOk !== 'undefined' && !!ultimoOk; }
+  });
+})();
+</script>
