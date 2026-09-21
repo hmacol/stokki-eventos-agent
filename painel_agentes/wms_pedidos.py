@@ -181,3 +181,103 @@ def alocar_fefo(conn, produto_id: int, qtd_un: float) -> tuple[list[dict], float
                           "validade": linha["validade"], "quantidade_un": round(se_pega, 3)})
         restante = round(restante - se_pega, 3)
     return alocacoes, max(restante, 0.0)
+
+
+def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
+    """
+    Cria ou atualiza o espelho do pedido e as linhas de item, ja resolvendo
+    produto e unidade. Idempotente por id_stokki + linha.
+    """
+    id_stokki = int(pedido["id_stokki"])
+    agora = wms.agora()
+    row = conn.execute("SELECT id FROM wms_pedidos WHERE id_stokki = ?", (id_stokki,)).fetchone()
+    if row:
+        pedido_id = row["id"]
+        conn.execute("UPDATE wms_pedidos SET situacao = ?, embarcador = ?, atualizado_em = ? WHERE id = ?",
+                     (pedido.get("situacao", ""), pedido.get("embarcador", ""), agora, pedido_id))
+    else:
+        cur = conn.execute("""
+            INSERT INTO wms_pedidos (id_stokki, codigo_ps, embarcador, situacao, estado_reserva, lido_em, atualizado_em)
+            VALUES (?,?,?,?,'PENDENTE',?,?)""",
+            (id_stokki, pedido.get("codigo_ps", ""), pedido.get("embarcador", ""),
+             pedido.get("situacao", ""), agora, agora))
+        pedido_id = cur.lastrowid
+
+    for item in itens:
+        r = resolver_item(conn, item)
+        conn.execute("""
+            INSERT INTO wms_pedido_itens (pedido_id, linha, sku, ean_linha, descricao, qtd_embalagem,
+                                          qtd_un, produto_id, motivo_pendencia)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(pedido_id, linha) DO UPDATE SET
+                sku = excluded.sku, ean_linha = excluded.ean_linha, descricao = excluded.descricao,
+                qtd_embalagem = excluded.qtd_embalagem, qtd_un = excluded.qtd_un,
+                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia""",
+            (pedido_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
+             item.get("descricao", ""), float(item["qtd_embalagem"]),
+             r["qtd_un"], r["produto_id"], r["motivo_pendencia"]))
+    return pedido_id
+
+
+def reservar_pedido(conn, pedido_id: int) -> dict:
+    """
+    Reserva FEFO o que cada item do pedido precisa. Nao mexe em saldo fisico.
+
+    Idempotente: itens que ja tem reserva ATIVA sao pulados. Falta de saldo
+    ou item nao resolvido nao levanta erro -- vira pendencia e o pedido fica
+    PARCIAL (decisao do Hugo, 21/09: avisar, nunca bloquear).
+
+    A comparacao que decide RESERVADO x PARCIAL arredonda a soma das
+    reservas a 3 casas (ROUND(...,3) no SQL): cada alocacao do FEFO ja vem
+    arredondada individualmente, mas a SOMA de varias delas pode acumular
+    residuo de ponto flutuante (ex.: 0.1 + 0.2 + 0.3 = 0.6000000000000001)
+    e marcar como PARCIAL um pedido que na pratica esta 100% reservado.
+    """
+    agora = wms.agora()
+    pendencias = []
+    criadas = 0
+    itens = conn.execute("SELECT * FROM wms_pedido_itens WHERE pedido_id = ? ORDER BY linha",
+                         (pedido_id,)).fetchall()
+    for item in itens:
+        ja = conn.execute("SELECT COUNT(*) n FROM wms_reservas WHERE item_id = ? AND estado = 'ATIVA'",
+                          (item["id"],)).fetchone()["n"]
+        if ja:
+            continue
+        if not item["produto_id"] or item["qtd_un"] is None:
+            pendencias.append(f"linha {item['linha']}: {item['motivo_pendencia']}")
+            continue
+        alocacoes, faltou = alocar_fefo(conn, item["produto_id"], item["qtd_un"])
+        for a in alocacoes:
+            conn.execute("""
+                INSERT INTO wms_reservas (pedido_id, item_id, produto_id, posicao, lote, validade,
+                                          quantidade_un, estado, origem, criado_em, atualizado_em)
+                VALUES (?,?,?,?,?,?,?,'ATIVA','FEFO',?,?)""",
+                (pedido_id, item["id"], item["produto_id"], a["posicao"], a["lote"], a["validade"],
+                 a["quantidade_un"], agora, agora))
+            criadas += 1
+        if faltou > 0:
+            pendencias.append(
+                f"linha {item['linha']} ({item['descricao']}): faltaram {faltou:g} UN em estoque")
+
+    total_itens = len(itens)
+    resolvidos = conn.execute("""
+        SELECT COUNT(*) n FROM wms_pedido_itens i
+         WHERE i.pedido_id = ? AND i.qtd_un IS NOT NULL
+           AND ROUND(i.qtd_un, 3) <= ROUND(COALESCE((SELECT SUM(r.quantidade_un) FROM wms_reservas r
+                                      WHERE r.item_id = i.id AND r.estado IN ('ATIVA','CONSUMIDA')), 0), 3)
+        """, (pedido_id,)).fetchone()["n"]
+    estado = "RESERVADO" if total_itens and resolvidos == total_itens else "PARCIAL"
+    conn.execute("UPDATE wms_pedidos SET estado_reserva = ?, atualizado_em = ? WHERE id = ?",
+                 (estado, agora, pedido_id))
+    return {"estado": estado, "reservas": criadas, "pendencias": pendencias}
+
+
+def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
+    """Libera as reservas ATIVAS do pedido e marca o pedido como CANCELADO."""
+    agora = wms.agora()
+    cur = conn.execute(
+        "UPDATE wms_reservas SET estado = 'CANCELADA', atualizado_em = ? WHERE pedido_id = ? AND estado = 'ATIVA'",
+        (agora, pedido_id))
+    conn.execute("UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', atualizado_em = ? WHERE id = ?",
+                 (agora, pedido_id))
+    return cur.rowcount

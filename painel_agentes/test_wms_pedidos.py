@@ -216,5 +216,81 @@ class TestFEFO(BaseWMS):
         self.assertEqual(lote_a["disponivel"], 6)
 
 
+class TestReservarPedido(BaseWMS):
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'111111111111', '222222222222', 6, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        self.itens = [
+            {"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+             "descricao": "PRODUTO 1", "qtd_embalagem": 4},
+        ]
+        self.pedido = {"id_stokki": 39751, "codigo_ps": "PS-39751",
+                       "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"}
+
+    def test_registrar_pedido_grava_itens_resolvidos(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        item = self.conn.execute("SELECT * FROM wms_pedido_itens WHERE pedido_id = ?", (pid,)).fetchone()
+        self.assertEqual(item["produto_id"], 1)
+        self.assertEqual(item["qtd_un"], 4)
+
+    def test_registrar_duas_vezes_nao_duplica(self):
+        pid1 = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        pid2 = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        self.assertEqual(pid1, pid2)
+        n = self.conn.execute("SELECT COUNT(*) n FROM wms_pedido_itens").fetchone()["n"]
+        self.assertEqual(n, 1)
+
+    def test_reserva_completa_marca_pedido_como_reservado(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(r["estado"], "RESERVADO")
+        self.assertEqual(r["reservas"], 1)
+        reserva = self.conn.execute("SELECT * FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["lote"], "L-A")
+        self.assertEqual(reserva["quantidade_un"], 4)
+        self.assertEqual(reserva["estado"], "ATIVA")
+
+    def test_reservar_duas_vezes_nao_duplica_reserva(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        n = self.conn.execute("SELECT COUNT(*) n FROM wms_reservas WHERE estado='ATIVA'").fetchone()["n"]
+        self.assertEqual(n, 1)
+
+    def test_sem_saldo_suficiente_fica_parcial_e_nunca_falha(self):
+        itens = [dict(self.itens[0], qtd_embalagem=99)]
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, itens)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(r["estado"], "PARCIAL")
+        self.assertTrue(any("falt" in p.lower() for p in r["pendencias"]))
+        self.assertEqual(self.conn.execute(
+            "SELECT SUM(quantidade_un) s FROM wms_reservas").fetchone()["s"], 10)
+
+    def test_item_nao_resolvido_nao_vira_reserva(self):
+        itens = [{"linha": 1, "sku": "FANTASMA", "ean_linha": "000",
+                  "descricao": "NAO EXISTE", "qtd_embalagem": 1}]
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, itens)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(r["reservas"], 0)
+        self.assertEqual(r["estado"], "PARCIAL")
+        self.assertTrue(r["pendencias"])
+
+    def test_cancelar_reservas_libera_o_disponivel(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        wms_pedidos.cancelar_reservas(self.conn, pid, "pedido cancelado na Stokki")
+        linha = wms_pedidos.disponivel_por_lote(self.conn, 1)[0]
+        self.assertEqual(linha["disponivel"], 10)
+        estado = self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id = ?",
+                                   (pid,)).fetchone()["estado_reserva"]
+        self.assertEqual(estado, "CANCELADO")
+
+
 if __name__ == "__main__":
     unittest.main()
