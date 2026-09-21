@@ -131,3 +131,53 @@ def resolver_item(conn, item: dict) -> dict:
 
     return {"produto_id": None, "qtd_un": None,
             "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN {ean or '-'})"}
+
+
+def disponivel_por_lote(conn, produto_id: int) -> list[dict]:
+    """
+    Saldo de um produto por (posicao, lote, validade), ja descontando as
+    reservas ATIVAS. Ordem FEFO: quem vence primeiro vem primeiro; sem
+    validade vai pro fim.
+
+    O disponivel e sempre derivado -- wms_saldos nunca e tocado pela reserva.
+    """
+    rows = conn.execute("""
+        SELECT s.posicao, s.lote, s.validade, s.quantidade AS saldo,
+               COALESCE((SELECT SUM(r.quantidade_un) FROM wms_reservas r
+                          WHERE r.produto_id = s.produto_id AND r.posicao = s.posicao
+                            AND r.lote = s.lote AND r.validade = s.validade
+                            AND r.estado = 'ATIVA'), 0) AS reservado
+          FROM wms_saldos s
+          JOIN wms_posicoes p ON p.codigo = s.posicao AND p.ativo = 1
+         WHERE s.produto_id = ? AND s.quantidade > 0
+         ORDER BY s.validade = '', s.validade, s.posicao""", (int(produto_id),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["saldo"] = round(float(d["saldo"]), 3)
+        d["reservado"] = round(float(d["reservado"]), 3)
+        d["disponivel"] = round(d["saldo"] - d["reservado"], 3)
+        out.append(d)
+    return out
+
+
+def alocar_fefo(conn, produto_id: int, qtd_un: float) -> tuple[list[dict], float]:
+    """
+    Distribui qtd_un pelos lotes disponiveis, do que vence primeiro pro que
+    vence depois. Devolve (alocacoes, faltante).
+
+    Faltar saldo nao e erro (decisao do Hugo, 21/09): aloca o que da e diz
+    quanto faltou, pra virar pendencia.
+    """
+    restante = round(float(qtd_un), 3)
+    alocacoes = []
+    for linha in disponivel_por_lote(conn, produto_id):
+        if restante <= 0:
+            break
+        se_pega = min(linha["disponivel"], restante)
+        if se_pega <= 0:
+            continue
+        alocacoes.append({"posicao": linha["posicao"], "lote": linha["lote"],
+                          "validade": linha["validade"], "quantidade_un": round(se_pega, 3)})
+        restante = round(restante - se_pega, 3)
+    return alocacoes, max(restante, 0.0)
