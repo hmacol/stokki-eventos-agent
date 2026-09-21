@@ -4,12 +4,10 @@
 <style>
   main { max-width: 1400px; margin: 0 auto; padding: 20px 28px 48px; display: flex; flex-direction: column; gap: 16px; }
   .barra-topo { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .data-nav { display: inline-flex; align-items: center; gap: 4px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 3px; }
-  .data-nav button { width: 30px; height: 30px; border: none; background: transparent; color: var(--texto-suave); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .data-nav button:hover { background: var(--fundo); color: var(--texto); }
-  .data-nav button svg { width: 14px; height: 14px; }
-  .data-nav .dia { font-weight: 700; font-size: 13px; padding: 0 8px; min-width: 150px; text-align: center; }
-  .data-nav input[type=date] { border: none; background: transparent; color: var(--texto); font-family: inherit; font-size: 13px; font-weight: 700; width: 0; opacity: 0; position: absolute; }
+  .periodo-nav { display: inline-flex; align-items: center; gap: 8px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 5px 10px; }
+  .periodo-nav svg { width: 14px; height: 14px; color: var(--texto-suave); flex: none; }
+  .periodo-nav select { border: none; background: transparent; color: var(--texto); font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer; outline: none; }
+  .periodo-nav .intervalo { color: var(--texto-suave); font-size: 12px; font-variant-numeric: tabular-nums; }
   .carimbo { color: var(--texto-suave); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
   .carimbo svg { width: 13px; height: 13px; }
   .carimbo.erro { color: var(--erro); font-weight: 600; }
@@ -61,6 +59,16 @@
   .rolagem { overflow-x: auto; padding: 0 8px 6px; }
   table { border-collapse: collapse; width: 100%; }
   th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+  /* Lista corrida (21/09): cada dia é anunciado por uma faixa, como na
+     Torre. Sem `position: sticky` no cabeçalho -- a .rolagem (overflow-x)
+     vira o contêiner de referência e a barra grudaria no topo dela, que
+     sai da tela junto com a página. */
+  tr.faixa-dia td { background: var(--fundo); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); padding: 6px 10px; }
+  tr.faixa-dia td b { color: var(--texto); }
+  tr.faixa-dia .qtd { font-weight: 600; text-transform: none; letter-spacing: 0; }
+  td.col-data { white-space: nowrap; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .chip-filtro { display: inline-flex; align-items: center; gap: 6px; background: var(--acento-bg, var(--fundo)); color: var(--acento); border: 1px solid var(--acento); border-radius: 100px; padding: 4px 6px 4px 11px; font-size: 12px; font-weight: 600; }
+  .chip-filtro button { border: none; background: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; }
   td { padding: 10px 10px; border-bottom: 1px solid var(--borda); vertical-align: middle; font-size: 12.5px; }
   tr:last-child td { border-bottom: none; }
   td.nw { white-space: nowrap; }
@@ -72,9 +80,7 @@
   td .falha { color: var(--st-falha); font-weight: 600; }
   .vazio { padding: 28px 18px; color: var(--texto-suave); text-align: center; font-size: 13px; }
   .rodape-tabela { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--borda); color: var(--texto-suave); font-size: 12px; flex-wrap: wrap; }
-  .paginacao { display: inline-flex; gap: 4px; align-items: center; }
-  .paginacao button { border: 1px solid var(--borda); background: none; color: var(--texto); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 12px; }
-  .paginacao button:disabled { opacity: 0.4; cursor: default; }
+  .filtros-ativos { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--borda); flex-wrap: wrap; }
 
   /* Seletor de colunas */
   .botao-linha.ativo { border-color: var(--acento); color: var(--acento); }
@@ -121,12 +127,15 @@
 {% block conteudo %}
 <main>
   <div class="barra-topo">
-    <div class="data-nav">
-      <button type="button" id="dia-ant" title="Dia anterior"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
-      <span class="dia" id="dia-rotulo" style="position: relative; cursor: pointer;" title="Escolher data">—<input type="date" id="dia-input"></span>
-      <button type="button" id="dia-prox" title="Dia seguinte"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button>
+    <div class="periodo-nav">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+      <select id="periodo" aria-label="Período mostrado na lista">
+        <option value="7">Últimos 7 dias</option>
+        <option value="14">Últimos 14 dias</option>
+        <option value="30">Últimos 30 dias</option>
+      </select>
+      <span class="intervalo" id="periodo-intervalo"></span>
     </div>
-    <button type="button" class="botao-linha" id="hoje">Hoje</button>
     <span class="carimbo" id="carimbo">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
       <span id="carimbo-texto">Carregando…</span>
@@ -140,7 +149,7 @@
     {% endif %}
     <a class="botao-linha" id="exportar" href="#" style="margin-left: auto;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-      <span>Exportar planilha do dia</span>
+      <span>Exportar planilha do período</span>
     </a>
   </div>
 
@@ -173,9 +182,11 @@
             </div>
           </div>
         </div>
+        <div class="filtros-ativos oculto" id="filtros-ativos"></div>
         <div class="rolagem"><table id="tabela"><thead></thead><tbody></tbody></table></div>
         <div class="vazio oculto" id="tabela-vazia"></div>
-        <div class="rodape-tabela"><span id="contagem"></span><span class="paginacao" id="paginacao"></span></div>
+        <div id="sentinela" aria-hidden="true"></div>
+        <div class="rodape-tabela"><span id="contagem"></span><span id="carregando-mais"></span></div>
       </div>
     </div>
 
@@ -216,15 +227,30 @@
 (function () {
   const BASE = {{ request.script_root | tojson }};
   const HOJE = {{ hoje | tojson }};
-  let dataAtual = {{ data_inicial | tojson }};
+  // Lista corrida (21/09): a tela deixou de ser "um dia" e passou a ser uma
+  // janela de dias até hoje, como a Torre. O dia escolhido vira filtro.
+  const DIAS_OPCOES = [7, 14, 30];
+  const CHAVE_DIAS = 'portal_periodo_dias';
+  let dias = periodoInicial();
   // Login de grupo (17/09): várias empresas na mesma tela, com coluna e filtro "Empresa".
   const EMPRESAS = {{ cliente.empresas | tojson }};
   const GRUPO = EMPRESAS.length > 1;
   const NOME_EMPRESA = Object.fromEntries(EMPRESAS.map(e => [e.sender_id, e.nome]));
 
+  function periodoInicial() {
+    const daUrl = Number(new URLSearchParams(location.search).get('dias'));
+    if (DIAS_OPCOES.includes(daUrl)) return daUrl;
+    try {
+      const salvo = Number(localStorage.getItem(CHAVE_DIAS));
+      if (DIAS_OPCOES.includes(salvo)) return salvo;
+    } catch (e) {}
+    return 14;
+  }
+
   // ── Colunas ────────────────────────────────────────────────────────────────
   const COLUNAS = [
     ...(GRUPO ? [{ id: 'empresa',            rotulo: 'Empresa',                 padrao: true }] : []),
+    { id: 'data',                  rotulo: 'Data',                    padrao: true },
     { id: 'codigo',                rotulo: 'Pedido',                  padrao: true },
     { id: 'nf',                    rotulo: 'NF',                      padrao: true },
     { id: 'destinatario',          rotulo: 'Destinatário',            padrao: true },
@@ -242,7 +268,9 @@
     { id: 'observacoes',           rotulo: 'Observações' },
   ];
   const PADRAO = COLUNAS.filter(c => c.padrao).map(c => c.id);
-  const CHAVE_COLUNAS = GRUPO ? 'portal_colunas_grupo_v1' : 'portal_colunas_v1';
+  // v2 (21/09): a coluna Data nasceu com a lista corrida -- quem já tinha
+  // preferência salva nunca a veria se a chave continuasse a mesma.
+  const CHAVE_COLUNAS = GRUPO ? 'portal_colunas_grupo_v2' : 'portal_colunas_v2';
   let visiveis = carregarColunas();
 
   function carregarColunas() {
@@ -255,8 +283,11 @@
   function salvarColunas() { try { localStorage.setItem(CHAVE_COLUNAS, JSON.stringify(visiveis)); } catch (e) {} }
 
   // ── Estado ─────────────────────────────────────────────────────────────────
-  let dados = null, bruto = null, empresa = '', aba = 'todos', busca = '', pagina = 1;
-  const POR_PAGINA = 25;
+  let dados = null, bruto = null, empresa = '', aba = 'todos', busca = '', filtroDia = '';
+  // Lista corrida: em vez de paginar, mostra um lote e vai crescendo
+  // conforme a pessoa rola.
+  const LOTE = 50;
+  let mostrando = LOTE;
   let timerAuto = null;
 
   const $ = id => document.getElementById(id);
@@ -276,22 +307,27 @@
     const so = l => (l || []).filter(x => !empresa || String(x.sender_id) === empresa)
                              .map(x => ({ ...x, empresa: NOME_EMPRESA[x.sender_id] || '' }));
     const pedidos = so(d.pedidos), futuros = so(d.agendados_futuros), atencao = so(d.atencao);
-    let kpis = d.kpis, proximos = d.proximos_dias, historico = d.historico;
+    let kpis = d.kpis, proximos = d.proximos_dias, historico = d.historico, periodo = d.periodo;
+    // Os KPIs são do DIA mesmo com a lista corrida de vários dias.
+    const doDia = pedidos.filter(p => p.data === d.data);
     if (empresa) {
-      const n = s => pedidos.filter(p => p.situacao === s).length;
-      kpis = { total: pedidos.length, volumes: pedidos.reduce((v, p) => v + (p.volumes || 0), 0),
+      const n = s => doDia.filter(p => p.situacao === s).length;
+      kpis = { total: doDia.length, volumes: doDia.reduce((v, p) => v + (p.volumes || 0), 0),
                entregues: n('entregue'), em_rota: n('em_rota'), programados: n('programado'),
                aguardando_saida: n('aguardando_saida'), insucessos: n('insucesso'),
-               rotas_em_andamento: new Set(pedidos.filter(p => p.situacao === 'em_rota').map(p => p.rota)).size,
+               rotas_em_andamento: new Set(doDia.filter(p => p.situacao === 'em_rota').map(p => p.rota)).size,
                aguardando_resposta: atencao.reduce((v, g) => v + g.codigos.length, 0) };
       proximos = (d.proximos_dias || []).map(x => ({ ...x, pedidos: futuros.filter(f => f.agendado_para === x.data).length }))
                                         .filter(x => x.pedidos);
+      if (periodo) periodo = { ...periodo, total: pedidos.length,
+                               entregues: pedidos.filter(p => p.situacao === 'entregue').length,
+                               insucessos: pedidos.filter(p => p.situacao === 'insucesso').length };
       historico = null;   // o card de 30 dias é a soma do grupo
     }
-    dados = { ...d, pedidos, agendados_futuros: futuros, atencao, kpis, proximos_dias: proximos, historico,
-              aguardando_saida: pedidos.filter(p => p.situacao === 'aguardando_saida' || p.situacao === 'programado') };
+    dados = { ...d, pedidos, agendados_futuros: futuros, atencao, kpis, proximos_dias: proximos, historico, periodo,
+              aguardando_saida: doDia.filter(p => p.situacao === 'aguardando_saida' || p.situacao === 'programado') };
   }
-  function hrefExportar(iso) { return `${BASE}/exportar.xlsx?data=${iso}${empresa ? '&empresa=' + empresa : ''}`; }
+  function hrefExportar() { return `${BASE}/exportar.xlsx?dias=${dias}${empresa ? '&empresa=' + empresa : ''}`; }
 
   // ── Carga ──────────────────────────────────────────────────────────────────
   async function carregar(forcar) {
@@ -299,13 +335,13 @@
     $('carimbo').classList.remove('erro');
     $('carimbo-texto').textContent = 'Atualizando…';
     try {
-      const r = await fetch(`${BASE}/api/dia?data=${dataAtual}${forcar ? '&atualizar=1' : ''}`, { credentials: 'same-origin' });
+      const r = await fetch(`${BASE}/api/dia?dias=${dias}${forcar ? '&atualizar=1' : ''}`, { credentials: 'same-origin' });
       if (r.status === 401) { location.href = `${BASE}/login?proximo=${encodeURIComponent(location.pathname + location.search)}`; return; }
       const corpo = await r.json();
       if (!r.ok) throw new Error(corpo.erro || 'Falha ao carregar.');
       bruto = corpo;
       aplicarEmpresa();
-      pagina = 1;
+      mostrando = LOTE;
       renderTudo();
       $('carimbo-texto').textContent = `Atualizado às ${dados.atualizado_em} · sincroniza a cada 5 min`;
     } catch (e) {
@@ -319,20 +355,23 @@
     timerAuto = setTimeout(() => carregar(false), 5 * 60 * 1000);
   }
 
-  function irPara(iso) {
-    dataAtual = iso;
-    history.replaceState(null, '', `${location.pathname}?data=${iso}`);
-    $('exportar').href = hrefExportar(iso);
+  function trocarPeriodo(n) {
+    dias = n;
+    try { localStorage.setItem(CHAVE_DIAS, String(n)); } catch (e) {}
+    history.replaceState(null, '', `${location.pathname}?dias=${n}`);
+    $('exportar').href = hrefExportar();
+    filtroDia = '';
     carregar(false);
   }
-  function somaDias(iso, n) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+  function filtrarDia(iso) { filtroDia = (filtroDia === iso ? '' : iso); mostrando = LOTE; renderTabela(); }
 
   // ── Render ─────────────────────────────────────────────────────────────────
   function renderTudo() {
     const d = dados, k = d.kpis;
-    $('dia-rotulo').firstChild.textContent = (d.hoje ? 'Hoje · ' : '') + d.data_rotulo;
-    $('dia-input').value = d.data;
-    $('exportar').href = hrefExportar(d.data);
+    const per = d.periodo || { dias: dias, intervalo: '' };
+    $('periodo').value = String(per.dias);
+    $('periodo-intervalo').textContent = per.intervalo;
+    $('exportar').href = hrefExportar();
 
     // atenção
     const at = $('atencao');
@@ -365,7 +404,9 @@
       at.classList.add('oculto'); at.innerHTML = '';
     }
 
-    // tiles
+    // tiles -- continuam sendo DE HOJE; clicar num deles filtra a lista
+    // corrida pelo dia de hoje (senão o número do tile não bateria com a
+    // tabela, que é da janela inteira).
     const pend = k.programados + k.aguardando_saida;
     $('tiles').innerHTML = `
       <div class="tile" data-aba="todos"><span class="rotulo">Pedidos no dia</span><span class="valor">${k.total}</span><span class="sub">${k.volumes} volume${k.volumes === 1 ? '' : 's'}</span></div>
@@ -374,11 +415,15 @@
       <div class="tile" data-aba="pendentes"><span class="rotulo">Aguardando saída</span><span class="valor">${pend}</span><span class="sub">${k.programados ? k.programados + ' já em rota programada' : 'sem rota ainda'}</span></div>
       <div class="tile ${k.insucessos ? 'ruim' : ''}" data-aba="insucesso"><span class="rotulo">Insucesso</span><span class="valor">${k.insucessos}</span><span class="sub">${k.aguardando_resposta ? k.aguardando_resposta + ' aguarda' + (k.aguardando_resposta > 1 ? 'm' : '') + ' sua resposta' : (k.insucessos ? 'tratado pela Fresh Log' : '—')}</span></div>`;
 
-    // abas
-    const ag = (d.agendados_futuros || []).length;
-    const abas = [['todos', 'Todos', k.total], ['em_rota', 'Em rota', k.em_rota], ['entregues', 'Entregues', k.entregues],
-                  ['pendentes', 'Pendentes', pend], ['insucesso', 'Insucesso', k.insucessos], ['agendados', 'Agendados', ag]];
-    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
+    // abas -- contam a lista visível (a janela inteira, ou o dia filtrado)
+    const base = (d.pedidos || []).filter(p => !filtroDia || p.data === filtroDia);
+    const n = s => base.filter(p => p.situacao === s).length;
+    const ag = (d.agendados_futuros || []).filter(p => !filtroDia || p.data === filtroDia).length;
+    const abas = [['todos', 'Todos', base.length], ['em_rota', 'Em rota', n('em_rota')],
+                  ['entregues', 'Entregues', n('entregue')],
+                  ['pendentes', 'Pendentes', n('programado') + n('aguardando_saida')],
+                  ['insucesso', 'Insucesso', n('insucesso')], ['agendados', 'Agendados', ag]];
+    $('abas').innerHTML = abas.map(([id, r, q]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${q}</em></button>`).join('');
 
     renderTabela();
     renderLateral();
@@ -390,14 +435,24 @@
     else if (aba === 'entregues') lista = lista.filter(p => p.situacao === 'entregue');
     else if (aba === 'pendentes') lista = lista.filter(p => p.situacao === 'programado' || p.situacao === 'aguardando_saida');
     else if (aba === 'insucesso') lista = lista.filter(p => p.situacao === 'insucesso');
+    if (filtroDia) lista = lista.filter(p => p.data === filtroDia);
     const q = busca.trim().toLowerCase();
-    if (q) lista = lista.filter(p => [p.codigo, p.nf, p.destinatario, p.endereco, p.motorista, p.rota, p.empresa].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(p => [p.codigo, p.nf, p.destinatario, p.endereco, p.motorista, p.rota, p.empresa, p.data_rotulo].join(' ').toLowerCase().includes(q));
     return lista;
+  }
+
+  function rotuloDoDia(iso, rotulo) {
+    if (iso === HOJE) return 'Hoje';
+    const d = new Date(iso + 'T12:00:00'), h = new Date(HOJE + 'T12:00:00');
+    if (Math.round((h - d) / 86400000) === 1) return 'Ontem';
+    return rotulo || iso.split('-').reverse().join('/');
   }
 
   function celula(p, id) {
     switch (id) {
       case 'empresa': return `<td class="col-empresa" title="${esc(p.empresa)}">${esc(p.empresa) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
+      // Só o dia/mês: o dia da semana já está na faixa e na dica da célula.
+      case 'data': return `<td class="col-data" title="${esc(p.data_rotulo)}">${esc((p.data || '').slice(5).split('-').reverse().join('/')) || '—'}</td>`;
       case 'codigo': return `<td class="nw"><span class="mono" style="font-weight:600;">${esc(p.codigo)}</span></td>`;
       case 'nf': return `<td class="nw"><span class="mono num">${esc(p.nf) || '<span style="color:var(--texto-suave)">—</span>'}</span></td>`;
       case 'destinatario': return `<td class="col-dest"><div class="dest">${esc(p.destinatario)}</div><div class="end">${esc(p.endereco)}</div></td>`;
@@ -416,19 +471,63 @@
 
   function renderTabela() {
     const lista = pedidosFiltrados();
-    const total = lista.length, paginas = Math.max(1, Math.ceil(total / POR_PAGINA));
-    if (pagina > paginas) pagina = paginas;
-    const fatia = lista.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
+    const total = lista.length;
+    if (mostrando > total) mostrando = Math.max(LOTE, Math.ceil(total / LOTE) * LOTE);
+    const fatia = lista.slice(0, mostrando);
     const cols = visiveis.map(id => COLUNAS.find(c => c.id === id));
     $('tabela').querySelector('thead').innerHTML = `<tr>${cols.map(c => `<th${c.id === 'volumes' ? ' style="text-align:center;"' : ''}>${esc(c.rotulo)}</th>`).join('')}</tr>`;
-    $('tabela').querySelector('tbody').innerHTML = fatia.map(p => `<tr>${cols.map(c => celula(p, c.id)).join('')}</tr>`).join('');
+
+    // Faixa separando os dias, como na Torre -- só quando a lista de fato
+    // atravessa mais de um dia. Conta na lista INTEIRA, não no lote à
+    // mostra: com 50 pedidos só de hoje o primeiro lote é de um dia só, e
+    // sem isso a lista começava sem nenhuma faixa.
+    const varios = new Set(lista.map(p => p.data)).size > 1;
+    let ultimo = null;
+    const linhas = fatia.map(p => {
+      let faixa = '';
+      if (varios && p.data !== ultimo) {
+        ultimo = p.data;
+        const q = lista.filter(x => x.data === p.data).length;
+        faixa = `<tr class="faixa-dia"><td colspan="${cols.length}"><b>${esc(rotuloDoDia(p.data, p.data_rotulo))}</b> <span class="qtd">· ${q} pedido${q > 1 ? 's' : ''}</span></td></tr>`;
+      }
+      return faixa + `<tr>${cols.map(c => celula(p, c.id)).join('')}</tr>`;
+    }).join('');
+    $('tabela').querySelector('tbody').innerHTML = linhas;
+
     const vazio = $('tabela-vazia');
     if (!total) {
       vazio.classList.remove('oculto');
-      vazio.textContent = busca ? 'Nenhum pedido bate com a busca.' : (aba === 'agendados' ? 'Nenhum pedido agendado pra frente.' : 'Nenhum pedido nessa situação.');
+      vazio.textContent = busca ? 'Nenhum pedido bate com a busca.'
+        : (aba === 'agendados' ? 'Nenhum pedido agendado pra frente.'
+        : filtroDia ? 'Nenhum pedido nessa situação nesse dia.' : 'Nenhum pedido nessa situação no período.');
     } else vazio.classList.add('oculto');
-    $('contagem').textContent = total ? `Mostrando ${(pagina - 1) * POR_PAGINA + 1}–${Math.min(pagina * POR_PAGINA, total)} de ${total} pedido${total > 1 ? 's' : ''}` : '';
-    $('paginacao').innerHTML = paginas > 1 ? `<button type="button" data-pg="${pagina - 1}" ${pagina <= 1 ? 'disabled' : ''}>‹</button><span>Página ${pagina} de ${paginas}</span><button type="button" data-pg="${pagina + 1}" ${pagina >= paginas ? 'disabled' : ''}>›</button>` : '';
+
+    const falta = total - fatia.length;
+    $('contagem').textContent = total
+      ? (falta ? `Mostrando ${fatia.length} de ${total} pedidos` : `${total} pedido${total > 1 ? 's' : ''}`)
+      : '';
+    $('carregando-mais').textContent = falta ? `role pra ver mais ${Math.min(falta, LOTE)}` : '';
+    renderFiltros();
+  }
+
+  function renderFiltros() {
+    const alvo = $('filtros-ativos');
+    if (!filtroDia) { alvo.classList.add('oculto'); alvo.innerHTML = ''; return; }
+    const rot = rotuloDoDia(filtroDia, (dados.pedidos.find(p => p.data === filtroDia) || {}).data_rotulo);
+    alvo.classList.remove('oculto');
+    alvo.innerHTML = `<span style="color:var(--texto-suave);font-size:12px;">Mostrando só</span>
+      <span class="chip-filtro">${esc(rot)}<button type="button" id="limpar-dia" title="Ver o período inteiro" aria-label="Ver o período inteiro">×</button></span>`;
+  }
+
+  // Rolou até o fim da lista: mostra mais um lote.
+  function observarFim() {
+    if (!('IntersectionObserver' in window)) return;
+    new IntersectionObserver(entradas => {
+      if (!entradas[0].isIntersecting || !dados) return;
+      if (mostrando >= pedidosFiltrados().length) return;
+      mostrando += LOTE;
+      renderTabela();
+    }, { rootMargin: '400px' }).observe($('sentinela'));
   }
 
   function renderLateral() {
@@ -444,7 +543,7 @@
       <span><i style="background:var(--st-rota)"></i>Em rota <b>${k.em_rota}</b></span>
       <span><i style="background:var(--st-neutro)"></i>Aguardando saída <b>${pend}</b></span>
       <span><i style="background:var(--st-falha)"></i>Insucesso <b>${k.insucessos}</b></span>`;
-    const emRota = d.pedidos.filter(p => p.situacao === 'em_rota');
+    const emRota = d.pedidos.filter(p => p.situacao === 'em_rota' && p.data === d.data);
     $('hoje-nota').innerHTML = emRota.length
       ? `${ICO_CAMINHAO} ${[...new Set(emRota.map(p => p.motorista + (p.rota ? ' · ' + p.rota : '')))].map(esc).join('<br>')}`
       : (total ? 'Nenhuma rota em andamento agora.' : 'Sem pedidos nessa data.');
@@ -454,7 +553,7 @@
     $('lista-saida').innerHTML = saida.length ? saida.slice(0, 8).map(p => `<div class="linha"><span><span class="mono">${esc(p.codigo)}</span> ${esc(p.destinatario)}</span><span class="suave">${esc(p.situacao === 'programado' ? (p.detalhe.split('·').pop() || '').trim() : 'sem rota')}</span></div>`).join('') + (saida.length > 8 ? `<div class="vazio-lat">e mais ${saida.length - 8}…</div>` : '') : '<div class="vazio-lat">Nada aguardando saída.</div>';
 
     const prox = d.proximos_dias || [];
-    $('lista-proximos').innerHTML = prox.length ? prox.map(x => `<div class="linha"><a href="#" data-ir-data="${x.data}">${esc(x.rotulo)}</a><b>${x.pedidos} pedido${x.pedidos > 1 ? 's' : ''}</b></div>`).join('') : '<div class="vazio-lat">Nenhum pedido agendado pra frente.</div>';
+    $('lista-proximos').innerHTML = prox.length ? prox.map(x => `<div class="linha"><a href="#" data-ver-agendado="${x.data}">${esc(x.rotulo)}</a><b>${x.pedidos} pedido${x.pedidos > 1 ? 's' : ''}</b></div>`).join('') : '<div class="vazio-lat">Nenhum pedido agendado pra frente.</div>';
 
     const h = d.historico;
     if (h) {
@@ -546,26 +645,27 @@
   }
 
   // ── Eventos gerais ─────────────────────────────────────────────────────────
-  $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; pagina = 1; renderTudo(); });
-  $('tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; pagina = 1; renderTudo(); });
-  $('busca').addEventListener('input', e => { busca = e.target.value; pagina = 1; renderTabela(); });
-  $('paginacao').addEventListener('click', e => { const b = e.target.closest('[data-pg]'); if (!b || b.disabled) return; pagina = Number(b.dataset.pg); renderTabela(); });
+  $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; mostrando = LOTE; renderTudo(); });
+  // Os tiles são do dia: clicar num deles leva junto o filtro "Hoje".
+  $('tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; filtroDia = HOJE; mostrando = LOTE; renderTudo(); });
+  $('busca').addEventListener('input', e => { busca = e.target.value; mostrando = LOTE; renderTabela(); });
   document.addEventListener('click', e => {
-    const a = e.target.closest('[data-ir-data]'); if (a) { e.preventDefault(); irPara(a.dataset.irData); return; }
+    if (e.target.closest('#limpar-dia')) { filtroDia = ''; mostrando = LOTE; renderTudo(); return; }
+    const a = e.target.closest('[data-ver-agendado]');
+    if (a) { e.preventDefault(); aba = 'agendados'; filtroDia = a.dataset.verAgendado; mostrando = LOTE; renderTudo();
+             $('abas').scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     const b = e.target.closest('[data-ir-atencao]'); if (b) { e.preventDefault(); $('atencao').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
-  $('dia-ant').addEventListener('click', () => irPara(somaDias(dataAtual, -1)));
-  $('dia-prox').addEventListener('click', () => irPara(somaDias(dataAtual, 1)));
-  $('hoje').addEventListener('click', () => irPara(HOJE));
+  $('periodo').addEventListener('change', e => trocarPeriodo(Number(e.target.value)));
   $('atualizar').addEventListener('click', () => carregar(true));
-  $('dia-rotulo').addEventListener('click', () => { const i = $('dia-input'); if (i.showPicker) { try { i.showPicker(); return; } catch (e) {} } i.click(); });
-  $('dia-input').addEventListener('change', e => { if (e.target.value) irPara(e.target.value); });
 
   if (GRUPO) $('filtro-empresa').addEventListener('change', e => {
-    empresa = e.target.value; pagina = 1;
+    empresa = e.target.value; mostrando = LOTE;
     if (bruto) { aplicarEmpresa(); renderTudo(); }
   });
-  $('exportar').href = hrefExportar(dataAtual);
+  $('periodo').value = String(dias);
+  $('exportar').href = hrefExportar();
+  observarFim();
   carregar(false);
 })();
 </script>

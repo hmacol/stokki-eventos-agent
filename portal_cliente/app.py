@@ -405,6 +405,14 @@ def _data_da_query() -> date:
         return date.today()
 
 
+def _dias_da_query() -> int | None:
+    """?dias=N -> lista corrida dos últimos N dias (21/09). Sem o parâmetro
+    (ou com valor fora das opções) a resposta continua sendo a do dia só --
+    é o que o e-mail e quem tiver link antigo esperam."""
+    bruto = request.args.get("dias", "")
+    return int(bruto) if bruto.isdigit() and int(bruto) in dados.DIAS_JANELA_OPCOES else None
+
+
 def _empresas_com_envio() -> list[dict]:
     """Empresas do login que são cliente na Stokki (interno.stkkc_id) -- são
     as que aparecem no seletor da vista "Enviar pedidos" do login de grupo.
@@ -444,9 +452,11 @@ def saude():
 @requer_cliente
 def api_dia():
     data_alvo = _data_da_query()
+    dias = _dias_da_query()
     forcar = request.args.get("atualizar") == "1"
     try:
-        dia = dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG, forcar=forcar)
+        dia = (dados.montar_janela(g.cliente["sender_ids"], dias, _CONFIG, forcar=forcar) if dias
+               else dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG, forcar=forcar))
         # `empresas` fora do cache: o front usa pra coluna/filtro "Empresa" do grupo.
         return jsonify({**dia, "empresas": [{"sender_id": e["sender_id"], "nome": e["nome"]}
                                             for e in g.cliente["empresas"]]})
@@ -861,19 +871,21 @@ def exportar_xlsx():
     from openpyxl.utils import get_column_letter
 
     data_alvo = _data_da_query()
-    d = dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG)
+    dias = _dias_da_query()
+    d = (dados.montar_janela(g.cliente["sender_ids"], dias, _CONFIG) if dias
+         else dados.montar_dia(g.cliente["sender_ids"], data_alvo, _CONFIG))
     pedidos = d["pedidos"] + d.get("agendados_futuros", [])
     empresa = request.args.get("empresa", "")   # filtro "Empresa" da tela (login de grupo)
     if empresa.isdigit() and int(empresa) in g.cliente["sender_ids"]:
         pedidos = [p for p in pedidos if p.get("sender_id") == int(empresa)]
-    colunas = _COLUNAS_XLSX
+    colunas = ([("data", "Data")] if dias else []) + _COLUNAS_XLSX
     if len(g.cliente["empresas"]) > 1:   # login de grupo: de qual empresa é cada pedido
         nomes = {e["sender_id"]: e["nome"] for e in g.cliente["empresas"]}
         pedidos = [{**p, "empresa": nomes.get(p.get("sender_id"), "")} for p in pedidos]
-        colunas = [("empresa", "Empresa")] + _COLUNAS_XLSX
+        colunas = [("empresa", "Empresa")] + colunas
     wb = Workbook()
     ws = wb.active
-    ws.title = data_alvo.strftime("%d-%m-%Y")
+    ws.title = f"{dias} dias" if dias else data_alvo.strftime("%d-%m-%Y")
     ws.append([rotulo for _, rotulo in colunas])
     for c in ws[1]:
         c.font = Font(bold=True)
@@ -886,7 +898,8 @@ def exportar_xlsx():
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    nome = f"pedidos_{g.cliente['cnpj']}_{data_alvo.isoformat()}.xlsx"
+    nome = (f"pedidos_{g.cliente['cnpj']}_{d['periodo']['de']}_a_{d['periodo']['ate']}.xlsx" if dias
+            else f"pedidos_{g.cliente['cnpj']}_{data_alvo.isoformat()}.xlsx")
     return send_file(buf, as_attachment=True, download_name=nome,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

@@ -55,6 +55,7 @@ from vuupt_client import VuuptClient
 from rotas_client import listar_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas
 from motivos_falha import texto_do_motivo, pergunta_do_motivo
+from nucleo.normalizacao import janela_utc_do_dia, vuupt_para_local
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,15 @@ FUSO = ZoneInfo("America/Sao_Paulo")
 
 CACHE_DIA_SEGUNDOS = 5 * 60
 CACHE_HISTORICO_SEGUNDOS = 60 * 60
+# Dia que já passou não muda mais: as rotas dele ficam 1 h em memória.
+CACHE_ROTAS_PASSADO_SEGUNDOS = 60 * 60
 HISTORICO_DIAS = 30
 PROXIMOS_DIAS_MAX = 4
+
+# Janela da lista corrida (Hugo, 21/09: "similar ao que temos na torre").
+# 14 dias é a mesma janela de painel_agentes/torre_controle.DIAS_JANELA_TORRE.
+DIAS_JANELA = 14
+DIAS_JANELA_OPCOES = (7, 14, 30)
 
 _PADRAO_CODIGO_BASE = re.compile(r"PS-\d+", re.IGNORECASE)
 
@@ -183,6 +191,16 @@ def _rota_curta(nome: str, rota_id) -> str:
     return nome or f"Rota {rota_id}"
 
 
+def dia_local_da_rota(rota: dict) -> date | None:
+    """Dia LOCAL em que a rota começa. start_at da VUUPT vem em UTC SEM
+    fuso (armadilha do projeto: rota das 22h de SP começa 01h UTC do dia
+    seguinte) -- mesma conversão da Torre."""
+    try:
+        return date.fromisoformat(str(vuupt_para_local(rota.get("start_at")))[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def _ddmm(d: date) -> str:
     return d.strftime("%d/%m")
 
@@ -257,6 +275,9 @@ def _linha(servico: dict, situacao: str, nfs: dict[str, str], **extra) -> dict:
         if servico.get("created_at") else "",
         "observacoes": servico.get("note") or "",
         "agendado_para": None,
+        # Dia a que a linha pertence na lista corrida (21/09): o dia da rota,
+        # ou o dia de hoje pra quem ainda não tem rota.
+        "data": "", "data_rotulo": "",
         "motorista": "", "rota": "", "placa": "", "ordem": None, "total_paradas": None,
         "detalhe": "", "concluido_em": "", "motivo": "", "comprovante": False,
         "reentrega": bool(re.search(r"-R\d+", codigo, re.IGNORECASE)),
@@ -280,6 +301,18 @@ def buscar_rotas_do_dia(token: str, data_alvo: date) -> list[dict]:
     notificar_nfs_em_rota.py) buscar na VUUPT uma vez so."""
     inicio = data_alvo.strftime("%Y-%m-%d") + " 00:00:00"
     fim = (data_alvo + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
+    filtro = [{"field": "start_at", "operator": "gte", "value": inicio},
+              {"field": "start_at", "operator": "lt", "value": fim}]
+    return listar_rotas(token, include=["services", "services.customer", "agent"], filtro=filtro)
+
+
+def buscar_rotas_do_periodo(token: str, de: date, ate: date) -> list[dict]:
+    """Rotas dos dias LOCAIS [de, ate] numa chamada só (a lista corrida,
+    21/09). Os limites saem de janela_utc_do_dia porque o start_at da
+    VUUPT é UTC -- filtrar com a data local crua pegava o dia errado nas
+    pontas (rota da noite)."""
+    inicio, _ = janela_utc_do_dia(de)
+    _, fim = janela_utc_do_dia(ate)
     filtro = [{"field": "start_at", "operator": "gte", "value": inicio},
               {"field": "start_at", "operator": "lt", "value": fim}]
     return listar_rotas(token, include=["services", "services.customer", "agent"], filtro=filtro)
@@ -312,7 +345,10 @@ def linhas_das_rotas(rotas: list[dict], sender_id, motoristas: dict, nfs_cache: 
         agente = _desembrulhar(rota, "agent")
         motorista = (m.nome if m else None) or agente.get("name") or ""
         placa = (m.placa if m else None) or ""
-        saida = (rota.get("start_at") or "")[11:16]
+        # start_at vem em UTC sem fuso: sem converter, a rota das 06:00
+        # aparecia pro cliente como "saída 09:00" (achado 21/09).
+        saida = (vuupt_para_local(rota.get("start_at")) or "")[11:16]
+        dia_rota = dia_local_da_rota(rota)
         iniciada = _hora(rota.get("started_at"))
         # Próxima parada da rota = 1ª não finalizada (pra "parada N de M").
         entregues_rota = sum(1 for s in validos if s.get("status") == "done")
@@ -340,6 +376,8 @@ def linhas_das_rotas(rotas: list[dict], sender_id, motoristas: dict, nfs_cache: 
                 motivo=texto_do_motivo(s.get("failed_reason_id")) if situacao == "insucesso" else "",
                 comprovante=(situacao == "entregue"),
                 rota_iniciada_em=iniciada,
+                data=dia_rota.isoformat() if dia_rota else "",
+                data_rotulo=f"{_dia_semana(dia_rota)} {_ddmm(dia_rota)}" if dia_rota else "",
             ))
     return linhas
 
@@ -369,7 +407,9 @@ def _coletar_sem_rota(vuupt: VuuptClient, sender_id, data_alvo: date, nfs_cache:
             hora = _hora(s.get("scheduled_start"))
             futuros.append(_linha(s, "agendado", nfs_cache,
                                   detalhe=f"Agendado {_dia_semana(agendada)} {_ddmm(agendada)}" + (f" · {hora}" if hora and hora != "00:00" else ""),
-                                  agendado_para=agendada.isoformat()))
+                                  agendado_para=agendada.isoformat(),
+                                  data=agendada.isoformat(),
+                                  data_rotulo=f"{_dia_semana(agendada)} {_ddmm(agendada)}"))
     return do_dia, futuros
 
 
@@ -443,7 +483,59 @@ def somar_historico(partes: list[dict | None]) -> dict | None:
 
 _cache_dia: dict[tuple, tuple[float, dict]] = {}
 _cache_hist: dict[int, tuple[float, dict | None]] = {}
+# Rotas por dia (ISO). Fora dos outros caches porque NÃO dependem do
+# remetente: 14 dias x cada cliente a cada 5 min seria 14x o tráfego com a
+# VUUPT -- assim a janela é buscada uma vez e serve todo mundo, e a carga
+# seguinte rebusca só o dia de hoje.
+_cache_rotas: dict[str, tuple[float, list[dict]]] = {}
 _lock = threading.Lock()
+
+
+def limpar_caches() -> None:
+    """Zera tudo -- usado pelos testes."""
+    with _lock:
+        _cache_dia.clear()
+        _cache_hist.clear()
+        _cache_rotas.clear()
+
+
+def _envelhecer_caches(segundos: float) -> None:
+    """Finge que tudo em cache foi buscado `segundos` atrás (testes)."""
+    with _lock:
+        for cache in (_cache_dia, _cache_rotas):
+            for k, (quando, valor) in list(cache.items()):
+                cache[k] = (quando - segundos, valor)
+
+
+def _rotas_por_dia(token: str, de: date, ate: date, hoje: date, forcar: bool) -> dict[str, list[dict]]:
+    """Rotas de cada dia da janela, do cache quando dá. Dia passado vale 1 h
+    (não muda mais), o dia corrente vale os mesmos 5 min do resto da tela."""
+    dias = [de + timedelta(days=i) for i in range((ate - de).days + 1)]
+    agora = time.time()
+    with _lock:
+        faltando = [d for d in dias
+                    if forcar or not _cache_rotas.get(d.isoformat())
+                    or agora - _cache_rotas[d.isoformat()][0] >= (CACHE_DIA_SEGUNDOS if d >= hoje
+                                                                  else CACHE_ROTAS_PASSADO_SEGUNDOS)]
+    if faltando:
+        # Uma chamada só, do mais antigo que falta até o mais novo -- na
+        # prática, depois da primeira carga isso é (hoje, hoje).
+        ini, fim = min(faltando), max(faltando)
+        novas: dict[str, list[dict]] = defaultdict(list)
+        for rota in buscar_rotas_do_periodo(token, ini, fim):
+            dia = dia_local_da_rota(rota)
+            if dia:
+                novas[dia.isoformat()].append(rota)
+        quando = time.time()
+        with _lock:
+            for i in range((fim - ini).days + 1):
+                chave = (ini + timedelta(days=i)).isoformat()
+                _cache_rotas[chave] = (quando, novas.get(chave, []))
+            limite = (hoje - timedelta(days=max(DIAS_JANELA_OPCOES) + 7)).isoformat()
+            for k in [k for k in _cache_rotas if k < limite]:
+                _cache_rotas.pop(k, None)
+    with _lock:
+        return {d.isoformat(): _cache_rotas.get(d.isoformat(), (0, []))[1] for d in dias}
 
 
 def montar_dia(sender_id, data_alvo: date, config: dict | None = None, forcar: bool = False) -> dict:
@@ -473,6 +565,59 @@ def invalidar_cache(sender_id: int) -> None:
             _cache_dia.pop(k, None)
 
 
+ORDEM_SITUACAO = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4}
+
+
+def _carimbar_dia(linhas: list[dict], dia: date) -> list[dict]:
+    """Pedido ainda sem rota não tem dia de rota: na lista ele é de hoje."""
+    for linha in linhas:
+        if not linha.get("data"):
+            linha["data"] = dia.isoformat()
+            linha["data_rotulo"] = f"{_dia_semana(dia)} {_ddmm(dia)}"
+    return linhas
+
+
+def _kpis(pedidos: list[dict], atencao: list[dict]) -> dict:
+    contagem = defaultdict(int)
+    for p in pedidos:
+        contagem[p["situacao"]] += 1
+    return {
+        "total": len(pedidos),
+        "volumes": sum(p["volumes"] for p in pedidos),
+        "entregues": contagem["entregue"],
+        "em_rota": contagem["em_rota"],
+        "rotas_em_andamento": len({p["rota"] for p in pedidos if p["situacao"] == "em_rota"}),
+        "programados": contagem["programado"],
+        "aguardando_saida": contagem["aguardando_saida"],
+        "insucessos": contagem["insucesso"],
+        "aguardando_resposta": sum(len(g["codigos"]) for g in atencao),
+    }
+
+
+def _proximos_dias(futuros: list[dict]) -> list[dict]:
+    por_dia: dict[str, list] = defaultdict(list)
+    for f in futuros:
+        por_dia[f["agendado_para"]].append(f)
+    return [{"data": d, "rotulo": f"{_dia_semana(date.fromisoformat(d))} {_ddmm(date.fromisoformat(d))}",
+             "pedidos": len(v)} for d, v in sorted(por_dia.items())][:PROXIMOS_DIAS_MAX]
+
+
+def _historico_do_grupo(vuupt: VuuptClient, remetentes: tuple[int, ...], hoje: date) -> dict | None:
+    """30 dias, cache 1 h por remetente; no grupo soma as empresas."""
+    partes = []
+    for remetente in remetentes:
+        with _lock:
+            hit = _cache_hist.get(remetente)
+        if hit and time.time() - hit[0] < CACHE_HISTORICO_SEGUNDOS:
+            partes.append(hit[1])
+            continue
+        parte = _historico(vuupt, remetente, hoje)
+        with _lock:
+            _cache_hist[remetente] = (time.time(), parte)
+        partes.append(parte)
+    return somar_historico(partes)
+
+
 def _montar_dia(sender_id: tuple[int, ...], data_alvo: date, config: dict) -> dict:
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
@@ -486,61 +631,101 @@ def _montar_dia(sender_id: tuple[int, ...], data_alvo: date, config: dict) -> di
         # pedido sem rota é "do dia" só olhando pra frente -- num dia passado
         # a lista é o que de fato rodou.
         sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, data_alvo, nfs)
-    pedidos = linhas + sem_rota
+    pedidos = _carimbar_dia(linhas + sem_rota, data_alvo)
 
-    ordem_situacao = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4}
-    pedidos.sort(key=lambda p: (ordem_situacao.get(p["situacao"], 9), p.get("rota") or "", p.get("ordem") or 0, p["codigo"]))
-
-    contagem = defaultdict(int)
-    for p in pedidos:
-        contagem[p["situacao"]] += 1
-    total = len(pedidos)
-    volumes = sum(p["volumes"] for p in pedidos)
-    rotas_em_andamento = {p["rota"] for p in pedidos if p["situacao"] == "em_rota"}
+    pedidos.sort(key=lambda p: (ORDEM_SITUACAO.get(p["situacao"], 9), p.get("rota") or "", p.get("ordem") or 0, p["codigo"]))
 
     atencao = _coletar_atencao(sender_id) if data_alvo >= hoje else []
-
-    # próximos dias (agendados futuros)
-    por_dia: dict[str, list] = defaultdict(list)
-    for f in futuros:
-        por_dia[f["agendado_para"]].append(f)
-    proximos = [{"data": d, "rotulo": f"{_dia_semana(date.fromisoformat(d))} {_ddmm(date.fromisoformat(d))}",
-                 "pedidos": len(v)} for d, v in sorted(por_dia.items())][:PROXIMOS_DIAS_MAX]
-
-    # histórico 30 dias (cache 1 h por remetente; no grupo soma as empresas)
-    partes = []
-    for remetente in sender_id:
-        with _lock:
-            hit = _cache_hist.get(remetente)
-        if hit and time.time() - hit[0] < CACHE_HISTORICO_SEGUNDOS:
-            partes.append(hit[1])
-            continue
-        parte = _historico(vuupt, remetente, hoje)
-        with _lock:
-            _cache_hist[remetente] = (time.time(), parte)
-        partes.append(parte)
-    historico = somar_historico(partes)
+    proximos = _proximos_dias(futuros)
+    historico = _historico_do_grupo(vuupt, sender_id, hoje)
 
     return {
         "data": data_alvo.isoformat(),
         "data_rotulo": f"{_dia_semana(data_alvo)} {data_alvo.strftime('%d/%m/%Y')}",
         "hoje": data_alvo == hoje,
         "atualizado_em": datetime.now().strftime("%H:%M"),
-        "kpis": {
-            "total": total, "volumes": volumes,
-            "entregues": contagem["entregue"],
-            "em_rota": contagem["em_rota"], "rotas_em_andamento": len(rotas_em_andamento),
-            "programados": contagem["programado"],
-            "aguardando_saida": contagem["aguardando_saida"],
-            "insucessos": contagem["insucesso"],
-            "aguardando_resposta": sum(len(g["codigos"]) for g in atencao),
-        },
+        "kpis": _kpis(pedidos, atencao),
         "pedidos": pedidos,
         "atencao": atencao,
         "aguardando_saida": [p for p in pedidos if p["situacao"] in ("aguardando_saida", "programado")],
         "proximos_dias": proximos,
         "agendados_futuros": futuros,
         "historico": historico,
+    }
+
+
+# ── Janela corrida (lista de vários dias) ──────────────────────────────────────
+
+def montar_janela(sender_id, dias: int = DIAS_JANELA, config: dict | None = None,
+                  forcar: bool = False, hoje: date | None = None) -> dict:
+    """Mesma forma de montar_dia, mas a lista de pedidos é corrida: os
+    últimos `dias` dias até hoje, do mais recente pro mais antigo. Os KPIs
+    e os cards da lateral continuam sendo DE HOJE (decisão do Hugo, 21/09)
+    -- quem quiser o total do período lê o bloco `periodo`."""
+    remetentes = _remetentes(sender_id)
+    dias = dias if dias in DIAS_JANELA_OPCOES else DIAS_JANELA
+    hoje = hoje or date.today()
+    chave = (remetentes, f"janela-{dias}", hoje.isoformat())
+    agora = time.time()
+    with _lock:
+        hit = _cache_dia.get(chave)
+        if hit and not forcar and agora - hit[0] < CACHE_DIA_SEGUNDOS:
+            return hit[1]
+    dados = _montar_janela(remetentes, dias, config or carregar_config(), hoje, forcar)
+    with _lock:
+        _cache_dia[chave] = (time.time(), dados)
+        if len(_cache_dia) > 200:
+            for k in sorted(_cache_dia, key=lambda k: _cache_dia[k][0])[:100]:
+                _cache_dia.pop(k, None)
+    return dados
+
+
+def _montar_janela(sender_id: tuple[int, ...], dias: int, config: dict, hoje: date, forcar: bool) -> dict:
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+    motoristas = _catalogo_motoristas(config)
+    nfs: dict[str, str] = {}
+    de = hoje - timedelta(days=dias - 1)   # a janela INCLUI hoje
+
+    rotas = [r for lista in _rotas_por_dia(token, de, hoje, hoje, forcar).values() for r in lista]
+    linhas = linhas_das_rotas(rotas, sender_id, motoristas, nfs)
+    # O que ainda não tem rota e o que está agendado pra frente são do
+    # AGORA, não da janela -- mesma coleta da tela de um dia só.
+    sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, hoje, nfs)
+    pedidos = _carimbar_dia(linhas + sem_rota, hoje)
+
+    # Mais recente primeiro; dentro do dia, a mesma ordem da tela do dia.
+    # Dois sorts porque o de dentro é crescente e o de fora decrescente
+    # (sort do Python é estável, o segundo preserva o primeiro).
+    pedidos.sort(key=lambda p: (ORDEM_SITUACAO.get(p["situacao"], 9), p.get("rota") or "",
+                                p.get("ordem") or 0, p["codigo"]))
+    pedidos.sort(key=lambda p: p["data"], reverse=True)
+
+    atencao = _coletar_atencao(sender_id)
+    do_dia = [p for p in pedidos if p["data"] == hoje.isoformat()]
+    entregues = sum(1 for p in pedidos if p["situacao"] == "entregue")
+
+    return {
+        "data": hoje.isoformat(),
+        "data_rotulo": f"{_dia_semana(hoje)} {hoje.strftime('%d/%m/%Y')}",
+        "hoje": True,
+        "atualizado_em": datetime.now().strftime("%H:%M"),
+        "kpis": _kpis(do_dia, atencao),
+        "periodo": {
+            "dias": dias,
+            "de": de.isoformat(), "ate": hoje.isoformat(),
+            "rotulo": f"Últimos {dias} dias",
+            "intervalo": f"{_ddmm(de)} a {_ddmm(hoje)}",
+            "total": len(pedidos),
+            "entregues": entregues,
+            "insucessos": sum(1 for p in pedidos if p["situacao"] == "insucesso"),
+        },
+        "pedidos": pedidos,
+        "atencao": atencao,
+        "aguardando_saida": [p for p in do_dia if p["situacao"] in ("aguardando_saida", "programado")],
+        "proximos_dias": _proximos_dias(futuros),
+        "agendados_futuros": futuros,
+        "historico": _historico_do_grupo(vuupt, sender_id, hoje),
     }
 
 
