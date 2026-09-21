@@ -52,5 +52,53 @@ class TestTabelas(BaseWMS):
         self.assertIn("wms_movimentos", nomes)
 
 
+class TestResolverItem(BaseWMS):
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (1, 900, '72400017', 'COXINHA FESTA ZC 5KG PCT', "
+            "'MARIA DOLORES', '724000170000', '430000100000', 6, 'UN', '2026-09-21 10:00:00')")
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (2, 901, '72400099', 'QUIBE AVULSO', 'MARIA DOLORES', "
+            "'111111111111', NULL, 1, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+
+    def test_ean_da_linha_igual_ao_dun_multiplica_pela_caixa(self):
+        r = wms_pedidos.resolver_item(self.conn, {
+            "sku": "72400017", "ean_linha": "430000100000", "qtd_embalagem": 2})
+        self.assertEqual(r["produto_id"], 1)
+        self.assertEqual(r["qtd_un"], 12)
+        self.assertEqual(r["motivo_pendencia"], "")
+
+    def test_ean_da_linha_igual_ao_ean_unitario_e_um_pra_um(self):
+        r = wms_pedidos.resolver_item(self.conn, {
+            "sku": "72400017", "ean_linha": "724000170000", "qtd_embalagem": 3})
+        self.assertEqual(r["produto_id"], 1)
+        self.assertEqual(r["qtd_un"], 3)
+
+    def test_sku_unico_com_caixa_de_um_resolve_sem_ean(self):
+        r = wms_pedidos.resolver_item(self.conn, {
+            "sku": "72400099", "ean_linha": "999999999999", "qtd_embalagem": 4})
+        self.assertEqual(r["produto_id"], 2)
+        self.assertEqual(r["qtd_un"], 4)
+
+    def test_produto_desconhecido_vira_pendencia_sem_quantidade(self):
+        r = wms_pedidos.resolver_item(self.conn, {
+            "sku": "NAO-EXISTE", "ean_linha": "123", "qtd_embalagem": 1})
+        self.assertIsNone(r["produto_id"])
+        self.assertIsNone(r["qtd_un"])
+        self.assertIn("nao encontrado", r["motivo_pendencia"].lower())
+
+    def test_ean_que_nao_bate_com_caixa_maior_que_um_vira_pendencia(self):
+        # SKU conhecido, mas o EAN da linha nao e nem o unitario nem o DUN:
+        # nao da pra saber se sao 2 unidades ou 2 caixas de 6. Nao inventa.
+        r = wms_pedidos.resolver_item(self.conn, {
+            "sku": "72400017", "ean_linha": "555555555555", "qtd_embalagem": 2})
+        self.assertIsNone(r["qtd_un"])
+        self.assertIn("unidade", r["motivo_pendencia"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()

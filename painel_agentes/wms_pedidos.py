@@ -76,3 +76,58 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     conn = wms.conectar(caminho)
     conn.executescript(_DDL)
     return conn
+
+
+def _so_digitos(valor) -> str:
+    return "".join(c for c in str(valor or "") if c.isdigit())
+
+
+def resolver_item(conn, item: dict) -> dict:
+    """
+    Descobre a que produto do catalogo a linha do pedido se refere e converte
+    a quantidade de EMBALAGEM pra UN.
+
+    A quantidade da Stokki e por embalagem e o EAN da linha diz QUAL
+    embalagem. Ordem das regras (spec secao 6):
+      1. EAN da linha == DUN do produto  -> qtd * qtd_por_caixa
+      2. EAN da linha == EAN unitario    -> qtd
+      3. SKU identifica um unico produto ativo com qtd_por_caixa == 1 -> qtd
+      4. qualquer outro caso -> pendencia, sem quantidade
+
+    Nunca chuta: um item que cai na regra 4 nao vira reserva nem baixa.
+    """
+    ean = _so_digitos(item.get("ean_linha"))
+    sku = str(item.get("sku") or "").strip()
+    qtd = float(item.get("qtd_embalagem") or 0)
+
+    if ean:
+        for coluna, fator_caixa in (("dun", True), ("ean", False)):
+            rows = conn.execute(
+                f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?", (ean,)).fetchall()
+            if len(rows) == 1:
+                p = rows[0]
+                por_caixa = float(p["qtd_por_caixa"] or 1)
+                return {"produto_id": p["id"],
+                        "qtd_un": round(qtd * por_caixa, 3) if fator_caixa else qtd,
+                        "motivo_pendencia": ""}
+            if len(rows) > 1:
+                return {"produto_id": None, "qtd_un": None,
+                        "motivo_pendencia": f"EAN {ean} esta em {len(rows)} produtos ativos"}
+
+    if sku:
+        rows = conn.execute(
+            "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", (sku,)).fetchall()
+        if len(rows) == 1:
+            p = rows[0]
+            por_caixa = float(p["qtd_por_caixa"] or 1)
+            if por_caixa == 1:
+                return {"produto_id": p["id"], "qtd_un": qtd, "motivo_pendencia": ""}
+            return {"produto_id": p["id"], "qtd_un": None,
+                    "motivo_pendencia": (f"EAN {ean or '(vazio)'} nao e o unitario nem o DUN do SKU {sku}; "
+                                         f"sem saber a unidade, nao da pra converter")}
+        if len(rows) > 1:
+            return {"produto_id": None, "qtd_un": None,
+                    "motivo_pendencia": f"SKU {sku} esta em {len(rows)} produtos ativos"}
+
+    return {"produto_id": None, "qtd_un": None,
+            "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN {ean or '-'})"}
