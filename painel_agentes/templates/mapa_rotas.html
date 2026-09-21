@@ -232,7 +232,7 @@
         origin: BASE,
         destination: { lat: ultimaParada.lat, lng: ultimaParada.lng },
         waypoints: waypoints,
-        optimizeWaypoints: false,  // já está na ordem certa (mais longe -> mais perto da base)
+        optimizeWaypoints: false,  // já está na ordem certa (vizinho mais próximo + 2-opt/or-opt, sem volta à base)
         travelMode: google.maps.TravelMode.DRIVING,
       }, (result, status) => {
         if (status === "OK") {

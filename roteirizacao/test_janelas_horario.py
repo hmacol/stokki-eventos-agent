@@ -175,19 +175,19 @@ class SequenciamentoTestCase(_SemGeocodificar):
         super().setUp()
         rd.COORDS_BASE = BASE
 
-    def test_sem_janela_igual_ao_2opt_antigo(self):
-        # ordem farthest-first + 2-opt por km, posição 0 fixa (mais distante)
+    def test_sem_janela_vizinho_mais_proximo_e_2opt(self):
+        # semente vizinho mais proximo + 2-opt sem volta a base (18/09)
         rota = [_servico(1, 0.05, 0.0), _servico(2, 0.30, 0.0), _servico(3, 0.10, 0.10),
                 _servico(4, 0.20, 0.05), _servico(5, 0.02, 0.02)]
         ordem = ot.ordenar_2opt(rota, *BASE)
-        self.assertEqual(ordem[0]["id"], 2)
+        self.assertNotEqual(ordem[0]["id"], 2)  # a mais distante deixou de ser a 1a obrigatoria
         self.assertEqual({s["id"] for s in ordem}, {1, 2, 3, 4, 5})
-        # 2-opt puro nunca piora o trajeto fechado em relação ao farthest-first
+
         def _km(seq):
-            pts = [BASE] + [(s["latitude"], s["longitude"]) for s in seq] + [BASE]
+            pts = [BASE] + [(s["latitude"], s["longitude"]) for s in seq]
             return sum(rd._distancia_km(*pts[i], *pts[i + 1]) for i in range(len(pts) - 1))
-        farthest = sorted(rota, key=lambda s: rd._distancia_km(s["latitude"], s["longitude"], *BASE), reverse=True)
-        self.assertLessEqual(_km(ordem), _km(farthest) + 1e-9)
+        semente = rd._ordem_vizinho_mais_proximo(rota, BASE, _coords)
+        self.assertLessEqual(_km(ordem), _km(semente) + 1e-9)
 
     def test_cliente_que_fecha_cedo_vai_pro_comeco(self):
         # 4 paradas próximas; a mais PERTO da base fecha às 11h -- no

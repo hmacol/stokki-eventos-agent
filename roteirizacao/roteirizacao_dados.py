@@ -47,11 +47,12 @@ COORD_CENTRO_SP = (-23.550520, -46.633309)
 # Paulo... pedidos de Sorocaba não se misturariam com pedidos de Barueri
 # automaticamente"): TRAVA RÍGIDA de partição -- nenhuma rota mistura
 # pedidos de macro-regiões diferentes. As macros são: GRANDE_SP (dentro
-# do raio de 70km e fora de região externa), o NOME de cada região
-# externa de dia fixo (Sorocaba, Campinas, Vale do Paraíba, Baixada
-# Santista, Piracicaba -- cada uma é uma direção/estrada diferente,
-# também não se misturam ENTRE SI), e VIAGEM pra pedido a mais de 70km
-# sem região externa cadastrada.
+# do raio de RAIO_GRANDE_SP_KM (35 km desde 20/08, ver regioes_dia_fixo.py)
+# e fora de região externa), o NOME de cada região externa de dia fixo
+# (Sorocaba, Campinas, Vale do Paraíba, Baixada Santista, Piracicaba --
+# cada uma é uma direção/estrada diferente, também não se misturam ENTRE
+# SI), e VIAGEM pra pedido a mais de RAIO_GRANDE_SP_KM (35 km desde
+# 20/08, ver regioes_dia_fixo.py) sem região externa cadastrada.
 MACRO_GRANDE_SP = "GRANDE_SP"
 MACRO_VIAGEM_GENERICA = "VIAGEM"
 
@@ -308,16 +309,37 @@ def extrair_cep(servico: dict) -> str | None:
 _cache_coordenadas: dict[tuple[str, str], tuple[float, float] | None] = {}
 
 
+def coordenada_embutida(servico: dict) -> tuple[float, float] | None:
+    """(lat, lng) das chaves latitude/longitude do proprio dict (servico
+    vindo de rota existente, rascunho ou replay), ou None se ausentes,
+    nao numericas ou (0, 0) -- placeholder que a Vuupt/geocache usam
+    pra "sem coordenada"."""
+    lat, lng = servico.get("latitude"), servico.get("longitude")
+    if lat in (None, "") or lng in (None, ""):
+        return None
+    try:
+        par = (float(lat), float(lng))
+    except (TypeError, ValueError):
+        return None
+    return None if par == (0.0, 0.0) else par
+
+
 def obter_coordenadas(servico: dict, api_key: str | None) -> tuple[float, float] | None:
     """
-    Busca as coordenadas do endereço do serviço, reaproveitando o
-    MESMO cache de geocodificação usado pelo pipeline de importação
-    (geocodificacao.py, tabela geocache em dados/dados.db) -- a imensa
-    maioria dos pedidos not_assigned já foi geocodificada por lá, isso
-    normalmente é um cache hit, sem chamada nova no Google Maps.
-    Retorna None se não houver endereço, chave de API, ou coordenada
-    (cache miss + falha do Google, ou endereço não resolvido antes).
+    Coordenada do servico: primeiro a EMBUTIDA no dict (latitude/
+    longitude -- desde 18/09, mesma preferencia que coords_do_servico e
+    otimizacao_rotas._distancia_da_base ja tinham; assim agrupadores,
+    sequenciador e replay enxergam a mesma coordenada), senao geocodifica
+    o 'address' reaproveitando o MESMO cache de geocodificacao usado pelo
+    pipeline de importacao (geocodificacao.py, tabela geocache em
+    dados/dados.db) -- a imensa maioria dos pedidos not_assigned ja foi
+    geocodificada por la, isso normalmente e um cache hit, sem chamada
+    nova no Google Maps. Retorna None se nao houver endereco, chave de
+    API, ou coordenada (cache miss + falha do Google).
     """
+    embutida = coordenada_embutida(servico)
+    if embutida:
+        return embutida
     endereco = servico.get("address")
     if not endereco:
         return None
@@ -343,11 +365,12 @@ def calcular_km_estimado(sublote: list[dict], base_lat: float, base_lng: float,
                          api_key: str | None) -> float:
     """
     KM total estimado (haversine) de UMA rota, na ordem de visita:
-    base -> p1 -> ... -> pN -> base. Serviço sem coordenada é ignorado
-    no somatório (não dá pra medir). Extraída de selecao_modelo.py::
-    _km_total (que soma isso sobre vários sublotes) pra ser reaproveitada
-    também pelo cálculo de km dos rascunhos de rota (painel_agentes/
-    rascunhos_rota.py), evitando duas implementações divergindo.
+    base -> p1 -> ... -> pN, SEM a perna de volta (desde 18/09: a rota
+    real termina na ultima entrega -- ver COORDS_BASE/estimar_tempo_rota
+    -- e o sequenciador otimiza o mesmo objetivo; ate entao somava uma
+    volta ficticia a base). Servico sem coordenada e ignorado no
+    somatorio. Usada por selecao_modelo._km_total, pelo km dos rascunhos
+    (painel_agentes/rascunhos_rota.py) e pelo polimento entre rotas.
     """
     coords = [c for c in (obter_coordenadas(s, api_key) for s in sublote) if c]
     if not coords:
@@ -355,7 +378,6 @@ def calcular_km_estimado(sublote: list[dict], base_lat: float, base_lng: float,
     total = _distancia_km(base_lat, base_lng, *coords[0])
     for i in range(len(coords) - 1):
         total += _distancia_km(*coords[i], *coords[i + 1])
-    total += _distancia_km(*coords[-1], base_lat, base_lng)
     return total
 
 
@@ -783,10 +805,10 @@ def _orcamento_inviavel_por_distancia(sublote: list[dict], api_key: str | None =
     em ROTA_TEMPO_MAXIMO_HORAS: pelo menos um pedido, SOZINHO (só ele +
     a perna da base), já estoura o orçamento por pura DISTÂNCIA até a
     base -- destino muito longe (ex.: seleção manual fora da área usual
-    de atendimento), não excesso de paradas. Como o 2-opt sempre visita
-    a parada mais distante PRIMEIRO (farthest-first, ver ordenar_2opt),
-    qualquer rota que inclua esse pedido paga aquela mesma perna longa
-    de qualquer forma -- fragmentar em rotas de 1 pedido não resolve
+    de atendimento), não excesso de paradas. Qualquer rota que inclua
+    esse pedido paga, em algum trecho, um deslocamento pelo menos tão
+    longo quanto a perna base -> pedido (desigualdade triangular), então
+    fragmentar em rotas de 1 pedido não resolve
     nada (cada uma continuaria acima do orçamento) e só multiplica
     motoristas pro mesmo problema (achado da revisão de 25/08: N
     pedidos vizinhos e distantes viravam N rotas de 1, todas ainda
@@ -1102,14 +1124,8 @@ def tem_janela(sublote: list[dict]) -> bool:
 
 
 def coords_do_servico(servico: dict, api_key: str | None = None) -> tuple[float, float] | None:
-    """Coordenada embutida no serviço (latitude/longitude, quando veio de
-    rota existente/rascunho) ou obter_coordenadas como reserva."""
-    lat, lng = servico.get("latitude"), servico.get("longitude")
-    if lat not in (None, "") and lng not in (None, ""):
-        try:
-            return (float(lat), float(lng))
-        except (TypeError, ValueError):
-            pass
+    """Mantida pelo nome (sequenciador, laboratorio, benchmark): desde
+    18/09 obter_coordenadas ja prefere a coordenada embutida."""
     return obter_coordenadas(servico, api_key)
 
 
@@ -1200,60 +1216,83 @@ def janela_viavel(sublote: list[dict], api_key: str | None = None,
 MAX_ITERACOES_2OPT = 100
 
 
+def _ordem_vizinho_mais_proximo(servicos: list[dict], base: tuple[float, float], resolver) -> list[dict]:
+    """Semente do sequenciador (18/09): sai da base pro servico mais
+    proximo, dali pro mais proximo ainda nao visitado, e assim por
+    diante. Servico sem coordenada vai pro FINAL, na ordem original.
+    Deterministico: empate resolvido pela ordem original."""
+    com, sem = [], []
+    for s in servicos:
+        (com if resolver(s) else sem).append(s)
+    ordem: list[dict] = []
+    atual = base
+    restantes = list(com)
+    while restantes:
+        proximo = min(restantes, key=lambda s: _distancia_km(atual[0], atual[1], *resolver(s)))
+        restantes.remove(proximo)
+        ordem.append(proximo)
+        atual = resolver(proximo)
+    return ordem + sem
+
+
 def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
                         api_key: str | None = None, coords_fn=None) -> list[dict]:
     """
-    Sequenciamento 2-opt (Modelo 3 do doc de otimização, antes em
-    otimizacao_rotas.ordenar_2opt -- que agora só delega pra cá). Parte
-    da ordem farthest-first (mais longe da base primeiro) e reverte
-    segmentos [i, j] enquanto isso melhorar o objetivo.
+    Sequenciamento de UMA rota (usado por otimizacao_rotas.ordenar_2opt,
+    que so delega pra ca). Desde 18/09 (Hugo -- "sequencia livre",
+    revoga a regra "mais longe primeiro" de 03/08):
 
-    SEM janela em nenhum pedido o comportamento é exatamente o de
-    sempre: objetivo = km do trajeto base -> p1 -> ... -> pN -> base,
-    posição 0 (mais distante) nunca se move (requisito de negócio, Hugo
-    03/08), serviço sem coordenada fica onde o farthest-first o deixou.
+      - semente: vizinho mais proximo saindo da base
+        (_ordem_vizinho_mais_proximo);
+      - objetivo SEM janela: km do trajeto base -> p1 -> ... -> pN, SEM
+        volta a base (a rota real termina na ultima entrega);
+      - objetivo COM janela (Hugo, 09/09): km + PESO_ATRASO_JANELA_KM x
+        horas de atraso + PESO_ESPERA_JANELA_KM x horas de espera
+        (simular_horarios);
+      - busca local: 2-opt (reversao de segmento) e or-opt (realocacao
+        de 1 parada), em QUALQUER posicao -- a 1a parada tambem se move.
 
-    COM janela (Hugo, 09/09): objetivo = km + PESO_ATRASO_JANELA_KM x
-    horas de atraso + PESO_ESPERA_JANELA_KM x horas de espera
-    (simular_horarios), alternando 2-opt com REALOCAÇÃO de parada
-    única (or-opt: tirar uma parada e reinserir em outra posição --
-    reversão de segmento sozinha não consegue "empurrar" um cliente
-    que só abre às 15h pro fim da rota sem bagunçar o resto). A posição
-    0 continua fixa numa 1ª passada; se ainda sobrar atraso evitável ou
-    espera acima da tolerância, uma 2ª passada libera a 1ª parada também
-    (aceita só se o objetivo melhorar) -- chegar dentro da janela vale
-    mais que sair pro ponto mais longe.
+    Servico sem coordenada nao entra no calculo de km e a semente o
+    deixa no final. No caminho SEM janela, reversao que envolveria essa
+    parada e pulada (_tem_coords), entao ela nao sai do lugar. No
+    caminho COM janela a busca local PODE reposiciona-la -- o custo
+    dela e avaliado pelo simulador de horarios (simular_horarios) e a
+    distancia dela conta zero, entao ela pode ser usada pra "absorver"
+    espera sem custo de km. Vies conhecido, pre-existente (o ramo com
+    janela sempre avaliou custo por _custo/simular_horarios, sem trava
+    de coordenada), aceito em 20/09 por ser caso de borda -- desde a
+    task de coordenada embutida quase todo servico chega com
+    latitude/longitude, embutida ou geocodificada.
     """
     resolver = coords_fn or (lambda s: coords_do_servico(s, api_key))
+    base = (base_lat, base_lng)
 
-    def _dist_base(s: dict) -> float:
-        c = resolver(s)
-        return _distancia_km(c[0], c[1], base_lat, base_lng) if c else -1.0
-
-    ordem_inicial = sorted(servicos, key=_dist_base, reverse=True)
+    ordem_inicial = _ordem_vizinho_mais_proximo(servicos, base, resolver)
     n = len(ordem_inicial)
     com_janela = tem_janela(ordem_inicial)
     if n <= 1 or (n <= 2 and not com_janela):
         return ordem_inicial
 
     coords = [resolver(s) for s in ordem_inicial]
-    base = (base_lat, base_lng)
-    # coordenada já resolvida por identidade do dict -- o simulador não
-    # geocodifica de novo a cada candidata avaliada
     coords_por_objeto = {id(s): c for s, c in zip(ordem_inicial, coords)}
     resolver_cache = lambda s: coords_por_objeto.get(id(s), resolver(s))
 
     def _ponto(rota: list[int], pos: int):
-        if pos < 0 or pos >= len(rota):
+        """Coordenada na posicao `pos`; base antes da 1a parada; None
+        depois da ultima (nao ha perna de volta)."""
+        if pos < 0:
             return base
+        if pos >= len(rota):
+            return None
         return coords[rota[pos]]
+
+    def _perna(a, b) -> float:
+        return _distancia_km(*a, *b) if (a is not None and b is not None) else 0.0
 
     def _delta_km(rota: list[int], i: int, j: int) -> float:
         a, b = _ponto(rota, i - 1), _ponto(rota, i)
         c, d = _ponto(rota, j), _ponto(rota, j + 1)
-        antes = _distancia_km(*a, *b) + _distancia_km(*c, *d)
-        depois = _distancia_km(*a, *c) + _distancia_km(*b, *d)
-        return depois - antes
+        return (_perna(a, c) + _perna(b, d)) - (_perna(a, b) + _perna(c, d))
 
     def _tem_coords(rota: list[int], i: int, j: int) -> bool:
         vizinhos = [k for k in (i - 1, j + 1) if 0 <= k < len(rota)]
@@ -1269,7 +1308,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
                 continue
             total += _distancia_km(anterior[0], anterior[1], c[0], c[1])
             anterior = c
-        return total + _distancia_km(anterior[0], anterior[1], base_lat, base_lng)
+        return total
 
     def _custo(rota: list[int]) -> float:
         sim = simular_horarios([ordem_inicial[k] for k in rota], api_key, base, coords_fn=resolver_cache)
@@ -1281,7 +1320,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
         while melhorou and iteracoes < MAX_ITERACOES_2OPT:
             melhorou = False
             iteracoes += 1
-            for i in range(1, len(rota) - 1):
+            for i in range(0, len(rota) - 1):
                 for j in range(i + 1, len(rota)):
                     if not _tem_coords(rota, i, j):
                         continue
@@ -1290,24 +1329,22 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
                         melhorou = True
         return rota
 
-    def _busca_local_com_janela(rota: list[int], i_min: int) -> list[int]:
+    def _busca_local_com_janela(rota: list[int]) -> list[int]:
         custo_atual = _custo(rota)
         melhorou, iteracoes = True, 0
         while melhorou and iteracoes < MAX_ITERACOES_2OPT:
             melhorou = False
             iteracoes += 1
-            # 2-opt (reversão de segmento)
-            for i in range(i_min, len(rota) - 1):
+            for i in range(0, len(rota) - 1):
                 for j in range(i + 1, len(rota)):
                     candidata = rota[:i] + rota[i:j + 1][::-1] + rota[j + 1:]
                     custo = _custo(candidata)
                     if custo < custo_atual - 0.01:
                         rota, custo_atual, melhorou = candidata, custo, True
-            # or-opt (realocação de 1 parada)
-            for i in range(i_min, len(rota)):
+            for i in range(0, len(rota)):
                 item = rota[i]
                 restante = rota[:i] + rota[i + 1:]
-                for pos in range(i_min, len(rota)):
+                for pos in range(0, len(rota)):
                     if pos == i:
                         continue
                     candidata = restante[:pos] + [item] + restante[pos:]
@@ -1320,16 +1357,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
         return rota
 
     rota = list(range(n))
-    if not com_janela:
-        rota = _2opt_sem_janela(rota)
-    else:
-        rota = _busca_local_com_janela(rota, 1)
-        sim = simular_horarios([ordem_inicial[k] for k in rota], api_key, base, coords_fn=resolver_cache)
-        atraso_evitavel = sim["atraso_h"] - _atraso_intrinseco(ordem_inicial, api_key, base, resolver_cache)
-        if atraso_evitavel > TOLERANCIA_JANELA_HORAS or sim["espera_h"] > TOLERANCIA_JANELA_HORAS:
-            alternativa = _busca_local_com_janela(list(rota), 0)
-            if _custo(alternativa) < _custo(rota):
-                rota = alternativa
+    rota = _busca_local_com_janela(rota) if com_janela else _2opt_sem_janela(rota)
     return [ordem_inicial[k] for k in rota]
 
 
@@ -1644,7 +1672,8 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
         sequência de saltos de ~18km cada pode passar nela e ainda
         assim virar uma rota de 150km, porque nada soma o trajeto.
         `km_acumulado_maximo` é uma APROXIMAÇÃO (usa a mesma ordem 1D
-        de `_chave_ordenacao`, não a ordem farthest-first+2opt real),
+        de `_chave_ordenacao`, não a ordem vizinho mais próximo +
+        2-opt/or-opt sem volta à base real),
         mas já pega o caso zigzag que o par-a-par sozinho não pega.
 
     Considera PROXIMIDADE real: ordena os serviços por coordenada
@@ -1761,9 +1790,9 @@ def ordenar_por_distancia_base(servicos: list[dict], base_lat: float, base_lng: 
                                api_key: str | None = None) -> list[dict]:
     """
     Ordena os serviços de uma rota da mais LONGE pra mais PERTO da
-    base -- padrão de sequenciamento pedido pelo Hugo, 03/08 (rotas
-    sempre saem da base indo primeiro pro ponto mais distante,
-    "esvaziando" o caminho de volta).
+    base -- regra de sequenciamento de 03/08, REVOGADA em 18/09 (Hugo:
+    "sequência livre", ver ordenar_com_janelas). Sem chamador em
+    produção desde então; mantida pra scripts antigos e benchmark.
 
     Usa a coordenada já embutida no próprio serviço (latitude/
     longitude, quando o serviço já veio de uma rota existente via

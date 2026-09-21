@@ -413,12 +413,12 @@ def recalcular_km(conn: sqlite3.Connection, rascunho_id: int, api_key: str) -> f
     subestimava 25-35% o km pago ao motorista). Sem chave / API fora, cai
     na linha reta e marca a fonte como HAVERSINE.
 
-    NÃO reaproveita roteirizacao_dados.calcular_km_estimado aqui de
-    propósito: aquela função busca coordenada via obter_coordenadas(), que
-    geocodifica pelo campo 'address' e ignora latitude/longitude já
-    presentes no dict -- em rascunhos_parada as coordenadas JÁ estão
-    resolvidas e gravadas; usar aquela função aqui geocodificaria 'None'
-    e zeraria o km."""
+    NÃO reaproveita roteirizacao_dados.calcular_km_estimado aqui: a
+    premissa original (obter_coordenadas() geocodificava pelo campo
+    'address' e ignorava latitude/longitude já presentes no dict) caducou
+    em 18/09 -- obter_coordenadas passou a preferir a coordenada embutida.
+    A função local abaixo é mantida por ora; reaproveitar ou não é
+    decisão de outra frente."""
     from geocodificacao import geocodificar
     from km_rodoviario import calcular_km
 

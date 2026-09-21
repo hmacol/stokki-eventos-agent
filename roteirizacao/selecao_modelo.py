@@ -16,14 +16,11 @@ sobre os pedidos do dia:
   - CEP real (otimizacao_rotas.agrupar_por_cep);
   - K-means geográfico (otimizacao_rotas.agrupar_por_kmeans);
 
-sequencia TODOS com 2-opt (otimizacao_rotas.ordenar_2opt -- parte do
-farthest-first de produção e só aceita trocas que reduzem o trajeto,
-mantendo a 1ª entrega como a mais distante da base, requisito do
-Hugo), valida travas + cobertura de pedidos de cada candidato, e
-escolhe o vencedor por:
-  1º MENOS rotas (menos motoristas/veículos no dia);
-  2º menor KM total estimado (haversine na ordem de visita) como
-     desempate.
+sequencia TODOS com otimizacao_rotas.ordenar_2opt (vizinho mais
+próximo + 2-opt/or-opt sem volta à base, Hugo 18/09), valida travas +
+cobertura de pedidos de cada candidato, e escolhe o vencedor por:
+  1º menor KM total estimado (haversine na ordem de visita);
+  2º MENOS rotas, só como desempate (ver _escolher_vencedor).
 
 Candidato que falhar validação ou estourar exceção é DESCARTADO do
 páreo (com log de erro) -- o modelo Atual é o piso de segurança: se
@@ -148,6 +145,17 @@ def agrupar_atual(servicos, gmaps_key, tamanho_minimo, tamanho_maximo,
     return sublotes
 
 
+def _escolher_vencedor(avaliacoes: dict[str, dict]) -> str:
+    """Critério do dia (Hugo, 18/09 -- "rota compacta, mesmo que custe
+    1 rota a mais"): MENOR km total estimado (arredondado a 0,1 km pra
+    não decidir por ruído), MENOS rotas só como desempate. Até 17/09 era
+    o inverso (menos rotas primeiro) -- premiava o Clarke-Wright por
+    esticar cada rota até o teto de distância. Como calcular_km_estimado
+    conta a perna base -> 1ª parada, cada rota extra já custa km: rota a
+    mais só vence quando compensa de verdade."""
+    return min(avaliacoes, key=lambda nome: (round(avaliacoes[nome]["km"], 1), avaliacoes[nome]["rotas"]))
+
+
 def _registrar_historico(data_alvo, label, vencedor, avaliacoes):
     """Uma linha por partição por dia -- auditável depois com um grep."""
     try:
@@ -170,12 +178,14 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
                            distancia_maxima_fusao_regiao_km: float | None = None,
                            km_acumulado_maximo: float | None = None,
                            km_acumulado_maximo_viagem: float | None = None,
+                           registrar_historico: bool = True,
                            ) -> tuple[str, list[list[dict]]]:
     """
     Avalia os 5 agrupamentos sobre os pedidos do dia e retorna
     (nome_do_vencedor, sublotes_já_sequenciados_com_2opt), prontos pra
-    virar rotas de verdade. Critério: menos rotas; empate decidido
-    pelo menor KM total estimado.
+    virar rotas de verdade. Critério (18/09): menor KM total estimado;
+    menos rotas só como desempate -- ver _escolher_vencedor.
+    `registrar_historico=False` (replay) não grava linha no histórico.
 
     `modelo_forcado` (Hugo, 15/08 -- escolha manual no botão
     "Roteirizar" de Planejamento): se informado, roda só esse esquema
@@ -294,7 +304,7 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
         # chama tratar como falha de roteirização mesmo.
         raise RuntimeError("Nenhum modelo de roteirização produziu agrupamento válido.")
 
-    vencedor = min(avaliacoes, key=lambda nome: (avaliacoes[nome]["rotas"], avaliacoes[nome]["km"]))
+    vencedor = _escolher_vencedor(avaliacoes)
 
     placar = " | ".join(
         f"{nome}: {a['rotas']} rota(s), {a['km']:.1f} km" for nome, a in avaliacoes.items()
@@ -302,6 +312,7 @@ def escolher_melhor_modelo(servicos: list[dict], base_lat: float, base_lng: floa
     logger.info(f"[{label}] Seleção do dia -- {placar}.")
     logger.info(f"[{label}] Modelo VENCEDOR: {vencedor} "
                 f"({avaliacoes[vencedor]['rotas']} rota(s), {avaliacoes[vencedor]['km']:.1f} km).")
-    _registrar_historico(data_alvo, label or "-", vencedor, avaliacoes)
+    if registrar_historico:
+        _registrar_historico(data_alvo, label or "-", vencedor, avaliacoes)
 
     return vencedor, avaliacoes[vencedor]["sublotes"]

@@ -94,6 +94,9 @@ def _limite_distancia(sublote_candidato: list[dict], distancia_maxima_km: float 
     return distancia_maxima_km
 
 
+limite_distancia = _limite_distancia  # nome publico pra polimento_rotas (18/09)
+
+
 def _cabe_na_distancia(servico: dict, sublote_atual: list[dict], distancia_maxima_km: float | None,
                        api_key: str | None, distancia_maxima_viagem_km: float | None = None,
                        eh_viagem_fn=None) -> bool:
@@ -321,24 +324,12 @@ _coords_do_servico = coords_do_servico  # mantido pelo nome antigo (benchmark/la
 def ordenar_2opt(servicos: list[dict], base_lat: float, base_lng: float,
                  api_key: str | None = None) -> list[dict]:
     """
-    Modelo 3: sequenciamento 2-opt. Parte da ordem farthest-first atual
-    (mais longe da base primeiro) e elimina cruzamentos revertendo
-    segmentos [i, j] sempre que isso reduzir a distância total do
-    trajeto base -> p1 -> ... -> pN -> base.
-
-    A posição 0 (entrega mais distante) NUNCA é movida -- requisito de
-    negócio: o motorista sai da base direto pro ponto mais longe e vai
-    "esvaziando" no caminho de volta. Serviço sem coordenada permanece
-    na posição do farthest-first (segmento que o contenha não é
-    candidato a reversão).
-
-    Desde 09/09 (janela de horário do cliente, pedido do Hugo) o miolo
-    vive em roteirizacao_dados.ordenar_com_janelas -- que é ESTE 2-opt
-    quando nenhum pedido tem janela, e um 2-opt + realocação com
-    objetivo km + atraso + espera quando tem (o BUG de 14/08 do
-    serviço sem coordenada em j+1 continua coberto lá). Esta função
-    fica como ponto de entrada de sempre pra selecao_modelo/
-    criar_rotas_diarias/rascunhos_rota/benchmark.
+    Sequenciamento de uma rota -- só delega pra
+    roteirizacao_dados.ordenar_com_janelas (semente vizinho mais
+    próximo, 2-opt + or-opt sem volta à base, janelas de horário; ver
+    docstring de lá). Mantida pelo nome: é o ponto de entrada de
+    selecao_modelo, criar_rotas_diarias, incrementar_rotas e do botão
+    "Otimizar sequência" dos rascunhos.
     """
     return ordenar_com_janelas(servicos, base_lat, base_lng, api_key)
 

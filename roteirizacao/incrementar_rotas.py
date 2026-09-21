@@ -842,9 +842,10 @@ def main(modo_teste: bool = False):
         # EXISTIAM antes desse run e ganharam pedido novo (rotas
         # criadas agora mesmo já nasceram na ordem certa, na etapa
         # acima -- reaplicar aqui seria desnecessário). Desde 09/09 usa
-        # o MESMO ordenar_2opt do criador diário (farthest-first + 2-opt,
-        # e janela de horário quando algum pedido tem) em vez do
-        # farthest-first puro -- a rota incrementada volta a respeitar
+        # o MESMO ordenar_2opt do criador diário (vizinho mais próximo +
+        # 2-opt/or-opt sem volta à base, Hugo 18/09, e janela de horário
+        # quando algum pedido tem) em vez de resequenciar aqui sem
+        # suporte a janela -- a rota incrementada volta a respeitar
         # as janelas que o rascunho do dia já respeitava.
         if not modo_teste and coords_base:
             for rota_info in info_rotas:
@@ -863,7 +864,7 @@ def main(modo_teste: bool = False):
                     ordem_ids = [s["id"] for s in ordenados]
                     if ordem_ids != rota_info["service_ids"]:
                         atualizar_rota(token, rota_info["id"], ordem_ids)
-                        logger.info(f"  Rota '{rota_info['nome']}' reordenada (mais longe -> mais perto da base).")
+                        logger.info(f"  Rota '{rota_info['nome']}' reordenada (vizinho mais próximo + 2-opt/or-opt, sem volta à base).")
                 except Exception as e:
                     logger.warning(f"  Falha ao reordenar a rota '{rota_info['nome']}' "
                                   f"(rota continua com a ordem atual): {e}")

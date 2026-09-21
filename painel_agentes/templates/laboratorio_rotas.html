@@ -96,6 +96,7 @@
 
   <label for="particao">Partição:</label>
   <select id="particao" name="particao">
+    <option value="Todos" {% if particao_input == "Todos" %}selected{% endif %}>Todos</option>
     <option value="Seco" {% if particao_input == "Seco" %}selected{% endif %}>Seco</option>
     <option value="Refrigerado/Congelado" {% if particao_input == "Refrigerado/Congelado" %}selected{% endif %}>Refrigerado/Congelado</option>
   </select>

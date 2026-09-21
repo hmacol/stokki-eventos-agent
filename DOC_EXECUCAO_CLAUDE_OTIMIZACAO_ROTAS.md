@@ -14,6 +14,8 @@ Este documento contém todas as instruções, regras de negócio, estrutura de c
 
 ### 1.1. Fluxo Atual de Roteirização (`roteirizacao_dados.py`)
 
+> **Nota (20/09/2026):** esta seção é um retrato histórico de ANTES de 18/09 -- mantido como estava, sem reescrever, porque documenta como o fluxo era. O sequenciamento "mais distante primeiro" descrito no item 4 abaixo foi revogado em 18/09 (sequência livre, vizinho mais próximo + 2-opt/or-opt); ver a tabela de decisões na **Seção 9 (Recalibração de 18/09/2026)**, que é a fonte de verdade do fluxo atual.
+
 O fluxo é executado diariamente por `criar_rotas_diarias.py` (job das 13h) e incrementado por hora por `incrementar_rotas.py` (14h–20h). As etapas são:
 
 1. **Agrupamento Geográfico (`agrupar_por_regiao`):** Células de grade estática de `0.1°` (lat/lng, ~11 km). Com coordenada = célula de grade; sem coordenada = prefixo do CEP (2 dígitos).
@@ -549,3 +551,42 @@ Agendamento **e** cadastro: vale a interseção; interseção vazia → vale o a
 
 - `py -3.11 -m unittest roteirizacao.test_janelas_horario test_janela_horario_email roteirizacao.test_orcamento_horas` (44 testes).
 - Dados reais de 09/09 (92 not_assigned, 35 com janela): 18 rotas nas duas rodadas, 2105 → 2098 km, 18 s → 28 s; zero atraso evitável — as 5 paradas "fora" restantes são intrínsecas (janela que fecha às 10h/11h com saída às 10h) ou dentro dos 15 min de tolerância.
+
+## 9. Recalibração de 18/09/2026 (spec: docs/superpowers/specs/2026-09-18-recalibracao-roteirizacao-design.md)
+
+Sintoma (Hugo, 17/09): rotas espalhadas, sobrepostas, sequência ruim, poucas paradas por rota. Medido em produção (rotas enviadas 11-17/09): 19-31% das paradas tinham a vizinha mais próxima em OUTRA rota; 20-45 pares de rotas com bolhas cruzadas por dia; média 9,5 paradas/rota com teto 16.
+
+Baseline de 31 dias (12/08 a 18/09, tudo que foi ENVIADO em produção -- é a régua contra a qual o replay compara o pipeline novo, `roteirizacao/replay_rotas.py` + `roteirizacao/metricas_plano.py`): 339 rotas, 3008 paradas, média 8,9 paradas por rota, 116 rotas com 6 paradas ou menos, diâmetro mediano dos dias 10,6 km, 18.731 km no total, 658 paradas (22%) com a parada mais próxima em OUTRA rota, e 658 pares de rotas com áreas se cruzando.
+
+Decisões do Hugo (18/09) e o que mudou:
+
+| Decisão | Onde | Retorno |
+|---|---|---|
+| Seco e Refrigerado sempre podem ir juntos (frota toda tem baú térmico) | `criar_rotas_diarias.SEPARAR_POR_TIPO_CARGA = False`; `rotulo_carga()` grava o tipo por rota em `rascunhos_rota.particao`; Laboratório ganhou "Todos" | `SEPARAR_POR_TIPO_CARGA = True` |
+| Rota compacta vale mais que menos rotas | `selecao_modelo._escolher_vencedor`: menor km total, rotas só desempata | trocar a chave do `min` |
+| Sequência livre (revoga "mais longe primeiro" de 03/08) | `roteirizacao_dados.ordenar_com_janelas`: semente vizinho mais próximo, objetivo sem volta à base, 2-opt + or-opt em todas as posições; `calcular_km_estimado` sem volta | sem chave (decisão de negócio) |
+| Polimento entre rotas | `roteirizacao/polimento_rotas.py`, chamado por `criar_rotas_diarias._polir_particao` | `POLIMENTO_ATIVO = False` |
+| Coordenada embutida vale antes da geocodificação | `roteirizacao_dados.obter_coordenadas` | — |
+| Distância máxima entre paradas (Grande SP) | `DISTANCIA_MAXIMA_ROTA_KM = 15` (era 20; calibrado pelo replay de 31 dias, ver comentário na constante em `criar_rotas_diarias.py` -- com 20 km o diâmetro mediano PIORAVA para 11,1 km, com 15 km todo indicador medido melhora ou fica estável, com 12 km compacta mais mas custa ~2 rotas/dia a mais e 213 rotas pequenas) | voltar a 20 |
+
+Miolo único: `criar_rotas_diarias.planejar_sublotes` (partição -> seleção -> fusão -> polimento), usado pelo job das 22h, pelo botão Roteirizar e pelo replay.
+
+Replay e métricas: `roteirizacao/replay_rotas.py` (lê rascunhos ENVIADOS de uma cópia do banco, `dados/dados_replay.db`, e compara "enviado" x "novo") e `roteirizacao/metricas_plano.py`. Prova real do pipeline novo rodando contra os pedidos de produção em modo teste (20/09): partição única funcionando, os 5 modelos competindo entre si -- o vencedor fez 13 rotas e 513,8 km contra 16 rotas e 535,3 km do modelo antigo -- e o polimento fazendo 6 realocações mais 3 trocas, levando o km de 513,8 para 478,9 (-6,8%) em 15,4 segundos.
+
+Resultado da calibração formal (Task 8, replay de 31 dias, 12/08 a 19/09, 3008 paradas, comparando o ENVIADO de verdade contra o pipeline novo em 4 configurações de `DISTANCIA_MAXIMA_ROTA_KM`):
+
+| Configuração | Rotas | Paradas/rota | Pequenas | Diâmetro mediano | Km | Entrelaçadas | Pares cruzados | Acima de 9h |
+|---|---|---|---|---|---|---|---|---|
+| **Enviado de verdade** | 339 | 8,9 | 116 | 10,6 km | 18.731 | 658 (22%) | 658 | **71** |
+| Controle (regras antigas de agrupamento, só sequência nova) | 363 | 8,3 | 145 | 10,6 km | 15.637 (-16,5%) | 724 (24%) | 554 | 0 |
+| 20 km | 350 | 8,6 | 133 | 11,1 km | 15.012 (-19,9%) | 631 (21%) | 577 | 0 |
+| **15 km (escolhida)** | 372 | 8,1 | 158 | 10,1 km | 15.234 (-18,7%) | 573 (19%) | 499 | 0 |
+| 12 km | 406 | 7,4 | 213 | 8,7 km | 15.551 (-17,0%) | 548 (18%) | 398 | 0 |
+
+Leitura: km cai 17-20% em qualquer configuração nova (a maior parte vem da sequência livre -- o Controle, que mantém o agrupamento antigo, já corta 16,5% sozinho); 71 das 339 rotas realmente enviadas estouravam 9h de orçamento e toda configuração nova zera isso, porque o orçamento passa a ser conferido na ordem final, depois do sequenciamento; 20 km piora o diâmetro mediano (10,6 -> 11,1 km) e não resolveria a queixa original de rotas espalhadas; 15 km é o único ponto em que todo indicador melhora ou fica estável frente ao enviado, ao custo de ~1 rota a mais por dia; 12 km compacta mais (diâmetro 8,7 km) mas custa ~2 rotas a mais por dia e quase dobra as rotas pequenas. **O critério de aceite da especificação pro entrelaçamento (cair de 22% pra 11%) NÃO foi atingido** -- o melhor resultado foi 18%, porque nem a seleção de modelo nem o polimento otimizam sobreposição de área, os dois otimizam km, e duas rotas paralelas na mesma via podem ter km baixo e entrelaçamento alto; o Hugo decidiu atacar isso numa fase seguinte, depois de ver esta em produção (detalhe completo em `.superpowers/sdd/2026-09-18-recalibracao-roteirizacao/task-8-report.md`).
+
+Testes: `test_metricas_plano`, `test_coordenadas_embutidas`, `test_sequencia_livre`, `test_selecao_modelo`, `test_particao_carga`, `test_polimento_rotas`, `test_planejar_sublotes`, `test_replay_rotas`, `painel_agentes/test_laboratorio_todos`. **Rodar em dois comandos** (um por pacote): `criar_rotas_diarias.py` insere `painel_agentes/` no `sys.path`, então num mesmo processo `import painel_agentes` passa a resolver para o arquivo em vez do pacote. Pré-existente, não é falha da suíte.
+
+Viés conhecido, aceito em 20/09 e deixado para uma fase seguinte: no sequenciamento **com** janela de horário, uma parada sem coordenada nenhuma pode ser reposicionada pela busca local para "absorver" tempo de espera, porque a distância dela conta zero. No ramo sem janela isso não acontece (a reversão que a envolveria é pulada). É caso de borda -- desde a Task 2 quase todo pedido chega com coordenada embutida ou geocodificada -- e o comportamento já era assim antes desta recalibração. Está documentado na docstring de `ordenar_com_janelas`.
+
+Bug corrigido durante a implementação, registrado porque explica o desenho do polimento: a primeira versão do esvaziamento de rota pequena recalculava a vizinhança a cada parada movida. Como a vizinhança é filtrada por distância entre centroides, e o centroide da rota de origem se desloca quando ela perde uma parada, uma rota fora do conjunto salvo no backup podia receber a parada e não ser revertida quando o movimento era desfeito, **duplicando o pedido** (reproduzido: entrada com 4 pedidos saía com 5). Por isso a vizinhança do esvaziamento é congelada no início, o backup cobre exatamente as rotas dessa lista, e há uma rede de segurança final que devolve a entrada original se o km de saída piorar. Todo teste novo do módulo verifica o multiconjunto de identificadores da entrada contra o da saída.

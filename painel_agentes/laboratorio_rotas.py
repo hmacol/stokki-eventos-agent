@@ -47,7 +47,18 @@ from mapa_util import carregar_remetentes_por_sender_id
 
 logger = logging.getLogger(__name__)
 
-PARTICOES_VALIDAS = ("Seco", "Refrigerado/Congelado")
+PARTICOES_VALIDAS = ("Todos", "Seco", "Refrigerado/Congelado")
+
+
+def filtrar_particao(servicos: list[dict], particao: str) -> list[dict]:
+    """"Todos" (padrao desde 18/09, igual a producao) nao filtra; "Seco"
+    e "Refrigerado/Congelado" continuam disponiveis pra investigar um
+    tipo de carga isolado."""
+    if particao not in PARTICOES_VALIDAS:
+        raise ValueError(f"Partição inválida: {particao!r} (esperado {PARTICOES_VALIDAS})")
+    if particao == "Todos":
+        return list(servicos)
+    return [s for s in servicos if (s["_tipo_carga"] in TIPOS_CARGA_FRIA) == (particao == "Refrigerado/Congelado")]
 
 
 def _carregar_config() -> dict:
@@ -221,11 +232,12 @@ def _sublote_para_mapa(sublote: list[dict], remetentes_por_id: dict[int, str]) -
     return paradas
 
 
-def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste: bool = False) -> dict:
+def buscar_dados_laboratorio(data_alvo: date, particao: str = "Todos", usar_teste: bool = False) -> dict:
     """
     Roda os 5 esquemas de agrupamento sobre os pedidos elegíveis pra
-    `data_alvo`, na partição escolhida ("Seco" ou "Refrigerado/
-    Congelado" -- nunca misturadas, mesma regra de produção), e devolve:
+    `data_alvo`, na partição escolhida ("Todos" -- padrão, igual à
+    produção desde 18/09 -- ou "Seco"/"Refrigerado/Congelado" pra
+    investigar um tipo isolado), e devolve:
 
     {"data_alvo", "particao", "teste", "total_pedidos", "base",
      "google_maps_key",
@@ -240,9 +252,6 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste
     o laboratório sem risco de dado fictício ser varrido pelos jobs
     automáticos de produção.
     """
-    if particao not in PARTICOES_VALIDAS:
-        raise ValueError(f"Partição inválida: {particao!r} (esperado {PARTICOES_VALIDAS})")
-
     config = _carregar_config()
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
 
@@ -262,10 +271,7 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Seco", usar_teste
         servicos = [s for s in servicos_brutos if elegivel_para_data(s, data_alvo)]
         _injetar_classificacoes(servicos, config, crd.DB_PATH)
 
-    servicos_particao = [
-        s for s in servicos
-        if (s["_tipo_carga"] in TIPOS_CARGA_FRIA) == (particao == "Refrigerado/Congelado")
-    ]
+    servicos_particao = filtrar_particao(servicos, particao)
 
     resultado = {
         "data_alvo": data_alvo.isoformat(),

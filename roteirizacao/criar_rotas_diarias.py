@@ -14,10 +14,10 @@ MATERIALIZA de fato (diferente do route-optimization, que só calcula).
 Rotas saem SEM veículo/agente atribuído (pedido do Hugo: atribuição
 manual depois, na tela). A sequência inicial dentro de cada rota usa a
 ordem de proximidade calculada por dividir_em_sublotes, mas depois de
-criar a rota, os pedidos são ordenados da mais LONGE pra mais PERTO
-da base (roteirizacao_dados.py::ordenar_por_distancia_base) -- padrão
-de sequenciamento pedido pelo Hugo, 03/08, que substituiu a abordagem
-anterior (chamar o solver de route-optimization só pra sequenciar,
+criar a rota, os pedidos são sequenciados por vizinho mais próximo +
+2-opt/or-opt sem volta à base (roteirizacao_dados.py::ordenar_com_janelas,
+Hugo 18/09; substituiu o "mais longe primeiro" de 03/08), que substituiu
+a abordagem anterior (chamar o solver de route-optimization só pra sequenciar,
 que existia porque rotas criadas via API não passam pelo
 sequenciamento automático que a tela do VUUPT faz sozinha). Isso NÃO
 decide quais pedidos entram (isso continua sendo decisão nossa, por
@@ -45,6 +45,7 @@ import argparse
 import logging
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,6 +93,7 @@ from roteirizacao_dados import (
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
+from polimento_rotas import polir_entre_rotas
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
 from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
@@ -123,7 +125,16 @@ DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
 TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
-DISTANCIA_MAXIMA_ROTA_KM = 20  # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo, 09/08 -- ajustado 10/08)
+# Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo,
+# 09/08 -- ajustado 10/08 pra 20). Hugo, 20/09: 15 km, calibrado pelo
+# replay de 31 dias de operação real (roteirizacao/replay_rotas.py, ver
+# DOC_EXECUCAO_CLAUDE_OTIMIZACAO_ROTAS.md §9). Com 20 km o agrupador
+# estica a rota e o diâmetro mediano PIORAVA (10,6 -> 11,1 km); 15 km é o
+# único ponto medido em que todo indicador melhora ou fica estável
+# (km -18,7%, diâmetro 10,1 km, entrelaçamento 19% contra 22%, zero rota
+# acima de 9h), ao custo de ~1 rota a mais por dia. 12 km compacta mais
+# (diâmetro 8,7 km) mas custa ~2 rotas por dia e 213 rotas pequenas.
+DISTANCIA_MAXIMA_ROTA_KM = 15
 # Rotas de Viagem (fora da Grande SP) NÃO têm limite de distância entre
 # pedidos (pedido do Hugo, 10/08): as próprias regiões de dia fixo já
 # têm vãos internos maiores que 15/20km (ex: Vale do Paraíba chega a
@@ -159,6 +170,32 @@ PREFIXO_NOME_ROTA = "Planejamento"
 # maximo/distância/nível continuam valendo normalmente) em vez de um
 # caminho de código à parte.
 SEM_LIMITE_PARADAS = 10_000
+# Particao por tipo de carga (Hugo, 18/09): DESLIGADA. Toda a frota tem
+# bau com compartimento termico, entao Seco e Refrigerado/Congelado podem
+# sempre ir no mesmo carro -- separar so criava rotas paralelas na mesma
+# regiao (medido em 16-17/09: metade das paradas cuja vizinha mais
+# proxima estava em OUTRA rota era por causa dessa particao). True volta
+# ao comportamento anterior (Seco x Refrigerado x Misto por macro).
+SEPARAR_POR_TIPO_CARGA = False
+PARTICAO_GERAL = "Geral"
+# Polimento entre rotas (Hugo, 18/09 -- ver polimento_rotas.py): roda
+# depois do modelo vencedor e da fusao de sublotes pequenos. False =
+# retorno rapido ao comportamento anterior. Teto de tempo por particao
+# pra nao estourar a janela das 22h. 15.0s = medicao do controlador em
+# 20/09 no maior dia de producao (18 rotas, 171 paradas): entre 3s e
+# 15s o ganho e no entrelacamento (99% -> 61%), que e o sintoma
+# relatado pelo Hugo; a curva de ganho de km satura por volta dos 15s
+# (de 15s pra 30s o km melhora so ~1%). Desde a task anterior existe
+# UMA particao por dia (nao tres), entao o teto e pago uma unica vez
+# por execucao, e o job das 22h roda por timer sem restricao de tempo.
+POLIMENTO_ATIVO = True
+POLIMENTO_TEMPO_MAXIMO_S = 15.0
+# Teto pro caminho INTERATIVO (fix final, 20/09): o botao "Roteirizar" da
+# tela de Planejamento chama planejar_sublotes de forma SINCRONA, com uma
+# pessoa esperando a resposta -- os 15s calibrados pro job noturno (que
+# roda por timer, sem ninguem esperando) pesam demais ali. 5s ainda cobre
+# a faixa de maior ganho (3-15s, ver comentario acima) sem travar a tela.
+POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S = 5.0
 
 
 def _carregar_config() -> dict:
@@ -228,7 +265,14 @@ def _particionar_carga_com_fusao(servicos: list[dict], tamanho_minimo: int,
     Macro-região com pedido suficiente de UM tipo (ou só um dos tipos
     presente ali) continua 100% separada, como sempre -- a fusão só
     entra quando ela realmente resolve uma rota pequena.
+
+    Desde 18/09 (SEPARAR_POR_TIPO_CARGA=False) devolve UMA particao
+    'Geral' com todos os servicos; o tipo de carga vira rotulo por rota
+    (rotulo_carga).
     """
+    if not SEPARAR_POR_TIPO_CARGA:
+        return [(PARTICAO_GERAL, list(servicos))]
+
     macros = particionar_por_macro_regiao(servicos, api_key=gmaps_key)
 
     seco: list[dict] = []
@@ -248,6 +292,19 @@ def _particionar_carga_com_fusao(servicos: list[dict], tamanho_minimo: int,
     if misto:
         particoes.append(("Misto (Seco+Refrigerado)", misto))
     return particoes
+
+
+def rotulo_carga(sublote: list[dict]) -> str:
+    """Rotulo de carga de UMA rota, derivado do conteudo (18/09): 'Seco',
+    'Refrigerado/Congelado' ou 'Misto (Seco+Refrigerado)'. Gravado em
+    rascunhos_rota.particao no lugar do nome da particao, pra tela,
+    historico e filtros continuarem enxergando o mesmo vocabulario de
+    antes. Rota vazia (nao acontece) rotula 'Seco'."""
+    tem_frio = any(s.get("_tipo_carga") in TIPOS_CARGA_FRIA for s in sublote)
+    tem_seco = any(s.get("_tipo_carga") not in TIPOS_CARGA_FRIA for s in sublote)
+    if tem_frio and tem_seco:
+        return "Misto (Seco+Refrigerado)"
+    return "Refrigerado/Congelado" if tem_frio else "Seco"
 
 
 def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coords_base,
@@ -283,11 +340,12 @@ def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coor
     Orçamento de horas na ordem FINAL (25/08, achado da revisão
     adversarial): fundir_sublotes_pequenos aceita cada fusão pelo tempo
     estimado na ordem de CONCATENAÇÃO (perto->longe), mas o ordenar_2opt
-    logo acima muda a ordem pra farthest-first -- a perna da base pode
-    ser percorrida 2x na prática (base->longe, depois longe->perto) e
-    uma fusão que cabia na concatenação estourar na ordem final, sem
-    ninguém reconferir depois (diferente de selecao_modelo.escolher_
-    melhor_modelo, que já reparava só ANTES desta fusão cross-região).
+    logo acima resequencia tudo por vizinho mais próximo + 2-opt/or-opt
+    (sem volta à base, Hugo 18/09) -- a ordem final pode ficar bem
+    diferente da concatenação, e uma fusão que cabia no tempo estimado
+    por lá pode estourar na ordem final, sem ninguém reconferir depois
+    (diferente de selecao_modelo.escolher_melhor_modelo, que já
+    reparava só ANTES desta fusão cross-região).
     Mesmo padrão de dois passes de escolher_melhor_modelo: repara,
     resequencia de novo só quem foi reparado, repara de novo (sem 3º
     2-opt -- convergência esperada na 2ª rodada).
@@ -318,6 +376,117 @@ def _fundir_sublotes_entre_macrorregioes(sublotes_do_dia: list[list[dict]], coor
     return fundidos
 
 
+def _polir_particao(sublotes: list[list[dict]], coords_base, gmaps_key: str | None, label: str,
+                    tamanho_maximo: int = TAMANHO_MAXIMO_ROTA,
+                    tempo_maximo_s: float = POLIMENTO_TEMPO_MAXIMO_S) -> list[list[dict]]:
+    """Polimento entre rotas de UMA particao (18/09). Sem base
+    geocodificada ou com menos de 2 rotas nao ha o que polir."""
+    if not POLIMENTO_ATIVO or not coords_base or len(sublotes) < 2:
+        return sublotes
+    try:
+        polidos, resumo = polir_entre_rotas(
+            sublotes, coords_base[0], coords_base[1], gmaps_key,
+            tamanho_maximo=tamanho_maximo, volume_maximo=VOLUME_MAXIMO_ROTA,
+            distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+            distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+            km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+            km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+            eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+            tempo_maximo_s=tempo_maximo_s,
+        )
+    except Exception as e:
+        # O polimento e a ULTIMA etapa e o resultado dele e totalmente
+        # OPCIONAL -- um plano nao polido ja e um plano bom (fix final,
+        # 20/09: antes uma excecao aqui subia sem tratamento e derrubava
+        # a criacao de rotas da noite inteira). Devolve os sublotes de
+        # entrada intocados; o resto do pipeline (job noturno ou tela de
+        # Planejamento) segue normalmente sem o polimento.
+        logger.exception(f"[{label}] Falha no polimento entre rotas (nao afeta o restante do planejamento -- "
+                         f"seguindo com as rotas nao polidas): {e}")
+        return sublotes
+    logger.info(f"[{label}] Polimento entre rotas: {len(sublotes)} -> {len(polidos)} rota(s), "
+                f"{resumo['realocacoes']} realocacao(oes), {resumo['trocas']} troca(s), "
+                f"{resumo['esvaziadas']} esvaziada(s), km {resumo['km_antes']:.1f} -> {resumo['km_depois']:.1f} "
+                f"em {resumo['tempo_s']:.1f}s{' (teto de tempo atingido)' if resumo['estourou_tempo'] else ''}.")
+    return polidos
+
+
+def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, data_alvo: date, *,
+                      sufixo_label: str = "", modelo_forcado: str | None = None,
+                      tamanho_maximo: int = TAMANHO_MAXIMO_ROTA,
+                      polimento_tempo_maximo_s: float = POLIMENTO_TEMPO_MAXIMO_S,
+                      registrar_historico: bool = True) -> list[dict]:
+    """Miolo UNICO do criador de rotas (18/09): particao (tipo de carga,
+    ver SEPARAR_POR_TIPO_CARGA) -> selecao diaria de modelo (ou fluxo de
+    reserva sem base) -> fusao de sublotes pequenos entre macro-regioes
+    -> polimento entre rotas. Usado por main() (job das 22h, teto de
+    tempo POLIMENTO_TEMPO_MAXIMO_S), por roteirizar_para_rascunhos
+    (botao Roteirizar da tela de Planejamento, sincrono, teto
+    POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S -- fix final, 20/09) e pelo
+    replay (replay_rotas.py, com registrar_historico=False). Os servicos
+    ja chegam classificados (_nivel_dificuldade, _tipo_carga, janelas) e
+    a base, quando existe, ja foi registrada com definir_coords_base.
+    Devolve [{"label", "modelo", "sublotes"}], uma entrada por particao
+    nao vazia, sublotes ja sequenciados."""
+    particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
+    planos: list[dict] = []
+    for label, servicos_particao in particoes:
+        if not servicos_particao:
+            continue
+        rotulo = f"{label}{sufixo_label}"
+        if coords_base:
+            modelo, sublotes = escolher_melhor_modelo(
+                servicos_particao, coords_base[0], coords_base[1], gmaps_key,
+                data_alvo=data_alvo, label=rotulo,
+                tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=tamanho_maximo,
+                volume_maximo=VOLUME_MAXIMO_ROTA,
+                distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                modelo_forcado=modelo_forcado,
+                distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+                km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                registrar_historico=registrar_historico,
+            )
+        else:
+            # Fluxo de reserva quando a base nao geocodifica -- mesmo
+            # esquema "Atual", reaproveitado de selecao_modelo.py.
+            modelo = "Atual (Grade+Greedy)"
+            particoes_macro = particionar_por_macro_regiao(
+                servicos_particao, gmaps_key, tamanho_minimo=TAMANHO_MINIMO_ROTA,
+                distancia_maxima_fusao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
+            )
+            sublotes = [
+                sub for svcs in particoes_macro.values()
+                for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, tamanho_maximo,
+                                         VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM,
+                                         KM_ACUMULADO_MAXIMO_ROTA_KM, KM_ACUMULADO_MAXIMO_VIAGEM_KM)
+            ]
+        sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, rotulo)
+        sublotes = _polir_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
+                                   polimento_tempo_maximo_s)
+        # Conferencia de cobertura POS fusao/polimento (fix final, 20/09):
+        # a mesma checagem "nenhum pedido perdido, nenhum duplicado" que
+        # selecao_modelo._validar ja faz roda ANTES da fusao e do
+        # polimento -- exatamente as duas etapas onde um defeito real
+        # desse tipo ja apareceu (polimento, achado so porque alguem
+        # reproduziu a mao). So LOG, nunca excecao: numa noite de
+        # producao um plano com 1 pedido a menos ainda e um plano
+        # utilizavel, e o log e o que permite diagnosticar depois --
+        # levantar excecao aqui derrubaria a criacao de rotas inteira
+        # por causa de uma unica particao.
+        ids_entrada = Counter(s["id"] for s in servicos_particao)
+        ids_saida = Counter(s["id"] for sub in sublotes for s in sub)
+        if ids_entrada != ids_saida:
+            perdidos = sorted((ids_entrada - ids_saida).elements())
+            duplicados = sorted((ids_saida - ids_entrada).elements())
+            logger.error(f"[{rotulo}] [ALERTA_COBERTURA] Divergencia de cobertura apos fusao/polimento -- "
+                        f"entrada {sum(ids_entrada.values())} pedido(s), saida {sum(ids_saida.values())} "
+                        f"pedido(s). Perdido(s): {perdidos or 'nenhum'}. Duplicado(s): {duplicados or 'nenhum'}.")
+        planos.append({"label": label, "modelo": modelo, "sublotes": sublotes})
+    return planos
+
+
 def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
                               indice_inicial: int = 1,
                               contagem_alocacoes_dia: dict[int, int] | None = None,
@@ -326,7 +495,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                               tamanho_maximo: int | None = TAMANHO_MAXIMO_ROTA) -> list[dict]:
     """
     Miolo do criador de rotas (classificação de nível/tipo de carga,
-    partição Seco x Refrigerado/Congelado, seleção de modelo + 2-opt,
+    planejar_sublotes (partição, seleção de modelo, fusão, polimento),
     alocação equitativa de motorista) aplicado a uma lista EXPLÍCITA de
     serviços brutos da VUUPT, devolvendo rascunhos prontos pra
     rascunhos_rota.criar_lote_rascunhos -- botão "Roteirizar" da seleção
@@ -382,8 +551,6 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     # com hora > scheduled_* real > horário de atendimento acima
     _preparar_janelas(servicos, config)
 
-    particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
-
     coords_base = None
     try:
         coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
@@ -394,44 +561,16 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
         # (25/08) em todo agrupamento/fusão deste processo
         definir_coords_base(*coords_base)
 
+    planos = planejar_sublotes(servicos, coords_base, gmaps_key, data_alvo, sufixo_label=sufixo_label,
+                               modelo_forcado=modelo_forcado, tamanho_maximo=tamanho_maximo_efetivo,
+                               # botao "Roteirizar" e SINCRONO (pessoa esperando na tela) -- teto de
+                               # tempo mais curto que o do job noturno (fix final, 20/09)
+                               polimento_tempo_maximo_s=POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S)
+
     indice = indice_inicial
     rascunhos: list[dict] = []
-    for label, servicos_particao in particoes:
-        if not servicos_particao:
-            continue
-
-        if coords_base:
-            _modelo, sublotes = escolher_melhor_modelo(
-                servicos_particao, coords_base[0], coords_base[1], gmaps_key,
-                data_alvo=data_alvo, label=f"{label}{sufixo_label}",
-                tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=tamanho_maximo_efetivo,
-                volume_maximo=VOLUME_MAXIMO_ROTA,
-                distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
-                distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
-                modelo_forcado=modelo_forcado,
-                distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
-                km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
-                km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
-            )
-        else:
-            # Fluxo de reserva do main() quando a base não geocodifica --
-            # mesmo esquema "Atual", reaproveitado de selecao_modelo.py
-            # (pedido do Hugo, 15/08: esse fluxo reimplementava a mesma
-            # lógica sem a fusão de macro-região nem a consolidação
-            # consciente de distância -- agora ganha as duas de graça).
-            particoes_macro = particionar_por_macro_regiao(
-                servicos_particao, gmaps_key, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                distancia_maxima_fusao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
-            )
-            sublotes = [
-                sub for svcs in particoes_macro.values()
-                for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, tamanho_maximo_efetivo,
-                                         VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM,
-                                         KM_ACUMULADO_MAXIMO_ROTA_KM, KM_ACUMULADO_MAXIMO_VIAGEM_KM)
-            ]
-
-        sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, f"{label}{sufixo_label}")
-
+    for plano in planos:
+        label, sublotes = plano["label"], plano["sublotes"]
         for sublote in sublotes:
             nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
             indice += 1
@@ -450,7 +589,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             )
             rascunhos.append({
                 "nome": nome_rota,
-                "particao": label,
+                "particao": rotulo_carga(sublote),
                 "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
                 "zona": zona,
                 "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
@@ -614,24 +753,10 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             s["_tipo_carga"] = tipo_carga
         _preparar_janelas(servicos, config)
 
-        # Partição por tipo de carga (pedido do Hugo, 10/08: "as entregas
-        # Secas deveriam ser roteirizadas separadas das refrigeradas e
-        # congeladas") -- Seco de um lado, Refrigerado+Congelado do outro,
-        # cada partição passando pelo MESMO fluxo de agrupamento
-        # geográfico/divisão em sublotes de forma independente. Ajustado
-        # 15/08: dentro da MESMA macro-região, quando um dos dois tipos
-        # não junta o mínimo sozinho (frota tem baú com compartimento
-        # térmico -- pedido do Hugo), os dois entram juntos numa 3ª
-        # partição "Misto" só naquela região -- ver
-        # _particionar_carga_com_fusao.
-        particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
-        for label, servicos_particao in particoes:
-            logger.info(f"Partição '{label}': {len(servicos_particao)} pedido(s).")
-
         start_at = start_at_rota(data_alvo)  # HORA_INICIO_ROTA (06:00 BRT, Hugo 09/09)
 
-        # Base pra seleção diária de modelo e sequenciamento (mais
-        # LONGE -> mais PERTO, pedido do Hugo, 03/08). Geocodificada
+        # Base pra seleção diária de modelo e sequenciamento (vizinho
+        # mais proximo + 2-opt, Hugo 18/09). Geocodificada
         # também em modo teste (é cache hit, sem custo) porque a
         # seleção de modelo precisa da coordenada da base; se falhar,
         # cai pro fluxo antigo (agrupamento fixo + ordem de
@@ -650,50 +775,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         modelos_vencedores: dict[str, str] = {}
         rascunhos_acumulados: list[dict] = []
 
-        def _rotear_particao(servicos_particao: list[dict], label: str):
+        def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]]):
             nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_sem_motorista
-
-            if not servicos_particao:
-                return
-
-            # Seleção diária de modelo (pedido do Hugo, 10/08): compara
-            # Atual x Sweep x Clarke-Wright sobre os pedidos DO DIA
-            # (todos sequenciados com 2-opt, 1ª entrega sempre a mais
-            # distante) e libera as rotas com o vencedor -- menos
-            # rotas primeiro, menor KM como desempate. Sem coordenada
-            # da base não dá pra comparar: cai pro fluxo fixo antigo.
-            if coords_base:
-                modelo_vencedor, sublotes_do_dia = escolher_melhor_modelo(
-                    servicos_particao, coords_base[0], coords_base[1], gmaps_key,
-                    data_alvo=data_alvo, label=label,
-                    tamanho_minimo=TAMANHO_MINIMO_ROTA, tamanho_maximo=TAMANHO_MAXIMO_ROTA,
-                    volume_maximo=VOLUME_MAXIMO_ROTA,
-                    distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
-                    distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
-                    distancia_maxima_fusao_regiao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
-                    km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
-                    km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
-                )
-                modelos_vencedores[label] = modelo_vencedor
-            else:
-                # Fluxo de reserva -- mesmo esquema "Atual", reaproveitado
-                # de selecao_modelo.py (pedido do Hugo, 15/08: esse fluxo
-                # reimplementava a mesma lógica sem a fusão de
-                # macro-região nem a consolidação consciente de
-                # distância -- agora ganha as duas de graça).
-                particoes_macro = particionar_por_macro_regiao(
-                    servicos_particao, gmaps_key, tamanho_minimo=TAMANHO_MINIMO_ROTA,
-                    distancia_maxima_fusao_km=DISTANCIA_MAXIMA_FUSAO_REGIAO_KM,
-                )
-                logger.info(f"[{label}] {len(particoes_macro)} macro-região(ões).")
-                sublotes_do_dia = [
-                    sub for svcs in particoes_macro.values()
-                    for sub in agrupar_atual(svcs, gmaps_key, TAMANHO_MINIMO_ROTA, TAMANHO_MAXIMO_ROTA,
-                                             VOLUME_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM,
-                                             KM_ACUMULADO_MAXIMO_ROTA_KM, KM_ACUMULADO_MAXIMO_VIAGEM_KM)
-                ]
-
-            sublotes_do_dia = _fundir_sublotes_entre_macrorregioes(sublotes_do_dia, coords_base, gmaps_key, label)
 
             # Ordena por escassez de motorista ANTES de alocar (mais restrito
             # primeiro, pedido do Hugo, 20/08): sem isso, um motorista que
@@ -702,7 +785,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             # um dos poucos elegíveis (ver contar_motoristas_elegiveis em
             # alocacao_motoristas.py -- caso real 20/08, Zona Sul). Ordenação
             # estável: sublotes com a mesma contagem mantêm a ordem original
-            # (mais longe -> mais perto da base).
+            # (a de saída do modelo vencedor, vizinho mais próximo desde
+            # 18/09).
             sublotes_do_dia = sorted(
                 sublotes_do_dia,
                 key=lambda sub: contar_motoristas_elegiveis(
@@ -744,7 +828,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     )
                     rascunhos_acumulados.append({
                         "nome": nome_rota,
-                        "particao": label,
+                        "particao": rotulo_carga(sublote),
                         "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
                         "zona": zona,
                         "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
@@ -758,7 +842,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         "sublote": sublote,
                     })
                     logger.info(f"[RASCUNHO] [{label}] '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
-                               f"(mais longe -> mais perto da base) -- motorista sugerido: {motorista_str}: {codigos}")
+                               f"(sequencia otimizada) -- motorista sugerido: {motorista_str}: {codigos}")
                     rotas_criadas += 1
                     pedidos_alocados += len(sublote)
                     if motorista:
@@ -769,7 +853,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
 
                 if modo_teste:
                     logger.info(f"[TESTE] [{label}] Criaria rota '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
-                               f"(mais longe -> mais perto da base) -- motorista: {motorista_str}: {codigos}")
+                               f"(sequencia otimizada) -- motorista: {motorista_str}: {codigos}")
                     rotas_criadas += 1
                     pedidos_alocados += len(sublote)
                     if motorista:
@@ -792,7 +876,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     codigos_finais = [s.get("code") for s in sublote_criado]
                     aviso_removidos = f" (removidos por conflito: {codigos_removidos})" if codigos_removidos else ""
                     logger.info(f"Rota criada: '{nome_rota}' (id={rota['id']}) [{tipo_rota_str}] com {len(sublote_criado)} "
-                               f"pedido(s) (mais longe -> mais perto da base){aviso_removidos} -- "
+                               f"pedido(s) (sequencia otimizada){aviso_removidos} -- "
                                f"motorista: {motorista_str}: {codigos_finais}")
                     for s in sublote_criado:
                         marcar_alocado(s["id"], rota["id"])
@@ -808,8 +892,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 except Exception as e:
                     logger.error(f"Falha ao criar rota '{nome_rota}': {e}")
 
-        for label, servicos_particao in particoes:
-            _rotear_particao(servicos_particao, label)
+        planos = planejar_sublotes(servicos, coords_base, gmaps_key, data_alvo)
+        for plano in planos:
+            logger.info(f"Partição '{plano['label']}': modelo {plano['modelo']}, {len(plano['sublotes'])} rota(s).")
+            modelos_vencedores[plano["label"]] = plano["modelo"]
+            _rotear_particao(plano["label"], plano["sublotes"])
 
         if gerar_rascunho and rascunhos_acumulados:
             lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)

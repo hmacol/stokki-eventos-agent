@@ -44,3 +44,4 @@ output/
 *.docx
 # Relatorios do verificador de botoes (gerados a cada rodada)
 verificador_botoes/relatorios/
+.superpowers/

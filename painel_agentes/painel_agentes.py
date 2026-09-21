@@ -745,7 +745,7 @@ def laboratorio_rotas():
     """Laboratório de comparação visual de esquemas de roteirização --
     pedido do Hugo, 14/08. 100% leitura (ver laboratorio_rotas.py)."""
     data_alvo = _parse_data_param()
-    particao = request.args.get("particao", "Seco")
+    particao = request.args.get("particao", "Todos")
     usar_teste = request.args.get("teste") == "1"
     try:
         dados = buscar_dados_laboratorio(data_alvo, particao, usar_teste=usar_teste)
