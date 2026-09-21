@@ -515,6 +515,54 @@ def _extrair_mensagens(soup: BeautifulSoup) -> list:
     return mensagens
 
 
+RE_SKU_DESCRICAO = re.compile(r"^\s*(\S+)\s+-\s+(.*)$")
+
+
+def extrair_itens_do_pedido(html: str) -> list[dict]:
+    """
+    Itens da aba "Itens do pedido" do detalhe (Produto | EAN | Quantidade).
+
+    O mesmo SKU pode aparecer em mais de uma linha, com EANs diferentes --
+    a linha e por embalagem, nao por produto. Por isso a lista devolvida
+    preserva as linhas como estao, sem agrupar, e cada uma leva o numero
+    da linha (1-based), que e a chave usada pela reserva.
+
+    A quantidade aqui esta em EMBALAGEM, nao em UN.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    tabela = None
+    for t in soup.find_all("table"):
+        cabecalhos = [th.get_text(strip=True).upper() for th in t.find_all("th")]
+        if "PRODUTO" in cabecalhos and "EAN" in cabecalhos and "QUANTIDADE" in cabecalhos:
+            tabela = t
+            break
+    if tabela is None:
+        return []
+
+    itens = []
+    for tr in tabela.find_all("tr"):
+        celulas = tr.find_all("td")
+        if len(celulas) < 3:
+            continue  # cabecalho ou linha de rodape
+        produto = celulas[0].get_text(" ", strip=True)
+        ean = celulas[1].get_text(" ", strip=True)
+        bruta = celulas[2].get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            quantidade = float(bruta)
+        except ValueError:
+            continue  # linha de total ou celula vazia
+        m = RE_SKU_DESCRICAO.match(produto)
+        sku, descricao = (m.group(1), m.group(2).strip()) if m else ("", produto)
+        itens.append({
+            "linha": len(itens) + 1,
+            "sku": sku,
+            "ean_linha": re.sub(r"\D", "", ean),
+            "descricao": descricao,
+            "qtd_embalagem": quantidade,
+        })
+    return itens
+
+
 # ── Diretórios ────────────────────────────────────────────────────────────────
 
 def listar_transportadoras(sessao: StokkiSession) -> list[dict]:
