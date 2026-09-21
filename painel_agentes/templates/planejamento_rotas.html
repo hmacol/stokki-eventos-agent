@@ -406,7 +406,11 @@
     font-size: 11px;
     font-weight: 700;
   }
-  .barra-selecao { display: flex; gap: 8px; margin-bottom: 10px; }
+  /* flex-wrap: sem isso os 8 botoes ficam numa linha so e os ultimos
+     (Incrementar, Editar endereco, Transportadora, Agendar) saem da
+     coluna do pool, que nasce com 260px (achado 17/09). Mesmo idioma
+     que o modo celular ja usa mais abaixo. */
+  .barra-selecao { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .barra-selecao button {
     flex: 1 1 auto;
     min-height: 34px;

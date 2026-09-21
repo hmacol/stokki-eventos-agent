@@ -213,7 +213,12 @@
   .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
 
   /* ── Faixa 2 ── */
+  /* min-width: 0 nas duas colunas: sem isso a coluna "1fr" nunca encolhe
+     abaixo do conteudo mais largo (a tabela da Fila de acao) e empurra a
+     coluna da direita pra fora da tela -- a 1366px a pagina inteira
+     rolava na horizontal (achado 17/09). */
   .corpo { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+  .corpo > div { min-width: 0; }
 
   .legenda { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--texto); margin-bottom: 10px; }
   .legenda .item { display: inline-flex; align-items: center; gap: 6px; }
@@ -421,7 +426,14 @@
   .pill-sev.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
   .td-quando { color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .td-tipo { color: var(--texto-suave); font-weight: 600; white-space: nowrap; }
-  .td-motivo { color: var(--st-falha); font-weight: 700; white-space: nowrap; }
+  /* Motivo do insucesso e texto livre do motorista: quebra em linha em
+     vez de esticar a tabela (par do min-width: 0 do .corpo). */
+  .td-motivo { color: var(--st-falha); font-weight: 700; overflow-wrap: anywhere; }
+  /* Abaixo de ~1100px a tabela ainda pede mais largura do que a tela tem
+     (6 colunas + os botoes de acao): quem rola e a fila, nao a pagina
+     inteira. Fica no #excecoes de proposito -- envolver a tabela numa
+     div quebraria os alvos '#excecoes > table' do guia da tela. */
+  #excecoes { overflow-x: auto; }
   .td-acao { text-align: right; white-space: nowrap; }
   .td-acao a, .td-acao button {
     font-size: 11.5px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda);
@@ -1221,12 +1233,14 @@ function renderExcecoes(d) {
   } else {
     const linhas = d.excecoes.map(x => {
       let acao = "";
+      // url/link_log vem do backend relativo a raiz do painel (sem o
+      // /painel do Caddy) -- prefixar com BASE_PATH, igual todo link daqui.
       if (x.acao && x.acao.tipo === "link") {
-        acao = `<a href="${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
+        acao = `<a href="${BASE_PATH}${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
       } else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) {
         acao = `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
       }
-      if (x.link_log) acao += ` <a href="${esc(x.link_log)}">Log</a>`;
+      if (x.link_log) acao += ` <a href="${BASE_PATH}${esc(x.link_log)}">Log</a>`;
       if (x.pode_duplicar && PODE_EDITAR) {
         acao += ` <button class="duplicar" title="Cria a reentrega no VUUPT agora, sem esperar resposta do remetente"
                           onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;

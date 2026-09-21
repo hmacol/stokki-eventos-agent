@@ -850,9 +850,11 @@ function renderExcecoes(d) {
   } else {
     partes.push(d.excecoes.map(x => {
       let acoes = "";
-      if (x.acao && x.acao.tipo === "link") acoes += `<a href="${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
+      // url/link_log vem do backend relativo a raiz do painel (sem o
+      // /painel do Caddy) -- prefixar com BASE_PATH, igual todo link daqui.
+      if (x.acao && x.acao.tipo === "link") acoes += `<a href="${BASE_PATH}${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
       else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) acoes += `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
-      if (x.link_log) acoes += `<a href="${esc(x.link_log)}">Log</a>`;
+      if (x.link_log) acoes += `<a href="${BASE_PATH}${esc(x.link_log)}">Log</a>`;
       if (x.pode_duplicar && PODE_EDITAR) acoes += `<button class="duplicar" onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
       if (x.pode_notificar_ocorrencia && PODE_EDITAR) acoes += `<button class="notificar" onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
       if (PODE_EDITAR) acoes += `<button onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
@@ -1109,7 +1111,11 @@ async function carregarDados() {
     renderExcecoes(d);
     renderTendencia(d);
     renderAmanha(d);
-    document.getElementById("link-mapa-completo").href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
+    // O card do mapa so existe com google_maps_key no config: sem chave,
+    // este getElementById vinha null e o TypeError derrubava o resto do
+    // carregarDados (a tela ficava "sem atualizar") -- achado 17/09.
+    const linkMapa = document.getElementById("link-mapa-completo");
+    if (linkMapa) linkMapa.href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
     ultimoOk = new Date();
     houveErro = false;
   } catch (e) {

@@ -1265,6 +1265,12 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
     no id de propósito, pra ressurgirem se o número mudar).
 
     Retorna (ativas, tratadas) -- tratadas vêm com motivo/tratado_em.
+
+    Os caminhos de `acao.url` e `link_log` são relativos à RAIZ DO PAINEL
+    (sem o /painel que o Caddy põe na frente): quem renderiza prefixa com
+    BASE_PATH (request.script_root). Não dá pra usar url_for aqui --
+    buscar_dados_torre também roda fora de request, na thread do badge do
+    menu lateral (contadores_menu._contar_torre).
     """
     excecoes = []
     data_iso = data_alvo.isoformat()

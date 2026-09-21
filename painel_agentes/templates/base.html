@@ -312,6 +312,85 @@
     margin: 0 auto;
     padding: 32px 24px 64px;
   }
+
+  /* ── Celular: o menu vira gaveta (21/09) ──────────────────────────
+     Ate aqui a sidebar era fixa em 240px em QUALQUER largura: num
+     celular de 390px sobravam 150px de conteudo e as telas do painel
+     (Expedicao, Pedidos Parados, Consulta, Motoristas...) ficavam
+     inutilizaveis. So o Planejamento escapava, escondendo a sidebar no
+     proprio template (html.modo-mobile), e a Torre por ter rota mobile.
+     Aqui a sidebar sai do fluxo e desliza por cima quando o ☰ e tocado.
+     Nada muda acima do breakpoint. */
+  .abre-menu { display: none; }
+  .veu-menu { display: none; }
+  @media (max-width: 760px) {
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      height: 100dvh;
+      width: 264px;
+      max-width: 86vw;
+      z-index: 1200;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease;
+      box-shadow: 0 0 28px rgba(0,0,0,0.4);
+    }
+    /* No celular a gaveta abre sempre inteira: o "recolhida" de 68px do
+       desktop (localStorage) deixaria so os icones numa tela de toque. */
+    html.sidebar-recolhida .sidebar { width: 264px; }
+    html.sidebar-recolhida .sidebar .marca .nome,
+    html.sidebar-recolhida .sidebar .marca .subtitulo { display: block; }
+    html.sidebar-recolhida .sidebar .marca .marca-mini { display: none; }
+    html.sidebar-recolhida .sidebar nav a { justify-content: flex-start; padding: 9px 14px; }
+    html.sidebar-recolhida .sidebar nav a .rotulo { display: block; }
+    html.sidebar-recolhida .sidebar nav .grupo-titulo { display: block; }
+    html.sidebar-recolhida .sidebar .rodape .usuario { display: flex; }
+    html.menu-aberto .sidebar { transform: translateX(0); }
+    /* O botao de recolher e coisa de desktop; no celular quem fecha e o
+       ☰, o veu ou o Esc. */
+    .alterna-sidebar { display: none; }
+    .veu-menu {
+      display: block;
+      position: fixed; inset: 0;
+      z-index: 1199;
+      background: rgba(10, 10, 24, 0.5);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    html.menu-aberto .veu-menu { opacity: 1; pointer-events: auto; }
+    html.menu-aberto { overflow: hidden; }
+    .abre-menu {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 1100;
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-bottom: 1px solid var(--borda);
+      background: var(--superficie);
+      color: var(--texto);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      min-height: 46px;
+      cursor: pointer;
+    }
+    .abre-menu svg { width: 20px; height: 20px; flex: none; }
+    main { padding: 16px 14px 48px; }
+    /* Tabela larga (Consulta, Motoristas, Historico: 480 a 674px) rola
+       sozinha em vez de esticar a pagina -- o cabecalho e os filtros da
+       tela ficam parados. So pega tabela que e filha direta do main;
+       tabela dentro de card cuida da propria rolagem. */
+    main > table { display: block; overflow-x: auto; }
+    /* O Planejamento ja tem o proprio modo celular (abas Pool/Rotas/
+       Mapa/Mais, com os atalhos da sidebar dentro da aba Mais) e esconde
+       a sidebar por conta propria: la o ☰ nao teria o que abrir. */
+    html.modo-mobile .abre-menu,
+    html.modo-mobile .veu-menu { display: none; }
+  }
   .badge {
     display: inline-block;
     padding: 3px 10px;
@@ -375,7 +454,7 @@
   const BASE_PATH = "{{ request.script_root }}";
 </script>
 <div class="shell">
-  <aside class="sidebar">
+  <aside class="sidebar" id="menu-lateral">
     <div class="marca">
       <span class="nome">Painel de Agentes</span>
       <span class="subtitulo">Agente Stokki Freshlog</span>
@@ -493,10 +572,16 @@
     {% endif %}
   </aside>
   <div class="area-conteudo">
+    {# So aparece no celular (CSS): abre a sidebar como gaveta. #}
+    <button type="button" class="abre-menu" id="abre-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="menu-lateral">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      <span>Menu</span>
+    </button>
     <main>
     {% block conteudo %}{% endblock %}
     </main>
   </div>
+  <div class="veu-menu" id="veu-menu"></div>
 </div>
 <script>
   (function() {
@@ -514,6 +599,53 @@
       localStorage.setItem(CHAVE, recolhida ? "1" : "0");
       aplicar(recolhida);
     });
+  })();
+</script>
+<script>
+  // Gaveta do menu no celular (21/09). Nada aqui roda no desktop: o ☰ e
+  // o veu so aparecem abaixo de 760px (CSS). Estado NAO vai pro
+  // localStorage de proposito -- gaveta nasce fechada a cada tela.
+  (function() {
+    var raiz = document.documentElement;
+    var botao = document.getElementById("abre-menu");
+    var veu = document.getElementById("veu-menu");
+    var menu = document.getElementById("menu-lateral");
+    if (!botao || !veu || !menu) return;
+    function aplicar(aberto) {
+      raiz.classList.toggle("menu-aberto", aberto);
+      botao.setAttribute("aria-expanded", aberto ? "true" : "false");
+      botao.setAttribute("aria-label", aberto ? "Fechar menu" : "Abrir menu");
+    }
+    function fechar(devolverFoco) {
+      if (!raiz.classList.contains("menu-aberto")) return;
+      aplicar(false);
+      if (devolverFoco) botao.focus();
+    }
+    botao.addEventListener("click", function() {
+      var aberto = !raiz.classList.contains("menu-aberto");
+      aplicar(aberto);
+      if (aberto) {
+        var primeiro = menu.querySelector("nav a");
+        if (primeiro) primeiro.focus();
+      }
+    });
+    veu.addEventListener("click", function() { fechar(true); });
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") fechar(true);
+    });
+    // Tocou num item do menu: a navegacao ja troca de pagina, mas fechar
+    // aqui evita a gaveta aberta piscando durante o load.
+    menu.addEventListener("click", function(e) {
+      if (e.target.closest("a")) fechar(false);
+    });
+    // Voltou pro desktop (girou a tela / redimensionou): some com o
+    // estado de gaveta pra nao travar o scroll do body.
+    if (window.matchMedia) {
+      var largo = window.matchMedia("(min-width: 761px)");
+      var aoMudar = function(ev) { if (ev.matches) fechar(false); };
+      if (largo.addEventListener) largo.addEventListener("change", aoMudar);
+      else if (largo.addListener) largo.addListener(aoMudar);
+    }
   })();
 </script>
 <script>
