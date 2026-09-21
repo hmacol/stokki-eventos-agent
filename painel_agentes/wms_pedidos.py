@@ -187,6 +187,12 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
     """
     Cria ou atualiza o espelho do pedido e as linhas de item, ja resolvendo
     produto e unidade. Idempotente por id_stokki + linha.
+
+    Linha que existia numa chamada anterior e nao vem em `itens` desta vez
+    (o pedido foi editado na Stokki e a linha saiu) tem suas reservas ATIVAS
+    canceladas -- a linha em si NAO e apagada de wms_pedido_itens, o
+    historico importa; so a reserva e liberada, pra nao esconder estoque
+    de um item que nao existe mais no pedido.
     """
     id_stokki = int(pedido["id_stokki"])
     agora = wms.agora()
@@ -203,6 +209,8 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
              pedido.get("situacao", ""), agora, agora))
         pedido_id = cur.lastrowid
 
+    linhas_novas = [int(item["linha"]) for item in itens]
+
     for item in itens:
         r = resolver_item(conn, item)
         conn.execute("""
@@ -216,6 +224,19 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
             (pedido_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
              item.get("descricao", ""), float(item["qtd_embalagem"]),
              r["qtd_un"], r["produto_id"], r["motivo_pendencia"]))
+
+    if linhas_novas:
+        placeholders = ",".join("?" * len(linhas_novas))
+        sumidas = conn.execute(
+            f"SELECT id FROM wms_pedido_itens WHERE pedido_id = ? AND linha NOT IN ({placeholders})",
+            (pedido_id, *linhas_novas)).fetchall()
+    else:
+        sumidas = conn.execute(
+            "SELECT id FROM wms_pedido_itens WHERE pedido_id = ?", (pedido_id,)).fetchall()
+    for it in sumidas:
+        conn.execute(
+            "UPDATE wms_reservas SET estado = 'CANCELADA', atualizado_em = ? "
+            "WHERE item_id = ? AND estado = 'ATIVA'", (agora, it["id"]))
     return pedido_id
 
 
@@ -223,9 +244,22 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     """
     Reserva FEFO o que cada item do pedido precisa. Nao mexe em saldo fisico.
 
-    Idempotente: itens que ja tem reserva ATIVA sao pulados. Falta de saldo
-    ou item nao resolvido nao levanta erro -- vira pendencia e o pedido fica
-    PARCIAL (decisao do Hugo, 21/09: avisar, nunca bloquear).
+    Reconciliacao (nao so idempotencia -- correcao 21/09, rodada 1): compara
+    o total ATIVO reservado do item com a qtd_un atual, os dois arredondados
+    a 3 casas.
+      - iguais -> nada a fazer (caso normal de rodada repetida a cada 15 min).
+      - diferentes e todas as reservas ATIVAS do item sao origem FEFO ->
+        cancela e realoca do zero pra qtd_un atual. Cobre o pedido editado
+        na Stokki entre rodadas, pra quantidade maior (reserva ficava presa
+        no valor velho) ou menor (reserva sobrando escondia estoque que
+        existe de verdade no galpao).
+      - diferentes mas existe reserva ATIVA origem MANUAL -> nao mexe em
+        nada, so registra pendencia. MANUAL quer dizer que alguem ja bipou
+        aquele lote no galpao; o sistema nao desfaz isso por conta propria.
+
+    Item que nao resolve produto ou unidade nao vira reserva -- vira
+    pendencia. Falta de saldo nunca levanta erro -- vira pendencia e o
+    pedido fica PARCIAL (decisao do Hugo, 21/09: avisar, nunca bloquear).
 
     A comparacao que decide RESERVADO x PARCIAL arredonda a soma das
     reservas a 3 casas (ROUND(...,3) no SQL): cada alocacao do FEFO ja vem
@@ -239,9 +273,27 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     itens = conn.execute("SELECT * FROM wms_pedido_itens WHERE pedido_id = ? ORDER BY linha",
                          (pedido_id,)).fetchall()
     for item in itens:
-        ja = conn.execute("SELECT COUNT(*) n FROM wms_reservas WHERE item_id = ? AND estado = 'ATIVA'",
-                          (item["id"],)).fetchone()["n"]
-        if ja:
+        reservas_ativas = conn.execute(
+            "SELECT * FROM wms_reservas WHERE item_id = ? AND estado = 'ATIVA'",
+            (item["id"],)).fetchall()
+
+        if reservas_ativas and item["qtd_un"] is not None:
+            total_ativo = round(sum(r["quantidade_un"] for r in reservas_ativas), 3)
+            qtd_atual = round(item["qtd_un"], 3)
+            if total_ativo != qtd_atual:
+                if any(r["origem"] != "FEFO" for r in reservas_ativas):
+                    pendencias.append(
+                        f"linha {item['linha']} ({item['descricao']}): quantidade mudou de "
+                        f"{total_ativo:g} para {qtd_atual:g} UN depois de uma reserva MANUAL -- "
+                        f"ajuste o lote manualmente")
+                    continue
+                for r in reservas_ativas:
+                    conn.execute(
+                        "UPDATE wms_reservas SET estado = 'CANCELADA', atualizado_em = ? WHERE id = ?",
+                        (agora, r["id"]))
+                reservas_ativas = []
+
+        if reservas_ativas:
             continue
         if not item["produto_id"] or item["qtd_un"] is None:
             pendencias.append(f"linha {item['linha']}: {item['motivo_pendencia']}")

@@ -291,6 +291,126 @@ class TestReservarPedido(BaseWMS):
                                    (pid,)).fetchone()["estado_reserva"]
         self.assertEqual(estado, "CANCELADO")
 
+    # -- Correcao 21/09, rodada 1: reconciliacao (pedido editado na Stokki
+    # entre rodadas de 15 min, antes da expedicao). --
+
+    def test_quantidade_sobe_cancela_a_reserva_velha_e_realoca_pro_valor_novo(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)  # 4 UN
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        itens_editados = [dict(self.itens[0], qtd_embalagem=6)]  # Stokki: 4 -> 6
+        wms_pedidos.registrar_pedido(self.conn, self.pedido, itens_editados)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+
+        self.assertEqual(r["estado"], "RESERVADO")
+        ativas = self.conn.execute(
+            "SELECT quantidade_un FROM wms_reservas WHERE estado = 'ATIVA'").fetchall()
+        self.assertEqual([a["quantidade_un"] for a in ativas], [6])
+        canceladas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'CANCELADA'").fetchone()["n"]
+        self.assertEqual(canceladas, 1)
+
+    def test_quantidade_desce_cancela_a_reserva_velha_e_o_disponivel_volta_a_subir(self):
+        itens_iniciais = [dict(self.itens[0], qtd_embalagem=8)]
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, itens_iniciais)  # 8 UN
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        disponivel_com_8 = wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"]
+        self.assertEqual(disponivel_com_8, 2)  # 10 em estoque, 8 reservadas
+
+        itens_editados = [dict(self.itens[0], qtd_embalagem=2)]  # Stokki: 8 -> 2
+        wms_pedidos.registrar_pedido(self.conn, self.pedido, itens_editados)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+
+        self.assertEqual(r["estado"], "RESERVADO")
+        disponivel_com_2 = wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"]
+        # a prova do achado: o disponivel sobe de volta (nao fica presa
+        # escondendo 6 UN que existem de verdade no galpao)
+        self.assertEqual(disponivel_com_2, 8)
+        ativas = self.conn.execute(
+            "SELECT SUM(quantidade_un) s FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["s"]
+        self.assertEqual(ativas, 2)
+
+    def test_linha_que_some_do_pedido_cancela_a_reserva_mas_mantem_a_linha(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        wms_pedidos.registrar_pedido(self.conn, self.pedido, [])  # linha 1 saiu do pedido
+
+        reserva = self.conn.execute("SELECT estado FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["estado"], "CANCELADA")
+        n_itens = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_pedido_itens WHERE pedido_id = ?", (pid,)).fetchone()["n"]
+        self.assertEqual(n_itens, 1)  # a linha continua no historico, so a reserva foi liberada
+        disponivel = wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"]
+        self.assertEqual(disponivel, 10)
+
+    def test_reserva_manual_e_preservada_quando_o_pedido_muda_e_vira_pendencia(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        item_id = self.conn.execute(
+            "SELECT id FROM wms_pedido_itens WHERE pedido_id = ?", (pid,)).fetchone()["id"]
+        agora = wms.agora()
+        self.conn.execute("""
+            INSERT INTO wms_reservas (pedido_id, item_id, produto_id, posicao, lote, validade,
+                                      quantidade_un, estado, origem, criado_em, atualizado_em)
+            VALUES (?,?,?,?,?,?,?,'ATIVA','MANUAL',?,?)""",
+            (pid, item_id, 1, "C9-E1-N1", "L-A", "2026-10-15", 4, agora, agora))
+        self.conn.commit()
+
+        itens_editados = [dict(self.itens[0], qtd_embalagem=6)]  # Stokki: 4 -> 6
+        wms_pedidos.registrar_pedido(self.conn, self.pedido, itens_editados)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+
+        self.assertEqual(r["reservas"], 0)  # nao criou nem tocou em nada
+        reserva = self.conn.execute("SELECT * FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["estado"], "ATIVA")
+        self.assertEqual(reserva["origem"], "MANUAL")
+        self.assertEqual(reserva["quantidade_un"], 4)
+        self.assertTrue(any("manual" in p.lower() for p in r["pendencias"]))
+        self.assertEqual(r["estado"], "PARCIAL")
+
+
+class TestArredondamentoFracionario(BaseWMS):
+    """Achado 2 da revisao: sem ROUND(...,3) na comparacao de RESERVADO x
+    PARCIAL, a SOMA de varias reservas fracionarias acumula residuo de
+    ponto flutuante e classifica errado um pedido 100% reservado (o
+    revisor simulou 500 mil combinacoes: 7,3% davam erro sem o ROUND)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, unidade, qtd_por_caixa, "
+            "atualizado_em) VALUES (1, 900, 'SKUFRAC', 'PRODUTO FRACIONARIO', 'MARIA DOLORES', 'UN', 1, "
+            "'2026-09-21 10:00:00')")
+        self.conn.commit()
+        # mesmo exemplo do relatorio da revisao: soma pura em ponto flutuante
+        # de 37.123+5.657+16.861+1.542+22.433+38.299+36.998 = 158.91299999999998,
+        # mas 158.913 (a soma "de verdade") e exatamente a qtd_un do item.
+        lotes = [
+            ("L1", "2026-10-01", 37.123),
+            ("L2", "2026-10-02", 5.657),
+            ("L3", "2026-10-03", 16.861),
+            ("L4", "2026-10-04", 1.542),
+            ("L5", "2026-10-05", 22.433),
+            ("L6", "2026-10-06", 38.299),
+            ("L7", "2026-10-07", 36.998),
+        ]
+        for lote, validade, qtd in lotes:
+            wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=qtd,
+                                    lote=lote, validade=validade, destino="C9-E1-N1")
+
+    def test_soma_fracionaria_com_residuo_de_ponto_flutuante_fica_reservado(self):
+        itens = [{"linha": 1, "sku": "SKUFRAC", "ean_linha": "",
+                  "descricao": "PRODUTO FRACIONARIO", "qtd_embalagem": 158.913}]
+        pedido = {"id_stokki": 50001, "codigo_ps": "PS-50001",
+                  "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"}
+        pid = wms_pedidos.registrar_pedido(self.conn, pedido, itens)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(r["pendencias"], [])
+        self.assertEqual(r["estado"], "RESERVADO")
+        total = self.conn.execute(
+            "SELECT SUM(quantidade_un) s FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["s"]
+        self.assertAlmostEqual(total, 158.913, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()
