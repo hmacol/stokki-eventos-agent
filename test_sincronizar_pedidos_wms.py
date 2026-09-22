@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
@@ -234,6 +235,79 @@ class TestRodar(BaseRotina):
         self.assertIsNotNone(pedido_ok)
         pedido_ruim = self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = 40006").fetchone()
         self.assertIsNone(pedido_ruim)
+
+
+class TestTravaStokki(unittest.TestCase):
+    """
+    Correcao 1 da revisao (Important, 22/09): a rotina tem que respeitar a
+    trava cooperativa de stokki/sessao_uso.py -- a sessao Stokki e unica,
+    e um login concorrente no meio da rodada (stokki-wms-sincronizar-
+    produtos, agente-importacao-stokki, o painel) derruba os cookies com
+    401. Duble/monkeypatch do modulo sessao_uso -- nenhum teste aqui toca
+    a Stokki nem o banco de producao (wms_pedidos.conectar e StokkiSession
+    tambem duplados, pra provar que nem chegam a ser chamados).
+    """
+
+    def test_trava_ocupada_desiste_sem_gravar_e_sem_chamar_a_stokki(self):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=False) as adquirir, \
+             mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
+             mock.patch("stokki.sessao_uso.liberar") as liberar, \
+             mock.patch("sincronizar_pedidos_wms.wms_pedidos.conectar") as conectar, \
+             mock.patch("sincronizar_pedidos_wms.StokkiSession") as sessao_cls:
+            codigo = mod.main(["--limite", "5"])
+
+        self.assertEqual(codigo, 1)
+        adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
+                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
+        conectar.assert_not_called()
+        sessao_cls.assert_not_called()
+        liberar.assert_not_called()  # nunca adquiriu -- nao ha o que liberar
+
+    def test_trava_ocupada_tambem_desiste_em_modo_teste(self):
+        # decisao (Hugo/revisao, 22/09): --modo-teste tambem respeita a
+        # trava -- ele so pula a ESCRITA, mas ainda faz leitura de verdade
+        # (listar_pedidos) na mesma sessao unica, e um login concorrente
+        # derrubaria essas leituras com 401 do mesmo jeito.
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=False) as adquirir, \
+             mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
+             mock.patch("stokki.sessao_uso.liberar"), \
+             mock.patch("sincronizar_pedidos_wms.wms_pedidos.conectar") as conectar, \
+             mock.patch("sincronizar_pedidos_wms.StokkiSession") as sessao_cls:
+            codigo = mod.main(["--modo-teste"])
+
+        self.assertEqual(codigo, 1)
+        adquirir.assert_called_once()
+        conectar.assert_not_called()
+        sessao_cls.assert_not_called()
+
+    def test_trava_livre_adquire_roda_e_libera_no_final(self):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True) as adquirir, \
+             mock.patch("stokki.sessao_uso.liberar") as liberar, \
+             mock.patch("sincronizar_pedidos_wms.wms_pedidos.conectar") as conectar, \
+             mock.patch("sincronizar_pedidos_wms.StokkiSession") as sessao_cls, \
+             mock.patch("sincronizar_pedidos_wms.rodar", return_value={"lidos": 0}) as rodar_mock:
+            conn_falso = mock.Mock()
+            conectar.return_value = conn_falso
+            codigo = mod.main(["--limite", "5"])
+
+        self.assertEqual(codigo, 0)
+        adquirir.assert_called_once()
+        rodar_mock.assert_called_once()
+        conn_falso.close.assert_called_once()
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
+
+    def test_liberar_roda_mesmo_se_a_rodada_estourar(self):
+        # a trava nao pode ficar presa se rodar() explodir no meio.
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True), \
+             mock.patch("stokki.sessao_uso.liberar") as liberar, \
+             mock.patch("sincronizar_pedidos_wms.wms_pedidos.conectar") as conectar, \
+             mock.patch("sincronizar_pedidos_wms.StokkiSession"), \
+             mock.patch("sincronizar_pedidos_wms.rodar", side_effect=RuntimeError("bug")):
+            conectar.return_value = mock.Mock()
+            with self.assertRaises(RuntimeError):
+                mod.main(["--limite", "5"])
+
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
 
 
 if __name__ == "__main__":

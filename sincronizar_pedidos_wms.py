@@ -28,6 +28,15 @@ producao ao vivo):
      tanto pra extrair_itens_do_pedido quanto, se precisar, pra
      stokki_pedidos._parsear_pagina_detalhe.
 
+Correcao 2 (revisao, 22/09): a rotina agora segura a trava cooperativa de
+stokki/sessao_uso.py em volta da rodada inteira -- a sessao Stokki e
+UNICA, e o login de outro processo no meio (stokki-wms-sincronizar-
+produtos, agente-importacao-stokki, o painel) derruba os cookies com 401.
+Vale tambem pro --modo-teste, que so pula a escrita mas ainda le da Stokki
+de verdade na mesma sessao. Se a trava nao vier, a rotina desiste (nao
+atropela quem esta usando) -- a proxima rodada e em 15 min e a reserva e
+idempotente, entao nada se perde.
+
 COMO USAR (timer systemd a cada 15 min, infra/stokki-wms-reservar-pedidos.*):
     python sincronizar_pedidos_wms.py
     python sincronizar_pedidos_wms.py --modo-teste      # nao grava nada
@@ -50,6 +59,7 @@ import yaml
 
 import wms_pedidos
 from stokki import pedidos as stokki_pedidos
+from stokki import sessao_uso
 from stokki.auth import StokkiSession
 
 logger = logging.getLogger("sincronizar_pedidos_wms")
@@ -58,6 +68,15 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 # pedido que ja saiu (Sent/Delivered) nao precisa mais de reserva, so de
 # baixa (isso ja e feito em outro lugar, na deteccao de expedicao).
 STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Pack")
+
+# Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
+# folgado pro tamanho real de uma rodada (~37 pedidos hoje, so requests,
+# sem Playwright -- minutos, nao dezenas de minutos). Espera curta de
+# proposito: o timer se repete a cada 15 min, entao nao faz sentido
+# esperar mais que isso -- so perderia a proxima janela tambem.
+DONO_TRAVA = "wms-reservar-pedidos"
+TRAVA_TTL_SEGUNDOS = 600
+TRAVA_ESPERA_SEGUNDOS = 120
 
 _PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
 
@@ -187,13 +206,28 @@ def main(argv=None) -> int:
     config = _carregar_config()
     piloto_id = (args.embarcador_id or _piloto_id(config)).strip()
     piloto_nome = (args.embarcador or _piloto_nome(config)).strip().upper()
-    conn = wms_pedidos.conectar()
-    sess = StokkiSession(config)
+
+    # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
+    # e o comentario "Correcao 2" no topo do arquivo). Adquire ANTES de abrir a
+    # conexao com o banco ou a StokkiSession: se a trava nao vier, a rotina
+    # desiste sem tocar em nada. Vale tambem pro --modo-teste (ele le da
+    # Stokki de verdade, so pula a escrita).
+    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
+                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS):
+        ocupante = sessao_uso.em_uso()
+        logger.error("Stokki ocupada por '%s' -- desistindo desta rodada.", ocupante)
+        return 1
+
     t0 = time.time()
     try:
-        res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+        conn = wms_pedidos.conectar()
+        sess = StokkiSession(config)
+        try:
+            res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        sessao_uso.liberar(DONO_TRAVA)
     logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
     return 0
 
