@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from geocodificacao import geocodificar
 from regioes_dia_fixo import RAIO_GRANDE_SP_KM, extrair_cidade, regiao_externa_da_cidade
-from regras.tipo_veiculo import classificar_tipo_veiculo, teto_caixas_para_enderecos
+from regras.tipo_veiculo import VOLUME_MAXIMO_GERAL_CX, classificar_tipo_veiculo
 
 logger = logging.getLogger(__name__)
 
@@ -1510,82 +1510,46 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
         grupos.sort(key=lambda g: -g["caixas"])
         return grupos
 
-    def _distancia_para_cluster(pedidos_cluster: list[dict], grupo_candidato: dict) -> float:
-        centroide = _centroide_coords(pedidos_cluster, api_key)
-        coords_candidato = obter_coordenadas(grupo_candidato["pedidos"][0], api_key)
-        if centroide and coords_candidato:
-            return _distancia_km(*centroide, *coords_candidato)
-        return 0.0  # sem coordenada -- não dá pra medir, mantém a ordem por caixas (não bloqueia)
-
     def _extrair_grupos_veiculo_grande(candidatos: list[dict]) -> tuple[list[list[dict]], list[dict]]:
         """
-        Consolida pedidos de até 4 endereços diferentes (ou até 2, se o
-        volume só couber em Truck) cujo volume COMBINADO já classifica
-        em algum tipo de veículo grande (regras.tipo_veiculo.
-        classificar_tipo_veiculo) -- ver docstring de
-        separar_pedidos_exclusivos.
+        Extrai como rota exclusiva de veículo grande todo ENDEREÇO cujos
+        pedidos somam mais que `volume_maximo` (o teto da rota comum, 100
+        caixas) -- pedido do Hugo, 22/09.
 
-        Guloso: parte do endereço com mais caixas ainda não usado e vai
-        anexando o endereço geograficamente mais próximo ainda não
-        usado, enquanto o total ainda couber em ALGUM tipo (teto que
-        ENCOLHE conforme mais endereços entram -- com 3+ endereços,
-        Truck deixa de ser alcançável e o teto cai de 2500 pra 1200, ver
-        regras.tipo_veiculo.teto_caixas_para_enderecos) e a distância
-        pro cluster continuar dentro da mesma trava de sempre
-        (`_cabe_na_distancia`, Grande SP x Viagem).
+        Até 22/09 isto era um crescimento guloso que juntava até 4
+        endereços vizinhos (2 no Truck) buscando alcançar o volume mínimo
+        do tipo. Saiu: juntar endereços diferentes num veículo grande não
+        é o que a operação quer, e o mínimo de 150 da VAN/HR deixava
+        descoberto o caso real -- 2 pedidos de 60 caixas pro MESMO
+        endereço (120) estouravam a rota comum e não alcançavam a VAN/HR,
+        saindo em 2 rotas.
 
-        Guarda o ÚLTIMO estado em que o cluster classificou em algum
-        tipo (`melhor`) -- crescer mais um endereço pode "estourar" o
-        cluster pra fora de qualquer faixa válida (ex: 3 endereços/
-        1200cx cabe em 3/4, mas o 4º endereço empurra pra 1250cx, que
-        não cabe nem em 3/4 nem em Truck com 4 endereços); nesse caso
-        o cluster extraído é o último válido, não o final.
+        Pedido individual acima do teto nunca chega aqui: já foi isolado
+        como "gigante" antes (ver separar_pedidos_exclusivos).
 
-        Extrai o cluster (`melhor`) ao final se ele classificou em
-        algum momento -- inclusive com 1 endereço só (vários pedidos
-        pro MESMO endereço somando volume de veículo grande, nenhum
-        deles "gigante" individualmente). Endereço(s) que nunca entram
-        em nenhum cluster válido voltam pro pool comum (`sobras`).
+        Endereço acima da maior capacidade do catálogo (2500 cx, Truck)
+        é extraído do mesmo jeito, com alerta -- 1 rota sinalizada é
+        melhor que dezenas de rotas pequenas silenciosas pro mesmo
+        portão. Dividir em várias rotas de Truck é outro projeto.
+
+        Endereço dentro do teto volta pro pool comum (`sobras`).
         """
-        grupos = _agrupar_por_endereco(candidatos)
-        usados: set[int] = set()
         extraidos: list[list[dict]] = []
+        sobras: list[dict] = []
 
-        for i, semente in enumerate(grupos):
-            if i in usados:
+        for grupo in _agrupar_por_endereco(candidatos):
+            if grupo["caixas"] <= volume_maximo:
+                sobras.extend(grupo["pedidos"])
                 continue
-            indices_cluster = [i]
-            pedidos_cluster = list(semente["pedidos"])
-            caixas_cluster = semente["caixas"]
-            melhor = None
-            if classificar_tipo_veiculo(caixas_cluster, 1) is not None:
-                melhor = (list(indices_cluster), list(pedidos_cluster))
+            if classificar_tipo_veiculo(grupo["caixas"], 1) is None:
+                endereco = grupo["pedidos"][0].get("address")
+                logger.warning(
+                    f"[ALERTA_ALOCACAO] Endereço '{endereco}' soma {grupo['caixas']} caixas, "
+                    f"acima da maior capacidade do catálogo ({VOLUME_MAXIMO_GERAL_CX}) -- "
+                    f"sai como 1 rota exclusiva sem tipo de veículo definido."
+                )
+            extraidos.append(grupo["pedidos"])
 
-            while True:
-                teto = teto_caixas_para_enderecos(len(indices_cluster) + 1)
-                if teto == 0 or caixas_cluster >= teto:
-                    break
-                candidatas = [
-                    (j, g) for j, g in enumerate(grupos)
-                    if j not in usados and j not in indices_cluster
-                    and caixas_cluster + g["caixas"] <= teto
-                    and all(_cabe_na_distancia(s, pedidos_cluster) for s in g["pedidos"])
-                ]
-                if not candidatas:
-                    break
-                proximo_j, proximo = min(candidatas, key=lambda par: _distancia_para_cluster(pedidos_cluster, par[1]))
-                indices_cluster.append(proximo_j)
-                pedidos_cluster = pedidos_cluster + proximo["pedidos"]
-                caixas_cluster += proximo["caixas"]
-                if classificar_tipo_veiculo(caixas_cluster, len(indices_cluster)) is not None:
-                    melhor = (list(indices_cluster), list(pedidos_cluster))
-
-            if melhor is not None:
-                indices_finais, pedidos_finais = melhor
-                usados.update(indices_finais)
-                extraidos.append(pedidos_finais)
-
-        sobras = [s for j, g in enumerate(grupos) if j not in usados for s in g["pedidos"]]
         return extraidos, sobras
 
     gigantes: list[dict] = []
