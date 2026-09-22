@@ -30,6 +30,10 @@ class TipoVeiculo:
     volume_maximo_cx: int
     volume_minimo_cx: int
     max_enderecos_distintos: int
+    # FIORINO é o único False: ele é o veículo da rota comum (100 cx é o
+    # mesmo teto de VOLUME_MAXIMO_ROTA), não um veículo que justifica
+    # sair da roteirização normal. Ver TIPOS_VEICULO_EXCLUSIVOS abaixo.
+    gera_rota_exclusiva: bool = True
 
 
 # Ordenado por capacidade CRESCENTE -- classificar_tipo_veiculo devolve o
@@ -37,16 +41,30 @@ class TipoVeiculo:
 # veiculo_comporta usa essa mesma ordem pra saber se o veículo de um
 # motorista "cobre pra cima" (ex: motorista de Truck também serve rota
 # classificada VUC).
+#
+# Faixas CONTÍGUAS desde 22/09/2026 (Hugo): o volume_minimo_cx virou o
+# teto do tipo anterior. Antes havia um buraco -- 101 a 149 caixas num
+# endereço estourava a rota comum (100) e não alcançava o mínimo da
+# VAN/HR (150), ficando sem veículo nenhum.
 TIPOS_VEICULO = [
+    TipoVeiculo("FIORINO", "Fiorino", peso_maximo_kg=650, volume_maximo_cx=100,
+                volume_minimo_cx=0, max_enderecos_distintos=4,
+                gera_rota_exclusiva=False),
     TipoVeiculo("VAN_HR", "VAN/HR", peso_maximo_kg=1300, volume_maximo_cx=400,
-                volume_minimo_cx=150, max_enderecos_distintos=4),
+                volume_minimo_cx=101, max_enderecos_distintos=4),
     TipoVeiculo("VUC", "VUC", peso_maximo_kg=2000, volume_maximo_cx=600,
-                volume_minimo_cx=300, max_enderecos_distintos=4),
+                volume_minimo_cx=401, max_enderecos_distintos=4),
     TipoVeiculo("TRES_QUARTOS", "3/4", peso_maximo_kg=6000, volume_maximo_cx=1200,
-                volume_minimo_cx=500, max_enderecos_distintos=4),
+                volume_minimo_cx=601, max_enderecos_distintos=4),
     TipoVeiculo("TRUCK", "Truck", peso_maximo_kg=10000, volume_maximo_cx=2500,
-                volume_minimo_cx=1500, max_enderecos_distintos=2),
+                volume_minimo_cx=1201, max_enderecos_distintos=2),
 ]
+
+# Tipos que JUSTIFICAM uma rota exclusiva de veículo grande. FIORINO
+# fica de fora: classificar_tipo_veiculo devolver FIORINO faria toda
+# rota comum (<=100 cx) virar "rota exclusiva" nos ~12 pontos do
+# pipeline que testam `classificar_tipo_veiculo(...) is not None`.
+TIPOS_VEICULO_EXCLUSIVOS = [t for t in TIPOS_VEICULO if t.gera_rota_exclusiva]
 
 _TIPOS_POR_CODIGO = {t.codigo: t for t in TIPOS_VEICULO}
 _ORDEM_CODIGO = {t.codigo: i for i, t in enumerate(TIPOS_VEICULO)}
@@ -55,13 +73,17 @@ _ORDEM_CODIGO = {t.codigo: i for i, t in enumerate(TIPOS_VEICULO)}
 # TIPO_VEICULO) -- "3/4" é a forma que o Hugo realmente usa (não
 # "TRES_QUARTOS"); depois de normalizado (maiúsculo, não-alfanumérico
 # vira '_', ver regras/preferencias_motoristas.py::_construir_motorista)
-# "3/4" chega aqui como "3_4".
-_APELIDOS_CODIGO = {"3_4": "TRES_QUARTOS", "34": "TRES_QUARTOS"}
+# "3/4" chega aqui como "3_4". "UTILITARIO" é como a planilha antiga
+# chamava o Fiorino (ver regras/tarifa_motorista.py, mesma tarifa).
+_APELIDOS_CODIGO = {
+    "3_4": "TRES_QUARTOS", "34": "TRES_QUARTOS",
+    "FIO": "FIORINO", "UTILITARIO": "FIORINO",
+}
 
-# Maior teto de caixas entre TODOS os tipos -- usado como limite inicial
-# ao tentar crescer um cluster de endereços em roteirizacao_dados.py,
-# antes de saber quantos endereços o cluster final vai ter.
-VOLUME_MAXIMO_GERAL_CX = max(t.volume_maximo_cx for t in TIPOS_VEICULO)
+# Maior teto de caixas entre os tipos que geram rota EXCLUSIVA -- usado
+# como limite inicial ao tentar crescer um cluster de endereços em
+# roteirizacao_dados.py.
+VOLUME_MAXIMO_GERAL_CX = max(t.volume_maximo_cx for t in TIPOS_VEICULO_EXCLUSIVOS)
 
 
 def tipo_por_codigo(codigo: str | None) -> TipoVeiculo | None:
@@ -83,19 +105,26 @@ def teto_caixas_para_enderecos(qtd_enderecos: int) -> int:
     tipo de 4 endereços, 1200, já que Truck deixou de ser alcançável).
     0 se nenhum tipo comportar mais esse tanto de endereços (cluster já
     deve parar de crescer)."""
-    candidatos = [t.volume_maximo_cx for t in TIPOS_VEICULO if t.max_enderecos_distintos >= qtd_enderecos]
+    candidatos = [t.volume_maximo_cx for t in TIPOS_VEICULO_EXCLUSIVOS if t.max_enderecos_distintos >= qtd_enderecos]
     return max(candidatos) if candidatos else 0
 
 
 def classificar_tipo_veiculo(caixas: int, enderecos_distintos: int) -> TipoVeiculo | None:
     """
-    Menor tipo de veículo (capacidade crescente) cujo `max_enderecos_distintos`
-    comporta `enderecos_distintos` E cujo [volume_minimo_cx, volume_maximo_cx]
-    contém `caixas`. None quando não cabe em nenhum tipo -- lote fica de
-    fora da faixa de veículo grande, segue a roteirização comum (última
-    milha) sem trava nenhuma daqui.
+    Menor tipo de veículo EXCLUSIVO (capacidade crescente, sem contar
+    FIORINO) cujo `max_enderecos_distintos` comporta `enderecos_distintos`
+    E cujo [volume_minimo_cx, volume_maximo_cx] contém `caixas`. None
+    quando não cabe em nenhum tipo -- lote fica de fora da faixa de
+    veículo grande, segue a roteirização comum (última milha) sem trava
+    nenhuma daqui.
+
+    NUNCA devolve FIORINO -- ele é o veículo da própria rota comum (não
+    um veículo que justifique rota exclusiva), então fica fora de
+    TIPOS_VEICULO_EXCLUSIVOS. Se vazasse, toda rota comum (<=100 cx)
+    passaria a ser tratada como "rota exclusiva de veículo grande" nos
+    ~12 pontos do pipeline que checam esse retorno.
     """
-    for tipo in TIPOS_VEICULO:
+    for tipo in TIPOS_VEICULO_EXCLUSIVOS:
         if (enderecos_distintos <= tipo.max_enderecos_distintos
                 and tipo.volume_minimo_cx <= caixas <= tipo.volume_maximo_cx):
             return tipo
