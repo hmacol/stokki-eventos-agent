@@ -16,6 +16,7 @@ Regras que este modulo garante:
 - A baixa reusa wms.registrar_movimento(tipo="SAIDA") com uuid
   deterministico, entao rodar duas vezes nao baixa duas vezes.
 """
+import re
 import sqlite3
 from pathlib import Path
 
@@ -333,3 +334,72 @@ def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
     conn.execute("UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', atualizado_em = ? WHERE id = ?",
                  (agora, pedido_id))
     return cur.rowcount
+
+
+def _id_stokki_do_codigo(codigo_ps: str) -> int | None:
+    """
+    Tira o id numerico do codigo do pedido. A VUUPT devolve '#PS-39751',
+    'PS-39751' ou '#PS-39751-R2' (reentrega) -- todos sao o mesmo pedido.
+    """
+    m = re.search(r"PS-?(\d+)", str(codigo_ps or "").upper())
+    return int(m.group(1)) if m else None
+
+
+def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> dict:
+    """
+    Converte as reservas ATIVAS do pedido em SAIDA de estoque.
+
+    Consome TODAS as reservas ATIVAS do pedido, seja origem FEFO (sugerida
+    pelo sistema) ou MANUAL (o operador bipou outro lote) -- na hora de
+    baixar nao importa quem escolheu o lote, so que a mercadoria saiu.
+
+    O uuid do movimento e deterministico (ps-<id>-item-<linha>-<n>) e o
+    registrar_movimento ja e idempotente por uuid: rodar duas vezes nao
+    baixa duas vezes. Um erro numa reserva nao derruba as outras.
+    """
+    id_stokki = _id_stokki_do_codigo(codigo_ps)
+    if not id_stokki:
+        return {"pedido_id": None, "baixas": 0, "ja_baixado": False,
+                "erros": [f"codigo de pedido nao reconhecido: {codigo_ps!r}"]}
+    pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?", (id_stokki,)).fetchone()
+    if not pedido:
+        return {"pedido_id": None, "baixas": 0, "ja_baixado": False, "erros": []}
+
+    reservas = conn.execute("""
+        SELECT r.*, i.linha FROM wms_reservas r
+          JOIN wms_pedido_itens i ON i.id = r.item_id
+         WHERE r.pedido_id = ? AND r.estado = 'ATIVA'
+         ORDER BY i.linha, r.id""", (pedido["id"],)).fetchall()
+    if not reservas:
+        ja = pedido["estado_reserva"] == "BAIXADO"
+        return {"pedido_id": pedido["id"], "baixas": 0, "ja_baixado": ja, "erros": []}
+
+    # Fecha qualquer transacao pendente de uma escrita anterior nesta mesma
+    # conexao (ex.: registrar_pedido/reservar_pedido chamados antes sem
+    # commit). wms.registrar_movimento abre a propria transacao com BEGIN
+    # IMMEDIATE e nao aceita rodar dentro de uma ja aberta.
+    conn.commit()
+
+    baixas, erros = 0, []
+    por_item = {}
+    for r in reservas:
+        por_item[r["linha"]] = por_item.get(r["linha"], 0) + 1
+        uuid = f"ps-{id_stokki}-item-{r['linha']}-{por_item[r['linha']]}"
+        try:
+            mov = wms.registrar_movimento(
+                conn, tipo="SAIDA", produto_id=r["produto_id"], quantidade=r["quantidade_un"],
+                lote=r["lote"], validade=r["validade"] or None, origem=r["posicao"],
+                operador=operador, uuid=uuid,
+                observacao=f"Baixa automatica da expedicao do {pedido['codigo_ps']}",
+                permitir_negativo=True)
+            conn.execute(
+                "UPDATE wms_reservas SET estado = 'CONSUMIDA', movimento_uuid = ?, atualizado_em = ? WHERE id = ?",
+                (mov["uuid"], wms.agora(), r["id"]))
+            if not mov.get("duplicado"):
+                baixas += 1
+        except Exception as e:  # noqa: BLE001 -- uma reserva ruim nao derruba a expedicao
+            erros.append(f"linha {r['linha']}: {e}")
+    conn.execute("UPDATE wms_pedidos SET estado_reserva = 'BAIXADO', atualizado_em = ? WHERE id = ?",
+                 (wms.agora(), pedido["id"]))
+    conn.commit()
+    return {"pedido_id": pedido["id"], "baixas": baixas, "ja_baixado": False, "erros": erros}

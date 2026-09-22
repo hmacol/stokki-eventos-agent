@@ -412,5 +412,59 @@ class TestArredondamentoFracionario(BaseWMS):
         self.assertAlmostEqual(total, 158.913, places=3)
 
 
+class TestBaixaNaExpedicao(BaseWMS):
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'111111111111', '222222222222', 6, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        self.pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39751, "codigo_ps": "PS-39751", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 4}])
+        wms_pedidos.reservar_pedido(self.conn, self.pid)
+
+    def test_baixa_gera_saida_e_derruba_o_saldo(self):
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39751")
+        self.assertEqual(r["baixas"], 1)
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), 6)
+        mov = self.conn.execute("SELECT * FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()
+        self.assertEqual(mov["quantidade"], 4)
+        self.assertEqual(mov["posicao_origem"], "C9-E1-N1")
+
+    def test_baixar_duas_vezes_nao_baixa_em_dobro(self):
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-39751")
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39751")
+        self.assertTrue(r["ja_baixado"])
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), 6)
+        n = self.conn.execute("SELECT COUNT(*) n FROM wms_movimentos WHERE tipo='SAIDA'").fetchone()["n"]
+        self.assertEqual(n, 1)
+
+    def test_baixa_marca_pedido_e_reservas(self):
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-39751")
+        estado = self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id = ?",
+                                   (self.pid,)).fetchone()["estado_reserva"]
+        self.assertEqual(estado, "BAIXADO")
+        reserva = self.conn.execute("SELECT * FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["estado"], "CONSUMIDA")
+        self.assertTrue(reserva["movimento_uuid"])
+
+    def test_codigo_com_sufixo_de_reentrega_encontra_o_pedido(self):
+        # a VUUPT devolve '#PS-39751-R2' em reentrega; tem que cair no mesmo pedido
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "#PS-39751-R2")
+        self.assertEqual(r["pedido_id"], self.pid)
+
+    def test_pedido_desconhecido_nao_explode(self):
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-00000")
+        self.assertIsNone(r["pedido_id"])
+        self.assertEqual(r["baixas"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
