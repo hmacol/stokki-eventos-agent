@@ -906,7 +906,14 @@ def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> l
     contagem por completed_at (leve, não traz registros) -- mesmo campo
     já usado em expedir_pedidos.py. Não usa scheduled_start como o
     relatorio_operacional: só pedido com agendamento tem esse campo
-    (ver _montar_pedidos_dia)."""
+    (ver _montar_pedidos_dia).
+
+    Cada dia sai com total, sucesso e falha (Hugo, 16/09: a coluna do
+    gráfico é dividida em verde/vermelho). A falha vem de uma 2ª
+    contagem com filtro status_done=failed (provado 16/09 que a API
+    aceita o filtro: 197 = 186 sucesso + 11 falha em 15/09); sucesso =
+    total - falha, pra ficar igual ao critério de _estatisticas_periodo
+    (done que não é failed conta como entregue)."""
     resultado = []
     dia = ultimo_dia
     while len(resultado) < dias:
@@ -917,10 +924,15 @@ def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> l
             ]
             try:
                 total = vuupt.contar_servicos(filtro)
+                falha = vuupt.contar_servicos(filtro + [{"field": "status_done", "operator": "eq", "value": "failed"}])
             except Exception as e:
                 logger.error(f"[torre] Falha ao contar tendência do dia {dia}: {e}")
-                total = 0
-            resultado.append({"rotulo": dia.strftime("%d/%m"), "data": dia.isoformat(), "total": total})
+                total = falha = 0
+            falha = min(falha, total)
+            resultado.append({
+                "rotulo": dia.strftime("%d/%m"), "data": dia.isoformat(),
+                "total": total, "sucesso": total - falha, "falha": falha,
+            })
         dia -= timedelta(days=1)
     resultado.reverse()
     return resultado
