@@ -69,6 +69,35 @@ CREATE TABLE IF NOT EXISTS wms_reservas (
 CREATE INDEX IF NOT EXISTS idx_wms_reservas_saldo
     ON wms_reservas(produto_id, posicao, lote, validade, estado);
 CREATE INDEX IF NOT EXISTS idx_wms_reservas_pedido ON wms_reservas(pedido_id, estado);
+CREATE TABLE IF NOT EXISTS wms_recebimentos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_stokki      INTEGER NOT NULL UNIQUE,
+    codigo         TEXT NOT NULL DEFAULT '',
+    embarcador     TEXT NOT NULL DEFAULT '',
+    situacao       TEXT NOT NULL DEFAULT '',
+    chegada        TEXT NOT NULL DEFAULT '',
+    estado         TEXT NOT NULL DEFAULT 'ESPERADO',  -- ESPERADO | ENDERECADO
+    lido_em        TEXT NOT NULL,
+    atualizado_em  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wms_recebimentos_estado ON wms_recebimentos(estado);
+CREATE TABLE IF NOT EXISTS wms_recebimento_itens (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    recebimento_id      INTEGER NOT NULL REFERENCES wms_recebimentos(id),
+    linha               INTEGER NOT NULL,
+    sku                 TEXT NOT NULL DEFAULT '',
+    ean_linha           TEXT NOT NULL DEFAULT '',
+    descricao           TEXT NOT NULL DEFAULT '',
+    qtd_embalagem       REAL NOT NULL,
+    qtd_un              REAL,
+    produto_id          INTEGER REFERENCES wms_produtos(id),
+    motivo_pendencia    TEXT NOT NULL DEFAULT '',
+    lote_sugerido       TEXT NOT NULL DEFAULT '',
+    validade_sugerida   TEXT NOT NULL DEFAULT '',
+    qtd_enderecada      REAL NOT NULL DEFAULT 0,
+    UNIQUE (recebimento_id, linha)
+);
+CREATE INDEX IF NOT EXISTS idx_wms_recebimento_itens_recebimento ON wms_recebimento_itens(recebimento_id);
 """
 
 
@@ -460,3 +489,59 @@ def pendencias(conn, limite: int = 50) -> list[dict]:
          WHERE i.motivo_pendencia <> '' AND p.estado_reserva <> 'CANCELADO'
          ORDER BY p.id DESC, i.linha LIMIT ?""", (int(limite),)).fetchall()
     return [dict(r) for r in rows]
+
+
+def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
+    """
+    Cria ou atualiza o espelho de um recebimento (entrada esperada) e as
+    linhas de item, ja resolvendo produto e unidade -- mesmo padrao de
+    registrar_pedido, so que aqui nao ha reserva nenhuma (nao mexe em
+    saldo, so cria a lista do que o operador vai enderecar no celular).
+
+    Idempotente por id_stokki + linha. O estado do recebimento (ESPERADO
+    | ENDERECADO) so nasce ESPERADO na criacao -- rodadas seguintes NUNCA
+    voltam um recebimento ja ENDERECADO pra ESPERADO, so atualizam os
+    campos de cabecalho (situacao/chegada podem mudar na Stokki antes do
+    operador terminar de enderecar).
+
+    lote/validade que a Stokki ja traz preenchidos (achado do Hugo,
+    22/09/2026: 61 de 61 itens numa amostra) sao gravados como SUGESTAO
+    (lote_sugerido/validade_sugerida) -- a tela do operador (tarefa
+    seguinte) mostra editavel, nunca aplica em silencio.
+    """
+    id_stokki = int(recebimento["id_stokki"])
+    agora = wms.agora()
+    row = conn.execute("SELECT id FROM wms_recebimentos WHERE id_stokki = ?", (id_stokki,)).fetchone()
+    if row:
+        recebimento_id = row["id"]
+        conn.execute(
+            "UPDATE wms_recebimentos SET codigo = ?, embarcador = ?, situacao = ?, chegada = ?, "
+            "atualizado_em = ? WHERE id = ?",
+            (recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
+             recebimento.get("situacao", ""), recebimento.get("chegada", ""), agora, recebimento_id))
+    else:
+        cur = conn.execute("""
+            INSERT INTO wms_recebimentos (id_stokki, codigo, embarcador, situacao, chegada, estado,
+                                          lido_em, atualizado_em)
+            VALUES (?,?,?,?,?,'ESPERADO',?,?)""",
+            (id_stokki, recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
+             recebimento.get("situacao", ""), recebimento.get("chegada", ""), agora, agora))
+        recebimento_id = cur.lastrowid
+
+    for item in itens:
+        r = resolver_item(conn, item)
+        conn.execute("""
+            INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, ean_linha, descricao,
+                                               qtd_embalagem, qtd_un, produto_id, motivo_pendencia,
+                                               lote_sugerido, validade_sugerida)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(recebimento_id, linha) DO UPDATE SET
+                sku = excluded.sku, ean_linha = excluded.ean_linha, descricao = excluded.descricao,
+                qtd_embalagem = excluded.qtd_embalagem, qtd_un = excluded.qtd_un,
+                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia,
+                lote_sugerido = excluded.lote_sugerido, validade_sugerida = excluded.validade_sugerida""",
+            (recebimento_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
+             item.get("descricao", ""), float(item["qtd_embalagem"]), r["qtd_un"], r["produto_id"],
+             r["motivo_pendencia"], item.get("lote", ""), item.get("validade", "")))
+
+    return recebimento_id

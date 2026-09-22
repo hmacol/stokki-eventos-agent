@@ -1,0 +1,55 @@
+<!-- Fixture SINTETICA (nao capturada da Stokki -- Hugo proibiu sondar a
+     producao desta maquina) que reproduz a estrutura real descrita pelo
+     Hugo em 22/09/2026: duas tabelas no detalhe de um recebimento, sendo
+     que so a segunda (Produto | Lote | Entrada | Fabricacao | Validade |
+     Quantidade) e a que o parser deve usar. -->
+<html>
+<body>
+  <div class="tab-pane" id="localizacao">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th>
+          <th>Localizacao</th><th>Quantidade</th><th>unidade</th><th>Valor Unitario</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td><td>900</td><td>CXPTD1</td>
+          <td>CX PALITINHO DE TAPIOCA TRAD</td>
+          <td>C9-E1-N1</td><td>10</td><td>UN</td><td>0,00</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tab-pane" id="itens">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Produto</th><th>Lote</th><th>Entrada</th>
+          <th>Fabricação</th><th>Validade</th><th>Quantidade</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>CXPTD1 - CX PALITINHO DE TAPIOCA TRAD</td>
+          <td>1809</td>
+          <td>18/09/2026</td>
+          <td></td>
+          <td>18/02/2027</td>
+          <td>10</td>
+        </tr>
+        <tr>
+          <td>CXPTD2 - CX PALITINHO DE TAPIOCA INTEGRAL</td>
+          <td>1810</td>
+          <td>18/09/2026</td>
+          <td></td>
+          <td></td>
+          <td>5</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
