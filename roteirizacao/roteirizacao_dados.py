@@ -1495,11 +1495,10 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
 
     def _agrupar_por_endereco(candidatos: list[dict]) -> list[dict]:
         """Agrupa `candidatos` por endereço (campo 'address') -- cada
-        grupo é 1 'unidade' pro empacotamento de veículo grande abaixo
-        (mesmo endereço nunca conta mais de 1 vez, não importa quantos
-        pedidos tenha). Ordenado por caixas DECRESCENTE: a semente de
-        cada cluster é sempre o maior endereço ainda não usado, o mais
-        provável de precisar de um veículo maior."""
+        grupo soma as caixas de todos os pedidos daquele endereço (mesmo
+        endereço nunca conta mais de 1 vez, não importa quantos pedidos
+        tenha). Ordenado por caixas DECRESCENTE -- cosmético, só afeta
+        a ordem das listas devolvidas por quem chama."""
         por_endereco: dict[object, list[dict]] = defaultdict(list)
         for s in candidatos:
             por_endereco[s.get("address")].append(s)
@@ -1524,8 +1523,12 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
         endereço (120) estouravam a rota comum e não alcançavam a VAN/HR,
         saindo em 2 rotas.
 
-        Pedido individual acima do teto nunca chega aqui: já foi isolado
-        como "gigante" antes (ver separar_pedidos_exclusivos).
+        Pedido individual acima do teto entra aqui como qualquer outro:
+        o endereço dele sozinho já soma mais que `volume_maximo`, então
+        é extraído do mesmo jeito -- decisão D2 do Hugo, 22/09: o
+        gatilho é a soma por endereço, pedido isolado é só o caso
+        particular com 1 pedido só. Isso também cobre gigante + irmão
+        pequeno no mesmo endereço: somam e saem juntos numa rota só.
 
         Endereço acima da maior capacidade do catálogo (2500 cx, Truck)
         é extraído do mesmo jeito, com alerta -- 1 rota sinalizada é
@@ -1541,7 +1544,7 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
             if grupo["caixas"] <= volume_maximo:
                 sobras.extend(grupo["pedidos"])
                 continue
-            if classificar_tipo_veiculo(grupo["caixas"], 1) is None:
+            if grupo["caixas"] > VOLUME_MAXIMO_GERAL_CX:
                 endereco = grupo["pedidos"][0].get("address")
                 logger.warning(
                     f"[ALERTA_ALOCACAO] Endereço '{endereco}' soma {grupo['caixas']} caixas, "
@@ -1552,26 +1555,25 @@ def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
 
         return extraidos, sobras
 
-    gigantes: list[dict] = []
     grupos_nivel4: dict[tuple[object, object], list[dict]] = {}
     demais: list[dict] = []
 
     for servico in servicos:
-        # Nível 4 ANTES do "gigante": um nível 4 gigante pertence ao
-        # grupo do seu endereço/embarcador (pode fechar um veículo
-        # grande com os irmãos -- ver _empacotar_grupo_nivel4); isolado
-        # só se o grupo não chegar a veículo grande.
+        # Nível 4 primeiro: um nível 4 gigante pertence ao grupo do seu
+        # endereço/embarcador (pode fechar um veículo grande com os
+        # irmãos -- ver _empacotar_grupo_nivel4); isolado só se o grupo
+        # não chegar a veículo grande. Os demais (nível 1/2/3, gigante
+        # ou não) seguem para _extrair_grupos_veiculo_grande, que agrupa
+        # por endereço -- um gigante sozinho já soma mais que o teto no
+        # endereço dele, então é extraído do mesmo jeito (decisão D2).
         if extrair_nivel_dificuldade(servico) == NIVEL_ROTA_EXCLUSIVA:
             grupos_nivel4.setdefault(_chave_nivel4(servico), []).append(servico)
-            continue
-        if extrair_volume_caixas(servico) > volume_maximo:
-            gigantes.append(servico)
             continue
         demais.append(servico)
 
     grupos_veiculo_grande, demais = _extrair_grupos_veiculo_grande(demais)
 
-    sublotes_prontos: list[list[dict]] = [[s] for s in gigantes]
+    sublotes_prontos: list[list[dict]] = []
     for grupo in grupos_nivel4.values():
         sublotes_prontos.extend(_empacotar_grupo_nivel4(grupo))
     sublotes_prontos.extend(grupos_veiculo_grande)

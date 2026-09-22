@@ -118,6 +118,32 @@ class TestPedidoGigante(BaseSemGeocodificar):
         self.assertEqual(prontos[0][0]["code"], "A")
         self.assertEqual(demais, [])
 
+    def test_gigante_com_irmao_pequeno_mesmo_endereco_vira_uma_rota(self):
+        # Fix round 1: A (150cx, gigante) e B (60cx) no MESMO endereco
+        # saiam em 2 rotas -- o gigante era desviado antes de agrupar
+        # por endereco. Decisao D2 do Hugo: a soma por endereco (210) e
+        # quem decide, gigante sozinho e so o caso particular.
+        pedidos = [
+            _pedido("A", "Rua X, 100", 150),
+            _pedido("B", "Rua X, 100", 60),
+        ]
+        prontos, demais = self.separar(pedidos)
+        self.assertEqual(len(prontos), 1, "gigante e irmao do mesmo endereco devem sair juntos")
+        self.assertEqual({s["code"] for s in prontos[0]}, {"A", "B"})
+        self.assertEqual(demais, [])
+
+    def test_gigante_sozinho_com_vizinho_de_outro_endereco_continua_isolado(self):
+        # Guarda de regressao: o gigante nao deve arrastar pedidos de
+        # OUTRO endereco pra dentro da rota dele.
+        pedidos = [
+            _pedido("A", "Rua X, 100", 150, lat=-23.50, lng=-46.60),
+            _pedido("C", "Rua Z, 300", 30, lat=-23.501, lng=-46.601),
+        ]
+        prontos, demais = self.separar(pedidos)
+        self.assertEqual(len(prontos), 1)
+        self.assertEqual({s["code"] for s in prontos[0]}, {"A"})
+        self.assertEqual({s["code"] for s in demais}, {"C"})
+
 
 class TestAcimaDaMaiorCapacidade(BaseSemGeocodificar):
     def test_endereco_acima_do_truck_sai_exclusivo_com_alerta(self):
