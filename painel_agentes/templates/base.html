@@ -126,7 +126,7 @@
     font-weight: 700;
     letter-spacing: 0.9px;
     text-transform: uppercase;
-    color: #6F6F92;
+    color: #8E8EB0;  /* era #6F6F92 = 3,8:1 sobre a sidebar; agora 5,7:1 */
     padding: 0 22px 6px;
     white-space: nowrap;
   }
@@ -180,7 +180,8 @@
     text-align: center;
     font-variant-numeric: tabular-nums;
   }
-  .sidebar nav a .badge.critico { background: var(--erro); }
+  /* texto escuro no badge critico: branco sobre o vermelho dava 3,0:1 (escuro) e 4,0:1 (claro) */
+  .sidebar nav a .badge.critico { background: var(--erro); color: #1A0705; }
   .sidebar nav a .badge[hidden] { display: none; }
   /* Rodapé em duas linhas: quem está logado (com o nível -- é o que
      explica por que uma tela some pro colega) e, embaixo, tema + sair.
@@ -419,6 +420,31 @@
     border-radius: 10px;
     font-size: 13px;
     margin-bottom: 16px;
+  }
+
+  /* Texto só pra leitor de tela (15/09): rótulo que a tela esconde
+     visualmente mas o campo/título continua precisando (WCAG 1.3.1). Não
+     usar display:none, que some da árvore de acessibilidade também. */
+  .oculto-acessivel {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  /* Quem pediu menos movimento no sistema operacional (15/09): as
+     animações infinitas (pulso de agente rodando, barra indeterminada)
+     viram estado parado -- a informação "rodando" continua pela cor. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   a.botao, button.botao {

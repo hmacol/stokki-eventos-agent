@@ -15,7 +15,21 @@
     --superficie-hover: #FAFAFB;
     --borda: #E5E7EB;
     --texto: #1F2937;
-    --texto-suave: #6B7280;
+    /* 15/09 (auditoria a11y): era #6B7280 = 4,39:1 sobre --fundo, abaixo
+       do minimo AA (4,5:1). #5B6472 da 5,4:1 e continua "suave". */
+    --texto-suave: #5B6472;
+    /* Cores de TEXTO que precisam de 4,5:1 sobre --fundo/--superficie
+       (15/09): --acento e --erro seguem sendo as cores de preenchimento
+       (botao, badge, marcador no mapa), mas como texto no tema claro
+       ficavam em 2,9:1 e 3,7:1. Remetente/destinatario/laranja eram hex
+       fixos do tema escuro em planejamento_rotas.html e ilegiveis no
+       claro (2,3:1 e 1,8:1). No escuro os *-texto sao iguais ao original. */
+    --acento-texto: #0A6E53;
+    --erro-texto: #A82F25;
+    --remetente: #2B57B8;
+    --destinatario: #8A5A0B;
+    --laranja-texto: #A85A12;
+    --numero-fundo: #5B6472;
     --sucesso-bg: #E5F7EF;
     --erro-bg: #FDEBEA;
     --rodando-bg: #FDF3E1;
@@ -44,7 +58,13 @@
     --superficie-hover: #1A2130;
     --borda: #262F3F;
     --texto: #DCE3EC;
-    --texto-suave: #7C89A0;
+    --texto-suave: #8F9CB3;  /* era #7C89A0: 4,0:1 dentro das badges cinza */
+    --acento-texto: #2FD9AE;
+    --erro-texto: #FF5C50;
+    --remetente: #6FA0FF;
+    --destinatario: #E0B15C;
+    --laranja-texto: #F2A65A;
+    --numero-fundo: #4B5563;
     --sucesso-bg: rgba(47,217,174,0.16);
     --erro-bg: rgba(255,92,80,0.16);
     --rodando-bg: rgba(240,170,69,0.16);
