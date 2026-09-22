@@ -49,7 +49,6 @@
   - `TipoVeiculo` com campo novo `gera_rota_exclusiva: bool = True`
   - `TIPOS_VEICULO: list[TipoVeiculo]` — 5 tipos, capacidade crescente, FIORINO primeiro
   - `TIPOS_VEICULO_EXCLUSIVOS: list[TipoVeiculo]` — os 4 que geram rota exclusiva
-  - `ordem_capacidade(codigo: str | None) -> int | None`
   - `classificar_tipo_veiculo(caixas: int, enderecos_distintos: int) -> TipoVeiculo | None` — nunca devolve FIORINO
   - `veiculo_comporta(tipo_motorista: str | None, tipo_necessario: str | None) -> bool` — assinatura inalterada
 
@@ -82,7 +81,6 @@ from regras.tipo_veiculo import (
     TIPOS_VEICULO,
     TIPOS_VEICULO_EXCLUSIVOS,
     classificar_tipo_veiculo,
-    ordem_capacidade,
     teto_caixas_para_enderecos,
     tipo_por_codigo,
     veiculo_comporta,
@@ -103,13 +101,6 @@ class TestFiorinoNoCatalogo(unittest.TestCase):
     def test_apelidos_resolvem(self):
         for apelido in ("FIORINO", "fiorino", "FIO", "UTILITARIO"):
             self.assertEqual(tipo_por_codigo(apelido).codigo, "FIORINO", apelido)
-
-    def test_ordem_capacidade(self):
-        self.assertEqual(ordem_capacidade("FIORINO"), 0)
-        self.assertEqual(ordem_capacidade("VAN_HR"), 1)
-        self.assertEqual(ordem_capacidade("TRUCK"), 4)
-        self.assertIsNone(ordem_capacidade(None))
-        self.assertIsNone(ordem_capacidade("CARROCA"))
 
 
 class TestClassificacaoNuncaDevolveFiorino(unittest.TestCase):
@@ -261,18 +252,6 @@ _APELIDOS_CODIGO = {
 VOLUME_MAXIMO_GERAL_CX = max(t.volume_maximo_cx for t in TIPOS_VEICULO_EXCLUSIVOS)
 ```
 
-Acrescentar `ordem_capacidade` logo depois de `tipo_por_codigo` (`:75`):
-
-```python
-def ordem_capacidade(codigo: str | None) -> int | None:
-    """Posição do tipo na ordem de capacidade CRESCENTE (FIORINO=0,
-    VAN_HR=1, VUC=2, TRES_QUARTOS=3, TRUCK=4), ou None se vazio/não
-    reconhecido. Acessor público de _ORDEM_CODIGO -- a alocação precisa
-    dessa ordem pra preferir o menor veículo que serve."""
-    tipo = tipo_por_codigo(codigo)
-    return _ORDEM_CODIGO.get(tipo.codigo) if tipo else None
-```
-
 Em `teto_caixas_para_enderecos` (`:86`) e `classificar_tipo_veiculo` (`:98`), trocar `TIPOS_VEICULO` por `TIPOS_VEICULO_EXCLUSIVOS`:
 
 ```python
@@ -292,7 +271,7 @@ Atualizar a docstring de `classificar_tipo_veiculo` para dizer que FIORINO nunca
 - [ ] **Step 4: Rodar o teste para ver passar**
 
 Run: `py -3.11 -m unittest regras.test_tipo_veiculo_fiorino -v`
-Expected: PASS, 12 testes
+Expected: PASS, 11 testes
 
 - [ ] **Step 5: Rodar a suite inteira para medir o estrago**
 
@@ -1086,10 +1065,12 @@ Em `nucleo/sincronizar_vuupt.py`, acrescentar `horas_estimadas` ao SELECT do ras
 Em `roteirizacao/criar_rotas_diarias.py`, nos **dois** pontos que montam o dict de rascunho (`:586-604` e `:825-843`), calcular junto do `km_estimado`:
 
 ```python
-                    horas_estimadas = estimar_tempo_rota(sublote, gmaps_key, coords_base)
+                    horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
 ```
 
-e acrescentar `"horas_estimadas": horas_estimadas,` ao dict, logo depois de `"km_estimado"`.
+e acrescentar `"horas_estimadas": horas_sublote,` ao dict, logo depois de `"km_estimado"`.
+
+**O nome `horas_sublote` é obrigatorio** (nao `horas_estimadas`): a Task 10 reaproveita essa mesma variavel para decidir `rota_longa`, em vez de estimar duas vezes.
 
 Conferir que `estimar_tempo_rota` esta importado no topo de `criar_rotas_diarias.py`; se nao estiver, acrescentar ao import existente de `roteirizacao_dados`.
 
@@ -1361,8 +1342,10 @@ Rodar (da raiz):
 """
 import sys
 import unittest
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -1395,7 +1378,7 @@ class BaseAlocacao(unittest.TestCase):
             ("classificar_rota_zona", lambda *a, **k: None),
             ("sublote_em_area_rodizio", lambda *a, **k: False),
         ):
-            patcher = unittest.mock.patch.object(alocacao_motoristas, nome, valor)
+            patcher = mock.patch.object(alocacao_motoristas, nome, valor)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -1424,9 +1407,9 @@ class TestJusticaPorHistorico(BaseAlocacao):
         self.assertEqual(escolhido.agent_id, 1)
 
     def test_carga_do_dia_vem_antes_do_historico(self):
-        motoristas = [_motorista(1), _motorista(2)]
-        m1 = _motorista(1)
-        m1 = MotoristaPreferencias(**{**m1.__dict__, "max_rotas_dia": 2})
+        # m1 pode pegar 2 rotas/dia e ja pegou 1; m2 esta zerado no dia mas
+        # rodou muito na semana. A carga do dia manda.
+        m1 = replace(_motorista(1), max_rotas_dia=2)
         escolhido = self.escolher([m1, _motorista(2)],
                                   carga={1: 1}, rotas_7d={1: 0, 2: 9})
         self.assertEqual(escolhido.agent_id, 2, "quem esta zerado no dia vem primeiro")
@@ -1455,7 +1438,7 @@ class TestRodizioDeRotasLongas(BaseAlocacao):
 class TestNadaVirouFiltro(BaseAlocacao):
     def test_zona_continua_travando(self):
         # Zona reconhecida e nenhum motorista atende -> ninguem elegivel.
-        with unittest.mock.patch.object(
+        with mock.patch.object(
             alocacao_motoristas, "classificar_rota_zona", lambda *a, **k: "ZONA SUL"
         ):
             escolhido = self.escolher([_motorista(1, zonas=("ZONA NORTE",))],
@@ -1478,11 +1461,8 @@ class TestCompatibilidade(BaseAlocacao):
 
 
 if __name__ == "__main__":
-    import unittest.mock  # noqa: F401
     unittest.main()
 ```
-
-Mover `import unittest.mock` para o topo do arquivo (junto dos outros imports) em vez de deixar no `__main__` — o `BaseAlocacao.setUp` usa `unittest.mock` e precisa dele carregado sempre.
 
 - [ ] **Step 2: Rodar o teste para ver falhar**
 

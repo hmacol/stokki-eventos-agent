@@ -83,7 +83,7 @@ unico `False`). Duas listas derivadas:
 
 | Lista | Conteudo | Quem usa |
 |---|---|---|
-| `TIPOS_VEICULO` | os 5, capacidade crescente | `ordem_capacidade` → `veiculo_comporta`; `tipo_por_codigo` |
+| `TIPOS_VEICULO` | os 5, capacidade crescente | `_ORDEM_CODIGO` → `veiculo_comporta`; `tipo_por_codigo` |
 | `TIPOS_VEICULO_EXCLUSIVOS` | os 4 maiores | `classificar_tipo_veiculo`, `teto_caixas_para_enderecos`, `VOLUME_MAXIMO_GERAL_CX` |
 
 FIORINO **nunca** pode sair de `classificar_tipo_veiculo`: esse retorno é o
@@ -93,14 +93,9 @@ gatilho de "vira rota exclusiva de veiculo grande" em ~12 pontos do pipeline
 `polimento_rotas.py:60`, `selecao_modelo.py:79`, `benchmark_modelos.py:134`).
 Se ele vazar, **toda** rota comum vira exclusiva e o plano do dia muda inteiro.
 
-`_ORDEM_CODIGO` (hoje privado) ganha um acessor publico, para o resto do
-projeto nao cutucar o privado:
-
-```python
-def ordem_capacidade(codigo: str | None) -> int | None:
-    """Posicao na ordem de capacidade crescente (FIORINO=0 ... TRUCK=4),
-    None se vazio/nao reconhecido."""
-```
+`_ORDEM_CODIGO` continua privado: `veiculo_comporta` é o unico consumidor
+dessa ordem, e ele mora no proprio modulo. Um acessor publico so se aparecer
+quem o use.
 
 ### 4.2 Acima do Truck
 
@@ -321,7 +316,7 @@ Sem pytest: `py -3.11 -m unittest <modulo>`.
   - faixas contiguas: 101→VAN/HR, 400→VAN/HR, 401→VUC, 1201→Truck, 2501→None
   - `veiculo_comporta("FIORINO", None)` True; `("FIORINO","VAN_HR")` False;
     `("TRUCK","FIORINO")` True
-  - `ordem_capacidade` e `tipo_por_codigo("FIO"/"fiorino")`
+  - `tipo_por_codigo("FIO"/"fiorino"/"UTILITARIO")` resolvem pra FIORINO
 - `regras/test_preferencias_motoristas.py` (acrescentar): `TIPO_VEICULO` vazio
   ou invalido vira `FIORINO`
 - `roteirizacao/test_veiculo_grande_um_endereco.py`
@@ -368,7 +363,7 @@ Fases independentes, cada uma entregavel e verificavel sozinha:
 
 | Fase | Entrega | Prova |
 |---|---|---|
-| 1 | FIORINO no catalogo + faixas contiguas + `ordem_capacidade` | `test_tipo_veiculo_fiorino.py`; suite inteira verde |
+| 1 | FIORINO no catalogo + faixas contiguas | `test_tipo_veiculo_fiorino.py`; suite inteira verde |
 | 2 | Planilha preenchida + leitura com default FIORINO + `/motoristas` | `test_preferencias_motoristas.py`; a tela lista os tipos |
 | 3 | Regra de 1 endereco na formacao | `test_veiculo_grande_um_endereco.py` |
 | 4 | **Replay de 30 dias** e numeros para o Hugo | relatorio; decisao de seguir é dele |
