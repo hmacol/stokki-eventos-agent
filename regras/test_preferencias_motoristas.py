@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from regras.preferencias_motoristas import CatalogoMotoristas  # noqa: E402
+from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista  # noqa: E402
 
 
 class TestLeituraPlanilha(unittest.TestCase):
@@ -31,6 +31,47 @@ class TestLeituraPlanilha(unittest.TestCase):
         self.assertIsNone(por_id[2].email)
         self.assertIsNone(por_id[2].telefone)
         self.assertEqual(por_id[2].nome, "Motorista 2")
+
+
+class TestTipoVeiculoPadraoFiorino(unittest.TestCase):
+    """TIPO_VEICULO vazio passa a ser FIORINO (Hugo, 22/09) -- 27 dos 30
+    motoristas estavam com a celula em branco, e Fiorino e o carro da
+    maioria da frota."""
+
+    def _motorista(self, tipo_veiculo):
+        return _construir_motorista({
+            "AGENT_ID_VUUPT": 1,
+            "NOME_MOTORISTA": "Teste",
+            "ATIVO": "SIM",
+            "TIPO_VEICULO": tipo_veiculo,
+        })
+
+    def test_celula_vazia_vira_fiorino(self):
+        self.assertEqual(self._motorista(None).tipo_veiculo, "FIORINO")
+        self.assertEqual(self._motorista("").tipo_veiculo, "FIORINO")
+
+    def test_fiorino_explicito(self):
+        self.assertEqual(self._motorista("FIORINO").tipo_veiculo, "FIORINO")
+        self.assertEqual(self._motorista("Fiorino").tipo_veiculo, "FIORINO")
+        self.assertEqual(self._motorista("UTILITARIO").tipo_veiculo, "FIORINO")
+
+    def test_valor_nao_reconhecido_cai_em_fiorino(self):
+        self.assertEqual(self._motorista("CARROCA").tipo_veiculo, "FIORINO")
+
+    def test_tipos_grandes_preservados(self):
+        self.assertEqual(self._motorista("VAN_HR").tipo_veiculo, "VAN_HR")
+        self.assertEqual(self._motorista("VUC").tipo_veiculo, "VUC")
+        self.assertEqual(self._motorista("3/4").tipo_veiculo, "TRES_QUARTOS")
+
+    def test_tarifa_nao_muda_com_o_default(self):
+        # regras/tarifa_motorista.py ja tratava "" e "FIORINO" como a
+        # mesma tarifa (R$340/65km). Preencher a planilha nao pode mexer
+        # em pagamento -- este teste trava isso.
+        from regras import tarifa_motorista
+        self.assertEqual(
+            tarifa_motorista.calcular_valor_rota(None, 50).valor_total,
+            tarifa_motorista.calcular_valor_rota("FIORINO", 50).valor_total,
+        )
 
 
 if __name__ == "__main__":

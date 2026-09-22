@@ -41,11 +41,11 @@ roteirizacao/alocacao_motoristas.py::selecionar_motorista_equitativo
 maior também serve rota de tipo menor, ex: motorista de Truck serve
 rota classificada VUC). A VUUPT não expõe esse dado de forma confiável
 (mesmo problema já visto com PLACA), então é 100% preenchimento manual
-na planilha -- sem sincronização automática. Motorista sem TIPO_VEICULO
-cadastrado, ou com valor não reconhecido: `tipo_veiculo=None`, nunca é
-bloqueado de rota comum (última milha), mas também nunca é elegível
-pra rota classificada como veículo grande (dado ausente não deve virar
-elegibilidade "universal" pra um porte que não sabemos se ele tem).
+na planilha -- sem sincronização automática. Motorista com TIPO_VEICULO
+vazio ou não reconhecido: assume-se FIORINO (o carro da maioria da
+frota); nunca é bloqueado de rota comum (última milha), mas também
+nunca é elegível pra rota classificada como veículo grande (FIORINO é
+o MENOR tipo, então continua fora, igual a quando isso era None).
 
 TELEFONE_MOTORISTA / EMAIL_MOTORISTA (doc de origem:
 DOC_EXECUCAO_CLAUDE_NOTIFICACAO_MOTORISTAS.md): contato usado por
@@ -111,6 +111,10 @@ _DIAS_SEMANA = {
 }
 
 _VALORES_VERDADEIROS = {"SIM", "S", "TRUE", "VERDADEIRO", "1", "YES"}
+
+# Veículo assumido pra quem está sem TIPO_VEICULO na planilha (Hugo,
+# 22/09) -- ver comentário em _construir_motorista.
+TIPO_VEICULO_PADRAO = "FIORINO"
 
 
 @dataclass
@@ -227,15 +231,19 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
     tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
     codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
     tipo_veiculo = tipo_por_codigo(codigo_tipo_veiculo)
-    # "FIORINO"/"UTILITARIO" explícito na planilha = veículo padrão da
-    # última milha (mesma coisa que coluna vazia pra roteirização, sem
-    # aviso) -- só a tarifa do motorista distingue isso, ver
-    # regras/tarifa_motorista.py (vazio e FIORINO caem na mesma tarifa).
-    if codigo_tipo_veiculo and tipo_veiculo is None and codigo_tipo_veiculo not in ("FIORINO", "UTILITARIO"):
+    if codigo_tipo_veiculo and tipo_veiculo is None:
         logger.warning(
             f"TIPO_VEICULO '{tipo_veiculo_bruto}' não reconhecido pro motorista {agent_id} -- "
-            f"tratado como sem tipo de veículo cadastrado (não elegível pra rota de veículo grande)."
+            f"tratado como {TIPO_VEICULO_PADRAO} (veículo padrão da última milha)."
         )
+    # Célula vazia = FIORINO (Hugo, 22/09): é o carro da maior parte da
+    # frota, e a planilha historicamente só registrava tipo pra veículo
+    # grande. Não afrouxa elegibilidade -- FIORINO é o MENOR tipo, então
+    # continua fora de qualquer rota de veículo grande, igual a quando
+    # isso era None. A tarifa também não muda: regras/tarifa_motorista.py
+    # já tratava vazio e "FIORINO" como a mesma tarifa.
+    if tipo_veiculo is None:
+        tipo_veiculo = tipo_por_codigo(TIPO_VEICULO_PADRAO)
 
     return MotoristaPreferencias(
         agent_id=agent_id,
@@ -249,7 +257,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         telefone=telefone,
         email=email,
         placa=placa,
-        tipo_veiculo=tipo_veiculo.codigo if tipo_veiculo else None,
+        tipo_veiculo=tipo_veiculo.codigo,
         cpf=cpf,
     )
 
