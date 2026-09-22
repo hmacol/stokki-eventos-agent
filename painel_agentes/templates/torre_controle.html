@@ -1573,6 +1573,22 @@ function renderSemaforo(d) {
 
 // ── Carga e ciclo de atualização ────────────────────────────────────
 
+// A torre fica aberta o dia inteiro e só refaz o fetch dos dados; sem
+// isto, uma aba aberta antes de um deploy ficava com o JS antigo pra
+// sempre (17/09: backend novo + aba velha ainda no prompt() do Tratar).
+// Guarda a primeira versão que viu e recarrega quando o backend passa a
+// mandar outra -- nunca com modal aberto (não derruba quem está no meio
+// de uma tratativa/exclusão; tenta de novo no próximo ciclo de 60 s).
+let versaoTelaCarregada = null;
+
+function conferirVersaoTela(d) {
+  if (!d || !d.versao_tela) return;
+  if (versaoTelaCarregada === null) { versaoTelaCarregada = d.versao_tela; return; }
+  if (d.versao_tela === versaoTelaCarregada) return;
+  if (document.querySelector(".modal-overlay-excluir.aberto")) return;
+  location.reload();
+}
+
 async function carregarDados() {
   const corpo = document.querySelector(".corpo");
   corpo.classList.add("atualizando");
@@ -1581,6 +1597,7 @@ async function carregarDados() {
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;
+    conferirVersaoTela(d);
     renderSemaforo(d);
     renderMapa(d);
     renderStepper(d.etapas);

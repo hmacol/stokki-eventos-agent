@@ -1126,12 +1126,26 @@ function renderSemaforo(d) {
   document.getElementById("semaforo-texto").textContent = rotulos[d.semaforo] || d.semaforo;
 }
 
+// Mesma guarda do desktop (17/09): aba aberta antes de um deploy ficava
+// com o JS antigo pra sempre. Recarrega quando a versão do backend muda,
+// nunca com modal aberto (tenta de novo no próximo ciclo).
+let versaoTelaCarregada = null;
+
+function conferirVersaoTela(d) {
+  if (!d || !d.versao_tela) return;
+  if (versaoTelaCarregada === null) { versaoTelaCarregada = d.versao_tela; return; }
+  if (d.versao_tela === versaoTelaCarregada) return;
+  if (document.querySelector(".modal-overlay-excluir.aberto")) return;
+  location.reload();
+}
+
 async function carregarDados() {
   try {
     const resp = await fetch(`${BASE_PATH}/api/torre/dados`);
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;
+    conferirVersaoTela(d);
     renderSemaforo(d);
     renderMapa(d);
     renderKpis(d);

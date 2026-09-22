@@ -117,6 +117,38 @@ RESPOSTAS_TRATATIVA = [
     "Outro",
 ]
 
+
+# Versão da tela da torre (17/09). A torre fica aberta o dia inteiro e
+# só refaz o fetch dos dados -- o HTML/JS nunca era recarregado, então
+# uma aba aberta antes de um deploy ficava com o JS antigo pra sempre
+# (caso real: deploy do dropdown do "Tratar" às 22:30 de 16/09 e, às
+# 22:47, tratativas ainda chegando com texto livre do prompt() antigo).
+# A versão vai no payload de buscar_dados_torre; a tela guarda a
+# primeira que viu e se recarrega quando muda. Calculada UMA vez, na
+# subida do processo: é o que este processo de fato serve (o Flask
+# também cacheia o template até o restart).
+_ARQUIVOS_DA_TELA = [
+    Path(__file__),
+    Path(__file__).parent / "templates" / "torre_controle.html",
+    Path(__file__).parent / "templates" / "torre_mobile.html",
+    Path(__file__).parent / "templates" / "base.html",
+]
+
+
+def _calcular_versao_tela(arquivos) -> str:
+    """mtime mais recente entre os arquivos da tela (arquivo ausente é
+    ignorado). Muda a cada deploy que toca em algum deles."""
+    mtimes = []
+    for arquivo in arquivos:
+        try:
+            mtimes.append(int(Path(arquivo).stat().st_mtime))
+        except OSError:
+            continue
+    return str(max(mtimes, default=0))
+
+
+VERSAO_TELA = _calcular_versao_tela(_ARQUIVOS_DA_TELA)
+
 # Rótulos do funil outbound da Stokki, na ordem do fluxo (o que ainda
 # não chegou na VUUPT). Chaves confirmadas ao vivo em 12/08.
 FUNIL_STOKKI = [
@@ -1592,6 +1624,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "excecoes": excecoes,
         "tratadas": tratadas,
         "respostas_tratativa": RESPOSTAS_TRATATIVA,
+        "versao_tela": VERSAO_TELA,
         "base": base,
     }
 
