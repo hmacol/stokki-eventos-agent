@@ -2,12 +2,16 @@
 """
 test_recebimentos.py
 
-Parser dos recebimentos da Stokki (incoming), sobre uma fixture
-SINTETICA -- Hugo proibiu conectar na Stokki desta maquina (derruba a
-sessao de producao). O HTML de stokki/fixtures/recebimento_itens.html
-reproduz a estrutura real que ele levantou ao vivo em 22/09/2026: duas
-tabelas no detalhe, cabecalhos exatos, uma linha com lote e validade
-preenchidos e uma com validade vazia.
+Parser dos recebimentos da Stokki (incoming), sobre fixtures SINTETICAS
+-- Hugo proibiu conectar na Stokki desta maquina (derruba a sessao de
+producao).
+
+  - recebimento_itens.html: reproduz a estrutura real que o Hugo levantou
+    ao vivo em 22/09/2026 -- duas tabelas no detalhe, cabecalhos exatos,
+    uma linha com lote e validade preenchidos e uma com validade vazia.
+  - recebimento_sem_tabela_lote.html: reproduz o caso do PE-2440, achado
+    na revisao (22/09/2026) -- recebimento "Recebido" SEM a tabela de
+    lote, so com a tabela sem-lote (SKU/Nome/Quantidade total recebida).
 
 Rodar (da raiz):
     py -3.11 -m unittest stokki.test_recebimentos -v
@@ -27,6 +31,7 @@ from stokki.recebimentos import (  # noqa: E402
 )
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "recebimento_itens.html"
+_FIXTURE_SEM_LOTE = Path(__file__).parent / "fixtures" / "recebimento_sem_tabela_lote.html"
 
 # HTML da armadilha descrita pelo Hugo: a coluna 'id' tem o link com o id
 # que abre o detalhe (2478) e um numero solto (41099) que NAO serve --
@@ -67,6 +72,7 @@ class TestExtrairItensDoRecebimento(unittest.TestCase):
         self.assertEqual(self.itens[0]["lote"], "1809")
         self.assertEqual(self.itens[0]["validade"], "18/02/2027")
         self.assertEqual(self.itens[0]["qtd_embalagem"], 10.0)
+        self.assertTrue(self.itens[0]["lote_informado"])
 
     def test_validade_vazia_fica_string_vazia_sem_quebrar(self):
         self.assertEqual(self.itens[1]["lote"], "1810")
@@ -83,6 +89,45 @@ class TestExtrairItensDoRecebimento(unittest.TestCase):
         # tabela de itens -- nao pode quebrar, so devolver vazio.
         html_em_transito = "<html><body><p>Em transito</p></body></html>"
         self.assertEqual(extrair_itens_do_recebimento(html_em_transito), [])
+
+
+class TestFallbackSemTabelaDeLote(unittest.TestCase):
+    """
+    Achado da revisao (Hugo, 22/09/2026, comparando PE-2440 x PE-2478):
+    um recebimento "Recebido" pode nao ter a tabela de lote e ainda assim
+    ter mercadoria real, enderecavel, na outra tabela do detalhe. Antes
+    isso virava erro e o recebimento inteiro sumia do sistema -- agora
+    cai pro fallback (SKU/Nome/Quantidade total recebida), sem sugestao
+    de lote/validade, marcado como tal.
+    """
+
+    def setUp(self):
+        self.html = _FIXTURE_SEM_LOTE.read_text(encoding="utf-8")
+        self.itens = extrair_itens_do_recebimento(self.html)
+
+    def test_cai_pro_fallback_e_acha_a_mercadoria(self):
+        self.assertEqual(len(self.itens), 1)
+
+    def test_le_sku_nome_e_quantidade_total_recebida(self):
+        item = self.itens[0]
+        self.assertEqual(item["sku"], "AMRF")
+        self.assertEqual(item["descricao"], "CAIXA DE AMOSTRAS")
+        self.assertEqual(item["qtd_embalagem"], 1.0)
+
+    def test_lote_e_validade_saem_vazios_e_marcados_como_nao_informados(self):
+        item = self.itens[0]
+        self.assertEqual(item["lote"], "")
+        self.assertEqual(item["validade"], "")
+        self.assertFalse(item["lote_informado"])
+
+    def test_nao_tem_coluna_ean(self):
+        self.assertEqual(self.itens[0]["ean_linha"], "")
+
+    def test_recebimento_sem_nenhuma_das_duas_tabelas_devolve_lista_vazia(self):
+        # nem tabela de lote, nem tabela sem-lote -- so entao vira erro
+        # (decisao de quem chama, ver sincronizar_recebimentos_wms.py).
+        html_sem_tabelas = "<html><body><table><tr><td>nada a ver</td></tr></table></body></html>"
+        self.assertEqual(extrair_itens_do_recebimento(html_sem_tabelas), [])
 
 
 class TestLinhaDaListagem(unittest.TestCase):

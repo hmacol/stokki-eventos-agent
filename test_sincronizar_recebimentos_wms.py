@@ -48,6 +48,28 @@ _HTML_ITENS = """
 </table>
 """
 
+# HTML minimo do caso PE-2440 (achado da revisao, 22/09/2026): sem a
+# tabela de lote, so a tabela "NR | ID | SKU | Nome | ... | Quantidade
+# total recebida | Obs" -- mercadoria real, sem sugestao de lote.
+_HTML_ITENS_SEM_LOTE = """
+<table class="table">
+  <thead>
+    <tr>
+      <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th><th>Localização</th>
+      <th>Quantidade</th><th>unidade</th><th>Valor Unitário</th>
+      <th>Quantidade total recebida</th><th>Obs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td><td>#ITM-948</td><td>SKU1</td><td>PRODUTO 1</td>
+      <td>Recebimento</td><td>4</td><td>UN</td><td>R$ 10,00</td>
+      <td>4</td><td></td>
+    </tr>
+  </tbody>
+</table>
+"""
+
 
 class _RespostaFalsa:
     """Imita o suficiente de requests.Response pro codigo da rotina."""
@@ -144,6 +166,7 @@ class TestRodar(BaseRotina):
         self.assertIsNotNone(recebimento)
         self.assertEqual(recebimento["codigo"], "#PE-2478")
         self.assertEqual(recebimento["estado"], "ESPERADO")
+        self.assertEqual(recebimento["sem_lote_na_stokki"], 0)
         item = self.conn.execute("SELECT * FROM wms_recebimento_itens").fetchone()
         self.assertEqual(item["produto_id"], 1)
         self.assertEqual(item["qtd_un"], 4)
@@ -215,11 +238,12 @@ class TestRodar(BaseRotina):
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2483").fetchone()
         self.assertIsNone(recebimento)
 
-    def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
-        # achado do Hugo (amostra de 8 recebimentos): um "Recebido" sem a
-        # tabela tambem foi visto -- tem que aguentar sem quebrar.
+    def test_recebido_sem_nenhuma_das_duas_tabelas_conta_como_erro_mas_nao_derruba_a_rodada(self):
+        # nem tabela de lote nem tabela sem-lote (formato mudou/pagina
+        # quebrada de verdade) -- so ENTAO vira erro, e mesmo assim tem
+        # que aguentar sem quebrar a rodada.
         linhas = [_linha(2484, PILOTO_ID, situacao="Recebido"), _linha(2485, PILOTO_ID, situacao="Recebido")]
-        sess = SessaoFalsa(linhas, {"2484": "<html>sem tabela</html>", "2485": _HTML_ITENS})
+        sess = SessaoFalsa(linhas, {"2484": "<html>sem tabela nenhuma</html>", "2485": _HTML_ITENS})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
@@ -229,6 +253,29 @@ class TestRodar(BaseRotina):
         self.assertIsNotNone(ok)
         ruim = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2484").fetchone()
         self.assertIsNone(ruim)
+
+    def test_recebido_sem_tabela_de_lote_mas_com_tabela_de_itens_e_registrado_sem_sugestao(self):
+        # achado da revisao (Hugo, 22/09/2026, caso real PE-2440): sem a
+        # tabela de lote, mas com a de itens -- a mercadoria existe e e
+        # enderecavel. Tem que gravar, so sem lote/validade sugeridos, e
+        # marcar sem_lote_na_stokki=1 pra tela do operador avisar.
+        linhas = [_linha(2487, PILOTO_ID, situacao="Recebido")]
+        sess = SessaoFalsa(linhas, {"2487": _HTML_ITENS_SEM_LOTE})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["gravados"], 1)
+        self.assertEqual(res["erros"], 0)
+        recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2487").fetchone()
+        self.assertIsNotNone(recebimento)
+        self.assertEqual(recebimento["sem_lote_na_stokki"], 1)
+        item = self.conn.execute(
+            "SELECT * FROM wms_recebimento_itens WHERE recebimento_id = ?", (recebimento["id"],)).fetchone()
+        self.assertEqual(item["sku"], "SKU1")
+        self.assertEqual(item["produto_id"], 1)
+        self.assertEqual(item["qtd_un"], 4)
+        self.assertEqual(item["lote_sugerido"], "")
+        self.assertEqual(item["validade_sugerida"], "")
 
     def test_recebimento_reenderecado_nao_volta_a_esperado(self):
         # o operador (tela do celular, tarefa seguinte) marca ENDERECADO;

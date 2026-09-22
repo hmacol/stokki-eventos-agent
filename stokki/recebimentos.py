@@ -28,25 +28,38 @@ e outro id interno que NAO serve -- incoming/show/41099 devolve 500.
 Extrair sempre do href (ou do '#PE-<n>'), nunca do numero solto.
 
 Estados vistos: "Recebido" e "Em transito". Um recebimento "Em transito"
-ainda nao tem a tabela de itens (mercadoria nao chegou). Um "Recebido"
-sem a tabela tambem foi visto (achado do Hugo, amostra de 8 recebimentos
-da Maria Dolores) -- o parser tem que aguentar os dois casos sem quebrar,
-devolvendo lista vazia.
+ainda nao tem tabela de itens nenhuma (mercadoria nao chegou) -- o parser
+devolve lista vazia e quem chama trata como normal, nao erro.
 
 Tabelas do detalhe de um recebimento:
-  - "NR. | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor Unitario"
-  - "Produto | Lote | Entrada | Fabricacao | Validade | Quantidade" <- e esta
-    que importa: lote e validade JA vem preenchidos na Stokki (61 de 61
-    itens numa amostra de 8 recebimentos). extrair_itens_do_recebimento
-    busca essa tabela pelo cabecalho (robusto a mudanca de layout, mesma
-    tecnica de stokki.pedidos.extrair_itens_do_pedido), NUNCA a outra.
+  - "Produto | Lote | Entrada | Fabricacao | Validade | Quantidade" <- a
+    preferida: lote e validade JA vem preenchidos na Stokki (61 de 61
+    itens numa amostra de 8 recebimentos).
+  - "NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
+    Unitario | Quantidade total recebida | Obs" <- FALLBACK (achado da
+    revisao, Hugo 22/09/2026, comparando PE-2440 x PE-2478): um
+    recebimento "Recebido" pode nao ter a aba "Detalhes de itens" (sem a
+    tabela de lote acima) e ainda assim ter mercadoria real, enderecavel,
+    nesta tabela -- descartar o recebimento inteiro jogaria fora entrada
+    de estoque de verdade (1 em 8 numa amostra, nao e caso raro).
 
-Decisao do Hugo (22/09/2026): lote e validade lidos aqui sao SUGESTAO --
-o operador confirma ou corrige na tela do celular (tarefa seguinte). Por
-isso o item extraido carrega "lote" e "validade" alem das chaves que
-extrair_itens_do_pedido ja usa (sku, ean_linha, descricao, qtd_embalagem,
-linha). Este endpoint nao tem coluna EAN -- ean_linha sai sempre vazio;
-quem resolve o produto (wms_pedidos.resolver_item) cai na regra por SKU.
+extrair_itens_do_recebimento busca a tabela de lote primeiro pelo
+cabecalho (robusto a mudanca de layout, mesma tecnica de
+stokki.pedidos.extrair_itens_do_pedido); se nao achar, cai pra tabela
+sem-lote (tambem por cabecalho -- SKU + Quantidade total recebida, nunca
+por posicao ou id). So se NENHUMA das duas existir e que devolve lista
+vazia (e quem chama, sim, trata como erro nesse caso).
+
+Decisao do Hugo (22/09/2026): lote e validade lidos da tabela preferida
+sao SUGESTAO -- o operador confirma ou corrige na tela do celular
+(tarefa seguinte). Por isso o item extraido carrega "lote" e "validade"
+alem das chaves que extrair_itens_do_pedido ja usa (sku, ean_linha,
+descricao, qtd_embalagem, linha), mais "lote_informado" (True/False) pra
+registrar_recebimento marcar o recebimento como "sem lote da Stokki"
+quando veio do fallback -- a tela do operador avisa que ali ele PRECISA
+digitar, em vez de so confirmar uma sugestao. Nenhuma das duas tabelas
+tem coluna EAN -- ean_linha sai sempre vazio; quem resolve o produto
+(wms_pedidos.resolver_item) cai na regra por SKU.
 """
 import logging
 import re
@@ -172,29 +185,64 @@ def extrair_cabecalho_da_linha(linha) -> dict:
 
 def extrair_itens_do_recebimento(html: str) -> list[dict]:
     """
-    Itens da tabela "Produto | Lote | Entrada | Fabricacao | Validade |
-    Quantidade" do detalhe de um recebimento -- e a que importa (lote e
-    validade JA vem preenchidos na Stokki). Busca pelo cabecalho, igual
-    stokki.pedidos.extrair_itens_do_pedido, pra nao confundir com a outra
-    tabela do detalhe (NR/ID/SKU/Nome/Localizacao/.../Valor Unitario).
+    Itens do detalhe de um recebimento. Tenta primeiro a tabela "Produto |
+    Lote | Entrada | Fabricacao | Validade | Quantidade" -- a que importa,
+    porque lote e validade JA vem preenchidos na Stokki. Busca pelo
+    cabecalho, igual stokki.pedidos.extrair_itens_do_pedido, pra nao
+    confundir com a outra tabela do detalhe.
 
-    Devolve lista vazia se a tabela nao existir (recebimento "Em transito"
-    ainda sem mercadoria chegada, ou "Recebido" sem a tabela -- os dois
-    casos vistos ao vivo).
+    FALLBACK (achado da revisao, Hugo 22/09/2026, comparando PE-2440 x
+    PE-2478): um recebimento "Recebido" pode nao ter a aba "Detalhes de
+    itens" (sem tabela de lote) e ainda assim ter mercadoria de verdade,
+    enderecavel, na outra tabela do detalhe -- "NR | ID | SKU | Nome |
+    Localizacao | Quantidade | unidade | Valor Unitario | Quantidade
+    total recebida | Obs". Descartar o recebimento inteiro jogaria fora
+    entrada real de estoque (1 em 8 numa amostra, nao e caso raro). Por
+    isso, se a tabela de lote nao existir, cai pra esta (tambem
+    encontrada por cabecalho -- SKU + Quantidade total recebida, nunca
+    por posicao). Cada item vem com lote="" e validade="" (sem sugestao)
+    e a chave "lote_informado": False, pra registrar_recebimento marcar
+    o recebimento como "sem lote da Stokki" -- a tela do operador avisa
+    que ali ele PRECISA digitar.
 
-    Nao ha coluna EAN nesta tabela -- ean_linha sempre vazio.
+    Usa "Quantidade total recebida" (nao "Quantidade") como qtd_embalagem
+    do fallback: e o que fisicamente chegou e vai ser guardado agora
+    ("Situacao: Recebido"), enquanto "Quantidade" e a nominal/esperada do
+    pedido de compra -- podem divergir num recebimento parcial, e o que
+    importa pra guardar no galpao e o que chegou de verdade.
+
+    Devolve lista vazia se NENHUMA das duas tabelas existir (recebimento
+    "Em transito" ainda sem mercadoria chegada, ou -- caso realmente sem
+    itens legiveis -- vira erro pra quem chama).
+
+    Nao ha coluna EAN em nenhuma das duas tabelas -- ean_linha sempre
+    vazio.
     """
     soup = BeautifulSoup(html, "html.parser")
-    tabela = None
-    for t in soup.find_all("table"):
-        cabecalhos = [th.get_text(strip=True).upper() for th in t.find_all("th")]
-        if ("PRODUTO" in cabecalhos and "LOTE" in cabecalhos
-                and "VALIDADE" in cabecalhos and "QUANTIDADE" in cabecalhos):
-            tabela = t
-            break
-    if tabela is None:
-        return []
 
+    tabela_lote = _achar_tabela_por_cabecalho(soup, {"PRODUTO", "LOTE", "VALIDADE", "QUANTIDADE"})
+    if tabela_lote is not None:
+        return _itens_da_tabela_de_lote(tabela_lote)
+
+    tabela_sem_lote = _achar_tabela_por_cabecalho(soup, {"SKU", "QUANTIDADE TOTAL RECEBIDA"})
+    if tabela_sem_lote is not None:
+        return _itens_da_tabela_sem_lote(tabela_sem_lote)
+
+    return []
+
+
+def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: set):
+    """Acha a <table> cujos <th> contenham TODOS os cabecalhos pedidos
+    (upper, exato) -- nunca escolhe por posicao ou id da tabela."""
+    for t in soup.find_all("table"):
+        cabecalhos = {th.get_text(strip=True).upper() for th in t.find_all("th")}
+        if cabecalhos_obrigatorios <= cabecalhos:
+            return t
+    return None
+
+
+def _itens_da_tabela_de_lote(tabela) -> list[dict]:
+    """Produto | Lote | Entrada | Fabricacao | Validade | Quantidade."""
     itens = []
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
@@ -218,6 +266,50 @@ def extrair_itens_do_recebimento(html: str) -> list[dict]:
             "qtd_embalagem": quantidade,
             "lote": lote,
             "validade": validade,
+            "lote_informado": True,
+        })
+    return itens
+
+
+def _itens_da_tabela_sem_lote(tabela) -> list[dict]:
+    """
+    Fallback: NR | ID | SKU | Nome | Localizacao | Quantidade | unidade |
+    Valor Unitario | Quantidade total recebida | Obs. Le por indice de
+    cabecalho (nunca posicao fixa) -- so usa SKU, Nome e Quantidade total
+    recebida; o resto (Localizacao, unidade, Valor Unitario, Obs) e
+    ignorado aqui.
+    """
+    indice = {}
+    for i, th in enumerate(tabela.find_all("th")):
+        nome = th.get_text(strip=True).upper()
+        if nome in ("SKU", "NOME", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
+            indice[nome] = i
+    if "SKU" not in indice or "QUANTIDADE TOTAL RECEBIDA" not in indice:
+        return []
+
+    itens = []
+    for tr in tabela.find_all("tr"):
+        celulas = tr.find_all("td")
+        if len(celulas) <= max(indice.values()):
+            continue  # cabecalho ou linha de rodape sem colunas suficientes
+        sku = celulas[indice["SKU"]].get_text(" ", strip=True)
+        if not sku:
+            continue  # linha de total ou celula vazia
+        descricao = celulas[indice["NOME"]].get_text(" ", strip=True) if "NOME" in indice else ""
+        bruta = celulas[indice["QUANTIDADE TOTAL RECEBIDA"]].get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            quantidade = float(bruta)
+        except ValueError:
+            continue
+        itens.append({
+            "linha": len(itens) + 1,
+            "sku": sku,
+            "ean_linha": "",
+            "descricao": descricao,
+            "qtd_embalagem": quantidade,
+            "lote": "",
+            "validade": "",
+            "lote_informado": False,
         })
     return itens
 

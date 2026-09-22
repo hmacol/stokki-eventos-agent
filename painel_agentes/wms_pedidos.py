@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS wms_recebimentos (
     situacao       TEXT NOT NULL DEFAULT '',
     chegada        TEXT NOT NULL DEFAULT '',
     estado         TEXT NOT NULL DEFAULT 'ESPERADO',  -- ESPERADO | ENDERECADO
+    sem_lote_na_stokki INTEGER NOT NULL DEFAULT 0,  -- 1 = veio so pela tabela sem lote (fallback); operador tem que digitar
     lido_em        TEXT NOT NULL,
     atualizado_em  TEXT NOT NULL
 );
@@ -508,24 +509,39 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     22/09/2026: 61 de 61 itens numa amostra) sao gravados como SUGESTAO
     (lote_sugerido/validade_sugerida) -- a tela do operador (tarefa
     seguinte) mostra editavel, nunca aplica em silencio.
+
+    Fallback (achado da revisao, 22/09/2026, PE-2440): quando o
+    recebimento nao tem a tabela de lote na Stokki, stokki.recebimentos
+    ja devolve os itens pela tabela sem lote, cada um marcado com
+    "lote_informado": False -- aqui isso vira sem_lote_na_stokki=1 no
+    cabecalho do recebimento, pra tela do operador avisar que ali ele
+    PRECISA digitar o lote, nao so confirmar uma sugestao.
     """
     id_stokki = int(recebimento["id_stokki"])
     agora = wms.agora()
+    # Todos os itens de um recebimento vem da MESMA tabela (lote ou
+    # fallback) -- basta olhar o primeiro. Sem itens, mantem o que ja
+    # estava gravado (nao ha update; so acontece se quem chamar passar
+    # lista vazia por engano, o que a rotina de lote nunca faz).
+    sem_lote_na_stokki = 1 if itens and not itens[0].get("lote_informado", True) else 0
+
     row = conn.execute("SELECT id FROM wms_recebimentos WHERE id_stokki = ?", (id_stokki,)).fetchone()
     if row:
         recebimento_id = row["id"]
         conn.execute(
             "UPDATE wms_recebimentos SET codigo = ?, embarcador = ?, situacao = ?, chegada = ?, "
-            "atualizado_em = ? WHERE id = ?",
+            "sem_lote_na_stokki = ?, atualizado_em = ? WHERE id = ?",
             (recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
-             recebimento.get("situacao", ""), recebimento.get("chegada", ""), agora, recebimento_id))
+             recebimento.get("situacao", ""), recebimento.get("chegada", ""),
+             sem_lote_na_stokki, agora, recebimento_id))
     else:
         cur = conn.execute("""
             INSERT INTO wms_recebimentos (id_stokki, codigo, embarcador, situacao, chegada, estado,
-                                          lido_em, atualizado_em)
-            VALUES (?,?,?,?,?,'ESPERADO',?,?)""",
+                                          sem_lote_na_stokki, lido_em, atualizado_em)
+            VALUES (?,?,?,?,?,'ESPERADO',?,?,?)""",
             (id_stokki, recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
-             recebimento.get("situacao", ""), recebimento.get("chegada", ""), agora, agora))
+             recebimento.get("situacao", ""), recebimento.get("chegada", ""),
+             sem_lote_na_stokki, agora, agora))
         recebimento_id = cur.lastrowid
 
     for item in itens:
