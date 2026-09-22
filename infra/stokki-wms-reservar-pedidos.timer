@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-wms-reservar-pedidos.service a cada 15 min (deslocado dos outros syncs)
+
+[Timer]
+OnCalendar=*-*-* *:04/15:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

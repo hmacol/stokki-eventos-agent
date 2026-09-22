@@ -443,3 +443,20 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                  (novo_estado, wms.agora(), pedido["id"]))
     conn.commit()
     return {"pedido_id": pedido["id"], "baixas": baixas, "ja_baixado": False, "erros": erros}
+
+
+def pendencias(conn, limite: int = 50) -> list[dict]:
+    """
+    Itens que nao viraram reserva -- produto ou unidade nao resolvidos.
+    Junta com o pedido pra dar contexto (codigo, embarcador, situacao),
+    e deixa de fora pedido ja CANCELADO (a pendencia dele nao importa mais).
+
+    Usado pela rotina de lote (sincronizar_pedidos_wms.py) pra logar o que
+    precisa de atencao manual, e pela tela do painel pra listar.
+    """
+    rows = conn.execute("""
+        SELECT i.*, p.codigo_ps, p.embarcador, p.situacao, p.estado_reserva
+          FROM wms_pedido_itens i JOIN wms_pedidos p ON p.id = i.pedido_id
+         WHERE i.motivo_pendencia <> '' AND p.estado_reserva <> 'CANCELADO'
+         ORDER BY p.id DESC, i.linha LIMIT ?""", (int(limite),)).fetchall()
+    return [dict(r) for r in rows]

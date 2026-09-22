@@ -609,5 +609,42 @@ class TestBaixaNaExpedicao(BaseWMS):
         self.assertEqual(reservas["C9-E2-N1"], "ATIVA")
 
 
+class TestPendencias(BaseWMS):
+    def test_pendencias_lista_item_nao_resolvido_com_o_pedido(self):
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 40001, "codigo_ps": "PS-40001", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "FANTASMA", "ean_linha": "000",
+              "descricao": "NAO EXISTE", "qtd_embalagem": 1}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        p = wms_pedidos.pendencias(self.conn)
+        self.assertEqual(len(p), 1)
+        self.assertEqual(p[0]["codigo_ps"], "PS-40001")
+        self.assertIn("nao encontrado", p[0]["motivo_pendencia"].lower())
+
+    def test_pedido_cancelado_nao_aparece_na_pendencia(self):
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 40002, "codigo_ps": "PS-40002", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "FANTASMA", "ean_linha": "000",
+              "descricao": "NAO EXISTE", "qtd_embalagem": 1}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        wms_pedidos.cancelar_reservas(self.conn, pid, "pedido cancelado na Stokki")
+        self.assertEqual(wms_pedidos.pendencias(self.conn), [])
+
+    def test_limite_corta_a_lista(self):
+        for i in range(3):
+            pid = wms_pedidos.registrar_pedido(
+                self.conn,
+                {"id_stokki": 41000 + i, "codigo_ps": f"PS-{41000 + i}", "embarcador": "MARIA DOLORES",
+                 "situacao": "Waiting for Carrier"},
+                [{"linha": 1, "sku": "FANTASMA", "ean_linha": "000",
+                  "descricao": "NAO EXISTE", "qtd_embalagem": 1}])
+            wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(len(wms_pedidos.pendencias(self.conn, limite=2)), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
