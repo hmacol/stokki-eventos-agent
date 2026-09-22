@@ -465,6 +465,109 @@ class TestBaixaNaExpedicao(BaseWMS):
         self.assertIsNone(r["pedido_id"])
         self.assertEqual(r["baixas"], 0)
 
+    # -- Correcao 1 da revisao (Achado 1, critical): a segunda reserva em
+    # diante nunca baixava -- o UPDATE de wms_reservas dentro do loop abria
+    # transacao implicita e o BEGIN IMMEDIATE da proxima reserva estourava,
+    # o except engolia e o rollback desfazia ate a reserva anterior. Os
+    # testes acima (pedido de 1 linha, 1 reserva) passavam sem cobrir isso.
+
+    def test_pedido_com_dois_itens_baixa_as_duas_linhas_sem_erro(self):
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (2, 901, 'SKU2', 'PRODUTO 2', 'MARIA DOLORES', "
+            "'333333333333', '444444444444', 1, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=2, quantidade=10,
+                                lote="L-X", validade="2026-11-01", destino="C9-E2-N1")
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39752, "codigo_ps": "PS-39752", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 2},
+             {"linha": 2, "sku": "SKU2", "ean_linha": "333333333333",
+              "descricao": "PRODUTO 2", "qtd_embalagem": 3}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39752")
+
+        self.assertEqual(r["baixas"], 2)
+        self.assertEqual(r["erros"], [])
+        n_saida = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"]
+        self.assertEqual(n_saida, 2)
+        consumidas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE pedido_id = ? AND estado = 'CONSUMIDA'",
+            (pid,)).fetchone()["n"]
+        self.assertEqual(consumidas, 2)
+
+    def test_item_dividido_em_dois_lotes_pelo_fefo_baixa_as_duas_reservas(self):
+        # o setUp deixa uma transacao pendente (registrar_pedido/reservar_pedido
+        # sem commit); fechar aqui pra poder chamar wms.registrar_movimento
+        # direto (BEGIN IMMEDIATE nao aceita rodar dentro de outra transacao)
+        self.conn.commit()
+        # segundo lote do mesmo produto, vencendo depois do L-A -- o FEFO
+        # esgota o L-A (sobrando 6 depois da reserva do setUp) e completa no L-B
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5,
+                                lote="L-B", validade="2026-11-01", destino="C9-E1-N2")
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39753, "codigo_ps": "PS-39753", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 8}])
+        r_reserva = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.assertEqual(r_reserva["estado"], "RESERVADO")
+        lotes_reservados = self.conn.execute(
+            "SELECT lote FROM wms_reservas WHERE pedido_id = ? AND estado = 'ATIVA' ORDER BY lote",
+            (pid,)).fetchall()
+        self.assertEqual([l["lote"] for l in lotes_reservados], ["L-A", "L-B"])  # confirma que dividiu
+
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39753")
+
+        self.assertEqual(r["baixas"], 2)
+        self.assertEqual(r["erros"], [])
+        uuids = sorted(m["uuid"] for m in self.conn.execute(
+            "SELECT mv.uuid FROM wms_movimentos mv "
+            "JOIN wms_reservas rv ON rv.movimento_uuid = mv.uuid "
+            "WHERE rv.pedido_id = ?", (pid,)).fetchall())
+        self.assertEqual(uuids, ["ps-39753-item-1-1", "ps-39753-item-1-2"])
+        consumidas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE pedido_id = ? AND estado = 'CONSUMIDA'",
+            (pid,)).fetchone()["n"]
+        self.assertEqual(consumidas, 2)
+
+    def test_baixar_duas_vezes_no_pedido_de_dois_itens_nao_baixa_em_dobro(self):
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (2, 901, 'SKU2', 'PRODUTO 2', 'MARIA DOLORES', "
+            "'333333333333', '444444444444', 1, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=2, quantidade=10,
+                                lote="L-X", validade="2026-11-01", destino="C9-E2-N1")
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39754, "codigo_ps": "PS-39754", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 2},
+             {"linha": 2, "sku": "SKU2", "ean_linha": "333333333333",
+              "descricao": "PRODUTO 2", "qtd_embalagem": 3}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        r1 = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39754")
+        r2 = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39754")
+
+        self.assertEqual(r1["baixas"], 2)
+        self.assertEqual(r1["erros"], [])
+        self.assertEqual(r2["baixas"], 0)
+        self.assertTrue(r2["ja_baixado"])
+        n_saida = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"]
+        self.assertEqual(n_saida, 2)  # nao dobrou na segunda chamada
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), 8)  # 10 - 2
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E2-N1", 2, "L-X", "2026-11-01"), 7)  # 10 - 3
+
 
 if __name__ == "__main__":
     unittest.main()

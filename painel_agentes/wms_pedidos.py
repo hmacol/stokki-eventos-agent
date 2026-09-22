@@ -355,7 +355,20 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
 
     O uuid do movimento e deterministico (ps-<id>-item-<linha>-<n>) e o
     registrar_movimento ja e idempotente por uuid: rodar duas vezes nao
-    baixa duas vezes. Um erro numa reserva nao derruba as outras.
+    baixa duas vezes. Um erro numa reserva nao derruba as outras -- cada
+    reserva e um movimento + um UPDATE que fecham a propria transacao
+    (commit por reserva, nao um so no fim): assim a reserva seguinte sempre
+    encontra a conexao limpa pro wms.registrar_movimento abrir a dele com
+    BEGIN IMMEDIATE.
+
+    ATENCAO -- esta funcao FAZ COMMIT. Da propria baixa (por reserva) e de
+    qualquer escrita pendente na conexao antes de comecar (ex.: um
+    registrar_pedido/reservar_pedido chamado antes, na mesma conexao, sem
+    commit). E proposital -- e como o resto da rotina de lote deste projeto
+    trabalha, pra nao segurar lock no dados.db (compartilhado com o painel,
+    ja derrubou o servico com "database is locked"). Por causa disso, NUNCA
+    chame esta funcao dentro de uma transacao do chamador que precise poder
+    desfazer tudo: ela nao pode ser embrulhada, so pode fechar.
     """
     id_stokki = _id_stokki_do_codigo(codigo_ps)
     if not id_stokki:
@@ -395,6 +408,14 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
             conn.execute(
                 "UPDATE wms_reservas SET estado = 'CONSUMIDA', movimento_uuid = ?, atualizado_em = ? WHERE id = ?",
                 (mov["uuid"], wms.agora(), r["id"]))
+            # Commit por reserva (nao um so no fim): fecha a transacao deste
+            # par movimento+UPDATE agora, pra reserva seguinte encontrar a
+            # conexao limpa. Sem isso, o UPDATE acima deixa uma transacao
+            # implicita aberta e o BEGIN IMMEDIATE da proxima reserva estoura
+            # "cannot start a transaction within a transaction" -- o except
+            # engolia o erro e o rollback do registrar_movimento desfazia ate
+            # o UPDATE da reserva anterior, que ja tinha saida gravada.
+            conn.commit()
             if not mov.get("duplicado"):
                 baixas += 1
         except Exception as e:  # noqa: BLE001 -- uma reserva ruim nao derruba a expedicao
