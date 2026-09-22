@@ -568,6 +568,46 @@ class TestBaixaNaExpedicao(BaseWMS):
         self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), 8)  # 10 - 2
         self.assertEqual(wms._saldo_atual(self.conn, "C9-E2-N1", 2, "L-X", "2026-11-01"), 7)  # 10 - 3
 
+    # -- Correcao 2 da revisao (Important): o pedido nao pode virar BAIXADO
+    # quando a baixa falhou parcialmente -- senao mascara a reserva orfa.
+
+    def test_falha_genuina_numa_reserva_deixa_o_pedido_parcial(self):
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, dun, qtd_por_caixa, "
+            "unidade, atualizado_em) VALUES (2, 901, 'SKU2', 'PRODUTO 2', 'MARIA DOLORES', "
+            "'333333333333', '444444444444', 1, 'UN', '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=2, quantidade=10,
+                                lote="L-X", validade="2026-11-01", destino="C9-E2-N1")
+        pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39755, "codigo_ps": "PS-39755", "embarcador": "MARIA DOLORES",
+             "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 2},
+             {"linha": 2, "sku": "SKU2", "ean_linha": "333333333333",
+              "descricao": "PRODUTO 2", "qtd_embalagem": 3}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        # falha genuina: a posicao de origem da linha 2 foi desativada entre
+        # a reserva e a expedicao (ex.: area em manutencao/bloqueio). Direto
+        # na tabela porque wms.desativar_posicao recusa desativar posicao
+        # com saldo -- exatamente o caso real que estamos simulando.
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 0 WHERE codigo = ?", ("C9-E2-N1",))
+        self.conn.commit()
+
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39755")
+
+        self.assertEqual(r["baixas"], 1)
+        self.assertTrue(r["erros"])
+        self.assertIn("linha 2", r["erros"][0])
+        estado_pedido = self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos WHERE id = ?", (pid,)).fetchone()["estado_reserva"]
+        self.assertEqual(estado_pedido, "PARCIAL")
+        reservas = {r2["posicao"]: r2["estado"] for r2 in self.conn.execute(
+            "SELECT posicao, estado FROM wms_reservas WHERE pedido_id = ?", (pid,)).fetchall()}
+        self.assertEqual(reservas["C9-E1-N1"], "CONSUMIDA")
+        self.assertEqual(reservas["C9-E2-N1"], "ATIVA")
+
 
 if __name__ == "__main__":
     unittest.main()

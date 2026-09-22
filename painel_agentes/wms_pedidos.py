@@ -361,6 +361,16 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     encontra a conexao limpa pro wms.registrar_movimento abrir a dele com
     BEGIN IMMEDIATE.
 
+    O pedido so vira 'BAIXADO' quando, no fim, nao sobra nenhuma reserva
+    ATIVA pra ele E nao houve erro nesta chamada -- checado consultando o
+    banco de novo (nao so a lista `erros` em memoria, que pode divergir).
+    Sobrando reserva ATIVA ou erro, fica 'PARCIAL' (o mesmo estado que o
+    resto do projeto usa pra "nao esta inteiro, olhe isto"): marcar
+    'BAIXADO' um pedido que baixou so uma parte esconderia a reserva orfa
+    que continua travando o disponivel. Uma chamada seguinte, depois do
+    problema resolvido, completa a baixa das reservas que sobraram ATIVAS
+    e o pedido termina 'BAIXADO' normalmente.
+
     ATENCAO -- esta funcao FAZ COMMIT. Da propria baixa (por reserva) e de
     qualquer escrita pendente na conexao antes de comecar (ex.: um
     registrar_pedido/reservar_pedido chamado antes, na mesma conexao, sem
@@ -420,7 +430,16 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                 baixas += 1
         except Exception as e:  # noqa: BLE001 -- uma reserva ruim nao derruba a expedicao
             erros.append(f"linha {r['linha']}: {e}")
-    conn.execute("UPDATE wms_pedidos SET estado_reserva = 'BAIXADO', atualizado_em = ? WHERE id = ?",
-                 (wms.agora(), pedido["id"]))
+
+    # Confere no banco (nao so na lista `erros` em memoria, que pode
+    # divergir) se sobrou reserva ATIVA pra este pedido. So marca BAIXADO
+    # quando a baixa saiu inteira; senao fica PARCIAL, pra nao mascarar
+    # uma reserva orfa como se o estoque estivesse certo.
+    restantes_ativas = conn.execute(
+        "SELECT COUNT(*) n FROM wms_reservas WHERE pedido_id = ? AND estado = 'ATIVA'",
+        (pedido["id"],)).fetchone()["n"]
+    novo_estado = "BAIXADO" if not restantes_ativas and not erros else "PARCIAL"
+    conn.execute("UPDATE wms_pedidos SET estado_reserva = ?, atualizado_em = ? WHERE id = ?",
+                 (novo_estado, wms.agora(), pedido["id"]))
     conn.commit()
     return {"pedido_id": pedido["id"], "baixas": baixas, "ja_baixado": False, "erros": erros}
