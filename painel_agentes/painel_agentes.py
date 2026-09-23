@@ -2933,16 +2933,31 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     volta no JSON pra tela poder dizer a verdade ao operador (e o e-mail
     nasce redirecionado pro interno enquanto o Hugo não ligar o envio
     real -- ver wms_faltas_recebimento).
+
+    Se o envio falhar, NÃO há reenvio automático: quem remanda é a equipe,
+    por `wms_faltas_recebimento.py --listar/--reenviar`. A falta fica
+    congelada em falta_un, então o relatório é remontado idêntico depois.
+
+    Repetir a chamada (resposta perdida no tablet, o operador aperta de
+    novo) é SUCESSO, não erro: o trabalho dele já está gravado. Nesse caso
+    a rota ainda tenta o e-mail -- se o primeiro deu certo, a idempotência
+    segura; se falhou, esta é uma segunda chance de graça.
     """
     op = _wms_exige_operador()
     body = request.get_json(force=True) or {}
     conn = wms_pedidos.conectar()
     try:
+        ja_encerrado = False
         try:
             r = wms_pedidos.encerrar_com_divergencia(
                 conn, recebimento_id, body.get("observacao") or "", operador=op)
         except (wms.ErroWMS, ValueError) as e:
-            return _wms_json_erro(e)
+            rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
+            if not (rec and rec["estado"] == "DIVERGENCIA"):
+                return _wms_json_erro(e)
+            ja_encerrado = True
+            r = {"recebimento": dict(rec),
+                 "faltas": wms_pedidos.faltas_congeladas(conn, recebimento_id)}
         try:
             envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
         except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
@@ -2950,7 +2965,8 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
             envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
     finally:
         conn.close()
-    return jsonify({"ok": True, "recebimento": r["recebimento"], "faltas": r["faltas"], "envio": envio})
+    return jsonify({"ok": True, "ja_encerrado": ja_encerrado, "recebimento": r["recebimento"],
+                    "faltas": r["faltas"], "envio": envio})
 
 
 @app.route("/wms/etiqueta-produto.pdf")

@@ -34,8 +34,23 @@ VPS (regra do projeto, CLAUDE.md).
 
 Nao ha rotina de lote nem timer: quem chama e a rota
 /api/wms/recebimentos/<id>/encerrar-divergencia do painel, logo depois de
-wms_pedidos.encerrar_com_divergencia. Falha de e-mail nunca desfaz o
-encerramento -- o recebimento ja esta encerrado, o e-mail se reenvia.
+wms_pedidos.encerrar_com_divergencia.
+
+QUANDO O ENVIO FALHA: o recebimento FICA encerrado (falha de SMTP nao
+desfaz a conferencia do galpao) e NAO ha reenvio automatico -- nenhum
+timer olha isso, e a rota recusa encerrar o mesmo recebimento de novo. O
+que salva o caso e a falta continuar congelada em falta_un: o relatorio
+pode ser remontado identico depois. Quem remanda e a equipe, por aqui:
+
+    py -3.11 painel_agentes/wms_faltas_recebimento.py --listar
+    py -3.11 painel_agentes/wms_faltas_recebimento.py --reenviar 2490 --modo-teste
+    py -3.11 painel_agentes/wms_faltas_recebimento.py --reenviar 2490
+    py -3.11 painel_agentes/wms_faltas_recebimento.py --reenviar 2490 --forcar
+
+--listar mostra os encerrados com divergencia sem relatorio enviado, que e
+exatamente a fila de reenvio: envio que FALHA nao entra em
+notificacoes_enviadas, so o que deu certo. --forcar remanda mesmo o que ja
+foi (cliente que diz nao ter recebido).
 """
 import html
 import logging
@@ -48,8 +63,12 @@ _RAIZ = Path(__file__).parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+
 import email_utils  # noqa: E402
 import preferencias_notificacao  # noqa: E402
+import wms_pedidos  # noqa: E402
 
 logger = logging.getLogger("wms_faltas_recebimento")
 
@@ -57,6 +76,7 @@ TIPO_NOTIFICACAO = "faltas_recebimento"
 SECAO_CONFIG = "notificacao_faltas_recebimento"
 EMAIL_TESTE = "hugo@freshlogbr.com"
 COPIA_INTERNA = "entregas@freshlogbr.com"
+URL_PORTAL = "https://app.freshhub.com.br/cliente"
 
 
 # --- Config -------------------------------------------------------------------
@@ -160,8 +180,22 @@ def registrar_envio(conn, chave: str) -> None:
 # --- E-mail -------------------------------------------------------------------
 
 def _num(valor) -> str:
-    """Numero do jeito que o cliente le: 27,5 -- nao 27.5."""
-    return f"{float(valor or 0):g}".replace(".", ",")
+    """
+    Numero EXATAMENTE como a tela do galpao mostra (num() do wms.html:
+    inteiro sem separador, quebrado com toLocaleString pt-BR). O operador
+    confere na tela e o cliente le no e-mail: os dois tem que dizer o
+    mesmo numero.
+
+    O `:g` de antes tinha 6 digitos significativos -- 123456.7 virava
+    "123457" (arredondava calado) e 1000000 virava "1e+06". Conta de
+    mercadoria que vira cobranca nao arredonda sozinha.
+    """
+    n = round(float(valor or 0), 3)
+    if n == int(n):
+        return str(int(n))
+    # f-string usa o formato en-US (1,234.5); troca pro pt-BR (1.234,5)
+    texto = f"{n:,.3f}".rstrip("0").rstrip(".")
+    return texto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
 def _data_amigavel(bruto: str) -> str:
@@ -225,11 +259,24 @@ def montar_email(rec: dict, faltas: list, nome_emb: str,
                  f"background-color:#FEF3C7;border-radius:6px;'><strong>Redirecionado (piloto).</strong> "
                  f"Destino real: {html.escape(', '.join(destino_original) or 'sem e-mail cadastrado')}</p>")
 
-    conferencia = []
-    if encerrado:
-        conferencia.append(f"em {html.escape(encerrado)}")
-    if (rec.get("encerrado_por") or "").strip():
-        conferencia.append(f"por {html.escape(rec['encerrado_por'])}")
+    # Ficha da carga: e com ela que o cliente cobra quem entregou. So o que
+    # ja esta no registro do recebimento (codigo, chegada, situacao na
+    # Stokki, embarcador) -- nada e buscado na Stokki pra montar o e-mail.
+    conferido = ", ".join(
+        p for p in (f"em {html.escape(encerrado)}" if encerrado else "",
+                    f"por {html.escape(rec['encerrado_por'])}" if (rec.get("encerrado_por") or "").strip() else "")
+        if p)
+    ficha = "".join(
+        f"<tr><td style='padding:3px 0;font-size:13px;color:{email_utils.COR_TEXTO_SUAVE};"
+        f"white-space:nowrap;'>{rotulo}&nbsp;&nbsp;</td>"
+        f"<td style='padding:3px 0;font-size:13px;color:{email_utils.COR_TEXTO};font-weight:600;'>{valor}</td></tr>"
+        for rotulo, valor in (
+            ("Recebimento", html.escape(codigo)),
+            ("Chegada no galpão", html.escape(chegada)),
+            ("Situação na Stokki", html.escape(str(rec.get("situacao") or ""))),
+            ("Destinatário", html.escape(str(rec.get("embarcador") or nome_emb))),
+            ("Conferência", conferido),
+        ) if valor)
 
     conteudo = f"""
     {aviso}
@@ -241,6 +288,8 @@ def montar_email(rec: dict, faltas: list, nome_emb: str,
       <strong>{quantos}</strong> chegaram em quantidade menor do que a anunciada.
       O que chegou já está no estoque; abaixo está a diferença.
     </p>
+    <table role="presentation" cellpadding="0" cellspacing="0"
+           style="margin:0 0 20px;border-collapse:collapse;">{ficha}</table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
            style="border:1px solid {email_utils.COR_BORDA};border-radius:8px;overflow:hidden;margin-bottom:20px;">
       <tr style="background-color:{email_utils.COR_PRIMARIA_CLARA};">{cab}</tr>
@@ -248,10 +297,14 @@ def montar_email(rec: dict, faltas: list, nome_emb: str,
     </table>
     {observacao}
     <p style="margin:0 0 24px;font-size:12px;color:{email_utils.COR_TEXTO_SUAVE};line-height:1.6;">
-      Quantidades conferidas na descarga, no galpão da Freshlog{(', ' + ', '.join(conferencia)) if conferencia else ''}.
+      Quantidades conferidas na descarga, no galpão da Freshlog.
       Itens que chegaram completos não aparecem nesta lista.<br>
       Se a diferença não bater com o que você enviou, responda este e-mail
       que verificamos junto com você.
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;color:{email_utils.COR_TEXTO};line-height:1.6;">
+      Seus pedidos e entregas continuam no
+      <a href="{URL_PORTAL}" style="color:#047857;font-weight:600;">portal do cliente</a>.
     </p>
     <p style="margin:0;font-size:14px;color:{email_utils.COR_TEXTO};line-height:1.6;">
       Atenciosamente,<br><strong>Freshlog Logística</strong>
@@ -264,12 +317,19 @@ def montar_email(rec: dict, faltas: list, nome_emb: str,
 # --- Execucao -----------------------------------------------------------------
 
 def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
-                     modo_teste: bool = False) -> dict:
+                     modo_teste: bool = False, forcar_reenvio: bool = False) -> dict:
     """
     Manda o relatorio de faltas de UM recebimento ja encerrado com
     divergencia. Nunca levanta por causa do e-mail -- quem chama e uma
     rota HTTP que ja encerrou o recebimento; devolve o que aconteceu, pra
     tela poder dizer a verdade ao operador.
+
+    Envio que FALHA nao e registrado em notificacoes_enviadas: e assim que
+    "ja foi enviado com sucesso" se distingue de "tentou e falhou", e e o
+    que deixa o --reenviar remandar sem precisar de nada extra.
+    `forcar_reenvio` passa por cima do registro (cliente que diz nao ter
+    recebido) -- nao confundir com a variavel local `forcar`, que e o
+    forcar_destino do config.
 
     `motivo` explica o que impediu o envio, quando nao houve:
       sem_faltas | nao_encerrado | desativado | sem_embarcador |
@@ -287,11 +347,7 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
         r["motivo"] = "nao_encerrado"
         return r
 
-    faltas = [dict(x) for x in conn.execute("""
-        SELECT i.*, COALESCE(p.unidade, 'UN') AS unidade
-          FROM wms_recebimento_itens i
-          LEFT JOIN wms_produtos p ON p.id = i.produto_id
-         WHERE i.recebimento_id = ? AND i.falta_un > 0 ORDER BY i.linha""", (int(recebimento_id),))]
+    faltas = wms_pedidos.faltas_congeladas(conn, recebimento_id)
     r["faltas"] = len(faltas)
     if not faltas:
         r["motivo"] = "sem_faltas"
@@ -324,7 +380,7 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
     destinos, redirecionado = resolver_destinos(emb["emails"], modo_teste, forcar)
     r["destinos"], r["redirecionado"] = destinos, redirecionado
     chave = _chave(rec.get("id_stokki"), redirecionado)
-    if not modo_teste and ja_enviado(conn, chave):
+    if not modo_teste and not forcar_reenvio and ja_enviado(conn, chave):
         r["motivo"] = "ja_enviado"
         return r
 
@@ -342,3 +398,68 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
     else:
         r["motivo"] = "falha_no_envio"
     return r
+
+
+# --- Linha de comando: reenvio manual -----------------------------------------
+# O envio acontece uma vez so, dentro da rota do encerramento. Se o SMTP
+# falhar ali, o recebimento JA esta encerrado e a rota nao aceita encerrar
+# de novo -- sem isto aqui, o cliente nunca seria avisado e a unica pista
+# seria um toast vermelho que o operador fecha. A falta continua congelada
+# em falta_un, entao o relatorio pode ser remontado identico depois.
+
+def pendentes_de_envio(conn) -> list:
+    """Recebimentos encerrados com divergencia cujo relatorio nunca foi
+    enviado com sucesso -- o que a equipe precisa reenviar."""
+    _garantir_tabela(conn)
+    return [dict(r) for r in conn.execute("""
+        SELECT r.* FROM wms_recebimentos r
+         WHERE r.estado = 'DIVERGENCIA'
+           AND NOT EXISTS (SELECT 1 FROM notificacoes_enviadas n
+                            WHERE n.tipo = ? AND (n.chave = CAST(r.id_stokki AS TEXT)
+                                                  OR n.chave = CAST(r.id_stokki AS TEXT) || '|redirecionado'))
+         ORDER BY r.encerrado_em""", (TIPO_NOTIFICACAO,))]
+
+
+def _carregar_config_yaml() -> dict:
+    import yaml
+    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--listar", action="store_true",
+                    help="recebimentos encerrados com divergencia sem relatorio enviado")
+    ap.add_argument("--reenviar", type=int, metavar="ID_STOKKI",
+                    help="reenvia o relatorio de um recebimento (o id da Stokki, ex.: 2490)")
+    ap.add_argument("--forcar", action="store_true",
+                    help="reenvia mesmo que ja tenha sido enviado com sucesso")
+    ap.add_argument("--modo-teste", action="store_true", help="manda pro e-mail interno e nao grava envio")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+
+    conn = wms_pedidos.conectar()
+    try:
+        if args.listar or not args.reenviar:
+            fila = pendentes_de_envio(conn)
+            for rec in fila:
+                print(f"  {rec['id_stokki']}  {rec['codigo']}  encerrado {rec['encerrado_em']}  "
+                      f"{rec['embarcador']}")
+            print(f"{len(fila)} recebimento(s) sem relatorio enviado.")
+            if not args.reenviar:
+                return 0
+        rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = ?", (args.reenviar,)).fetchone()
+        if not rec:
+            print(f"Recebimento {args.reenviar} nao existe no WMS.")
+            return 1
+        r = notificar_faltas(conn, rec["id"], _carregar_config_yaml(),
+                             modo_teste=args.modo_teste, forcar_reenvio=args.forcar)
+        print(r)
+        return 0 if r["enviado"] else 1
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -741,9 +741,13 @@
     try {
       const resp = await api('/recebimentos/' + r.id + '/encerrar-divergencia', { method: 'POST', body: { observacao: obs } });
       const envio = resp.envio || {};
-      toast(envio.enviado
-        ? 'Encerrado. Relatório enviado para ' + (envio.destinos || []).join(', ')
-        : 'Encerrado, mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + ')', !envio.enviado);
+      // resp.ja_encerrado: resposta perdida e nova tentativa -- o trabalho
+      // dele já estava gravado, então isso é sucesso, não erro.
+      const feito = resp.ja_encerrado ? 'Já estava encerrado' : 'Encerrado';
+      const ok = envio.enviado || envio.motivo === 'ja_enviado';
+      toast(ok
+        ? feito + '. Relatório ' + (envio.enviado ? 'enviado para ' + (envio.destinos || []).join(', ') : 'já havia sido enviado')
+        : feito + ', mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + '). Avise a equipe.', !ok);
       ir('receber', {}, false);
     } catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }

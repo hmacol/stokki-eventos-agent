@@ -258,6 +258,129 @@ class TestRelatorio(Base):
         self.assertEqual(envio.chamadas, [])
 
 
+class TestNumeroComoATelaMostra(unittest.TestCase):
+    """O `:g` de antes tinha 6 digitos significativos: 123456,7 virava
+    "123457" (arredondava calado) e 1000000 virava "1e+06". O operador
+    confere na tela (num() do wms.html) e o cliente le no e-mail -- os dois
+    tem que dizer o mesmo numero, porque isso vira cobranca."""
+
+    def test_nao_arredonda_e_nao_vira_notacao_cientifica(self):
+        self.assertEqual(faltas_mod._num(123456.7), "123.456,7")
+        self.assertEqual(faltas_mod._num(1000000), "1000000")
+
+    def test_inteiro_sem_separador_e_quebrado_em_pt_br(self):
+        # mesmo criterio do num() da tela: Number.isInteger -> String(n)
+        self.assertEqual(faltas_mod._num(4), "4")
+        self.assertEqual(faltas_mod._num(27.5), "27,5")
+        self.assertEqual(faltas_mod._num(0.5), "0,5")
+        self.assertEqual(faltas_mod._num(0), "0")
+        self.assertEqual(faltas_mod._num(1234.125), "1.234,125")
+
+
+class TestReenvioManual(Base):
+    """Falha de SMTP nao tem reenvio automatico -- a rota nao aceita
+    encerrar de novo. O que salva o cliente de nunca ser avisado e a fila
+    de reenvio da equipe."""
+
+    def _encerrar(self):
+        self._enderecar(1, 6)
+        wms_pedidos.encerrar_com_divergencia(self.conn, self.rid, "nao veio", operador={"nome": "Jonas"})
+
+    def test_envio_que_falhou_fica_na_fila_e_o_que_deu_certo_sai(self):
+        self._encerrar()
+        self._notificar(envio=EnvioFalso(ok=False))
+        fila = faltas_mod.pendentes_de_envio(self.conn)
+        self.assertEqual([r["id_stokki"] for r in fila], [2490])
+        r, _ = self._notificar()
+        self.assertTrue(r["enviado"])
+        self.assertEqual(faltas_mod.pendentes_de_envio(self.conn), [])
+
+    def test_reenvio_repete_a_falta_congelada_mesmo_se_a_stokki_mudar(self):
+        self._encerrar()
+        self._notificar(envio=EnvioFalso(ok=False))
+        # a Stokki reescreve a quantidade anunciada depois do encerramento
+        wms_pedidos.registrar_recebimento(
+            self.conn, {"id_stokki": 2490, "codigo": "#PE-2490", "stkkc_id": STKKC_ID},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "", "descricao": "FILE DE TILAPIA 1KG",
+              "qtd_embalagem": 6}])
+        self.conn.commit()
+        r, envio = self._notificar()
+        self.assertTrue(r["enviado"])
+        self.assertIn("4 UN", envio.chamadas[0]["corpo"])
+
+    def test_forcar_remanda_o_que_ja_tinha_sido_enviado(self):
+        self._encerrar()
+        self._notificar()
+        envio = EnvioFalso()
+        r = faltas_mod.notificar_faltas(self.conn, self.rid, self.config, enviar=envio,
+                                        forcar_reenvio=True)
+        self.assertTrue(r["enviado"])
+        self.assertEqual(len(envio.chamadas), 1)
+
+    def test_linha_de_comando_reenvia_de_verdade(self):
+        """--reenviar e o unico caminho de recuperacao que existe: tem que
+        funcionar de ponta a ponta, nao so as funcoes por baixo."""
+        from unittest import mock
+        self._encerrar()
+        self._notificar(envio=EnvioFalso(ok=False))
+        envio = EnvioFalso()
+        conectar = wms_pedidos.conectar   # o modulo e o mesmo objeto: guarda antes de trocar
+        with mock.patch.object(faltas_mod.wms_pedidos, "conectar",
+                               side_effect=lambda *a, **k: conectar(self.db)), \
+             mock.patch.object(faltas_mod, "_carregar_config_yaml", return_value=self.config), \
+             mock.patch.object(faltas_mod.email_utils, "enviar_email", envio):
+            self.assertEqual(faltas_mod.main(["--reenviar", "2490"]), 0)
+        self.assertEqual(len(envio.chamadas), 1)
+        self.assertEqual(envio.chamadas[0]["para"], ["hugo@freshlogbr.com"])
+        self.assertEqual(faltas_mod.pendentes_de_envio(self.conn), [])
+
+    def test_forcar_destino_preenchido_nao_desliga_a_idempotencia(self):
+        """`forcar` (destino do config) e `forcar_reenvio` sao coisas
+        diferentes -- confundir os dois mandava o e-mail duas vezes."""
+        self._encerrar()
+        envio = EnvioFalso()
+        self._notificar(envio=envio)
+        self._notificar(envio=envio)
+        self.assertEqual(len(envio.chamadas), 1)
+
+
+class TestEmailIdentificaACarga(Base):
+    def test_ficha_da_carga_e_link_do_portal(self):
+        self._enderecar(1, 6)
+        wms_pedidos.encerrar_com_divergencia(self.conn, self.rid, "nao veio", operador={"nome": "Jonas"})
+        _, envio = self._notificar()
+        corpo = envio.chamadas[0]["corpo"]
+        for texto in ("#PE-2490", "Chegada no galpão", "23/09/2026", "Situação na Stokki", "Recebido",
+                      "Destinatário", "MARIA DOLORES", "Conferência", "Jonas",
+                      "https://app.freshhub.com.br/cliente"):
+            self.assertIn(texto, corpo)
+
+
+class TestUmCriterioSo(Base):
+    """Fechar sozinho e "nao ha falta nenhuma" -- a mesma funcao decide as
+    duas coisas. Enquanto eram duas comparacoes iguais em lugares
+    diferentes, divergir criava o recebimento que nao fecha e tambem nao
+    tem falta pra reportar."""
+
+    def test_fecha_sozinho_exatamente_quando_nao_ha_falta(self):
+        for linha, qtd in ((1, 4), (1, 6), (2, 6)):
+            self._enderecar(linha, qtd)
+            estado = self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?",
+                                       (self.rid,)).fetchone()[0]
+            sem_falta = not wms_pedidos.faltas_do_recebimento(self.conn, self.rid)
+            self.assertEqual(estado == "ENDERECADO", sem_falta,
+                             f"depois de {qtd} na linha {linha}: estado={estado}, sem_falta={sem_falta}")
+
+    def test_enderecamento_atrasado_nao_apaga_o_encerramento_com_divergencia(self):
+        self._enderecar(1, 6)
+        self._enderecar(2, 6)
+        wms_pedidos.encerrar_com_divergencia(self.conn, self.rid, "nao veio")
+        self._enderecar(1, 4)   # a mercadoria apareceu depois
+        self.assertEqual(
+            self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (self.rid,)).fetchone()[0],
+            "DIVERGENCIA")
+
+
 class TestPreferenciaNova(unittest.TestCase):
     """O tipo novo entrou em preferencias_notificacao.TIPOS, entao o botao
     Notificacoes do portal ja o mostra -- e o banco que ja existe (a VPS)
@@ -324,6 +447,12 @@ class TestTelaDoGalpao(unittest.TestCase):
 
     def test_linha_sem_produto_no_catalogo_nao_entra_nas_faltas_da_tela(self):
         self.assertIn(".filter((it) => it.produto_id && it.qtd_un !== null && it.falta > 0)", self._WMS)
+
+    def test_tentativa_repetida_nao_aparece_como_erro_pro_operador(self):
+        """Resposta perdida no tablet + novo toque: o trabalho dele ja foi
+        gravado, entao a tela mostra sucesso."""
+        self.assertIn("resp.ja_encerrado", self._WMS)
+        self.assertIn("envio.motivo === 'ja_enviado'", self._WMS)
 
 
 if __name__ == "__main__":

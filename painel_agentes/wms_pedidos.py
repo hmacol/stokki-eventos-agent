@@ -857,11 +857,18 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
         conn.execute(
             "UPDATE wms_recebimento_itens SET qtd_enderecada = ROUND(qtd_enderecada + ?, 3) WHERE id = ?",
             (qtd, int(item_id)))
-    pendentes = conn.execute(
-        "SELECT COUNT(*) n FROM wms_recebimento_itens WHERE recebimento_id = ? AND produto_id IS NOT NULL "
-        "AND ROUND(qtd_enderecada, 3) < ROUND(qtd_un, 3)", (int(recebimento_id),)).fetchone()["n"]
-    if pendentes == 0:
-        conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? WHERE id = ?",
+    # "Fecha sozinho" e exatamente "nao ha falta nenhuma": e a MESMA funcao
+    # que decide o que vai no relatorio de faltas do cliente, de proposito.
+    # Enquanto eram duas comparacoes iguais escritas em lugares diferentes
+    # (uma em SQL aqui, outra em Python la), qualquer mexida numa delas
+    # criava em silencio o recebimento que nao fecha automatico e tambem nao
+    # tem falta pra reportar -- o operador ficaria sem saida nenhuma.
+    if not faltas_do_recebimento(conn, recebimento_id):
+        # So o ESPERADO vira ENDERECADO: recebimento ja encerrado com
+        # DIVERGENCIA (relatorio enviado ao cliente) nao pode ser apagado
+        # por um enderecamento atrasado.
+        conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? "
+                     "WHERE id = ? AND estado = 'ESPERADO'",
                      (wms.agora(), int(recebimento_id)))
     conn.commit()
     return {
@@ -884,11 +891,9 @@ def faltas_do_recebimento(conn, recebimento_id: int) -> list[dict]:
     uma falta que nunca houve. Essa linha continua visivel na tela do
     galpao como pendencia, que e onde ela se resolve.
 
-    O criterio (as duas quantidades arredondadas a 3 casas) e exatamente o
-    complemento do que fecha o recebimento sozinho em
-    contabilizar_enderecamento -- tem que ser o mesmo, senao existiria
-    recebimento que nao fecha automatico e tambem nao tem falta nenhuma
-    pra reportar, e o operador ficaria sem saida.
+    E a MESMA funcao que contabilizar_enderecamento usa pra decidir se o
+    recebimento fecha sozinho ("fecha" = esta lista vazia), pra nao existir
+    dois criterios espelhados que possam divergir numa mexida futura.
     """
     rows = conn.execute("""
         SELECT i.*, COALESCE(p.unidade, 'UN') AS unidade
@@ -905,6 +910,20 @@ def faltas_do_recebimento(conn, recebimento_id: int) -> list[dict]:
         d["falta_un"] = falta
         faltas.append(d)
     return faltas
+
+
+def faltas_congeladas(conn, recebimento_id: int) -> list[dict]:
+    """
+    A falta que FICOU GRAVADA no encerramento com divergencia (falta_un),
+    nao a recalculada. E o que o relatorio manda pro cliente e o que o
+    reenvio tem que repetir palavra por palavra meses depois, mesmo que a
+    quantidade anunciada mude na Stokki.
+    """
+    return [dict(r) for r in conn.execute("""
+        SELECT i.*, COALESCE(p.unidade, 'UN') AS unidade
+          FROM wms_recebimento_itens i
+          LEFT JOIN wms_produtos p ON p.id = i.produto_id
+         WHERE i.recebimento_id = ? AND i.falta_un > 0 ORDER BY i.linha""", (int(recebimento_id),))]
 
 
 def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
