@@ -35,10 +35,10 @@
 </section>
 
 <section class="bloco-estoque">
-  <h2>Pendências <small>(itens que não viraram reserva -- produto ou unidade não resolvidos)</small></h2>
+  <h2>Pendências <small>(itens que não viraram reserva inteira -- cadastro a corrigir ou estoque a endereçar)</small></h2>
   <table class="tabela-estoque" id="tab-pendencias">
-    <thead><tr><th>Pedido</th><th>Linha</th><th>Descrição</th><th>Motivo</th></tr></thead>
-    <tbody><tr><td colspan="4" class="vazio">Carregando…</td></tr></tbody>
+    <thead><tr><th>Pedido</th><th>Linha</th><th>Descrição</th><th>Tipo</th><th>Motivo</th></tr></thead>
+    <tbody><tr><td colspan="5" class="vazio">Carregando…</td></tr></tbody>
   </table>
 </section>
 
@@ -68,7 +68,7 @@
         <tr><td><strong>${esc(p.codigo_ps)}</strong></td>
             <td>${esc(p.embarcador)}</td>
             <td>${esc(p.situacao)}</td>
-            <td><span class="badge ${CHIP[p.estado_reserva] || 'badge-nunca'}">${esc(p.estado_reserva)}</span></td>
+            <td><span class="badge ${CHIP[p.estado_reserva] || 'badge-nunca'}">${esc(p.estado_reserva)}</span>${p.saldo_negativo ? ` <span class="badge badge-erro" title="${esc(p.saldo_negativo)}">saldo negativo</span>` : ''}</td>
             <td>${p.reservas_ativas} / ${p.itens}</td>
             <td>${p.pendencias ? p.pendencias + ' pendência(s)' : '—'}</td></tr>`).join('')
         || '<tr><td colspan="6" class="vazio">Nenhum pedido espelhado ainda.</td></tr>';
@@ -85,10 +85,12 @@
       const { pendencias } = await r.json();
       corpo.innerHTML = pendencias.map((p) => `
         <tr><td>${esc(p.codigo_ps)}</td><td>${p.linha}</td>
-            <td>${esc(p.descricao)}</td><td>${esc(p.motivo_pendencia)}</td></tr>`).join('')
-        || '<tr><td colspan="4" class="vazio">Nenhuma pendência -- todos os itens resolveram.</td></tr>';
+            <td>${esc(p.descricao)}</td>
+            <td><span class="badge ${p.tipo_pendencia === 'SALDO' ? 'badge-rodando' : 'badge-erro'}">${p.tipo_pendencia === 'SALDO' ? 'sem saldo' : 'cadastro'}</span></td>
+            <td>${esc(p.motivo || p.motivo_pendencia)}</td></tr>`).join('')
+        || '<tr><td colspan="5" class="vazio">Nenhuma pendência -- todos os itens resolveram.</td></tr>';
     } catch (e) {
-      corpo.innerHTML = '<tr><td colspan="4" class="vazio">' + esc(e.message) + '</td></tr>';
+      corpo.innerHTML = '<tr><td colspan="5" class="vazio">' + esc(e.message) + '</td></tr>';
     }
   }
 

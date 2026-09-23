@@ -89,6 +89,7 @@
   .item .qtd small { display: block; font-size: 10.5px; color: var(--texto-suave); font-weight: 600; }
   .item.venc { border-left: 4px solid var(--erro); }
   .item.perto { border-left: 4px solid var(--rodando); }
+  .item.escolhido { outline: 2px solid var(--acento); outline-offset: 1px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
   .badge-erro { background: var(--erro-bg); color: var(--erro); }
   .badge-atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
@@ -732,13 +733,17 @@
     if (!(qtd > 0)) return toast('Informe a quantidade.', true);
     if (!posicao) return toast('Leia a etiqueta da posição.', true);
     const btn = document.querySelector('[data-confirmar="' + i + '"]'); btn.disabled = true;
+    // O MESMO uuid vai nas duas chamadas: a entrada em si já é idempotente
+    // por uuid, e a contabilização passou a ser também -- resposta perdida
+    // + nova tentativa não pode somar duas vezes no que já foi endereçado.
+    const idMov = uuid();
     try {
       await api('/movimentos', { method: 'POST', body: {
-        uuid: uuid(), tipo: 'ENTRADA', produto_id: it.produto_id, lote, validade, quantidade: qtd, destino: posicao,
+        uuid: idMov, tipo: 'ENTRADA', produto_id: it.produto_id, lote, validade, quantidade: qtd, destino: posicao,
         observacao: 'Recebimento ' + r.codigo + ' linha ' + it.linha,
         criado_em: new Date().toISOString().slice(0, 19).replace('T', ' '), operador: S.operador,
       } });
-      await api('/recebimentos/' + r.id + '/itens/' + it.id + '/enderecar', { method: 'POST', body: { qtd } });
+      await api('/recebimentos/' + r.id + '/itens/' + it.id + '/enderecar', { method: 'POST', body: { qtd, uuid: idMov } });
       toast('Entrada registrada em ' + posicao);
       abrirRecebimento(r.id);
     } catch (e) {
@@ -779,13 +784,13 @@
     <div class="leitura">
       <input type="text" id="campo-bip-sep" data-foco inputmode="none" placeholder="Bipe a etiqueta do lote que você pegou" autocomplete="off">
       <button type="button" class="btn-cam" id="btn-cam-sep">📷</button>
-      <div class="dica">bipar um lote diferente do sugerido troca a reserva pra esse lote</div>
+      <div class="dica">bipar o lote sugerido confirma; bipar outro troca a reserva pra esse lote. Mesmo produto em mais de uma linha: toque na linha antes de bipar</div>
     </div>
     <div class="lista">${sep.map((r) => `
-      <div class="item ${r.origem === 'MANUAL' ? 'perto' : ''}" data-res="${r.id}" style="cursor:default">
+      <div class="item ${r.origem === 'MANUAL' ? 'perto' : ''} ${ctx.reservaSel === r.id ? 'escolhido' : ''}" data-res="${r.id}">
         <div class="cod">${esc(r.descricao)}</div>
         <div class="qtd">${num(r.quantidade_un)}<small>${esc(r.unidade)}</small></div>
-        <div class="meta"><span class="mono">${esc(r.posicao)}</span> · lote ${esc(r.lote || '-')}${r.validade ? ' · val. ' + dataBr(r.validade) : ''}${r.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">trocado</span>' : ''}</div>
+        <div class="meta">linha ${r.linha} · <span class="mono">${esc(r.posicao)}</span> · lote ${esc(r.lote || '-')}${r.validade ? ' · val. ' + dataBr(r.validade) : ''}${r.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">trocado</span>' : ''}</div>
       </div>`).join('') || '<div class="vazio">Sem reserva ativa pra este pedido.</div>'}</div>`;
   };
   TELAS_POS.separacao = (ctx) => {
@@ -798,22 +803,37 @@
       try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
       if (r.tipo !== 'produto_lote') { toast('Bipe a etiqueta de mercadoria (com QR de lote), não a de posição.', true); return; }
       const sep = ctx.separacao || [];
-      const alvo = sep.find((s) => r.produtos.some((p) => p.id === s.produto_id));
-      if (!alvo) { toast('Esse produto não está na separação deste pedido.', true); return; }
+      // Casa pela LINHA da separação, não pelo produto: o mesmo SKU aparece
+      // em mais de uma linha do pedido (a linha é por embalagem) e casar
+      // por produto trocava o lote da linha errada.
+      const candidatos = sep.filter((s) => r.produtos.some((p) => p.id === s.produto_id));
+      if (!candidatos.length) { toast('Esse produto não está na separação deste pedido.', true); return; }
+      let alvo = candidatos.find((s) => s.id === ctx.reservaSel);
+      if (!alvo && candidatos.length === 1) alvo = candidatos[0];
+      if (!alvo) { toast('Esse produto está em mais de uma linha: toque na linha que você está separando e bipe de novo.', true); return; }
       const produto = r.produtos.find((p) => p.id === alvo.produto_id);
       const nosSaldos = (produto.saldos || []).filter((s) => (s.lote || '') === (r.lote || ''));
       let posicao = nosSaldos.length === 1 ? nosSaldos[0].posicao : null;
       if (!posicao) posicao = prompt('Em qual posição você pegou o lote ' + (r.lote || '(sem lote)') + '?', (nosSaldos[0] || {}).posicao || '');
       if (!posicao) return;
       try {
-        await api('/reservas/' + alvo.id + '/trocar-lote', { method: 'POST', body: { posicao: posicao.trim().toUpperCase(), lote: r.lote, validade: r.validade || null } });
-        toast('Lote trocado: ' + posicao.trim().toUpperCase());
+        const resp = await api('/reservas/' + alvo.id + '/trocar-lote', { method: 'POST', body: { posicao: posicao.trim().toUpperCase(), lote: r.lote, validade: r.validade || null } });
+        // Bipar o mesmo lote da reserva é confirmação, não troca.
+        toast(resp.reserva && resp.reserva.confirmada
+          ? 'Lote confirmado: ' + posicao.trim().toUpperCase()
+          : 'Lote trocado: ' + posicao.trim().toUpperCase());
         abrirSeparacao(ctx.pedido.id);
       } catch (e) {
         if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
         else toast(e.message, true);
       }
     }
+    // Toque na linha = "é esta que eu estou separando" -- desempata quando o
+    // mesmo produto está em mais de uma linha do pedido.
+    app.querySelectorAll('[data-res]').forEach((x) => x.addEventListener('click', () => {
+      ctx.reservaSel = Number(x.dataset.res);
+      app.querySelectorAll('[data-res]').forEach((y) => y.classList.toggle('escolhido', y === x));
+    }));
     campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = campo.value.trim(); campo.value = ''; if (v) bipar(v); } });
     document.getElementById('btn-cam-sep').addEventListener('click', () => abrirCamera(bipar));
   };

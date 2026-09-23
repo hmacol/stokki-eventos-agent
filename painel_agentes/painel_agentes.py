@@ -2815,9 +2815,10 @@ def api_wms_recebimento(recebimento_id):
         rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
         if not rec:
             return _wms_json_erro("Recebimento não encontrado.", 404)
-        itens = [dict(r) for r in conn.execute(
-            "SELECT * FROM wms_recebimento_itens WHERE recebimento_id = ? ORDER BY linha", (recebimento_id,))]
-        return jsonify({"recebimento": dict(rec), "itens": itens})
+        # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
+        # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
+        return jsonify({"recebimento": dict(rec),
+                        "itens": wms_pedidos.itens_do_recebimento(conn, recebimento_id)})
     finally:
         conn.close()
 
@@ -2835,33 +2836,25 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     (produto nao encontrado no catalogo) nunca entra nessa conta: ela so
     aparece na tela como aviso, nunca trava o fechamento do recebimento.
 
+    Idempotente pelo `uuid` do movimento de ENTRADA que o aparelho já
+    mandou: resposta perdida + nova tentativa não conta duas vezes (a
+    lógica está em wms_pedidos.contabilizar_enderecamento).
+
     registrar_recebimento (Task 8) nunca reverte ENDERECADO pra ESPERADO;
     esta rota so anda pra frente, pelo mesmo motivo.
     """
     _wms_exige_operador()
     body = request.get_json(force=True) or {}
-    qtd = float(body.get("qtd") or 0)
     conn = wms_pedidos.conectar()
     try:
-        item = conn.execute(
-            "SELECT * FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",
-            (item_id, recebimento_id)).fetchone()
-        if not item:
-            return _wms_json_erro("Item do recebimento não encontrado.", 404)
-        nova_qtd = round((item["qtd_enderecada"] or 0) + qtd, 3)
-        conn.execute("UPDATE wms_recebimento_itens SET qtd_enderecada = ? WHERE id = ?", (nova_qtd, item_id))
-        pendentes = conn.execute(
-            "SELECT COUNT(*) n FROM wms_recebimento_itens WHERE recebimento_id = ? AND produto_id IS NOT NULL "
-            "AND ROUND(qtd_enderecada, 3) < ROUND(qtd_un, 3)", (recebimento_id,)).fetchone()["n"]
-        if pendentes == 0:
-            conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? WHERE id = ?",
-                         (wms.agora(), recebimento_id))
-        conn.commit()
-        item_novo = dict(conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?", (item_id,)).fetchone())
-        rec = dict(conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone())
-        return jsonify({"ok": True, "item": item_novo, "recebimento": rec})
+        r = wms_pedidos.contabilizar_enderecamento(
+            conn, recebimento_id, item_id, body.get("qtd") or 0, body.get("uuid") or "")
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
     finally:
         conn.close()
+    return jsonify({"ok": True, "item": r["item"], "recebimento": r["recebimento"],
+                    "duplicado": r["duplicado"]})
 
 
 @app.route("/wms/etiqueta-produto.pdf")
