@@ -1413,7 +1413,24 @@
      contexto -- não há botão direito no touch) e a seleção do pool ganha
      "Adicionar à rota…" (substitui o arrastar pool→rota). */
   .abas-mobile, .painel-mais-mobile, .botao-menu-parada, #select-adicionar-rota { display: none; }
-  html.modo-mobile .sidebar { display: none; }
+  /* Sidebar no celular (23/09): até 760px ela é a gaveta do base.html
+     (☰). Aqui o ☰ vira um botão só de ícone preso à esquerda do topo
+     fixo, em vez da faixa "Menu" de largura inteira, que também é
+     sticky em top:0 e cobriria a barra de data/KPIs. Entre 761 e 820px
+     (ou ?modo=mobile no desktop) a gaveta não existe e a sidebar
+     continua escondida, como antes. */
+  @media (min-width: 761px) {
+    html.modo-mobile .sidebar { display: none; }
+  }
+  @media (max-width: 760px) {
+    html.modo-mobile .abre-menu {
+      position: fixed; top: 0; left: 0; z-index: 75;
+      width: 44px; min-height: 0; height: var(--altura-topo-mobile, 56px);
+      padding: 0; justify-content: center;
+      border-bottom: none; border-right: 1px solid var(--borda);
+    }
+    html.modo-mobile .abre-menu span { display: none; }
+  }
   html.modo-mobile .area-conteudo { width: 100%; }
   html.modo-mobile main, html.modo-mobile.tema-escuro main {
     max-width: none; border-radius: 0;
@@ -1433,6 +1450,11 @@
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   html.modo-mobile .barra-controle::-webkit-scrollbar { display: none; }
+  /* espaço do ☰ fixo à esquerda (ver "Sidebar no celular" acima); fica
+     depois do padding do topo fixo pra ganhar dele */
+  @media (max-width: 760px) {
+    html.modo-mobile .barra-controle { padding-left: 52px; }
+  }
   /* degradê na borda direita: a tira rola de lado com a barra de rolagem
      escondida, sem ele nada indica que há mais chips à direita */
   html.modo-mobile .barra-controle {
