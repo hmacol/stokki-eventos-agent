@@ -21,6 +21,33 @@ def conteudo_qr(sku: str, lote: str, validade: str | None) -> str:
     return f"{PREFIXO}{str(sku or '').strip()}|{str(lote or '').strip()}|{str(validade or '').strip()}"
 
 
+def identificador_do_produto(produto: dict) -> str:
+    """
+    O que vai no lugar do SKU dentro do QR. Produto sem SKU (cadastro
+    rapido do galpao, por exemplo) gerava 'FL||LOTE|VAL', que o
+    ler_codigo() nao resolve de volta -- etiqueta impressa e colada na
+    caixa que ninguem consegue bipar. O EAN serve tao bem quanto: o
+    wms.buscar_por_codigo() procura por EAN, DUN e SKU. Sem nenhum dos
+    dois, e melhor recusar do que imprimir etiqueta cega.
+    """
+    return (str(produto.get("sku") or "").strip() or str(produto.get("ean") or "").strip())
+
+
+def _cortar(texto: str, limite: int) -> str:
+    """
+    Corta pra caber na etiqueta sem picar palavra no meio -- ela vai na
+    caixa que o operador le ("GRANDE" virando "GRAND" e pior do que
+    faltar a palavra inteira). Sobrou texto, marca com reticencias.
+    """
+    texto = " ".join(str(texto or "").split())
+    if len(texto) <= limite:
+        return texto
+    corte = texto[:limite - 1]
+    if " " in corte:
+        corte = corte[:corte.rfind(" ")]
+    return corte.rstrip() + "…"
+
+
 def parse_qr(texto: str) -> dict | None:
     """Le o QR da nossa etiqueta. Devolve None pro que nao for nosso."""
     bruto = str(texto or "").strip()
@@ -46,7 +73,7 @@ def desenhar_etiqueta_produto(dados: dict):
 
     x0 = 30 + lado + 40
     largura = W - x0 - 30
-    descricao = (dados.get("descricao") or "").upper()[:60]
+    descricao = _cortar((dados.get("descricao") or "").upper(), 60)
     f_desc = wms._ajustar_fonte(draw, descricao, largura, 54, negrito=True, condensada=True)
     draw.text((x0, 40), descricao, fill=0, font=f_desc)
 
@@ -65,7 +92,7 @@ def desenhar_etiqueta_produto(dados: dict):
     f_val = wms._ajustar_fonte(draw, linha_val, largura, 92, condensada=True)
     draw.text((x0, 40 + f_desc.size + 25 + f_lote.size + 15), linha_val, fill=0, font=f_val)
 
-    rodape = f"{dados.get('sku') or '-'}  ·  {(dados.get('embarcador') or '')[:28]}  ·  Freshlog"
+    rodape = f"{dados.get('sku') or '-'}  ·  {_cortar(dados.get('embarcador'), 28)}  ·  Freshlog"
     f_rod = wms._ajustar_fonte(draw, rodape, largura, 30, negrito=False)
     draw.text((x0, H - 75), rodape, fill=0, font=f_rod)
     return img
@@ -77,12 +104,19 @@ def gerar_etiquetas_produto_pdf(conn, produto_id: int, lote: str, validade: str 
     """PDF com uma etiqueta por pagina, no tamanho exato da midia termica."""
     import io
 
+    if not produto_id:
+        raise wms.ErroWMS("Informe o produto da etiqueta.")
     produto = wms.obter_produto(conn, produto_id)
     if not produto:
         raise wms.ErroWMS("Produto nao encontrado.")
+    identificador = identificador_do_produto(produto)
+    if not identificador:
+        raise wms.ErroWMS(
+            "Produto sem SKU e sem EAN: o QR ficaria ilegivel pro leitor. "
+            "Cadastre o codigo do produto antes de imprimir a etiqueta.")
     validade = wms._validar_validade(validade)
     copias = max(1, min(int(copias or 1), 200))
-    dados = {"descricao": produto["descricao"], "sku": produto["sku"], "lote": lote,
+    dados = {"descricao": produto["descricao"], "sku": identificador, "lote": lote,
              "validade": validade, "embarcador": produto["embarcador"]}
     arte = desenhar_etiqueta_produto(dados)
     if orientacao == "retrato":
