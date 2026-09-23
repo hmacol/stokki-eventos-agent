@@ -118,7 +118,18 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
 
     # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so os
     # recebimentos do piloto quando cliente=piloto_id.
-    resposta = stokki_recebimentos.listar_recebimentos(sess, cliente=piloto_id, por_pagina=limite)
+    #
+    # status="" e "todos os status", e NAO "all" -- medido na Stokki de
+    # producao em 23/09/2026 com o piloto (cliente='48'):
+    #     state="all" -> linhas=0  iTotalDisplayRecords=0
+    #     state=""    -> linhas=9  iTotalDisplayRecords=9
+    # Com "all" (o default antigo de listar_recebimentos) a rodada lia
+    # ZERO linhas e terminava com {'lidos': 0, ...} sem erro nenhum --
+    # nenhum recebimento seria importado, nunca, e em silencio. Vai
+    # explicito aqui de proposito: se alguem "consertar" o default de
+    # volta pra "all", esta rotina continua certa.
+    resposta = stokki_recebimentos.listar_recebimentos(
+        sess, status="", cliente=piloto_id, por_pagina=limite)
     for linha in (resposta.get("aaData") or []):
         res["lidos"] += 1
         dados = stokki_recebimentos.extrair_cabecalho_da_linha(linha)

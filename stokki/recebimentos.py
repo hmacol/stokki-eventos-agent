@@ -20,6 +20,14 @@ Colunas do DataTable (nesta ordem, indices 0-11):
 Filtros que a tela envia: state, marker, client, unit, input_search.
 client=48 (Maria Dolores) confirmado -- filtra do lado do servidor.
 
+ARMADILHA -- "todos os status" e state="" (string vazia), NUNCA "all".
+Medido na producao em 23/09/2026 com o piloto (cliente='48'):
+    state="all" -> linhas=0  iTotalDisplayRecords=0
+    state=""    -> linhas=9  iTotalDisplayRecords=9
+O "all" nao da erro nenhum: devolve HTTP 200 com aaData=[]. Uma rotina
+que o usasse simplesmente nunca importaria nada, em silencio. E o mesmo
+bug que ja aconteceu no outbound (ver sincronizar_pedidos_wms.py).
+
 ARMADILHA -- a linha tem dois numeros diferentes no campo 'id':
     <a href="https://freshlog.stokki.com.br/.../incoming/show/2478">#PE-2478</a><br>
     <span class="text-muted">41099</span>
@@ -72,7 +80,15 @@ BASE_URL = "https://freshlog.stokki.com.br"
 
 def listar_recebimentos(
     sessao: StokkiSession,
-    status: str = "all",
+    # NAO troque por "all". Medido na Stokki de producao (23/09/2026, com
+    # o piloto cliente='48'):
+    #     state="all" -> linhas=0  iTotalDisplayRecords=0
+    #     state=""    -> linhas=9  iTotalDisplayRecords=9
+    # "all" NAO e um filtro valido neste endpoint: devolve LISTA VAZIA, em
+    # silencio (HTTP 200, aaData=[]). Quem le "todos os status" tem que
+    # mandar string vazia. Mesmo bug ja corrigido no outbound
+    # (sincronizar_pedidos_wms.py, achado da rodada 2).
+    status: str = "",
     cliente: str = "",
     marcador: str = "",
     unidade: str = "",

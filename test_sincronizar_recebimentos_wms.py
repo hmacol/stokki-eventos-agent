@@ -109,6 +109,20 @@ class SessaoFalsa:
     Duble de StokkiSession -- nunca toca a rede. .get() devolve o que o
     teste montar, conforme a URL: a listagem (.../table) e o detalhe
     (.../show/{id}).
+
+    Responde como a Stokki de PRODUCAO responde ao filtro de status,
+    medido em 23/09/2026 com o piloto (cliente='48'):
+
+        state="all" -> linhas=0  iTotalDisplayRecords=0
+        state=""    -> linhas=9  iTotalDisplayRecords=9
+
+    O duble antigo devolvia as linhas pra QUALQUER state, inclusive
+    "all" -- que era justamente o default de listar_recebimentos. Com
+    isso a suite inteira passava com a rotina quebrada: em producao ela
+    terminava {'lidos': 0, 'gravados': 0} e nao importava recebimento
+    nenhum, em silencio. Mesma fidelidade que o duble de
+    test_sincronizar_pedidos_wms.py ja tem (achado da rodada 2 no
+    outbound).
     """
 
     def __init__(self, linhas, html_por_id):
@@ -119,7 +133,11 @@ class SessaoFalsa:
     def get(self, url, params=None, headers=None):
         self.chamadas.append((url, params))
         if url.endswith("/table"):
-            return _RespostaFalsa(json_data={"aaData": self.linhas, "iTotalRecords": len(self.linhas)})
+            status = (params or {}).get("state", "")
+            # producao: "all" nao e um filtro valido -- devolve vazio
+            linhas = [] if status == "all" else self.linhas
+            return _RespostaFalsa(json_data={"aaData": linhas, "iTotalRecords": len(self.linhas),
+                                             "iTotalDisplayRecords": len(linhas)})
         if "/show/" in url:
             id_recebimento = url.rstrip("/").split("/")[-1]
             return _RespostaFalsa(text=self.html_por_id.get(id_recebimento, ""))
@@ -167,6 +185,54 @@ class BaseRotina(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         self._tmp.cleanup()
+
+
+class TestFiltroDeStatusDaListagem(BaseRotina):
+    """
+    O filtro de status da listagem de recebimentos (parametro `state` do
+    incoming/table).
+
+    Por que estes testes existem: a rotina nasceu chamando
+    listar_recebimentos sem passar status, e o default do modulo era
+    "all". "all" NAO e um filtro valido nesse endpoint -- devolve HTTP
+    200 com aaData=[]. Medido na Stokki de producao em 23/09/2026 com o
+    piloto (cliente='48'):
+
+        state="all" -> linhas=0  iTotalDisplayRecords=0
+        state=""    -> linhas=9  iTotalDisplayRecords=9
+
+    Na pratica a rotina NUNCA importaria recebimento nenhum, e sem erro:
+    a rodada em modo teste na VPS terminou {'lidos': 0, 'do_piloto': 0,
+    'gravados': 0, ...}. E o mesmo bug que ja tinha acontecido no
+    outbound (sincronizar_pedidos_wms.py, rodada 2), onde tambem passou
+    batido porque o duble respondia linhas pra "all".
+    """
+
+    def test_listagem_nao_pede_state_all_que_em_producao_devolve_lista_vazia(self):
+        linhas = [_linha(2478, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2478": _HTML_ITENS})
+
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        _, params = next(c for c in sess.chamadas if c[0].endswith("/table"))
+        self.assertEqual(params["state"], "",
+                         "'todos os status' no incoming/table e state='' -- "
+                         "'all' devolve lista vazia (medido em producao, 23/09/2026)")
+
+    def test_com_o_filtro_certo_a_rodada_enxerga_e_importa_o_recebimento(self):
+        # Este e o teste que faltava: com o duble respondendo como
+        # producao (state="all" -> vazio), o codigo antigo (default
+        # "all") termina com lidos=0/gravados=0 e este assert falha.
+        linhas = [_linha(2478, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2478": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["lidos"], 1, "listagem voltou vazia -- filtro de status errado?")
+        self.assertEqual(res["gravados"], 1)
+        recebimento = self.conn.execute(
+            "SELECT * FROM wms_recebimentos WHERE id_stokki = 2478").fetchone()
+        self.assertIsNotNone(recebimento)
 
 
 class TestRodar(BaseRotina):
