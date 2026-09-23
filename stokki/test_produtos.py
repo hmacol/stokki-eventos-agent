@@ -46,6 +46,7 @@ class TestParsearLinha(unittest.TestCase):
             "stokki_id": 1,
             "descricao": "MOMBAK CAPPUCCINO - Cafe leite e chocolate",
             "embarcador": "MOMBAK COMERCIO DE ALIMENTOS E BEBIDAS LTDA",
+            "embarcador_id": 22,
             "sku": "MKCA2022",
             "ean": "7898966259166",
             "categoria": "COLD BREW COFFEE",
@@ -61,6 +62,11 @@ class TestParsearLinha(unittest.TestCase):
                      product=dict(_LINHA["product"], markers=[{"key": "lot", "on": False}]))
         p = _parsear_linha(linha)
         self.assertEqual((p["controla_lote"], p["ativo"]), (0, 0))
+
+    def test_depositante_sem_stkkc(self):
+        detalhes = [dict(d, sub="") if d["label"] == "DEPOSITANTE" else d for d in _LINHA["product"]["details"]]
+        linha = dict(_LINHA, product=dict(_LINHA["product"], details=detalhes))
+        self.assertIsNone(_parsear_linha(linha)["embarcador_id"])
 
     def test_sem_id_descarta(self):
         self.assertIsNone(_parsear_linha(dict(_LINHA, selection={})))

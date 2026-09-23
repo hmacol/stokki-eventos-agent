@@ -10,9 +10,9 @@ sessão de cookies dos pedidos. Descoberto em 04/09/2026:
       state (""|Active|Inactive|...), input_search. ~1.800 linhas.
       Desde 22/09/2026 as células vêm como JSON (antes eram HTML):
       `selection.id` é o id do produto; `product.text` o nome e
-      `product.details[]` (label/value) depositante, categoria, SKU e
-      GTIN/EAN; `product.markers` traz {key: "lot", on}; `state.key`
-      Active/Inactive; `updated` {text: dd/mm/aaaa, sub: hh:mm}.
+      `product.details[]` (label/value) depositante (sub "#stkkc-N" =
+      embarcador_id), categoria, SKU e GTIN/EAN; `product.markers` traz
+      {key: "lot", on}; `state.key` Active/Inactive; `updated` {text: dd/mm/aaaa, sub: hh:mm}.
   GET /pt-br/administrator/client/product/show/{id} — perfil completo
       (unidade, "Lote: Sim/Não", GTIN/EAN, DUN 1 + Quantidade 1 da caixa,
       pesos). É uma página HTML: rótulo numa linha, valor na seguinte.
@@ -64,12 +64,15 @@ def _parsear_linha(row: dict) -> dict | None:
     campos = {str(d.get("label") or "").upper(): str(d.get("copy") or d.get("value") or "").strip()
               for d in produto.get("details") or []}
     controla_lote = int(any(m.get("key") == "lot" and m.get("on") for m in produto.get("markers") or []))
+    stkkc = next((re.search(r"#stkkc-(\d+)", str(d.get("sub") or "")) for d in produto.get("details") or []
+                  if str(d.get("label") or "").upper() in ("DEPOSITANTE", "CLIENTE")), None)
     estado = row.get("state") or {}
     atualizado = row.get("updated") or {}
     return {
         "stokki_id": stokki_id,
         "descricao": descricao or campos.get("SKU") or f"Produto #{stokki_id}",
         "embarcador": campos.get("DEPOSITANTE") or campos.get("CLIENTE") or None,
+        "embarcador_id": int(stkkc.group(1)) if stkkc else None,
         "sku": campos.get("SKU") or None,
         "ean": campos.get("GTIN/EAN") or None,
         "categoria": campos.get("CATEGORIA") or None,
@@ -150,10 +153,6 @@ def ler_perfil(sess, stokki_id: int) -> dict:
         if chave and chave not in bruto:
             valor = linhas[i + 1]
             bruto[chave] = None if valor.lower().startswith("não informado") else valor
-    embarcador_id = None
-    m = re.search(r"#stkc-(\d+)", resp.text)
-    if m:
-        embarcador_id = int(m.group(1))
     perfil = {
         "unidade": (bruto.get("unidade") or "UN").upper()[:6],
         "ean": re.sub(r"\D", "", bruto.get("ean") or "") or None,
@@ -161,7 +160,6 @@ def ler_perfil(sess, stokki_id: int) -> dict:
         "qtd_por_caixa": _numero(bruto.get("qtd_por_caixa")) or _numero(bruto.get("qtd_por_volume")),
         "peso_liquido_kg": _numero(bruto.get("peso_liquido")),
         "controla_lote": 1 if (bruto.get("lote") or "").strip().lower().startswith("sim") else 0,
-        "embarcador_id": embarcador_id,
         "ncm": bruto.get("ncm"),
         "lido_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
