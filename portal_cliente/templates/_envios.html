@@ -22,6 +22,11 @@
   .b-DUPLICADO { background: var(--sucesso-bg); color: var(--st-sucesso); opacity: .8; }
   .b-ERRO { background: var(--erro-bg); color: var(--st-falha); }
   .b-CANCELADO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  /* área não atendida (23/09): retido até a Fresh Log liberar */
+  .b-AGUARDANDO_LIBERACAO { background: var(--erro-bg); color: var(--st-falha); }
+  .bloq-txt { font-size: 11px; color: var(--st-falha); margin-top: 3px; max-width: 260px; white-space: normal; }
+  .chip.dedicado { background: var(--rota-bg); color: var(--st-rota); }
+  .acoes-linha button.cotacao { border-color: var(--st-rota); color: var(--st-rota); font-weight: 700; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 100px; background: var(--rodando-bg); color: var(--rodando-texto); white-space: nowrap; }
   .chip.falha { background: var(--erro-bg); color: var(--st-falha); }
   .previa { display: none; flex-direction: column; gap: 14px; }
@@ -232,10 +237,10 @@
 
   function filtrados() {
     let lista = dados.envios;
-    if (aba === 'fila') lista = lista.filter(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    if (aba === 'fila') lista = lista.filter(x => ['NA_FILA', 'ENVIANDO', 'AGUARDANDO_LIBERACAO'].includes(x.status));
     else if (aba === 'criados') lista = lista.filter(x => x.status === 'CRIADO' || x.status === 'DUPLICADO');
     else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
-    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length);
+    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO');
     const q = busca.trim().toLowerCase();
     if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
     return lista;
@@ -262,10 +267,11 @@
       <td class="nw">${docCurto(x)}</td>
       <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
-      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
+      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
       <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
       <td class="nw">${entrega(x)}</td>
       <td><div class="acoes-linha">
+        ${x.status === 'AGUARDANDO_LIBERACAO' && x.bloqueio_chamado_id ? `<button type="button" class="cotacao" data-acao="cotacao" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Solicitar cotação de envio dedicado</button><button type="button" data-acao="chat" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Falar com a equipe Fresh Log</button>` : ''}
         ${PODE_ENVIAR && x.pode_reagendar ? `<button type="button" data-acao="reagendar" data-id="${x.id}">${x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar'}</button>` : ''}
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
@@ -403,7 +409,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
       previa = null; $('previa').classList.remove('aberta');
-      mensagem(j.mensagem, 'ok');
+      mensagem(j.mensagem, (j.bloqueados || []).length ? 'info' : 'ok');
       aba = 'fila';
       carregar();
     } catch (e) {
@@ -480,7 +486,21 @@
   $('env-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
   $('env-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });
   $('env-atualizar').addEventListener('click', () => carregar());
-  secao.addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (b) abrirAcao(b.dataset.acao, b.dataset.id); });
+  secao.addEventListener('click', e => {
+    const b = e.target.closest('[data-acao]'); if (!b) return;
+    // bloqueio de área (23/09): os dois botões abrem o chat no chamado do bloqueio;
+    // "cotação" já manda a mensagem pronta
+    if (b.dataset.acao === 'chat' || b.dataset.acao === 'cotacao') {
+      const x = dados.envios.find(v => String(v.id) === b.dataset.id) || {};
+      const texto = b.dataset.acao === 'cotacao'
+        ? `Solicito cotação de envio dedicado para NF ${x.numero_nf || x.referencia || ''} → ${x.destinatario_municipio || ''}/${x.destinatario_uf || ''}.`
+        : '';
+      if (window.atdAbrirChamado) window.atdAbrirChamado(b.dataset.chamado, texto);
+      else location.href = `${BASE}/?chamado=${b.dataset.chamado}`;
+      return;
+    }
+    abrirAcao(b.dataset.acao, b.dataset.id);
+  });
 
   // badge na aba mesmo sem abrir a vista
   fetch(`${BASE}/api/envios`, { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(j => {

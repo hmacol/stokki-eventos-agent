@@ -66,6 +66,7 @@ from planejamento_rotas import (
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
+    marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
@@ -2351,6 +2352,28 @@ def api_editar_transportadora():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"], "endereco": resultado["endereco"]})
+
+
+@app.route("/api/planejamento/dedicado", methods=["POST", "DELETE"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_planejamento_dedicado():
+    """Marca (POST {itens, valor}) ou desmarca (DELETE {codigos}) pedidos
+    dedicados -- Hugo, 23/09. Nada vai pra Vuupt; a marca é nossa e alimenta
+    a roteirização (fica fora da rota compartilhada) e o e-mail quinzenal
+    do financeiro (notificar_dedicados_financeiro.py)."""
+    body = request.get_json(force=True, silent=True) or {}
+    por = session.get("usuario") or g.nivel_acesso
+    try:
+        if request.method == "DELETE":
+            return jsonify(remover_dedicados([str(c) for c in body.get("codigos") or []], por))
+        from atendimento_chamados import valor_brl
+        return jsonify(marcar_dedicados(body.get("itens") or [], valor_brl(body.get("valor")), por))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha em dedicado")
+        return jsonify({"erro": str(e)}), 500
 
 
 # ── Galpão: endereçamento de produtos (WMS, Hugo 04/09) ─────────────────────

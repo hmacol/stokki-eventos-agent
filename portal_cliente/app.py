@@ -748,6 +748,16 @@ def api_envios_confirmar():
     try:
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
         criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"])
+        # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a
+        # linha fica AGUARDANDO_LIBERACAO até a equipe liberar no painel.
+        bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
+        if bloqueados:
+            import bloqueio_area
+            emp = _empresa_envio()
+            # CNPJ do LOGIN (g.cliente), não da empresa do seletor: o widget do
+            # chat busca o chamado pelo CNPJ logado (login de grupo -- revisão 23/09)
+            bloqueio_area.abrir_bloqueio(conn, {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")},
+                                         criados, _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     except Exception as e:
@@ -757,9 +767,14 @@ def api_envios_confirmar():
         conn.close()
     logger.info(f"confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={len(criados)}")
     n = len(criados)
-    return jsonify({"ok": True, "criados": criados,
-                    "mensagem": f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
-                                f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo."})
+    if bloqueados:
+        b = len(bloqueados)
+        mensagem = (f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''}. "
+                    f"{b} {'ficaram' if b > 1 else 'ficou'} aguardando liberação por região não atendida -- veja a lista abaixo.")
+    else:
+        mensagem = (f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
+                    f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
+    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem})
 
 
 @app.route("/api/envios/<int:envio_id>/acao", methods=["POST"])
@@ -784,6 +799,10 @@ def api_envios_acao(envio_id):
     logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
+    # cancelamento de envio bloqueado por área (23/09): registra no chamado do chat
+    if tipo == "cancelar" and resultado.get("aplicado") and envio.get("bloqueio_chamado_id"):
+        import bloqueio_area
+        bloqueio_area.avisar_cancelamento(envio, _quem_envia())
     return jsonify({"ok": True, **resultado})
 
 

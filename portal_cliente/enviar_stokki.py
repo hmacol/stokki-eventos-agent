@@ -59,6 +59,7 @@ for _p in (_RAIZ, _AQUI):
 import yaml
 
 import envio_pedidos as ep
+import pedidos_dedicados
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
 
@@ -466,6 +467,20 @@ def _marcar(conn, envio_id: int, **campos) -> None:
     conn.execute(f"UPDATE portal_envios SET {sets} WHERE id = ?", (*campos.values(), envio_id))
 
 
+def _gravar_codigo(conn, envio_id: int, codigo: str | None, **campos) -> None:
+    """Grava o PS do envio e, se ele foi liberado como dedicado antes de ter
+    codigo (Hugo, 23/09), vincula a marca em pedidos_dedicados -- vale tanto
+    pro codigo que a Stokki devolve na criacao quanto pro achado depois na
+    reconciliacao. Nao faz commit."""
+    _marcar(conn, envio_id, codigo_pedido=codigo, **campos)
+    if not codigo:
+        return
+    try:
+        pedidos_dedicados.vincular_codigo(conn, envio_id, codigo)
+    except Exception as ex:
+        logger.warning(f"nao vinculou dedicado do envio {envio_id}: {ex}")
+
+
 def _falha_tecnica(conn, envios: list[dict], erro: str) -> list[dict]:
     """Volta pra fila (até MAX_TENTATIVAS_TECNICAS), depois vira ERRO.
     Devolve os que viraram ERRO (pra e-mail)."""
@@ -591,8 +606,8 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
             if r["criado"]:
                 codigo = (codigos.get(e["numero_nf"]) if e.get("numero_nf") else None) or codigos.get(e["chave_nfe"]) \
                     or _codigo_da_resposta(resposta) or None
-                _marcar(conn, e["id"], status=ep.STATUS_CRIADO, erro=None, resposta_stokki=resposta_txt,
-                        criado_stokki_em=ep._agora(), codigo_pedido=codigo)
+                _gravar_codigo(conn, e["id"], codigo, status=ep.STATUS_CRIADO, erro=None, resposta_stokki=resposta_txt,
+                               criado_stokki_em=ep._agora())
                 resumo["criados"] += 1
                 if codigo and e.get("agendamento_data") and not e.get("agendamento_pendente"):
                     ep.registrar_agendamento_pedido(conn, {**e, "codigo_pedido": codigo})
@@ -711,7 +726,7 @@ def reconciliar_codigos(conn) -> int:
             except Exception:
                 pass
         if codigo:
-            _marcar(conn, e["id"], codigo_pedido=codigo)
+            _gravar_codigo(conn, e["id"], codigo)
             conn.commit()
             achados += 1
             if e.get("agendamento_data") and not e.get("agendamento_pendente") and not e.get("agendamento_aplicado_em"):

@@ -48,6 +48,13 @@
   .conv-cab h2 { margin: 0; font-size: 15px; font-weight: 700; }
   .conv-cab .meta { display: flex; align-items: center; gap: 12px; font-size: 11.5px; color: var(--texto-suave); flex-wrap: wrap; }
   .conv-cab .meta .acoes { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  /* NFs bloqueadas por área não atendida (23/09): quadro de liberação */
+  .quadro-bloq { margin: 8px 16px 0; padding: 10px 12px; border: 1px solid var(--st-falha, #EF4444); border-radius: 8px; background: var(--erro-bg); font-size: 13px; }
+  .quadro-bloq h3 { margin: 0 0 6px; font-size: 13px; color: var(--st-falha, #EF4444); }
+  .quadro-bloq label.nf { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .quadro-bloq label.nf.tratada { opacity: .55; text-decoration: line-through; }
+  .quadro-bloq .acoes-bloq { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .quadro-bloq input.valor { width: 150px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font: inherit; }
   .botao-linha { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--borda); border-radius: 6px; padding: 6px 12px; font-size: 12px; color: var(--texto); cursor: pointer; font-family: inherit; white-space: nowrap; }
   .botao-linha:hover { border-color: var(--acento); color: var(--acento); }
   .botao-p { display: inline-flex; align-items: center; gap: 7px; background: var(--primaria); color: #fff; border: 1px solid transparent; padding: 7px 14px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap; }
@@ -122,6 +129,7 @@
   <section class="card" id="conversa">
     <div class="vazio" id="conv-vazio">Escolha um chamado na fila.</div>
     <div class="conv-cab oculto" id="conv-cab"></div>
+    <div class="quadro-bloq oculto" id="quadro-bloq"></div>
     <div class="conv-corpo oculto" id="conv-corpo"></div>
     <div class="conv-pe oculto" id="conv-pe">
       <div class="macros" id="macros"></div>
@@ -218,9 +226,48 @@
       const j = await api(`/api/atendimento/chamados/${id}`);
       st.chamado = j.chamado; st.mensagens = j.mensagens; st.contexto = j.contexto; st.ultimoId = st.mensagens.length ? st.mensagens[st.mensagens.length - 1].id : 0;
       history.replaceState(null, '', `${location.pathname}?chamado=${id}`);
-      renderConversa(); renderLateral(); renderFila(); agendarConv();
+      renderConversa(); renderLateral(); renderFila(); agendarConv(); renderBloqueio();
     } catch (e) { alert(e.message); }
   }
+
+  // ── NFs bloqueadas por área não atendida (23/09) ─────────────────────────
+  // Chamado com area "envios" nasce no portal; aqui a equipe libera (com ou
+  // sem dedicado) ou cancela. Toda ação vira mensagem de sistema no chat.
+  function brl(v) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
+  async function renderBloqueio() {
+    const q = $('quadro-bloq'); const c = st.chamado;
+    if (!c || c.area !== 'envios') { q.classList.add('oculto'); q.innerHTML = ''; return; }
+    let envs = [];
+    try { envs = (await api(`/api/atendimento/chamados/${c.id}/envios-bloqueados`)).envios || []; } catch (e) { q.classList.add('oculto'); return; }
+    if (!envs.length || st.chamado !== c) { q.classList.add('oculto'); return; }
+    q.classList.remove('oculto');
+    const abertos = envs.filter(e => e.status === 'AGUARDANDO_LIBERACAO');
+    q.innerHTML = `<h3>NFs aguardando liberação (região não atendida)</h3>` +
+      envs.map(e => `<label class="nf ${e.status === 'AGUARDANDO_LIBERACAO' ? '' : 'tratada'}">
+        ${e.status === 'AGUARDANDO_LIBERACAO' ? `<input type="checkbox" value="${e.id}" checked>` : '<span style="width:13px"></span>'}
+        <b class="mono">NF ${esc(e.numero_nf || e.referencia || e.id)}</b> · ${esc(e.destinatario_nome)} · ${esc(e.destinatario_municipio)}/${esc(e.destinatario_uf)}
+        <span class="pill">${esc(e.status_rotulo)}${e.dedicado_valor != null ? ' · dedicado ' + brl(e.dedicado_valor) : ''}</span></label>`).join('') +
+      (abertos.length ? `<div class="acoes-bloq">
+        <input class="valor" id="bloq-valor" placeholder="Valor da cotação (R$)" inputmode="decimal" aria-label="Valor da cotação em reais">
+        <button type="button" class="botao-p" data-liberar="dedicado">Liberar como dedicado</button>
+        <button type="button" class="botao-linha" data-liberar="simples">Liberar sem dedicado</button>
+        <button type="button" class="botao-linha" data-liberar="cancelar">Cancelar envio</button>
+      </div>` : '');
+  }
+  $('quadro-bloq').addEventListener('click', async e => {
+    const b = e.target.closest('[data-liberar]'); if (!b || !st.chamado) return;
+    const ids = Array.from($('quadro-bloq').querySelectorAll('input[type=checkbox]:checked')).map(i => Number(i.value));
+    const modo = b.dataset.liberar, valor = ($('bloq-valor') || {}).value || '';
+    if (!ids.length) { alert('Marque ao menos uma NF.'); return; }
+    if (modo === 'dedicado' && !valor.trim()) { alert('Informe o valor da cotação.'); return; }
+    if (modo === 'cancelar' && !confirm(`Cancelar ${ids.length} NF(s)? O cliente vê a mensagem no chat.`)) return;
+    b.disabled = true;
+    try {
+      const j = await api(`/api/atendimento/chamados/${st.chamado.id}/liberar`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, modo, valor }) });
+      st.chamado = j.chamado; st.mensagens = st.mensagens.concat(j.mensagens); if (st.mensagens.length) st.ultimoId = st.mensagens[st.mensagens.length - 1].id;
+      renderConversa(); renderBloqueio(); carregarFila();
+    } catch (err) { alert(err.message); b.disabled = false; }
+  });
   async function pollConv() {
     if (!st.chamado) return;
     try {

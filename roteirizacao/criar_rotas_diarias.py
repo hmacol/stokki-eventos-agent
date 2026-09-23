@@ -667,6 +667,14 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta a criação de rotas): {e}")
 
+        # Dedicado (Hugo, 23/09): transporte cotado à parte -- sai ANTES da
+        # checagem de área não atendida pra não gerar e-mail nem entrar em rota.
+        try:
+            from dedicados import separar_dedicados
+            servicos_brutos, _dedicados = separar_dedicados(servicos_brutos)
+        except Exception as e:
+            logger.error(f"Falha ao separar pedidos dedicados (seguem na roteirização normal): {e}")
+
         # Área não atendida (pedido do Hugo, 02/08): pedido fora de
         # toda região com dia fixo E fora do raio da Grande SP (ou
         # fora do estado de SP) -- notifica o remetente (cotação ou

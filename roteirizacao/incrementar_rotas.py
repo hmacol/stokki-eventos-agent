@@ -460,6 +460,14 @@ def main(modo_teste: bool = False):
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta o incremento): {e}")
 
+        # Dedicado (Hugo, 23/09): sai antes da checagem de área não atendida
+        # (sem e-mail, sem rota compartilhada). Só some do lote deste ciclo.
+        try:
+            from dedicados import separar_dedicados
+            servicos, _dedicados = separar_dedicados(servicos)
+        except Exception as e:
+            logger.error(f"Falha ao separar pedidos dedicados (seguem no incremento normal): {e}")
+
         # Área não atendida (pedido do Hugo, 02/08) -- diferente do
         # agendamento pendente, esse aviso é ÚNICO (não é rate-limitado
         # por dia) e pode surgir a qualquer hora, então notifica aqui

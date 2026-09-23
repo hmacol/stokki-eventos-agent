@@ -465,7 +465,8 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
                         mapa_niveis: dict[str, int] | None = None,
                         mapa_horarios: dict[str, tuple[str, str]] | None = None,
                         ajustes_manuais: dict[str, dict] | None = None,
-                        janelas_confirmadas: dict[str, tuple[str, str]] | None = None) -> dict:
+                        janelas_confirmadas: dict[str, tuple[str, str]] | None = None,
+                        dedicado: dict | None = None) -> dict:
     lat, lng = servico.get("latitude"), servico.get("longitude")
     agendado = _data_agendada(servico)
     codigo = servico.get("code", "")
@@ -484,6 +485,7 @@ def _servico_para_pool(servico: dict, remetentes_por_id: dict[int, str],
         "janela_fonte": janela_fonte,
         "agendado_para": agendado.isoformat() if agendado else None,
         "tipo_area": tipo_area,  # None | "sp_nao_atendido" | "fora_sp" (ver identificar_area_nao_atendida)
+        "dedicado": dedicado,  # None | {valor, valor_total, n_grupo} (Hugo, 23/09; ver roteirizacao/dedicados.py)
         "service_id": servico["id"],
         "codigo": codigo,
         "titulo": servico.get("title", ""),
@@ -722,6 +724,15 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
 
+    # Dedicado (Hugo, 23/09): só rotula o card ("Dedicado · R$ X"); quem
+    # tira da rota automática é a roteirização (roteirizacao/dedicados.py).
+    dedicados_por_id: dict[int, dict] = {}
+    try:
+        from dedicados import dedicados_por_servico
+        dedicados_por_id = dedicados_por_servico(servicos_brutos)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar dedicados pro pool (tela segue sem essa marcação): {e}")
+
     # Pool é sempre a FOTO AO VIVO do not_assigned na VUUPT -- não existe
     # "pool de um dia passado" (pedido do Hugo, 23/08: plano de dia
     # anterior a hoje é só consulta, sem editar/cancelar nem oferecer
@@ -733,7 +744,8 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     else:
         pool = [
             _servico_para_pool(s, remetentes_por_id, nf_por_codigo, tipos_area.get(s["id"]),
-                                mapa_niveis, mapa_horarios, ajustes_manuais, janelas_confirmadas)
+                                mapa_niveis, mapa_horarios, ajustes_manuais, janelas_confirmadas,
+                                dedicados_por_id.get(s["id"]))
             for s in servicos_brutos
             if s["id"] not in ids_em_rascunho
         ]
@@ -780,6 +792,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
+        "dedicados_por_service_id": dedicados_por_id,
     }
 
 
@@ -849,6 +862,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     # se já estiver dentro de um rascunho, e volta pra seção certa do
     # pool ("Fora da área") se for removido da rota de novo.
     tipos_area = pool_e_agendados["tipos_area_por_service_id"]
+    dedicados_rascunho = pool_e_agendados.get("dedicados_por_service_id") or {}
     # NF: mesmo princípio, mas casada pelo código do pedido (não muda
     # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
     # também dentro de rotas já montadas, não só no pool
@@ -861,6 +875,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
+            p["dedicado"] = dedicados_rascunho.get(p["service_id"])
             p["numero_nf"] = ", ".join(filter(None, (
                 nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
             )))
@@ -2006,6 +2021,47 @@ def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dic
         resultado["endereco"] = texto
         logger.info(f"Redespacho via {transportadora}: {len(itens)} pedido(s) -> {texto}")
     return resultado
+
+
+def marcar_dedicados(itens: list[dict], valor: float, por: str, conn=None) -> dict:
+    """Marca pedidos do pool como dedicados dividindo `valor` entre eles
+    (Hugo, 23/09). Nada vai pra Vuupt: a marca é nossa (pedidos_dedicados).
+    Cada item: {service_id, codigo, sender_id?, remetente_nome?, numero_nf?}.
+    Serviço com mais de um código usa o primeiro (é o que a Vuupt mostra)."""
+    import pedidos_dedicados
+    if not itens:
+        raise ValueError("Nenhum pedido selecionado.")
+    pedidos = []
+    for it in itens:
+        codigos = pedidos_dedicados.codigos_do_servico({"code": it.get("codigo")})
+        if not codigos:
+            raise ValueError(f"Pedido #{it.get('service_id')} sem código.")
+        pedidos.append({"codigo_pedido": codigos[0], "service_id": it.get("service_id"), "sender_id": it.get("sender_id"),
+                        "remetente_nome": it.get("remetente_nome"), "numero_nf": it.get("numero_nf")})
+    propria = conn is None
+    conn = conn or pedidos_dedicados.conectar()
+    try:
+        grupo = pedidos_dedicados.marcar(conn, pedidos, float(valor), por)
+        valores = {r["codigo_pedido"]: r["valor"] for r in conn.execute(
+            "SELECT codigo_pedido, valor FROM pedidos_dedicados WHERE grupo_id = ?", (grupo,))}
+    finally:
+        if propria:
+            conn.close()
+    logger.info(f"Dedicado: {len(pedidos)} pedido(s) por {por}, R$ {float(valor):.2f} -> {valores}")
+    return {"ok": True, "grupo_id": grupo, "valores": valores}
+
+
+def remover_dedicados(codigos: list[str], por: str, conn=None) -> dict:
+    import pedidos_dedicados
+    propria = conn is None
+    conn = conn or pedidos_dedicados.conectar()
+    try:
+        n = sum(pedidos_dedicados.remover(conn, codigo_pedido=c, por=por) for c in codigos)
+    finally:
+        if propria:
+            conn.close()
+    logger.info(f"Dedicado removido de {n} pedido(s) por {por}: {codigos}")
+    return {"ok": True, "removidos": n}
 
 
 PASTA_ROMANEIOS_RASCUNHO = _RAIZ / "painel_agentes" / "dados" / "romaneios_rascunho"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-dedicados-financeiro.service nos dias 1 e 16 as 08:00 (quinzena anterior)
+
+[Timer]
+OnCalendar=*-*-01,16 08:00:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -75,7 +75,10 @@ STATUS_CRIADO = "CRIADO"
 STATUS_ERRO = "ERRO"
 STATUS_DUPLICADO = "DUPLICADO"
 STATUS_CANCELADO = "CANCELADO"
-STATUS_ABERTOS = (STATUS_NA_FILA, STATUS_ENVIANDO)
+# Área não atendida (Hugo, 23/09): não vai pra Stokki até a equipe liberar
+# no /atendimento do painel. O worker só pega NA_FILA, então fica parado.
+STATUS_AGUARDANDO_LIBERACAO = "AGUARDANDO_LIBERACAO"
+STATUS_ABERTOS = (STATUS_NA_FILA, STATUS_ENVIANDO, STATUS_AGUARDANDO_LIBERACAO)
 ROTULOS_STATUS = {
     STATUS_NA_FILA: "Na fila",
     STATUS_ENVIANDO: "Enviando à Stokki",
@@ -83,7 +86,9 @@ ROTULOS_STATUS = {
     STATUS_ERRO: "Erro",
     STATUS_DUPLICADO: "Já existia na Stokki",
     STATUS_CANCELADO: "Cancelado",
+    STATUS_AGUARDANDO_LIBERACAO: "Aguardando liberação",
 }
+MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora da área atendida em SP"}
 
 ORIGEM_XML = "xml"
 ORIGEM_PLANILHA = "planilha"
@@ -201,6 +206,9 @@ def conectar() -> sqlite3.Connection:
         "itens_json": "TEXT",
         "data_expedicao": "TEXT",
         "linhas_planilha": "TEXT",
+        # bloqueio por área não atendida (23/09)
+        "bloqueio_motivo": "TEXT",
+        "bloqueio_chamado_id": "INTEGER",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -1077,6 +1085,36 @@ def definir_parametros_cliente(conn: sqlite3.Connection, cnpj: str, **campos) ->
 
 # ── Confirmar envio (entra na fila) ────────────────────────────────────────────
 
+def _identificar_area(servicos: list[dict], api_key: str | None):
+    """Indireção pra teste; a regra mora na roteirização."""
+    pasta = str(_RAIZ / "roteirizacao")
+    if pasta not in sys.path:
+        sys.path.insert(0, pasta)
+    from notificar_area_nao_atendida import identificar_area_nao_atendida
+    return identificar_area_nao_atendida(servicos, api_key)
+
+
+def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
+    """Mesma regra da roteirização (região de dia fixo -> ok; UF != SP ->
+    fora_sp; SP a mais de RAIO_GRANDE_SP_KM do centro -> sp_nao_atendido).
+    Monta um serviço sintético no formato de endereço da Vuupt. Qualquer
+    falha (sem chave, geocodificação) deixa passar: nunca segura pedido
+    por falta de dado. Desliga com portal_cliente.envios.bloqueio_area_ativo."""
+    cfg = ((config or {}).get("portal_cliente", {}) or {}).get("envios", {}) or {}
+    if not cfg.get("bloqueio_area_ativo", True):
+        return None
+    cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
+    endereco = ", ".join(p for p in (nfe.get("destinatario_endereco"), cidade_uf, nfe.get("destinatario_cep")) if p)
+    api_key = ((config or {}).get("google_maps", {}) or {}).get("api_key") or ""
+    try:
+        for _servico, tipo in _identificar_area([{"id": 0, "address": endereco}], api_key):
+            return tipo
+        return None
+    except Exception as e:
+        logger.warning(f"classificar_area_envio falhou ({e}); deixando passar NF {nfe.get('numero_nf')}")
+        return None
+
+
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
                      config: dict | None, regra_xml: str) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
@@ -1102,6 +1140,10 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         v = validar_item(conn, nfe, emb)
         if not v["ok"]:
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
+        # Área não atendida (Hugo, 23/09): classifica AQUI, antes de qualquer
+        # escrita -- a geocodificação grava cache por outra conexão e travaria
+        # ~5 s por NF se já houvesse transação de escrita aberta nesta.
+        nfe["_bloqueio_motivo"] = classificar_area_envio(nfe, config)
         lidos.append((item, caminho, conteudo, nfe, v["envio_existente"]))
 
     dest_info = info_destinatarios(conn, emb, [x[3] for x in lidos], config)
@@ -1159,6 +1201,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             pass
         agora = _agora()
         obs = (item.get("observacoes") or nfe.get("observacoes") or "")[:500]
+        motivo = nfe.get("_bloqueio_motivo")
         campos = {
             "cnpj_embarcador": emb, "chave_nfe": nfe["chave_nfe"], "numero_nf": nfe["numero_nf"], "serie": nfe["serie"],
             "emitida_em": nfe["emitida_em"], "destinatario_doc": nfe["destinatario_doc"], "destinatario_nome": nfe["destinatario_nome"],
@@ -1167,7 +1210,8 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "destinatario_cep": nfe["destinatario_cep"], "destinatario_telefone": nfe["destinatario_telefone"],
             "volumes": nfe["volumes"], "peso_kg": nfe["peso_kg"], "valor_nf": nfe["valor_nf"], "itens": nfe["itens"],
             "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else regra_xml,
-            "status": STATUS_NA_FILA, "tentativas": 0,
+            "status": STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, "tentativas": 0,
+            "bloqueio_motivo": motivo, "bloqueio_chamado_id": None,
             "erro": None, "resposta_stokki": None, "codigo_pedido": None, "horario_inicio": ini, "horario_fim": fim,
             "requer_agendamento": int(requer), "agendamento_data": ag_data, "agendamento_hora_inicio": ag_ini,
             "agendamento_hora_fim": ag_fim, "agendamento_pendente": pendente, "agendamento_aplicado_em": None,
@@ -1193,7 +1237,9 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             conn.execute(f"INSERT INTO portal_envios ({cols}) VALUES ({','.join('?' * len(campos))})", tuple(campos.values()))
             envio_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         criados.append({"id": envio_id, "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
-                        "origem": campos["origem"], "destinatario_nome": nfe["destinatario_nome"]})
+                        "origem": campos["origem"], "destinatario_nome": nfe["destinatario_nome"],
+                        "status": campos["status"], "bloqueio_motivo": motivo,
+                        "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"]})
     conn.commit()
     return criados
 
@@ -1227,7 +1273,10 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
         "arquivo_ext": Path(d.get("xml_path") or "").suffix.lstrip(".").lower() or "xml",
         "solicitacoes_pendentes": [{"tipo": s["tipo"], "rotulo": ROTULOS_SOLICITACAO.get(s["tipo"], s["tipo"]),
                                     "criado_em_br": _dt_br(s["criado_em"]), "detalhes": s["detalhes"]} for s in pend],
-        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO) and not any(s["tipo"] == "cancelar" for s in pend),
+        "bloqueio_texto": (f"Não atendemos a região de {d.get('destinatario_municipio') or '?'}/{d.get('destinatario_uf') or '?'}."
+                           if d["status"] == STATUS_AGUARDANDO_LIBERACAO else ""),
+        "bloqueio_chamado_id": d.get("bloqueio_chamado_id"),
+        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO) and not any(s["tipo"] == "cancelar" for s in pend),
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
         "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO),
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
@@ -1241,12 +1290,21 @@ def listar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DI
     desde = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
     emb = _so_digitos(cnpj_embarcador)
     rows = conn.execute(
-        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO')) "
+        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO','AGUARDANDO_LIBERACAO')) "
         "ORDER BY criado_em DESC, id DESC", (emb, desde)).fetchall()
     sol = {}
     for s in conn.execute("SELECT * FROM portal_solicitacoes WHERE cnpj_embarcador = ? AND status = 'PENDENTE'", (emb,)):
         sol.setdefault(s["envio_id"], []).append(dict(s))
-    return [_linha(r, sol) for r in rows]
+    linhas = [_linha(r, sol) for r in rows]
+    # Marca de envio dedicado (Hugo, 23/09): pedidos_dedicados mora no mesmo
+    # dados.db; a checagem em sqlite_master cobre banco sem a tabela ainda.
+    dedicados = {}
+    if conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pedidos_dedicados'").fetchone():
+        dedicados = {r["envio_id"]: r["valor"] for r in conn.execute(
+            "SELECT envio_id, valor FROM pedidos_dedicados WHERE removido_em IS NULL AND envio_id IS NOT NULL")}
+    for l in linhas:
+        l["dedicado"] = {"valor": dedicados[l["id"]]} if l["id"] in dedicados else None
+    return linhas
 
 
 def resumo_envios(envios: list[dict]) -> dict:
@@ -1282,6 +1340,18 @@ def _registrar_solicitacao(conn, envio: dict, tipo: str, detalhes: str, por: str
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
+def _remover_dedicado(conn: sqlite3.Connection, envio_id: int, por: str) -> None:
+    """Envio cancelado não pode continuar como dedicado no financeiro (revisão
+    23/09). Mesma conexão/transação; tabela pode não existir ainda."""
+    try:
+        if not conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pedidos_dedicados'").fetchone():
+            return
+        conn.execute("UPDATE pedidos_dedicados SET removido_em = ?, removido_por = ? WHERE envio_id = ? AND removido_em IS NULL",
+                     (_agora(), f"cancelamento:{por}", envio_id))
+    except sqlite3.Error as e:
+        logger.warning(f"nao removeu dedicado do envio {envio_id} ao cancelar: {e}")
+
+
 def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, por: str) -> dict:
     """Devolve {aplicado: bool, mensagem, precisa_operacao: bool}.
     - cancelar/reenviar antes de ir pra Stokki: resolve aqui mesmo.
@@ -1297,9 +1367,10 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             raise ErroEnvio("Esse pedido está sendo enviado à Stokki agora -- tente de novo em alguns instantes.")
         if st == STATUS_CANCELADO:
             raise ErroEnvio("Esse pedido já está cancelado.")
-        if st in (STATUS_NA_FILA, STATUS_ERRO):
+        if st in (STATUS_NA_FILA, STATUS_ERRO, STATUS_AGUARDANDO_LIBERACAO):
             conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELADO, agora, envio["id"]))
             _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por, status="CONCLUIDA")
+            _remover_dedicado(conn, envio["id"], por)
             conn.commit()
             return {"aplicado": True, "precisa_operacao": False, "mensagem": "Pedido cancelado -- não será enviado à Stokki."}
         _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por)
@@ -1310,6 +1381,16 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
     if tipo == "reenviar":
         if st not in (STATUS_ERRO, STATUS_CANCELADO):
             raise ErroEnvio("Só pedidos com erro ou cancelados podem ser reenviados.")
+        # Pedido que foi bloqueado por área (Hugo, 23/09): Cancelar + Reenviar
+        # não fura o bloqueio -- volta pra "aguardando liberação" e a equipe
+        # decide de novo (se já tinha sido liberado, libera outra vez).
+        if envio.get("bloqueio_motivo"):
+            conn.execute("UPDATE portal_envios SET status = ?, erro = NULL, atualizado_em = ? WHERE id = ?",
+                         (STATUS_AGUARDANDO_LIBERACAO, agora, envio["id"]))
+            _registrar_solicitacao(conn, envio, tipo, "", por, status="CONCLUIDA")
+            conn.commit()
+            return {"aplicado": True, "precisa_operacao": False,
+                    "mensagem": "Pedido de volta pra fila de liberação -- a região não é atendida, a Fresh Log precisa liberar de novo."}
         conn.execute("UPDATE portal_envios SET status = ?, erro = NULL, atualizado_em = ? WHERE id = ?",
                      (STATUS_NA_FILA, agora, envio["id"]))
         _registrar_solicitacao(conn, envio, tipo, "", por, status="CONCLUIDA")

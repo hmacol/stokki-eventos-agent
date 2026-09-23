@@ -501,6 +501,19 @@
     background: rgba(255,92,80,0.18);
     color: var(--erro-texto);
   }
+  /* dedicado (Hugo, 23/09): mesmo formato do chip de área, cor da rota */
+  .item-parada .badge-dedicado {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
@@ -805,6 +818,7 @@
   body.cards-numeros .item-parada .agendamento,
   body.cards-numeros .item-parada .badge-caixas,
   body.cards-numeros .item-parada .badge-fora-area,
+  body.cards-numeros .item-parada .badge-dedicado,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
   body.cards-numeros .item-parada .numero {
@@ -1837,6 +1851,25 @@
   </div>
 </div>
 
+{# Dedicado (Hugo, 23/09): valor da cotação dividido entre os pedidos escolhidos.
+   Nada muda na Vuupt; a marca é nossa (pedidos_dedicados). #}
+<div class="modal-overlay-editar-endereco" id="modal-dedicado">
+  <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-dedicado">
+    <h2 id="titulo-modal-dedicado">Marcar como dedicado</h2>
+    <p class="subtitulo"><strong id="dedicado-resumo"></strong> — o valor da cotação é dividido em partes iguais e vai pro financeiro na quinzena. Nada muda na Vuupt; a roteirização automática deixa esses pedidos fora das rotas compartilhadas.</p>
+    <ul id="dedicado-lista" style="margin:0 0 10px; padding-left:18px; font-size:12.5px; max-height:140px; overflow:auto;"></ul>
+    <div class="campo-reagendar">
+      <label for="dedicado-valor">Valor total da cotação (R$)</label>
+      <input id="dedicado-valor" inputmode="decimal" placeholder="0,00" autocomplete="off">
+      <p class="transportadora-endereco" id="dedicado-previa">—</p>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-dedicado">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-dedicado" disabled>Marcar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-nivel-horario" id="modal-nivel-horario">
   <div class="modal-nivel-horario" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-nivel-horario">
     <h2 id="titulo-modal-nivel-horario">Nível / horário de atendimento</h2>
@@ -2245,6 +2278,7 @@
       <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — sem teto de pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
+      <button type="button" id="botao-dedicado-selecao" disabled title="Marca os pedidos selecionados como envio dedicado e divide o valor da cotação entre eles (fora da rota automática; vai pro financeiro na quinzena)">Dedicado</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
          no lugar do arrastar pool→rota, que não existe entre abas #}
@@ -2493,6 +2527,13 @@
   function badgesPedidoHtml(p) {
     // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
     const partes = [];
+    // dedicado (Hugo, 23/09): transporte cotado à parte, fora da rota automática
+    if (p.dedicado) {
+      const brl = v => Number(v).toFixed(2).replace(".", ",");
+      const titulo = p.dedicado.n_grupo > 1
+        ? ` title="Cotação R$ ${brl(p.dedicado.valor_total)} dividida entre ${p.dedicado.n_grupo} pedidos"` : "";
+      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}</span>`);
+    }
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
@@ -2574,6 +2615,7 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    li.dataset.dedicado = p.dedicado ? "1" : "";
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
     // 22/08 -- editável pelo menu de contexto, ver abrirModalNivelHorario)
     li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
@@ -3578,6 +3620,7 @@
     botaoIncrementar.textContent = SELECIONADOS.size ? `Incrementar (${SELECIONADOS.size})` : "Incrementar";
     document.getElementById("botao-editar-endereco-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-transportadora-selecao").disabled = SELECIONADOS.size === 0;
+    document.getElementById("botao-dedicado-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
     // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
@@ -5226,6 +5269,79 @@
   // com o galpão da planilha. Então escolher a transportadora aplica o
   // endereço do galpão dela pelo mesmo caminho do "Editar endereço".
   // Um modal só pra 1 pedido (menu de contexto) ou lote (barras).
+  // ── Dedicado (Hugo, 23/09) ──────────────────────────────────────────────
+  // Marca pedidos como envio dedicado com o valor da cotação dividido entre
+  // eles. POST/DELETE /api/planejamento/dedicado; depois location.reload()
+  // (mesmo padrão da transportadora) pra chip e menu refletirem a marca.
+  let dedicadoPendente = null;  // { itens: [{service_id, codigo, sender_id, remetente_nome, numero_nf}] }
+
+  function itemDedicadoDe(serviceId) {
+    const p = POOL_BY_ID[serviceId];
+    if (p) return { service_id: serviceId, codigo: p.codigo || "", sender_id: p.sender_id, remetente_nome: p.remetente_nome, numero_nf: p.numero_nf || null };
+    // parada já em rascunho não está no POOL_BY_ID: lê do card
+    const li = document.querySelector(`.item-parada[data-service-id="${serviceId}"]`);
+    return { service_id: serviceId, codigo: li?.querySelector(".codigo")?.textContent.trim() || "",
+             sender_id: null, remetente_nome: li?.querySelector(".remetente")?.textContent.trim() || "", numero_nf: null };
+  }
+
+  function valorDedicadoDigitado() {
+    const bruto = document.getElementById("dedicado-valor").value.trim().replace(/\./g, "").replace(",", ".");
+    return bruto === "" ? NaN : Number(bruto);
+  }
+
+  function atualizarPreviaDedicado() {
+    const n = dedicadoPendente ? dedicadoPendente.itens.length : 0;
+    const v = valorDedicadoDigitado();
+    const ok = n > 0 && isFinite(v) && v > 0;
+    const brl = x => x.toFixed(2).replace(".", ",");
+    document.getElementById("dedicado-previa").textContent = ok
+      ? (n > 1 ? `R$ ${brl(v)} ÷ ${n} = R$ ${brl(Math.floor(v * 100 / n) / 100)} cada (centavos que sobrarem vão pro primeiro)` : `R$ ${brl(v)}`)
+      : "—";
+    document.getElementById("botao-confirmar-dedicado").disabled = !ok;
+  }
+
+  function abrirModalDedicado(serviceIds) {
+    const itens = serviceIds.map(itemDedicadoDe).filter(it => it.codigo);
+    if (!itens.length) { alert("Só pedidos com código podem ser marcados."); return; }
+    dedicadoPendente = { itens };
+    document.getElementById("dedicado-resumo").textContent = `${itens.length} pedido(s)`;
+    document.getElementById("dedicado-lista").innerHTML = itens.map(it => `<li>${escaparHtml(it.codigo)} · ${escaparHtml(it.remetente_nome || "")}</li>`).join("");
+    document.getElementById("dedicado-valor").value = "";
+    atualizarPreviaDedicado();
+    document.getElementById("modal-dedicado").classList.add("aberto");
+  }
+
+  async function confirmarDedicado(botao) {
+    if (!dedicadoPendente) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Marcando...";
+    try {
+      await postJSON("/api/planejamento/dedicado", { itens: dedicadoPendente.itens, valor: document.getElementById("dedicado-valor").value });
+      document.getElementById("modal-dedicado").classList.remove("aberto");
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao marcar dedicado: ${e.message}`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  async function removerDedicado(serviceIds) {
+    const codigos = serviceIds.map(id => itemDedicadoDe(id).codigo).filter(Boolean);
+    if (!codigos.length || !confirm(`Remover a marca de dedicado de ${codigos.length} pedido(s)?`)) return;
+    try {
+      const resp = await fetch(BASE_PATH + "/api/planejamento/dedicado", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codigos }),
+      });
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao remover");
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao remover dedicado: ${e.message}`);
+    }
+  }
+
   let transportadoraPendente = null;   // { itens: [{service_id, rascunho_id}] }
   let TRANSPORTADORAS_TERCEIROS = null; // cache da lista, carregada 1x por página
 
@@ -5539,6 +5655,11 @@
       itens.push({ rotulo: "Transportadora (redespacho)", acao: () => abrirModalTransportadora(
         [{ service_id: serviceId, rascunho_id: rascunhoId }],
         li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`) });
+      // dedicado (Hugo, 23/09): se o card clicado está na seleção, vale pra todos
+      const alvoDedicado = SELECIONADOS.has(serviceId) && SELECIONADOS.size > 1 ? Array.from(SELECIONADOS) : [serviceId];
+      if (li.dataset.dedicado) itens.push({ rotulo: "Remover dedicado", acao: () => removerDedicado(alvoDedicado) });
+      else itens.push({ rotulo: alvoDedicado.length > 1 ? `Marcar como dedicado (${alvoDedicado.length} selecionados)` : "Marcar como dedicado…",
+                        acao: () => abrirModalDedicado(alvoDedicado) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Nível / horário de atendimento", acao: () => abrirModalNivelHorario(li, serviceId, rascunhoId) });
@@ -6198,6 +6319,13 @@
     });
     document.getElementById("transportadora-select").addEventListener("change", atualizarPreviaTransportadora);
     document.getElementById("botao-confirmar-transportadora").addEventListener("click", (e) => confirmarEditarTransportadora(e.target));
+    document.getElementById("botao-dedicado-selecao").addEventListener("click", () => abrirModalDedicado(Array.from(SELECIONADOS)));
+    document.getElementById("botao-cancelar-dedicado").addEventListener("click", () => {
+      document.getElementById("modal-dedicado").classList.remove("aberto");
+      dedicadoPendente = null;
+    });
+    document.getElementById("dedicado-valor").addEventListener("input", atualizarPreviaDedicado);
+    document.getElementById("botao-confirmar-dedicado").addEventListener("click", (e) => confirmarDedicado(e.target));
     document.getElementById("botao-cancelar-nivel-horario").addEventListener("click", () => {
       document.getElementById("modal-nivel-horario").classList.remove("aberto");
       nivelHorarioPendente = null;

@@ -297,4 +297,14 @@
     try { abrirAgora = abrirAgora || sessionStorage.getItem('atd_aberto') === '1'; } catch (e) {}
     if (abrirAgora) abrir(true); else agendarPoll();
   }).catch(() => { $('atd-dica-st').textContent = 'Atendimento indisponível agora'; });
+
+  // Chamado por outra tela (aba Envios, bloqueio de área — Hugo 23/09):
+  // abre o widget num chamado e, se vier texto, já manda como mensagem.
+  window.atdAbrirChamado = async function (chamadoId, textoPronto) {
+    try {
+      await abrirChamado(Number(chamadoId));
+      abrir(true);
+      if (textoPronto) await enviar(textoPronto);
+    } catch (e) { alert(e.message || 'Não foi possível abrir a conversa.'); }
+  };
 })();

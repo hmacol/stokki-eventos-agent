@@ -104,6 +104,7 @@ AREAS = {
     "financeiro": "Financeiro",
     "cadastro": "Cadastro / acesso",
     "outro": "Outro",
+    "envios": "Envios do portal",  # bloqueio de área não atendida (23/09), aberto pelo sistema
 }
 
 # Assuntos do motorista (Hugo, 12/09) -- o que ele escolhe ao abrir a conversa.
