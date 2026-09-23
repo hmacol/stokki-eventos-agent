@@ -53,6 +53,7 @@ import yaml
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "insucesso_entrega"))
+sys.path.insert(0, str(_RAIZ / "painel_agentes"))
 
 import fingerprint_expedicao
 import fingerprint_duplicacao_insucesso
@@ -1241,6 +1242,27 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     res["expedido"] += 1
                 else:
                     res["ja_expedido"] = res.get("ja_expedido", 0) + 1
+                # Baixa do estoque proprio (WMS fase 2). Nunca derruba a
+                # expedicao: se o WMS falhar, o pedido ja foi expedido na
+                # Stokki e isso e o que importa aqui.
+                try:
+                    import wms_pedidos
+                    conn_wms = wms_pedidos.conectar()
+                    try:
+                        r_wms = wms_pedidos.baixar_por_expedicao(conn_wms, codigo_ps)
+                    finally:
+                        conn_wms.close()
+                    if r_wms["baixas"]:
+                        logger.info(f"  {codigo_ps}: WMS baixou {r_wms['baixas']} reserva(s).")
+                    for erro in r_wms["erros"]:
+                        logger.warning(f"  {codigo_ps}: WMS {erro}")
+                    # Saldo negativo e aceito de proposito (a mercadoria ja
+                    # saiu), mas nunca em silencio: sempre significa entrada
+                    # nao registrada ou contagem errada no galpao.
+                    for neg in r_wms.get("negativos") or []:
+                        logger.warning(f"  {codigo_ps}: WMS saldo negativo -- {neg}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"  {codigo_ps}: baixa no WMS falhou ({e}) -- expedicao segue.")
                 if pdf_path:
                     if _canhoto_ja_anexado(page, codigo_ps):
                         res["anexado"] += 1  # conta como ok -- ja estava la

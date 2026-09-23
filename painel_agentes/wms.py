@@ -33,6 +33,7 @@ _RAIZ = Path(__file__).parent.parent
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
 PREFIXO_QR = "POS:"
+PREFIXO_QR_PRODUTO = "FL|"
 TEMPERATURAS = ("AMBIENTE", "REFRIGERADO", "CONGELADO")
 TIPOS_AREA = {
     "CONTAINER": ("Container", "AMBIENTE"),
@@ -819,6 +820,18 @@ def ler_codigo(conn, codigo: str) -> dict:
     bruto = str(codigo or "").strip()
     if not bruto:
         return {"tipo": "vazio"}
+    if bruto.upper().startswith(PREFIXO_QR_PRODUTO):
+        import wms_etiqueta_produto
+        lido = wms_etiqueta_produto.parse_qr(bruto)
+        if lido:
+            produtos = buscar_por_codigo(conn, lido["sku"])
+            if not produtos:
+                return {"tipo": "desconhecido", "codigo": bruto, "parece_ean": False}
+            for p in produtos:
+                p["saldos"] = saldos_produto(conn, p["id"])
+                p["total"] = round(sum(s["quantidade"] for s in p["saldos"]), 3)
+            return {"tipo": "produto_lote", "produtos": produtos, "codigo": bruto,
+                    "lote": lido["lote"], "validade": lido["validade"]}
     if bruto.upper().startswith(PREFIXO_QR) or parece_posicao(bruto):
         try:
             p = parse_posicao(bruto)

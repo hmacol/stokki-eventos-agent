@@ -79,6 +79,9 @@ import tratativas
 import pedidos_parados_triagem
 import contadores_menu
 import wms
+import wms_pedidos
+import wms_etiqueta_produto
+import wms_faltas_recebimento
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -2359,6 +2362,11 @@ def api_editar_transportadora():
 
 _NIVEIS_WMS = ("total", "operador", "galpao")
 _NIVEIS_WMS_ADMIN = ("total", "operador")
+# Rotas de SO LEITURA que tanto o app do galpao quanto a tela da equipe
+# (/wms/estoque, niveis "total"/"operador"/"leitura", sem "galpao") usam --
+# uniao dos dois publicos. Rotas que MUDAM estado (trocar lote, registrar
+# recebimento) continuam em _NIVEIS_WMS: "leitura" nunca opera o estoque.
+_NIVEIS_WMS_CONSULTA = ("total", "operador", "leitura", "galpao")
 
 
 def _wms_operador_atual():
@@ -2705,6 +2713,300 @@ def api_wms_criar_area():
         return _wms_json_erro(e)
     finally:
         conn.close()
+
+
+# ── WMS fase 2: pedidos com reserva por lote, telas (Hugo 22/09) ──────────
+# Modulo de dados em wms_pedidos.py (Tasks 1-9, sem interface). Aqui so HTTP.
+# Rotas de leitura (_NIVEIS_WMS_CONSULTA) servem tanto o app do galpao
+# (aba Separar) quanto a tela da equipe (/wms/estoque). Trocar lote e
+# registrar/enderecar recebimento continuam _NIVEIS_WMS (quem opera).
+
+@app.route("/api/wms/pedidos")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pedidos():
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"pedidos": wms_pedidos.listar_pedidos_wms(
+            conn, estado=request.args.get("estado"), limite=request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/pedidos/<int:pedido_id>")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pedido(pedido_id):
+    conn = wms_pedidos.conectar()
+    try:
+        pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
+        if not pedido:
+            return _wms_json_erro("Pedido não encontrado.", 404)
+        itens = [dict(r) for r in conn.execute(
+            "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? ORDER BY linha", (pedido_id,))]
+        return jsonify({"pedido": dict(pedido), "itens": itens,
+                        "separacao": wms_pedidos.separacao_do_pedido(conn, pedido_id)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/reservas/<int:reserva_id>/trocar-lote", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_trocar_lote(reserva_id):
+    _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_pedidos.conectar()
+    try:
+        nova = wms_pedidos.trocar_lote_reserva(
+            conn, reserva_id, body.get("posicao"), body.get("lote"), body.get("validade"))
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "reserva": nova})
+
+
+@app.route("/api/wms/pendencias")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pendencias():
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"pendencias": wms_pedidos.pendencias(
+            conn, request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/reservas-antigas")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_reservas_antigas():
+    """Reserva ATIVA parada ha muitos dias -- sintoma de baixa que nunca
+    veio (ver wms_pedidos.reservas_antigas). O corte em dias vem do
+    config.yaml (wms.reserva_antiga_dias); sem a chave vale o padrao do
+    modulo, e mudar la nao exige deploy."""
+    dias = (_carregar_config().get("wms", {}) or {}).get(
+        "reserva_antiga_dias", wms_pedidos.RESERVA_ANTIGA_DIAS)
+    try:
+        dias = int(dias)
+    except (TypeError, ValueError):
+        dias = wms_pedidos.RESERVA_ANTIGA_DIAS
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"dias": dias, "pedidos": wms_pedidos.reservas_antigas(
+            conn, dias, limite=request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/pedidos/<int:pedido_id>/liberar-reservas", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_wms_liberar_reservas(pedido_id):
+    """
+    Saída manual pra reserva que escapou das duas varreduras automáticas
+    (a baixa do que já foi expedido e a liberação do que sumiu da Stokki).
+    Devolve o que está reservado pro disponível.
+
+    Escrita de equipe interna ("total"/"operador"): nem "leitura" nem o
+    aparelho do galpão ("galpao") liberam reserva. O motivo é obrigatório
+    e fica gravado no pedido junto com quem pediu -- liberar por engano
+    devolve ao disponível mercadoria que já foi embora, e seis meses
+    depois "por que este pedido está CANCELADO" precisa ter resposta.
+    """
+    body = request.get_json(force=True) or {}
+    motivo = " ".join(str(body.get("motivo") or "").split())
+    if not motivo:
+        return _wms_json_erro("Diga o motivo da liberação -- ele fica gravado no pedido.")
+    conn = wms_pedidos.conectar()
+    try:
+        pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
+        if not pedido:
+            return _wms_json_erro("Pedido não encontrado.", 404)
+        quem = session.get("usuario") or "equipe"
+        liberadas = wms_pedidos.cancelar_reservas(
+            conn, pedido_id, f"Liberado manualmente por {quem}: {motivo}")
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "liberadas": liberadas, "codigo_ps": pedido["codigo_ps"]})
+
+
+@app.route("/api/wms/produtos/<int:produto_id>/saldo")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_produto_saldo(produto_id):
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"lotes": wms_pedidos.disponivel_por_lote(conn, produto_id)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimentos():
+    """Recebimentos esperados (Task 8) pra aba Receber do app do galpao.
+    Sem ?estado, so mostra ESPERADO -- o que falta enderecar."""
+    conn = wms_pedidos.conectar()
+    try:
+        estado = request.args.get("estado", "ESPERADO")
+        sql = ("SELECT r.*, (SELECT COUNT(*) FROM wms_recebimento_itens i "
+               "WHERE i.recebimento_id = r.id) AS itens FROM wms_recebimentos r")
+        params = []
+        if estado and estado != "TODOS":
+            sql += " WHERE r.estado = ?"
+            params.append(estado)
+        sql += " ORDER BY r.id DESC LIMIT ?"
+        params.append(request.args.get("limite", 50, type=int))
+        rows = conn.execute(sql, params).fetchall()
+        return jsonify({"recebimentos": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimento(recebimento_id):
+    conn = wms_pedidos.conectar()
+    try:
+        rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
+        if not rec:
+            return _wms_json_erro("Recebimento não encontrado.", 404)
+        # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
+        # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
+        return jsonify({"recebimento": dict(rec),
+                        "itens": wms_pedidos.itens_do_recebimento(conn, recebimento_id)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/itens/<int:item_id>/enderecar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
+    """
+    Chamada depois que a ENTRADA em si ja foi aceita por /api/wms/movimentos
+    (esta rota nao move estoque, so contabiliza o quanto desta linha do
+    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha e fecha
+    o recebimento (estado=ENDERECADO) quando toda linha RESOLVIDA (produto
+    identificado) bateu a quantidade do pedido -- linha que ficou pendencia
+    (produto nao encontrado no catalogo) nunca entra nessa conta: ela so
+    aparece na tela como aviso, nunca trava o fechamento do recebimento.
+
+    Idempotente pelo `uuid` do movimento de ENTRADA que o aparelho já
+    mandou: resposta perdida + nova tentativa não conta duas vezes (a
+    lógica está em wms_pedidos.contabilizar_enderecamento).
+
+    registrar_recebimento (Task 8) nunca reverte ENDERECADO pra ESPERADO;
+    esta rota so anda pra frente, pelo mesmo motivo.
+    """
+    _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_pedidos.conectar()
+    try:
+        r = wms_pedidos.contabilizar_enderecamento(
+            conn, recebimento_id, item_id, body.get("qtd") or 0, body.get("uuid") or "")
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "item": r["item"], "recebimento": r["recebimento"],
+                    "duplicado": r["duplicado"]})
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar-divergencia", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_recebimento_encerrar_divergencia(recebimento_id):
+    """
+    O operador terminou a descarga e faltou mercadoria: encerra o
+    recebimento assumindo a falta e manda o relatório pro cliente.
+
+    Sem isto, recebimento que chegou parcial nunca alcança o esperado,
+    nunca fecha sozinho e fica pra sempre na lista do galpão. O
+    fechamento automático do caso normal continua onde estava
+    (contabilizar_enderecamento) -- este botão é só pro caso em que falta.
+
+    NÃO mexe em estoque: o que chegou já entrou pelas ENTRADAs do
+    endereçamento e o que faltou nunca existiu.
+
+    O e-mail vai DEPOIS do encerramento, que já está commitado: falha de
+    SMTP não pode desfazer a conferência do galpão. O resultado do envio
+    volta no JSON pra tela poder dizer a verdade ao operador (e o e-mail
+    nasce redirecionado pro interno enquanto o Hugo não ligar o envio
+    real -- ver wms_faltas_recebimento).
+
+    Se o envio falhar, NÃO há reenvio automático: quem remanda é a equipe,
+    por `wms_faltas_recebimento.py --listar/--reenviar`. A falta fica
+    congelada em falta_un, então o relatório é remontado idêntico depois.
+
+    Repetir a chamada (resposta perdida no tablet, o operador aperta de
+    novo) é SUCESSO, não erro: o trabalho dele já está gravado. Nesse caso
+    a rota ainda tenta o e-mail -- se o primeiro deu certo, a idempotência
+    segura; se falhou, esta é uma segunda chance de graça.
+    """
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_pedidos.conectar()
+    try:
+        ja_encerrado = False
+        try:
+            r = wms_pedidos.encerrar_com_divergencia(
+                conn, recebimento_id, body.get("observacao") or "", operador=op)
+        except (wms.ErroWMS, ValueError) as e:
+            rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
+            if not (rec and rec["estado"] == "DIVERGENCIA"):
+                return _wms_json_erro(e)
+            ja_encerrado = True
+            r = {"recebimento": dict(rec),
+                 "faltas": wms_pedidos.faltas_congeladas(conn, recebimento_id)}
+        try:
+            envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
+        except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
+            logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
+            envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "ja_encerrado": ja_encerrado, "recebimento": r["recebimento"],
+                    "faltas": r["faltas"], "envio": envio})
+
+
+@app.route("/wms/etiqueta-produto.pdf")
+@requer_auth(niveis=_NIVEIS_WMS)
+def wms_etiqueta_produto_pdf():
+    """PDF da etiqueta de mercadoria (produto + lote + validade, QR FL|...),
+    imprimida na aba Receber. Mesma calibracao de midia da etiqueta de
+    posicao vizinha (config.yaml wms.etiqueta_*) -- ver wms_etiquetas_pdf."""
+    conn = wms_pedidos.conectar()
+    cfg_wms = _carregar_config().get("wms", {}) or {}
+    orientacao = request.args.get("orientacao") or cfg_wms.get("etiqueta_orientacao") or "paisagem"
+    padrao = {"margem": cfg_wms.get("etiqueta_margem_mm", 0), "dx": cfg_wms.get("etiqueta_dx_mm", 0),
+              "dy": cfg_wms.get("etiqueta_dy_mm", 0)}
+
+    def _mm(nome):
+        bruto = request.args.get(nome)
+        if bruto in (None, ""):
+            bruto = padrao[nome]
+        try:
+            return float(str(bruto).replace(",", "."))
+        except ValueError:
+            abort(400, f"Parâmetro {nome} inválido.")
+    margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
+    try:
+        pdf = wms_etiqueta_produto.gerar_etiquetas_produto_pdf(
+            conn, request.args.get("produto_id", type=int), request.args.get("lote", ""),
+            request.args.get("validade") or None, copias=request.args.get("copias", 1, type=int),
+            orientacao=orientacao, margem_mm=margem, desloc_x_mm=dx, desloc_y_mm=dy)
+    except wms.ErroWMS as e:
+        abort(400, str(e))
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": "inline; filename=etiqueta-produto.pdf"})
+
+
+@app.route("/wms/estoque")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def wms_estoque():
+    return render_template("wms_estoque.html")
 
 
 @app.route("/wms/etiquetas.pdf")

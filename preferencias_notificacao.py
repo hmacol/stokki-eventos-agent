@@ -48,6 +48,13 @@ TIPOS = {
         "descricao": "Um e-mail por pedido assim que a entrega é concluída, com o canhoto ou o motivo da falha.",
         "default": True,
     },
+    "faltas_recebimento": {
+        "grupo": "acompanhamento",
+        "rotulo": "Faltas no recebimento",
+        "descricao": "Quando o galpão encerra um recebimento com falta, o que foi anunciado, "
+                     "o que chegou e o que faltou em cada item.",
+        "default": True,
+    },
     "resumo_diario": {
         "grupo": "acompanhamento",
         "rotulo": "Resumo diário",
@@ -75,7 +82,8 @@ TIPOS = {
         "default": True,
     },
 }
-TIPOS_OPT_IN_SE_NOTIFICAR_EMAIL_0 = ("nfs_em_rota", "entrega_concluida", "resumo_diario")
+TIPOS_OPT_IN_SE_NOTIFICAR_EMAIL_0 = ("nfs_em_rota", "entrega_concluida", "resumo_diario",
+                                     "faltas_recebimento")
 CHAVES = ("sender_id", "stkkc_id")
 MAX_EMAILS = 5
 
@@ -95,6 +103,10 @@ def _emails_do_campo(raw) -> list[str]:
     return [e.strip() for e in re.split(r"[,;\t]+", str(raw or "")) if e.strip() and "@" in e]
 
 
+def _colunas(conn: sqlite3.Connection) -> set:
+    return {r[1] for r in conn.execute("PRAGMA table_info(preferencias_notificacao)")}
+
+
 def _garantir_tabela(conn: sqlite3.Connection) -> None:
     colunas = ", ".join(f"{tipo} INTEGER NOT NULL DEFAULT {int(info['default'])}" for tipo, info in TIPOS.items())
     conn.execute(
@@ -102,6 +114,16 @@ def _garantir_tabela(conn: sqlite3.Connection) -> None:
         "cnpj_embarcador TEXT PRIMARY KEY, emails TEXT NOT NULL DEFAULT '', "
         f"{colunas}, atualizado_em TEXT, atualizado_por TEXT)"
     )
+    # CREATE TABLE IF NOT EXISTS nao mexe em tabela que ja existe: tipo novo
+    # em TIPOS precisa do ALTER TABLE, senao o banco que ja rodou (a VPS)
+    # estoura "no such column" no primeiro SELECT depois do deploy. A coluna
+    # nasce com o default do tipo, que e exatamente o que quem nunca salvou
+    # preferencia deveria ter.
+    existentes = _colunas(conn)
+    for tipo, info in TIPOS.items():
+        if tipo not in existentes:
+            conn.execute(f"ALTER TABLE preferencias_notificacao ADD COLUMN {tipo} "
+                         f"INTEGER NOT NULL DEFAULT {int(info['default'])}")
 
 
 def _tabela_existe(conn: sqlite3.Connection) -> bool:
@@ -211,7 +233,12 @@ def carregar_embarcadores(tipo: str, chave: str = "sender_id", db_path=None) -> 
     try:
         if _tabela_existe(conn):
             juncao = "LEFT JOIN preferencias_notificacao p ON p.cnpj_embarcador = i.cnpj_embarcador"
-            campos = f"p.emails AS emails_notificacao, p.{tipo} AS ligado"
+            # Tipo recem-criado ainda sem a coluna no banco (a rotina de lote
+            # so LE: quem cria a coluna e o portal, pela _garantir_tabela).
+            # Sem esta guarda o SELECT estourava "no such column" e a rotina
+            # inteira caia -- aqui, coluna que nao existe vale o default.
+            coluna = f"p.{tipo}" if tipo in _colunas(conn) else "NULL"
+            campos = f"p.emails AS emails_notificacao, {coluna} AS ligado"
         else:
             juncao, campos = "", "NULL AS emails_notificacao, NULL AS ligado"
         rows = conn.execute(

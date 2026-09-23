@@ -89,6 +89,7 @@
   .item .qtd small { display: block; font-size: 10.5px; color: var(--texto-suave); font-weight: 600; }
   .item.venc { border-left: 4px solid var(--erro); }
   .item.perto { border-left: 4px solid var(--rodando); }
+  .item.escolhido { outline: 2px solid var(--acento); outline-offset: 1px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
   .badge-erro { background: var(--erro-bg); color: var(--erro); }
   .badge-atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
@@ -163,6 +164,8 @@
 
 <nav class="barra-inferior">
   <button class="aba on" data-aba="inicio"><span class="ic">⌂</span>Início</button>
+  <button class="aba" data-aba="receber"><span class="ic">⇩</span>Receber</button>
+  <button class="aba" data-aba="separar"><span class="ic">☑</span>Separar</button>
   <button class="aba" data-aba="busca"><span class="ic">⌕</span>Consultar</button>
   <button class="aba" data-aba="movimentos"><span class="ic">≡</span>Movimentos</button>
   <button class="aba" data-aba="posicoes"><span class="ic">▦</span>Posições</button>
@@ -649,6 +652,242 @@
       document.getElementById('btn-gerar-aqui').addEventListener('click', () => { S.ctx.abrirNova = true; render(); document.getElementById('a-codigo').value = area; document.getElementById('a-tipo').value = a.tipo || 'CONTAINER'; document.getElementById('a-codigo').scrollIntoView({ behavior: 'smooth' }); });
     } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
   }
+
+  // Receber -- recebimentos esperados da Stokki (WMS fase 2, Task 8+10)
+  TELAS.receber = () => `
+    <h1>Receber<small>entradas esperadas -- lote e validade você lê na caixa</small></h1>
+    <div class="lista" id="lista-receber"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.receber = async () => {
+    const el = document.getElementById('lista-receber');
+    try {
+      const r = await api('/recebimentos?estado=ESPERADO');
+      el.innerHTML = r.recebimentos.map((x) => `
+        <div class="item" data-rec="${x.id}" style="grid-template-columns:1fr">
+          <div class="cod">${esc(x.codigo)}</div>
+          <div class="meta">${esc((x.embarcador || '').split(' ').slice(0, 3).join(' '))}${x.situacao ? ' · ' + esc(x.situacao) : ''} · ${x.itens} item(ns)${x.chegada ? ' · chegada ' + esc(x.chegada) : ''}</div>
+        </div>`).join('') || '<div class="vazio">Nenhuma entrada esperada agora.</div>';
+      el.querySelectorAll('[data-rec]').forEach((x) => x.addEventListener('click', () => abrirRecebimento(Number(x.dataset.rec))));
+    } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+  };
+  async function abrirRecebimento(id) {
+    try {
+      const r = await api('/recebimentos/' + id);
+      ir('recebimento', { recebimento: Object.assign({}, r.recebimento, { itens: r.itens }) });
+    } catch (e) { toast(e.message, true); }
+  }
+
+  TELAS.recebimento = (ctx) => {
+    const r = ctx.recebimento; const itens = r.itens || [];
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${esc(r.codigo)}<small>${esc((r.embarcador || '').split(' ').slice(0, 3).join(' '))} · ${itens.length} item(ns)</small></h1>
+    <div class="lista">${itens.map((it, i) => {
+      const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;
+      const restante = Math.max(0, Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000);
+      return `
+      <div class="cartao ${feito ? 'ok' : (it.produto_id ? '' : 'erro')}">
+        <div class="rotulo">Linha ${it.linha}${feito ? ' · <span class="badge badge-ok">endereçado</span>' : ''}</div>
+        <div class="valor">${esc(it.descricao)}</div>
+        <div class="sub mono">SKU ${esc(it.sku || '-')}${it.produto_id ? '' : ' · sem produto no catálogo: ' + esc(it.motivo_pendencia)}</div>
+        ${it.produto_id && !feito ? `
+        <div class="duas" style="margin-top:8px">
+          <div class="campo"><label>Lote</label><input type="text" id="rec-lote-${i}" style="text-transform:uppercase" placeholder="opcional"></div>
+          <div class="campo"><label>Validade</label><input type="date" id="rec-val-${i}"></div>
+        </div>
+        <div class="duas-3">
+          <div class="campo"><label>Quantidade (${esc(it.unidade || 'UN')})</label><input type="number" id="rec-qtd-${i}" inputmode="decimal" min="0" step="any" value="${restante}"></div>
+          <div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>
+        </div>
+        <div class="botoes linha">
+          <button class="botao neutro" type="button" data-etiqueta="${i}">Imprimir etiqueta</button>
+          <button class="botao" type="button" data-confirmar="${i}">Registrar entrada</button>
+        </div>` : ''}
+      </div>`; }).join('') || '<div class="vazio">Recebimento sem itens.</div>'}</div>
+    ${blocoDivergencia(r, itens)}`;
+  };
+  // Chegou menos do que foi anunciado: o que falta pra cada linha resolvida.
+  // Mesmo critério do fechamento automático -- linha sem produto no catálogo
+  // fica de fora (é pendência nossa, não falta do cliente).
+  function faltasDoRecebimento(itens) {
+    return (itens || []).map((it) => Object.assign({}, it, {
+      falta: Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000,
+    })).filter((it) => it.produto_id && it.qtd_un !== null && it.falta > 0);
+  }
+  function blocoDivergencia(r, itens) {
+    const faltas = faltasDoRecebimento(itens);
+    if (r.estado !== 'ESPERADO' || !faltas.length) return '';
+    return `
+    <div class="cartao erro" style="margin-top:14px">
+      <div class="rotulo">Encerrar com divergência</div>
+      <div class="sub">Chegou menos do que foi anunciado em ${faltas.length} item(ns). Encerrar tira o recebimento da lista <b>e envia o relatório de faltas por e-mail ao cliente</b>. O que já foi endereçado continua no estoque.</div>
+      <ul style="margin:10px 0 0;padding-left:18px">
+        ${faltas.map((it) => `<li style="margin-bottom:4px">${esc(it.descricao)} — anunciado ${num(it.qtd_un)}, recebido ${num(it.qtd_enderecada || 0)}, <b>faltou ${num(it.falta)} ${esc(it.unidade || 'UN')}</b></li>`).join('')}
+      </ul>
+      <div class="campo" style="margin-top:10px"><label>O que aconteceu (vai no e-mail do cliente)</label>
+        <input type="text" id="div-obs" maxlength="300" placeholder="ex.: 2 caixas chegaram avariadas"></div>
+      <div class="botoes"><button class="botao" type="button" id="btn-divergencia">Encerrar com divergência</button></div>
+    </div>`;
+  }
+  async function encerrarComDivergencia(r, itens) {
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    const faltas = faltasDoRecebimento(itens);
+    if (!faltas.length) return toast('Não há falta nenhuma neste recebimento.', true);
+    const obs = (document.getElementById('div-obs').value || '').trim();
+    const resumo = faltas.map((it) => '• ' + it.descricao + ': anunciado ' + num(it.qtd_un)
+      + ', recebido ' + num(it.qtd_enderecada || 0) + ', faltou ' + num(it.falta) + ' ' + (it.unidade || 'UN')).join('\n');
+    if (!confirm('Encerrar ' + r.codigo + ' com divergência?\n\nO cliente vai receber por e-mail:\n' + resumo
+      + (obs ? '\n\nObservação: ' + obs : '\n\n(sem observação)'))) return;
+    const btn = document.getElementById('btn-divergencia'); btn.disabled = true;
+    try {
+      const resp = await api('/recebimentos/' + r.id + '/encerrar-divergencia', { method: 'POST', body: { observacao: obs } });
+      const envio = resp.envio || {};
+      // resp.ja_encerrado: resposta perdida e nova tentativa -- o trabalho
+      // dele já estava gravado, então isso é sucesso, não erro.
+      const feito = resp.ja_encerrado ? 'Já estava encerrado' : 'Encerrado';
+      const ok = envio.enviado || envio.motivo === 'ja_enviado';
+      toast(ok
+        ? feito + '. Relatório ' + (envio.enviado ? 'enviado para ' + (envio.destinos || []).join(', ') : 'já havia sido enviado')
+        : feito + ', mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + '). Avise a equipe.', !ok);
+      ir('receber', {}, false);
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+      else { toast(e.message, true); btn.disabled = false; }
+    }
+  }
+  TELAS_POS.recebimento = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const g = (id) => document.getElementById(id);
+    const itens = (ctx.recebimento && ctx.recebimento.itens) || [];
+    const btnDiv = document.getElementById('btn-divergencia');
+    if (btnDiv) btnDiv.addEventListener('click', () => encerrarComDivergencia(ctx.recebimento, itens));
+    app.querySelectorAll('[data-cam]').forEach((b) => b.addEventListener('click', () => abrirCamera((c) => {
+      g('rec-pos-' + b.dataset.cam).value = c.replace(/^pos:/i, '').toUpperCase();
+    })));
+    app.querySelectorAll('[data-etiqueta]').forEach((b) => b.addEventListener('click', () => {
+      const i = b.dataset.etiqueta; const it = itens[i];
+      const lote = g('rec-lote-' + i) ? g('rec-lote-' + i).value.trim() : '';
+      const validade = g('rec-val-' + i) ? g('rec-val-' + i).value : '';
+      let url = BASE_PATH + '/wms/etiqueta-produto.pdf?produto_id=' + it.produto_id + '&lote=' + encodeURIComponent(lote) + '&copias=1';
+      if (validade) url += '&validade=' + validade;
+      window.open(url, '_blank');
+    }));
+    app.querySelectorAll('[data-confirmar]').forEach((b) => b.addEventListener('click', () => confirmarRecebimentoItem(Number(b.dataset.confirmar))));
+  };
+  async function confirmarRecebimentoItem(i) {
+    const ctx = S.ctx; const r = ctx.recebimento; const it = r.itens[i];
+    const g = (id) => document.getElementById(id);
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    const lote = g('rec-lote-' + i).value.trim().toUpperCase();
+    const validade = g('rec-val-' + i).value || null;
+    const qtd = Number(String(g('rec-qtd-' + i).value).replace(',', '.'));
+    const posicao = g('rec-pos-' + i).value.trim().toUpperCase();
+    if (!(qtd > 0)) return toast('Informe a quantidade.', true);
+    if (!posicao) return toast('Leia a etiqueta da posição.', true);
+    const btn = document.querySelector('[data-confirmar="' + i + '"]'); btn.disabled = true;
+    // O MESMO uuid vai nas duas chamadas: a entrada em si já é idempotente
+    // por uuid, e a contabilização passou a ser também -- resposta perdida
+    // + nova tentativa não pode somar duas vezes no que já foi endereçado.
+    const idMov = uuid();
+    try {
+      await api('/movimentos', { method: 'POST', body: {
+        uuid: idMov, tipo: 'ENTRADA', produto_id: it.produto_id, lote, validade, quantidade: qtd, destino: posicao,
+        observacao: 'Recebimento ' + r.codigo + ' linha ' + it.linha,
+        criado_em: new Date().toISOString().slice(0, 19).replace('T', ' '), operador: S.operador,
+      } });
+      await api('/recebimentos/' + r.id + '/itens/' + it.id + '/enderecar', { method: 'POST', body: { qtd, uuid: idMov } });
+      toast('Entrada registrada em ' + posicao);
+      abrirRecebimento(r.id);
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+      else toast(e.message, true);
+      btn.disabled = false;
+    }
+  }
+
+  // Separar -- pedidos reservados por lote, troca do lote sugerido (WMS fase 2, Task 5+10)
+  TELAS.separar = () => `
+    <h1>Separar<small>pedidos com reserva pronta ou parcial</small></h1>
+    <div class="lista" id="lista-separar"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.separar = async () => {
+    const el = document.getElementById('lista-separar');
+    try {
+      const [a, b] = await Promise.all([api('/pedidos?estado=RESERVADO&limite=30'), api('/pedidos?estado=PARCIAL&limite=30')]);
+      const pedidos = a.pedidos.concat(b.pedidos).sort((x, y) => y.id - x.id);
+      el.innerHTML = pedidos.map((p) => `
+        <div class="item" data-ped="${p.id}" style="grid-template-columns:1fr">
+          <div class="cod">${esc(p.codigo_ps)}</div>
+          <div class="meta">${esc((p.embarcador || '').split(' ').slice(0, 3).join(' '))} · <span class="badge ${p.estado_reserva === 'PARCIAL' ? 'badge-atencao' : 'badge-ok'}">${p.estado_reserva}</span> · ${p.reservas_ativas}/${p.itens} itens</div>
+        </div>`).join('') || '<div class="vazio">Nenhum pedido reservado agora.</div>';
+      el.querySelectorAll('[data-ped]').forEach((x) => x.addEventListener('click', () => abrirSeparacao(Number(x.dataset.ped))));
+    } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+  };
+  async function abrirSeparacao(id) {
+    try {
+      const r = await api('/pedidos/' + id);
+      ir('separacao', { pedido: r.pedido, separacao: r.separacao });
+    } catch (e) { toast(e.message, true); }
+  }
+  TELAS.separacao = (ctx) => {
+    const p = ctx.pedido; const sep = ctx.separacao || [];
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1 class="mono">${esc(p.codigo_ps)}<small class="mono">${esc((p.embarcador || '').split(' ').slice(0, 3).join(' '))} · <span class="badge ${p.estado_reserva === 'PARCIAL' ? 'badge-atencao' : 'badge-ok'}">${p.estado_reserva}</span></small></h1>
+    <div class="leitura">
+      <input type="text" id="campo-bip-sep" data-foco inputmode="none" placeholder="Bipe a etiqueta do lote que você pegou" autocomplete="off">
+      <button type="button" class="btn-cam" id="btn-cam-sep">📷</button>
+      <div class="dica">bipar o lote sugerido confirma; bipar outro troca a reserva pra esse lote. Mesmo produto em mais de uma linha: toque na linha antes de bipar</div>
+    </div>
+    <div class="lista">${sep.map((r) => `
+      <div class="item ${r.origem === 'MANUAL' ? 'perto' : ''} ${ctx.reservaSel === r.id ? 'escolhido' : ''}" data-res="${r.id}">
+        <div class="cod">${esc(r.descricao)}</div>
+        <div class="qtd">${num(r.quantidade_un)}<small>${esc(r.unidade)}</small></div>
+        <div class="meta">linha ${r.linha} · <span class="mono">${esc(r.posicao)}</span> · lote ${esc(r.lote || '-')}${r.validade ? ' · val. ' + dataBr(r.validade) : ''}${r.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">trocado</span>' : ''}</div>
+      </div>`).join('') || '<div class="vazio">Sem reserva ativa pra este pedido.</div>'}</div>`;
+  };
+  TELAS_POS.separacao = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const campo = document.getElementById('campo-bip-sep');
+    async function bipar(codigo) {
+      codigo = String(codigo || '').trim(); if (!codigo) return;
+      if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+      let r;
+      try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
+      if (r.tipo !== 'produto_lote') { toast('Bipe a etiqueta de mercadoria (com QR de lote), não a de posição.', true); return; }
+      const sep = ctx.separacao || [];
+      // Casa pela LINHA da separação, não pelo produto: o mesmo SKU aparece
+      // em mais de uma linha do pedido (a linha é por embalagem) e casar
+      // por produto trocava o lote da linha errada.
+      const candidatos = sep.filter((s) => r.produtos.some((p) => p.id === s.produto_id));
+      if (!candidatos.length) { toast('Esse produto não está na separação deste pedido.', true); return; }
+      let alvo = candidatos.find((s) => s.id === ctx.reservaSel);
+      if (!alvo && candidatos.length === 1) alvo = candidatos[0];
+      if (!alvo) { toast('Esse produto está em mais de uma linha: toque na linha que você está separando e bipe de novo.', true); return; }
+      const produto = r.produtos.find((p) => p.id === alvo.produto_id);
+      const nosSaldos = (produto.saldos || []).filter((s) => (s.lote || '') === (r.lote || ''));
+      let posicao = nosSaldos.length === 1 ? nosSaldos[0].posicao : null;
+      if (!posicao) posicao = prompt('Em qual posição você pegou o lote ' + (r.lote || '(sem lote)') + '?', (nosSaldos[0] || {}).posicao || '');
+      if (!posicao) return;
+      try {
+        const resp = await api('/reservas/' + alvo.id + '/trocar-lote', { method: 'POST', body: { posicao: posicao.trim().toUpperCase(), lote: r.lote, validade: r.validade || null } });
+        // Bipar o mesmo lote da reserva é confirmação, não troca.
+        toast(resp.reserva && resp.reserva.confirmada
+          ? 'Lote confirmado: ' + posicao.trim().toUpperCase()
+          : 'Lote trocado: ' + posicao.trim().toUpperCase());
+        abrirSeparacao(ctx.pedido.id);
+      } catch (e) {
+        if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+        else toast(e.message, true);
+      }
+    }
+    // Toque na linha = "é esta que eu estou separando" -- desempata quando o
+    // mesmo produto está em mais de uma linha do pedido.
+    app.querySelectorAll('[data-res]').forEach((x) => x.addEventListener('click', () => {
+      ctx.reservaSel = Number(x.dataset.res);
+      app.querySelectorAll('[data-res]').forEach((y) => y.classList.toggle('escolhido', y === x));
+    }));
+    campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = campo.value.trim(); campo.value = ''; if (v) bipar(v); } });
+    document.getElementById('btn-cam-sep').addEventListener('click', () => abrirCamera(bipar));
+  };
 
   // Produto manual
   TELAS.novoProduto = (ctx) => `

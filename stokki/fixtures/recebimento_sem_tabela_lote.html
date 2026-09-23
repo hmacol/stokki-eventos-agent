@@ -1,0 +1,32 @@
+<!-- Fixture SINTETICA (nao capturada da Stokki -- proibido sondar a
+     producao desta maquina) que reproduz o caso do PE-2440 achado pela
+     revisao (Hugo, 22/09/2026): recebimento "Recebido" SEM a tabela de
+     lote na pagina, so com a tabela de itens (SKU/Nome/Quantidade total
+     recebida) -- o parser le essa tabela do mesmo jeito, com ou sem a
+     tabela de lote presente. Conteudo baseado no exemplo real citado na
+     revisao:
+       1 | #ITM-948 | AMRF | CAIXA DE AMOSTRAS | Recebimento | 1 | CX |
+       R$ 150,0000 | 1 -->
+<html>
+<body>
+  <div class="tab-pane" id="localizacao">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th>
+          <th>Localização</th><th>Quantidade</th><th>unidade</th>
+          <th>Valor Unitário</th><th>Quantidade total recebida</th><th>Obs</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td><td>#ITM-948</td><td>AMRF</td>
+          <td>CAIXA DE AMOSTRAS</td>
+          <td>Recebimento</td><td>1</td><td>CX</td>
+          <td>R$ 150,0000</td><td>1</td><td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
