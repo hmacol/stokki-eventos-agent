@@ -609,6 +609,287 @@ class TestBaixaNaExpedicao(BaseWMS):
         self.assertEqual(reservas["C9-E2-N1"], "ATIVA")
 
 
+class TestSequenciaDaRotina(BaseWMS):
+    """
+    Achado CRITICO da revisao final (22/09): os testes antigos exercitavam
+    registrar_pedido e reservar_pedido isoladamente. A rotina de lote chama
+    os DOIS em sequencia (sincronizar_pedidos_wms.rodar) -- e era so nessa
+    sequencia que o bug aparecia. Todo teste desta classe roda a sequencia
+    real.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO A', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (2, 901, 'SKU2', 'PRODUTO B', 'MARIA DOLORES', "
+            "'222222222222', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=2, quantidade=10,
+                                lote="L-B", validade="2026-11-15", destino="C9-E1-N2")
+        self.pedido = {"id_stokki": 39760, "codigo_ps": "PS-39760",
+                       "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"}
+        self.duas_linhas = [
+            {"linha": 1, "sku": "SKU1", "ean_linha": "111111111111", "descricao": "PRODUTO A",
+             "qtd_embalagem": 2},
+            {"linha": 2, "sku": "SKU2", "ean_linha": "222222222222", "descricao": "PRODUTO B",
+             "qtd_embalagem": 3},
+        ]
+
+    def _rodada(self, itens):
+        """Exatamente o que sincronizar_pedidos_wms.rodar faz por pedido."""
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, itens)
+        r = wms_pedidos.reservar_pedido(self.conn, pid)
+        self.conn.commit()
+        return pid, r
+
+    def _ativas(self):
+        return [(r["item_id"], r["quantidade_un"]) for r in self.conn.execute(
+            "SELECT item_id, quantidade_un FROM wms_reservas WHERE estado = 'ATIVA' ORDER BY item_id")]
+
+    def test_linha_que_sai_do_pedido_nao_ressuscita_na_reserva_da_mesma_rodada(self):
+        # rodada 1: as duas linhas reservam
+        self._rodada(self.duas_linhas)
+        self.assertEqual(len(self._ativas()), 2)
+
+        # rodada 2: a linha 2 saiu do pedido na Stokki. registrar_pedido
+        # cancela a reserva dela -- e o reservar_pedido logo em seguida NAO
+        # pode criar outra (era o critico: mercadoria saia do estoque sem
+        # estar no pedido, sem erro nenhum).
+        pid, _ = self._rodada(self.duas_linhas[:1])
+
+        self.assertEqual(len(self._ativas()), 1)
+        item_removido = self.conn.execute(
+            "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND linha = 2", (pid,)).fetchone()
+        self.assertTrue(item_removido["removido_em"])  # a linha fica no historico
+        # e a baixa gera UMA saida, nao duas
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39760")
+        self.assertEqual(r["baixas"], 1)
+        n_saida = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"]
+        self.assertEqual(n_saida, 1)
+
+    def test_linha_que_volta_pro_pedido_volta_a_reservar(self):
+        self._rodada(self.duas_linhas)
+        self._rodada(self.duas_linhas[:1])          # linha 2 saiu
+        pid, r = self._rodada(self.duas_linhas)     # e voltou
+
+        self.assertEqual(len(self._ativas()), 2)
+        self.assertEqual(r["estado"], "RESERVADO")
+        item = self.conn.execute(
+            "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND linha = 2", (pid,)).fetchone()
+        self.assertEqual(item["removido_em"], "")
+
+    def test_rodada_depois_da_baixa_nao_re_reserva_o_pedido(self):
+        # Depois da baixa as reservas estao CONSUMIDAS e o pedido BAIXADO.
+        # A rodada seguinte (o pedido ainda aparece em 'Pack' por uns
+        # minutos) criava reserva ATIVA nova e devolvia o pedido pra
+        # RESERVADO -- travando estoque que ja saiu do galpao.
+        self._rodada(self.duas_linhas)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-39760")
+
+        pid, r = self._rodada(self.duas_linhas)
+
+        self.assertEqual(r["estado"], "BAIXADO")
+        self.assertEqual(r["reservas"], 0)
+        self.assertEqual(self._ativas(), [])
+        estado = self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id = ?",
+                                   (pid,)).fetchone()["estado_reserva"]
+        self.assertEqual(estado, "BAIXADO")
+
+    def test_rodada_depois_do_cancelamento_nao_re_reserva_o_pedido(self):
+        pid, _ = self._rodada(self.duas_linhas)
+        wms_pedidos.cancelar_reservas(self.conn, pid, "pedido cancelado na Stokki")
+        self.conn.commit()
+
+        _, r = self._rodada(self.duas_linhas)
+
+        self.assertEqual(r["estado"], "CANCELADO")
+        self.assertEqual(self._ativas(), [])
+
+    def test_cancelar_reservas_grava_o_motivo(self):
+        pid, _ = self._rodada(self.duas_linhas)
+        wms_pedidos.cancelar_reservas(self.conn, pid, "pedido nao existe mais na Stokki")
+        motivo = self.conn.execute("SELECT motivo_cancelamento FROM wms_pedidos WHERE id = ?",
+                                   (pid,)).fetchone()["motivo_cancelamento"]
+        self.assertEqual(motivo, "pedido nao existe mais na Stokki")
+
+
+class TestFEFOEntradaMaisAntiga(BaseWMS):
+    """spec 7.3 item 4: validade crescente, depois ENTRADA mais antiga."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, unidade, qtd_por_caixa, "
+            "atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', 'UN', 1, "
+            "'2026-09-21 10:00:00')")
+        self.conn.commit()
+        # mesma validade nos dois lotes; o que ENTROU antes esta na posicao
+        # que ordena DEPOIS, entao ordenar por posicao daria o lote errado.
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="L-VELHO",
+                                validade="2026-12-31", destino="C9-E2-N1", criado_em="2026-08-01 08:00:00")
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="L-NOVO",
+                                validade="2026-12-31", destino="C9-E1-N1", criado_em="2026-09-20 08:00:00")
+
+    def test_empate_de_validade_sai_primeiro_o_que_entrou_primeiro(self):
+        alocacoes, faltou = wms_pedidos.alocar_fefo(self.conn, 1, 3)
+        self.assertEqual(faltou, 0)
+        self.assertEqual(alocacoes[0]["lote"], "L-VELHO")
+
+
+class TestFaltaDeSaldoViraPendencia(BaseWMS):
+    """
+    I7 da revisao: falta de saldo so aparecia no retorno da funcao (ia pro
+    log). Na primeira semana, com o galpao ainda sem enderecar nada, TODO
+    pedido fica PARCIAL e a tela dizia "Nenhuma pendencia".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        self.pedido = {"id_stokki": 39770, "codigo_ps": "PS-39770",
+                       "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"}
+        self.itens = [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+                       "descricao": "PRODUTO 1", "qtd_embalagem": 6}]
+
+    def test_estoque_zerado_vira_pendencia_de_saldo_na_tela(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        p = wms_pedidos.pendencias(self.conn)
+
+        self.assertEqual(len(p), 1)
+        self.assertEqual(p[0]["tipo_pendencia"], "SALDO")
+        self.assertEqual(p[0]["falta_un"], 6)
+        self.assertIn("falt", p[0]["motivo"].lower())
+        self.assertEqual(p[0]["motivo_pendencia"], "")  # nao e falha de catalogo
+
+    def test_pendencia_de_saldo_some_quando_o_galpao_endereca(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, self.itens)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=6,
+                                lote="L-A", validade="2026-12-31", destino="C9-E1-N1")
+
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        self.assertEqual(wms_pedidos.pendencias(self.conn), [])
+
+    def test_falha_de_catalogo_continua_distinguivel_da_falta_de_saldo(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, self.pedido, [
+            {"linha": 1, "sku": "FANTASMA", "ean_linha": "000", "descricao": "NAO EXISTE",
+             "qtd_embalagem": 1}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+
+        p = wms_pedidos.pendencias(self.conn)
+
+        self.assertEqual(p[0]["tipo_pendencia"], "CATALOGO")
+        self.assertEqual(p[0]["falta_un"], 0)
+
+
+class TestSaldoNegativoNaBaixa(BaseWMS):
+    """
+    I12: permitir_negativo=True e decisao consciente (a mercadoria ja saiu),
+    mas o negativo precisa ficar visivel -- antes: erros: [], BAIXADO, e
+    ninguem ficava sabendo.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        self.pid = wms_pedidos.registrar_pedido(
+            self.conn, {"id_stokki": 39780, "codigo_ps": "PS-39780", "embarcador": "MARIA DOLORES",
+                        "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 8}])
+        wms_pedidos.reservar_pedido(self.conn, self.pid)
+        self.conn.commit()
+        # o saldo some entre a reserva e a expedicao (contagem/ajuste do
+        # galpao) -- a baixa vai deixar a posicao negativa.
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=9, lote="L-A",
+                                validade="2026-10-15", origem="C9-E1-N1", observacao="quebra no galpao")
+
+    def test_baixa_negativa_volta_no_retorno_e_fica_gravada(self):
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-39780")
+
+        self.assertEqual(r["baixas"], 1)
+        self.assertEqual(r["erros"], [])           # segue sendo permitido
+        self.assertTrue(r["negativos"])            # mas nao passa calado
+        self.assertIn("C9-E1-N1", r["negativos"][0])
+        gravado = self.conn.execute("SELECT saldo_negativo FROM wms_pedidos WHERE id = ?",
+                                    (self.pid,)).fetchone()["saldo_negativo"]
+        self.assertIn("C9-E1-N1", gravado)
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), -7)
+
+
+class TestEnderecamentoDoRecebimento(BaseWMS):
+    """I6 (idempotencia) e I13 (incremento no SQL) da contabilizacao."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        self.rid = wms_pedidos.registrar_recebimento(
+            self.conn, {"id_stokki": 2478, "codigo": "#PE-2478", "embarcador": "MARIA DOLORES",
+                        "situacao": "Recebido", "chegada": "22/09/2026"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "", "descricao": "PRODUTO 1",
+              "qtd_embalagem": 10, "lote": "L-A", "validade": "18/02/2027"}])
+        self.conn.commit()
+        self.item_id = self.conn.execute(
+            "SELECT id FROM wms_recebimento_itens WHERE recebimento_id = ?", (self.rid,)).fetchone()["id"]
+
+    def test_mesma_chamada_repetida_nao_conta_duas_vezes(self):
+        r1 = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 10, "mov-1")
+        r2 = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 10, "mov-1")
+
+        self.assertFalse(r1["duplicado"])
+        self.assertTrue(r2["duplicado"])
+        self.assertEqual(r2["item"]["qtd_enderecada"], 10)
+
+    def test_dois_enderecamentos_diferentes_somam_e_fecham_o_recebimento(self):
+        wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 4, "mov-1")
+        r = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 6, "mov-2")
+
+        self.assertEqual(r["item"]["qtd_enderecada"], 10)
+        self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
+
+    def test_validade_sugerida_e_gravada_em_iso(self):
+        # a Stokki devolve 18/02/2027; o <input type="date"> da tela so
+        # entende ISO -- gravar cru fazia a sugestao sumir da tela.
+        item = self.conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?",
+                                 (self.item_id,)).fetchone()
+        self.assertEqual(item["validade_sugerida"], "2027-02-18")
+
+    def test_validade_gravada_no_formato_velho_e_convertida_na_migracao(self):
+        self.conn.execute("UPDATE wms_recebimento_itens SET validade_sugerida = '18/02/2027' WHERE id = ?",
+                          (self.item_id,))
+        self.conn.commit()
+        wms_pedidos._migrar(self.conn)
+        item = self.conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?",
+                                 (self.item_id,)).fetchone()
+        self.assertEqual(item["validade_sugerida"], "2027-02-18")
+
+
 class TestPendencias(BaseWMS):
     def test_pendencias_lista_item_nao_resolvido_com_o_pedido(self):
         pid = wms_pedidos.registrar_pedido(
@@ -675,6 +956,27 @@ class TestTrocarLote(BaseWMS):
         self.assertEqual(nova["quantidade_un"], 3)
         ativas = self.conn.execute("SELECT COUNT(*) n FROM wms_reservas WHERE estado='ATIVA'").fetchone()["n"]
         self.assertEqual(ativas, 1)
+
+    def test_bipar_o_proprio_lote_sugerido_e_confirmacao_nao_erro(self):
+        # I4 da revisao: disponivel_por_lote ja desconta a propria reserva,
+        # entao confirmar o lote que o FEFO sugeriu -- a acao mais natural
+        # do operador -- dava "tem 0 UN disponivel".
+        reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()
+        self.assertEqual(reserva["lote"], "L-A")
+
+        r = wms_pedidos.trocar_lote_reserva(self.conn, reserva["id"], "C9-E1-N1", "L-A", "2026-10-15")
+
+        self.assertTrue(r["confirmada"])
+        self.assertEqual(r["id"], reserva["id"])       # a mesma reserva, sem troca
+        self.assertEqual(r["estado"], "ATIVA")
+        n = self.conn.execute("SELECT COUNT(*) n FROM wms_reservas").fetchone()["n"]
+        self.assertEqual(n, 1)                          # nao criou reserva nova
+
+    def test_troca_de_verdade_continua_marcando_manual(self):
+        reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()
+        nova = wms_pedidos.trocar_lote_reserva(self.conn, reserva["id"], "C9-E1-N2", "L-B", "2026-12-31")
+        self.assertFalse(nova["confirmada"])
+        self.assertEqual(nova["origem"], "MANUAL")
 
     def test_trocar_pra_lote_sem_saldo_avisa_e_nao_troca(self):
         reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()

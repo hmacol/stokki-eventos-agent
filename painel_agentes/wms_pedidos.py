@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS wms_pedidos (
     embarcador      TEXT NOT NULL DEFAULT '',
     situacao        TEXT NOT NULL DEFAULT '',
     estado_reserva  TEXT NOT NULL DEFAULT 'PENDENTE',
+    motivo_cancelamento TEXT NOT NULL DEFAULT '',  -- por que as reservas foram liberadas
+    saldo_negativo  TEXT NOT NULL DEFAULT '',      -- baixa que deixou posicao negativa (aviso pra equipe)
     lido_em         TEXT NOT NULL,
     atualizado_em   TEXT NOT NULL
 );
@@ -49,6 +51,8 @@ CREATE TABLE IF NOT EXISTS wms_pedido_itens (
     qtd_un           REAL,
     produto_id       INTEGER REFERENCES wms_produtos(id),
     motivo_pendencia TEXT NOT NULL DEFAULT '',
+    falta_un         REAL NOT NULL DEFAULT 0,   -- quanto faltou de saldo na ultima reserva
+    removido_em      TEXT NOT NULL DEFAULT '',  -- linha que saiu do pedido na Stokki: nao reserva mais
     UNIQUE (pedido_id, linha)
 );
 CREATE TABLE IF NOT EXISTS wms_reservas (
@@ -99,14 +103,61 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_itens (
     UNIQUE (recebimento_id, linha)
 );
 CREATE INDEX IF NOT EXISTS idx_wms_recebimento_itens_recebimento ON wms_recebimento_itens(recebimento_id);
+CREATE TABLE IF NOT EXISTS wms_recebimento_enderecamentos (
+    uuid           TEXT PRIMARY KEY,   -- o mesmo uuid do movimento de ENTRADA do aparelho
+    recebimento_id INTEGER NOT NULL REFERENCES wms_recebimentos(id),
+    item_id        INTEGER NOT NULL REFERENCES wms_recebimento_itens(id),
+    quantidade     REAL NOT NULL,
+    criado_em      TEXT NOT NULL
+);
 """
+
+# Colunas que nasceram depois da primeira versao das tabelas. CREATE TABLE
+# IF NOT EXISTS nao mexe em tabela que ja existe, entao banco antigo (a VPS)
+# precisa do ALTER TABLE -- feito uma vez por conexao, e barato.
+_COLUNAS_NOVAS = {
+    "wms_pedidos": {"motivo_cancelamento": "TEXT NOT NULL DEFAULT ''",
+                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''"},
+    "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
+                         "removido_em": "TEXT NOT NULL DEFAULT ''"},
+}
+
+
+def _migrar(conn) -> None:
+    for tabela, colunas in _COLUNAS_NOVAS.items():
+        existentes = {r["name"] for r in conn.execute(f"PRAGMA table_info({tabela})")}
+        for nome, tipo in colunas.items():
+            if nome not in existentes:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+    # Validade sugerida gravada crua em dd/mm/aaaa antes da correcao (o
+    # <input type="date"> da tela ignora valor nao-ISO e aparece VAZIO).
+    antigas = conn.execute(
+        "SELECT id, validade_sugerida FROM wms_recebimento_itens "
+        "WHERE validade_sugerida <> '' AND validade_sugerida NOT LIKE '____-__-__'").fetchall()
+    for r in antigas:
+        conn.execute("UPDATE wms_recebimento_itens SET validade_sugerida = ? WHERE id = ?",
+                     (_validade_iso(r["validade_sugerida"]), r["id"]))
+    conn.commit()
 
 
 def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     """Conexao com as tabelas da fase 1 (wms.conectar) mais as da fase 2."""
     conn = wms.conectar(caminho)
     conn.executescript(_DDL)
+    _migrar(conn)
     return conn
+
+
+def _validade_iso(valor) -> str:
+    """
+    Normaliza a validade lida da Stokki (dd/mm/aaaa) pro ISO (aaaa-mm-dd)
+    que o <input type="date"> da tela entende. E so uma SUGESTAO pro
+    operador, entao data ilegivel vira vazio -- nunca levanta erro.
+    """
+    try:
+        return wms._validar_validade(valor) or ""
+    except wms.ErroWMS:
+        return ""
 
 
 def _so_digitos(valor) -> str:
@@ -167,8 +218,10 @@ def resolver_item(conn, item: dict) -> dict:
 def disponivel_por_lote(conn, produto_id: int) -> list[dict]:
     """
     Saldo de um produto por (posicao, lote, validade), ja descontando as
-    reservas ATIVAS. Ordem FEFO: quem vence primeiro vem primeiro; sem
-    validade vai pro fim.
+    reservas ATIVAS. Ordem FEFO (spec 7.3 item 4): quem vence primeiro vem
+    primeiro; empatou a validade, sai primeiro quem ENTROU primeiro (a
+    primeira ENTRADA daquele lote naquela posicao); sem validade vai pro
+    fim. A posicao so entra como desempate final, pra ordem ser estavel.
 
     O disponivel e sempre derivado -- wms_saldos nunca e tocado pela reserva.
     """
@@ -177,11 +230,16 @@ def disponivel_por_lote(conn, produto_id: int) -> list[dict]:
                COALESCE((SELECT SUM(r.quantidade_un) FROM wms_reservas r
                           WHERE r.produto_id = s.produto_id AND r.posicao = s.posicao
                             AND r.lote = s.lote AND r.validade = s.validade
-                            AND r.estado = 'ATIVA'), 0) AS reservado
+                            AND r.estado = 'ATIVA'), 0) AS reservado,
+               COALESCE((SELECT MIN(m.criado_em) FROM wms_movimentos m
+                          WHERE m.produto_id = s.produto_id AND m.posicao_destino = s.posicao
+                            AND m.lote = s.lote AND COALESCE(m.validade, '') = s.validade
+                            AND m.tipo = 'ENTRADA'), '9999-12-31') AS primeira_entrada
           FROM wms_saldos s
           JOIN wms_posicoes p ON p.codigo = s.posicao AND p.ativo = 1
          WHERE s.produto_id = ? AND s.quantidade > 0
-         ORDER BY s.validade = '', s.validade, s.posicao""", (int(produto_id),)).fetchall()
+         ORDER BY s.validade = '', s.validade, primeira_entrada, s.posicao""",
+        (int(produto_id),)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -214,6 +272,17 @@ def alocar_fefo(conn, produto_id: int, qtd_un: float) -> tuple[list[dict], float
     return alocacoes, max(restante, 0.0)
 
 
+def _gravar_falta(conn, item_id: int, faltou: float) -> None:
+    """
+    Persiste quanto faltou de saldo pra reservar a linha inteira. Fica em
+    wms_pedido_itens.falta_un (nao em motivo_pendencia, que e de falha de
+    CATALOGO): sao coisas diferentes -- a falta some sozinha quando o
+    galpao enderecar, a de catalogo exige corrigir cadastro.
+    """
+    conn.execute("UPDATE wms_pedido_itens SET falta_un = ? WHERE id = ?",
+                 (round(float(faltou or 0), 3), int(item_id)))
+
+
 def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
     """
     Cria ou atualiza o espelho do pedido e as linhas de item, ja resolvendo
@@ -221,9 +290,17 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
 
     Linha que existia numa chamada anterior e nao vem em `itens` desta vez
     (o pedido foi editado na Stokki e a linha saiu) tem suas reservas ATIVAS
-    canceladas -- a linha em si NAO e apagada de wms_pedido_itens, o
-    historico importa; so a reserva e liberada, pra nao esconder estoque
-    de um item que nao existe mais no pedido.
+    canceladas E ganha `removido_em` preenchido -- a linha em si NAO e
+    apagada de wms_pedido_itens, o historico importa; so a reserva e
+    liberada, pra nao esconder estoque de um item que nao existe mais no
+    pedido.
+
+    O `removido_em` e o que impede o achado critico da revisao (22/09): sem
+    ele, o reservar_pedido logo em seguida (a rotina de lote chama os dois
+    em sequencia) iterava TODOS os itens do pedido, inclusive o que acabara
+    de sair, e ressuscitava a reserva -- a mercadoria virava SAIDA na
+    expedicao sem estar no pedido. Linha que volta pro pedido tem o
+    removido_em limpo no upsert abaixo e volta a ser reservavel.
     """
     id_stokki = int(pedido["id_stokki"])
     agora = wms.agora()
@@ -251,7 +328,8 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
             ON CONFLICT(pedido_id, linha) DO UPDATE SET
                 sku = excluded.sku, ean_linha = excluded.ean_linha, descricao = excluded.descricao,
                 qtd_embalagem = excluded.qtd_embalagem, qtd_un = excluded.qtd_un,
-                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia""",
+                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia,
+                removido_em = ''""",
             (pedido_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
              item.get("descricao", ""), float(item["qtd_embalagem"]),
              r["qtd_un"], r["produto_id"], r["motivo_pendencia"]))
@@ -268,6 +346,9 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
         conn.execute(
             "UPDATE wms_reservas SET estado = 'CANCELADA', atualizado_em = ? "
             "WHERE item_id = ? AND estado = 'ATIVA'", (agora, it["id"]))
+        conn.execute(
+            "UPDATE wms_pedido_itens SET removido_em = ?, falta_un = 0 WHERE id = ? AND removido_em = ''",
+            (agora, it["id"]))
     return pedido_id
 
 
@@ -288,9 +369,20 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
         nada, so registra pendencia. MANUAL quer dizer que alguem ja bipou
         aquele lote no galpao; o sistema nao desfaz isso por conta propria.
 
+    Linha marcada com `removido_em` (saiu do pedido na Stokki) NAO entra:
+    a linha fica no historico, mas nao pode voltar a reservar estoque
+    (achado critico da revisao, 22/09 -- ver registrar_pedido).
+
+    Pedido ja BAIXADO ou CANCELADO tambem nao e re-reservado: depois da
+    baixa as reservas estao CONSUMIDAS e uma rodada seguinte criava
+    reserva ATIVA nova e devolvia o pedido pra RESERVADO, travando
+    estoque que ja saiu do galpao.
+
     Item que nao resolve produto ou unidade nao vira reserva -- vira
     pendencia. Falta de saldo nunca levanta erro -- vira pendencia e o
-    pedido fica PARCIAL (decisao do Hugo, 21/09: avisar, nunca bloquear).
+    pedido fica PARCIAL (decisao do Hugo, 21/09: avisar, nunca bloquear);
+    a falta fica gravada em wms_pedido_itens.falta_un, pra tela de
+    pendencias mostrar (some sozinha quando o galpao enderecar).
 
     A comparacao que decide RESERVADO x PARCIAL arredonda a soma das
     reservas a 3 casas (ROUND(...,3) no SQL): cada alocacao do FEFO ja vem
@@ -301,8 +393,12 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     agora = wms.agora()
     pendencias = []
     criadas = 0
-    itens = conn.execute("SELECT * FROM wms_pedido_itens WHERE pedido_id = ? ORDER BY linha",
-                         (pedido_id,)).fetchall()
+    pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
+    if pedido and pedido["estado_reserva"] in ("BAIXADO", "CANCELADO"):
+        return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
+    itens = conn.execute(
+        "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND removido_em = '' ORDER BY linha",
+        (pedido_id,)).fetchall()
     for item in itens:
         reservas_ativas = conn.execute(
             "SELECT * FROM wms_reservas WHERE item_id = ? AND estado = 'ATIVA'",
@@ -325,8 +421,11 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
                 reservas_ativas = []
 
         if reservas_ativas:
+            _gravar_falta(conn, item["id"], 0)  # ja esta reservado inteiro
             continue
         if not item["produto_id"] or item["qtd_un"] is None:
+            # pendencia de CATALOGO (motivo_pendencia) -- nao e falta de saldo
+            _gravar_falta(conn, item["id"], 0)
             pendencias.append(f"linha {item['linha']}: {item['motivo_pendencia']}")
             continue
         alocacoes, faltou = alocar_fefo(conn, item["produto_id"], item["qtd_un"])
@@ -338,6 +437,7 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
                 (pedido_id, item["id"], item["produto_id"], a["posicao"], a["lote"], a["validade"],
                  a["quantidade_un"], agora, agora))
             criadas += 1
+        _gravar_falta(conn, item["id"], faltou)
         if faltou > 0:
             pendencias.append(
                 f"linha {item['linha']} ({item['descricao']}): faltaram {faltou:g} UN em estoque")
@@ -345,7 +445,7 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     total_itens = len(itens)
     resolvidos = conn.execute("""
         SELECT COUNT(*) n FROM wms_pedido_itens i
-         WHERE i.pedido_id = ? AND i.qtd_un IS NOT NULL
+         WHERE i.pedido_id = ? AND i.removido_em = '' AND i.qtd_un IS NOT NULL
            AND ROUND(i.qtd_un, 3) <= ROUND(COALESCE((SELECT SUM(r.quantidade_un) FROM wms_reservas r
                                       WHERE r.item_id = i.id AND r.estado IN ('ATIVA','CONSUMIDA')), 0), 3)
         """, (pedido_id,)).fetchone()["n"]
@@ -356,13 +456,22 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
 
 
 def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
-    """Libera as reservas ATIVAS do pedido e marca o pedido como CANCELADO."""
+    """
+    Libera as reservas ATIVAS do pedido e marca o pedido como CANCELADO.
+    Chamada pela rotina de lote quando o pedido some da Stokki ou aparece
+    cancelado la (spec 7.3 item 6) -- sem isso a reserva trava o
+    disponivel pra sempre.
+
+    O motivo fica gravado em wms_pedidos.motivo_cancelamento: seis meses
+    depois, "por que este pedido esta CANCELADO" tem resposta.
+    """
     agora = wms.agora()
     cur = conn.execute(
         "UPDATE wms_reservas SET estado = 'CANCELADA', atualizado_em = ? WHERE pedido_id = ? AND estado = 'ATIVA'",
         (agora, pedido_id))
-    conn.execute("UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', atualizado_em = ? WHERE id = ?",
-                 (agora, pedido_id))
+    conn.execute(
+        "UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', motivo_cancelamento = ?, atualizado_em = ? "
+        "WHERE id = ?", (str(motivo or "")[:300], agora, pedido_id))
     return cur.rowcount
 
 
@@ -401,6 +510,12 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     problema resolvido, completa a baixa das reservas que sobraram ATIVAS
     e o pedido termina 'BAIXADO' normalmente.
 
+    A baixa aceita deixar saldo NEGATIVO (permitir_negativo=True): a
+    mercadoria ja saiu fisicamente e recusar deixaria o estoque mais
+    errado. Mas negativo nunca passa calado -- volta em `negativos` e fica
+    gravado em wms_pedidos.saldo_negativo, pra tela da equipe mostrar.
+    Negativo sempre quer dizer entrada nao registrada ou contagem errada.
+
     ATENCAO -- esta funcao FAZ COMMIT. Da propria baixa (por reserva) e de
     qualquer escrita pendente na conexao antes de comecar (ex.: um
     registrar_pedido/reservar_pedido chamado antes, na mesma conexao, sem
@@ -412,11 +527,11 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     """
     id_stokki = _id_stokki_do_codigo(codigo_ps)
     if not id_stokki:
-        return {"pedido_id": None, "baixas": 0, "ja_baixado": False,
+        return {"pedido_id": None, "baixas": 0, "ja_baixado": False, "negativos": [],
                 "erros": [f"codigo de pedido nao reconhecido: {codigo_ps!r}"]}
     pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?", (id_stokki,)).fetchone()
     if not pedido:
-        return {"pedido_id": None, "baixas": 0, "ja_baixado": False, "erros": []}
+        return {"pedido_id": None, "baixas": 0, "ja_baixado": False, "erros": [], "negativos": []}
 
     reservas = conn.execute("""
         SELECT r.*, i.linha FROM wms_reservas r
@@ -425,7 +540,7 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
          ORDER BY i.linha, r.id""", (pedido["id"],)).fetchall()
     if not reservas:
         ja = pedido["estado_reserva"] == "BAIXADO"
-        return {"pedido_id": pedido["id"], "baixas": 0, "ja_baixado": ja, "erros": []}
+        return {"pedido_id": pedido["id"], "baixas": 0, "ja_baixado": ja, "erros": [], "negativos": []}
 
     # Fecha qualquer transacao pendente de uma escrita anterior nesta mesma
     # conexao (ex.: registrar_pedido/reservar_pedido chamados antes sem
@@ -433,7 +548,7 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     # IMMEDIATE e nao aceita rodar dentro de uma ja aberta.
     conn.commit()
 
-    baixas, erros = 0, []
+    baixas, erros, negativos = 0, [], []
     por_item = {}
     for r in reservas:
         por_item[r["linha"]] = por_item.get(r["linha"], 0) + 1
@@ -445,6 +560,15 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                 operador=operador, uuid=uuid,
                 observacao=f"Baixa automatica da expedicao do {pedido['codigo_ps']}",
                 permitir_negativo=True)
+            # permitir_negativo=True e decisao consciente: a mercadoria ja
+            # saiu fisicamente, recusar a baixa deixaria o estoque MAIS
+            # errado. Mas saldo negativo nao pode passar em silencio -- e
+            # sempre sinal de entrada nao registrada ou contagem errada.
+            for posicao, saldo in (mov.get("saldos") or {}).items():
+                if saldo < 0:
+                    negativos.append(
+                        f"{posicao} ficou com {saldo:g} UN de {r['lote'] or '(sem lote)'} "
+                        f"(linha {r['linha']}) -- entrada faltando no WMS")
             conn.execute(
                 "UPDATE wms_reservas SET estado = 'CONSUMIDA', movimento_uuid = ?, atualizado_em = ? WHERE id = ?",
                 (mov["uuid"], wms.agora(), r["id"]))
@@ -471,25 +595,50 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     novo_estado = "BAIXADO" if not restantes_ativas and not erros else "PARCIAL"
     conn.execute("UPDATE wms_pedidos SET estado_reserva = ?, atualizado_em = ? WHERE id = ?",
                  (novo_estado, wms.agora(), pedido["id"]))
+    if negativos:
+        conn.execute("UPDATE wms_pedidos SET saldo_negativo = ? WHERE id = ?",
+                     (" | ".join(negativos)[:500], pedido["id"]))
     conn.commit()
-    return {"pedido_id": pedido["id"], "baixas": baixas, "ja_baixado": False, "erros": erros}
+    return {"pedido_id": pedido["id"], "baixas": baixas, "ja_baixado": False,
+            "erros": erros, "negativos": negativos}
 
 
 def pendencias(conn, limite: int = 50) -> list[dict]:
     """
-    Itens que nao viraram reserva -- produto ou unidade nao resolvidos.
-    Junta com o pedido pra dar contexto (codigo, embarcador, situacao),
-    e deixa de fora pedido ja CANCELADO (a pendencia dele nao importa mais).
+    Itens que nao viraram reserva inteira. Dois tipos, de proposito
+    distinguiveis (`tipo_pendencia`):
+
+      CATALOGO -- produto ou unidade nao resolvidos (motivo_pendencia).
+                  So some corrigindo cadastro.
+      SALDO    -- resolveu o produto, mas faltou estoque (falta_un > 0).
+                  Some sozinho quando o galpao enderecar a mercadoria.
+
+    Sem o tipo SALDO a tela mentia: na primeira semana, com o galpao ainda
+    sem enderecar nada, TODO pedido fica PARCIAL e a tela dizia "Nenhuma
+    pendencia -- todos os itens resolveram".
+
+    Junta com o pedido pra dar contexto (codigo, embarcador, situacao), e
+    deixa de fora linha removida do pedido e pedido ja CANCELADO ou
+    BAIXADO (a pendencia deles nao importa mais).
 
     Usado pela rotina de lote (sincronizar_pedidos_wms.py) pra logar o que
     precisa de atencao manual, e pela tela do painel pra listar.
     """
     rows = conn.execute("""
-        SELECT i.*, p.codigo_ps, p.embarcador, p.situacao, p.estado_reserva
+        SELECT i.*, p.codigo_ps, p.embarcador, p.situacao, p.estado_reserva,
+               CASE WHEN i.motivo_pendencia <> '' THEN 'CATALOGO' ELSE 'SALDO' END AS tipo_pendencia
           FROM wms_pedido_itens i JOIN wms_pedidos p ON p.id = i.pedido_id
-         WHERE i.motivo_pendencia <> '' AND p.estado_reserva <> 'CANCELADO'
+         WHERE (i.motivo_pendencia <> '' OR i.falta_un > 0)
+           AND i.removido_em = ''
+           AND p.estado_reserva NOT IN ('CANCELADO', 'BAIXADO')
          ORDER BY p.id DESC, i.linha LIMIT ?""", (int(limite),)).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["motivo"] = d["motivo_pendencia"] or (
+            f"faltaram {float(d['falta_un']):g} UN em estoque -- aguardando enderecamento no galpao")
+        out.append(d)
+    return out
 
 
 def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
@@ -508,7 +657,11 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     lote/validade que a Stokki ja traz preenchidos (achado do Hugo,
     22/09/2026: 61 de 61 itens numa amostra) sao gravados como SUGESTAO
     (lote_sugerido/validade_sugerida) -- a tela do operador (tarefa
-    seguinte) mostra editavel, nunca aplica em silencio.
+    seguinte) mostra editavel, nunca aplica em silencio. A validade vem da
+    Stokki em dd/mm/aaaa e e gravada em ISO (aaaa-mm-dd): o <input
+    type="date"> da tela IGNORA valor nao-ISO e aparece vazio, o que
+    matava a sugestao inteira (o operador tinha que digitar de novo uma
+    validade que e obrigatoria por padrao).
 
     Fallback (achado da revisao, 22/09/2026, PE-2440): quando o
     recebimento nao tem a tabela de lote na Stokki, stokki.recebimentos
@@ -558,15 +711,38 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
                 lote_sugerido = excluded.lote_sugerido, validade_sugerida = excluded.validade_sugerida""",
             (recebimento_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
              item.get("descricao", ""), float(item["qtd_embalagem"]), r["qtd_un"], r["produto_id"],
-             r["motivo_pendencia"], item.get("lote", ""), item.get("validade", "")))
+             r["motivo_pendencia"], item.get("lote", ""), _validade_iso(item.get("validade"))))
 
     return recebimento_id
 
 
+def itens_do_recebimento(conn, recebimento_id: int) -> list[dict]:
+    """
+    Linhas de um recebimento pra tela do operador. A unidade vem do
+    produto do catalogo -- wms_recebimento_itens nao tem essa coluna, e a
+    tela mostrava "undefined" no rotulo da quantidade.
+    """
+    rows = conn.execute("""
+        SELECT i.*, COALESCE(p.unidade, 'UN') AS unidade
+          FROM wms_recebimento_itens i
+          LEFT JOIN wms_produtos p ON p.id = i.produto_id
+         WHERE i.recebimento_id = ? ORDER BY i.linha""", (int(recebimento_id),)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def trocar_lote_reserva(conn, reserva_id: int, posicao: str, lote: str, validade: str | None) -> dict:
     """
-    O operador pegou outro lote do que o FEFO sugeriu. Cancela a reserva
-    sugerida e cria uma MANUAL no lote que ele bipou, se houver disponivel.
+    O operador bipou a etiqueta do lote que pegou (spec 7.4).
+
+    Bipou o MESMO lote/posicao/validade da reserva -> e confirmacao, nao
+    troca: devolve a reserva como esta, sem erro e sem reserva nova. Era o
+    achado mais bobo e mais grave da tela: disponivel_por_lote ja desconta
+    a propria reserva, entao confirmar o lote sugerido -- a acao mais
+    natural do operador -- dava "tem 0 UN disponivel".
+
+    Bipou outro lote -> cancela a sugerida e cria uma MANUAL no lote
+    bipado, se houver disponivel. O disponivel do lote de destino nao
+    conta a reserva que esta sendo substituida (ela sai no mesmo ato).
     """
     r = conn.execute("SELECT * FROM wms_reservas WHERE id = ?", (int(reserva_id),)).fetchone()
     if not r:
@@ -576,6 +752,13 @@ def trocar_lote_reserva(conn, reserva_id: int, posicao: str, lote: str, validade
     posicao = wms.normalizar_codigo(posicao)
     lote = " ".join(str(lote or "").split()).upper()
     validade = wms._validar_validade(validade) or ""
+
+    mesma_chave = (r["posicao"] == posicao and r["lote"] == lote and (r["validade"] or "") == validade)
+    if mesma_chave:
+        d = dict(r)
+        d["confirmada"] = True
+        return d
+
     alvo = [d for d in disponivel_por_lote(conn, r["produto_id"])
             if d["posicao"] == posicao and d["lote"] == lote and d["validade"] == validade]
     disponivel = alvo[0]["disponivel"] if alvo else 0
@@ -592,7 +775,60 @@ def trocar_lote_reserva(conn, reserva_id: int, posicao: str, lote: str, validade
         (r["pedido_id"], r["item_id"], r["produto_id"], posicao, lote, validade,
          r["quantidade_un"], agora, agora))
     conn.commit()
-    return dict(conn.execute("SELECT * FROM wms_reservas WHERE id = ?", (cur.lastrowid,)).fetchone())
+    nova = dict(conn.execute("SELECT * FROM wms_reservas WHERE id = ?", (cur.lastrowid,)).fetchone())
+    nova["confirmada"] = False
+    return nova
+
+
+def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: float,
+                               uuid: str = "") -> dict:
+    """
+    Contabiliza quanto de uma linha do recebimento ja foi enderecado.
+    Chamada DEPOIS que a ENTRADA em si foi aceita por registrar_movimento
+    -- aqui nao se move estoque nenhum, so se anda a barra do recebimento.
+
+    Idempotente pelo mesmo `uuid` do movimento de ENTRADA do aparelho: a
+    contabilizacao e uma segunda chamada HTTP e o celular do galpao perde
+    resposta a toda hora. Sem isso, "registrar entrada" repetido com o
+    movimento ja gravado (que registrar_movimento devolve como duplicado)
+    somava de novo no qtd_enderecada e fechava o recebimento como
+    ENDERECADO com mercadoria faltando.
+
+    O incremento e feito no proprio SQL (qtd_enderecada = qtd_enderecada +
+    ?), nao em read-modify-write no Python: dois operadores enderecando a
+    mesma linha ao mesmo tempo perdiam um dos incrementos.
+    """
+    item = conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",
+                        (int(item_id), int(recebimento_id))).fetchone()
+    if not item:
+        raise wms.ErroWMS("Item do recebimento nao encontrado.")
+    qtd = round(float(qtd or 0), 3)
+    uuid = str(uuid or "").strip()
+    duplicado = False
+    if uuid:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO wms_recebimento_enderecamentos (uuid, recebimento_id, item_id, "
+            "quantidade, criado_em) VALUES (?,?,?,?,?)",
+            (uuid, int(recebimento_id), int(item_id), qtd, wms.agora()))
+        duplicado = cur.rowcount == 0
+
+    if not duplicado:
+        conn.execute(
+            "UPDATE wms_recebimento_itens SET qtd_enderecada = ROUND(qtd_enderecada + ?, 3) WHERE id = ?",
+            (qtd, int(item_id)))
+    pendentes = conn.execute(
+        "SELECT COUNT(*) n FROM wms_recebimento_itens WHERE recebimento_id = ? AND produto_id IS NOT NULL "
+        "AND ROUND(qtd_enderecada, 3) < ROUND(qtd_un, 3)", (int(recebimento_id),)).fetchone()["n"]
+    if pendentes == 0:
+        conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? WHERE id = ?",
+                     (wms.agora(), int(recebimento_id)))
+    conn.commit()
+    return {
+        "duplicado": duplicado,
+        "item": dict(conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?", (int(item_id),)).fetchone()),
+        "recebimento": dict(conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?",
+                                         (int(recebimento_id),)).fetchone()),
+    }
 
 
 def listar_pedidos_wms(conn, estado: str | None = None, limite: int = 50) -> list[dict]:
