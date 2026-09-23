@@ -11,6 +11,7 @@ Rodar (da raiz):
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -966,6 +967,140 @@ class TestTrocarLote(BaseWMS):
         reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()
         with self.assertRaises(wms.ErroWMS):
             wms_pedidos.trocar_lote_reserva(self.conn, reserva["id"], "C9-E1-N2", "L-FANTASMA", "2027-01-01")
+
+
+class TestReservasAntigas(BaseWMS):
+    """
+    Reserva ATIVA parada ha dias e sintoma de baixa que nunca veio: a
+    mercadoria sumiu do disponivel sem ter saido do galpao e faz pedido
+    novo nascer PARCIAL por falta que nao existe. A tela da equipe mostra
+    quem passou do corte -- e so quem passou.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO A', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        self.item = [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+                      "descricao": "PRODUTO A", "qtd_embalagem": 2}]
+
+    def _pedido_reservado(self, id_stokki, dias_atras):
+        """Pedido com reserva ATIVA criada ha `dias_atras` dias."""
+        pid = wms_pedidos.registrar_pedido(
+            self.conn, {"id_stokki": id_stokki, "codigo_ps": f"PS-{id_stokki}",
+                        "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"}, self.item)
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        criado = (datetime.now() - timedelta(days=dias_atras)).strftime("%Y-%m-%d %H:%M:%S")
+        self.conn.execute("UPDATE wms_reservas SET criado_em = ? WHERE pedido_id = ?", (criado, pid))
+        self.conn.commit()
+        return pid
+
+    def test_reserva_velha_aparece_e_reserva_nova_nao(self):
+        self._pedido_reservado(50001, dias_atras=9)
+        self._pedido_reservado(50002, dias_atras=1)
+
+        antigas = wms_pedidos.reservas_antigas(self.conn, dias=4)
+
+        self.assertEqual([a["codigo_ps"] for a in antigas], ["PS-50001"])
+        self.assertEqual(antigas[0]["reservas"], 1)
+        self.assertEqual(antigas[0]["total_un"], 2)
+        self.assertAlmostEqual(antigas[0]["dias"], 9, delta=0.2)
+
+    def test_lista_o_que_esta_preso(self):
+        self._pedido_reservado(50003, dias_atras=9)
+
+        preso = wms_pedidos.reservas_antigas(self.conn, dias=4)[0]["itens"]
+
+        self.assertEqual(len(preso), 1)
+        self.assertEqual(preso[0]["descricao"], "PRODUTO A")
+        self.assertEqual(preso[0]["posicao"], "C9-E1-N1")
+        self.assertEqual(preso[0]["lote"], "L-A")
+        self.assertEqual(preso[0]["quantidade_un"], 2)
+
+    def test_corte_em_dias_manda(self):
+        self._pedido_reservado(50004, dias_atras=5)
+
+        self.assertEqual(len(wms_pedidos.reservas_antigas(self.conn, dias=4)), 1)
+        self.assertEqual(len(wms_pedidos.reservas_antigas(self.conn, dias=6)), 0)
+
+    def test_reserva_ja_baixada_ou_liberada_sai_da_lista(self):
+        # so reserva ATIVA trava o disponivel -- CONSUMIDA (baixou) e
+        # CANCELADA (liberou) nao sao sintoma de nada.
+        self._pedido_reservado(50005, dias_atras=9)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-50005")
+        outro = self._pedido_reservado(50006, dias_atras=9)
+        wms_pedidos.cancelar_reservas(self.conn, outro, "liberado na mao")
+        self.conn.commit()
+
+        self.assertEqual(wms_pedidos.reservas_antigas(self.conn, dias=4), [])
+
+
+class TestLiberarReservaNaMao(BaseWMS):
+    """
+    Frente 3: saida manual pro que escapou das varreduras automaticas.
+    Libera as reservas ATIVAS do pedido, devolve o disponivel e grava o
+    motivo -- seis meses depois, "por que este pedido esta CANCELADO"
+    precisa ter resposta.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO A', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        self.pid = wms_pedidos.registrar_pedido(
+            self.conn, {"id_stokki": 51000, "codigo_ps": "PS-51000",
+                        "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO A", "qtd_embalagem": 3}])
+        wms_pedidos.reservar_pedido(self.conn, self.pid)
+        self.conn.commit()
+
+    def test_liberar_devolve_o_disponivel_e_grava_o_motivo(self):
+        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 7)
+
+        n = wms_pedidos.cancelar_reservas(
+            self.conn, self.pid, "Liberado manualmente por hugo: saiu por redespacho, baixa nao veio")
+        self.conn.commit()
+
+        self.assertEqual(n, 1)
+        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 10)
+        pedido = self.conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (self.pid,)).fetchone()
+        self.assertEqual(pedido["estado_reserva"], "CANCELADO")
+        self.assertIn("Liberado manualmente por hugo", pedido["motivo_cancelamento"])
+
+    def test_liberar_nao_mexe_no_saldo_fisico(self):
+        # invariante central: reserva nunca toca wms_saldos.
+        saldo_antes = self.conn.execute(
+            "SELECT quantidade FROM wms_saldos WHERE produto_id = 1").fetchone()["quantidade"]
+
+        wms_pedidos.cancelar_reservas(self.conn, self.pid, "engano")
+        self.conn.commit()
+
+        saldo_depois = self.conn.execute(
+            "SELECT quantidade FROM wms_saldos WHERE produto_id = 1").fetchone()["quantidade"]
+        self.assertEqual(saldo_antes, saldo_depois)
+        n_mov = self.conn.execute("SELECT COUNT(*) n FROM wms_movimentos").fetchone()["n"]
+        self.assertEqual(n_mov, 1)  # so a ENTRADA do setUp
+
+    def test_pedido_liberado_some_das_reservas_antigas(self):
+        self.conn.execute("UPDATE wms_reservas SET criado_em = '2026-01-01 08:00:00'")
+        self.conn.commit()
+        self.assertEqual(len(wms_pedidos.reservas_antigas(self.conn, dias=4)), 1)
+
+        wms_pedidos.cancelar_reservas(self.conn, self.pid, "liberado na mao")
+        self.conn.commit()
+
+        self.assertEqual(wms_pedidos.reservas_antigas(self.conn, dias=4), [])
 
 
 if __name__ == "__main__":

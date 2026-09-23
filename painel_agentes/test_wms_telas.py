@@ -72,6 +72,35 @@ class TestTelaDaEquipeMostraOsDoisTiposDePendencia(unittest.TestCase):
         self.assertIn("p.saldo_negativo", _ESTOQUE)
 
 
+class TestTelaDaEquipeMostraReservaAntiga(unittest.TestCase):
+    """Frente 2: reserva ATIVA parada ha dias e o sintoma visivel de baixa
+    que nunca veio -- a tela tem que buscar a lista e dizer a idade."""
+
+    def test_tela_busca_as_reservas_antigas(self):
+        self.assertIn("api_wms_reservas_antigas", _ESTOQUE)
+        self.assertIn("tab-antigas", _ESTOQUE)
+
+    def test_mostra_idade_e_o_que_esta_preso(self):
+        self.assertIn("p.dias", _ESTOQUE)
+        self.assertIn("i.posicao", _ESTOQUE)
+
+
+class TestBotaoLiberarReserva(unittest.TestCase):
+    """Frente 3: a acao e de escrita -- so nivel de equipe interna ve o
+    botao, o motivo e obrigatorio e o POST vai pra rota certa."""
+
+    def test_botao_so_aparece_pra_equipe_interna(self):
+        self.assertIn("session.get('nivel_acesso') in ('total', 'operador')", _ESTOQUE)
+
+    def test_pede_motivo_e_nao_manda_vazio(self):
+        self.assertIn("prompt(", _ESTOQUE)
+        self.assertIn("O motivo é obrigatório", _ESTOQUE)
+
+    def test_posta_na_rota_de_liberar(self):
+        self.assertIn("api_wms_liberar_reservas", _ESTOQUE)
+        self.assertIn("JSON.stringify({ motivo: motivo.trim() })", _ESTOQUE)
+
+
 class TestUnidadeDoItemDoRecebimento(unittest.TestCase):
     """M7: `it.unidade` era sempre undefined -- wms_recebimento_itens nao
     tem essa coluna. A unidade vem do produto do catalogo."""

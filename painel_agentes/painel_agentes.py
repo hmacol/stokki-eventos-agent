@@ -2775,6 +2775,60 @@ def api_wms_pendencias():
         conn.close()
 
 
+@app.route("/api/wms/reservas-antigas")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_reservas_antigas():
+    """Reserva ATIVA parada ha muitos dias -- sintoma de baixa que nunca
+    veio (ver wms_pedidos.reservas_antigas). O corte em dias vem do
+    config.yaml (wms.reserva_antiga_dias); sem a chave vale o padrao do
+    modulo, e mudar la nao exige deploy."""
+    dias = (_carregar_config().get("wms", {}) or {}).get(
+        "reserva_antiga_dias", wms_pedidos.RESERVA_ANTIGA_DIAS)
+    try:
+        dias = int(dias)
+    except (TypeError, ValueError):
+        dias = wms_pedidos.RESERVA_ANTIGA_DIAS
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"dias": dias, "pedidos": wms_pedidos.reservas_antigas(
+            conn, dias, limite=request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/pedidos/<int:pedido_id>/liberar-reservas", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_wms_liberar_reservas(pedido_id):
+    """
+    Saída manual pra reserva que escapou das duas varreduras automáticas
+    (a baixa do que já foi expedido e a liberação do que sumiu da Stokki).
+    Devolve o que está reservado pro disponível.
+
+    Escrita de equipe interna ("total"/"operador"): nem "leitura" nem o
+    aparelho do galpão ("galpao") liberam reserva. O motivo é obrigatório
+    e fica gravado no pedido junto com quem pediu -- liberar por engano
+    devolve ao disponível mercadoria que já foi embora, e seis meses
+    depois "por que este pedido está CANCELADO" precisa ter resposta.
+    """
+    body = request.get_json(force=True) or {}
+    motivo = " ".join(str(body.get("motivo") or "").split())
+    if not motivo:
+        return _wms_json_erro("Diga o motivo da liberação -- ele fica gravado no pedido.")
+    conn = wms_pedidos.conectar()
+    try:
+        pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
+        if not pedido:
+            return _wms_json_erro("Pedido não encontrado.", 404)
+        quem = session.get("usuario") or "equipe"
+        liberadas = wms_pedidos.cancelar_reservas(
+            conn, pedido_id, f"Liberado manualmente por {quem}: {motivo}")
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "liberadas": liberadas, "codigo_ps": pedido["codigo_ps"]})
+
+
 @app.route("/api/wms/produtos/<int:produto_id>/saldo")
 @requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
 def api_wms_produto_saldo(produto_id):

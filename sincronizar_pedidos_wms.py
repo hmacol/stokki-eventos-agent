@@ -66,7 +66,9 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 
 # Estados de pedido que interessam pra reserva -- antes da expedicao. Um
 # pedido que ja saiu (Sent/Delivered) nao precisa mais de reserva, so de
-# baixa (isso ja e feito em outro lugar, na deteccao de expedicao).
+# baixa -- feita pelo expedir_pedidos.py quando o pedido passa por rota da
+# Vuupt e, pra quem sai por fora dela, pela varredura do fim desta rodada
+# (_baixar_pedidos_ja_expedidos).
 STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Pack")
 
 # Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
@@ -112,54 +114,119 @@ def _stkkc_id_da_linha(linha) -> str | None:
     return m.group(1) if m else None
 
 
-def _liberar_pedidos_sumidos(conn, sess, piloto_id: str, vistos: set) -> int:
+def _esta_expedido(situacao: str) -> bool:
     """
-    Spec 7.3 item 6: pedido cancelado ou sumido da Stokki tem as reservas
-    liberadas. Sem isso a reserva ATIVA trava o disponivel pra sempre e o
-    galpao "nao tem" mercadoria que esta la na prateleira.
-
-    Quem entra na conta: pedido nosso com reserva ATIVA que NAO apareceu
-    em nenhum dos status varridos nesta rodada. Como sair dos status
-    varridos tambem acontece quando o pedido e EXPEDIDO (e a baixa,
-    chamada pelo expedir_pedidos.py, pode vir horas depois no caso
-    "ja_expedido"), a rotina nao cancela por omissao: ela consulta a
-    Stokki uma vez (listagem sem filtro de status, so do piloto) e so
-    libera quem:
-      - nao existe mais na Stokki (sumiu de vez), ou
-      - esta com situacao de CANCELADO la.
-    Pedido que saiu dos status varridos por outro motivo (expedido,
-    entregue) mantem a reserva -- ela ainda vai virar a SAIDA da baixa --
-    e so gera aviso no log. Cancelar ali baixaria estoque nenhum e
-    deixaria o saldo mentindo pra sempre.
-
-    A consulta extra so acontece quando ha candidato -- no dia a dia,
-    nenhuma requisicao a mais.
+    A Stokki diz que o pedido ja saiu do galpao. Mesmo criterio de
+    retiradas/acompanhar_retiradas.decidir() e de
+    expedir_pedidos._situacao_na_stokki: a tela em pt-br mostra
+    "Enviado", a listagem em ingles devolve "Sent". Entregue/Delivered
+    tambem conta -- se chegou ao cliente, saiu do galpao ha mais tempo
+    ainda.
     """
-    candidatos = conn.execute("""
+    s = " ".join(str(situacao or "").split()).lower()
+    return ("enviad" in s or s == "sent"
+            or "entregue" in s or s == "delivered")
+
+
+def _candidatos_com_reserva_ativa(conn, vistos: set) -> list:
+    """
+    Pedido nosso com reserva ATIVA que NAO apareceu em nenhum dos status
+    varridos nesta rodada -- a materia-prima das duas varreduras do fim
+    da rodada (baixar o que ja foi expedido, liberar o que sumiu).
+    """
+    rows = conn.execute("""
         SELECT p.id, p.id_stokki, p.codigo_ps, p.estado_reserva
           FROM wms_pedidos p
          WHERE p.estado_reserva IN ('PENDENTE', 'RESERVADO', 'PARCIAL')
            AND EXISTS (SELECT 1 FROM wms_reservas r WHERE r.pedido_id = p.id AND r.estado = 'ATIVA')
     """).fetchall()
-    candidatos = [c for c in candidatos if c["id_stokki"] not in vistos]
-    if not candidatos:
-        return 0
+    return [r for r in rows if r["id_stokki"] not in vistos]
 
-    situacoes = {}
+
+def _situacoes_na_stokki(sess, piloto_id: str) -> dict | None:
+    """
+    Situacao de cada pedido do piloto na Stokki, numa consulta so
+    (listagem sem filtro de status). E o que as duas varreduras do fim da
+    rodada usam pra nao concluir nada por omissao -- e uma requisicao,
+    nao duas.
+
+    None quando a consulta falha: sem a lista, nenhuma das varreduras
+    conclui coisa alguma.
+    """
     try:
         resposta = stokki_pedidos.listar_pedidos(
             sess, status="all", cliente=piloto_id, por_pagina=200,
             ordenar_coluna="1", ordenar_dir="desc")
-        for linha in (resposta.get("aaData") or []):
-            id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
-            if id_pedido:
-                situacoes[id_pedido] = re.sub(
-                    r"<[^>]+>", " ", str(linha.get("state", ""))).strip()
-    except Exception as e:  # noqa: BLE001 -- sem a lista, nao cancela nada
-        logger.warning("Nao deu pra conferir os pedidos sumidos na Stokki (%s) -- "
-                        "nenhuma reserva foi liberada nesta rodada.", e)
-        return 0
+    except Exception as e:  # noqa: BLE001 -- sem a lista, nao mexe em nada
+        logger.warning("Nao deu pra conferir a situacao dos pedidos na Stokki (%s) -- "
+                        "nenhuma baixa nem liberacao de reserva nesta rodada.", e)
+        return None
+    situacoes = {}
+    for linha in (resposta.get("aaData") or []):
+        id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
+        if id_pedido:
+            situacoes[id_pedido] = re.sub(
+                r"<[^>]+>", " ", str(linha.get("state", ""))).strip()
+    return situacoes
 
+
+def _baixar_pedidos_ja_expedidos(conn, candidatos: list, situacoes: dict) -> int:
+    """
+    Pedido que saiu pela Stokki SEM passar por rota da Vuupt (retirada no
+    galpao, redespacho, transportadora propria) nunca chega no unico
+    chamador de baixar_por_expedicao (expedir_pedidos.py, dentro do laco
+    dos servicos entregues). A reserva dele ficava ATIVA pra sempre, sumia
+    do disponivel e fazia pedido novo nascer PARCIAL por falta que nao
+    existe. Mesmo pelo caminho da Vuupt, se a baixa estourava o
+    fingerprint ja marcava o pedido como processado e nao havia
+    retentativa nenhuma.
+
+    Aqui a rodada de 15 min fecha o buraco: pedido com reserva ATIVA que
+    sumiu dos status varridos E esta "Enviado"/"Sent" na Stokki leva a
+    baixa. Nao e cancelamento -- a mercadoria SAIU, entao vira SAIDA de
+    estoque, nunca reserva liberada (as duas coisas sao diferentes: uma
+    corrige o saldo, a outra o falsificaria).
+
+    baixar_por_expedicao e idempotente por uuid de movimento (ps-<id>-
+    item-<linha>-<n>), entao rodar de novo nao baixa em dobro -- e por
+    isso tambem que uma baixa que falhou hoje pode ser completada pela
+    rodada de amanha.
+    """
+    baixados = 0
+    for c in candidatos:
+        situacao = situacoes.get(c["id_stokki"])
+        if situacao is None or not _esta_expedido(situacao):
+            continue
+        # baixar_por_expedicao faz o proprio commit (por reserva).
+        r = wms_pedidos.baixar_por_expedicao(conn, c["codigo_ps"])
+        for erro in r["erros"]:
+            logger.warning("%s: baixa da expedicao falhou -- %s", c["codigo_ps"], erro)
+        for neg in r.get("negativos") or []:
+            logger.warning("%s: saldo negativo na baixa -- %s", c["codigo_ps"], neg)
+        if r["baixas"]:
+            baixados += 1
+            logger.warning("%s: expedido na Stokki (%s) sem passar por rota -- %d reserva(s) baixada(s).",
+                           c["codigo_ps"], situacao, r["baixas"])
+    return baixados
+
+
+def _liberar_pedidos_sumidos(conn, candidatos: list, situacoes: dict) -> int:
+    """
+    Spec 7.3 item 6: pedido cancelado ou sumido da Stokki tem as reservas
+    liberadas. Sem isso a reserva ATIVA trava o disponivel pra sempre e o
+    galpao "nao tem" mercadoria que esta la na prateleira.
+
+    A rotina nao cancela por omissao: so libera quem
+      - nao existe mais na Stokki (sumiu de vez), ou
+      - esta com situacao de CANCELADO la.
+    Pedido que saiu dos status varridos por outro motivo mantem a reserva
+    -- ela ainda vai virar a SAIDA da baixa -- e so gera aviso no log.
+    Cancelar ali baixaria estoque nenhum e deixaria o saldo mentindo pra
+    sempre. Quem estava expedido ja foi baixado antes desta varredura
+    (_baixar_pedidos_ja_expedidos) e nem chega aqui como candidato; se
+    chegar, e porque a baixa nao saiu inteira -- e ai a reserva que sobrou
+    tem que continuar ATIVA pra proxima rodada completar.
+    """
     liberados = 0
     for c in candidatos:
         situacao = situacoes.get(c["id_stokki"])
@@ -180,7 +247,8 @@ def _liberar_pedidos_sumidos(conn, sess, piloto_id: str, vistos: set) -> int:
 
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
     res = {"lidos": 0, "do_piloto": 0, "ignorados_outro_embarcador": 0,
-           "reservados": 0, "parciais": 0, "pendencias": 0, "liberados": 0, "erros": 0}
+           "reservados": 0, "parciais": 0, "pendencias": 0, "baixados": 0,
+           "liberados": 0, "erros": 0}
     vistos = set()
     pagina_cheia = False
     for status in STATUS_INTERESSANTES:
@@ -262,15 +330,29 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             time.sleep(0.3)
 
     # Depois de varrer tudo: quem tem reserva ATIVA e nao apareceu em
-    # nenhum status pode ter sido cancelado ou sumido (spec 7.3 item 6).
+    # nenhum status ou ja foi expedido por fora da rota (baixa que nunca
+    # veio) ou foi cancelado/sumiu (spec 7.3 item 6).
     if modo_teste:
         return res
     if pagina_cheia:
-        logger.warning("Alguma listagem encheu a pagina (limite %d) -- pulando a liberacao de "
-                        "reservas de pedido sumido nesta rodada, pra nao cancelar quem so nao foi lido.",
-                        limite)
+        logger.warning("Alguma listagem encheu a pagina (limite %d) -- pulando as varreduras de fim de "
+                        "rodada nesta volta, pra nao concluir nada sobre quem so nao foi lido.", limite)
         return res
-    res["liberados"] = _liberar_pedidos_sumidos(conn, sess, piloto_id, vistos)
+    candidatos = _candidatos_com_reserva_ativa(conn, vistos)
+    if not candidatos:
+        return res
+    # Uma consulta a Stokki so, e so quando ha candidato -- no dia a dia,
+    # nenhuma requisicao a mais.
+    situacoes = _situacoes_na_stokki(sess, piloto_id)
+    if situacoes is None:
+        return res
+    # A baixa vem PRIMEIRO: quem ja foi expedido sai da lista de
+    # candidatos (nao sobra reserva ATIVA) e nem e oferecido a varredura
+    # de sumidos, que cancelaria -- e cancelar mercadoria que ja saiu do
+    # galpao deixaria o saldo mentindo pra sempre.
+    res["baixados"] = _baixar_pedidos_ja_expedidos(conn, candidatos, situacoes)
+    res["liberados"] = _liberar_pedidos_sumidos(
+        conn, _candidatos_com_reserva_ativa(conn, vistos), situacoes)
     return res
 
 

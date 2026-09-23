@@ -294,7 +294,11 @@ class TestLiberarPedidoSumido(BaseRotina):
         self.assertEqual(pedido["estado_reserva"], "CANCELADO")
         self.assertIn("cancelado", pedido["motivo_cancelamento"].lower())
 
-    def test_pedido_expedido_mantem_a_reserva_pra_baixa(self):
+    def test_pedido_expedido_nunca_e_cancelado_por_esta_varredura(self):
+        # A varredura de sumidos nao pode cancelar quem foi EXPEDIDO: a
+        # mercadoria saiu, entao a reserva vira SAIDA (quem faz isso e o
+        # _baixar_pedidos_ja_expedidos, ver TestBaixarPedidoJaExpedido).
+        # Cancelar aqui baixaria estoque nenhum e o saldo mentiria pra sempre.
         self._reservar_o_pedido()
         linhas = _linhas_vazias()
         linhas["all"] = [_linha(40100, PILOTO_ID, status="Sent")]
@@ -303,13 +307,10 @@ class TestLiberarPedidoSumido(BaseRotina):
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["liberados"], 0)
-        ativas = self.conn.execute(
-            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"]
-        self.assertEqual(ativas, 1)
-        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
-        # e a baixa da expedicao ainda encontra o que baixar
-        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-40100")
-        self.assertEqual(r["baixas"], 1)
+        self.assertEqual(self._estado()["estado_reserva"], "BAIXADO")
+        n_cancelada = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'CANCELADA'").fetchone()["n"]
+        self.assertEqual(n_cancelada, 0)
 
     def test_listagem_que_encheu_a_pagina_nao_libera_ninguem(self):
         # pedido do piloto pode simplesmente nao ter sido lido: nao da pra
@@ -332,6 +333,166 @@ class TestLiberarPedidoSumido(BaseRotina):
 
         self.assertEqual(res["liberados"], 0)
         self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
+
+
+class TestBaixarPedidoJaExpedido(BaseRotina):
+    """
+    Achado da revisao final: baixar_por_expedicao tinha UM chamador so
+    (expedir_pedidos.py, dentro do laco dos servicos entregues da Vuupt).
+    Pedido que sai pela Stokki sem passar por rota (retirada no galpao,
+    redespacho, transportadora propria) nunca chegava la: a reserva ficava
+    ATIVA pra sempre, sumia do disponivel e fazia pedido novo nascer
+    PARCIAL por falta que nao existe.
+
+    A varredura do fim da rodada da a BAIXA (o estoque saiu de verdade) --
+    nunca cancela a reserva, que e coisa diferente e falsificaria o saldo.
+    """
+
+    def _reservar_o_pedido(self, id_pedido=40200):
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(id_pedido, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {str(id_pedido): _HTML_ITENS})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+    def _rodada_com_situacao(self, situacao, id_pedido=40200):
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(id_pedido, PILOTO_ID, status=situacao)]
+        return mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+                         limite=50, modo_teste=False)
+
+    def _saidas(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM(quantidade), 0) q FROM wms_movimentos "
+            "WHERE tipo = 'SAIDA'").fetchone()
+
+    def test_pedido_expedido_na_stokki_recebe_a_baixa(self):
+        self._reservar_o_pedido()
+        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 6)
+
+        res = self._rodada_com_situacao("Sent")
+
+        self.assertEqual(res["baixados"], 1)
+        self.assertEqual(res["liberados"], 0)
+        pedido = self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = 40200").fetchone()
+        self.assertEqual(pedido["estado_reserva"], "BAIXADO")
+        reserva = self.conn.execute("SELECT * FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["estado"], "CONSUMIDA")
+        # saiu de verdade do estoque fisico: 10 - 4 = 6
+        saidas = self._saidas()
+        self.assertEqual(saidas["n"], 1)
+        self.assertEqual(saidas["q"], 4)
+        self.assertEqual(self.conn.execute(
+            "SELECT quantidade FROM wms_saldos WHERE produto_id = 1").fetchone()["quantidade"], 6)
+
+    def test_situacao_em_portugues_tambem_conta_como_expedido(self):
+        # a Stokki em pt-br mostra "Enviado", e o state vem com marcacao
+        # HTML em volta.
+        self._reservar_o_pedido()
+
+        res = self._rodada_com_situacao('<span class="badge badge-success">Enviado</span>')
+
+        self.assertEqual(res["baixados"], 1)
+        self.assertEqual(self._saidas()["n"], 1)
+
+    def test_rodar_de_novo_nao_baixa_em_dobro(self):
+        self._reservar_o_pedido()
+        self._rodada_com_situacao("Sent")
+
+        res = self._rodada_com_situacao("Sent")
+
+        # sem reserva ATIVA o pedido nem e candidato -- e mesmo que fosse, o
+        # uuid deterministico do movimento barraria a segunda SAIDA.
+        self.assertEqual(res["baixados"], 0)
+        saidas = self._saidas()
+        self.assertEqual(saidas["n"], 1)
+        self.assertEqual(saidas["q"], 4)
+
+    def test_pedido_nao_expedido_mantem_a_reserva_intacta(self):
+        # pedido que saiu dos status varridos sem ter sido expedido nem
+        # cancelado (ex.: voltou pra "Em espera" na Stokki): nada de baixa,
+        # nada de cancelamento -- a reserva fica como estava.
+        self._reservar_o_pedido()
+
+        res = self._rodada_com_situacao("Em espera")
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self._saidas()["n"], 0)
+        reserva = self.conn.execute("SELECT * FROM wms_reservas").fetchone()
+        self.assertEqual(reserva["estado"], "ATIVA")
+        self.assertEqual(reserva["quantidade_un"], 4)
+        pedido = self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = 40200").fetchone()
+        self.assertEqual(pedido["estado_reserva"], "RESERVADO")
+
+    def test_pedido_ainda_nos_status_varridos_nao_e_candidato(self):
+        # o pedido apareceu na varredura normal desta rodada: nao ha nada a
+        # concluir sobre ele no fim, mesmo que a listagem geral o mostre
+        # como expedido (corrida entre as duas consultas).
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40200, PILOTO_ID)]
+        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
+        sess = SessaoFalsa(linhas, {"40200": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(self._saidas()["n"], 0)
+
+    def test_modo_teste_nunca_baixa(self):
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
+
+        res = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+                        limite=50, modo_teste=True)
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(self._saidas()["n"], 0)
+
+    def test_listagem_que_encheu_a_pagina_nao_baixa_ninguem(self):
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40201, PILOTO_ID)]
+        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
+        sess = SessaoFalsa(linhas, {"40201": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(self._saidas()["n"], 0)
+
+    def test_listagem_que_falhou_nao_baixa_nem_libera(self):
+        self._reservar_o_pedido()
+
+        class SessaoQueFalhaNaListagemGeral(SessaoFalsa):
+            def get(self, url, params=None, headers=None):
+                if url.endswith("/table") and (params or {}).get("state") == "all":
+                    raise RuntimeError("500 da Stokki")
+                return super().get(url, params, headers)
+
+        res = mod.rodar(self.conn, SessaoQueFalhaNaListagemGeral(_linhas_vazias(), {}),
+                        PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self._saidas()["n"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
+
+    def test_uma_consulta_so_da_listagem_geral_pras_duas_varreduras(self):
+        # a Stokki e de terceiros e de sessao unica: as duas varreduras do
+        # fim da rodada dividem a MESMA listagem.
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(40200, PILOTO_ID, status="Em espera")]
+        sess = SessaoFalsa(linhas, {})
+
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        gerais = [c for c in sess.chamadas
+                  if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
+        self.assertEqual(len(gerais), 1)
 
 
 class TestTravaStokki(unittest.TestCase):

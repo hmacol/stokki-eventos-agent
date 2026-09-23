@@ -17,6 +17,10 @@
   .vazio { color: var(--texto-suave); font-size: 13px; padding: 14px 0; }
   #busca-produto { width: 100%; max-width: 360px; padding: 8px 12px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); color: var(--texto); font-size: 13.5px; margin-bottom: 8px; }
   .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace; }
+  button.liberar { padding: 5px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font-size: 12px; cursor: pointer; white-space: nowrap; }
+  button.liberar:hover { border-color: var(--erro); color: var(--erro); }
+  button.liberar[disabled] { opacity: 0.5; cursor: progress; }
+  ul.presos { margin: 0; padding-left: 16px; font-size: 12.5px; color: var(--texto-suave); }
 </style>
 {% endblock %}
 
@@ -27,10 +31,18 @@
 </div>
 
 <section class="bloco-estoque">
+  <h2>Reservas antigas <small id="rotulo-antigas">(reserva parada há dias -- alguma coisa não fechou)</small></h2>
+  <table class="tabela-estoque" id="tab-antigas">
+    <thead><tr><th>Pedido</th><th>Embarcador</th><th>Situação</th><th>Parada há</th><th>O que está preso</th><th>Ação</th></tr></thead>
+    <tbody><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+  </table>
+</section>
+
+<section class="bloco-estoque">
   <h2>Pedidos com reserva</h2>
   <table class="tabela-estoque" id="tab-pedidos">
-    <thead><tr><th>Pedido</th><th>Embarcador</th><th>Situação</th><th>Reserva</th><th>Itens</th><th>Pendências</th></tr></thead>
-    <tbody><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+    <thead><tr><th>Pedido</th><th>Embarcador</th><th>Situação</th><th>Reserva</th><th>Itens</th><th>Pendências</th><th>Ação</th></tr></thead>
+    <tbody><tr><td colspan="7" class="vazio">Carregando…</td></tr></tbody>
   </table>
 </section>
 
@@ -58,6 +70,14 @@
                  CANCELADO: 'badge-erro', PENDENTE: 'badge-nunca' };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // Só quem opera o estoque pela equipe interna vê o botão de liberar --
+  // o mesmo nível que a rota POST exige (nem "leitura", nem "galpao").
+  const PODE_LIBERAR = {{ 'true' if session.get('nivel_acesso') in ('total', 'operador') else 'false' }};
+
+  const botaoLiberar = (p) => (PODE_LIBERAR
+    ? `<button type="button" class="liberar" data-pedido="${p.pedido_id || p.id}" data-codigo="${esc(p.codigo_ps)}">Liberar reserva</button>`
+    : '—');
+
   async function carregarPedidos() {
     const corpo = document.querySelector('#tab-pedidos tbody');
     try {
@@ -70,12 +90,71 @@
             <td>${esc(p.situacao)}</td>
             <td><span class="badge ${CHIP[p.estado_reserva] || 'badge-nunca'}">${esc(p.estado_reserva)}</span>${p.saldo_negativo ? ` <span class="badge badge-erro" title="${esc(p.saldo_negativo)}">saldo negativo</span>` : ''}</td>
             <td>${p.reservas_ativas} / ${p.itens}</td>
-            <td>${p.pendencias ? p.pendencias + ' pendência(s)' : '—'}</td></tr>`).join('')
-        || '<tr><td colspan="6" class="vazio">Nenhum pedido espelhado ainda.</td></tr>';
+            <td>${p.pendencias ? p.pendencias + ' pendência(s)' : '—'}</td>
+            <td>${p.reservas_ativas ? botaoLiberar(p) : '—'}</td></tr>`).join('')
+        || '<tr><td colspan="7" class="vazio">Nenhum pedido espelhado ainda.</td></tr>';
+    } catch (e) {
+      corpo.innerHTML = '<tr><td colspan="7" class="vazio">' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  // Reserva ATIVA parada há dias: a baixa da expedição nunca veio (pedido
+  // que saiu por fora da rota, baixa que estourou) e a mercadoria sumiu do
+  // disponível sem ter saído do galpão.
+  async function carregarAntigas() {
+    const corpo = document.querySelector('#tab-antigas tbody');
+    try {
+      const r = await fetch("{{ url_for('api_wms_reservas_antigas') }}", { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('Erro ' + r.status);
+      const dados = await r.json();
+      document.getElementById('rotulo-antigas').textContent =
+        `(reserva ATIVA parada há mais de ${dados.dias} dias -- alguma coisa não fechou)`;
+      corpo.innerHTML = (dados.pedidos || []).map((p) => `
+        <tr><td><strong>${esc(p.codigo_ps)}</strong></td>
+            <td>${esc(p.embarcador)}</td>
+            <td>${esc(p.situacao)} <span class="badge ${CHIP[p.estado_reserva] || 'badge-nunca'}">${esc(p.estado_reserva)}</span></td>
+            <td><strong>${p.dias == null ? '?' : p.dias} dia(s)</strong><br><span style="font-size:11.5px;color:var(--texto-suave)">desde ${esc(p.reservada_em)}</span></td>
+            <td><ul class="presos">${(p.itens || []).map((i) => `<li>${esc(i.descricao)} -- ${i.quantidade_un} UN em <span class="mono">${esc(i.posicao)}</span>${i.lote ? ' lote ' + esc(i.lote) : ''}</li>`).join('')}</ul></td>
+            <td>${botaoLiberar(p)}</td></tr>`).join('')
+        || `<tr><td colspan="6" class="vazio">Nenhuma reserva parada há mais de ${dados.dias} dias.</td></tr>`;
     } catch (e) {
       corpo.innerHTML = '<tr><td colspan="6" class="vazio">' + esc(e.message) + '</td></tr>';
     }
   }
+
+  // Saída manual pro que escapou das duas varreduras automáticas. O motivo
+  // é obrigatório (fica gravado no pedido) e o próprio texto do prompt é a
+  // confirmação: liberar por engano devolve ao disponível mercadoria que
+  // já foi embora.
+  document.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button.liberar');
+    if (!b) return;
+    const codigo = b.dataset.codigo;
+    const motivo = prompt(
+      `Liberar as reservas de ${codigo}?\n\n`
+      + 'A mercadoria reservada volta pro disponível. Se o pedido JÁ SAIU do galpão, '
+      + 'isso deixa o saldo errado -- nesse caso a baixa é que tem de ser corrigida.\n\n'
+      + 'Motivo (fica gravado no pedido):');
+    if (motivo === null) return;
+    if (!motivo.trim()) { alert('O motivo é obrigatório.'); return; }
+    b.disabled = true;
+    try {
+      const r = await fetch("{{ url_for('api_wms_liberar_reservas', pedido_id=0) }}".replace(/\/0\//, '/' + b.dataset.pedido + '/'), {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivo.trim() }),
+      });
+      const dados = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(dados.erro || ('Erro ' + r.status));
+      alert(`${codigo}: ${dados.liberadas} reserva(s) liberada(s).`);
+      carregarAntigas();
+      carregarPedidos();
+      carregarPendencias();
+    } catch (e) {
+      alert(e.message);
+      b.disabled = false;
+    }
+  });
 
   async function carregarPendencias() {
     const corpo = document.querySelector('#tab-pendencias tbody');
@@ -123,6 +202,7 @@
     }
   }
 
+  carregarAntigas();
   carregarPedidos();
   carregarPendencias();
 })();

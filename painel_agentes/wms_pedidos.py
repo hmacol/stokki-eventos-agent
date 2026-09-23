@@ -18,12 +18,18 @@ Regras que este modulo garante:
 """
 import re
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import wms
 
 ESTADOS_PEDIDO = ("PENDENTE", "RESERVADO", "PARCIAL", "BAIXADO", "CANCELADO")
 ESTADOS_RESERVA = ("ATIVA", "CONSUMIDA", "CANCELADA")
+
+# A partir de quantos dias uma reserva ATIVA parada vira sintoma na tela da
+# equipe (ver reservas_antigas). Sobrescrevivel em config.yaml, secao wms,
+# chave reserva_antiga_dias -- a rota do painel le de la.
+RESERVA_ANTIGA_DIAS = 4
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS wms_pedidos (
@@ -614,6 +620,56 @@ def pendencias(conn, limite: int = 50) -> list[dict]:
         d = dict(r)
         d["motivo"] = d["motivo_pendencia"] or (
             f"faltaram {float(d['falta_un']):g} UN em estoque -- aguardando enderecamento no galpao")
+        out.append(d)
+    return out
+
+
+def reservas_antigas(conn, dias: int = RESERVA_ANTIGA_DIAS, limite: int = 50) -> list[dict]:
+    """
+    Pedidos cuja reserva ATIVA mais velha passou de `dias` dias.
+
+    Reserva so nasce pra ser consumida pela baixa da expedicao (dias) ou
+    liberada quando o pedido some/cancela. Uma que fica ATIVA muito tempo
+    quer dizer que alguma coisa NAO fechou: o pedido saiu por fora da
+    rota (retirada no galpao, redespacho, transportadora propria) e a
+    baixa nunca foi chamada, a baixa estourou, ou o pedido virou outra
+    coisa na Stokki. Enquanto isso a mercadoria some do disponivel e faz
+    pedido novo nascer PARCIAL por falta que nao existe.
+
+    A varredura de sincronizar_pedidos_wms.py resolve o caso comum
+    sozinha; esta lista e o que revela o que escapou dela -- e o que a
+    equipe usa pra decidir se libera a reserva na mao.
+
+    Uma linha por PEDIDO (nao por reserva), com a idade em dias e o que
+    esta preso (item, posicao, lote, quantidade) -- "PS-123 ha 6 dias"
+    sem dizer o que esta segurando nao ajuda ninguem a agir.
+    """
+    corte = (datetime.now() - timedelta(days=int(dias))).strftime("%Y-%m-%d %H:%M:%S")
+    rows = conn.execute("""
+        SELECT p.id AS pedido_id, p.codigo_ps, p.embarcador, p.situacao, p.estado_reserva,
+               MIN(r.criado_em) AS reservada_em, COUNT(*) AS reservas,
+               ROUND(SUM(r.quantidade_un), 3) AS total_un
+          FROM wms_reservas r
+          JOIN wms_pedidos p ON p.id = r.pedido_id
+         WHERE r.estado = 'ATIVA'
+         GROUP BY p.id
+        HAVING MIN(r.criado_em) < ?
+         ORDER BY reservada_em LIMIT ?""", (corte, int(limite))).fetchall()
+    agora = datetime.now()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            idade = agora - datetime.strptime(d["reservada_em"], "%Y-%m-%d %H:%M:%S")
+            d["dias"] = round(idade.total_seconds() / 86400.0, 1)
+        except (TypeError, ValueError):  # criado_em em formato inesperado
+            d["dias"] = None
+        d["itens"] = [dict(x) for x in conn.execute("""
+            SELECT i.linha, i.descricao, i.sku, r.posicao, r.lote, r.validade, r.quantidade_un
+              FROM wms_reservas r
+              JOIN wms_pedido_itens i ON i.id = r.item_id
+             WHERE r.pedido_id = ? AND r.estado = 'ATIVA'
+             ORDER BY i.linha, r.id""", (d["pedido_id"],))]
         out.append(d)
     return out
 
