@@ -96,8 +96,11 @@ class SessaoFalsa:
          entregava linhas pra qualquer status, entao a suite inteira (e
          duas revisoes) passou por cima de uma consulta que em producao
          voltaria vazia e faria TODO candidato ser cancelado.
-      2. `/show/<id>` de pedido que nao existe responde 404 -- e o unico
-         jeito de "sumiu" ser evidencia direta.
+      2. `/show/<id>` de pedido que nao existe responde **500**, nao 404
+         (medido pelo Hugo; a mesma nota esta no
+         pedidos_parados_triagem desde 28/08). O duble da rodada 2 dizia
+         404 e um teste consagrava esse comportamento que producao nao
+         tem -- a mesma dobra de duble complacente, um nivel abaixo.
 
     A listagem respeita start/length, como a Stokki (que honra o tamanho
     de pagina pedido: pedi 200, vieram 200).
@@ -122,7 +125,8 @@ class SessaoFalsa:
         if "/show/" in url:
             id_pedido = url.rstrip("/").split("/")[-1]
             if id_pedido not in self.html_por_id:
-                return _RespostaFalsa(text="Not Found", status_code=404)
+                # producao: id inexistente da 500, nao 404
+                return _RespostaFalsa(text="Server Error", status_code=500)
             return _RespostaFalsa(text=self.html_por_id[id_pedido])
         raise AssertionError(f"URL inesperada na sessao falsa: {url}")
 
@@ -282,16 +286,19 @@ class TestRodar(BaseRotina):
         self.assertIsNone(pedido_ruim)
 
 
-class TestLiberarPedidoSumido(BaseRotina):
+class TestLiberarPedidoCancelado(BaseRotina):
     """
     I2 da revisao final: cancelar_reservas era codigo morto -- pedido
-    cancelado ou sumido da Stokki ficava com reserva ATIVA pra sempre,
-    travando o disponivel (spec 7.3 item 6).
+    cancelado na Stokki ficava com reserva ATIVA pra sempre, travando o
+    disponivel (spec 7.3 item 6).
+
+    Rodada 3: o rotulo de CANCELADO na pagina do pedido virou a unica via
+    automatica de liberacao. Pedido que SUMIU nao e mais detectado (ver
+    TestSumicoNaoEMaisDetectado) -- decisao do Hugo, 23/09.
 
     Cuidado que o teste tambem fixa: pedido que saiu dos status varridos
     porque foi EXPEDIDO nao pode ter a reserva liberada -- ela ainda vai
-    virar a SAIDA da baixa (expedir_pedidos.py, caso 'ja_expedido', pode
-    vir horas depois). Liberar ali baixaria estoque nenhum e o saldo
+    virar a SAIDA da baixa. Liberar ali baixaria estoque nenhum e o saldo
     ficaria mentindo pra sempre.
     """
 
@@ -308,24 +315,6 @@ class TestLiberarPedidoSumido(BaseRotina):
         return self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?",
                                  (id_stokki,)).fetchone()
 
-    def test_pedido_que_sumiu_da_stokki_tem_as_reservas_liberadas(self):
-        self._reservar_o_pedido()
-        # rodada seguinte: nao aparece em status nenhum e nem na listagem
-        # geral -- sumiu de vez.
-        sess = SessaoFalsa(_linhas_vazias(), {})
-
-        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
-
-        self.assertEqual(res["liberados"], 1)
-        ativas = self.conn.execute(
-            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"]
-        self.assertEqual(ativas, 0)
-        pedido = self._estado()
-        self.assertEqual(pedido["estado_reserva"], "CANCELADO")
-        self.assertIn("nao existe mais", pedido["motivo_cancelamento"])
-        # o disponivel voltou pro galpao
-        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 10)
-
     def test_pedido_cancelado_na_stokki_tem_as_reservas_liberadas(self):
         self._reservar_o_pedido()
         # a pagina do pedido existe e diz "Cancelado"
@@ -337,6 +326,24 @@ class TestLiberarPedidoSumido(BaseRotina):
         pedido = self._estado()
         self.assertEqual(pedido["estado_reserva"], "CANCELADO")
         self.assertIn("cancelado", pedido["motivo_cancelamento"].lower())
+        # o disponivel voltou pro galpao
+        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 10)
+
+    def test_rotulo_parecido_com_cancelado_nao_libera(self):
+        # "Cancelamento solicitado" nao e "Cancelado": liberar aqui
+        # marcaria o pedido CANCELADO pra sempre (reservar_pedido pula
+        # CANCELADO) e, se ele embarcasse depois, sairia sem SAIDA --
+        # mercadoria fantasma na prateleira, em silencio.
+        self._reservar_o_pedido()
+        sess = SessaoFalsa(_linhas_vazias(),
+                           {"40100": _pagina_com_situacao("Cancelamento solicitado")})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self._estado()["estado_reserva"], "RESERVADO")
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
     def test_pedido_expedido_nunca_e_cancelado_por_esta_varredura(self):
         # A varredura nao pode cancelar quem foi EXPEDIDO: a mercadoria
@@ -352,19 +359,6 @@ class TestLiberarPedidoSumido(BaseRotina):
         n_cancelada = self.conn.execute(
             "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'CANCELADA'").fetchone()["n"]
         self.assertEqual(n_cancelada, 0)
-
-    def test_listagem_que_encheu_a_pagina_nao_libera_ninguem(self):
-        # pedido do piloto pode simplesmente nao ter sido lido: nao da pra
-        # concluir que sumiu.
-        self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["Waiting for Carrier"] = [_linha(40101, PILOTO_ID)]
-        sess = SessaoFalsa(linhas, {"40101": _HTML_ITENS})
-
-        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
-
-        self.assertEqual(res["liberados"], 0)
-        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
 
     def test_modo_teste_nunca_libera_reserva(self):
         self._reservar_o_pedido()
@@ -488,18 +482,6 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
         self.assertEqual(res["baixados"], 0)
         self.assertEqual(self._saidas()["n"], 0)
 
-    def test_listagem_que_encheu_a_pagina_nao_baixa_ninguem(self):
-        self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["Waiting for Carrier"] = [_linha(40201, PILOTO_ID)]
-        sess = SessaoFalsa(linhas, {"40201": _HTML_ITENS,
-                                    "40200": _pagina_com_situacao("Enviado")})
-
-        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
-
-        self.assertEqual(res["baixados"], 0)
-        self.assertEqual(self._saidas()["n"], 0)
-
     def test_consulta_que_falhou_nao_baixa_nem_libera(self):
         # sessao derrubada / Stokki fora do ar: ausencia de resposta nunca
         # e evidencia de nada.
@@ -605,15 +587,6 @@ class TestEvidenciaDiretaNaPaginaDoPedido(BaseRotina):
         self.assertEqual(resposta.json()["aaData"], [])
         self.assertEqual(resposta.json()["iTotalDisplayRecords"], 0)
 
-    def test_pagina_404_e_a_evidencia_de_que_o_pedido_sumiu(self):
-        sess = SessaoFalsa(_linhas_vazias(), {})   # /show/<id> -> 404
-
-        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
-
-        self.assertEqual(res["liberados"], 1)
-        self.assertEqual(self._estado()["estado_reserva"], "CANCELADO")
-        self.assertIn("404", self._estado()["motivo_cancelamento"])
-
     def test_pagina_ilegivel_nao_conclui_nada(self):
         # HTML 200 mas sem o bloco "Situação:" (layout mudou, pagina de
         # erro amigavel): nao da pra concluir, entao nao se mexe em nada.
@@ -627,22 +600,82 @@ class TestEvidenciaDiretaNaPaginaDoPedido(BaseRotina):
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
     def test_500_nao_cancela(self):
-        # divergencia consciente dos precedentes: a Stokki devolve 500
-        # tanto pra id inexistente quanto pra ela mesma quebrada, e aqui a
-        # decisao devolve mercadoria ao disponivel.
-        class SessaoCom500(SessaoFalsa):
-            def get(self, url, params=None, headers=None):
-                if "/show/" in url:
-                    self.chamadas.append((url, params))
-                    return _RespostaFalsa(text="erro", status_code=500)
-                return super().get(url, params, headers)
-
-        res = mod.rodar(self.conn, SessaoCom500(_linhas_vazias(), {}),
+        # o que producao devolve pra id inexistente -- e tambem o que ela
+        # devolve quando esta quebrada. Nao da pra distinguir, entao nao
+        # se conclui nada.
+        res = mod.rodar(self.conn, SessaoFalsa(_linhas_vazias(), {}),
                         PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["liberados"], 0)
         self.assertEqual(self.conn.execute(
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
+
+
+class TestSumicoNaoEMaisDetectado(BaseRotina):
+    """
+    Important 1 da rodada 3. O ramo do 404 foi removido: pedido
+    inexistente devolve 500 (medido em producao), entao o 404 so podia
+    acontecer se a ROTA /…/outbound/show/<id> parasse de resolver
+    (mudanca de path, proxy, WAF). Nesse cenario TODOS os candidatos
+    devolveriam 404 e a rotina cancelaria em massa -- 20 por rodada, 4
+    rodadas por hora: a catastrofe original entrando por outra porta.
+
+    Um ramo que so pode abrir pelo motivo errado e pior que ramo nenhum.
+    O preco esta escrito: sumico nao e mais detectado automaticamente; a
+    saida e o botao "Liberar reserva" da tela /wms/estoque.
+    """
+
+    def setUp(self):
+        super().setUp()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40700, PILOTO_ID)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {"40700": _HTML_ITENS}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+    def _reserva(self):
+        return self.conn.execute("SELECT estado FROM wms_reservas").fetchone()["estado"]
+
+    def test_404_nao_cancela_ninguem(self):
+        class SessaoCom404(SessaoFalsa):
+            def get(self, url, params=None, headers=None):
+                if "/show/" in url:
+                    self.chamadas.append((url, params))
+                    return _RespostaFalsa(text="Not Found", status_code=404)
+                return super().get(url, params, headers)
+
+        res = mod.rodar(self.conn, SessaoCom404(_linhas_vazias(), {}),
+                        PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(self._reserva(), "ATIVA")
+        self.assertEqual(self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos").fetchone()["estado_reserva"], "RESERVADO")
+
+    def test_rota_quebrada_nao_cancela_a_carteira_inteira(self):
+        # o cenario que motivou a decisao: a rota some e TODOS os
+        # candidatos passam a dar 404 ao mesmo tempo.
+        html_1un = _HTML_ITENS.replace("<td>4</td>", "<td>1</td>")
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40710 + i, PILOTO_ID) for i in range(3)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {str(40710 + i): html_1un for i in range(3)}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        class SessaoRotaQuebrada(SessaoFalsa):
+            def get(self, url, params=None, headers=None):
+                if "/show/" in url:
+                    self.chamadas.append((url, params))
+                    return _RespostaFalsa(text="Not Found", status_code=404)
+                return super().get(url, params, headers)
+
+        res = mod.rodar(self.conn, SessaoRotaQuebrada(_linhas_vazias(), {}),
+                        PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 4)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_pedidos WHERE estado_reserva = 'CANCELADO'").fetchone()["n"], 0)
 
 
 class TestRotulosDeExpedicao(unittest.TestCase):
@@ -673,7 +706,8 @@ class TestEnsaioDoModoTeste(BaseRotina):
                   PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
     def _ensaio(self, situacao):
-        """situacao=None -> a pagina do pedido responde 404 (sumiu)."""
+        """situacao=None -> a pagina do pedido responde 500 (o que producao
+        devolve pra id inexistente): nao da pra concluir nada."""
         html = {} if situacao is None else {"40500": _pagina_com_situacao(situacao)}
         return mod.rodar(self.conn, SessaoFalsa(_linhas_vazias(), html), PILOTO_NOME, PILOTO_ID,
                          limite=50, modo_teste=True)
@@ -689,12 +723,17 @@ class TestEnsaioDoModoTeste(BaseRotina):
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
     def test_modo_teste_diz_que_liberaria_sem_liberar(self):
-        res = self._ensaio(None)
+        res = self._ensaio("Cancelado")
 
         self.assertEqual(res["ensaio"], {"baixaria": 0, "liberaria": 1, "manteria": 0})
         self.assertEqual(res["liberados"], 0)
         self.assertNotEqual(self.conn.execute(
             "SELECT estado_reserva FROM wms_pedidos").fetchone()["estado_reserva"], "CANCELADO")
+
+    def test_modo_teste_conta_como_mantido_o_que_nao_deu_pra_ler(self):
+        res = self._ensaio(None)   # 500
+
+        self.assertEqual(res["ensaio"], {"baixaria": 0, "liberaria": 0, "manteria": 1})
 
     def test_modo_teste_relata_o_que_manteria(self):
         res = self._ensaio("Em espera")
@@ -743,6 +782,111 @@ class TestTetoDeCandidatosPorRodada(BaseRotina):
         # 3 SAIDAs no total, uma por pedido -- nada baixado duas vezes
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"], 3)
+
+
+class TestListagemCheiaNaoDesligaAVarredura(BaseRotina):
+    """
+    Important 3 da rodada 3. Ate a rodada 2, listagem que enchia a pagina
+    fazia `rodar` voltar ANTES de montar candidatos -- desligando a
+    varredura inteira, inclusive a BAIXA. O .service roda sem --limite
+    (default 50) e o piloto ja bate 30 num status: o desligamento
+    aconteceria justamente nos dias de mais movimento, com um WARNING num
+    log que ninguem le.
+
+    A premissa do guarda morreu junto com a listagem: hoje a decisao vem
+    da pagina de cada candidato, entao completude de listagem nao importa.
+    """
+
+    def setUp(self):
+        super().setUp()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40800, PILOTO_ID)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {"40800": _HTML_ITENS}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+    def test_com_listagem_cheia_a_baixa_continua_acontecendo(self):
+        # limite=1 e a listagem devolve 1 linha (de outro pedido): pagina
+        # cheia. O 40800 continua sendo verificado e baixado.
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40801, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"40801": _HTML_ITENS,
+                                    "40800": _pagina_com_situacao("Enviado")})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
+
+        self.assertEqual(res["baixados"], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos WHERE id_stokki = 40800"
+        ).fetchone()["estado_reserva"], "BAIXADO")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"], 1)
+
+    def test_pedido_nao_lido_por_pagina_cheia_so_e_logado(self):
+        # o pedido nao foi lido nesta rodada (pagina cheia com outro),
+        # entao vira candidato -- mas a pagina dele diz que ainda esta em
+        # status normal, entao nada acontece.
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40801, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"40801": _HTML_ITENS,
+                                    "40800": _pagina_com_situacao("Aguardando Transportador")})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
+
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas WHERE pedido_id = "
+            "(SELECT id FROM wms_pedidos WHERE id_stokki = 40800)").fetchone()["estado"], "ATIVA")
+
+
+class TestRotacaoDaFilaDeCandidatos(BaseRotina):
+    """
+    Important 4 da rodada 3: sem rotacao, a fila sai sempre na mesma
+    ordem e um candidato permanentemente inconclusivo (pagina que nao
+    responde, rotulo fora das listas brancas, pedido parado em status nao
+    varrido) fica pra sempre na cabeca, escondendo quem esta atras
+    enquanto o teto nao alcanca todo mundo.
+    """
+
+    def setUp(self):
+        super().setUp()
+        html_1un = _HTML_ITENS.replace("<td>4</td>", "<td>1</td>")
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40900 + i, PILOTO_ID) for i in range(3)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {str(40900 + i): html_1un for i in range(3)}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 3)
+        # os tres ficam inconclusivos pra sempre: rotulo que nao esta em
+        # lista branca nenhuma (o caso do candidato "travado")
+        self.paginas = {str(40900 + i): _pagina_com_situacao("Em analise") for i in range(3)}
+
+    def _consultados_na_rodada(self, numero_da_rodada):
+        sess = SessaoFalsa(_linhas_vazias(), self.paginas)
+        original = mod._rodada_atual
+        mod._rodada_atual = lambda: numero_da_rodada
+        try:
+            mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        finally:
+            mod._rodada_atual = original
+        return [c[0].rsplit("/", 1)[-1] for c in sess.chamadas if "/show/" in c[0]]
+
+    def test_candidato_travado_na_cabeca_nao_esconde_os_outros(self):
+        teto_original = mod.CANDIDATOS_POR_RODADA
+        mod.CANDIDATOS_POR_RODADA = 1
+        try:
+            rodadas = [self._consultados_na_rodada(n) for n in (0, 1, 2)]
+        finally:
+            mod.CANDIDATOS_POR_RODADA = teto_original
+
+        # uma consulta por rodada, e cada rodada olha um pedido diferente
+        self.assertEqual([len(r) for r in rodadas], [1, 1, 1])
+        self.assertEqual({r[0] for r in rodadas}, {"40900", "40901", "40902"})
+
+    def test_sem_estouro_de_teto_a_ordem_nao_e_mexida(self):
+        # 3 candidatos e teto 20: rotacionar seria ruido
+        vistos = self._consultados_na_rodada(7)
+        self.assertEqual(vistos, ["40900", "40901", "40902"])
 
 
 class TestTravaStokki(unittest.TestCase):
