@@ -89,7 +89,7 @@ from roteirizacao_dados import (
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
     injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
-    start_at_rota, HORA_INICIO_ROTA,
+    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -587,6 +587,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
                 if coords_base else None
             )
+            horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
             rascunhos.append({
                 "nome": nome_rota,
                 "particao": rotulo_carga(sublote),
@@ -600,6 +601,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 "end_location_base_id": BASE_LOCATION_ID,
                 "start_at": start_at,
                 "km_estimado": km_estimado,
+                "horas_estimadas": round(horas_sublote, 2),
                 "sublote": sublote,
             })
             veiculo_str = f" [veículo: {tipo_veiculo.nome}]" if tipo_veiculo else ""
@@ -826,6 +828,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
                         if coords_base else None
                     )
+                    horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
                     rascunhos_acumulados.append({
                         "nome": nome_rota,
                         "particao": rotulo_carga(sublote),
@@ -839,6 +842,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         "end_location_base_id": BASE_LOCATION_ID,
                         "start_at": start_at,
                         "km_estimado": km_estimado,
+                        "horas_estimadas": round(horas_sublote, 2),
                         "sublote": sublote,
                     })
                     logger.info(f"[RASCUNHO] [{label}] '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "

@@ -124,13 +124,17 @@ class _Contexto:
                 if r[1] is not None:
                     self.motivos[int(r[1])] = (r[0], r[2])
         self.tem_rascunhos = _tem_tabela(conn, "rascunhos_rota")
+        # horas_estimadas (22/09) nasce na migração de rascunhos_rota._conectar;
+        # este timer pode rodar antes dela no primeiro deploy.
+        self.col_horas = "horas_estimadas" if self.tem_rascunhos and "horas_estimadas" in {
+            r[1] for r in conn.execute("PRAGMA table_info(rascunhos_rota)")} else "NULL AS horas_estimadas"
 
     def rascunho_de(self, vuupt_route_id: int) -> sqlite3.Row | None:
         if not self.tem_rascunhos:
             return None
         return self.conn.execute(
-            "SELECT id, km_estimado, km_volta_estimado, km_fonte_estimativa, tipo_veiculo, motorista_nome "
-            "FROM rascunhos_rota WHERE vuupt_route_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, km_estimado, km_volta_estimado, km_fonte_estimativa, tipo_veiculo, motorista_nome, "
+            f"{self.col_horas} FROM rascunhos_rota WHERE vuupt_route_id = ? ORDER BY id DESC LIMIT 1",
             (vuupt_route_id,),
         ).fetchone()
 
@@ -185,8 +189,9 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
         cur = conn.execute("""
             INSERT INTO nucleo_rotas (data_rota, nome, provedor, vuupt_route_id, rascunho_id, agent_id, vehicle_id,
                                       motorista_nome, tipo_veiculo, start_at, km_estimado, km_volta_estimado,
-                                      km_fonte_estimativa, km_fonte, status, status_provedor, dados_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      km_fonte_estimativa, km_fonte, horas_estimadas, status, status_provedor,
+                                      dados_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data_rota, rota.get("name"), banco.PROVEDOR_VUUPT, vuupt_route_id,
             rascunho["id"] if rascunho else None, agent_id, rota.get("vehicle_id"),
@@ -196,6 +201,7 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
             rascunho["km_volta_estimado"] if rascunho else None,
             rascunho["km_fonte_estimativa"] if rascunho else None,
             "ESTIMADO" if rascunho and rascunho["km_estimado"] is not None else None,
+            rascunho["horas_estimadas"] if rascunho else None,
             banco.ROTA_PLANEJADA, rota.get("status"),
             _json({k: v for k, v in rota.items() if k != "services"}),
         ))

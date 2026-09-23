@@ -336,6 +336,7 @@ _COLUNAS_PARADAS_NOVAS = [
 _COLUNAS_ROTAS_NOVAS = [
     ("km_volta_estimado", "REAL"),      # última parada -> base (mesma fonte do km_estimado)
     ("km_fonte_estimativa", "TEXT"),    # GOOGLE_ROUTES | HAVERSINE
+    ("horas_estimadas", "REAL"),        # 22/09: copiada do rascunho -- rodízio de rotas longas na alocação
 ]
 
 

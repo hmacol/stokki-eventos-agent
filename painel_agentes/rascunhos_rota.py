@@ -164,6 +164,13 @@ def _conectar() -> sqlite3.Connection:
         if coluna not in colunas_rota:
             conn.execute(f"ALTER TABLE rascunhos_rota ADD COLUMN {coluna} {tipo}")
 
+    # Migração 22/09: duração estimada da rota, usada pelo rodízio de
+    # rotas longas na alocação (ver alocacao_motoristas.py). A duração
+    # REAL não serve -- confirmação em lote na Vuupt distorce o
+    # timestamp (nucleo/tempos.py).
+    if "horas_estimadas" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN horas_estimadas REAL")
+
     conn.commit()
     return conn
 
@@ -275,7 +282,8 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     `rascunhos` é uma lista de dicts com as chaves: nome, particao,
     tipo_rota, zona, tipo_veiculo, agent_id, vehicle_id, motorista_nome,
     start_location_base_id, end_location_base_id, start_at,
-    km_estimado, sublote (lista de serviços brutos da VUUPT).
+    km_estimado, horas_estimadas, sublote (lista de serviços brutos da
+    VUUPT).
 
     `lote_id` explícito ACRESCENTA os rascunhos a um lote já existente
     em vez de abrir um novo -- botão "Roteirizar" da tela (Hugo, 12/08):
@@ -298,13 +306,13 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                     data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                     agent_id, vehicle_id, motorista_nome,
                     start_location_base_id, end_location_base_id,
-                    start_at, km_estimado, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_at, km_estimado, horas_estimadas, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data_alvo.isoformat(), lote_id, r["nome"], r.get("particao"),
                 r.get("tipo_rota"), r.get("zona"), r.get("tipo_veiculo"), r.get("agent_id"), r.get("vehicle_id"),
                 r.get("motorista_nome"), r["start_location_base_id"], r.get("end_location_base_id"),
-                r["start_at"], r.get("km_estimado"), STATUS_RASCUNHO,
+                r["start_at"], r.get("km_estimado"), r.get("horas_estimadas"), STATUS_RASCUNHO,
             ))
             rascunho_id = cursor.lastrowid
             for ordem, servico in enumerate(r["sublote"]):
@@ -1055,13 +1063,13 @@ def duplicar_rascunho(rascunho_id: int) -> int:
                 data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                 agent_id, vehicle_id, motorista_nome,
                 start_location_base_id, end_location_base_id,
-                start_at, km_estimado, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_at, km_estimado, horas_estimadas, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
             origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
-            origem["start_at"], origem["km_estimado"], STATUS_RASCUNHO,
+            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), STATUS_RASCUNHO,
         ))
         novo_id = cursor.lastrowid
         for p in origem["paradas"]:
