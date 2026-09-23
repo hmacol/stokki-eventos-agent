@@ -84,25 +84,42 @@ class GrupoNivel4VeiculoGrandeTestCase(unittest.TestCase):
         self.assertEqual({_codigos(por_tamanho[0])[0], _codigos(por_tamanho[1])[0]},
                          {"#PS-38284", "#PS-38010"})
 
-    def test_grupo_abaixo_de_veiculo_grande_segue_regra_de_ultima_milha(self):
-        # 40 + 40 + 40 = 120 caixas: não chega a VAN/HR (150) -> trava de
-        # 100 caixas continua valendo (2 + 1), como sempre foi
+    def test_grupo_de_120_caixas_agora_fecha_van_hr_com_faixa_continua(self):
+        # Mudou em 22/09: faixas contiguas (VAN/HR passou a valer de 101 cx,
+        # era 150) -- ver docs/superpowers/specs/2026-09-22-alocacao-motoristas-justa-design.md
+        # 40 + 40 + 40 = 120 caixas: antes ficava no buraco entre o teto da
+        # rota comum (100) e o minimo antigo da VAN/HR (150), saindo em
+        # 2 + 1 pela regra de ultima milha. Com a faixa continua (101-400),
+        # o grupo inteiro fecha 1 rota de VAN/HR.
         grupo = [_servico(1, 40), _servico(2, 40), _servico(3, 40)]
         prontos, _ = _separar(grupo)
-        self.assertEqual(sorted(len(s) for s in prontos), [1, 2])
+        self.assertEqual(len(prontos), 1)
+        self.assertEqual(_codigos(prontos[0]), _codigos(grupo))
+        self.assertEqual(classificar_tipo_veiculo(*rd.caixas_e_enderecos(prontos[0])).codigo, "VAN_HR")
 
-    def test_gigante_nivel4_sozinho_sem_par_continua_isolado(self):
+    def test_gigante_nivel4_sozinho_sem_par_agora_classifica_van_hr(self):
+        # Mudou em 22/09: faixas contiguas (VAN/HR passou a valer de 101 cx,
+        # era 150) -- ver docs/superpowers/specs/2026-09-22-alocacao-motoristas-justa-design.md
+        # 123 caixas caia no buraco antigo (101-149) e nao classificava em
+        # nada; agora cabe na VAN/HR (101-400). Continua isolado no sentido
+        # de nao se juntar com pedidos de outro endereco/embarcador -- so
+        # deixou de ser None.
         prontos, _ = _separar([_servico(38408, 123)])
         self.assertEqual(len(prontos), 1)
-        self.assertIsNone(classificar_tipo_veiculo(*rd.caixas_e_enderecos(prontos[0])))
+        self.assertEqual(classificar_tipo_veiculo(*rd.caixas_e_enderecos(prontos[0])).codigo, "VAN_HR")
 
-    def test_grupo_maior_que_qualquer_veiculo_fecha_o_maior_prefixo(self):
-        # 13 x 100 = 1300 caixas: 3/4 vai até 1200, Truck começa em 1500
+    def test_grupo_grande_agora_fecha_1_rota_de_truck_com_faixa_continua(self):
+        # Mudou em 22/09: faixas contiguas (Truck passou a valer de 1201 cx,
+        # era 1500) -- ver docs/superpowers/specs/2026-09-22-alocacao-motoristas-justa-design.md
+        # 13 x 100 = 1300 caixas: antes ficava no buraco entre o teto do 3/4
+        # (1200) e o minimo antigo do Truck (1500), fechando so os 12
+        # primeiros num 3/4 e deixando 1 pedido de fora. Com a faixa
+        # continua (1201-2500), o grupo inteiro cabe no Truck -- 1 rota so.
         grupo = [_servico(i, 100) for i in range(1, 14)]
         prontos, _ = _separar(grupo)
-        self.assertEqual(sorted(len(s) for s in prontos), [1, 12])
-        maior = max(prontos, key=len)
-        self.assertEqual(classificar_tipo_veiculo(*rd.caixas_e_enderecos(maior)).codigo, "TRES_QUARTOS")
+        self.assertEqual(len(prontos), 1)
+        self.assertEqual(_codigos(prontos[0]), _codigos(grupo))
+        self.assertEqual(classificar_tipo_veiculo(*rd.caixas_e_enderecos(prontos[0])).codigo, "TRUCK")
 
     def test_nivel4_nunca_junta_com_nivel_1_2_3_do_mesmo_endereco(self):
         prontos, demais = _separar([_servico(1, 200), _servico(2, 10, nivel=1)])
