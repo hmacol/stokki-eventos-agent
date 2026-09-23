@@ -51,10 +51,15 @@ def selecionar_motorista_equitativo(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    rotas_7d: dict[int, int] | None = None,
+    rotas_30d: dict[int, int] | None = None,
+    longas_7d: dict[int, int] | None = None,
+    rota_longa: bool = False,
 ) -> "MotoristaPreferencias | None":
     """
     Seleciona o motorista elegível com a menor carga do dia (Least-
-    Allocated Load Balancing) -- sem preferência entre motoristas.
+    Allocated Load Balancing) e, entre esses, o que rodou menos nos
+    últimos dias -- sem preferência fixa entre motoristas.
 
     Filtro de elegibilidade: ativo, disponível no dia da semana de
     `data_rota`, com espaço em MAX_ROTAS_DIA, e:
@@ -99,6 +104,26 @@ def selecionar_motorista_equitativo(
     chama incrementa depois de confirmar que a rota foi criada de
     verdade (evita contar uma alocação que falhou na API).
 
+    `rotas_7d`/`rotas_30d` (pedido do Hugo, 22/09): quantas rotas
+    cada motorista fez nos últimos 7 e 30 dias (ver regras/
+    prioridade_ofertas.py::contar_rotas_recentes). Sem elas, a escolha é
+    a de antes de 22/09 -- menor carga do dia, desempate por agent_id.
+    Como 28 dos 30 motoristas têm MAX_ROTAS_DIA=1, a carga do dia é
+    quase sempre 0 pra todos, e o que decidia de fato era o agent_id:
+    quem tinha id baixo rodava quase todo dia.
+
+    `longas_7d` + `rota_longa` (Hugo, 22/09): rodízio das rotas
+    pesadas -- quem pegou rota longa na semana não pega a próxima.
+    `longas_7d` é quantas rotas acima do limiar cada um fez em 7 dias
+    (contar_rotas_longas_recentes); `rota_longa` diz se a rota SENDO
+    alocada é longa, e só nesse caso o critério pesa. Quem chama decide
+    isso (estimar_tempo_rota > roteirizacao.rota_longa_horas) -- este
+    módulo não estima tempo.
+
+    Tudo isto é ORDENAÇÃO, nunca filtro: nenhum motorista deixa de ser
+    elegível por histórico, e nenhuma rota fica sem motorista por causa
+    dessa ordem.
+
     Retorna None (com [ALERTA_ALOCACAO] no log) se não houver
     motorista elegível -- quem chama decide como seguir (rota sem
     motorista).
@@ -114,11 +139,21 @@ def selecionar_motorista_equitativo(
         )
         return None
 
-    # Ordenação equitativa: menor número de alocações no dia; empate
-    # resolvido por agent_id (round-robin circular estável -- a ordem
-    # entre motoristas com a mesma contagem sempre alterna da mesma
-    # forma, sem favorecer nenhum deles arbitrariamente).
-    elegiveis.sort(key=lambda m: (contagem_alocacoes_dia.get(m.agent_id, 0), m.agent_id))
+    # Ordem (Hugo, 22/09): carga do próprio dia primeiro -- não dar a 2ª
+    # rota a alguém enquanto outro está zerado --, depois o rodízio de
+    # rotas longas (só quando a rota é longa), depois quem rodou menos na
+    # semana e no mês. agent_id deixou de ser o critério efetivo e virou
+    # o último desempate, estável.
+    rotas_7d = rotas_7d or {}
+    rotas_30d = rotas_30d or {}
+    longas_7d = longas_7d or {}
+    elegiveis.sort(key=lambda m: (
+        contagem_alocacoes_dia.get(m.agent_id, 0),
+        longas_7d.get(m.agent_id, 0) if rota_longa else 0,
+        rotas_7d.get(m.agent_id, 0),
+        rotas_30d.get(m.agent_id, 0),
+        m.agent_id,
+    ))
     return elegiveis[0]
 
 
