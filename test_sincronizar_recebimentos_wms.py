@@ -292,6 +292,23 @@ class TestRodar(BaseRotina):
         estado = self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (rid,)).fetchone()["estado"]
         self.assertEqual(estado, "ENDERECADO")
 
+    def test_recebimento_ja_enderecado_nao_e_rebuscado_na_stokki(self):
+        # I10 da revisao final: a rotina relia o detalhe dos ~50 mais
+        # recentes a cada 30 min, pra sempre, inclusive os ja fechados --
+        # ~50 GETs por rodada contra um sistema de sessao unica e fragil.
+        linhas = [_linha(2488, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2488": _HTML_ITENS})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO' WHERE id_stokki = 2488")
+        self.conn.commit()
+
+        sess2 = SessaoFalsa(linhas, {"2488": _HTML_ITENS})
+        res = mod.rodar(self.conn, sess2, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["ja_fechados"], 1)
+        self.assertEqual(res["gravados"], 0)
+        self.assertFalse(any("/show/" in url for url, _ in sess2.chamadas))
+
 
 class TestTravaStokki(unittest.TestCase):
     """Mesma trava cooperativa de sincronizar_pedidos_wms.py -- a sessao
@@ -301,6 +318,9 @@ class TestTravaStokki(unittest.TestCase):
     chamados)."""
 
     def test_trava_ocupada_desiste_sem_gravar_e_sem_chamar_a_stokki(self):
+        # Sai com 0 (I9 da revisao final): trava ocupada e operacao normal,
+        # nao falha -- o .service tem OnFailure=stokki-alerta-falha@%n e
+        # alertava a cada rodada.
         with mock.patch("stokki.sessao_uso.adquirir", return_value=False) as adquirir, \
              mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
              mock.patch("stokki.sessao_uso.liberar") as liberar, \
@@ -308,7 +328,7 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls:
             codigo = mod.main(["--limite", "5"])
 
-        self.assertEqual(codigo, 1)
+        self.assertEqual(codigo, 0)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
                                           esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
         conectar.assert_not_called()
@@ -323,7 +343,7 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls:
             codigo = mod.main(["--modo-teste"])
 
-        self.assertEqual(codigo, 1)
+        self.assertEqual(codigo, 0)  # desistir por trava ocupada nao e falha
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
 

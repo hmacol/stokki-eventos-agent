@@ -107,7 +107,12 @@ def _sem_acento(texto: str) -> str:
 
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
     res = {"lidos": 0, "do_piloto": 0, "ignorados_outro_embarcador": 0,
-           "gravados": 0, "em_transito": 0, "erros": 0}
+           "gravados": 0, "em_transito": 0, "ja_fechados": 0, "erros": 0}
+    # Recebimento ja ENDERECADO esta fechado: nao ha nada pra reler nele.
+    # Sem este filtro a rotina rebuscava o detalhe dos ~50 mais recentes a
+    # cada 30 min, pra sempre, contra um sistema de sessao unica e fragil.
+    fechados = {r["id_stokki"] for r in conn.execute(
+        "SELECT id_stokki FROM wms_recebimentos WHERE estado = 'ENDERECADO'")}
 
     # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so os
     # recebimentos do piloto quando cliente=piloto_id.
@@ -132,6 +137,10 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
         res["do_piloto"] += 1
         if not dados.get("embarcador"):
             dados["embarcador"] = piloto_nome
+
+        if dados["id_stokki"] in fechados:
+            res["ja_fechados"] += 1
+            continue
 
         if modo_teste:
             logger.info("[teste] recebimento %s (%s) seria gravado", dados["codigo"], piloto_nome)
@@ -196,9 +205,13 @@ def main(argv=None) -> int:
     # verdade, so pula a escrita).
     if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
                                 esperar_segundos=TRAVA_ESPERA_SEGUNDOS):
+        # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
+        # falha (o .service tem OnFailure=stokki-alerta-falha@%n, que
+        # alertava a cada rodada). Mesmo precedente de
+        # notificar_transportadoras.py e roteirizacao/documentacao_rota.py.
         ocupante = sessao_uso.em_uso()
-        logger.error("Stokki ocupada por '%s' -- desistindo desta rodada.", ocupante)
-        return 1
+        logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 30 min).", ocupante)
+        return 0
 
     t0 = time.time()
     try:

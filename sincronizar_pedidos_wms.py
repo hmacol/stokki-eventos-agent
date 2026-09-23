@@ -112,17 +112,89 @@ def _stkkc_id_da_linha(linha) -> str | None:
     return m.group(1) if m else None
 
 
+def _liberar_pedidos_sumidos(conn, sess, piloto_id: str, vistos: set) -> int:
+    """
+    Spec 7.3 item 6: pedido cancelado ou sumido da Stokki tem as reservas
+    liberadas. Sem isso a reserva ATIVA trava o disponivel pra sempre e o
+    galpao "nao tem" mercadoria que esta la na prateleira.
+
+    Quem entra na conta: pedido nosso com reserva ATIVA que NAO apareceu
+    em nenhum dos status varridos nesta rodada. Como sair dos status
+    varridos tambem acontece quando o pedido e EXPEDIDO (e a baixa,
+    chamada pelo expedir_pedidos.py, pode vir horas depois no caso
+    "ja_expedido"), a rotina nao cancela por omissao: ela consulta a
+    Stokki uma vez (listagem sem filtro de status, so do piloto) e so
+    libera quem:
+      - nao existe mais na Stokki (sumiu de vez), ou
+      - esta com situacao de CANCELADO la.
+    Pedido que saiu dos status varridos por outro motivo (expedido,
+    entregue) mantem a reserva -- ela ainda vai virar a SAIDA da baixa --
+    e so gera aviso no log. Cancelar ali baixaria estoque nenhum e
+    deixaria o saldo mentindo pra sempre.
+
+    A consulta extra so acontece quando ha candidato -- no dia a dia,
+    nenhuma requisicao a mais.
+    """
+    candidatos = conn.execute("""
+        SELECT p.id, p.id_stokki, p.codigo_ps, p.estado_reserva
+          FROM wms_pedidos p
+         WHERE p.estado_reserva IN ('PENDENTE', 'RESERVADO', 'PARCIAL')
+           AND EXISTS (SELECT 1 FROM wms_reservas r WHERE r.pedido_id = p.id AND r.estado = 'ATIVA')
+    """).fetchall()
+    candidatos = [c for c in candidatos if c["id_stokki"] not in vistos]
+    if not candidatos:
+        return 0
+
+    situacoes = {}
+    try:
+        resposta = stokki_pedidos.listar_pedidos(
+            sess, status="all", cliente=piloto_id, por_pagina=200,
+            ordenar_coluna="1", ordenar_dir="desc")
+        for linha in (resposta.get("aaData") or []):
+            id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
+            if id_pedido:
+                situacoes[id_pedido] = re.sub(
+                    r"<[^>]+>", " ", str(linha.get("state", ""))).strip()
+    except Exception as e:  # noqa: BLE001 -- sem a lista, nao cancela nada
+        logger.warning("Nao deu pra conferir os pedidos sumidos na Stokki (%s) -- "
+                        "nenhuma reserva foi liberada nesta rodada.", e)
+        return 0
+
+    liberados = 0
+    for c in candidatos:
+        situacao = situacoes.get(c["id_stokki"])
+        if situacao is None:
+            motivo = "pedido nao existe mais na Stokki"
+        elif "CANCEL" in situacao.upper():
+            motivo = f"pedido cancelado na Stokki ({situacao})"
+        else:
+            logger.info("%s saiu dos status varridos (Stokki: %s) com reserva ATIVA -- "
+                        "reserva mantida pra baixa da expedicao.", c["codigo_ps"], situacao or "?")
+            continue
+        n = wms_pedidos.cancelar_reservas(conn, c["id"], motivo)
+        conn.commit()
+        liberados += 1
+        logger.warning("%s: %d reserva(s) liberada(s) -- %s", c["codigo_ps"], n, motivo)
+    return liberados
+
+
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
     res = {"lidos": 0, "do_piloto": 0, "ignorados_outro_embarcador": 0,
-           "reservados": 0, "parciais": 0, "pendencias": 0, "erros": 0}
+           "reservados": 0, "parciais": 0, "pendencias": 0, "liberados": 0, "erros": 0}
     vistos = set()
+    pagina_cheia = False
     for status in STATUS_INTERESSANTES:
         # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so
         # os pedidos do piloto quando cliente=piloto_id.
         resposta = stokki_pedidos.listar_pedidos(
             sess, status=status, cliente=piloto_id, por_pagina=limite,
             ordenar_coluna="1", ordenar_dir="desc")
-        for linha in (resposta.get("aaData") or []):
+        linhas = resposta.get("aaData") or []
+        # A pagina encheu: pode haver pedido do piloto neste status que
+        # nao foi lido -- ele nao pode ser tratado como "sumido" depois.
+        if len(linhas) >= limite:
+            pagina_cheia = True
+        for linha in linhas:
             res["lidos"] += 1
             id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
             if not id_pedido or id_pedido in vistos:
@@ -188,6 +260,17 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             for p in r["pendencias"]:
                 logger.info("  %s: %s", codigo_ps, p)
             time.sleep(0.3)
+
+    # Depois de varrer tudo: quem tem reserva ATIVA e nao apareceu em
+    # nenhum status pode ter sido cancelado ou sumido (spec 7.3 item 6).
+    if modo_teste:
+        return res
+    if pagina_cheia:
+        logger.warning("Alguma listagem encheu a pagina (limite %d) -- pulando a liberacao de "
+                        "reservas de pedido sumido nesta rodada, pra nao cancelar quem so nao foi lido.",
+                        limite)
+        return res
+    res["liberados"] = _liberar_pedidos_sumidos(conn, sess, piloto_id, vistos)
     return res
 
 
@@ -214,9 +297,15 @@ def main(argv=None) -> int:
     # Stokki de verdade, so pula a escrita).
     if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
                                 esperar_segundos=TRAVA_ESPERA_SEGUNDOS):
+        # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
+        # falha. O .service tem OnFailure=stokki-alerta-falha@%n -- sair
+        # com 1 aqui alertava a cada rodada em que outro processo estava
+        # usando a Stokki. Mesmo precedente de notificar_transportadoras.py
+        # e roteirizacao/documentacao_rota.py: loga e segue. A proxima
+        # rodada e em 15 min e a reserva e idempotente, nada se perde.
         ocupante = sessao_uso.em_uso()
-        logger.error("Stokki ocupada por '%s' -- desistindo desta rodada.", ocupante)
-        return 1
+        logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 15 min).", ocupante)
+        return 0
 
     t0 = time.time()
     try:

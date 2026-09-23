@@ -1256,6 +1256,11 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         logger.info(f"  {codigo_ps}: WMS baixou {r_wms['baixas']} reserva(s).")
                     for erro in r_wms["erros"]:
                         logger.warning(f"  {codigo_ps}: WMS {erro}")
+                    # Saldo negativo e aceito de proposito (a mercadoria ja
+                    # saiu), mas nunca em silencio: sempre significa entrada
+                    # nao registrada ou contagem errada no galpao.
+                    for neg in r_wms.get("negativos") or []:
+                        logger.warning(f"  {codigo_ps}: WMS saldo negativo -- {neg}")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"  {codigo_ps}: baixa no WMS falhou ({e}) -- expedicao segue.")
                 if pdf_path:

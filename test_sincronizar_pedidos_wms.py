@@ -237,6 +237,103 @@ class TestRodar(BaseRotina):
         self.assertIsNone(pedido_ruim)
 
 
+class TestLiberarPedidoSumido(BaseRotina):
+    """
+    I2 da revisao final: cancelar_reservas era codigo morto -- pedido
+    cancelado ou sumido da Stokki ficava com reserva ATIVA pra sempre,
+    travando o disponivel (spec 7.3 item 6).
+
+    Cuidado que o teste tambem fixa: pedido que saiu dos status varridos
+    porque foi EXPEDIDO nao pode ter a reserva liberada -- ela ainda vai
+    virar a SAIDA da baixa (expedir_pedidos.py, caso 'ja_expedido', pode
+    vir horas depois). Liberar ali baixaria estoque nenhum e o saldo
+    ficaria mentindo pra sempre.
+    """
+
+    def _reservar_o_pedido(self, id_pedido=40100):
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(id_pedido, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {str(id_pedido): _HTML_ITENS})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        ativas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"]
+        self.assertEqual(ativas, 1)
+
+    def _estado(self, id_stokki=40100):
+        return self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?",
+                                 (id_stokki,)).fetchone()
+
+    def test_pedido_que_sumiu_da_stokki_tem_as_reservas_liberadas(self):
+        self._reservar_o_pedido()
+        # rodada seguinte: nao aparece em status nenhum e nem na listagem
+        # geral -- sumiu de vez.
+        sess = SessaoFalsa(_linhas_vazias(), {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 1)
+        ativas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"]
+        self.assertEqual(ativas, 0)
+        pedido = self._estado()
+        self.assertEqual(pedido["estado_reserva"], "CANCELADO")
+        self.assertIn("nao existe mais", pedido["motivo_cancelamento"])
+        # o disponivel voltou pro galpao
+        self.assertEqual(wms_pedidos.disponivel_por_lote(self.conn, 1)[0]["disponivel"], 10)
+
+    def test_pedido_cancelado_na_stokki_tem_as_reservas_liberadas(self):
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(40100, PILOTO_ID, status="Canceled")]
+        sess = SessaoFalsa(linhas, {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 1)
+        pedido = self._estado()
+        self.assertEqual(pedido["estado_reserva"], "CANCELADO")
+        self.assertIn("cancelado", pedido["motivo_cancelamento"].lower())
+
+    def test_pedido_expedido_mantem_a_reserva_pra_baixa(self):
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(40100, PILOTO_ID, status="Sent")]
+        sess = SessaoFalsa(linhas, {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        ativas = self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"]
+        self.assertEqual(ativas, 1)
+        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
+        # e a baixa da expedicao ainda encontra o que baixar
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-40100")
+        self.assertEqual(r["baixas"], 1)
+
+    def test_listagem_que_encheu_a_pagina_nao_libera_ninguem(self):
+        # pedido do piloto pode simplesmente nao ter sido lido: nao da pra
+        # concluir que sumiu.
+        self._reservar_o_pedido()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40101, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"40101": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
+
+    def test_modo_teste_nunca_libera_reserva(self):
+        self._reservar_o_pedido()
+        sess = SessaoFalsa(_linhas_vazias(), {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=True)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
+
+
 class TestTravaStokki(unittest.TestCase):
     """
     Correcao 1 da revisao (Important, 22/09): a rotina tem que respeitar a
@@ -249,6 +346,11 @@ class TestTravaStokki(unittest.TestCase):
     """
 
     def test_trava_ocupada_desiste_sem_gravar_e_sem_chamar_a_stokki(self):
+        # Sai com 0 (I9 da revisao final): o .service tem
+        # OnFailure=stokki-alerta-falha@%n -- sair com 1 alertava a cada
+        # rodada em que outro processo estava usando a Stokki. Desistir por
+        # trava ocupada e operacao normal, nao falha (mesmo precedente de
+        # notificar_transportadoras.py e roteirizacao/documentacao_rota.py).
         with mock.patch("stokki.sessao_uso.adquirir", return_value=False) as adquirir, \
              mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
              mock.patch("stokki.sessao_uso.liberar") as liberar, \
@@ -256,7 +358,7 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("sincronizar_pedidos_wms.StokkiSession") as sessao_cls:
             codigo = mod.main(["--limite", "5"])
 
-        self.assertEqual(codigo, 1)
+        self.assertEqual(codigo, 0)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
                                           esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
         conectar.assert_not_called()
@@ -275,7 +377,7 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("sincronizar_pedidos_wms.StokkiSession") as sessao_cls:
             codigo = mod.main(["--modo-teste"])
 
-        self.assertEqual(codigo, 1)
+        self.assertEqual(codigo, 0)  # desistir por trava ocupada nao e falha
         adquirir.assert_called_once()
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
