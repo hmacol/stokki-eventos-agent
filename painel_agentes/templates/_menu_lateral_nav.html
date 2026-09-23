@@ -1,0 +1,86 @@
+{#
+  Lista de telas do menu lateral. Compartilhada (23/09) entre o
+  base.html (sidebar do desktop / gaveta no celular) e o
+  base_mobile.html (gaveta da Torre mobile) -- a lista mora só aqui.
+  CSS em _menu_lateral_estilo.html, gaveta e badges em
+  _menu_lateral_script.html.
+
+  Menu lateral (reorganizado 11/09/2026, pedido do Hugo): os 13 itens
+  vinham num bloco plano, na ordem em que foram criados. Agora saem
+  de UMA lista, agrupados pelo momento do dia em que a tela é usada.
+
+  `niveis` de cada item ESPELHA o `niveis=` do @requer_auth da rota
+  correspondente em painel_agentes.py -- é o que evita o menu
+  oferecer link que dá 403 (era o caso do nível "galpao", que via
+  Torre/Planejamento/Expedição e não via o próprio Galpão). Ao criar
+  ou mudar o acesso de uma tela, mexa nos dois lugares.
+
+  `badge` liga o item ao contador de mesmo nome em contadores_menu.py
+  (vem por JS depois do load, nunca na renderização).
+#}
+{% set NIVEIS_ROTAS = ('total', 'operador', 'leitura') %}
+{% set GRUPOS_MENU = [
+  ('Acompanhar', [
+    {'rota': 'torre', 'rotulo': 'Torre de Controle', 'titulo': 'Torre de Controle', 'niveis': NIVEIS_ROTAS, 'badge': 'torre',
+     'icone': '<path d="M10 8v9M10 8a2 2 0 100-4 2 2 0 000 4z"/><path d="M6.5 6.5a5 5 0 000 7M13.5 6.5a5 5 0 010 7"/><path d="M4 4a8 8 0 000 12M16 4a8 8 0 010 12"/>'},
+    {'rota': 'pedidos_parados', 'rotulo': 'Pedidos Parados', 'titulo': 'Pedidos Parados', 'niveis': NIVEIS_ROTAS, 'badge': 'pedidos_parados',
+     'icone': '<rect x="3.5" y="6" width="13" height="9.5" rx="1.5"/><path d="M6.5 6V4.8a1.3 1.3 0 011.3-1.3h4.4a1.3 1.3 0 011.3 1.3V6"/><path d="M10 9.3v3.4M8.3 11h3.4"/>'},
+    {'rota': 'historico_tratativas', 'rotulo': 'Tratativas', 'titulo': 'Histórico de Tratativas', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<rect x="4.5" y="3.5" width="11" height="14" rx="1.5"/><path d="M7.5 3.2h5a.8.8 0 01.8.8v1H6.7v-1a.8.8 0 01.8-.8z"/><path d="M7.3 10.5l1.8 1.8 3.6-3.8"/>'},
+    {'rota': 'consulta', 'rotulo': 'Consulta', 'titulo': 'Consulta de rotas e pedidos (histórico)', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<circle cx="9" cy="9" r="5.2"/><path d="M12.8 12.8L17 17"/>'},
+  ]),
+  ('Planejar', [
+    {'rota': 'planejamento', 'rotulo': 'Planejamento', 'titulo': 'Planejamento de Rotas', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/>'},
+    {'rota': 'mapa_rotas', 'rotulo': 'Mapa', 'titulo': 'Mapa de Rotas', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/>'},
+    {'rota': 'laboratorio_rotas', 'rotulo': 'Laboratório', 'titulo': 'Laboratório de Roteirização', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<path d="M8 3h4M8.5 3v4.2L4.8 14a1.8 1.8 0 001.6 2.6h7.2a1.8 1.8 0 001.6-2.6L11.5 7.2V3"/><path d="M6.8 12h6.4"/>'},
+  ]),
+  ('Operar', [
+    {'rota': 'expedicao', 'rotulo': 'Expedição', 'titulo': 'Expedição', 'niveis': ('total', 'operador', 'leitura', 'expedicao'), 'badge': none,
+     'icone': '<rect x="4" y="3.5" width="12" height="14" rx="1.5"/><path d="M7 8h6M7 11.2h6M7 14.4h3.5"/>'},
+    {'rota': 'wms', 'rotulo': 'Galpão', 'titulo': 'Galpão (endereçamento)', 'niveis': ('total', 'operador', 'galpao'), 'badge': none,
+     'icone': '<path d="M3.5 8.5L10 4l6.5 4.5V16h-13z"/><path d="M7 16v-4.5h6V16"/><path d="M8.5 9.2h3"/>'},
+    {'rota': 'atendimento', 'rotulo': 'Atendimento', 'titulo': 'Atendimento', 'niveis': ('total', 'operador', 'atendimento'), 'badge': 'atendimento',
+     'icone': '<path d="M17 12.5a1.5 1.5 0 01-1.5 1.5H7l-3.5 3V5A1.5 1.5 0 015 3.5h10.5A1.5 1.5 0 0117 5z"/><path d="M7 8h6M7 10.8h4"/>'},
+  ]),
+  ('Motoristas', [
+    {'rota': 'motoristas', 'rotulo': 'Motoristas', 'titulo': 'Motoristas', 'niveis': NIVEIS_ROTAS, 'badge': none,
+     'icone': '<circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/>'},
+    {'rota': 'pedagios', 'rotulo': 'Pedágios', 'titulo': 'Pedágios (app de motoristas)', 'niveis': NIVEIS_ROTAS, 'badge': 'pedagios',
+     'icone': '<rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M3 8.5h14"/><path d="M6.5 12h3"/>'},
+    {'rota': 'canhotos', 'rotulo': 'Canhotos', 'titulo': 'Canhotos (conferência das fotos do app)', 'niveis': NIVEIS_ROTAS, 'badge': 'canhotos',
+     'icone': '<path d="M5 3h10v14l-2.5-1.5L10 17l-2.5-1.5L5 17z"/><path d="M8 7.5h4"/><path d="M8 10.5h4"/>'},
+  ]),
+  ('Sistema', [
+    {'rota': 'index', 'rotulo': 'Agentes', 'titulo': 'Agentes', 'niveis': ('total',), 'badge': none,
+     'icone': '<rect x="3" y="3" width="6" height="6" rx="1.2"/><rect x="11" y="3" width="6" height="6" rx="1.2"/><rect x="3" y="11" width="6" height="6" rx="1.2"/><rect x="11" y="11" width="6" height="6" rx="1.2"/>'},
+    {'rota': 'historico', 'rotulo': 'Execuções', 'titulo': 'Histórico de execuções dos agentes', 'niveis': ('total',), 'badge': none,
+     'icone': '<circle cx="10" cy="10.5" r="6.7"/><path d="M10 6.8V10.5l3 1.8"/><path d="M7.5 2.3h5"/>'},
+  ]),
+] %}
+{% set nivel = session.get('nivel_acesso') %}
+<nav aria-label="Telas do painel">
+  {% for titulo_grupo, itens in GRUPOS_MENU %}
+    {% set visiveis = [] %}
+    {% for item in itens %}{% if nivel in item.niveis %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
+    {# Grupo que ficou sem nenhum item pro nível do usuário não
+       desenha nem o cabeçalho (ex: "Sistema" fora do nível total). #}
+    {% if visiveis %}
+    <div class="grupo" role="group" aria-label="{{ titulo_grupo }}">
+      <span class="grupo-titulo" aria-hidden="true">{{ titulo_grupo }}</span>
+      {% for item in visiveis %}
+      {% set ativo = request.endpoint == item.rota %}
+      <a href="{{ url_for(item.rota) }}" class="{{ 'ativo' if ativo else '' }}" title="{{ item.titulo }}"
+         {% if ativo %}aria-current="page"{% endif %}>
+        <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{{ item.icone | safe }}</svg></span>
+        <span class="rotulo">{{ item.rotulo }}</span>
+        {% if item.badge %}<span class="badge" data-contador="{{ item.badge }}" hidden></span>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endfor %}
+</nav>

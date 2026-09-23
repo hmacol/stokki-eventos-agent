@@ -36,50 +36,7 @@
     align-items: stretch;
     min-height: 100vh;
   }
-  .sidebar {
-    flex: none;
-    width: 240px;
-    background: var(--primaria);
-    color: #fff;
-    display: flex;
-    flex-direction: column;
-    position: sticky;
-    top: 0;
-    align-self: flex-start;
-    height: 100vh;
-    overflow: hidden;
-    transition: width 0.18s ease;
-  }
-  .sidebar .marca {
-    padding: 24px 22px 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }
-  .sidebar .marca .nome {
-    display: block;
-    font-size: 17px;
-    font-weight: 800;
-    letter-spacing: 0.3px;
-    white-space: nowrap;
-  }
-  .sidebar .marca .subtitulo {
-    display: block;
-    font-size: 12px;
-    color: #A3A3C2;
-    margin-top: 4px;
-    white-space: nowrap;
-  }
-  .sidebar .marca .marca-mini {
-    display: none;
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    background: var(--acento);
-    color: #fff;
-    font-weight: 800;
-    font-size: 14px;
-    align-items: center;
-    justify-content: center;
-  }
+  {% include "_menu_lateral_estilo.html" %}
   .alterna-sidebar {
     position: absolute;
     top: 27px;
@@ -100,89 +57,6 @@
   }
   .alterna-sidebar:hover { background: var(--primaria-clara); color: #fff; }
   .alterna-sidebar svg { width: 13px; height: 13px; transition: transform 0.2s; flex: none; }
-  /* Só a LISTA rola (11/09). Com a sidebar inteira rolando, numa tela de
-     768px de altura o rodapé -- quem está logado e o botão Sair -- saía
-     de vista junto com o menu. Marca e rodapé agora ficam parados. */
-  .sidebar nav {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    padding: 10px 0 14px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.18) transparent;
-  }
-  .sidebar nav::-webkit-scrollbar { width: 6px; }
-  .sidebar nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
-  .sidebar nav::-webkit-scrollbar-track { background: transparent; }
-  /* Menu agrupado por momento do dia (11/09) -- 13 itens num bloco só
-     não se lê. O cabeçalho do grupo é rótulo, não link. */
-  .sidebar nav .grupo { display: flex; flex-direction: column; }
-  .sidebar nav .grupo + .grupo { margin-top: 12px; }
-  .sidebar nav .grupo-titulo {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.9px;
-    text-transform: uppercase;
-    color: #8E8EB0;  /* era #6F6F92 = 3,8:1 sobre a sidebar; agora 5,7:1 */
-    padding: 0 22px 6px;
-    white-space: nowrap;
-  }
-  .sidebar nav a {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    color: #C7C7E0;
-    text-decoration: none;
-    font-size: 13.5px;
-    padding: 8px 11px;
-    margin: 1px 10px;
-    border-radius: 8px;
-    white-space: nowrap;
-    transition: color 0.15s, background 0.15s;
-  }
-  .sidebar nav a .icone { display: flex; flex: none; }
-  .sidebar nav a .icone svg { width: 18px; height: 18px; }
-  .sidebar nav a .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-  .sidebar nav a:hover { color: #fff; background: rgba(255,255,255,0.06); }
-  .sidebar nav a.ativo {
-    color: #fff;
-    font-weight: 600;
-    background: rgba(14,165,117,0.18);
-  }
-  /* Barrinha de acento por dentro da pílula (sem ela, duas pílulas de
-     grupos diferentes ficam parecidas demais no hover). */
-  .sidebar nav a.ativo::before {
-    content: "";
-    position: absolute;
-    left: 0; top: 50%;
-    transform: translateY(-50%);
-    width: 3px; height: 18px;
-    border-radius: 0 3px 3px 0;
-    background: var(--acento);
-  }
-  /* Badge: quantos itens estão esperando ação naquela tela. Vem do JS
-     (/api/sidebar/contadores) -- nasce escondido e só aparece com
-     número > 0, senão o menu fica cheio de zeros. */
-  .sidebar nav a .badge {
-    flex: none;
-    min-width: 19px;
-    padding: 0 5px;
-    border-radius: 9px;
-    background: rgba(255,255,255,0.16);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 18px;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-  }
-  /* texto escuro no badge critico: branco sobre o vermelho dava 3,0:1 (escuro) e 4,0:1 (claro) */
-  .sidebar nav a .badge.critico { background: var(--erro); color: #1A0705; }
-  .sidebar nav a .badge[hidden] { display: none; }
   /* Rodapé em duas linhas: quem está logado (com o nível -- é o que
      explica por que uma tela some pro colega) e, embaixo, tema + sair.
      O tema saiu do menu de propósito (11/09): é configuração, não
@@ -325,19 +199,6 @@
   .abre-menu { display: none; }
   .veu-menu { display: none; }
   @media (max-width: 760px) {
-    .sidebar {
-      position: fixed;
-      top: 0; left: 0; bottom: 0;
-      height: 100dvh;
-      width: 264px;
-      max-width: 86vw;
-      z-index: 1200;
-      transform: translateX(-100%);
-      transition: transform 0.2s ease;
-    }
-    /* sombra so com a gaveta aberta: fechada, ela vazava 28px na borda
-       esquerda da tela como uma faixa cinza */
-    html.menu-aberto .sidebar { box-shadow: 0 0 28px rgba(0,0,0,0.4); }
     /* No celular a gaveta abre sempre inteira: o "recolhida" de 68px do
        desktop (localStorage) deixaria so os icones numa tela de toque. */
     html.sidebar-recolhida .sidebar { width: 264px; }
@@ -348,20 +209,9 @@
     html.sidebar-recolhida .sidebar nav a .rotulo { display: block; }
     html.sidebar-recolhida .sidebar nav .grupo-titulo { display: block; }
     html.sidebar-recolhida .sidebar .rodape .usuario { display: flex; }
-    html.menu-aberto .sidebar { transform: translateX(0); }
     /* O botao de recolher e coisa de desktop; no celular quem fecha e o
        ☰, o veu ou o Esc. */
     .alterna-sidebar { display: none; }
-    .veu-menu {
-      display: block;
-      position: fixed; inset: 0;
-      z-index: 1199;
-      background: rgba(10, 10, 24, 0.5);
-      opacity: 0; pointer-events: none;
-      transition: opacity 0.2s ease;
-    }
-    html.menu-aberto .veu-menu { opacity: 1; pointer-events: auto; }
-    html.menu-aberto { overflow: hidden; }
     .abre-menu {
       display: inline-flex;
       align-items: center;
@@ -486,86 +336,8 @@
     <button type="button" class="alterna-sidebar" id="alterna-sidebar" title="Recolher menu" aria-label="Recolher menu">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 5l-5 5 5 5"/></svg>
     </button>
-    {#
-      Menu lateral (reorganizado 11/09/2026, pedido do Hugo): os 13 itens
-      vinham num bloco plano, na ordem em que foram criados. Agora saem
-      de UMA lista, agrupados pelo momento do dia em que a tela é usada.
-
-      `niveis` de cada item ESPELHA o `niveis=` do @requer_auth da rota
-      correspondente em painel_agentes.py -- é o que evita o menu
-      oferecer link que dá 403 (era o caso do nível "galpao", que via
-      Torre/Planejamento/Expedição e não via o próprio Galpão). Ao criar
-      ou mudar o acesso de uma tela, mexa nos dois lugares.
-
-      `badge` liga o item ao contador de mesmo nome em contadores_menu.py
-      (vem por JS depois do load, nunca na renderização).
-    #}
-    {% set NIVEIS_ROTAS = ('total', 'operador', 'leitura') %}
-    {% set GRUPOS_MENU = [
-      ('Acompanhar', [
-        {'rota': 'torre', 'rotulo': 'Torre de Controle', 'titulo': 'Torre de Controle', 'niveis': NIVEIS_ROTAS, 'badge': 'torre',
-         'icone': '<path d="M10 8v9M10 8a2 2 0 100-4 2 2 0 000 4z"/><path d="M6.5 6.5a5 5 0 000 7M13.5 6.5a5 5 0 010 7"/><path d="M4 4a8 8 0 000 12M16 4a8 8 0 010 12"/>'},
-        {'rota': 'pedidos_parados', 'rotulo': 'Pedidos Parados', 'titulo': 'Pedidos Parados', 'niveis': NIVEIS_ROTAS, 'badge': 'pedidos_parados',
-         'icone': '<rect x="3.5" y="6" width="13" height="9.5" rx="1.5"/><path d="M6.5 6V4.8a1.3 1.3 0 011.3-1.3h4.4a1.3 1.3 0 011.3 1.3V6"/><path d="M10 9.3v3.4M8.3 11h3.4"/>'},
-        {'rota': 'historico_tratativas', 'rotulo': 'Tratativas', 'titulo': 'Histórico de Tratativas', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<rect x="4.5" y="3.5" width="11" height="14" rx="1.5"/><path d="M7.5 3.2h5a.8.8 0 01.8.8v1H6.7v-1a.8.8 0 01.8-.8z"/><path d="M7.3 10.5l1.8 1.8 3.6-3.8"/>'},
-        {'rota': 'consulta', 'rotulo': 'Consulta', 'titulo': 'Consulta de rotas e pedidos (histórico)', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<circle cx="9" cy="9" r="5.2"/><path d="M12.8 12.8L17 17"/>'},
-      ]),
-      ('Planejar', [
-        {'rota': 'planejamento', 'rotulo': 'Planejamento', 'titulo': 'Planejamento de Rotas', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/>'},
-        {'rota': 'mapa_rotas', 'rotulo': 'Mapa', 'titulo': 'Mapa de Rotas', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/>'},
-        {'rota': 'laboratorio_rotas', 'rotulo': 'Laboratório', 'titulo': 'Laboratório de Roteirização', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<path d="M8 3h4M8.5 3v4.2L4.8 14a1.8 1.8 0 001.6 2.6h7.2a1.8 1.8 0 001.6-2.6L11.5 7.2V3"/><path d="M6.8 12h6.4"/>'},
-      ]),
-      ('Operar', [
-        {'rota': 'expedicao', 'rotulo': 'Expedição', 'titulo': 'Expedição', 'niveis': ('total', 'operador', 'leitura', 'expedicao'), 'badge': none,
-         'icone': '<rect x="4" y="3.5" width="12" height="14" rx="1.5"/><path d="M7 8h6M7 11.2h6M7 14.4h3.5"/>'},
-        {'rota': 'wms', 'rotulo': 'Galpão', 'titulo': 'Galpão (endereçamento)', 'niveis': ('total', 'operador', 'galpao'), 'badge': none,
-         'icone': '<path d="M3.5 8.5L10 4l6.5 4.5V16h-13z"/><path d="M7 16v-4.5h6V16"/><path d="M8.5 9.2h3"/>'},
-        {'rota': 'atendimento', 'rotulo': 'Atendimento', 'titulo': 'Atendimento', 'niveis': ('total', 'operador', 'atendimento'), 'badge': 'atendimento',
-         'icone': '<path d="M17 12.5a1.5 1.5 0 01-1.5 1.5H7l-3.5 3V5A1.5 1.5 0 015 3.5h10.5A1.5 1.5 0 0117 5z"/><path d="M7 8h6M7 10.8h4"/>'},
-      ]),
-      ('Motoristas', [
-        {'rota': 'motoristas', 'rotulo': 'Motoristas', 'titulo': 'Motoristas', 'niveis': NIVEIS_ROTAS, 'badge': none,
-         'icone': '<circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/>'},
-        {'rota': 'pedagios', 'rotulo': 'Pedágios', 'titulo': 'Pedágios (app de motoristas)', 'niveis': NIVEIS_ROTAS, 'badge': 'pedagios',
-         'icone': '<rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M3 8.5h14"/><path d="M6.5 12h3"/>'},
-        {'rota': 'canhotos', 'rotulo': 'Canhotos', 'titulo': 'Canhotos (conferência das fotos do app)', 'niveis': NIVEIS_ROTAS, 'badge': 'canhotos',
-         'icone': '<path d="M5 3h10v14l-2.5-1.5L10 17l-2.5-1.5L5 17z"/><path d="M8 7.5h4"/><path d="M8 10.5h4"/>'},
-      ]),
-      ('Sistema', [
-        {'rota': 'index', 'rotulo': 'Agentes', 'titulo': 'Agentes', 'niveis': ('total',), 'badge': none,
-         'icone': '<rect x="3" y="3" width="6" height="6" rx="1.2"/><rect x="11" y="3" width="6" height="6" rx="1.2"/><rect x="3" y="11" width="6" height="6" rx="1.2"/><rect x="11" y="11" width="6" height="6" rx="1.2"/>'},
-        {'rota': 'historico', 'rotulo': 'Execuções', 'titulo': 'Histórico de execuções dos agentes', 'niveis': ('total',), 'badge': none,
-         'icone': '<circle cx="10" cy="10.5" r="6.7"/><path d="M10 6.8V10.5l3 1.8"/><path d="M7.5 2.3h5"/>'},
-      ]),
-    ] %}
     {% set nivel = session.get('nivel_acesso') %}
-    <nav aria-label="Telas do painel">
-      {% for titulo_grupo, itens in GRUPOS_MENU %}
-        {% set visiveis = [] %}
-        {% for item in itens %}{% if nivel in item.niveis %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
-        {# Grupo que ficou sem nenhum item pro nível do usuário não
-           desenha nem o cabeçalho (ex: "Sistema" fora do nível total). #}
-        {% if visiveis %}
-        <div class="grupo" role="group" aria-label="{{ titulo_grupo }}">
-          <span class="grupo-titulo" aria-hidden="true">{{ titulo_grupo }}</span>
-          {% for item in visiveis %}
-          {% set ativo = request.endpoint == item.rota %}
-          <a href="{{ url_for(item.rota) }}" class="{{ 'ativo' if ativo else '' }}" title="{{ item.titulo }}"
-             {% if ativo %}aria-current="page"{% endif %}>
-            <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{{ item.icone | safe }}</svg></span>
-            <span class="rotulo">{{ item.rotulo }}</span>
-            {% if item.badge %}<span class="badge" data-contador="{{ item.badge }}" hidden></span>{% endif %}
-          </a>
-          {% endfor %}
-        </div>
-        {% endif %}
-      {% endfor %}
-    </nav>
+    {% include "_menu_lateral_nav.html" %}
     {% if nivel %}
     <div class="rodape">
       {% set ROTULOS_NIVEL = {'total': 'acesso total', 'operador': 'operação', 'leitura': 'somente leitura',
@@ -624,53 +396,7 @@
     });
   })();
 </script>
-<script>
-  // Gaveta do menu no celular (21/09). Nada aqui roda no desktop: o ☰ e
-  // o veu so aparecem abaixo de 760px (CSS). Estado NAO vai pro
-  // localStorage de proposito -- gaveta nasce fechada a cada tela.
-  (function() {
-    var raiz = document.documentElement;
-    var botao = document.getElementById("abre-menu");
-    var veu = document.getElementById("veu-menu");
-    var menu = document.getElementById("menu-lateral");
-    if (!botao || !veu || !menu) return;
-    function aplicar(aberto) {
-      raiz.classList.toggle("menu-aberto", aberto);
-      botao.setAttribute("aria-expanded", aberto ? "true" : "false");
-      botao.setAttribute("aria-label", aberto ? "Fechar menu" : "Abrir menu");
-    }
-    function fechar(devolverFoco) {
-      if (!raiz.classList.contains("menu-aberto")) return;
-      aplicar(false);
-      if (devolverFoco) botao.focus();
-    }
-    botao.addEventListener("click", function() {
-      var aberto = !raiz.classList.contains("menu-aberto");
-      aplicar(aberto);
-      if (aberto) {
-        var primeiro = menu.querySelector("nav a");
-        if (primeiro) primeiro.focus();
-      }
-    });
-    veu.addEventListener("click", function() { fechar(true); });
-    document.addEventListener("keydown", function(e) {
-      if (e.key === "Escape") fechar(true);
-    });
-    // Tocou num item do menu: a navegacao ja troca de pagina, mas fechar
-    // aqui evita a gaveta aberta piscando durante o load.
-    menu.addEventListener("click", function(e) {
-      if (e.target.closest("a")) fechar(false);
-    });
-    // Voltou pro desktop (girou a tela / redimensionou): some com o
-    // estado de gaveta pra nao travar o scroll do body.
-    if (window.matchMedia) {
-      var largo = window.matchMedia("(min-width: 761px)");
-      var aoMudar = function(ev) { if (ev.matches) fechar(false); };
-      if (largo.addEventListener) largo.addEventListener("change", aoMudar);
-      else if (largo.addListener) largo.addListener(aoMudar);
-    }
-  })();
-</script>
+{% include "_menu_lateral_script.html" %}
 <script>
   // Alternador de tema claro/escuro. Dispara "tema:alterado" no
   // document pra páginas com conteúdo que não usa var(--...) direto
@@ -697,51 +423,6 @@
       var escuro = !document.documentElement.classList.contains("tema-escuro");
       localStorage.setItem(CHAVE, escuro ? "1" : "0");
       aplicar(escuro, true);
-    });
-  })();
-</script>
-<script>
-  // Badges do menu (11/09): quantos itens esperam ação em cada tela.
-  // Busca DEPOIS do load e nunca na renderização -- o menu está em toda
-  // página do painel e não pode atrasar nenhuma (ver contadores_menu.py).
-  (function() {
-    var INTERVALO_MS = 120000;  // 2 min; o lado caro tem cache de 3 min
-    var badges = document.querySelectorAll(".sidebar nav .badge[data-contador]");
-    if (!badges.length) return;
-
-    var ROTULOS = {
-      torre: "na fila de ação",
-      pedidos_parados: "esperando triagem",
-      pedagios: "aguardando aprovação",
-      atendimento: "esperando atendimento",
-    };
-
-    function pintar(contadores) {
-      badges.forEach(function(el) {
-        var dado = contadores[el.dataset.contador];
-        // Contador ausente = fonte falhou ou ainda não tem leitura:
-        // mantém o que estava na tela em vez de piscar pra vazio.
-        if (!dado) return;
-        var qtd = dado.qtd || 0;
-        el.hidden = qtd === 0;
-        el.textContent = qtd > 99 ? "99+" : qtd;
-        el.classList.toggle("critico", (dado.criticas || 0) > 0);
-        el.title = qtd + " " + (ROTULOS[el.dataset.contador] || "");
-      });
-    }
-
-    function buscar() {
-      if (document.hidden) return;  // aba em segundo plano não martela o servidor
-      fetch(BASE_PATH + "/api/sidebar/contadores", { credentials: "same-origin" })
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(d) { if (d && d.contadores) pintar(d.contadores); })
-        .catch(function() { /* menu sem badge é degradação aceitável */ });
-    }
-
-    buscar();
-    setInterval(buscar, INTERVALO_MS);
-    document.addEventListener("visibilitychange", function() {
-      if (!document.hidden) buscar();
     });
   })();
 </script>

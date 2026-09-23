@@ -117,6 +117,11 @@
   details.acordeao > summary::-webkit-details-marker { display: none; }
   details.acordeao > summary::before { content: "▾ "; }
   details.acordeao[open] > summary::before { content: "▴ "; }
+
+  /* Menu lateral (23/09): o mesmo do painel, aqui sempre como gaveta
+     aberta pelo ☰ da barra de cima. */
+  .barra-superior .inicio { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  {% with gaveta_sempre = true %}{% include "_menu_lateral_estilo.html" %}{% endwith %}
 </style>
 {% block estilo_extra %}{% endblock %}
 <style>
@@ -134,9 +139,14 @@
   const BASE_PATH = "{{ request.script_root }}";
 </script>
 <div class="barra-superior">
-  <div class="identidade">
-    <div class="marca">Freshlog</div>
-    <div class="titulo-pagina">{% block titulo_barra %}{% endblock %}</div>
+  <div class="inicio">
+    <button type="button" class="botao-icone" id="abre-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="menu-lateral">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div class="identidade">
+      <div class="marca">Freshlog</div>
+      <div class="titulo-pagina">{% block titulo_barra %}{% endblock %}</div>
+    </div>
   </div>
   <div class="acoes">
     <a class="botao-icone" href="{{ url_for(endpoint_desktop, data=request.args.get('data')) if request.args.get('data') else url_for(endpoint_desktop) }}" title="Versão completa (desktop)" aria-label="Versão completa">
@@ -169,6 +179,17 @@
     <span class="icone-aba">🗺️</span>Planejamento
   </a>
 </nav>
+
+<aside class="sidebar" id="menu-lateral">
+  <div class="marca">
+    <span class="nome">Painel de Agentes</span>
+    <span class="subtitulo">Agente Stokki Freshlog</span>
+  </div>
+  {% set nivel = session.get('nivel_acesso') %}
+  {% include "_menu_lateral_nav.html" %}
+</aside>
+<div class="veu-menu" id="veu-menu"></div>
+{% include "_menu_lateral_script.html" %}
 
 <script>
   (function() {
