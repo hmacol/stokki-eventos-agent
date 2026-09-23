@@ -81,7 +81,6 @@ CREATE TABLE IF NOT EXISTS wms_recebimentos (
     situacao       TEXT NOT NULL DEFAULT '',
     chegada        TEXT NOT NULL DEFAULT '',
     estado         TEXT NOT NULL DEFAULT 'ESPERADO',  -- ESPERADO | ENDERECADO
-    sem_lote_na_stokki INTEGER NOT NULL DEFAULT 0,  -- 1 = veio so pela tabela sem lote (fallback); operador tem que digitar
     lido_em        TEXT NOT NULL,
     atualizado_em  TEXT NOT NULL
 );
@@ -97,8 +96,6 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_itens (
     qtd_un              REAL,
     produto_id          INTEGER REFERENCES wms_produtos(id),
     motivo_pendencia    TEXT NOT NULL DEFAULT '',
-    lote_sugerido       TEXT NOT NULL DEFAULT '',
-    validade_sugerida   TEXT NOT NULL DEFAULT '',
     qtd_enderecada      REAL NOT NULL DEFAULT 0,
     UNIQUE (recebimento_id, linha)
 );
@@ -129,14 +126,6 @@ def _migrar(conn) -> None:
         for nome, tipo in colunas.items():
             if nome not in existentes:
                 conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
-    # Validade sugerida gravada crua em dd/mm/aaaa antes da correcao (o
-    # <input type="date"> da tela ignora valor nao-ISO e aparece VAZIO).
-    antigas = conn.execute(
-        "SELECT id, validade_sugerida FROM wms_recebimento_itens "
-        "WHERE validade_sugerida <> '' AND validade_sugerida NOT LIKE '____-__-__'").fetchall()
-    for r in antigas:
-        conn.execute("UPDATE wms_recebimento_itens SET validade_sugerida = ? WHERE id = ?",
-                     (_validade_iso(r["validade_sugerida"]), r["id"]))
     conn.commit()
 
 
@@ -146,18 +135,6 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     conn.executescript(_DDL)
     _migrar(conn)
     return conn
-
-
-def _validade_iso(valor) -> str:
-    """
-    Normaliza a validade lida da Stokki (dd/mm/aaaa) pro ISO (aaaa-mm-dd)
-    que o <input type="date"> da tela entende. E so uma SUGESTAO pro
-    operador, entao data ilegivel vira vazio -- nunca levanta erro.
-    """
-    try:
-        return wms._validar_validade(valor) or ""
-    except wms.ErroWMS:
-        return ""
 
 
 def _so_digitos(valor) -> str:
@@ -654,64 +631,45 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     campos de cabecalho (situacao/chegada podem mudar na Stokki antes do
     operador terminar de enderecar).
 
-    lote/validade que a Stokki ja traz preenchidos (achado do Hugo,
-    22/09/2026: 61 de 61 itens numa amostra) sao gravados como SUGESTAO
-    (lote_sugerido/validade_sugerida) -- a tela do operador (tarefa
-    seguinte) mostra editavel, nunca aplica em silencio. A validade vem da
-    Stokki em dd/mm/aaaa e e gravada em ISO (aaaa-mm-dd): o <input
-    type="date"> da tela IGNORA valor nao-ISO e aparece vazio, o que
-    matava a sugestao inteira (o operador tinha que digitar de novo uma
-    validade que e obrigatoria por padrao).
-
-    Fallback (achado da revisao, 22/09/2026, PE-2440): quando o
-    recebimento nao tem a tabela de lote na Stokki, stokki.recebimentos
-    ja devolve os itens pela tabela sem lote, cada um marcado com
-    "lote_informado": False -- aqui isso vira sem_lote_na_stokki=1 no
-    cabecalho do recebimento, pra tela do operador avisar que ali ele
-    PRECISA digitar o lote, nao so confirmar uma sugestao.
+    Decisao do Hugo (23/09/2026): sem pre-preenchimento vindo da Stokki --
+    da Stokki so entra a quantidade. Lote e validade o operador digita na
+    tela do celular, lendo a caixa fisica (fonte de verdade).
     """
     id_stokki = int(recebimento["id_stokki"])
     agora = wms.agora()
-    # Todos os itens de um recebimento vem da MESMA tabela (lote ou
-    # fallback) -- basta olhar o primeiro. Sem itens, mantem o que ja
-    # estava gravado (nao ha update; so acontece se quem chamar passar
-    # lista vazia por engano, o que a rotina de lote nunca faz).
-    sem_lote_na_stokki = 1 if itens and not itens[0].get("lote_informado", True) else 0
 
     row = conn.execute("SELECT id FROM wms_recebimentos WHERE id_stokki = ?", (id_stokki,)).fetchone()
     if row:
         recebimento_id = row["id"]
         conn.execute(
             "UPDATE wms_recebimentos SET codigo = ?, embarcador = ?, situacao = ?, chegada = ?, "
-            "sem_lote_na_stokki = ?, atualizado_em = ? WHERE id = ?",
+            "atualizado_em = ? WHERE id = ?",
             (recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
              recebimento.get("situacao", ""), recebimento.get("chegada", ""),
-             sem_lote_na_stokki, agora, recebimento_id))
+             agora, recebimento_id))
     else:
         cur = conn.execute("""
             INSERT INTO wms_recebimentos (id_stokki, codigo, embarcador, situacao, chegada, estado,
-                                          sem_lote_na_stokki, lido_em, atualizado_em)
-            VALUES (?,?,?,?,?,'ESPERADO',?,?,?)""",
+                                          lido_em, atualizado_em)
+            VALUES (?,?,?,?,?,'ESPERADO',?,?)""",
             (id_stokki, recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
              recebimento.get("situacao", ""), recebimento.get("chegada", ""),
-             sem_lote_na_stokki, agora, agora))
+             agora, agora))
         recebimento_id = cur.lastrowid
 
     for item in itens:
         r = resolver_item(conn, item)
         conn.execute("""
             INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, ean_linha, descricao,
-                                               qtd_embalagem, qtd_un, produto_id, motivo_pendencia,
-                                               lote_sugerido, validade_sugerida)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                                               qtd_embalagem, qtd_un, produto_id, motivo_pendencia)
+            VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(recebimento_id, linha) DO UPDATE SET
                 sku = excluded.sku, ean_linha = excluded.ean_linha, descricao = excluded.descricao,
                 qtd_embalagem = excluded.qtd_embalagem, qtd_un = excluded.qtd_un,
-                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia,
-                lote_sugerido = excluded.lote_sugerido, validade_sugerida = excluded.validade_sugerida""",
+                produto_id = excluded.produto_id, motivo_pendencia = excluded.motivo_pendencia""",
             (recebimento_id, int(item["linha"]), item.get("sku", ""), item.get("ean_linha", ""),
              item.get("descricao", ""), float(item["qtd_embalagem"]), r["qtd_un"], r["produto_id"],
-             r["motivo_pendencia"], item.get("lote", ""), _validade_iso(item.get("validade"))))
+             r["motivo_pendencia"]))
 
     return recebimento_id
 

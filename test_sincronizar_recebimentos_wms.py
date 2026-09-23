@@ -28,8 +28,11 @@ import sincronizar_recebimentos_wms as mod  # noqa: E402
 PILOTO_ID = "48"
 PILOTO_NOME = "MARIA DOLORES"
 
-# HTML minimo com a tabela "Produto | Lote | Entrada | Fabricacao |
-# Validade | Quantidade" -- so o que extrair_itens_do_recebimento precisa.
+# HTML minimo com as duas tabelas do detalhe: a de lote (Produto | Lote |
+# Entrada | Fabricacao | Validade | Quantidade), que o parser IGNORA de
+# proposito (decisao do Hugo, 23/09/2026: sem pre-preenchimento vindo da
+# Stokki), e a de itens (NR | ID | SKU | Nome | ... | Quantidade total
+# recebida | Obs), a unica que extrair_itens_do_recebimento le.
 _HTML_ITENS = """
 <table class="table">
   <thead>
@@ -46,11 +49,27 @@ _HTML_ITENS = """
     </tr>
   </tbody>
 </table>
+<table class="table">
+  <thead>
+    <tr>
+      <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th><th>Localização</th>
+      <th>Quantidade</th><th>unidade</th><th>Valor Unitário</th>
+      <th>Quantidade total recebida</th><th>Obs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td><td>#ITM-948</td><td>SKU1</td><td>PRODUTO 1</td>
+      <td>Recebimento</td><td>4</td><td>UN</td><td>R$ 10,00</td>
+      <td>4</td><td></td>
+    </tr>
+  </tbody>
+</table>
 """
 
 # HTML minimo do caso PE-2440 (achado da revisao, 22/09/2026): sem a
-# tabela de lote, so a tabela "NR | ID | SKU | Nome | ... | Quantidade
-# total recebida | Obs" -- mercadoria real, sem sugestao de lote.
+# tabela de lote na pagina, so a tabela de itens -- mesmo assim registrado
+# normalmente, porque e a unica tabela que o parser sempre le.
 _HTML_ITENS_SEM_LOTE = """
 <table class="table">
   <thead>
@@ -151,7 +170,7 @@ class BaseRotina(unittest.TestCase):
 
 
 class TestRodar(BaseRotina):
-    def test_recebimento_do_piloto_e_registrado_com_lote_e_validade_sugeridos(self):
+    def test_recebimento_do_piloto_e_registrado_com_a_quantidade_da_stokki(self):
         linhas = [_linha(2478, PILOTO_ID)]
         sess = SessaoFalsa(linhas, {"2478": _HTML_ITENS})
 
@@ -166,12 +185,9 @@ class TestRodar(BaseRotina):
         self.assertIsNotNone(recebimento)
         self.assertEqual(recebimento["codigo"], "#PE-2478")
         self.assertEqual(recebimento["estado"], "ESPERADO")
-        self.assertEqual(recebimento["sem_lote_na_stokki"], 0)
         item = self.conn.execute("SELECT * FROM wms_recebimento_itens").fetchone()
         self.assertEqual(item["produto_id"], 1)
-        self.assertEqual(item["qtd_un"], 4)
-        self.assertEqual(item["lote_sugerido"], "L-A")
-        self.assertEqual(item["validade_sugerida"], "2026-10-15")
+        self.assertEqual(item["qtd_un"], 4)  # so a quantidade vem da Stokki -- sem lote/validade
 
         # o filtro do lado do servidor tem que ter sido usado (correcao 1)
         url_tabela, params_tabela = next(c for c in sess.chamadas if c[0].endswith("/table"))
@@ -238,10 +254,10 @@ class TestRodar(BaseRotina):
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2483").fetchone()
         self.assertIsNone(recebimento)
 
-    def test_recebido_sem_nenhuma_das_duas_tabelas_conta_como_erro_mas_nao_derruba_a_rodada(self):
-        # nem tabela de lote nem tabela sem-lote (formato mudou/pagina
-        # quebrada de verdade) -- so ENTAO vira erro, e mesmo assim tem
-        # que aguentar sem quebrar a rodada.
+    def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
+        # sem a tabela de itens na pagina (formato mudou/pagina quebrada
+        # de verdade) -- vira erro, e mesmo assim tem que aguentar sem
+        # quebrar a rodada.
         linhas = [_linha(2484, PILOTO_ID, situacao="Recebido"), _linha(2485, PILOTO_ID, situacao="Recebido")]
         sess = SessaoFalsa(linhas, {"2484": "<html>sem tabela nenhuma</html>", "2485": _HTML_ITENS})
 
@@ -254,11 +270,11 @@ class TestRodar(BaseRotina):
         ruim = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2484").fetchone()
         self.assertIsNone(ruim)
 
-    def test_recebido_sem_tabela_de_lote_mas_com_tabela_de_itens_e_registrado_sem_sugestao(self):
+    def test_recebido_sem_tabela_de_lote_na_pagina_e_registrado_normalmente(self):
         # achado da revisao (Hugo, 22/09/2026, caso real PE-2440): sem a
-        # tabela de lote, mas com a de itens -- a mercadoria existe e e
-        # enderecavel. Tem que gravar, so sem lote/validade sugeridos, e
-        # marcar sem_lote_na_stokki=1 pra tela do operador avisar.
+        # tabela de lote na pagina, so a de itens -- a mercadoria existe e
+        # e enderecavel. Tem que gravar do mesmo jeito: a tabela de lote
+        # nunca foi lida mesmo quando presente (decisao do Hugo, 23/09/2026).
         linhas = [_linha(2487, PILOTO_ID, situacao="Recebido")]
         sess = SessaoFalsa(linhas, {"2487": _HTML_ITENS_SEM_LOTE})
 
@@ -268,14 +284,11 @@ class TestRodar(BaseRotina):
         self.assertEqual(res["erros"], 0)
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2487").fetchone()
         self.assertIsNotNone(recebimento)
-        self.assertEqual(recebimento["sem_lote_na_stokki"], 1)
         item = self.conn.execute(
             "SELECT * FROM wms_recebimento_itens WHERE recebimento_id = ?", (recebimento["id"],)).fetchone()
         self.assertEqual(item["sku"], "SKU1")
         self.assertEqual(item["produto_id"], 1)
         self.assertEqual(item["qtd_un"], 4)
-        self.assertEqual(item["lote_sugerido"], "")
-        self.assertEqual(item["validade_sugerida"], "")
 
     def test_recebimento_reenderecado_nao_volta_a_esperado(self):
         # o operador (tela do celular, tarefa seguinte) marca ENDERECADO;

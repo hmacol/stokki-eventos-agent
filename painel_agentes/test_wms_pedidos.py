@@ -853,7 +853,7 @@ class TestEnderecamentoDoRecebimento(BaseWMS):
             self.conn, {"id_stokki": 2478, "codigo": "#PE-2478", "embarcador": "MARIA DOLORES",
                         "situacao": "Recebido", "chegada": "22/09/2026"},
             [{"linha": 1, "sku": "SKU1", "ean_linha": "", "descricao": "PRODUTO 1",
-              "qtd_embalagem": 10, "lote": "L-A", "validade": "18/02/2027"}])
+              "qtd_embalagem": 10}])
         self.conn.commit()
         self.item_id = self.conn.execute(
             "SELECT id FROM wms_recebimento_itens WHERE recebimento_id = ?", (self.rid,)).fetchone()["id"]
@@ -872,22 +872,6 @@ class TestEnderecamentoDoRecebimento(BaseWMS):
 
         self.assertEqual(r["item"]["qtd_enderecada"], 10)
         self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
-
-    def test_validade_sugerida_e_gravada_em_iso(self):
-        # a Stokki devolve 18/02/2027; o <input type="date"> da tela so
-        # entende ISO -- gravar cru fazia a sugestao sumir da tela.
-        item = self.conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?",
-                                 (self.item_id,)).fetchone()
-        self.assertEqual(item["validade_sugerida"], "2027-02-18")
-
-    def test_validade_gravada_no_formato_velho_e_convertida_na_migracao(self):
-        self.conn.execute("UPDATE wms_recebimento_itens SET validade_sugerida = '18/02/2027' WHERE id = ?",
-                          (self.item_id,))
-        self.conn.commit()
-        wms_pedidos._migrar(self.conn)
-        item = self.conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?",
-                                 (self.item_id,)).fetchone()
-        self.assertEqual(item["validade_sugerida"], "2027-02-18")
 
 
 class TestPendencias(BaseWMS):

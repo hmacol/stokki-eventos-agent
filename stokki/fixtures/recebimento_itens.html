@@ -1,29 +1,17 @@
 <!-- Fixture SINTETICA (nao capturada da Stokki -- Hugo proibiu sondar a
-     producao desta maquina) que reproduz a estrutura real descrita pelo
-     Hugo em 22/09/2026: duas tabelas no detalhe de um recebimento, sendo
-     que so a segunda (Produto | Lote | Entrada | Fabricacao | Validade |
-     Quantidade) e a que o parser deve usar. -->
+     producao desta maquina) que reproduz um recebimento com as duas
+     tabelas do detalhe: a de lote (Produto | Lote | Entrada | Fabricacao
+     | Validade | Quantidade, com lote/validade preenchidos) e a de itens
+     (NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
+     Unitario | Quantidade total recebida | Obs). Decisao do Hugo
+     (23/09/2026): sem pre-preenchimento vindo da Stokki -- o parser
+     ignora a tabela de lote e le sempre a de itens. As colunas
+     Quantidade x Quantidade total recebida tem valores DIFERENTES de
+     proposito, pra provar que o parser usa a segunda (o que chegou de
+     verdade), nao a primeira (nominal do pedido de compra). -->
 <html>
 <body>
-  <div class="tab-pane" id="localizacao">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th>
-          <th>Localizacao</th><th>Quantidade</th><th>unidade</th><th>Valor Unitario</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1</td><td>900</td><td>CXPTD1</td>
-          <td>CX PALITINHO DE TAPIOCA TRAD</td>
-          <td>C9-E1-N1</td><td>10</td><td>UN</td><td>0,00</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="tab-pane" id="itens">
+  <div class="tab-pane" id="itens-lote">
     <table class="table">
       <thead>
         <tr>
@@ -47,6 +35,30 @@
           <td></td>
           <td></td>
           <td>5</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tab-pane" id="localizacao">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th>
+          <th>Localização</th><th>Quantidade</th><th>unidade</th>
+          <th>Valor Unitário</th><th>Quantidade total recebida</th><th>Obs</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td><td>900</td><td>CXPTD1</td>
+          <td>CX PALITINHO DE TAPIOCA TRAD</td>
+          <td>C9-E1-N1</td><td>12</td><td>UN</td><td>0,00</td><td>10</td><td></td>
+        </tr>
+        <tr>
+          <td>2</td><td>901</td><td>CXPTD2</td>
+          <td>CX PALITINHO DE TAPIOCA INTEGRAL</td>
+          <td>C9-E1-N2</td><td>6</td><td>UN</td><td>0,00</td><td>5</td><td></td>
         </tr>
       </tbody>
     </table>

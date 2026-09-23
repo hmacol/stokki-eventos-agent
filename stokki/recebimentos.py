@@ -31,34 +31,28 @@ Estados vistos: "Recebido" e "Em transito". Um recebimento "Em transito"
 ainda nao tem tabela de itens nenhuma (mercadoria nao chegou) -- o parser
 devolve lista vazia e quem chama trata como normal, nao erro.
 
-Tabelas do detalhe de um recebimento:
-  - "Produto | Lote | Entrada | Fabricacao | Validade | Quantidade" <- a
-    preferida: lote e validade JA vem preenchidos na Stokki (61 de 61
-    itens numa amostra de 8 recebimentos).
-  - "NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
-    Unitario | Quantidade total recebida | Obs" <- FALLBACK (achado da
-    revisao, Hugo 22/09/2026, comparando PE-2440 x PE-2478): um
-    recebimento "Recebido" pode nao ter a aba "Detalhes de itens" (sem a
-    tabela de lote acima) e ainda assim ter mercadoria real, enderecavel,
-    nesta tabela -- descartar o recebimento inteiro jogaria fora entrada
-    de estoque de verdade (1 em 8 numa amostra, nao e caso raro).
+Tabela do detalhe de um recebimento usada por este parser:
+  "NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
+  Unitario | Quantidade total recebida | Obs"
 
-extrair_itens_do_recebimento busca a tabela de lote primeiro pelo
-cabecalho (robusto a mudanca de layout, mesma tecnica de
-stokki.pedidos.extrair_itens_do_pedido); se nao achar, cai pra tabela
-sem-lote (tambem por cabecalho -- SKU + Quantidade total recebida, nunca
-por posicao ou id). So se NENHUMA das duas existir e que devolve lista
-vazia (e quem chama, sim, trata como erro nesse caso).
+Decisao do Hugo (23/09/2026): sem pre-preenchimento vindo da Stokki --
+lote e validade o operador digita na tela do celular, lendo a caixa
+fisica (fonte de verdade). Da Stokki so entra a QUANTIDADE. O
+recebimento tambem tem uma tabela "Produto | Lote | Entrada | Fabricacao
+| Validade | Quantidade" com lote/validade preenchidos, mas ela e
+ignorada de proposito -- nao e mais lida.
 
-Decisao do Hugo (22/09/2026): lote e validade lidos da tabela preferida
-sao SUGESTAO -- o operador confirma ou corrige na tela do celular
-(tarefa seguinte). Por isso o item extraido carrega "lote" e "validade"
-alem das chaves que extrair_itens_do_pedido ja usa (sku, ean_linha,
-descricao, qtd_embalagem, linha), mais "lote_informado" (True/False) pra
-registrar_recebimento marcar o recebimento como "sem lote da Stokki"
-quando veio do fallback -- a tela do operador avisa que ali ele PRECISA
-digitar, em vez de so confirmar uma sugestao. Nenhuma das duas tabelas
-tem coluna EAN -- ean_linha sai sempre vazio; quem resolve o produto
+extrair_itens_do_recebimento acha a tabela de itens pelo cabecalho
+(robusto a mudanca de layout, mesma tecnica de
+stokki.pedidos.extrair_itens_do_pedido; nunca por posicao ou id). Usa
+"Quantidade total recebida" (nao "Quantidade") como qtd_embalagem: e o
+que fisicamente chegou e vai ser guardado agora ("Situacao: Recebido"),
+enquanto "Quantidade" e a nominal/esperada do pedido de compra -- podem
+divergir num recebimento parcial, e o que importa pra guardar no galpao
+e o que chegou de verdade. Devolve lista vazia se a tabela nao existir
+(recebimento "Em transito" ainda sem mercadoria chegada, ou -- caso
+realmente sem itens legiveis -- vira erro pra quem chama). Nao ha coluna
+EAN nessa tabela -- ean_linha sai sempre vazio; quem resolve o produto
 (wms_pedidos.resolver_item) cai na regra por SKU.
 """
 import logging
@@ -72,8 +66,6 @@ from stokki.auth import StokkiSession
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://freshlog.stokki.com.br"
-
-RE_SKU_DESCRICAO = re.compile(r"^\s*(\S+)\s+-\s+(.*)$")
 
 
 # ── Listagem paginada ─────────────────────────────────────────────────────────
@@ -185,50 +177,33 @@ def extrair_cabecalho_da_linha(linha) -> dict:
 
 def extrair_itens_do_recebimento(html: str) -> list[dict]:
     """
-    Itens do detalhe de um recebimento. Tenta primeiro a tabela "Produto |
-    Lote | Entrada | Fabricacao | Validade | Quantidade" -- a que importa,
-    porque lote e validade JA vem preenchidos na Stokki. Busca pelo
-    cabecalho, igual stokki.pedidos.extrair_itens_do_pedido, pra nao
-    confundir com a outra tabela do detalhe.
+    Itens do detalhe de um recebimento, sempre da tabela "NR | ID | SKU |
+    Nome | Localizacao | Quantidade | unidade | Valor Unitario |
+    Quantidade total recebida | Obs" (acha por cabecalho, igual
+    stokki.pedidos.extrair_itens_do_pedido -- nunca por posicao ou id).
+    A outra tabela do detalhe ("Produto | Lote | Entrada | Fabricacao |
+    Validade | Quantidade", com lote/validade preenchidos) e ignorada de
+    proposito: decisao do Hugo (23/09/2026) de nao pre-preencher lote nem
+    validade a partir da Stokki -- o operador digita lendo a caixa fisica.
 
-    FALLBACK (achado da revisao, Hugo 22/09/2026, comparando PE-2440 x
-    PE-2478): um recebimento "Recebido" pode nao ter a aba "Detalhes de
-    itens" (sem tabela de lote) e ainda assim ter mercadoria de verdade,
-    enderecavel, na outra tabela do detalhe -- "NR | ID | SKU | Nome |
-    Localizacao | Quantidade | unidade | Valor Unitario | Quantidade
-    total recebida | Obs". Descartar o recebimento inteiro jogaria fora
-    entrada real de estoque (1 em 8 numa amostra, nao e caso raro). Por
-    isso, se a tabela de lote nao existir, cai pra esta (tambem
-    encontrada por cabecalho -- SKU + Quantidade total recebida, nunca
-    por posicao). Cada item vem com lote="" e validade="" (sem sugestao)
-    e a chave "lote_informado": False, pra registrar_recebimento marcar
-    o recebimento como "sem lote da Stokki" -- a tela do operador avisa
-    que ali ele PRECISA digitar.
+    Usa "Quantidade total recebida" (nao "Quantidade") como qtd_embalagem:
+    e o que fisicamente chegou e vai ser guardado agora ("Situacao:
+    Recebido"), enquanto "Quantidade" e a nominal/esperada do pedido de
+    compra -- podem divergir num recebimento parcial, e o que importa pra
+    guardar no galpao e o que chegou de verdade.
 
-    Usa "Quantidade total recebida" (nao "Quantidade") como qtd_embalagem
-    do fallback: e o que fisicamente chegou e vai ser guardado agora
-    ("Situacao: Recebido"), enquanto "Quantidade" e a nominal/esperada do
-    pedido de compra -- podem divergir num recebimento parcial, e o que
-    importa pra guardar no galpao e o que chegou de verdade.
-
-    Devolve lista vazia se NENHUMA das duas tabelas existir (recebimento
-    "Em transito" ainda sem mercadoria chegada, ou -- caso realmente sem
+    Devolve lista vazia se a tabela nao existir (recebimento "Em
+    transito" ainda sem mercadoria chegada, ou -- caso realmente sem
     itens legiveis -- vira erro pra quem chama).
 
-    Nao ha coluna EAN em nenhuma das duas tabelas -- ean_linha sempre
-    vazio.
+    Nao ha coluna EAN nessa tabela -- ean_linha sempre vazio.
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    tabela_lote = _achar_tabela_por_cabecalho(soup, {"PRODUTO", "LOTE", "VALIDADE", "QUANTIDADE"})
-    if tabela_lote is not None:
-        return _itens_da_tabela_de_lote(tabela_lote)
-
-    tabela_sem_lote = _achar_tabela_por_cabecalho(soup, {"SKU", "QUANTIDADE TOTAL RECEBIDA"})
-    if tabela_sem_lote is not None:
-        return _itens_da_tabela_sem_lote(tabela_sem_lote)
-
-    return []
+    tabela = _achar_tabela_por_cabecalho(soup, {"SKU", "QUANTIDADE TOTAL RECEBIDA"})
+    if tabela is None:
+        return []
+    return _itens_da_tabela_de_itens(tabela)
 
 
 def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: set):
@@ -241,51 +216,17 @@ def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: se
     return None
 
 
-def _itens_da_tabela_de_lote(tabela) -> list[dict]:
+def _itens_da_tabela_de_itens(tabela) -> list[dict]:
     """
-    Produto | Lote | Entrada | Fabricacao | Validade | Quantidade.
+    NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
+    Unitario | Quantidade total recebida | Obs. Le por indice de
+    cabecalho (nunca posicao fixa) -- so usa SKU, Nome e Quantidade total
+    recebida; o resto (Localizacao, unidade, Valor Unitario, Obs) e
+    ignorado aqui.
 
     `linha` e a POSICAO REAL na tabela (nao a posicao na lista devolvida):
     linha pulada por quantidade ilegivel nao pode renumerar as de baixo --
     `linha` e a chave de reconciliacao (UNIQUE(recebimento_id, linha)).
-    """
-    itens = []
-    posicao = 0
-    for tr in tabela.find_all("tr"):
-        celulas = tr.find_all("td")
-        if len(celulas) < 6:
-            continue  # cabecalho ou linha de rodape
-        posicao += 1
-        produto = celulas[0].get_text(" ", strip=True)
-        lote = celulas[1].get_text(" ", strip=True)
-        validade = celulas[4].get_text(" ", strip=True)
-        bruta = celulas[5].get_text(" ", strip=True).replace(".", "").replace(",", ".")
-        try:
-            quantidade = float(bruta)
-        except ValueError:
-            continue  # linha de total ou celula vazia -- nao renumera as de baixo
-        m = RE_SKU_DESCRICAO.match(produto)
-        sku, descricao = (m.group(1), m.group(2).strip()) if m else ("", produto)
-        itens.append({
-            "linha": posicao,
-            "sku": sku,
-            "ean_linha": "",
-            "descricao": descricao,
-            "qtd_embalagem": quantidade,
-            "lote": lote,
-            "validade": validade,
-            "lote_informado": True,
-        })
-    return itens
-
-
-def _itens_da_tabela_sem_lote(tabela) -> list[dict]:
-    """
-    Fallback: NR | ID | SKU | Nome | Localizacao | Quantidade | unidade |
-    Valor Unitario | Quantidade total recebida | Obs. Le por indice de
-    cabecalho (nunca posicao fixa) -- so usa SKU, Nome e Quantidade total
-    recebida; o resto (Localizacao, unidade, Valor Unitario, Obs) e
-    ignorado aqui.
     """
     indice = {}
     for i, th in enumerate(tabela.find_all("th")):
@@ -317,9 +258,6 @@ def _itens_da_tabela_sem_lote(tabela) -> list[dict]:
             "ean_linha": "",
             "descricao": descricao,
             "qtd_embalagem": quantidade,
-            "lote": "",
-            "validade": "",
-            "lote_informado": False,
         })
     return itens
 

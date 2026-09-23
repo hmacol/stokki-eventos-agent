@@ -5,8 +5,8 @@ sincronizar_recebimentos_wms.py
 Le os recebimentos do embarcador piloto na Stokki e cria a entrada
 esperada no WMS. Quem endereca de fato e o operador, pela tela do
 celular (tarefa seguinte): aqui so nasce a lista do que deve chegar, com
-lote/validade que a Stokki ja informa como SUGESTAO -- o operador
-confirma ou corrige, nunca aplicado em silencio.
+a QUANTIDADE que a Stokki informa -- lote e validade nao vem da Stokki
+(decisao do Hugo, 23/09/2026), o operador digita lendo a caixa fisica.
 
 Mesmo desenho de sincronizar_pedidos_wms.py (Task 7), adaptado pro
 endpoint de incoming:

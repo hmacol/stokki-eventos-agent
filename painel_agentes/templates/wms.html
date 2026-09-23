@@ -681,7 +681,6 @@
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${esc(r.codigo)}<small>${esc((r.embarcador || '').split(' ').slice(0, 3).join(' '))} · ${itens.length} item(ns)</small></h1>
-    ${r.sem_lote_na_stokki ? '<div class="cartao atencao"><div class="sub">Este recebimento não veio com lote da Stokki -- confira e digite o lote de cada item pela caixa física.</div></div>' : ''}
     <div class="lista">${itens.map((it, i) => {
       const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;
       const restante = Math.max(0, Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000);
@@ -692,8 +691,8 @@
         <div class="sub mono">SKU ${esc(it.sku || '-')}${it.produto_id ? '' : ' · sem produto no catálogo: ' + esc(it.motivo_pendencia)}</div>
         ${it.produto_id && !feito ? `
         <div class="duas" style="margin-top:8px">
-          <div class="campo"><label>Lote</label><input type="text" id="rec-lote-${i}" value="${esc(it.lote_sugerido || '')}" style="text-transform:uppercase" placeholder="opcional"></div>
-          <div class="campo"><label>Validade</label><input type="date" id="rec-val-${i}" value="${esc(it.validade_sugerida || '')}"></div>
+          <div class="campo"><label>Lote</label><input type="text" id="rec-lote-${i}" style="text-transform:uppercase" placeholder="opcional"></div>
+          <div class="campo"><label>Validade</label><input type="date" id="rec-val-${i}"></div>
         </div>
         <div class="duas-3">
           <div class="campo"><label>Quantidade (${esc(it.unidade || 'UN')})</label><input type="number" id="rec-qtd-${i}" inputmode="decimal" min="0" step="any" value="${restante}"></div>
