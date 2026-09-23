@@ -528,11 +528,15 @@ class TestBaixaNaExpedicao(BaseWMS):
 
         self.assertEqual(r["baixas"], 2)
         self.assertEqual(r["erros"], [])
+        # um uuid por RESERVA (nao um ordinal da chamada -- ver C2 em
+        # TestRetentativaDeLinhaPartida): dois movimentos distintos.
+        ids_reservas = [r2["id"] for r2 in self.conn.execute(
+            "SELECT id FROM wms_reservas WHERE pedido_id = ? ORDER BY id", (pid,))]
         uuids = sorted(m["uuid"] for m in self.conn.execute(
             "SELECT mv.uuid FROM wms_movimentos mv "
             "JOIN wms_reservas rv ON rv.movimento_uuid = mv.uuid "
             "WHERE rv.pedido_id = ?", (pid,)).fetchall())
-        self.assertEqual(uuids, ["ps-39753-item-1-1", "ps-39753-item-1-2"])
+        self.assertEqual(uuids, sorted(f"ps-39753-reserva-{i}" for i in ids_reservas))
         consumidas = self.conn.execute(
             "SELECT COUNT(*) n FROM wms_reservas WHERE pedido_id = ? AND estado = 'CONSUMIDA'",
             (pid,)).fetchone()["n"]
@@ -608,6 +612,112 @@ class TestBaixaNaExpedicao(BaseWMS):
             "SELECT posicao, estado FROM wms_reservas WHERE pedido_id = ?", (pid,)).fetchall()}
         self.assertEqual(reservas["C9-E1-N1"], "CONSUMIDA")
         self.assertEqual(reservas["C9-E2-N1"], "ATIVA")
+
+
+class TestRetentativaDeLinhaPartida(BaseWMS):
+    """
+    C2 da revisao (23/09): o uuid da baixa era ps-<id>-item-<linha>-<n>,
+    com n contado so entre as reservas ATIVAS DAQUELA chamada. Linha
+    partida pelo FEFO em dois lotes, primeira baixa OK e segunda
+    estourando: na rodada seguinte a reserva sobrevivente virava n=1,
+    colidia com o uuid ja gravado, voltava duplicado=True e era marcada
+    CONSUMIDA apontando pro movimento DA OUTRA. Resultado: 5 UN saindo do
+    galpao sem SAIDA nenhuma, pedido BAIXADO, e MUDO -- sem pendencia, sem
+    reserva antiga, sem saldo negativo.
+
+    E a varredura nova executa essa retentativa a cada 15 min.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO A', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        # dois lotes de 5 UN: o FEFO parte a linha de 10 UN em dois
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="L-A",
+                                validade="2026-10-15", destino="C9-E1-N1")
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="L-B",
+                                validade="2026-11-15", destino="C9-E1-N2")
+        self.pid = wms_pedidos.registrar_pedido(
+            self.conn, {"id_stokki": 40400, "codigo_ps": "PS-40400",
+                        "embarcador": "MARIA DOLORES", "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO A", "qtd_embalagem": 10}])
+        wms_pedidos.reservar_pedido(self.conn, self.pid)
+        self.conn.commit()
+        lotes = [r["lote"] for r in self.conn.execute(
+            "SELECT lote FROM wms_reservas WHERE estado = 'ATIVA' ORDER BY id")]
+        self.assertEqual(lotes, ["L-A", "L-B"])  # confirma que partiu
+
+    def _saidas(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM(quantidade), 0) q FROM wms_movimentos "
+            "WHERE tipo = 'SAIDA'").fetchone()
+
+    def test_retentativa_depois_de_falha_parcial_gera_a_segunda_saida(self):
+        # 1a baixa: o L-B falha (posicao desativada entre reserva e expedicao)
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 0 WHERE codigo = 'C9-E1-N2'")
+        self.conn.commit()
+        primeira = wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+        self.assertEqual(primeira["baixas"], 1)
+        self.assertTrue(primeira["erros"])
+        self.assertEqual(self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos WHERE id = ?", (self.pid,)
+        ).fetchone()["estado_reserva"], "PARCIAL")
+
+        # problema resolvido; a rodada seguinte retenta
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 1 WHERE codigo = 'C9-E1-N2'")
+        self.conn.commit()
+        segunda = wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+
+        # antes da correcao: baixas=0, sem erro, pedido BAIXADO e UMA saida so
+        self.assertEqual(segunda["baixas"], 1)
+        self.assertEqual(segunda["erros"], [])
+        saidas = self._saidas()
+        self.assertEqual(saidas["n"], 2)
+        self.assertEqual(saidas["q"], 10)   # as 10 UN que foram no caminhao
+        self.assertEqual(self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos WHERE id = ?", (self.pid,)
+        ).fetchone()["estado_reserva"], "BAIXADO")
+
+    def test_cada_reserva_aponta_pro_proprio_movimento(self):
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+
+        pares = self.conn.execute(
+            "SELECT id, lote, movimento_uuid, estado FROM wms_reservas ORDER BY id").fetchall()
+        self.assertEqual(len({p["movimento_uuid"] for p in pares}), 2)  # uuids distintos
+        for p in pares:
+            self.assertEqual(p["estado"], "CONSUMIDA")
+            self.assertEqual(p["movimento_uuid"], f"ps-40400-reserva-{p['id']}")
+
+    def test_prateleira_nao_fica_com_mercadoria_que_ja_foi_embora(self):
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 0 WHERE codigo = 'C9-E1-N2'")
+        self.conn.commit()
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 1 WHERE codigo = 'C9-E1-N2'")
+        self.conn.commit()
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N1", 1, "L-A", "2026-10-15"), 0)
+        # antes da correcao ficavam 5 UN fantasmas no L-B
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N2", 1, "L-B", "2026-11-15"), 0)
+        # e a invariante central: saldo == soma dos movimentos
+        soma = self.conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN tipo = 'ENTRADA' THEN quantidade ELSE -quantidade END), 0) s "
+            "FROM wms_movimentos").fetchone()["s"]
+        saldo = self.conn.execute(
+            "SELECT COALESCE(SUM(quantidade), 0) s FROM wms_saldos").fetchone()["s"]
+        self.assertEqual(saldo, soma)
+
+    def test_baixar_de_novo_depois_de_tudo_certo_nao_baixa_em_dobro(self):
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-40400")
+
+        self.assertEqual(r["baixas"], 0)
+        self.assertTrue(r["ja_baixado"])
+        self.assertEqual(self._saidas()["n"], 2)
 
 
 class TestSequenciaDaRotina(BaseWMS):

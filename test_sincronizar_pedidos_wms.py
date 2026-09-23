@@ -11,6 +11,7 @@ projeto, agente-importacao-stokki).
 Rodar (da raiz):
     py -3.11 -m unittest test_sincronizar_pedidos_wms -v
 """
+import re
 import sys
 import tempfile
 import unittest
@@ -63,6 +64,10 @@ class SessaoFalsa:
     Duble de StokkiSession -- nunca toca a rede. .get() devolve o que o
     teste montar, conforme a URL: a listagem (.../table) e o detalhe
     (.../show/{id}).
+
+    A listagem PAGINA de verdade (respeita start/length, como a Stokki):
+    sem isso nao da pra reproduzir o achado C1, em que o pedido preso fica
+    fora da primeira pagina.
     """
 
     def __init__(self, linhas_por_status, html_por_id):
@@ -74,8 +79,12 @@ class SessaoFalsa:
         self.chamadas.append((url, params))
         if url.endswith("/table"):
             status = (params or {}).get("state", "")
-            linhas = self.linhas_por_status.get(status, [])
-            return _RespostaFalsa(json_data={"aaData": linhas, "iTotalRecords": 385})
+            todas = self.linhas_por_status.get(status, [])
+            inicio = int((params or {}).get("start", 0) or 0)
+            tamanho = int((params or {}).get("length", 100) or 100)
+            linhas = todas[inicio:inicio + tamanho]
+            return _RespostaFalsa(json_data={"aaData": linhas, "iTotalRecords": 385,
+                                             "iTotalDisplayRecords": len(todas)})
         if "/show/" in url:
             id_pedido = url.rstrip("/").split("/")[-1]
             return _RespostaFalsa(text=self.html_por_id.get(id_pedido, ""))
@@ -493,6 +502,216 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
         gerais = [c for c in sess.chamadas
                   if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
         self.assertEqual(len(gerais), 1)
+
+
+class TestJanelaDaListagemGeral(BaseRotina):
+    """
+    C1 da revisao (23/09): a consulta que decide "sumiu" pedia UMA pagina
+    de 200, dos mais recentes pros mais antigos, e nao olhava se havia
+    mais. Pedido com reserva ATIVA que ja tinha rolado pra fora dessa
+    janela sumia do dicionario e era lido como "nao existe mais na
+    Stokki" -- CANCELADO, com a mercadoria ja fora do galpao e ZERO
+    saida de estoque.
+
+    E o pior caso e o da primeira rodada em producao: o passivo
+    acumulado e justamente o mais antigo, o mais provavel de estar fora
+    da janela.
+    """
+
+    ID_PRESO = 40300
+
+    def setUp(self):
+        super().setUp()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(self.ID_PRESO, PILOTO_ID)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {str(self.ID_PRESO): _HTML_ITENS}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 1)
+
+    def _listagem_com_260_pedidos(self, situacao_do_preso):
+        """O preso e o 260o (ultimo) da listagem geral ordenada desc --
+        fora dos 200 primeiros, entao so a 2a pagina o encontra."""
+        outros = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(259)]
+        linhas = _linhas_vazias()
+        linhas["all"] = outros + [_linha(self.ID_PRESO, PILOTO_ID, status=situacao_do_preso)]
+        return linhas
+
+    def _estado(self):
+        return self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?",
+                                 (self.ID_PRESO,)).fetchone()
+
+    def _saidas(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"]
+
+    def test_pedido_fora_da_primeira_pagina_nao_e_tratado_como_sumido(self):
+        # antes da correcao: {'baixados': 0, 'liberados': 1}, pedido
+        # CANCELADO, nenhuma SAIDA, disponivel de volta a 10 com a
+        # mercadoria ja no caminhao.
+        sess = SessaoFalsa(self._listagem_com_260_pedidos("Sent"), {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(res["baixados"], 1)
+        self.assertEqual(self._estado()["estado_reserva"], "BAIXADO")
+        self.assertEqual(self._saidas(), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "CONSUMIDA")
+        # a listagem geral foi paginada ate o fim: 2 paginas
+        gerais = [c for c in sess.chamadas
+                  if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
+        self.assertEqual(len(gerais), 2)
+        self.assertEqual(gerais[0][1]["start"], 0)
+        self.assertEqual(gerais[1][1]["start"], mod.STOKKI_POR_PAGINA)
+
+    def test_pedido_sumido_de_verdade_fora_da_janela_continua_sendo_liberado(self):
+        # o mesmo cenario, mas o preso NAO esta em pagina nenhuma: agora
+        # que a lista foi vista inteira, "nao apareceu" prova alguma coisa.
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(259)]
+        sess = SessaoFalsa(linhas, {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["liberados"], 1)
+        self.assertEqual(self._estado()["estado_reserva"], "CANCELADO")
+
+    def test_lista_incompleta_nao_libera_ninguem(self):
+        # teto de paginas estourado: a lista nao foi vista ate o fim,
+        # entao "nao apareceu" nao prova nada e ninguem e cancelado.
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(600)]
+        sess = SessaoFalsa(linhas, {})
+        max_original = mod.STOKKI_MAX_PAGINAS
+        mod.STOKKI_MAX_PAGINAS = 1
+        try:
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        finally:
+            mod.STOKKI_MAX_PAGINAS = max_original
+
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(res["baixados"], 0)
+        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
+
+    def test_lista_incompleta_ainda_baixa_quem_aparece_expedido(self):
+        # a baixa depende de evidencia POSITIVA, entao segue mesmo sem a
+        # lista inteira -- so a conclusao por omissao e que fica de fora.
+        linhas = _linhas_vazias()
+        linhas["all"] = ([_linha(self.ID_PRESO, PILOTO_ID, status="Sent")]
+                         + [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(599)])
+        sess = SessaoFalsa(linhas, {})
+        max_original = mod.STOKKI_MAX_PAGINAS
+        mod.STOKKI_MAX_PAGINAS = 1
+        try:
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        finally:
+            mod.STOKKI_MAX_PAGINAS = max_original
+
+        self.assertEqual(res["baixados"], 1)
+        self.assertEqual(res["liberados"], 0)
+        self.assertEqual(self._saidas(), 1)
+
+
+class TestRotulosDeExpedicao(unittest.TestCase):
+    """M2: _esta_expedido decide dar BAIXA em estoque -- casar por pedaco
+    de palavra transformava rotulo negado em saida de mercadoria."""
+
+    def test_rotulos_que_significam_saiu_do_galpao(self):
+        for rotulo in ("Sent", "sent", "Enviado", "ENVIADO", "Entregue", "Delivered",
+                       '<span class="badge">Enviado</span>'):
+            limpo = re.sub(r"<[^>]+>", " ", rotulo).strip()
+            self.assertTrue(mod._esta_expedido(limpo), rotulo)
+
+    def test_rotulo_negado_nunca_vira_baixa(self):
+        for rotulo in ("Nao entregue", "Não entregue", "Nao enviado", "Not sent",
+                       "Reenviado", "Aguardando Transportador", "Em espera", "", None):
+            self.assertFalse(mod._esta_expedido(rotulo), rotulo)
+
+
+class TestEnsaioDoModoTeste(BaseRotina):
+    """I1: --modo-teste e a mitigacao recomendada antes da primeira rodada
+    de verdade. Um modo teste que nao imprime nada nao mitiga nada."""
+
+    def setUp(self):
+        super().setUp()
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40500, PILOTO_ID)]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {"40500": _HTML_ITENS}),
+                  PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+    def _ensaio(self, situacao):
+        linhas = _linhas_vazias()
+        if situacao is not None:
+            linhas["all"] = [_linha(40500, PILOTO_ID, status=situacao)]
+        return mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+                         limite=50, modo_teste=True)
+
+    def test_modo_teste_diz_que_baixaria_sem_baixar(self):
+        res = self._ensaio("Sent")
+
+        self.assertEqual(res["ensaio"], {"baixaria": 1, "liberaria": 0, "manteria": 0})
+        self.assertEqual(res["baixados"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
+
+    def test_modo_teste_diz_que_liberaria_sem_liberar(self):
+        res = self._ensaio(None)
+
+        self.assertEqual(res["ensaio"], {"baixaria": 0, "liberaria": 1, "manteria": 0})
+        self.assertEqual(res["liberados"], 0)
+        self.assertNotEqual(self.conn.execute(
+            "SELECT estado_reserva FROM wms_pedidos").fetchone()["estado_reserva"], "CANCELADO")
+
+    def test_modo_teste_relata_o_que_manteria(self):
+        res = self._ensaio("Em espera")
+
+        self.assertEqual(res["ensaio"], {"baixaria": 0, "liberaria": 0, "manteria": 1})
+
+
+class TestTetoDeBaixasPorRodada(BaseRotina):
+    """I2: a primeira rodada encontra o passivo inteiro; cada baixa e um
+    commit no dados.db compartilhado. O que sobra vai pra proxima rodada."""
+
+    def setUp(self):
+        super().setUp()
+        # 3 pedidos reservados (1 UN cada, pra caber no saldo de 10)
+        html_1un = _HTML_ITENS.replace("<td>4</td>", "<td>1</td>")
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40600 + i, PILOTO_ID) for i in range(3)]
+        sess = SessaoFalsa(linhas, {str(40600 + i): html_1un for i in range(3)})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 3)
+
+    def test_teto_corta_a_rodada_e_a_proxima_termina(self):
+        linhas = _linhas_vazias()
+        linhas["all"] = [_linha(40600 + i, PILOTO_ID, status="Sent") for i in range(3)]
+        teto_original = mod.BAIXAS_POR_RODADA
+        mod.BAIXAS_POR_RODADA = 2
+        try:
+            primeira = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+                                 limite=50, modo_teste=False)
+            self.assertEqual(primeira["baixados"], 2)
+            self.assertEqual(self.conn.execute(
+                "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 1)
+
+            segunda = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+                                limite=50, modo_teste=False)
+        finally:
+            mod.BAIXAS_POR_RODADA = teto_original
+
+        self.assertEqual(segunda["baixados"], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 0)
+        # 3 SAIDAs no total, uma por pedido -- nada baixado duas vezes
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"], 3)
 
 
 class TestTravaStokki(unittest.TestCase):

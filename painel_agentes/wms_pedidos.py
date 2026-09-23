@@ -475,9 +475,11 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     pelo sistema) ou MANUAL (o operador bipou outro lote) -- na hora de
     baixar nao importa quem escolheu o lote, so que a mercadoria saiu.
 
-    O uuid do movimento e deterministico (ps-<id>-item-<linha>-<n>) e o
-    registrar_movimento ja e idempotente por uuid: rodar duas vezes nao
-    baixa duas vezes. Um erro numa reserva nao derruba as outras -- cada
+    O uuid do movimento e deterministico e derivado do ID DA RESERVA
+    (ps-<id_stokki>-reserva-<id>) e o registrar_movimento ja e idempotente
+    por uuid: rodar duas vezes nao baixa duas vezes, e `duplicado` quer
+    dizer exatamente "esta reserva ja virou SAIDA" -- nunca "outra reserva
+    da mesma linha ja virou", que era o bug C2 (ver o comentario no laco). Um erro numa reserva nao derruba as outras -- cada
     reserva e um movimento + um UPDATE que fecham a propria transacao
     (commit por reserva, nao um so no fim): assim a reserva seguinte sempre
     encontra a conexao limpa pro wms.registrar_movimento abrir a dele com
@@ -532,10 +534,19 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     conn.commit()
 
     baixas, erros, negativos = 0, [], []
-    por_item = {}
     for r in reservas:
-        por_item[r["linha"]] = por_item.get(r["linha"], 0) + 1
-        uuid = f"ps-{id_stokki}-item-{r['linha']}-{por_item[r['linha']]}"
+        # O uuid vem do ID DA RESERVA, que e estavel pra sempre -- nunca
+        # de um contador da chamada (achado critico C2 da revisao, 23/09):
+        # o uuid antigo (ps-<id>-item-<linha>-<n>) contava so as reservas
+        # ATIVAS DAQUELA chamada. Linha partida pelo FEFO em dois lotes com
+        # a primeira baixa OK e a segunda estourando fazia a sobrevivente
+        # virar n=1 na rodada seguinte, colidir com o uuid ja gravado,
+        # voltar duplicado=True e ser marcada CONSUMIDA apontando pro
+        # movimento DA OUTRA -- mercadoria saindo do galpao sem SAIDA
+        # nenhuma, em silencio (pedido BAIXADO, sem pendencia). Com o id da
+        # reserva, duplicado=True quer dizer exatamente "esta reserva ja
+        # foi baixada", e ai marcar CONSUMIDA e a coisa certa.
+        uuid = f"ps-{id_stokki}-reserva-{r['id']}"
         try:
             mov = wms.registrar_movimento(
                 conn, tipo="SAIDA", produto_id=r["produto_id"], quantidade=r["quantidade_un"],
