@@ -45,15 +45,35 @@ _HTML_ITENS = """
 """
 
 
+def _pagina_com_situacao(situacao, com_itens=True):
+    """
+    Pagina de detalhe do pedido como a Stokki devolve: o status e o
+    PRIMEIRO badge-status depois de "Situação:" (os seguintes sao
+    marcadores tipo "Remessa Expressa"). Mesmo formato que
+    retiradas/acompanhar_retiradas.py e pedidos_parados_triagem.py leem.
+    """
+    return f"""
+<table class="table">
+  <tr><th>Situação:</th><td>
+      <span class="badge badge-status badge-info">{situacao}</span>
+      <span class="badge badge-status badge-warning">Remessa Expressa</span>
+  </td></tr>
+</table>
+{_HTML_ITENS if com_itens else ""}
+"""
+
+
 class _RespostaFalsa:
     """Imita o suficiente de requests.Response pro codigo da rotina."""
 
-    def __init__(self, json_data=None, text=""):
+    def __init__(self, json_data=None, text="", status_code=200):
         self._json = json_data
         self.text = text
+        self.status_code = status_code
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
     def json(self):
         return self._json
@@ -61,13 +81,26 @@ class _RespostaFalsa:
 
 class SessaoFalsa:
     """
-    Duble de StokkiSession -- nunca toca a rede. .get() devolve o que o
-    teste montar, conforme a URL: a listagem (.../table) e o detalhe
-    (.../show/{id}).
+    Duble de StokkiSession -- nunca toca a rede. Responde como a Stokki de
+    PRODUCAO responde, medido pelo Hugo em 23/09 com o piloto
+    (cliente='48'):
 
-    A listagem PAGINA de verdade (respeita start/length, como a Stokki):
-    sem isso nao da pra reproduzir o achado C1, em que o pedido preso fica
-    fora da primeira pagina.
+        status="all"        pedi 200 -> voltaram   0  (iTotalDisplayRecords=0)
+        status=""           pedi 100 -> voltaram  30  (iTotalDisplayRecords=30)
+        status="Sent"       pedi 200 -> voltaram 200  (iTotalDisplayRecords=3465)
+        status="Delivered"  pedi 200 -> voltaram   0  (iTotalDisplayRecords=0)
+
+    Duas fidelidades que o duble antigo NAO tinha, e por isso escondeu o
+    critico da rodada 2:
+      1. `state="all"` devolve LISTA VAZIA, sempre. O duble antigo
+         entregava linhas pra qualquer status, entao a suite inteira (e
+         duas revisoes) passou por cima de uma consulta que em producao
+         voltaria vazia e faria TODO candidato ser cancelado.
+      2. `/show/<id>` de pedido que nao existe responde 404 -- e o unico
+         jeito de "sumiu" ser evidencia direta.
+
+    A listagem respeita start/length, como a Stokki (que honra o tamanho
+    de pagina pedido: pedi 200, vieram 200).
     """
 
     def __init__(self, linhas_por_status, html_por_id):
@@ -79,7 +112,8 @@ class SessaoFalsa:
         self.chamadas.append((url, params))
         if url.endswith("/table"):
             status = (params or {}).get("state", "")
-            todas = self.linhas_por_status.get(status, [])
+            # producao: "all" nao e um filtro valido -- devolve vazio
+            todas = [] if status == "all" else self.linhas_por_status.get(status, [])
             inicio = int((params or {}).get("start", 0) or 0)
             tamanho = int((params or {}).get("length", 100) or 100)
             linhas = todas[inicio:inicio + tamanho]
@@ -87,7 +121,9 @@ class SessaoFalsa:
                                              "iTotalDisplayRecords": len(todas)})
         if "/show/" in url:
             id_pedido = url.rstrip("/").split("/")[-1]
-            return _RespostaFalsa(text=self.html_por_id.get(id_pedido, ""))
+            if id_pedido not in self.html_por_id:
+                return _RespostaFalsa(text="Not Found", status_code=404)
+            return _RespostaFalsa(text=self.html_por_id[id_pedido])
         raise AssertionError(f"URL inesperada na sessao falsa: {url}")
 
 
@@ -292,9 +328,8 @@ class TestLiberarPedidoSumido(BaseRotina):
 
     def test_pedido_cancelado_na_stokki_tem_as_reservas_liberadas(self):
         self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(40100, PILOTO_ID, status="Canceled")]
-        sess = SessaoFalsa(linhas, {})
+        # a pagina do pedido existe e diz "Cancelado"
+        sess = SessaoFalsa(_linhas_vazias(), {"40100": _pagina_com_situacao("Cancelado")})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
@@ -304,14 +339,11 @@ class TestLiberarPedidoSumido(BaseRotina):
         self.assertIn("cancelado", pedido["motivo_cancelamento"].lower())
 
     def test_pedido_expedido_nunca_e_cancelado_por_esta_varredura(self):
-        # A varredura de sumidos nao pode cancelar quem foi EXPEDIDO: a
-        # mercadoria saiu, entao a reserva vira SAIDA (quem faz isso e o
-        # _baixar_pedidos_ja_expedidos, ver TestBaixarPedidoJaExpedido).
+        # A varredura nao pode cancelar quem foi EXPEDIDO: a mercadoria
+        # saiu, entao a reserva vira SAIDA (ver TestBaixarPedidoJaExpedido).
         # Cancelar aqui baixaria estoque nenhum e o saldo mentiria pra sempre.
         self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(40100, PILOTO_ID, status="Sent")]
-        sess = SessaoFalsa(linhas, {})
+        sess = SessaoFalsa(_linhas_vazias(), {"40100": _pagina_com_situacao("Enviado")})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
@@ -364,10 +396,10 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
         mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
     def _rodada_com_situacao(self, situacao, id_pedido=40200):
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(id_pedido, PILOTO_ID, status=situacao)]
-        return mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
-                         limite=50, modo_teste=False)
+        """A pagina do pedido (e so ela) diz a situacao -- nenhuma listagem
+        participa da decisao."""
+        sess = SessaoFalsa(_linhas_vazias(), {str(id_pedido): _pagina_com_situacao(situacao)})
+        return mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
     def _saidas(self):
         return self.conn.execute(
@@ -394,11 +426,10 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
             "SELECT quantidade FROM wms_saldos WHERE produto_id = 1").fetchone()["quantidade"], 6)
 
     def test_situacao_em_portugues_tambem_conta_como_expedido(self):
-        # a Stokki em pt-br mostra "Enviado", e o state vem com marcacao
-        # HTML em volta.
+        # a Stokki em pt-br mostra "Enviado" no badge-status
         self._reservar_o_pedido()
 
-        res = self._rodada_com_situacao('<span class="badge badge-success">Enviado</span>')
+        res = self._rodada_com_situacao("Enviado")
 
         self.assertEqual(res["baixados"], 1)
         self.assertEqual(self._saidas()["n"], 1)
@@ -435,26 +466,24 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
 
     def test_pedido_ainda_nos_status_varridos_nao_e_candidato(self):
         # o pedido apareceu na varredura normal desta rodada: nao ha nada a
-        # concluir sobre ele no fim, mesmo que a listagem geral o mostre
-        # como expedido (corrida entre as duas consultas).
+        # concluir sobre ele no fim, e nenhuma consulta extra e feita.
         self._reservar_o_pedido()
         linhas = _linhas_vazias()
         linhas["Waiting for Carrier"] = [_linha(40200, PILOTO_ID)]
-        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
-        sess = SessaoFalsa(linhas, {"40200": _HTML_ITENS})
+        sess = SessaoFalsa(linhas, {"40200": _pagina_com_situacao("Enviado")})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["baixados"], 0)
         self.assertEqual(self._saidas()["n"], 0)
+        # so o GET da reserva (1 por status varrido em que ele aparece)
+        self.assertEqual(len([c for c in sess.chamadas if "/show/" in c[0]]), 1)
 
     def test_modo_teste_nunca_baixa(self):
         self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
+        sess = SessaoFalsa(_linhas_vazias(), {"40200": _pagina_com_situacao("Enviado")})
 
-        res = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
-                        limite=50, modo_teste=True)
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=True)
 
         self.assertEqual(res["baixados"], 0)
         self.assertEqual(self._saidas()["n"], 0)
@@ -463,24 +492,26 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
         self._reservar_o_pedido()
         linhas = _linhas_vazias()
         linhas["Waiting for Carrier"] = [_linha(40201, PILOTO_ID)]
-        linhas["all"] = [_linha(40200, PILOTO_ID, status="Sent")]
-        sess = SessaoFalsa(linhas, {"40201": _HTML_ITENS})
+        sess = SessaoFalsa(linhas, {"40201": _HTML_ITENS,
+                                    "40200": _pagina_com_situacao("Enviado")})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=1, modo_teste=False)
 
         self.assertEqual(res["baixados"], 0)
         self.assertEqual(self._saidas()["n"], 0)
 
-    def test_listagem_que_falhou_nao_baixa_nem_libera(self):
+    def test_consulta_que_falhou_nao_baixa_nem_libera(self):
+        # sessao derrubada / Stokki fora do ar: ausencia de resposta nunca
+        # e evidencia de nada.
         self._reservar_o_pedido()
 
-        class SessaoQueFalhaNaListagemGeral(SessaoFalsa):
+        class SessaoQueFalhaNoDetalhe(SessaoFalsa):
             def get(self, url, params=None, headers=None):
-                if url.endswith("/table") and (params or {}).get("state") == "all":
-                    raise RuntimeError("500 da Stokki")
+                if "/show/40200" in url:
+                    raise RuntimeError("401 da Stokki (sessao derrubada)")
                 return super().get(url, params, headers)
 
-        res = mod.rodar(self.conn, SessaoQueFalhaNaListagemGeral(_linhas_vazias(), {}),
+        res = mod.rodar(self.conn, SessaoQueFalhaNoDetalhe(_linhas_vazias(), {}),
                         PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["baixados"], 0)
@@ -489,33 +520,35 @@ class TestBaixarPedidoJaExpedido(BaseRotina):
         self.assertEqual(self.conn.execute(
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
-    def test_uma_consulta_so_da_listagem_geral_pras_duas_varreduras(self):
-        # a Stokki e de terceiros e de sessao unica: as duas varreduras do
-        # fim da rodada dividem a MESMA listagem.
+    def test_uma_consulta_por_candidato_e_nenhuma_listagem_geral(self):
+        # a Stokki e de terceiros e de sessao unica: a varredura custa 1
+        # GET por candidato (e no dia a dia nao ha candidato nenhum).
         self._reservar_o_pedido()
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(40200, PILOTO_ID, status="Em espera")]
-        sess = SessaoFalsa(linhas, {})
+        sess = SessaoFalsa(_linhas_vazias(), {"40200": _pagina_com_situacao("Em espera")})
 
         mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
-        gerais = [c for c in sess.chamadas
-                  if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
-        self.assertEqual(len(gerais), 1)
+        detalhes = [c for c in sess.chamadas if "/show/40200" in c[0]]
+        self.assertEqual(len(detalhes), 1)
+        listagens_gerais = [c for c in sess.chamadas
+                            if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
+        self.assertEqual(listagens_gerais, [])
 
 
-class TestJanelaDaListagemGeral(BaseRotina):
+class TestEvidenciaDiretaNaPaginaDoPedido(BaseRotina):
     """
-    C1 da revisao (23/09): a consulta que decide "sumiu" pedia UMA pagina
-    de 200, dos mais recentes pros mais antigos, e nao olhava se havia
-    mais. Pedido com reserva ATIVA que ja tinha rolado pra fora dessa
-    janela sumia do dicionario e era lido como "nao existe mais na
-    Stokki" -- CANCELADO, com a mercadoria ja fora do galpao e ZERO
-    saida de estoque.
+    CRITICAL da rodada 2 (23/09), medido pelo Hugo na Stokki de producao:
+    `status="all"` -- o valor que a varredura usava pra montar a lista de
+    situacoes -- devolve LISTA VAZIA (iTotalDisplayRecords=0). Com zero
+    linhas, o criterio de fim de lista concluia "lista completa", TODO
+    candidato ficava sem situacao e era lido como "sumiu": CANCELADO em
+    vez de baixado, toda rodada, desde a primeira.
 
-    E o pior caso e o da primeira rodada em producao: o passivo
-    acumulado e justamente o mais antigo, o mais provavel de estar fora
-    da janela.
+    O duble antigo devolvia linhas pra qualquer status, e por isso a
+    suite inteira e duas revisoes passaram por cima disso. A rede que
+    faltava e o primeiro teste desta classe.
+
+    A varredura nao usa listagem nenhuma: le a pagina do proprio pedido.
     """
 
     ID_PRESO = 40300
@@ -529,14 +562,6 @@ class TestJanelaDaListagemGeral(BaseRotina):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 1)
 
-    def _listagem_com_260_pedidos(self, situacao_do_preso):
-        """O preso e o 260o (ultimo) da listagem geral ordenada desc --
-        fora dos 200 primeiros, entao so a 2a pagina o encontra."""
-        outros = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(259)]
-        linhas = _linhas_vazias()
-        linhas["all"] = outros + [_linha(self.ID_PRESO, PILOTO_ID, status=situacao_do_preso)]
-        return linhas
-
     def _estado(self):
         return self.conn.execute("SELECT * FROM wms_pedidos WHERE id_stokki = ?",
                                  (self.ID_PRESO,)).fetchone()
@@ -545,11 +570,12 @@ class TestJanelaDaListagemGeral(BaseRotina):
         return self.conn.execute(
             "SELECT COUNT(*) n FROM wms_movimentos WHERE tipo = 'SAIDA'").fetchone()["n"]
 
-    def test_pedido_fora_da_primeira_pagina_nao_e_tratado_como_sumido(self):
-        # antes da correcao: {'baixados': 0, 'liberados': 1}, pedido
-        # CANCELADO, nenhuma SAIDA, disponivel de volta a 10 com a
-        # mercadoria ja no caminhao.
-        sess = SessaoFalsa(self._listagem_com_260_pedidos("Sent"), {})
+    def test_status_que_nao_devolve_nada_nao_faz_ninguem_ser_cancelado(self):
+        # A REDE QUE FALTOU. Nenhuma listagem devolve linha nenhuma (e o
+        # "all" nunca devolve, como em producao); a pagina do pedido diz
+        # "Enviado". Antes: liberados=1, CANCELADO, zero SAIDA, disponivel
+        # de volta a 10 com a mercadoria ja no caminhao.
+        sess = SessaoFalsa(_linhas_vazias(), {str(self.ID_PRESO): _pagina_com_situacao("Enviado")})
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
@@ -559,61 +585,64 @@ class TestJanelaDaListagemGeral(BaseRotina):
         self.assertEqual(self._saidas(), 1)
         self.assertEqual(self.conn.execute(
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "CONSUMIDA")
-        # a listagem geral foi paginada ate o fim: 2 paginas
-        gerais = [c for c in sess.chamadas
-                  if c[0].endswith("/table") and (c[1] or {}).get("state") == "all"]
-        self.assertEqual(len(gerais), 2)
-        self.assertEqual(gerais[0][1]["start"], 0)
-        self.assertEqual(gerais[1][1]["start"], mod.STOKKI_POR_PAGINA)
 
-    def test_pedido_sumido_de_verdade_fora_da_janela_continua_sendo_liberado(self):
-        # o mesmo cenario, mas o preso NAO esta em pagina nenhuma: agora
-        # que a lista foi vista inteira, "nao apareceu" prova alguma coisa.
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(259)]
-        sess = SessaoFalsa(linhas, {})
+    def test_a_varredura_nao_consulta_listagem_nenhuma(self):
+        sess = SessaoFalsa(_linhas_vazias(), {str(self.ID_PRESO): _pagina_com_situacao("Enviado")})
+
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        # so as listagens dos status varridos (3), nenhuma "all" nem "Sent"
+        estados_pedidos = [(c[1] or {}).get("state") for c in sess.chamadas if c[0].endswith("/table")]
+        self.assertEqual(sorted(estados_pedidos), sorted(mod.STATUS_INTERESSANTES))
+
+    def test_o_all_da_stokki_realmente_volta_vazio_no_duble(self):
+        # guarda do proprio duble: se alguem voltar a montar decisao em
+        # cima de listagem geral, o teste acima passa a falhar por este
+        # motivo -- e nao por acidente do duble.
+        sess = SessaoFalsa(_linhas_vazias(), {})
+        resposta = sess.get("http://x/pt-br/administrator/inventory/outbound/table",
+                            params={"state": "all", "start": 0, "length": 200})
+        self.assertEqual(resposta.json()["aaData"], [])
+        self.assertEqual(resposta.json()["iTotalDisplayRecords"], 0)
+
+    def test_pagina_404_e_a_evidencia_de_que_o_pedido_sumiu(self):
+        sess = SessaoFalsa(_linhas_vazias(), {})   # /show/<id> -> 404
 
         res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["liberados"], 1)
         self.assertEqual(self._estado()["estado_reserva"], "CANCELADO")
+        self.assertIn("404", self._estado()["motivo_cancelamento"])
 
-    def test_lista_incompleta_nao_libera_ninguem(self):
-        # teto de paginas estourado: a lista nao foi vista ate o fim,
-        # entao "nao apareceu" nao prova nada e ninguem e cancelado.
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(600)]
-        sess = SessaoFalsa(linhas, {})
-        max_original = mod.STOKKI_MAX_PAGINAS
-        mod.STOKKI_MAX_PAGINAS = 1
-        try:
-            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
-        finally:
-            mod.STOKKI_MAX_PAGINAS = max_original
+    def test_pagina_ilegivel_nao_conclui_nada(self):
+        # HTML 200 mas sem o bloco "Situação:" (layout mudou, pagina de
+        # erro amigavel): nao da pra concluir, entao nao se mexe em nada.
+        sess = SessaoFalsa(_linhas_vazias(), {str(self.ID_PRESO): "<html>oi</html>"})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
         self.assertEqual(res["liberados"], 0)
         self.assertEqual(res["baixados"], 0)
-        self.assertNotEqual(self._estado()["estado_reserva"], "CANCELADO")
         self.assertEqual(self.conn.execute(
             "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
-    def test_lista_incompleta_ainda_baixa_quem_aparece_expedido(self):
-        # a baixa depende de evidencia POSITIVA, entao segue mesmo sem a
-        # lista inteira -- so a conclusao por omissao e que fica de fora.
-        linhas = _linhas_vazias()
-        linhas["all"] = ([_linha(self.ID_PRESO, PILOTO_ID, status="Sent")]
-                         + [_linha(50000 + i, PILOTO_ID, status="Sent") for i in range(599)])
-        sess = SessaoFalsa(linhas, {})
-        max_original = mod.STOKKI_MAX_PAGINAS
-        mod.STOKKI_MAX_PAGINAS = 1
-        try:
-            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
-        finally:
-            mod.STOKKI_MAX_PAGINAS = max_original
+    def test_500_nao_cancela(self):
+        # divergencia consciente dos precedentes: a Stokki devolve 500
+        # tanto pra id inexistente quanto pra ela mesma quebrada, e aqui a
+        # decisao devolve mercadoria ao disponivel.
+        class SessaoCom500(SessaoFalsa):
+            def get(self, url, params=None, headers=None):
+                if "/show/" in url:
+                    self.chamadas.append((url, params))
+                    return _RespostaFalsa(text="erro", status_code=500)
+                return super().get(url, params, headers)
 
-        self.assertEqual(res["baixados"], 1)
+        res = mod.rodar(self.conn, SessaoCom500(_linhas_vazias(), {}),
+                        PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
         self.assertEqual(res["liberados"], 0)
-        self.assertEqual(self._saidas(), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT estado FROM wms_reservas").fetchone()["estado"], "ATIVA")
 
 
 class TestRotulosDeExpedicao(unittest.TestCase):
@@ -644,14 +673,13 @@ class TestEnsaioDoModoTeste(BaseRotina):
                   PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
 
     def _ensaio(self, situacao):
-        linhas = _linhas_vazias()
-        if situacao is not None:
-            linhas["all"] = [_linha(40500, PILOTO_ID, status=situacao)]
-        return mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+        """situacao=None -> a pagina do pedido responde 404 (sumiu)."""
+        html = {} if situacao is None else {"40500": _pagina_com_situacao(situacao)}
+        return mod.rodar(self.conn, SessaoFalsa(_linhas_vazias(), html), PILOTO_NOME, PILOTO_ID,
                          limite=50, modo_teste=True)
 
     def test_modo_teste_diz_que_baixaria_sem_baixar(self):
-        res = self._ensaio("Sent")
+        res = self._ensaio("Enviado")
 
         self.assertEqual(res["ensaio"], {"baixaria": 1, "liberaria": 0, "manteria": 0})
         self.assertEqual(res["baixados"], 0)
@@ -674,9 +702,10 @@ class TestEnsaioDoModoTeste(BaseRotina):
         self.assertEqual(res["ensaio"], {"baixaria": 0, "liberaria": 0, "manteria": 1})
 
 
-class TestTetoDeBaixasPorRodada(BaseRotina):
-    """I2: a primeira rodada encontra o passivo inteiro; cada baixa e um
-    commit no dados.db compartilhado. O que sobra vai pra proxima rodada."""
+class TestTetoDeCandidatosPorRodada(BaseRotina):
+    """I2: a primeira rodada encontra o passivo inteiro. Cada candidato e
+    um GET na Stokki (sessao unica) e, quando baixa, um commit no dados.db
+    compartilhado. O que sobra vai pra proxima rodada, 15 min depois."""
 
     def setUp(self):
         super().setUp()
@@ -690,21 +719,23 @@ class TestTetoDeBaixasPorRodada(BaseRotina):
             "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 3)
 
     def test_teto_corta_a_rodada_e_a_proxima_termina(self):
-        linhas = _linhas_vazias()
-        linhas["all"] = [_linha(40600 + i, PILOTO_ID, status="Sent") for i in range(3)]
-        teto_original = mod.BAIXAS_POR_RODADA
-        mod.BAIXAS_POR_RODADA = 2
+        paginas = {str(40600 + i): _pagina_com_situacao("Enviado") for i in range(3)}
+        teto_original = mod.CANDIDATOS_POR_RODADA
+        mod.CANDIDATOS_POR_RODADA = 2
         try:
-            primeira = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
+            sess1 = SessaoFalsa(_linhas_vazias(), paginas)
+            primeira = mod.rodar(self.conn, sess1, PILOTO_NOME, PILOTO_ID,
                                  limite=50, modo_teste=False)
             self.assertEqual(primeira["baixados"], 2)
+            # o teto tambem limita as CONSULTAS: 2 GETs, nao 3
+            self.assertEqual(len([c for c in sess1.chamadas if "/show/" in c[0]]), 2)
             self.assertEqual(self.conn.execute(
                 "SELECT COUNT(*) n FROM wms_reservas WHERE estado = 'ATIVA'").fetchone()["n"], 1)
 
-            segunda = mod.rodar(self.conn, SessaoFalsa(linhas, {}), PILOTO_NOME, PILOTO_ID,
-                                limite=50, modo_teste=False)
+            segunda = mod.rodar(self.conn, SessaoFalsa(_linhas_vazias(), paginas),
+                                PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
         finally:
-            mod.BAIXAS_POR_RODADA = teto_original
+            mod.CANDIDATOS_POR_RODADA = teto_original
 
         self.assertEqual(segunda["baixados"], 1)
         self.assertEqual(self.conn.execute(

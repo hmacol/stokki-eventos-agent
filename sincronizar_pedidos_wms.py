@@ -68,7 +68,7 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 # pedido que ja saiu (Sent/Delivered) nao precisa mais de reserva, so de
 # baixa -- feita pelo expedir_pedidos.py quando o pedido passa por rota da
 # Vuupt e, pra quem sai por fora dela, pela varredura do fim desta rodada
-# (_baixar_pedidos_ja_expedidos).
+# (_varrer_candidatos).
 STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Pack")
 
 # Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
@@ -82,31 +82,36 @@ TRAVA_ESPERA_SEGUNDOS = 120
 
 _PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
 
-# Rotulos de situacao (coluna 'state' da listagem, ja sem HTML) que
-# significam "a mercadoria saiu do galpao" -- ver _esta_expedido. Lista
-# branca de proposito: e ela que autoriza dar baixa em estoque.
+# Rotulos de situacao lidos da pagina do pedido que significam "a
+# mercadoria saiu do galpao" -- ver _esta_expedido. Lista branca de
+# proposito: e ela que autoriza dar baixa em estoque.
 ROTULOS_EXPEDIDO = frozenset({
-    "sent", "shipped", "delivered",      # listagem em ingles
+    "sent", "shipped", "delivered",      # rotulo em ingles
     "enviado", "enviada", "expedido", "expedida", "entregue",  # tela em pt-br
 })
 
-# Fim de rodada: a consulta que diz quem sumiu da Stokki pagina de
-# verdade. Uma pagina so, dos mais recentes, fazia o pedido antigo cair
-# fora da janela e ser lido como "nao existe mais" -- e cancelado, com a
-# mercadoria ja fora do galpao (achado critico C1 da revisao, 23/09). O
-# teto de paginas existe porque status="all" traz o historico inteiro do
-# piloto e cresce pra sempre; estourado o teto, a lista e tratada como
-# INCOMPLETA e nenhuma liberacao acontece.
-STOKKI_POR_PAGINA = 200
-STOKKI_MAX_PAGINAS = 10
-PAUSA_ENTRE_PAGINAS = 0.4
+# Marca que a pagina do pedido nao existe mais na Stokki (404). E a UNICA
+# evidencia que autoriza liberar reserva por sumico -- ausencia numa
+# listagem nao serve (ver _situacao_do_pedido).
+SITUACAO_SUMIU = "__SUMIU__"
 
-# Teto de baixas por rodada. A primeira rodada em producao encontra o
-# passivo inteiro acumulado desde que a fase 2 comecou a reservar, e cada
-# baixa e um commit no dados.db compartilhado com painel e portal. O que
-# nao couber nesta rodada cabe na proxima, 15 min depois.
-BAIXAS_POR_RODADA = 20
-PAUSA_ENTRE_BAIXAS = 0.3
+# Teto de candidatos verificados por rodada. Cada candidato custa um GET
+# na Stokki (sessao unica, sistema de terceiros) e, se for o caso, uma
+# baixa com commit no dados.db compartilhado com painel e portal. No dia
+# a dia a lista de candidatos e vazia; o teto existe pro passivo da
+# primeira rodada. O que nao couber cabe na proxima, 15 min depois.
+# Como so candidato verificado pode virar baixa, este teto tambem limita
+# quantas baixas uma rodada faz.
+CANDIDATOS_POR_RODADA = 20
+PAUSA_ENTRE_CONSULTAS = 0.3
+
+# O status e o PRIMEIRO badge-status depois de "Situacao:" na pagina do
+# pedido (os seguintes sao marcadores tipo "Remessa Expressa"). Mesmo
+# regex de retiradas/acompanhar_retiradas.py e de
+# painel_agentes/pedidos_parados_triagem.py.
+_RE_SITUACAO_STOKKI = re.compile(
+    r"Situa[çc][ãa]o:\s*</th>\s*<td>\s*<span[^>]*badge-status[^>]*>(.*?)</span>", re.S | re.IGNORECASE,
+)
 
 
 def _carregar_config() -> dict:
@@ -143,9 +148,8 @@ def _stkkc_id_da_linha(linha) -> str | None:
 def _esta_expedido(situacao: str) -> bool:
     """
     A Stokki diz que o pedido ja saiu do galpao. A tela em pt-br mostra
-    "Enviado", a listagem em ingles devolve "Sent"; entregue/delivered
-    tambem conta (se chegou ao cliente, saiu do galpao ha mais tempo
-    ainda).
+    "Enviado"; entregue/delivered tambem conta (se chegou ao cliente, saiu
+    do galpao ha mais tempo ainda).
 
     Lista BRANCA de rotulos inteiros, nao "contem a palavra": esta funcao
     decide dar BAIXA em estoque, e casar por pedaco faria "Nao entregue",
@@ -154,9 +158,9 @@ def _esta_expedido(situacao: str) -> bool:
     da lista branca e nenhum e ela elimina a classe inteira de erro.
 
     Rotulo desconhecido nao vira baixa E nao vira cancelamento: cai no
-    "reserva mantida" do _liberar_pedidos_sumidos, que loga a situacao
-    literal -- e assim um rotulo novo da Stokki aparece no log em vez de
-    mexer no estoque por conta propria.
+    "reserva mantida" do _varrer_candidatos, que loga a situacao literal
+    -- e assim um rotulo novo da Stokki aparece no log em vez de mexer no
+    estoque por conta propria.
     """
     s = " ".join(str(situacao or "").split()).strip(" .:-").casefold()
     return s in ROTULOS_EXPEDIDO
@@ -177,190 +181,148 @@ def _candidatos_com_reserva_ativa(conn, vistos: set) -> list:
     return [r for r in rows if r["id_stokki"] not in vistos]
 
 
-def _situacoes_na_stokki(sess, piloto_id: str) -> tuple[dict, bool] | None:
+def _situacao_do_pedido(sess, id_stokki: int) -> str | None:
     """
-    Situacao de cada pedido do piloto na Stokki (listagem sem filtro de
-    status), PAGINADA. Devolve (situacoes, completa):
+    Situacao do pedido lida da PAGINA DELE, um GET por pedido. Devolve:
 
-      situacoes -- {id_stokki: rotulo da coluna 'state', sem HTML}
-      completa  -- True so quando a lista foi vista ate o fim.
+      SITUACAO_SUMIU -- 404: a pagina nao existe mais na Stokki.
+      <texto>        -- o rotulo do badge ("Enviado", "Cancelado",
+                        "Aguardando Transportador"...).
+      None           -- nao deu pra concluir nada (erro de rede, 401 de
+                        sessao derrubada, 500, HTML sem o bloco de
+                        situacao). Quem chama NAO mexe em nada.
 
-    None quando a consulta falha em qualquer pagina: sem a lista,
-    nenhuma das varreduras conclui coisa alguma.
+    Por que pedido a pedido e nao por listagem (achado critico C1 da
+    rodada 2, medido na Stokki de producao pelo Hugo em 23/09):
 
-    Achado critico C1 da revisao (23/09): a versao anterior pedia UMA
-    pagina de 200, ordenada dos mais recentes pros mais antigos, e nao
-    olhava se havia mais. Um pedido com reserva ATIVA que ja rolou pra
-    fora dos 200 mais recentes sumia do dicionario, e o
-    _liberar_pedidos_sumidos lia isso como "nao existe mais na Stokki" e
-    CANCELAVA -- devolvendo ao disponivel mercadoria que ja tinha saido
-    do galpao. Com status="all" trazendo o historico inteiro, o piloto
-    passa de 200 em semanas, e o passivo acumulado (o alvo desta leva) e
-    justamente o mais antigo, o mais provavel de estar fora da janela.
+      status="all"       pedi 200 -> voltaram   0   (iTotalDisplayRecords=0)
+      status="Sent"      pedi 200 -> voltaram 200   (iTotalDisplayRecords=3465)
 
-    Fim da lista = pagina que voltou com menos linhas do que foi pedido
-    (ou vazia) -- criterio que nao depende de qual chave de total a
-    Stokki devolve (recordsFiltered/iTotalDisplayRecords/iTotalRecords
-    variam, e a "sem filtro" contaria pedido de outro embarcador).
+    O "all" que a rotina usava devolve LISTA VAZIA. Com zero linhas o
+    criterio de fim de lista concluia "lista completa", todo candidato
+    ficava sem situacao e era lido como "sumiu" -- CANCELADO em vez de
+    baixado, toda rodada, desde a primeira. E varrer o "Sent" no lugar
+    seria pior: 3.465 pedidos so desse cliente, a cada 15 min, contra um
+    sistema de sessao unica.
 
-    O teto de paginas existe porque o historico cresce pra sempre e esta
-    rotina roda a cada 15 min. Estourado o teto, `completa` volta False e
-    quem chama NAO conclui "sumiu" de ninguem. A pausa entre paginas e a
-    mesma de stokki_pedidos.iterar_todos_pedidos.
+    Aqui nao ha listagem nenhuma: a evidencia e direta e vale so pra
+    aquele pedido. Os candidatos sao poucos (so pedido com reserva ATIVA
+    fora dos status varridos; no dia a dia, nenhum).
+
+    So o 404 conta como sumico -- e uma divergencia CONSCIENTE dos dois
+    precedentes do projeto (retiradas/acompanhar_retiradas.status_stokki e
+    pedidos_parados_triagem._status_e_transportadora_stokki), que tratam
+    404 e 500 como "nao encontrado". O motivo: a Stokki devolve 500 tanto
+    pra id inexistente (nota de 28/08 no pedidos_parados_triagem) quanto
+    pra ela mesma quebrada, e aqui a decisao devolve mercadoria ao
+    disponivel. Aceitar 500 faria uma janela de instabilidade da Stokki
+    cancelar reserva de pedido que ja saiu do galpao -- exatamente a
+    catastrofe que esta leva existe pra impedir. Nao aceitar custa uma
+    reserva presa que a tela de reservas antigas acusa em 4 dias e a
+    equipe libera na mao. Pedido CANCELADO na Stokki, que e o caso comum
+    da spec 7.3 item 6, continua sendo liberado pelo proprio rotulo.
     """
-    situacoes = {}
-    completa = False
-    for pagina in range(STOKKI_MAX_PAGINAS):
-        try:
-            resposta = stokki_pedidos.listar_pedidos(
-                sess, status="all", cliente=piloto_id, pagina=pagina,
-                por_pagina=STOKKI_POR_PAGINA, ordenar_coluna="1", ordenar_dir="desc")
-        except Exception as e:  # noqa: BLE001 -- sem a lista, nao mexe em nada
-            logger.warning("Nao deu pra conferir a situacao dos pedidos na Stokki (pagina %d: %s) -- "
-                            "nenhuma baixa nem liberacao de reserva nesta rodada.", pagina + 1, e)
-            return None
-        linhas = resposta.get("aaData") or []
-        for linha in linhas:
-            id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
-            if id_pedido:
-                situacoes[id_pedido] = re.sub(
-                    r"<[^>]+>", " ", str(linha.get("state", ""))).strip()
-        if len(linhas) < STOKKI_POR_PAGINA:
-            completa = True
-            break
-        time.sleep(PAUSA_ENTRE_PAGINAS)
-    if not completa:
-        logger.warning("A listagem geral do piloto passou de %d pedidos (teto de %d paginas) -- "
-                        "lista INCOMPLETA: nenhuma reserva sera liberada por omissao nesta rodada.",
-                        STOKKI_MAX_PAGINAS * STOKKI_POR_PAGINA, STOKKI_MAX_PAGINAS)
-    return situacoes, completa
+    try:
+        resp = sess.get(
+            f"{stokki_pedidos.BASE_URL}/pt-br/administrator/inventory/outbound/show/{id_stokki}")
+        if resp.status_code == 404:
+            return SITUACAO_SUMIU
+        resp.raise_for_status()
+        m = _RE_SITUACAO_STOKKI.search(resp.text)
+    except Exception as e:  # noqa: BLE001 -- um pedido ruim nao derruba a rodada
+        logger.warning("Nao deu pra ler a situacao do pedido %s na Stokki (%s) -- "
+                        "nada concluido sobre ele nesta rodada.", id_stokki, e)
+        return None
+    if not m:
+        logger.warning("Pagina do pedido %s sem o bloco de situacao -- nada concluido sobre ele.",
+                        id_stokki)
+        return None
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
 
 
-def _baixar_pedidos_ja_expedidos(conn, candidatos: list, situacoes: dict) -> int:
+def _varrer_candidatos(conn, sess, candidatos: list, modo_teste: bool = False) -> dict:
     """
-    Pedido que saiu pela Stokki SEM passar por rota da Vuupt (retirada no
-    galpao, redespacho, transportadora propria) nunca chega no unico
-    chamador de baixar_por_expedicao (expedir_pedidos.py, dentro do laco
-    dos servicos entregues). A reserva dele ficava ATIVA pra sempre, sumia
-    do disponivel e fazia pedido novo nascer PARCIAL por falta que nao
-    existe. Mesmo pelo caminho da Vuupt, se a baixa estourava o
-    fingerprint ja marcava o pedido como processado e nao havia
-    retentativa nenhuma.
+    Fecha a rodada olhando, um por um, os pedidos que ficaram com reserva
+    ATIVA fora dos status varridos. Para cada um, a pagina dele na Stokki
+    decide:
 
-    Aqui a rodada de 15 min fecha o buraco: pedido com reserva ATIVA que
-    sumiu dos status varridos E esta "Enviado"/"Sent" na Stokki leva a
-    baixa. Nao e cancelamento -- a mercadoria SAIU, entao vira SAIDA de
-    estoque, nunca reserva liberada (as duas coisas sao diferentes: uma
-    corrige o saldo, a outra o falsificaria).
+      expedido (lista branca)  -> BAIXA. A mercadoria saiu, entao vira
+                                  SAIDA de estoque. Nunca cancelamento --
+                                  cancelar devolveria ao disponivel algo
+                                  que ja foi embora.
+      404                      -> LIBERA ("nao existe mais na Stokki").
+      cancelado                -> LIBERA (spec 7.3 item 6).
+      qualquer outro rotulo    -> so loga. A reserva fica de pe pra
+                                  proxima rodada; rotulo novo da Stokki
+                                  aparece no log em vez de mexer no
+                                  estoque por conta propria.
+      nao deu pra ler          -> so loga. Ausencia de resposta nunca e
+                                  evidencia de nada.
 
-    baixar_por_expedicao e idempotente por uuid de movimento
-    (ps-<id_stokki>-reserva-<id da reserva>), entao rodar de novo nao
-    baixa em dobro -- e por isso tambem que uma baixa que falhou hoje
-    pode ser completada pela rodada de amanha.
+    Teto de candidatos por rodada + pausa entre as consultas: cada
+    candidato e um GET numa Stokki de sessao unica e, quando baixa, um
+    commit no dados.db compartilhado. O que sobrar entra na proxima
+    rodada, 15 min depois.
 
-    A baixa so depende de evidencia POSITIVA ("a Stokki diz que este
-    pedido saiu"), entao ela roda mesmo quando a listagem veio
-    incompleta: quem nao apareceu simplesmente nao e baixado. Concluir
-    "sumiu" e que exige ter visto a lista inteira, e isso e problema do
-    _liberar_pedidos_sumidos.
-
-    Teto por rodada + pausa entre pedidos (I2 da revisao): a primeira
-    rodada em producao encontra o passivo inteiro de uma vez e cada baixa
-    faz commit no dados.db compartilhado com painel e portal. O que
-    sobrar entra na proxima rodada, 15 min depois.
+    modo_teste percorre e RELATA o que faria, sem gravar nada -- e a
+    mitigacao recomendada antes da primeira rodada de verdade, quando o
+    passivo acumulado inteiro sera baixado.
     """
-    baixados = 0
+    res = {"baixados": 0, "liberados": 0, "consultados": 0,
+           "ensaio": {"baixaria": 0, "liberaria": 0, "manteria": 0}}
     for c in candidatos:
-        situacao = situacoes.get(c["id_stokki"])
-        if situacao is None or not _esta_expedido(situacao):
-            continue
-        if baixados >= BAIXAS_POR_RODADA:
-            logger.warning("Teto de %d baixas por rodada atingido -- o resto do passivo entra na "
-                            "proxima rodada (15 min).", BAIXAS_POR_RODADA)
+        if res["consultados"] >= CANDIDATOS_POR_RODADA:
+            logger.warning("Teto de %d candidatos por rodada atingido -- restam %d pra proxima "
+                            "rodada (15 min).", CANDIDATOS_POR_RODADA,
+                            len(candidatos) - res["consultados"])
             break
-        # baixar_por_expedicao faz o proprio commit (por reserva).
-        r = wms_pedidos.baixar_por_expedicao(conn, c["codigo_ps"])
-        for erro in r["erros"]:
-            logger.warning("%s: baixa da expedicao falhou -- %s", c["codigo_ps"], erro)
-        for neg in r.get("negativos") or []:
-            logger.warning("%s: saldo negativo na baixa -- %s", c["codigo_ps"], neg)
-        if r["baixas"]:
-            baixados += 1
-            logger.warning("%s: expedido na Stokki (%s) sem passar por rota -- %d reserva(s) baixada(s).",
-                           c["codigo_ps"], situacao, r["baixas"])
-            time.sleep(PAUSA_ENTRE_BAIXAS)
-    return baixados
+        if res["consultados"]:
+            time.sleep(PAUSA_ENTRE_CONSULTAS)
+        situacao = _situacao_do_pedido(sess, c["id_stokki"])
+        res["consultados"] += 1
+        codigo = c["codigo_ps"]
 
-
-def _liberar_pedidos_sumidos(conn, candidatos: list, situacoes: dict) -> int:
-    """
-    Spec 7.3 item 6: pedido cancelado ou sumido da Stokki tem as reservas
-    liberadas. Sem isso a reserva ATIVA trava o disponivel pra sempre e o
-    galpao "nao tem" mercadoria que esta la na prateleira.
-
-    A rotina nao cancela por omissao: so libera quem
-      - nao existe mais na Stokki (sumiu de vez), ou
-      - esta com situacao de CANCELADO la.
-    Pedido que saiu dos status varridos por outro motivo mantem a reserva
-    -- ela ainda vai virar a SAIDA da baixa -- e so gera aviso no log.
-    Cancelar ali baixaria estoque nenhum e deixaria o saldo mentindo pra
-    sempre. Quem estava expedido ja foi baixado antes desta varredura
-    (_baixar_pedidos_ja_expedidos) e nem chega aqui como candidato; se
-    chegar, e porque a baixa nao saiu inteira -- e ai a reserva que sobrou
-    tem que continuar ATIVA pra proxima rodada completar.
-    """
-    liberados = 0
-    for c in candidatos:
-        situacao = situacoes.get(c["id_stokki"])
         if situacao is None:
-            motivo = "pedido nao existe mais na Stokki"  # so chega aqui com a lista COMPLETA
+            res["ensaio"]["manteria"] += 1
+            continue  # o proprio _situacao_do_pedido ja logou o porque
+
+        if _esta_expedido(situacao):
+            if modo_teste:
+                res["ensaio"]["baixaria"] += 1
+                logger.info("[teste] %s: expedido na Stokki (%s) -- BAIXARIA as reservas ATIVAS.",
+                            codigo, situacao)
+                continue
+            # baixar_por_expedicao faz o proprio commit (por reserva).
+            r = wms_pedidos.baixar_por_expedicao(conn, codigo)
+            for erro in r["erros"]:
+                logger.warning("%s: baixa da expedicao falhou -- %s", codigo, erro)
+            for neg in r.get("negativos") or []:
+                logger.warning("%s: saldo negativo na baixa -- %s", codigo, neg)
+            if r["baixas"]:
+                res["baixados"] += 1
+                logger.warning("%s: expedido na Stokki (%s) sem passar por rota -- "
+                                "%d reserva(s) baixada(s).", codigo, situacao, r["baixas"])
+            continue
+
+        if situacao == SITUACAO_SUMIU:
+            motivo = "pedido nao existe mais na Stokki (404 na pagina do pedido)"
         elif "CANCEL" in situacao.upper():
             motivo = f"pedido cancelado na Stokki ({situacao})"
         else:
+            res["ensaio"]["manteria"] += 1
             logger.info("%s saiu dos status varridos (Stokki: %s) com reserva ATIVA -- "
-                        "reserva mantida pra baixa da expedicao.", c["codigo_ps"], situacao or "?")
+                        "reserva mantida.", codigo, situacao)
+            continue
+
+        if modo_teste:
+            res["ensaio"]["liberaria"] += 1
+            logger.info("[teste] %s: %s -- LIBERARIA as reservas.", codigo, motivo)
             continue
         n = wms_pedidos.cancelar_reservas(conn, c["id"], motivo)
         conn.commit()
-        liberados += 1
-        logger.warning("%s: %d reserva(s) liberada(s) -- %s", c["codigo_ps"], n, motivo)
-    return liberados
-
-
-def _ensaiar_varreduras(candidatos: list, situacoes: dict, completa: bool) -> dict:
-    """
-    --modo-teste: percorre os mesmos candidatos e DIZ no log o que faria,
-    sem gravar nada (I1 da revisao). O modo teste e a mitigacao
-    recomendada antes da primeira rodada de verdade, quando o passivo
-    inteiro sera baixado de uma vez -- um modo teste que nao imprime nada
-    nao mitiga coisa nenhuma.
-    """
-    ensaio = {"baixaria": 0, "liberaria": 0, "manteria": 0}
-    for c in candidatos:
-        situacao = situacoes.get(c["id_stokki"])
-        if situacao is not None and _esta_expedido(situacao):
-            ensaio["baixaria"] += 1
-            logger.info("[teste] %s: expedido na Stokki (%s) -- BAIXARIA as reservas ATIVAS.",
-                        c["codigo_ps"], situacao)
-        elif situacao is None and not completa:
-            ensaio["manteria"] += 1
-            logger.info("[teste] %s: nao apareceu numa listagem INCOMPLETA -- nada a concluir.",
-                        c["codigo_ps"])
-        elif situacao is None:
-            ensaio["liberaria"] += 1
-            logger.info("[teste] %s: nao existe mais na Stokki -- LIBERARIA as reservas.", c["codigo_ps"])
-        elif "CANCEL" in situacao.upper():
-            ensaio["liberaria"] += 1
-            logger.info("[teste] %s: cancelado na Stokki (%s) -- LIBERARIA as reservas.",
-                        c["codigo_ps"], situacao)
-        else:
-            ensaio["manteria"] += 1
-            logger.info("[teste] %s: Stokki diz '%s' -- reserva mantida.", c["codigo_ps"], situacao)
-    if ensaio["baixaria"] > BAIXAS_POR_RODADA:
-        logger.info("[teste] %d pedidos a baixar, teto de %d por rodada -- seriam necessarias %d rodadas.",
-                    ensaio["baixaria"], BAIXAS_POR_RODADA,
-                    -(-ensaio["baixaria"] // BAIXAS_POR_RODADA))
-    return ensaio
+        res["liberados"] += 1
+        logger.warning("%s: %d reserva(s) liberada(s) -- %s", codigo, n, motivo)
+    return res
 
 
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
@@ -447,42 +409,22 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
                 logger.info("  %s: %s", codigo_ps, p)
             time.sleep(0.3)
 
-    # Depois de varrer tudo: quem tem reserva ATIVA e nao apareceu em
-    # nenhum status ou ja foi expedido por fora da rota (baixa que nunca
-    # veio) ou foi cancelado/sumiu (spec 7.3 item 6).
+    # Depois de varrer tudo: quem ficou com reserva ATIVA fora dos status
+    # varridos ou ja foi expedido por fora da rota (baixa que nunca veio)
+    # ou foi cancelado/sumiu (spec 7.3 item 6). Cada um e conferido na
+    # PROPRIA pagina dele -- ver _situacao_do_pedido.
     if pagina_cheia:
-        logger.warning("Alguma listagem encheu a pagina (limite %d) -- pulando as varreduras de fim de "
+        logger.warning("Alguma listagem encheu a pagina (limite %d) -- pulando a varredura de fim de "
                         "rodada nesta volta, pra nao concluir nada sobre quem so nao foi lido.", limite)
         return res
     candidatos = _candidatos_com_reserva_ativa(conn, vistos)
     if not candidatos:
-        return res
-    # Uma consulta a Stokki so (paginada), e so quando ha candidato -- no
-    # dia a dia, nenhuma requisicao a mais.
-    resultado = _situacoes_na_stokki(sess, piloto_id)
-    if resultado is None:
-        return res
-    situacoes, completa = resultado
-
+        return res  # o caso normal: nenhuma requisicao a mais
+    varredura = _varrer_candidatos(conn, sess, candidatos, modo_teste)
+    res["baixados"] = varredura["baixados"]
+    res["liberados"] = varredura["liberados"]
     if modo_teste:
-        # Nao grava nada, mas DIZ o que faria (I1 da revisao).
-        res["ensaio"] = _ensaiar_varreduras(candidatos, situacoes, completa)
-        return res
-
-    # A baixa vem PRIMEIRO: quem ja foi expedido sai da lista de
-    # candidatos (nao sobra reserva ATIVA) e nem e oferecido a varredura
-    # de sumidos, que cancelaria -- e cancelar mercadoria que ja saiu do
-    # galpao deixaria o saldo mentindo pra sempre. Ela roda mesmo com
-    # lista incompleta: depende de evidencia positiva ("a Stokki diz que
-    # saiu"), nunca de omissao.
-    res["baixados"] = _baixar_pedidos_ja_expedidos(conn, candidatos, situacoes)
-    if not completa:
-        # Sem ter visto a lista inteira, "nao apareceu" nao prova nada --
-        # e o pedido antigo, justamente o que cai fora da janela, e o que
-        # mais tem reserva presa (C1 da revisao).
-        return res
-    res["liberados"] = _liberar_pedidos_sumidos(
-        conn, _candidatos_com_reserva_ativa(conn, vistos), situacoes)
+        res["ensaio"] = varredura["ensaio"]
     return res
 
 
