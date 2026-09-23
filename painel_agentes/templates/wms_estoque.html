@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block titulo %}Estoque do Galpão{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1200px; }
+  .cabecalho-pagina { margin-bottom: 16px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  section.bloco-estoque { margin: 22px 0; }
+  section.bloco-estoque h2 { font-size: 15px; margin: 0 0 4px; }
+  section.bloco-estoque h2 small { font-weight: 400; color: var(--texto-suave); font-size: 12px; }
+  table.tabela-estoque { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  table.tabela-estoque th, table.tabela-estoque td { padding: 9px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  table.tabela-estoque th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-estoque tr:last-child td { border-bottom: none; }
+  .vazio { color: var(--texto-suave); font-size: 13px; padding: 14px 0; }
+  #busca-produto { width: 100%; max-width: 360px; padding: 8px 12px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); color: var(--texto); font-size: 13.5px; margin-bottom: 8px; }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Estoque do Galpão</h1>
+  <p>Pedidos com reserva por lote, pendências de identificação e o saldo disponível de qualquer produto.</p>
+</div>
+
+<section class="bloco-estoque">
+  <h2>Pedidos com reserva</h2>
+  <table class="tabela-estoque" id="tab-pedidos">
+    <thead><tr><th>Pedido</th><th>Embarcador</th><th>Situação</th><th>Reserva</th><th>Itens</th><th>Pendências</th></tr></thead>
+    <tbody><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+  </table>
+</section>
+
+<section class="bloco-estoque">
+  <h2>Pendências <small>(itens que não viraram reserva -- produto ou unidade não resolvidos)</small></h2>
+  <table class="tabela-estoque" id="tab-pendencias">
+    <thead><tr><th>Pedido</th><th>Linha</th><th>Descrição</th><th>Motivo</th></tr></thead>
+    <tbody><tr><td colspan="4" class="vazio">Carregando…</td></tr></tbody>
+  </table>
+</section>
+
+<section class="bloco-estoque">
+  <h2>Saldo por lote</h2>
+  <input id="busca-produto" type="search" placeholder="Nome, SKU ou EAN do produto" autocomplete="off">
+  <table class="tabela-estoque" id="tab-saldo">
+    <thead><tr><th>Posição</th><th>Lote</th><th>Validade</th><th>Saldo</th><th>Reservado</th><th>Disponível</th></tr></thead>
+    <tbody><tr><td colspan="6" class="vazio">Digite pelo menos 2 letras acima.</td></tr></tbody>
+  </table>
+</section>
+
+<script>
+(function () {
+  'use strict';
+  const CHIP = { RESERVADO: 'badge-sucesso', PARCIAL: 'badge-rodando', BAIXADO: 'badge-interrompido',
+                 CANCELADO: 'badge-erro', PENDENTE: 'badge-nunca' };
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  async function carregarPedidos() {
+    const corpo = document.querySelector('#tab-pedidos tbody');
+    try {
+      const r = await fetch("{{ url_for('api_wms_pedidos') }}?limite=100", { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('Erro ' + r.status);
+      const { pedidos } = await r.json();
+      corpo.innerHTML = pedidos.map((p) => `
+        <tr><td><strong>${esc(p.codigo_ps)}</strong></td>
+            <td>${esc(p.embarcador)}</td>
+            <td>${esc(p.situacao)}</td>
+            <td><span class="badge ${CHIP[p.estado_reserva] || 'badge-nunca'}">${esc(p.estado_reserva)}</span></td>
+            <td>${p.reservas_ativas} / ${p.itens}</td>
+            <td>${p.pendencias ? p.pendencias + ' pendência(s)' : '—'}</td></tr>`).join('')
+        || '<tr><td colspan="6" class="vazio">Nenhum pedido espelhado ainda.</td></tr>';
+    } catch (e) {
+      corpo.innerHTML = '<tr><td colspan="6" class="vazio">' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  async function carregarPendencias() {
+    const corpo = document.querySelector('#tab-pendencias tbody');
+    try {
+      const r = await fetch("{{ url_for('api_wms_pendencias') }}?limite=100", { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('Erro ' + r.status);
+      const { pendencias } = await r.json();
+      corpo.innerHTML = pendencias.map((p) => `
+        <tr><td>${esc(p.codigo_ps)}</td><td>${p.linha}</td>
+            <td>${esc(p.descricao)}</td><td>${esc(p.motivo_pendencia)}</td></tr>`).join('')
+        || '<tr><td colspan="4" class="vazio">Nenhuma pendência -- todos os itens resolveram.</td></tr>';
+    } catch (e) {
+      corpo.innerHTML = '<tr><td colspan="4" class="vazio">' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  let h = null;
+  document.getElementById('busca-produto').addEventListener('input', (ev) => {
+    clearTimeout(h);
+    const q = ev.target.value.trim();
+    if (q.length < 2) return;
+    h = setTimeout(() => buscarSaldo(q), 300);
+  });
+
+  async function buscarSaldo(q) {
+    const corpo = document.querySelector('#tab-saldo tbody');
+    corpo.innerHTML = '<tr><td colspan="6" class="vazio">Buscando…</td></tr>';
+    try {
+      const rp = await fetch("{{ url_for('api_wms_produtos') }}?q=" + encodeURIComponent(q), { credentials: 'same-origin' });
+      if (!rp.ok) throw new Error('Erro ' + rp.status);
+      const dados = await rp.json();
+      const produto = (dados.produtos || [])[0];
+      if (!produto) { corpo.innerHTML = '<tr><td colspan="6" class="vazio">Produto não encontrado no catálogo.</td></tr>'; return; }
+      const rs = await fetch("{{ url_for('api_wms_produto_saldo', produto_id=0) }}".replace(/\/0$/, '/' + produto.id), { credentials: 'same-origin' });
+      if (!rs.ok) throw new Error('Erro ' + rs.status);
+      const { lotes } = await rs.json();
+      corpo.innerHTML = lotes.map((l) => `
+        <tr><td class="mono">${esc(l.posicao)}</td><td>${esc(l.lote) || '—'}</td><td>${esc(l.validade) || '—'}</td>
+            <td>${l.saldo}</td><td>${l.reservado}</td><td><strong>${l.disponivel}</strong></td></tr>`).join('')
+        || '<tr><td colspan="6" class="vazio">' + esc(produto.descricao) + ' -- sem saldo endereçado.</td></tr>';
+    } catch (e) {
+      corpo.innerHTML = '<tr><td colspan="6" class="vazio">' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  carregarPedidos();
+  carregarPendencias();
+})();
+</script>
+{% endblock %}

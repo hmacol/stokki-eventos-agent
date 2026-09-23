@@ -561,3 +561,63 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
              r["motivo_pendencia"], item.get("lote", ""), item.get("validade", "")))
 
     return recebimento_id
+
+
+def trocar_lote_reserva(conn, reserva_id: int, posicao: str, lote: str, validade: str | None) -> dict:
+    """
+    O operador pegou outro lote do que o FEFO sugeriu. Cancela a reserva
+    sugerida e cria uma MANUAL no lote que ele bipou, se houver disponivel.
+    """
+    r = conn.execute("SELECT * FROM wms_reservas WHERE id = ?", (int(reserva_id),)).fetchone()
+    if not r:
+        raise wms.ErroWMS("Reserva nao encontrada.")
+    if r["estado"] != "ATIVA":
+        raise wms.ErroWMS(f"Reserva ja esta {r['estado'].lower()}.")
+    posicao = wms.normalizar_codigo(posicao)
+    lote = " ".join(str(lote or "").split()).upper()
+    validade = wms._validar_validade(validade) or ""
+    alvo = [d for d in disponivel_por_lote(conn, r["produto_id"])
+            if d["posicao"] == posicao and d["lote"] == lote and d["validade"] == validade]
+    disponivel = alvo[0]["disponivel"] if alvo else 0
+    if disponivel < r["quantidade_un"]:
+        raise wms.ErroWMS(
+            f"Lote {lote or '(sem lote)'} em {posicao} tem {disponivel:g} UN disponivel, "
+            f"menos que os {r['quantidade_un']:g} UN da reserva.")
+    agora = wms.agora()
+    conn.execute("UPDATE wms_reservas SET estado='CANCELADA', atualizado_em=? WHERE id=?", (agora, r["id"]))
+    cur = conn.execute("""
+        INSERT INTO wms_reservas (pedido_id, item_id, produto_id, posicao, lote, validade,
+                                  quantidade_un, estado, origem, criado_em, atualizado_em)
+        VALUES (?,?,?,?,?,?,?,'ATIVA','MANUAL',?,?)""",
+        (r["pedido_id"], r["item_id"], r["produto_id"], posicao, lote, validade,
+         r["quantidade_un"], agora, agora))
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM wms_reservas WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+def listar_pedidos_wms(conn, estado: str | None = None, limite: int = 50) -> list[dict]:
+    """Pedidos espelhados, com contagem de itens e reservas -- pra tela."""
+    sql = """
+        SELECT p.*,
+               (SELECT COUNT(*) FROM wms_pedido_itens i WHERE i.pedido_id = p.id) AS itens,
+               (SELECT COUNT(*) FROM wms_reservas r WHERE r.pedido_id = p.id AND r.estado='ATIVA') AS reservas_ativas,
+               (SELECT COUNT(*) FROM wms_pedido_itens i WHERE i.pedido_id = p.id AND i.motivo_pendencia <> '') AS pendencias
+          FROM wms_pedidos p {onde} ORDER BY p.id DESC LIMIT ?"""
+    if estado:
+        rows = conn.execute(sql.format(onde="WHERE p.estado_reserva = ?"), (estado, int(limite))).fetchall()
+    else:
+        rows = conn.execute(sql.format(onde=""), (int(limite),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def separacao_do_pedido(conn, pedido_id: int) -> list[dict]:
+    """Lista de separacao: uma linha por reserva, com posicao, lote e validade."""
+    rows = conn.execute("""
+        SELECT r.*, i.linha, i.descricao, i.sku, i.qtd_un AS qtd_item,
+               pr.unidade, pr.qtd_por_caixa
+          FROM wms_reservas r
+          JOIN wms_pedido_itens i ON i.id = r.item_id
+          JOIN wms_produtos pr ON pr.id = r.produto_id
+         WHERE r.pedido_id = ? AND r.estado = 'ATIVA'
+         ORDER BY r.posicao, i.linha""", (int(pedido_id),)).fetchall()
+    return [dict(r) for r in rows]

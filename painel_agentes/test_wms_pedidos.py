@@ -646,5 +646,41 @@ class TestPendencias(BaseWMS):
         self.assertEqual(len(wms_pedidos.pendencias(self.conn, limite=2)), 2)
 
 
+class TestTrocarLote(BaseWMS):
+    def setUp(self):
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, ean, unidade, "
+            "qtd_por_caixa, atualizado_em) VALUES (1, 900, 'SKU1', 'PRODUTO 1', 'MARIA DOLORES', "
+            "'111111111111', 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5,
+                                lote="L-A", validade="2026-10-15", destino="C9-E1-N1")
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5,
+                                lote="L-B", validade="2026-12-31", destino="C9-E1-N2")
+        self.pid = wms_pedidos.registrar_pedido(
+            self.conn,
+            {"id_stokki": 39751, "codigo_ps": "PS-39751", "embarcador": "MARIA DOLORES",
+             "situacao": "Separating"},
+            [{"linha": 1, "sku": "SKU1", "ean_linha": "111111111111",
+              "descricao": "PRODUTO 1", "qtd_embalagem": 3}])
+        wms_pedidos.reservar_pedido(self.conn, self.pid)
+
+    def test_operador_pegou_outro_lote(self):
+        reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()
+        self.assertEqual(reserva["lote"], "L-A")  # FEFO sugeriu o que vence antes
+        nova = wms_pedidos.trocar_lote_reserva(self.conn, reserva["id"], "C9-E1-N2", "L-B", "2026-12-31")
+        self.assertEqual(nova["lote"], "L-B")
+        self.assertEqual(nova["origem"], "MANUAL")
+        self.assertEqual(nova["quantidade_un"], 3)
+        ativas = self.conn.execute("SELECT COUNT(*) n FROM wms_reservas WHERE estado='ATIVA'").fetchone()["n"]
+        self.assertEqual(ativas, 1)
+
+    def test_trocar_pra_lote_sem_saldo_avisa_e_nao_troca(self):
+        reserva = self.conn.execute("SELECT * FROM wms_reservas WHERE estado='ATIVA'").fetchone()
+        with self.assertRaises(wms.ErroWMS):
+            wms_pedidos.trocar_lote_reserva(self.conn, reserva["id"], "C9-E1-N2", "L-FANTASMA", "2027-01-01")
+
+
 if __name__ == "__main__":
     unittest.main()

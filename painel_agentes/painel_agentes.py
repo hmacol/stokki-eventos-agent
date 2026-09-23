@@ -79,6 +79,8 @@ import tratativas
 import pedidos_parados_triagem
 import contadores_menu
 import wms
+import wms_pedidos
+import wms_etiqueta_produto
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -2359,6 +2361,11 @@ def api_editar_transportadora():
 
 _NIVEIS_WMS = ("total", "operador", "galpao")
 _NIVEIS_WMS_ADMIN = ("total", "operador")
+# Rotas de SO LEITURA que tanto o app do galpao quanto a tela da equipe
+# (/wms/estoque, niveis "total"/"operador"/"leitura", sem "galpao") usam --
+# uniao dos dois publicos. Rotas que MUDAM estado (trocar lote, registrar
+# recebimento) continuam em _NIVEIS_WMS: "leitura" nunca opera o estoque.
+_NIVEIS_WMS_CONSULTA = ("total", "operador", "leitura", "galpao")
 
 
 def _wms_operador_atual():
@@ -2705,6 +2712,196 @@ def api_wms_criar_area():
         return _wms_json_erro(e)
     finally:
         conn.close()
+
+
+# ── WMS fase 2: pedidos com reserva por lote, telas (Hugo 22/09) ──────────
+# Modulo de dados em wms_pedidos.py (Tasks 1-9, sem interface). Aqui so HTTP.
+# Rotas de leitura (_NIVEIS_WMS_CONSULTA) servem tanto o app do galpao
+# (aba Separar) quanto a tela da equipe (/wms/estoque). Trocar lote e
+# registrar/enderecar recebimento continuam _NIVEIS_WMS (quem opera).
+
+@app.route("/api/wms/pedidos")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pedidos():
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"pedidos": wms_pedidos.listar_pedidos_wms(
+            conn, estado=request.args.get("estado"), limite=request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/pedidos/<int:pedido_id>")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pedido(pedido_id):
+    conn = wms_pedidos.conectar()
+    try:
+        pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
+        if not pedido:
+            return _wms_json_erro("Pedido não encontrado.", 404)
+        itens = [dict(r) for r in conn.execute(
+            "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? ORDER BY linha", (pedido_id,))]
+        return jsonify({"pedido": dict(pedido), "itens": itens,
+                        "separacao": wms_pedidos.separacao_do_pedido(conn, pedido_id)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/reservas/<int:reserva_id>/trocar-lote", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_trocar_lote(reserva_id):
+    _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_pedidos.conectar()
+    try:
+        nova = wms_pedidos.trocar_lote_reserva(
+            conn, reserva_id, body.get("posicao"), body.get("lote"), body.get("validade"))
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "reserva": nova})
+
+
+@app.route("/api/wms/pendencias")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_pendencias():
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"pendencias": wms_pedidos.pendencias(
+            conn, request.args.get("limite", 50, type=int))})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/produtos/<int:produto_id>/saldo")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def api_wms_produto_saldo(produto_id):
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify({"lotes": wms_pedidos.disponivel_por_lote(conn, produto_id)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimentos():
+    """Recebimentos esperados (Task 8) pra aba Receber do app do galpao.
+    Sem ?estado, so mostra ESPERADO -- o que falta enderecar."""
+    conn = wms_pedidos.conectar()
+    try:
+        estado = request.args.get("estado", "ESPERADO")
+        sql = ("SELECT r.*, (SELECT COUNT(*) FROM wms_recebimento_itens i "
+               "WHERE i.recebimento_id = r.id) AS itens FROM wms_recebimentos r")
+        params = []
+        if estado and estado != "TODOS":
+            sql += " WHERE r.estado = ?"
+            params.append(estado)
+        sql += " ORDER BY r.id DESC LIMIT ?"
+        params.append(request.args.get("limite", 50, type=int))
+        rows = conn.execute(sql, params).fetchall()
+        return jsonify({"recebimentos": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimento(recebimento_id):
+    conn = wms_pedidos.conectar()
+    try:
+        rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
+        if not rec:
+            return _wms_json_erro("Recebimento não encontrado.", 404)
+        itens = [dict(r) for r in conn.execute(
+            "SELECT * FROM wms_recebimento_itens WHERE recebimento_id = ? ORDER BY linha", (recebimento_id,))]
+        return jsonify({"recebimento": dict(rec), "itens": itens})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/itens/<int:item_id>/enderecar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
+    """
+    Chamada depois que a ENTRADA em si ja foi aceita por /api/wms/movimentos
+    (esta rota nao move estoque, so contabiliza o quanto desta linha do
+    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha e fecha
+    o recebimento (estado=ENDERECADO) quando toda linha RESOLVIDA (produto
+    identificado) bateu a quantidade do pedido -- linha que ficou pendencia
+    (produto nao encontrado no catalogo) nunca entra nessa conta: ela so
+    aparece na tela como aviso, nunca trava o fechamento do recebimento.
+
+    registrar_recebimento (Task 8) nunca reverte ENDERECADO pra ESPERADO;
+    esta rota so anda pra frente, pelo mesmo motivo.
+    """
+    _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    qtd = float(body.get("qtd") or 0)
+    conn = wms_pedidos.conectar()
+    try:
+        item = conn.execute(
+            "SELECT * FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",
+            (item_id, recebimento_id)).fetchone()
+        if not item:
+            return _wms_json_erro("Item do recebimento não encontrado.", 404)
+        nova_qtd = round((item["qtd_enderecada"] or 0) + qtd, 3)
+        conn.execute("UPDATE wms_recebimento_itens SET qtd_enderecada = ? WHERE id = ?", (nova_qtd, item_id))
+        pendentes = conn.execute(
+            "SELECT COUNT(*) n FROM wms_recebimento_itens WHERE recebimento_id = ? AND produto_id IS NOT NULL "
+            "AND ROUND(qtd_enderecada, 3) < ROUND(qtd_un, 3)", (recebimento_id,)).fetchone()["n"]
+        if pendentes == 0:
+            conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? WHERE id = ?",
+                         (wms.agora(), recebimento_id))
+        conn.commit()
+        item_novo = dict(conn.execute("SELECT * FROM wms_recebimento_itens WHERE id = ?", (item_id,)).fetchone())
+        rec = dict(conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone())
+        return jsonify({"ok": True, "item": item_novo, "recebimento": rec})
+    finally:
+        conn.close()
+
+
+@app.route("/wms/etiqueta-produto.pdf")
+@requer_auth(niveis=_NIVEIS_WMS)
+def wms_etiqueta_produto_pdf():
+    """PDF da etiqueta de mercadoria (produto + lote + validade, QR FL|...),
+    imprimida na aba Receber. Mesma calibracao de midia da etiqueta de
+    posicao vizinha (config.yaml wms.etiqueta_*) -- ver wms_etiquetas_pdf."""
+    conn = wms_pedidos.conectar()
+    cfg_wms = _carregar_config().get("wms", {}) or {}
+    orientacao = request.args.get("orientacao") or cfg_wms.get("etiqueta_orientacao") or "paisagem"
+    padrao = {"margem": cfg_wms.get("etiqueta_margem_mm", 0), "dx": cfg_wms.get("etiqueta_dx_mm", 0),
+              "dy": cfg_wms.get("etiqueta_dy_mm", 0)}
+
+    def _mm(nome):
+        bruto = request.args.get(nome)
+        if bruto in (None, ""):
+            bruto = padrao[nome]
+        try:
+            return float(str(bruto).replace(",", "."))
+        except ValueError:
+            abort(400, f"Parâmetro {nome} inválido.")
+    margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
+    try:
+        pdf = wms_etiqueta_produto.gerar_etiquetas_produto_pdf(
+            conn, request.args.get("produto_id", type=int), request.args.get("lote", ""),
+            request.args.get("validade") or None, copias=request.args.get("copias", 1, type=int),
+            orientacao=orientacao, margem_mm=margem, desloc_x_mm=dx, desloc_y_mm=dy)
+    except wms.ErroWMS as e:
+        abort(400, str(e))
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": "inline; filename=etiqueta-produto.pdf"})
+
+
+@app.route("/wms/estoque")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def wms_estoque():
+    return render_template("wms_estoque.html")
 
 
 @app.route("/wms/etiquetas.pdf")
