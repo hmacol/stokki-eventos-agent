@@ -72,3 +72,22 @@ def classificar_tipo_carga(sender_id, mapa: dict[int, str]) -> tuple[str, bool]:
     if sender_id in mapa:
         return mapa[sender_id], True
     return TIPO_CARGA_PADRAO, False
+
+
+def marcar_tipo_carga(servico: dict, mapa: dict[int, str]) -> str:
+    """Injeta no serviço '_tipo_carga' (com o padrão Seco pra quem não
+    tem cadastro, como a roteirização sempre fez) e
+    '_tipo_carga_cadastrado' (se veio do cadastro do embarcador). Devolve
+    o tipo."""
+    tipo, cadastrado = classificar_tipo_carga(servico.get("sender_id"), mapa)
+    servico["_tipo_carga"] = tipo
+    servico["_tipo_carga_cadastrado"] = cadastrado
+    return tipo
+
+
+def carga_seca_confirmada(servico: dict) -> bool:
+    """Seco DE CADASTRO (Hugo, 23/09): o padrão "Seco" de embarcador sem
+    tipo cadastrado não conta -- é o que decide se motorista com
+    APENAS_CARGA_SECA pode levar o pedido. Serviço que nunca passou por
+    marcar_tipo_carga também não conta (dado ausente não libera)."""
+    return servico.get("_tipo_carga") == "Seco" and servico.get("_tipo_carga_cadastrado") is True

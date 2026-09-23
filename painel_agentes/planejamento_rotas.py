@@ -53,7 +53,10 @@ from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
 from regras.disponibilidade_motoristas import (
     carregar_ajustes_dia, definir_disponibilidade_dia, definir_disponibilidade_periodo, limpar_ajuste,
 )
-from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
+from regras.tipo_carga_embarcador import (
+    carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA,
+    marcar_tipo_carga, carga_seca_confirmada,
+)
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from regras.prioridade_ofertas import carregar_historico_justica
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
@@ -1168,6 +1171,9 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
         macro_pedido = macro_regiao_do_servico(servico, gmaps_key)
         zona_pedido = None if eh_viagem else classificar_zona(servico, gmaps_key)
         classe_pedido = _classe_carga(parada.get("sender_id"), mapa_tipos_carga)
+        marcado = {"sender_id": parada.get("sender_id")}
+        marcar_tipo_carga(marcado, mapa_tipos_carga)
+        pedido_seco_confirmado = carga_seca_confirmada(marcado)
 
         def _motorista_ok(info: dict) -> bool:
             if info["agent_id"] is None:
@@ -1179,6 +1185,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
                 return False
             if zona_pedido is not None and zona_pedido not in m.zonas_preferidas:
                 return False
+            if m.apenas_carga_seca and not pedido_seco_confirmado:
+                return False  # APENAS_CARGA_SECA (23/09): só pedido Seco de cadastro
             return True
 
         candidatas = [
@@ -1271,6 +1279,7 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
             contagem_alocacoes_dia[r["agent_id"]] = contagem_alocacoes_dia.get(r["agent_id"], 0) + 1
     # rodízio justo (Hugo, 22/09) -- mesmo histórico do job noturno
     historico = carregar_historico_justica(data_alvo, config)
+    mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
 
     alocados: list[dict] = []
     sem_elegivel: list[str] = []
@@ -1284,15 +1293,9 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         if not r["paradas"]:
             sem_paradas += 1
             continue
-        # Formato bruto que os classificadores (zona/viagem/rodízio,
-        # veículo grande) esperam: campo 'address' -- obter_coordenadas
-        # geocodifica por ele, com cache já quente (as paradas foram
-        # geocodificadas desses mesmos endereços ao entrar no rascunho).
-        # 'dimension_3' precisa vir junto (classificar_tipo_veiculo lê o
-        # volume real de cada parada -- sem isso, extrair_volume_caixas
-        # cairia no fallback de 1 caixa por parada e classificaria
-        # errado o tipo de veículo necessário).
-        sublote = [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in r["paradas"]]
+        # Formato bruto que os classificadores esperam -- ver
+        # _sublote_para_elegibilidade (endereço, volume e tipo de carga).
+        sublote = _sublote_para_elegibilidade(r["paradas"], mapa_tipos_carga)
         horas_rota = r.get("horas_estimadas")
         if horas_rota is None:
             # rota montada à mão na tela nasce sem horas gravadas -- mesmo
@@ -1348,13 +1351,22 @@ def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
     return {"desalocados": desalocados, "sem_motorista": sem_motorista}
 
 
-def _sublote_para_elegibilidade(paradas: list[dict]) -> list[dict]:
-    """Mesmo formato mínimo usado em alocar_motoristas_rascunhos --
-    'address' pra classificação de zona/viagem/rodízio (geocodifica via
-    cache, ignora latitude/longitude já resolvidas no rascunho) e
-    'dimension_3' pra classificar_tipo_veiculo (precisa do volume real
-    de cada parada)."""
-    return [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in paradas]
+def _sublote_para_elegibilidade(paradas: list[dict], mapa_tipos_carga: dict | None = None) -> list[dict]:
+    """Formato mínimo que a elegibilidade (alocacao_motoristas) espera,
+    usado pelo "Alocar motoristas" e pelo marketplace -- 'address' pra
+    classificação de zona/viagem/rodízio (geocodifica via cache, ignora
+    latitude/longitude já resolvidas no rascunho), 'dimension_3' pra
+    classificar_tipo_veiculo (precisa do volume real de cada parada) e o
+    tipo de carga marcado pelo sender_id, pra trava de APENAS_CARGA_SECA
+    (23/09)."""
+    if mapa_tipos_carga is None:
+        mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
+    sublote = []
+    for p in paradas:
+        s = {"address": p["endereco"], "dimension_3": p["volume_caixas"], "sender_id": p.get("sender_id")}
+        marcar_tipo_carga(s, mapa_tipos_carga)
+        sublote.append(s)
+    return sublote
 
 
 def publicar_oferta_rascunho(rascunho_id: int) -> dict:

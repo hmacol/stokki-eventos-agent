@@ -21,6 +21,7 @@ from zonas_sp import classificar_rota_zona
 from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
 from regras.tipo_veiculo import classificar_tipo_veiculo, veiculo_comporta
+from regras.tipo_carga_embarcador import carga_seca_confirmada
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,14 @@ def selecionar_motorista_equitativo(
     return elegiveis[0]
 
 
+def rota_so_carga_seca(sublote: list[dict]) -> bool:
+    """True se TODOS os pedidos são Seco de cadastro (regras/
+    tipo_carga_embarcador.carga_seca_confirmada). Quem monta o sublote
+    precisa ter passado cada serviço por marcar_tipo_carga -- sem a
+    marcação, a rota não conta como seca."""
+    return bool(sublote) and all(carga_seca_confirmada(s) for s in sublote)
+
+
 def _elegibilidade_sublote(
     sublote: list[dict],
     data_rota: date,
@@ -182,6 +191,10 @@ def _elegibilidade_sublote(
     # restrição de dígito (segunda-sexta) -- sábado/domingo pula direto.
     rota_em_rodizio = dia_semana in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, api_key)
 
+    # APENAS_CARGA_SECA (Hugo, 23/09): motorista marcado só entra em rota
+    # 100% seca DE CADASTRO -- embarcador sem tipo cadastrado não conta.
+    so_seca = rota_so_carga_seca(sublote)
+
     def _disponivel_no_dia(m: MotoristaPreferencias) -> bool:
         ajuste = ajustes_disponibilidade.get(m.agent_id) if ajustes_disponibilidade else None
         if ajuste is not None:
@@ -197,6 +210,7 @@ def _elegibilidade_sublote(
         and (zona is None or zona in m.zonas_preferidas)
         and not (rota_em_rodizio and placa_restrita_no_dia(m.placa, dia_semana))
         and veiculo_comporta(m.tipo_veiculo, tipo_veiculo_necessario)
+        and (so_seca or not m.apenas_carga_seca)
     ]
 
     tipo_str = "VIAGEM" if eh_viagem else f"Grande SP/{zona or 'zona desconhecida'}"

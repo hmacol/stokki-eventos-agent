@@ -114,7 +114,7 @@ from regras.complexidade_entrega import (
     carregar_niveis, classificar_nivel, carregar_horarios,
     carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
 )
-from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
+from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, TIPOS_CARGA_FRIA
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo, contar_motoristas_elegiveis
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
@@ -546,8 +546,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
         s["_nivel_dificuldade"] = nivel_efetivo(cnpj_destino, mapa_niveis, ajustes_manuais)
         s["_horario_atendimento_inicio"], s["_horario_atendimento_fim"] = \
             horario_efetivo(cnpj_destino, mapa_horarios, ajustes_manuais)
-        tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
-        s["_tipo_carga"] = tipo_carga
+        marcar_tipo_carga(s, mapa_tipos_carga)  # + se é de cadastro (APENAS_CARGA_SECA, 23/09)
     # janela de horário do cliente (Hugo, 09/09) -- agendamento confirmado
     # com hora > scheduled_* real > horário de atendimento acima
     _preparar_janelas(servicos, config)
@@ -754,8 +753,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             if nivel_requer_revisao and doc_destino not in ajustes_manuais:
                 cnpjs_pendentes_nivel.add(cnpj_destino)
 
-            tipo_carga, _ = classificar_tipo_carga(s.get("sender_id"), mapa_tipos_carga)
-            s["_tipo_carga"] = tipo_carga
+            marcar_tipo_carga(s, mapa_tipos_carga)  # + se é de cadastro (APENAS_CARGA_SECA, 23/09)
         _preparar_janelas(servicos, config)
 
         start_at = start_at_rota(data_alvo)  # HORA_INICIO_ROTA (06:00 BRT, Hugo 09/09)

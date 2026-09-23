@@ -9,7 +9,14 @@ DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
     DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
-    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO | CPF_MOTORISTA
+    TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO | CPF_MOTORISTA |
+    APENAS_CARGA_SECA
+
+APENAS_CARGA_SECA (pedido do Hugo, 23/09 -- caso do Fagner): SIM = o
+motorista só pode pegar rota em que TODOS os pedidos são de embarcador
+CADASTRADO como Seco (ver roteirizacao/alocacao_motoristas.py::
+rota_so_carga_seca). Embarcador sem tipo de carga cadastrado NÃO conta
+como seco, mesmo caindo no padrão "Seco" da roteirização. Vazio = NAO.
 
 CPF_MOTORISTA (pedido do Hugo, 22/08): identificador do motorista na
 tela compartilhada do marketplace de rotas (regras/ofertas_rota.py,
@@ -132,6 +139,7 @@ class MotoristaPreferencias:
     placa: str | None = None  # coluna PLACA -- usado pela trava de rodízio (ver roteirizacao/rodizio_sp.py)
     tipo_veiculo: str | None = None  # coluna TIPO_VEICULO -- código de regras/tipo_veiculo.py, usado pela trava de veículo grande
     cpf: str | None = None  # coluna CPF_MOTORISTA -- só dígitos; identificação do motorista no marketplace de rotas (ver regras/ofertas_rota.py)
+    apenas_carga_seca: bool = False  # coluna APENAS_CARGA_SECA -- só rota 100% seca confirmada (ver docstring do módulo)
 
 
 def _normalizar_texto(s) -> str:
@@ -259,6 +267,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         placa=placa,
         tipo_veiculo=tipo_veiculo.codigo,
         cpf=cpf,
+        apenas_carga_seca=_parse_bool(registro.get("APENAS_CARGA_SECA")),
     )
 
 

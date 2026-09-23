@@ -106,8 +106,9 @@ from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas,
+    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
+from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
 )
@@ -368,6 +369,7 @@ def main(modo_teste: bool = False):
         cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""),
     )
     motoristas_por_id = {m.agent_id: m for m in catalogo_motoristas.motoristas}
+    mapa_tipos_carga = carregar_tipos_carga_por_sender(DB_PATH)
 
     resumo_etapas = {}
 
@@ -709,6 +711,11 @@ def main(modo_teste: bool = False):
             # trava de viagem acima.
             pedido_zona = None if pedido_eh_viagem else classificar_zona(pedido, gmaps_key)
 
+            # APENAS_CARGA_SECA (Hugo, 23/09): rota de motorista marcado só
+            # recebe pedido Seco DE CADASTRO do embarcador.
+            marcar_tipo_carga(pedido, mapa_tipos_carga)
+            pedido_seco_confirmado = carga_seca_confirmada(pedido)
+
             # Tenta a melhor rota candidata; se o VUUPT recusar por causa
             # do STATUS da rota (achado em produção, 06/08: rota "Cancelada"
             # ainda aparecia como candidata -- data óbvia, mas cancelada
@@ -745,6 +752,11 @@ def main(modo_teste: bool = False):
                         or r["agent_id"] is None
                         or motoristas_por_id.get(r["agent_id"], None) is not None
                         and pedido_zona in motoristas_por_id[r["agent_id"]].zonas_preferidas
+                    )
+                    and (
+                        pedido_seco_confirmado
+                        or r["agent_id"] is None
+                        or not getattr(motoristas_por_id.get(r["agent_id"]), "apenas_carga_seca", False)
                     )
                 ]
                 candidatas_com_centroide = [r for r in candidatas_com_espaco if r["centroide"]]
