@@ -81,6 +81,7 @@ import contadores_menu
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
+import wms_faltas_recebimento
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -2909,6 +2910,47 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
         conn.close()
     return jsonify({"ok": True, "item": r["item"], "recebimento": r["recebimento"],
                     "duplicado": r["duplicado"]})
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar-divergencia", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_recebimento_encerrar_divergencia(recebimento_id):
+    """
+    O operador terminou a descarga e faltou mercadoria: encerra o
+    recebimento assumindo a falta e manda o relatório pro cliente.
+
+    Sem isto, recebimento que chegou parcial nunca alcança o esperado,
+    nunca fecha sozinho e fica pra sempre na lista do galpão. O
+    fechamento automático do caso normal continua onde estava
+    (contabilizar_enderecamento) -- este botão é só pro caso em que falta.
+
+    NÃO mexe em estoque: o que chegou já entrou pelas ENTRADAs do
+    endereçamento e o que faltou nunca existiu.
+
+    O e-mail vai DEPOIS do encerramento, que já está commitado: falha de
+    SMTP não pode desfazer a conferência do galpão. O resultado do envio
+    volta no JSON pra tela poder dizer a verdade ao operador (e o e-mail
+    nasce redirecionado pro interno enquanto o Hugo não ligar o envio
+    real -- ver wms_faltas_recebimento).
+    """
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_pedidos.conectar()
+    try:
+        try:
+            r = wms_pedidos.encerrar_com_divergencia(
+                conn, recebimento_id, body.get("observacao") or "", operador=op)
+        except (wms.ErroWMS, ValueError) as e:
+            return _wms_json_erro(e)
+        try:
+            envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
+        except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
+            logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
+            envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "recebimento": r["recebimento"], "faltas": r["faltas"], "envio": envio})
 
 
 @app.route("/wms/etiqueta-produto.pdf")

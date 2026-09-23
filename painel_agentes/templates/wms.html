@@ -702,12 +702,60 @@
           <button class="botao neutro" type="button" data-etiqueta="${i}">Imprimir etiqueta</button>
           <button class="botao" type="button" data-confirmar="${i}">Registrar entrada</button>
         </div>` : ''}
-      </div>`; }).join('') || '<div class="vazio">Recebimento sem itens.</div>'}</div>`;
+      </div>`; }).join('') || '<div class="vazio">Recebimento sem itens.</div>'}</div>
+    ${blocoDivergencia(r, itens)}`;
   };
+  // Chegou menos do que foi anunciado: o que falta pra cada linha resolvida.
+  // Mesmo critério do fechamento automático -- linha sem produto no catálogo
+  // fica de fora (é pendência nossa, não falta do cliente).
+  function faltasDoRecebimento(itens) {
+    return (itens || []).map((it) => Object.assign({}, it, {
+      falta: Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000,
+    })).filter((it) => it.produto_id && it.qtd_un !== null && it.falta > 0);
+  }
+  function blocoDivergencia(r, itens) {
+    const faltas = faltasDoRecebimento(itens);
+    if (r.estado !== 'ESPERADO' || !faltas.length) return '';
+    return `
+    <div class="cartao erro" style="margin-top:14px">
+      <div class="rotulo">Encerrar com divergência</div>
+      <div class="sub">Chegou menos do que foi anunciado em ${faltas.length} item(ns). Encerrar tira o recebimento da lista <b>e envia o relatório de faltas por e-mail ao cliente</b>. O que já foi endereçado continua no estoque.</div>
+      <ul style="margin:10px 0 0;padding-left:18px">
+        ${faltas.map((it) => `<li style="margin-bottom:4px">${esc(it.descricao)} — anunciado ${num(it.qtd_un)}, recebido ${num(it.qtd_enderecada || 0)}, <b>faltou ${num(it.falta)} ${esc(it.unidade || 'UN')}</b></li>`).join('')}
+      </ul>
+      <div class="campo" style="margin-top:10px"><label>O que aconteceu (vai no e-mail do cliente)</label>
+        <input type="text" id="div-obs" maxlength="300" placeholder="ex.: 2 caixas chegaram avariadas"></div>
+      <div class="botoes"><button class="botao" type="button" id="btn-divergencia">Encerrar com divergência</button></div>
+    </div>`;
+  }
+  async function encerrarComDivergencia(r, itens) {
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    const faltas = faltasDoRecebimento(itens);
+    if (!faltas.length) return toast('Não há falta nenhuma neste recebimento.', true);
+    const obs = (document.getElementById('div-obs').value || '').trim();
+    const resumo = faltas.map((it) => '• ' + it.descricao + ': anunciado ' + num(it.qtd_un)
+      + ', recebido ' + num(it.qtd_enderecada || 0) + ', faltou ' + num(it.falta) + ' ' + (it.unidade || 'UN')).join('\n');
+    if (!confirm('Encerrar ' + r.codigo + ' com divergência?\n\nO cliente vai receber por e-mail:\n' + resumo
+      + (obs ? '\n\nObservação: ' + obs : '\n\n(sem observação)'))) return;
+    const btn = document.getElementById('btn-divergencia'); btn.disabled = true;
+    try {
+      const resp = await api('/recebimentos/' + r.id + '/encerrar-divergencia', { method: 'POST', body: { observacao: obs } });
+      const envio = resp.envio || {};
+      toast(envio.enviado
+        ? 'Encerrado. Relatório enviado para ' + (envio.destinos || []).join(', ')
+        : 'Encerrado, mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + ')', !envio.enviado);
+      ir('receber', {}, false);
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+      else { toast(e.message, true); btn.disabled = false; }
+    }
+  }
   TELAS_POS.recebimento = (ctx) => {
     document.getElementById('btn-voltar').addEventListener('click', voltar);
     const g = (id) => document.getElementById(id);
     const itens = (ctx.recebimento && ctx.recebimento.itens) || [];
+    const btnDiv = document.getElementById('btn-divergencia');
+    if (btnDiv) btnDiv.addEventListener('click', () => encerrarComDivergencia(ctx.recebimento, itens));
     app.querySelectorAll('[data-cam]').forEach((b) => b.addEventListener('click', () => abrirCamera((c) => {
       g('rec-pos-' + b.dataset.cam).value = c.replace(/^pos:/i, '').toUpperCase();
     })));

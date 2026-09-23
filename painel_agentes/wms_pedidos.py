@@ -84,9 +84,13 @@ CREATE TABLE IF NOT EXISTS wms_recebimentos (
     id_stokki      INTEGER NOT NULL UNIQUE,
     codigo         TEXT NOT NULL DEFAULT '',
     embarcador     TEXT NOT NULL DEFAULT '',
+    stkkc_id       TEXT NOT NULL DEFAULT '',          -- #stkkc-<id> do embarcador na Stokki
     situacao       TEXT NOT NULL DEFAULT '',
     chegada        TEXT NOT NULL DEFAULT '',
-    estado         TEXT NOT NULL DEFAULT 'ESPERADO',  -- ESPERADO | ENDERECADO
+    estado         TEXT NOT NULL DEFAULT 'ESPERADO',  -- ESPERADO | ENDERECADO | DIVERGENCIA
+    observacao_divergencia TEXT NOT NULL DEFAULT '',  -- o que o operador viu ("chegou avariado")
+    encerrado_em   TEXT NOT NULL DEFAULT '',
+    encerrado_por  TEXT NOT NULL DEFAULT '',
     lido_em        TEXT NOT NULL,
     atualizado_em  TEXT NOT NULL
 );
@@ -103,6 +107,7 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_itens (
     produto_id          INTEGER REFERENCES wms_produtos(id),
     motivo_pendencia    TEXT NOT NULL DEFAULT '',
     qtd_enderecada      REAL NOT NULL DEFAULT 0,
+    falta_un            REAL NOT NULL DEFAULT 0,   -- congelado no encerramento com divergencia
     UNIQUE (recebimento_id, linha)
 );
 CREATE INDEX IF NOT EXISTS idx_wms_recebimento_itens_recebimento ON wms_recebimento_itens(recebimento_id);
@@ -123,6 +128,11 @@ _COLUNAS_NOVAS = {
                     "saldo_negativo": "TEXT NOT NULL DEFAULT ''"},
     "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
                          "removido_em": "TEXT NOT NULL DEFAULT ''"},
+    "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
+                         "observacao_divergencia": "TEXT NOT NULL DEFAULT ''",
+                         "encerrado_em": "TEXT NOT NULL DEFAULT ''",
+                         "encerrado_por": "TEXT NOT NULL DEFAULT ''"},
+    "wms_recebimento_itens": {"falta_un": "REAL NOT NULL DEFAULT 0"},
 }
 
 
@@ -701,6 +711,12 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     Decisao do Hugo (23/09/2026): sem pre-preenchimento vindo da Stokki --
     da Stokki so entra a quantidade. Lote e validade o operador digita na
     tela do celular, lendo a caixa fisica (fonte de verdade).
+
+    `stkkc_id` (o #stkkc-<id> do embarcador na propria linha da Stokki) e
+    gravado junto: e por ele que o relatorio de faltas acha o contato do
+    embarcador nas preferencias de notificacao. Sem ele o relatorio teria
+    que adivinhar pelo nome -- e mandar falta de mercadoria pro cliente
+    errado e o tipo de erro que nao se conserta depois.
     """
     id_stokki = int(recebimento["id_stokki"])
     agora = wms.agora()
@@ -709,19 +725,19 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     if row:
         recebimento_id = row["id"]
         conn.execute(
-            "UPDATE wms_recebimentos SET codigo = ?, embarcador = ?, situacao = ?, chegada = ?, "
-            "atualizado_em = ? WHERE id = ?",
+            "UPDATE wms_recebimentos SET codigo = ?, embarcador = ?, stkkc_id = ?, situacao = ?, "
+            "chegada = ?, atualizado_em = ? WHERE id = ?",
             (recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
-             recebimento.get("situacao", ""), recebimento.get("chegada", ""),
-             agora, recebimento_id))
+             str(recebimento.get("stkkc_id") or ""), recebimento.get("situacao", ""),
+             recebimento.get("chegada", ""), agora, recebimento_id))
     else:
         cur = conn.execute("""
-            INSERT INTO wms_recebimentos (id_stokki, codigo, embarcador, situacao, chegada, estado,
-                                          lido_em, atualizado_em)
-            VALUES (?,?,?,?,?,'ESPERADO',?,?)""",
+            INSERT INTO wms_recebimentos (id_stokki, codigo, embarcador, stkkc_id, situacao, chegada,
+                                          estado, lido_em, atualizado_em)
+            VALUES (?,?,?,?,?,?,'ESPERADO',?,?)""",
             (id_stokki, recebimento.get("codigo", ""), recebimento.get("embarcador", ""),
-             recebimento.get("situacao", ""), recebimento.get("chegada", ""),
-             agora, agora))
+             str(recebimento.get("stkkc_id") or ""), recebimento.get("situacao", ""),
+             recebimento.get("chegada", ""), agora, agora))
         recebimento_id = cur.lastrowid
 
     for item in itens:
@@ -854,6 +870,87 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
         "recebimento": dict(conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?",
                                          (int(recebimento_id),)).fetchone()),
     }
+
+
+def faltas_do_recebimento(conn, recebimento_id: int) -> list[dict]:
+    """
+    O que foi anunciado e nao foi enderecado, linha a linha.
+
+    Entra so linha RESOLVIDA (produto identificado no catalogo) cujo
+    enderecado ficou abaixo do esperado. Linha que virou pendencia de
+    catalogo NAO entra de proposito: o operador nao conseguiu enderecar
+    por problema NOSSO (produto sem cadastro), e chamar isso de "faltou"
+    num relatorio que vai pro cliente seria acusar o transportador dele de
+    uma falta que nunca houve. Essa linha continua visivel na tela do
+    galpao como pendencia, que e onde ela se resolve.
+
+    O criterio (as duas quantidades arredondadas a 3 casas) e exatamente o
+    complemento do que fecha o recebimento sozinho em
+    contabilizar_enderecamento -- tem que ser o mesmo, senao existiria
+    recebimento que nao fecha automatico e tambem nao tem falta nenhuma
+    pra reportar, e o operador ficaria sem saida.
+    """
+    rows = conn.execute("""
+        SELECT i.*, COALESCE(p.unidade, 'UN') AS unidade
+          FROM wms_recebimento_itens i
+          LEFT JOIN wms_produtos p ON p.id = i.produto_id
+         WHERE i.recebimento_id = ? AND i.produto_id IS NOT NULL AND i.qtd_un IS NOT NULL
+         ORDER BY i.linha""", (int(recebimento_id),)).fetchall()
+    faltas = []
+    for r in rows:
+        falta = round(round(float(r["qtd_un"]), 3) - round(float(r["qtd_enderecada"] or 0), 3), 3)
+        if falta <= 0:
+            continue
+        d = dict(r)
+        d["falta_un"] = falta
+        faltas.append(d)
+    return faltas
+
+
+def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
+                             operador: dict | None = None) -> dict:
+    """
+    O operador terminou a descarga e faltou mercadoria (carga parcial,
+    avaria, item que nao veio). Fecha o recebimento assumindo a falta.
+
+    Sem isto, o recebimento que recebeu menos do que foi anunciado nunca
+    alcanca o esperado, nunca fecha sozinho e fica pra sempre na lista do
+    operador -- sem ninguem saber se e trabalho pendente ou se simplesmente
+    nao veio.
+
+    NAO MEXE EM ESTOQUE, de proposito: o que chegou ja entrou pelas
+    ENTRADAs do enderecamento, e o que faltou nunca existiu. Nenhuma linha
+    aqui escreve em wms_saldos ou wms_movimentos.
+
+    A falta de cada linha e CONGELADA em wms_recebimento_itens.falta_un: o
+    relatorio que vai pro cliente precisa continuar dizendo a mesma coisa
+    seis meses depois, mesmo que a Stokki mude a quantidade anunciada
+    depois. `observacao` e a diferenca entre "chegou avariado" e "nao
+    veio", que nao e a mesma conversa pra quem recebe o relatorio.
+    """
+    rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()
+    if not rec:
+        raise wms.ErroWMS("Recebimento nao encontrado.")
+    if rec["estado"] != "ESPERADO":
+        raise wms.ErroWMS(f"Recebimento ja encerrado ({rec['estado']}).")
+    faltas = faltas_do_recebimento(conn, recebimento_id)
+    if not faltas:
+        raise wms.ErroWMS(
+            "Nao ha falta nenhuma neste recebimento -- ele fecha sozinho quando a ultima linha bater.")
+
+    agora = wms.agora()
+    for f in faltas:
+        conn.execute("UPDATE wms_recebimento_itens SET falta_un = ? WHERE id = ?",
+                     (f["falta_un"], f["id"]))
+    conn.execute(
+        "UPDATE wms_recebimentos SET estado = 'DIVERGENCIA', observacao_divergencia = ?, "
+        "encerrado_em = ?, encerrado_por = ?, atualizado_em = ? WHERE id = ?",
+        (" ".join(str(observacao or "").split())[:500], agora,
+         str((operador or {}).get("nome") or "")[:60], agora, int(recebimento_id)))
+    conn.commit()
+    return {"recebimento": dict(conn.execute(
+        "SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()),
+        "faltas": faltas}
 
 
 def listar_pedidos_wms(conn, estado: str | None = None, limite: int = 50) -> list[dict]:

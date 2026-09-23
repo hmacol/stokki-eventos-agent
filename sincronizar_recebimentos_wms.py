@@ -108,11 +108,13 @@ def _sem_acento(texto: str) -> str:
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
     res = {"lidos": 0, "do_piloto": 0, "ignorados_outro_embarcador": 0,
            "gravados": 0, "em_transito": 0, "ja_fechados": 0, "erros": 0}
-    # Recebimento ja ENDERECADO esta fechado: nao ha nada pra reler nele.
-    # Sem este filtro a rotina rebuscava o detalhe dos ~50 mais recentes a
-    # cada 30 min, pra sempre, contra um sistema de sessao unica e fragil.
+    # Recebimento ja ENDERECADO (fechou sozinho) ou encerrado com
+    # DIVERGENCIA (chegou menos e o operador assumiu a falta) esta fechado:
+    # nao ha nada pra reler nele. Sem este filtro a rotina rebuscava o
+    # detalhe dos ~50 mais recentes a cada 30 min, pra sempre, contra um
+    # sistema de sessao unica e fragil.
     fechados = {r["id_stokki"] for r in conn.execute(
-        "SELECT id_stokki FROM wms_recebimentos WHERE estado = 'ENDERECADO'")}
+        "SELECT id_stokki FROM wms_recebimentos WHERE estado IN ('ENDERECADO', 'DIVERGENCIA')")}
 
     # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so os
     # recebimentos do piloto quando cliente=piloto_id.
@@ -135,6 +137,10 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             res["ignorados_outro_embarcador"] += 1
             continue
         res["do_piloto"] += 1
+        # Guarda o #stkkc-<id> no proprio recebimento: e por ele que o
+        # relatorio de faltas acha o contato certo do embarcador nas
+        # preferencias de notificacao (wms_faltas_recebimento.py).
+        dados["stkkc_id"] = stkkc_id
         if not dados.get("embarcador"):
             dados["embarcador"] = piloto_nome
 

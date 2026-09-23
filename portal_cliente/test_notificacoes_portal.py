@@ -68,7 +68,7 @@ class TestApiNotificacoes(unittest.TestCase):
         self.assertEqual(self.tc.get("/api/notificacoes").status_code, 401)
         self.assertEqual(self.tc.post("/api/notificacoes", json={}, headers=ORIGEM).status_code, 401)
 
-    def test_get_devolve_os_seis_tipos_com_rotulo_e_os_defaults(self):
+    def test_get_devolve_os_sete_tipos_com_rotulo_e_os_defaults(self):
         self._entrar_como_cliente()
         corpo = self.tc.get("/api/notificacoes").get_json()
         self.assertEqual([t["tipo"] for t in corpo["tipos"]], list(pn.TIPOS))
@@ -77,7 +77,7 @@ class TestApiNotificacoes(unittest.TestCase):
         self.assertTrue(ligados["entrega_concluida"])
         self.assertTrue(all(t["rotulo"] and t["descricao"] for t in corpo["tipos"]))
         self.assertEqual([t["grupo"] for t in corpo["tipos"]],
-                         ["acompanhamento"] * 3 + ["acao"] * 3)
+                         ["acompanhamento"] * 4 + ["acao"] * 3)
         self.assertFalse(corpo["somente_leitura"])
         self.assertEqual(corpo["emails"], [])
         self.assertEqual(corpo["emails_cadastro"], ["cadastro@alfa.com"])
