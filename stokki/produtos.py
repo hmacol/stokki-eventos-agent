@@ -8,8 +8,11 @@ sessão de cookies dos pedidos. Descoberto em 04/09/2026:
   GET /pt-br/administrator/client/product/table   — DataTables (formato
       legado: aaData / iTotalRecords), params draw/start/length + client,
       state (""|Active|Inactive|...), input_search. ~1.800 linhas.
-      A célula `sku` é HTML com nome, cliente, SKU, GTIN/EAN e categoria;
-      `checkbox` traz o id do produto; `updated` a última atualização.
+      Desde 22/09/2026 as células vêm como JSON (antes eram HTML):
+      `selection.id` é o id do produto; `product.text` o nome e
+      `product.details[]` (label/value) depositante, categoria, SKU e
+      GTIN/EAN; `product.markers` traz {key: "lot", on}; `state.key`
+      Active/Inactive; `updated` {text: dd/mm/aaaa, sub: hh:mm}.
   GET /pt-br/administrator/client/product/show/{id} — perfil completo
       (unidade, "Lote: Sim/Não", GTIN/EAN, DUN 1 + Quantidade 1 da caixa,
       pesos). É uma página HTML: rótulo numa linha, valor na seguinte.
@@ -52,48 +55,29 @@ def _data_br_para_iso(texto: str) -> str | None:
 
 
 def _parsear_linha(row: dict) -> dict | None:
-    cb = BeautifulSoup(row.get("checkbox", ""), "html.parser").find("input")
-    if not cb or not cb.get("value"):
+    stokki_id = (row.get("selection") or {}).get("id")
+    if not stokki_id:
         return None
-    stokki_id = int(cb["value"])
-    sku_soup = BeautifulSoup(row.get("sku", ""), "html.parser")
-    strong = sku_soup.find("strong")
-    descricao = " ".join(strong.get_text(" ", strip=True).split()) if strong else ""
-    campos = {}
-    for span in sku_soup.select("span"):
-        small = span.find("small", class_="text-muted", recursive=False)
-        if not small:
-            continue
-        rotulo = small.get_text(strip=True).upper()
-        copia = span.find("a", class_="btn_copy_text")
-        if copia and copia.get("data-text"):
-            valor = copia["data-text"].strip()
-        else:
-            interno = span.find("span", attrs={"title": True})
-            if interno:
-                valor = interno["title"].strip()
-            else:
-                valor = " ".join(small.next_sibling.split()) if isinstance(small.next_sibling, str) else ""
-                valor = valor.replace("\xa0", " ").strip()
-        campos[rotulo] = valor
-    # ícone "possui lote": presente sempre, invisível (#ffffff00) quando não tem
-    controla_lote = 0
-    for a in sku_soup.find_all("a", attrs={"title": True}):
-        if "possui lote" in a["title"].lower() and "ffffff00" not in (a.get("style") or "").replace(" ", "").lower():
-            controla_lote = 1
-    estado = _texto(row.get("state", ""))
+    stokki_id = int(stokki_id)
+    produto = row.get("product") or {}
+    descricao = " ".join(str(produto.get("text") or "").split())
+    campos = {str(d.get("label") or "").upper(): str(d.get("copy") or d.get("value") or "").strip()
+              for d in produto.get("details") or []}
+    controla_lote = int(any(m.get("key") == "lot" and m.get("on") for m in produto.get("markers") or []))
+    estado = row.get("state") or {}
+    atualizado = row.get("updated") or {}
     return {
         "stokki_id": stokki_id,
         "descricao": descricao or campos.get("SKU") or f"Produto #{stokki_id}",
-        "embarcador": campos.get("CLIENTE") or None,
+        "embarcador": campos.get("DEPOSITANTE") or campos.get("CLIENTE") or None,
         "sku": campos.get("SKU") or None,
         "ean": campos.get("GTIN/EAN") or None,
         "categoria": campos.get("CATEGORIA") or None,
         "controla_lote": controla_lote,
-        "ativo": 1 if estado.lower().startswith("ativo") else 0,
-        "estado_stokki": estado,
+        "ativo": 1 if estado.get("key") == "Active" else 0,
+        "estado_stokki": estado.get("label") or "",
         "origem_stokki": _texto(row.get("origin", "")),
-        "stokki_atualizado_em": _data_br_para_iso(_texto(row.get("updated", ""))),
+        "stokki_atualizado_em": _data_br_para_iso(f"{atualizado.get('text') or ''} {atualizado.get('sub') or ''}"),
     }
 
 
