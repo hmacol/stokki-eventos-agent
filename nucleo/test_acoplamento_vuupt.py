@@ -50,6 +50,7 @@ PERMITIDOS = {
     "nucleo/relatorios_financeiro.py",      # 16/09: --atualizar-cadastros puxa usuario/veiculo (nome e placa)
     "nucleo/sincronizar_servicos_vuupt.py",  # 16/09: espelha o pedido fora da rota (pool, retirada, reentrega)
     "nucleo/sincronizar_vuupt.py",          # a ponte Vuupt -> núcleo (morre na virada)
+    "notificacao_entregas/vuupt_entregas.py",  # 17/09: só lê concluídos + canhoto; peça isolada que troca por nucleo_* na saída
     "painel_agentes/expedicao.py",
     "painel_agentes/laboratorio_rotas.py",
     "painel_agentes/mapa_rotas.py",
