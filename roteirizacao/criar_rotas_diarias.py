@@ -118,6 +118,7 @@ from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classi
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo, contar_motoristas_elegiveis
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
+from regras.prioridade_ofertas import carregar_historico_justica
 
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
@@ -567,6 +568,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                                # tempo mais curto que o do job noturno (fix final, 20/09)
                                polimento_tempo_maximo_s=POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S)
 
+    historico = carregar_historico_justica(data_alvo, config)
     indice = indice_inicial
     rascunhos: list[dict] = []
     for plano in planos:
@@ -577,9 +579,11 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
             zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
             tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+            horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
             motorista = selecionar_motorista_equitativo(
                 sublote, data_alvo, catalogo_motoristas.motoristas, contagem, gmaps_key,
                 ajustes_disponibilidade=ajustes_disponibilidade,
+                **historico.parametros_alocacao(horas_sublote),
             )
             if motorista:
                 contagem[motorista.agent_id] = contagem.get(motorista.agent_id, 0) + 1
@@ -587,7 +591,6 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
                 if coords_base else None
             )
-            horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
             rascunhos.append({
                 "nome": nome_rota,
                 "particao": rotulo_carga(sublote),
@@ -776,6 +779,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         indice_global = 1
         modelos_vencedores: dict[str, str] = {}
         rascunhos_acumulados: list[dict] = []
+        historico = carregar_historico_justica(data_alvo, config)
 
         def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]]):
             nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_sem_motorista
@@ -788,16 +792,23 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             # alocacao_motoristas.py -- caso real 20/08, Zona Sul). Ordenação
             # estável: sublotes com a mesma contagem mantêm a ordem original
             # (a de saída do modelo vencedor, vizinho mais próximo desde
-            # 18/09).
+            # 18/09). Entre sublotes igualmente escassos, o mais LONGO
+            # primeiro (22/09): senão a rota pesada é processada por último
+            # e sobra só quem já pegou muitas longas na semana.
+            horas_por_sublote = {id(sub): estimar_tempo_rota(sub, gmaps_key, coords_base) for sub in sublotes_do_dia}
             sublotes_do_dia = sorted(
                 sublotes_do_dia,
-                key=lambda sub: contar_motoristas_elegiveis(
-                    sub, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
-                    ajustes_disponibilidade=ajustes_disponibilidade,
+                key=lambda sub: (
+                    contar_motoristas_elegiveis(
+                        sub, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
+                        ajustes_disponibilidade=ajustes_disponibilidade,
+                    ),
+                    -horas_por_sublote[id(sub)],
                 ),
             )
 
             for sublote in sublotes_do_dia:
+                horas_sublote = horas_por_sublote[id(sublote)]
                 nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice_global}"
                 indice_global += 1
 
@@ -817,6 +828,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 motorista = selecionar_motorista_equitativo(
                     sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
                     ajustes_disponibilidade=ajustes_disponibilidade,
+                    **historico.parametros_alocacao(horas_sublote),
                 )
                 agent_id = motorista.agent_id if motorista else None
                 vehicle_id = motorista.vehicle_id if motorista else None
@@ -828,7 +840,6 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
                         if coords_base else None
                     )
-                    horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
                     rascunhos_acumulados.append({
                         "nome": nome_rota,
                         "particao": rotulo_carga(sublote),

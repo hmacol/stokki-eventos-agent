@@ -168,6 +168,46 @@ def contar_rotas_longas_recentes(data_alvo: date, dias: int, limiar_horas: float
     return _contar_rotas(data_alvo, dias, conn, limiar_horas=limiar_horas)
 
 
+ROTA_LONGA_HORAS_PADRAO = 7.0
+
+
+@dataclass(frozen=True)
+class HistoricoJustica:
+    """Histórico que a alocação automática usa pra rodar os motoristas
+    (Hugo, 22/09) -- carregado UMA vez por execução, nunca por rota
+    (cada contagem varre nucleo_rotas e rascunhos_rota)."""
+    rota_longa_horas: float
+    rotas_7d: dict[int, int]
+    rotas_30d: dict[int, int]
+    longas_7d: dict[int, int]
+
+    def parametros_alocacao(self, horas_rota: float) -> dict:
+        """kwargs de selecionar_motorista_equitativo pra uma rota com
+        `horas_rota` estimadas."""
+        return {"rotas_7d": self.rotas_7d, "rotas_30d": self.rotas_30d, "longas_7d": self.longas_7d,
+                "rota_longa": horas_rota > self.rota_longa_horas}
+
+
+def carregar_historico_justica(data_alvo: date, config: dict | None,
+                               conn: sqlite3.Connection | None = None) -> HistoricoJustica:
+    """Janelas = as MESMAS do marketplace (marketplace_rotas.janela_*_dias)
+    de propósito: os dois caminhos que decidem quem roda contam do mesmo
+    jeito. Limiar de rota longa em roteirizacao.rota_longa_horas (padrão
+    7h)."""
+    janelas = carregar_config(config)
+    try:
+        limiar = float(((config or {}).get("roteirizacao") or {}).get("rota_longa_horas", ROTA_LONGA_HORAS_PADRAO))
+    except (TypeError, ValueError):
+        limiar = ROTA_LONGA_HORAS_PADRAO
+    curta, longa = janelas["janela_curta_dias"], janelas["janela_longa_dias"]
+    return HistoricoJustica(
+        rota_longa_horas=limiar,
+        rotas_7d=contar_rotas_recentes(data_alvo, curta, conn),
+        rotas_30d=contar_rotas_recentes(data_alvo, longa, conn),
+        longas_7d=contar_rotas_longas_recentes(data_alvo, curta, limiar, conn),
+    )
+
+
 def _contar_rotas(data_alvo: date, dias: int, conn: sqlite3.Connection | None,
                   limiar_horas: float | None = None) -> dict[int, int]:
     inicio = (data_alvo - timedelta(days=dias)).isoformat()

@@ -55,6 +55,7 @@ from regras.disponibilidade_motoristas import (
 )
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga, TIPOS_CARGA_FRIA
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
+from regras.prioridade_ofertas import carregar_historico_justica
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
@@ -1268,6 +1269,8 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
     for r in rascunhos:
         if r.get("agent_id"):
             contagem_alocacoes_dia[r["agent_id"]] = contagem_alocacoes_dia.get(r["agent_id"], 0) + 1
+    # rodízio justo (Hugo, 22/09) -- mesmo histórico do job noturno
+    historico = carregar_historico_justica(data_alvo, config)
 
     alocados: list[dict] = []
     sem_elegivel: list[str] = []
@@ -1290,9 +1293,20 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         # cairia no fallback de 1 caixa por parada e classificaria
         # errado o tipo de veículo necessário).
         sublote = [{"address": p["endereco"], "dimension_3": p["volume_caixas"]} for p in r["paradas"]]
+        horas_rota = r.get("horas_estimadas")
+        if horas_rota is None:
+            # rota montada à mão na tela nasce sem horas gravadas -- mesmo
+            # estimador de _badges_trava, com as coordenadas das paradas
+            horas_rota = estimar_tempo_rota(
+                [{"_nivel_dificuldade": p["nivel_dificuldade"] or 1,
+                  "latitude": p["latitude"], "longitude": p["longitude"]} for p in r["paradas"]],
+                coords_base=_garantir_coords_base(),
+                coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+            )
         motorista = selecionar_motorista_equitativo(
             sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
             ajustes_disponibilidade=ajustes_disponibilidade,
+            **historico.parametros_alocacao(horas_rota),
         )
         if not motorista:
             sem_elegivel.append(r["nome"])

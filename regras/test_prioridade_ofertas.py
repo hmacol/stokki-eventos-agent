@@ -205,6 +205,40 @@ class TestContarRotasLongasRecentes(unittest.TestCase):
         self.assertEqual(prioridade_ofertas.contar_rotas_longas_recentes(date(2026, 9, 22), 7, 7.0, conn), {})
 
 
+class TestHistoricoJustica(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, data_rota TEXT, agent_id INTEGER,
+                                       status TEXT, rascunho_id INTEGER, vuupt_route_id INTEGER,
+                                       horas_estimadas REAL);
+            INSERT INTO nucleo_rotas (data_rota, agent_id, status, horas_estimadas) VALUES
+                ('2026-09-21', 1, 'CONCLUIDA', 8.0),
+                ('2026-09-20', 1, 'CONCLUIDA', 5.0),
+                ('2026-09-01', 2, 'CONCLUIDA', 9.0);
+        """)
+        self.addCleanup(self.conn.close)
+
+    def test_carrega_as_tres_contagens_com_as_janelas_do_marketplace(self):
+        h = prioridade_ofertas.carregar_historico_justica(date(2026, 9, 22), {}, self.conn)
+        self.assertEqual(h.rota_longa_horas, 7.0)
+        self.assertEqual(h.rotas_7d, {1: 2})
+        self.assertEqual(h.rotas_30d, {1: 2, 2: 1})
+        self.assertEqual(h.longas_7d, {1: 1})
+
+    def test_limiar_vem_do_config(self):
+        h = prioridade_ofertas.carregar_historico_justica(
+            date(2026, 9, 22), {"roteirizacao": {"rota_longa_horas": 4.5}}, self.conn)
+        self.assertEqual(h.rota_longa_horas, 4.5)
+        self.assertEqual(h.longas_7d, {1: 2})
+
+    def test_parametros_alocacao_decide_rota_longa(self):
+        h = prioridade_ofertas.carregar_historico_justica(date(2026, 9, 22), {}, self.conn)
+        self.assertTrue(h.parametros_alocacao(7.5)["rota_longa"])
+        self.assertFalse(h.parametros_alocacao(7.0)["rota_longa"])
+        self.assertEqual(h.parametros_alocacao(3.0)["rotas_7d"], {1: 2})
+
+
 class TestFilaDeAvisos(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
