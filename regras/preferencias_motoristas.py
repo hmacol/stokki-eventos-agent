@@ -148,7 +148,7 @@ def _parse_dias_disponiveis(valor) -> list[int]:
     não reconhecido é ignorado (log de aviso), não quebra o parse dos
     demais dias da mesma linha."""
     dias = []
-    for pedaco in re.split(r"[,;/]", str(valor or "")):
+    for pedaco in re.split(r"[,;/]", _parse_texto_numerico(valor) or ""):
         nome = re.sub(r"[^A-Z]", "", _normalizar_texto(pedaco))
         if not nome:
             continue
@@ -166,7 +166,7 @@ def _parse_zonas_preferidas(valor) -> list[str]:
     Não valida contra a lista de zonas conhecidas aqui (evita
     acoplamento circular com zonas_sp.py); zona desconhecida só nunca
     vai bater com nenhuma rota classificada, sem quebrar o carregamento."""
-    return [z.strip().upper() for z in re.split(r"[,;]", str(valor or "")) if z.strip()]
+    return [z.strip().upper() for z in re.split(r"[,;]", _parse_texto_numerico(valor) or "") if z.strip()]
 
 
 def _parse_int_opcional(valor) -> int | None:
@@ -228,7 +228,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
             f"tratado como sem CPF cadastrado (não aparece na identificação por CPF)."
         )
 
-    tipo_veiculo_bruto = registro.get("TIPO_VEICULO")
+    tipo_veiculo_bruto = _parse_texto_numerico(registro.get("TIPO_VEICULO"))
     codigo_tipo_veiculo = re.sub(r"[^A-Z0-9]", "_", _normalizar_texto(tipo_veiculo_bruto)).strip("_") or None
     tipo_veiculo = tipo_por_codigo(codigo_tipo_veiculo)
     if codigo_tipo_veiculo and tipo_veiculo is None:

@@ -74,5 +74,22 @@ class TestTipoVeiculoPadraoFiorino(unittest.TestCase):
         )
 
 
+class TestCelulaVaziaNaoViraNan(unittest.TestCase):
+    """Celula vazia do Excel chega como NaN e str() virava "nan": aviso
+    de TIPO_VEICULO 'nan' e de dia 'nan' a cada carga da planilha, e uma
+    zona fantasma "NAN" (Hugo, 23/09)."""
+
+    def test_nan_nao_gera_aviso_nem_zona(self):
+        with self.assertNoLogs("regras.preferencias_motoristas", level="WARNING"):
+            m = _construir_motorista({
+                "AGENT_ID_VUUPT": 1, "NOME_MOTORISTA": "Virtual", "ATIVO": "SIM",
+                "TIPO_VEICULO": float("nan"), "DIAS_DISPONIVEIS": float("nan"),
+                "ZONAS_PREFERIDAS": float("nan"),
+            })
+        self.assertEqual(m.tipo_veiculo, "FIORINO")
+        self.assertEqual(m.dias_disponiveis, [])
+        self.assertEqual(m.zonas_preferidas, [])
+
+
 if __name__ == "__main__":
     unittest.main()
