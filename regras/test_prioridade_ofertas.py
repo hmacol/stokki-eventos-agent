@@ -124,6 +124,87 @@ class TestContarRotasRecentes(unittest.TestCase):
         self.assertEqual(contar_rotas_recentes(date(2026, 9, 2), 7, sqlite3.connect(":memory:")), {})
 
 
+class TestContarRotasLongasRecentes(unittest.TestCase):
+    """Rodizio de rotas longas (Hugo, 22/09): quem pegou rota pesada na
+    semana nao pega a proxima. Longa = acima do limiar (7h por padrao)."""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, data_rota TEXT, agent_id INTEGER,
+                                       status TEXT, rascunho_id INTEGER, vuupt_route_id INTEGER,
+                                       horas_estimadas REAL);
+            CREATE TABLE rascunhos_rota (id INTEGER PRIMARY KEY, data_alvo TEXT, agent_id INTEGER,
+                                         status TEXT, vuupt_route_id INTEGER, horas_estimadas REAL);
+        """)
+        self.addCleanup(self.conn.close)
+
+    def _rota(self, agent_id, dias_atras, horas, status="CONCLUIDA"):
+        data = (date(2026, 9, 22) - timedelta(days=dias_atras)).isoformat()
+        self.conn.execute(
+            "INSERT INTO nucleo_rotas (data_rota, agent_id, status, horas_estimadas) VALUES (?,?,?,?)",
+            (data, agent_id, status, horas),
+        )
+
+    def _contar(self, dias=7, limiar=7.0):
+        return prioridade_ofertas.contar_rotas_longas_recentes(date(2026, 9, 22), dias, limiar, self.conn)
+
+    def test_conta_so_acima_do_limiar(self):
+        self._rota(1, 1, 8.5)
+        self._rota(1, 2, 6.0)
+        self._rota(2, 1, 7.0)   # exatamente no limiar nao conta
+        contagem = self._contar()
+        self.assertEqual(contagem.get(1), 1)
+        self.assertIsNone(contagem.get(2))
+
+    def test_ignora_cancelada(self):
+        self._rota(1, 1, 9.0, status="CANCELADA")
+        self.assertEqual(self._contar(), {})
+
+    def test_ignora_rota_sem_horas_gravadas(self):
+        self._rota(1, 1, None)
+        self.assertEqual(self._contar(), {})
+
+    def test_respeita_a_janela(self):
+        self._rota(1, 3, 8.0)
+        self._rota(1, 20, 8.0)
+        self.assertEqual(self._contar(dias=7).get(1), 1)
+        self.assertEqual(self._contar(dias=30).get(1), 2)
+
+    def test_nao_conta_duas_vezes_a_mesma_rota(self):
+        # Mesma rota nas duas tabelas (rascunho que virou rota na Vuupt).
+        self.conn.execute(
+            "INSERT INTO nucleo_rotas (data_rota, agent_id, status, rascunho_id, horas_estimadas) "
+            "VALUES ('2026-09-21', 1, 'CONCLUIDA', 55, 8.0)"
+        )
+        self.conn.execute(
+            "INSERT INTO rascunhos_rota (id, data_alvo, agent_id, status, horas_estimadas) "
+            "VALUES (55, '2026-09-21', 1, 'ENVIADO', 8.0)"
+        )
+        self.assertEqual(self._contar().get(1), 1)
+
+    def test_conta_rascunho_que_ainda_nao_virou_rota(self):
+        self.conn.execute(
+            "INSERT INTO rascunhos_rota (id, data_alvo, agent_id, status, horas_estimadas) "
+            "VALUES (77, '2026-09-21', 3, 'RASCUNHO', 8.0)"
+        )
+        self.assertEqual(self._contar().get(3), 1)
+
+    def test_banco_sem_a_coluna_nao_quebra(self):
+        # Primeira noite apos o deploy: o job pode contar antes de qualquer
+        # migracao criar horas_estimadas. Tem que devolver vazio, nao
+        # derrubar a roteirizacao.
+        conn = sqlite3.connect(":memory:")
+        conn.executescript("""
+            CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, data_rota TEXT, agent_id INTEGER,
+                                       rascunho_id INTEGER, vuupt_route_id INTEGER, status TEXT);
+            CREATE TABLE rascunhos_rota (id INTEGER PRIMARY KEY, data_alvo TEXT, agent_id INTEGER,
+                                         vuupt_route_id INTEGER, status TEXT);
+            INSERT INTO nucleo_rotas (data_rota, agent_id, status) VALUES ('2026-09-21', 1, 'CONCLUIDA');
+        """)
+        self.assertEqual(prioridade_ofertas.contar_rotas_longas_recentes(date(2026, 9, 22), 7, 7.0, conn), {})
+
+
 class TestFilaDeAvisos(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

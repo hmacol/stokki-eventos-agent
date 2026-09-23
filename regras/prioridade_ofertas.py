@@ -143,10 +143,33 @@ def _tem_tabela(conn: sqlite3.Connection, nome: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (nome,)).fetchone() is not None
 
 
+def _tem_coluna(conn: sqlite3.Connection, tabela: str, coluna: str) -> bool:
+    return any(row[1] == coluna for row in conn.execute(f"PRAGMA table_info({tabela})"))
+
+
 def contar_rotas_recentes(data_alvo: date, dias: int, conn: sqlite3.Connection | None = None) -> dict[int, int]:
     """{agent_id: quantidade de rotas} na janela [data_alvo - dias, data_alvo],
     inclusive o próprio dia (ver docstring do módulo). Abre a conexão em
     dados/dados.db se `conn` não vier (teste passa a própria)."""
+    return _contar_rotas(data_alvo, dias, conn)
+
+
+def contar_rotas_longas_recentes(data_alvo: date, dias: int, limiar_horas: float,
+                                 conn: sqlite3.Connection | None = None) -> dict[int, int]:
+    """{agent_id: quantidade de rotas LONGAS} na mesma janela, união e
+    dedup de contar_rotas_recentes. Longa = `horas_estimadas` acima de
+    `limiar_horas` (Hugo, 22/09: quem pegou rota pesada na semana não
+    pega a próxima -- ver roteirizacao/alocacao_motoristas.py).
+
+    Rota sem `horas_estimadas` gravada NÃO conta: a coluna só existe
+    desde 22/09, então o critério entra em vigor conforme o histórico
+    acumula. Tabela sem a coluna (migração ainda não rodou) conta como
+    nenhuma rota longa, em vez de derrubar a roteirização."""
+    return _contar_rotas(data_alvo, dias, conn, limiar_horas=limiar_horas)
+
+
+def _contar_rotas(data_alvo: date, dias: int, conn: sqlite3.Connection | None,
+                  limiar_horas: float | None = None) -> dict[int, int]:
     inicio = (data_alvo - timedelta(days=dias)).isoformat()
     fim = data_alvo.isoformat()
     fechar = conn is None
@@ -158,12 +181,19 @@ def contar_rotas_recentes(data_alvo: date, dias: int, conn: sqlite3.Connection |
         contagem: dict[int, int] = {}
         vistos_rascunho: set[int] = set()
         vistos_vuupt: set[int] = set()
+        filtro_horas, params_horas = ("", ()) if limiar_horas is None else (
+            " AND horas_estimadas IS NOT NULL AND horas_estimadas > ?", (limiar_horas,))
 
-        if _tem_tabela(conn, "nucleo_rotas"):
+        def _consultavel(tabela: str) -> bool:
+            return _tem_tabela(conn, tabela) and (
+                limiar_horas is None or _tem_coluna(conn, tabela, "horas_estimadas"))
+
+        if _consultavel("nucleo_rotas"):
             for agent_id, rascunho_id, vuupt_route_id in conn.execute(
                 "SELECT agent_id, rascunho_id, vuupt_route_id FROM nucleo_rotas "
-                "WHERE agent_id IS NOT NULL AND status != 'CANCELADA' AND data_rota BETWEEN ? AND ?",
-                (inicio, fim),
+                "WHERE agent_id IS NOT NULL AND status != 'CANCELADA' AND data_rota BETWEEN ? AND ?"
+                + filtro_horas,
+                (inicio, fim, *params_horas),
             ):
                 contagem[agent_id] = contagem.get(agent_id, 0) + 1
                 if rascunho_id is not None:
@@ -171,12 +201,12 @@ def contar_rotas_recentes(data_alvo: date, dias: int, conn: sqlite3.Connection |
                 if vuupt_route_id is not None:
                     vistos_vuupt.add(vuupt_route_id)
 
-        if _tem_tabela(conn, "rascunhos_rota"):
+        if _consultavel("rascunhos_rota"):
             for rid, agent_id, vuupt_route_id in conn.execute(
                 "SELECT id, agent_id, vuupt_route_id FROM rascunhos_rota "
                 "WHERE agent_id IS NOT NULL AND status IN ('RASCUNHO', 'OFERTADA', 'ENVIADO') "
-                "AND data_alvo BETWEEN ? AND ?",
-                (inicio, fim),
+                "AND data_alvo BETWEEN ? AND ?" + filtro_horas,
+                (inicio, fim, *params_horas),
             ):
                 if rid in vistos_rascunho or (vuupt_route_id is not None and vuupt_route_id in vistos_vuupt):
                     continue
