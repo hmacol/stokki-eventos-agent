@@ -117,6 +117,38 @@ RESPOSTAS_TRATATIVA = [
     "Outro",
 ]
 
+
+# Versão da tela da torre (17/09). A torre fica aberta o dia inteiro e
+# só refaz o fetch dos dados -- o HTML/JS nunca era recarregado, então
+# uma aba aberta antes de um deploy ficava com o JS antigo pra sempre
+# (caso real: deploy do dropdown do "Tratar" às 22:30 de 16/09 e, às
+# 22:47, tratativas ainda chegando com texto livre do prompt() antigo).
+# A versão vai no payload de buscar_dados_torre; a tela guarda a
+# primeira que viu e se recarrega quando muda. Calculada UMA vez, na
+# subida do processo: é o que este processo de fato serve (o Flask
+# também cacheia o template até o restart).
+_ARQUIVOS_DA_TELA = [
+    Path(__file__),
+    Path(__file__).parent / "templates" / "torre_controle.html",
+    Path(__file__).parent / "templates" / "torre_mobile.html",
+    Path(__file__).parent / "templates" / "base.html",
+]
+
+
+def _calcular_versao_tela(arquivos) -> str:
+    """mtime mais recente entre os arquivos da tela (arquivo ausente é
+    ignorado). Muda a cada deploy que toca em algum deles."""
+    mtimes = []
+    for arquivo in arquivos:
+        try:
+            mtimes.append(int(Path(arquivo).stat().st_mtime))
+        except OSError:
+            continue
+    return str(max(mtimes, default=0))
+
+
+VERSAO_TELA = _calcular_versao_tela(_ARQUIVOS_DA_TELA)
+
 # Rótulos do funil outbound da Stokki, na ordem do fluxo (o que ainda
 # não chegou na VUUPT). Chaves confirmadas ao vivo em 12/08.
 FUNIL_STOKKI = [
@@ -906,7 +938,14 @@ def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> l
     contagem por completed_at (leve, não traz registros) -- mesmo campo
     já usado em expedir_pedidos.py. Não usa scheduled_start como o
     relatorio_operacional: só pedido com agendamento tem esse campo
-    (ver _montar_pedidos_dia)."""
+    (ver _montar_pedidos_dia).
+
+    Cada dia sai com total, sucesso e falha (Hugo, 16/09: a coluna do
+    gráfico é dividida em verde/vermelho). A falha vem de uma 2ª
+    contagem com filtro status_done=failed (provado 16/09 que a API
+    aceita o filtro: 197 = 186 sucesso + 11 falha em 15/09); sucesso =
+    total - falha, pra ficar igual ao critério de _estatisticas_periodo
+    (done que não é failed conta como entregue)."""
     resultado = []
     dia = ultimo_dia
     while len(resultado) < dias:
@@ -917,10 +956,15 @@ def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> l
             ]
             try:
                 total = vuupt.contar_servicos(filtro)
+                falha = vuupt.contar_servicos(filtro + [{"field": "status_done", "operator": "eq", "value": "failed"}])
             except Exception as e:
                 logger.error(f"[torre] Falha ao contar tendência do dia {dia}: {e}")
-                total = 0
-            resultado.append({"rotulo": dia.strftime("%d/%m"), "data": dia.isoformat(), "total": total})
+                total = falha = 0
+            falha = min(falha, total)
+            resultado.append({
+                "rotulo": dia.strftime("%d/%m"), "data": dia.isoformat(),
+                "total": total, "sucesso": total - falha, "falha": falha,
+            })
         dia -= timedelta(days=1)
     resultado.reverse()
     return resultado
@@ -1580,6 +1624,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "excecoes": excecoes,
         "tratadas": tratadas,
         "respostas_tratativa": RESPOSTAS_TRATATIVA,
+        "versao_tela": VERSAO_TELA,
         "base": base,
     }
 

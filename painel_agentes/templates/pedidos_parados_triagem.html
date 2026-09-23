@@ -124,6 +124,13 @@ const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
 const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue"];
 // Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
 const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota", "Entregue": "já foi entregue" };
+// Classificações que já encerram o caso pro filtro "Mostrar só não
+// tratados" (decisão do Hugo, 22/09), independente de acao_status --
+// classificar() sempre grava 'pendente' e só uma AÇÃO (duplicar, criar
+// Demanda, notificar) promove pra 'concluida', então sem isto essas
+// linhas apareciam como "✓ revisado" e mesmo assim não sumiam do filtro.
+// Cliente Retira entra mesmo sem a notificação ter sido enviada.
+const CONTAM_COMO_TRATADAS = ["Cliente Retira", "Em Rota", "Agendado", "Entregue"];
 const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
 // Área de destino de cada classificação que cria Demanda -- só pra
 // mostrar no botão/confirmação; a fonte de verdade é MOLDE_TRATATIVA em
@@ -178,10 +185,18 @@ function linhaPassaFiltros(p) {
   return true;
 }
 
+// Revisão urgente (Entregue que voltou a ser registrado como parado) NUNCA
+// conta como tratado -- é justamente a linha que precisa de atenção, e a
+// tabela já dá precedência a ela sobre o "✓ revisado".
+function estaTratado(p) {
+  if (p.revisao_urgente) return false;
+  return p.acao_status === "concluida" || CONTAM_COMO_TRATADAS.includes(p.classificacao);
+}
+
 function linhasFiltradas() {
   const soPendentes = document.getElementById("so-pendentes").checked;
   return pedidosAtuais
-    .filter(p => !soPendentes || p.acao_status !== "concluida")
+    .filter(p => !soPendentes || !estaTratado(p))
     .filter(linhaPassaFiltros);
 }
 
@@ -206,7 +221,14 @@ function renderTabela() {
     if (p.acao_status === "concluida") {
       acaoHtml = `<span class="status-ok">✓ ${esc(p.acao_detalhe || "concluído")}</span>`;
     } else if (p.acao_status === "erro") {
-      acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>`;
+      // Cliente Retira com e-mail falhado precisa de um caminho de volta: a
+      // linha conta como tratada no filtro do topo (CONTAM_COMO_TRATADAS),
+      // então sem este botão ela some da lista e ninguém reenvia.
+      // notificarClienteRetira() já pede confirmação antes de disparar.
+      const retentar = PODE_EDITAR && p.classificacao === "Cliente Retira"
+        ? ` <button class="botao-acao botao-notificar" onclick="notificarClienteRetira('${p.order_number}')">Tentar de novo</button>`
+        : "";
+      acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>${retentar}`;
     } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
       acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
     } else if (PODE_EDITAR && p.classificacao === "Cliente Retira") {

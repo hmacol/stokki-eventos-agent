@@ -654,6 +654,37 @@ def _avisar_erros(config: dict, cfg: dict, envios: list[dict], cabecalho: str) -
 
 # ── Conciliação: descobrir o PS-xxxxx depois ───────────────────────────────────
 
+def _codigo_em_documentos(conn, envio: dict) -> str | None:
+    """Pedido do envio olhando as DANFEs já processadas.
+
+    O número da NF NÃO é único: ele se repete entre embarcadores (no banco
+    de 08/26, 7 de 1209 NFs apontam pra mais de um pedido -- a 245699 pra
+    11). documentos_processados não guarda o emitente, só
+    cnpj_contraparte, que é o DESTINATÁRIO da NF (ver
+    documentos_pedido/fingerprint_documentos.py) -- serve de desempate,
+    mas não dá pra exigir: 23% das linhas de NF têm contraparte vazia.
+    Então: desempata pelo destinatário quando ele resolve, aceita a NF
+    sozinha quando ela aponta pra um pedido só, e desiste quando fica
+    ambígua (aí a busca em pedidos_historico, que filtra por embarcador,
+    ainda pode responder; senão o próximo ciclo tenta de novo)."""
+    linhas = conn.execute(
+        "SELECT DISTINCT codigo_pedido, "
+        "REPLACE(REPLACE(REPLACE(COALESCE(cnpj_contraparte,''),'.',''),'/',''),'-','') AS dest "
+        "FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND numero_nf = ? "
+        "AND COALESCE(codigo_pedido,'') != ''", (envio["numero_nf"],)).fetchall()
+    if not linhas:
+        return None
+    dest = re.sub(r"\D", "", envio.get("destinatario_doc") or "")
+    candidatos = {r["codigo_pedido"] for r in linhas if dest and r["dest"] == dest}
+    if not candidatos:
+        candidatos = {r["codigo_pedido"] for r in linhas}
+    if len(candidatos) == 1:
+        return candidatos.pop()
+    logger.warning(f"envio {envio['id']}: NF {envio['numero_nf']} aponta pra {len(candidatos)} pedidos "
+                   f"({', '.join(sorted(candidatos))}) e o destinatário não desempata -- deixando sem código")
+    return None
+
+
 def reconciliar_codigos(conn) -> int:
     """Pedidos criados sem código: procura pelo número da NF nas tabelas
     que o pipeline já alimenta (documentos_processados, pedidos_historico).
@@ -666,10 +697,7 @@ def reconciliar_codigos(conn) -> int:
         e = dict(r)
         codigo = None
         try:
-            d = conn.execute("SELECT codigo_pedido FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND numero_nf = ? "
-                             "ORDER BY rowid DESC LIMIT 1", (e["numero_nf"],)).fetchone()
-            if d and d["codigo_pedido"]:
-                codigo = d["codigo_pedido"]
+            codigo = _codigo_em_documentos(conn, e)
         except Exception:
             pass
         if not codigo:

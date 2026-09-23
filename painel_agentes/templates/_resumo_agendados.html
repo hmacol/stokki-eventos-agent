@@ -8,7 +8,7 @@
    isso é um partial: mesmo markup nos dois caminhos. #}
 {% if resumo_agendados %}
 <div class="resumo-agendados">
-  <h3>Resumo dos pedidos agendados — {{ resumo_agendados | sum(attribute='total_pedidos') }} pedido(s) não finalizado(s)</h3>
+  <h2>Resumo dos pedidos agendados — {{ resumo_agendados | sum(attribute='total_pedidos') }} pedido(s) não finalizado(s)</h2>
   <div class="dias-agendados">
     {% for dia in resumo_agendados %}
     <a class="card-dia-agendado{% if dia.atrasado %} atrasado{% endif %}" href="{{ url_for('planejamento', data=dia.data_iso) }}"

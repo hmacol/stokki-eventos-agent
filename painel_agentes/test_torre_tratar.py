@@ -115,5 +115,33 @@ class TestRespostasTratativa(unittest.TestCase):
         self.assertEqual(len(respostas), len(set(respostas)))
 
 
+class TestVersaoTela(unittest.TestCase):
+    """Aba da torre aberta antes de um deploy ficava com o JS antigo pra
+    sempre (17/09: backend novo gravando 'Duplicado -> ...' e a aba velha
+    ainda no prompt() de texto livre). A tela compara a versao que veio
+    no payload com a primeira que viu e se recarrega quando muda."""
+
+    def test_versao_muda_quando_um_arquivo_da_tela_muda(self):
+        import os
+        with tempfile.TemporaryDirectory() as pasta:
+            a, b = Path(pasta) / "a.html", Path(pasta) / "b.py"
+            a.write_text("x"); b.write_text("y")
+            os.utime(a, (1000, 1000)); os.utime(b, (2000, 2000))
+            antes = torre_controle._calcular_versao_tela([a, b])
+            self.assertEqual(antes, torre_controle._calcular_versao_tela([a, b]))
+            os.utime(a, (3000, 3000))
+            self.assertNotEqual(antes, torre_controle._calcular_versao_tela([a, b]))
+
+    def test_arquivo_ausente_nao_quebra(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            versao = torre_controle._calcular_versao_tela([Path(pasta) / "nao_existe.html"])
+        self.assertIsInstance(versao, str)
+        self.assertTrue(versao)
+
+    def test_versao_do_processo_esta_definida(self):
+        self.assertIsInstance(torre_controle.VERSAO_TELA, str)
+        self.assertTrue(torre_controle.VERSAO_TELA)
+
+
 if __name__ == "__main__":
     unittest.main()

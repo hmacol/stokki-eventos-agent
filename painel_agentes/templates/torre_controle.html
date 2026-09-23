@@ -451,14 +451,26 @@
   details.tratadas .motivo { font-style: italic; }
 
   /* ── Faixa 5: tendência ── */
-  .tendencia { display: flex; align-items: flex-end; gap: 14px; height: 130px; padding-top: 18px; }
+  /* Coluna empilhada: sucesso (verde) embaixo, falha (vermelho) em cima,
+     com 2px de fundo entre os dois segmentos (Hugo, 16/09). O dia em
+     foco (data_alvo) fica a cores cheias; os outros, esmaecidos. */
+  .tendencia { display: flex; align-items: flex-end; gap: 14px; height: 150px; padding-top: 18px; }
   .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
-  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto-suave); }
+  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto-suave); line-height: 1.1; }
   .col-dia.destaque .valor-col { color: var(--acento); }
-  .col-dia .col { width: 100%; max-width: 24px; background: var(--enfase-fora); border-radius: 4px 4px 0 0; }
-  .col-dia.destaque .col { background: var(--st-rota); }
+  .col-dia .parcial { font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.1; }
+  .col-dia .parcial .ok { color: var(--st-sucesso); }
+  .col-dia .parcial .ruim { color: var(--st-falha); }
+  .col-dia .parcial .sep { color: var(--texto-suave); margin: 0 2px; }
+  .col-dia .col { width: 100%; max-width: 24px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; opacity: 0.55; }
+  .col-dia.destaque .col { opacity: 1; }
+  .col-dia .seg { width: 100%; border-radius: 2px; }
+  .col-dia .seg.sucesso { background: var(--st-sucesso); border-radius: 0 0 2px 2px; }
+  .col-dia .seg.falha { background: var(--st-falha); border-radius: 4px 4px 2px 2px; }
+  .col-dia .seg.sucesso:first-child { border-radius: 4px 4px 2px 2px; }
   .col-dia .rotulo-dia { font-size: 11px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
   .base-tendencia { border-top: 1px solid var(--borda); margin-top: 0; }
+  .legenda-tendencia { margin-bottom: 0; margin-top: 2px; }
 
   @media (max-width: 1100px) {
     .stepper { grid-template-columns: repeat(3, 1fr); }
@@ -514,6 +526,7 @@
 
     <div class="card">
       <h3>Entregas finalizadas — últimos 7 dias úteis</h3>
+      <div class="legenda legenda-tendencia" id="legenda-tendencia"></div>
       <div class="tendencia base-tendencia" id="tendencia"><div class="carregando">Carregando…</div></div>
     </div>
   </div>
@@ -1404,14 +1417,30 @@ async function notificarOcorrencia(id) {
 
 function renderTendencia(d) {
   const alvo = document.getElementById("tendencia");
-  if (!d.tendencia.length) { alvo.innerHTML = ""; return; }
+  const legenda = document.getElementById("legenda-tendencia");
+  if (!d.tendencia.length) { alvo.innerHTML = ""; legenda.innerHTML = ""; return; }
+  const ALTURA_MAX = 88;
   const maior = Math.max(...d.tendencia.map(t => t.total), 1);
+  const somaOk = d.tendencia.reduce((a, t) => a + (t.sucesso || 0), 0);
+  const somaRuim = d.tendencia.reduce((a, t) => a + (t.falha || 0), 0);
+  legenda.innerHTML = `
+    <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues <span class="qtd">${somaOk}</span></span>
+    <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Falhas <span class="qtd">${somaRuim}</span></span>`;
   alvo.innerHTML = d.tendencia.map(t => {
     const destaque = t.data === d.data_alvo_iso;
-    const altura = Math.max(3, Math.round(88 * t.total / maior));
-    return `<div class="col-dia ${destaque ? "destaque" : ""}" title="${esc(t.rotulo)}: ${t.total} pedido(s)">
+    const ok = t.sucesso || 0, ruim = t.falha || 0;
+    // Cada segmento escala pelo mesmo maior; o mínimo de 3px só vale
+    // pra segmento com valor (zero não ganha risquinho).
+    const px = v => v ? Math.max(3, Math.round(ALTURA_MAX * v / maior)) : 0;
+    const altura = t.total ? Math.max(3, px(ok) + px(ruim) + (ok && ruim ? 2 : 0)) : 3;
+    return `<div class="col-dia ${destaque ? "destaque" : ""}" title="${esc(t.rotulo)}: ${t.total} finalizada(s) · ${ok} entregue(s) · ${ruim} falha(s)">
       <div class="valor-col">${t.total}</div>
-      <div class="col" style="height:${altura}px"></div>
+      <div class="parcial"><span class="ok">${ok}</span><span class="sep">·</span><span class="ruim">${ruim}</span></div>
+      <div class="col" style="height:${altura}px">
+        ${ruim ? `<div class="seg falha" style="height:${px(ruim)}px"></div>` : ""}
+        ${ok ? `<div class="seg sucesso" style="height:${px(ok)}px"></div>` : ""}
+        ${!t.total ? `<div class="seg" style="height:3px;background:var(--enfase-fora)"></div>` : ""}
+      </div>
       <div class="rotulo-dia">${esc(t.rotulo)}</div>
     </div>`;
   }).join("");
@@ -1544,6 +1573,22 @@ function renderSemaforo(d) {
 
 // ── Carga e ciclo de atualização ────────────────────────────────────
 
+// A torre fica aberta o dia inteiro e só refaz o fetch dos dados; sem
+// isto, uma aba aberta antes de um deploy ficava com o JS antigo pra
+// sempre (17/09: backend novo + aba velha ainda no prompt() do Tratar).
+// Guarda a primeira versão que viu e recarrega quando o backend passa a
+// mandar outra -- nunca com modal aberto (não derruba quem está no meio
+// de uma tratativa/exclusão; tenta de novo no próximo ciclo de 60 s).
+let versaoTelaCarregada = null;
+
+function conferirVersaoTela(d) {
+  if (!d || !d.versao_tela) return;
+  if (versaoTelaCarregada === null) { versaoTelaCarregada = d.versao_tela; return; }
+  if (d.versao_tela === versaoTelaCarregada) return;
+  if (document.querySelector(".modal-overlay-excluir.aberto")) return;
+  location.reload();
+}
+
 async function carregarDados() {
   const corpo = document.querySelector(".corpo");
   corpo.classList.add("atualizando");
@@ -1552,6 +1597,7 @@ async function carregarDados() {
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     dadosAtuais = d;
+    conferirVersaoTela(d);
     renderSemaforo(d);
     renderMapa(d);
     renderStepper(d.etapas);
