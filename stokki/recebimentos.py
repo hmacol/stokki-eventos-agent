@@ -242,12 +242,20 @@ def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: se
 
 
 def _itens_da_tabela_de_lote(tabela) -> list[dict]:
-    """Produto | Lote | Entrada | Fabricacao | Validade | Quantidade."""
+    """
+    Produto | Lote | Entrada | Fabricacao | Validade | Quantidade.
+
+    `linha` e a POSICAO REAL na tabela (nao a posicao na lista devolvida):
+    linha pulada por quantidade ilegivel nao pode renumerar as de baixo --
+    `linha` e a chave de reconciliacao (UNIQUE(recebimento_id, linha)).
+    """
     itens = []
+    posicao = 0
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
         if len(celulas) < 6:
             continue  # cabecalho ou linha de rodape
+        posicao += 1
         produto = celulas[0].get_text(" ", strip=True)
         lote = celulas[1].get_text(" ", strip=True)
         validade = celulas[4].get_text(" ", strip=True)
@@ -255,11 +263,11 @@ def _itens_da_tabela_de_lote(tabela) -> list[dict]:
         try:
             quantidade = float(bruta)
         except ValueError:
-            continue  # linha de total ou celula vazia
+            continue  # linha de total ou celula vazia -- nao renumera as de baixo
         m = RE_SKU_DESCRICAO.match(produto)
         sku, descricao = (m.group(1), m.group(2).strip()) if m else ("", produto)
         itens.append({
-            "linha": len(itens) + 1,
+            "linha": posicao,
             "sku": sku,
             "ean_linha": "",
             "descricao": descricao,
@@ -288,10 +296,12 @@ def _itens_da_tabela_sem_lote(tabela) -> list[dict]:
         return []
 
     itens = []
+    posicao = 0  # posicao real na tabela -- pular uma linha nao renumera as outras
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
         if len(celulas) <= max(indice.values()):
             continue  # cabecalho ou linha de rodape sem colunas suficientes
+        posicao += 1
         sku = celulas[indice["SKU"]].get_text(" ", strip=True)
         if not sku:
             continue  # linha de total ou celula vazia
@@ -302,7 +312,7 @@ def _itens_da_tabela_sem_lote(tabela) -> list[dict]:
         except ValueError:
             continue
         itens.append({
-            "linha": len(itens) + 1,
+            "linha": posicao,
             "sku": sku,
             "ean_linha": "",
             "descricao": descricao,

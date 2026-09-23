@@ -35,6 +35,22 @@ _HTML_QTD_COM_VIRGULA = """
 """
 
 
+# Primeira linha com a celula de quantidade ilegivel -- o parser pula a
+# linha de proposito, mas nao pode renumerar as de baixo (I3).
+_HTML_LINHA_ILEGIVEL = """
+<table class="table">
+  <thead>
+    <tr><th>Produto</th><th>EAN</th><th>Quantidade</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>SKU-A - PRODUTO A</td><td>111111111111</td><td>-</td></tr>
+    <tr><td>SKU-B - PRODUTO B</td><td>222222222222</td><td>3</td></tr>
+    <tr><td>SKU-C - PRODUTO C</td><td>333333333333</td><td>5</td></tr>
+  </tbody>
+</table>
+"""
+
+
 class TestExtrairItens(unittest.TestCase):
     def setUp(self):
         self.html = _FIXTURE.read_text(encoding="utf-8")
@@ -67,6 +83,17 @@ class TestExtrairItens(unittest.TestCase):
 
     def test_html_sem_aba_de_itens_devolve_lista_vazia(self):
         self.assertEqual(extrair_itens_do_pedido("<html><body>nada</body></html>"), [])
+
+    def test_linha_ilegivel_no_meio_nao_renumera_as_de_baixo(self):
+        # I3 da revisao final: `linha` e a chave de reconciliacao
+        # (UNIQUE(pedido_id, linha)) e entra no uuid deterministico da
+        # baixa. Se a quantidade da linha A for ilegivel (o parser pula a
+        # linha, de proposito), a linha B NAO pode virar a linha 1 -- a
+        # reserva ativa continuaria no lote de A e a tela mandaria o
+        # operador buscar o produto errado no lote errado.
+        itens = extrair_itens_do_pedido(_HTML_LINHA_ILEGIVEL)
+        self.assertEqual([i["sku"] for i in itens], ["SKU-B", "SKU-C"])
+        self.assertEqual([i["linha"] for i in itens], [2, 3])
 
 
 if __name__ == "__main__":

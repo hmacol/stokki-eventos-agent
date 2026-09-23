@@ -45,6 +45,21 @@ _LINHA_ARMADILHA = {
 }
 
 
+# Tabela de lote com a primeira linha de quantidade ilegivel (I3).
+_HTML_LOTE_LINHA_ILEGIVEL = """
+<table class="table">
+  <thead>
+    <tr><th>Produto</th><th>Lote</th><th>Entrada</th><th>Fabricação</th><th>Validade</th><th>Quantidade</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>SKU-A - PRODUTO A</td><td>L1</td><td>18/09/2026</td><td></td><td>18/02/2027</td><td>—</td></tr>
+    <tr><td>SKU-B - PRODUTO B</td><td>L2</td><td>18/09/2026</td><td></td><td>18/02/2027</td><td>3</td></tr>
+    <tr><td>SKU-C - PRODUTO C</td><td>L3</td><td>18/09/2026</td><td></td><td>18/02/2027</td><td>5</td></tr>
+  </tbody>
+</table>
+"""
+
+
 class TestExtrairItensDoRecebimento(unittest.TestCase):
     def setUp(self):
         self.html = _FIXTURE.read_text(encoding="utf-8")
@@ -80,6 +95,14 @@ class TestExtrairItensDoRecebimento(unittest.TestCase):
 
     def test_linha_e_1_based_e_estavel(self):
         self.assertEqual([i["linha"] for i in self.itens], [1, 2])
+
+    def test_linha_ilegivel_no_meio_nao_renumera_as_de_baixo(self):
+        # I3 da revisao final: linha pulada por quantidade ilegivel nao
+        # pode renumerar as de baixo -- `linha` e a chave de reconciliacao
+        # (UNIQUE(recebimento_id, linha)).
+        itens = extrair_itens_do_recebimento(_HTML_LOTE_LINHA_ILEGIVEL)
+        self.assertEqual([i["sku"] for i in itens], ["SKU-B", "SKU-C"])
+        self.assertEqual([i["linha"] for i in itens], [2, 3])
 
     def test_recebimento_sem_itens_devolve_lista_vazia(self):
         self.assertEqual(extrair_itens_do_recebimento("<html></html>"), [])

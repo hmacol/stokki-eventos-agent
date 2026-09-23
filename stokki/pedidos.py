@@ -527,6 +527,14 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
     preserva as linhas como estao, sem agrupar, e cada uma leva o numero
     da linha (1-based), que e a chave usada pela reserva.
 
+    O numero da linha e a POSICAO REAL na tabela, nao a posicao na lista
+    devolvida: linha com quantidade ilegivel e pulada (de proposito), mas
+    nao renumera as de baixo. `linha` e a chave de reconciliacao
+    (UNIQUE(pedido_id, linha)) e entra no uuid deterministico da baixa --
+    renumerar faria a reserva ativa de uma linha grudar no lote de outra,
+    sem que a reconciliacao percebesse (as quantidades continuam batendo)
+    e a tela mandaria o operador buscar o produto errado no lote errado.
+
     A quantidade aqui esta em EMBALAGEM, nao em UN.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -540,21 +548,23 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
         return []
 
     itens = []
+    posicao = 0  # posicao real da linha na tabela -- ver docstring
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
         if len(celulas) < 3:
             continue  # cabecalho ou linha de rodape
+        posicao += 1
         produto = celulas[0].get_text(" ", strip=True)
         ean = celulas[1].get_text(" ", strip=True)
         bruta = celulas[2].get_text(" ", strip=True).replace(".", "").replace(",", ".")
         try:
             quantidade = float(bruta)
         except ValueError:
-            continue  # linha de total ou celula vazia
+            continue  # linha de total ou celula vazia -- nao renumera as de baixo
         m = RE_SKU_DESCRICAO.match(produto)
         sku, descricao = (m.group(1), m.group(2).strip()) if m else ("", produto)
         itens.append({
-            "linha": len(itens) + 1,
+            "linha": posicao,
             "sku": sku,
             "ean_linha": re.sub(r"\D", "", ean),
             "descricao": descricao,
