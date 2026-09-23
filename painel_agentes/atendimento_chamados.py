@@ -134,9 +134,7 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
 
     # ── Tela ──────────────────────────────────────────────────────────────────
 
-    @app.route("/atendimento", endpoint="atendimento")
-    @requer_auth(niveis=NIVEIS)
-    def tela_atendimento():
+    def _boot() -> dict:
         config = _config()
         conn = ch.conectar()
         try:
@@ -168,7 +166,19 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
             }
         finally:
             conn.close()
-        return render_template("atendimento.html", boot=boot)
+        return boot
+
+    @app.route("/atendimento", endpoint="atendimento")
+    @requer_auth(niveis=NIVEIS)
+    def tela_atendimento():
+        return render_template("atendimento.html", boot=_boot())
+
+    @app.route("/atendimento/mobile", endpoint="atendimento_mobile")
+    @requer_auth(niveis=NIVEIS)
+    def tela_atendimento_mobile():
+        """Versão celular (23/09): fila, conversa e contexto em telas
+        empilhadas, nos mesmos /api/atendimento/* da tela desktop."""
+        return render_template("atendimento_mobile.html", boot=_boot(), endpoint_desktop="atendimento")
 
     # ── API ───────────────────────────────────────────────────────────────────
 
