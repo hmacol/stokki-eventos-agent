@@ -221,7 +221,14 @@ function renderTabela() {
     if (p.acao_status === "concluida") {
       acaoHtml = `<span class="status-ok">✓ ${esc(p.acao_detalhe || "concluído")}</span>`;
     } else if (p.acao_status === "erro") {
-      acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>`;
+      // Cliente Retira com e-mail falhado precisa de um caminho de volta: a
+      // linha conta como tratada no filtro do topo (CONTAM_COMO_TRATADAS),
+      // então sem este botão ela some da lista e ninguém reenvia.
+      // notificarClienteRetira() já pede confirmação antes de disparar.
+      const retentar = PODE_EDITAR && p.classificacao === "Cliente Retira"
+        ? ` <button class="botao-acao botao-notificar" onclick="notificarClienteRetira('${p.order_number}')">Tentar de novo</button>`
+        : "";
+      acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>${retentar}`;
     } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
       acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
     } else if (PODE_EDITAR && p.classificacao === "Cliente Retira") {
