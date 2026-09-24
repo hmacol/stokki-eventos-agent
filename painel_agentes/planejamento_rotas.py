@@ -43,7 +43,7 @@ from roteirizacao_dados import (
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, regiao_da_cidade, regra_dia_fixo_do_servico
+from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, nomes_dias, regiao_da_cidade, regra_dia_fixo_do_servico
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
     definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
@@ -580,6 +580,20 @@ def _regiao_do_servico(servico: dict) -> str:
     return "Sem região identificada"
 
 
+def _aviso_dia_fixo(servico: dict, data_alvo: date) -> str | None:
+    """
+    "Americana: só Quartas" quando o pedido é de região/galpão com dia
+    fixo e `data_alvo` não é um desses dias; None caso contrário. Só
+    rotula -- o botão "Roteirizar" pede confirmação com a lista desses
+    pedidos (Hugo, 23/09, caso PS-39752: recriado à mão na VUUPT pra uma
+    quinta e roteirizado pela tela, sendo que Americana só recebe quarta).
+    """
+    regra = regra_dia_fixo_do_servico(servico)
+    if not regra or data_alvo.weekday() in regra["dias"]:
+        return None
+    return f"{regra['nome']}: só {nomes_dias(regra['dias'])}"
+
+
 def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
     """
     Agrega TODO pedido agendado e não finalizado (independente da data,
@@ -733,6 +747,14 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao marcar dedicados pro pool (tela segue sem essa marcação): {e}")
 
+    # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
+    # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
+    fora_dia_fixo: dict[int, str] = {}
+    for s in servicos_brutos:
+        aviso = _aviso_dia_fixo(s, data_alvo)
+        if aviso:
+            fora_dia_fixo[s["id"]] = aviso
+
     # Pool é sempre a FOTO AO VIVO do not_assigned na VUUPT -- não existe
     # "pool de um dia passado" (pedido do Hugo, 23/08: plano de dia
     # anterior a hoje é só consulta, sem editar/cancelar nem oferecer
@@ -749,6 +771,8 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
             for s in servicos_brutos
             if s["id"] not in ids_em_rascunho
         ]
+        for p in pool:
+            p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
         pool.sort(key=lambda p: p["codigo"])
 
     agendamentos_por_service_id = {}
@@ -793,6 +817,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
         "dedicados_por_service_id": dedicados_por_id,
+        "fora_dia_fixo_por_service_id": fora_dia_fixo,
     }
 
 
@@ -863,6 +888,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     # pool ("Fora da área") se for removido da rota de novo.
     tipos_area = pool_e_agendados["tipos_area_por_service_id"]
     dedicados_rascunho = pool_e_agendados.get("dedicados_por_service_id") or {}
+    fora_dia_fixo_rascunho = pool_e_agendados.get("fora_dia_fixo_por_service_id") or {}
     # NF: mesmo princípio, mas casada pelo código do pedido (não muda
     # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
     # também dentro de rotas já montadas, não só no pool
@@ -876,6 +902,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
             p["dedicado"] = dedicados_rascunho.get(p["service_id"])
+            p["fora_dia_fixo"] = fora_dia_fixo_rascunho.get(p["service_id"])
             p["numero_nf"] = ", ".join(filter(None, (
                 nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
             )))

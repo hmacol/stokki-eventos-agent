@@ -2616,6 +2616,7 @@
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
     li.dataset.dedicado = p.dedicado ? "1" : "";
+    li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
     // 22/08 -- editável pelo menu de contexto, ver abrirModalNivelHorario)
     li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
@@ -4253,6 +4254,15 @@
     const ids = Array.from(SELECIONADOS);
     const modal = document.getElementById("modal-tipo-roteirizacao");
     if (!ids.length || modal.classList.contains("aberto")) return;
+    // região com dia fixo fora do dia (Hugo, 23/09, caso PS-39752): a
+    // seleção manual continua valendo, mas só depois de confirmar
+    const foraDoDia = ids
+      .map(id => document.querySelector(`li.item-parada[data-service-id="${id}"]`))
+      .filter(li => li && li.dataset.foraDiaFixo)
+      .map(li => `• ${li.querySelector(".codigo")?.textContent || li.dataset.serviceId} (${li.dataset.foraDiaFixo})`);
+    if (foraDoDia.length && !confirm(
+        `${foraDoDia.length} pedido(s) selecionado(s) são de região que não recebe no dia ${DATA_ALVO_ISO.split("-").reverse().join("/")}:\n\n` +
+        `${foraDoDia.join("\n")}\n\nRoteirizar mesmo assim?`)) return;
     modal.querySelector('input[value="automatico"]').checked = true;
     // limite de pedidos por rota (Hugo, 15/08): reabre sempre com a
     // mesma trava do pipeline automático (TRAVAS.max_paradas), sem
