@@ -1038,10 +1038,26 @@
   #lista-rotas.aba-ofertadas:not(.buscando) .card-rota:not(.ofertada) { display: none; }
   #lista-rotas.aba-enviadas:not(.buscando) .card-rota:not(.enviada) { display: none; }
   #lista-rotas.aba-lalamove:not(.buscando) .card-rota:not(.lalamove) { display: none; }
-  .info-parada { font-size: 13px; line-height: 1.6; max-width: 260px; }
-  .info-parada .titulo { font-weight: 700; margin-bottom: 2px; }
-  .info-parada .remetente { color: #6FA0FF; font-weight: 600; }
-  .info-parada .endereco { color: var(--texto-suave); font-size: 12px; margin-top: 4px; }
+  /* balão do marcador de parada: cores do tema da tela (o branco fixo do
+     Google apagava o código do pedido no tema escuro) + cópia do card
+     do pool embaixo do cabeçalho da rota */
+  #map .gm-style .gm-style-iw-c { background: var(--superficie); color: var(--texto); padding: 10px !important; }
+  #map .gm-style .gm-style-iw-d { overflow: auto !important; padding: 0 !important; }
+  #map .gm-style .gm-style-iw-tc::after { background: var(--superficie); }
+  #map .gm-style .gm-ui-hover-effect > span { background-color: var(--texto-suave) !important; }
+  .info-parada { font-size: 13px; line-height: 1.5; width: 270px; max-width: 100%; color: var(--texto); }
+  .info-parada .cabecalho-rota { margin-bottom: 8px; }
+  .info-parada .rota { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+  .info-parada .rota .cor-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+  .info-parada .motorista { font-weight: 600; color: var(--texto-suave); font-size: 12px; padding-left: 18px; }
+  /* a cópia do card sempre no formato completo, mesmo com a lista em
+     "compacto" ou "só número" (body.cards-*): #map ganha na especificidade */
+  #map .info-parada .item-parada { width: auto; height: auto; padding: 7px 9px; margin: 0; background: var(--fundo); border: 1px solid var(--borda); white-space: normal; overflow: visible; cursor: default; }
+  #map .info-parada .item-parada::before,
+  #map .info-parada .item-parada .numero::after { content: none; display: none; }
+  #map .info-parada .item-parada :is(br, .codigo, .remetente, .destinatario, .endereco, .nf-pedido) { display: revert; }
+  #map .info-parada .item-parada :is(.agendamento, .janela, .badge-caixas, .badge-fora-area, .badge-dedicado) { display: inline-flex; margin: 3px 0 0; }
+  #map .info-parada .item-parada .numero { position: static; display: inline-block; width: auto; height: 18px; min-width: 18px; margin: 0 6px 0 0; border-radius: 100px; font-size: 11px; }
 
   .resumo-agendados {
     background: var(--superficie);
@@ -2502,12 +2518,34 @@
     return icone;
   }
 
-  function montarInfoHtml(parada) {
+  // balão do marcador de parada no mapa: em qual rota o pedido está
+  // (cor, "Rota N", posição, motorista) + cópia do card da parada, igual
+  // ao do pool (sem os controles). Nome lido do card na hora do clique
+  // pra pegar renomeação.
+  function montarInfoHtml(li, rascunhoId, posicao, total) {
+    const card = document.getElementById(`card-rota-${rascunhoId}`);
+    const nomeRota = card?.querySelector(".titulo-rota .nome")?.textContent || "";
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    let motorista = "sem motorista";
+    if (r && rotaEhLalamove(r)) motorista = "Lalamove";
+    else if (r && r.agent_id) {
+      const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
+      motorista = (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
+    }
+    const cor = coresPorRascunho[rascunhoId] || "#6B7280";
+    const copia = document.createElement("div");
+    copia.className = "item-parada";
+    copia.innerHTML = li.innerHTML;
+    copia.querySelectorAll(".check-parada, .botao-cancelar-pedido, .botao-menu-parada").forEach(el => el.remove());
     return `<div class="info-parada">
-      <div class="titulo">${escaparHtml(parada.codigo)}</div>
-      <div class="remetente">${escaparHtml(parada.remetente)}</div>
-      <div>${escaparHtml(parada.titulo)}</div>
-      <div class="endereco">${escaparHtml(parada.endereco)}</div>
+      <div class="cabecalho-rota">
+        <div class="rota">
+          <span class="cor-swatch" style="background:${cor}"></span>
+          <span>${escaparHtml(rotuloCurtoRota(nomeRota))} · parada ${posicao} de ${total}</span>
+        </div>
+        <div class="motorista">${escaparHtml(motorista)}</div>
+      </div>
+      ${copia.outerHTML}
     </div>`;
   }
 
@@ -3169,10 +3207,9 @@
     if (!ul) return;
     const paradas = Array.from(ul.children)
       .map(li => ({
+        li,
         lat: parseFloat(li.dataset.lat), lng: parseFloat(li.dataset.lng),
         codigo: li.querySelector(".codigo")?.textContent || "",
-        remetente: li.querySelector(".remetente")?.textContent || "",
-        endereco: li.querySelector(".endereco")?.textContent || "",
       }))
       .filter(p => !isNaN(p.lat) && !isNaN(p.lng));
     if (!paradas.length) return;
@@ -3187,7 +3224,7 @@
         icon: iconeNumerado(idx + 1, cor), title: p.codigo,
       });
       marker.addListener("click", () => {
-        infoWindow.setContent(montarInfoHtml(p));
+        infoWindow.setContent(montarInfoHtml(p.li, rascunhoId, idx + 1, paradas.length));
         infoWindow.open(map, marker);
       });
       return marker;
