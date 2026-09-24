@@ -6,6 +6,7 @@ Gestão das contas do portal do cliente pela linha de comando (VPS ou
 local -- mesmo dados.db):
 
     py -3 portal_cliente/gerenciar_clientes.py listar
+    py -3 portal_cliente/gerenciar_clientes.py checar maiz            # antes do convite: conta, grupo, insucessos, envio (CNPJ ou nome)
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --para hugo@freshlogbr.com   # convite vai pra quem repassa, não pro cliente
     py -3 portal_cliente/gerenciar_clientes.py definir-pin 29909190000146 123456
@@ -35,6 +36,8 @@ mesma tabela usada pelas notificações de insucesso).
 import argparse
 import re
 import sys
+import unicodedata
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -124,6 +127,86 @@ def _link(conn, cfg, cnpj) -> str:
     return f"{url_base}/definir-pin/{auth.gerar_token_definir_pin(secret, conn, cnpj)}"
 
 
+def _sem_acento(texto: str) -> str:
+    return unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
+
+
+def procurar(conn, termo: str) -> list[dict]:
+    """Embarcadores de `interno` pelo CNPJ (com ou sem máscara) ou por
+    pedaço do nome, sem ligar pra acento/caixa ("maiz" acha "MAÍZ FOOD")."""
+    if len(auth.normalizar_cnpj(termo)) >= 13:
+        emb = auth.buscar_embarcador(conn, termo)
+        return [emb] if emb else []
+    alvo = _sem_acento(termo)
+    return [e for e in auth.listar_embarcadores(conn) if alvo in _sem_acento(e["nome"])]
+
+
+def checar(conn, cnpj: str, agora: datetime | None = None) -> dict:
+    """O que conferir antes do convite (24/09): conta, grupo, insucessos
+    PENDENTES (aparecem no 1º acesso com botões que agem de verdade),
+    stkkc_id/envio (máscara de pedidos) e e-mail repetido em outro
+    embarcador (sinal de grupo econômico, como a Marchef)."""
+    emb = auth.buscar_embarcador(conn, cnpj)
+    agora = agora or datetime.now()
+    conta = auth.buscar_conta(conn, emb["cnpj"])
+    estado = "sem conta" if not conta else ("ATIVA" if conta["ativo"] else "desativada")
+    grupo = auth.empresas_do_login(conn, emb["cnpj"])[1:]
+    membro_de = [r["cnpj_login"] for r in conn.execute(
+        "SELECT cnpj_login FROM portal_grupos WHERE cnpj_membro = ?", (emb["cnpj"],))]
+    meus = {e.lower() for e in emb["emails"]}
+    mesmo_email = [e for e in auth.listar_embarcadores(conn)
+                   if e["cnpj"] != emb["cnpj"] and meus & {x.lower() for x in e["emails"]}]
+    pend = [r["primeira_notificacao_em"] for r in conn.execute(
+        "SELECT primeira_notificacao_em FROM insucessos_aguardando_resposta WHERE sender_id = ? AND status = 'PENDENTE' "
+        "ORDER BY primeira_notificacao_em", (emb["sender_id"],))]
+    corte = (agora - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    velhos = [p for p in pend if p < corte]
+    stkkc = conn.execute("SELECT stkkc_id FROM interno WHERE cnpj_embarcador = ?", (emb["cnpj"],)).fetchone()["stkkc_id"]
+    envio = conn.execute("SELECT envio_ativo FROM portal_clientes_envio WHERE cnpj = ?", (emb["cnpj"],)).fetchone()
+    envio_ativo = bool(envio["envio_ativo"]) if envio else True
+
+    alertas = []
+    if conta:
+        alertas.append(f"já tem conta ({estado}, último login {conta.get('ultimo_login_em') or '-'}): convite novo troca o PIN")
+    if not emb["emails"]:
+        alertas.append("sem e-mail em `interno`: só dá pra mandar com --para")
+    if pend:
+        alertas.append(f"{len(pend)} insucesso(s) PENDENTE(s), {len(velhos)} com mais de 7 dias (desde {pend[0][:10]}): "
+                       f"aparecem em 'Precisa da sua atenção' no 1º acesso")
+    if not stkkc:
+        alertas.append("sem stkkc_id em `interno`: o envio de pedidos (XML/planilha) não funciona")
+    elif not envio_ativo:
+        alertas.append("envio de pedidos desativado (gerenciar_clientes.py envio <cnpj> --ativar)")
+    if membro_de:
+        alertas.append("já enxergado pelo grupo de " + ", ".join(auth.formatar_cnpj(c) for c in membro_de)
+                       + ": o convite normalmente vai pro login do grupo")
+    if mesmo_email and not grupo and not membro_de:
+        alertas.append(f"e-mail igual ao de {len(mesmo_email)} outro(s) embarcador(es): confirmar se é grupo econômico")
+    return {"emb": emb, "conta": estado, "ultimo_login": (conta or {}).get("ultimo_login_em"),
+            "grupo": grupo, "membro_de": membro_de, "mesmo_email": mesmo_email,
+            "insucessos_pendentes": len(pend), "insucessos_velhos": len(velhos),
+            "stkkc_id": stkkc, "envio_ativo": envio_ativo, "alertas": alertas}
+
+
+def _imprimir_checagem(r: dict) -> None:
+    emb = r["emb"]
+    print(f"{emb['nome']} ({auth.formatar_cnpj(emb['cnpj'])})  sender {emb['sender_id']}")
+    print(f"  e-mails: {', '.join(emb['emails']) or '(nenhum)'}")
+    print(f"  conta no portal: {r['conta']}" + (f", último login {r['ultimo_login'] or '-'}" if r["conta"] != "sem conta" else ""))
+    print(f"  insucessos PENDENTES: {r['insucessos_pendentes']} ({r['insucessos_velhos']} com mais de 7 dias)")
+    print(f"  envio de pedidos: stkkc_id {r['stkkc_id'] or '(FALTA)'}, {'ativo' if r['envio_ativo'] else 'DESATIVADO'}")
+    if r["grupo"]:
+        print(f"  login de grupo, enxerga também: " + ", ".join(f"{e['nome']} ({auth.formatar_cnpj(e['cnpj'])})" for e in r["grupo"]))
+    for e in r["mesmo_email"]:
+        print(f"  mesmo e-mail: {e['nome']} ({auth.formatar_cnpj(e['cnpj'])})")
+    if r["alertas"]:
+        print("ATENÇÃO antes do convite:")
+        for a in r["alertas"]:
+            print(f"  - {a}")
+    else:
+        print("Pronto pro convite: gerenciar_clientes.py enviar-link " + emb["cnpj"] + " --para <quem repassa>")
+
+
 def _imprimir_grupo(empresas: list[dict]) -> None:
     login = empresas[0]
     print(f"{login['nome']} ({auth.formatar_cnpj(login['cnpj'])}) -- login enxerga {len(empresas)} empresa(s):")
@@ -135,6 +218,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Contas do portal do cliente")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("listar")
+    ck = sub.add_parser("checar", help="o que conferir antes do convite (aceita CNPJ ou pedaço do nome)")
+    ck.add_argument("termo")
     for nome in ("enviar-link", "link", "desativar", "ativar"):
         sp = sub.add_parser(nome)
         sp.add_argument("cnpj")
@@ -179,6 +264,17 @@ def main(argv=None) -> int:
                     estado += " (sem PIN)"
                 print(f"{auth.formatar_cnpj(e['cnpj'])}  sender {e['sender_id']:<9}  {estado:<20}  "
                       f"último login {e['ultimo_login_em'] or '-':<19}  {e['nome']}  {', '.join(e['emails']) or '(sem e-mail)'}")
+            return 0
+
+        if args.cmd == "checar":
+            achados = procurar(conn, args.termo)
+            if len(achados) != 1:
+                print("Nenhum embarcador com sender_id em `interno` bate com isso." if not achados
+                      else "Mais de um embarcador bate -- use o CNPJ:")
+                for e in achados:
+                    print(f"  {auth.formatar_cnpj(e['cnpj'])}  {e['nome']}")
+                return 2
+            _imprimir_checagem(checar(conn, achados[0]["cnpj"]))
             return 0
 
         if args.cmd == "grupos":
