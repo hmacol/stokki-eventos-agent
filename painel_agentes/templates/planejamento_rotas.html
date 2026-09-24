@@ -4220,6 +4220,18 @@
     }
   }
 
+  function confirmarDiaFixo(ids, acao) {
+    // região com dia fixo fora do dia (Hugo, 23/09, caso PS-39752): a
+    // seleção manual continua valendo, mas só depois de confirmar
+    const foraDoDia = ids
+      .map(id => document.querySelector(`li.item-parada[data-service-id="${id}"]`))
+      .filter(li => li && li.dataset.foraDiaFixo)
+      .map(li => `• ${li.querySelector(".codigo")?.textContent || li.dataset.serviceId} (${li.dataset.foraDiaFixo})`);
+    return !foraDoDia.length || confirm(
+      `${foraDoDia.length} pedido(s) selecionado(s) são de região que não recebe no dia ${DATA_ALVO_ISO.split("-").reverse().join("/")}:\n\n` +
+      `${foraDoDia.join("\n")}\n\n${acao} mesmo assim?`);
+  }
+
   async function criarRotaComSelecionados(botao) {
     // paradas na ordem em que aparecem no pool (dá pra ajustar depois
     // arrastando ou com "Otimizar sequência" no card novo)
@@ -4229,6 +4241,7 @@
       .map(id => POOL_BY_ID[id])
       .filter(Boolean);
     if (!paradas.length) return;
+    if (!confirmarDiaFixo(paradas.map(p => p.service_id), "Criar a rota")) return;
     botao.disabled = true;
     botao.textContent = "Criando rota...";
     try {
@@ -4254,15 +4267,7 @@
     const ids = Array.from(SELECIONADOS);
     const modal = document.getElementById("modal-tipo-roteirizacao");
     if (!ids.length || modal.classList.contains("aberto")) return;
-    // região com dia fixo fora do dia (Hugo, 23/09, caso PS-39752): a
-    // seleção manual continua valendo, mas só depois de confirmar
-    const foraDoDia = ids
-      .map(id => document.querySelector(`li.item-parada[data-service-id="${id}"]`))
-      .filter(li => li && li.dataset.foraDiaFixo)
-      .map(li => `• ${li.querySelector(".codigo")?.textContent || li.dataset.serviceId} (${li.dataset.foraDiaFixo})`);
-    if (foraDoDia.length && !confirm(
-        `${foraDoDia.length} pedido(s) selecionado(s) são de região que não recebe no dia ${DATA_ALVO_ISO.split("-").reverse().join("/")}:\n\n` +
-        `${foraDoDia.join("\n")}\n\nRoteirizar mesmo assim?`)) return;
+    if (!confirmarDiaFixo(ids, "Roteirizar")) return;
     modal.querySelector('input[value="automatico"]').checked = true;
     // limite de pedidos por rota (Hugo, 15/08): reabre sempre com a
     // mesma trava do pipeline automático (TRAVAS.max_paradas), sem
