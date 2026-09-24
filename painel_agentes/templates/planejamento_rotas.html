@@ -2689,7 +2689,7 @@
 
   function montarSelectMotorista(rascunho) {
     const opcoes = ['<option value="">Sem motorista</option>'].concat(
-      MOTORISTAS.map(m => `<option value="${m.agent_id}" ${m.agent_id === rascunho.agent_id ? "selected" : ""}>${escaparHtml(m.nome)}</option>`)
+      [...MOTORISTAS].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR", { sensitivity: "base" })).map(m => `<option value="${m.agent_id}" ${m.agent_id === rascunho.agent_id ? "selected" : ""}>${escaparHtml(m.nome)}</option>`)
     );
     return opcoes.join("");
   }
