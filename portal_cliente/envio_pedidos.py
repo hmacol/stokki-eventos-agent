@@ -317,6 +317,7 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         endereco = f"{endereco} - {compl}" if endereco else compl
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
+    transporta = inf.find("nfe:transp/nfe:transporta", NS)
     return {
         "chave_nfe": chave,
         "numero_nf": _texto(ide, "nfe:nNF"),
@@ -337,6 +338,8 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "valor_nf": round(valor, 2),
         "itens": len(dets),
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
+        "transportadora_nome": _texto(transporta, "nfe:xNome"),
+        "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
     }
 
 
@@ -1094,6 +1097,18 @@ def _identificar_area(servicos: list[dict], api_key: str | None):
     return identificar_area_nao_atendida(servicos, api_key)
 
 
+def _tipo_transportadora(nome: str, cnpj: str) -> str | None:
+    """Tipo (ENTREGA/RETIRADA/TERCEIROS) da transportadora do XML na
+    BD_TRANSPORTADORAS; None se não há transportadora, é desconhecida ou
+    está em conflito na planilha."""
+    if not nome and not cnpj:
+        return None
+    from regras.transportadoras import CatalogoTransportadoras
+    catalogo = CatalogoTransportadoras.carregar(_RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx")
+    resultado = catalogo.resolver(nome, cnpj=cnpj)
+    return None if resultado.conflito else resultado.tipo
+
+
 def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
     """Mesma regra da roteirização (região de dia fixo -> ok; UF != SP ->
     fora_sp; SP a mais de RAIO_GRANDE_SP_KM do centro -> sp_nao_atendido).
@@ -1103,6 +1118,14 @@ def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
     cfg = ((config or {}).get("portal_cliente", {}) or {}).get("envios", {}) or {}
     if not cfg.get("bloqueio_area_ativo", True):
         return None
+    # Hugo 24/09 (caso PS-40084): transportadora do XML cadastrada como
+    # redespacho ou retirada -> a importação troca o endereço pelo galpão
+    # (regras/endereco.py), então a cidade do destinatário não importa.
+    try:
+        if _tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "") in ("TERCEIROS", "RETIRADA"):
+            return None
+    except Exception as e:
+        logger.warning(f"consulta a BD_TRANSPORTADORAS falhou ({e}); seguindo com a checagem de área da NF {nfe.get('numero_nf')}")
     cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
     endereco = ", ".join(p for p in (nfe.get("destinatario_endereco"), cidade_uf, nfe.get("destinatario_cep")) if p)
     api_key = ((config or {}).get("google_maps", {}) or {}).get("api_key") or ""

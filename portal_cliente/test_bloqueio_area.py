@@ -54,6 +54,68 @@ class ClassificarAreaEnvio(unittest.TestCase):
         with mock.patch.object(ep, "_identificar_area", return_value=[({"id": 0}, "fora_sp")]):
             self.assertIsNone(ep.classificar_area_envio(self._nfe(), {"portal_cliente": {"envios": {"bloqueio_area_ativo": False}}}))
 
+    # Hugo 24/09 (caso PS-40084): transportadora do XML cadastrada na
+    # BD_TRANSPORTADORAS como redespacho/retirada -> entrega é no galpão, passa.
+    def _com_transp(self, cidade="Curitiba", uf="PR"):
+        nfe = self._nfe(cidade, uf)
+        nfe.update(transportadora_nome="ANDREA BELOTTO PACHECO LTDA", transportadora_cnpj="03639618000194")
+        return nfe
+
+    def test_transportadora_terceiros_libera_sem_geocodificar(self):
+        with mock.patch.object(ep, "_tipo_transportadora", return_value="TERCEIROS") as tipo, \
+             mock.patch.object(ep, "_identificar_area", return_value=[({"id": 0}, "fora_sp")]) as ident:
+            self.assertIsNone(ep.classificar_area_envio(self._com_transp(), {}))
+        tipo.assert_called_once_with("ANDREA BELOTTO PACHECO LTDA", "03639618000194")
+        ident.assert_not_called()
+
+    def test_transportadora_retirada_libera(self):
+        with mock.patch.object(ep, "_tipo_transportadora", return_value="RETIRADA"), \
+             mock.patch.object(ep, "_identificar_area", return_value=[({"id": 0}, "fora_sp")]):
+            self.assertIsNone(ep.classificar_area_envio(self._com_transp(), {}))
+
+    def test_transportadora_entrega_ou_desconhecida_segue_bloqueio(self):
+        for tipo in ("ENTREGA", None):
+            with mock.patch.object(ep, "_tipo_transportadora", return_value=tipo), \
+                 mock.patch.object(ep, "_identificar_area", return_value=[({"id": 0}, "fora_sp")]):
+                self.assertEqual(ep.classificar_area_envio(self._com_transp(), {}), "fora_sp")
+
+    def test_falha_no_catalogo_segue_bloqueio(self):
+        with mock.patch.object(ep, "_tipo_transportadora", side_effect=OSError("planilha")), \
+             mock.patch.object(ep, "_identificar_area", return_value=[({"id": 0}, "fora_sp")]):
+            with self.assertLogs(ep.logger, level="WARNING"):
+                self.assertEqual(ep.classificar_area_envio(self._com_transp(), {}), "fora_sp")
+
+
+class TipoTransportadora(unittest.TestCase):
+    def test_sem_transportadora_nem_abre_planilha(self):
+        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar") as carregar:
+            self.assertIsNone(ep._tipo_transportadora("", ""))
+        carregar.assert_not_called()
+
+    def test_resolve_pelo_catalogo(self):
+        resultado = mock.Mock(tipo="TERCEIROS", conflito=False)
+        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar") as carregar:
+            carregar.return_value.resolver.return_value = resultado
+            self.assertEqual(ep._tipo_transportadora("ANDREA BELOTTO", "03639618000194"), "TERCEIROS")
+        carregar.return_value.resolver.assert_called_once_with("ANDREA BELOTTO", cnpj="03639618000194")
+
+
+class LerNfeTransportadora(unittest.TestCase):
+    def _xml(self, transp=""):
+        chave = "3" * 44
+        return f"""<?xml version="1.0"?><nfeProc xmlns="http://www.portalfiscal.inf.br/nfe"><NFe><infNFe Id="NFe{chave}">
+<ide><nNF>41239</nNF><serie>1</serie><tpNF>1</tpNF></ide><emit><CNPJ>22135070000190</CNPJ><xNome>Emit</xNome></emit>
+<dest><CNPJ>11111111000111</CNPJ><xNome>Dest</xNome><enderDest><xLgr>BR 470</xLgr><nro>6065</nro><xMun>Blumenau</xMun><UF>SC</UF></enderDest></dest>
+<transp><modFrete>0</modFrete>{transp}<vol><qVol>42</qVol></vol></transp></infNFe></NFe></nfeProc>""".encode("utf-8")
+
+    def test_extrai_nome_e_cnpj(self):
+        nfe = ep.ler_nfe(self._xml("<transporta><CNPJ>03639618000194</CNPJ><xNome>ANDREA BELOTTO PACHECO LTDA</xNome></transporta>"))
+        self.assertEqual((nfe["transportadora_nome"], nfe["transportadora_cnpj"]), ("ANDREA BELOTTO PACHECO LTDA", "03639618000194"))
+
+    def test_sem_transporta(self):
+        nfe = ep.ler_nfe(self._xml())
+        self.assertEqual((nfe["transportadora_nome"], nfe["transportadora_cnpj"]), ("", ""))
+
 
 class ConfirmarComBloqueio(unittest.TestCase):
     def setUp(self):
