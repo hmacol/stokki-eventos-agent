@@ -554,20 +554,25 @@ def _abrir_planilha(conteudo: bytes, nome: str):
         wb.close()
 
 
-def _achar_cabecalho(linhas: list[list]) -> tuple[int, dict[int, str]]:
+def _achar_cabecalho(linhas: list[list], apelidos: dict[str, str] | None = None,
+                     mensagem: str | None = None) -> tuple[int, dict[int, str]]:
     """Procura nas primeiras 15 linhas a que mais parece o cabeçalho
-    (>= 3 colunas conhecidas). Devolve (índice da linha, {coluna: chave})."""
+    (>= 3 colunas conhecidas). Devolve (índice da linha, {coluna: chave}).
+    `apelidos`/`mensagem` (25/09): a aba Pedidos de Entrada reaproveita este
+    parser com o próprio dicionário de colunas -- sem eles, o comportamento
+    de Envios fica igual."""
+    apelidos = _APELIDOS_NORMALIZADOS if apelidos is None else apelidos
     melhor = (0, -1, {})
     for i, linha in enumerate(linhas[:15]):
         mapa = {}
         for j, v in enumerate(linha):
-            chave = _APELIDOS_NORMALIZADOS.get(_normalizar_texto(v))
+            chave = apelidos.get(_normalizar_texto(v))
             if chave and chave not in mapa.values():
                 mapa[j] = chave
         if len(mapa) > melhor[0]:
             melhor = (len(mapa), i, mapa)
     if melhor[0] < 3:
-        raise ErroEnvio("Não achei o cabeçalho da planilha -- use o modelo Fresh Log (botão \"Baixar modelo\") "
+        raise ErroEnvio(mensagem or "Não achei o cabeçalho da planilha -- use o modelo Fresh Log (botão \"Baixar modelo\") "
                         "e mantenha a primeira linha com os nomes das colunas.")
     return melhor[1], melhor[2]
 

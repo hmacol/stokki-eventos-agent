@@ -253,20 +253,8 @@ def chave_planilha_entrada(cnpj_embarcador: str, referencia: str) -> str:
     return f"PLANILHA-ENTRADA-{_so_digitos(cnpj_embarcador)}-{ref}-{digest}"
 
 
-def _achar_cabecalho(linhas: list[list]) -> tuple[int, dict[int, str]]:
-    melhor = (0, -1, {})
-    for i, linha in enumerate(linhas[:15]):
-        mapa = {}
-        for j, v in enumerate(linha):
-            chave = _APELIDOS_ENTRADA.get(ep._normalizar_texto(v))
-            if chave and chave not in mapa.values():
-                mapa[j] = chave
-        if len(mapa) > melhor[0]:
-            melhor = (len(mapa), i, mapa)
-    if melhor[0] < 3:
-        raise ErroEnvio("Não achei o cabeçalho da planilha -- use o modelo Fresh Log de entrada (botão \"Baixar modelo\") "
-                        "e mantenha a primeira linha com os nomes das colunas.")
-    return melhor[1], melhor[2]
+_MENSAGEM_CABECALHO_ENTRADA = ("Não achei o cabeçalho da planilha -- use o modelo Fresh Log de entrada (botão \"Baixar modelo\") "
+                               "e mantenha a primeira linha com os nomes das colunas.")
 
 
 def ler_planilha_entrada(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list[dict], list[dict]]:
@@ -275,7 +263,7 @@ def ler_planilha_entrada(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tu
     linhas = ep._abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
-    i_cab, mapa = _achar_cabecalho(linhas)
+    i_cab, mapa = ep._achar_cabecalho(linhas, _APELIDOS_ENTRADA, _MENSAGEM_CABECALHO_ENTRADA)
     faltando = [c[1] for c in COLUNAS_PLANILHA_ENTRADA if c[2] and c[0] not in mapa.values()]
     if faltando:
         raise ErroEnvio(f"{nome}: faltam colunas obrigatórias no cabeçalho: {', '.join(faltando)}. "
