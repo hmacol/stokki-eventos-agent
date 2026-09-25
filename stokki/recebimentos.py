@@ -286,10 +286,8 @@ def _itens_da_tabela_de_itens(tabela) -> list[dict]:
 
 
 def ler_itens(sessao: StokkiSession, id_recebimento: int) -> list[dict]:
-    """GET no detalhe do recebimento + extrair_itens_do_recebimento."""
-    resp = sessao.get(f"{BASE_URL}/pt-br/administrator/inventory/incoming/show/{id_recebimento}")
-    resp.raise_for_status()
-    return extrair_itens_do_recebimento(resp.text)
+    """GET no detalhe (via ler_detalhe) + extrai apenas os itens."""
+    return ler_detalhe(sessao, id_recebimento)["itens"]
 
 
 # ── Cabecalho do detalhe (chave NF-e e Ref. do Pedido) ────────────────────────
