@@ -1300,6 +1300,17 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_alocado(s["id"], rota["id"])
 
     marcar_enviado(rascunho_id, rota["id"])
+    # O pool lido do núcleo (nucleo/pool.py) precisa ver esses pedidos
+    # como EM_ROTA já -- senão, quando o lote ativo trocar, eles voltariam
+    # a aparecer no pool por até 15 min (Hugo, 24/09). Gravação local, sem
+    # ir na Vuupt (a rota e o route_id já são conhecidos), e DEPOIS de
+    # marcar_enviado: nada entre a rota existir na Vuupt e o rascunho
+    # ficar ENVIADO (um restart ali reenviaria a rota). Best-effort.
+    try:
+        from nucleo.pedidos import marcar_em_rota_por_service_ids
+        marcar_em_rota_por_service_ids([s["id"] for s in sublote_criado], rota["id"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Pedidos do rascunho {rascunho_id} não marcados EM_ROTA no núcleo: {e}")
     # Motorista virtual LALAMOVE: a corrida NÃO é mais criada aqui
     # (Hugo, 30/08) -- o envio só cria a rota na VUUPT; a corrida (paga)
     # sai pelo botão "Lançar na Lalamove" do card (lancar_lalamove).

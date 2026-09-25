@@ -46,6 +46,7 @@ PERMITIDOS = {
     "lalamove_integracao.py",
     "ler_planilha_entregas_nuu.py",
     "nucleo/comparar_vuupt.py",             # 15/09: compara os dois lados; some quando a Vuupt sair
+    "nucleo/comparar_pool.py",              # 24/09: sombra do pool (Entrega 1); some na virada
     "nucleo/exportar_historico_vuupt.py",   # 16/09: tira o historico da Vuupt pro nosso bucket (Etapa 1)
     "nucleo/relatorios_financeiro.py",      # 16/09: --atualizar-cadastros puxa usuario/veiculo (nome e placa)
     "nucleo/sincronizar_servicos_vuupt.py",  # 16/09: espelha o pedido fora da rota (pool, retirada, reentrega)

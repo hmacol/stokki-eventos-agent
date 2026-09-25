@@ -5746,11 +5746,12 @@
   async function atualizarPool(botao) {
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Buscando...";
+    botao.textContent = "Sincronizando...";
     try {
-      const resp = await fetch(`${BASE_PATH}/api/planejamento/pool?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/pool?data=${encodeURIComponent(DATA_ALVO_ISO)}&sincronizar=1`);
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.erro || "Falha ao buscar o pool.");
+      if (dados.aviso) alert(dados.aviso);
 
       const listaPool = document.getElementById("lista-pool");
       let novos = 0;

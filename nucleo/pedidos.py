@@ -120,6 +120,30 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
           banco.agora(), tipo, status))
 
 
+def marcar_em_rota_por_service_ids(service_ids, vuupt_route_id: int, conn: sqlite3.Connection | None = None) -> int:
+    """Gancho do envio do rascunho (rascunhos_rota.enviar_rascunho, Hugo
+    24/09): a rota acabou de ser criada na Vuupt e o route_id já é conhecido,
+    então o pedido vira EM_ROTA aqui na hora, sem ir buscar o serviço. Só
+    mexe em quem estava ABERTO (entregue/cancelado não volta). Devolve
+    quantos mudaram."""
+    ids = [int(i) for i in (service_ids or []) if i]
+    if not ids:
+        return 0
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        marcadores = ",".join("?" * len(ids))
+        cur = conn.execute(f"""UPDATE nucleo_pedidos SET status = ?, status_provedor = 'assigned', vuupt_route_id = ?,
+                                      atualizado_em = ?
+                               WHERE vuupt_service_id IN ({marcadores}) AND status = ?""",
+                           (banco.PEDIDO_EM_ROTA, vuupt_route_id, banco.agora(), *ids, banco.PEDIDO_ABERTO))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        if fechar:
+            conn.close()
+
+
 def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Connection | None = None):
     """
     Gancho do pipeline.py (dual-write). `acao` é o retorno de

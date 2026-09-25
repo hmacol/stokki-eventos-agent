@@ -61,12 +61,14 @@ NOME_CURSOR = "servicos_vuupt"
 MARGEM_MIN = 15          # reprocessa os últimos 15 min a cada rodada (barato, e não perde mudança)
 LIMITE_SUMIDOS = 200     # teto de conferências individuais por rodada
 
-# Código de pedido de verdade: PS-12345, PS-12345-R1, PS-12345-C1. O que
-# não casa (ex.: "COLETA QUATRO ESTRELAS", código fixo que se repete todo
-# dia) NÃO vira linha em nucleo_pedidos -- viraria uma linha só,
-# sobrescrita diariamente. Esses serviços seguem existindo como parada da
-# rota em que entram.
-_RE_CODIGO_PEDIDO = re.compile(r"^[A-Z]{1,4}-?\d{2,}(?:-[A-Z0-9]+)*$")
+# Código de pedido de verdade: PS-12345, PS-12345-R1, PS-12345-C1, e o
+# serviço que agrupa mais de um pedido ("PS-1, PS-2", já sem '#' -- ver
+# normalizacao.normalizar_codigo). O que não casa (ex.: "COLETA QUATRO
+# ESTRELAS", código fixo que se repete todo dia) NÃO vira linha em
+# nucleo_pedidos -- viraria uma linha só, sobrescrita diariamente. Esses
+# serviços seguem existindo como parada da rota em que entram.
+_UM_CODIGO = r"[A-Z]{1,4}-?\d{2,}(?:-[A-Z0-9]+)*"
+_RE_CODIGO_PEDIDO = re.compile(rf"^{_UM_CODIGO}(?:, {_UM_CODIGO})*$")
 
 _STATUS_SERVICO = {
     "not_assigned": banco.PEDIDO_ABERTO,
@@ -182,8 +184,27 @@ def sincronizar_servicos(servicos: list[dict], conn: sqlite3.Connection) -> dict
             # Stokki). Apontar o pedido pra ele mesmo não diz nada.
             campos["reentrega_de_codigo"] = origem if origem and origem != codigo else None
         status = status_do_servico(s)
+        # Revisão 24/09: serviço editado na Vuupt pra agrupar outro pedido
+        # ("PS-10" virou "PS-10, PS-20") deixava a linha antiga ABERTA com o
+        # mesmo id -- fantasma no pool, pra sempre. O id é de UMA linha só.
+        if s.get("id"):
+            for outra in conn.execute("SELECT codigo FROM nucleo_pedidos WHERE vuupt_service_id = ? AND codigo != ?",
+                                      (s["id"], codigo)).fetchall():
+                conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = NULL, atualizado_em = ? WHERE codigo = ?",
+                             (banco.agora(), outra["codigo"]))
+                logger.info(f"serviço {s['id']} agora é '{codigo}': a linha '{outra['codigo']}' perdeu o vínculo.")
         nucleo_pedidos.upsert_pedido(conn, codigo, campos, origem=banco.ORIGEM_VUUPT_SYNC,
                                      status=status, vuupt_service_id=s.get("id"))
+        # Revisão 24/09: o upsert nunca apaga campo (COALESCE) -- certo pra
+        # fonte parcial, errado aqui, onde o serviço vem INTEIRO de GET
+        # /services. Campo que a Vuupt esvaziou (agendamento removido, saiu da
+        # rota) é esvaziado, e serviço vivo limpa o excluido_em que um
+        # cancelamento anterior com o mesmo código deixou -- sem isso o pedido
+        # recriado sumia do pool do núcleo pra sempre.
+        conn.execute("""UPDATE nucleo_pedidos SET agendamento_inicio = ?, agendamento_fim = ?, vuupt_route_id = ?,
+                               driver_id = ?, status_done_provedor = ?, excluido_em = ? WHERE codigo = ?""",
+                     (campos["agendamento_inicio"], campos["agendamento_fim"], campos["vuupt_route_id"],
+                      campos["driver_id"], campos["status_done_provedor"], campos["excluido_em"], codigo))
         if anterior is None:
             stats["novos"] += 1
             if campos["reentrega_de_service_id"]:
@@ -281,6 +302,55 @@ def reconciliar_pool(servicos_pool: list[dict], conn: sqlite3.Connection, buscar
     return stats
 
 
+def ressincronizar_ids(vuupt, service_ids, conn: sqlite3.Connection | None = None) -> int:
+    """Traz pro espelho, AGORA, os serviços que acabaram de ser escritos na
+    Vuupt pela tela ou por um script (cancelar, reagendar, endereço, dia
+    fixo, envio de rota). Sem isto o pool lido do núcleo (nucleo/pool.py)
+    ficava até 15 min atrás da Vuupt, o intervalo do timer.
+
+    Best-effort por contrato: a escrita na Vuupt já aconteceu, então falha
+    aqui só pode virar aviso no log -- o timer alcança depois. 404 é a única
+    resposta que autoriza CANCELADO (mesma regra de reconciliar_pool)."""
+    ids = [int(i) for i in (service_ids or []) if i]
+    if not ids:
+        return 0
+    fechar = conn is None
+    try:
+        conn = conn or banco.conectar()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"ressincronizar {ids}: banco indisponível ({str(exc)[:120]})")
+        return 0
+    aplicados = 0
+    try:
+        for sid in ids:
+            try:
+                servico = _buscar_servico(vuupt, sid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"ressincronizar {sid}: {str(exc)[:120]}")
+                continue
+            if servico is None:
+                codigo = _codigo_por_service_id(conn, sid)
+                if codigo:
+                    conn.execute("""UPDATE nucleo_pedidos SET status = ?, excluido_em = COALESCE(excluido_em, ?),
+                                           atualizado_em = ? WHERE codigo = ?""",
+                                 (banco.PEDIDO_CANCELADO, banco.agora(), banco.agora(), codigo))
+                    registrar_evento(conn, "PEDIDO_SUMIU_DA_VUUPT", banco.ORIGEM_VUUPT_SYNC,
+                                     dados={"codigo": codigo, "service_id": sid})
+                    aplicados += 1
+                continue
+            if not servico.get("code"):
+                continue   # _buscar_servico devolve {"id": sid} em falha de rede/HTTP: nada a concluir
+            sincronizar_servicos([servico], conn)
+            aplicados += 1
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"ressincronizar {ids}: {str(exc)[:160]}")
+    finally:
+        if fechar:
+            conn.close()
+    return aplicados
+
+
 # ── Cursor ────────────────────────────────────────────────────────────────────
 
 def _garantir_tabela(conn: sqlite3.Connection):
@@ -344,56 +414,71 @@ def main(argv=None) -> int:
     try:
         # A VUUPT filtra em UTC sem fuso; o cursor é guardado do mesmo jeito.
         agora_utc = datetime.now(timezone.utc)
+        inicio = None
         if args.dias or args.desde:
             inicio = (args.desde if args.desde else
                       (agora_utc - timedelta(days=args.dias)).strftime("%Y-%m-%d %H:%M:%S"))
-        else:
-            cursor = ler_cursor(conn)
-            inicio = (cursor if cursor else (agora_utc - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"))
-        logger.info(f"Serviços alterados desde {inicio} (UTC).")
-        servicos = vuupt.listar_servicos([{"field": "updated_at", "operator": "gte", "value": inicio}],
-                                         include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
-        logger.info(f"{len(servicos)} serviço(s) alterado(s).")
         if args.modo_teste:
+            inicio = inicio or ler_cursor(conn) or (agora_utc - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+            servicos = vuupt.listar_servicos([{"field": "updated_at", "operator": "gte", "value": inicio}],
+                                             include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
             por_status = {}
             for s in servicos:
                 por_status[s.get("status")] = por_status.get(s.get("status"), 0) + 1
-            logger.info(f"[TESTE] por status: {por_status}")
+            logger.info(f"[TESTE] {len(servicos)} serviço(s) desde {inicio} (UTC); por status: {por_status}")
             pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}])
             logger.info(f"[TESTE] pool na VUUPT: {len(pool)} serviço(s); nada foi gravado.")
             return 0
-
-        stats = sincronizar_servicos(servicos, conn)
-        logger.info(f"Incremental: {stats}")
-
-        alvo = rotas_a_ressincronizar(servicos, conn)[:args.limite_rotas]
-        if alvo:
-            from nucleo.sincronizar_vuupt import reconciliar_rotas_sumidas
-            # `vistas=set()` de propósito: aqui a gente QUER buscar cada uma
-            # dessas rotas por id, mesmo que a listagem do dia não as traga.
-            resultado = reconciliar_rotas_sumidas(conn, config["vuupt_api"]["token"], [date.today()],
-                                                  set(), nomes=None, ids=alvo)
-            logger.info(f"Rotas tocadas por serviço que mudou: {len(alvo)} -> {resultado}")
-        if not args.sem_pool:
-            pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}],
-                                         include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
-            stats_pool = reconciliar_pool(pool, conn, lambda sid: _buscar_servico(vuupt, sid),
-                                          limite=args.limite_sumidos)
-            # O pool inteiro também entra no espelho (pedido que nunca passou
-            # pelo pipeline com dual-write, ex.: criado na tela da VUUPT).
-            stats_pool_upsert = sincronizar_servicos(pool, conn)
-            stats_vinculo = vincular_sem_service_id(conn, vuupt.buscar_servico_por_code)
-            logger.info(f"Pool: {stats_pool} | upsert: {stats_pool_upsert} | vínculo: {stats_vinculo}")
-            abertos = conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE status = ?",
-                                   (banco.PEDIDO_ABERTO,)).fetchone()[0]
-            if abertos != len(pool):
-                logger.warning(f"Pool do núcleo ({abertos}) != pool da VUUPT ({len(pool)}) -- "
-                               f"confira com nucleo/comparar_vuupt.py.")
-        # Cursor com margem: perder mudança é pior do que reprocessar.
-        gravar_cursor(conn, (agora_utc - timedelta(minutes=MARGEM_MIN)).strftime("%Y-%m-%d %H:%M:%S"), stats)
+        resultado = executar(vuupt, conn, config["vuupt_api"]["token"], inicio=inicio, sem_pool=args.sem_pool,
+                             limite_sumidos=args.limite_sumidos, limite_rotas=args.limite_rotas)
+        logger.info(f"Resultado: {resultado}")
     finally:
         conn.close()
     return 0
+
+
+def executar(vuupt, conn: sqlite3.Connection, token: str, inicio: str | None = None, sem_pool: bool = False,
+             limite_sumidos: int = LIMITE_SUMIDOS, limite_rotas: int = 20) -> dict:
+    """Uma rodada completa (o que o timer roda a cada 15 min), reutilizável
+    pelo botão "Atualizar" do planejamento com fonte_pool=nucleo. `inicio`
+    é 'YYYY-MM-DD HH:MM:SS' em UTC; None lê o cursor (ou 2 dias atrás)."""
+    agora_utc = datetime.now(timezone.utc)
+    if not inicio:
+        cursor = ler_cursor(conn)
+        inicio = cursor if cursor else (agora_utc - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Serviços alterados desde {inicio} (UTC).")
+    servicos = vuupt.listar_servicos([{"field": "updated_at", "operator": "gte", "value": inicio}],
+                                     include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
+    logger.info(f"{len(servicos)} serviço(s) alterado(s).")
+    stats = sincronizar_servicos(servicos, conn)
+    logger.info(f"Incremental: {stats}")
+    resultado = {"incremental": stats, "pool": None, "vinculo": None, "abertos": None, "pool_vuupt": None}
+
+    alvo = rotas_a_ressincronizar(servicos, conn)[:limite_rotas]
+    if alvo:
+        from nucleo.sincronizar_vuupt import reconciliar_rotas_sumidas
+        # `vistas=set()` de propósito: aqui a gente QUER buscar cada uma
+        # dessas rotas por id, mesmo que a listagem do dia não as traga.
+        res_rotas = reconciliar_rotas_sumidas(conn, token, [date.today()], set(), nomes=None, ids=alvo)
+        logger.info(f"Rotas tocadas por serviço que mudou: {len(alvo)} -> {res_rotas}")
+    if not sem_pool:
+        pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}],
+                                     include=["customer", "sender", "zone", "checklistAnswers", "attachments"])
+        stats_pool = reconciliar_pool(pool, conn, lambda sid: _buscar_servico(vuupt, sid), limite=limite_sumidos)
+        # O pool inteiro também entra no espelho (pedido que nunca passou
+        # pelo pipeline com dual-write, ex.: criado na tela da VUUPT).
+        stats_pool_upsert = sincronizar_servicos(pool, conn)
+        stats_vinculo = vincular_sem_service_id(conn, vuupt.buscar_servico_por_code)
+        logger.info(f"Pool: {stats_pool} | upsert: {stats_pool_upsert} | vínculo: {stats_vinculo}")
+        abertos = conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE status = ?",
+                               (banco.PEDIDO_ABERTO,)).fetchone()[0]
+        if abertos != len(pool):
+            logger.warning(f"Pool do núcleo ({abertos}) != pool da VUUPT ({len(pool)}) -- "
+                           f"confira com nucleo/comparar_pool.py.")
+        resultado.update({"pool": stats_pool, "vinculo": stats_vinculo, "abertos": abertos, "pool_vuupt": len(pool)})
+    # Cursor com margem: perder mudança é pior do que reprocessar.
+    gravar_cursor(conn, (agora_utc - timedelta(minutes=MARGEM_MIN)).strftime("%Y-%m-%d %H:%M:%S"), stats)
+    return resultado
 
 
 def _buscar_servico(vuupt, service_id: int) -> dict | None:

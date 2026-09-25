@@ -99,6 +99,7 @@ from fingerprint_rotas import marcar_alocado
 from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
 from rascunhos_rota import criar_lote_rascunhos
+from nucleo.pool import listar_pool_not_assigned
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
@@ -646,8 +647,9 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             f"({'mesmo dia' if data_alvo == agora_brasilia.date() else 'próximo dia útil'})."
         )
 
-        filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-        servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+        # Fonte do pool (Hugo, 24/09): Vuupt ao vivo OU o núcleo, pela chave
+        # planejamento.fonte_pool -- ver nucleo/pool.py.
+        servicos_brutos = listar_pool_not_assigned(config, vuupt)
         logger.info(f"{len(servicos_brutos)} serviço(s) 'not_assigned' encontrado(s).")
 
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
@@ -658,6 +660,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         try:
             agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos_brutos, vuupt)
             if agendados_dia_fixo:
+                # scheduled_* acabou de ser gravado na Vuupt; o espelho
+                # precisa disso já, senão a próxima rodada (pool do núcleo)
+                # agendaria e AVISARIA o remetente de novo (Hugo, 24/09).
+                from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+                ressincronizar_ids(vuupt, [a["servico"]["id"] for a in agendados_dia_fixo])
                 logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
                 # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
                 if notificacoes_automaticas_ativas(config):

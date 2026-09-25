@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-comparar-pool.service de hora em hora (07h-20h, :10, depois do sync de :05)
+
+[Timer]
+OnCalendar=*-*-* 07..20:10:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

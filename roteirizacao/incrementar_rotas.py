@@ -104,6 +104,7 @@ from roteirizacao_dados import (
 from otimizacao_rotas import ordenar_2opt
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
+from nucleo.pool import listar_pool_not_assigned
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
@@ -387,11 +388,10 @@ def main(modo_teste: bool = False):
         data_alvo = _data_alvo_rotas(datetime.now(TZ_BRASILIA))
         data_alvo_br  = data_alvo.strftime("%d/%m/%Y")  # formato usado no NOME da rota (convenção nativa do VUUPT)
 
-        filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-        # include=customer (09/09): o CNPJ do destinatário (customer.code)
-        # resolve nível de dificuldade e horário de atendimento do cadastro
-        # -- mesma listagem que criar_rotas_diarias.py já fazia.
-        servicos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+        # Fonte do pool (Hugo, 24/09): Vuupt ao vivo OU o núcleo, pela chave
+        # planejamento.fonte_pool -- ver nucleo/pool.py. include=customer
+        # continua vindo (CNPJ do destinatário resolve nível e horário).
+        servicos = listar_pool_not_assigned(config, vuupt)
 
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
@@ -451,6 +451,8 @@ def main(modo_teste: bool = False):
         try:
             agendados_dia_fixo = aplicar_regioes_dia_fixo(servicos, vuupt)
             if agendados_dia_fixo:
+                from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+                ressincronizar_ids(vuupt, [a["servico"]["id"] for a in agendados_dia_fixo])
                 logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
                 # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
                 if notificacoes_automaticas_ativas(config):

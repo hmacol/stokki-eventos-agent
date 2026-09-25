@@ -61,7 +61,7 @@ from executor import (
 from mapa_rotas import buscar_rotas_para_mapa
 from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
-    buscar_dados_planejamento, buscar_pool_e_agendados, gerar_romaneio_pdf,
+    buscar_dados_planejamento, buscar_pool_e_agendados, sincronizar_pool_agora, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
@@ -1174,8 +1174,17 @@ def api_pool():
     rascunhos/mapa já carregados, pra não perder o estado de edição em
     andamento. O resumo volta já renderizado (mesmo partial
     _resumo_agendados.html do load da página), a tela só troca o
-    innerHTML do container."""
+    innerHTML do container. Com ?sincronizar=1 e fonte_pool=nucleo, roda
+    antes a sincronização com a Vuupt (Hugo, 24/09); se ela falhar, o pool
+    do núcleo é devolvido mesmo assim, com "aviso"."""
     data_alvo = _parse_data_param()
+    aviso = None
+    if request.args.get("sincronizar") == "1":
+        try:
+            sincronizar_pool_agora()
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Sincronização do pool antes de atualizar falhou: {e}")
+            aviso = f"Não consegui sincronizar com a Vuupt agora ({e}); mostrando o pool do núcleo como está."
     try:
         resultado = buscar_pool_e_agendados(data_alvo)
     except Exception as e:
@@ -1184,6 +1193,7 @@ def api_pool():
         "pool": resultado["pool"],
         "pool_retiradas": resultado.get("pool_retiradas", []),
         "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
+        "aviso": aviso,
     })
 
 

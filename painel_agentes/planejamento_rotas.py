@@ -24,6 +24,7 @@ import logging
 import re
 import statistics
 import sys
+import threading
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -76,6 +77,7 @@ from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao, progresso_execucao
 
 import rascunhos_rota
+from nucleo.pool import fonte_pool, listar_pool_not_assigned
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +250,54 @@ MINIMO_ROTAS_PARA_MEDIANA = 3  # com menos rotas no lote, "2x fora da mediana" n
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _ressincronizar(vuupt: VuuptClient, service_ids: list[int]) -> None:
+    """Depois de uma escrita na Vuupt feita por esta tela, traz o serviço pro
+    espelho (Hugo, 24/09: pool lido do núcleo, ver nucleo/pool.py). Roda em
+    thread própria: são N GETs à Vuupt (lote de reagendamento/endereço) que
+    não podem segurar a resposta nem disputar a cota de 429 com a tela.
+    Best-effort: falha vira aviso no log, o timer de 15 min alcança depois."""
+    def _rodar():
+        try:
+            from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+            ressincronizar_ids(vuupt, service_ids)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Ressincronização do núcleo falhou pra {service_ids}: {e}")
+
+    threading.Thread(target=_rodar, name="ressincronizar-nucleo", daemon=True).start()
+
+
+# Uma rodada de sincronização por vez dentro do processo do painel: dois
+# operadores clicando "Atualizar" (ou o timer de 15 min por fora) não
+# empilham rodadas nem ocupam todas as threads do waitress.
+_TRAVA_SINCRONIZACAO = threading.Lock()
+
+
+def sincronizar_pool_agora(config: dict | None = None) -> dict:
+    """Botão "Atualizar" do pool com fonte_pool=nucleo (Hugo, 24/09): antes
+    de ler o núcleo, roda SÓ o incremental por updated_at (o que o spec
+    pede) -- serviço criado/editado/reagendado direto no site da Vuupt
+    aparece sem esperar o timer. A reconciliação completa (pool inteiro,
+    rotas tocadas, DELETE) fica com o timer de 15 min. Com fonte vuupt não
+    faz nada; se já há uma rodada em andamento, não espera. Exceção da
+    Vuupt sobe pra quem chama."""
+    config = config or _carregar_config()
+    if fonte_pool(config) != "nucleo":
+        return {"pulado": True}
+    if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):
+        return {"pulado": "em_andamento"}
+    try:
+        from nucleo import banco
+        from nucleo.sincronizar_servicos_vuupt import executar
+        token = config.get("vuupt_api", {}).get("token", "")
+        conn = banco.conectar()
+        try:
+            return executar(VuuptClient(token), conn, token, sem_pool=True, limite_rotas=0)
+        finally:
+            conn.close()
+    finally:
+        _TRAVA_SINCRONIZACAO.release()
 
 
 def _simular_rascunho(paradas: list[dict]) -> dict | None:
@@ -711,8 +761,9 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
 
     remetentes_por_id = carregar_remetentes_por_sender_id()
     vuupt = VuuptClient(token)
-    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-    servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+    # Fonte do pool (Hugo, 24/09): Vuupt ao vivo OU o núcleo, pela chave
+    # planejamento.fonte_pool -- ver nucleo/pool.py. Mesmo formato de item.
+    servicos_brutos = listar_pool_not_assigned(config, vuupt)
     nf_por_codigo = rascunhos_rota.carregar_nf_por_codigo_pedido(
         {c for s in servicos_brutos for c in _codigos_base_lista(s.get("code", ""))})
 
@@ -784,6 +835,10 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     # Agendado já em rota (accepted/on_route) também é "não finalizado".
     # Falha aqui não derruba a tela: o resumo fica só com os
     # not_assigned, que continuam sendo a maior parte.
+    # O resumo de agendados continua lendo accepted/on_route da Vuupt com
+    # qualquer fonte (revisão 24/09): o EM_ROTA do núcleo inclui assigned e
+    # arrived, exclui retirada, e não passa pelo comparador em sombra --
+    # mudaria o resumo sem ninguém medir. Migra numa etapa própria.
     servicos_resumo = list(servicos_brutos)
     for status_rota in ("accepted", "on_route"):
         try:
@@ -1016,8 +1071,7 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
     ids_em_rascunho = {p["service_id"] for r in rascunhos_ativos for p in r["paradas"]}
 
     vuupt = VuuptClient(token)
-    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-    servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+    servicos_brutos = listar_pool_not_assigned(config, vuupt)
     por_id = {s["id"]: s for s in servicos_brutos}
 
     selecionados = [por_id[sid] for sid in service_ids if sid in por_id and sid not in ids_em_rascunho]
@@ -1636,10 +1690,12 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
         if not preparo["ok"]:
             return preparo
 
+    vuupt = VuuptClient(token)
     try:
-        VuuptClient(token).cancelar_servico(service_id)
+        vuupt.cancelar_servico(service_id)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
+    _ressincronizar(vuupt, [service_id])
 
     if rascunho and rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
         rascunhos_rota.remover_parada(rascunho_id, service_id)
@@ -1673,13 +1729,15 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
     try:
-        VuuptClient(token).atualizar_servico(service_id, {
+        vuupt.atualizar_servico(service_id, {
             "scheduled_start": scheduled_start,
             "scheduled_end": scheduled_end,
         })
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
+    _ressincronizar(vuupt, [service_id])
 
     return {"ok": True}
 
@@ -1725,6 +1783,7 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
     vuupt = VuuptClient(token)
 
     falhas = []
+    ok_ids = []
     for item in itens:
         service_id = int(item["service_id"])
         try:
@@ -1733,6 +1792,7 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
                 "scheduled_end": scheduled_end,
             })
             logger.info(f"Agendamento em lote: serviço {service_id} atualizado.")
+            ok_ids.append(service_id)
         except Exception as e:
             # Exception ampla (não só VuuptAPIError) de propósito: uma
             # falha de rede/timeout num item NÃO pode travar o loop e
@@ -1743,6 +1803,8 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
             logger.warning(f"Agendamento em lote: falha no serviço {service_id}: {e}")
             falhas.append({"service_id": service_id, "erro": str(e)})
 
+    if ok_ids:
+        _ressincronizar(vuupt, ok_ids)
     return {"ok": True, "falhas": falhas}
 
 
@@ -1808,6 +1870,8 @@ def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
             rascunho_id, service_id, endereco,
             dados_endereco.get("latitude"), dados_endereco.get("longitude"),
         )
+
+    _ressincronizar(vuupt, [service_id])
 
 
 def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | None = None) -> dict:

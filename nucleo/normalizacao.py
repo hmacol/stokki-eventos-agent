@@ -28,8 +28,15 @@ FORMATO = "%Y-%m-%d %H:%M:%S"
 
 
 def normalizar_codigo(codigo) -> str | None:
-    """'#PS-12345' / ' ps-12345 ' -> 'PS-12345'. Vazio -> None."""
-    texto = str(codigo if codigo is not None else "").strip().lstrip("#").strip().upper()
+    """'#PS-12345' / ' ps-12345 ' -> 'PS-12345'. Vazio -> None.
+    Serviço com mais de um pedido ('#PS-1, #PS-2', achado 20/08) vira
+    'PS-1, PS-2': cada parte sem '#', separadas por ', '."""
+    texto = str(codigo if codigo is not None else "").strip().upper()
+    if "," in texto:
+        partes = [p.strip().lstrip("#").strip() for p in texto.split(",")]
+        texto = ", ".join(p for p in partes if p)
+    else:
+        texto = texto.lstrip("#").strip()
     return texto or None
 
 
@@ -72,6 +79,22 @@ def para_local(ts) -> str | None:
     if dt.tzinfo is not None:
         dt = dt.astimezone(FUSO_LOCAL)
     return dt.strftime(FORMATO)
+
+
+def local_para_vuupt(ts) -> str | None:
+    """Inverso de vuupt_para_local: hora local do núcleo -> o formato que a
+    API da Vuupt devolve (UTC sem fuso). Usado por nucleo/pool.py pra
+    entregar o pedido no MESMO formato que o serviço da Vuupt, sem mudar o
+    que as telas enxergam. Sem fuso = hora de SP; com offset, respeitado.
+    Texto que não é data volta como veio."""
+    if ts is None or str(ts).strip() == "":
+        return None
+    dt = _parse(ts)
+    if dt is None:
+        return str(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=FUSO_LOCAL)
+    return dt.astimezone(timezone.utc).strftime(FORMATO)
 
 
 def janela_utc_do_dia(dia: date) -> tuple[str, str]:
