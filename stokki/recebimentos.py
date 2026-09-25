@@ -32,8 +32,15 @@ ARMADILHA -- a linha tem dois numeros diferentes no campo 'id':
     <a href="https://freshlog.stokki.com.br/.../incoming/show/2478">#PE-2478</a><br>
     <span class="text-muted">41099</span>
 O codigo e '#PE-2478', o id que abre o detalhe e 2478 (do href). O 41099
-e outro id interno que NAO serve -- incoming/show/41099 devolve 500.
-Extrair sempre do href (ou do '#PE-<n>'), nunca do numero solto.
+e a "Ref. do Pedido" (= numero da NF quando o #PE foi criado por XML,
+confirmado na sondagem de 25/09/2026) -- serve pra conciliar com o
+portal, mas NAO serve pra abrir o detalhe: incoming/show/41099 devolve
+500. Extrair o id sempre do href.
+
+Cabecalho do detalhe (duas tabelas <tr><th>rotulo</th><td>valor</td></tr>):
+  ID do Pedido | Ref. do Pedido | Tipo | Movimento | Cliente | unidade
+  Situacao | Chegada Prevista | Tipo de Acondicionamento | ... | NF-e | CT-e
+'NF-e:' traz a chave de 44 digitos num <a> pro portal da Fazenda.
 
 Estados vistos: "Recebido" e "Em transito". Um recebimento "Em transito"
 ainda nao tem tabela de itens nenhuma (mercadoria nao chegou) -- o parser
@@ -283,3 +290,59 @@ def ler_itens(sessao: StokkiSession, id_recebimento: int) -> list[dict]:
     resp = sessao.get(f"{BASE_URL}/pt-br/administrator/inventory/incoming/show/{id_recebimento}")
     resp.raise_for_status()
     return extrair_itens_do_recebimento(resp.text)
+
+
+# ── Cabecalho do detalhe (chave NF-e e Ref. do Pedido) ────────────────────────
+
+def _valor_do_rotulo(soup: BeautifulSoup, rotulo: str) -> str:
+    """Valor do <td> ao lado do <th> cujo texto comeca com `rotulo`, nas
+    tabelas de cabecalho do detalhe. Acha pelo texto do rotulo, nunca por
+    posicao (mesma regra do resto do modulo)."""
+    alvo = rotulo.upper().rstrip(":")
+    for th in soup.find_all("th"):
+        texto = th.get_text(" ", strip=True).upper().rstrip(":")
+        if texto == alvo or texto.startswith(alvo):
+            td = th.find_next_sibling("td")
+            if td is not None:
+                return td.get_text(" ", strip=True)
+    return ""
+
+
+def _nao_informado(valor: str) -> bool:
+    return not valor or valor.strip().upper().replace("Ã", "A") in ("NAO INFORMADO", "-", "—")
+
+
+def extrair_chave_nfe(html: str) -> str:
+    """Chave de acesso (44 digitos) do campo 'NF-e:' do detalhe, ou ''."""
+    soup = BeautifulSoup(html, "html.parser")
+    digitos = re.sub(r"\D", "", _valor_do_rotulo(soup, "NF-e"))
+    return digitos if len(digitos) == 44 else ""
+
+
+def extrair_ref_pedido(html: str) -> str:
+    """'Ref. do Pedido:' do detalhe (= numero da NF quando criado por XML;
+    = po quando criado por Excel), ou '' quando 'Nao informado'."""
+    soup = BeautifulSoup(html, "html.parser")
+    valor = _valor_do_rotulo(soup, "Ref. do Pedido")
+    return "" if _nao_informado(valor) else valor.strip()
+
+
+def extrair_ref_da_linha(linha) -> str:
+    """O segundo numero do campo 'id' da listagem ('#PE-2478 ... 41099'):
+    e a Ref. do Pedido, nao um id. '' quando nao ha."""
+    html = str(linha.get("id", "")) if isinstance(linha, dict) else ""
+    texto = re.sub(r"<[^>]+>", " ", html)
+    texto = re.sub(r"#PE-\d+", " ", texto)
+    m = re.search(r"\S+", texto)
+    return m.group(0) if m else ""
+
+
+def ler_detalhe(sessao: StokkiSession, id_recebimento: int) -> dict:
+    """GET no detalhe UMA vez e devolve itens + chave NF-e + Ref. do Pedido
+    (o timer do WMS e o worker do portal precisam dos tres do mesmo HTML)."""
+    resp = sessao.get(f"{BASE_URL}/pt-br/administrator/inventory/incoming/show/{id_recebimento}")
+    resp.raise_for_status()
+    html = resp.text
+    return {"itens": extrair_itens_do_recebimento(html),
+            "chave_nfe": extrair_chave_nfe(html),
+            "ref_pedido": extrair_ref_pedido(html)}

@@ -33,10 +33,15 @@ from stokki.recebimentos import (  # noqa: E402
     extrair_id_da_linha,
     extrair_codigo_da_linha,
     extrair_cabecalho_da_linha,
+    extrair_chave_nfe,
+    extrair_ref_pedido,
+    extrair_ref_da_linha,
+    ler_detalhe,
 )
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "recebimento_itens.html"
 _FIXTURE_SEM_LOTE = Path(__file__).parent / "fixtures" / "recebimento_sem_tabela_lote.html"
+_FIXTURE_CABECALHO = Path(__file__).parent / "fixtures" / "recebimento_detalhe_cabecalho.html"
 
 # HTML da armadilha descrita pelo Hugo: a coluna 'id' tem o link com o id
 # que abre o detalhe (2478) e um numero solto (41099) que NAO serve --
@@ -178,6 +183,67 @@ class TestLinhaDaListagem(unittest.TestCase):
         self.assertIn("MARIA DOLORES", dados["embarcador"])
         self.assertEqual(dados["situacao"], "Recebido")
         self.assertEqual(dados["chegada"], "18/09/2026")
+
+
+class TestCabecalhoDoDetalhe(unittest.TestCase):
+    """Sondagem de 24-25/09/2026: o detalhe de um #PE mostra 'NF-e:' com a
+    chave de 44 digitos e 'Ref. do Pedido:' com o numero da NF (o wizard
+    XML grava po = nrNota). E por isso que a aba Pedidos de Entrada do
+    portal concilia pela chave, exata."""
+
+    def setUp(self):
+        self.html = _FIXTURE_CABECALHO.read_text(encoding="utf-8")
+
+    def test_chave_nfe_sai_com_44_digitos_sem_espacos(self):
+        self.assertEqual(extrair_chave_nfe(self.html), "35260912345678000195550010000412211000000017")
+
+    def test_ref_do_pedido_e_o_numero_da_nf(self):
+        self.assertEqual(extrair_ref_pedido(self.html), "41221")
+
+    def test_sem_nfe_devolve_vazio(self):
+        html = self.html.replace("35260912345678000195550010000412211000000017", "Não informado")
+        self.assertEqual(extrair_chave_nfe(html), "")
+
+    def test_ref_nao_informada_devolve_vazio(self):
+        html = self.html.replace("<td>41221</td>", "<td> Não informado </td>")
+        self.assertEqual(extrair_ref_pedido(html), "")
+
+    def test_pagina_sem_cabecalho_devolve_vazio(self):
+        self.assertEqual(extrair_chave_nfe("<html></html>"), "")
+        self.assertEqual(extrair_ref_pedido("<html></html>"), "")
+
+    def test_ler_detalhe_junta_itens_chave_e_ref(self):
+        class _Resp:
+            status_code = 200
+            text = self.html
+
+            def raise_for_status(self):
+                pass
+
+        class _Sessao:
+            chamadas = []
+
+            def get(self, url, **kw):
+                self.chamadas.append(url)
+                return _Resp()
+
+        sess = _Sessao()
+        d = ler_detalhe(sess, 2497)
+        self.assertTrue(sess.chamadas[0].endswith("/incoming/show/2497"))
+        self.assertEqual(d["chave_nfe"], "35260912345678000195550010000412211000000017")
+        self.assertEqual(d["ref_pedido"], "41221")
+        self.assertEqual([i["sku"] for i in d["itens"]], ["NUU001FD"])
+
+
+class TestRefDaLinha(unittest.TestCase):
+    def test_segundo_numero_da_listagem_e_a_ref_do_pedido(self):
+        # Correcao (25/09/2026): o numero solto ao lado do #PE-2478 e a
+        # "Ref. do Pedido" (= numero da NF quando criado por XML), nao um
+        # id interno. Continua NAO servindo pra abrir /show/{id}.
+        self.assertEqual(extrair_ref_da_linha(_LINHA_ARMADILHA), "41099")
+
+    def test_linha_sem_segundo_numero_devolve_vazio(self):
+        self.assertEqual(extrair_ref_da_linha({"id": '<a href="/show/2478">#PE-2478</a>'}), "")
 
 
 if __name__ == "__main__":
