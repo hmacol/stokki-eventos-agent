@@ -67,6 +67,15 @@ class TestComparar(unittest.TestCase):
         self.assertEqual(r["divergencias_proprias"], 0)
         self.assertEqual(r["total_divergencias"], 1)
 
+    def test_codigo_duplicado_nao_entra_na_comparacao_de_campos(self):
+        """Produção 24/09: com duas cópias na Vuupt (uma agendada, outra não)
+        não há como dizer qual campo o núcleo deveria ter -- a diferença é
+        consequência do duplicado, não do espelho."""
+        r = cp.comparar([_s(id=1), _s(id=2, scheduled_start=None, scheduled_end=None)], [_s(id=2)])
+        self.assertEqual(r["diferentes"], [])
+        self.assertEqual(r["divergencias_proprias"], 0)
+        self.assertEqual(r["duplicados_na_vuupt"], ["PS-10"])
+
     def test_janela_e_dia_fixo_entram_na_projecao(self):
         p = cp.projetar(_s())
         self.assertEqual(p["janela"], ("11:00", "15:00"))

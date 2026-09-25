@@ -91,7 +91,10 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict]) -> dict:
     v, duplicados = por_codigo(pool_vuupt)
     n, _ = por_codigo(pool_nucleo)
     diferentes = []
-    for codigo in sorted(set(v) & set(n)):
+    # Código duplicado fica fora da comparação de campos: com duas cópias
+    # (uma agendada, outra não) não há "valor certo" pro núcleo ter -- a
+    # diferença é consequência do duplicado, não do espelho (produção 24/09).
+    for codigo in sorted((set(v) & set(n)) - set(duplicados)):
         campos = {c: [v[codigo][c], n[codigo][c]] for c in CAMPOS if v[codigo][c] != n[codigo][c]}
         if campos:
             diferentes.append({"code": codigo, "campos": campos})
