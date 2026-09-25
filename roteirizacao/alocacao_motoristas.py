@@ -83,13 +83,14 @@ def selecionar_motorista_equitativo(
         classificar_tipo_veiculo, a partir do volume/nº de endereços do
         próprio sublote -- mesma classificação usada no empacotamento,
         roteirizacao_dados.py::separar_pedidos_exclusivos), só motorista
-        com TIPO_VEICULO cadastrado de capacidade igual ou maior é
-        elegível (veiculo_comporta -- ex: motorista de Truck também
-        serve rota classificada VUC). Motorista sem TIPO_VEICULO
-        cadastrado nunca é elegível pra essa rota (dado ausente não
-        deve virar elegibilidade "universal" pra veículo grande). Rota
-        fora da faixa de veículo grande (classificação None) não é
-        afetada por essa trava, igual a hoje.
+        com TIPO_VEICULO cadastrado desse porte EXATO é elegível
+        (veiculo_comporta -- desde 25/09, Hugo: Truck não serve rota
+        VUC, e vice-versa). Motorista sem TIPO_VEICULO cadastrado nunca
+        é elegível pra essa rota (dado ausente não deve virar
+        elegibilidade "universal" pra veículo grande). Rota fora da
+        faixa de veículo grande (classificação None) só aceita Fiorino
+        ou motorista sem tipo -- veículo grande fica reservado pra
+        carga do tamanho dele.
 
     `ajustes_disponibilidade` (pedido do Hugo, 16/08, ver
     regras/disponibilidade_motoristas.py): ajustes pontuais de

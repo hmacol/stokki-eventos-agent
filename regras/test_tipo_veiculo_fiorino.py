@@ -99,13 +99,25 @@ class TestVeiculoComporta(unittest.TestCase):
         for necessario in ("VAN_HR", "VUC", "TRES_QUARTOS", "TRUCK"):
             self.assertFalse(veiculo_comporta("FIORINO", necessario), necessario)
 
-    def test_maior_cobre_menor(self):
-        self.assertTrue(veiculo_comporta("TRUCK", "FIORINO"))
-        self.assertTrue(veiculo_comporta("VUC", "VAN_HR"))
-        self.assertTrue(veiculo_comporta("VAN_HR", "VAN_HR"))
+    def test_veiculo_grande_so_serve_o_proprio_porte(self):
+        # Hugo, 25/09: quem nao e Fiorino so pega rota do porte exato.
+        for codigo in ("VAN_HR", "VUC", "TRES_QUARTOS", "TRUCK"):
+            self.assertTrue(veiculo_comporta(codigo, codigo), codigo)
+            self.assertFalse(veiculo_comporta(codigo, None), codigo)
+            self.assertFalse(veiculo_comporta(codigo, "FIORINO"), codigo)
+
+    def test_maior_nao_cobre_menor(self):
+        self.assertFalse(veiculo_comporta("TRUCK", "VUC"))
+        self.assertFalse(veiculo_comporta("VUC", "VAN_HR"))
 
     def test_menor_nao_cobre_maior(self):
         self.assertFalse(veiculo_comporta("VAN_HR", "VUC"))
+
+    def test_sem_tipo_so_serve_rota_comum(self):
+        self.assertTrue(veiculo_comporta(None, None))
+        self.assertFalse(veiculo_comporta(None, "VAN_HR"))
+        self.assertTrue(veiculo_comporta("XYZ", None))
+        self.assertFalse(veiculo_comporta("XYZ", "VAN_HR"))
 
 
 if __name__ == "__main__":

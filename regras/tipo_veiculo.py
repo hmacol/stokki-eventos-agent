@@ -37,10 +37,7 @@ class TipoVeiculo:
 
 
 # Ordenado por capacidade CRESCENTE -- classificar_tipo_veiculo devolve o
-# primeiro que servir (o menor/mais barato que comporta o lote), e
-# veiculo_comporta usa essa mesma ordem pra saber se o veículo de um
-# motorista "cobre pra cima" (ex: motorista de Truck também serve rota
-# classificada VUC).
+# primeiro que servir (o menor/mais barato que comporta o lote).
 #
 # Faixas CONTÍGUAS desde 22/09/2026 (Hugo): o volume_minimo_cx virou o
 # teto do tipo anterior. Antes havia um buraco -- 101 a 149 caixas num
@@ -67,7 +64,6 @@ TIPOS_VEICULO = [
 TIPOS_VEICULO_EXCLUSIVOS = [t for t in TIPOS_VEICULO if t.gera_rota_exclusiva]
 
 _TIPOS_POR_CODIGO = {t.codigo: t for t in TIPOS_VEICULO}
-_ORDEM_CODIGO = {t.codigo: i for i, t in enumerate(TIPOS_VEICULO)}
 
 # Apelidos pro preenchimento manual na planilha de motoristas (coluna
 # TIPO_VEICULO) -- "3/4" é a forma que o Hugo realmente usa (não
@@ -134,19 +130,23 @@ def classificar_tipo_veiculo(caixas: int, enderecos_distintos: int) -> TipoVeicu
 def veiculo_comporta(tipo_motorista: str | None, tipo_necessario: str | None) -> bool:
     """
     True se um motorista com veículo `tipo_motorista` pode atender uma
-    rota que precisa de `tipo_necessario` -- veículo de capacidade MAIOR
-    OU IGUAL comporta (ex: motorista de Truck também serve rota
-    classificada VUC/3-4/VAN-HR).
+    rota que precisa de `tipo_necessario`.
+
+    Regra (Hugo, 25/09): quem não é Fiorino só pega rota do porte EXATO
+    do carro -- VAN/HR só rota VAN_HR, VUC só rota VUC, etc. Nem rota
+    comum (última milha), nem rota de outro porte, mesmo menor (até
+    25/09 valia "capacidade maior ou igual comporta"; a ideia agora é
+    reservar o veículo grande pra carga do tamanho dele).
 
     `tipo_necessario` None (rota comum, fora da faixa de veículo grande)
-    sempre True -- essa trava não se aplica a rotas de última milha.
-    `tipo_motorista` None só serve rota sem `tipo_necessario` (dado
-    ausente não deve virar elegibilidade universal pra veículo grande).
-    Código não reconhecido em qualquer um dos dois é tratado como
-    ausente (mesmo padrão fail-safe do resto do módulo).
+    é True só pra Fiorino e pra quem está sem tipo. `tipo_motorista`
+    None só serve rota comum (dado ausente não deve virar elegibilidade
+    universal pra veículo grande). Código não reconhecido em qualquer um
+    dos dois é tratado como ausente (mesmo padrão fail-safe do resto do
+    módulo).
     """
-    if tipo_necessario is None or tipo_necessario not in _ORDEM_CODIGO:
-        return True
-    if tipo_motorista is None or tipo_motorista not in _ORDEM_CODIGO:
-        return False
-    return _ORDEM_CODIGO[tipo_motorista] >= _ORDEM_CODIGO[tipo_necessario]
+    if tipo_necessario not in _TIPOS_POR_CODIGO:
+        tipo_necessario = None
+    if tipo_motorista not in _TIPOS_POR_CODIGO or tipo_motorista == "FIORINO":
+        return tipo_necessario is None
+    return tipo_motorista == tipo_necessario

@@ -44,15 +44,15 @@ TIPO_VEICULO (pedido do Hugo, 15/08): porte do veículo do motorista --
 um dos códigos de regras/tipo_veiculo.py (VAN_HR, VUC, TRES_QUARTOS,
 TRUCK), usado pela trava de veículo grande em
 roteirizacao/alocacao_motoristas.py::selecionar_motorista_equitativo
-(ver regras.tipo_veiculo.veiculo_comporta -- veículo de capacidade
-maior também serve rota de tipo menor, ex: motorista de Truck serve
-rota classificada VUC). A VUUPT não expõe esse dado de forma confiável
+(ver regras.tipo_veiculo.veiculo_comporta -- desde 25/09, a pedido do
+Hugo, quem não é Fiorino só serve rota do porte EXATO do carro, nunca
+rota comum nem de outro porte). A VUUPT não expõe esse dado de forma confiável
 (mesmo problema já visto com PLACA), então é 100% preenchimento manual
 na planilha -- sem sincronização automática. Motorista com TIPO_VEICULO
 vazio ou não reconhecido: assume-se FIORINO (o carro da maioria da
 frota); nunca é bloqueado de rota comum (última milha), mas também
-nunca é elegível pra rota classificada como veículo grande (FIORINO é
-o MENOR tipo, então continua fora, igual a quando isso era None).
+nunca é elegível pra rota classificada como veículo grande (igual a
+quando isso era None).
 
 TELEFONE_MOTORISTA / EMAIL_MOTORISTA (doc de origem:
 DOC_EXECUCAO_CLAUDE_NOTIFICACAO_MOTORISTAS.md): contato usado por
