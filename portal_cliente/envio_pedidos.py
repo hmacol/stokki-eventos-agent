@@ -265,10 +265,11 @@ def _texto(el, caminho: str) -> str:
     return (achado.text or "").strip() if achado is not None and achado.text else ""
 
 
-def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
+def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = False) -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
-    item 9)."""
+    item 9). `permitir_entrada` (aba Pedidos de Entrada, 25/09): aceita
+    tpNF=0 também -- Envios continua recusando."""
     try:
         root = ET.fromstring(conteudo)
     except ET.ParseError as e:
@@ -289,10 +290,28 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e sem destinatário (<dest>).")
     ender = dest.find("nfe:enderDest", NS)
     tipo_nf = _texto(ide, "nfe:tpNF")
-    if tipo_nf == "0":
+    if tipo_nf == "0" and not permitir_entrada:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e de ENTRADA (tpNF=0) -- só notas de saída viram pedido de entrega.")
 
     dets = inf.findall("nfe:det", NS)
+    itens_lista = []
+    for i, det in enumerate(dets, start=1):
+        prod = det.find("nfe:prod", NS)
+        ean = _texto(prod, "nfe:cEAN")
+        try:
+            qtd = float(_texto(prod, "nfe:qCom") or 0)
+        except ValueError:
+            qtd = 0.0
+        try:
+            vu = float(_texto(prod, "nfe:vUnCom") or 0)
+        except ValueError:
+            vu = 0.0
+        itens_lista.append({
+            "linha": int(det.get("nItem") or i), "sku": _texto(prod, "nfe:cProd"),
+            "ean": _so_digitos(ean) if ean.upper() != "SEM GTIN" else "",
+            "descricao": _texto(prod, "nfe:xProd"), "quantidade": qtd,
+            "unidade": _texto(prod, "nfe:uCom"), "valor_unitario": vu,
+        })
     volumes = 0
     peso = 0.0
     for vol in inf.findall("nfe:transp/nfe:vol", NS):
@@ -340,6 +359,8 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
+        "tipo_nf": tipo_nf,
+        "itens_lista": itens_lista,
     }
 
 
