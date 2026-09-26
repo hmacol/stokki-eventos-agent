@@ -22,7 +22,15 @@ Por entrada, o resultado é:
   CRIADO (já existia) -- antes de subir, procurar_pe achou um #PE com a
                  mesma chave (resposta perdida numa rodada anterior, ou a
                  equipe criou à mão): não cria de novo;
-  ERRO        -- 4xx com errors, ou 3 falhas técnicas seguidas.
+  ERRO        -- recusa EXPLÍCITA da Stokki (4xx com errors/message, ou
+                 barra vermelha com mensagem na tela), ou 3 tentativas
+                 técnicas/indeterminadas seguidas;
+  (indeterminado) -- sem resposta capturada, timeout no POST, ou HTTP 2xx
+                 que a tela não confirma: NUNCA vira ERRO na hora (rev.
+                 25/09, achado 1 -- upload duplicado é pior que demorar).
+                 Antes de desistir, tenta achar o #PE pela chave/referência
+                 na listagem (ele pode ter sido criado mesmo sem resposta
+                 capturada); sem achar, volta pra fila até 3x, sem e-mail.
 
 NUNCA sonda URL da Stokki por adivinhação (URL inexistente redireciona
 pro /login e o auth.py refaz o login, derrubando as outras sessões).
@@ -36,7 +44,6 @@ COMO RODAR:
 import argparse
 import json
 import logging
-import re
 import shutil
 import sys
 import time
@@ -128,7 +135,14 @@ _JS_LINHAS = """
 
 
 def _criado_da_resposta(resp: dict | None) -> tuple[bool | None, str]:
-    """(criado, motivo) da resposta HTTP capturada; None sem resposta."""
+    """(criado, motivo) da resposta HTTP capturada.
+
+    None sem resposta, OU quando a Stokki respondeu mas sem um motivo
+    EXPLÍCITO de recusa (status ruim sem "errors"/"message" no corpo) --
+    achado 1 da revisão de 25/09: um status ruim isolado, sem mensagem, não
+    é prova de recusa (pode ser timeout/erro de rede do lado do servidor
+    com o #PE tendo sido criado mesmo assim). Só vira ERRO definitivo
+    quando o corpo tem um motivo de verdade; sem ele, fica indeterminado."""
     if not resp:
         return None, ""
     body = resp.get("body", "")
@@ -146,31 +160,41 @@ def _criado_da_resposta(resp: dict | None) -> tuple[bool | None, str]:
             return False, "; ".join(str(e).strip() for e in erros)
     if 200 <= int(resp.get("status", 0)) < 300:
         return True, ""
-    return False, f"HTTP {resp.get('status')}: {body[:200].strip() or 'sem corpo'}"
+    return None, ""
 
 
 def resultados_do_lote(linhas: list[dict], chaves: list[str], respostas: dict) -> dict[str, dict]:
-    """{chave: {criado, erro}} cruzando a tela (barra verde/vermelha) com a
-    resposta HTTP do store. A resposta manda; a tela só confirma. Sem os
-    dois: não criado (a Stokki recusa como duplicado se já existir)."""
+    """{chave: {criado, erro, indeterminado}} cruzando a tela (barra
+    verde/vermelha) com a resposta HTTP do store.
+
+    Achado 1 da revisão de 25/09: ERRO definitivo só quando há recusa
+    EXPLÍCITA -- 4xx/message no corpo HTTP, ou barra vermelha com uma
+    mensagem na tela. Sem resposta capturada, sem linha na tela, ou HTTP
+    2xx que a tela não confirma (ou contradiz sem detalhar por quê): fica
+    `indeterminado` -- quem chama tenta achar o #PE pela listagem antes de
+    decidir (nunca cria de novo por engano nem manda e-mail de recusa
+    indevido)."""
     saida = {}
     for chave in chaves:
         linha = next((l for l in linhas if l.get("invoice") == chave or l.get("nome", "").startswith(chave)), None)
         criado_http, motivo_http = _criado_da_resposta(respostas.get(chave))
-        if linha is None and criado_http is None:
-            saida[chave] = {"criado": False, "erro": "linha do arquivo não encontrada na tela da Stokki"}
-            continue
         criado_tela, motivo_tela = None, ""
         if linha is not None:
             texto, classe = linha["barra_texto"].lower(), linha["barra_classe"]
             criado_tela = ("pedido criado" in texto or "bg-success" in classe) and "bg-danger" not in classe
-            motivo_tela = "; ".join(linha["erros"]) or linha["barra_texto"]
-        if criado_http is None:
-            criado, motivo = bool(criado_tela), motivo_tela or "sem mensagem na tela"
+            if criado_tela is False:
+                motivo_tela = "; ".join(linha.get("erros") or []) or linha.get("barra_texto", "").strip()
+        if motivo_http and criado_http is False:
+            saida[chave] = {"criado": False, "erro": motivo_http, "indeterminado": False}
+        elif criado_tela is False and motivo_tela:
+            saida[chave] = {"criado": False, "erro": motivo_tela, "indeterminado": False}
+        elif criado_http is True and criado_tela is not False:
+            saida[chave] = {"criado": True, "erro": "", "indeterminado": False}
+        elif criado_tela is True and criado_http is not False:
+            saida[chave] = {"criado": True, "erro": "", "indeterminado": False}
         else:
-            criado = criado_http and (criado_tela is not False)
-            motivo = motivo_http or motivo_tela or ("" if criado else "sem mensagem na tela")
-        saida[chave] = {"criado": criado, "erro": "" if criado else motivo}
+            # sem recusa explicita e sem confirmacao clara de sucesso
+            saida[chave] = {"criado": False, "erro": "", "indeterminado": True}
     return saida
 
 
@@ -199,23 +223,36 @@ class _SessaoNavegador:
         return _R()
 
 
+class ErroConsultaStokki(RuntimeError):
+    """procurar_pe não conseguiu LER a listagem/detalhe da Stokki (rede,
+    sessão caiu, HTML mudou de layout) -- achado 2 da revisão de 25/09:
+    isso NUNCA pode virar "não achei" em silêncio, porque faria o worker
+    subir o mesmo #PE de novo. Quem chama decide o que fazer: na
+    pré-checagem (antes de subir) deixa propagar pro processar_lote, que
+    devolve o lote inteiro pra fila sem tocar o upload; na busca de
+    confirmação (depois do 2xx/indeterminado) intercepta e deixa sem id."""
+
+
 def procurar_pe(sessao, client_id: str, busca: str, chave_nfe: str = "", referencia: str = "") -> tuple[int | None, str]:
     """(id_stokki, '#PE-n') do recebimento do cliente que bate com a chave
     NF-e (XML: abre o detalhe só das linhas cuja Ref. do Pedido = nº da NF)
     ou com a referência (planilha: Ref. do Pedido da própria linha). Sem
-    par: (None, '')."""
+    par: (None, ''). Ignora linhas de #PE cancelado (a Stokki mantém o
+    registro na listagem, mas ele não conta como "já existe" pro dedupe).
+    Falha de CONSULTA (não achar não é falha) levanta ErroConsultaStokki."""
     vistos = set()
     for tentativa in ({"busca": busca, "por_pagina": 10}, {"busca": "", "por_pagina": 20}):
         try:
             dados = stokki_recebimentos.listar_recebimentos(sessao, cliente=str(client_id), **tentativa)
         except Exception as e:  # noqa: BLE001
-            logger.info(f"   (listagem de recebimentos falhou: {e})")
-            return None, ""
+            raise ErroConsultaStokki(f"listagem de recebimentos falhou: {e}") from e
         for linha in dados.get("aaData") or []:
             id_stokki = stokki_recebimentos.extrair_id_da_linha(linha)
             if not id_stokki or id_stokki in vistos:
                 continue
             vistos.add(id_stokki)
+            if "CANCEL" in (stokki_recebimentos.extrair_cabecalho_da_linha(linha).get("situacao") or "").upper():
+                continue
             ref = stokki_recebimentos.extrair_ref_da_linha(linha).strip().upper()
             codigo = stokki_recebimentos.extrair_codigo_da_linha(linha)
             if referencia and not chave_nfe:
@@ -227,8 +264,7 @@ def procurar_pe(sessao, client_id: str, busca: str, chave_nfe: str = "", referen
             try:
                 det = stokki_recebimentos.ler_detalhe(sessao, id_stokki)
             except Exception as e:  # noqa: BLE001
-                logger.info(f"   (detalhe do #PE {id_stokki} falhou: {e})")
-                continue
+                raise ErroConsultaStokki(f"detalhe do #PE {id_stokki} falhou: {e}") from e
             if chave_nfe and det["chave_nfe"] == chave_nfe:
                 return id_stokki, codigo
         if not busca:
@@ -252,8 +288,10 @@ def _novo_navegador(p, wiz, usuario: str, senha: str, headless: bool):
 def executar_wizard_xml(cfg: dict, usuario: str, senha: str, lote: list[dict], arquivos: dict[str, Path], pasta_logs: Path, wiz,
                         headless: bool = True) -> dict[str, dict]:
     """Um wizard por data prevista (o formulário tem UM arrival_date pro
-    lote). Antes de subir, procura #PE já existente pela chave. Devolve
-    {chave: {criado, ja_existia, erro, stokki_id, codigo, resposta}}."""
+    lote). Antes de subir, procura #PE já existente pela chave -- se a
+    consulta falhar (ErroConsultaStokki), a exceção sobe (achado 2: nunca
+    finge que não achou nesse ponto, senão duplica). Devolve
+    {chave: {criado, ja_existia, erro, stokki_id, codigo, resposta, indeterminado}}."""
     from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
     pasta_logs.mkdir(parents=True, exist_ok=True)
@@ -268,7 +306,8 @@ def executar_wizard_xml(cfg: dict, usuario: str, senha: str, lote: list[dict], a
                 id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("numero_nf") or "", chave_nfe=e["chave_nfe"])
                 if id_pe:
                     logger.info(f"   {en.rotulo_entrada(e)} já existe na Stokki ({codigo}) -- não cria de novo")
-                    saida[e["chave_nfe"]] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo, "resposta": ""}
+                    saida[e["chave_nfe"]] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo,
+                                             "resposta": "", "indeterminado": False}
                 else:
                     a_subir.append(e)
             por_data: dict[str, list[dict]] = {}
@@ -314,10 +353,26 @@ def executar_wizard_xml(cfg: dict, usuario: str, senha: str, lote: list[dict], a
                 for e in grupo:
                     r = res[e["chave_nfe"]]
                     item = {"criado": r["criado"], "ja_existia": False, "erro": r["erro"], "stokki_id": None, "codigo": "",
-                            "resposta": (respostas.get(e["chave_nfe"]) or {}).get("body", "")}
-                    if r["criado"]:
-                        item["stokki_id"], item["codigo"] = procurar_pe(sessao, cfg["client_id"], e.get("numero_nf") or "", chave_nfe=e["chave_nfe"])
+                            "resposta": (respostas.get(e["chave_nfe"]) or {}).get("body", ""), "indeterminado": r["indeterminado"]}
+                    if r["criado"] or r["indeterminado"]:
+                        # busca de CONFIRMAÇÃO (depois do 2xx, ou pra desempatar um
+                        # indeterminado): falha de consulta aqui não pode travar o
+                        # lote inteiro (achado 2) -- só fica sem id/sem confirmar.
+                        try:
+                            id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("numero_nf") or "", chave_nfe=e["chave_nfe"])
+                        except ErroConsultaStokki as ex:
+                            logger.info(f"   (não consegui confirmar o #PE de {en.rotulo_entrada(e)} pela listagem: {ex})")
+                            id_pe, codigo = None, ""
+                        if r["criado"]:
+                            item["stokki_id"], item["codigo"] = id_pe, codigo
+                        elif id_pe:
+                            item["criado"], item["indeterminado"] = True, False
+                            item["stokki_id"], item["codigo"] = id_pe, codigo
                     saida[e["chave_nfe"]] = item
+                # renova a trava a cada grupo de data (achado 1 pediu confirmação
+                # extra por wizard; o lote pode ter vários grupos e o wizard Excel
+                # ainda vem depois -- 30 min de TTL não sobrevive tudo isso sozinho)
+                sessao_uso.renovar(DONO_TRAVA, ttl_segundos=30 * 60)
         finally:
             browser.close()
     return saida
@@ -364,11 +419,15 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, lote: list[dict],
                 origem_id = ""
             carrier = fila_saida._escolher_transportadora(page, cfg)
             page.screenshot(path=str(pasta_logs / f"{ts}_excel_form.png"), full_page=True)
+            # renova a trava antes do wizard Excel (o XML já pode ter gasto boa
+            # parte do TTL de 30 min em grupos anteriores no mesmo lote)
+            sessao_uso.renovar(DONO_TRAVA, ttl_segundos=30 * 60)
             for e in lote:
                 chave = e["chave_nfe"]
                 id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
                 if id_pe:
-                    saida[chave] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo, "resposta": ""}
+                    saida[chave] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo,
+                                    "resposta": "", "indeterminado": False}
                     continue
                 data_br = _arrival_date(e.get("data_prevista"))
                 campos = {
@@ -383,18 +442,38 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, lote: list[dict],
                 try:
                     r = page.context.request.post(URL_STORE_EXCEL, multipart=campos, headers=_HEADERS_AJAX, timeout=120000)
                 except Exception as ex:  # noqa: BLE001
-                    saida[chave] = {"criado": False, "ja_existia": False, "erro": f"falha ao enviar à Stokki: {ex}", "stokki_id": None, "codigo": "", "resposta": str(ex)}
+                    # achado 1: exceção/timeout no POST não é recusa -- pode ter
+                    # criado do lado da Stokki mesmo sem resposta. Confirma pela
+                    # listagem antes de desistir (indeterminado, não ERRO).
+                    logger.info(f"   (post do wizard Excel falhou pra {en.rotulo_entrada(e)}: {ex})")
+                    try:
+                        id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
+                    except ErroConsultaStokki as ex2:
+                        logger.info(f"   (consulta pós-falha indeterminada pra {en.rotulo_entrada(e)}: {ex2})")
+                        id_pe, codigo = None, ""
+                    if id_pe:
+                        saida[chave] = {"criado": True, "ja_existia": False, "erro": "", "stokki_id": id_pe, "codigo": codigo,
+                                        "resposta": str(ex), "indeterminado": False}
+                    else:
+                        saida[chave] = {"criado": False, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "",
+                                        "resposta": str(ex), "indeterminado": True}
                     continue
                 corpo = (r.text() or "")[:4000]
                 if r.ok:
-                    id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
-                    saida[chave] = {"criado": True, "ja_existia": False, "erro": "", "stokki_id": id_pe, "codigo": codigo, "resposta": corpo}
+                    try:
+                        id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
+                    except ErroConsultaStokki as ex:
+                        logger.info(f"   (não consegui confirmar o #PE de {en.rotulo_entrada(e)} pela listagem: {ex})")
+                        id_pe, codigo = None, ""
+                    saida[chave] = {"criado": True, "ja_existia": False, "erro": "", "stokki_id": id_pe, "codigo": codigo,
+                                    "resposta": corpo, "indeterminado": False}
                 else:
                     erro = fila_saida._erros_da_resposta(r)
                     if not origem_id and "origin" in erro.lower():
                         erro = "A Stokki exige uma origem cadastrada pra remessa por planilha e o cliente não tem nenhuma -- " \
                                "anuncie pelo XML da NF-e ou peça à Fresh Log pra cadastrar a origem na Stokki. Detalhe: " + erro
-                    saida[chave] = {"criado": False, "ja_existia": False, "erro": erro, "stokki_id": None, "codigo": "", "resposta": corpo}
+                    saida[chave] = {"criado": False, "ja_existia": False, "erro": erro, "stokki_id": None, "codigo": "",
+                                    "resposta": corpo, "indeterminado": False}
         finally:
             browser.close()
     return saida
@@ -438,9 +517,22 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
         return resumo
 
     ids = [e["id"] for e in lote]
-    conn.execute(f"UPDATE portal_entradas SET stokki_status = ?, atualizado_em = ? WHERE id IN ({','.join('?' * len(ids))})",
-                 (en.STOKKI_ENVIANDO, ep._agora(), *ids))
+    marcador = ",".join("?" * len(ids))
+    # achado 3: guard + releitura -- se o cliente cancelou entre o ciclo() ler
+    # a fila e este lote começar, a linha não está mais em ANUNCIADO/NA_FILA
+    # e o UPDATE (com o guard) simplesmente não pega ela; a releitura garante
+    # que só processamos quem realmente virou ENVIANDO agora, nunca a
+    # entrada cancelada (que fica intocada, com o status dela).
+    conn.execute(f"UPDATE portal_entradas SET stokki_status = ?, atualizado_em = ? "
+                 f"WHERE id IN ({marcador}) AND status = ? AND stokki_status = ?",
+                 (en.STOKKI_ENVIANDO, ep._agora(), *ids, en.STATUS_ANUNCIADO, en.STOKKI_NA_FILA))
     conn.commit()
+    lote = [dict(r) for r in conn.execute(
+        f"SELECT * FROM portal_entradas WHERE id IN ({marcador}) AND stokki_status = ?",
+        (*ids, en.STOKKI_ENVIANDO)).fetchall()]
+    if not lote:
+        logger.info(f"[{cfg['nome']}] nenhuma das {len(ids)} entrada(s) do lote seguia elegível (cancelada nesse meio-tempo?) -- nada a fazer.")
+        return resumo
 
     pasta_lote = _pasta_lotes() / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cfg['cnpj']}"
     pasta_lote.mkdir(parents=True, exist_ok=True)
@@ -475,7 +567,8 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
 
         if simular:
             logger.info(f"[{cfg['nome']}] SIMULAÇÃO: {len(prontos)} entrada(s) marcadas como criadas sem tocar a Stokki.")
-            resultados = {e["chave_nfe"]: {"criado": True, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "", "resposta": ""} for e in prontos}
+            resultados = {e["chave_nfe"]: {"criado": True, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "",
+                                           "resposta": "", "indeterminado": False} for e in prontos}
         else:
             espera = int(_cfg_portal(config).get("espera_stokki_minutos") or 45) * 60
             if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera):
@@ -510,6 +603,13 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
                 resumo["ja_existiam" if r["ja_existia"] else "criados"] += 1
                 if r["criado"] and not r["stokki_id"]:
                     logger.info(f"   {en.rotulo_entrada(e)} criado, mas o #PE ainda não foi achado -- o timer do WMS amarra pela chave.")
+            elif r.get("indeterminado"):
+                # achado 1: nunca ERRO na hora nem e-mail de recusa por um
+                # resultado indeterminado -- volta pra fila (mesma trilha de
+                # falha técnica: conta tentativa, 3ª vez vira ERRO sozinho,
+                # sem entrar em erros_definitivos/_avisar_erros).
+                definitivos = _falha_tecnica(conn, [e], f"resultado indeterminado: {r.get('erro') or 'sem confirmação da Stokki'}")
+                resumo["erros" if definitivos else "adiados"] += 1
             else:
                 _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_erro=(r["erro"] or "recusado pela Stokki")[:900],
                         stokki_tentativas=int(e.get("stokki_tentativas") or 0) + 1)

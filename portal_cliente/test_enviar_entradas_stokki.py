@@ -57,6 +57,20 @@ def _linha(id_stokki, ref):
                   f'<br><span class="text-muted">{ref}</span>', "client": "X <span>#stkkc-48</span>", "state": "Em transito", "arrival_date": ""}
 
 
+def _linha_cancelada(id_stokki, ref):
+    d = _linha(id_stokki, ref)
+    d["state"] = "Cancelado"
+    return d
+
+
+class SessaoQuebrada:
+    """procurar_pe sobre isso tem que levantar, nunca devolver (None, '')
+    como se não tivesse achado (achado 2: falha de CONSULTA != não achar)."""
+
+    def get(self, url, params=None, headers=None):
+        raise RuntimeError("rede caiu")
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -159,6 +173,58 @@ class TestWizardDublado(Base):
         wiz.assert_not_called()
         self.assertEqual(self.conn.execute("SELECT stokki_status FROM portal_entradas").fetchone()[0], "NA_FILA")
 
+    def test_indeterminado_volta_pra_fila_sem_email(self):
+        # achado 1: sem resposta/tela claras a Stokki pode ter criado mesmo
+        # assim -- nunca ERRO na hora, nunca e-mail de recusa por isso.
+        self._anunciar()
+        resultado = {CHAVE: {"criado": False, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "",
+                             "resposta": "", "indeterminado": True}}
+        with mock.patch.object(worker, "carregar_importador", return_value=(mock.Mock(), mock.Mock())), \
+             mock.patch.object(worker, "_credenciais", return_value=("u", "s")), \
+             mock.patch.object(worker.sessao_uso, "adquirir", return_value=True), \
+             mock.patch.object(worker.sessao_uso, "liberar"), \
+             mock.patch.object(worker, "_avisar_erros") as avisar, \
+             mock.patch.object(worker, "executar_wizard_xml", return_value=resultado):
+            r = worker.processar_lote(self.conn, CNPJ, self._fila(), self.config)
+        avisar.assert_not_called()
+        self.assertEqual(r["adiados"], 1)
+        e = dict(self.conn.execute("SELECT * FROM portal_entradas").fetchone())
+        self.assertEqual((e["stokki_status"], e["stokki_tentativas"], e["status"]), ("NA_FILA", 1, "ANUNCIADO"))
+
+    def test_tres_indeterminados_seguidos_vira_erro(self):
+        self._anunciar()
+        resultado = {CHAVE: {"criado": False, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "",
+                             "resposta": "", "indeterminado": True}}
+        for tentativa in (1, 2, 3):
+            with mock.patch.object(worker, "carregar_importador", return_value=(mock.Mock(), mock.Mock())), \
+                 mock.patch.object(worker, "_credenciais", return_value=("u", "s")), \
+                 mock.patch.object(worker.sessao_uso, "adquirir", return_value=True), \
+                 mock.patch.object(worker.sessao_uso, "liberar"), \
+                 mock.patch.object(worker, "_avisar_erros") as avisar, \
+                 mock.patch.object(worker, "executar_wizard_xml", return_value=resultado):
+                worker.processar_lote(self.conn, CNPJ, self._fila(), self.config)
+            avisar.assert_not_called()
+            e = dict(self.conn.execute("SELECT * FROM portal_entradas").fetchone())
+            self.assertEqual(e["stokki_tentativas"], tentativa)
+            self.assertEqual(e["stokki_status"], "ERRO" if tentativa == 3 else "NA_FILA")
+
+    def test_cancelado_entre_ciclo_e_lote_fica_de_fora(self):
+        # achado 3: o snapshot que o ciclo() leu pode estar velho -- se o
+        # cliente cancelou nesse meio-tempo, a entrada não pode virar
+        # ENVIANDO nem entrar no wizard.
+        self._anunciar()
+        fila_velha = self._fila()   # snapshot de antes do cancelamento
+        self.conn.execute("UPDATE portal_entradas SET status = 'CANCELADO'")
+        self.conn.commit()
+        with mock.patch.object(worker, "carregar_importador") as ci, \
+             mock.patch.object(worker, "executar_wizard_xml") as wiz:
+            r = worker.processar_lote(self.conn, CNPJ, fila_velha, self.config)
+        ci.assert_not_called()
+        wiz.assert_not_called()
+        self.assertEqual((r["criados"], r["ja_existiam"], r["erros"], r["adiados"]), (0, 0, 0, 0))
+        e = dict(self.conn.execute("SELECT * FROM portal_entradas").fetchone())
+        self.assertEqual((e["status"], e["stokki_status"]), ("CANCELADO", "NA_FILA"))
+
 
 class TestCiclo(Base):
     def test_ciclo_pega_so_anunciadas_na_fila(self):
@@ -187,16 +253,32 @@ class TestPuros(unittest.TestCase):
         self.assertEqual(worker._arrival_date(""), hoje.strftime("%d/%m/%Y"))
 
     def test_resultados_do_lote_resposta_http_manda(self):
+        # 422 com errors explicito: ERRO definitivo (indeterminado=False),
+        # mesmo com a tela mostrando "Pedido criado".
         linhas = [{"nome": f"{CHAVE}.xml (12.3 KB)", "invoice": CHAVE, "barra_texto": "Pedido criado", "barra_classe": "progress-bar bg-success", "erros": []}]
         respostas = {CHAVE: {"status": 422, "body": '{"errors": {"po": ["Chave da NFe já utilizada"]}}'}}
         r = worker.resultados_do_lote(linhas, [CHAVE], respostas)
-        self.assertFalse(r[CHAVE]["criado"])
+        self.assertEqual(r[CHAVE]["criado"], False)
+        self.assertEqual(r[CHAVE]["indeterminado"], False)
         self.assertIn("já utilizada", r[CHAVE]["erro"])
+        # 2xx com a tela confirmando: criado, sem duvida
         respostas = {CHAVE: {"status": 200, "body": '{"success":true}'}}
-        self.assertTrue(worker.resultados_do_lote(linhas, [CHAVE], respostas)[CHAVE]["criado"])
-        # sem resposta capturada e sem linha na tela: não criado (melhor tentar de novo)
-        r = worker.resultados_do_lote([], [CHAVE], {})
-        self.assertFalse(r[CHAVE]["criado"])
+        r2 = worker.resultados_do_lote(linhas, [CHAVE], respostas)
+        self.assertEqual((r2[CHAVE]["criado"], r2[CHAVE]["indeterminado"]), (True, False))
+        # achado 1: sem resposta capturada e sem linha na tela -- indeterminado,
+        # nunca ERRO na hora (nao dá pra saber se criou ou nao)
+        r3 = worker.resultados_do_lote([], [CHAVE], {})
+        self.assertEqual(r3[CHAVE], {"criado": False, "erro": "", "indeterminado": True})
+        # achado 1: 2xx no store mas a tela mostra vermelho SEM detalhar por
+        # que -- tambem indeterminado (nao é uma recusa explicita)
+        linhas_vermelhas = [{"nome": f"{CHAVE}.xml", "invoice": CHAVE, "barra_texto": "", "barra_classe": "progress-bar bg-danger", "erros": []}]
+        r4 = worker.resultados_do_lote(linhas_vermelhas, [CHAVE], {CHAVE: {"status": 200, "body": '{"success":true}'}})
+        self.assertEqual(r4[CHAVE], {"criado": False, "erro": "", "indeterminado": True})
+        # barra vermelha COM mensagem, sem resposta HTTP capturada: recusa
+        # explicita pela tela, tambem conta (indeterminado=False)
+        linhas_com_erro = [{"nome": f"{CHAVE}.xml", "invoice": CHAVE, "barra_texto": "", "barra_classe": "progress-bar bg-danger", "erros": ["SKU não cadastrado"]}]
+        r5 = worker.resultados_do_lote(linhas_com_erro, [CHAVE], {})
+        self.assertEqual(r5[CHAVE], {"criado": False, "erro": "SKU não cadastrado", "indeterminado": False})
 
     def test_procurar_pe_pela_chave_so_abre_o_detalhe_com_a_mesma_ref(self):
         sess = SessaoFalsa([_linha(2400, "41000"), _linha(2497, "41221")], {"2497": HTML_DETALHE, "2400": "<html>outra</html>"})
@@ -213,6 +295,20 @@ class TestPuros(unittest.TestCase):
     def test_procurar_pe_sem_par(self):
         sess = SessaoFalsa([_linha(2400, "41000")], {"2400": "<html></html>"})
         self.assertEqual(worker.procurar_pe(sess, "48", "41221", chave_nfe=CHAVE), (None, ""))
+
+    def test_procurar_pe_ignora_pe_cancelado_mesmo_com_a_chave_batendo(self):
+        # achado 4: um #PE cancelado nao pode contar como "ja existe" pro
+        # dedupe -- mesmo que a chave da NF-e bata no detalhe dele.
+        sess = SessaoFalsa([_linha_cancelada(2497, "41221")], {"2497": HTML_DETALHE})
+        self.assertEqual(worker.procurar_pe(sess, "48", "41221", chave_nfe=CHAVE), (None, ""))
+        self.assertFalse(any("/show/" in u for u, _ in sess.chamadas))
+
+    def test_procurar_pe_consulta_quebrada_levanta_em_vez_de_fingir_que_nao_achou(self):
+        # achado 2: falha de CONSULTA (rede, sessao caida) tem que levantar
+        # -- nunca virar (None, "") como se so nao tivesse achado, senao o
+        # worker sobe o #PE de novo por engano.
+        with self.assertRaises(worker.ErroConsultaStokki):
+            worker.procurar_pe(SessaoQuebrada(), "48", "41221", chave_nfe=CHAVE)
 
 
 if __name__ == "__main__":
