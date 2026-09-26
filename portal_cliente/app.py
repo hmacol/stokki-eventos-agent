@@ -39,6 +39,7 @@ sys.path.insert(1, str(_RAIZ / "insucesso_entrega"))
 import yaml
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from jinja2 import ChoiceLoader, FileSystemLoader
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import auth_cliente as auth
@@ -963,6 +964,8 @@ def api_entradas_confirmar():
         criados = entradas_mod.confirmar_entradas(conn, _empresa_envio()["cnpj"], itens, _quem_envia(), _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("confirmar_entradas falhou")
         return jsonify({"erro": f"Não foi possível registrar as entradas ({type(e).__name__})."}), 500
