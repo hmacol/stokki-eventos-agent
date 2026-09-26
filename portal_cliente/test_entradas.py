@@ -548,5 +548,25 @@ class TestAmarracaoEStatus(BasePortal):
         self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")   # CANCELADO nunca reabre
 
 
+class TestCli(BasePortal):
+    def test_entradas_ativar_avisa_quando_nao_e_o_piloto(self):
+        import io
+        import contextlib
+        import gerenciar_clientes as cli
+        saida = io.StringIO()
+        # sem patch em envios.conectar: ep.DB_PATH já aponta pro banco temporário
+        # (BasePortal) e o comando chama garantir_tabelas antes de tudo
+        with mock.patch.object(cli, "_config", return_value={"wms": {"embarcador_piloto_id": "48"}}), \
+             contextlib.redirect_stdout(saida):
+            cli.main(["entradas", OUTRO, "--ativar"])
+            cli.main(["entradas", CNPJ, "--ativar"])
+            cli.main(["entradas", CNPJ])
+        texto = saida.getvalue()
+        self.assertIn("ATENÇÃO", texto)                 # OUTRO (stkkc 77) não é o piloto 48
+        self.assertIn("Pedidos de Entrada: ATIVO", texto)
+        self.assertTrue(entradas.config_entradas_cliente(self.conn, CNPJ)["entradas_ativo"])
+        self.assertTrue(entradas.config_entradas_cliente(self.conn, OUTRO)["entradas_ativo"])   # avisa, mas obedece
+
+
 if __name__ == "__main__":
     unittest.main()

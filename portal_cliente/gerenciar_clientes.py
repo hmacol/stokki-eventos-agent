@@ -29,6 +29,11 @@ Máscara de envio de pedidos (08/09):
     py -3 portal_cliente/gerenciar_clientes.py concluir 12 "cancelado na Stokki"         # marca a solicitação 12 como atendida
     py -3 portal_cliente/gerenciar_clientes.py fila                                       # o que está NA_FILA/ENVIANDO/ERRO
 
+Pedidos de Entrada (25/09, só o piloto do WMS):
+    py -3 portal_cliente/gerenciar_clientes.py entradas 22135070000190              # mostra se a aba está ligada
+    py -3 portal_cliente/gerenciar_clientes.py entradas 22135070000190 --ativar     # liga a aba pro embarcador
+    py -3 portal_cliente/gerenciar_clientes.py entradas 22135070000190 --desativar
+
 Quem pode ter conta é quem está em `interno` com sender_id -- pra liberar
 um embarcador novo, primeiro cadastre CNPJ/sender_id/e-mail lá (é a
 mesma tabela usada pelas notificações de insucesso).
@@ -48,6 +53,7 @@ import yaml
 
 import auth_cliente as auth
 import envio_pedidos as envios
+import entradas as entradas_portal
 
 
 def _comandos_envio(args, cfg: dict) -> int:
@@ -79,6 +85,19 @@ def _comandos_envio(args, cfg: dict) -> int:
             print(f"  planilha (wizard Excel): carrier_id: {c['carrier_id'] or '(automático: ' + (c['carrier_nome'] or 'primeira transportadora do cliente') + ')'}"
                   f"  prioridade: {c['prioridade'] or '(nenhuma)'}")
             print(f"  envio {'ATIVO' if c['envio_ativo'] else 'DESATIVADO'}  e-mails: {', '.join(c['emails']) or '(nenhum)'}")
+            return 0
+        if args.cmd == "entradas":
+            entradas_portal.garantir_tabelas(conn)
+            if args.ativar or args.desativar:
+                entradas_portal.definir_entradas_ativo(conn, args.cnpj, bool(args.ativar))
+            c = envios.config_stokki_cliente(conn, args.cnpj, cfg)
+            ativo = entradas_portal.config_entradas_cliente(conn, args.cnpj)["entradas_ativo"]
+            piloto = str((cfg.get("wms", {}) or {}).get("embarcador_piloto_id", "48"))
+            print(f"{c['nome']} ({auth.formatar_cnpj(c['cnpj'])})  stkkc_id {c['client_id'] or '(FALTA)'}")
+            print(f"  Pedidos de Entrada: {'ATIVO' if ativo else 'DESATIVADO'}")
+            if ativo and str(c["client_id"]) != piloto:
+                print(f"ATENÇÃO: o timer do WMS só lê recebimentos do piloto (stkkc {piloto}); entradas deste embarcador "
+                      f"vão ficar ANUNCIADO pra sempre até o WMS atender mais de um embarcador.")
             return 0
         if args.cmd == "solicitacoes":
             itens = envios.listar_solicitacoes_pendentes(conn)
@@ -250,10 +269,15 @@ def main(argv=None) -> int:
     cc.add_argument("id", type=int)
     cc.add_argument("resposta", nargs="?", default="")
     cc.add_argument("--recusar", action="store_true")
+    en = sub.add_parser("entradas", help="aba Pedidos de Entrada (só o piloto do WMS)")
+    en.add_argument("cnpj")
+    ge = en.add_mutually_exclusive_group()
+    ge.add_argument("--ativar", action="store_true")
+    ge.add_argument("--desativar", action="store_true")
     args = p.parse_args(argv)
 
     cfg = _config()
-    if args.cmd in ("envio", "solicitacoes", "fila", "concluir"):
+    if args.cmd in ("envio", "solicitacoes", "fila", "concluir", "entradas"):
         return _comandos_envio(args, cfg)
     conn = auth.conectar()
     try:

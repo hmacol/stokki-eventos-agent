@@ -44,6 +44,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
+import entradas as entradas_mod
 from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
@@ -435,9 +436,16 @@ def _empresas_com_envio() -> list[dict]:
 @requer_cliente
 def inicio():
     aba = request.args.get("aba") or "acompanhamento"
+    conn = entradas_mod.conectar()
+    try:
+        entradas_ativo = entradas_mod.entradas_ativas_para(conn, [e["cnpj"] for e in g.cliente["empresas"]])
+    finally:
+        conn.close()
+    abas = ("acompanhamento", "envios") + (("entradas",) if entradas_ativo else ())
     return render_template("acompanhamento.html", data_inicial=_data_da_query().isoformat(),
                            empresas_envio=_empresas_com_envio(),
-                           hoje=date.today().isoformat(), aba_inicial=aba if aba in ("acompanhamento", "envios") else "acompanhamento",
+                           hoje=date.today().isoformat(), aba_inicial=aba if aba in abas else "acompanhamento",
+                           entradas_ativo=entradas_ativo,
                            pode_enviar=not (g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA))
 
 
@@ -849,6 +857,165 @@ def api_envios_xml(envio_id):
         return send_file(caminho, mimetype=tipos.get(caminho.suffix.lower(), "application/octet-stream"), as_attachment=True,
                          download_name=caminho.name.split("_", 3)[-1] if caminho.name.count("_") >= 3 else caminho.name, max_age=0)
     return send_file(caminho, mimetype="application/xml", as_attachment=True, download_name=f"{envio['chave_nfe']}.xml", max_age=0)
+
+
+# ── Pedidos de Entrada (25/09) ─────────────────────────────────────────────────
+
+def _exige_entradas_ativas(conn) -> None:
+    if not entradas_mod.config_entradas_cliente(conn, _empresa_envio()["cnpj"])["entradas_ativo"]:
+        abort(Response(jsonify({"erro": "A aba Pedidos de Entrada não está liberada pra esta empresa."}).get_data(),
+                       status=403, mimetype="application/json"))
+
+
+@app.route("/api/entradas")
+@requer_cliente
+def api_entradas_listar():
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        lista = entradas_mod.listar_entradas(conn, _empresa_envio()["cnpj"])
+    finally:
+        conn.close()
+    return jsonify({"entradas": lista, "resumo": entradas_mod.resumo_entradas(lista), "dias": entradas_mod.DIAS_LISTAGEM,
+                    "hoje": date.today().isoformat(), "atualizado_em": datetime.now().strftime("%H:%M")})
+
+
+@app.route("/api/entradas/analisar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_analisar():
+    """Recebe .xml/.zip/.xlsx, lê cada NF-e de remessa ou remessa da
+    planilha, valida e devolve a prévia. Nada entra na fila ainda."""
+    _exige_pode_enviar()
+    arquivos = request.files.getlist("arquivos")
+    if not arquivos:
+        return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e de remessa (ou ZIP) ou planilha .xlsx no modelo Fresh Log de entrada."}), 400
+    itens, rejeitados, vistos = [], [], set()
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        cnpj = _empresa_envio()["cnpj"]
+        for f in arquivos:
+            try:
+                partes = envios.expandir_upload(f.filename or "", f.read())
+            except envios.ErroEnvio as e:
+                rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
+                continue
+            for nome, conteudo in partes:
+                if envios.e_planilha(nome, conteudo):
+                    try:
+                        remessas, rej = entradas_mod.ler_planilha_entrada(conteudo, nome, cnpj)
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                        continue
+                    rejeitados.extend(rej)
+                    token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
+                    lidos = [(entradas_mod.rotulo_entrada(r), r, lambda r=r: envios.guardar_temporario_pedido(r, token_plan)) for r in remessas]
+                else:
+                    try:
+                        nfe = entradas_mod.ler_nfe_entrada(conteudo, nome)
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                        continue
+                    lidos = [(entradas_mod.rotulo_entrada(nfe), nfe, lambda c=conteudo: envios.guardar_temporario(c))]
+                for rotulo, item, guardar in lidos:
+                    if item["chave_nfe"] in vistos:
+                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetida dentro do mesmo envio."})
+                        continue
+                    vistos.add(item["chave_nfe"])
+                    v = entradas_mod.validar_entrada(conn, item, cnpj, _CONFIG, _outras_empresas_envio())
+                    if not v["ok"]:
+                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"])})
+                        continue
+                    previa = {k: x for k, x in item.items() if k not in ("emitente_cnpj",)}
+                    previa.update({"token": guardar(), "avisos": v["avisos"], "rotulo": rotulo})
+                    itens.append(previa)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"entradas.analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)}")
+    return jsonify({"itens": itens, "rejeitados": rejeitados, "hoje": date.today().isoformat()})
+
+
+@app.route("/api/entradas/modelo-planilha")
+@requer_cliente
+def api_entradas_modelo_planilha():
+    conteudo = entradas_mod.gerar_modelo_planilha_entrada(_empresa_envio()["nome"] or "")
+    return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="modelo_entradas_freshlog.xlsx", max_age=0)
+
+
+@app.route("/api/entradas/confirmar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_confirmar():
+    _exige_pode_enviar()
+    corpo = request.get_json(silent=True) or {}
+    itens = corpo.get("itens") or []
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "Nenhuma remessa pra confirmar."}), 400
+    if len(itens) > 200:
+        return jsonify({"erro": "Anuncie no máximo 200 notas por vez."}), 400
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        criados = entradas_mod.confirmar_entradas(conn, _empresa_envio()["cnpj"], itens, _quem_envia(), _CONFIG)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    except Exception as e:
+        logger.exception("confirmar_entradas falhou")
+        return jsonify({"erro": f"Não foi possível registrar as entradas ({type(e).__name__})."}), 500
+    finally:
+        conn.close()
+    n = len(criados)
+    logger.info(f"entradas.confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={n}")
+    return jsonify({"ok": True, "criados": criados,
+                    "mensagem": f"{n} entrada{'s' if n > 1 else ''} anunciada{'s' if n > 1 else ''}. "
+                                f"O recebimento é criado na Stokki em instantes -- acompanhe o status na lista."})
+
+
+@app.route("/api/entradas/<int:entrada_id>/cancelar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_cancelar(entrada_id):
+    _exige_pode_enviar()
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        entrada = entradas_mod.buscar_entrada(conn, entrada_id, _empresa_envio()["cnpj"])
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada."}), 404
+        emp = _empresa_envio()
+        # CNPJ do LOGIN (g.cliente), como bloqueio_area: o chat busca o chamado pelo CNPJ logado
+        r = entradas_mod.cancelar_entrada(conn, entrada, _quem_envia(),
+                                          {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")}, _CONFIG)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"entradas.cancelar cnpj={_empresa_envio()['cnpj']} entrada={entrada_id} por={_quem_envia()} -> {r}")
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/entradas/<int:entrada_id>/arquivo")
+@requer_cliente
+def api_entradas_arquivo(entrada_id):
+    conn = entradas_mod.conectar()
+    try:
+        entrada = entradas_mod.buscar_entrada(conn, entrada_id, _empresa_envio()["cnpj"])
+    finally:
+        conn.close()
+    if not entrada:
+        abort(404)
+    caminho = entradas_mod.caminho_arquivo(entrada)
+    if not caminho.is_file():
+        abort(404)
+    if entrada["origem"] == envios.ORIGEM_PLANILHA:
+        tipos = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel"}
+        return send_file(caminho, mimetype=tipos.get(caminho.suffix.lower(), "application/octet-stream"), as_attachment=True,
+                         download_name=caminho.name.split("_", 3)[-1] if caminho.name.count("_") >= 3 else caminho.name, max_age=0)
+    return send_file(caminho, mimetype="application/xml", as_attachment=True, download_name=f"{entrada['chave_nfe']}.xml", max_age=0)
 
 
 @app.route("/api/destinatarios", methods=["POST"])
