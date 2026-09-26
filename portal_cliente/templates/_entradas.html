@@ -1,0 +1,317 @@
+{# Aba "Pedidos de Entrada" (25/09/2026): o cliente anuncia a mercadoria que
+   vai chegar no galpão (XML da NF-e de remessa ou planilha). Incluído por
+   acompanhamento.html DEPOIS de _envios.html: reaproveita o CSS de lá
+   (.zona, .previa, .msg, .modal*, .chip, .badge) e a barra .vistas, à qual
+   acrescenta o terceiro botão. Conversa com /api/entradas/* (app.py). #}
+{% if entradas_ativo %}
+<style>
+  #vista-entradas { display: flex; flex-direction: column; gap: 16px; }
+  .b-ANUNCIADO { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .b-CHEGOU { background: var(--rota-bg); color: var(--st-rota); }
+  .b-ENDERECADO { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .b-DIVERGENCIA { background: var(--erro-bg); color: var(--st-falha); }
+  .chip.atrasada { background: var(--erro-bg); color: var(--st-falha); }
+  .chip.stokki-erro { background: var(--erro-bg); color: var(--st-falha); }
+  .ent-itens { font-size: 12px; margin: 6px 0 0; border-collapse: collapse; }
+  .ent-itens th, .ent-itens td { padding: 3px 8px; border-bottom: 1px dashed var(--borda); text-align: left; }
+  .ent-itens td.num { text-align: right; }
+  .ent-itens .falta { color: var(--st-falha); font-weight: 700; }
+  tr.ent-detalhe td { background: var(--fundo); }
+  .ent-expandir { border: none; background: none; color: var(--acento); cursor: pointer; font-size: 12px; padding: 0; }
+</style>
+
+<section id="vista-entradas" class="oculto" data-aba-inicial="{{ aba_inicial }}" data-pode-enviar="{{ 1 if pode_enviar else 0 }}">
+  <div class="env-grade">
+    <div class="coluna">
+      <div class="card" id="ent-card-anunciar" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+          <h3 style="margin:0;">Anunciar mercadoria que vai chegar</h3>
+          {% if empresas_envio | length > 1 %}
+          <select id="ent-empresa" aria-label="Empresa" style="font-family:inherit; font-size:12.5px; color:var(--texto); background:var(--superficie); border:1px solid var(--borda); border-radius:6px; padding:5px 9px; max-width:280px;">
+            {% for e in empresas_envio %}<option value="{{ e.cnpj }}">{{ e.nome }}</option>{% endfor %}
+          </select>
+          {% endif %}
+        </div>
+        <label class="zona" id="ent-zona">
+          <input type="file" id="ent-arquivos" multiple accept=".xml,.zip,.xlsx,.xls,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <div><b>Arraste o XML da NF-e de remessa ou a planilha de entrada aqui</b> ou clique pra escolher</div>
+          <div style="font-size:11.5px; margin-top:4px;">XML: a nota de remessa emitida pela sua empresa pro galpão Fresh Log (vários .xml ou um .zip). Planilha: .xlsx no modelo de entrada, uma linha por item.</div>
+        </label>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
+          <a class="botao-linha" id="ent-btn-modelo" href="{{ request.script_root }}/api/entradas/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha de entrada (.xlsx)</a>
+        </div>
+        <div class="msg" id="ent-msg"></div>
+        <div class="previa" id="ent-previa">
+          <div class="rej oculto" id="ent-previa-rej"></div>
+          <div>
+            <h4 id="ent-previa-titulo"></h4>
+            <div style="font-size:12px; color:var(--texto-suave); margin:4px 0 8px;">Data prevista pra todas: <input type="date" id="ent-data-todas"> <span>(ajuste por linha se precisar)</span></div>
+            <div class="rolagem"><table id="ent-previa-tabela"><thead><tr><th>NF / Remessa</th><th>Itens</th><th style="text-align:center">Vol.</th><th>Data prevista</th><th>Observação</th></tr></thead><tbody></tbody></table></div>
+          </div>
+          <div class="barra-confirmar">
+            <button type="button" class="botao" id="ent-btn-confirmar">Confirmar anúncio</button>
+            <button type="button" class="botao-linha" id="ent-btn-limpar">Descartar</button>
+            <span style="font-size:12px; color:var(--texto-suave);">Depois de confirmar, o recebimento é criado na Stokki e o galpão passa a esperar a mercadoria.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:14px 18px;">
+        <div class="grade-tiles" id="ent-tiles"><div class="carregando">Carregando as entradas…</div></div>
+      </div>
+
+      <div class="card card-tabela">
+        <div class="ferramentas">
+          <div class="abas" id="ent-abas"></div>
+          <div class="busca">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="search" id="ent-busca" placeholder="Buscar por NF, remessa, SKU ou #PE">
+          </div>
+          <button type="button" class="botao-linha" id="ent-atualizar">Atualizar</button>
+        </div>
+        <div class="rolagem"><table id="ent-tabela"><thead><tr><th>Anunciado em</th><th>NF / Remessa</th><th>Data prevista</th><th style="text-align:center">Itens</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Stokki</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+        <div class="vazio oculto" id="ent-vazia"></div>
+        <div class="rodape-tabela"><span id="ent-contagem"></span><span id="ent-carimbo" style="font-size:12px;"></span></div>
+      </div>
+    </div>
+
+    <aside class="coluna">
+      <div class="card">
+        <h3>Como funciona</h3>
+        <div class="lista-lateral" style="font-size:12.5px; color:var(--texto-suave); gap:10px;">
+          <div><b style="color:var(--texto)">1.</b> Você sobe o XML da NF-e de remessa que a sua empresa emitiu pro galpão da Fresh Log (ou a planilha de entrada) e informa a data prevista de chegada.</div>
+          <div><b style="color:var(--texto)">2.</b> O recebimento é criado na Stokki automaticamente e o galpão passa a esperar a mercadoria.</div>
+          <div><b style="color:var(--texto)">3.</b> Quando chega, o galpão confere e endereça. Se chegar menos do que foi anunciado, a divergência aparece aqui e você recebe o relatório por e-mail.</div>
+          <div><b style="color:var(--texto)">4.</b> Enquanto ainda não chegou, dá pra cancelar por aqui.</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<div class="modal-fundo" id="ent-modal"><div class="modal" id="ent-modal-caixa"></div></div>
+
+<script>
+(function () {
+  const BASE = {{ request.script_root | tojson }};
+  const secao = document.getElementById('vista-entradas');
+  const PODE_ENVIAR = secao.dataset.podeEnviar === '1';
+  const EMPRESAS = {{ empresas_envio | tojson }};
+  let empresa = EMPRESAS.length ? EMPRESAS[0].cnpj : '';
+  const fetch = (url, o = {}) => window.fetch(url, { ...o, headers: { ...(o.headers || {}), ...(empresa ? { 'X-Portal-Empresa': empresa } : {}) } });
+  const comEmpresa = url => empresa ? `${url}?empresa=${empresa}` : url;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = v => (Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  const dataBr = iso => iso ? iso.split('-').reverse().join('/') : '';
+
+  // ── Terceiro botão na barra .vistas (criada por _envios.html) ──────────────
+  const vistas = document.querySelector('.vistas');
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.dataset.vista = 'entradas';
+  btn.innerHTML = 'Pedidos de entrada <em id="ent-badge"></em>';
+  const envBtn = vistas.querySelector('[data-vista="envios"]');
+  envBtn.insertAdjacentElement('afterend', btn);
+  let vista = 'acompanhamento';
+  // O handler de _envios.html já esconde a grade e a vista de envios pra
+  // qualquer data-vista; aqui só se cuida da própria seção e do ?aba=.
+  vistas.addEventListener('click', e => {
+    const b = e.target.closest('[data-vista]'); if (!b) return;
+    vista = b.dataset.vista;
+    secao.classList.toggle('oculto', vista !== 'entradas');
+    const url = new URL(location.href);
+    if (vista === 'entradas') { url.searchParams.set('aba', 'entradas'); history.replaceState(null, '', url); carregar(); }
+  });
+
+  // ── Estado ─────────────────────────────────────────────────────────────────
+  let dados = null, aba = 'abertas', busca = '', timer = null, previa = null, abertos = new Set();
+
+  async function carregar() {
+    try {
+      const r = await fetch(`${BASE}/api/entradas`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = `${BASE}/login?proximo=${encodeURIComponent(location.pathname + location.search)}`; return; }
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao carregar as entradas.');
+      dados = j; render();
+    } catch (e) { $('ent-carimbo').textContent = e.message; }
+    clearTimeout(timer);
+    const ativo = dados && dados.entradas.some(x => x.stokki_status === 'NA_FILA' || x.stokki_status === 'ENVIANDO');
+    timer = setTimeout(carregar, ativo ? 20000 : 120000);
+  }
+
+  function render() {
+    const d = dados, k = d.resumo;
+    if (!PODE_ENVIAR) $('ent-card-anunciar').classList.add('oculto');
+    const badge = k.atrasados + k.divergencias + k.erros_stokki;
+    $('ent-badge').textContent = badge; $('ent-badge').classList.toggle('on', badge > 0);
+    $('ent-tiles').innerHTML = `
+      <div class="tile" data-aba="abertas"><span class="rotulo">Anunciadas</span><span class="valor">${k.anunciados}</span><span class="sub">aguardando chegar</span></div>
+      <div class="tile ${k.atrasados ? 'ruim' : ''}" data-aba="atrasadas"><span class="rotulo">Atrasadas</span><span class="valor">${k.atrasados}</span><span class="sub">${k.atrasados ? 'passou da data prevista' : '—'}</span></div>
+      <div class="tile rota" data-aba="chegaram"><span class="rotulo">Chegaram</span><span class="valor">${k.chegaram_hoje}</span><span class="sub">no galpão</span></div>
+      <div class="tile ${k.divergencias ? 'ruim' : ''}" data-aba="divergencias"><span class="rotulo">Com divergência</span><span class="valor">${k.divergencias}</span><span class="sub">${k.divergencias ? 'chegou menos que o anunciado' : '—'}</span></div>`;
+    const abas = [['abertas', 'Abertas', k.anunciados], ['atrasadas', 'Atrasadas', k.atrasados], ['chegaram', 'Chegaram', k.chegaram_hoje], ['divergencias', 'Divergência', k.divergencias], ['todas', 'Todas', k.total]];
+    $('ent-abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
+    renderTabela();
+    $('ent-carimbo').textContent = `Atualizado às ${d.atualizado_em}`;
+  }
+
+  function filtradas() {
+    let lista = dados.entradas;
+    if (aba === 'abertas') lista = lista.filter(x => x.status === 'ANUNCIADO');
+    else if (aba === 'atrasadas') lista = lista.filter(x => x.atrasada);
+    else if (aba === 'chegaram') lista = lista.filter(x => ['CHEGOU', 'ENDERECADO', 'DIVERGENCIA'].includes(x.status));
+    else if (aba === 'divergencias') lista = lista.filter(x => x.status === 'DIVERGENCIA');
+    const q = busca.trim().toLowerCase();
+    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.stokki_codigo, ...(x.itens_lista || []).map(i => i.sku)].join(' ').toLowerCase().includes(q));
+    return lista;
+  }
+
+  function detalhe(x) {
+    const itens = `<table class="ent-itens"><thead><tr><th>SKU</th><th>Descrição</th><th class="num">Qtd anunciada</th></tr></thead><tbody>` +
+      (x.itens_lista || []).map(i => `<tr><td class="mono">${esc(i.sku)}</td><td>${esc(i.descricao || '')}</td><td class="num">${num(i.quantidade)} ${esc(i.unidade || '')}</td></tr>`).join('') + '</tbody></table>';
+    const conf = (x.conferencia || []).length ? `<div style="margin-top:8px;font-size:12px;font-weight:600">Conferência do galpão (por SKU)</div><table class="ent-itens"><thead><tr><th>SKU</th><th>Descrição</th><th class="num">Anunciado</th><th class="num">Recebido</th><th class="num">Faltou</th></tr></thead><tbody>` +
+      x.conferencia.map(c => `<tr><td class="mono">${esc(c.sku)}</td><td>${esc(c.descricao)}</td><td class="num">${num(c.anunciado)} ${esc(c.unidade)}</td><td class="num">${num(c.recebido)} ${esc(c.unidade)}</td><td class="num ${c.falta > 0 ? 'falta' : ''}">${c.falta > 0 ? num(c.falta) + ' ' + esc(c.unidade) : '—'}</td></tr>`).join('') + '</tbody></table>' +
+      (x.observacao_divergencia ? `<div style="margin-top:6px;font-size:12px"><b>Observação de quem recebeu:</b> ${esc(x.observacao_divergencia)}</div>` : '') : '';
+    return `<tr class="ent-detalhe"><td colspan="8">${itens}${conf}${x.observacoes ? `<div style="margin-top:6px;font-size:12px;color:var(--texto-suave)">Obs.: ${esc(x.observacoes)}</div>` : ''}</td></tr>`;
+  }
+
+  function renderTabela() {
+    const lista = filtradas();
+    $('ent-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
+      <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Anunciado pela equipe Fresh Log">equipe</span>' : ''}</td>
+      <td class="nw"><span class="mono num" style="font-weight:600">${esc(x.numero_nf || x.referencia || '—')}</span>${x.origem === 'planilha' ? ' <span class="chip">planilha</span>' : ''}${x.origem === 'planilha' && x.numero_nf && x.referencia ? `<div class="end">${esc(x.referencia)}</div>` : ''}</td>
+      <td class="nw num">${esc(x.data_prevista_br)}${x.atrasada ? ' <span class="chip atrasada">atrasada</span>' : ''}</td>
+      <td class="num nw" style="text-align:center"><button type="button" class="ent-expandir" data-exp="${x.id}">${(x.itens_lista || []).length} ${abertos.has(x.id) ? '▴' : '▾'}</button></td>
+      <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
+      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.encerrado_em_br ? `<div class="end">${esc(x.encerrado_em_br)}</div>` : ''}</td>
+      <td class="nw">${x.stokki_codigo ? `<span class="mono">${esc(x.stokki_codigo)}</span>` : (x.stokki_status === 'ERRO' ? `<span class="chip stokki-erro" title="${esc(x.stokki_erro || '')}">erro na Stokki</span><div class="erro-txt">${esc((x.stokki_erro || '').slice(0, 90))}</div>` : (x.status === 'ANUNCIADO' ? `<span style="color:var(--texto-suave)">${esc(x.stokki_rotulo)}</span>` : '—'))}</td>
+      <td><div class="acoes-linha">
+        ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
+        <button type="button" data-acao="arquivo" data-id="${x.id}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
+      </div></td></tr>` + (abertos.has(x.id) ? detalhe(x) : '')).join('');
+    const vazio = $('ent-vazia');
+    if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.entradas.length ? 'Nenhuma entrada nessa situação.' : 'Você ainda não anunciou nenhuma mercadoria por aqui.'); }
+    else vazio.classList.add('oculto');
+    $('ent-contagem').textContent = lista.length ? `${lista.length} entrada${lista.length > 1 ? 's' : ''}` : '';
+  }
+
+  // ── Upload → prévia → confirmar ────────────────────────────────────────────
+  function mensagem(texto, tipo) { const m = $('ent-msg'); m.className = 'msg' + (texto ? ' ' + tipo : ''); m.textContent = texto || ''; }
+
+  async function analisar(arquivos) {
+    if (!arquivos || !arquivos.length) return;
+    const fd = new FormData();
+    for (const f of arquivos) fd.append('arquivos', f);
+    mensagem(`Lendo ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}…`, 'info');
+    try {
+      const r = await fetch(`${BASE}/api/entradas/analisar`, { method: 'POST', credentials: 'same-origin', body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao ler os arquivos.');
+      previa = j; mensagem('', ''); renderPrevia();
+    } catch (e) { mensagem(e.message, 'erro'); }
+    $('ent-arquivos').value = '';
+  }
+
+  function renderPrevia() {
+    const p = previa, box = $('ent-previa');
+    if (!p.itens.length && !p.rejeitados.length) { box.classList.remove('aberta'); return; }
+    box.classList.add('aberta');
+    const rej = $('ent-previa-rej');
+    if (p.rejeitados.length) {
+      rej.classList.remove('oculto');
+      rej.innerHTML = `<b>${p.rejeitados.length} ${p.rejeitados.length > 1 ? 'itens não podem ser anunciados' : 'item não pode ser anunciado'}:</b>` +
+        p.rejeitados.map(r => `<div>• ${esc(r.rotulo || r.arquivo)} — ${esc(r.erro)}</div>`).join('');
+    } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
+    $('ent-previa-titulo').textContent = p.itens.length ? `${p.itens.length} remessa${p.itens.length > 1 ? 's' : ''} pronta${p.itens.length > 1 ? 's' : ''} pra anunciar` : 'Nenhuma remessa válida neste lote';
+    $('ent-data-todas').min = p.hoje;
+    $('ent-previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => `<tr data-i="${i}">
+      <td class="nw"><span class="mono num" style="font-weight:600">${esc(it.rotulo)}</span>${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
+      <td>${(it.itens_lista || []).slice(0, 4).map(x => `<div class="end">${esc(x.sku)} × ${num(x.quantidade)} ${esc(x.unidade || '')}</div>`).join('')}${(it.itens_lista || []).length > 4 ? `<div class="end">e mais ${it.itens_lista.length - 4}…</div>` : ''}</td>
+      <td class="num nw" style="text-align:center">${it.volumes}</td>
+      <td class="nw"><input type="date" class="ent-data" min="${p.hoje}" value="${esc(it.data_prevista || '')}" required></td>
+      <td><input type="text" class="ent-obs" maxlength="500" placeholder="opcional" style="width:100%"></td>
+    </tr>`).join('');
+    $('ent-btn-confirmar').disabled = !p.itens.length;
+    $('ent-btn-confirmar').textContent = p.itens.length ? `Confirmar anúncio de ${p.itens.length} remessa${p.itens.length > 1 ? 's' : ''}` : 'Nada a anunciar';
+  }
+
+  $('ent-data-todas').addEventListener('change', e => { $('ent-previa-tabela').querySelectorAll('.ent-data').forEach(i => { i.value = e.target.value; }); });
+
+  async function confirmar() {
+    const itens = [];
+    for (let i = 0; i < previa.itens.length; i++) {
+      const tr = $('ent-previa-tabela').querySelector(`tr[data-i="${i}"]`);
+      const data = tr.querySelector('.ent-data').value;
+      if (!data) { mensagem(`${previa.itens[i].rotulo}: informe a data prevista de chegada.`, 'erro'); return; }
+      itens.push({ token: previa.itens[i].token, data_prevista: data, observacoes: tr.querySelector('.ent-obs').value });
+    }
+    $('ent-btn-confirmar').disabled = true;
+    mensagem('Registrando as entradas…', 'info');
+    try {
+      const r = await fetch(`${BASE}/api/entradas/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
+      previa = null; $('ent-previa').classList.remove('aberta');
+      mensagem(j.mensagem, 'ok'); aba = 'abertas'; carregar();
+    } catch (e) { mensagem(e.message, 'erro'); $('ent-btn-confirmar').disabled = false; }
+  }
+
+  // ── Cancelar ───────────────────────────────────────────────────────────────
+  function modal(html) { $('ent-modal-caixa').innerHTML = html; $('ent-modal').classList.add('aberto'); }
+  function fecharModal() { $('ent-modal').classList.remove('aberto'); }
+  $('ent-modal').addEventListener('click', e => { if (e.target === $('ent-modal') || e.target.closest('[data-fechar]')) fecharModal(); });
+
+  function abrirCancelar(id) {
+    const x = dados.entradas.find(e => e.id === Number(id)); if (!x) return;
+    modal(`<h3>Cancelar entrada</h3><p><b>${esc(x.rotulo)}</b> · prevista pra ${esc(x.data_prevista_br)}${x.stokki_codigo ? ' · ' + esc(x.stokki_codigo) : ''}</p>
+      <p>${x.stokki_codigo ? 'O recebimento já existe na Stokki: a Fresh Log vai cancelá-lo lá e você acompanha pelo chat.' : 'A entrada ainda não foi criada na Stokki — será cancelada na hora.'}</p>
+      <label>Motivo (opcional) <textarea id="ent-m-motivo" maxlength="300"></textarea></label>
+      <div class="msg" id="ent-m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="ent-m-ok">Cancelar entrada</button></div>`);
+    $('ent-m-ok').addEventListener('click', async () => {
+      $('ent-m-ok').disabled = true;
+      try {
+        const r = await fetch(`${BASE}/api/entradas/${id}/cancelar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo: $('ent-m-motivo').value }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.erro || 'Falha ao cancelar.');
+        fecharModal(); mensagem(j.mensagem, 'ok'); carregar();
+      } catch (e) { const m = $('ent-m-msg'); m.className = 'msg erro'; m.textContent = e.message; $('ent-m-ok').disabled = false; }
+    });
+  }
+
+  // ── Eventos ────────────────────────────────────────────────────────────────
+  const zona = $('ent-zona');
+  $('ent-btn-modelo').addEventListener('click', e => e.stopPropagation());
+  $('ent-arquivos').addEventListener('change', e => analisar(e.target.files));
+  ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
+  ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));
+  zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
+  $('ent-btn-confirmar').addEventListener('click', confirmar);
+  $('ent-btn-limpar').addEventListener('click', () => { previa = null; $('ent-previa').classList.remove('aberta'); mensagem('', ''); });
+  if ($('ent-empresa')) {
+    $('ent-empresa').addEventListener('change', () => { empresa = $('ent-empresa').value; previa = null; $('ent-previa').classList.remove('aberta'); $('ent-btn-modelo').href = comEmpresa(`${BASE}/api/entradas/modelo-planilha`); if (vista === 'entradas') carregar(); });
+    $('ent-btn-modelo').href = comEmpresa(`${BASE}/api/entradas/modelo-planilha`);
+  }
+  $('ent-abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; render(); });
+  $('ent-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
+  $('ent-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });
+  $('ent-atualizar').addEventListener('click', () => carregar());
+  secao.addEventListener('click', e => {
+    const ex = e.target.closest('[data-exp]');
+    if (ex) { const id = Number(ex.dataset.exp); abertos.has(id) ? abertos.delete(id) : abertos.add(id); renderTabela(); return; }
+    const b = e.target.closest('[data-acao]'); if (!b) return;
+    if (b.dataset.acao === 'arquivo') { window.open(comEmpresa(`${BASE}/api/entradas/${b.dataset.id}/arquivo`), '_blank'); return; }
+    abrirCancelar(b.dataset.id);
+  });
+
+  // badge sem abrir a vista + aba inicial
+  fetch(`${BASE}/api/entradas`, { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j || dados) return;
+    dados = j; const n = j.resumo.atrasados + j.resumo.divergencias + j.resumo.erros_stokki;
+    $('ent-badge').textContent = n; $('ent-badge').classList.toggle('on', n > 0);
+  }).catch(() => {});
+  if (secao.dataset.abaInicial === 'entradas') btn.click();
+})();
+</script>
+{% endif %}

@@ -17,6 +17,8 @@
   }
   var acomp = function () { mostrarVista('acompanhamento'); };
   var envios = function () { mostrarVista('envios'); };
+  var entradas = function () { mostrarVista('entradas'); };
+  var temEntradas = !!document.querySelector('.vistas [data-vista="entradas"]');
   var equipe = !!document.querySelector('.cab .cliente a');
   var estadoInicial = { vista: null, chatAberto: null, colunasAbertas: null };
   function popoverColunas(abrir) {
@@ -33,7 +35,7 @@
     if (b) b.click();
   }
 
-  var A = 'Acompanhamento', E = 'Enviar pedidos', G = 'Geral';
+  var A = 'Acompanhamento', E = 'Enviar pedidos', N = 'Pedidos de entrada', G = 'Geral';
   var passos = [
     { alvo: null, capitulo: G, titulo: 'Bem-vindo ao portal Fresh Log',
       texto: '<p>Este guia percorre a tela e explica pra que serve cada campo e botão.</p><p>Use <b>Próximo</b> e <b>Voltar</b> (ou as setas do teclado). Você pode sair quando quiser e reabrir pelo botão <b>Guia</b>, no topo da página.</p>',
@@ -48,7 +50,7 @@
       texto: '<p>Aqui você escolhe <b>quais avisos</b> a sua empresa recebe por e-mail (notas em rota, entrega concluída, resumo do dia, insucessos, pedidos em espera e agendamentos) e <b>em qual endereço</b>.</p><p>Desligar um aviso só tira o e-mail: a informação continua aparecendo aqui no portal.</p>' },
 
     { alvo: '.vistas', capitulo: G, titulo: 'As duas áreas do portal',
-      texto: '<p><b>Acompanhamento</b> mostra o que está acontecendo com as suas entregas, dia a dia.</p><p><b>Enviar pedidos</b> é onde você sobe as notas fiscais pra criar novos pedidos de entrega. O número vermelho nessa aba avisa que há algo pendente nos envios (erro ou agendamento por definir).</p>',
+      texto: '<p><b>Acompanhamento</b> mostra o que está acontecendo com as suas entregas, dia a dia.</p><p><b>Enviar pedidos</b> é onde você sobe as notas fiscais pra criar novos pedidos de entrega.</p>' + (temEntradas ? '<p><b>Pedidos de entrada</b> é onde você anuncia a mercadoria que vai chegar no galpão da Fresh Log.</p>' : '') + '<p>O número vermelho numa aba avisa que há algo pendente nela.</p>',
       antes: acomp },
 
     // ── Acompanhamento ───────────────────────────────────────────────────────
@@ -114,6 +116,15 @@
       texto: 'Pedidos aguardando criação na Stokki. Se outro processo estiver usando a Stokki no momento, os seus entram assim que ela liberar.', antes: envios },
     { alvo: card('env-pendencias'), capitulo: E, titulo: 'Pendências com a Fresh Log', posicao: 'esquerda',
       texto: 'Solicitações que dependem da equipe (cancelar um pedido já criado, tirar da rota, reagendar). Somem daqui quando forem atendidas.', antes: envios },
+
+    // ── Pedidos de entrada (só quando a aba existe; alvo ausente = passo pulado) ──
+    { alvo: '#ent-zona', capitulo: N, titulo: 'Anunciar mercadoria',
+      texto: '<p>Arraste o XML da <b>NF-e de remessa</b> que a sua empresa emitiu pro galpão da Fresh Log, ou a <b>planilha de entrada</b> (uma linha por item).</p><p>Na prévia você informa a <b>data prevista de chegada</b> de cada remessa e confirma. O recebimento é criado na Stokki na hora.</p>',
+      antes: function () { chat(false); entradas(); } },
+    { alvo: '#ent-tiles', capitulo: N, titulo: 'Resumo das entradas',
+      texto: '<ul><li><b>Anunciadas</b>: aguardando chegar.</li><li><b>Atrasadas</b>: passou da data prevista e ainda não chegou.</li><li><b>Chegaram</b>: já no galpão (conferindo ou endereçadas).</li><li><b>Com divergência</b>: chegou menos do que foi anunciado.</li></ul>', antes: entradas },
+    { alvo: '#ent-tabela', capitulo: N, titulo: 'Suas entradas',
+      texto: '<p>Cada linha é uma remessa anunciada: data prevista, situação e o número do recebimento (<b>#PE</b>) na Stokki. Clique no número de itens pra abrir a lista do que foi anunciado e, depois da chegada, a <b>conferência do galpão</b> por SKU.</p><p><b>Cancelar</b> só enquanto está Anunciada. <b>XML</b> baixa o arquivo original.</p>', antes: entradas },
 
     // ── Fecho ────────────────────────────────────────────────────────────────
     { alvo: '#alterna-tema', capitulo: G, titulo: 'Tema claro ou escuro',

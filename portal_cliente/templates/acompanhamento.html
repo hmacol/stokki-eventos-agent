@@ -218,6 +218,8 @@
 
   {# Máscara de envio de pedidos (XML → Stokki), 08/09 -- mesma tela, outra vista #}
   {% include "_envios.html" %}
+  {# Pedidos de Entrada (25/09) -- só quando entradas_ativo; depende da barra .vistas de _envios.html #}
+  {% include "_entradas.html" %}
 </main>
 {% if cliente and not equipe %}{% include "_widget_atendimento.html" %}{% endif %}
 {% endblock %}
