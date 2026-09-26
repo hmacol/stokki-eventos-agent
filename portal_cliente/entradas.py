@@ -397,3 +397,273 @@ def gerar_modelo_planilha_entrada(nome_cliente: str = "") -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ── Confirmação ────────────────────────────────────────────────────────────────
+
+def _data_prevista_valida(valor) -> str:
+    try:
+        d = date.fromisoformat(str(valor or ""))
+    except ValueError:
+        raise ErroEnvio("Informe a data prevista de chegada (AAAA-MM-DD).")
+    if d < date.today():
+        raise ErroEnvio(f"A data prevista {d.strftime('%d/%m/%Y')} já passou -- precisa ser hoje ou depois.")
+    return d.isoformat()
+
+
+def _caminho_definitivo_xml(cnpj: str, chave: str) -> Path:
+    pasta = _pasta_entradas() / _so_digitos(cnpj)
+    pasta.mkdir(parents=True, exist_ok=True)
+    return pasta / f"{chave}.xml"
+
+
+def _caminho_definitivo_planilha(cnpj: str, nome_original: str) -> Path:
+    import secrets
+    pasta = _pasta_entradas() / _so_digitos(cnpj) / "planilhas"
+    pasta.mkdir(parents=True, exist_ok=True)
+    seguro = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(nome_original or "planilha.xlsx").name)[:80] or "planilha.xlsx"
+    return pasta / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}_{seguro}"
+
+
+def confirmar_entradas(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
+                       config: dict | None) -> list[dict]:
+    """Grava as entradas ANUNCIADO / NA_FILA a partir dos temporários da
+    prévia. Revalida tudo (o catálogo pode ter mudado entre analisar e
+    confirmar). Uma entrada que já existia CANCELADO é regravada na mesma
+    linha (UPDATE), com os itens antigos apagados. Commit por entrada."""
+    emb = _so_digitos(cnpj_embarcador)
+    criados = []
+    planilhas_movidas: dict[str, Path] = {}
+    for item in itens:
+        caminho = ep._caminho_temporario(item.get("token", ""))
+        conteudo = caminho.read_bytes()
+        if caminho.suffix == ".json":
+            nfe = json.loads(conteudo.decode("utf-8"))
+            if nfe.get("origem") != ORIGEM_PLANILHA or _so_digitos(nfe.get("emitente_cnpj")) != emb:
+                raise ErroEnvio("Remessa temporária inválida -- envie a planilha de novo.")
+        else:
+            nfe = ler_nfe_entrada(conteudo)
+        v = validar_entrada(conn, nfe, emb, config)
+        if not v["ok"]:
+            raise ErroEnvio(f"{rotulo_entrada(nfe)}: " + " ".join(v["erros"]))
+        data_prevista = _data_prevista_valida(item.get("data_prevista") or nfe.get("data_prevista"))
+
+        planilha = nfe.get("origem") == ORIGEM_PLANILHA
+        if planilha:
+            tk = nfe.get("arquivo_token", "")
+            destino = planilhas_movidas.get(tk)
+            if destino is None:
+                origem_plan = ep._caminho_temporario(tk)
+                destino = _caminho_definitivo_planilha(emb, nfe.get("nome_arquivo") or origem_plan.name)
+                destino.write_bytes(origem_plan.read_bytes())
+                planilhas_movidas[tk] = destino
+                try:
+                    origem_plan.unlink()
+                except OSError:
+                    pass
+        else:
+            destino = _caminho_definitivo_xml(emb, nfe["chave_nfe"])
+            destino.write_bytes(conteudo)
+        try:
+            caminho.unlink()
+        except OSError:
+            pass
+
+        agora = _agora()
+        campos = {
+            "cnpj_embarcador": emb, "origem": nfe["origem"], "chave_nfe": nfe["chave_nfe"],
+            "numero_nf": nfe.get("numero_nf") or None, "serie": nfe.get("serie") or None,
+            "emitida_em": nfe.get("emitida_em") or None, "referencia": nfe.get("referencia") or None,
+            "data_prevista": data_prevista, "volumes": nfe.get("volumes") or 1, "peso_kg": nfe.get("peso_kg") or 0,
+            "valor_nf": nfe.get("valor_nf") or 0, "arquivo_path": str(destino.relative_to(ep._RAIZ)),
+            "status": STATUS_ANUNCIADO, "stokki_status": STOKKI_NA_FILA, "stokki_id": None, "stokki_codigo": None,
+            "stokki_erro": None, "stokki_tentativas": 0, "wms_recebimento_id": None,
+            "observacoes": (item.get("observacoes") or nfe.get("observacoes") or "")[:500],
+            "enviado_por": enviado_por, "criado_em": agora, "atualizado_em": agora,
+            "cancelado_em": None, "cancelado_por": None, "chamado_id": None,
+        }
+        existente = v["existente"]
+        if existente:
+            sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
+            conn.execute(f"UPDATE portal_entradas SET {sets} WHERE id = ?",
+                         (*[x for k, x in campos.items() if k != "chave_nfe"], existente["id"]))
+            entrada_id = existente["id"]
+            conn.execute("DELETE FROM portal_entrada_itens WHERE entrada_id = ?", (entrada_id,))
+        else:
+            cols = ", ".join(campos)
+            conn.execute(f"INSERT INTO portal_entradas ({cols}) VALUES ({','.join('?' * len(campos))})", tuple(campos.values()))
+            entrada_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for it in nfe.get("itens_lista") or []:
+            conn.execute("INSERT INTO portal_entrada_itens (entrada_id, linha, sku, ean, descricao, quantidade, unidade) VALUES (?,?,?,?,?,?,?)",
+                         (entrada_id, int(it["linha"]), str(it["sku"])[:60], str(it.get("ean") or "")[:20],
+                          str(it.get("descricao") or "")[:200], float(it["quantidade"]), str(it.get("unidade") or "")[:10]))
+        conn.commit()
+        criados.append({"id": entrada_id, "numero_nf": nfe.get("numero_nf"), "referencia": nfe.get("referencia"),
+                        "origem": nfe["origem"], "data_prevista": data_prevista, "status": STATUS_ANUNCIADO})
+    return criados
+
+
+# ── Listagem ───────────────────────────────────────────────────────────────────
+
+def _tem_tabela(conn, nome: str) -> bool:
+    return conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (nome,)).fetchone() is not None
+
+
+def _conferencia_do_galpao(conn, recebimento_id: int | None) -> list[dict]:
+    """Anunciado × recebido × falta POR SKU, em UN, do wms_recebimento_itens
+    ligado. Vazio sem ligação ou sem as tabelas do WMS (banco só do portal)."""
+    if not recebimento_id or not _tem_tabela(conn, "wms_recebimento_itens"):
+        return []
+    if _tem_tabela(conn, "wms_produtos"):
+        sql = ("SELECT i.sku, COALESCE(p.descricao, '') AS descricao, COALESCE(p.unidade, 'UN') AS unidade, "
+               "SUM(COALESCE(i.qtd_un, 0)) AS anunciado, SUM(COALESCE(i.qtd_enderecada, 0)) AS recebido, "
+               "SUM(COALESCE(i.falta_un, 0)) AS falta FROM wms_recebimento_itens i LEFT JOIN wms_produtos p ON p.id = i.produto_id "
+               "WHERE i.recebimento_id = ? GROUP BY i.sku ORDER BY MIN(i.linha)")
+    else:
+        sql = ("SELECT i.sku, '' AS descricao, 'UN' AS unidade, SUM(COALESCE(i.qtd_un, 0)) AS anunciado, "
+               "SUM(COALESCE(i.qtd_enderecada, 0)) AS recebido, SUM(COALESCE(i.falta_un, 0)) AS falta "
+               "FROM wms_recebimento_itens i WHERE i.recebimento_id = ? GROUP BY i.sku ORDER BY MIN(i.linha)")
+    saida = []
+    for r in conn.execute(sql, (int(recebimento_id),)):
+        saida.append({"sku": r["sku"], "descricao": r["descricao"], "unidade": r["unidade"],
+                      "anunciado": round(float(r["anunciado"]), 3), "recebido": round(float(r["recebido"]), 3),
+                      "falta": round(float(r["falta"]), 3)})
+    return saida
+
+
+def _linha(conn, r: sqlite3.Row, itens: dict[int, list[dict]]) -> dict:
+    d = dict(r)
+    hoje = date.today().isoformat()
+    rec = None
+    if d.get("wms_recebimento_id") and _tem_tabela(conn, "wms_recebimentos"):
+        rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (d["wms_recebimento_id"],)).fetchone()
+    d.update({
+        "rotulo": rotulo_entrada(d),
+        "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
+        "stokki_rotulo": ROTULOS_STOKKI.get(d["stokki_status"], d["stokki_status"]),
+        "criado_em_br": _quando_br(d["criado_em"]),
+        "data_prevista_br": "/".join(reversed(d["data_prevista"].split("-"))) if d.get("data_prevista") else "",
+        "atrasada": d["status"] == STATUS_ANUNCIADO and bool(d.get("data_prevista")) and d["data_prevista"] < hoje,
+        "itens_lista": itens.get(d["id"], []),
+        "conferencia": _conferencia_do_galpao(conn, d.get("wms_recebimento_id")),
+        "observacao_divergencia": (rec["observacao_divergencia"] if rec is not None and "observacao_divergencia" in rec.keys() else "") or "",
+        "encerrado_em_br": _quando_br(rec["encerrado_em"]) if rec is not None and "encerrado_em" in rec.keys() else "",
+        "pode_cancelar": d["status"] == STATUS_ANUNCIADO and d["stokki_status"] != STOKKI_ENVIANDO,
+        "arquivo_ext": Path(d.get("arquivo_path") or "").suffix.lstrip(".").lower() or "xml",
+    })
+    d.pop("arquivo_path", None)
+    return d
+
+
+def listar_entradas(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DIAS_LISTAGEM) -> list[dict]:
+    desde = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
+    emb = _so_digitos(cnpj_embarcador)
+    rows = conn.execute("SELECT * FROM portal_entradas WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('ANUNCIADO','CHEGOU')) "
+                        "ORDER BY data_prevista, criado_em DESC, id DESC", (emb, desde)).fetchall()
+    itens: dict[int, list[dict]] = {}
+    if rows:
+        ids = [r["id"] for r in rows]
+        for it in conn.execute(f"SELECT * FROM portal_entrada_itens WHERE entrada_id IN ({','.join('?' * len(ids))}) ORDER BY entrada_id, linha", ids):
+            itens.setdefault(it["entrada_id"], []).append({k: it[k] for k in ("linha", "sku", "ean", "descricao", "quantidade", "unidade")})
+    return [_linha(conn, r, itens) for r in rows]
+
+
+def resumo_entradas(lista: list[dict]) -> dict:
+    hoje = date.today().strftime("%d/%m/%Y")
+    return {
+        "total": len(lista),
+        "anunciados": sum(1 for e in lista if e["status"] == STATUS_ANUNCIADO),
+        "atrasados": sum(1 for e in lista if e["atrasada"]),
+        # "Chegaram": tudo que já está no galpão (conferindo, endereçado ou com
+        # divergência) -- o nome da chave é histórico do desenho, o tile diz "no galpão"
+        "chegaram_hoje": sum(1 for e in lista if e["status"] in (STATUS_CHEGOU, STATUS_ENDERECADO, STATUS_DIVERGENCIA)),
+        "divergencias": sum(1 for e in lista if e["status"] == STATUS_DIVERGENCIA),
+        "erros_stokki": sum(1 for e in lista if e["stokki_status"] == STOKKI_ERRO and e["status"] == STATUS_ANUNCIADO),
+    }
+
+
+def buscar_entrada(conn: sqlite3.Connection, entrada_id: int, cnpj_embarcador: str) -> dict | None:
+    r = conn.execute("SELECT * FROM portal_entradas WHERE id = ? AND cnpj_embarcador = ?",
+                     (entrada_id, _so_digitos(cnpj_embarcador))).fetchone()
+    return dict(r) if r else None
+
+
+def caminho_arquivo(entrada: dict) -> Path:
+    return ep._RAIZ / entrada["arquivo_path"]
+
+
+# ── Cancelar ───────────────────────────────────────────────────────────────────
+
+def _chamados():
+    import chamados as ch
+    return ch
+
+
+def _abrir_chamado_cancelamento(entrada: dict, cliente: dict, por: str) -> int | None:
+    """Com #PE já criado, a Stokki não é cancelada sozinha (spec D5): abre
+    chamado pra equipe, o mesmo desenho de bloqueio_area.abrir_bloqueio.
+    Falha do chat não desfaz o cancelamento no portal."""
+    try:
+        ch = _chamados()
+        conn_ch = ch.conectar()
+        try:
+            chamado = ch.criar_chamado(conn_ch, cliente, ch.ORIGEM_SISTEMA, ch.STATUS_AGUARDANDO_FL,
+                                       assunto=f"Cancelar recebimento {entrada.get('stokki_codigo') or entrada.get('stokki_id')} na Stokki",
+                                       area="entradas", pedido_ref=rotulo_entrada(entrada))
+            quem = "pela equipe Fresh Log" if str(por).startswith("equipe") else "pelo cliente"
+            ch.mensagem_sistema(conn_ch, chamado,
+                                f"{rotulo_entrada(entrada)} foi cancelada {quem} na aba Pedidos de Entrada. O recebimento "
+                                f"{entrada.get('stokki_codigo') or ''} já existe na Stokki e precisa ser cancelado lá à mão.")
+            return chamado["id"]
+        finally:
+            conn_ch.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"entradas: não abriu chamado do cancelamento da entrada {entrada.get('id')}: {e}")
+        return None
+
+
+def cancelar_entrada(conn: sqlite3.Connection, entrada: dict, por: str, cliente: dict, config: dict | None) -> dict:
+    """{aplicado, mensagem, chamado_id}. Só a partir de ANUNCIADO e nunca
+    enquanto o worker está criando o #PE."""
+    if entrada["status"] != STATUS_ANUNCIADO:
+        raise ErroEnvio("Só uma entrada ainda anunciada (que não chegou) pode ser cancelada.")
+    if entrada["stokki_status"] == STOKKI_ENVIANDO:
+        raise ErroEnvio("Essa entrada está sendo criada na Stokki agora -- tente de novo em alguns instantes.")
+    agora = _agora()
+    conn.execute("UPDATE portal_entradas SET status = ?, cancelado_em = ?, cancelado_por = ?, atualizado_em = ? WHERE id = ?",
+                 (STATUS_CANCELADO, agora, por, agora, entrada["id"]))
+    if entrada.get("wms_recebimento_id") and _tem_tabela(conn, "wms_recebimentos"):
+        conn.execute("UPDATE wms_recebimentos SET estado = 'CANCELADO', atualizado_em = ? WHERE id = ? AND estado = 'ESPERADO' "
+                     "AND NOT EXISTS (SELECT 1 FROM wms_recebimento_itens i WHERE i.recebimento_id = wms_recebimentos.id AND i.qtd_enderecada > 0)",
+                     (agora, entrada["wms_recebimento_id"]))
+    conn.commit()
+    chamado_id = None
+    if entrada.get("stokki_id"):
+        chamado_id = _abrir_chamado_cancelamento(entrada, cliente, por)
+        if chamado_id:
+            conn.execute("UPDATE portal_entradas SET chamado_id = ? WHERE id = ?", (chamado_id, entrada["id"]))
+            conn.commit()
+        mensagem = ("Entrada cancelada. O recebimento já existia na Stokki: a Fresh Log vai cancelá-lo lá e você acompanha pelo chat."
+                    if chamado_id else "Entrada cancelada. O recebimento já existia na Stokki -- avise a Fresh Log pelo chat pra cancelar lá.")
+    else:
+        mensagem = "Entrada cancelada -- não será criada na Stokki."
+    return {"aplicado": True, "mensagem": mensagem, "chamado_id": chamado_id}
+
+
+# ── Flag por cliente (D3: só o piloto) ─────────────────────────────────────────
+
+def config_entradas_cliente(conn: sqlite3.Connection, cnpj_embarcador: str) -> dict:
+    r = conn.execute("SELECT entradas_ativo FROM portal_clientes_envio WHERE cnpj = ?", (_so_digitos(cnpj_embarcador),)).fetchone()
+    return {"entradas_ativo": bool(r["entradas_ativo"]) if r else False}
+
+
+def definir_entradas_ativo(conn: sqlite3.Connection, cnpj_embarcador: str, ativo: bool) -> None:
+    emb = _so_digitos(cnpj_embarcador)
+    if not conn.execute("SELECT 1 FROM portal_clientes_envio WHERE cnpj = ?", (emb,)).fetchone():
+        ep.definir_parametros_cliente(conn, emb)   # cria a linha com os padrões de Envios
+    conn.execute("UPDATE portal_clientes_envio SET entradas_ativo = ?, atualizado_em = ? WHERE cnpj = ?", (int(bool(ativo)), _agora(), emb))
+    conn.commit()
+
+
+def entradas_ativas_para(conn: sqlite3.Connection, cnpjs: list[str]) -> bool:
+    return any(config_entradas_cliente(conn, c)["entradas_ativo"] for c in cnpjs or [])

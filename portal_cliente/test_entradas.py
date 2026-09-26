@@ -255,5 +255,192 @@ class TestPlanilhaEntrada(BasePortal):
             entradas.ler_planilha_entrada(self._planilha([{"Pedido": 1}], ["Pedido", "SKU"]), "x.xlsx", CNPJ)
 
 
+def _confirmar(self_or_conn, conn=None, itens_extra=None, **kw):
+    """Helper: analisa um XML de remessa e confirma pra AMANHA."""
+    conn = conn or self_or_conn.conn
+    conteudo = xml_remessa(**kw)
+    nfe = entradas.ler_nfe_entrada(conteudo, "nota.xml")
+    v = entradas.validar_entrada(conn, nfe, CNPJ, {})
+    assert v["ok"], v["erros"]
+    token = ep.guardar_temporario(conteudo)
+    item = {"token": token, "data_prevista": AMANHA, "observacoes": "portão 2"}
+    item.update(itens_extra or {})
+    return entradas.confirmar_entradas(conn, CNPJ, [item], "cliente", {})
+
+
+class TestConfirmar(BasePortal):
+    def test_grava_entrada_itens_e_move_o_arquivo(self):
+        criados = _confirmar(self)
+        self.assertEqual(len(criados), 1)
+        e = dict(self.conn.execute("SELECT * FROM portal_entradas").fetchone())
+        self.assertEqual((e["status"], e["stokki_status"], e["origem"]), ("ANUNCIADO", "NA_FILA", "xml"))
+        self.assertEqual(e["numero_nf"], "41221")
+        self.assertEqual(e["data_prevista"], AMANHA)
+        self.assertEqual(e["observacoes"], "portão 2")
+        self.assertTrue(e["arquivo_path"].endswith(f"{e['chave_nfe']}.xml"))
+        self.assertTrue((ep._RAIZ / e["arquivo_path"]).is_file())
+        self.assertFalse(list(ep.PASTA_TEMP.glob("*")))
+        itens = [dict(r) for r in self.conn.execute("SELECT * FROM portal_entrada_itens ORDER BY linha")]
+        self.assertEqual([(i["sku"], i["quantidade"], i["unidade"]) for i in itens], [("NUU001FD", 20.0, "CX")])
+
+    def test_data_prevista_obrigatoria_e_nao_passada(self):
+        for ruim in ("", None, (HOJE - timedelta(days=1)).isoformat(), "31/12/2030"):
+            with self.assertRaises(ep.ErroEnvio):
+                _confirmar(self, itens_extra={"data_prevista": ruim})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM portal_entradas").fetchone()[0], 0)
+        _confirmar(self, itens_extra={"data_prevista": HOJE.isoformat()})   # hoje vale
+
+    def test_reanunciar_cancelada_regrava_a_mesma_linha(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET status = 'CANCELADO', stokki_status = 'CRIADO', stokki_id = 9")
+        self.conn.execute("INSERT INTO portal_entrada_itens (entrada_id, linha, sku, quantidade) VALUES (1, 99, 'VELHO', 1)")
+        self.conn.commit()
+        _confirmar(self, itens_extra={"data_prevista": (HOJE + timedelta(days=3)).isoformat()})
+        rows = [dict(r) for r in self.conn.execute("SELECT * FROM portal_entradas")]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["status"], rows[0]["stokki_status"], rows[0]["stokki_id"]), ("ANUNCIADO", "NA_FILA", None))
+        self.assertEqual(rows[0]["data_prevista"], (HOJE + timedelta(days=3)).isoformat())
+        skus = [r[0] for r in self.conn.execute("SELECT sku FROM portal_entrada_itens")]
+        self.assertEqual(skus, ["NUU001FD"])
+
+    def test_planilha_confirmada_guarda_a_planilha_uma_vez(self):
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([c[1] for c in entradas.COLUNAS_PLANILHA_ENTRADA])
+        d = "/".join(reversed(AMANHA.split("-")))
+        ws.append(["REM-1", d, "NUU001FD", 10, "CX", "", 3, "12,5", ""])
+        ws.append(["REM-2", d, "SKU-B", 1, "UN", "", "", "", ""])
+        buf = io.BytesIO()
+        wb.save(buf)
+        conteudo = buf.getvalue()
+        pedidos, rej = entradas.ler_planilha_entrada(conteudo, "e.xlsx", CNPJ)
+        self.assertEqual(rej, [])
+        tk_plan = ep.guardar_temporario(conteudo, "xlsx")
+        itens = [{"token": ep.guardar_temporario_pedido(p, tk_plan), "data_prevista": p["data_prevista"]} for p in pedidos]
+        criados = entradas.confirmar_entradas(self.conn, CNPJ, itens, "equipe:hugo", {})
+        self.assertEqual([c["referencia"] for c in criados], ["REM-1", "REM-2"])
+        rows = [dict(r) for r in self.conn.execute("SELECT * FROM portal_entradas ORDER BY id")]
+        self.assertEqual(rows[0]["arquivo_path"], rows[1]["arquivo_path"])
+        self.assertTrue(rows[0]["arquivo_path"].endswith("_e.xlsx"))
+        self.assertEqual(rows[0]["enviado_por"], "equipe:hugo")
+
+
+class TestListar(BasePortal):
+    def test_lista_com_rotulos_atrasada_e_pode_cancelar(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET data_prevista = ?", ((HOJE - timedelta(days=2)).isoformat(),))
+        self.conn.commit()
+        lista = entradas.listar_entradas(self.conn, CNPJ)
+        e = lista[0]
+        self.assertEqual(e["rotulo"], "NF 41221")
+        self.assertEqual(e["status_rotulo"], "Anunciado")
+        self.assertTrue(e["atrasada"])
+        self.assertTrue(e["pode_cancelar"])
+        self.assertEqual(e["data_prevista_br"], (HOJE - timedelta(days=2)).strftime("%d/%m/%Y"))
+        self.assertEqual([i["sku"] for i in e["itens_lista"]], ["NUU001FD"])
+        self.assertEqual(e["conferencia"], [])   # sem wms_recebimento_id ainda
+        self.assertNotIn("arquivo_path", e)
+        r = entradas.resumo_entradas(lista)
+        self.assertEqual((r["anunciados"], r["atrasados"], r["divergencias"], r["chegaram_hoje"]), (1, 1, 0, 0))
+
+    def test_conferencia_do_galpao_agrupa_por_sku(self):
+        # NF com o mesmo SKU em duas linhas (embalagens diferentes): a aba
+        # mostra as linhas como vieram e a conferência do galpão por SKU.
+        _confirmar(self, itens=[("NUU001FD", "7891234567890", "MINI CX", 20, "CX", 64.77),
+                                ("NUU001FD", "17891234567897", "MINI CX (DUN)", 5, "CX", 64.77)])
+        self.conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, id_stokki INTEGER, codigo TEXT, estado TEXT, situacao TEXT, "
+                          "observacao_divergencia TEXT DEFAULT '', encerrado_em TEXT DEFAULT '')")
+        self.conn.execute("CREATE TABLE wms_recebimento_itens (id INTEGER PRIMARY KEY, recebimento_id INTEGER, linha INTEGER, sku TEXT, "
+                          "qtd_embalagem REAL, qtd_un REAL, produto_id INTEGER, qtd_enderecada REAL DEFAULT 0, falta_un REAL DEFAULT 0)")
+        self.conn.execute("INSERT INTO wms_recebimentos VALUES (7, 2497, '#PE-2497', 'DIVERGENCIA', 'Recebido', 'chegou avariado', '2026-09-25 11:00:00')")
+        self.conn.execute("INSERT INTO wms_recebimento_itens VALUES (1, 7, 1, 'NUU001FD', 25, 25, 1, 22, 3)")
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7, status = 'DIVERGENCIA', stokki_id = 2497, stokki_codigo = '#PE-2497'")
+        self.conn.commit()
+        e = entradas.listar_entradas(self.conn, CNPJ)[0]
+        self.assertEqual(len(e["itens_lista"]), 2)
+        self.assertEqual(e["conferencia"], [{"sku": "NUU001FD", "descricao": "MINI CX PAO DE QUEIJO", "unidade": "UN",
+                                             "anunciado": 25.0, "recebido": 22.0, "falta": 3.0}])
+        self.assertEqual(e["observacao_divergencia"], "chegou avariado")
+        self.assertFalse(e["pode_cancelar"])
+
+    def test_janela_de_30_dias_mas_abertas_sempre_aparecem(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET criado_em = '2026-01-01 10:00:00'")
+        self.conn.commit()
+        self.assertEqual(len(entradas.listar_entradas(self.conn, CNPJ)), 1)     # ANUNCIADO: aparece
+        self.conn.execute("UPDATE portal_entradas SET status = 'ENDERECADO'")
+        self.conn.commit()
+        self.assertEqual(entradas.listar_entradas(self.conn, CNPJ), [])         # fechada e velha: some
+
+
+class TestCancelar(BasePortal):
+    def _cliente(self):
+        return {"cnpj": CNPJ, "sender_id": 1, "nome": "CLIENTE TESTE"}
+
+    def test_cancelar_anunciada_sem_pe(self):
+        _confirmar(self)
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        r = entradas.cancelar_entrada(self.conn, e, "cliente", self._cliente(), {})
+        self.assertTrue(r["aplicado"])
+        self.assertIsNone(r["chamado_id"])
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertEqual(e["status"], "CANCELADO")
+        self.assertEqual(e["cancelado_por"], "cliente")
+
+    def test_cancelar_com_pe_abre_chamado(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', stokki_id = 2497, stokki_codigo = '#PE-2497'")
+        self.conn.commit()
+        chamado_falso = mock.Mock()
+        chamado_falso.criar_chamado.return_value = {"id": 55}
+        chamado_falso.conectar.return_value = mock.MagicMock()
+        with mock.patch.object(entradas, "_chamados", return_value=chamado_falso):
+            r = entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+        self.assertTrue(r["aplicado"])
+        self.assertEqual(r["chamado_id"], 55)
+        self.assertIn("#PE-2497", chamado_falso.criar_chamado.call_args.kwargs["assunto"])
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["chamado_id"], 55)
+
+    def test_cancelar_tira_do_wms_so_se_esperado_sem_enderecamento(self):
+        _confirmar(self)
+        self.conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, id_stokki INTEGER, codigo TEXT, estado TEXT, atualizado_em TEXT)")
+        self.conn.execute("CREATE TABLE wms_recebimento_itens (id INTEGER PRIMARY KEY, recebimento_id INTEGER, linha INTEGER, sku TEXT, "
+                          "qtd_embalagem REAL, qtd_un REAL, produto_id INTEGER, qtd_enderecada REAL DEFAULT 0, falta_un REAL DEFAULT 0)")
+        self.conn.execute("INSERT INTO wms_recebimentos VALUES (7, 2497, '#PE-2497', 'ESPERADO', '')")
+        self.conn.execute("INSERT INTO wms_recebimento_itens VALUES (1, 7, 1, 'NUU001FD', 20, 20, 1, 0, 0)")
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7")
+        self.conn.commit()
+        entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+        self.assertEqual(self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = 7").fetchone()[0], "CANCELADO")
+
+    def test_cancelar_fora_de_anunciado_e_recusado(self):
+        _confirmar(self)
+        for st in ("CHEGOU", "ENDERECADO", "DIVERGENCIA", "CANCELADO"):
+            self.conn.execute("UPDATE portal_entradas SET status = ?", (st,))
+            self.conn.commit()
+            with self.assertRaises(ep.ErroEnvio):
+                entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+
+    def test_cancelar_enquanto_worker_envia_e_recusado(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'ENVIANDO'")
+        self.conn.commit()
+        with self.assertRaises(ep.ErroEnvio):
+            entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+
+
+class TestFlagCliente(BasePortal):
+    def test_nasce_desligada_e_liga_por_cnpj(self):
+        self.assertFalse(entradas.config_entradas_cliente(self.conn, CNPJ)["entradas_ativo"])
+        entradas.definir_entradas_ativo(self.conn, CNPJ, True)
+        self.assertTrue(entradas.config_entradas_cliente(self.conn, CNPJ)["entradas_ativo"])
+        self.assertTrue(entradas.entradas_ativas_para(self.conn, [OUTRO, CNPJ]))
+        self.assertFalse(entradas.entradas_ativas_para(self.conn, [OUTRO]))
+        entradas.definir_entradas_ativo(self.conn, CNPJ, False)
+        self.assertFalse(entradas.config_entradas_cliente(self.conn, CNPJ)["entradas_ativo"])
+
+
 if __name__ == "__main__":
     unittest.main()
