@@ -29,6 +29,10 @@ HOJE = date.today()
 AMANHA = (HOJE + timedelta(days=1)).isoformat()
 
 
+def _agora_txt():
+    return ep._agora()
+
+
 def xml_remessa(nf="41221", emitente=CNPJ, dest=CNPJ_FRESHLOG, tp_nf="1", itens=None, chave=None):
     """NF-e de remessa pra armazenagem: emitente = cliente, destinatário =
     Fresh Log. tpNF=1 (saída do ponto de vista de quem emite)."""
@@ -440,6 +444,108 @@ class TestFlagCliente(BasePortal):
         self.assertFalse(entradas.entradas_ativas_para(self.conn, [OUTRO]))
         entradas.definir_entradas_ativo(self.conn, CNPJ, False)
         self.assertFalse(entradas.config_entradas_cliente(self.conn, CNPJ)["entradas_ativo"])
+
+
+class TestAmarracaoEStatus(BasePortal):
+    """As tabelas do WMS aqui são um recorte mínimo (o teste do timer, em
+    test_sincronizar_recebimentos_wms.py, usa as reais)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, id_stokki INTEGER, codigo TEXT, stkkc_id TEXT, "
+                          "situacao TEXT DEFAULT '', estado TEXT DEFAULT 'ESPERADO', observacao_divergencia TEXT DEFAULT '', "
+                          "encerrado_em TEXT DEFAULT '', portal_entrada_id INTEGER, data_prevista TEXT DEFAULT '', atualizado_em TEXT DEFAULT '')")
+        self.conn.execute("CREATE TABLE wms_recebimento_itens (id INTEGER PRIMARY KEY, recebimento_id INTEGER, linha INTEGER, sku TEXT, "
+                          "qtd_embalagem REAL, qtd_un REAL, produto_id INTEGER, qtd_enderecada REAL DEFAULT 0, falta_un REAL DEFAULT 0)")
+        self.conn.commit()
+
+    def _rec(self, rid=7, id_stokki=2497, estado="ESPERADO", situacao="Em transito", enderecada=0):
+        self.conn.execute("INSERT INTO wms_recebimentos (id, id_stokki, codigo, stkkc_id, situacao, estado) VALUES (?,?,?,?,?,?)",
+                          (rid, id_stokki, f"#PE-{id_stokki}", "48", situacao, estado))
+        self.conn.execute("INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, qtd_embalagem, qtd_un, produto_id, qtd_enderecada) "
+                          "VALUES (?, 1, 'NUU001FD', 20, 20, 1, ?)", (rid, enderecada))
+        self.conn.commit()
+
+    def test_amarra_por_stokki_id(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', stokki_id = 2497")
+        self.conn.commit()
+        self._rec()
+        eid = entradas.amarrar_recebimento(self.conn, 7, 2497, "#PE-2497", "48", chave_nfe="", ref_pedido="")
+        self.assertEqual(eid, 1)
+        rec = dict(self.conn.execute("SELECT * FROM wms_recebimentos WHERE id = 7").fetchone())
+        self.assertEqual((rec["portal_entrada_id"], rec["data_prevista"]), (1, AMANHA))
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertEqual((e["wms_recebimento_id"], e["stokki_codigo"]), (7, "#PE-2497"))
+
+    def test_amarra_pela_chave_nfe_quando_o_pe_foi_criado_a_mao(self):
+        criados = _confirmar(self)
+        chave = entradas.buscar_entrada(self.conn, criados[0]["id"], CNPJ)["chave_nfe"]
+        self._rec()
+        eid = entradas.amarrar_recebimento(self.conn, 7, 2497, "#PE-2497", "48", chave_nfe=chave, ref_pedido="41221")
+        self.assertEqual(eid, 1)
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertEqual((e["stokki_id"], e["stokki_codigo"], e["stokki_status"]), (2497, "#PE-2497", "CRIADO"))
+
+    def test_amarra_planilha_pela_referencia_do_mesmo_embarcador(self):
+        entradas.garantir_tabelas(self.conn)
+        self.conn.execute("INSERT INTO portal_entradas (cnpj_embarcador, origem, chave_nfe, referencia, data_prevista, arquivo_path, status, "
+                          "criado_em, atualizado_em) VALUES (?, 'planilha', 'PLANILHA-ENTRADA-x', 'REM-9', ?, 'x', 'ANUNCIADO', ?, ?)",
+                          (CNPJ, AMANHA, _agora_txt(), _agora_txt()))
+        self.conn.execute("INSERT INTO portal_entradas (cnpj_embarcador, origem, chave_nfe, referencia, data_prevista, arquivo_path, status, "
+                          "criado_em, atualizado_em) VALUES (?, 'planilha', 'PLANILHA-ENTRADA-y', 'REM-9', ?, 'x', 'ANUNCIADO', ?, ?)",
+                          (OUTRO, AMANHA, _agora_txt(), _agora_txt()))
+        self.conn.commit()
+        self._rec()
+        eid = entradas.amarrar_recebimento(self.conn, 7, 2497, "#PE-2497", "48", chave_nfe="", ref_pedido="REM-9")
+        self.assertEqual(eid, 1)   # a do cliente 48, não a do OUTRO (stkkc 77)
+
+    def test_sem_par_nao_amarra_e_nao_inventa(self):
+        _confirmar(self)
+        self._rec()
+        self.assertIsNone(entradas.amarrar_recebimento(self.conn, 7, 2497, "#PE-2497", "48", chave_nfe="0" * 44, ref_pedido="999"))
+        self.assertIsNone(entradas.buscar_entrada(self.conn, 1, CNPJ)["wms_recebimento_id"])
+
+    def test_sincronizar_status_anda_so_pra_frente(self):
+        _confirmar(self)
+        self._rec(situacao="Em transito")
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7, stokki_id = 2497")
+        self.conn.commit()
+        self.assertEqual(entradas.sincronizar_status(self.conn), 0)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "ANUNCIADO")
+        self.conn.execute("UPDATE wms_recebimentos SET situacao = 'Recebido'")
+        self.conn.commit()
+        self.assertEqual(entradas.sincronizar_status(self.conn), 1)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CHEGOU")
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO'")
+        self.conn.commit()
+        entradas.sincronizar_status(self.conn)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "ENDERECADO")
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'ESPERADO', situacao = 'Em transito'")
+        self.conn.commit()
+        entradas.sincronizar_status(self.conn)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "ENDERECADO")   # nunca volta
+
+    def test_primeiro_enderecamento_tambem_vira_chegou(self):
+        _confirmar(self)
+        self._rec(situacao="Em transito", enderecada=5)
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7")
+        self.conn.commit()
+        entradas.sincronizar_status(self.conn)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CHEGOU")
+
+    def test_divergencia_e_cancelado(self):
+        _confirmar(self)
+        self._rec(estado="DIVERGENCIA", situacao="Recebido")
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7")
+        self.conn.commit()
+        entradas.sincronizar_status(self.conn)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "DIVERGENCIA")
+        self.conn.execute("UPDATE portal_entradas SET status = 'CANCELADO'")
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO'")
+        self.conn.commit()
+        entradas.sincronizar_status(self.conn)
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")   # CANCELADO nunca reabre
 
 
 if __name__ == "__main__":

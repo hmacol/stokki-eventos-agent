@@ -667,3 +667,80 @@ def definir_entradas_ativo(conn: sqlite3.Connection, cnpj_embarcador: str, ativo
 
 def entradas_ativas_para(conn: sqlite3.Connection, cnpjs: list[str]) -> bool:
     return any(config_entradas_cliente(conn, c)["entradas_ativo"] for c in cnpjs or [])
+
+
+# ── Ligação com o WMS ──────────────────────────────────────────────────────────
+# Quem chama: sincronizar_recebimentos_wms.rodar() (a cada 30 min, logo
+# depois de registrar_recebimento) e a rota de encerrar-divergência do
+# painel. As duas abrem a conexão delas (wms_pedidos.conectar) no mesmo
+# dados.db; garantir_tabelas() cobre banco onde a aba nunca rodou.
+
+def _cnpj_do_stkkc(conn, stkkc_id: str) -> str:
+    if not stkkc_id or not _tem_tabela(conn, "interno"):
+        return ""
+    r = conn.execute("SELECT cnpj_embarcador FROM interno WHERE stkkc_id = ?", (int(stkkc_id),)).fetchone()
+    return _so_digitos(r["cnpj_embarcador"]) if r else ""
+
+
+def amarrar_recebimento(conn: sqlite3.Connection, recebimento_id: int, id_stokki: int, codigo: str, stkkc_id: str,
+                        chave_nfe: str = "", ref_pedido: str = "") -> int | None:
+    """Liga um wms_recebimentos recém-registrado à entrada do portal:
+    1) por stokki_id (o worker já sabia o #PE); 2) pela chave NF-e do
+    detalhe (XML, exata); 3) pela referência = Ref. do Pedido, do mesmo
+    embarcador (planilha). Sem par: devolve None e não inventa nada."""
+    garantir_tabelas(conn)
+    e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE stokki_id = ? AND status IN ('ANUNCIADO','CHEGOU')",
+                     (int(id_stokki),)).fetchone()
+    if e is None and chave_nfe:
+        e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE chave_nfe = ? AND status IN ('ANUNCIADO','CHEGOU') "
+                         "AND wms_recebimento_id IS NULL", (chave_nfe,)).fetchone()
+    if e is None and ref_pedido:
+        cnpj = _cnpj_do_stkkc(conn, stkkc_id)
+        if cnpj:
+            rows = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE cnpj_embarcador = ? AND origem = 'planilha' "
+                                "AND referencia = ? AND status IN ('ANUNCIADO','CHEGOU') AND wms_recebimento_id IS NULL",
+                                (cnpj, str(ref_pedido).strip())).fetchall()
+            if len(rows) == 1:
+                e = rows[0]
+            elif len(rows) > 1:
+                logger.warning(f"entradas: {len(rows)} remessas com referência {ref_pedido!r} do embarcador {cnpj} -- não amarrei o #PE {id_stokki}")
+    if e is None:
+        return None
+    agora = _agora()
+    conn.execute("UPDATE wms_recebimentos SET portal_entrada_id = ?, data_prevista = ?, atualizado_em = ? WHERE id = ?",
+                 (e["id"], e["data_prevista"] or "", agora, int(recebimento_id)))
+    # O #PE existe na Stokki (o timer acabou de ler), entao a fila esta
+    # resolvida mesmo se o worker ainda nao tinha gravado (resposta perdida).
+    conn.execute("UPDATE portal_entradas SET wms_recebimento_id = ?, stokki_id = ?, stokki_codigo = ?, "
+                 "stokki_status = 'CRIADO', stokki_erro = NULL, atualizado_em = ? WHERE id = ?",
+                 (int(recebimento_id), int(id_stokki), codigo or f"#PE-{id_stokki}", agora, e["id"]))
+    conn.commit()
+    return e["id"]
+
+
+def sincronizar_status(conn: sqlite3.Connection) -> int:
+    """ANUNCIADO -> CHEGOU -> ENDERECADO | DIVERGENCIA, lendo o
+    wms_recebimentos ligado. Só anda pra frente; CANCELADO nunca reabre.
+    Um UPDATE por entrada (dados.db compartilhado)."""
+    if not _tem_tabela(conn, "portal_entradas") or not _tem_tabela(conn, "wms_recebimentos"):
+        return 0
+    rows = conn.execute("""
+        SELECT e.id, e.status, r.estado, r.situacao,
+               (SELECT COALESCE(SUM(i.qtd_enderecada), 0) FROM wms_recebimento_itens i WHERE i.recebimento_id = r.id) AS enderecado
+          FROM portal_entradas e JOIN wms_recebimentos r ON r.id = e.wms_recebimento_id
+         WHERE e.status IN ('ANUNCIADO', 'CHEGOU')""").fetchall()
+    mudou = 0
+    for r in rows:
+        novo = None
+        if r["estado"] == "ENDERECADO":
+            novo = STATUS_ENDERECADO
+        elif r["estado"] == "DIVERGENCIA":
+            novo = STATUS_DIVERGENCIA
+        elif r["status"] == STATUS_ANUNCIADO and ("RECEB" in (r["situacao"] or "").upper() or float(r["enderecado"] or 0) > 0):
+            novo = STATUS_CHEGOU
+        if novo and novo != r["status"]:
+            conn.execute("UPDATE portal_entradas SET status = ?, atualizado_em = ? WHERE id = ? AND status IN ('ANUNCIADO','CHEGOU')",
+                         (novo, _agora(), r["id"]))
+            conn.commit()
+            mudou += 1
+    return mudou

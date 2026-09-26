@@ -32,8 +32,29 @@ PILOTO_NOME = "MARIA DOLORES"
 # Entrada | Fabricacao | Validade | Quantidade), que o parser IGNORA de
 # proposito (decisao do Hugo, 23/09/2026: sem pre-preenchimento vindo da
 # Stokki), e a de itens (NR | ID | SKU | Nome | ... | Quantidade total
-# recebida | Obs), a unica que extrair_itens_do_recebimento le.
+# recebida | Obs), a unica que extrair_itens_do_recebimento le. As duas
+# tabelas de cabecalho (ID do Pedido/Ref. do Pedido/... e Situacao/NF-e/...)
+# vem da fixture da Tarefa 1 (stokki/fixtures/recebimento_detalhe_cabecalho.html),
+# chave 35260912345678000195550010000412211000000017 e Ref. do Pedido 41221.
 _HTML_ITENS = """
+<table>
+  <tr><th>ID do Pedido:</th><td>#PE-2497</td></tr>
+  <tr><th>Ref. do Pedido:</th><td>41221</td></tr>
+  <tr><th>Tipo:</th><td><span>Entrada</span></td></tr>
+  <tr><th>Movimento:</th><td><span>Remessa</span></td></tr>
+  <tr><th>Cliente:</th><td>EMBARCADOR TESTE LTDA (#stkkc-48)</td></tr>
+  <tr><th>unidade:</th><td>Freshlog - São Paulo, SP</td></tr>
+</table>
+<table>
+  <tr><th>Situação:</th><td><span><i></i>Recebido</span></td></tr>
+  <tr><th>Chegada Prevista:</th><td>24/09/2026</td></tr>
+  <tr><th>Tipo de Acondicionamento:</th><td> Carga Solta (Caixas)</td></tr>
+  <tr><th> Número de paletes: <i title="Número estimado de paletes."></i> </th><td> Não informado </td></tr>
+  <tr><th> Número de caixas: <i title="Número estimado de caixas."></i> </th><td> Não informado </td></tr>
+  <tr><th>Tipo de Transporte:</th><td>Fracionado (LTL)</td></tr>
+  <tr><th>NF-e:</th><td> <a href="http://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=completa&amp;nfe=35260912345678000195550010000412211000000017" target="_blank"> 35260912345678000195550010000412211000000017 </a> </td></tr>
+  <tr><th>CT-e:</th><td> Não informado </td></tr>
+</table>
 <table class="table">
   <thead>
     <tr><th>Produto</th><th>Lote</th><th>Entrada</th><th>Fabricação</th><th>Validade</th><th>Quantidade</th></tr>
@@ -386,6 +407,41 @@ class TestRodar(BaseRotina):
 
         self.assertEqual(res["ja_fechados"], 1)
         self.assertEqual(res["gravados"], 0)
+        self.assertFalse(any("/show/" in url for url, _ in sess2.chamadas))
+
+    def test_amarra_entrada_do_portal_e_propaga_status(self):
+        import entradas
+        entradas.garantir_tabelas(self.conn)
+        self.conn.execute("CREATE TABLE IF NOT EXISTS interno (cnpj_embarcador TEXT, stkkc_id INTEGER)")
+        self.conn.execute("INSERT INTO interno VALUES ('12345678000195', 48)")
+        self.conn.execute("INSERT INTO portal_entradas (cnpj_embarcador, origem, chave_nfe, numero_nf, data_prevista, arquivo_path, status, "
+                          "stokki_status, criado_em, atualizado_em) VALUES ('12345678000195', 'xml', "
+                          "'35260912345678000195550010000412211000000017', '41221', '2026-09-26', 'x', 'ANUNCIADO', 'CRIADO', "
+                          "'2026-09-25 10:00:00', '2026-09-25 10:00:00')")
+        self.conn.commit()
+        sess = SessaoFalsa([_linha(2497, PILOTO_ID, situacao="Recebido")], {"2497": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["gravados"], 1)
+        self.assertEqual(res["amarrados"], 1)
+        rec = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2497").fetchone()
+        self.assertEqual(rec["portal_entrada_id"], 1)
+        self.assertEqual(rec["data_prevista"], "2026-09-26")
+        e = self.conn.execute("SELECT * FROM portal_entradas WHERE id = 1").fetchone()
+        self.assertEqual((e["wms_recebimento_id"], e["stokki_id"], e["stokki_codigo"], e["status"]), (rec["id"], 2497, "#PE-2497", "CHEGOU"))
+        # so UM GET no detalhe: itens, chave e ref vem do mesmo HTML
+        self.assertEqual(sum(1 for url, _ in sess.chamadas if "/show/" in url), 1)
+
+    def test_recebimento_cancelado_nao_e_relido(self):
+        linhas = [_linha(2489, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2489": _HTML_ITENS})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'CANCELADO' WHERE id_stokki = 2489")
+        self.conn.commit()
+        sess2 = SessaoFalsa(linhas, {"2489": _HTML_ITENS})
+        res = mod.rodar(self.conn, sess2, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.assertEqual(res["ja_fechados"], 1)
         self.assertFalse(any("/show/" in url for url, _ in sess2.chamadas))
 
 

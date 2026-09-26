@@ -664,7 +664,7 @@
       el.innerHTML = r.recebimentos.map((x) => `
         <div class="item" data-rec="${x.id}" style="grid-template-columns:1fr">
           <div class="cod">${esc(x.codigo)}</div>
-          <div class="meta">${esc((x.embarcador || '').split(' ').slice(0, 3).join(' '))}${x.situacao ? ' · ' + esc(x.situacao) : ''} · ${x.itens} item(ns)${x.chegada ? ' · chegada ' + esc(x.chegada) : ''}</div>
+          <div class="meta">${esc((x.embarcador || '').split(' ').slice(0, 3).join(' '))}${x.situacao ? ' · ' + esc(x.situacao) : ''} · ${x.itens} item(ns)${x.chegada ? ' · chegada ' + esc(x.chegada) : ''}${x.data_prevista ? ' · prevista ' + esc(x.data_prevista.split('-').reverse().join('/')) : ''}${x.portal_entrada_id ? ' · <b>portal</b>' : ''}</div>
         </div>`).join('') || '<div class="vazio">Nenhuma entrada esperada agora.</div>';
       el.querySelectorAll('[data-rec]').forEach((x) => x.addEventListener('click', () => abrirRecebimento(Number(x.dataset.rec))));
     } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }

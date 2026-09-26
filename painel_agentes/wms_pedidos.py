@@ -131,7 +131,9 @@ _COLUNAS_NOVAS = {
     "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
                          "observacao_divergencia": "TEXT NOT NULL DEFAULT ''",
                          "encerrado_em": "TEXT NOT NULL DEFAULT ''",
-                         "encerrado_por": "TEXT NOT NULL DEFAULT ''"},
+                         "encerrado_por": "TEXT NOT NULL DEFAULT ''",
+                         "portal_entrada_id": "INTEGER",
+                         "data_prevista": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimento_itens": {"falta_un": "REAL NOT NULL DEFAULT 0"},
 }
 
