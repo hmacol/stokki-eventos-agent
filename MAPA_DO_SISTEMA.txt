@@ -1,0 +1,762 @@
+==============================================================================
+ MAPA DO SISTEMA — agente_stokki_eventos (Fresh Log / Fresh Hub)
+ Guia de navegação para programadores: onde fica cada coisa e o que faz.
+ Atualizado em 26/09/2026. Se criar/mover/apagar arquivo, atualize aqui.
+==============================================================================
+
+ÍNDICE
+  0. Visão geral em 1 minuto
+  1. Onde mexer para... (atalhos)
+  2. Fluxo de um pedido, do XML à entrega
+  3. Serviços web (portas, URLs, autenticação)
+  4. Rotinas agendadas (timers da VPS)
+  5. Arquivos da raiz
+  6. stokki/          — integração com o WMS Stokki
+  7. regras/          — regras de negócio
+  8. roteirizacao/    — roteirizador próprio + ponte com a Vuupt
+  9. nucleo/          — banco próprio + API do app do motorista
+ 10. painel_agentes/  — painel interno (Torre, Planejamento, WMS...)
+ 11. portal_cliente/  — portal do embarcador
+ 12. atendimento/     — central de WhatsApp
+ 13. app_motorista/   — app Expo dos motoristas
+ 14. Demais diretórios
+ 15. Banco de dados (dados/dados.db)
+ 16. Como rodar, testar e publicar
+ 17. Armadilhas conhecidas
+
+
+==============================================================================
+ 0. VISÃO GERAL EM 1 MINUTO
+==============================================================================
+
+ Sistemas externos:
+   Stokki   = WMS onde os embarcadores têm os pedidos (PS-XXXXX) e as NFs.
+              Sem API pública: acessamos pelos endpoints internos da tela,
+              com login via Playwright (pasta stokki/).
+   Vuupt    = roteirizador/app de campo que executa as rotas hoje
+              (vuupt_client.py, roteirizacao/rotas_client.py).
+   Lalamove = entregas avulsas (lalamove_client.py).
+   Fresh Hub (freshhub.com.br) = SPA interno em Supabase, fonte dos
+              "pedidos parados" (pasta freshhub/). Não confundir com
+              app.freshhub.com.br, que é o nosso guarda-chuva no Caddy.
+
+ O que é nosso:
+   - Rotinas em lote (Python) que importam pedidos da Stokki para a Vuupt,
+     roteirizam, geram romaneios, expedem e mandam e-mails.
+   - Painel interno Flask   -> app.freshhub.com.br/painel
+   - Portal do cliente      -> app.freshhub.com.br/cliente
+   - API do app motorista   -> app.freshhub.com.br/motorista
+   - Página de insucesso    -> app.freshhub.com.br/insucesso
+   - Central de WhatsApp    -> atendimento.freshhub.com.br
+   - Confirmação de rota    -> confirmacao.freshhub.com.br
+   - App Expo dos motoristas (app_motorista/)
+   - "Núcleo": tabelas próprias (nucleo_*) que espelham a Vuupt e vão
+     substituí-la aos poucos (ver DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md).
+
+ Produção: VPS Ubuntu, repo em /opt/stokki-eventos, serviços systemd
+ (waitress atrás do Caddy), rotinas em timers systemd (infra/*.timer).
+ Detalhes de acesso e deploy: CLAUDE.md na raiz.
+
+ Idioma do código, comentários e commits: português.
+
+
+==============================================================================
+ 1. ONDE MEXER PARA... (atalhos)
+==============================================================================
+
+ Importação Stokki -> Vuupt ................ pipeline.py
+ Regra de endereço de entrega .............. regras/endereco.py
+ Nível de complexidade / skill Vuupt ....... regras/complexidade_entrega.py
+ Tipo de carga (Seco/Refrig/Congelado) ..... regras/tipo_carga_embarcador.py
+ Transportadora / redespacho ............... regras/transportadoras.py
+ Tipo de veículo (FIORINO, VAN/HR, VUC...) . regras/tipo_veiculo.py
+ Criar rotas do dia (18h, rascunho) ........ roteirizacao/criar_rotas_diarias.py
+ Algoritmos de agrupamento/sequência ....... roteirizacao/otimizacao_rotas.py,
+                                             selecao_modelo.py, polimento_rotas.py
+ Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
+ Rodízio SP / zonas SP ..................... roteirizacao/rodizio_sp.py, zonas_sp.py
+ Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py
+ PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
+ Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
+ Insucesso de entrega ...................... insucesso_entrega/ + resposta_insucesso/
+ Documentos (NF, boleto) por pedido ........ documentos_pedido/processar_documentos.py
+ Tela de planejamento (dados) .............. painel_agentes/planejamento_rotas.py
+ Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
+ Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
+ Torre de Controle ......................... painel_agentes/torre_controle.py
+ Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
+ Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
+ Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
+ WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
+ Portal do cliente ......................... portal_cliente/app.py
+ Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Chat/chamados ............................. portal_cliente/chamados.py
+ API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
+ Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+ E-mail comum (visual Freshlog) ............ email_utils.py
+ E-mail de resumo das rotinas .............. notificar_execucao_agente.py
+ Preferências de e-mail do embarcador ...... preferencias_notificacao.py
+ Trava de login da Stokki .................. stokki/sessao_uso.py
+ Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
+
+
+==============================================================================
+ 2. FLUXO DE UM PEDIDO, DO XML À ENTREGA
+==============================================================================
+
+ 1) Pedido nasce na Stokki (embarcador sobe o XML lá, ou pelo portal:
+    portal_cliente/enviar_stokki.py cria o pedido via Playwright).
+ 2) Estação de Impressão: "Em espera" -> "Aguardando Transportador"
+    (stokki/estacao_impressao.py, chamado por somente_impressao.py /
+    executar_tudo.py).
+ 3) pipeline.py lista os "Aguardando Transportador", resolve endereço
+    (regras/endereco.py), geocodifica (geocodificacao.py), pega telefone do
+    XML (telefone_origem.py), calcula nível e tipo de carga, trata agendamento
+    (agendamento_confirmacao.py) e redespacho (redespacho_confirmacao.py),
+    e cria/atualiza o SERVIÇO na Vuupt (vuupt_client.py). Grava em paralelo
+    em nucleo_pedidos. Retiradas viram serviço avulso (retiradas/).
+ 4) 18h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
+    pool (nucleo/pool.py) -> dia fixo / dedicados / área não atendida ->
+    partição por carga -> agrupamento + seleção de modelo + polimento ->
+    alocação de motorista -> grava RASCUNHOS (rascunhos_rota/parada).
+ 5) Operador revisa no /planejamento e clica "Confirmar e Enviar"
+    -> rotas_client.criar_rota (POST /routes na Vuupt)
+    -> nucleo/rotas.registrar_rota_enviada.
+    Às 22h, rascunhos esquecidos são enviados e pedidos novos são
+    encaixados (enviar_rascunhos_pendentes.py, incrementar_rotas.py).
+ 6) Documentos (NF/boleto) são casados com o pedido e subidos ao GCS
+    (documentos_pedido/). 04h: gerar_pdf_romaneios.py gera 1 PDF por rota;
+    o print_agent/ no Windows do escritório imprime.
+ 7) Motoristas confirmam rota (confirmacao_motoristas/ + roteirizacao/
+    sincronizar_respostas_confirmacao.py) e executam no app da Vuupt
+    ou no app próprio (app_motorista/, rotas com provedor=APP).
+ 8) Durante o dia: Torre de Controle acompanha; notificacao_entregas/ manda
+    e-mail por entrega; expedir_pedidos.py expede na Stokki os entregues;
+    insucessos viram pergunta ao embarcador (insucesso_entrega/).
+ 9) E-mails de rotina: 07h NFs em rota, 20h resumo diário, etc. (seção 4).
+
+
+==============================================================================
+ 3. SERVIÇOS WEB
+==============================================================================
+
+ Todos Flask + waitress em 127.0.0.1, atrás do Caddy (handle_path +
+ ProxyFix(x_prefix=1)). Nos templates use sempre url_for(), nunca caminho
+ absoluto.
+
+ Serviço                Porta  URL pública                      Código
+ ---------------------  -----  -------------------------------  ---------------------------------
+ painel-agentes         8071   app.freshhub.com.br/painel       painel_agentes/painel_agentes.py
+   (local: 8070; para testar use outra porta, ex. 8099)
+ resposta-insucesso     8072   app.freshhub.com.br/insucesso    resposta_insucesso/app.py
+ motorista-api          8073   app.freshhub.com.br/motorista    nucleo/api_motorista.py
+ portal-cliente         8074   app.freshhub.com.br/cliente      portal_cliente/app.py
+ confirmacao-motoristas 8090   confirmacao.freshhub.com.br      confirmacao_motoristas/app.py
+   (instalação separada em /opt/confirmacao-motoristas, cópia manual)
+ atendimento-central    8095   atendimento.freshhub.com.br      atendimento/app.py
+ dashboard_embarcadores 8060   (interno, Basic Auth)            dashboard_embarcadores/
+ Evolution API (docker) 8080   (só local)                       atendimento/infra/docker-compose.yml
+
+ Daemons sem porta:
+   portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
+   portal-cliente-chamados -> portal_cliente/chamados.py ler --loop   (IMAP dos chamados)
+
+ Units: infra/*.service, painel_agentes/infra/, portal_cliente/infra/,
+ resposta_insucesso/infra/, atendimento/infra/, confirmacao_motoristas/infra/.
+ Blocos do Caddy: arquivos Caddyfile-* nessas mesmas pastas.
+
+ Autenticação:
+   painel    -> usuário/senha do config, 6 níveis: total, operador, leitura,
+                expedicao, galpao, atendimento. Decorador requer_auth(niveis=).
+                Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
+                print_agent usa header X-Token-Impressao.
+   portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
+                /equipe com login do painel.
+   app/API   -> CPF + PIN, token Bearer (nucleo/auth_motorista.py).
+   atendimento -> usuários próprios em dados/atendimento.db (admin/atendente).
+   links públicos (canhoto, insucesso, aceite de cotação, confirmação)
+             -> tokens assinados com itsdangerous.
+
+
+==============================================================================
+ 4. ROTINAS AGENDADAS (timers systemd na VPS, pasta infra/)
+==============================================================================
+
+ Todos os .service têm OnFailure=stokki-alerta-falha@%n (manda e-mail via
+ alertar_falha_job.py, no máximo 1 a cada 2h por unidade).
+
+ Horário                     Timer (stokki-*)                Script
+ --------------------------  ------------------------------  -------------------------------------------
+ 01:30                       exportar-vuupt                  nucleo/exportar_historico_vuupt.py
+ 03:00                       backup-gcs                      backup_dados_gcs.py
+ xx:22 (toda hora)           backup-horario                  backup_dados_gcs.py --horario
+ dom 05:30                   ensaio-restauracao              ensaiar_restauracao_backup.py
+ 04:00                       romaneios-manha                 roteirizacao/gerar_pdf_romaneios.py --data hoje
+ 04:10                       notificar-transportadoras       notificacao_transportadoras/notificar_transportadoras.py
+ 07:00                       notificar-nfs-em-rota           notificar_nfs_em_rota.py --data hoje
+ 07:15                       verificar-entregues-nao-exp.    verificar_entregues_nao_expedidos.py
+ 07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
+ 07-20h xx:10                comparar-pool                   nucleo/comparar_pool.py (sombra)
+ seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
+ dias 1 e 16 08:00           dedicados-financeiro            notificar_dedicados_financeiro.py
+ 08:20 e 15:20               notificar-pedidos-em-espera     notificar_pedidos_em_espera.py
+ 08-19h a cada 30 min        expedicao-frequente             expedir_pedidos.py
+ 08-17h xx:05/xx:35          acompanhar-retiradas            retiradas/acompanhar_retiradas.py
+ 08,10,...,20h               reconciliar-retirada            reconciliar_pedidos_retirada.py --cancelar
+ seg-sex 09,11,13,15,17:10   documentos-incremental          documentos_pedido/processar_documentos.py --incremental
+ 06-23h a cada 5 min         notificar-entregas              notificacao_entregas/notificar_entrega_concluida.py
+ 17:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
+ 18:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
+ 20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
+ 22:00                       sequencia-noite                 infra/sequencia_noite.sh (abaixo)
+ a cada 15 min               nucleo-sincronizar-servicos     nucleo/sincronizar_servicos_vuupt.py
+ xx:15 e xx:45               nucleo-sincronizar-vuupt        nucleo/sincronizar_vuupt.py
+ a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
+ a cada 15 min               sincronizar-lalamove            nucleo/sincronizar_lalamove.py
+ a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
+ a cada 15 min               wms-reservar-pedidos            sincronizar_pedidos_wms.py
+ xx:09 e xx:39               wms-recebimentos                sincronizar_recebimentos_wms.py
+ xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
+ a cada minuto               atendimento-reenviar-pendentes  atendimento/reenviar_pendentes.py
+ a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
+
+ infra/sequencia_tarde.sh (18h, para no 1º erro):
+   executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
+   roteirizacao/criar_rotas_diarias.py --gerar-rascunho ->
+   documentos_pedido/processar_documentos.py
+ infra/sequencia_noite.sh (22h, continua mesmo com erro):
+   somente_impressao.py -> pipeline.py -> expedir_pedidos.py ->
+   documentos_pedido/processar_documentos.py ->
+   roteirizacao/gerar_pdf_romaneios.py --data amanha
+
+ Fora da VPS: só o print_agent/ roda no Agendador do Windows (04h05-07h,
+ a cada 10 min). Os .ps1 da raiz são legado da fase local.
+
+
+==============================================================================
+ 5. ARQUIVOS DA RAIZ
+==============================================================================
+
+ --- Orquestração ---
+ executar_tudo.py        Orquestrador combinado: 1) respostas de agendamento
+                         (IMAP+Claude) 1a) planilha NUU 2) Estação de
+                         Impressão 3) pipeline 4) retiradas; e-mail de resumo.
+                         Flags: --modo-teste --sem-impressao --sem-agendamento.
+ pipeline.py             Importação Stokki -> Vuupt (ver seção 2). Flags:
+                         --modo-teste --pedido PS-X --embarcador --status.
+ historico.py            Auditoria das execuções do pipeline; regenera
+                         STATUS_IMPORTACAO.md (gerado, não editar à mão).
+ somente_impressao.py    Só a Estação de Impressão.
+ inventario.py           Lista em Excel o que o pipeline importaria (manual).
+
+ --- Expedição Stokki ---
+ expedir_pedidos.py      Expede na Stokki os entregues na Vuupt, anexa canhoto,
+                         trata insucessos. É ESTE que roda em produção.
+ fingerprint_expedicao.py  Tabelas do que já foi expedido / falhas.
+ verificar_entregues_nao_expedidos.py  Checagem diária + e-mail interno.
+
+ --- Vuupt ---
+ vuupt_client.py         Cliente REST da Vuupt (serviços, skills, telefone E.164).
+ http_retry.py           Backoff para HTTP 429.
+ fingerprint_importacao.py  Hash do payload enviado (não reenviar igual).
+ fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned.
+ limpar_fingerprints.py  Força reenvio (dry-run sem --confirmar).
+ geocodificacao.py       Google Geocoding com cache (tabela geocache).
+ telefone_origem.py      Telefone certo lido do XML da NF-e.
+ verificar_pedidos_duplicados_vuupt.py  Audita/cancela duplicados.
+ reconciliar_pedidos_retirada.py  Cancela serviço que virou RETIRADA.
+ atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço.
+ sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
+ vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
+ revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
+
+ --- Agendamento e redespacho ---
+ adicionar_agendamento.py      Migração única das tabelas de agendamento.
+ agendamento_confirmacao.py    Pede data ao embarcador por e-mail.
+ ler_respostas_agendamento.py  Lê respostas por IMAP e extrai data com Claude.
+ ler_planilha_entregas_nuu.py  Planilha ENTREGAS.xlsx da NUU -> agenda/endereço.
+ redespacho_confirmacao.py     Segura pedido fora da área sem redespacho.
+ email_leitura_utils.py        Helpers de IMAP.
+
+ --- Notificações e e-mails ---
+ email_utils.py                Envio de e-mail HTML padrão (use sempre este).
+ notificar_execucao_agente.py  E-mail de resumo por rotina.
+ notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
+ notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
+ resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
+ preferencias_notificacao.py   Preferências de e-mail por embarcador.
+ notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
+ pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
+ relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
+ alertar_falha_job.py          E-mail quando um job systemd falha.
+ integracao_evolution.py       Envio de WhatsApp pela Evolution API.
+ integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
+
+ --- WMS (sincronizações com a Stokki, embarcador piloto) ---
+ sincronizar_pedidos_wms.py      Reserva estoque (FEFO) para os pedidos.
+ sincronizar_recebimentos_wms.py Recebimentos viram entrada esperada.
+ sincronizar_produtos_stokki.py  Catálogo -> wms_produtos.
+
+ --- Lalamove ---
+ lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
+ lalamove_integracao.py  Liga o /planejamento à Lalamove (lançar, sincronizar).
+
+ --- Tratativas ---
+ tratativas.py           Log append-only de tratativas por pedido.
+ tratativas_backfill.py  Backfill único.
+
+ --- Backup ---
+ backup_dados_gcs.py            Backup do dados.db + planilhas + fotos no GCS.
+ ensaiar_restauracao_backup.py  Ensaio semanal de restauração.
+
+ --- Testes (unittest) ---
+ test_*.py               Um por módulo acima (nome indica o alvo).
+ testar_*.py             Scripts MANUAIS (e-mail, Lalamove, fluxo Vuupt);
+                         não são unittest.
+
+ --- Scripts .ps1 (Agendador do Windows) ---
+ Todos legado da fase local, exceto o de print_agent/. setup_tarefas.ps1
+ parece sobra do outro projeto (agente_importacao_stokki).
+
+ --- Documentação ---
+ CLAUDE.md                     Regras de trabalho, ambiente, deploy. LEIA.
+ DOC_EXECUCAO_CLAUDE_*.md      Especificação por feature (leia a do módulo
+                               antes de mexer): ALOCACAO_MOTORISTAS,
+                               APP_MOTORISTAS, BOLETOS_PARCELADOS,
+                               CODE (= duplicados na Vuupt), COTACAO_FRETE,
+                               MIGRACAO_VPS, NOTIFICACAO_ENTREGAS,
+                               NOTIFICACAO_MOTORISTAS, NOTIFICACAO_TRANSPORTADORAS,
+                               OTIMIZACAO_ROTAS, RESUMO_DIARIO_EMBARCADOR,
+                               RETIRADAS, ROMANEIOS_PDF, ROTEIRIZACAO_VOLUMES,
+                               SAIDA_VUUPT, TIPO_VEICULO, VALIDACAO_CHECKLISTS,
+                               VOLUMES_VUUPT.
+ TRATATIVAS_PEDIDOS_PARADOS.md Contexto operacional da tela /pedidos-parados.
+ PRODUCT.md                    Contexto de produto/design.
+ docs/superpowers/             Specs e planos de setembro/2026.
+ README.md                     Desatualizado (2 linhas).
+ requirements.txt              Dependências Python.
+ config.yaml                   SEGREDOS. Gitignored. Nunca commitar/colar.
+
+
+==============================================================================
+ 6. stokki/ — integração com o WMS Stokki
+==============================================================================
+
+ Sem API pública: login Playwright uma vez, cookies em sessao_stokki.json,
+ depois requests. LOGIN NOVO DERRUBA A SESSÃO ANTERIOR (inclusive a do
+ outro projeto agente_importacao_stokki). Use sempre as funções prontas.
+
+ auth.py              StokkiSession(config): login, .get/.post, renova em
+                      401/403. SessaoExpiradaError.
+ pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
+                      iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
+                      listar_transportadoras, listar_embarcadores, parsers de linha.
+ recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
+ produtos.py          Catálogo: listar_produtos, ler_perfil.
+ estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
+                      imprimir_pedidos_pendentes.
+ sessao_uso.py        Trava cooperativa de uso da sessão (adquirir/liberar/
+                      aguardar_vez_para_login). Obrigatória antes de logar.
+ fixtures/, test_*.py Parsers testados com HTML salvo (não conectar na Stokki
+                      a partir da máquina local).
+
+
+==============================================================================
+ 7. regras/ — regras de negócio (quase todas puras)
+==============================================================================
+
+ Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx,
+ BD_TRANSPORTADORAS.xlsx) e tabela `interno`.
+
+ embarcadores.py            Identificação do embarcador.
+ endereco.py                Endereço final: LLM > Local de Entrega >
+                            redespacho TERCEIROS > destino.
+ transportadoras.py         Tipo (ENTREGA/RETIRADA/TERCEIROS) e endereço de
+                            redespacho; resolver_por_endereco.
+ complexidade_entrega.py    Nível 1-4 por destinatário -> skill "{Carga}-{Nível}".
+ tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
+ clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
+ preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
+ cadastro_motoristas.py     Grava motorista novo na planilha.
+ disponibilidade_motoristas.py  Férias/atestado por data.
+ confirmacao_rotas.py       Estado da confirmação de rota pelo motorista.
+ ofertas_rota.py            Marketplace de rotas.
+ prioridade_ofertas.py      Ondas de prioridade das ofertas.
+ resumo_oferta.py           Resumo da rota exibido ao motorista.
+ tarifa_motorista.py        Remuneração por rota/veículo.
+ km_cobrado.py              Qual km entra na franquia.
+ test_*.py                  Testes.
+
+
+==============================================================================
+ 8. roteirizacao/ — roteirizador próprio (Vuupt só executa)
+==============================================================================
+
+ Núcleo do cálculo
+ roteirizacao_dados.py     Biblioteca central: seleção, agrupamento por região,
+                           fusão/divisão de sublotes, macro-região, janela de
+                           horário, orçamento de horas.
+ criar_rotas_diarias.py    Job principal (18h). --gerar-rascunho grava rascunhos;
+                           sem a flag cria direto na Vuupt. Também expõe
+                           roteirizar_para_rascunhos (botão "Roteirizar").
+ otimizacao_rotas.py       Modelos: Sweep Polar, Clarke-Wright, 2-Opt, CEP, K-means.
+ selecao_modelo.py         Roda os 5 e escolhe o melhor.
+ polimento_rotas.py        Move/troca paradas entre rotas se o km cai.
+ metricas_plano.py         Métricas geométricas de um plano.
+ km_rodoviario.py          Km pela Google Routes (haversine de reserva).
+ replay_rotas.py           Replay de dias passados para calibrar.
+ benchmark_modelos.py      Benchmark só leitura.
+ roteirizar.py             LEGADO (agrupamento por CEP + otimizador da Vuupt).
+
+ Motoristas e restrições
+ alocacao_motoristas.py    Alocação equitativa com travas.
+ zonas_sp.py               Zonas da Grande SP.
+ rodizio_sp.py             Rodízio municipal por placa.
+ regioes_dia_fixo.py       Regiões com dia fixo de entrega.
+ dedicados.py              Tira dedicados da rota compartilhada.
+
+ Vuupt
+ rotas_client.py           Endpoint real de rotas (criar, buscar, atualizar,
+                           adicionar_atividades, cancelar).
+ otimizacao_client.py      /route-optimization (só calcula).
+ enviar_rascunhos_pendentes.py  22h: envia rascunhos não confirmados.
+ incrementar_rotas.py      22h: encaixa pedidos novos nas rotas (corte 19h).
+ cancelar_rotas_sem_motorista.py  17h45.
+ reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
+ fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
+
+ Documentos e avisos
+ gerar_pdf_romaneios.py    1 PDF por rota (capa, NFs, boletos, canhoteira).
+                           Saída: roteirizacao/dados/romaneios/<data>/.
+ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
+ avisar_motoristas_rotas.py  Texto WhatsApp/e-mail + confirmações.
+ sincronizar_respostas_confirmacao.py  Puxa respostas da página pública.
+ notificar_agendamento_pendente.py, notificar_agendamento_dia_fixo.py,
+ notificar_area_nao_atendida.py (+ fingerprint_area_nao_atendida.py)
+                           E-mails ao remetente.
+ test_*.py                 Testes (alocação, janelas, polimento, sequência...).
+
+
+==============================================================================
+ 9. nucleo/ — banco próprio + API do app do motorista
+==============================================================================
+
+ Tabelas nucleo_* em dados/dados.db. Hoje é principalmente ESPELHO da Vuupt
+ e fonte de verdade das rotas com provedor=APP. Regra: ganchos no núcleo são
+ best-effort e nunca derrubam o fluxo atual.
+
+ Base
+ banco.py                  Esquema idempotente e conexão.
+ normalizacao.py           Código do pedido (sem "#", maiúsculo, sufixos -R/-C)
+                           e fuso. Use antes de comparar códigos.
+ pedidos.py                nucleo_pedidos (upsert, nunca apaga).
+ rotas.py                  Materializa rota/paradas ao enviar rascunho.
+ pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
+                           núcleo conforme config planejamento.fonte_pool.
+
+ Espelhamento e conferência
+ sincronizar_vuupt.py      Rotas/paradas da Vuupt -> núcleo (30 min).
+ sincronizar_servicos_vuupt.py  Pedidos fora de rota -> núcleo (15 min).
+ comparar_pool.py          Sombra: pool Vuupt x núcleo.
+ comparar_vuupt.py         Rotas Vuupt x núcleo.
+ exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
+ migrar_espelho_15_09.py   Migração única.
+ consulta.py               Leitura para a tela /consulta.
+ relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
+
+ App do motorista
+ api_motorista.py          API Flask (porta 8073).
+ operacao.py               Regras: aceitar/iniciar, eventos, checklist,
+                           comprovantes, GPS, ofertas, disponibilidade, pedágios.
+ auth_motorista.py         Login CPF+PIN, tokens.
+ motoristas_cli.py         CLI de usuários do app.
+ financeiro.py             Extrato do motorista.
+ tempos.py, metricas.py    Durações por parada.
+ recalcular_km_rotas.py    Backfill de km.
+ chamados_motorista.py     Chat "Ajuda" -> fila /atendimento do painel.
+ assistente_motorista.py   Triagem com Claude.
+ validacao_fotos.py        Nitidez + Claude conferindo NF/recibo.
+ calibrar_nitidez.py       Calibra o limiar.
+ marketplace_remoto.py     Cliente da página pública de ofertas.
+
+ Lalamove
+ sincronizar_lalamove.py, lancar_lalamove_programados.py  Timers.
+
+ test_*.py                 Testes (test_acoplamento_vuupt trava dependência
+                           nova da Vuupt).
+
+
+==============================================================================
+ 10. painel_agentes/ — painel interno
+==============================================================================
+
+ painel_agentes.py         App Flask: login, níveis, decoradores, quase todas
+                           as rotas. Rotas de atendimento registradas no fim.
+ agentes.py                Lista AGENTES = scripts que o painel dispara.
+                           Agente novo = nova entrada aqui. Para aparecer nas
+                           barras da Torre/Planejamento, adicione também em
+                           torre_controle.ETAPAS_PIPELINE ou
+                           planejamento_rotas.ETAPAS_AGENTES_PLANEJAMENTO.
+ executor.py               Roda o script em subprocess, fila, log, histórico
+                           (tabela painel_execucoes).
+ torre_controle.py         Dados da Torre (KPIs, fila de exceções, tendência).
+ planejamento_rotas.py     Dados/ações do Planejamento.
+ rascunhos_rota.py         Tabelas dos rascunhos de rota.
+ expedicao.py              Tela de expedição e PDF do romaneio.
+ mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
+ motoristas.py             Tela de motoristas.
+ pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
+ atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
+ contadores_menu.py        Badges do menu lateral.
+ wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
+                           WMS do galpão (posições, movimentos, reservas,
+                           recebimentos, etiquetas).
+ test_*.py                 Testes.
+
+ Telas (URL -> template)
+   /torre, /torre/mobile      torre_controle.html, torre_mobile.html
+   /planejamento              planejamento_rotas.html (maior arquivo do repo;
+                              ?modo=mobile para celular; dia passado = só leitura)
+   /mapa-rotas                mapa_rotas.html
+   /laboratorio-rotas         laboratorio_rotas.html
+   /expedicao                 expedicao.html
+   /pedidos-parados           pedidos_parados_triagem.html
+   /historico-tratativas      historico_tratativas.html
+   /consulta (+/rota, /pedido) consulta*.html
+   /atendimento (+/mobile)    atendimento*.html
+   /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
+   /motoristas                motoristas.html
+   /financeiro/pedagios       pedagios.html
+   /canhotos                  canhotos.html
+   /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
+   APIs em /api/<tela>/...
+
+ Templates compartilhados
+   base.html, base_mobile.html
+   _menu_lateral_nav.html     Itens do menu. O `niveis` de cada item deve
+                              bater com o @requer_auth da rota.
+   _menu_lateral_estilo.html, _menu_lateral_script.html
+   _tour*.html                Tours guiados.
+
+ Relacionados
+   verificador_botoes/        Clica em todos os botões do painel em Chromium
+                              headless, com rede interceptada (porta 8099).
+                              py -3.11 -m verificador_botoes.verificar_botoes
+   dashboard_embarcadores/    App separado (porta 8060) com comparativo de
+                              embarcadores e envio semanal por e-mail.
+
+
+==============================================================================
+ 11. portal_cliente/ — portal do embarcador
+==============================================================================
+
+ README.md                 Doc principal do portal.
+ app.py                    Flask: login, acompanhamento do dia, canhoto,
+                           resposta de insucesso, notificações, envios,
+                           /equipe, exportação xlsx.
+ auth_cliente.py           CNPJ + PIN, grupos econômicos.
+ dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
+ envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright).
+ chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
+ assistente.py             Triagem com Claude no chat.
+ cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado
+                           (oculta do cliente por padrão).
+ link_canhoto.py           /c/<token>: canhoto sem login.
+ bloqueio_area.py          Bloqueio de área não atendida.
+ gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN.
+ templates/                acompanhamento.html é a tela principal.
+ test_*.py                 Testes.
+
+
+==============================================================================
+ 12. atendimento/ — central de WhatsApp
+==============================================================================
+
+ WhatsApp -> Evolution API (docker) -> webhook -> atendimento/app.py
+ -> dados/atendimento.db. Atendentes usam atendimento.freshhub.com.br/inbox.
+ É separado dos "chamados" do portal/app (esses ficam em portal_chamados no
+ dados.db e são atendidos em /painel/atendimento).
+
+ app.py                    Flask: inbox, conversas, usuários, webhook, bot de
+                           triagem por menu.
+ banco.py                  Esquema do atendimento.db.
+ alertas.py                E-mails de alerta.
+ reenviar_pendentes.py     Reenvio com backoff (timer 1 min).
+ monitorar_saude_evolution.py  Checa conexão do WhatsApp (timer 5 min).
+ sonda_entrega.py          Teste manual de entrega.
+ gerenciar_usuarios.py     CLI de usuários.
+ infra/                    docker-compose, Caddyfile, instalador.
+ FASE0*.md                 Histórico (Chatwoot abandonado -> Evolution).
+
+
+==============================================================================
+ 13. app_motorista/ — app Expo (Android)
+==============================================================================
+
+ Expo SDK 57 + expo-router + TypeScript. Consome a API em
+ app.freshhub.com.br/motorista/api (código em nucleo/api_motorista.py).
+
+ app/login.tsx             CPF + PIN.
+ app/(tabs)/               rotas, ofertas (marketplace), financeiro,
+                           disponibilidade, perfil, ajuda (chat).
+ app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
+ app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
+                           checklist e fotos.
+ src/api.ts                Cliente HTTP com refresh de token.
+ src/fila.ts               Fila offline idempotente (uuid).
+ src/gps.ts, sessao.tsx, rotasStore.ts, local.ts, tipos.ts, tema.ts ...
+ app.json, eas.json        Config e perfis de build (preview/production).
+
+ Publicar: mudança só de JS -> OTA (npx eas-cli update --channel preview);
+ mudança nativa -> novo build + subir android.versionCode.
+
+
+==============================================================================
+ 14. DEMAIS DIRETÓRIOS
+==============================================================================
+
+ documentos_pedido/        Busca PDFs (NF, boleto, CC, agendamento) por IMAP e
+                           na Stokki, classifica, separa PDFs compostos, casa
+                           com o pedido e sobe ao GCS (pedidos/{PS}/{tipo}/).
+   processar_documentos.py  Orquestrador (completo / --incremental / --pedidos).
+   classificador.py, matcher.py, *_splitter.py, boleto_parser.py,
+   email_documentos.py, stokki_documentos.py, storage_gcs.py,
+   fingerprint_documentos.py (tabela documentos_processados),
+   localizar_arquivos.py, selecionar_pedidos.py (espelha regra do pipeline.py:
+   mudou lá, mude aqui).
+
+ notificacao_entregas/     E-mail por pedido quando a entrega conclui
+                           (desligado por padrão: ativo + forcar_destino).
+   notificar_entrega_concluida.py (orquestrador), regras_entrega.py,
+   montar_email_entrega.py, vuupt_entregas.py (fonte de dados — trocar ao
+   sair da Vuupt), fingerprint_notificacao_entrega.py, test_*.py.
+
+ notificacao_transportadoras/  04h10: pedidos do dia + XML para transportadoras
+                           de redespacho.
+
+ insucesso_entrega/        Insucesso vira pergunta ao embarcador; reentrega só
+                           se ele confirmar.
+   aplicar_resposta_insucesso.py, notificar_insucesso_aguardando_resposta.py,
+   motivos_falha.py, fingerprint_*.py.
+   ATENÇÃO: insucesso_entrega/expedir_pedidos.py é CÓPIA ANTIGA. O que roda
+   é o expedir_pedidos.py da raiz.
+
+ resposta_insucesso/       Página pública /insucesso/r/<token> (porta 8072).
+
+ retiradas/                "Cliente Retira" vira serviço avulso na Vuupt
+                           (agente fixo) e é fechado conforme a Stokki.
+
+ print_agent/              Único componente local (Windows do escritório):
+                           baixa romaneios do painel e imprime.
+
+ validacao_checklists/     Validação de canhotos da Vuupt com IA. Sem timer
+                           na VPS (só a tarefa Windows legada); status atual
+                           não confirmado. A validação de fotos do app
+                           próprio está em nucleo/validacao_fotos.py.
+
+ coleta_emporio_quatro_estrelas/  Lança a coleta diária na Vuupt.
+
+ confirmacao_motoristas/   Página pública de confirmação de rota e
+                           marketplace. Banco próprio (confirmacoes.db), não
+                           usa config.yaml. Deploy manual em outro diretório.
+
+ freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
+                           parados, tarefas do Kanban.
+
+ infra/                    Units e timers systemd, sequencia_*.sh,
+                           Caddyfile-motorista.
+
+ investigacao/             Ferramentas manuais de engenharia reversa.
+ docs/                     Specs e planos (docs/superpowers/).
+ manuais/                  PDFs de manuais (Vuupt).
+ assets/                   Logo.
+ debug/                    Fora do git; scripts descartáveis locais.
+ dados/                    Runtime (gitignored, exceto BD_MOTORISTAS.xlsx e
+                           centro_expandido_sp.json): dados.db, planilhas BD_*,
+                           logs, canhotos, JSONs auxiliares.
+                           dados/gcs-service-account.json é CREDENCIAL.
+
+
+==============================================================================
+ 15. BANCO DE DADOS (dados/dados.db, SQLite)
+==============================================================================
+
+ Produção = banco da VPS. O local é cópia antiga, só para desenvolvimento.
+ Não há ORM nem migrações centralizadas: cada módulo cria as próprias tabelas
+ (CREATE TABLE IF NOT EXISTS). Para achar o dono de uma tabela:
+   grep "CREATE TABLE IF NOT EXISTS <nome>"
+
+ Principais grupos
+   nucleo_*                  nucleo/ (pedidos, rotas, paradas, eventos,
+                             comprovantes, pedágios, reconciliações...)
+   motoristas, tarifas_motorista  nucleo/banco.py
+   rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py
+   painel_execucoes          painel_agentes/executor.py
+   wms_*                     painel_agentes/wms*.py
+   clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)
+   confirmacoes_rota, ofertas_rota, ofertas_avisos,
+   disponibilidade_motoristas, ajustes_complexidade_cliente   regras/
+   pedidos_roteirizados, pedidos_area_notificada   roteirizacao/
+   documentos_processados    documentos_pedido/
+   expedicoes_*              fingerprint_expedicao.py
+   notificacoes_entrega      notificacao_entregas/
+   agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
+   tratativas_pedido         tratativas.py
+   geocache                  geocodificacao.py
+   stokki_sessao_uso         stokki/sessao_uso.py
+   interno                   tipo de carga por embarcador (só leitura)
+   rotas, rotas_paradas      LEGADO vazio (não usar)
+
+ Outros bancos: dados/atendimento.db (atendimento/),
+ confirmacoes.db (confirmacao_motoristas/, só na instalação dele).
+
+
+==============================================================================
+ 16. COMO RODAR, TESTAR E PUBLICAR
+==============================================================================
+
+ Local (Windows): sempre `py -3.11`.
+   Painel de teste:  cd painel_agentes
+                     py -3.11 -c "import painel_agentes; painel_agentes.app.run(host='127.0.0.1', port=8099)"
+                     (NUNCA use a 8070, pode estar rodando de verdade)
+   API motorista:    py -3.11 nucleo/api_motorista.py --porta 8073
+   Testes:           py -3.11 -m unittest <modulo>   (ex. roteirizacao.test_polimento_rotas)
+                     Não há pytest.
+   Compilar:         py -3.11 -m py_compile <arquivos>
+   Scripts de lote:  quase todos aceitam --modo-teste (não escreve na
+                     Stokki/Vuupt; e-mail vai para forcar_destino). Use antes
+                     de rodar de verdade.
+
+ VPS: interpretador /opt/stokki-eventos/venv/bin/python, rodando como
+ www-data (sudo -u www-data ...). Rodar como root cria arquivos que travam
+ os serviços.
+
+ Deploy (só depois de commit + push): ver passo a passo em CLAUDE.md
+ (git pull --no-rebase, chown, units, restart só do serviço afetado,
+ provar chamando a rota/função de verdade).
+
+
+==============================================================================
+ 17. ARMADILHAS CONHECIDAS
+==============================================================================
+
+ - Login concorrente na Stokki derruba a outra sessão (401). Use
+   stokki/sessao_uso.py. Não chute URL da Stokki: gera login em cascata.
+ - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
+ - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
+ - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
+   comparar (normalizar_order_number / nucleo/normalizacao.py).
+ - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
+ - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
+ - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
+ - Envio real para clientes/motoristas é desligado por padrão
+   (notificacoes_automaticas.ativo, forcar_destino). Ligar é decisão do Hugo.
+ - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
+   a aba.
+ - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.
+ - executor.py mata processos com taskkill (Windows); na VPS só o processo
+   principal é encerrado.
+ - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita
+   "Notificador"; painel-agentes.service diz "somente leitura".
