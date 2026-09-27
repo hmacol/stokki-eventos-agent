@@ -1465,6 +1465,8 @@
   html.modo-mobile main, html.modo-mobile.tema-escuro main {
     max-width: none; border-radius: 0;
     padding: 0 8px calc(76px + env(safe-area-inset-bottom, 0px));
+    /* o topo e fixed (fora do fluxo): o conteudo comeca abaixo dele */
+    padding-top: calc(var(--altura-topo-mobile, 56px) + 8px);
   }
   /* o h1 some da tela mas fica pro leitor de tela (era display:none, que
      deixava a página sem h1 no celular) */
@@ -1472,11 +1474,14 @@
     position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
   }
-  /* topo fixo: data + chips de KPI numa linha que rola de lado */
+  /* topo fixo: data + chips de KPI numa linha que rola de lado. Era
+     sticky (25/09): virou fixed, igual ao ☰ e as abas, pra nao depender
+     do sticky do navegador do celular; o main compensa com padding-top
+     (--altura-topo-mobile, medida pelo JS das abas). */
   html.modo-mobile .barra-controle {
-    position: sticky; top: 0; z-index: 70;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 70;
     flex-wrap: nowrap; overflow-x: auto; gap: 8px;
-    padding: 8px 10px; margin: 0 -8px 8px; border-radius: 0; border-width: 0 0 1px;
+    padding: 8px 10px; margin: 0; border-radius: 0; border-width: 0 0 1px;
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   html.modo-mobile .barra-controle::-webkit-scrollbar { display: none; }
@@ -1486,10 +1491,14 @@
     html.modo-mobile .barra-controle { padding-left: 52px; }
   }
   /* degradê na borda direita: a tira rola de lado com a barra de rolagem
-     escondida, sem ele nada indica que há mais chips à direita */
-  html.modo-mobile .barra-controle {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+     escondida, sem ele nada indica que há mais chips à direita. Era
+     mask-image na propria barra (25/09): mascara em elemento fixo/sticky
+     fica pra tras ao rolar no Safari do iPhone e a barra "some"; agora e
+     um overlay fixo por cima da borda direita, sem mascara. */
+  html.modo-mobile main::before {
+    content: ""; position: fixed; top: 0; right: 0; z-index: 71; pointer-events: none;
+    width: 28px; height: var(--altura-topo-mobile, 56px);
+    background: linear-gradient(to right, transparent, var(--superficie));
   }
   /* o rótulo "Data:" sai da tela mas continua ligado ao campo pro leitor de tela */
   html.modo-mobile .barra-controle > label[for="data"] {
