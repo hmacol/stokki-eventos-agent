@@ -265,7 +265,7 @@
   function abrirCancelar(id) {
     const x = dados.entradas.find(e => e.id === Number(id)); if (!x) return;
     modal(`<h3>Cancelar entrada</h3><p><b>${esc(x.rotulo)}</b> · prevista pra ${esc(x.data_prevista_br)}${x.stokki_codigo ? ' · ' + esc(x.stokki_codigo) : ''}</p>
-      <p>${x.stokki_codigo ? 'O recebimento já existe na Stokki: a Fresh Log vai cancelá-lo lá e você acompanha pelo chat.' : 'A entrada ainda não foi criada na Stokki — será cancelada na hora.'}</p>
+      <p>${x.stokki_status === 'CRIADO' ? 'O recebimento já existe na Stokki (ou está sendo criado): a Fresh Log vai cancelá-lo lá e você acompanha pelo chat.' : 'A entrada ainda não foi criada na Stokki — será cancelada na hora.'}</p>
       <label>Motivo (opcional) <textarea id="ent-m-motivo" maxlength="300"></textarea></label>
       <div class="msg" id="ent-m-msg"></div>
       <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="ent-m-ok">Cancelar entrada</button></div>`);

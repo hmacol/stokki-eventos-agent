@@ -63,6 +63,12 @@ def _linha_cancelada(id_stokki, ref):
     return d
 
 
+def _linha_recebida(id_stokki, ref):
+    d = _linha(id_stokki, ref)
+    d["state"] = "Recebido"
+    return d
+
+
 class SessaoQuebrada:
     """procurar_pe sobre isso tem que levantar, nunca devolver (None, '')
     como se não tivesse achado (achado 2: falha de CONSULTA != não achar)."""
@@ -336,6 +342,15 @@ class TestPuros(unittest.TestCase):
         sess = SessaoFalsa([_linha(2500, "REM-9")], {})
         self.assertEqual(worker.procurar_pe(sess, "48", "REM-9", referencia="REM-9"), (2500, "#PE-2500"))
         self.assertFalse(any("/show/" in u for u, _ in sess.chamadas))
+
+    def test_procurar_pe_por_referencia_ignora_pe_ja_recebido(self):
+        # achado da revisão final: um #PE antigo já RECEBIDO com a mesma
+        # referência de uma remessa nova não pode contar como "já existe"
+        # pro dedupe da planilha -- só um #PE ainda em trânsito casa.
+        sess = SessaoFalsa([_linha_recebida(2600, "REM-9")], {})
+        self.assertEqual(worker.procurar_pe(sess, "48", "REM-9", referencia="REM-9"), (None, ""))
+        sess2 = SessaoFalsa([_linha(2601, "REM-9")], {})   # "Em transito"
+        self.assertEqual(worker.procurar_pe(sess2, "48", "REM-9", referencia="REM-9"), (2601, "#PE-2601"))
 
     def test_procurar_pe_sem_par(self):
         sess = SessaoFalsa([_linha(2400, "41000")], {"2400": "<html></html>"})

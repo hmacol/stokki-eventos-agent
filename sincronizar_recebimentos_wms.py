@@ -209,10 +209,14 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             res["erros"] += 1
             continue
         time.sleep(0.3)
-    try:
-        res["status_portal"] = portal_entradas.sincronizar_status(conn)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("sincronizar_status do portal falhou: %s", e)
+    if modo_teste:
+        res["status_portal"] = 0
+        logger.info("modo teste: status do portal nao sincronizado")
+    else:
+        try:
+            res["status_portal"] = portal_entradas.sincronizar_status(conn)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sincronizar_status do portal falhou: %s", e)
     return res
 
 

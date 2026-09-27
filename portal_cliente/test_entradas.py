@@ -434,6 +434,73 @@ class TestCancelar(BasePortal):
         with self.assertRaises(ep.ErroEnvio):
             entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
 
+    def test_cancelar_criado_sem_id_abre_chamado(self):
+        # o worker pode marcar CRIADO sem ainda ter achado o #PE (o timer do
+        # WMS amarra depois) -- o cancelamento não pode decidir só pelo
+        # stokki_id e deixar o #PE vivo sem chamado nenhum.
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', stokki_id = NULL, stokki_codigo = NULL")
+        self.conn.commit()
+        chamado_falso = mock.Mock()
+        chamado_falso.criar_chamado.return_value = {"id": 55}
+        chamado_falso.conectar.return_value = mock.MagicMock()
+        with mock.patch.object(entradas, "_chamados", return_value=chamado_falso):
+            r = entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+        self.assertTrue(r["aplicado"])
+        self.assertEqual(r["chamado_id"], 55)
+        self.assertIn("NF 41221", chamado_falso.criar_chamado.call_args.kwargs["assunto"])
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")
+
+    def test_cancelar_recusa_se_mudou_de_estado_entre_ler_e_gravar(self):
+        _confirmar(self)
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        # mudou por fora depois que a rota leu `e`
+        self.conn.execute("UPDATE portal_entradas SET status = 'CHEGOU'")
+        self.conn.commit()
+        with self.assertRaises(ep.ErroEnvio):
+            entradas.cancelar_entrada(self.conn, e, "cliente", self._cliente(), {})
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CHEGOU")
+
+    def test_cancelar_nao_mexe_no_wms_com_enderecamento_ou_fora_de_esperado(self):
+        # cenário artificial (a entrada em si segue ANUNCIADO e é cancelada
+        # nos dois casos), só pra provar o guard SQL do UPDATE em
+        # wms_recebimentos: nunca mexe fora de ESPERADO sem endereçamento.
+        _confirmar(self)
+        self.conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, id_stokki INTEGER, codigo TEXT, estado TEXT, atualizado_em TEXT)")
+        self.conn.execute("CREATE TABLE wms_recebimento_itens (id INTEGER PRIMARY KEY, recebimento_id INTEGER, linha INTEGER, sku TEXT, "
+                          "qtd_embalagem REAL, qtd_un REAL, produto_id INTEGER, qtd_enderecada REAL DEFAULT 0, falta_un REAL DEFAULT 0)")
+        self.conn.execute("INSERT INTO wms_recebimentos VALUES (7, 2497, '#PE-2497', 'ESPERADO', '')")
+        self.conn.execute("INSERT INTO wms_recebimento_itens VALUES (1, 7, 1, 'NUU001FD', 20, 20, 1, 5, 0)")  # já endereçou parte
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7")
+        self.conn.commit()
+        entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+        self.assertEqual(self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = 7").fetchone()[0], "ESPERADO")
+        self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")
+
+        _confirmar(self, nf="41222")
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7 WHERE id = 2")
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'DIVERGENCIA'")
+        self.conn.commit()
+        entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 2, CNPJ), "cliente", self._cliente(), {})
+        self.assertEqual(self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = 7").fetchone()[0], "DIVERGENCIA")
+        self.assertEqual(entradas.buscar_entrada(self.conn, 2, CNPJ)["status"], "CANCELADO")
+
+    def test_cancelar_guarda_motivo_e_manda_pro_chamado(self):
+        _confirmar(self)
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', stokki_id = 2497, stokki_codigo = '#PE-2497', "
+                          "observacoes = 'portão 2'")
+        self.conn.commit()
+        chamado_falso = mock.Mock()
+        chamado_falso.criar_chamado.return_value = {"id": 55}
+        chamado_falso.conectar.return_value = mock.MagicMock()
+        with mock.patch.object(entradas, "_chamados", return_value=chamado_falso):
+            entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {},
+                                      motivo="pedido cancelado pelo comprador")
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertEqual(e["observacoes"], "portão 2 | Cancelada: pedido cancelado pelo comprador")
+        msg = chamado_falso.mensagem_sistema.call_args.args[2]
+        self.assertIn("pedido cancelado pelo comprador", msg)
+
 
 class TestFlagCliente(BasePortal):
     def test_nasce_desligada_e_liga_por_cnpj(self):
@@ -486,6 +553,21 @@ class TestAmarracaoEStatus(BasePortal):
         self.assertEqual(eid, 1)
         e = entradas.buscar_entrada(self.conn, 1, CNPJ)
         self.assertEqual((e["stokki_id"], e["stokki_codigo"], e["stokki_status"]), (2497, "#PE-2497", "CRIADO"))
+
+    def test_amarrar_por_chave_nao_rouba_entrada_ja_ligada_a_outro_pe(self):
+        # entrada já ligada ao #PE 2497 (stokki_id): um #PE NOVO (2600) com a
+        # MESMA chave de NF-e não pode roubar essa entrada -- caso raro
+        # (chave duplicada), mas o guard tem que recusar em vez de
+        # sobrescrever o stokki_id de quem já estava ligado.
+        criados = _confirmar(self)
+        chave = entradas.buscar_entrada(self.conn, criados[0]["id"], CNPJ)["chave_nfe"]
+        self.conn.execute("UPDATE portal_entradas SET stokki_id = 2497, stokki_codigo = '#PE-2497', stokki_status = 'CRIADO'")
+        self.conn.commit()
+        self._rec(rid=8, id_stokki=2600)
+        eid = entradas.amarrar_recebimento(self.conn, 8, 2600, "#PE-2600", "48", chave_nfe=chave, ref_pedido="")
+        self.assertIsNone(eid)
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertEqual((e["stokki_id"], e["stokki_codigo"]), (2497, "#PE-2497"))
 
     def test_amarra_planilha_pela_referencia_do_mesmo_embarcador(self):
         entradas.garantir_tabelas(self.conn)

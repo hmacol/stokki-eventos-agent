@@ -317,6 +317,20 @@ class TestRodar(BaseRotina):
         self.assertEqual(n, 0)
         self.assertFalse(any("/show/" in url for url, _ in sess.chamadas))
 
+    def test_modo_teste_nao_sincroniza_status_do_portal(self):
+        # --modo-teste e pra nao gravar nada -- inclusive nao mexer no
+        # portal_entradas.status via sincronizar_status (que nao e
+        # wms_movimentos/wms_saldos, mas tambem nao pode escrever em modo
+        # teste do timer).
+        linhas = [_linha(2490, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2490": _HTML_ITENS})
+
+        with mock.patch.object(mod.portal_entradas, "sincronizar_status") as sinc:
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=True)
+
+        sinc.assert_not_called()
+        self.assertEqual(res["status_portal"], 0)
+
     def test_rodada_repetida_sobre_recebimento_inalterado_nao_duplica_item(self):
         linhas = [_linha(2482, PILOTO_ID)]
         sess = SessaoFalsa(linhas, {"2482": _HTML_ITENS})

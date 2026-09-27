@@ -990,9 +990,12 @@ def api_entradas_cancelar(entrada_id):
         if not entrada:
             return jsonify({"erro": "Entrada não encontrada."}), 404
         emp = _empresa_envio()
+        corpo = request.get_json(silent=True) or {}
+        motivo = (corpo.get("motivo") or "")[:300]
         # CNPJ do LOGIN (g.cliente), como bloqueio_area: o chat busca o chamado pelo CNPJ logado
         r = entradas_mod.cancelar_entrada(conn, entrada, _quem_envia(),
-                                          {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")}, _CONFIG)
+                                          {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")}, _CONFIG,
+                                          motivo=motivo)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:

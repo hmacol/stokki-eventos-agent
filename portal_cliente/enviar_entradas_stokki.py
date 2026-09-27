@@ -35,6 +35,13 @@ Por entrada, o resultado é:
 NUNCA sonda URL da Stokki por adivinhação (URL inexistente redireciona
 pro /login e o auth.py refaz o login, derrubando as outras sessões).
 
+Origem (origin_id) da remessa por planilha: enviada sempre vazia -- pela
+mesma regra acima, o worker nunca sonda a URL de origens do cliente por
+adivinhação. Depende de a Stokki aceitar o wizard Excel sem origin_id;
+a ser provado em produção (Task 9). Se a Stokki recusar por causa disso,
+o erro fica claro pro cliente (ver o `if not origem_id and "origin" in
+erro.lower()` em executar_wizard_excel).
+
 COMO RODAR:
     py -3 portal_cliente/enviar_entradas_stokki.py --loop              # serviço (VPS)
     py -3 portal_cliente/enviar_entradas_stokki.py --uma-vez           # um ciclo
@@ -73,7 +80,6 @@ URL_BASE = "https://freshlog.stokki.com.br"
 URL_WIZARD_XML = f"{URL_BASE}/pt-br/administrator/inventory/incoming/xml/multiple/create"
 URL_WIZARD_EXCEL = f"{URL_BASE}/pt-br/administrator/inventory/incoming/create/excel/incoming"
 URL_STORE_EXCEL = f"{URL_BASE}/pt-br/administrator/inventory/incoming/excel/store"
-URL_CLIENTE_EXCEL = f"{URL_BASE}/pt-br/administrator/inventory/incoming/create/excel/client/{{client_id}}"
 _HEADERS_AJAX = fila_saida._HEADERS_AJAX
 
 carregar_config = fila_saida.carregar_config
@@ -239,6 +245,11 @@ def procurar_pe(sessao, client_id: str, busca: str, chave_nfe: str = "", referen
     ou com a referência (planilha: Ref. do Pedido da própria linha). Sem
     par: (None, ''). Ignora linhas de #PE cancelado (a Stokki mantém o
     registro na listagem, mas ele não conta como "já existe" pro dedupe).
+    No modo referência (planilha), também ignora #PE cuja situação já
+    contém "RECEB" -- um #PE antigo, já recebido, com a mesma referência
+    de uma remessa nova não pode casar com ela (a mercadoria em trânsito
+    é outra); só um #PE ainda em trânsito conta como "já existe" pro
+    dedupe da planilha.
     Falha de CONSULTA (não achar não é falha) levanta ErroConsultaStokki."""
     vistos = set()
     for tentativa in ({"busca": busca, "por_pagina": 10}, {"busca": "", "por_pagina": 20}):
@@ -251,11 +262,14 @@ def procurar_pe(sessao, client_id: str, busca: str, chave_nfe: str = "", referen
             if not id_stokki or id_stokki in vistos:
                 continue
             vistos.add(id_stokki)
-            if "CANCEL" in (stokki_recebimentos.extrair_cabecalho_da_linha(linha).get("situacao") or "").upper():
+            situacao = (stokki_recebimentos.extrair_cabecalho_da_linha(linha).get("situacao") or "").upper()
+            if "CANCEL" in situacao:
                 continue
             ref = stokki_recebimentos.extrair_ref_da_linha(linha).strip().upper()
             codigo = stokki_recebimentos.extrair_codigo_da_linha(linha)
             if referencia and not chave_nfe:
+                if "RECEB" in situacao:
+                    continue
                 if ref == str(referencia).strip().upper():
                     return id_stokki, codigo
                 continue
@@ -390,20 +404,6 @@ def executar_wizard_xml(cfg: dict, usuario: str, senha: str, lote: list[dict], a
 
 # ── Wizard Excel (remessas de planilha) ───────────────────────────────────────
 
-def _primeira_origem(dados) -> str:
-    """origin_id do JSON de create/excel/client/<id>, formato desconhecido:
-    procura uma lista com 'id' em chaves plausíveis. '' se não houver."""
-    if not isinstance(dados, dict):
-        return ""
-    for chave in ("origins", "origin", "addresses", "address", "data"):
-        v = dados.get(chave)
-        if isinstance(v, list) and v and isinstance(v[0], dict) and v[0].get("id") not in (None, ""):
-            return str(v[0]["id"])
-        if isinstance(v, dict) and v.get("id") not in (None, ""):
-            return str(v["id"])
-    return ""
-
-
 def executar_wizard_excel(cfg: dict, usuario: str, senha: str, lote: list[dict], arquivos: dict[str, Path], pasta_logs: Path, wiz,
                           headless: bool = True) -> dict[str, dict]:
     from playwright.sync_api import sync_playwright
@@ -421,12 +421,10 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, lote: list[dict],
                 or page.evaluate("() => (document.querySelector('input[name=_token]') || {}).value || ''")
             wiz.selecionar_valor_select(page, "#client_id", cfg["client_id"])
             page.wait_for_timeout(1500)
-            try:
-                r = page.context.request.get(URL_CLIENTE_EXCEL.format(client_id=cfg["client_id"]), headers=_HEADERS_AJAX, timeout=30000)
-                origem_id = _primeira_origem(fila_saida._json_ou_none(r)) if r.ok else ""
-            except Exception as e:  # noqa: BLE001
-                logger.info(f"   (origem do cliente no wizard Excel indisponível: {e})")
-                origem_id = ""
+            # nunca sonda a URL de origens do cliente por adivinhação (regra
+            # do módulo) -- origem sempre vazia; depende de a Stokki aceitar
+            # o wizard Excel sem origin_id (a ser provado em produção, Task 9).
+            origem_id = ""
             carrier = fila_saida._escolher_transportadora(page, cfg)
             page.screenshot(path=str(pasta_logs / f"{ts}_excel_form.png"), full_page=True)
             # renova a trava antes do wizard Excel (o XML já pode ter gasto boa

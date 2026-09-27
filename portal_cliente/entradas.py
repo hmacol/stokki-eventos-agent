@@ -599,21 +599,31 @@ def _chamados():
     return ch
 
 
-def _abrir_chamado_cancelamento(entrada: dict, cliente: dict, por: str) -> int | None:
-    """Com #PE já criado, a Stokki não é cancelada sozinha (spec D5): abre
-    chamado pra equipe, o mesmo desenho de bloqueio_area.abrir_bloqueio.
-    Falha do chat não desfaz o cancelamento no portal."""
+def _abrir_chamado_cancelamento(entrada: dict, cliente: dict, por: str, motivo: str = "") -> int | None:
+    """Com o #PE já criado (ou em criação) na Stokki, ela não é cancelada
+    sozinha (spec D5): abre chamado pra equipe, o mesmo desenho de
+    bloqueio_area.abrir_bloqueio. O worker pode ter marcado stokki_status
+    CRIADO sem ainda ter achado o #PE (o timer do WMS amarra depois) --
+    nesse caso o assunto/mensagem avisam que o #PE ainda não foi
+    identificado, em vez de fingir que não existe nada a cancelar. Falha
+    do chat não desfaz o cancelamento no portal."""
+    if entrada.get("stokki_codigo"):
+        assunto = f"Cancelar recebimento {entrada['stokki_codigo']} na Stokki"
+        texto_pe = f"O recebimento {entrada['stokki_codigo']} já existe na Stokki"
+    else:
+        assunto = f"Cancelar recebimento da {rotulo_entrada(entrada)} na Stokki (sem #PE identificado)"
+        texto_pe = "O recebimento já existe na Stokki, mas o #PE ainda não foi identificado"
     try:
         ch = _chamados()
         conn_ch = ch.conectar()
         try:
             chamado = ch.criar_chamado(conn_ch, cliente, ch.ORIGEM_SISTEMA, ch.STATUS_AGUARDANDO_FL,
-                                       assunto=f"Cancelar recebimento {entrada.get('stokki_codigo') or entrada.get('stokki_id')} na Stokki",
-                                       area="entradas", pedido_ref=rotulo_entrada(entrada))
+                                       assunto=assunto, area="entradas", pedido_ref=rotulo_entrada(entrada))
             quem = "pela equipe Fresh Log" if str(por).startswith("equipe") else "pelo cliente"
+            texto_motivo = f" Motivo informado: {motivo}." if motivo else ""
             ch.mensagem_sistema(conn_ch, chamado,
-                                f"{rotulo_entrada(entrada)} foi cancelada {quem} na aba Pedidos de Entrada. O recebimento "
-                                f"{entrada.get('stokki_codigo') or ''} já existe na Stokki e precisa ser cancelado lá à mão.")
+                                f"{rotulo_entrada(entrada)} foi cancelada {quem} na aba Pedidos de Entrada.{texto_motivo} "
+                                f"{texto_pe} e precisa ser cancelado lá à mão.")
             return chamado["id"]
         finally:
             conn_ch.close()
@@ -622,29 +632,48 @@ def _abrir_chamado_cancelamento(entrada: dict, cliente: dict, por: str) -> int |
         return None
 
 
-def cancelar_entrada(conn: sqlite3.Connection, entrada: dict, por: str, cliente: dict, config: dict | None) -> dict:
+def cancelar_entrada(conn: sqlite3.Connection, entrada: dict, por: str, cliente: dict, config: dict | None,
+                     motivo: str = "") -> dict:
     """{aplicado, mensagem, chamado_id}. Só a partir de ANUNCIADO e nunca
-    enquanto o worker está criando o #PE."""
+    enquanto o worker está criando o #PE. O UPDATE é condicional (mesmo
+    guard do `if` acima, refeito no WHERE): entre a rota ler `entrada` e
+    chegar aqui, o worker pode ter marcado ENVIANDO ou sincronizar_status
+    pode ter levado a CHEGOU -- sem a condição, o cancelamento aplicaria
+    em cima de um estado que já mudou."""
     if entrada["status"] != STATUS_ANUNCIADO:
         raise ErroEnvio("Só uma entrada ainda anunciada (que não chegou) pode ser cancelada.")
     if entrada["stokki_status"] == STOKKI_ENVIANDO:
         raise ErroEnvio("Essa entrada está sendo criada na Stokki agora -- tente de novo em alguns instantes.")
     agora = _agora()
-    conn.execute("UPDATE portal_entradas SET status = ?, cancelado_em = ?, cancelado_por = ?, atualizado_em = ? WHERE id = ?",
-                 (STATUS_CANCELADO, agora, por, agora, entrada["id"]))
+    obs_nova = entrada.get("observacoes") or ""
+    if motivo:
+        texto_motivo = f"Cancelada: {motivo}"
+        obs_nova = f"{obs_nova} | {texto_motivo}" if obs_nova else texto_motivo
+    cur = conn.execute("UPDATE portal_entradas SET status = ?, cancelado_em = ?, cancelado_por = ?, atualizado_em = ?, "
+                       "observacoes = ? WHERE id = ? AND status = ? AND stokki_status <> ?",
+                       (STATUS_CANCELADO, agora, por, agora, obs_nova, entrada["id"], STATUS_ANUNCIADO, STOKKI_ENVIANDO))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise ErroEnvio("Essa entrada mudou de situação agora há pouco -- atualize a tela e tente de novo.")
     if entrada.get("wms_recebimento_id") and _tem_tabela(conn, "wms_recebimentos"):
         conn.execute("UPDATE wms_recebimentos SET estado = 'CANCELADO', atualizado_em = ? WHERE id = ? AND estado = 'ESPERADO' "
                      "AND NOT EXISTS (SELECT 1 FROM wms_recebimento_itens i WHERE i.recebimento_id = wms_recebimentos.id AND i.qtd_enderecada > 0)",
                      (agora, entrada["wms_recebimento_id"]))
     conn.commit()
     chamado_id = None
-    if entrada.get("stokki_id"):
-        chamado_id = _abrir_chamado_cancelamento(entrada, cliente, por)
+    if entrada.get("stokki_status") == STOKKI_CRIADO:
+        chamado_id = _abrir_chamado_cancelamento(entrada, cliente, por, motivo)
         if chamado_id:
             conn.execute("UPDATE portal_entradas SET chamado_id = ? WHERE id = ?", (chamado_id, entrada["id"]))
             conn.commit()
-        mensagem = ("Entrada cancelada. O recebimento já existia na Stokki: a Fresh Log vai cancelá-lo lá e você acompanha pelo chat."
-                    if chamado_id else "Entrada cancelada. O recebimento já existia na Stokki -- avise a Fresh Log pelo chat pra cancelar lá.")
+        if entrada.get("stokki_codigo"):
+            mensagem = ("Entrada cancelada. O recebimento já existia na Stokki: a Fresh Log vai cancelá-lo lá e você acompanha pelo chat."
+                        if chamado_id else "Entrada cancelada. O recebimento já existia na Stokki -- avise a Fresh Log pelo chat pra cancelar lá.")
+        else:
+            mensagem = ("Entrada cancelada. O recebimento estava sendo criado na Stokki (o #PE ainda não foi identificado): "
+                        "a Fresh Log vai cancelá-lo lá assim que aparecer e você acompanha pelo chat."
+                        if chamado_id else "Entrada cancelada. O recebimento estava sendo criado na Stokki -- avise a Fresh Log "
+                        "pelo chat pra cancelar lá assim que o #PE aparecer.")
     else:
         mensagem = "Entrada cancelada -- não será criada na Stokki."
     return {"aplicado": True, "mensagem": mensagem, "chamado_id": chamado_id}
@@ -692,8 +721,12 @@ def amarrar_recebimento(conn: sqlite3.Connection, recebimento_id: int, id_stokki
     e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE stokki_id = ? AND status IN ('ANUNCIADO','CHEGOU')",
                      (int(id_stokki),)).fetchone()
     if e is None and chave_nfe:
+        # AND (stokki_id IS NULL OR stokki_id = ?): a entrada pode já estar
+        # ligada a OUTRO #PE (stokki_id diferente) -- a chave da NF-e sozinha
+        # não pode roubar essa entrada pro #PE que está chegando agora.
         e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE chave_nfe = ? AND status IN ('ANUNCIADO','CHEGOU') "
-                         "AND wms_recebimento_id IS NULL", (chave_nfe,)).fetchone()
+                         "AND wms_recebimento_id IS NULL AND (stokki_id IS NULL OR stokki_id = ?)",
+                         (chave_nfe, int(id_stokki))).fetchone()
     if e is None and ref_pedido:
         cnpj = _cnpj_do_stkkc(conn, stkkc_id)
         if cnpj:
