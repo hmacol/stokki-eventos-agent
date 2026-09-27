@@ -958,6 +958,31 @@ def _bases_do_code(code: str) -> set[str]:
     return bases
 
 
+def _desmembrar_combinados(servicos: list) -> list:
+    """Serviço com mais de um pedido no 'code' ("PS-37189, PS-37176")
+    vira um item por pedido, cada um com seu 'code' -- antes o loop
+    expedia só o 1º id (_extrair_id pega a 1ª sequência de dígitos) e os
+    outros ficavam 'Aguardando Transportador' pra sempre (14/09). O
+    canhoto (mesmo checklist) é anexado em cada um."""
+    saida = []
+    for s in servicos:
+        pedacos = [p.strip().lstrip("#") for p in (s.get("code") or "").split(",") if p.strip()]
+        if len(pedacos) <= 1:
+            saida.append(s)
+        else:
+            saida.extend({**s, "code": p} for p in pedacos)
+    return saida
+
+
+def _falhas_bloqueadas(falhas_persistentes: dict, agora: datetime | None = None) -> dict:
+    """Das falhas persistentes, só as que falharam nas últimas 24h ficam
+    fora da fila. As mais velhas voltam pra uma tentativa por dia: pedido
+    recusado por estar 'Aberto'/'Em Conferência' na Stokki costuma ficar
+    expedível dias depois (17 casos em 14/09) e antes nunca era retentado."""
+    limite = ((agora or datetime.now()) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    return {c: f for c, f in falhas_persistentes.items() if (f.get("ultima_em") or "") > limite}
+
+
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
          forcar: list = None, horas_entregues: int = HORAS_ENTREGUES,
          pedidos: list = None):
@@ -1001,7 +1026,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             return
         logger.info(f"MODO SELECIONADO: {len(codigos_alvo)} pedido(s): {sorted(codigos_alvo)}")
 
-        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
+        servicos = _desmembrar_combinados(buscar_servicos_entregues(vuupt_token, horas=horas_entregues))
         validados = [s for s in servicos if _bases_do_code(s.get("code")) & codigos_alvo]
         encontrados = {b for s in validados for b in _bases_do_code(s.get("code"))} & codigos_alvo
         faltando = codigos_alvo - encontrados
@@ -1034,7 +1059,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     else:
         # 1. Busca entregues (com ou sem canhoto -- 28/08, a foto e a
         # validação deixaram de ser trava; ver docstring do módulo)
-        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
+        servicos = _desmembrar_combinados(buscar_servicos_entregues(vuupt_token, horas=horas_entregues))
         if not servicos:
             # Sem return: mesmo sem entrega nova, a parte de INSUCESSO
             # abaixo precisa rodar (notificação, duplicação, aviso de dia
@@ -1060,15 +1085,20 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # 2b. Quem já falhou MAX_TENTATIVAS_FALHA vezes seguidas com o
         # mesmo erro sai da fila automática (vai pro e-mail de pendências
         # abaixo) -- antes era retentado a cada 30 min por 7 dias e
-        # depois sumia sem aviso.
+        # depois sumia sem aviso. Fica fora só por 24h desde a última
+        # tentativa: depois volta pra 1 tentativa por dia (_falhas_bloqueadas).
         falhas_persistentes = fingerprint_expedicao.falhas_persistentes(MAX_TENTATIVAS_FALHA)
+        bloqueadas = _falhas_bloqueadas(falhas_persistentes)
         if falhas_persistentes:
             antes = len(validados)
             validados = [s for s in validados
-                         if fingerprint_expedicao._normalizar(s.get("code")) not in falhas_persistentes]
+                         if fingerprint_expedicao._normalizar(s.get("code")) not in bloqueadas]
             if antes - len(validados):
                 logger.info(f"{antes - len(validados)} pedido(s) com falha persistente "
-                            f"(>= {MAX_TENTATIVAS_FALHA} tentativas) -- fora da fila, ver e-mail de pendencias.")
+                            f"(>= {MAX_TENTATIVAS_FALHA} tentativas) nas ultimas 24h -- fora da fila, ver e-mail de pendencias.")
+            retentar = len(falhas_persistentes) - len(bloqueadas)
+            if retentar:
+                logger.info(f"{retentar} falha(s) persistente(s) com mais de 24h -- retentativa diaria.")
 
         # 3. Avisa falhas persistentes (os "sem comprovante" entram no
         # mesmo e-mail depois de expedidos, no fim da execução)
