@@ -1597,7 +1597,7 @@
      com a MESMA cor do traço no mapa, mais perto primeiro. "Mais ações"
      leva pra aba Pool com a seleção (Criar rota, Roteirizar...). */
   .folha-mapa { display: none; }
-  html.modo-mobile[data-aba="mapa"] body.tem-selecao-pool .folha-mapa { display: flex; }
+  html.modo-mobile[data-aba="mapa"] body.tem-selecao-mapa .folha-mapa { display: flex; }
   .folha-mapa {
     position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 75;
     flex-direction: column; gap: 8px; padding: 8px 10px 10px; max-height: 48vh;
@@ -1618,7 +1618,7 @@
     flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 4px 0 10px;
     border-radius: 100px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-size: 12px; font-weight: 600;
   }
-  .folha-mapa .chip-pedido::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #2FD9AE; }
+  .folha-mapa .chip-pedido::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--cor-origem, #2FD9AE); }
   .folha-mapa .chip-pedido .x { width: 22px; height: 22px; line-height: 22px; text-align: center; color: var(--texto-suave); font-size: 15px; }
   .folha-mapa .folha-rotulo { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); flex: none; }
   .folha-mapa .folha-rotas {
@@ -3277,11 +3277,23 @@
     const visivel = grupoVisivelNoMapa(rascunhoId);
 
     const markers = paradas.map((p, idx) => {
+      const serviceId = Number(p.li.dataset.serviceId);
       const marker = new google.maps.Marker({
         position: { lat: p.lat, lng: p.lng }, map: visivel ? map : null,
-        icon: iconeNumerado(idx + 1, cor), title: p.codigo,
+        icon: iconeNumerado(idx + 1, SELECIONADOS_ROTA.has(serviceId) ? COR_SELECIONADO : cor), title: p.codigo,
       });
+      marker.serviceId = serviceId;
+      marker.numero = idx + 1;
       marker.addListener("click", () => {
+        // celular, aba Mapa, rota ainda em rascunho: toque (des)seleciona
+        // pra mover pela folha (#folha-mapa); rota enviada segue só
+        // mostrando o balão
+        const r = RASCUNHOS.find(x => x.id === rascunhoId);
+        const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+        if (MODO_MOBILE && PODE_EDITAR && document.documentElement.dataset.aba === "mapa" && r && r.status === "RASCUNHO" && li) {
+          alternarSelecaoRota(serviceId, li);
+          return;
+        }
         infoWindow.setContent(montarInfoHtml(p.li, rascunhoId, idx + 1, paradas.length));
         infoWindow.open(map, marker);
       });
@@ -4294,41 +4306,63 @@
     montarFolhaMapa();
   }
 
-  // confirmar=false: a folha do mapa já é a confirmação (escolher a rota
-  // colorida + tocar em "Adicionar"), não precisa do confirm() nativo.
-  // controle = o que fica desabilitado enquanto posta.
-  async function adicionarSelecionadosARota(rascunhoId, { confirmar = true, controle = null } = {}) {
+  async function adicionarSelecionadosARota(rascunhoId) {
     // mesma chamada do soltar um card do pool numa rota (onDragEnd), só
     // que pra vários de uma vez, ao fim da rota; recarrega no final
-    const ids = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
-      .map(li => Number(li.dataset.serviceId)).filter(id => SELECIONADOS.has(id));
+    const ids = idsPoolSelecionados();
     const rota = RASCUNHOS.find(r => r.id === rascunhoId);
     if (!ids.length || !rota) return;
-    if (confirmar && !confirm(`Adicionar ${ids.length} pedido(s) ao fim da rota "${rota.nome}"?`)) return;
+    if (!confirm(`Adicionar ${ids.length} pedido(s) ao fim da rota "${rota.nome}"?`)) return;
     if (!confirmarDiaFixo(ids, "Adicionar à rota")) return;
-    const el = controle || document.getElementById("select-adicionar-rota");
-    el.disabled = true;
+    const select = document.getElementById("select-adicionar-rota");
+    select.disabled = true;
     try {
-      for (const id of ids) {
-        const parada = POOL_BY_ID[id];
-        if (!parada) continue;
-        await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada, ordem: null });
-      }
+      await postarNaRota(rascunhoId, ids, []);
       location.reload();
     } catch (e) {
       alert(`Falha ao adicionar à rota: ${e.message}. Recarregue a página.`);
-      el.disabled = false;
+      select.disabled = false;
     }
   }
 
+  // pool selecionado na ordem em que aparece no pool
+  function idsPoolSelecionados() {
+    return Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .map(li => Number(li.dataset.serviceId)).filter(id => SELECIONADOS.has(id));
+  }
+
+  // parada de rota selecionada -> {service_id, rascunho_origem_id}, com a
+  // origem lida do DOM agora (mesmo padrão de moverSelecionados)
+  function itensRotaSelecionados() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      const ul = li && li.closest(".lista-paradas");
+      return ul ? { service_id: serviceId, rascunho_origem_id: Number(ul.dataset.listId), li } : null;
+    }).filter(Boolean);
+  }
+
+  // pool -> adicionar-parada (um por um, ao fim); paradas de outras rotas
+  // -> mover-paradas (um POST só). Quem já está na rota de destino fica.
+  async function postarNaRota(rascunhoId, idsPool, itensRota) {
+    for (const id of idsPool) {
+      const parada = POOL_BY_ID[id];
+      if (!parada) continue;
+      await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada, ordem: null });
+    }
+    const mover = itensRota.filter(i => i.rascunho_origem_id !== rascunhoId)
+      .map(({ service_id, rascunho_origem_id }) => ({ service_id, rascunho_origem_id }));
+    if (mover.length) await postJSON("/api/planejamento/mover-paradas", { itens: mover, rascunho_destino_id: rascunhoId });
+  }
+
   // ---- Folha de seleção da aba Mapa (celular, Hugo 27/09) ----
-  // Tocar nos pontos vermelhos continua (des)selecionando (alternarSelecao);
-  // em vez da barra de 9 botões, sobe esta folha: chips dos pedidos
-  // escolhidos (toque tira), rotas em rascunho com a cor do traço delas
-  // no mapa, ordenadas pela distância até a seleção, e a lotação que a
-  // rota fica depois de receber. Tocar numa rota destaca o traço dela
-  // (as outras esmaecem); "Adicionar" confirma. O mapa segue livre
-  // acima pra continuar tocando em pontos.
+  // Tocar num ponto vermelho (pool) ou num número de rota em rascunho
+  // (des)seleciona; em vez das barras, sobe esta folha: chips dos pedidos
+  // escolhidos (toque tira; os que já estão em rota trazem a cor dela),
+  // rotas em rascunho com a cor do traço delas no mapa, ordenadas pela
+  // distância até a seleção, e a lotação que a rota fica depois de
+  // receber. Tocar numa rota destaca o traço dela (as outras esmaecem);
+  // o botão confirma -- pool entra no fim da rota, parada de outra rota
+  // é movida. O mapa segue livre acima pra continuar tocando em pontos.
   let folhaRotaEscolhida = null;
 
   function montarFolhaMapa() {
@@ -4345,14 +4379,17 @@
         <button type="button" id="folha-limpar">Limpar</button>
       </div>
       <div class="folha-pedidos" id="folha-pedidos"></div>
-      <div class="folha-rotulo" id="folha-rotulo">Adicionar à rota · mais perto primeiro</div>
+      <div class="folha-rotulo" id="folha-rotulo">Levar pra rota · mais perto primeiro</div>
       <div class="folha-rotas" id="folha-rotas" role="radiogroup" aria-label="Rota de destino"></div>
       <div class="folha-acoes">
         <button type="button" id="folha-adicionar" disabled>Escolha uma rota</button>
-        <button type="button" id="folha-mais" title="Abre a aba Pool com a seleção: Criar rota, Roteirizar, Incrementar, endereço, agendar...">Mais ações ›</button>
+        <button type="button" id="folha-mais" title="Abre a aba Pool (ou Rotas) com a seleção: Criar rota, Roteirizar, endereço, agendar...">Mais ações ›</button>
       </div>`;
     document.body.appendChild(folha);
-    folha.querySelector("#folha-limpar").addEventListener("click", limparSelecao);
+    folha.querySelector("#folha-limpar").addEventListener("click", () => {
+      limparSelecao();
+      limparSelecaoRotas();
+    });
     folha.querySelector("#folha-recolher").addEventListener("click", (e) => {
       const recolhida = folha.classList.toggle("recolhida");
       e.currentTarget.textContent = recolhida ? "▴" : "▾";
@@ -4360,7 +4397,11 @@
     });
     folha.querySelector("#folha-pedidos").addEventListener("click", (e) => {
       const chip = e.target.closest(".chip-pedido");
-      if (chip) alternarSelecao(Number(chip.dataset.id));
+      if (!chip) return;
+      const id = Number(chip.dataset.id);
+      if (chip.dataset.origem === "pool") { alternarSelecao(id); return; }
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${id}"]`);
+      if (li) alternarSelecaoRota(id, li);
     });
     folha.querySelector("#folha-rotas").addEventListener("click", (e) => {
       const chip = e.target.closest(".chip-rota");
@@ -4368,14 +4409,35 @@
       const id = Number(chip.dataset.id);
       escolherRotaFolha(folhaRotaEscolhida === id ? null : id);
     });
-    folha.querySelector("#folha-adicionar").addEventListener("click", (e) => {
-      if (folhaRotaEscolhida) adicionarSelecionadosARota(folhaRotaEscolhida, { confirmar: false, controle: e.currentTarget });
-    });
+    folha.querySelector("#folha-adicionar").addEventListener("click", (e) => aplicarFolhaNaRota(e.currentTarget));
     folha.querySelector("#folha-mais").addEventListener("click", () => {
       escolherRotaFolha(null);
-      document.querySelector('#abas-mobile button[data-aba="pool"]')?.click();
+      // as ações de lote de cada seleção moram na aba dela
+      const aba = SELECIONADOS.size || !SELECIONADOS_ROTA.size ? "pool" : "rotas";
+      document.querySelector(`#abas-mobile button[data-aba="${aba}"]`)?.click();
     });
     atualizarFolhaMapa();
+  }
+
+  async function aplicarFolhaNaRota(botao) {
+    const destinoId = folhaRotaEscolhida;
+    if (!destinoId) return;
+    const idsPool = idsPoolSelecionados();
+    const itensRota = itensRotaSelecionados();
+    // a folha já é a confirmação (rota colorida escolhida + botão); só o
+    // aviso de dia fixo continua, igual a Criar rota/Roteirizar
+    if (idsPool.length && !confirmarDiaFixo(idsPool, "Adicionar à rota")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      await postarNaRota(destinoId, idsPool, itensRota);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao levar pra rota: ${e.message}. Recarregue a página.`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
   }
 
   function distanciaKm(a, b) {
@@ -4390,50 +4452,68 @@
       .filter(p => !isNaN(p.lat) && !isNaN(p.lng));
   }
 
+  // quantos entram de fato na rota (quem já está nela não conta)
+  function selecaoParaRota(rascunhoId, lisPool, itensRota) {
+    const lis = lisPool.concat(itensRota.filter(i => i.rascunho_origem_id !== rascunhoId).map(i => i.li));
+    return { n: lis.length, caixas: lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) };
+  }
+
   function atualizarFolhaMapa() {
     const folha = document.getElementById("folha-mapa");
     if (!folha) return;
-    if (!SELECIONADOS.size) {
+    const total = SELECIONADOS.size + SELECIONADOS_ROTA.size;
+    document.body.classList.toggle("tem-selecao-mapa", total > 0);
+    if (!total) {
       escolherRotaFolha(null);
       return;
     }
-    const lisSel = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+    const lisPool = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
       .filter(li => SELECIONADOS.has(Number(li.dataset.serviceId)));
-    const caixasSel = lisSel.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0);
-    const n = lisSel.length;
+    const itensRota = itensRotaSelecionados();
+    const todosLis = lisPool.concat(itensRota.map(i => i.li));
+    const caixasSel = todosLis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0);
+    const n = todosLis.length;
     folha.querySelector("#folha-resumo").innerHTML =
       `${n} pedido${n === 1 ? "" : "s"} <small>· ${caixasSel} cx · toque no mapa pra somar mais</small>`;
-    folha.querySelector("#folha-pedidos").innerHTML = lisSel.map(li => {
-      const id = Number(li.dataset.serviceId);
-      const codigo = POOL_BY_ID[id]?.codigo || li.querySelector(".codigo")?.textContent || id;
-      return `<button type="button" class="chip-pedido" data-id="${id}" aria-label="Tirar ${escaparHtml(codigo)} da seleção">${escaparHtml(codigo)}<span class="x" aria-hidden="true">×</span></button>`;
-    }).join("");
+    const chip = (id, codigo, cor, origem) =>
+      `<button type="button" class="chip-pedido" data-id="${id}" data-origem="${origem}" style="--cor-origem:${cor}"
+        aria-label="Tirar ${escaparHtml(codigo)} da seleção">${escaparHtml(codigo)}<span class="x" aria-hidden="true">×</span></button>`;
+    folha.querySelector("#folha-pedidos").innerHTML =
+      lisPool.map(li => {
+        const id = Number(li.dataset.serviceId);
+        return chip(id, POOL_BY_ID[id]?.codigo || li.querySelector(".codigo")?.textContent || id, COR_SELECIONADO, "pool");
+      }).join("") +
+      itensRota.map(i => chip(i.service_id, i.li.querySelector(".codigo")?.textContent || i.service_id,
+        coresPorRascunho[i.rascunho_origem_id] || "#6B7280", "rota")).join("");
 
-    // leitura não edita: sem lista de rotas nem "Adicionar"
+    // leitura não edita: sem lista de rotas nem botão
     const rotasEl = folha.querySelector("#folha-rotas");
-    const podeAdicionar = PODE_EDITAR;
-    folha.querySelector("#folha-rotulo").style.display = podeAdicionar ? "" : "none";
-    rotasEl.style.display = podeAdicionar ? "" : "none";
-    folha.querySelector("#folha-adicionar").style.display = podeAdicionar ? "" : "none";
-    if (!podeAdicionar) return;
+    folha.querySelector("#folha-rotulo").style.display = PODE_EDITAR ? "" : "none";
+    rotasEl.style.display = PODE_EDITAR ? "" : "none";
+    folha.querySelector("#folha-adicionar").style.display = PODE_EDITAR ? "" : "none";
+    if (!PODE_EDITAR) return;
 
-    const pontosSel = pontosDoLi(lisSel);
+    const pontosSel = pontosDoLi(todosLis);
     const rotas = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => {
       const lis = Array.from(document.querySelectorAll(`#lista-parada-${r.id} .item-parada`));
-      const pontos = pontosDoLi(lis);
+      // distância até as paradas da rota que NÃO estão selecionadas (a
+      // parada selecionada daria 0 km pra própria rota)
+      const pontos = pontosDoLi(lis.filter(li => !SELECIONADOS_ROTA.has(Number(li.dataset.serviceId))));
       let km = Infinity;
       pontosSel.forEach(a => pontos.forEach(b => { km = Math.min(km, distanciaKm(a, b)); }));
-      const caixas = lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) + caixasSel;
-      const paradas = lis.length + n;
+      const entra = selecaoParaRota(r.id, lisPool, itensRota);
+      const caixas = lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) + entra.caixas;
+      const paradas = lis.length + entra.n;
       const nome = document.querySelector(`#card-rota-${r.id} .titulo-rota .nome`)?.textContent || r.nome;
-      return { r, km, caixas, paradas, nome };
+      const origem = itensRota.some(i => i.rascunho_origem_id === r.id);
+      return { r, km, caixas, paradas, nome, origem };
     }).sort((a, b) => a.km - b.km);
 
     if (folhaRotaEscolhida && !rotas.some(x => x.r.id === folhaRotaEscolhida)) folhaRotaEscolhida = null;
     if (!rotas.length) {
       rotasEl.innerHTML = `<div class="folha-vazio">Nenhuma rota em rascunho. Use "Mais ações" → Criar rota.</div>`;
     } else {
-      rotasEl.innerHTML = rotas.map(({ r, km, caixas, paradas, nome }) => {
+      rotasEl.innerHTML = rotas.map(({ r, km, caixas, paradas, nome, origem }) => {
         const cor = coresPorRascunho[r.id] || "#6B7280";
         // mesma régua do capacidadeHtml: veículo grande conta só caixas
         // contra o teto do tipo; rota comum, caixas e paradas
@@ -4444,6 +4524,7 @@
           return max && v > max ? `<span class="estoura">⚠ ${txt}</span>` : txt;
         };
         const partes = [];
+        if (origem) partes.push("origem");
         if (isFinite(km)) partes.push(`${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km`);
         if (!infoVeiculo) partes.push(fmt(paradas, TRAVAS.max_paradas, "par"));
         partes.push(fmt(caixas, maxCx, "cx"));
@@ -4456,21 +4537,29 @@
       }).join("");
     }
     atualizarBotaoAdicionarFolha();
+    // seleção mudou com rota escolhida: repinta o destaque (a parada
+    // recém-selecionada de outra rota não pode ficar esmaecida)
+    if (folhaRotaEscolhida) destacarRotaFolha(folhaRotaEscolhida, true);
   }
 
   function atualizarBotaoAdicionarFolha() {
     const botao = document.getElementById("folha-adicionar");
     if (!botao) return;
     const rota = folhaRotaEscolhida && RASCUNHOS.find(r => r.id === folhaRotaEscolhida);
-    botao.disabled = !rota || !SELECIONADOS.size;
-    if (rota) {
-      const nome = document.querySelector(`#card-rota-${rota.id} .titulo-rota .nome`)?.textContent || rota.nome;
-      botao.textContent = `Adicionar ${SELECIONADOS.size} à ${rotuloCurtoRota(nome)}`;
-      botao.style.setProperty("--cor-escolhida", coresPorRascunho[rota.id] || "#6B7280");
-    } else {
+    if (!rota) {
+      botao.disabled = true;
       botao.textContent = "Escolha uma rota";
       botao.style.removeProperty("--cor-escolhida");
+      return;
     }
+    const nome = rotuloCurtoRota(document.querySelector(`#card-rota-${rota.id} .titulo-rota .nome`)?.textContent || rota.nome);
+    const nPool = SELECIONADOS.size;
+    const nMover = itensRotaSelecionados().filter(i => i.rascunho_origem_id !== rota.id).length;
+    botao.disabled = nPool + nMover === 0;
+    botao.textContent = nPool + nMover === 0 ? `Já estão na ${nome}`
+      : nMover === 0 ? `Adicionar ${nPool} à ${nome}`
+      : `Mover ${nPool + nMover} pra ${nome}`;
+    botao.style.setProperty("--cor-escolhida", coresPorRascunho[rota.id] || "#6B7280");
   }
 
   function escolherRotaFolha(id) {
@@ -4485,11 +4574,12 @@
   }
 
   // destaca a rota escolhida no mapa: ela aparece (mesmo com "Alocados"
-  // desligado) com traço mais grosso; as outras esmaecem. id=null volta
-  // tudo ao que os toggles do mapa mandam.
+  // desligado) com traço mais grosso; as outras esmaecem, menos as
+  // paradas selecionadas (verdes). id=null volta tudo ao que os toggles
+  // do mapa mandam.
   let rotaDestacadaFolha = null;
-  function destacarRotaFolha(id) {
-    if (id === rotaDestacadaFolha || !map) return;
+  function destacarRotaFolha(id, forcar = false) {
+    if ((id === rotaDestacadaFolha && !forcar) || !map) return;
     rotaDestacadaFolha = id;
     Object.keys(gruposMapa).forEach(chave => {
       const g = gruposMapa[chave];
@@ -4497,7 +4587,10 @@
       const alvo = id !== null && rid === id;
       const apagada = id !== null && !alvo;
       const visivel = alvo || grupoVisivelNoMapa(rid);
-      g.markers.forEach(m => { m.setMap(visivel ? map : null); m.setOpacity(apagada ? 0.3 : 1); });
+      g.markers.forEach(m => {
+        m.setMap(visivel ? map : null);
+        m.setOpacity(apagada && !SELECIONADOS_ROTA.has(m.serviceId) ? 0.3 : 1);
+      });
       if (!g.renderer) return;
       g.renderer.setMap(visivel ? map : null);
       const direcoes = g.renderer.getDirections();
@@ -4507,6 +4600,17 @@
         polylineOptions: { strokeColor: coresPorRascunho[rid] || "#6B7280", strokeWeight: alvo ? 7 : 4, ...(apagada ? { strokeOpacity: 0.2 } : {}) },
       });
       if (direcoes) g.renderer.setDirections(direcoes);  // setOptions sozinho não redesenha a linha
+    });
+  }
+
+  // ponto numerado da rota fica verde quando a parada está selecionada
+  // (mesmo verde do chip do card, ver renumerarRotaEl)
+  function pintarMarcadoresRota(rascunhoId) {
+    const g = gruposMapa[rascunhoId];
+    if (!g) return;
+    const cor = coresPorRascunho[rascunhoId] || "#6B7280";
+    g.markers.forEach(m => {
+      if (m.numero) m.setIcon(iconeNumerado(m.numero, SELECIONADOS_ROTA.has(m.serviceId) ? COR_SELECIONADO : cor));
     });
   }
 
@@ -4781,6 +4885,7 @@
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-transportadora-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    atualizarFolhaMapa();
   }
 
   // clique no card inteiro (des)seleciona, igual ao pool (alternarSelecao)
@@ -4794,6 +4899,8 @@
     const check = li.querySelector(".check-parada");
     if (check) check.checked = selecionado;
     renumerarRotaDoLi(li);  // repinta o chip (verde = selecionado)
+    const ul = li.closest(".lista-paradas");
+    if (ul) pintarMarcadoresRota(Number(ul.dataset.listId));
     atualizarBarraSelecaoRotas();
   }
 
@@ -4814,7 +4921,10 @@
       const ul = li.closest(".lista-paradas");
       if (ul) rotasTocadas.add(ul);
     });
-    rotasTocadas.forEach(ul => renumerarRotaEl(ul, Number(ul.dataset.listId)));
+    rotasTocadas.forEach(ul => {
+      renumerarRotaEl(ul, Number(ul.dataset.listId));
+      pintarMarcadoresRota(Number(ul.dataset.listId));
+    });
     atualizarBarraSelecaoRotas();
   }
 
