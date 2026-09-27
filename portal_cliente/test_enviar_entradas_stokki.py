@@ -101,6 +101,25 @@ class Base(unittest.TestCase):
         entradas.confirmar_entradas(self.conn, CNPJ, [{"token": token, "data_prevista": AMANHA}], "cliente", {})
         return dict(self.conn.execute("SELECT * FROM portal_entradas ORDER BY id DESC LIMIT 1").fetchone())
 
+    def _anunciar_planilha(self, referencia="REM-1", sku="NUU001FD", quantidade=5):
+        # mesmo desenho de test_entradas.TestConfirmar.test_planilha_confirmada_guarda_a_planilha_uma_vez
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([c[1] for c in entradas.COLUNAS_PLANILHA_ENTRADA])
+        d = "/".join(reversed(AMANHA.split("-")))
+        ws.append([referencia, d, sku, quantidade, "CX", "", 1, "", ""])
+        buf = io.BytesIO()
+        wb.save(buf)
+        conteudo = buf.getvalue()
+        pedidos, rejeitados = entradas.ler_planilha_entrada(conteudo, "e.xlsx", CNPJ)
+        assert not rejeitados, rejeitados
+        tk_plan = ep.guardar_temporario(conteudo, "xlsx")
+        itens = [{"token": ep.guardar_temporario_pedido(p, tk_plan), "data_prevista": p["data_prevista"]} for p in pedidos]
+        entradas.confirmar_entradas(self.conn, CNPJ, itens, "cliente", {})
+        return dict(self.conn.execute("SELECT * FROM portal_entradas WHERE origem = 'planilha' ORDER BY id DESC LIMIT 1").fetchone())
+
     def _fila(self):
         return [dict(r) for r in self.conn.execute("SELECT * FROM portal_entradas WHERE stokki_status = 'NA_FILA' AND status = 'ANUNCIADO'")]
 
@@ -207,6 +226,32 @@ class TestWizardDublado(Base):
             e = dict(self.conn.execute("SELECT * FROM portal_entradas").fetchone())
             self.assertEqual(e["stokki_tentativas"], tentativa)
             self.assertEqual(e["stokki_status"], "ERRO" if tentativa == 3 else "NA_FILA")
+
+    def test_planilha_falhando_nao_desfaz_xml_ja_criado(self):
+        # regressão do fix round 2: o wizard Excel levanta DEPOIS que o
+        # wizard XML já criou com sucesso -- o resultado do XML tem que
+        # estar GRAVADO (não só num dict em memória) antes do except
+        # externo decidir o que reprocessar; senão o #PE do XML, que já
+        # existe na Stokki, volta pra NA_FILA/ERRO por engano.
+        self._anunciar()
+        planilha = self._anunciar_planilha()
+        chave_plan = planilha["chave_nfe"]
+        resultado_xml = {CHAVE: {"criado": True, "ja_existia": False, "erro": "", "stokki_id": 2497, "codigo": "#PE-2497",
+                                 "resposta": "{}", "indeterminado": False}}
+        with mock.patch.object(worker, "carregar_importador", return_value=(mock.Mock(), mock.Mock())), \
+             mock.patch.object(worker, "_credenciais", return_value=("u", "s")), \
+             mock.patch.object(worker.sessao_uso, "adquirir", return_value=True), \
+             mock.patch.object(worker.sessao_uso, "liberar"), \
+             mock.patch.object(worker, "_avisar_erros") as avisar, \
+             mock.patch.object(worker, "executar_wizard_xml", return_value=resultado_xml), \
+             mock.patch.object(worker, "executar_wizard_excel", side_effect=RuntimeError("stokki excel caiu")):
+            r = worker.processar_lote(self.conn, CNPJ, self._fila(), self.config)
+        avisar.assert_not_called()
+        e_xml = dict(self.conn.execute("SELECT * FROM portal_entradas WHERE chave_nfe = ?", (CHAVE,)).fetchone())
+        e_plan = dict(self.conn.execute("SELECT * FROM portal_entradas WHERE chave_nfe = ?", (chave_plan,)).fetchone())
+        self.assertEqual((e_xml["stokki_status"], e_xml["stokki_id"], e_xml["stokki_codigo"]), ("CRIADO", 2497, "#PE-2497"))
+        self.assertEqual((e_plan["stokki_status"], e_plan["stokki_tentativas"]), ("NA_FILA", 1))
+        self.assertEqual((r["criados"], r["adiados"]), (1, 1))
 
     def test_cancelado_entre_ciclo_e_lote_fica_de_fora(self):
         # achado 3: o snapshot que o ciclo() leu pode estar velho -- se o

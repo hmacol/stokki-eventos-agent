@@ -303,7 +303,17 @@ def executar_wizard_xml(cfg: dict, usuario: str, senha: str, lote: list[dict], a
             sessao = _SessaoNavegador(page)
             a_subir: list[dict] = []
             for e in lote:
-                id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("numero_nf") or "", chave_nfe=e["chave_nfe"])
+                # regressão da revisão de 25/09 (fix round 2): uma consulta que
+                # falha na pré-checagem de UMA chave não pode derrubar o wizard
+                # inteiro -- essa chave fica indeterminada e fora de a_subir; as
+                # outras seguem normalmente.
+                try:
+                    id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("numero_nf") or "", chave_nfe=e["chave_nfe"])
+                except ErroConsultaStokki as ex:
+                    logger.info(f"   (pré-checagem indeterminada pra {en.rotulo_entrada(e)}: {ex})")
+                    saida[e["chave_nfe"]] = {"criado": False, "ja_existia": False, "indeterminado": True, "erro": "", "stokki_id": None,
+                                             "codigo": "", "resposta": f"consulta falhou antes de subir: {ex}"}
+                    continue
                 if id_pe:
                     logger.info(f"   {en.rotulo_entrada(e)} já existe na Stokki ({codigo}) -- não cria de novo")
                     saida[e["chave_nfe"]] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo,
@@ -424,7 +434,16 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, lote: list[dict],
             sessao_uso.renovar(DONO_TRAVA, ttl_segundos=30 * 60)
             for e in lote:
                 chave = e["chave_nfe"]
-                id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
+                # regressão da revisão de 25/09 (fix round 2): igual ao XML --
+                # consulta falhando na pré-checagem de UM item não pode subir
+                # sem checar (duplicaria) nem derrubar os demais itens do lote.
+                try:
+                    id_pe, codigo = procurar_pe(sessao, cfg["client_id"], e.get("referencia") or "", referencia=e.get("referencia") or "")
+                except ErroConsultaStokki as ex:
+                    logger.info(f"   (pré-checagem indeterminada pra {en.rotulo_entrada(e)}: {ex})")
+                    saida[chave] = {"criado": False, "ja_existia": False, "indeterminado": True, "erro": "", "stokki_id": None,
+                                    "codigo": "", "resposta": f"consulta falhou antes de subir: {ex}"}
+                    continue
                 if id_pe:
                     saida[chave] = {"criado": False, "ja_existia": True, "erro": "", "stokki_id": id_pe, "codigo": codigo,
                                     "resposta": "", "indeterminado": False}
@@ -502,6 +521,42 @@ def _falha_tecnica(conn, lote: list[dict], erro: str) -> list[dict]:
     return definitivos
 
 
+def _aplicar_resultados(conn, prontos: list[dict], resultados: dict, resumo: dict, erros_definitivos: list[dict]) -> None:
+    """Grava na hora {chave: resultado} de UM wizard (XML ou Excel) e
+    comita -- regressão da revisão de 25/09 (fix round 2): antes, os
+    resultados dos dois wizards só eram aplicados juntos, DEPOIS dos dois
+    terminarem; se o segundo wizard levantasse, o `except` externo
+    reprocessava (via _falha_tecnica) até as entradas do primeiro wizard
+    que já tinham sido criadas na Stokki com sucesso -- só existiam no
+    dict `resultados` em memória, nunca chegaram a ser persistidas.
+    Mutação: `resumo` e `erros_definitivos` são atualizados in place."""
+    for e in prontos:
+        r = resultados.get(e["chave_nfe"])
+        if r is None:
+            _falha_tecnica(conn, [e], "a Stokki não devolveu resultado pra esse arquivo")
+            resumo["erros"] += 1
+            continue
+        if r["criado"] or r["ja_existia"]:
+            _marcar(conn, e["id"], stokki_status=en.STOKKI_CRIADO, stokki_erro=None, stokki_id=r["stokki_id"],
+                    stokki_codigo=r["codigo"] or None)
+            resumo["ja_existiam" if r["ja_existia"] else "criados"] += 1
+            if r["criado"] and not r["stokki_id"]:
+                logger.info(f"   {en.rotulo_entrada(e)} criado, mas o #PE ainda não foi achado -- o timer do WMS amarra pela chave.")
+        elif r.get("indeterminado"):
+            # achado 1: nunca ERRO na hora nem e-mail de recusa por um
+            # resultado indeterminado -- volta pra fila (mesma trilha de
+            # falha técnica: conta tentativa, 3ª vez vira ERRO sozinho,
+            # sem entrar em erros_definitivos/_avisar_erros).
+            definitivos = _falha_tecnica(conn, [e], f"resultado indeterminado: {r.get('erro') or 'sem confirmação da Stokki'}")
+            resumo["erros" if definitivos else "adiados"] += 1
+        else:
+            _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_erro=(r["erro"] or "recusado pela Stokki")[:900],
+                    stokki_tentativas=int(e.get("stokki_tentativas") or 0) + 1)
+            erros_definitivos.append({**e, "erro": r["erro"]})
+            resumo["erros"] += 1
+    conn.commit()
+
+
 def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: bool = False, headless: bool = True) -> dict:
     cfg = ep.config_stokki_cliente(conn, cnpj, config)
     resumo = {"cliente": cfg["nome"], "criados": 0, "ja_existiam": 0, "erros": 0, "adiados": 0}
@@ -539,6 +594,13 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
     arquivos: dict[str, Path] = {}
     prontos_xml: list[dict] = []
     prontos_plan: list[dict] = []
+    erros_definitivos: list[dict] = []
+    # None enquanto ainda não sabemos quais entradas vão pro wizard (falha
+    # nesse ponto ainda retry o lote inteiro); depois vira a lista do que
+    # cada wizard AINDA não devolveu resultado -- regressão do fix round 2:
+    # o except externo só pode reprocessar quem ainda está pendente, nunca
+    # quem um wizard anterior já criou (e já gravamos via _aplicar_resultados).
+    pendentes: list[dict] | None = None
     try:
         wiz = None
         if not simular:
@@ -564,11 +626,14 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
         prontos = prontos_xml + prontos_plan
         if not prontos:
             return resumo
+        pendentes = list(prontos)
 
         if simular:
             logger.info(f"[{cfg['nome']}] SIMULAÇÃO: {len(prontos)} entrada(s) marcadas como criadas sem tocar a Stokki.")
             resultados = {e["chave_nfe"]: {"criado": True, "ja_existia": False, "erro": "", "stokki_id": None, "codigo": "",
                                            "resposta": "", "indeterminado": False} for e in prontos}
+            _aplicar_resultados(conn, prontos, resultados, resumo, erros_definitivos)
+            pendentes = []
         else:
             espera = int(_cfg_portal(config).get("espera_stokki_minutos") or 45) * 60
             if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera):
@@ -580,54 +645,39 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
                 return resumo
             try:
                 usuario, senha = _credenciais(config)
-                resultados = {}
+                # cada wizard grava (e comita) o resultado dele ASSIM que
+                # termina -- se o wizard seguinte falhar, o que já foi criado
+                # aqui não volta pra fila por engano (ver _aplicar_resultados).
                 if prontos_xml:
                     logger.info(f"[{cfg['nome']}] criando {len(prontos_xml)} recebimento(s) por XML na Stokki (client_id={cfg['client_id']})...")
-                    resultados.update(executar_wizard_xml(cfg, usuario, senha, prontos_xml, arquivos, pasta_lote, wiz, headless=headless))
+                    resultados_xml = executar_wizard_xml(cfg, usuario, senha, prontos_xml, arquivos, pasta_lote, wiz, headless=headless)
+                    _aplicar_resultados(conn, prontos_xml, resultados_xml, resumo, erros_definitivos)
+                    ids_xml = {e["id"] for e in prontos_xml}
+                    pendentes = [e for e in pendentes if e["id"] not in ids_xml]
                 if prontos_plan:
                     logger.info(f"[{cfg['nome']}] criando {len(prontos_plan)} recebimento(s) por planilha na Stokki...")
-                    resultados.update(executar_wizard_excel(cfg, usuario, senha, prontos_plan, arquivos, pasta_lote, wiz, headless=headless))
+                    resultados_plan = executar_wizard_excel(cfg, usuario, senha, prontos_plan, arquivos, pasta_lote, wiz, headless=headless)
+                    _aplicar_resultados(conn, prontos_plan, resultados_plan, resumo, erros_definitivos)
+                    ids_plan = {e["id"] for e in prontos_plan}
+                    pendentes = [e for e in pendentes if e["id"] not in ids_plan]
             finally:
                 sessao_uso.liberar(DONO_TRAVA)
 
-        erros_definitivos = []
-        for e in prontos:
-            r = resultados.get(e["chave_nfe"])
-            if r is None:
-                _falha_tecnica(conn, [e], "a Stokki não devolveu resultado pra esse arquivo")
-                resumo["erros"] += 1
-                continue
-            if r["criado"] or r["ja_existia"]:
-                _marcar(conn, e["id"], stokki_status=en.STOKKI_CRIADO, stokki_erro=None, stokki_id=r["stokki_id"],
-                        stokki_codigo=r["codigo"] or None)
-                resumo["ja_existiam" if r["ja_existia"] else "criados"] += 1
-                if r["criado"] and not r["stokki_id"]:
-                    logger.info(f"   {en.rotulo_entrada(e)} criado, mas o #PE ainda não foi achado -- o timer do WMS amarra pela chave.")
-            elif r.get("indeterminado"):
-                # achado 1: nunca ERRO na hora nem e-mail de recusa por um
-                # resultado indeterminado -- volta pra fila (mesma trilha de
-                # falha técnica: conta tentativa, 3ª vez vira ERRO sozinho,
-                # sem entrar em erros_definitivos/_avisar_erros).
-                definitivos = _falha_tecnica(conn, [e], f"resultado indeterminado: {r.get('erro') or 'sem confirmação da Stokki'}")
-                resumo["erros" if definitivos else "adiados"] += 1
-            else:
-                _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_erro=(r["erro"] or "recusado pela Stokki")[:900],
-                        stokki_tentativas=int(e.get("stokki_tentativas") or 0) + 1)
-                erros_definitivos.append({**e, "erro": r["erro"]})
-                resumo["erros"] += 1
-        conn.commit()
         if erros_definitivos:
             _avisar_erros(config, cfg, erros_definitivos, "A Stokki recusou a(s) entrada(s) abaixo.")
         logger.info(f"[{cfg['nome']}] lote concluído: {resumo}")
         return resumo
     except Exception as ex:  # noqa: BLE001
         logger.error(f"[{cfg['nome']}] falha técnica no lote: {ex}\n{traceback.format_exc()}")
-        pendentes = (prontos_xml + prontos_plan) or lote
-        definitivos = _falha_tecnica(conn, pendentes, f"{type(ex).__name__}: {ex}")
+        # pendentes é None só se a falha aconteceu antes de sabermos quem ia
+        # pro wizard (ex.: carregar_importador) -- aí sim o lote inteiro
+        # (releitura já filtrada por cancelamento) volta pra fila.
+        pendentes_restantes = pendentes if pendentes is not None else lote
+        definitivos = _falha_tecnica(conn, pendentes_restantes, f"{type(ex).__name__}: {ex}")
         if definitivos:
             _avisar_erros(config, cfg, definitivos, "Não conseguimos criar a(s) entrada(s) abaixo na Stokki depois de 3 tentativas.")
         resumo["erros"] += len(definitivos)
-        resumo["adiados"] += len(pendentes) - len(definitivos)
+        resumo["adiados"] += len(pendentes_restantes) - len(definitivos)
         return resumo
 
 
