@@ -362,6 +362,9 @@ def criar_app(config: dict | None = None) -> Flask:
         if arquivo is None or not arquivo.filename:
             raise OperacaoInvalida("Envie o arquivo no campo 'arquivo' (multipart).")
         tipo = (request.form.get("tipo") or "CANHOTO").upper()
+        # `tipo` vira parte do nome do arquivo: valida antes de gravar em disco
+        if tipo not in operacao.TIPOS_COMPROVANTE:
+            raise OperacaoInvalida(f"Tipo de comprovante inválido: {tipo!r}.")
         uuid = (request.form.get("uuid") or "").strip()
         capturado_em = request.form.get("capturado_em") or banco.agora()
         ext = _extensao_foto(arquivo)

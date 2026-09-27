@@ -247,6 +247,22 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual((fin["total"], fin["total_rotas"], fin["total_pedagio"], fin["pedagio_pendente"]), (562.0, 550.0, 12.0, 0.0))
         self.assertEqual(fin["por_dia"][0]["valor"], 562.0)
 
+    def test_comprovante_tipo_invalido_nao_grava_arquivo(self):
+        # `tipo` entra no nome do arquivo: precisa ser validado ANTES de gravar
+        # em disco, senão "../.." escreve fora da pasta de comprovantes.
+        h = self._auth()
+        rota_id = self._rota_app()
+        self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={"uuid": "u-aceite"}, headers=h)
+        p1 = self.cli.post(f"/api/rotas/{rota_id}/iniciar", json={}, headers=h).get_json()["paradas"][0]["id"]
+        antes = {p for p in Path(self._tmp.name).rglob("*") if p.is_file()}
+        for tipo in ("../../fora", "XYZ"):
+            r = self.cli.post(f"/api/paradas/{p1}/comprovantes", headers=h,
+                              data={"arquivo": (io.BytesIO(b"\xff\xd8\xff x"), "c.jpg"), "tipo": tipo, "uuid": f"t-{tipo}"},
+                              content_type="multipart/form-data")
+            self.assertEqual(r.status_code, 400, r.get_json())
+        depois = {p for p in Path(self._tmp.name).rglob("*") if p.is_file()}
+        self.assertEqual({p for p in depois - antes if p.suffix == ".jpg"}, set())
+
     def test_motorista_cancela_pedagio_pendente(self):
         h = self._auth()
         rota_id = self._rota_app()
