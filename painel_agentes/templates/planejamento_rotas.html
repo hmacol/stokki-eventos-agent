@@ -1618,8 +1618,14 @@
     flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 4px 0 10px;
     border-radius: 100px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-size: 12px; font-weight: 600;
   }
-  .folha-mapa .chip-pedido::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--cor-origem, #2FD9AE); }
-  .folha-mapa .chip-pedido .x { width: 22px; height: 22px; line-height: 22px; text-align: center; color: var(--texto-suave); font-size: 15px; }
+  .folha-mapa .chip-pedido::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cor-origem, #2FD9AE); }
+  /* chip = [código ⓘ] abre os detalhes | [×] tira da seleção */
+  .folha-mapa .chip-pedido button {
+    border: none; background: none; color: inherit; font: inherit; padding: 0; min-height: 30px; display: inline-flex; align-items: center;
+  }
+  .folha-mapa .chip-pedido .ver { gap: 4px; padding: 0 2px; }
+  .folha-mapa .chip-pedido .ver .i { color: var(--texto-suave); font-size: 13px; }
+  .folha-mapa .chip-pedido .x { width: 30px; justify-content: center; color: var(--texto-suave); font-size: 16px; border-left: 1px solid var(--borda); }
   .folha-mapa .folha-rotulo { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); flex: none; }
   .folha-mapa .folha-rotas {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start;
@@ -1655,8 +1661,22 @@
   .folha-mapa.com-tirar .folha-acoes #folha-adicionar { flex-basis: 100%; }
   .folha-mapa.com-tirar .folha-acoes #folha-tirar,
   .folha-mapa.com-tirar .folha-acoes #folha-mais { flex: 1 1 0; }
+  /* detalhes do pedido (ⓘ do chip) ocupam o lugar da lista de rotas */
+  .folha-mapa .folha-detalhes { display: none; position: relative; flex: 0 1 auto; min-height: 0; overflow: auto;
+    padding: 8px 30px 8px 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); font-size: 12.5px; line-height: 1.5; }
+  .folha-mapa.mostrando-detalhes .folha-detalhes { display: block; }
+  .folha-mapa.mostrando-detalhes :is(.folha-rotulo, .folha-rotas) { display: none; }
+  .folha-mapa .folha-detalhes .fechar { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border: none; background: none; color: var(--texto-suave); font-size: 18px; }
+  .folha-mapa .folha-detalhes .det-rota { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-weight: 700; margin-bottom: 4px; }
+  .folha-mapa .folha-detalhes .det-rota .cor-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+  .folha-mapa .folha-detalhes .det-motorista { font-weight: 600; color: var(--texto-suave); }
+  .folha-mapa .folha-detalhes .titulo { font-weight: 700; }
+  .folha-mapa .folha-detalhes .remetente { color: #6FA0FF; font-weight: 600; }
+  .folha-mapa .folha-detalhes .destinatario { color: #E0B15C; }
+  .folha-mapa .folha-detalhes .endereco { color: var(--texto-suave); margin-top: 2px; }
+  .folha-mapa .folha-detalhes .extras { margin-top: 4px; color: var(--texto-suave); font-size: 11.5px; }
   /* recolhida: só a linha do resumo, pra sobrar mapa pra tocar em mais pontos */
-  .folha-mapa.recolhida :is(.folha-pedidos, .folha-rotulo, .folha-rotas, .folha-acoes) { display: none; }
+  .folha-mapa.recolhida :is(.folha-pedidos, .folha-detalhes, .folha-rotulo, .folha-rotas, .folha-acoes) { display: none !important; }
   /* cards: alvo de toque maior + botão "⋯" (fica escondido no modo "só número") */
   html.modo-mobile .item-parada { padding-right: 34px; font-size: 12.5px; }
   html.modo-mobile body.cards-compactos .item-parada { padding-right: 34px; }
@@ -2589,16 +2609,20 @@
   // (cor, "Rota N", posição, motorista) + cópia do card da parada, igual
   // ao do pool (sem os controles). Nome lido do card na hora do clique
   // pra pegar renomeação.
+  function motoristaDaRota(r) {
+    if (r && rotaEhLalamove(r)) return "Lalamove";
+    if (r && r.agent_id) {
+      const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
+      return (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
+    }
+    return "sem motorista";
+  }
+
   function montarInfoHtml(li, rascunhoId, posicao, total) {
     const card = document.getElementById(`card-rota-${rascunhoId}`);
     const nomeRota = card?.querySelector(".titulo-rota .nome")?.textContent || "";
     const r = RASCUNHOS.find(x => x.id === rascunhoId);
-    let motorista = "sem motorista";
-    if (r && rotaEhLalamove(r)) motorista = "Lalamove";
-    else if (r && r.agent_id) {
-      const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
-      motorista = (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
-    }
+    const motorista = motoristaDaRota(r);
     const cor = coresPorRascunho[rascunhoId] || "#6B7280";
     const copia = document.createElement("div");
     copia.className = "item-parada";
@@ -3223,6 +3247,13 @@
       zIndex: 9999,
       clickable: false,
     });
+  }
+
+  // hover/scroll não apagam o halo aberto pelo "ⓘ" da folha do mapa: no
+  // toque o navegador solta um mouseover sintético logo depois do click
+  // (que apagaria na hora) -- ele some quando o popup de detalhes fecha
+  function removerDestaqueHover() {
+    if (!destaqueDetalhesFolha) removerDestaqueMapa();
   }
 
   function removerDestaqueMapa() {
@@ -4388,6 +4419,10 @@
         <button type="button" id="folha-limpar">Limpar</button>
       </div>
       <div class="folha-pedidos" id="folha-pedidos"></div>
+      <div class="folha-detalhes" id="folha-detalhes" role="region" aria-label="Detalhes do pedido">
+        <button type="button" class="fechar" id="folha-detalhes-fechar" aria-label="Fechar detalhes">×</button>
+        <div id="folha-detalhes-corpo"></div>
+      </div>
       <div class="folha-rotulo" id="folha-rotulo">Levar pra rota · mais perto primeiro</div>
       <div class="folha-rotas" id="folha-rotas" role="radiogroup" aria-label="Rota de destino"></div>
       <div class="folha-acoes">
@@ -4400,6 +4435,7 @@
       limparSelecao();
       limparSelecaoRotas();
     });
+    folha.querySelector("#folha-detalhes-fechar").addEventListener("click", fecharDetalhesNaFolha);
     folha.querySelector("#folha-recolher").addEventListener("click", (e) => {
       const recolhida = folha.classList.toggle("recolhida");
       e.currentTarget.textContent = recolhida ? "▴" : "▾";
@@ -4407,11 +4443,20 @@
     });
     folha.querySelector("#folha-pedidos").addEventListener("click", (e) => {
       const chip = e.target.closest(".chip-pedido");
-      if (!chip) return;
+      const botao = e.target.closest("button");
+      if (!chip || !botao) return;
       const id = Number(chip.dataset.id);
-      if (chip.dataset.origem === "pool") { alternarSelecao(id); return; }
-      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${id}"]`);
-      if (li) alternarSelecaoRota(id, li);
+      const li = document.querySelector(chip.dataset.origem === "pool"
+        ? `#lista-pool .item-parada[data-service-id="${id}"]`
+        : `#lista-rotas .item-parada[data-service-id="${id}"]`);
+      if (!li) return;
+      if (botao.classList.contains("ver")) {
+        if (detalhesFolhaServiceId === id) fecharDetalhesNaFolha();  // ⓘ de novo fecha
+        else verDetalhesNaFolha(li);
+        return;
+      }
+      if (chip.dataset.origem === "pool") alternarSelecao(id);
+      else alternarSelecaoRota(id, li);
     });
     folha.querySelector("#folha-rotas").addEventListener("click", (e) => {
       const chip = e.target.closest(".chip-rota");
@@ -4428,6 +4473,58 @@
       document.querySelector(`#abas-mobile button[data-aba="${aba}"]`)?.click();
     });
     atualizarFolhaMapa();
+  }
+
+  // "ⓘ" do chip: detalhes do pedido DENTRO da folha, no lugar da lista
+  // de rotas (um popup cobriria o pouco de mapa que sobra acima dela no
+  // celular) -- mesmo conteúdo do "Ver detalhes" do ⋯ (montarTooltipParada)
+  // + rota/posição/motorista quando já está numa rota (o que o balão do
+  // número mostrava). O ponto ganha o halo de destaque e o mapa centraliza
+  // nele na área livre acima da folha. Fecha no × ou abrindo outro.
+  let destaqueDetalhesFolha = false;
+  let detalhesFolhaServiceId = null;
+  function verDetalhesNaFolha(li) {
+    const folha = document.getElementById("folha-mapa");
+    if (!folha) return;
+    const serviceId = Number(li.dataset.serviceId);
+    const ul = li.closest(".lista-paradas");
+    const rascunhoId = ul && ul.dataset.listId !== "pool" ? Number(ul.dataset.listId) : null;
+    let cabecalho = `<div class="det-rota"><span class="cor-swatch" style="background:${COR_NAO_ALOCADO}"></span>No pool (sem rota)</div>`;
+    if (rascunhoId !== null) {
+      const nome = document.querySelector(`#card-rota-${rascunhoId} .titulo-rota .nome`)?.textContent || "";
+      const r = RASCUNHOS.find(x => x.id === rascunhoId);
+      cabecalho = `<div class="det-rota"><span class="cor-swatch" style="background:${coresPorRascunho[rascunhoId] || "#6B7280"}"></span>
+        ${escaparHtml(rotuloCurtoRota(nome))} · parada ${Array.from(ul.children).indexOf(li) + 1} de ${ul.children.length}
+        <span class="det-motorista">· ${escaparHtml(motoristaDaRota(r))}</span></div>`;
+    }
+    folha.querySelector("#folha-detalhes-corpo").innerHTML = cabecalho + montarTooltipParada(li);
+    folha.classList.add("mostrando-detalhes");
+    folha.classList.remove("recolhida");
+    detalhesFolhaServiceId = serviceId;
+    destaqueDetalhesFolha = true;
+    destacarNoMapa(li);
+    centrarNaAreaLivreDoMapa(li);
+  }
+
+  function fecharDetalhesNaFolha() {
+    const folha = document.getElementById("folha-mapa");
+    if (folha) folha.classList.remove("mostrando-detalhes");
+    detalhesFolhaServiceId = null;
+    if (destaqueDetalhesFolha) { destaqueDetalhesFolha = false; removerDestaqueMapa(); }
+  }
+
+  // centro do mapa fica atrás da folha: panTo põe o ponto no centro e o
+  // panBy sobe ele pro meio do pedaço de mapa visível acima da folha
+  function centrarNaAreaLivreDoMapa(li) {
+    const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+    const folha = document.getElementById("folha-mapa");
+    const mapaEl = document.getElementById("map");
+    if (!map || isNaN(lat) || isNaN(lng) || !folha || !mapaEl) return;
+    map.panTo({ lat, lng });
+    const r = mapaEl.getBoundingClientRect();
+    const livreCentro = (r.top + Math.min(folha.getBoundingClientRect().top, r.bottom)) / 2;
+    const deslocamento = Math.round((r.top + r.bottom) / 2 - livreCentro);
+    if (deslocamento > 0) map.panBy(0, deslocamento);
   }
 
   async function aplicarFolhaNaRota(botao) {
@@ -4498,6 +4595,9 @@
     if (!folha) return;
     const total = SELECIONADOS.size + SELECIONADOS_ROTA.size;
     document.body.classList.toggle("tem-selecao-mapa", total > 0);
+    if (detalhesFolhaServiceId !== null && !SELECIONADOS.has(detalhesFolhaServiceId) && !SELECIONADOS_ROTA.has(detalhesFolhaServiceId)) {
+      fecharDetalhesNaFolha();
+    }
     if (!total) {
       escolherRotaFolha(null);
       return;
@@ -4511,8 +4611,10 @@
     folha.querySelector("#folha-resumo").innerHTML =
       `${n} pedido${n === 1 ? "" : "s"} <small>· ${caixasSel} cx · toque no mapa pra somar mais</small>`;
     const chip = (id, codigo, cor, origem) =>
-      `<button type="button" class="chip-pedido" data-id="${id}" data-origem="${origem}" style="--cor-origem:${cor}"
-        aria-label="Tirar ${escaparHtml(codigo)} da seleção">${escaparHtml(codigo)}<span class="x" aria-hidden="true">×</span></button>`;
+      `<span class="chip-pedido" data-id="${id}" data-origem="${origem}" style="--cor-origem:${cor}">
+        <button type="button" class="ver" aria-label="Ver detalhes de ${escaparHtml(codigo)}">${escaparHtml(codigo)}<span class="i" aria-hidden="true">ⓘ</span></button>
+        <button type="button" class="x" aria-label="Tirar ${escaparHtml(codigo)} da seleção">×</button>
+      </span>`;
     folha.querySelector("#folha-pedidos").innerHTML =
       lisPool.map(li => {
         const id = Number(li.dataset.serviceId);
@@ -6869,7 +6971,7 @@
     // não rouba o mouse do card embaixo.
     document.addEventListener("mouseover", (e) => {
       const li = e.target.closest ? e.target.closest(".item-parada") : null;
-      if (!li || dragRecente) removerDestaqueMapa();
+      if (!li || dragRecente) removerDestaqueHover();
       else if (li !== liDestaque) destacarNoMapa(li);
       if (!li || densidadeCards === "normal" || dragRecente) {
         if (liTooltip && li !== liTooltip) esconderTooltipParada();
@@ -6879,8 +6981,8 @@
     });
     // capture pega o scroll das colunas (que não borbulha) -- o card
     // saiu do lugar, tooltip e destaque fechariam desalinhados
-    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueMapa(); fecharMenuContexto(); }, true);
-    document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueMapa(); });
+    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueHover(); fecharMenuContexto(); }, true);
+    document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueHover(); });
 
     // menu de contexto (botão direito) num pedido -- em qualquer
     // densidade de card e tanto no pool quanto numa rota
