@@ -12,6 +12,8 @@ from pathlib import Path
 
 from vigia import banco, regras
 
+HORAS_RETRATO_VALIDO = 30  # mesmo limite de vigia/vigiar.py
+
 
 def _idade(desde: str | None, agora: datetime) -> str:
     try:
@@ -80,12 +82,33 @@ def excecoes_torre(data_iso: str, db_path: Path | None = None, agora: datetime |
     try:
         linhas = [dict(r) for r in conn.execute(
             "SELECT codigo, estado, desde FROM vigia_pedidos WHERE vencido = 1 ORDER BY desde")]
+        ultima_listagem = banco.ultima_listagem_completa(conn)
+        ultima_rodada = conn.execute("SELECT MAX(visto_em) FROM vigia_pedidos").fetchone()[0]
     finally:
         conn.close()
     por_estado: dict[str, list[dict]] = {}
     for l in linhas:
         por_estado.setdefault(l["estado"], []).append(l)
     excecoes = []
+    # O vigia depende do retrato da Stokki que o pipeline grava; sem ele,
+    # "sem serviço" e insucesso ficam congelados. Avisa em vez de calar.
+    if ultima_rodada or ultima_listagem:
+        try:
+            idade_h = (agora - datetime.strptime(ultima_listagem, banco.FMT)).total_seconds() / 3600 \
+                if ultima_listagem else None
+        except ValueError:
+            idade_h = None
+        if idade_h is None or idade_h > HORAS_RETRATO_VALIDO:
+            excecoes.append({
+                "id": f"vigia:retrato:{data_iso}",
+                "severidade": "critico",
+                "tipo": "Vigia",
+                "descricao": ("Vigia sem retrato recente da Stokki (última listagem completa do pipeline: "
+                              f"{ultima_listagem or 'nenhuma'}) -- 'sem serviço' e insucessos não estão "
+                              "sendo atualizados. Conferir se o pipeline está rodando."),
+                "quando": None,
+                "acao": {"tipo": "link", "url": "/vigia", "rotulo": "Abrir vigia"},
+            })
     for estado in regras.ORDEM:
         itens = por_estado.get(estado)
         if not itens:
@@ -93,7 +116,9 @@ def excecoes_torre(data_iso: str, db_path: Path | None = None, agora: datetime |
         mais_antigo = itens[0]
         exemplos = ", ".join(i["codigo"] for i in itens[:5])
         excecoes.append({
-            "id": f"vigia:{estado}:{data_iso}:{len(itens)}",
+            # quantidade + mais antigo no id: "Tratar" esconde só esta
+            # situação -- pedido novo no lugar de outro faz reaparecer.
+            "id": f"vigia:{estado}:{data_iso}:{len(itens)}:{mais_antigo['codigo']}",
             "severidade": "critico" if estado in regras.CRITICOS else "atencao",
             "tipo": "Vigia",
             "descricao": (f"{len(itens)} pedido(s) — {regras.ROTULOS[estado].lower()} com prazo vencido "

@@ -12,8 +12,9 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
   EM_RASCUNHO          rascunho não enviado                        19h do último dia útil antes da data
   RASCUNHO_COM_ERRO    rascunho em ERRO_ENVIO                      na hora
   ROTA_PASSADA         em rota de dia anterior que não terminou    na hora
-  INSUCESSO            insucesso sem reentrega nem decisão         13h (a reentrega automática é com 12h;
-                                                                    se passou disso, algo travou)
+  INSUCESSO            insucesso sem reentrega nem decisão         1h depois da 1ª rodada da expedição
+                                                                    passadas 12h (a reentrega automática
+                                                                    roda nela; se passou, algo travou)
   RECUSADO             embarcador pediu pra não reenviar           2 dias úteis (cancelar/devolver na Stokki)
 
 Estados sem prazo (só aparecem na lista): AGENDADO (data futura), EM_ROTA
@@ -51,7 +52,7 @@ ORDEM = [ROTA_PASSADA, INSUCESSO, SEM_SERVICO, RASCUNHO_COM_ERRO, EM_RASCUNHO,
 CRITICOS = {ROTA_PASSADA, INSUCESSO, SEM_SERVICO, RASCUNHO_COM_ERRO}
 
 HORAS_SEM_SERVICO = 4
-HORAS_INSUCESSO = 13
+HORAS_REENTREGA_AUTO = 12  # espelha expedir_pedidos.HORAS_REENTREGA_AUTO
 DIAS_UTEIS_NO_POOL = 1
 DIAS_UTEIS_CLIENTE = 2
 HORA_LIMITE_RASCUNHO = time(19, 0)
@@ -75,6 +76,18 @@ def somar_dias_uteis(inicio: datetime, dias: int) -> datetime:
     return atual
 
 
+def proxima_rodada_expedicao(dt: datetime) -> datetime:
+    """1ª rodada do expedir_pedidos.py a partir de dt (timers: 08:00-19:30
+    de 30 em 30 min + 22:00 da sequência da noite, todo dia)."""
+    t = dt.time()
+    if time(8, 0) <= t <= time(19, 30):
+        return dt
+    if time(19, 30) < t <= time(22, 0):
+        return datetime.combine(dt.date(), time(22, 0))
+    dia = dt.date() if t < time(8, 0) else dt.date() + timedelta(days=1)
+    return datetime.combine(dia, time(8, 0))
+
+
 def ultimo_dia_util_antes(d: date) -> date:
     atual = d - timedelta(days=1)
     while not eh_dia_util(atual):
@@ -91,7 +104,11 @@ def prazo(estado: str, desde: datetime, *, data_rascunho: date | None = None) ->
     if estado in (AGUARDANDO_CLIENTE, RECUSADO):
         return somar_dias_uteis(desde, DIAS_UTEIS_CLIENTE)
     if estado == INSUCESSO:
-        return desde + timedelta(hours=HORAS_INSUCESSO)
+        # A reentrega automática roda junto da expedição (30 em 30 min das
+        # 08h às 19h30 e às 22h): o prazo é a 1ª rodada depois das 12h + 1h
+        # de folga. Sem isso todo insucesso da tarde virava alerta de
+        # madrugada, antes de a automática ter tido chance.
+        return proxima_rodada_expedicao(desde + timedelta(hours=HORAS_REENTREGA_AUTO)) + timedelta(hours=1)
     if estado in (RASCUNHO_COM_ERRO, ROTA_PASSADA):
         return desde
     if estado == EM_RASCUNHO:
@@ -152,11 +169,13 @@ def classificar(p: dict, hoje: date) -> tuple[str, str] | None:
         return RASCUNHO_COM_ERRO, f"rascunho de {p['rascunho_data']:%d/%m} falhou no envio"
     if p.get("rascunho_status") in ("RASCUNHO", "OFERTADA"):
         return EM_RASCUNHO, f"rascunho de {p['rascunho_data']:%d/%m} ainda não enviado"
-    if p.get("agendamento_pendente"):
-        return AGUARDANDO_CLIENTE, "embarcador ainda não informou a data de agendamento"
     ag = p.get("agendamento")
     if ag and ag > hoje:
         return AGENDADO, f"agendado pra {ag:%d/%m}"
+    # Data já no serviço (combinada por telefone, planilha...) vence o
+    # pedido de data por e-mail que ficou PENDENTE.
+    if p.get("agendamento_pendente") and not ag:
+        return AGUARDANDO_CLIENTE, "embarcador ainda não informou a data de agendamento"
     # Dedicado / área não atendida ficam fora da roteirização de propósito,
     # mas continuam sendo pedido parado -- o motivo diz por quê.
     if p.get("motivo_pool"):

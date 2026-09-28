@@ -18,7 +18,8 @@ AGORA = datetime(2026, 9, 29, 10, 0)  # terça
 ESQUEMA = """
 CREATE TABLE nucleo_pedidos (codigo TEXT PRIMARY KEY, vuupt_service_id INTEGER, status TEXT,
     agendamento_inicio TEXT, vuupt_route_id INTEGER, criado_em_provedor TEXT, atualizado_em_provedor TEXT,
-    criado_em TEXT, remetente_nome TEXT, destinatario_nome TEXT, fluxo TEXT, excluido_em TEXT);
+    criado_em TEXT, remetente_nome TEXT, destinatario_nome TEXT, fluxo TEXT, excluido_em TEXT,
+    reentrega_de_service_id INTEGER);
 CREATE TABLE nucleo_rotas (vuupt_route_id INTEGER, data_rota TEXT);
 CREATE TABLE nucleo_paradas (service_id INTEGER, completed_at TEXT, motivo_texto TEXT);
 CREATE TABLE rascunhos_rota (id INTEGER PRIMARY KEY, data_alvo TEXT, lote_id TEXT, nome TEXT,
@@ -92,20 +93,76 @@ class TestRodada(unittest.TestCase):
         hist = self.conn.execute("SELECT estado FROM vigia_historico WHERE codigo = 'PS-2'").fetchall()
         self.assertEqual([h["estado"] for h in hist], ["ROTA_PASSADA"])
 
-    def test_retrato_velho_nao_acusa_sem_servico(self):
+    def test_retrato_velho_nao_acusa_sem_servico_novo(self):
         vigiar.rodar(self.conn, agora=datetime(2026, 10, 3, 10, 0))
         e = self._estados()
         self.assertNotIn("PS-7", e)
         self.assertNotIn("PS-3", e)
         self.assertIn("PS-1", e)
 
+    def test_torre_avisa_retrato_velho(self):
+        from vigia import consulta
+        vigiar.rodar(self.conn, agora=datetime(2026, 10, 3, 10, 0))
+        db = Path(self.tmp.name) / "t.db"
+        ex = consulta.excecoes_torre("2026-10-03", db_path=db, agora=datetime(2026, 10, 3, 10, 0))
+        self.assertTrue(any(x["id"].startswith("vigia:retrato:") for x in ex))
+        ex = consulta.excecoes_torre("2026-09-29", db_path=db, agora=AGORA)
+        self.assertFalse(any(x["id"].startswith("vigia:retrato:") for x in ex))
+
     def test_listagem_incompleta_nao_fecha_ninguem(self):
+        abertos = lambda: {r["codigo"] for r in self.conn.execute("SELECT codigo FROM vigia_stokki_abertos")}  # noqa: E731
         banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=False, conn=self.conn)
-        codigos = {r["codigo"] for r in self.conn.execute("SELECT codigo FROM vigia_stokki_abertos")}
-        self.assertEqual(codigos, {"PS-3", "PS-4", "PS-7"})
+        self.assertEqual(abertos(), {"PS-3", "PS-4", "PS-7"})
+        # 1 ausência numa listagem completa ainda não fecha (fonte pode voltar vazia sem erro)
         banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=True, conn=self.conn)
-        codigos = {r["codigo"] for r in self.conn.execute("SELECT codigo FROM vigia_stokki_abertos")}
-        self.assertEqual(codigos, {"PS-3"})
+        self.assertEqual(abertos(), {"PS-3", "PS-4", "PS-7"})
+        banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=True, conn=self.conn)
+        self.assertEqual(abertos(), {"PS-3"})
+
+    def test_reaparecer_zera_as_ausencias_e_mantem_o_desde(self):
+        primeira = self.conn.execute(
+            "SELECT primeira_vez_em FROM vigia_stokki_abertos WHERE codigo = 'PS-7'").fetchone()[0]
+        banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=True, conn=self.conn)
+        banco.registrar_listagem_stokki([{"codigo": "PS-7"}], completa=True, conn=self.conn)
+        banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=True, conn=self.conn)
+        row = self.conn.execute(
+            "SELECT primeira_vez_em FROM vigia_stokki_abertos WHERE codigo = 'PS-7'").fetchone()
+        self.assertEqual(row[0], primeira)
+
+    def test_retirada_aberta_nao_vira_sem_servico(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, fluxo) "
+                          "VALUES ('PS-7', 70, 'EM_ROTA', 'RETIRADA')")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertNotIn("PS-7", self._estados())
+
+    def test_reentrega_feita_a_mao_na_vuupt_resolve_o_insucesso(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, fluxo, "
+                          "reentrega_de_service_id) VALUES ('PS-3-R1', 30, 'ABERTO', 'ENTREGA', 3)")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertNotIn("PS-3", self._estados())
+
+    def test_combinado_reentregue_deixa_o_segundo_pedido_sem_servico(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, fluxo) "
+                          "VALUES ('PS-20, PS-21', 20, 'INSUCESSO', 'ENTREGA')")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, fluxo) "
+                          "VALUES ('PS-20-R1', 22, 'ABERTO', 'ENTREGA')")
+        self.conn.execute("INSERT INTO insucessos_duplicados VALUES (20, '#PS-20-R1', NULL)")
+        self.conn.commit()
+        banco.registrar_listagem_stokki([{"codigo": c} for c in ("PS-3", "PS-4", "PS-7", "PS-20", "PS-21")],
+                                        completa=True, agora=datetime(2026, 9, 29, 5, 0), conn=self.conn)
+        vigiar.rodar(self.conn, agora=AGORA)
+        e = self._estados()
+        self.assertEqual(e["PS-21"]["estado"], "SEM_SERVICO")
+        self.assertNotIn("PS-20", e)
+
+    def test_retrato_velho_mantem_o_que_se_sabia(self):
+        vigiar.rodar(self.conn, agora=AGORA)
+        vigiar.rodar(self.conn, agora=datetime(2026, 10, 3, 10, 0))
+        e = self._estados()
+        self.assertEqual(e["PS-7"]["estado"], "SEM_SERVICO")
+        self.assertEqual(e["PS-3"]["estado"], "INSUCESSO")
 
 
 if __name__ == "__main__":

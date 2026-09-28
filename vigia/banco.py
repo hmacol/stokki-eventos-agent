@@ -22,6 +22,7 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 FMT = "%Y-%m-%d %H:%M:%S"
+AUSENCIAS_PRA_FECHAR = 2
 
 
 def conectar(db_path: Path | None = None) -> sqlite3.Connection:
@@ -74,6 +75,10 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_vigia_historico_codigo ON vigia_historico(codigo);
     """)
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(vigia_stokki_abertos)")}
+    if "ausencias" not in colunas:
+        conn.execute("ALTER TABLE vigia_stokki_abertos ADD COLUMN ausencias INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def normalizar(codigo) -> str:
@@ -84,10 +89,11 @@ def registrar_listagem_stokki(itens: list[dict], completa: bool, agora: datetime
                               conn: sqlite3.Connection | None = None) -> None:
     """Chamado pelo pipeline no fim de uma rodada SEM filtro. `itens`:
     [{"codigo", "id_stokki", "embarcador", "status_stokki", "fonte",
-    "acao", "observacao"}]. Listagem completa apaga quem não apareceu
-    (saiu de "aberto" na Stokki: expedido, cancelado...); incompleta só
-    atualiza -- falha de uma fonte não pode "fechar" pedido que continua
-    aberto."""
+    "acao", "observacao"}]. Quem não apareceu em DUAS listagens completas
+    seguidas sai (foi expedido, cancelado...). Uma ausência só não basta:
+    uma fonte pode voltar vazia sem erro (a Estação de Impressão devolve []
+    quando a captura falha), e apagar zeraria o "desde" do pedido.
+    Listagem incompleta só atualiza quem apareceu."""
     agora_txt = (agora or datetime.now()).strftime(FMT)
     fechar = conn is None
     conn = conn or conectar()
@@ -101,20 +107,22 @@ def registrar_listagem_stokki(itens: list[dict], completa: bool, agora: datetime
             conn.execute("""
                 INSERT INTO vigia_stokki_abertos
                     (codigo, id_stokki, embarcador, status_stokki, fonte, ultima_acao, ultima_obs,
-                     primeira_vez_em, ultima_vez_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     primeira_vez_em, ultima_vez_em, ausencias)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(codigo) DO UPDATE SET
                     id_stokki = excluded.id_stokki, embarcador = excluded.embarcador,
                     status_stokki = excluded.status_stokki, fonte = excluded.fonte,
                     ultima_acao = excluded.ultima_acao, ultima_obs = excluded.ultima_obs,
-                    ultima_vez_em = excluded.ultima_vez_em
+                    ultima_vez_em = excluded.ultima_vez_em, ausencias = 0
             """, (codigo, it.get("id_stokki"), it.get("embarcador"), it.get("status_stokki"),
                   it.get("fonte"), it.get("acao"), (it.get("observacao") or "")[:300],
                   agora_txt, agora_txt))
         if completa:
             antigos = {r["codigo"] for r in conn.execute("SELECT codigo FROM vigia_stokki_abertos")}
             for codigo in antigos - vistos:
-                conn.execute("DELETE FROM vigia_stokki_abertos WHERE codigo = ?", (codigo,))
+                conn.execute("UPDATE vigia_stokki_abertos SET ausencias = ausencias + 1 WHERE codigo = ?",
+                             (codigo,))
+            conn.execute(f"DELETE FROM vigia_stokki_abertos WHERE ausencias >= {AUSENCIAS_PRA_FECHAR}")
         conn.execute("INSERT INTO vigia_listagens (concluida_em, completa, qtd) VALUES (?, ?, ?)",
                      (agora_txt, 1 if completa else 0, len(vistos)))
         conn.commit()

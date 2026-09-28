@@ -841,6 +841,7 @@ def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: boo
 # outro. A rodada horária espera quem está usando (mesma regra do login da
 # StokkiSession) e, se ainda estiver ocupado, DESISTE -- a próxima é em 1h.
 DONO_TRAVA_HORARIO = "pipeline-horario"
+DONO_TRAVA_SEQUENCIA = "pipeline"
 ESPERA_TRAVA_HORARIO_S = 10 * 60
 TTL_TRAVA_HORARIO_S = 20 * 60
 
@@ -877,6 +878,20 @@ def main_horario(modo_teste: bool = False) -> None:
 
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
          filtro_statuses: list[str] | None = None, dono_trava: str | None = None):
+    # Rodada completa fora do --horario (sequências das 18h/22h, painel):
+    # segura a trava da sessão da Stokki se estiver livre, pra expedição e
+    # rotinas do WMS esperarem em vez de logar por cima (revisão de 28/09).
+    # Ocupada (ou disparada pelo painel, que já conta como "em uso") segue
+    # como sempre: o login da StokkiSession já espera a vez sozinho.
+    if dono_trava is None and not (filtro_pedido or filtro_embarcador):
+        from stokki import sessao_uso
+        if sessao_uso.adquirir(DONO_TRAVA_SEQUENCIA, ttl_segundos=TTL_TRAVA_HORARIO_S):
+            try:
+                return main(modo_teste=modo_teste, filtro_statuses=filtro_statuses,
+                            dono_trava=DONO_TRAVA_SEQUENCIA)
+            finally:
+                sessao_uso.liberar(DONO_TRAVA_SEQUENCIA)
+
     inicio_execucao = time.monotonic()
     logger.info(
         f"{'[MODO TESTE] ' if modo_teste else ''}Pipeline iniciado."

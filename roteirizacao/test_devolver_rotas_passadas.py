@@ -50,6 +50,13 @@ class TestPlanoDevolucao(unittest.TestCase):
         self.assertEqual(plano["acao"], "nada")
         self.assertEqual(plano["iniciados"], ["PS-2"])
 
+    def test_rota_com_movimento_hoje_nao_mexe(self):
+        entregue_hoje = {**_s(1, "done"), "completed_at": "2026-09-29 13:00:00"}  # UTC -> 10h local
+        plano = crsm.plano_devolucao(_rota([entregue_hoje, _s(2, "assigned")]), HOJE)
+        self.assertEqual(plano["acao"], "nada")
+        self.assertTrue(plano["rodando_hoje"])
+        self.assertEqual(plano["iniciados"], ["PS-2"])
+
     def test_rota_encerrada_nao_mexe(self):
         plano = crsm.plano_devolucao(_rota([_s(1, "assigned")], status="finished"))
         self.assertEqual(plano["acao"], "nada")

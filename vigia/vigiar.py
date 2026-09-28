@@ -70,10 +70,14 @@ def _d(texto) -> date | None:
 
 
 def _consultar(conn: sqlite3.Connection, sql: str, params=()) -> list[sqlite3.Row]:
-    """Tabela que ainda não existe (banco novo, fluxo nunca rodou) = vazio."""
+    """Tabela que ainda não existe (banco novo, fluxo nunca rodou) = vazio.
+    Qualquer outro erro (lock, coluna faltando) sobe: engolir faria, por
+    exemplo, todo pedido aberto virar "sem serviço" numa rodada."""
     try:
         return conn.execute(sql, params).fetchall()
     except sqlite3.OperationalError as e:
+        if "no such table" not in str(e):
+            raise
         logger.debug(f"consulta ignorada ({e}): {sql[:60]}")
         return []
 
@@ -88,20 +92,35 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
     servicos = _consultar(conn, """
         SELECT codigo, vuupt_service_id, status, agendamento_inicio, vuupt_route_id,
                criado_em_provedor, atualizado_em_provedor, criado_em, remetente_nome,
-               destinatario_nome, fluxo, excluido_em
+               destinatario_nome, fluxo, excluido_em, reentrega_de_service_id
         FROM nucleo_pedidos
-        WHERE COALESCE(fluxo, 'ENTREGA') = 'ENTREGA'
     """)
-    # Bases (PS-X) que têm algum serviço vivo na Vuupt -- quem está aberto na
-    # Stokki e não tem nenhum é SEM_SERVICO.
+    duplicados = {r["service_id_original"]: r["cancelado_em"] for r in _consultar(
+        conn, "SELECT service_id_original, cancelado_em FROM insucessos_duplicados")}
+    # Serviço recriado a partir de outro (nosso fingerprint OU recriação à
+    # mão na Vuupt, que só aparece no espelho via recreated_order_origin_id).
+    recriados = {s["reentrega_de_service_id"] for s in servicos
+                 if s["reentrega_de_service_id"] and s["status"] != "CANCELADO" and not s["excluido_em"]}
+
+    # Bases (PS-X) que têm algum serviço vivo na Vuupt, de QUALQUER fluxo (a
+    # retirada usa o mesmo código) -- quem está aberto na Stokki e não tem
+    # nenhum é SEM_SERVICO.
     bases_com_servico: set[str] = set()
     ativos = []
     for s in servicos:
         vivo = s["status"] != "CANCELADO" and not s["excluido_em"]
-        if vivo:
-            for parte in _partes(s["codigo"]):
+        partes = _partes(s["codigo"])
+        combinado_reentregue = (s["status"] == "INSUCESSO" and len(partes) > 1
+                                and (s["vuupt_service_id"] in duplicados or s["vuupt_service_id"] in recriados))
+        if vivo and not combinado_reentregue:
+            # Combinado ("PS-1, PS-2") com insucesso já reentregue: a
+            # reentrega leva só o 1º pedido -- os outros NÃO têm serviço vivo.
+            for parte in partes:
                 bases_com_servico.add(base_do_codigo(parte))
-        if vivo and s["status"] in ("ABERTO", "EM_ROTA", "INSUCESSO"):
+        elif vivo and combinado_reentregue:
+            bases_com_servico.add(base_do_codigo(partes[0]))
+        if (vivo and s["status"] in ("ABERTO", "EM_ROTA", "INSUCESSO")
+                and (s["fluxo"] or "ENTREGA") == "ENTREGA"):
             ativos.append(s)
 
     rotas = {r["vuupt_route_id"]: _d(r["data_rota"]) for r in _consultar(
@@ -131,8 +150,6 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
     """):
         agendamento_pendente[banco.normalizar(r["pedido"])] = r["desde"]
 
-    duplicados = {r["service_id_original"]: r["cancelado_em"] for r in _consultar(
-        conn, "SELECT service_id_original, cancelado_em FROM insucessos_duplicados")}
     agendadas = {r["service_id"] for r in _consultar(
         conn, "SELECT service_id FROM duplicacoes_agendadas WHERE status IN ('PENDENTE', 'EXECUTADO')")}
     recusas = {r["service_id"]: r["respondido_em"] for r in _consultar(conn, """
@@ -169,11 +186,13 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
             "codigo": codigo, "service_id": sid, "status_nucleo": s["status"],
             "aberto_stokki": aberto,
             "agendamento": _d(s["agendamento_inicio"]),
-            "agendamento_pendente": codigo in agendamento_pendente or base in agendamento_pendente,
+            # Só pelo código exato: a -R1 não herda o pedido de data da original.
+            "agendamento_pendente": codigo in agendamento_pendente,
             "rascunho_status": rasc["status"] if rasc else None,
             "rascunho_data": _d(rasc["data_alvo"]) if rasc else None,
             "rota_data": rotas.get(s["vuupt_route_id"]) if s["vuupt_route_id"] else None,
-            "tem_reentrega": bool(sid and ((sid in duplicados and not duplicados[sid]) or sid in agendadas)),
+            "tem_reentrega": bool(sid and ((sid in duplicados and not duplicados[sid])
+                                           or sid in agendadas or sid in recriados)),
             "recusado": bool(sid and (sid in recusas or duplicados.get(sid))),
             "tratado_na_torre": codigo in tratadas,
             "motivo_insucesso": motivo_insucesso,
@@ -186,7 +205,7 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
             "_atualizado": _dt(s["atualizado_em_provedor"]),
             "_concluido": _dt(concluido),
             "_rascunho_criado": _dt(rasc["criado_em"]) if rasc else None,
-            "_agendamento_desde": _dt(agendamento_pendente.get(codigo) or agendamento_pendente.get(base)),
+            "_agendamento_desde": _dt(agendamento_pendente.get(codigo)),
             "_recusado_em": _dt(recusas.get(sid)) if sid else None,
             "_detalhe": " | ".join(x for x in (
                 abertos.get(base, {}).get("embarcador") or s["remetente_nome"],
@@ -263,6 +282,16 @@ def rodar(conn: sqlite3.Connection, agora: datetime | None = None, gravar: bool 
             "service_id": f.get("service_id"), "detalhe": (f.get("_detalhe") or "")[:300],
             "visto_em": agora_txt,
         }
+
+    if not retrato_ok:
+        # Cego pra Stokki: mantém o que já se sabia em vez de "resolver"
+        # (apagar) justamente quando não dá pra ver -- a Torre ganha o
+        # aviso de retrato velho (consulta.excecoes_torre).
+        for codigo, ant in anteriores.items():
+            if codigo not in novos and ant["estado"] in (regras.SEM_SERVICO, regras.INSUCESSO, regras.RECUSADO):
+                vence = _dt(ant["vence_em"])
+                novos[codigo] = {**ant, "vencido": 1 if regras.vencido(vence, agora) else 0,
+                                 "visto_em": agora_txt}
 
     resumo = {"total": len(novos), "vencidos": sum(n["vencido"] for n in novos.values()),
               "por_estado": {}, "retrato_ok": retrato_ok, "ultima_listagem": ultima}

@@ -22,7 +22,7 @@ há mais tempo do que devia, alguém fica sabendo.
 | Rascunho não enviado | em rascunho da data D | 19h do último dia útil antes de D (só alerta) |
 | Rascunho com erro | rascunho em ERRO_ENVIO | na hora |
 | Preso em rota de dia anterior | rota de ontem pra trás não terminou | na hora |
-| Insucesso sem reentrega | sem R1, sem resposta, sem tratar na Torre | 13h (a reentrega automática é com 12h) |
+| Insucesso sem reentrega | sem R1, sem resposta, sem tratar na Torre | 1h depois da 1ª rodada da expedição passadas 12h |
 | Embarcador recusou | respondeu "não reenviar" e o pedido segue aberto na Stokki | 2 dias úteis |
 | Agendado / Em rota | data futura / rota de hoje em diante | sem prazo |
 
@@ -45,19 +45,27 @@ Dia útil = segunda a sexta (sem feriados, por enquanto).
 ## Ações automáticas que vieram junto (28/09)
 
 1. **Reentrega automática** (`expedir_pedidos.reentregar_insucessos_sem_resposta`):
-   insucesso sem resposta do embarcador em 12h vira reentrega. Não age se o
-   embarcador respondeu, se alguém tratou na Torre, se já tem R1/agendamento,
-   em retirada, nos motivos avaria/validade/manutenção/não coletado
-   (`MOTIVOS_SEM_REENTREGA_AUTO`) nem a partir da -R2 (`MAX_REENTREGAS_AUTO`).
-   Usa a mesma trava do clique do embarcador. Resposta que chega depois
-   continua valendo ("não reenviar" cancela a R1 criada).
+   insucesso sem resposta do embarcador em 12h vira reentrega. NÃO age se:
+   - o embarcador respondeu, alguém tratou na Torre, já tem R1/agendamento
+     (inclusive R1 feita à mão na Vuupt, vista pelo espelho do núcleo);
+   - motivo avaria, validade, manutenção, não coletado, cliente não
+     reconheceu, problema fiscal (`MOTIVOS_SEM_REENTREGA_AUTO`) ou motivo que
+     não está no de-para;
+   - o pedido não está aberto na Stokki (ou o retrato do vigia está velho);
+   - retirada, serviço com mais de um pedido ("PS-1, PS-2"), a partir da -R2;
+   - insucesso concluído antes de 29/09 ou há mais de 48h (sem rajada no deploy).
+   Trava da página de resposta pega e solta POR PEDIDO. Resposta que chega
+   depois continua valendo ("não reenviar" cancela a R1 criada).
 2. **Rota de dia anterior** (`cancelar_rotas_sem_motorista.py`, 17h45): pedido
    NÃO iniciado volta pro pool antes da roteirização das 18h. Iniciado
    (on_route/arrived) não é mexido: pode ter sido entregue sem baixa — vai
-   pro e-mail como "CONFERIR".
+   pro e-mail como "CONFERIR". Rota com movimento HOJE (ainda rodando) não é
+   mexida: a carga está no caminhão.
 3. **Pipeline de hora em hora** (`stokki-pipeline-horario`, seg-sex 08h05-16h05):
    espera a vez na sessão da Stokki (`stokki/sessao_uso.py`) e desiste se
-   continuar ocupada. A expedição passou a pegar a mesma trava.
+   continuar ocupada. A expedição e o pipeline das sequências (18h/22h) passam
+   a segurar a mesma trava quando está livre. Limite conhecido: rodando pelo
+   painel, a trava não é gravada (o painel já conta como "em uso").
 4. **Reentrega com caixas**: a R1 nascia sem `dimension_3`.
 
 ## Deploy
@@ -73,7 +81,18 @@ sudo -u www-data venv/bin/python -m vigia.vigiar --resumo   # confere antes de g
 O vigia só mostra "sem serviço" depois da primeira rodada do pipeline com o
 código novo (é ela que grava o retrato).
 
+## Robustez do retrato (revisão de 28/09)
+
+- Pedido só sai do retrato depois de faltar em DUAS listagens completas (uma
+  fonte pode voltar vazia sem erro); reaparecer zera e mantém o "desde".
+- Sem retrato completo há 30h, o vigia congela "sem serviço"/insucesso como
+  estavam (não apaga) e a Torre mostra "Vigia sem retrato recente da Stokki".
+- Retirada conta como serviço vivo (mesmo código do pedido).
+
 ## Pendências conhecidas
+
+- ROTA_PASSADA de rota com mais de 14 dias não é devolvida sozinha (só
+  alertada); rodar `--resumo` antes de ligar pra ver o volume.
 
 - Feriados não contam como dia não útil.
 - O retrato cobre o que o pipeline lista: "Aguardando Transportador" de

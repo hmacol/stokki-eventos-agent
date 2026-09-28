@@ -133,14 +133,33 @@ def _elegivel(rota: dict, hoje: date) -> tuple[bool, str]:
     return True, ""
 
 
-def plano_devolucao(rota: dict) -> dict:
+def _mexeu_hoje(servicos: list[dict], hoje: date) -> bool:
+    """Algum serviço da rota teve saída/chegada/conclusão HOJE (horário da
+    Vuupt vem em UTC sem fuso -> converte pra data local)."""
+    from nucleo.normalizacao import vuupt_para_local
+    for s in servicos:
+        for campo in ("started_at", "arrived_at", "completed_at"):
+            local = vuupt_para_local(s.get(campo)) if s.get(campo) else None
+            if local and local[:10] == hoje.isoformat():
+                return True
+    return False
+
+
+def plano_devolucao(rota: dict, hoje: date | None = None) -> dict:
     """Regra pura do passo 2 pra UMA rota de dia anterior. Retorna
     {"acao": "nada"|"cancelar_rota"|"atualizar", "devolver": [serviços],
-     "manter_ids": [ids na ordem], "iniciados": [codes]}."""
+     "manter_ids": [ids na ordem], "iniciados": [codes]}.
+    Rota que teve movimento HOJE ainda está rodando (rota longa, motorista
+    atrasado): a carga das paradas pendentes está no caminhão -- não mexe,
+    vai pro resumo como "em andamento" (revisão de 28/09)."""
     vazio = {"acao": "nada", "devolver": [], "manter_ids": [], "iniciados": []}
     if rota.get("status") in STATUS_ROTA_ENCERRADA:
         return vazio
     servicos = [s for s in extrair_servicos_da_rota(rota) if s.get("id")]
+    if hoje and _mexeu_hoje(servicos, hoje):
+        pendentes = [(s.get("code") or str(s["id"])).lstrip("#") for s in servicos
+                     if (s.get("status") or "") in STATUS_SERVICO_DEVOLVIVEL | STATUS_SERVICO_INICIADO]
+        return {**vazio, "iniciados": pendentes, "rodando_hoje": True}
     devolver = [s for s in servicos if (s.get("status") or "") in STATUS_SERVICO_DEVOLVIVEL]
     iniciados = [(s.get("code") or str(s["id"])).lstrip("#") for s in servicos
                  if (s.get("status") or "") in STATUS_SERVICO_INICIADO]
@@ -167,9 +186,10 @@ def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: boo
         data_rota = _data_inicio_rota(rota)
         if data_rota is None or data_rota >= hoje:
             continue
-        plano = plano_devolucao(rota)
+        plano = plano_devolucao(rota, hoje)
         nome = rota.get("name") or f"rota {rota.get('id')}"
-        resumo["iniciados"] += [f"{c} ({nome})" for c in plano["iniciados"]]
+        rotulo = f"{nome}, ainda rodando hoje" if plano.get("rodando_hoje") else nome
+        resumo["iniciados"] += [f"{c} ({rotulo})" for c in plano["iniciados"]]
         if plano["acao"] == "nada":
             continue
         codes = [(s.get("code") or str(s["id"])).lstrip("#") for s in plano["devolver"]]

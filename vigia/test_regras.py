@@ -27,7 +27,10 @@ class TestPrazos(unittest.TestCase):
         self.assertEqual(r.prazo(r.SEM_SERVICO, desde), datetime(2026, 9, 29, 12, 0))
         self.assertEqual(r.prazo(r.NO_POOL, desde), datetime(2026, 9, 30, 8, 0))
         self.assertEqual(r.prazo(r.AGUARDANDO_CLIENTE, desde), datetime(2026, 10, 1, 8, 0))
-        self.assertEqual(r.prazo(r.INSUCESSO, desde), datetime(2026, 9, 29, 21, 0))
+        # 08h + 12h = 20h, fora da janela da expedição -> rodada das 22h + 1h
+        self.assertEqual(r.prazo(r.INSUCESSO, desde), datetime(2026, 9, 29, 23, 0))
+        # 15h + 12h = 03h -> expedição das 08h + 1h
+        self.assertEqual(r.prazo(r.INSUCESSO, datetime(2026, 9, 29, 15, 0)), datetime(2026, 9, 30, 9, 0))
         self.assertEqual(r.prazo(r.ROTA_PASSADA, desde), desde)
         self.assertIsNone(r.prazo(r.AGENDADO, desde))
 
@@ -54,6 +57,11 @@ class TestClassificar(unittest.TestCase):
                          r.RASCUNHO_COM_ERRO)
         self.assertEqual(r.classificar({**base, "agendamento": date(2026, 10, 9)}, HOJE)[0], r.AGENDADO)
         self.assertEqual(r.classificar({**base, "agendamento_pendente": True}, HOJE)[0], r.AGUARDANDO_CLIENTE)
+
+    def test_agendamento_no_servico_vence_pedido_de_data_pendente(self):
+        base = {"status_nucleo": "ABERTO", "agendamento_pendente": True}
+        self.assertEqual(r.classificar({**base, "agendamento": date(2026, 10, 9)}, HOJE)[0], r.AGENDADO)
+        self.assertEqual(r.classificar({**base, "agendamento": HOJE}, HOJE)[0], r.NO_POOL)
 
     def test_motivo_do_pool(self):
         est, motivo = r.classificar({"status_nucleo": "ABERTO", "motivo_pool": "dedicado"}, HOJE)
