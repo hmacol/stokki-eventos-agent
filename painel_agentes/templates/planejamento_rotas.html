@@ -1622,7 +1622,8 @@
   .folha-mapa .chip-pedido .x { width: 22px; height: 22px; line-height: 22px; text-align: center; color: var(--texto-suave); font-size: 15px; }
   .folha-mapa .folha-rotulo { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); flex: none; }
   .folha-mapa .folha-rotas {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; overflow: hidden auto; min-height: 0; flex: 1 1 auto;
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start;
+    gap: 6px; overflow: hidden auto; min-height: 0; flex: 1 1 auto;
     overscroll-behavior: contain;
   }
   .folha-mapa .chip-rota {
@@ -1646,6 +1647,14 @@
   .folha-mapa .folha-acoes #folha-adicionar { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .folha-mapa .folha-acoes #folha-adicionar:not(:disabled) { background: var(--cor-escolhida, var(--acento)); border-color: var(--cor-escolhida, var(--acento)); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
   .folha-mapa .folha-acoes button:disabled { opacity: 0.55; cursor: default; }
+  /* devolve pro pool: contorno laranja pra não parecer a ação principal */
+  .folha-mapa .folha-acoes #folha-tirar { border-color: var(--laranja-texto); color: var(--laranja-texto); white-space: nowrap; }
+  /* com o "Tirar" são 3 botões: o principal ganha a linha de cima inteira
+     (senão o nome da rota some no "Mover N pra …") */
+  .folha-mapa.com-tirar .folha-acoes { flex-wrap: wrap; }
+  .folha-mapa.com-tirar .folha-acoes #folha-adicionar { flex-basis: 100%; }
+  .folha-mapa.com-tirar .folha-acoes #folha-tirar,
+  .folha-mapa.com-tirar .folha-acoes #folha-mais { flex: 1 1 0; }
   /* recolhida: só a linha do resumo, pra sobrar mapa pra tocar em mais pontos */
   .folha-mapa.recolhida :is(.folha-pedidos, .folha-rotulo, .folha-rotas, .folha-acoes) { display: none; }
   /* cards: alvo de toque maior + botão "⋯" (fica escondido no modo "só número") */
@@ -4383,6 +4392,7 @@
       <div class="folha-rotas" id="folha-rotas" role="radiogroup" aria-label="Rota de destino"></div>
       <div class="folha-acoes">
         <button type="button" id="folha-adicionar" disabled>Escolha uma rota</button>
+        <button type="button" id="folha-tirar" title="Devolve as paradas de rota selecionadas pro pool (não cancela na VUUPT), igual ao &quot;Remover da rota&quot; do ⋯">Tirar da rota</button>
         <button type="button" id="folha-mais" title="Abre a aba Pool (ou Rotas) com a seleção: Criar rota, Roteirizar, endereço, agendar...">Mais ações ›</button>
       </div>`;
     document.body.appendChild(folha);
@@ -4410,6 +4420,7 @@
       escolherRotaFolha(folhaRotaEscolhida === id ? null : id);
     });
     folha.querySelector("#folha-adicionar").addEventListener("click", (e) => aplicarFolhaNaRota(e.currentTarget));
+    folha.querySelector("#folha-tirar").addEventListener("click", (e) => tirarDaRotaSelecionados(e.currentTarget));
     folha.querySelector("#folha-mais").addEventListener("click", () => {
       escolherRotaFolha(null);
       // as ações de lote de cada seleção moram na aba dela
@@ -4435,6 +4446,30 @@
       location.reload();
     } catch (e) {
       alert(`Falha ao levar pra rota: ${e.message}. Recarregue a página.`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  // "Tirar da rota" da folha: cada parada de rota selecionada volta pro
+  // pool pelo mesmo endpoint do "Remover da rota" do ⋯ (não há lote no
+  // backend -- um POST por parada; falha no meio deixa parte já no pool,
+  // o reload/aviso mostra o estado real). Pedidos do pool na seleção
+  // ficam como estão.
+  async function tirarDaRotaSelecionados(botao) {
+    const itens = itensRotaSelecionados();
+    if (!itens.length) return;
+    if (!confirm(`Tirar ${itens.length} pedido(s) da rota e devolver pro pool?\n\nSe voltarem pra uma rota, entram no fim dela.`)) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Tirando...";
+    try {
+      for (const i of itens) {
+        await postJSON("/api/planejamento/remover-parada", { rascunho_id: i.rascunho_origem_id, service_id: i.service_id });
+      }
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao tirar da rota: ${e.message}. Recarregue a página.`);
       botao.disabled = false;
       botao.textContent = original;
     }
@@ -4491,6 +4526,10 @@
     folha.querySelector("#folha-rotulo").style.display = PODE_EDITAR ? "" : "none";
     rotasEl.style.display = PODE_EDITAR ? "" : "none";
     folha.querySelector("#folha-adicionar").style.display = PODE_EDITAR ? "" : "none";
+    const tirar = folha.querySelector("#folha-tirar");
+    tirar.style.display = PODE_EDITAR && itensRota.length ? "" : "none";
+    folha.classList.toggle("com-tirar", PODE_EDITAR && itensRota.length > 0);
+    tirar.textContent = `Tirar ${itensRota.length} da rota`;
     if (!PODE_EDITAR) return;
 
     const pontosSel = pontosDoLi(todosLis);
