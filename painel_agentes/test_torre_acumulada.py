@@ -17,6 +17,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -83,6 +84,25 @@ class TestClassificarRotaTorre(unittest.TestCase):
         ontem = dict(_rota("vazia", ONTEM), cancelada=True)
         self.assertTrue(torre_controle.classificar_rota_torre(hoje, HOJE, set(), set())["fica"])
         self.assertFalse(torre_controle.classificar_rota_torre(ontem, HOJE, set(), set())["fica"])
+
+
+class TestEncerrarNaoEscondeInsucesso(unittest.TestCase):
+    """28/09: "Encerrar" tira a rota da tela, mas o insucesso ainda não
+    tratado dela continua na Fila de ação."""
+
+    def test_insucesso_de_rota_encerrada_segue_no_agregado(self):
+        card = _rota("concluida", ONTEM, [{"codigo": "#PS-9", "situacao": "insucesso"},
+                                           {"codigo": "#PS-8", "situacao": "insucesso"}], rota_id=77)
+        contrib = torre_controle._contrib_vazia()
+        contrib["insucessos_lista"] = [{"codigo": "#PS-9"}, {"codigo": "#PS-8"}]
+        with mock.patch.object(torre_controle, "listar_rotas", return_value=[{"id": 77}]), \
+             mock.patch.object(torre_controle, "_data_local_da_rota", return_value=ONTEM), \
+             mock.patch.object(torre_controle, "_montar_card_rota", return_value=(card, contrib)), \
+             mock.patch.object(torre_controle, "_rota_ids_com_exclusao_no_dia", return_value=set()), \
+             mock.patch.object(torre_controle, "_buscar_tratadas", return_value={"insucesso:#PS-8": {}}):
+            rotas, agregado, _ = torre_controle._coletar_rotas_abertas("t", HOJE, {}, {77})
+        self.assertEqual(rotas, [])
+        self.assertEqual([i["codigo"] for i in agregado["insucessos_lista"]], ["#PS-9"])
 
 
 if __name__ == "__main__":

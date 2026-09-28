@@ -33,9 +33,19 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.vuupt.com/api/v1"
 
+# Captura o código COM sufixo de reentrega/canhoto (PS-1-R1, PS-1-C1):
+# antes só pegava "PS-\d+", a reentrega PS-1-R1 não casava com nenhum
+# serviço do sublote e a rota inteira caía em erro (28/09) -- justamente
+# o pedido que devia voltar pra rota derrubava todos os outros.
 PADRAO_CONFLITO_ROTA = re.compile(
-    r"j[aá] faz parte de uma rota.*?(PS-\d+)", re.IGNORECASE | re.DOTALL
+    r"j[aá] faz parte de uma rota.*?(PS-\d+(?:-[RC]\d+)*)", re.IGNORECASE | re.DOTALL
 )
+
+
+def _partes_codigo(code) -> set[str]:
+    """'#PS-1, #PS-2-R1' -> {'PS-1', 'PS-2-R1'} (serviço combinado tem
+    vários pedidos no mesmo code)."""
+    return {p.strip().lstrip("#").strip().upper() for p in str(code or "").split(",") if p.strip()}
 
 
 def _headers(token: str) -> dict:
@@ -144,9 +154,9 @@ def criar_rota_removendo_conflitos(token: str, nome_rota: str, start_at: str,
             if not match:
                 raise  # erro de outro tipo -- não sabemos remediar, propaga como antes
 
-            codigo_conflitante = match.group(1)
+            codigo_conflitante = match.group(1).upper()
             antes = len(sublote_atual)
-            sublote_atual = [s for s in sublote_atual if s.get("code", "").lstrip("#") != codigo_conflitante]
+            sublote_atual = [s for s in sublote_atual if codigo_conflitante not in _partes_codigo(s.get("code"))]
             if len(sublote_atual) == antes:
                 # o código apontado no erro não bate com nenhum do sublote atual
                 # (já deve ter sido removido numa tentativa anterior, ou algo

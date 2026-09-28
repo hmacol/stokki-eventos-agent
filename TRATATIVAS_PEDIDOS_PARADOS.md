@@ -83,9 +83,12 @@ número do pedido.
 Vuupt (segue a cadeia de reentregas até o serviço mais recente) e:
 - **Atribuído / Aceito / Em deslocamento / Chegou ao cliente**
   (`assigned`, `accepted`, `on_route`) → "Em Rota" (Hugo, 28/08);
-- **não atribuído** (`not_assigned`): sem agendamento → "Em Rota";
-  agendado pra **hoje** → "Em Rota"; agendado pra **depois de hoje** →
-  "Agendado"; agendamento vencido → sem ação;
+- **não atribuído** (`not_assigned`): sem agendamento ou agendado pra
+  **hoje** → **sem ação** ("NO POOL, ainda sem rota"; mudado em 28/09:
+  antes virava "Em Rota", que conta como tratado e escondia pedido
+  esquecido no pool — se já estava "Em Rota", a classificação é
+  desfeita e o pedido volta pro "só não tratados"); agendado pra
+  **depois de hoje** → "Agendado"; agendamento vencido → sem ação;
 - **concluído com sucesso** (`done` + `status_done=success`) →
   "Entregue"; concluído com insucesso → sem ação (tratativa na Torre);
 - cancelado → sem ação.

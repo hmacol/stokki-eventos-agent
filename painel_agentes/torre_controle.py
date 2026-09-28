@@ -560,7 +560,9 @@ def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
         "qtd_nao_atribuidos": qtd_atrasados,
         "backlog_pool": backlog["pool"],
         "backlog_futuros": backlog["futuros"],
-        "insucessos": agregado["insucessos_lista"][:30],
+        # Sem corte: o [:30] antigo (na ordem da API, não por idade)
+        # fazia insucesso não tratado sumir da Fila de ação (28/09).
+        "insucessos": agregado["insucessos_lista"],
     }
 
 
@@ -898,6 +900,13 @@ def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, s
     for card, contrib in candidatas:
         veredito = classificar_rota_torre(card, hoje, ids_tratadas, ids_encerradas)
         if not veredito["fica"]:
+            # "Encerrar" tira a ROTA da tela, não o insucesso ainda não
+            # tratado dela: antes ele sumia da Fila de ação junto (28/09)
+            # e o pedido ficava sem reentrega nem alerta.
+            agregado["insucessos_lista"].extend(
+                i for i in contrib["insucessos_lista"]
+                if f"insucesso:{i.get('codigo')}" not in ids_tratadas
+            )
             continue
         card["atrasada"] = veredito["atrasada"]
         card["pendencias"] = veredito["pendencias"]

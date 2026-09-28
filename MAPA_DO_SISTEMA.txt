@@ -1,7 +1,7 @@
 ==============================================================================
  MAPA DO SISTEMA — agente_stokki_eventos (Fresh Log / Fresh Hub)
  Guia de navegação para programadores: onde fica cada coisa e o que faz.
- Atualizado em 26/09/2026. Se criar/mover/apagar arquivo, atualize aqui.
+ Atualizado em 28/09/2026. Se criar/mover/apagar arquivo, atualize aqui.
 ==============================================================================
 
 ÍNDICE
@@ -122,8 +122,10 @@
  5) Operador revisa no /planejamento e clica "Confirmar e Enviar"
     -> rotas_client.criar_rota (POST /routes na Vuupt)
     -> nucleo/rotas.registrar_rota_enviada.
-    Às 22h, rascunhos esquecidos são enviados e pedidos novos são
-    encaixados (enviar_rascunhos_pendentes.py, incrementar_rotas.py).
+    ATENÇÃO: desde 09/09 NADA envia rascunho esquecido nem encaixa pedido
+    novo sozinho -- a sequência das 22h deixou de roteirizar.
+    incrementar_rotas.py é só botão do painel; enviar_rascunhos_pendentes.py
+    não é chamado por ninguém. Rascunho não confirmado = pedido perde o dia.
  6) Documentos (NF/boleto) são casados com o pedido e subidos ao GCS
     (documentos_pedido/). 04h: gerar_pdf_romaneios.py gera 1 PDF por rota;
     o print_agent/ no Windows do escritório imprime.
@@ -259,7 +261,9 @@
  vuupt_client.py         Cliente REST da Vuupt (serviços, skills, telefone E.164).
  http_retry.py           Backoff para HTTP 429.
  fingerprint_importacao.py  Hash do payload enviado (não reenviar igual).
- fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned.
+ fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned
+                         ('done' pra sempre; o resto vence em 12h, porque
+                         unassign devolve o serviço pro pool).
  limpar_fingerprints.py  Força reenvio (dry-run sem --confirmar).
  geocodificacao.py       Google Geocoding com cache (tabela geocache).
  telefone_origem.py      Telefone certo lido do XML da NF-e.
@@ -420,8 +424,10 @@
  rotas_client.py           Endpoint real de rotas (criar, buscar, atualizar,
                            adicionar_atividades, cancelar).
  otimizacao_client.py      /route-optimization (só calcula).
- enviar_rascunhos_pendentes.py  22h: envia rascunhos não confirmados.
- incrementar_rotas.py      22h: encaixa pedidos novos nas rotas (corte 19h).
+ enviar_rascunhos_pendentes.py  Envia rascunhos não confirmados. SEM TIMER
+                           desde 09/09 (não é chamado por ninguém).
+ incrementar_rotas.py      Encaixa pedidos novos nas rotas (corte 19h). Só
+                           botão do painel desde 09/09.
  cancelar_rotas_sem_motorista.py  17h45.
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
@@ -749,6 +755,10 @@
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (normalizar_order_number / nucleo/normalizacao.py).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
+ - "Serviço cancelado na Vuupt" NÃO é recriado pelo pipeline se o pedido
+   segue aberto na Stokki: sai como pulado_cancelado_vuupt no relatório
+   da importação (conferir à mão). Exceção: se virou RETIRADA, o pipeline
+   cria o serviço avulso de retirada.
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão

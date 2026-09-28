@@ -461,23 +461,30 @@ def processar_pedido(
         # checagem já existia, mas só rodava no FINAL (criar_ou_
         # atualizar_servico), depois de todo o trabalho caro já feito.
         #
-        # 1ª camada: fingerprint local (instantâneo, sem rede) — uma
-        # vez confirmado que saiu de not_assigned, o VUUPT nunca mais
-        # volta pra esse status, então fica marcado pra sempre.
+        # 1ª camada: fingerprint local (instantâneo, sem rede). 'done'
+        # fica marcado pra sempre; os outros status vencem em 12h e
+        # voltam a ser conferidos (unassign devolve pro pool, 28/09).
         if ja_confirmado_atribuido(codigo_ps):
-            resultado["acao"] = "pulado_ja_atribuido"
+            resultado["acao"] = "pulado_atribuido"
             resultado["observacao"] = "Já confirmado fora de not_assigned em execução anterior (fingerprint)."
             return resultado
 
-        # 2ª camada: se ainda não está no fingerprint local, confere
-        # rápido direto no VUUPT (1 consulta, sem geocodificar nada) —
-        # se já saiu de not_assigned, marca no fingerprint (pra nunca
-        # mais precisar consultar de novo) e pula sem gastar mais nada.
+        # 2ª camada: se não está no fingerprint local (ou a marcação
+        # venceu), confere rápido direto no VUUPT (1 consulta, sem
+        # geocodificar nada) — se saiu de not_assigned, marca no
+        # fingerprint e pula sem gastar mais nada.
         servico_existente = vuupt.buscar_servico_por_code(codigo_ps)
-        if servico_existente and servico_existente.get("status") != vuupt.STATUS_ATUALIZAVEL:
-            marcar_atribuido(codigo_ps, status=servico_existente.get("status", ""))
-            resultado["acao"] = "pulado_ja_atribuido"
-            resultado["observacao"] = f"Status no VUUPT: {servico_existente.get('status')} (não é mais not_assigned)."
+        status_vuupt = (servico_existente or {}).get("status", "")
+        # Serviço CANCELADO com o pedido ainda aberto na Stokki (28/09): não
+        # entra no cache e segue até o desvio de RETIRADA -- é o caso do
+        # reconciliar_pedidos_retirada.py, que cancela o serviço de entrega
+        # contando que o pipeline crie o avulso de retirada (antes o cache
+        # eterno impedia). Se for ENTREGA, para logo depois com ação própria.
+        cancelado_na_vuupt = status_vuupt == "canceled"
+        if servico_existente and status_vuupt != vuupt.STATUS_ATUALIZAVEL and not cancelado_na_vuupt:
+            marcar_atribuido(codigo_ps, status=status_vuupt)
+            resultado["acao"] = "pulado_atribuido"
+            resultado["observacao"] = f"Status no VUUPT: {status_vuupt} (não é mais not_assigned)."
             return resultado
 
         # 1. Detalhe completo do pedido
@@ -514,6 +521,16 @@ def processar_pedido(
             resultado["acao"] = acao_ret
             resultado["fonte_endereco"] = "retirada_galpao"
             resultado["observacao"] = f"Retirada no galpão via {transp_info['nome'] or 'cliente'} -- serviço avulso, sem rota."
+            return resultado
+
+        if cancelado_na_vuupt:
+            # ENTREGA com serviço cancelado: não recria sozinho (o
+            # cancelamento pode ter sido de propósito), mas não some junto
+            # com os atribuídos -- ação própria, reportada em toda rodada.
+            resultado["acao"] = "pulado_cancelado_vuupt"
+            resultado["requer_revisao"] = True
+            resultado["observacao"] = ("Serviço CANCELADO na VUUPT, mas o pedido segue aberto na Stokki "
+                                       "-- conferir se deve voltar pra rota ou ser cancelado na Stokki.")
             return resultado
 
         # Local de Entrega fora da área atendida e sem redespacho conhecido
@@ -930,11 +947,10 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             sess_stokki, status=STATUS_AGUARDANDO_TRANSPORTADOR
         ):
             id_ = stokki_pedidos.extrair_id_da_linha(linha)
-            nome_cli = re.sub(r"<[^>]+>", "", str(
-                linha.get("client", "") if isinstance(linha, dict) else ""
-            )).strip()
             if id_ and id_ not in linhas_ids_vistos:
-                if not _embarcador_prioritario(nome_cli):
+                # Passa a linha inteira: o filtro decide pelo #stkkc-NN
+                # do campo 'client' (achado 28/09, nome parecido caía fora).
+                if not _embarcador_prioritario(linha):
                     linhas_ids_vistos.add(id_)
                     if isinstance(linha, dict):
                         linha["_fonte"] = "aguardando_transportador"

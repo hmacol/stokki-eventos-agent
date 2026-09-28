@@ -79,6 +79,7 @@ PERMITIDOS = {
     "roteirizacao/otimizacao_client.py",
     "roteirizacao/reprocessar_rotas.py",
     "roteirizacao/rotas_client.py",
+    "roteirizacao/test_conflito_rota.py",  # 28/09: teste do rotas_client (mocka criar_rota)
     # roteirizacao/roteirizacao_dados.py saiu da lista: só cita a Vuupt em
     # comentário, recebe o serviço pronto de quem chamou (não é acoplamento).
     "roteirizacao/roteirizar.py",
