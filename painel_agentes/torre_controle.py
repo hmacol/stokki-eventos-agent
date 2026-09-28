@@ -1427,6 +1427,16 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "_epoch": 0.0,
         })
 
+    # Vigia de pedidos abertos (28/09): um item por estado com prazo
+    # vencido (pool parado, rota de ontem, insucesso sem reentrega...).
+    # Só lê vigia_pedidos -- quem calcula é o timer do vigia.
+    try:
+        from vigia.consulta import excecoes_torre
+        for x in excecoes_torre(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Vigia indisponível: {e}")
+
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []
     for x in excecoes:

@@ -801,6 +801,31 @@ def historico_tratativas():
     )
 
 
+@app.route("/vigia")
+@requer_auth(niveis=("total", "operador", "leitura"))
+def vigia_pedidos():
+    """Vigia de pedidos abertos (Hugo, 28/09): cada pedido aberto com o
+    estado, há quanto tempo e se o prazo venceu. Só leitura -- quem
+    calcula é vigia/vigiar.py (timer de 15 min)."""
+    from vigia import consulta as vigia_consulta
+    filtros = {
+        "estado": request.args.get("estado", ""),
+        "vencidos": request.args.get("vencidos", "") == "1",
+        "busca": request.args.get("busca", ""),
+    }
+    try:
+        dados = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], filtros["busca"])
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao ler o vigia")
+        dados = {"linhas": [], "resumo": [], "total": 0, "vencidos": 0,
+                 "ultima_rodada": None, "ultima_listagem_stokki": None}
+        erro = str(e)
+    from vigia.regras import ORDEM, ROTULOS
+    return render_template("vigia_pedidos.html", dados=dados, filtros=filtros, erro=erro,
+                           estados=[(e, ROTULOS[e]) for e in ORDEM])
+
+
 @app.route("/pedidos-parados")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def pedidos_parados():

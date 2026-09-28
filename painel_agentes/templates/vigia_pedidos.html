@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block titulo %}Vigia de pedidos{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 18px; }
+  .card {
+    display: block; text-decoration: none; color: var(--texto);
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 10px 14px; min-width: 170px;
+  }
+  .card.ativo { outline: 2px solid var(--acento-real); }
+  .card .rotulo { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  .card .numeros { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .card .vencidos { font-size: 12px; color: var(--erro); font-weight: 700; }
+  .card.critico { border-left: 4px solid var(--erro); }
+  form.filtros {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    background: var(--superficie); border: 1px solid var(--borda);
+    border-radius: 10px; padding: 14px 16px; margin: 0 0 18px;
+  }
+  form.filtros .campo { display: flex; flex-direction: column; gap: 4px; }
+  form.filtros label { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  form.filtros input[type="text"], form.filtros select {
+    padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; min-width: 180px;
+  }
+  form.filtros .check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 900px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr.vencido td:first-child { box-shadow: inset 4px 0 0 var(--erro); }
+  .mono { font-size: 12px; white-space: nowrap; }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; background: var(--teste-bg); color: var(--teste-texto); white-space: nowrap; }
+  .pilula.vencido { background: var(--erro); color: #fff; }
+  .suave { color: var(--texto-suave); }
+  @media (max-width: 700px) { .card { min-width: calc(50% - 5px); } }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Vigia de pedidos abertos</h1>
+<p class="sub">
+  Todo pedido aberto, em que pé está, há quanto tempo e se o prazo venceu.
+  {{ dados.total }} vigiado(s), <strong>{{ dados.vencidos }} com prazo vencido</strong>.
+  Última rodada: {{ dados.ultima_rodada or '—' }} · retrato da Stokki: {{ dados.ultima_listagem_stokki or 'nenhum ainda' }}.
+</p>
+
+{% if erro %}<p style="color:var(--erro);">Falha ao ler o vigia: {{ erro }}</p>{% endif %}
+
+<div class="cards">
+  {% for r in dados.resumo %}
+  <a class="card {% if r.critico %}critico{% endif %} {% if filtros.estado == r.estado %}ativo{% endif %}"
+     href="{{ url_for('vigia_pedidos', estado=r.estado, vencidos='1' if r.vencidos else '') }}">
+    <div class="rotulo">{{ r.rotulo }}</div>
+    <div class="numeros">{{ r.total }}</div>
+    {% if r.vencidos %}<div class="vencidos">{{ r.vencidos }} vencido(s)</div>{% else %}<div class="suave" style="font-size:12px;">no prazo</div>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+
+<form class="filtros" method="GET" action="{{ url_for('vigia_pedidos') }}">
+  <div class="campo">
+    <label for="busca">Buscar</label>
+    <input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS, embarcador, destinatário, motivo">
+  </div>
+  <div class="campo">
+    <label for="estado">Estado</label>
+    <select id="estado" name="estado">
+      <option value="">Todos</option>
+      {% for e, rotulo in estados %}
+      <option value="{{ e }}" {% if filtros.estado == e %}selected{% endif %}>{{ rotulo }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <label class="campo check"><input type="checkbox" name="vencidos" value="1" {% if filtros.vencidos %}checked{% endif %}> Só prazo vencido</label>
+  <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
+  {% if filtros.busca or filtros.estado or filtros.vencidos %}
+  <div class="campo"><a class="botao" style="background:var(--texto-suave);" href="{{ url_for('vigia_pedidos') }}">Limpar</a></div>
+  {% endif %}
+</form>
+
+<div class="tabela-wrap">
+<table>
+  <thead>
+    <tr><th>Pedido</th><th>Estado</th><th>Há quanto tempo</th><th>Prazo</th><th>Motivo</th><th>Embarcador / destinatário</th></tr>
+  </thead>
+  <tbody>
+    {% for l in dados.linhas %}
+    <tr class="{% if l.vencido %}vencido{% endif %}">
+      <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
+      <td><span class="pilula">{{ l.rotulo }}</span></td>
+      <td class="mono">{{ l.idade }}<div class="suave">desde {{ l.desde[:16] }}</div></td>
+      <td class="mono">
+        {% if l.vence_em %}
+          {% if l.vencido %}<span class="pilula vencido">vencido</span>{% endif %}
+          <div class="suave">{{ l.vence_em[:16] }}</div>
+        {% else %}<span class="suave">sem prazo</span>{% endif %}
+      </td>
+      <td>{{ l.motivo or '—' }}</td>
+      <td>{{ l.detalhe or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="suave">Nenhum pedido nesse filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

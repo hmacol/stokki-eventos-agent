@@ -807,8 +807,76 @@ def processar_pedido(
 
 # ── Orquestrador principal ─────────────────────────────────────────────────────
 
+def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: bool) -> None:
+    """Best-effort: falha aqui nunca derruba a importação."""
+    try:
+        from vigia.banco import registrar_listagem_stokki
+        por_codigo = {(r.get("codigo_ps") or "").lstrip("#").upper(): r for r in resultados}
+        itens = []
+        for linha in linhas:
+            codigo = stokki_pedidos.extrair_codigo_ps_da_linha(linha)
+            if not codigo:
+                continue
+            r = por_codigo.get(codigo.lstrip("#").upper(), {})
+            cliente = re.sub(r"#stkkc-\d+", "", re.sub(r"<[^>]+>", "", str(
+                linha.get("client", "") if isinstance(linha, dict) else ""))).strip()
+            itens.append({
+                "codigo": codigo,
+                "id_stokki": stokki_pedidos.extrair_id_da_linha(linha),
+                "embarcador": cliente,
+                "status_stokki": linha.get("_status_stokki") if isinstance(linha, dict) else None,
+                "fonte": linha.get("_fonte") if isinstance(linha, dict) else None,
+                "acao": "erro" if r.get("erro") else r.get("acao"),
+                "observacao": r.get("erro") or r.get("observacao"),
+            })
+        registrar_listagem_stokki(itens, completa)
+        logger.info(f"Vigia: retrato de {len(itens)} pedido(s) aberto(s) gravado "
+                    f"({'completo' if completa else 'INCOMPLETO -- alguma fonte falhou'}).")
+    except Exception as e:
+        logger.warning(f"Vigia: retrato dos pedidos abertos não gravado: {e}")
+
+
+# Rodada de hora em hora durante o dia (Hugo, 28/09, "com o cuidado da
+# concorrência"): a sessão da Stokki é única e um login novo derruba o
+# outro. A rodada horária espera quem está usando (mesma regra do login da
+# StokkiSession) e, se ainda estiver ocupado, DESISTE -- a próxima é em 1h.
+DONO_TRAVA_HORARIO = "pipeline-horario"
+ESPERA_TRAVA_HORARIO_S = 10 * 60
+TTL_TRAVA_HORARIO_S = 20 * 60
+
+
+def _obter_trava_horario() -> bool:
+    from stokki import sessao_uso
+    ocupante = sessao_uso.aguardar_vez_para_login(ESPERA_TRAVA_HORARIO_S)
+    if ocupante:
+        logger.info(f"Rodada horária adiada: Stokki em uso por '{ocupante}'.")
+        return False
+    if not sessao_uso.adquirir(DONO_TRAVA_HORARIO, ttl_segundos=TTL_TRAVA_HORARIO_S):
+        logger.info(f"Rodada horária adiada: Stokki em uso ({sessao_uso.em_uso()}).")
+        return False
+    return True
+
+
+def _renovar_trava(dono: str) -> None:
+    try:
+        from stokki import sessao_uso
+        sessao_uso.renovar(dono, TTL_TRAVA_HORARIO_S)
+    except Exception as e:
+        logger.warning(f"Renovação da trava da Stokki falhou: {e}")
+
+
+def main_horario(modo_teste: bool = False) -> None:
+    if not _obter_trava_horario():
+        return
+    from stokki import sessao_uso
+    try:
+        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO)
+    finally:
+        sessao_uso.liberar(DONO_TRAVA_HORARIO)
+
+
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
-         filtro_statuses: list[str] | None = None):
+         filtro_statuses: list[str] | None = None, dono_trava: str | None = None):
     inicio_execucao = time.monotonic()
     logger.info(
         f"{'[MODO TESTE] ' if modo_teste else ''}Pipeline iniciado."
@@ -878,6 +946,11 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             else:
                 raise SystemExit(f"Embarcador '{filtro_embarcador}' não encontrado no banco.")
 
+    # Retrato dos pedidos abertos pro vigia (vigia/banco.py): só vale como
+    # listagem COMPLETA se nenhuma fonte falhou (senão "fecharia" pedido
+    # que continua aberto).
+    listagem_completa = not (filtro_pedido or filtro_embarcador)
+
     # Inicia sessoes
     sess_stokki = StokkiSession(config)
     vuupt = VuuptClient(vuupt_token)
@@ -936,8 +1009,10 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                             linhas_ids_vistos.add(id_)
                             if isinstance(linha, dict):
                                 linha["_fonte"] = "prioritario"
+                                linha["_status_stokki"] = status
                             linhas.append(linha)
                 except Exception as e:
+                    listagem_completa = False
                     logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
         logger.info(f"Embarcadores prioritários: {len(linhas)} pedido(s) coletado(s).")
 
@@ -954,6 +1029,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                     linhas_ids_vistos.add(id_)
                     if isinstance(linha, dict):
                         linha["_fonte"] = "aguardando_transportador"
+                        linha["_status_stokki"] = STATUS_AGUARDANDO_TRANSPORTADOR
                     linhas.append(linha)
         logger.info(f"Aguardando Transportador (outros embarcadores): "
                     f"{len(linhas) - n_antes} pedido(s) adicionados.")
@@ -974,8 +1050,10 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                         "destination": "",
                         "_codigo_ps": p["codigo_ps"].lstrip("#"),
                         "_fonte": "estacao_impressao",
+                        "_status_stokki": "Em espera",
                     })
         except Exception as e:
+            listagem_completa = False
             logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
         logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
 
@@ -983,6 +1061,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
 
     if not linhas:
         logger.info("Nenhum pedido encontrado.")
+        if not (filtro_pedido or filtro_embarcador or modo_teste):
+            _registrar_retrato_vigia([], [], listagem_completa)
         registrar_execucao(
             modo_teste=modo_teste,
             filtro=filtro_pedido or filtro_embarcador or "",
@@ -1042,6 +1122,9 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         )
         resultados.append(res)
 
+        if dono_trava and i % 20 == 0:
+            _renovar_trava(dono_trava)
+
         if i < len(linhas):
             time.sleep(PAUSA_ENTRE_PEDIDOS)
 
@@ -1098,6 +1181,12 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         duracao_seg=time.monotonic() - inicio_execucao,
     )
 
+    # Retrato pro vigia (Hugo, 28/09): quem está aberto na Stokki e o que o
+    # pipeline fez com cada um. Só em rodada sem filtro e de verdade (o
+    # modo teste gravaria acao 'simulado' como motivo).
+    if not (filtro_pedido or filtro_embarcador or modo_teste):
+        _registrar_retrato_vigia(linhas, resultados, listagem_completa)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agente Stokki Eventos — Pipeline principal")
@@ -1112,7 +1201,13 @@ if __name__ == "__main__":
                         help="Restringe a busca (só com --embarcador) a status específico(s) do "
                              "Stokki. Repita a flag para vários. Padrão: todos os 5 status abertos. "
                              f"Valores válidos: {', '.join(STATUSES_EM_ABERTO)}")
+    parser.add_argument("--horario", action="store_true",
+                        help="Rodada horária do timer: espera a vez na sessão da Stokki e desiste "
+                             "se continuar ocupada (a próxima é em 1h).")
     args = parser.parse_args()
 
-    main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
-         filtro_embarcador=args.embarcador or "", filtro_statuses=args.status)
+    if args.horario:
+        main_horario(modo_teste=args.modo_teste)
+    else:
+        main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
+             filtro_embarcador=args.embarcador or "", filtro_statuses=args.status)
