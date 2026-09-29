@@ -236,10 +236,12 @@
 
  infra/sequencia_tarde.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
+   atualizar_agendamentos_confirmados.py ->
    roteirizacao/criar_rotas_diarias.py --gerar-rascunho ->
    documentos_pedido/processar_documentos.py
  infra/sequencia_noite.sh (22h, continua mesmo com erro):
-   somente_impressao.py -> pipeline.py -> expedir_pedidos.py ->
+   somente_impressao.py -> pipeline.py ->
+   atualizar_agendamentos_confirmados.py -> expedir_pedidos.py ->
    documentos_pedido/processar_documentos.py ->
    roteirizacao/gerar_pdf_romaneios.py --data amanha
 
@@ -283,7 +285,9 @@
  telefone_origem.py      Telefone certo lido do XML da NF-e.
  verificar_pedidos_duplicados_vuupt.py  Audita/cancela duplicados.
  reconciliar_pedidos_retirada.py  Cancela serviço que virou RETIRADA.
- atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço.
+ atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
+                         (roda nas sequências 18h/22h). Data informada
+                         vence o dia fixo da região.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.

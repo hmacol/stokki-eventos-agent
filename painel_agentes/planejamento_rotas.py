@@ -630,14 +630,43 @@ def _regiao_do_servico(servico: dict) -> str:
     return "Sem região identificada"
 
 
-def _aviso_dia_fixo(servico: dict, data_alvo: date) -> str | None:
+def _datas_agendadas_confirmadas() -> dict[str, date]:
+    """{codigo_pedido: data} dos agendamentos RESPONDIDOS em
+    agendamentos_pedido (portal, planilha, resposta de e-mail). Falha de
+    banco/tabela: {} (a tela segue avisando como antes)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(rascunhos_rota.DB_PATH))
+        rows = conn.execute(
+            "SELECT pedido, data_agendada FROM agendamentos_pedido "
+            "WHERE status = 'RESPONDIDO' AND data_agendada IS NOT NULL"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Não consegui carregar as datas de agendamento confirmadas: {e}")
+        return {}
+    datas = {}
+    for pedido, data_br in rows:
+        try:
+            datas[str(pedido).lstrip("#").strip()] = datetime.strptime(data_br, "%d/%m/%Y").date()
+        except (ValueError, TypeError):
+            continue
+    return datas
+
+
+def _aviso_dia_fixo(servico: dict, data_alvo: date, data_agendada: date | None = None) -> str | None:
     """
     "Americana: só Quartas" quando o pedido é de região/galpão com dia
     fixo e `data_alvo` não é um desses dias; None caso contrário. Só
     rotula -- o botão "Roteirizar" pede confirmação com a lista desses
     pedidos (Hugo, 23/09, caso PS-39752: recriado à mão na VUUPT pra uma
     quinta e roteirizado pela tela, sendo que Americana só recebe quarta).
+
+    `data_agendada` (Hugo, 28/09, caso PS-40316): data de agendamento
+    INFORMADA vence o dia fixo -- se é a do planejamento, não avisa.
     """
+    if data_agendada and data_agendada == data_alvo:
+        return None
     regra = regra_dia_fixo_do_servico(servico)
     if not regra or data_alvo.weekday() in regra["dias"]:
         return None
@@ -801,8 +830,10 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
     fora_dia_fixo: dict[int, str] = {}
+    datas_agendadas = _datas_agendadas_confirmadas()
     for s in servicos_brutos:
-        aviso = _aviso_dia_fixo(s, data_alvo)
+        aviso = _aviso_dia_fixo(s, data_alvo,
+                                datas_agendadas.get(str(s.get("code") or "").lstrip("#").strip()))
         if aviso:
             fora_dia_fixo[s["id"]] = aviso
 

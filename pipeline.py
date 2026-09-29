@@ -640,11 +640,10 @@ def processar_pedido(
                 f"de complexidade — aplicando nível padrão ({nivel})."
             )
 
-        # Agendamento — só entra no payload quando o destinatário exige
-        # (cadastro clientes_agendamento) e, quando exige, só com um
-        # horário de VERDADE: das mensagens da Stokki (prioridade,
-        # já veio confiável de res_end); senão, de uma confirmação já
-        # recebida por e-mail; senão, dispara a solicitação de
+        # Agendamento — sem data informada, só entra no payload quando o
+        # destinatário exige (cadastro clientes_agendamento) e, quando
+        # exige, só com um horário de VERDADE: das mensagens da Stokki
+        # (já veio confiável de res_end); senão, dispara a solicitação de
         # confirmação e o pedido fica SEM agendamento por enquanto
         # (pedido do Hugo, 29/07).
         scheduled_start_final = None
@@ -652,48 +651,52 @@ def processar_pedido(
         fonte_agendamento = "nao_exigido"
         cnpj_destino_bruto = detalhe.get("destino", {}).get("documento", "")
 
-        if tem_agendamento(cnpj_destino_bruto, conjunto_agendamento or set()):
+        # Data de agendamento INFORMADA (portal, planilha, resposta de
+        # e-mail) vale pra qualquer destinatário, exija agendamento no
+        # cadastro ou não, e vem antes de tudo (pedido do Hugo, 28/09,
+        # caso PS-40316: a data do portal era ignorada porque o
+        # destinatário não estava marcado com AGENDA na BD_CLIENTES).
+        confirmacao = buscar_confirmacao(codigo_ps)
+        if confirmacao:
+            scheduled_start_final = _converter_data_para_iso(
+                f"{confirmacao['data']} {confirmacao['inicio']}")
+            scheduled_end_final = _converter_data_para_iso(
+                f"{confirmacao['data']} {confirmacao['fim']}")
+            fonte_agendamento = "confirmado_email"
+        elif tem_agendamento(cnpj_destino_bruto, conjunto_agendamento or set()):
             if res_end.horario_entrega:
                 scheduled_start_final, scheduled_end_final = montar_agendamento(
                     data_saida, res_end.horario_entrega)
                 fonte_agendamento = "mensagem_stokki"
             else:
-                confirmacao = buscar_confirmacao(codigo_ps)
-                if confirmacao:
-                    scheduled_start_final = _converter_data_para_iso(
-                        f"{confirmacao['data']} {confirmacao['inicio']}")
-                    scheduled_end_final = _converter_data_para_iso(
-                        f"{confirmacao['data']} {confirmacao['fim']}")
-                    fonte_agendamento = "confirmado_email"
-                else:
-                    fonte_agendamento = "aguardando_confirmacao"
-                    resultado["requer_revisao"] = True
-                    if modo_teste:
-                        logger.info(
-                            f"  [TESTE] {codigo_ps}: exigiria solicitação de confirmação "
-                            f"de agendamento (e-mail NÃO enviado em modo teste)."
-                        )
-                    elif dados_banco.get("notificar_email", True) and dados_banco.get("email"):
-                        enviado, motivo_email = enviar_solicitacao(
-                            pedido=codigo_ps,
-                            nome_dest=detalhe.get("destino", {}).get("nome", ""),
-                            numero_nf=ref_final,
-                            cnpj_dest=cnpj_destino_bruto,
-                            cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
-                            email_emb=dados_banco.get("email", ""),
-                            config_email=config_email or {},
-                        )
-                        if enviado:
-                            logger.info(f"  {codigo_ps}: solicitação de confirmação de agendamento enviada.")
-                        elif motivo_email:
-                            logger.debug(
-                                f"  {codigo_ps}: solicitação de agendamento não enviada ({motivo_email})."
-                            )
-                    else:
+                fonte_agendamento = "aguardando_confirmacao"
+                resultado["requer_revisao"] = True
+                if modo_teste:
+                    logger.info(
+                        f"  [TESTE] {codigo_ps}: exigiria solicitação de confirmação "
+                        f"de agendamento (e-mail NÃO enviado em modo teste)."
+                    )
+                elif dados_banco.get("notificar_email", True) and dados_banco.get("email"):
+                    enviado, motivo_email = enviar_solicitacao(
+                        pedido=codigo_ps,
+                        nome_dest=detalhe.get("destino", {}).get("nome", ""),
+                        numero_nf=ref_final,
+                        cnpj_dest=cnpj_destino_bruto,
+                        cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
+                        email_emb=dados_banco.get("email", ""),
+                        config_email=config_email or {},
+                    )
+                    if enviado:
+                        logger.info(f"  {codigo_ps}: solicitação de confirmação de agendamento enviada.")
+                    elif motivo_email:
                         logger.debug(
-                            f"  {codigo_ps}: exige agendamento mas embarcador sem e-mail/"
-                            f"notificação desativada — aguardando confirmação manual."
+                            f"  {codigo_ps}: solicitação de agendamento não enviada ({motivo_email})."
                         )
+                else:
+                    logger.debug(
+                        f"  {codigo_ps}: exige agendamento mas embarcador sem e-mail/"
+                        f"notificação desativada — aguardando confirmação manual."
+                    )
 
         resultado["tem_agendamento"] = fonte_agendamento != "nao_exigido"
         resultado["fonte_agendamento"] = fonte_agendamento
@@ -728,7 +731,11 @@ def processar_pedido(
         # ainda não tem essa data (servico_existente) -- o pipeline
         # reprocessa pedidos not_assigned toda rodada, e sem essa checagem
         # o remetente receberia o mesmo aviso em toda execução.
-        if payload.get("scheduled_start"):
+        # 28/09 (pedido do Hugo, caso PS-40316): data INFORMADA
+        # (confirmado_email = portal/planilha/resposta) não passa mais por
+        # aqui -- vale como veio. Segue valendo pra mensagem da Stokki, que
+        # só traz HORÁRIO (a data ali é calculada por nós).
+        if payload.get("scheduled_start") and fonte_agendamento != "confirmado_email":
             try:
                 from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
                 data_original = date.fromisoformat(payload["scheduled_start"][:10])

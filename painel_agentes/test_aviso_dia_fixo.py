@@ -46,6 +46,14 @@ class AvisoDiaFixoTestCase(unittest.TestCase):
     def test_sem_endereco_nao_avisa(self):
         self.assertIsNone(planejamento_rotas._aviso_dia_fixo({}, QUINTA))
 
+    def test_data_agendada_informada_vence_o_dia_fixo(self):
+        # Hugo, 28/09 (PS-40316): agendamento informado vale sempre.
+        self.assertIsNone(planejamento_rotas._aviso_dia_fixo(AMERICANA, QUINTA, data_agendada=QUINTA))
+
+    def test_agendado_pra_outro_dia_continua_avisando(self):
+        self.assertEqual(planejamento_rotas._aviso_dia_fixo(AMERICANA, QUINTA, data_agendada=QUARTA),
+                         "Americana: só Quartas")
+
 
 if __name__ == "__main__":
     unittest.main()
