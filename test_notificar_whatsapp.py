@@ -107,6 +107,50 @@ class TestTextoNaoExpedidos(unittest.TestCase):
         self.assertNotIn("rota", nw.texto_nao_expedidos(3, 0, 0))
 
 
+def _insucesso(n, remetente="Quatro Estrelas", motivo="Destinatário ausente"):
+    return {"codigo": f"#PS-{n}", "destinatario": f"Mercado {n}", "remetente": remetente, "motivo": motivo}
+
+
+class TestTextoInsucessos(unittest.TestCase):
+    def test_um_pedido(self):
+        self.assertEqual(nw.texto_insucessos([_insucesso(1)], agora=AGORA), "\n".join([
+            "⚠️ *Insucesso na entrega* · 16/09 22:05",
+            "1 pedido novo",
+            "PS-1 · Mercado 1 (Quatro Estrelas): Destinatário ausente",
+            "Detalhes no e-mail e na Torre.",
+        ]))
+
+    def test_varios_pedidos(self):
+        linhas = nw.texto_insucessos([_insucesso(1), _insucesso(2, "Muai", "Recusado")], agora=AGORA).split("\n")
+        self.assertEqual(linhas[1], "2 pedidos novos")
+        self.assertEqual(linhas[3], "PS-2 · Mercado 2 (Muai): Recusado")
+
+    def test_mais_de_dez_lista_dez_e_conta_o_resto(self):
+        linhas = nw.texto_insucessos([_insucesso(i) for i in range(13)], agora=AGORA).split("\n")
+        self.assertEqual(linhas[1], "13 pedidos novos")
+        self.assertTrue(linhas[11].startswith("PS-9 "))
+        self.assertEqual(linhas[12:], ["e mais 3", "Detalhes no e-mail e na Torre."])
+
+    def test_sem_remetente_ou_destinatario_ou_motivo(self):
+        itens = [{"codigo": "PS-1", "destinatario": "Mercado", "remetente": "", "motivo": "Ausente"},
+                 {"codigo": "PS-2", "destinatario": None, "remetente": "Muai", "motivo": None},
+                 {"codigo": "PS-3"}]
+        self.assertEqual(nw.texto_insucessos(itens, agora=AGORA).split("\n")[2:5], [
+            "PS-1 · Mercado: Ausente",
+            "PS-2 (Muai): motivo não informado",
+            "PS-3: motivo não informado",
+        ])
+
+    def test_nomes_perdem_formatacao_e_sao_cortados(self):
+        item = {"codigo": "PS-1", "destinatario": "*Mercado*\n_Bom_ " + "x" * 100, "remetente": "~Muai~",
+                "motivo": "m" * 300}
+        linha = nw.texto_insucessos([item], agora=AGORA).split("\n")[2]
+        self.assertTrue(linha.startswith("PS-1 · Mercado Bom xxx"))
+        self.assertIn("… (Muai): mmm", linha)
+        self.assertNotIn("*", linha)
+        self.assertLessEqual(len(linha), 200)
+
+
 def _config(**extra):
     wa = {"ativo": True, "base_url": "http://x/api", "api_key": "k", "sessao": "s",
           "grupo_id": "1@g.us", "sempre_avisar": ["criar_rotas_diarias"], "teto_diario": 3,
@@ -319,10 +363,31 @@ class TestAvisarOutros(_ComBanco):
         self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
                          ("verificar_entregues_nao_expedidos", "nao_expedidos"))
 
+    def test_insucessos(self):
+        situacao = nw.avisar_insucessos([_insucesso(1)], _config(), conn=self.conn, agora=AGORA,
+                                        dormir=self.dormir)
+        self.assertEqual(situacao, "enviado")
+        self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
+                         ("expedir_pedidos", "insucesso"))
+        self.assertIn("PS-1 · Mercado 1 (Quatro Estrelas)", self.enviar.call_args[0][2])
+
+    def test_insucessos_lista_vazia_nao_envia_nem_registra(self):
+        for vazio in ([], None):
+            self.assertEqual(nw.avisar_insucessos(vazio, _config(), conn=self.conn), "nao_relevante")
+        self.enviar.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0], 0)
+
+    def test_insucessos_modo_teste_so_loga(self):
+        self.assertEqual(nw.avisar_insucessos([_insucesso(1)], _config(), modo_teste=True, conn=self.conn,
+                                              agora=AGORA), "modo_teste")
+        self.enviar.assert_not_called()
+
     def test_nenhuma_levanta_com_entrada_ruim(self):
         with patch.object(nw, "despachar", side_effect=RuntimeError("bug")):
             self.assertEqual(nw.avisar_falha_job("u", None, _config()), "falhou")
             self.assertEqual(nw.avisar_nao_expedidos(1, 1, 1, _config()), "falhou")
+            self.assertEqual(nw.avisar_insucessos([_insucesso(1)], _config()), "falhou")
+            self.assertEqual(nw.avisar_insucessos(["lixo"], _config()), "falhou")
             with patch.object(nw.sys, "argv", ["x.py"]):
                 self.assertEqual(nw.avisar_execucao(VARIAS_ERRO, 1, False, _config()), "falhou")
 

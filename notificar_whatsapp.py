@@ -7,10 +7,15 @@ por e-mail (pedido do Hugo, 28/09/2026). O e-mail continua sendo o
 registro completo; aqui vai so o essencial: contagens e nome da rotina,
 NUNCA nome de cliente, endereco, NF ou log.
 
-Tres origens chamam este modulo, sempre DEPOIS do e-mail:
+Excecao (pedido do Hugo, 29/09/2026): o aviso de insucesso de entrega
+leva codigo do pedido, destinatario, remetente e motivo. Endereco e NF
+continuam de fora.
+
+Quatro origens chamam este modulo, sempre DEPOIS do e-mail:
     notificar_execucao_agente.notificar_execucao  -> avisar_execucao
     alertar_falha_job.main                        -> avisar_falha_job
     verificar_entregues_nao_expedidos.main        -> avisar_nao_expedidos
+    expedir_pedidos.main                          -> avisar_insucessos
 
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
@@ -48,6 +53,7 @@ logger = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parent / "dados" / "dados.db"
 MAX_DETALHE = 200
 MAX_ETAPAS_ERRO = 3
+MAX_INSUCESSOS = 10
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -128,6 +134,27 @@ def texto_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int) -> str:
     if partes:
         linhas.append(" · ".join(partes))
     linhas.append("Lista completa no e-mail.")
+    return "\n".join(linhas)
+
+
+def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
+    """Cada item: {"codigo", "destinatario", "remetente", "motivo"}."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    linhas = [f"⚠️ *Insucesso na entrega* · {quando}",
+              _plural(len(insucessos), "pedido novo", "pedidos novos")]
+    for item in insucessos[:MAX_INSUCESSOS]:
+        linha = _uma_linha(item.get("codigo"), 30).lstrip("#")
+        destinatario = _uma_linha(item.get("destinatario"), 60)
+        remetente = _uma_linha(item.get("remetente"), 40)
+        if destinatario:
+            linha += f" · {destinatario}"
+        if remetente:
+            linha += f" ({remetente})"
+        linhas.append(_uma_linha(f"{linha}: {_uma_linha(item.get('motivo')) or 'motivo não informado'}"))
+    resto = len(insucessos) - MAX_INSUCESSOS
+    if resto > 0:
+        linhas.append(f"e mais {resto}")
+    linhas.append("Detalhes no e-mail e na Torre.")
     return "\n".join(linhas)
 
 
@@ -304,6 +331,20 @@ def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config:
     try:
         return despachar(config, "verificar_entregues_nao_expedidos", "nao_expedidos",
                          texto_nao_expedidos(n_alertas, n_rotas, n_retiradas), **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_insucessos(insucessos: list, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Insucessos NOVOS da rodada de expedicao, uma mensagem por rodada.
+    Sem regra de repeticao aqui: quem chama so passa o que ainda nao foi
+    avisado (fingerprint_notificacao_interna)."""
+    try:
+        if not insucessos:
+            return "nao_relevante"
+        return despachar(config, "expedir_pedidos", "insucesso",
+                         texto_insucessos(insucessos, kw.get("agora")), modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

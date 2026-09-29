@@ -38,5 +38,22 @@ class TestFalhasBloqueadas(unittest.TestCase):
         self.assertEqual(set(ep._falhas_bloqueadas(falhas, agora)), {"PS-1"})
 
 
+class TestItensWhatsappInsucesso(unittest.TestCase):
+    EMBARCADORES = {10: {"nome": "Quatro Estrelas"}}
+
+    def test_monta_codigo_destinatario_remetente_e_motivo(self):
+        s = {"id": 1, "code": "#PS-1", "title": "Mercado Bom", "sender_id": 10,
+             "failed_reason_id": None, "note": "Portão fechado"}
+        self.assertEqual(ep._itens_whatsapp_insucesso([s], self.EMBARCADORES), [
+            {"codigo": "#PS-1", "destinatario": "Mercado Bom", "remetente": "Quatro Estrelas",
+             "motivo": "Portão fechado"}])
+
+    def test_sem_observacao_usa_o_texto_do_motivo_e_remetente_sem_cadastro_fica_vazio(self):
+        s = {"id": 2, "code": "PS-2", "title": "Padaria", "sender_id": 99, "failed_reason_id": None}
+        item = ep._itens_whatsapp_insucesso([s], self.EMBARCADORES)[0]
+        self.assertEqual(item["remetente"], "")
+        self.assertEqual(item["motivo"], ep.texto_do_motivo(None))
+
+
 if __name__ == "__main__":
     unittest.main()
