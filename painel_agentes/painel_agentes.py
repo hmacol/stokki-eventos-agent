@@ -83,6 +83,7 @@ import wms
 import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
+import usuarios_painel
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -168,6 +169,35 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     return None
 
 
+NIVEL_PERSONALIZADO = "personalizado"
+
+# Chaves do config.yaml (seção painel_agentes) com os logins fixos. Login
+# cadastrado em /usuarios não pode repetir nenhum deles.
+_CHAVES_LOGIN_FIXO = ("usuario", "usuario_operador", "usuario_leitura", "usuario_expedicao",
+                      "usuario_galpao", "usuario_atendimento")
+
+
+def _logins_fixos(cfg_painel: dict) -> list[str]:
+    return [cfg_painel.get(c) for c in _CHAVES_LOGIN_FIXO if cfg_painel.get(c)]
+
+
+def _usuario_cadastrado_da_sessao():
+    """Relê o usuário cadastrado da sessão a cada requisição: desativado,
+    apagado ou com senha/login trocado (versao mudou) -> None, e a sessão
+    cai. Permissão alterada vale já no próximo clique."""
+    usuario_id = session.get("usuario_id")
+    if not usuario_id:
+        return None
+    conn = usuarios_painel.conectar()
+    try:
+        u = usuarios_painel.buscar_usuario(conn, int(usuario_id))
+    finally:
+        conn.close()
+    if u is None or not u["ativo"] or u["versao"] != session.get("usuario_versao"):
+        return None
+    return u
+
+
 def requer_auth(f=None, *, niveis=("total",)):
     """Login por sessão (cookie assinado) com quatro níveis: "total"
     (usuario/senha, acesso irrestrito), "operador" (usuario_operador/
@@ -202,6 +232,23 @@ def requer_auth(f=None, *, niveis=("total",)):
                     "e painel_agentes.senha no config.yaml antes de subir.", 500,
                 )
             nivel = session.get("nivel_acesso")
+            if nivel == NIVEL_PERSONALIZADO:
+                # Usuário cadastrado em /usuarios: vale a permissão por tela,
+                # não o `niveis=` da rota (ver usuarios_painel.py).
+                usuario_cad = _usuario_cadastrado_da_sessao()
+                if usuario_cad is None:
+                    session.clear()
+                    nivel = None
+                else:
+                    liberado, acesso = usuarios_painel.pode(
+                        usuario_cad["permissoes"], request.path, request.endpoint, request.method)
+                    if not liberado:
+                        abort(403, "Seu usuário não tem permissão pra essa ação.")
+                    g.usuario_cadastrado = usuario_cad
+                    # Os templates decidem botões por g.nivel_acesso: "total"
+                    # na tela libera as ações, "leitura" esconde.
+                    g.nivel_acesso = "total" if acesso == "total" else "leitura"
+                    return func(*args, **kwargs)
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
@@ -362,17 +409,37 @@ def login():
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
+        usuario_cad = None
         if nivel is None:
+            # Não é login fixo do config: tenta os cadastrados em /usuarios.
+            conn = usuarios_painel.conectar()
+            try:
+                usuario_cad = usuarios_painel.autenticar(conn, usuario, senha)
+            finally:
+                conn.close()
+        inicial_cad = usuario_cad and usuarios_painel.endpoint_inicial(usuario_cad["permissoes"])
+        if nivel is None and usuario_cad is None:
             erro = "Usuário ou senha incorretos."
+        elif usuario_cad is not None and not inicial_cad:
+            erro = "Seu usuário ainda não tem acesso a nenhuma tela. Fale com o administrador do painel."
         else:
             session.clear()
             session.permanent = True
+            if usuario_cad is not None:
+                nivel = NIVEL_PERSONALIZADO
+                usuario = usuario_cad["usuario"]
+                session["usuario_id"] = usuario_cad["id"]
+                session["usuario_versao"] = usuario_cad["versao"]
+                session["usuario_nome"] = usuario_cad["nome"]
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
             # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
             # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
-                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
+            if inicial_cad:
+                pagina_padrao = url_for(inicial_cad)
+            else:
+                pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
+                                 "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -387,6 +454,78 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.context_processor
+def _contexto_usuario_cadastrado():
+    """paginas_usuario: {tela: "total"|"leitura"} do usuário cadastrado
+    logado (menu lateral e abas do mobile); None pros logins fixos."""
+    usuario_cad = getattr(g, "usuario_cadastrado", None)
+    return {"paginas_usuario": usuario_cad["permissoes"] if usuario_cad else None}
+
+
+# ── Usuários do painel (29/09, Hugo) ──────────────────────────────────────────
+# Cadastro de login próprio por pessoa, com acesso total / leitura / sem
+# acesso em cada tela. Regras e tabelas em usuarios_painel.py.
+
+def _render_usuarios(selecionado=None, erro=None, aviso=None, status=200):
+    conn = usuarios_painel.conectar()
+    try:
+        usuarios = usuarios_painel.listar_usuarios(conn)
+    finally:
+        conn.close()
+    return render_template(
+        "usuarios.html", usuarios=usuarios, selecionado=selecionado, erro=erro, aviso=aviso,
+        grupos=usuarios_painel.grupos_paginas(), paginas=usuarios_painel.PAGINAS,
+        rotulo_acesso=usuarios_painel.ROTULO_ACESSO, senha_minima=usuarios_painel.SENHA_MINIMA,
+        pode_editar=g.nivel_acesso == "total",
+    ), status
+
+
+@app.route("/usuarios")
+@requer_auth
+def usuarios():
+    selecionado = None
+    if request.args.get("novo"):
+        selecionado = {"id": None, "usuario": "", "nome": "", "ativo": True, "permissoes": {}}
+    elif request.args.get("id"):
+        conn = usuarios_painel.conectar()
+        try:
+            selecionado = usuarios_painel.buscar_usuario(conn, request.args.get("id", type=int) or 0)
+        finally:
+            conn.close()
+        if selecionado is None:
+            abort(404, "Usuário não encontrado.")
+    aviso = {"criado": "Usuário criado.", "salvo": "Alterações salvas."}.get(request.args.get("ok", ""))
+    return _render_usuarios(selecionado, aviso=aviso)
+
+
+@app.route("/usuarios/salvar", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def usuarios_salvar():
+    form = request.form
+    usuario_id = form.get("usuario_id", type=int)
+    permissoes = {p: form.get(f"acesso_{p}", "") for p in usuarios_painel.CHAVES_PAGINAS}
+    dados = {"id": usuario_id, "usuario": form.get("usuario", ""), "nome": form.get("nome", ""),
+             "ativo": form.get("ativo") == "1", "permissoes": usuarios_painel.limpar_permissoes(permissoes)}
+    cfg_painel = _carregar_config().get("painel_agentes", {})
+    usuario_cad = getattr(g, "usuario_cadastrado", None)
+    conn = usuarios_painel.conectar()
+    try:
+        novo_id = usuarios_painel.salvar_usuario(
+            conn, usuario_id=usuario_id, usuario=dados["usuario"], nome=dados["nome"],
+            senha=form.get("senha", ""), ativo=dados["ativo"], permissoes=permissoes,
+            por=session.get("usuario") or g.nivel_acesso, logins_reservados=_logins_fixos(cfg_painel),
+            editor_id=usuario_cad["id"] if usuario_cad else None)
+    except usuarios_painel.ErroUsuario as e:
+        return _render_usuarios(dados, erro=str(e), status=400)
+    finally:
+        conn.close()
+    logging.getLogger("painel.usuarios").info(
+        f"[usuarios] {session.get('usuario')} salvou o usuario {dados['usuario']!r} (id {novo_id}): "
+        f"ativo={dados['ativo']} permissoes={dados['permissoes']}")
+    return redirect(url_for("usuarios", id=novo_id, ok="salvo" if usuario_id else "criado"))
 
 
 @app.route("/")
@@ -499,6 +638,10 @@ def api_sidebar_contadores():
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
+    usuario_cad = getattr(g, "usuario_cadastrado", None)
+    if usuario_cad is not None:
+        permitidos = usuarios_painel.contadores_permitidos(usuario_cad["permissoes"])
+        return jsonify({"contadores": contadores_menu.contadores(None, permitidos=permitidos)})
     return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
 
 
@@ -551,7 +694,7 @@ def expedicao():
         # requer_auth). Esconde a opção em vez de deixar o usuário
         # tentar e levar 401/erro do servidor.
         # Nível "atendimento" (28/09) também só consulta e imprime aqui.
-        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") not in ("leitura", "atendimento"),
+        pode_excluir=data_alvo >= date.today() and g.nivel_acesso not in ("leitura", "atendimento"),
     )
 
 

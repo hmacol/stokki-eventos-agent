@@ -90,7 +90,9 @@ class TestBotaoLiberarReserva(unittest.TestCase):
     botao, o motivo e obrigatorio e o POST vai pra rota certa."""
 
     def test_botao_so_aparece_pra_equipe_interna(self):
-        self.assertIn("session.get('nivel_acesso') in ('total', 'operador')", _ESTOQUE)
+        # g.nivel_acesso (e nao a sessao): usuario cadastrado com acesso total
+        # na tela Estoque vira "total" so dentro da requisicao (29/09).
+        self.assertIn("g.nivel_acesso in ('total', 'operador')", _ESTOQUE)
 
     def test_pede_motivo_e_nao_manda_vazio(self):
         self.assertIn("prompt(", _ESTOQUE)

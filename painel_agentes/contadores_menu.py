@@ -183,10 +183,12 @@ def _contar_atendimento() -> dict:
 
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
-def contadores(nivel_acesso: str) -> dict:
+def contadores(nivel_acesso: str | None, permitidos: set[str] | None = None) -> dict:
     """{"torre": {"qtd": 3, "criticas": 1}, ...} só com o que esse nível
     pode abrir. Contador que falhou ou que ainda não tem leitura fica
-    de fora -- o menu simplesmente não desenha o badge."""
+    de fora -- o menu simplesmente não desenha o badge.
+    `permitidos` (usuário cadastrado em /usuarios, sem nível fixo): as
+    chaves liberadas pelas telas dele; quando vem, substitui o nível."""
     fontes = {
         "torre": lambda: _caro("torre", _contar_torre, ja_fresco=_torre_ja_coletada),
         "pedidos_parados": lambda: _caro("pedidos_parados", _contar_pedidos_parados),
@@ -196,7 +198,10 @@ def contadores(nivel_acesso: str) -> dict:
     }
     resultado = {}
     for chave, fonte in fontes.items():
-        if nivel_acesso not in NIVEIS_POR_CONTADOR[chave]:
+        if permitidos is not None:
+            if chave not in permitidos:
+                continue
+        elif nivel_acesso not in NIVEIS_POR_CONTADOR[chave]:
             continue
         try:
             valor = fonte()

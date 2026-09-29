@@ -90,6 +90,7 @@
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
+ Usuários do painel + acesso por tela ...... painel_agentes/usuarios_painel.py, tela /usuarios
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
@@ -181,6 +182,11 @@
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
+                Usuários cadastrados em /painel/usuarios (29/09): login próprio,
+                e por tela total / leitura / sem acesso (usuarios_painel.PAGINAS).
+                Sessão com nivel "personalizado": ignora niveis= da rota; GET
+                exige leitura, POST/DELETE exige total, rota fora de tela = 403.
+                ROTA NOVA NO PAINEL: incluir o caminho na tela certa em PAGINAS.
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
                 /equipe com login do painel.
@@ -536,6 +542,8 @@
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  contadores_menu.py        Badges do menu lateral.
+ usuarios_painel.py        Usuários cadastrados do painel e acesso por tela
+                           (catálogo PAGINAS: caminho -> tela). Tela /usuarios.
  wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
                            WMS do galpão (posições, movimentos, reservas,
                            recebimentos, etiquetas).
@@ -729,6 +737,7 @@
    motoristas, tarifas_motorista  nucleo/banco.py
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py
    painel_execucoes          painel_agentes/executor.py
+   painel_usuarios, painel_usuario_permissoes  painel_agentes/usuarios_painel.py
    wms_*                     painel_agentes/wms*.py
    clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)
    confirmacoes_rota, ofertas_rota, ofertas_avisos,

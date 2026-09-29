@@ -172,11 +172,13 @@
 </main>
 
 <nav class="barra-inferior">
+  {% if paginas_usuario is none or paginas_usuario.get('torre') %}
   <a class="aba-mobile {{ 'ativo' if request.endpoint == 'torre_mobile' else '' }}" href="{{ url_for('torre_mobile') }}">
     <span class="icone-aba">🗼</span>Torre
   </a>
+  {% endif %}
   {# Nível "atendimento" vê a Torre mas não o Planejamento (28/09). #}
-  {% if session.get('nivel_acesso') != 'atendimento' %}
+  {% if (paginas_usuario and paginas_usuario.get('planejamento')) or (paginas_usuario is none and session.get('nivel_acesso') != 'atendimento') %}
   <a class="aba-mobile {{ 'ativo' if request.endpoint == 'planejamento_mobile' else '' }}" href="{{ url_for('planejamento_mobile') }}">
     <span class="icone-aba">🗺️</span>Planejamento
   </a>

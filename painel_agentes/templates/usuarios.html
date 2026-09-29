@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .explica { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 18px; max-width: 820px; }
+  .botao-usr { display: inline-block; padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
+  .botao-usr.primario { background: var(--acento); color: #06170F; border-color: var(--acento); }
+  .botao-usr:disabled { opacity: .5; cursor: not-allowed; }
+  .layout-usuarios { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { .layout-usuarios { grid-template-columns: 1fr; } }
+
+  table.lista-usuarios { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  .lista-usuarios th, .lista-usuarios td { padding: 9px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); }
+  .lista-usuarios th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .4px; }
+  .lista-usuarios tr:last-child td { border-bottom: none; }
+  .lista-usuarios tr.ativo-sel td { background: var(--superficie-hover); }
+  .lista-usuarios tr.ativo-sel td:first-child { box-shadow: inset 3px 0 0 var(--acento); }
+  .lista-usuarios a { color: var(--texto); text-decoration: none; font-weight: 600; }
+  .lista-usuarios a:hover { text-decoration: underline; }
+  .lista-usuarios .login { display: block; font-size: 11.5px; color: var(--texto-suave); font-weight: 400; }
+  .lista-usuarios .resumo { font-size: 11.5px; color: var(--texto-suave); }
+  .inativo { opacity: .55; }
+
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 18px 20px; }
+  .cartao h2 { font-size: 16px; margin: 0 0 14px; }
+  .campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .campo label { display: block; font-size: 12px; font-weight: 600; color: var(--texto-suave); margin-bottom: 4px; }
+  .campo input[type="text"], .campo input[type="password"] { width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; background: var(--fundo); color: var(--texto); box-sizing: border-box; }
+  .campo .dica { font-size: 11px; color: var(--texto-suave); margin-top: 3px; }
+  .check-ativo { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 16px; }
+
+  .barra-atalhos { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; font-size: 12px; color: var(--texto-suave); }
+  .barra-atalhos button { font-size: 12px; padding: 4px 9px; border-radius: 5px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); cursor: pointer; }
+  table.permissoes { width: 100%; border-collapse: collapse; }
+  .permissoes th, .permissoes td { padding: 6px 8px; font-size: 13px; border-bottom: 1px solid var(--borda); text-align: left; }
+  .permissoes th.grupo { background: var(--fundo); color: var(--texto-suave); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
+  .permissoes th.grupo button { float: right; font-size: 11px; padding: 1px 7px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto-suave); cursor: pointer; text-transform: none; letter-spacing: 0; }
+  .opcoes { display: inline-flex; border: 1px solid var(--borda); border-radius: 6px; overflow: hidden; }
+  .opcoes label { padding: 4px 10px; font-size: 12px; cursor: pointer; border-left: 1px solid var(--borda); user-select: none; }
+  .opcoes label:first-child { border-left: none; }
+  .opcoes input { position: absolute; opacity: 0; pointer-events: none; }
+  .opcoes input:focus-visible + span { outline: 2px solid var(--acento); outline-offset: 2px; }
+  .opcoes label.sel-total { background: var(--sucesso-bg); color: var(--acento-texto); font-weight: 700; }
+  .opcoes label.sel-leitura { background: var(--rodando-bg); color: var(--rodando-texto); font-weight: 700; }
+  .opcoes label.sel-nenhum { background: var(--interrompido-bg); color: var(--interrompido-texto); font-weight: 700; }
+  .acoes-form { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .caixa { border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+  .caixa.erro { background: var(--erro-bg); color: var(--erro-texto); border: 1px solid var(--erro); }
+  .caixa.ok { background: var(--sucesso-bg); color: var(--acento-texto); border: 1px solid var(--acento); }
+  .vazio { color: var(--texto-suave); font-size: 13px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Usuários do painel</h1>
+  {% if pode_editar %}<a class="botao-usr primario" href="{{ url_for('usuarios', novo=1) }}">+ Novo usuário</a>{% endif %}
+</div>
+<p class="explica">
+  Cada usuário tem login próprio e, em cada tela, <strong>acesso total</strong> (vê e usa os botões),
+  <strong>somente leitura</strong> (vê, sem ações) ou <strong>sem acesso</strong> (a tela some do menu).
+  Mudanças valem no próximo clique do usuário; trocar a senha ou desativar derruba a sessão dele.
+  Os logins fixos do config.yaml continuam funcionando e não aparecem aqui.
+</p>
+
+{% if erro %}<div class="caixa erro">{{ erro }}</div>{% endif %}
+{% if aviso %}<div class="caixa ok">{{ aviso }}</div>{% endif %}
+
+<div class="layout-usuarios">
+  <div>
+    <table class="lista-usuarios">
+      <thead><tr><th>Usuário</th><th>Acessos</th><th>Último login</th></tr></thead>
+      <tbody>
+        {% for u in usuarios %}
+        {% set n_total = u.permissoes.values() | select('equalto', 'total') | list | length %}
+        {% set n_leitura = u.permissoes.values() | select('equalto', 'leitura') | list | length %}
+        <tr class="{{ 'inativo' if not u.ativo else '' }} {{ 'ativo-sel' if selecionado and selecionado.id == u.id else '' }}">
+          <td>
+            <a href="{{ url_for('usuarios', id=u.id) }}">{{ u.nome }}</a>
+            <span class="login">{{ u.usuario }}{% if not u.ativo %} · desativado{% endif %}</span>
+          </td>
+          <td class="resumo">
+            {% if n_total or n_leitura %}{{ n_total }} total · {{ n_leitura }} leitura{% else %}nenhuma tela{% endif %}
+          </td>
+          <td class="resumo">{{ u.ultimo_login.replace('T', ' ')[:16] if u.ultimo_login else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="vazio">Nenhum usuário cadastrado ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    {% if selecionado %}
+    {% set sem_edicao = not pode_editar %}
+    <form class="cartao" method="post" action="{{ url_for('usuarios_salvar') }}" autocomplete="off" id="form-usuario">
+      <h2>{{ 'Novo usuário' if not selecionado.id else 'Editar ' ~ selecionado.nome }}</h2>
+      {% if selecionado.id %}<input type="hidden" name="usuario_id" value="{{ selecionado.id }}">{% endif %}
+      <div class="campos">
+        <div class="campo">
+          <label for="f-nome">Nome</label>
+          <input type="text" id="f-nome" name="nome" value="{{ selecionado.nome }}" required maxlength="80" {{ 'disabled' if sem_edicao }}>
+        </div>
+        <div class="campo">
+          <label for="f-usuario">Login</label>
+          <input type="text" id="f-usuario" name="usuario" value="{{ selecionado.usuario }}" required maxlength="40"
+                 autocapitalize="none" spellcheck="false" {{ 'disabled' if sem_edicao }}>
+          <div class="dica">Minúsculas, números e . _ - @</div>
+        </div>
+        <div class="campo">
+          <label for="f-senha">{{ 'Nova senha' if selecionado.id else 'Senha' }}</label>
+          <input type="password" id="f-senha" name="senha" autocomplete="new-password" minlength="{{ senha_minima }}"
+                 {{ 'required' if not selecionado.id }} {{ 'disabled' if sem_edicao }}
+                 placeholder="{{ 'em branco = mantém a atual' if selecionado.id else 'mínimo ' ~ senha_minima ~ ' caracteres' }}">
+        </div>
+      </div>
+      <label class="check-ativo">
+        <input type="checkbox" name="ativo" value="1" {{ 'checked' if selecionado.ativo }} {{ 'disabled' if sem_edicao }}>
+        Ativo (desmarcado = não consegue entrar)
+      </label>
+
+      {% if pode_editar %}
+      <div class="barra-atalhos">
+        Todas as telas:
+        <button type="button" data-todas="total">Total</button>
+        <button type="button" data-todas="leitura">Leitura</button>
+        <button type="button" data-todas="">Sem acesso</button>
+      </div>
+      {% endif %}
+      <table class="permissoes">
+        {% for grupo, paginas_grupo in grupos %}
+        <tr><th class="grupo" colspan="2">{{ grupo }}
+          {% if pode_editar %}
+          <button type="button" data-grupo="{{ loop.index }}" data-valor="">sem acesso</button>
+          <button type="button" data-grupo="{{ loop.index }}" data-valor="leitura">leitura</button>
+          <button type="button" data-grupo="{{ loop.index }}" data-valor="total">total</button>
+          {% endif %}
+        </th></tr>
+        {% set idx_grupo = loop.index %}
+        {% for p in paginas_grupo %}
+        {% set atual = selecionado.permissoes.get(p.chave, '') %}
+        <tr data-linha-grupo="{{ idx_grupo }}">
+          <td>{{ p.rotulo }}</td>
+          <td style="text-align:right;">
+            <span class="opcoes" role="radiogroup" aria-label="Acesso a {{ p.rotulo }}">
+              {% for valor, classe in [('total', 'sel-total'), ('leitura', 'sel-leitura'), ('', 'sel-nenhum')] %}
+              <label data-classe="{{ classe }}" class="{{ classe if atual == valor else '' }}">
+                <input type="radio" name="acesso_{{ p.chave }}" value="{{ valor }}" {{ 'checked' if atual == valor }} {{ 'disabled' if sem_edicao }}>
+                <span>{{ {'total': 'Total', 'leitura': 'Leitura', '': 'Sem acesso'}[valor] }}</span>
+              </label>
+              {% endfor %}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </table>
+
+      {% if pode_editar %}
+      <div class="acoes-form">
+        <a class="botao-usr" href="{{ url_for('usuarios') }}">Cancelar</a>
+        <button type="submit" class="botao-usr primario">{{ 'Criar usuário' if not selecionado.id else 'Salvar' }}</button>
+      </div>
+      {% endif %}
+    </form>
+    {% else %}
+    <div class="cartao vazio">Escolha um usuário na lista{% if pode_editar %} ou crie um novo{% endif %}.</div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('form-usuario');
+  if (!form) return;
+  function pintar() {
+    form.querySelectorAll('.opcoes label').forEach(function (lb) {
+      var marcado = lb.querySelector('input').checked;
+      lb.classList.toggle(lb.dataset.classe, marcado);
+    });
+  }
+  function marcar(linhas, valor) {
+    linhas.forEach(function (tr) {
+      var r = tr.querySelector('input[type=radio][value="' + valor + '"]');
+      if (r && !r.disabled) r.checked = true;
+    });
+    pintar();
+  }
+  form.addEventListener('change', pintar);
+  form.querySelectorAll('[data-todas]').forEach(function (b) {
+    b.addEventListener('click', function () { marcar(form.querySelectorAll('tr[data-linha-grupo]'), b.dataset.todas); });
+  });
+  form.querySelectorAll('[data-grupo]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      marcar(form.querySelectorAll('tr[data-linha-grupo="' + b.dataset.grupo + '"]'), b.dataset.valor);
+    });
+  });
+})();
+</script>
+{% endblock %}

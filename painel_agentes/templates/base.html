@@ -341,9 +341,10 @@
     {% if nivel %}
     <div class="rodape">
       {% set ROTULOS_NIVEL = {'total': 'acesso total', 'operador': 'operação', 'leitura': 'somente leitura',
-                              'expedicao': 'expedição', 'galpao': 'galpão', 'atendimento': 'atendimento'} %}
+                              'expedicao': 'expedição', 'galpao': 'galpão', 'atendimento': 'atendimento',
+                              'personalizado': 'acesso por tela'} %}
       <span class="usuario" title="{{ session.get('usuario', '') }} — {{ ROTULOS_NIVEL.get(nivel, nivel) }}">
-        <span class="nome">{{ session.get('usuario', '') }}</span>
+        <span class="nome">{{ session.get('usuario_nome') or session.get('usuario', '') }}</span>
         <span class="nivel">{{ ROTULOS_NIVEL.get(nivel, nivel) }}</span>
       </span>
       <div class="botoes">
