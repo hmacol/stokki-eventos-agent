@@ -1,0 +1,14 @@
+# Configuracao do gateway OpenWA usado pelas notificacoes internas por
+# WhatsApp (notificar_whatsapp.py). Copiado para /opt/openwa/.env na VPS.
+# NAO tem segredo: a chave de administrador nasce aleatoria no primeiro
+# boot e fica so em /opt/openwa/data/.api-key.
+# O compose do proprio OpenWA (docker-compose.dev.yml) ja publica a porta
+# so em 127.0.0.1:2785. Nao definir BIND_HOST.
+NODE_ENV=production
+TZ=America/Sao_Paulo
+ENGINE_TYPE=whatsapp-web.js
+AUTO_START_SESSIONS=true
+# Segunda camada de protecao do numero (a primeira e o teto diario de
+# notificar_whatsapp.py): 20 mensagens no primeiro dia da sessao, subindo.
+SEND_PACING_ENABLED=true
+# MCP_ENABLED fica de fora de proposito (desligado).
