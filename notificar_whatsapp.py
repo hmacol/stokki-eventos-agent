@@ -34,12 +34,30 @@ config.yaml:
 """
 import logging
 import re
-from datetime import datetime
+import sqlite3
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import integracao_openwa
 
 logger = logging.getLogger(__name__)
 
+DB_PATH = Path(__file__).resolve().parent / "dados" / "dados.db"
 MAX_DETALHE = 200
 MAX_ETAPAS_ERRO = 3
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    criado_em    TEXT NOT NULL,
+    origem       TEXT NOT NULL,
+    tipo         TEXT NOT NULL,
+    assinatura   TEXT,
+    situacao     TEXT NOT NULL,
+    motivo       TEXT,
+    id_mensagem  TEXT
+)"""
 
 
 # --- Texto --------------------------------------------------------------------
@@ -100,3 +118,126 @@ def texto_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int) -> str:
         linhas.append(" · ".join(partes))
     linhas.append("Lista completa no e-mail.")
     return "\n".join(linhas)
+
+
+# --- Envio --------------------------------------------------------------------
+
+def _cfg(config: dict | None) -> dict:
+    return (config or {}).get("whatsapp_notificacoes") or {}
+
+
+def _inteiro(cfg: dict, chave: str, padrao: int) -> int:
+    try:
+        return int(cfg.get(chave, padrao))
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _iso(quando: datetime) -> str:
+    return quando.isoformat(timespec="seconds")
+
+
+def _registrar(conn, agora, origem, tipo, assinatura, situacao, motivo=None, id_mensagem=None):
+    conn.execute(
+        "INSERT INTO notificacoes_whatsapp (criado_em, origem, tipo, assinatura, situacao, motivo, id_mensagem) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (_iso(agora), origem, tipo, assinatura, situacao, motivo, id_mensagem))
+    conn.commit()
+
+
+def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime) -> str | None:
+    if assinatura:
+        desde = _iso(agora - timedelta(minutes=_inteiro(cfg, "janela_repeticao_min", 120)))
+        if conn.execute(
+                "SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
+                "AND situacao = 'enviado' AND criado_em >= ? LIMIT 1",
+                (origem, assinatura, desde)).fetchone():
+            return "repetida dentro da janela"
+    inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
+    enviadas = conn.execute(
+        "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ?",
+        (inicio_do_dia,)).fetchone()[0]
+    if enviadas >= _inteiro(cfg, "teto_diario", 20):
+        return "teto diario atingido"
+    return None
+
+
+def _esperar_intervalo(conn, cfg: dict, agora: datetime, dormir) -> None:
+    ultima = conn.execute(
+        "SELECT MAX(criado_em) FROM notificacoes_whatsapp WHERE situacao = 'enviado'").fetchone()[0]
+    if not ultima:
+        return
+    intervalo = _inteiro(cfg, "intervalo_min_seg", 20)
+    falta = intervalo - (agora - datetime.fromisoformat(ultima)).total_seconds()
+    if 0 < falta <= intervalo:
+        dormir(falta)
+
+
+def _alertar_se_canal_parou(conn, cfg: dict, config: dict) -> None:
+    """Um e-mail so, exatamente na N-esima falha seguida. A N+1 nao repete;
+    um envio com sucesso zera a contagem."""
+    limite = _inteiro(cfg, "falhas_para_alerta", 3)
+    seguidas = 0
+    for (situacao,) in conn.execute(
+            "SELECT situacao FROM notificacoes_whatsapp WHERE situacao IN ('enviado', 'falhou') "
+            "ORDER BY id DESC LIMIT ?", (limite + 1,)):
+        if situacao != "falhou":
+            break
+        seguidas += 1
+    if seguidas != limite:
+        return
+    destino = (config.get("notificacao_execucao") or {}).get("destinatario") \
+        or (config.get("email") or {}).get("remetente")
+    if not destino:
+        return
+    from email_utils import envelope_html, enviar_email
+    corpo = (f"<h2 style='margin:0 0 12px;color:#EF4444'>WhatsApp das notificações parou</h2>"
+             f"<p>{limite} envios seguidos falharam. O gateway pode estar fora do ar ou o número "
+             f"desconectado. Os e-mails continuam saindo normalmente.</p>"
+             f"<p>Conferir na VPS: <code>docker ps</code> e a tabela <code>notificacoes_whatsapp</code>.</p>")
+    enviar_email([destino], "[ALERTA] WhatsApp das notificações parou", envelope_html(corpo),
+                 config.get("email", {}))
+
+
+def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir) -> str:
+    cfg = _cfg(config)
+    if not cfg.get("ativo") or not integracao_openwa.configurado(cfg) or not cfg.get("grupo_id"):
+        return "desligado"
+    if modo_teste:
+        logger.info(f"[MODO TESTE] WhatsApp nao enviado ({origem}). Texto:\n{texto}")
+        return "modo_teste"
+    agora = agora or datetime.now()
+    fechar = conn is None
+    if fechar:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute(_SCHEMA)
+        motivo = _motivo_para_nao_enviar(conn, cfg, origem, assinatura, agora)
+        if motivo:
+            _registrar(conn, agora, origem, tipo, assinatura, "nao_enviado", motivo)
+            logger.info(f"WhatsApp nao enviado ({origem}): {motivo}.")
+            return "nao_enviado"
+        _esperar_intervalo(conn, cfg, agora, dormir)
+        ok, id_mensagem = integracao_openwa.enviar_texto(cfg, cfg["grupo_id"], texto)
+        if ok:
+            _registrar(conn, agora, origem, tipo, assinatura, "enviado", None, id_mensagem)
+            logger.info(f"WhatsApp enviado ao grupo ({origem}).")
+            return "enviado"
+        _registrar(conn, agora, origem, tipo, assinatura, "falhou", "gateway fora do ar ou envio recusado")
+        _alertar_se_canal_parou(conn, cfg, config)
+        return "falhou"
+    finally:
+        if fechar:
+            conn.close()
+
+
+def despachar(config: dict, origem: str, tipo: str, texto: str, assinatura: str | None = None,
+              modo_teste: bool = False, conn=None, agora: datetime | None = None,
+              dormir=time.sleep) -> str:
+    """Aplica as regras e envia. Devolve a situacao: desligado | modo_teste |
+    nao_enviado | enviado | falhou. Nunca levanta excecao."""
+    try:
+        return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"

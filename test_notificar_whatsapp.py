@@ -6,6 +6,9 @@ Rodar: py -3.11 -m unittest test_notificar_whatsapp
 import unittest
 from datetime import datetime
 from unittest.mock import patch
+import sqlite3
+from datetime import timedelta
+from unittest.mock import MagicMock
 
 import notificar_whatsapp as nw
 
@@ -102,6 +105,153 @@ class TestTextoNaoExpedidos(unittest.TestCase):
             "Lista completa no e-mail.",
         ]))
         self.assertNotIn("rota", nw.texto_nao_expedidos(3, 0, 0))
+
+
+def _config(**extra):
+    wa = {"ativo": True, "base_url": "http://x/api", "api_key": "k", "sessao": "s",
+          "grupo_id": "1@g.us", "sempre_avisar": ["criar_rotas_diarias"], "teto_diario": 3,
+          "intervalo_min_seg": 20, "janela_repeticao_min": 120, "falhas_para_alerta": 3}
+    wa.update(extra)
+    return {"whatsapp_notificacoes": wa, "email": {"remetente": "a@b.com"}}
+
+
+class _ComBanco(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.dormir = MagicMock()
+        self.envio = patch.object(nw.integracao_openwa, "enviar_texto", return_value=(True, "m1"))
+        self.enviar = self.envio.start()
+        self.addCleanup(self.envio.stop)
+        self.addCleanup(self.conn.close)
+
+    def despachar(self, config=None, origem="rotina", assinatura=None, agora=AGORA, **kw):
+        return nw.despachar(config or _config(), origem, "execucao", "texto", assinatura,
+                            conn=self.conn, agora=agora, dormir=self.dormir, **kw)
+
+    def linhas(self):
+        return self.conn.execute(
+            "SELECT origem, situacao, motivo, id_mensagem FROM notificacoes_whatsapp ORDER BY id").fetchall()
+
+
+class TestDespacharChave(_ComBanco):
+    def test_envia_e_registra(self):
+        self.assertEqual(self.despachar(), "enviado")
+        self.enviar.assert_called_once_with(_config()["whatsapp_notificacoes"], "1@g.us", "texto")
+        self.assertEqual(self.linhas(), [("rotina", "enviado", None, "m1")])
+
+    def test_desligado_nao_envia_nem_cria_tabela(self):
+        for config in (_config(ativo=False), _config(grupo_id=""), _config(api_key=""), {}, None,
+                       {"whatsapp_notificacoes": None}):
+            self.assertEqual(nw.despachar(config, "r", "execucao", "t", conn=self.conn), "desligado")
+        self.enviar.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0], 0)
+
+    def test_modo_teste_so_loga(self):
+        with self.assertLogs(nw.logger, level="INFO") as logs:
+            self.assertEqual(self.despachar(modo_teste=True), "modo_teste")
+        self.assertIn("texto", "\n".join(logs.output))
+        self.enviar.assert_not_called()
+
+
+class TestDespacharVolume(_ComBanco):
+    def test_repeticao_dentro_da_janela(self):
+        self.assertEqual(self.despachar(assinatura="erro:Pipeline"), "enviado")
+        depois = AGORA + timedelta(minutes=119)
+        self.assertEqual(self.despachar(assinatura="erro:Pipeline", agora=depois), "nao_enviado")
+        self.assertEqual(self.linhas()[-1][1:3], ("nao_enviado", "repetida dentro da janela"))
+
+    def test_repeticao_fora_da_janela_ou_de_outra_origem_envia(self):
+        self.despachar(assinatura="erro:Pipeline")
+        self.assertEqual(self.despachar(assinatura="erro:Pipeline", origem="outra",
+                                        agora=AGORA + timedelta(minutes=5)), "enviado")
+        self.assertEqual(self.despachar(assinatura="erro:Pipeline",
+                                        agora=AGORA + timedelta(minutes=121)), "enviado")
+
+    def test_sem_assinatura_nao_tem_regra_de_repeticao(self):
+        self.despachar()
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=5)), "enviado")
+
+    def test_teto_diario(self):
+        for i in range(3):
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=i)), "enviado")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=10)), "nao_enviado")
+        self.assertEqual(self.linhas()[-1][2], "teto diario atingido")
+        amanha = AGORA + timedelta(days=1)
+        self.assertEqual(self.despachar(agora=amanha), "enviado")
+
+    def test_intervalo_minimo_espera_a_diferenca(self):
+        self.despachar()
+        self.dormir.assert_not_called()
+        self.despachar(agora=AGORA + timedelta(seconds=5))
+        self.dormir.assert_called_once_with(15.0)
+
+    def test_intervalo_ja_cumprido_nao_espera(self):
+        self.despachar()
+        self.despachar(agora=AGORA + timedelta(seconds=25))
+        self.dormir.assert_not_called()
+
+    def test_numeros_malformados_caem_no_padrao(self):
+        config = _config(teto_diario="vinte", intervalo_min_seg=None, janela_repeticao_min="x",
+                         falhas_para_alerta=[])
+        self.assertEqual(self.despachar(config=config), "enviado")
+
+
+class TestDespacharFalhas(_ComBanco):
+    def setUp(self):
+        super().setUp()
+        self.enviar.return_value = (False, None)
+        self.email = patch("email_utils.enviar_email", return_value=True)
+        self.enviar_email = self.email.start()
+        self.addCleanup(self.email.stop)
+
+    def falhar(self, n, inicio=0):
+        for i in range(n):
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=inicio + i)), "falhou")
+
+    def test_falha_registra_e_nao_reenvia(self):
+        self.falhar(1)
+        self.assertEqual(self.enviar.call_count, 1)
+        self.assertEqual(self.linhas()[0][1], "falhou")
+
+    def test_email_unico_na_terceira_falha_seguida(self):
+        self.falhar(2)
+        self.enviar_email.assert_not_called()
+        self.falhar(1, inicio=2)
+        self.enviar_email.assert_called_once()
+        self.assertEqual(self.enviar_email.call_args[0][0], ["a@b.com"])
+        self.falhar(3, inicio=3)
+        self.enviar_email.assert_called_once()
+
+    def test_sucesso_no_meio_zera_a_contagem(self):
+        self.falhar(2)
+        self.enviar.return_value = (True, "m")
+        self.despachar(agora=AGORA + timedelta(minutes=5))
+        self.enviar.return_value = (False, None)
+        self.falhar(2, inicio=6)
+        self.enviar_email.assert_not_called()
+        self.falhar(1, inicio=8)
+        self.enviar_email.assert_called_once()
+
+    def test_falha_nao_conta_para_o_teto(self):
+        self.falhar(5)
+        self.enviar.return_value = (True, "m")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=30)), "enviado")
+
+
+class TestDespacharNuncaLevanta(unittest.TestCase):
+    def test_banco_indisponivel(self):
+        conn = MagicMock()
+        conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+        with patch.object(nw.integracao_openwa, "enviar_texto") as enviar:
+            self.assertEqual(nw.despachar(_config(), "r", "execucao", "t", conn=conn, agora=AGORA), "falhou")
+        enviar.assert_not_called()
+
+    def test_excecao_no_transporte(self):
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        with patch.object(nw.integracao_openwa, "enviar_texto", side_effect=RuntimeError("bug")):
+            self.assertEqual(nw.despachar(_config(), "r", "execucao", "t", conn=conn, agora=AGORA,
+                                          dormir=MagicMock()), "falhou")
 
 
 if __name__ == "__main__":
