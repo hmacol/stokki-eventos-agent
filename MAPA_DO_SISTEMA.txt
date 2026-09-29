@@ -178,6 +178,9 @@
  Autenticação:
    painel    -> usuário/senha do config, 6 níveis: total, operador, leitura,
                 expedicao, galpao, atendimento. Decorador requer_auth(niveis=).
+                atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
+                Parados, Tratativas, Consulta e Expedição; trata ocorrência,
+                não roda agente, não encerra rota, não exclui pedido.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por

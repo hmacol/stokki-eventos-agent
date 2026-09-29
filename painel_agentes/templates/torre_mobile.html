@@ -409,6 +409,9 @@
 <script>
 const HOJE_ISO = {{ hoje_iso | tojson }};
 const PODE_EDITAR = {{ pode_editar | tojson }};
+// Tratar/desfazer/duplicar/notificar ocorrência: inclui o nível
+// "atendimento" (28/09), que não roda agente nem encerra rota.
+const PODE_TRATAR = {{ pode_tratar | tojson }};
 // "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo mecanismo do
 // desktop/Expedição, mas aqui sem hover: toque no chip pendente/em
 // rota já abre o modal de motivo direto (ver abrirModalExcluir).
@@ -870,9 +873,9 @@ function renderExcecoes(d) {
       if (x.acao && x.acao.tipo === "link") acoes += `<a href="${BASE_PATH}${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
       else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) acoes += `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
       if (x.link_log) acoes += `<a href="${BASE_PATH}${esc(x.link_log)}">Log</a>`;
-      if (x.pode_duplicar && PODE_EDITAR) acoes += `<button class="duplicar" onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
-      if (x.pode_notificar_ocorrencia && PODE_EDITAR) acoes += `<button class="notificar" onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
-      if (PODE_EDITAR) acoes += `<button onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      if (x.pode_duplicar && PODE_TRATAR) acoes += `<button class="duplicar" onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
+      if (x.pode_notificar_ocorrencia && PODE_TRATAR) acoes += `<button class="notificar" onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
+      if (PODE_TRATAR) acoes += `<button onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
       const icone = x.severidade === "critico" ? "✗" : "▲";
       return `<div class="cartao-excecao">
           <div class="topo-excecao">
@@ -892,7 +895,7 @@ function renderExcecoes(d) {
         <div class="descricao">${esc(x.tipo)} — ${esc(x.descricao)}</div>
         ${quemAtualizou(x)}${badgesHtml(x.badges)}
         <div class="motivo-tratado">"${esc(x.motivo)}" — ${esc(x.tratado_em)}</div>
-        ${PODE_EDITAR ? `<div class="acoes-excecao"><button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button></div>` : ""}
+        ${PODE_TRATAR ? `<div class="acoes-excecao"><button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button></div>` : ""}
       </div>`).join("");
     partes.push(`<details class="tratadas"><summary>${d.tratadas.length} exceção(ões) tratada(s)</summary>${linhasTratadas}</details>`);
   }
