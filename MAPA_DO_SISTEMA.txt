@@ -165,6 +165,7 @@
  atendimento-central    8095   atendimento.freshhub.com.br      atendimento/app.py
  dashboard_embarcadores 8060   (interno, Basic Auth)            dashboard_embarcadores/
  Evolution API (docker) 8080   (só local)                       atendimento/infra/docker-compose.yml
+ OpenWA (docker)        2785   (só local)                       /opt/openwa + infra/openwa/ (LEIAME.md)
 
  Daemons sem porta:
    portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
@@ -315,6 +316,10 @@
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
+ integracao_openwa.py          Envio de WhatsApp pelo OpenWA (só notificações internas).
+ notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
+                               job, não expedidos e resumo das rotinas (erro ou
+                               lista sempre_avisar). Desligado por padrão.
  integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
 
  --- WMS (sincronizações com a Stokki, embarcador piloto) ---
@@ -737,6 +742,7 @@
    documentos_processados    documentos_pedido/
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
+   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
@@ -796,6 +802,10 @@
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão
    (notificacoes_automaticas.ativo, forcar_destino). Ligar é decisão do Hugo.
+ - WhatsApp das notificações internas (whatsapp_notificacoes.ativo) sai do
+   número do Hugo por gateway não-oficial (OpenWA). Sem reenvio, teto de
+   20/dia. Não tem relação com atendimento/ nem com a Evolution. Ligar é
+   decisão do Hugo.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

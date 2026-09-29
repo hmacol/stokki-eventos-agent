@@ -19,6 +19,9 @@ de vez mandaria 60 e-mails por hora. Um alerta por unidade a cada
 `janela_min` (padrão 120); as falhas no meio são contadas e aparecem no
 próximo e-mail.
 
+28/09/2026: depois do e-mail, o mesmo alerta vai resumido pro grupo interno
+de WhatsApp (notificar_whatsapp.py), se whatsapp_notificacoes.ativo.
+
 config.yaml (opcional):
     alertas_jobs:
       ativo: true
@@ -162,6 +165,11 @@ def main(argv=None) -> int:
     assunto = f"[ALERTA VPS] Job falhou: {args.unidade}"
     ok = enviar_email([destino], assunto, envelope_html(montar_corpo(args.unidade, info, log, suprimidos),
                                                         cor_acento=COR_ERRO), config.get("email", {}))
+    try:
+        import notificar_whatsapp
+        notificar_whatsapp.avisar_falha_job(args.unidade, info, config)
+    except Exception as exc:
+        logger.warning(f"Falha no aviso por WhatsApp (nao afeta o alerta): {exc}")
     return 0 if ok else 1
 
 
