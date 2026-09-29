@@ -85,7 +85,22 @@ whatsapp_notificacoes:
   pausa_canal_min: 60
 ```
 
-## Pendente de prova (28/09/2026)
+## Provado em 29/09/2026
 
-Pareamento, listagem de grupos, envio ao grupo e retorno da sessão após
-reinício ainda não foram provados: dependem do Hugo com o celular.
+- Pareamento por QR com o numero final 5364: conectou com `WWEBJS_WEB_VERSION=off`.
+  Com a versao fixada pelo padrao (alpha de terceiros) o WhatsApp desfez o
+  vinculo (LOGOUT) segundos depois da leitura.
+- Pareamento por CODIGO nao funcionou e a documentacao do gateway avisa que,
+  neste motor, pode derrubar os outros aparelhos do numero. Usar sempre QR.
+- Depois de recriar o container a sessao volta sozinha para `ready` em cerca
+  de 70 s, sem novo QR (`AUTO_START_SESSIONS=true`). Nesse intervalo as rotas
+  respondem 400/409.
+- Sessao que NUNCA foi autenticada nao inicia sozinha: precisa de
+  `POST /api/sessions/<id>/start` antes de pedir o QR.
+- Memoria: ~130 MB sem sessao, ~1,0 a 1,3 GB com a sessao ativa (limite do
+  container: 2 GB). O numero tem 113 grupos.
+
+## Pendente
+
+- Grupo de destino e mensagem de prova.
+- Chave de papel `operator` e secao `whatsapp_notificacoes` no config.yaml.

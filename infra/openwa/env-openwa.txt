@@ -12,3 +12,12 @@ AUTO_START_SESSIONS=true
 # notificar_whatsapp.py): 20 mensagens no primeiro dia da sessao, subindo.
 SEND_PACING_ENABLED=true
 # MCP_ENABLED fica de fora de proposito (desligado).
+# 29/09/2026: com a versao fixada pelo padrao (alpha, vinda de repositorio de
+# terceiros) o WhatsApp desfez o vinculo segundos depois da leitura do QR.
+# "off" usa a versao oficial servida pelo proprio WhatsApp.
+WWEBJS_WEB_VERSION=off
+# O numero pareado e o do Hugo, com 113 grupos e conversas de clientes. O
+# gateway so serve pra ENVIAR aviso: nao baixar midia recebida nem guardar
+# mensagem temporaria.
+MEDIA_DOWNLOAD_ENABLED=false
+STORE_EPHEMERAL_MESSAGES=false
