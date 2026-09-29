@@ -219,7 +219,9 @@ class TestDespacharFalhas(_ComBanco):
         self.falhar(1, inicio=2)
         self.enviar_email.assert_called_once()
         self.assertEqual(self.enviar_email.call_args[0][0], ["a@b.com"])
-        self.falhar(3, inicio=3)
+        # canal em pausa: nem tenta; depois da pausa tenta 1 vez e nao repete o e-mail
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=10)), "nao_enviado")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=63)), "falhou")
         self.enviar_email.assert_called_once()
 
     def test_sucesso_no_meio_zera_a_contagem(self):
@@ -233,7 +235,7 @@ class TestDespacharFalhas(_ComBanco):
         self.enviar_email.assert_called_once()
 
     def test_falha_nao_conta_para_o_teto(self):
-        self.falhar(5)
+        self.falhar(2)
         self.enviar.return_value = (True, "m")
         self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=30)), "enviado")
 
@@ -348,6 +350,67 @@ class TestChamadaNoResumoDasRotinas(unittest.TestCase):
             nea.notificar_execucao(UMA, 12.0, False, config)
         email.assert_not_called()
         avisar.assert_not_called()
+
+
+class TestCorrecoesDaRevisao(_ComBanco):
+    def test_intervalo_vale_a_partir_do_horario_real_do_envio(self):
+        self.despachar()
+        self.despachar(agora=AGORA + timedelta(seconds=5))          # espera 15 s, sai em +20
+        self.dormir.assert_called_once_with(15.0)
+        horarios = [l[0] for l in self.conn.execute("SELECT criado_em FROM notificacoes_whatsapp ORDER BY id")]
+        self.assertEqual(horarios[1], (AGORA + timedelta(seconds=20)).isoformat(timespec="seconds"))
+        self.dormir.reset_mock()
+        self.despachar(agora=AGORA + timedelta(seconds=22))
+        self.dormir.assert_called_once_with(18.0)
+
+    def test_canal_em_pausa_depois_de_falhas_seguidas(self):
+        self.enviar.return_value = (False, None)
+        with patch("email_utils.enviar_email", return_value=True):
+            for i in range(3):
+                self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=i)), "falhou")
+            self.assertEqual(self.enviar.call_count, 3)
+            for minuto in (3, 30, 61):
+                self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=minuto)), "nao_enviado")
+            self.assertEqual(self.enviar.call_count, 3)
+            self.assertEqual(self.linhas()[-1][2], "canal em pausa")
+            self.enviar.return_value = (True, "m")
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=63)), "enviado")
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=64)), "enviado")
+
+    def test_pausa_configuravel(self):
+        self.enviar.return_value = (False, None)
+        config = _config(pausa_canal_min=10)
+        with patch("email_utils.enviar_email", return_value=True):
+            for i in range(3):
+                self.despachar(config=config, agora=AGORA + timedelta(minutes=i))
+            self.assertEqual(self.despachar(config=config, agora=AGORA + timedelta(minutes=5)), "nao_enviado")
+            self.assertEqual(self.despachar(config=config, agora=AGORA + timedelta(minutes=13)), "falhou")
+
+
+class TestResumoDeErroLimpo(unittest.TestCase):
+    def test_muitas_etapas_lista_tres_e_conta_o_resto(self):
+        etapas = {f"Rota {i} — Motorista {i}": {"status": "erro", "detalhe": "x"} for i in range(20)}
+        with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
+            linha = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")[1]
+        self.assertEqual(linha, "20 de 20 etapas com erro: Rota 0 — Motorista 0, Rota 1 — Motorista 1, "
+                                "Rota 2 — Motorista 2 e mais 17")
+
+    def test_nome_de_etapa_perde_formatacao_tambem_no_resumo(self):
+        etapas = {"rota_1 *x*": {"status": "erro", "detalhe": "d"}, "ok": {"status": "ok"}}
+        with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
+            linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
+        self.assertEqual(linhas[1], "1 de 2 etapas com erro: rota1 x")
+        self.assertEqual(linhas[2], "rota1 x: d")
+
+    def test_uma_etapa_so_com_erro(self):
+        linhas = nw.texto_execucao({"Pipeline": {"status": "erro", "detalhe": "d"}}, 1, agora=AGORA).split("\n")
+        self.assertEqual(linhas[1], "A etapa terminou com erro")
+
+    def test_rotas_sem_motorista_tem_titulo_proprio(self):
+        etapas = {"Cancelamento de rotas sem motorista": {"status": "ok", "detalhe": "2 canceladas"},
+                  "Pedidos presos em rotas de dias anteriores": {"status": "ok", "detalhe": "0"}}
+        with patch("notificar_execucao_agente.sys.argv", ["/opt/x/roteirizacao/cancelar_rotas_sem_motorista.py"]):
+            self.assertTrue(nw.texto_execucao(etapas, 1, agora=AGORA).startswith("✅ *Rotas sem motorista*"))
 
 
 if __name__ == "__main__":

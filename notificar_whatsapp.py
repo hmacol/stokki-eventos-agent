@@ -26,11 +26,12 @@ config.yaml:
       api_key: "..."
       sessao: "..."
       grupo_id: "...@g.us"
-      sempre_avisar: [cancelar_rotas_sem_motorista, criar_rotas_diarias, pipeline]
+      sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
       teto_diario: 20
       intervalo_min_seg: 20
       janela_repeticao_min: 120
       falhas_para_alerta: 3
+      pausa_canal_min: 60        # descanso depois de N falhas seguidas
 """
 import logging
 import re
@@ -82,9 +83,18 @@ def texto_execucao(resumo_etapas: dict, duracao_seg: float, titulo: str | None =
     erros = etapas_com_erro(resumo_etapas)
     nome = _uma_linha(titulo_da_rotina(resumo_etapas, titulo), 80)
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
-    resumo = resumir_execucao(resumo_etapas).rstrip(".")
     if not erros:
+        resumo = resumir_execucao(resumo_etapas).rstrip(".")
         return f"✅ *{nome}* · {quando}\n{resumo} ({formatar_duracao(duracao_seg)})"
+    # O resumo do e-mail lista TODAS as etapas com erro pelo nome cru; aqui
+    # vao so as primeiras, limpas (nome de etapa pode ser "rota — motorista").
+    if len(resumo_etapas) == 1:
+        resumo = "A etapa terminou com erro"
+    else:
+        nomes = ", ".join(_uma_linha(e, 60) for e in erros[:MAX_ETAPAS_ERRO])
+        resto = len(erros) - MAX_ETAPAS_ERRO
+        resumo = (f"{len(erros)} de {len(resumo_etapas)} etapas com erro: {nomes}"
+                  + (f" e mais {resto}" if resto > 0 else ""))
     linhas = [f"❌ *{nome}* · {quando}", resumo]
     for etapa in erros[:MAX_ETAPAS_ERRO]:
         detalhe = _uma_linha((resumo_etapas.get(etapa) or {}).get("detalhe"))
@@ -154,6 +164,16 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
                 "AND situacao = 'enviado' AND criado_em >= ? LIMIT 1",
                 (origem, assinatura, desde)).fetchone():
             return "repetida dentro da janela"
+    # Disjuntor: depois de N falhas seguidas o canal descansa. Sem isso, rotina
+    # que erra a cada rodada bateria no gateway o dia inteiro (insistir piora).
+    limite = max(1, _inteiro(cfg, "falhas_para_alerta", 3))
+    ultimas = conn.execute(
+        "SELECT situacao, criado_em FROM notificacoes_whatsapp WHERE situacao IN ('enviado', 'falhou') "
+        "ORDER BY id DESC LIMIT ?", (limite,)).fetchall()
+    if len(ultimas) == limite and all(s == "falhou" for s, _ in ultimas):
+        pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
+        if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
+            return "canal em pausa"
     inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
     enviadas = conn.execute(
         "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ?",
@@ -163,15 +183,19 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
     return None
 
 
-def _esperar_intervalo(conn, cfg: dict, agora: datetime, dormir) -> None:
+def _esperar_intervalo(conn, cfg: dict, agora: datetime, dormir) -> datetime:
+    """Devolve o horario em que o envio de fato acontece (agora + espera) --
+    e ESSE que vai pro registro, senao o proximo calcula o intervalo errado."""
     ultima = conn.execute(
         "SELECT MAX(criado_em) FROM notificacoes_whatsapp WHERE situacao = 'enviado'").fetchone()[0]
     if not ultima:
-        return
+        return agora
     intervalo = _inteiro(cfg, "intervalo_min_seg", 20)
     falta = intervalo - (agora - datetime.fromisoformat(ultima)).total_seconds()
     if 0 < falta <= intervalo:
         dormir(falta)
+        return agora + timedelta(seconds=falta)
+    return agora
 
 
 def _alertar_se_canal_parou(conn, cfg: dict, config: dict) -> None:
@@ -218,7 +242,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
             _registrar(conn, agora, origem, tipo, assinatura, "nao_enviado", motivo)
             logger.info(f"WhatsApp nao enviado ({origem}): {motivo}.")
             return "nao_enviado"
-        _esperar_intervalo(conn, cfg, agora, dormir)
+        agora = _esperar_intervalo(conn, cfg, agora, dormir)
         ok, id_mensagem = integracao_openwa.enviar_texto(cfg, cfg["grupo_id"], texto)
         if ok:
             _registrar(conn, agora, origem, tipo, assinatura, "enviado", None, id_mensagem)

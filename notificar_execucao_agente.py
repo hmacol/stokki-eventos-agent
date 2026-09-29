@@ -46,6 +46,7 @@ TITULOS_POR_SCRIPT = {
     "processar_documentos": "Documentos dos pedidos",
     "notificar_transportadoras": "Notificação de transportadoras",
     "gerar_pdf_romaneios": "PDFs de romaneio",
+    "cancelar_rotas_sem_motorista": "Rotas sem motorista",
 }
 TITULO_PADRAO = "Agente Stokki Eventos"
 

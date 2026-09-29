@@ -77,11 +77,12 @@ whatsapp_notificacoes:
   sempre_avisar:
     - cancelar_rotas_sem_motorista
     - criar_rotas_diarias
-    - pipeline
+    - executar_tudo
   teto_diario: 20
   intervalo_min_seg: 20
   janela_repeticao_min: 120
   falhas_para_alerta: 3
+  pausa_canal_min: 60
 ```
 
 ## Pendente de prova (28/09/2026)
