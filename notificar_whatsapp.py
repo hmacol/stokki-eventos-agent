@@ -35,6 +35,7 @@ config.yaml:
 import logging
 import re
 import sqlite3
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -238,6 +239,47 @@ def despachar(config: dict, origem: str, tipo: str, texto: str, assinatura: str 
     nao_enviado | enviado | falhou. Nunca levanta excecao."""
     try:
         return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+# --- Pontos de chamada -----------------------------------------------------------
+
+def avisar_execucao(resumo_etapas: dict, duracao_seg: float, modo_teste: bool, config: dict,
+                    titulo: str | None = None, **kw) -> str:
+    """Resumo de rotina. So vai pro grupo se houve erro ou se o script
+    esta em whatsapp_notificacoes.sempre_avisar."""
+    try:
+        if not _cfg(config).get("ativo"):
+            return "desligado"
+        from notificar_execucao_agente import etapas_com_erro
+        origem = Path(sys.argv[0]).stem if sys.argv and sys.argv[0] else ""
+        erros = etapas_com_erro(resumo_etapas or {})
+        if not erros and origem not in (_cfg(config).get("sempre_avisar") or []):
+            return "nao_relevante"
+        assinatura = "erro:" + ",".join(erros) if erros else None
+        texto = texto_execucao(resumo_etapas, duracao_seg, titulo, kw.get("agora"))
+        return despachar(config, origem or "desconhecido", "execucao", texto, assinatura, modo_teste, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_falha_job(unidade: str, info: dict, config: dict, **kw) -> str:
+    """Sem regra de repeticao aqui: alertar_falha_job.py ja tem a janela
+    anti-enxurrada e so chama quando o e-mail tambem saiu."""
+    try:
+        return despachar(config, unidade, "falha_job", texto_falha_job(unidade, info, kw.get("agora")), **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config: dict, **kw) -> str:
+    try:
+        return despachar(config, "verificar_entregues_nao_expedidos", "nao_expedidos",
+                         texto_nao_expedidos(n_alertas, n_rotas, n_retiradas), **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

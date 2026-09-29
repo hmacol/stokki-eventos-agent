@@ -254,5 +254,101 @@ class TestDespacharNuncaLevanta(unittest.TestCase):
                                           dormir=MagicMock()), "falhou")
 
 
+class TestAvisarExecucao(_ComBanco):
+    def avisar(self, etapas, script, config=None, modo_teste=False):
+        with patch.object(nw.sys, "argv", [script]), \
+                patch("notificar_execucao_agente.sys.argv", [script]):
+            return nw.avisar_execucao(etapas, 10, modo_teste, config or _config(),
+                                      conn=self.conn, agora=AGORA, dormir=self.dormir)
+
+    def test_sucesso_fora_da_lista_nao_envia_nem_registra(self):
+        self.assertEqual(self.avisar(UMA, "/opt/x/expedir_pedidos.py"), "nao_relevante")
+        self.enviar.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0], 0)
+
+    def test_sucesso_de_script_da_lista_envia(self):
+        self.assertEqual(self.avisar(UMA, "/opt/x/roteirizacao/criar_rotas_diarias.py"), "enviado")
+        self.assertEqual(self.linhas()[0][0], "criar_rotas_diarias")
+        self.assertTrue(self.enviar.call_args[0][2].startswith("✅ *Criação de rotas*"))
+
+    def test_erro_de_qualquer_script_envia_com_assinatura(self):
+        self.assertEqual(self.avisar(VARIAS_ERRO, "expedir_pedidos.py"), "enviado")
+        assinatura = self.conn.execute("SELECT assinatura FROM notificacoes_whatsapp").fetchone()[0]
+        self.assertEqual(assinatura, "erro:Pipeline,Retiradas")
+
+    def test_mesmo_erro_de_novo_nao_repete(self):
+        self.avisar(VARIAS_ERRO, "expedir_pedidos.py")
+        self.assertEqual(self.avisar(VARIAS_ERRO, "expedir_pedidos.py"), "nao_enviado")
+
+    def test_desligado_vence_a_relevancia(self):
+        self.assertEqual(self.avisar(VARIAS_ERRO, "x.py", config=_config(ativo=False)), "desligado")
+
+    def test_modo_teste(self):
+        self.assertEqual(self.avisar(VARIAS_ERRO, "x.py", modo_teste=True), "modo_teste")
+        self.enviar.assert_not_called()
+
+    def test_sempre_avisar_ausente_ou_none(self):
+        for valor in (None, "", []):
+            self.assertEqual(self.avisar(UMA, "criar_rotas_diarias.py",
+                                         config=_config(sempre_avisar=valor)), "nao_relevante")
+
+    def test_argv_vazio_e_resumo_none(self):
+        with patch.object(nw.sys, "argv", [""]), patch("notificar_execucao_agente.sys.argv", [""]):
+            self.assertEqual(nw.avisar_execucao(None, 0, False, _config(), conn=self.conn, agora=AGORA),
+                             "nao_relevante")
+            self.assertEqual(nw.avisar_execucao(VARIAS_ERRO, 0, False, _config(), conn=self.conn,
+                                                agora=AGORA, dormir=self.dormir), "enviado")
+        self.assertEqual(self.linhas()[0][0], "desconhecido")
+
+
+class TestAvisarOutros(_ComBanco):
+    def test_falha_job(self):
+        situacao = nw.avisar_falha_job("stokki-backup-gcs.service", {"Result": "exit-code"}, _config(),
+                                       conn=self.conn, agora=AGORA, dormir=self.dormir)
+        self.assertEqual(situacao, "enviado")
+        self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
+                         ("stokki-backup-gcs.service", "falha_job"))
+        self.assertIn("Job da VPS falhou", self.enviar.call_args[0][2])
+
+    def test_nao_expedidos(self):
+        situacao = nw.avisar_nao_expedidos(4, 2, 1, _config(), conn=self.conn, agora=AGORA,
+                                           dormir=self.dormir)
+        self.assertEqual(situacao, "enviado")
+        self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
+                         ("verificar_entregues_nao_expedidos", "nao_expedidos"))
+
+    def test_nenhuma_levanta_com_entrada_ruim(self):
+        with patch.object(nw, "despachar", side_effect=RuntimeError("bug")):
+            self.assertEqual(nw.avisar_falha_job("u", None, _config()), "falhou")
+            self.assertEqual(nw.avisar_nao_expedidos(1, 1, 1, _config()), "falhou")
+            with patch.object(nw.sys, "argv", ["x.py"]):
+                self.assertEqual(nw.avisar_execucao(VARIAS_ERRO, 1, False, _config()), "falhou")
+
+
+class TestChamadaNoResumoDasRotinas(unittest.TestCase):
+    def test_notificar_execucao_chama_o_whatsapp_depois_do_email(self):
+        import notificar_execucao_agente as nea
+        ordem = []
+        with patch.object(nea, "enviar_email", side_effect=lambda *a, **k: ordem.append("email") or True), \
+                patch.object(nw, "avisar_execucao", side_effect=lambda *a, **k: ordem.append("whatsapp")) as avisar:
+            nea.notificar_execucao(UMA, 12.0, False, _config(), titulo="T")
+        self.assertEqual(ordem, ["email", "whatsapp"])
+        avisar.assert_called_once_with(UMA, 12.0, False, _config(), "T")
+
+    def test_falha_no_whatsapp_nao_derruba_a_rotina(self):
+        import notificar_execucao_agente as nea
+        with patch.object(nea, "enviar_email", return_value=True), \
+                patch.object(nw, "avisar_execucao", side_effect=RuntimeError("bug")):
+            nea.notificar_execucao(UMA, 12.0, False, _config())
+
+    def test_email_de_execucao_desligado_desliga_tudo(self):
+        import notificar_execucao_agente as nea
+        config = dict(_config(), notificacao_execucao={"ativo": False})
+        with patch.object(nea, "enviar_email") as email, patch.object(nw, "avisar_execucao") as avisar:
+            nea.notificar_execucao(UMA, 12.0, False, config)
+        email.assert_not_called()
+        avisar.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

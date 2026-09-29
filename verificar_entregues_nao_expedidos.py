@@ -387,8 +387,8 @@ def main(modo_teste: bool = False) -> int:
     if (alertas or rotas or retiradas) and not modo_teste:
         config_email = config.get("email", {})
         destino = config_email.get("email_responsavel", "")
+        n_ret = sum(g["qtd"] for g in retiradas)
         if destino:
-            n_ret = sum(g["qtd"] for g in retiradas)
             assunto = (f"[Freshlog] Expedicao: {len(alertas)} entregue(s) sem expedir, "
                        f"{len(rotas)} rota(s) sem terminar, {n_ret} retirada(s) antiga(s)")
             ok = enviar_email([destino], assunto,
@@ -396,6 +396,11 @@ def main(modo_teste: bool = False) -> int:
             logger.info(f"E-mail {'enviado' if ok else 'FALHOU'} para {destino}.")
         else:
             logger.warning("email.email_responsavel nao configurado -- e-mail pulado.")
+        try:
+            import notificar_whatsapp
+            notificar_whatsapp.avisar_nao_expedidos(len(alertas), len(rotas), n_ret, config)
+        except Exception as exc:
+            logger.warning(f"Falha no aviso por WhatsApp (nao afeta a checagem): {exc}")
     return len(alertas)
 
 

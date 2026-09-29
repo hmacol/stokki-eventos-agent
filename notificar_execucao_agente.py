@@ -178,3 +178,10 @@ def notificar_execucao(resumo_etapas: dict, duracao_total_seg: float,
             logger.info(f"Notificação de execução enviada para {destinatario}.")
     except Exception as e:
         logger.warning(f"Falha ao enviar notificação de execução (não afeta o resultado): {e}")
+
+    try:
+        # import tardio: notificar_whatsapp importa funcoes deste modulo
+        import notificar_whatsapp
+        notificar_whatsapp.avisar_execucao(resumo_etapas, duracao_total_seg, modo_teste, config, titulo)
+    except Exception as e:
+        logger.warning(f"Falha no aviso por WhatsApp (não afeta o resultado): {e}")
