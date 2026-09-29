@@ -558,7 +558,7 @@
     </div>
 
     <div class="card">
-      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento">abrir planejamento</a></h3>
+      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento"{% if session.get('nivel_acesso') == 'atendimento' %} hidden{% endif %}>abrir planejamento</a></h3>
       <div id="amanha"><div class="carregando">Carregando…</div></div>
     </div>
   </div>

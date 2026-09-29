@@ -349,7 +349,7 @@
 </div>
 
 <div class="cartao">
-  <h2><span>Planejamento de amanhã</span><a href="#" id="link-planejamento" style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">abrir</a></h2>
+  <h2><span>Planejamento de amanhã</span><a href="#" id="link-planejamento"{% if session.get('nivel_acesso') == 'atendimento' %} hidden{% endif %} style="font-size:11.5px;font-weight:600;color:var(--acento);text-decoration:none;text-transform:none;">abrir</a></h2>
   <div id="amanha"><div class="carregando">Carregando…</div></div>
 </div>
 
