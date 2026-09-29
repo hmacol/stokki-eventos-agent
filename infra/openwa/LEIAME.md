@@ -100,7 +100,17 @@ whatsapp_notificacoes:
 - Memoria: ~130 MB sem sessao, ~1,0 a 1,3 GB com a sessao ativa (limite do
   container: 2 GB). O numero tem 113 grupos.
 
+- Envio ao grupo ALERTAS FRESH: HTTP 201, resposta `{"messageId": ..., "timestamp": ...}`,
+  cerca de 3,5 s (o gateway simula "digitando").
+- `SEND_PACING_ENABLED=true` NAO serve para numero de uso pessoal: a conta do
+  gateway inclui o que o dono digita no celular, e o limite do primeiro dia
+  (20) ja vinha estourado (HTTP 429 `SEND_PACING_LIMITED`). Ficou desligado.
+- Chave das rotinas: papel `operator`, restrita a sessao `notificacoes` E ao
+  grupo ALERTAS FRESH (`allowedChats`). Envio a outro grupo com ela: HTTP 403.
+- Secao `whatsapp_notificacoes` incluida no `config.yaml` da VPS em 29/09/2026
+  com `ativo: false`. Backup: `config.yaml.bak-20260929-antes-whatsapp`.
+
 ## Pendente
 
-- Grupo de destino e mensagem de prova.
-- Chave de papel `operator` e secao `whatsapp_notificacoes` no config.yaml.
+- Merge e deploy do ramo `whatsapp-notificacoes`.
+- Ligar (`ativo: true`) e prova real com `alertar_falha_job.py ... --forcar`.

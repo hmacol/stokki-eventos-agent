@@ -8,9 +8,11 @@ NODE_ENV=production
 TZ=America/Sao_Paulo
 ENGINE_TYPE=whatsapp-web.js
 AUTO_START_SESSIONS=true
-# Segunda camada de protecao do numero (a primeira e o teto diario de
-# notificar_whatsapp.py): 20 mensagens no primeiro dia da sessao, subindo.
-SEND_PACING_ENABLED=true
+# SEND_PACING_ENABLED fica DESLIGADO (padrao do gateway). O controle de ritmo
+# dele conta TODA mensagem que sai do numero, inclusive as que o Hugo digita
+# no celular: em 29/09 o limite de 20/dia ja estava estourado antes do
+# primeiro aviso (HTTP 429 SEND_PACING_LIMITED). Quem limita os avisos e o
+# teto diario de notificar_whatsapp.py.
 # MCP_ENABLED fica de fora de proposito (desligado).
 # 29/09/2026: com a versao fixada pelo padrao (alpha, vinda de repositorio de
 # terceiros) o WhatsApp desfez o vinculo segundos depois da leitura do QR.
