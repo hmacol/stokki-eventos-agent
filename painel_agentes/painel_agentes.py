@@ -157,6 +157,9 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
         return "galpao"
     # Nível "atendimento" (09/09, Hugo): só a tela /atendimento (chat e
     # chamados do portal do cliente). Total e operador também a acessam.
+    # Ampliado 28/09 (Hugo): também Torre, Pedidos Parados, Tratativas,
+    # Consulta e Expedição -- vê tudo e trata ocorrência, mas não roda
+    # agente, não encerra rota nem exclui pedido de rota.
     usuario_atendimento = cfg_painel.get("usuario_atendimento")
     senha_atendimento = cfg_painel.get("senha_atendimento")
     if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
@@ -525,7 +528,7 @@ def mapa_rotas():
 
 
 @app.route("/expedicao")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "atendimento"))
 def expedicao():
     """Tela de impressão pro time de expedição (Hugo, 18/08): nome da
     rota, motorista e um botão por rota pra imprimir a papelada (NFs +
@@ -547,12 +550,13 @@ def expedicao():
         # não tem botão de ação nenhum, por definição (ver docstring de
         # requer_auth). Esconde a opção em vez de deixar o usuário
         # tentar e levar 401/erro do servidor.
-        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") != "leitura",
+        # Nível "atendimento" (28/09) também só consulta e imprime aqui.
+        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") not in ("leitura", "atendimento"),
     )
 
 
 @app.route("/api/expedicao/romaneio/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "atendimento"))
 def api_expedicao_romaneio(rota_id):
     """Gera (sempre fresco) e serve o PDF de romaneio de uma rota já
     criada na VUUPT -- mesmo padrão do botão 'Imprimir rota' do
@@ -766,7 +770,7 @@ def laboratorio_rotas():
 
 
 @app.route("/historico-tratativas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def historico_tratativas():
     """Histórico de tratativas pesquisável por NF, PS, embarcador, cliente,
     motorista ou motivo -- pedido do Hugo, 14/08. 100% leitura (ver
@@ -827,7 +831,7 @@ def vigia_pedidos():
 
 
 @app.route("/pedidos-parados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def pedidos_parados():
     """Triagem dos pedidos parados do Fresh Hub -- pedido do Hugo,
     24/08. Página sobe só com a casca; os dados chegam por
@@ -835,11 +839,11 @@ def pedidos_parados():
     levar alguns segundos, não deve travar o load -- mesmo padrão da
     Torre)."""
     return render_template("pedidos_parados_triagem.html",
-                           pode_editar=g.nivel_acesso in ("total", "operador"))
+                           pode_editar=g.nivel_acesso in ("total", "operador", "atendimento"))
 
 
 @app.route("/api/pedidos-parados/dados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def api_pedidos_parados_dados():
     try:
         return jsonify({"pedidos": pedidos_parados_triagem.listar_com_classificacao()})
@@ -849,7 +853,7 @@ def api_pedidos_parados_dados():
 
 
 @app.route("/api/pedidos-parados/classificar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_classificar():
     body = request.get_json(force=True)
@@ -869,7 +873,7 @@ def api_pedidos_parados_classificar():
 
 
 @app.route("/api/pedidos-parados/buscar-vuupt")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def api_pedidos_parados_buscar_vuupt():
     order_number = request.args.get("order_number", "")
     if not order_number:
@@ -883,7 +887,7 @@ def api_pedidos_parados_buscar_vuupt():
 
 
 @app.route("/api/pedidos-parados/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_duplicar():
     body = request.get_json(force=True)
@@ -902,7 +906,7 @@ def api_pedidos_parados_duplicar():
 
 
 @app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_encaminhar():
     body = request.get_json(force=True)
@@ -921,7 +925,7 @@ def api_pedidos_parados_encaminhar():
 
 
 @app.route("/api/pedidos-parados/notificar-cliente-retira", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_notificar_cliente_retira():
     body = request.get_json(force=True)
@@ -940,7 +944,7 @@ def api_pedidos_parados_notificar_cliente_retira():
 
 
 @app.route("/api/pedidos-parados/verificar-stokki", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_stokki():
     """Consulta status/transportadora de todos os pedidos em tela na
@@ -963,7 +967,7 @@ def api_pedidos_parados_verificar_stokki():
 
 
 @app.route("/api/pedidos-parados/verificar-vuupt", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_vuupt():
     """Consulta status/agendamento de todos os pedidos em tela na Vuupt
@@ -985,7 +989,7 @@ def api_pedidos_parados_verificar_vuupt():
 
 
 @app.route("/torre")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def torre():
     """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
     sobe só com a casca; os dados chegam por /api/torre/* via JS (a
@@ -999,6 +1003,10 @@ def torre():
     return render_template(
         "torre_controle.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
+        # Nível "atendimento" (Hugo, 28/09): trata ocorrência (tratar,
+        # desfazer, duplicar, notificar), mas não roda agente, não
+        # encerra rota nem exclui pedido -- isso segue em pode_editar.
+        pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         # "Excluir da Rota" do chip (25/08, mesmo botão da Expedição):
         # sem data na torre, toda rota mostrada é "de hoje em diante"
@@ -1008,7 +1016,7 @@ def torre():
 
 
 @app.route("/torre/mobile")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def torre_mobile():
     """Versão mobile da Torre de Controle (Hugo, 17/08) -- mesmo template
     "casca vazia + JS" do desktop, só que consumindo os mesmos
@@ -1019,6 +1027,7 @@ def torre_mobile():
     return render_template(
         "torre_mobile.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
+        pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
         endpoint_desktop="torre",
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         pode_excluir_pedido=pode_editar,
@@ -1026,7 +1035,7 @@ def torre_mobile():
 
 
 @app.route("/api/torre/dados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def api_torre_dados():
     try:
         return jsonify(torre_controle.buscar_dados_torre())
@@ -1036,7 +1045,7 @@ def api_torre_dados():
 
 
 @app.route("/api/torre/stokki")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def api_torre_stokki():
     """Funil outbound da Stokki -- endpoint separado do resto porque tem
     cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
@@ -1096,7 +1105,7 @@ def api_torre_encerrar_rota():
 
 
 @app.route("/api/torre/etapas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def api_torre_etapas():
     """Só o estado das etapas do stepper (leitura barata no SQLite) --
     o front consulta com frequência maior pra dar feedback rápido
@@ -1123,7 +1132,7 @@ def api_torre_rodar():
 
 
 @app.route("/api/torre/tratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_torre_tratar():
     """Marca uma exceção da fila como tratada (com motivo) -- ela sai
@@ -1141,7 +1150,7 @@ def api_torre_tratar():
 
 
 @app.route("/api/torre/destratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_torre_destratar():
     body = request.get_json(force=True)
@@ -1153,7 +1162,7 @@ def api_torre_destratar():
 
 
 @app.route("/api/torre/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_torre_duplicar():
     """Botão 'Duplicar pedido' da fila de ação -- cria a reentrega no
@@ -1172,7 +1181,7 @@ def api_torre_duplicar():
 
 
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem
 def api_torre_notificar_ocorrencia():
     """Botão 'Notificar' da fila de ação -- dispara na hora a pergunta
@@ -1765,7 +1774,7 @@ def pedagios():
 
 
 @app.route("/financeiro/pedagios/<int:pedagio_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def pedagio_foto(pedagio_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -1839,7 +1848,7 @@ def canhotos():
 
 
 @app.route("/canhotos/<int:comprovante_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def canhoto_foto(comprovante_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -1897,7 +1906,7 @@ def _arg_data(chave: str) -> str | None:
 
 
 @app.route("/consulta")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def consulta():
     from nucleo import banco as nucleo_banco, consulta as nucleo_consulta
     termo = (request.args.get("q") or "").strip()
@@ -1934,7 +1943,7 @@ def consulta():
 
 
 @app.route("/consulta/rota/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def consulta_rota(rota_id):
     from nucleo import consulta as nucleo_consulta
     rota = nucleo_consulta.detalhar_rota(rota_id)
@@ -1944,7 +1953,7 @@ def consulta_rota(rota_id):
 
 
 @app.route("/consulta/pedido/<codigo>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def consulta_pedido(codigo):
     from nucleo import consulta as nucleo_consulta
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
