@@ -730,6 +730,23 @@ def classificar(order_number: str, freshhub_id: str, classificacao: str, usuario
     )
 
 
+def _desfazer_classificacao(order_number: str, usuario: str, motivo: str) -> None:
+    """Volta o pedido pra "sem classificação" (aparece de novo em "só não
+    tratados"). Usado quando a Vuupt desmente a classificação."""
+    conn = _conectar()
+    conn.execute("""
+        UPDATE pedidos_parados_classificacao
+           SET classificacao = NULL, acao_status = NULL, acao_detalhe = NULL, acao_em = NULL
+         WHERE order_number = ?
+    """, (order_number,))
+    conn.commit()
+    conn.close()
+    tratativas.registrar_evento(
+        order_number, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLASSIFICADO",
+        decisao="", texto=f"Classificação desfeita por {usuario} -- Vuupt: {motivo}",
+    )
+
+
 def duplicar(order_number: str, usuario: str) -> dict:
     """
     Ação da tratativa "Reenvio": resolve o pedido na Vuupt e duplica --
@@ -747,11 +764,30 @@ def duplicar(order_number: str, usuario: str) -> dict:
             f"ID do Stokki e como NF em pedidos_historico)."
         )
 
+    # Segue a cadeia de reentregas (R1 -> R2 ...) até a mais recente
+    # (28/09): antes, se o original já tinha R1, respondia "já duplicado
+    # → R1" e marcava CONCLUÍDA mesmo com a R1 também falhada -- a R2
+    # nunca nascia e o pedido ficava parado com a tratativa dada por feita.
+    servico = _servico_mais_recente_da_cadeia(vuupt, servico)
     service_id = servico["id"]
+    code_atual = (servico.get("code") or "").lstrip("#")
     if fingerprint_duplicacao_insucesso.ja_duplicado(service_id):
+        # Cadeia parou num serviço duplicado cuja reentrega não foi
+        # achada na Vuupt -- não dá pra decidir sozinho.
         novo_code = fingerprint_duplicacao_insucesso.buscar_novo_code(service_id)
-        _marcar_acao(order_number, "concluida", f"já duplicado antes → {novo_code}")
-        return {"ok": True, "novo_code": novo_code, "ja_existia": True}
+        raise ValueError(f"{code_atual} já foi duplicado ({novo_code}), mas a reentrega não foi "
+                         f"encontrada na Vuupt -- conferir manualmente.")
+    status = servico.get("status") or ""
+    if code_atual != (pedido_code or "").lstrip("#"):
+        # Já existe reentrega: só duplica de novo se ELA falhou (vira R2).
+        if status == "done" and _servico_com_sucesso(servico):
+            _marcar_acao(order_number, "concluida", f"reentrega {code_atual} já entregue")
+            return {"ok": True, "novo_code": code_atual, "ja_existia": True}
+        if status == "canceled":
+            raise ValueError(f"A reentrega {code_atual} está CANCELADA na Vuupt -- conferir antes de reenviar.")
+        if status != "done":
+            _marcar_acao(order_number, "concluida", f"reentrega {code_atual} já ativa ({status})")
+            return {"ok": True, "novo_code": code_atual, "ja_existia": True}
 
     modulo = _expedir_pedidos_raiz()
     novo = modulo.duplicar_servico_por_insucesso(vuupt, servico)
@@ -1231,6 +1267,9 @@ def _servico_mais_recente_da_cadeia(vuupt: VuuptClient, servico: dict) -> dict:
     return atual
 
 
+MOTIVO_NO_POOL = "NO POOL, ainda sem rota -- "
+
+
 def _sugestao_vuupt(servico: dict, hoje: date) -> tuple[str | None, str]:
     """(classificação sugerida ou None, motivo legível)."""
     status = servico.get("status") or ""
@@ -1245,10 +1284,14 @@ def _sugestao_vuupt(servico: dict, hoje: date) -> tuple[str | None, str]:
     if status != "not_assigned":
         return None, f"status '{status}' (não é 'não atribuído')"
     data_ag = _data_agendamento_local(servico.get("scheduled_start"))
+    # 28/09: 'not_assigned' sem agendamento (ou agendado pra hoje) está
+    # no POOL, não em rota. Antes virava "Em Rota", que conta como tratado
+    # e some do "só não tratados" -- pedido parado no galpão e esquecido
+    # no pool ficava rotulado como resolvido. Agora fica sem sugestão.
     if data_ag is None:
-        return "Em Rota", "não atribuído, sem agendamento"
+        return None, MOTIVO_NO_POOL + "sem agendamento"
     if data_ag == hoje:
-        return "Em Rota", f"não atribuído, agendado pra hoje ({data_ag:%d/%m})"
+        return None, MOTIVO_NO_POOL + f"agendado pra hoje ({data_ag:%d/%m})"
     if data_ag > hoje:
         return "Agendado", f"não atribuído, agendado pra {data_ag:%d/%m/%Y}"
     return None, f"não atribuído, agendamento vencido ({data_ag:%d/%m/%Y})"
@@ -1312,6 +1355,12 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
             resumo["detalhes"].append({"order_number": numero, "code": code, "status": status,
                                        "scheduled_start": scheduled_start, "sugestao": alvo, "motivo": motivo})
             if not alvo:
+                atual_local = locais.get(numero, {}).get("classificacao")
+                if motivo.startswith(MOTIVO_NO_POOL) and atual_local == "Em Rota":
+                    # "Em Rota" é falso: o serviço está no pool. Desfaz pra
+                    # o pedido voltar pro "só não tratados" (28/09).
+                    _desfazer_classificacao(numero, f"{usuario} (auto via Vuupt)", motivo)
+                    motivo += " (classificação 'Em Rota' desfeita)"
                 resumo["sem_acao"].append(f"{numero}: {motivo}")
                 continue
 

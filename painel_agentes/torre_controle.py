@@ -560,7 +560,9 @@ def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
         "qtd_nao_atribuidos": qtd_atrasados,
         "backlog_pool": backlog["pool"],
         "backlog_futuros": backlog["futuros"],
-        "insucessos": agregado["insucessos_lista"][:30],
+        # Sem corte: o [:30] antigo (na ordem da API, não por idade)
+        # fazia insucesso não tratado sumir da Fila de ação (28/09).
+        "insucessos": agregado["insucessos_lista"],
     }
 
 
@@ -898,6 +900,13 @@ def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, s
     for card, contrib in candidatas:
         veredito = classificar_rota_torre(card, hoje, ids_tratadas, ids_encerradas)
         if not veredito["fica"]:
+            # "Encerrar" tira a ROTA da tela, não o insucesso ainda não
+            # tratado dela: antes ele sumia da Fila de ação junto (28/09)
+            # e o pedido ficava sem reentrega nem alerta.
+            agregado["insucessos_lista"].extend(
+                i for i in contrib["insucessos_lista"]
+                if f"insucesso:{i.get('codigo')}" not in ids_tratadas
+            )
             continue
         card["atrasada"] = veredito["atrasada"]
         card["pendencias"] = veredito["pendencias"]
@@ -1417,6 +1426,16 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "acao": {"tipo": "link", "url": f"/planejamento?data={amanha['data_iso']}", "rotulo": "Revisar"},
             "_epoch": 0.0,
         })
+
+    # Vigia de pedidos abertos (28/09): um item por estado com prazo
+    # vencido (pool parado, rota de ontem, insucesso sem reentrega...).
+    # Só lê vigia_pedidos -- quem calcula é o timer do vigia.
+    try:
+        from vigia.consulta import excecoes_torre
+        for x in excecoes_torre(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Vigia indisponível: {e}")
 
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []

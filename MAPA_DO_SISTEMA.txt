@@ -1,7 +1,7 @@
 ==============================================================================
  MAPA DO SISTEMA — agente_stokki_eventos (Fresh Log / Fresh Hub)
  Guia de navegação para programadores: onde fica cada coisa e o que faz.
- Atualizado em 26/09/2026. Se criar/mover/apagar arquivo, atualize aqui.
+ Atualizado em 28/09/2026. Se criar/mover/apagar arquivo, atualize aqui.
 ==============================================================================
 
 ÍNDICE
@@ -84,6 +84,9 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+ Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
+ Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
+ Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
@@ -122,8 +125,10 @@
  5) Operador revisa no /planejamento e clica "Confirmar e Enviar"
     -> rotas_client.criar_rota (POST /routes na Vuupt)
     -> nucleo/rotas.registrar_rota_enviada.
-    Às 22h, rascunhos esquecidos são enviados e pedidos novos são
-    encaixados (enviar_rascunhos_pendentes.py, incrementar_rotas.py).
+    ATENÇÃO: desde 09/09 NADA envia rascunho esquecido nem encaixa pedido
+    novo sozinho -- a sequência das 22h deixou de roteirizar.
+    incrementar_rotas.py é só botão do painel; enviar_rascunhos_pendentes.py
+    não é chamado por ninguém. Rascunho não confirmado = pedido perde o dia.
  6) Documentos (NF/boleto) são casados com o pedido e subidos ao GCS
     (documentos_pedido/). 04h: gerar_pdf_romaneios.py gera 1 PDF por rota;
     o print_agent/ no Windows do escritório imprime.
@@ -132,7 +137,11 @@
     ou no app próprio (app_motorista/, rotas com provedor=APP).
  8) Durante o dia: Torre de Controle acompanha; notificacao_entregas/ manda
     e-mail por entrega; expedir_pedidos.py expede na Stokki os entregues;
-    insucessos viram pergunta ao embarcador (insucesso_entrega/).
+    insucessos viram pergunta ao embarcador (insucesso_entrega/); sem
+    resposta em 12h, expedir_pedidos.py cria a reentrega sozinho (exceto
+    avaria/validade/manutenção/não coletado, e no máximo até a -R2).
+ 10) Vigia (vigia/, a cada 15 min): todo pedido aberto ganha estado,
+    idade e prazo; vencidos viram exceção na Torre e aparecem em /vigia.
  9) E-mails de rotina: 07h NFs em rota, 20h resumo diário, etc. (seção 4).
 
 
@@ -205,7 +214,12 @@
  08,10,...,20h               reconciliar-retirada            reconciliar_pedidos_retirada.py --cancelar
  seg-sex 09,11,13,15,17:10   documentos-incremental          documentos_pedido/processar_documentos.py --incremental
  06-23h a cada 5 min         notificar-entregas              notificacao_entregas/notificar_entrega_concluida.py
+ seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario (desiste se a Stokki
+                                                             estiver em uso -- ver stokki/sessao_uso.py)
+ xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
  17:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
+                                                             (+ devolve ao pool pedido NÃO iniciado de
+                                                             rota de dia anterior)
  18:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
  22:00                       sequencia-noite                 infra/sequencia_noite.sh (abaixo)
@@ -251,7 +265,9 @@
 
  --- Expedição Stokki ---
  expedir_pedidos.py      Expede na Stokki os entregues na Vuupt, anexa canhoto,
-                         trata insucessos. É ESTE que roda em produção.
+                         trata insucessos e cria a reentrega automática (12h
+                         sem resposta). É ESTE que roda em produção. Pega a
+                         trava da sessão Stokki antes do Playwright.
  fingerprint_expedicao.py  Tabelas do que já foi expedido / falhas.
  verificar_entregues_nao_expedidos.py  Checagem diária + e-mail interno.
 
@@ -259,7 +275,9 @@
  vuupt_client.py         Cliente REST da Vuupt (serviços, skills, telefone E.164).
  http_retry.py           Backoff para HTTP 429.
  fingerprint_importacao.py  Hash do payload enviado (não reenviar igual).
- fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned.
+ fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned
+                         ('done' pra sempre; o resto vence em 12h, porque
+                         unassign devolve o serviço pro pool).
  limpar_fingerprints.py  Força reenvio (dry-run sem --confirmar).
  geocodificacao.py       Google Geocoding com cache (tabela geocache).
  telefone_origem.py      Telefone certo lido do XML da NF-e.
@@ -329,7 +347,7 @@
                                OTIMIZACAO_ROTAS, RESUMO_DIARIO_EMBARCADOR,
                                RETIRADAS, ROMANEIOS_PDF, ROTEIRIZACAO_VOLUMES,
                                SAIDA_VUUPT, TIPO_VEICULO, VALIDACAO_CHECKLISTS,
-                               VOLUMES_VUUPT.
+                               VIGIA, VOLUMES_VUUPT.
  TRATATIVAS_PEDIDOS_PARADOS.md Contexto operacional da tela /pedidos-parados.
  PRODUCT.md                    Contexto de produto/design.
  docs/superpowers/             Specs e planos de setembro/2026.
@@ -420,8 +438,10 @@
  rotas_client.py           Endpoint real de rotas (criar, buscar, atualizar,
                            adicionar_atividades, cancelar).
  otimizacao_client.py      /route-optimization (só calcula).
- enviar_rascunhos_pendentes.py  22h: envia rascunhos não confirmados.
- incrementar_rotas.py      22h: encaixa pedidos novos nas rotas (corte 19h).
+ enviar_rascunhos_pendentes.py  Envia rascunhos não confirmados. SEM TIMER
+                           desde 09/09 (não é chamado por ninguém).
+ incrementar_rotas.py      Encaixa pedidos novos nas rotas (corte 19h). Só
+                           botão do painel desde 09/09.
  cancelar_rotas_sem_motorista.py  17h45.
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
@@ -521,6 +541,7 @@
    /mapa-rotas                mapa_rotas.html
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
+   /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
    /pedidos-parados           pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
@@ -665,6 +686,13 @@
  freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
                            parados, tarefas do Kanban.
 
+ vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
+   regras.py   estados e prazos (puro, testado).
+   vigiar.py   job de 15 min: junta núcleo + retrato da Stokki + rascunhos
+               + insucessos, grava vigia_pedidos. Não chama Stokki/Vuupt.
+   banco.py    tabelas; registrar_listagem_stokki (chamado pelo pipeline).
+   consulta.py leitura pra Torre (exceções "Vigia") e tela /vigia.
+
  infra/                    Units e timers systemd, sequencia_*.sh,
                            Caddyfile-motorista.
 
@@ -704,6 +732,7 @@
    notificacoes_entrega      notificacao_entregas/
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
+   vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
    interno                   tipo de carga por embarcador (só leitura)
@@ -749,6 +778,13 @@
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (normalizar_order_number / nucleo/normalizacao.py).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
+ - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada
+   rodada sem filtro. Sem listagem completa em 30h, "sem serviço" e
+   insucessos saem do vigia (pra não acusar com dado velho).
+ - "Serviço cancelado na Vuupt" NÃO é recriado pelo pipeline se o pedido
+   segue aberto na Stokki: sai como pulado_cancelado_vuupt no relatório
+   da importação (conferir à mão). Exceção: se virou RETIRADA, o pipeline
+   cria o serviço avulso de retirada.
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão

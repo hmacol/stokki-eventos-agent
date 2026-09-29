@@ -227,8 +227,11 @@ def _chamar_claude(prompt: str, api_key: str, resposta_falha: dict) -> dict:
         return json.loads(texto_resposta_ia)
 
     except Exception as e:
+        # _falha_api: quem chama NÃO marca o e-mail como processado -- a
+        # resposta do embarcador é tentada de novo na próxima rodada em vez
+        # de se perder como "não entendida" (achado 28/09).
         logger.error(f"Erro ao extrair agendamento via Claude: {e}")
-        return dict(resposta_falha)
+        return {**resposta_falha, "_falha_api": True}
 
 
 def _atualizar_agendamento(pedido_id: int, data: str, inicio: str | None, fim: str | None, resposta_texto: str):
@@ -271,6 +274,11 @@ def processar_respostas_agendamento(config: dict) -> dict:
     processados    = 0
     atualizados    = 0
     nao_entendidos = 0
+    falhas_ia      = 0
+    # Respostas reais de embarcador que não deu pra aplicar sozinho (não
+    # entendida / ambígua): o e-mail é marcado como processado pra não
+    # repetir, então precisam chegar a alguém no resumo (28/09).
+    para_conferir: list[str] = []
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=30)
@@ -364,6 +372,9 @@ def processar_respostas_agendamento(config: dict) -> dict:
                     continue
                 por_pedido = {p["pedido"].lstrip("#"): p for p in pendentes}
                 resultado_ia = _extrair_agendamentos_multiplos_via_claude(corpo_sem_citacao, pendentes, api_key)
+                if resultado_ia.get("_falha_api"):
+                    falhas_ia += 1
+                    continue  # sem marcar: tenta de novo na próxima rodada
                 aplicados = 0
                 for item in resultado_ia.get("agendamentos") or []:
                     row = por_pedido.get(str(item.get("pedido") or "").lstrip("#").strip())
@@ -381,6 +392,7 @@ def processar_respostas_agendamento(config: dict) -> dict:
                     atualizados += aplicados
                 else:
                     nao_entendidos += 1
+                    para_conferir.append(f"{remetente_email}: não entendida ({', '.join(por_pedido)})")
                     logger.warning(f"Não foi possível extrair data de agendamento da resposta de "
                                    f"{remetente_email} ({len(pendentes)} pedido(s) pendente(s)).")
                 _marcar_processado(message_id, remetente_email)
@@ -432,6 +444,7 @@ def processar_respostas_agendamento(config: dict) -> dict:
                     f"pendente (sem marcador de pedido na mensagem) — ambíguo, "
                     f"não aplicado automaticamente. Requer conferência manual."
                 )
+                para_conferir.append(f"{remetente_email}: ambígua (mais de um pedido pendente)")
                 _marcar_processado(message_id, remetente_email)
                 continue
 
@@ -444,6 +457,9 @@ def processar_respostas_agendamento(config: dict) -> dict:
             resultado_ia = _extrair_agendamento_via_claude(
                 corpo_sem_citacao, agendamento["nome_destinatario"], agendamento["pedido"], api_key
             )
+            if resultado_ia.get("_falha_api"):
+                falhas_ia += 1
+                continue  # sem marcar: tenta de novo na próxima rodada
 
             if resultado_ia.get("nao_entendido") or not resultado_ia.get("data"):
                 logger.warning(
@@ -451,6 +467,7 @@ def processar_respostas_agendamento(config: dict) -> dict:
                     f"para o pedido {agendamento['pedido']}."
                 )
                 nao_entendidos += 1
+                para_conferir.append(f"{remetente_email}: não entendida ({agendamento['pedido']})")
                 _marcar_processado(message_id, remetente_email)
                 continue
 
@@ -474,9 +491,11 @@ def processar_respostas_agendamento(config: dict) -> dict:
 
     logger.info(
         f"Leitura de respostas de agendamento concluída: {processados} processado(s), "
-        f"{atualizados} pedido(s) atualizado(s), {nao_entendidos} não entendido(s)."
+        f"{atualizados} pedido(s) atualizado(s), {nao_entendidos} não entendido(s), "
+        f"{falhas_ia} adiada(s) por falha da IA."
     )
-    return {"processados": processados, "atualizados": atualizados, "nao_entendidos": nao_entendidos}
+    return {"processados": processados, "atualizados": atualizados, "nao_entendidos": nao_entendidos,
+            "falhas_ia": falhas_ia, "para_conferir": para_conferir}
 
 
 def main():

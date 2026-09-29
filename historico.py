@@ -58,6 +58,7 @@ ROTULOS = {
     "atualizado":           "Atualizados",
     "pulado_sem_alteracao": "Sem alteração (fingerprint)",
     "pulado_atribuido":     "Pulados (já atribuídos/concluídos)",
+    "pulado_cancelado_vuupt": "Cancelados na VUUPT com pedido aberto na Stokki",
     "ignorado_retirada":    "Ignorados (RETIRADA)",
     "retirada_criada":      "Retiradas criadas (serviço avulso)",
     "retirada_atualizada":  "Retiradas atualizadas",

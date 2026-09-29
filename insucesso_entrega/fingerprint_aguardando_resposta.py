@@ -65,6 +65,17 @@ def pode_notificar(service_id: int) -> bool:
     return row["ultima_notificacao_em"][:10] != hoje
 
 
+def ja_respondido(service_id: int) -> bool:
+    """True se o embarcador já respondeu a pergunta de reenvio (qualquer
+    resposta: prevalece o que ele pediu, a reentrega automática não mexe)."""
+    conn = _conectar()
+    row = conn.execute(
+        "SELECT status FROM insucessos_aguardando_resposta WHERE service_id = ?", (service_id,),
+    ).fetchone()
+    conn.close()
+    return bool(row and row["status"] and row["status"].upper() != "PENDENTE")
+
+
 def marcar_notificado(service_id: int, failed_reason_id, sender_id=None, code=None):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _conectar()

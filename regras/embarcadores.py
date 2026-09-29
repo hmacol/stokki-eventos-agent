@@ -15,6 +15,9 @@ import unicodedata
 from pathlib import Path
 
 
+_PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
+
+
 def _normalizar(s: str) -> str:
     s = re.sub(r"<[^>]+>", "", s).upper().strip()
     s = unicodedata.normalize("NFKD", s)
@@ -28,11 +31,19 @@ def embarcador_prioritario(linha, prioritarios: dict) -> bool:
     extraído como string.
 
     prioritarios: dict {id_stokki: nome_legivel} (ex: EMBARCADORES_IMPORTAR_ABERTOS).
+
+    28/09: decide pelo id estável (#stkkc-NN, que vem no campo 'client'
+    da linha e é o mesmo id do filtro cliente= da Fonte 1) sempre que ele
+    existe. O casamento por pedaço de nome, nos dois sentidos, descartava
+    da Fonte 2 embarcador de nome parecido (filial, outro CNPJ) -- e ele
+    também não vinha na Fonte 1, então sumia da importação sem registro.
+    O nome só é usado quando a linha não traz o id.
     """
-    if isinstance(linha, dict):
-        nome = _normalizar(str(linha.get("client", "")))
-    else:
-        nome = _normalizar(str(linha or ""))
+    texto = str(linha.get("client", "")) if isinstance(linha, dict) else str(linha or "")
+    m_id = _PADRAO_STKKC_ID.search(texto)
+    if m_id:
+        return m_id.group(1) in {str(k) for k in prioritarios.keys()}
+    nome = _normalizar(texto)
     if not nome:
         # Nome vazio nunca é prioritário — sem isso, "" in <qualquer nome>
         # dava True e descartava TODOS os pedidos da Fonte 2.
