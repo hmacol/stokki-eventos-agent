@@ -99,22 +99,25 @@ PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
 FOLGA_DISTANCIA_KM = 20
 FOLGA_KM_ACUMULADO_KM = 75
-FOLGA_TAMANHO_MAXIMO = 18
+FOLGA_PARADAS_EXTRA = 2          # 16 + 2 = 18; acompanha o teto escolhido no botao Roteirizar
 PRAZO_ENTREGA_DIAS_UTEIS = 3
 ```
+
+A folga de paradas é relativa ao teto da rodada (teto + 2), e não um 18 fixo: no botão Roteirizar o Hugo pode escolher um teto menor, e a junção não deve passar muito dele.
 
 Funções:
 
 - `eh_rota_fraca(sublote) -> bool`
-- `absorver_rotas_fracas(sublotes, base, api_key, *, volume_maximo, distancia_maxima_viagem_km, km_acumulado_maximo_viagem, eh_viagem_fn) -> (sublotes, relatorio)`. O relatório lista as rotas juntadas e, para as que sobraram, o motivo (por exemplo "vizinha mais próxima a 27 km", "vizinhas sem espaço em caixas"). Valida cada receptora com `polimento_rotas._rota_valida` usando os limites com folga, e resequencia com `ordenar_2opt`.
-- `prazo_final(entrada: datetime) -> date`
-- `motivo_nao_segurar(servico, data_alvo, ja_segurados: set[str]) -> str | None`. `None` = pode segurar.
+- `absorver_rotas_fracas(sublotes, base_lat, base_lng, api_key, *, tamanho_maximo, volume_maximo, distancia_maxima_km, distancia_maxima_viagem_km, km_acumulado_maximo, km_acumulado_maximo_viagem, eh_viagem_fn) -> (sublotes, relatorio)`. O relatório traz `juntadas` (quantas rotas fracas sumiram) e `motivos` (por rota que sobrou fraca, o motivo: "vizinha mais próxima a 27 km", "sem rota vizinha na mesma região" ou "não coube nas vizinhas"). Valida cada receptora com `polimento_rotas._rota_valida` usando os limites com folga, e resequencia com `ordenar_2opt`.
+- `data_entrada(servico) -> date | None` e `prazo_final(entrada: date) -> date`
+- `motivo_nao_segurar(servico, data_alvo, ja_segurados: set[str], api_key) -> str | None`. `None` = pode segurar.
 
 Garantia: o multiconjunto de ids de pedidos na saída de `absorver_rotas_fracas` é igual ao da entrada.
 
 ### 6.2 `roteirizacao/criar_rotas_diarias.py`
 
 - `planejar_sublotes`: chama `absorver_rotas_fracas` depois de `_polir_particao`, quando `ROTAS_FRACAS_ATIVO`. Cada entrada do retorno ganha a chave `rotas_fracas` (motivo por sublote que sobrou fraco). A conferência de cobertura continua valendo sem mudança, porque a junção não tira pedido.
+- `main`: tira da rodada os pedidos segurados para uma data posterior à data alvo (mesmo filtro do `incrementar_rotas`). Sem isso, rodar o job de novo na mesma noite recriaria a rota fraca, já sem poder segurar.
 - `main`: depois de `planejar_sublotes` e **antes** de alocar motorista, aplica o segurar nas rotas fracas que sobraram, quando `SEGURAR_ATIVO`. Grava em `pedidos_segurados`, tira o sublote da lista e registra no resumo. Em `--modo-teste` só registra no log, não grava.
 - `main` e `roteirizar_para_rascunhos`: passam `rota_fraca_motivo` no dict do rascunho.
 - O resumo da execução ganha uma linha: juntadas, seguradas, sobraram.
@@ -158,7 +161,7 @@ Função nova `avisar_rotas_fracas(config, data_alvo, juntadas, seguradas, sobra
 
 Exemplo: `Rotas de 30/09: 2 fracas juntadas em vizinhas, 1 segurada para 01/10 (3 pedidos), 1 sobrou fraca (2 pedidos, 9 caixas). Veja no Planejamento.`
 
-Atenção: este arquivo tem mudanças não commitadas de outra sessão (aviso de chamado, linguagem simples). A função nova entra depois que aquelas forem commitadas, para não misturar trabalhos.
+As mudanças de outra sessão nesse arquivo (aviso de chamado, linguagem simples) já foram commitadas em 29/09 (`3a35d3e`, `34322fc`). A função nova segue o padrão delas: mensagem inteira dentro de `MAX_MENSAGEM`.
 
 ### 6.9 `roteirizacao/replay_rotas.py`
 
