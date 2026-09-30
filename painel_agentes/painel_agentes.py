@@ -830,6 +830,45 @@ def vigia_pedidos():
                            estados=[(e, ROTULOS[e]) for e in ORDEM])
 
 
+@app.route("/clientes-agenda")
+@requer_auth
+def clientes_agenda():
+    """Fila de destinatários com data de agendamento informada esperando
+    o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
+    alimenta é marcar_clientes_agenda.py (sequências 18h/22h); o link
+    chega pelo WhatsApp. Só nível total: a decisão grava na planilha."""
+    import marcar_clientes_agenda
+    try:
+        linhas = marcar_clientes_agenda.listar()
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar clientes com agendamento")
+        linhas, erro = [], str(e)
+    pendentes = [l for l in linhas if l["situacao"] == marcar_clientes_agenda.PENDENTE]
+    decididos = [l for l in linhas if l["situacao"] != marcar_clientes_agenda.PENDENTE][:50]
+    return render_template("clientes_agenda.html", pendentes=pendentes, decididos=decididos, erro=erro)
+
+
+@app.route("/api/clientes-agenda/decidir", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_clientes_agenda_decidir():
+    import marcar_clientes_agenda
+    body = request.get_json(force=True) or {}
+    acao = body.get("acao")
+    if acao not in ("autorizar", "nao_marcar"):
+        return jsonify({"erro": "ação inválida"}), 400
+    caminho = _carregar_config().get("clientes_agendamento", {}).get("planilha", "")
+    try:
+        resultado = marcar_clientes_agenda.decidir(body.get("documento", ""), acao == "autorizar", caminho)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "situacao": resultado["situacao"], "backup": resultado["backup"]})
+
+
 @app.route("/pedidos-parados")
 @requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def pedidos_parados():

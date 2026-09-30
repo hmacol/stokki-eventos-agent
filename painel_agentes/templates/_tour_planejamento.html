@@ -54,8 +54,12 @@
     inicial = {
       aba: document.documentElement.dataset.aba || null,
       poolColapsada: !!(pool && pool.classList.contains('colapsada')),
-      rotasColapsada: !!(rotas && rotas.classList.contains('colapsada'))
+      rotasColapsada: !!(rotas && rotas.classList.contains('colapsada')),
+      topoRecolhido: document.documentElement.classList.contains('topo-recolhido')
     };
+  }
+  function topo(recolher) {
+    if (typeof alternarTopoPlanejamento === 'function') alternarTopoPlanejamento(recolher, false);
   }
   function coluna(c, colapsar) {
     var el = $('coluna-' + c);
@@ -87,6 +91,7 @@
     try {
       coluna('pool', inicial.poolColapsada);
       coluna('rotas', inicial.rotasColapsada);
+      topo(inicial.topoRecolhido);
       irPraAba(inicial.aba);
     } catch (e) {}
     inicial = null;
@@ -100,6 +105,7 @@
       guardar(); fecharTudo(); irPraAba(p.aba);
       if (p.aba === 'pool') coluna('pool', false);
       if (p.aba === 'rotas') coluna('rotas', false);
+      if (p.aba === 'mais') topo(false);
       if (extra) extra();
     };
     return p;

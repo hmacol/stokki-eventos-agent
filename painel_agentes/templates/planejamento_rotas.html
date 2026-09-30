@@ -1183,6 +1183,19 @@
   .barra-agentes-planejamento .etapa-tudo button:hover:not(:disabled) { background: #26C49A; }
   .barra-agentes-planejamento .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
 
+  /* Topo recolhível (Hugo, 29/09): um botão só esconde a barra de
+     agentes + painéis dela + resumo de agendados, pra sobrar tela pro
+     pool/rotas/mapa. Só desktop: no celular esses blocos já moram na
+     aba Mais. Recolhido, a faixa mostra o que está rodando/na fila. */
+  .faixa-topo-planejamento { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .faixa-topo-planejamento .estado-rotinas { display: none; color: var(--texto-suave); font-size: 11.5px; }
+  html.topo-recolhido .faixa-topo-planejamento .estado-rotinas { display: inline; }
+  html.modo-mobile .faixa-topo-planejamento { display: none; }
+  html.topo-recolhido:not(.modo-mobile) #barra-agentes-planejamento,
+  html.topo-recolhido:not(.modo-mobile) #painel-importacao-filtro,
+  html.topo-recolhido:not(.modo-mobile) #painel-expedicao-selecao,
+  html.topo-recolhido:not(.modo-mobile) #resumo-agendados-container { display: none !important; }
+
   .painel-importacao-filtro {
     display: none; align-items: flex-end; gap: 12px; flex-wrap: wrap;
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
@@ -1790,6 +1803,27 @@
   </div>
 </div>
 
+<div class="faixa-topo-planejamento" id="faixa-topo-planejamento">
+  <button type="button" class="botao-mini" id="botao-recolher-topo" aria-expanded="true"
+          title="Recolhe (ou mostra) as rotinas e o resumo dos pedidos agendados"
+          onclick="alternarTopoPlanejamento()">▾ Rotinas e agendados</button>
+  <span class="estado-rotinas" id="estado-rotinas-recolhido"></span>
+</div>
+<script>
+  // salvar=false: usado pelo guia da tela, que abre o topo só durante o
+  // passeio e não pode mexer na preferência guardada
+  function alternarTopoPlanejamento(recolher, salvar) {
+    const raiz = document.documentElement;
+    if (recolher === undefined) recolher = !raiz.classList.contains("topo-recolhido");
+    raiz.classList.toggle("topo-recolhido", recolher);
+    const botao = document.getElementById("botao-recolher-topo");
+    botao.textContent = (recolher ? "▸" : "▾") + " Rotinas e agendados";
+    botao.setAttribute("aria-expanded", recolher ? "false" : "true");
+    if (salvar !== false) { try { localStorage.setItem("planejamento.topoRecolhido", recolher ? "1" : "0"); } catch (e) {} }
+  }
+  try { if (localStorage.getItem("planejamento.topoRecolhido") === "1") alternarTopoPlanejamento(true, false); } catch (e) {}
+</script>
+
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
 {# região viva (15/09): a barra acima é reescrita inteira a cada
    consulta, então o leitor de tela recebe só o resumo do que MUDOU #}
@@ -2146,6 +2180,7 @@
     let resumo = "";
     if (rodando.length) resumo += `Rodando: ${rodando.join(", ")}.`;
     if (naFila.length) resumo += ` Na fila: ${naFila.join(", ")}.`;
+    document.getElementById("estado-rotinas-recolhido").textContent = resumo;
     if (!resumo && ultimoAnuncioAgentes) resumo = "Agentes terminaram.";
     if (resumo !== ultimoAnuncioAgentes) {
       ultimoAnuncioAgentes = resumo;

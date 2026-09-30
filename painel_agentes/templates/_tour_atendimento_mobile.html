@@ -1,0 +1,142 @@
+{# Roteiro do "Guia da tela" do Atendimento no CELULAR (/atendimento/mobile)
+   -- pedido do Hugo, 29/09. Mesmo conteúdo do _tour_atendimento.html, em
+   textos mais curtos: no celular o balão fica fixo embaixo e cobre parte
+   da tela. Entra sozinho pelo base_mobile.html (_tour_<endpoint>.html).
+
+   A conversa e o contexto são telas cheias (position: fixed): enquanto o
+   guia roda elas encolhem pra metade de cima, senão o balão taparia a
+   caixa de resposta.
+
+   O guia NUNCA dispara ação de verdade e NUNCA abre chamado (abrir marca
+   as mensagens como lidas): se não houver conversa aberta, mostra uma de
+   EXEMPLO, sem mexer no history, com botões sem data-acao / data-macro, e
+   apaga tudo ao sair. #}
+<style>
+  html.tour-ativo .tela { height: 46vh; height: 46dvh; }
+  /* Alvo de borda a borda (abas, telas cheias): o anel de destaque passa
+     6px da tela e o celular alargaria a página, jogando o balão pra fora. */
+  html.tour-ativo .tour-foco { max-width: calc(100vw - 2px); }
+</style>
+<script>
+(function () {
+  if (!window.Tour) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var q = function (sel) { return function () { return document.querySelector(sel); }; };
+
+  var exemplo = false;
+  function conversaReal() { return !exemplo && !$('tela-conversa').classList.contains('oculto'); }
+  function mostrarExemplo() {
+    if (exemplo || conversaReal()) return;
+    exemplo = true;
+    $('conv-titulo').textContent = 'Cliente Exemplo';
+    $('conv-sub').textContent = '#0 · Entrega (exemplo do guia)';
+    $('conv-info').innerHTML =
+      '<div class="meta"><span class="pill NA_FILA"><i></i>Na fila</span><span>Entrega</span><span>Pedido <b class="mono" style="color:var(--texto)">PS-00000</b></span></div>' +
+      '<div class="acoes"><button type="button" class="botao secundario">Assumir</button><button type="button" class="botao">✓ Resolver</button></div>';
+    $('conv-corpo').innerHTML =
+      '<div class="msg"><div class="bolha">Bom dia, o pedido PS-00000 chega hoje?</div><div class="meta-msg">Cliente Exemplo · 09:12</div></div>' +
+      '<div class="msg bot"><div class="bolha">Está em rota, parada 4 de 9.</div><div class="meta-msg">Assistente · 09:12</div></div>' +
+      '<div class="msg eu"><div class="bolha">Bom dia! Já te retorno.</div><div class="meta-msg">Atendente · 09:14</div></div>';
+    $('macros').innerHTML = '<button type="button" class="macro">Estou conferindo com o motorista…</button><button type="button" class="macro">A reentrega vai na rota da tarde…</button>';
+    $('nota-pe').textContent = 'Cliente não está no chat: a resposta vai pro e-mail dele.';
+    $('ctx-sub').textContent = '#0 · Cliente Exemplo';
+    $('lateral').innerHTML =
+      '<div class="cartao"><span class="rot">Cliente</span><div style="font-size:15px;font-weight:700">Cliente Exemplo</div><div class="kv"><span>Pedidos hoje</span><span>12 · 7 entregues</span></div></div>' +
+      '<div class="cartao"><span class="rot">Pedido citado</span><div class="mono" style="font-weight:700;font-size:15px">PS-00000</div><div class="kv"><span>Motorista / rota</span><span>Motorista Exemplo · Rota 3</span></div><div class="kv"><span>Parada</span><span>4 de 9</span></div></div>';
+  }
+  // nivel: 0 fila, 1 conversa, 2 contexto (só mexe nas telas de exemplo)
+  function tela(nivel) {
+    if (nivel) mostrarExemplo();
+    if (!exemplo) return;
+    $('tela-conversa').classList.toggle('oculto', nivel < 1);
+    $('tela-contexto').classList.toggle('oculto', nivel < 2);
+  }
+  function desfazer() {
+    if (!exemplo) return;
+    tela(0);
+    exemplo = false;
+    ['conv-info', 'conv-corpo', 'macros', 'lateral'].forEach(function (id) { $(id).innerHTML = ''; });
+    ['conv-titulo', 'conv-sub', 'ctx-sub', 'nota-pe'].forEach(function (id) { $(id).textContent = ''; });
+  }
+  var fila = function () { tela(0); }, conversa = function () { tela(1); }, contexto = function () { tela(2); };
+  // com conversa DE VERDADE aberta, a fila está atrás dela: pula os passos da fila
+  var naFila = function () { return exemplo || !conversaReal(); };
+
+  var G = 'Geral', S = 'Meu status', F = 'Fila', C = 'Conversa', X = 'Contexto';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Atendimento no celular',
+      texto: '<p>Conversas dos <b>clientes</b> (portal e e-mail) e dos <b>motoristas</b> (app), numa fila só. São três telas: <b>fila</b>, <b>conversa</b> e <b>contexto</b>.</p><p>Toque em <b>Próximo</b> pra seguir. Pra reabrir, o botão <b>?</b> no topo.</p>',
+      antes: fila },
+
+    { alvo: '#seg-status', capitulo: S, titulo: 'Online, Almoço ou Offline', quando: naFila,
+      texto: '<p><b>Online</b>: quem pedir atendente entra na fila. <b>Almoço</b> e <b>Offline</b>: a conversa vira chamado e a resposta vai por e-mail.</p><p>O Online só vale com esta tela aberta. Ao sair, marque <b>Offline</b>.</p>',
+      antes: fila },
+
+    { alvo: '.status-cartao label', capitulo: S, titulo: 'Seu nome', quando: naFila,
+      texto: '<p>O login é compartilhado: é aqui que você diz quem é. O nome <b>aparece pro cliente</b>. Sem ele não dá pra ficar Online nem responder.</p>',
+      antes: fila },
+
+    { alvo: '#aviso-topo', capitulo: S, titulo: 'Aviso do seu status', quando: naFila,
+      texto: '<p>Aparece quando você não está Online ou está fora do horário, e diz o que o cliente está vendo.</p>',
+      antes: fila },
+
+    { alvo: '#kpis', capitulo: G, titulo: 'Os números de agora', quando: naFila,
+      texto: '<p>Quantos esperam <b>na fila</b>, quantos <b>em atendimento</b>, de motorista, por e-mail e o que o assistente resolveu hoje. Arraste pro lado pra ver todos.</p>',
+      antes: fila },
+
+    { alvo: '#abas', capitulo: F, titulo: 'As abas', quando: naFila,
+      texto: '<p><b>Fila</b>: esperando a equipe, <b>comece por aqui</b>. <b>Meus</b>: os que você assumiu. <b>Motoristas</b>, <b>Por e-mail</b>, <b>Com o assistente</b> (o robô ainda conversa) e <b>Resolvidos</b>. Arraste pro lado.</p>',
+      antes: fila },
+
+    { alvo: '#busca', capitulo: F, titulo: 'Busca', quando: naFila,
+      texto: '<p>Cliente, pedido ou número do chamado. Procura só <b>dentro da aba aberta</b>.</p>',
+      antes: fila },
+
+    { alvo: '#fila .vazio', capitulo: F, titulo: 'Nada por aqui', quando: naFila,
+      texto: '<p>Aba vazia. Na <b>Fila</b>, é o objetivo: ninguém esperando.</p>',
+      antes: fila },
+
+    { alvo: q('#fila .item'), capitulo: F, titulo: 'Um chamado na fila', quando: naFila,
+      texto: '<p>Quem espera há mais tempo fica em cima. <b>Bolinha verde</b> = mensagem não lida. <b>Volante</b> = motorista. Embaixo, a situação e com quem está.</p><p>Tocar abre a conversa e <b>marca como lida</b>.</p>',
+      antes: fila },
+
+    { alvo: '#tela-conversa .tela-cab', capitulo: C, titulo: 'Topo da conversa',
+      texto: '<p>A <b>seta</b> volta pra fila (o voltar do celular também). O <b>ⓘ</b> abre o contexto: cliente, pedido, rota.</p><p style="color:var(--texto-suave)">Se não havia conversa aberta, esta é um exemplo: o guia não abre chamado.</p>',
+      antes: conversa },
+
+    { alvo: '#conv-info', capitulo: C, titulo: 'Assumir e resolver',
+      texto: '<p><b>Assumir</b>: o chamado vira seu e a pessoa vê que você entrou. <b>Devolver pra fila</b> solta. <b>Resolver</b> fecha e <b>manda a conversa inteira por e-mail</b> pro cliente.</p>',
+      antes: conversa },
+
+    { alvo: '#conv-corpo', capitulo: C, titulo: 'As mensagens',
+      texto: '<p>À esquerda, quem pediu ajuda; à direita, a equipe. Com <b>barra lateral</b> é o assistente (robô). Se houver <b>Resumo do assistente</b> no topo, leia antes de responder.</p>',
+      antes: conversa },
+
+    { alvo: '#macros', capitulo: C, titulo: 'Respostas rápidas',
+      texto: '<p>Tocar <b>só coloca o texto na caixa</b>, não envia. Arraste pro lado pra ver mais.</p>',
+      antes: conversa },
+
+    { alvo: '#tela-conversa .compor', capitulo: C, titulo: 'Responder',
+      texto: '<p>Aqui o <b>Enter quebra a linha</b>; envia pelo botão. O clipe anexa até 5 arquivos.</p><p>Responder chamado sem dono <b>já assume</b>; responder resolvido <b>reabre</b>. <b>Não dá pra apagar</b> depois.</p>',
+      antes: conversa },
+
+    { alvo: '#nota-pe', capitulo: C, titulo: 'Pra onde vai a resposta',
+      texto: '<p>Cliente com o chat aberto vê na hora; fora do chat, vai por <b>e-mail</b>. Motorista recebe na aba Ajuda do app.</p>',
+      antes: conversa },
+
+    { alvo: '#lateral', capitulo: X, titulo: 'Contexto',
+      texto: '<p>Dados do <b>cliente</b> e do <b>pedido citado</b> (situação, motorista, rota, parada). Em chamado de motorista: ele, a rota de hoje e o pagamento. Tocar em outro chamado da lista abre ele.</p>',
+      antes: contexto },
+
+    { alvo: null, capitulo: G, titulo: 'É isso',
+      texto: '<p><b>1.</b> Nome e Online. <b>2.</b> Aba Fila, de cima pra baixo. <b>3.</b> Assumir, responder, <b>Resolver</b>. <b>4.</b> Offline ao sair.</p><p>O <b>?</b> no topo reabre este guia.</p>',
+      antes: fila }
+  ];
+
+  window.Tour.registrar('atendimento_mobile', passos, {
+    auto: true, titulo: 'Atendimento',
+    pronto: function () { return !!document.querySelector('#abas button'); },
+    aoSair: desfazer
+  });
+})();
+</script>
