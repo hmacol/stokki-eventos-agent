@@ -225,6 +225,7 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict):
                 ch.mensagem_sistema(conn, chamado, f"Chamado registrado. {sit['texto']}. A equipe responde aqui e no seu e-mail ({sit['horario']}).")
             chamado = ch.buscar_chamado(conn, chamado["id"])
             ch.em_segundo_plano(ch.email_para_atendimento, chamado, m, config, novo=True)
+            ch.whatsapp_para_atendimento(chamado, config)
             emails = ch.emails_do_cliente(conn, cli["cnpj"])
             if emails:
                 ch.em_segundo_plano(ch.email_confirmacao_cliente, chamado, m, emails, config)

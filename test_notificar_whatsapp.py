@@ -483,6 +483,86 @@ class TestAvisarOutros(_ComBanco):
                 self.assertEqual(nw.avisar_execucao(VARIAS_ERRO, 1, False, _config()), "falhou")
 
 
+LINK = "https://app.freshhub.com.br/painel/atendimento?chamado=21"
+
+
+def _chamado(**extra):
+    chamado = {"id": 21, "tipo": "CLIENTE", "nome_cliente": "QUATRO ESTRELAS", "area_rotulo": "Entrega",
+               "pedido_ref": "PS-40316", "assunto": "Pedido nao chegou"}
+    chamado.update(extra)
+    return chamado
+
+
+class TestTextoChamado(unittest.TestCase):
+    def test_cliente(self):
+        self.assertEqual(nw.texto_chamado(_chamado(), LINK, agora=AGORA), "\n".join([
+            "🙋 *Atendimento precisa de gente* · 16/09 22:05",
+            "Chamado #21 · QUATRO ESTRELAS",
+            "Área: Entrega · Pedido: PS-40316",
+            LINK,
+        ]))
+
+    def test_motorista_sai_sem_nome(self):
+        texto = nw.texto_chamado(_chamado(tipo="MOTORISTA", nome_cliente="João da Silva", pedido_ref=""),
+                                 LINK, agora=AGORA)
+        self.assertEqual(texto.split("\n")[1:3], ["Chamado #21 · Motorista (app)", "Área: Entrega"])
+        self.assertNotIn("João", texto)
+
+    def test_sem_area_nem_pedido_nao_deixa_linha_vazia(self):
+        texto = nw.texto_chamado(_chamado(area_rotulo="", pedido_ref=None), LINK, agora=AGORA)
+        self.assertEqual(texto.split("\n")[1:], ["Chamado #21 · QUATRO ESTRELAS", LINK])
+
+    def test_cabe_em_200_sem_cortar_o_link(self):
+        link = "https://app.freshhub.com.br/painel/atendimento?chamado=123456"
+        texto = nw.texto_chamado(_chamado(id=123456, nome_cliente="N" * 300, area_rotulo="a" * 300,
+                                          pedido_ref="p" * 300), link, agora=AGORA)
+        self.assertLessEqual(len(texto), nw.MAX_MENSAGEM)
+        self.assertEqual(texto.split("\n")[-1], link)
+        self.assertIn("Área: ", texto)
+
+    def test_assunto_e_texto_do_cliente_ficam_de_fora(self):
+        self.assertNotIn("nao chegou", nw.texto_chamado(_chamado(), LINK, agora=AGORA))
+
+
+class TestAvisarChamado(_ComBanco):
+    def avisar(self, config=None, chamado=None, agora=AGORA):
+        return nw.avisar_chamado(chamado or _chamado(), LINK,
+                                 config or _config(grupo_atendimento_id="2@g.us"),
+                                 conn=self.conn, agora=agora, dormir=self.dormir)
+
+    def test_vai_pro_grupo_do_atendimento(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "2@g.us")
+        self.assertIn(LINK, self.enviar.call_args[0][2])
+        self.assertEqual(self.conn.execute("SELECT origem, tipo, assinatura FROM notificacoes_whatsapp").fetchone(),
+                         ("atendimento", "chamado", "chamado:21"))
+
+    def test_sem_grupo_do_atendimento_nao_cai_no_grupo_de_alertas(self):
+        self.assertEqual(self.avisar(config=_config()), "desligado")
+        self.enviar.assert_not_called()
+
+    def test_vale_mesmo_sem_o_grupo_de_alertas(self):
+        self.assertEqual(self.avisar(config=_config(grupo_id="", grupo_atendimento_id="2@g.us")), "enviado")
+
+    def test_chave_propria_desliga_so_este_aviso(self):
+        config = _config(grupo_atendimento_id="2@g.us", avisar_chamados=False)
+        self.assertEqual(self.avisar(config=config), "desligado")
+        self.assertEqual(self.despachar(config=config), "enviado")
+
+    def test_chave_mestra_desligada(self):
+        self.assertEqual(self.avisar(config=_config(ativo=False, grupo_atendimento_id="2@g.us")), "desligado")
+        self.enviar.assert_not_called()
+
+    def test_um_aviso_por_chamado_dentro_da_janela(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.avisar(agora=AGORA + timedelta(minutes=30)), "nao_enviado")
+        self.assertEqual(self.avisar(chamado=_chamado(id=22), agora=AGORA + timedelta(minutes=31)), "enviado")
+        self.assertEqual(self.enviar.call_count, 2)
+
+    def test_nao_levanta_com_entrada_ruim(self):
+        self.assertEqual(nw.avisar_chamado(None, LINK, _config(grupo_atendimento_id="2@g.us")), "falhou")
+
+
 class TestChamadaNoResumoDasRotinas(unittest.TestCase):
     def test_notificar_execucao_chama_o_whatsapp_depois_do_email(self):
         import notificar_execucao_agente as nea

@@ -796,6 +796,7 @@ def _abrir_chamado(conn: sqlite3.Connection, cot: dict, config: dict) -> int | N
             ch.mensagem_sistema(conn_ch, chamado, f"Cliente aceitou a proposta {cot['numero']} ({r['veiculo_nome']}, "
                                                   f"{r['km_total']:.1f} km, {_fmt_brl(r['total'])}).\nEntregas:\n{entregas}\n"
                                                   f"Programar coleta e confirmar data com o cliente.")
+            ch.whatsapp_para_atendimento(chamado, config)
             return chamado["id"]
         finally:
             conn_ch.close()

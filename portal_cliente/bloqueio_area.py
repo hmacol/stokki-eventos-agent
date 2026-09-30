@@ -97,6 +97,7 @@ def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> in
             chamado = ch.criar_chamado(conn_ch, cliente, ch.ORIGEM_SISTEMA, ch.STATUS_AGUARDANDO_FL,
                                        assunto="Envio para região não atendida", area=AREA_CHAMADO, pedido_ref=f"NF {nfs}")
             ch.mensagem_sistema(conn_ch, chamado, texto)
+            ch.whatsapp_para_atendimento(chamado, config)
             chamado_id = chamado["id"]
             emails_cliente = ch.emails_do_cliente(conn_ch, cliente.get("cnpj"))
         finally:

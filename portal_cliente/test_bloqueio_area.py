@@ -323,6 +323,7 @@ class AbrirBloqueio(unittest.TestCase):
             chamado_id = ba.abrir_bloqueio(conn, cliente, criados, config)
         self.assertEqual(chamado_id, 77)
         fake_ch.criar_chamado.assert_called_once()
+        fake_ch.whatsapp_para_atendimento.assert_called_once_with({"id": 77}, config)
         kw = fake_ch.criar_chamado.call_args.kwargs
         self.assertEqual(kw["area"], "envios")
         self.assertEqual(kw["pedido_ref"], "NF 10, 11")

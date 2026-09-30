@@ -204,6 +204,21 @@ def emails_atendimento(config: dict, perfil: str = PERFIL_CLIENTE) -> list[str]:
     return list(lista or [])
 
 
+def _whatsapp_chamado(conn, chamado: dict, config: dict) -> None:
+    import notificar_whatsapp
+    notificar_whatsapp.avisar_chamado(chamado, f"{url_painel(config)}/atendimento?chamado={chamado['id']}",
+                                      config, conn=conn)
+
+
+def whatsapp_para_atendimento(chamado: dict, config: dict) -> None:
+    """Chamado passou a depender de gente: aviso no grupo de WhatsApp do
+    atendimento, com o link (Hugo, 29/09/2026). Em segundo plano porque o
+    envio pode esperar o intervalo minimo entre mensagens."""
+    wa = (config or {}).get("whatsapp_notificacoes") or {}
+    if wa.get("ativo") and wa.get("avisar_chamados", True) and wa.get("grupo_atendimento_id"):
+        em_segundo_plano(_whatsapp_chamado, chamado, config)
+
+
 def url_base(config: dict) -> str:
     return ((config.get("portal_cliente", {}) or {}).get("url_base") or "https://app.freshhub.com.br/cliente").rstrip("/")
 
@@ -796,6 +811,7 @@ def entrar_na_fila(conn: sqlite3.Connection, chamado: dict, config: dict) -> dic
     NA_FILA; fora do horário / sem atendente -> AGUARDANDO_FL (vira chamado
     por e-mail). O horário considerado é o do perfil do chamado."""
     sit = situacao_atendimento(conn, config, perfil=perfil_do_tipo(chamado.get("tipo")))
+    whatsapp_para_atendimento(chamado, config)
     if sit["estado"] == "online":
         posicao = conn.execute("SELECT COUNT(*) FROM portal_chamados WHERE status = 'NA_FILA'").fetchone()[0] + 1
         atualizar_chamado(conn, chamado["id"], status=STATUS_NA_FILA, fila_desde=_agora())
@@ -856,6 +872,7 @@ def registrar_mensagem_cliente(conn: sqlite3.Connection, chamado: dict, cliente:
     Devolve (mensagem, chamado_atualizado, precisa_avisar_equipe_por_email)."""
     if chamado["status"] == STATUS_RESOLVIDO:
         chamado = reabrir(conn, chamado, config, "nova mensagem do cliente")
+        whatsapp_para_atendimento(chamado, config)
     msg = adicionar_mensagem(conn, chamado, ORIGEM_CLIENTE, cliente.get("nome") or "Cliente", texto, canal, anexos,
                              message_id=message_id, email_remetente=email_remetente)
     chamado = buscar_chamado(conn, chamado["id"])

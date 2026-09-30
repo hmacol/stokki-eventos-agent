@@ -292,6 +292,11 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 18h/22h). Data informada
                          vence o dia fixo da região.
+ marcar_clientes_agenda.py  Quem teve data de agendamento informada vira
+                         AGENDA na BD_CLIENTES (sequências 18h/22h, backup
+                         antes de gravar). Trata cada documento uma vez
+                         (tabela clientes_agenda_marcados): AGENDA apagado
+                         à mão não volta.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
@@ -322,6 +327,9 @@
                                lista sempre_avisar) e insucessos novos de entrega
                                (um aviso por rodada do expedir_pedidos.py, com
                                código, destinatário, remetente e motivo).
+                               Em grupo separado (grupo_atendimento_id): chamado
+                               do atendimento que passou a depender de gente,
+                               com o link (chamados.whatsapp_para_atendimento).
                                Desligado por padrão.
                                Texto em linguagem simples (sem nome de unit nem
                                exceção crua) e mensagem inteira em 200 caracteres
@@ -813,6 +821,10 @@
    número do Hugo por gateway não-oficial (OpenWA). Sem reenvio, teto de
    20/dia. Não tem relação com atendimento/ nem com a Evolution. Ligar é
    decisão do Hugo.
+ - Aviso de chamado no WhatsApp vai pro grupo ALERTAS ATENDIMENTO
+   (whatsapp_notificacoes.grupo_atendimento_id; sem ele não envia, nunca
+   cai no grupo de alertas). Desliga sozinho com avisar_chamados: false.
+   O portal lê o config na subida: mudou a seção, reinicie portal-cliente.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

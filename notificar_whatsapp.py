@@ -17,6 +17,11 @@ Quatro origens chamam este modulo, sempre DEPOIS do e-mail:
     verificar_entregues_nao_expedidos.main        -> avisar_nao_expedidos
     expedir_pedidos.main                          -> avisar_insucessos
 
+Quinta origem (pedido do Hugo, 29/09/2026), em grupo SEPARADO: chamado do
+atendimento que passou a depender de gente, com o link da tela. Leva so o
+nome do embarcador.
+    portal_cliente/chamados.whatsapp_para_atendimento -> avisar_chamado
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -31,6 +36,8 @@ config.yaml:
       api_key: "..."
       sessao: "..."
       grupo_id: "...@g.us"
+      grupo_atendimento_id: "...@g.us"   # grupo dos avisos de chamado
+      avisar_chamados: true              # desliga so o aviso de chamado
       sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
       teto_diario: 20
       intervalo_min_seg: 20
@@ -263,6 +270,29 @@ def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     return "\n".join(linhas)
 
 
+def texto_chamado(chamado: dict, link: str, agora: datetime | None = None) -> str:
+    """So o nome do embarcador (motorista sai sem nome); assunto e conversa
+    ficam de fora, quem abre o link le na tela."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    if chamado.get("tipo") == "MOTORISTA":
+        quem = "Motorista (app)"
+    else:
+        quem = _uma_linha(chamado.get("nome_cliente"), 35) or "Cliente"
+    linhas = [f"🙋 *Atendimento precisa de gente* · {quando}", f"Chamado #{chamado['id']} · {quem}"]
+    partes = []
+    if chamado.get("area_rotulo"):
+        partes.append(f"Área: {_uma_linha(chamado['area_rotulo'], 30)}")
+    if chamado.get("pedido_ref"):
+        partes.append(f"Pedido: {_uma_linha(chamado['pedido_ref'], 30)}")
+    # O link nunca e cortado: a linha de area/pedido e que encolhe.
+    while partes and _tamanho(linhas + [" · ".join(partes), link]) > MAX_MENSAGEM:
+        partes.pop()
+    if partes:
+        linhas.append(" · ".join(partes))
+    linhas.append(link)
+    return "\n".join(linhas)
+
+
 # --- Envio --------------------------------------------------------------------
 
 def _cfg(config: dict | None) -> dict:
@@ -356,9 +386,10 @@ def _alertar_se_canal_parou(conn, cfg: dict, config: dict) -> None:
                  config.get("email", {}))
 
 
-def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir) -> str:
+def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id) -> str:
     cfg = _cfg(config)
-    if not cfg.get("ativo") or not integracao_openwa.configurado(cfg) or not cfg.get("grupo_id"):
+    grupo_id = grupo_id or cfg.get("grupo_id")
+    if not cfg.get("ativo") or not integracao_openwa.configurado(cfg) or not grupo_id:
         return "desligado"
     if modo_teste:
         logger.info(f"[MODO TESTE] WhatsApp nao enviado ({origem}). Texto:\n{texto}")
@@ -375,7 +406,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
             logger.info(f"WhatsApp nao enviado ({origem}): {motivo}.")
             return "nao_enviado"
         agora = _esperar_intervalo(conn, cfg, agora, dormir)
-        ok, id_mensagem = integracao_openwa.enviar_texto(cfg, cfg["grupo_id"], texto)
+        ok, id_mensagem = integracao_openwa.enviar_texto(cfg, grupo_id, texto)
         if ok:
             _registrar(conn, agora, origem, tipo, assinatura, "enviado", None, id_mensagem)
             logger.info(f"WhatsApp enviado ao grupo ({origem}).")
@@ -390,11 +421,12 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
 
 def despachar(config: dict, origem: str, tipo: str, texto: str, assinatura: str | None = None,
               modo_teste: bool = False, conn=None, agora: datetime | None = None,
-              dormir=time.sleep) -> str:
+              dormir=time.sleep, grupo_id: str | None = None) -> str:
     """Aplica as regras e envia. Devolve a situacao: desligado | modo_teste |
-    nao_enviado | enviado | falhou. Nunca levanta excecao."""
+    nao_enviado | enviado | falhou. Nunca levanta excecao. `grupo_id` troca
+    o destino (padrao: whatsapp_notificacoes.grupo_id)."""
     try:
-        return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir)
+        return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
@@ -450,6 +482,25 @@ def avisar_insucessos(insucessos: list, config: dict, modo_teste: bool = False, 
             return "nao_relevante"
         return despachar(config, "expedir_pedidos", "insucesso",
                          texto_insucessos(insucessos, kw.get("agora")), modo_teste=modo_teste, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def chamados_ligado(config: dict) -> bool:
+    cfg = _cfg(config)
+    return bool(cfg.get("ativo") and cfg.get("avisar_chamados", True) and cfg.get("grupo_atendimento_id"))
+
+
+def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
+    """Chamado que passou a depender de gente (portal_cliente/chamados.py).
+    Vai pro grupo do atendimento, NUNCA pro de alertas; um aviso por chamado
+    dentro da janela de repeticao."""
+    try:
+        if not chamados_ligado(config):
+            return "desligado"
+        return despachar(config, "atendimento", "chamado", texto_chamado(chamado, link, kw.get("agora")),
+                         f"chamado:{chamado['id']}", grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
