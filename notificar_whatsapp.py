@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent / "dados" / "dados.db"
 MAX_DETALHE = 200
+MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 
 _SCHEMA = """
@@ -75,59 +76,163 @@ def _plural(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
 
+# Linguagem do grupo (pedido do Hugo, 29/09/2026): quem le nao e tecnico.
+# Nada de nome de unit, codigo de saida ou excecao crua; isso fica no e-mail.
+# A mensagem INTEIRA cabe em MAX_MENSAGEM caracteres, sem cortar no meio.
+# Excecao decidida pelo Hugo: o aviso de insucesso, que lista os pedidos.
+RODAPE_EMAIL = "Detalhes no e-mail."
+
+NOMES_SIMPLES = {
+    "Pipeline": "Importação de pedidos",
+    "Execução completa": "Rotina de pedidos",
+    "Agente Stokki Eventos": "Rotina automática",
+}
+
+MOTIVOS_SIMPLES = [
+    (r"timeout|timed out|tempo esgotado", "o sistema demorou a responder"),
+    (r"(?:http|status|erro|error|code|c[oó]digo)\W*40[13]\b|^\W*40[13]\W*$|unauthorized|forbidden"
+     r"|n[aã]o autorizado", "o login no sistema caiu"),
+    (r"(?:http|status|erro|error|code|c[oó]digo)\W*50[0234]\b|^\W*50[0234]\W*$|bad gateway|service unavailable",
+     "o outro sistema estava fora do ar"),
+    (r"connection|conex[aã]o|\bssl\b|\bdns\b|network|unreachable", "falha de conexão"),
+    (r"database is locked", "banco de dados ocupado"),
+]
+CARA_DE_ERRO_TECNICO = r"Error|Exception|Traceback|[<>{}\[\]]|0x|\w\.\w+\("
+
+# Chave = nome da unit sem "stokki-" e sem ".service" (infra/*.service).
+NOMES_DAS_TAREFAS = {
+    "acompanhar-retiradas": "Acompanhamento das retiradas no galpão",
+    "backup-gcs": "Cópia de segurança diária dos dados",
+    "backup-horario": "Cópia de segurança de hora em hora",
+    "cancelar-rotas-sem-motorista": "Cancelamento das rotas de hoje sem motorista",
+    "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
+    "comparar-pool": "Conferência dos pedidos que aguardam rota",
+    "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
+    "dedicados-financeiro": "E-mail dos pedidos dedicados para o financeiro",
+    "documentos-incremental": "Busca das notas fiscais dos pedidos",
+    "ensaio-restauracao": "Teste semanal da cópia de segurança",
+    "expedicao-frequente": "Baixa das entregas na Stokki",
+    "exportar-vuupt": "Cópia do histórico da Vuupt",
+    "lancar-lalamove": "Pedido de corridas na Lalamove",
+    "notificar-entregas": "E-mail de entrega concluída para os clientes",
+    "notificar-nfs-em-rota": "E-mail da manhã com as notas em rota",
+    "notificar-pedidos-em-espera": "Aviso de pedidos em espera",
+    "notificar-transportadoras": "Aviso às transportadoras",
+    "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
+    "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
+    "pipeline-horario": "Importação de pedidos de hora em hora",
+    "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
+    "resumo-diario-embarcador": "E-mail da noite com o resumo do dia",
+    "romaneios-manha": "Geração dos romaneios da manhã",
+    "sequencia-noite": "Rotina da noite",
+    "sequencia-tarde": "Rotina da tarde",
+    "sincronizar-confirmacoes": "Leitura das confirmações de rota dos motoristas",
+    "sincronizar-lalamove": "Atualização das corridas da Lalamove",
+    "verificar-entregues-nao-expedidos": "Conferência diária das entregas",
+    "vigia-pedidos": "Vigia dos pedidos em aberto",
+    "wms-recebimentos": "Atualização dos recebimentos do estoque",
+    "wms-reservar-pedidos": "Reserva de estoque para os pedidos",
+    "wms-sincronizar-produtos": "Atualização do cadastro de produtos do galpão",
+}
+
+RESULTADOS_SIMPLES = {
+    "exit-code": "parou com erro",
+    "timeout": "demorou demais e foi interrompida",
+    "oom-kill": "foi interrompida por falta de memória",
+    "signal": "foi interrompida no meio",
+    "core-dump": "foi interrompida no meio",
+}
+
+
+def _nome_simples(nome, limite: int) -> str:
+    limpo = _uma_linha(nome, limite)
+    return NOMES_SIMPLES.get(limpo, limpo)
+
+
+def _motivo_simples(detalhe, limite: int = MAX_DETALHE) -> str:
+    """Erro conhecido vira frase; excecao crua vira 'erro técnico'; texto
+    escrito por gente (ex.: '2 pedidos nao devolvidos') passa, cortado."""
+    texto = _uma_linha(detalhe, 10_000)
+    for padrao, frase in MOTIVOS_SIMPLES:
+        if re.search(padrao, texto, re.IGNORECASE):
+            return frase
+    return "erro técnico" if re.search(CARA_DE_ERRO_TECNICO, texto) else _uma_linha(texto, limite)
+
+
+def _nome_da_tarefa(unidade: str, info: dict) -> str:
+    chave = re.sub(r"^stokki-|\.service$", "", str(unidade or ""))
+    if chave in NOMES_DAS_TAREFAS:
+        return NOMES_DAS_TAREFAS[chave]
+    descricao = re.sub(r"^Stokki Eventos - |\s*\([^)]*\)", "", str(info.get("Description") or ""))
+    return _uma_linha(descricao or unidade, 70)
+
+
+def _tamanho(linhas: list) -> int:
+    return len("\n".join(linhas))
+
+
 def texto_execucao(resumo_etapas: dict, duracao_seg: float, titulo: str | None = None,
                    agora: datetime | None = None) -> str:
-    from notificar_execucao_agente import (etapas_com_erro, formatar_duracao, resumir_execucao,
-                                           titulo_da_rotina)
+    from notificar_execucao_agente import etapas_com_erro, formatar_duracao, titulo_da_rotina
     resumo_etapas = resumo_etapas or {}
     erros = etapas_com_erro(resumo_etapas)
-    nome = _uma_linha(titulo_da_rotina(resumo_etapas, titulo), 80)
+    nome = _nome_simples(titulo_da_rotina(resumo_etapas, titulo), 60)
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    total = len(resumo_etapas)
     if not erros:
-        resumo = resumir_execucao(resumo_etapas).rstrip(".")
+        resumo = ("Rodou, mas não informou o que fez" if not total
+                  else "Terminou sem problemas" if total == 1
+                  else f"As {total} etapas terminaram sem problemas")
         return f"✅ *{nome}* · {quando}\n{resumo} ({formatar_duracao(duracao_seg)})"
-    # O resumo do e-mail lista TODAS as etapas com erro pelo nome cru; aqui
-    # vao so as primeiras, limpas (nome de etapa pode ser "rota — motorista").
-    if len(resumo_etapas) == 1:
-        resumo = "A etapa terminou com erro"
+    linhas = [f"❌ *{nome}* · {quando}"]
+    if total == 1:
+        livre = MAX_MENSAGEM - _tamanho(linhas + ["Não funcionou: ", RODAPE_EMAIL])
+        motivo = _motivo_simples((resumo_etapas[erros[0]] or {}).get("detalhe"), livre)
+        linhas.append(f"Não funcionou: {motivo}" if motivo else "Não funcionou")
     else:
-        nomes = ", ".join(_uma_linha(e, 60) for e in erros[:MAX_ETAPAS_ERRO])
-        resto = len(erros) - MAX_ETAPAS_ERRO
-        resumo = (f"{len(erros)} de {len(resumo_etapas)} etapas com erro: {nomes}"
-                  + (f" e mais {resto}" if resto > 0 else ""))
-    linhas = [f"❌ *{nome}* · {quando}", resumo]
-    for etapa in erros[:MAX_ETAPAS_ERRO]:
-        detalhe = _uma_linha((resumo_etapas.get(etapa) or {}).get("detalhe"))
-        if detalhe:
-            linhas.append(f"{_uma_linha(etapa, 60)}: {detalhe}")
-    linhas.append("Detalhes completos no e-mail.")
+        linhas.append(f"{len(erros)} das {total} etapas falharam:")
+        # Entra o que couber em MAX_MENSAGEM: etapa com motivo, senao so o
+        # nome, senao vai pra conta do "e mais N".
+        mostradas = 0
+        for etapa in erros[:MAX_ETAPAS_ERRO]:
+            nome_etapa = _nome_simples(etapa, 45)
+            motivo = _motivo_simples((resumo_etapas.get(etapa) or {}).get("detalhe"), 40)
+            resto = [f"• e mais {len(erros) - mostradas - 1}"] if len(erros) - mostradas > 1 else []
+            opcoes = ([f"• {nome_etapa}: {motivo}"] if motivo else []) + [f"• {nome_etapa}"]
+            linha = next((o for o in opcoes
+                          if _tamanho(linhas + [o] + resto + [RODAPE_EMAIL]) <= MAX_MENSAGEM), None)
+            if not linha:
+                break
+            linhas.append(linha)
+            mostradas += 1
+        if len(erros) > mostradas:
+            linhas.append(f"• e mais {len(erros) - mostradas}")
+    linhas.append(RODAPE_EMAIL)
     return "\n".join(linhas)
 
 
 def texto_falha_job(unidade: str, info: dict, agora: datetime | None = None) -> str:
     info = info or {}
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    resultado = RESULTADOS_SIMPLES.get(info.get("Result"), "não terminou como deveria")
     return "\n".join([
-        "🚨 *Job da VPS falhou*",
-        _uma_linha(unidade, 80),
-        f"Resultado: {_uma_linha(info.get('Result', '?'), 40)} "
-        f"(código {_uma_linha(info.get('ExecMainStatus', '?'), 10)}) · {quando}",
-        "Log completo no e-mail.",
+        f"🚨 *Tarefa automática falhou* · {quando}",
+        f"{_nome_da_tarefa(unidade, info)}: {resultado}.",
+        RODAPE_EMAIL,
     ])
 
 
 def texto_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int) -> str:
-    linhas = ["⚠️ *Checagem da expedição*"]
+    linhas = ["⚠️ *Conferência das entregas*"]
     if n_alertas:
-        linhas.append(f"{_plural(n_alertas, 'pedido entregue', 'pedidos entregues')} sem expedição na Stokki")
-    partes = []
+        linhas.append("• " + _plural(n_alertas, "pedido entregue sem baixa na Stokki",
+                                     "pedidos entregues sem baixa na Stokki"))
     if n_rotas:
-        partes.append(f"{_plural(n_rotas, 'rota', 'rotas')} sem terminar")
+        linhas.append("• " + _plural(n_rotas, "rota antiga não encerrada", "rotas antigas não encerradas"))
     if n_retiradas:
-        partes.append(f"{_plural(n_retiradas, 'retirada parada', 'retiradas paradas')} há mais de 7 dias")
-    if partes:
-        linhas.append(" · ".join(partes))
-    linhas.append("Lista completa no e-mail.")
+        linhas.append("• " + _plural(n_retiradas, "retirada no galpão há mais de 7 dias",
+                                     "retiradas no galpão há mais de 7 dias"))
+    linhas.append("Lista no e-mail.")
     return "\n".join(linhas)
 
 

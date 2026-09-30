@@ -320,6 +320,9 @@
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
                                job, não expedidos e resumo das rotinas (erro ou
                                lista sempre_avisar). Desligado por padrão.
+                               Texto em linguagem simples (sem nome de unit nem
+                               exceção crua): unit nova em infra/ precisa de nome
+                               em NOMES_DAS_TAREFAS, senão o teste falha.
  integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
 
  --- WMS (sincronizações com a Stokki, embarcador piloto) ---

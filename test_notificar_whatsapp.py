@@ -26,83 +26,174 @@ VARIAS_ERRO = dict(VARIAS_OK, Pipeline={"status": "erro", "detalhe": "TimeoutErr
 class TestTextoExecucao(unittest.TestCase):
     def test_sucesso(self):
         self.assertEqual(nw.texto_execucao(UMA, 42, agora=AGORA),
-                         "✅ *Criação de rotas* · 16/09 22:05\nEtapa concluída sem erro (42 s)")
+                         "✅ *Criação de rotas* · 16/09 22:05\nTerminou sem problemas (42 s)")
 
-    def test_erro_lista_etapas_e_aponta_o_email(self):
+    def test_sucesso_com_varias_etapas(self):
+        with patch("notificar_execucao_agente.sys.argv", ["executar_tudo.py"]):
+            texto = nw.texto_execucao(VARIAS_OK, 138, agora=AGORA)
+        self.assertEqual(texto, "✅ *Rotina de pedidos* · 16/09 22:05\n"
+                                "As 3 etapas terminaram sem problemas (2,3 min)")
+
+    def test_erro_explica_em_linguagem_simples_e_aponta_o_email(self):
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
             texto = nw.texto_execucao(VARIAS_ERRO, 138, agora=AGORA)
         self.assertEqual(texto, "\n".join([
-            "❌ *Agente Stokki Eventos* · 16/09 22:05",
-            "2 de 4 etapas com erro: Pipeline, Retiradas",
-            "Pipeline: TimeoutError: <stokki> linha 2",
-            "Retiradas: 401",
-            "Detalhes completos no e-mail.",
+            "❌ *Rotina automática* · 16/09 22:05",
+            "2 das 4 etapas falharam:",
+            "• Importação de pedidos: o sistema demorou a responder",
+            "• Retiradas: o login no sistema caiu",
+            "Detalhes no e-mail.",
         ]))
 
-    def test_detalhe_longo_e_cortado_em_200(self):
+    def test_detalhe_longo_e_cortado_para_a_mensagem_caber(self):
         etapas = {"Pipeline": {"status": "erro", "detalhe": "x" * 500}}
-        linha = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")[2]
-        self.assertEqual(len(linha), len("Pipeline: ") + 200)
-        self.assertTrue(linha.endswith("…"))
+        texto = nw.texto_execucao(etapas, 1, agora=AGORA)
+        self.assertEqual(len(texto), 200)
+        self.assertTrue(texto.endswith("…\nDetalhes no e-mail."))
 
     def test_detalhe_perde_formatacao_do_whatsapp(self):
         etapas = {"Pipeline": {"status": "erro", "detalhe": "erro *grave* em _campo_ ~x~ `y`"}}
-        self.assertIn("Pipeline: erro grave em campo x y", nw.texto_execucao(etapas, 1, agora=AGORA))
+        self.assertIn("Não funcionou: erro grave em campo x y", nw.texto_execucao(etapas, 1, agora=AGORA))
 
     def test_no_maximo_tres_etapas_com_detalhe(self):
         etapas = {f"E{i}": {"status": "erro", "detalhe": f"d{i}"} for i in range(5)}
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
             linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
-        self.assertEqual(linhas[2:5], ["E0: d0", "E1: d1", "E2: d2"])
-        self.assertEqual(len(linhas), 6)
+        self.assertEqual(linhas[2:6], ["• E0: d0", "• E1: d1", "• E2: d2", "• e mais 2"])
+        self.assertEqual(len(linhas), 7)
 
-    def test_etapa_com_erro_sem_detalhe_nao_gera_linha_vazia(self):
+    def test_etapa_com_erro_sem_detalhe_mostra_so_o_nome(self):
         etapas = {"Pipeline": {"status": "erro", "detalhe": ""}, "Outra": None}
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
             linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
-        self.assertEqual(linhas[1:], ["2 de 2 etapas com erro: Pipeline, Outra", "Detalhes completos no e-mail."])
+        self.assertEqual(linhas[1:], ["2 das 2 etapas falharam:", "• Importação de pedidos",
+                                      "• Outra", "Detalhes no e-mail."])
 
     def test_resumo_vazio_ou_none_nao_quebra(self):
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
             for vazio in ({}, None):
                 self.assertEqual(nw.texto_execucao(vazio, 0, agora=AGORA),
-                                 "✅ *Agente Stokki Eventos* · 16/09 22:05\nNenhuma etapa reportada (0 s)")
+                                 "✅ *Rotina automática* · 16/09 22:05\nRodou, mas não informou o que fez (0 s)")
+
+
+class TestCabeEm200(unittest.TestCase):
+    """Pedido do Hugo (29/09/2026): a mensagem inteira em 200 caracteres,
+    completa -- sem reticencias cortando o rodape."""
+
+    def conferir(self, texto):
+        self.assertLessEqual(len(texto), nw.MAX_MENSAGEM, texto)
+        self.assertRegex(texto.split("\n")[-1], r"(e-mail\.|\))$", texto)
+
+    def test_falha_de_qualquer_tarefa_com_qualquer_resultado(self):
+        for chave in nw.NOMES_DAS_TAREFAS:
+            for resultado in list(nw.RESULTADOS_SIMPLES) + ["desconhecido"]:
+                self.conferir(nw.texto_falha_job(f"stokki-{chave}.service", {"Result": resultado}, agora=AGORA))
+
+    def test_falha_de_tarefa_sem_nome_cadastrado(self):
+        info = {"Description": "Stokki Eventos - " + "descricao comprida " * 20, "Result": "oom-kill"}
+        self.conferir(nw.texto_falha_job("stokki-nova.service", info, agora=AGORA))
+        self.conferir(nw.texto_falha_job("u" * 300 + ".service", {}, agora=AGORA))
+
+    def test_conferencia_com_numeros_grandes(self):
+        self.conferir(nw.texto_nao_expedidos(9999, 9999, 9999))
+
+    def test_rotina_com_nomes_e_detalhes_compridos(self):
+        for qtd in (1, 2, 3, 20, 150):
+            etapas = {f"Etapa {i} " + "n" * 80: {"status": "erro", "detalhe": "d" * 500} for i in range(qtd)}
+            for titulo in (None, "t" * 300):
+                with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
+                    self.conferir(nw.texto_execucao(etapas, 99999, titulo, agora=AGORA))
+            ok = {nome: {"status": "ok"} for nome in etapas}
+            self.conferir(nw.texto_execucao(ok, 99999, "t" * 300, agora=AGORA))
+
+    def test_o_que_nao_cabe_vai_pra_conta_do_e_mais(self):
+        etapas = {f"Etapa {i} " + "n" * 80: {"status": "erro", "detalhe": "d" * 500} for i in range(5)}
+        with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
+            linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
+        mostradas = [l for l in linhas if l.startswith("• Etapa")]
+        self.assertGreaterEqual(len(mostradas), 1)
+        self.assertEqual(linhas[-2], f"• e mais {5 - len(mostradas)}")
+
+
+class TestMotivoSimples(unittest.TestCase):
+    def test_erros_conhecidos_viram_frase(self):
+        casos = {
+            "TimeoutError: Page.goto: Timeout 30000ms exceeded": "o sistema demorou a responder",
+            "401": "o login no sistema caiu",
+            "HTTP 403 Forbidden": "o login no sistema caiu",
+            "Erro 502 na Vuupt": "o outro sistema estava fora do ar",
+            "ConnectionError: HTTPSConnectionPool(host='x')": "falha de conexão",
+            "sqlite3.OperationalError: database is locked": "banco de dados ocupado",
+            "x" * 300 + " TimeoutError": "o sistema demorou a responder",
+        }
+        for detalhe, frase in casos.items():
+            self.assertEqual(nw._motivo_simples(detalhe), frase, detalhe)
+
+    def test_excecao_desconhecida_vira_erro_tecnico(self):
+        self.assertEqual(nw._motivo_simples("KeyError: 'sender_id'"), "erro técnico")
+        self.assertEqual(nw._motivo_simples("<Response [418]>"), "erro técnico")
+
+    def test_texto_escrito_por_gente_passa_como_esta(self):
+        self.assertEqual(nw._motivo_simples("3 devolvidos ao pool, 1 com erro."), "3 devolvidos ao pool, 1 com erro.")
+        self.assertEqual(nw._motivo_simples("500 pedidos lidos, 401 importados"), "500 pedidos lidos, 401 importados")
+        self.assertEqual(nw._motivo_simples(None), "")
 
 
 class TestTextoFalhaJob(unittest.TestCase):
     def test_formato(self):
         info = {"Result": "exit-code", "ExecMainStatus": "1"}
         self.assertEqual(nw.texto_falha_job("stokki-backup-gcs.service", info, agora=AGORA), "\n".join([
-            "🚨 *Job da VPS falhou*",
-            "stokki-backup-gcs.service",
-            "Resultado: exit-code (código 1) · 16/09 22:05",
-            "Log completo no e-mail.",
+            "🚨 *Tarefa automática falhou* · 16/09 22:05",
+            "Cópia de segurança diária dos dados: parou com erro.",
+            "Detalhes no e-mail.",
         ]))
 
-    def test_info_vazio(self):
-        self.assertIn("Resultado: ? (código ?)", nw.texto_falha_job("x.service", {}, agora=AGORA))
-        self.assertIn("Resultado: ? (código ?)", nw.texto_falha_job("x.service", None, agora=AGORA))
+    def test_nao_mostra_nome_de_unit_nem_codigo(self):
+        texto = nw.texto_falha_job("stokki-sequencia-noite.service", {"Result": "timeout", "ExecMainStatus": "15"},
+                                   agora=AGORA)
+        self.assertIn("Rotina da noite: demorou demais e foi interrompida.", texto)
+        for jargao in ("stokki-", ".service", "timeout", "15", "VPS", "Job"):
+            self.assertNotIn(jargao, texto.replace("16/09 22:05", ""))
+
+    def test_tarefa_sem_nome_cadastrado_usa_a_descricao_limpa(self):
+        info = {"Description": "Stokki Eventos - Tarefa nova (tarefa_nova.py --hoje)"}
+        self.assertEqual(nw.texto_falha_job("stokki-tarefa-nova.service", info, agora=AGORA).split("\n")[1],
+                         "Tarefa nova: não terminou como deveria.")
+        self.assertEqual(nw.texto_falha_job("x.service", {}, agora=AGORA).split("\n")[1],
+                         "x.service: não terminou como deveria.")
+
+    def test_info_none(self):
+        self.assertIn("não terminou como deveria.", nw.texto_falha_job("x.service", None, agora=AGORA))
+
+    def test_toda_tarefa_do_infra_tem_nome_simples(self):
+        from pathlib import Path
+        units = {p.name[len("stokki-"):-len(".service")]
+                 for p in (Path(__file__).resolve().parent / "infra").glob("stokki-*.service")
+                 if "@" not in p.name}
+        self.assertEqual(units - set(nw.NOMES_DAS_TAREFAS), set())
 
 
 class TestTextoNaoExpedidos(unittest.TestCase):
     def test_completo(self):
         self.assertEqual(nw.texto_nao_expedidos(4, 2, 1), "\n".join([
-            "⚠️ *Checagem da expedição*",
-            "4 pedidos entregues sem expedição na Stokki",
-            "2 rotas sem terminar · 1 retirada parada há mais de 7 dias",
-            "Lista completa no e-mail.",
+            "⚠️ *Conferência das entregas*",
+            "• 4 pedidos entregues sem baixa na Stokki",
+            "• 2 rotas antigas não encerradas",
+            "• 1 retirada no galpão há mais de 7 dias",
+            "Lista no e-mail.",
         ]))
 
     def test_singular_e_plural(self):
-        self.assertIn("1 pedido entregue sem expedição", nw.texto_nao_expedidos(1, 0, 0))
-        self.assertIn("1 rota sem terminar · 3 retiradas paradas há mais de 7 dias",
-                      nw.texto_nao_expedidos(0, 1, 3))
+        self.assertIn("• 1 pedido entregue sem baixa na Stokki", nw.texto_nao_expedidos(1, 0, 0))
+        texto = nw.texto_nao_expedidos(0, 1, 3)
+        self.assertIn("• 1 rota antiga não encerrada", texto)
+        self.assertIn("• 3 retiradas no galpão há mais de 7 dias", texto)
 
     def test_contagem_zero_e_omitida(self):
         self.assertEqual(nw.texto_nao_expedidos(0, 2, 0), "\n".join([
-            "⚠️ *Checagem da expedição*",
-            "2 rotas sem terminar",
-            "Lista completa no e-mail.",
+            "⚠️ *Conferência das entregas*",
+            "• 2 rotas antigas não encerradas",
+            "Lista no e-mail.",
         ]))
         self.assertNotIn("rota", nw.texto_nao_expedidos(3, 0, 0))
 
@@ -310,7 +401,7 @@ class TestAvisarOutros(_ComBanco):
         self.assertEqual(situacao, "enviado")
         self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
                          ("stokki-backup-gcs.service", "falha_job"))
-        self.assertIn("Job da VPS falhou", self.enviar.call_args[0][2])
+        self.assertIn("Tarefa automática falhou", self.enviar.call_args[0][2])
 
     def test_nao_expedidos(self):
         situacao = nw.avisar_nao_expedidos(4, 2, 1, _config(), conn=self.conn, agora=AGORA,
@@ -391,20 +482,19 @@ class TestResumoDeErroLimpo(unittest.TestCase):
     def test_muitas_etapas_lista_tres_e_conta_o_resto(self):
         etapas = {f"Rota {i} — Motorista {i}": {"status": "erro", "detalhe": "x"} for i in range(20)}
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
-            linha = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")[1]
-        self.assertEqual(linha, "20 de 20 etapas com erro: Rota 0 — Motorista 0, Rota 1 — Motorista 1, "
-                                "Rota 2 — Motorista 2 e mais 17")
+            linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
+        self.assertEqual(linhas[1:6], ["20 das 20 etapas falharam:", "• Rota 0 — Motorista 0: x",
+                                       "• Rota 1 — Motorista 1: x", "• Rota 2 — Motorista 2: x", "• e mais 17"])
 
-    def test_nome_de_etapa_perde_formatacao_tambem_no_resumo(self):
+    def test_nome_de_etapa_perde_formatacao(self):
         etapas = {"rota_1 *x*": {"status": "erro", "detalhe": "d"}, "ok": {"status": "ok"}}
         with patch("notificar_execucao_agente.sys.argv", ["desconhecido.py"]):
             linhas = nw.texto_execucao(etapas, 1, agora=AGORA).split("\n")
-        self.assertEqual(linhas[1], "1 de 2 etapas com erro: rota1 x")
-        self.assertEqual(linhas[2], "rota1 x: d")
+        self.assertEqual(linhas[1:3], ["1 das 2 etapas falharam:", "• rota1 x: d"])
 
     def test_uma_etapa_so_com_erro(self):
         linhas = nw.texto_execucao({"Pipeline": {"status": "erro", "detalhe": "d"}}, 1, agora=AGORA).split("\n")
-        self.assertEqual(linhas[1], "A etapa terminou com erro")
+        self.assertEqual(linhas[:2], ["❌ *Importação de pedidos* · 16/09 22:05", "Não funcionou: d"])
 
     def test_rotas_sem_motorista_tem_titulo_proprio(self):
         etapas = {"Cancelamento de rotas sem motorista": {"status": "ok", "detalhe": "2 canceladas"},
