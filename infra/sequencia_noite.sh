@@ -30,6 +30,8 @@ cd "$RAIZ" && "$PY" somente_impressao.py
 cd "$RAIZ" && "$PY" pipeline.py
 # 28/09: aplica na VUUPT a data de agendamento informada depois das 18h.
 cd "$RAIZ" && "$PY" atualizar_agendamentos_confirmados.py
+# 29/09: quem teve data de agendamento informada vira AGENDA na BD_CLIENTES.
+cd "$RAIZ" && "$PY" marcar_clientes_agenda.py
 cd "$RAIZ" && "$PY" expedir_pedidos.py
 cd "$RAIZ/documentos_pedido" && "$PY" processar_documentos.py
 cd "$RAIZ/roteirizacao" && "$PY" gerar_pdf_romaneios.py --data amanha
