@@ -188,5 +188,54 @@ class TestCarregarEmbarcadores(_ComBanco):
         self.assertFalse(pn.carregar_embarcadores("insucesso", db_path=self.db)[101]["desligado"])
 
 
+class TestCelulares(_ComBanco):
+    def test_sem_linha_sem_celular(self):
+        self.assertEqual(pn.ler(self.conn, CNPJ_A)["celulares"], [])
+
+    def test_salvar_normaliza_e_tira_repeticao(self):
+        prefs = pn.salvar(self.conn, CNPJ_A, [], {}, "cliente",
+                          celulares=["(11) 98888-7777", "+55 11 98888-7777", "", "21977776666"])
+        self.assertEqual(prefs["celulares"], ["11988887777", "21977776666"])
+
+    def test_celular_invalido_levanta_e_nao_grava(self):
+        for ruim in ("1188887777", "11 3888-7777", "01988887777", "988887777", "abc123"):
+            with self.subTest(ruim=ruim):
+                with self.assertRaises(ValueError) as erro:
+                    pn.salvar(self.conn, CNPJ_A, [], {"resumo_diario": True}, "cliente", celulares=[ruim])
+                self.assertIn("Celular inválido", str(erro.exception))
+        self.assertFalse(pn.ler(self.conn, CNPJ_A)["tipos"]["resumo_diario"])
+
+    def test_mais_que_o_maximo_levanta(self):
+        with self.assertRaises(ValueError):
+            pn.salvar(self.conn, CNPJ_A, [], {}, "cliente",
+                      celulares=[f"1198888777{i}" for i in range(pn.MAX_CELULARES + 1)])
+
+    def test_celulares_none_mantem_e_lista_vazia_apaga(self):
+        pn.salvar(self.conn, CNPJ_A, [], {}, "cliente", celulares=["11988887777"])
+        pn.salvar(self.conn, CNPJ_A, ["x@alfa.com"], {}, "cliente")
+        self.assertEqual(pn.ler(self.conn, CNPJ_A)["celulares"], ["11988887777"])
+        pn.salvar(self.conn, CNPJ_A, [], {}, "cliente", celulares=[])
+        self.assertEqual(pn.ler(self.conn, CNPJ_A)["celulares"], [])
+
+    def test_rotinas_so_recebem_celular_nos_tipos_com_whatsapp(self):
+        pn.salvar(self.conn, CNPJ_A, [], {}, "cliente", celulares=["11988887777"])
+        for tipo in pn.TIPOS:
+            with self.subTest(tipo=tipo):
+                esperado = ["11988887777"] if tipo in pn.TIPOS_WHATSAPP else []
+                self.assertEqual(pn.carregar_embarcadores(tipo, db_path=self.db)[101]["celulares"], esperado)
+        self.assertEqual(pn.carregar_embarcadores("insucesso", db_path=self.db)[102]["celulares"], [])
+
+    def test_tabela_antiga_sem_a_coluna(self):
+        # banco da VPS: tabela criada em 17/09, antes da coluna celulares
+        self.conn.execute("CREATE TABLE preferencias_notificacao (cnpj_embarcador TEXT PRIMARY KEY, "
+                          "emails TEXT NOT NULL DEFAULT '', insucesso INTEGER NOT NULL DEFAULT 1, "
+                          "atualizado_em TEXT, atualizado_por TEXT)")
+        self.conn.commit()
+        self.assertEqual(pn.carregar_embarcadores("insucesso", db_path=self.db)[101]["celulares"], [])
+        pn.salvar(self.conn, CNPJ_A, [], {}, "cliente", celulares=["11988887777"])
+        self.assertEqual(pn.carregar_embarcadores("insucesso", db_path=self.db)[101]["celulares"],
+                         ["11988887777"])
+
+
 if __name__ == "__main__":
     unittest.main()

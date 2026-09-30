@@ -62,6 +62,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
     COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
 )
+import notificar_whatsapp_embarcador
 import preferencias_notificacao
 import tratativas
 
@@ -276,6 +277,10 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
 
     Remetente que desligou este aviso no portal (17/09) é pulado sem
     marcar nada -- a pendência continua no portal e na Torre.
+
+    Depois de cada e-mail enviado, o mesmo aviso vai curto por WhatsApp pros
+    celulares que o remetente informou no portal (30/09,
+    notificar_whatsapp_embarcador.py). Falha no WhatsApp não muda o resultado.
     `ignorar_preferencia` é do botão 'Notificar' da Torre: ação
     deliberada de quem opera, manda mesmo assim.
     """
@@ -324,6 +329,11 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            codigos = ",".join(sorted((p.get("code") or "").lstrip("#") for p in pedidos))
+            notificar_whatsapp_embarcador.avisar(
+                emb, "insucesso", f"insucesso:{failed_reason_id}:{codigos}",
+                notificar_whatsapp_embarcador.texto_insucesso(emb["nome"], motivo_texto, pedidos, url_resposta),
+                modo_teste=modo_teste)
             if not modo_teste:
                 for p in pedidos:
                     marcar_notificado(p["id"], failed_reason_id, sender_id=sender_id, code=p.get("code"))

@@ -34,6 +34,7 @@ _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
 from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_ERRO, COR_TEXTO, COR_BORDA, COR_FUNDO
+import notificar_whatsapp_embarcador
 import preferencias_notificacao
 
 logger = logging.getLogger(__name__)
@@ -156,7 +157,8 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
     """
     Agrupa os pedidos pendentes por remetente (sender_id) e manda 1
     e-mail urgente por remetente. Retorna {"enviados", "falhas",
-    "sem_email"} pra quem chama montar um resumo.
+    "sem_email"} pra quem chama montar um resumo. Cada e-mail enviado
+    vai também, curto, por WhatsApp (notificar_whatsapp_embarcador.py).
     """
     embarcadores = _carregar_embarcadores_por_sender_id()
     grupos = defaultdict(list)
@@ -188,6 +190,11 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            codigos = ",".join(sorted(_codigo_pedido(p) for p in pedidos))
+            notificar_whatsapp_embarcador.avisar(
+                emb, "agendamento", f"agendamento_pendente:{codigos}",
+                notificar_whatsapp_embarcador.texto_agendamento_pendente(emb["nome"], pedidos),
+                modo_teste=modo_teste)
             if not modo_teste:
                 _registrar_pendentes(pedidos, emb)
         else:

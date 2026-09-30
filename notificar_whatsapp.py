@@ -44,6 +44,8 @@ config.yaml:
       janela_repeticao_min: 120
       falhas_para_alerta: 3
       pausa_canal_min: 60        # descanso depois de N falhas seguidas
+      embarcadores:              # ver notificar_whatsapp_embarcador.py
+        ativo: false
 """
 import logging
 import re
@@ -62,6 +64,7 @@ MAX_DETALHE = 200
 MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 MAX_INSUCESSOS = 10
+ORIGEM_EMBARCADOR = "embarcador:"  # prefixo de origem das mensagens a embarcador
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -336,10 +339,13 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
         pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
         if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
             return "canal em pausa"
+    # Mensagem a embarcador (notificar_whatsapp_embarcador.py) tem teto
+    # proprio e nao gasta o dos avisos internos. Disjuntor e intervalo acima
+    # continuam valendo pros dois: o numero e o gateway sao os mesmos.
     inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
     enviadas = conn.execute(
-        "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ?",
-        (inicio_do_dia,)).fetchone()[0]
+        "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
+        "AND origem NOT LIKE ?", (inicio_do_dia, ORIGEM_EMBARCADOR + "%")).fetchone()[0]
     if enviadas >= _inteiro(cfg, "teto_diario", 20):
         return "teto diario atingido"
     return None

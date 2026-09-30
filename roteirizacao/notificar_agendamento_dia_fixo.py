@@ -41,6 +41,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ACENTO,
 )
 from regioes_dia_fixo import nomes_dias
+import notificar_whatsapp_embarcador
 import preferencias_notificacao
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,8 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
     """
     Agrupa os agendamentos de dia fixo por remetente (sender_id) e
     manda 1 e-mail por remetente. Retorna {"enviados", "falhas",
-    "sem_email"} pra quem chama montar um resumo.
+    "sem_email"} pra quem chama montar um resumo. Cada e-mail enviado
+    vai também, curto, por WhatsApp (notificar_whatsapp_embarcador.py).
     """
     if not agendados:
         return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
@@ -149,6 +151,12 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            codigos = ",".join(sorted(f"{(i['servico'].get('code') or '').lstrip('#')}@{i['data']:%Y%m%d}"
+                                      for i in itens))
+            notificar_whatsapp_embarcador.avisar(
+                emb, "agendamento", f"agendamento_dia_fixo:{codigos}",
+                notificar_whatsapp_embarcador.texto_agendamento_dia_fixo(emb["nome"], itens),
+                modo_teste=modo_teste)
         else:
             falhas += 1
 

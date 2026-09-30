@@ -248,3 +248,44 @@ Pendências:
    `resumo_diario_embarcador.forcar_destino: ""` no config da VPS.
 6. `pytest` não está instalado na máquina local: `portal_cliente/test_cotacao.py` e
    `test_envio_planilha.py` (estilo pytest) não foram rodados nesta sessão.
+
+## Etapa 4: WhatsApp ao embarcador (30/09)
+
+Decisões do Hugo (30/09): sai pelo **número dele** (OpenWA, o mesmo gateway dos avisos internos);
+só **Insucesso aguardando retorno** e **Agendamento** (pendente e dia fixo); vai **junto** com o
+e-mail, não no lugar.
+
+- `preferencias_notificacao.py`: coluna `celulares` (até `MAX_CELULARES` = 3, guardados com 11
+  dígitos, sem o 55; fixo é recusado). `TIPOS_WHATSAPP = ("insucesso", "agendamento")`.
+  `carregar_embarcadores` devolve `celulares` só pra esses tipos. `salvar(..., celulares=None)`
+  mantém o que estava. Informar o número é o consentimento; apagar desliga.
+- Portal: campo "Celular para receber no WhatsApp" no modal, selo "+ WhatsApp" nos dois tipos.
+  POST sem `celulares` não apaga os gravados.
+- `notificar_whatsapp_embarcador.py`: `avisar(emb, tipo, chave, texto)` chamado DEPOIS de cada
+  e-mail enviado em `notificar_insucesso_aguardando_resposta.py`, `notificar_agendamento_pendente.py`
+  e `notificar_agendamento_dia_fixo.py`. E-mail desligado, sem e-mail ou com falha = sem WhatsApp.
+  Reaproveita `notificar_whatsapp.despachar` (disjuntor, intervalo, janela de repetição, tabela
+  `notificacoes_whatsapp` com origem `embarcador:<tipo>`). Teto próprio: `teto_diario` (30) e
+  `teto_por_embarcador` (6); o teto de 20/dia dos avisos internos passou a ignorar essas linhas.
+- O botão "Notificar" da Torre (insucesso) usa a mesma função, então também manda o WhatsApp.
+
+config.yaml da VPS (dentro da seção que já existe):
+
+    whatsapp_notificacoes:
+      embarcadores:
+        ativo: false
+        forcar_destino: "11999998888"   # opcional: tudo vai pra este número, com o destino original no texto
+        teto_diario: 30
+        teto_por_embarcador: 6
+
+Pendências e riscos:
+1. **Não testado contra o gateway real.** `send-text` pra `55<DDD><número>@c.us` segue o formato
+   do `integracao_openwa.py`, mas números brasileiros antigos às vezes estão registrados no
+   WhatsApp sem o nono dígito. Se algum envio falhar, conferir primeiro isso.
+2. Resposta do cliente pelo WhatsApp cai no celular do Hugo, fora da central de atendimento e sem
+   leitura automática. O texto manda responder pelo link (insucesso) ou pelo e-mail (agendamento).
+3. `forcar_destino` com o próprio número do Hugo (o remetente) pode não funcionar: mensagem pra si
+   mesmo depende do gateway. Para testar, prefira outro celular.
+4. Deploy: pull + chown, restart de `portal-cliente` (tela e API) e `painel-agentes` (Torre importa
+   o módulo de insucesso). As rotinas em lote pegam a versão nova sozinhas. A coluna `celulares`
+   nasce no primeiro GET/POST do portal; antes disso as rotinas leem vazio.

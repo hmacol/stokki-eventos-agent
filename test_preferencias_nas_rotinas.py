@@ -51,14 +51,21 @@ class _ComBanco(unittest.TestCase):
             (CNPJ_DESLIGADO, "Beta SA", "Beta", "cadastro@beta.com", 1, 102, 9002),
         ])
         conn.commit()
-        pn.salvar(conn, CNPJ_LIGADO, ["avisos@alfa.com"], {}, "cliente")
-        pn.salvar(conn, CNPJ_DESLIGADO, [], {self.TIPO: False}, "cliente")
+        pn.salvar(conn, CNPJ_LIGADO, ["avisos@alfa.com"], {}, "cliente", celulares=["11988887777"])
+        pn.salvar(conn, CNPJ_DESLIGADO, [], {self.TIPO: False}, "cliente", celulares=["21977776666"])
         conn.close()
 
         patcher = patch.object(pn, "DB_PATH", self.db)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
+        # WhatsApp junto com o e-mail (30/09): so pra quem recebeu o e-mail
+        patcher_zap = patch("notificar_whatsapp_embarcador.avisar", return_value=["enviado"])
+        self.zap = patcher_zap.start()
+        self.addCleanup(patcher_zap.stop)
+
+    def celulares_avisados(self):
+        return [c.args[0]["celulares"] for c in self.zap.call_args_list]
 
 
 class TestInsucesso(_ComBanco):
@@ -83,6 +90,14 @@ class TestInsucesso(_ComBanco):
         self.assertEqual([c.args[0] for c in enviar.call_args_list], [["avisos@alfa.com"]])
         self.assertEqual([c.args[0] for c in marcar.call_args_list], [1])
         self.assertEqual([c.args[0] for c in registrar.call_args_list], ["#PS-1"])
+        self.assertEqual(self.celulares_avisados(), [["11988887777"]])
+        self.assertIn("https://exemplo.test/insucesso/r/", self.zap.call_args.args[3])
+
+    def test_email_que_falha_nao_leva_whatsapp(self):
+        with patch.object(insucesso, "enviar_email", return_value=False), \
+             patch("fingerprint_aguardando_resposta.marcar_notificado"):
+            insucesso.notificar_remetentes(self._pendentes(), {}, CONFIG_RESPOSTA)
+        self.zap.assert_not_called()
 
     def test_botao_manual_da_torre_ignora_a_chave(self):
         resultado, enviar, _, _ = self._rodar(ignorar_preferencia=True)
@@ -111,6 +126,7 @@ class TestAgendamentoPendente(_ComBanco):
         self.assertEqual([c.args[0] for c in enviar.call_args_list], [["avisos@alfa.com"]])
         self.assertEqual(len(registrar.call_args_list), 1)
         self.assertEqual(registrar.call_args.args[1]["cnpj"], CNPJ_LIGADO)
+        self.assertEqual(self.celulares_avisados(), [["11988887777"]])
 
 
 class TestAgendamentoDiaFixo(_ComBanco):
@@ -125,6 +141,8 @@ class TestAgendamentoDiaFixo(_ComBanco):
             resultado = ag_dia_fixo.notificar_agendamentos_dia_fixo([item(101, "#PS-1"), item(102, "#PS-2")], {})
         self.assertEqual(resultado, {"enviados": 1, "falhas": 0, "sem_email": 0, "desligados": 1})
         self.assertEqual([c.args[0] for c in enviar.call_args_list], [["avisos@alfa.com"]])
+        self.assertEqual(self.celulares_avisados(), [["11988887777"]])
+        self.assertIn("PS-1 (22/09)", self.zap.call_args.args[3])
 
 
 class TestPedidosEmEspera(_ComBanco):

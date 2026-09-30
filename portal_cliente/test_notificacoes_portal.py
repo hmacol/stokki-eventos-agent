@@ -93,6 +93,31 @@ class TestApiNotificacoes(unittest.TestCase):
         self.assertFalse(prefs["tipos"]["insucesso"])
         self.assertEqual(prefs["atualizado_por"], "cliente")
 
+    def test_celular_grava_e_volta_com_os_tipos_de_whatsapp(self):
+        self._entrar_como_cliente()
+        corpo = self.tc.get("/api/notificacoes").get_json()
+        self.assertEqual(corpo["celulares"], [])
+        self.assertEqual([t["tipo"] for t in corpo["tipos"] if t["whatsapp"]], ["insucesso", "agendamento"])
+        r = self.tc.post("/api/notificacoes", headers=ORIGEM,
+                         json={"emails": "", "celulares": "(11) 98888-7777\n", "tipos": {}})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["celulares"], ["11988887777"])
+        self.assertEqual(self._prefs(CNPJ_A)["celulares"], ["11988887777"])
+
+    def test_post_sem_celulares_nao_apaga_o_que_ja_existe(self):
+        self._entrar_como_cliente()
+        self.tc.post("/api/notificacoes", headers=ORIGEM, json={"celulares": ["11988887777"], "tipos": {}})
+        self.tc.post("/api/notificacoes", headers=ORIGEM, json={"emails": "x@alfa.com", "tipos": {}})
+        self.assertEqual(self._prefs(CNPJ_A)["celulares"], ["11988887777"])
+
+    def test_celular_invalido_da_400(self):
+        self._entrar_como_cliente()
+        for celulares in ("11 3888-7777", {"a": 1}):
+            with self.subTest(celulares=celulares):
+                r = self.tc.post("/api/notificacoes", headers=ORIGEM, json={"celulares": celulares, "tipos": {}})
+                self.assertEqual(r.status_code, 400)
+        self.assertEqual(self._prefs(CNPJ_A)["celulares"], [])
+
     def test_cnpj_no_corpo_e_ignorado(self):
         self._entrar_como_cliente()
         self.tc.post("/api/notificacoes", headers=ORIGEM,

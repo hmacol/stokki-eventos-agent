@@ -544,14 +544,18 @@ def api_responder():
 # Pedido do Hugo, 17/09: botão Notificações -- o próprio cliente liga/desliga
 # cada tipo de e-mail e informa o e-mail em que quer recebê-los. Regra e
 # validação em preferencias_notificacao.py (as rotinas de envio leem de lá).
+# 30/09: também o celular pro WhatsApp, que vale só pros TIPOS_WHATSAPP.
 
 def _resposta_notificacoes(prefs: dict):
     return jsonify({
         "tipos": [{"tipo": tipo, "grupo": info["grupo"], "rotulo": info["rotulo"], "descricao": info["descricao"],
-                   "ligado": prefs["tipos"][tipo]} for tipo, info in preferencias.TIPOS.items()],
+                   "ligado": prefs["tipos"][tipo], "whatsapp": tipo in preferencias.TIPOS_WHATSAPP}
+                  for tipo, info in preferencias.TIPOS.items()],
         "emails": prefs["emails"],
         "emails_cadastro": prefs["emails_cadastro"],
         "max_emails": preferencias.MAX_EMAILS,
+        "celulares": prefs["celulares"],
+        "max_celulares": preferencias.MAX_CELULARES,
         "somente_leitura": bool(g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA),
     })
 
@@ -573,20 +577,23 @@ def api_notificacoes_salvar():
     """Sempre no CNPJ da sessão -- nada do corpo escolhe o embarcador."""
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
-    emails, tipos = corpo.get("emails", ""), corpo.get("tipos", {})
+    emails, tipos, celulares = corpo.get("emails", ""), corpo.get("tipos", {}), corpo.get("celulares")
     if isinstance(emails, str):
         emails = emails.replace(";", "\n").replace(",", "\n").splitlines()
-    if not isinstance(emails, list) or not isinstance(tipos, dict):
+    if isinstance(celulares, str):
+        celulares = celulares.replace(";", "\n").replace(",", "\n").splitlines()
+    if not isinstance(emails, list) or not isinstance(tipos, dict) \
+            or not (celulares is None or isinstance(celulares, list)):
         return jsonify({"erro": "Dados inválidos."}), 400
     conn = auth.conectar()
     try:
-        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia())
+        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia(), celulares=celulares)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
         conn.close()
     logger.info(f"notificacoes cnpj={g.cliente['cnpj']} por={_quem_envia()} tipos={prefs['tipos']} "
-                f"emails={len(prefs['emails'])}")
+                f"emails={len(prefs['emails'])} celulares={len(prefs['celulares'])}")
     return _resposta_notificacoes(prefs)
 
 

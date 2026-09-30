@@ -1,5 +1,7 @@
 {# Modal "Notificações" do portal -- pedido do Hugo, 17/09. O cliente liga e
    desliga cada tipo de e-mail e informa o e-mail em que quer recebê-los.
+   30/09: celular pro WhatsApp, que acompanha o e-mail só nos tipos marcados
+   com "whatsapp" pela API.
    Os tipos, rótulos e descrições vêm da API (/api/notificacoes ->
    preferencias_notificacao.TIPOS); aqui é só a tela. Aberto pelo botão
    #btn-notificacoes do cabeçalho (base_cliente.html). #}
@@ -19,6 +21,7 @@
   #ntf-modal .ntf-item .txt { flex: 1; min-width: 0; }
   #ntf-modal .ntf-item b { display: block; font-size: 13.5px; font-weight: 600; }
   #ntf-modal .ntf-item span.desc { display: block; margin-top: 2px; font-size: 12.5px; color: var(--texto-suave); line-height: 1.45; }
+  #ntf-modal .ntf-zap { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 100px; background: var(--fundo); border: 1px solid var(--borda); font-size: 11px; font-weight: 600; color: var(--texto-suave); vertical-align: 1px; }
   /* Chave liga/desliga: checkbox de verdade (role=switch), só a cara muda. */
   #ntf-modal .ntf-chave { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 40px; height: 22px; margin: 1px 0 0; border-radius: 100px; background: var(--numero-fundo); cursor: pointer; transition: background 0.15s; }
   #ntf-modal .ntf-chave::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 100px; background: #fff; transition: transform 0.15s; }
@@ -42,8 +45,8 @@
   <form method="dialog" id="ntf-form">
     <div class="ntf-cab">
       <div>
-        <h2 id="ntf-titulo">Notificações por e-mail</h2>
-        <p>Escolha quais avisos a sua empresa recebe e em qual e-mail.</p>
+        <h2 id="ntf-titulo">Notificações</h2>
+        <p>Escolha quais avisos a sua empresa recebe, em qual e-mail e, para alguns, também no WhatsApp.</p>
       </div>
       <button type="button" class="ntf-x" id="ntf-fechar" aria-label="Fechar">&times;</button>
     </div>
@@ -52,6 +55,9 @@
       <label class="ntf-email" for="ntf-emails">E-mail para receber as notificações</label>
       <textarea id="ntf-emails" rows="3" spellcheck="false" autocomplete="off" placeholder="um e-mail por linha"></textarea>
       <p class="ntf-ajuda" id="ntf-ajuda-email"></p>
+      <label class="ntf-email" for="ntf-celulares">Celular para receber no WhatsApp (opcional)</label>
+      <textarea id="ntf-celulares" rows="2" spellcheck="false" autocomplete="off" inputmode="tel" placeholder="(11) 98888-7777 — um por linha"></textarea>
+      <p class="ntf-ajuda" id="ntf-ajuda-celular"></p>
     </div>
     <div class="ntf-pe">
       <span class="ntf-status" id="ntf-status" role="status"></span>
@@ -80,13 +86,21 @@
     let html = '', grupoAtual = null;
     dados.tipos.forEach(function (t) {
       if (t.grupo !== grupoAtual) { grupoAtual = t.grupo; html += '<div class="ntf-grupo">' + esc(GRUPOS[t.grupo] || '') + '</div>'; }
-      html += '<label class="ntf-item"><span class="txt"><b>' + esc(t.rotulo) + '</b><span class="desc">' + esc(t.descricao) + '</span></span>' +
+      html += '<label class="ntf-item"><span class="txt"><b>' + esc(t.rotulo) +
+              (t.whatsapp ? '<span class="ntf-zap">+ WhatsApp</span>' : '') +
+              '</b><span class="desc">' + esc(t.descricao) + '</span></span>' +
               '<input type="checkbox" role="switch" class="ntf-chave" data-tipo="' + esc(t.tipo) + '"' +
               (t.ligado ? ' checked' : '') + (dados.somente_leitura ? ' disabled' : '') + '></label>';
     });
     $('ntf-lista').innerHTML = html;
     $('ntf-emails').value = (dados.emails || []).join('\n');
     $('ntf-emails').disabled = !!dados.somente_leitura;
+    $('ntf-celulares').value = (dados.celulares || []).join('\n');
+    $('ntf-celulares').disabled = !!dados.somente_leitura;
+    const comZap = dados.tipos.filter(function (t) { return t.whatsapp; }).map(function (t) { return t.rotulo; });
+    $('ntf-ajuda-celular').textContent = 'Até ' + dados.max_celulares + ' celulares, com DDD. ' +
+      'Os avisos marcados com “+ WhatsApp” (' + comZap.join(', ') + ') chegam também por mensagem, junto com o e-mail. ' +
+      'Deixe em branco para receber só por e-mail.';
     $('ntf-salvar').disabled = !!dados.somente_leitura;
     const cadastro = (dados.emails_cadastro || []).join(', ');
     $('ntf-ajuda-email').textContent = 'Até ' + dados.max_emails + ' endereços, um por linha. ' +
@@ -126,7 +140,7 @@
     try {
       const r = await fetch(URL_API, { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tipos: tipos, emails: $('ntf-emails').value }) });
+        body: JSON.stringify({ tipos: tipos, emails: $('ntf-emails').value, celulares: $('ntf-celulares').value }) });
       const dados = await r.json();
       if (!r.ok) throw new Error(dados.erro || 'Não foi possível salvar.');
       desenhar(dados);
