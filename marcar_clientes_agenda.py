@@ -24,6 +24,7 @@ marcou alguém ou deu erro.
 COMO USAR:
     py -3.11 marcar_clientes_agenda.py
     py -3.11 marcar_clientes_agenda.py --modo-teste
+    py -3.11 marcar_clientes_agenda.py --nao-marcar 48178686000131 51322677000187
 """
 import argparse
 import logging
@@ -103,6 +104,20 @@ def _registrar_tratados(candidatos: dict[str, str]):
         conn.close()
 
 
+def registrar_nao_marcar(documentos: list[str]) -> list[str]:
+    """Tira destinatários da rotina (decisão do Hugo): entram como já
+    tratados, então nunca são marcados. Não mexe na planilha. Retorna os
+    documentos registrados (só dígitos)."""
+    docs = [d for d in (_so_digitos(x) for x in documentos) if d]
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _garantir_tabela(conn)
+    finally:
+        conn.close()
+    _registrar_tratados({d: "(não marcar)" for d in docs})
+    return docs
+
+
 def processar(caminho_planilha, modo_teste: bool) -> dict:
     """Marca os candidatos na planilha. Retorna o resultado de
     marcar_agendamento mais "nomes" ({documento: nome})."""
@@ -179,5 +194,10 @@ if __name__ == "__main__":
                                                  "data de agendamento informada")
     parser.add_argument("--modo-teste", action="store_true",
                         help="Lista quem seria marcado, sem gravar na planilha nem no banco")
+    parser.add_argument("--nao-marcar", nargs="+", metavar="DOCUMENTO",
+                        help="Só registra esses CNPJ/CPF como fora da rotina (nunca serão marcados) e sai")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste)
+    if args.nao_marcar:
+        print("Fora da rotina:", ", ".join(registrar_nao_marcar(args.nao_marcar)))
+    else:
+        main(modo_teste=args.modo_teste)

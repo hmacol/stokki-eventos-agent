@@ -97,6 +97,16 @@ class TestMarcarClientesAgenda(unittest.TestCase):
         mca.processar(self.planilha, modo_teste=False)
         self.assertIsNone(self._alertas()["21590391000111"])
 
+    def test_nao_marcar_tira_o_cliente_da_rotina(self):
+        self._agendar("PS-1", "49749452000160", "VERO PANE")
+        self._agendar("PS-2", "59708718000180", "REAL BREAD")
+        self.assertEqual(mca.registrar_nao_marcar(["49.749.452/0001-60", "abc"]), ["49749452000160"])
+
+        resultado = mca.processar(self.planilha, modo_teste=False)
+        self.assertEqual(resultado["marcados"], [])
+        self.assertEqual(resultado["incluidos"], ["59708718000180"])
+        self.assertIsNone(self._alertas()["49749452000160"])
+
     def test_modo_teste_nao_grava_nada(self):
         self._agendar("PS-1", "49749452000160", "VERO PANE")
         resultado = mca.processar(self.planilha, modo_teste=True)
