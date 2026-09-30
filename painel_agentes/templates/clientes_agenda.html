@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block titulo %}Clientes com agendamento{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 26px 0 8px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; white-space: nowrap; color: var(--texto-suave); }
+  .pedidos { margin: 0; padding: 0; list-style: none; }
+  .pedidos li { font-size: 12px; white-space: nowrap; }
+  .acoes { white-space: nowrap; }
+  .acoes button { margin-right: 6px; }
+  button.botao.secundario { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.AUTORIZADO { background: var(--ok-bg, #e6f4ea); color: var(--ok, #1e7e34); }
+  .pilula.NAO_MARCAR { background: var(--erro-bg); color: var(--erro); }
+  .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
+  .erro-decisao { color: var(--erro); font-size: 13px; margin: 8px 0 0; min-height: 18px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Clientes com agendamento</h1>
+<p class="sub">
+  Destinatários que tiveram pedido com <strong>data de agendamento informada</strong> (portal, resposta de e-mail ou
+  planilha) e ainda não estão como AGENDA na BD_CLIENTES. <strong>Autorizar</strong> grava AGENDA na planilha agora
+  (com backup) e, a partir daí, pedido desse cliente sem data gera o aviso urgente ao remetente.
+  <strong>Não marcar</strong> tira o cliente desta fila para sempre.
+</p>
+
+{% if erro %}<p class="erro-decisao">{{ erro }}</p>{% endif %}
+
+<h2>Aguardando sua decisão ({{ pendentes | length }})</h2>
+<div class="tabela-wrap">
+  {% if pendentes %}
+  <table>
+    <thead><tr><th>Destinatário</th><th>CNPJ/CPF</th><th>Pedidos com data informada</th><th>Entrou em</th><th></th></tr></thead>
+    <tbody>
+    {% for c in pendentes %}
+      <tr data-documento="{{ c.documento }}">
+        <td>{{ c.nome or '(sem nome)' }}</td>
+        <td class="mono">{{ c.documento_formatado }}</td>
+        <td>
+          <ul class="pedidos">
+            {% for p in c.pedidos %}<li>{{ p.codigo }} · {{ p.data }} · {{ p.origem }}</li>{% endfor %}
+          </ul>
+        </td>
+        <td class="mono">{{ c.tratado_em or '' }}</td>
+        <td class="acoes">
+          <button type="button" class="botao" data-acao="autorizar">Autorizar</button>
+          <button type="button" class="botao secundario" data-acao="nao_marcar">Não marcar</button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="vazio">Nenhum cliente esperando decisão.</div>
+  {% endif %}
+</div>
+<p class="erro-decisao" id="aviso"></p>
+
+<h2>Já decididos</h2>
+<div class="tabela-wrap">
+  {% if decididos %}
+  <table>
+    <thead><tr><th>Destinatário</th><th>CNPJ/CPF</th><th>Decisão</th><th>Quando</th></tr></thead>
+    <tbody>
+    {% for c in decididos %}
+      <tr>
+        <td>{{ c.nome or '(sem nome)' }}</td>
+        <td class="mono">{{ c.documento_formatado }}</td>
+        <td><span class="pilula {{ c.situacao }}">{{ c.rotulo }}</span></td>
+        <td class="mono">{{ c.decidido_em or c.tratado_em or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="vazio">Nenhuma decisão ainda.</div>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  const aviso = document.getElementById("aviso");
+  document.querySelectorAll("tr[data-documento] button[data-acao]").forEach((botao) => {
+    botao.addEventListener("click", async () => {
+      const linha = botao.closest("tr");
+      const documento = linha.dataset.documento;
+      const acao = botao.dataset.acao;
+      const nome = linha.querySelector("td").textContent.trim();
+      const pergunta = acao === "autorizar"
+        ? `Marcar ${nome} como AGENDA na BD_CLIENTES?`
+        : `Tirar ${nome} da fila? Ele não volta a ser sugerido.`;
+      if (!window.confirm(pergunta)) return;
+      linha.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+      aviso.textContent = "";
+      try {
+        const resp = await fetch(BASE_PATH + "/api/clientes-agenda/decidir", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documento, acao }),
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || "Falha ao gravar a decisão.");
+        window.location.reload();
+      } catch (e) {
+        aviso.textContent = e.message;
+        linha.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

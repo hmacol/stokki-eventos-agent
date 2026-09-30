@@ -151,6 +151,8 @@ def carregar_clientes_agendamento(caminho: str | Path) -> set[str]:
         else:
             linhas_com_alerta_nao_agendamento += 1
 
+    wb.close()  # em read_only o arquivo fica aberto até aqui; no Windows isso trava o marcar_agendamento
+
     if linhas_com_alerta_nao_agendamento:
         logger.info(
             f"{linhas_com_alerta_nao_agendamento} linha(s) com outro tipo de alerta "
