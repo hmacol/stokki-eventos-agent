@@ -31,8 +31,9 @@ Travas:
   - resumo_diario_embarcador.forcar_destino: enquanto preenchido, TODO e-mail
     vai so pra ele. SEM a secao no config o padrao e o e-mail do Hugo: envio
     real pro cliente exige `forcar_destino: ""` explicito.
-  - chave-mestra notificacoes_automaticas.ativo vale pro envio real (o
-    redirecionado nao sai de casa, entao nao depende dela).
+  - a chave-mestra notificacoes_automaticas.ativo NAO vale aqui (Hugo,
+    29/09): o resumo e opt-in por embarcador e foi liberado sozinho, com os
+    outros e-mails automaticos ainda desligados.
   - notificacoes_enviadas (tipo + chave sender|data): rodar duas vezes no
     mesmo dia nao manda duas vezes.
 
@@ -60,7 +61,7 @@ _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
 from email_utils import (COR_BORDA, COR_ERRO, COR_PRIMARIA, COR_PRIMARIA_CLARA, COR_TEXTO,
-                         COR_TEXTO_SUAVE, enviar_email, envelope_html, notificacoes_automaticas_ativas)
+                         COR_TEXTO_SUAVE, enviar_email, envelope_html)
 from notificar_execucao_agente import notificar_execucao
 from portal_cliente import dados_cliente, link_canhoto
 import preferencias_notificacao
@@ -409,14 +410,10 @@ def executar(config: dict, data_alvo: date, modo_teste: bool = False, sender_id:
          "notas": 0, "desativado": ""}
 
     forcar = forcar_destino_do_config(config)
-    if not modo_teste:
-        if not rotina_ativa(config):
-            r["desativado"] = "resumo_diario_embarcador.ativo=false"
-        elif not forcar and not notificacoes_automaticas_ativas(config):
-            r["desativado"] = "notificacoes_automaticas.ativo=false"
-        if r["desativado"]:
-            logger.info(f"Desativado ({r['desativado']}) -- nada enviado.")
-            return r
+    if not modo_teste and not rotina_ativa(config):
+        r["desativado"] = "resumo_diario_embarcador.ativo=false"
+        logger.info(f"Desativado ({r['desativado']}) -- nada enviado.")
+        return r
 
     todos = preferencias_notificacao.carregar_embarcadores(TIPO_NOTIFICACAO, db_path=db_path)
     # --sender-id em modo teste prova o e-mail de quem ainda nao ligou o resumo

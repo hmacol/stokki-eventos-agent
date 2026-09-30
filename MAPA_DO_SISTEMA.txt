@@ -318,11 +318,15 @@
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
  integracao_openwa.py          Envio de WhatsApp pelo OpenWA (só notificações internas).
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
-                               job, não expedidos e resumo das rotinas (erro ou
-                               lista sempre_avisar). Desligado por padrão.
+                               job, não expedidos, resumo das rotinas (erro ou
+                               lista sempre_avisar) e insucessos novos de entrega
+                               (um aviso por rodada do expedir_pedidos.py, com
+                               código, destinatário, remetente e motivo).
+                               Desligado por padrão.
                                Texto em linguagem simples (sem nome de unit nem
-                               exceção crua): unit nova em infra/ precisa de nome
-                               em NOMES_DAS_TAREFAS, senão o teste falha.
+                               exceção crua) e mensagem inteira em 200 caracteres
+                               (insucesso é exceção): unit nova em infra/ precisa
+                               de nome em NOMES_DAS_TAREFAS, senão o teste falha.
  integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
 
  --- WMS (sincronizações com a Stokki, embarcador piloto) ---

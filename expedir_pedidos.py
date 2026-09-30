@@ -697,6 +697,28 @@ def reentregar_insucessos_sem_resposta(vuupt_token: str, insucessos: list, modo_
     return resultado
 
 
+def _itens_whatsapp_insucesso(insucessos: list, embarcadores: dict) -> list:
+    """Insucessos no formato de notificar_whatsapp.avisar_insucessos."""
+    return [{
+        "codigo": s.get("code") or "",
+        "destinatario": s.get("title") or "",
+        "remetente": (embarcadores.get(s.get("sender_id")) or {}).get("nome", ""),
+        "motivo": s.get("note") or texto_do_motivo(s.get("failed_reason_id")),
+    } for s in insucessos]
+
+
+def avisar_insucessos_whatsapp(novos: list, config: dict, modo_teste: bool):
+    """Aviso curto no grupo interno com os insucessos NOVOS da rodada
+    (pedido do Hugo, 29/09). Falha aqui nunca derruba a expedição."""
+    try:
+        import notificar_whatsapp
+        import preferencias_notificacao
+        embarcadores = preferencias_notificacao.carregar_embarcadores("insucesso")
+        notificar_whatsapp.avisar_insucessos(_itens_whatsapp_insucesso(novos, embarcadores), config, modo_teste)
+    except Exception as e:
+        logger.warning(f"  Falha no aviso de insucesso por WhatsApp (segue a expedição): {e}")
+
+
 def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste: bool):
     """
     Envia e-mail interno listando pedidos com INSUCESSO na entrega
@@ -704,6 +726,9 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
     Stokki — só geram este aviso, pra alguém tratar manualmente
     (decisão do Hugo, 29/07). Mesmo padrão visual/estrutural de
     notificar_validacao_pendente, adaptado pro conteúdo de insucesso.
+
+    Devolve os insucessos NOVOS quando o e-mail saiu (pro aviso de
+    WhatsApp); None nos demais casos.
     """
     if not insucessos:
         return
@@ -803,6 +828,7 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
         # suprimir o e-mail de produção seguinte).
         if not modo_teste:
             fingerprint_notificacao_interna.marcar_notificados(insucessos)
+        return novos
     except Exception as e:
         logger.warning(f"  Falha ao enviar notificacao de insucesso: {e}")
         for s in insucessos:
@@ -1397,7 +1423,9 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 logger.info(f"Notificações automáticas desativadas -- {len(pendentes_resposta)} pedido(s) "
                            f"aguardando pergunta de reenvio, disponível pra disparo manual na Fila de Ação.")
 
-            notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+            novos_avisados = notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+            if novos_avisados:
+                avisar_insucessos_whatsapp(novos_avisados, config, modo_teste)
 
             # Reentrega automática depois de HORAS_REENTREGA_AUTO sem
             # decisão (Hugo, 28/09) -- DEPOIS da pergunta, pra ela sair
