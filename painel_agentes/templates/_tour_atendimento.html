@@ -1,0 +1,155 @@
+{# Roteiro do "Guia da tela" do Atendimento (/atendimento) -- pedido do
+   Hugo, 29/09 (guias pros funcionários, mesmo molde das outras telas).
+   Só o CONTEÚDO (ordem dos passos e textos); o motor está em _tour.html e
+   este arquivo entra sozinho pelo base.html (nome = _tour_<endpoint>.html).
+   Pra mudar um texto, é só editar aqui. Passos cujo elemento não está na
+   tela (fila vazia, tela estreita sem a coluna de contexto) são pulados
+   sozinhos. Abre sozinho na primeira visita (?tour=1 força, ?tour=0
+   impede) e pelo botão "Guia" da barra lateral.
+
+   O guia NUNCA dispara ação de verdade e NUNCA abre chamado: abrir um
+   chamado marca as mensagens do cliente como lidas. Se já houver uma
+   conversa aberta, o guia mostra ela; se não, desenha uma conversa de
+   EXEMPLO (botões sem data-acao / data-macro / data-liberar, então clicar
+   neles não faz nada) e apaga tudo ao sair. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var q = function (sel) { return function () { return document.querySelector(sel); }; };
+  var VAZIO_LATERAL = '<div class="vazio">Contexto do cliente aparece aqui.</div>';
+
+  var exemplo = false;
+  function conversaReal() { return !exemplo && !$('conv-cab').classList.contains('oculto'); }
+  function mostrarExemplo() {
+    if (exemplo || conversaReal()) return;
+    exemplo = true;
+    $('conv-vazio').classList.add('oculto');
+    ['conv-cab', 'conv-corpo', 'conv-pe'].forEach(function (id) { $(id).classList.remove('oculto'); });
+    $('conv-cab').innerHTML =
+      '<div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;"><span class="mono" style="font-size:12.5px;color:var(--texto-suave);font-weight:600">#0</span><h2>Entrega (exemplo do guia)</h2><span class="pill NA_FILA"><i></i>Na fila</span></div>' +
+      '<div class="meta"><span><b style="color:var(--texto)">Cliente Exemplo</b></span><span>Entrega</span><span>Pedido <b class="mono" style="color:var(--texto)">PS-00000</b></span><span>Aberto agora pelo chat</span>' +
+      '<span class="acoes"><button type="button" class="botao-linha">Assumir</button><button type="button" class="botao-p">✓ Resolver e enviar histórico</button></span></div>';
+    $('conv-corpo').innerHTML =
+      '<div class="resumo"><div class="t"><span>Resumo do assistente</span></div><div><span style="color:var(--texto-suave)">Área:</span> <b>Entrega</b> &nbsp;·&nbsp; <span style="color:var(--texto-suave)">Pedido:</span> <b class="mono">PS-00000</b></div><div>Cliente quer saber a previsão de entrega e pediu pra falar com uma pessoa.</div></div>' +
+      '<div class="msg"><div class="bolha">Bom dia, o pedido PS-00000 chega hoje?</div><div class="meta-msg">Cliente Exemplo · 09:12 · pelo portal</div></div>' +
+      '<div class="msg bot"><div class="bolha">Ele está em rota, é a parada 4 de 9. Quer falar com a equipe?</div><div class="meta-msg">Assistente · 09:12</div></div>' +
+      '<div class="sistema">Você está na fila (1º). A equipe vai assumir em instantes. · 09:13</div>' +
+      '<div class="msg eu"><div class="bolha">Bom dia! Estou conferindo com o motorista e já te retorno.</div><div class="meta-msg">Atendente · 09:14</div></div>';
+    $('macros').innerHTML = '<span class="rot" style="font-size:10.5px">Respostas rápidas</span>' +
+      '<button type="button" class="macro">Estou conferindo com o motorista…</button><button type="button" class="macro">A reentrega vai na rota da tarde…</button>';
+    $('nota-pe').textContent = 'Cliente não está no chat: a resposta vai pro e-mail dele e fica no chamado.';
+    $('lateral').innerHTML =
+      '<div class="card"><span class="rot">Cliente</span><div style="font-size:14px;font-weight:700">Cliente Exemplo</div><div class="kv"><span>CNPJ</span><span>00.000.000/0000-00</span></div><div class="kv"><span>Chamados em 30 dias</span><span>3 · 2 resolvidos</span></div><div class="kv"><span>Pedidos hoje</span><span>12 · 7 entregues</span></div></div>' +
+      '<div class="card"><span class="rot">Pedido citado</span><div style="display:flex;align-items:center;gap:8px"><span class="mono" style="font-weight:700;font-size:14px">PS-00000</span><span class="pill" style="background:var(--teste-bg);color:var(--teste-texto)"><i></i>Em rota</span></div><div class="kv"><span>NF</span><span>00000 · 4 vol.</span></div><div class="kv"><span>Motorista / rota</span><span>Motorista Exemplo · Rota 3</span></div><div class="kv"><span>Parada</span><span>4 de 9</span></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><span class="botao-linha">Abrir a Torre</span></div></div>' +
+      '<div class="card"><span class="rot">Outros chamados deste cliente</span><div class="kv"><span><span class="mono" style="color:var(--texto-suave)">#0</span> Comprovante</span><span class="pill RESOLVIDO"><i></i>Resolvido</span></div></div>';
+  }
+  function quadroExemplo(mostrar) {
+    if (!exemplo) return;
+    var qd = $('quadro-bloq');
+    qd.classList.toggle('oculto', !mostrar);
+    qd.innerHTML = !mostrar ? '' :
+      '<h3>NFs aguardando liberação (região não atendida)</h3>' +
+      '<label class="nf"><input type="checkbox" checked disabled> <b class="mono">NF 00000</b> · Destinatário Exemplo · Curitiba/PR <span class="pill">Aguardando liberação</span></label>' +
+      '<div class="acoes-bloq"><input class="valor" placeholder="Valor da cotação (R$)" disabled>' +
+      '<button type="button" class="botao-p">Liberar como dedicado</button><button type="button" class="botao-linha">Liberar sem dedicado</button><button type="button" class="botao-linha">Cancelar envio</button></div>';
+  }
+  function desfazer() {
+    if (!exemplo) return;
+    quadroExemplo(false);
+    exemplo = false;
+    ['conv-cab', 'conv-corpo', 'macros'].forEach(function (id) { $(id).innerHTML = ''; });
+    $('nota-pe').textContent = '';
+    ['conv-cab', 'conv-corpo', 'conv-pe'].forEach(function (id) { $(id).classList.add('oculto'); });
+    $('conv-vazio').classList.remove('oculto');
+    $('lateral').innerHTML = VAZIO_LATERAL;
+  }
+  var conversa = function () { mostrarExemplo(); quadroExemplo(false); };
+  var aviso = '<p style="color:var(--texto-suave)">Se não havia conversa aberta, esta é só um exemplo: o guia não abre nem altera chamado nenhum.</p>';
+
+  var G = 'Geral', S = 'Meu status', F = 'Fila', C = 'Conversa', X = 'Contexto';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Atendimento: todo mundo numa fila só',
+      texto: '<p>Aqui chegam as conversas dos <b>clientes</b> (chat do portal e e-mail) e dos <b>motoristas</b> (aba Ajuda do app). A tela tem três partes: a <b>fila</b> à esquerda, a <b>conversa</b> no meio e o <b>contexto</b> à direita.</p><p>Use <b>Próximo</b> e <b>Voltar</b> (ou as setas do teclado). Dá pra sair quando quiser e reabrir pelo botão <b>Guia</b>, embaixo no menu lateral.</p>',
+      antes: quadroExemplo.bind(null, false) },
+
+    { alvo: '#seg-status', capitulo: S, titulo: 'Online, Almoço ou Offline',
+      texto: '<p>É o que diz pro portal e pro app se <b>tem gente atendendo agora</b>.</p><ul><li><b>Online</b>: quem pedir atendente entra na fila e espera você assumir.</li><li><b>Almoço</b>: o cliente vê que o atendimento está em pausa e é convidado a deixar chamado.</li><li><b>Offline</b>: conversa nova vira chamado e a resposta vai por e-mail.</li></ul><p>O Online só vale <b>enquanto esta tela estiver aberta</b>. Ao sair no fim do dia, marque <b>Offline</b>.</p>' },
+
+    { alvo: '.nome-atd', capitulo: S, titulo: 'Seu nome',
+      texto: '<p>O login do painel é compartilhado, então é aqui que você diz quem é. O nome <b>aparece pro cliente</b> em cada resposta e no histórico que vai por e-mail.</p><p>Sem nome a tela não deixa ficar Online nem responder.</p>' },
+
+    { alvo: '#horario-txt', capitulo: S, titulo: 'Horário divulgado',
+      texto: '<p>O horário de atendimento que o cliente e o motorista veem. Fora dele, mesmo com você Online, o portal avisa o horário e a conversa vira chamado.</p>' },
+
+    { alvo: '#aviso-topo', capitulo: S, titulo: 'Aviso do seu status',
+      texto: '<p>Esta faixa aparece quando você <b>não está Online</b> ou está <b>fora do horário</b>, e explica o que o cliente está vendo do outro lado.</p>' },
+
+    { alvo: '#kpis', capitulo: G, titulo: 'Os números de agora',
+      texto: '<p><b>Na fila</b>: gente esperando atendente agora. <b>Em atendimento</b>: conversas já assumidas por alguém. <b>De motorista</b> e <b>por e-mail</b>: chamados abertos de cada tipo. <b>Assistente resolveu</b>: o que o robô fechou sozinho hoje.</p><p>Atualiza sozinho a cada poucos segundos.</p>',
+      posicao: 'baixo' },
+
+    { alvo: '#abas', capitulo: F, titulo: 'As abas da fila',
+      texto: '<ul><li><b>Fila</b>: esperando alguém da equipe (ao vivo ou chamado sem resposta). <b>Comece por aqui.</b></li><li><b>Meus</b>: os que você assumiu.</li><li><b>Motoristas</b>: tudo que veio do app e ainda está aberto.</li><li><b>Por e-mail</b>: chamados que andam por e-mail, aguardando a gente ou já respondidos.</li><li><b>Com o assistente</b>: o robô ainda está conversando. Dá pra acompanhar e entrar se precisar.</li><li><b>Resolvidos</b>: o histórico.</li></ul>',
+      posicao: 'direita' },
+
+    { alvo: '.busca', capitulo: F, titulo: 'Busca',
+      texto: '<p>Filtra por <b>cliente</b>, <b>pedido</b> ou <b>número do chamado</b>. Procura só <b>dentro da aba aberta</b>: se não achar, troque de aba (chamado antigo costuma estar em Resolvidos).</p>',
+      posicao: 'direita' },
+
+    { alvo: '#fila .vazio', capitulo: F, titulo: 'Nada por aqui',
+      texto: '<p>Esta aba está vazia. Na aba <b>Fila</b>, isso é o objetivo: ninguém esperando.</p>',
+      posicao: 'direita' },
+
+    { alvo: q('#fila .item'), capitulo: F, titulo: 'Um chamado na fila',
+      texto: '<p>Quem está <b>esperando ao vivo</b> vem primeiro, e o que espera há mais tempo fica em cima.</p><ul><li><b>Bolinha verde</b> à esquerda: tem mensagem que ninguém da equipe leu.</li><li><b>Volante</b> e etiqueta <b>Motorista</b>: veio do app.</li><li>Balão = chegou pelo chat; envelope = por e-mail. Ao lado, há quanto tempo espera.</li><li>Embaixo: o resumo do assistente ou a última mensagem, a situação e <b>com quem está</b>.</li></ul><p>Clicar abre a conversa e <b>marca as mensagens como lidas</b>.</p>',
+      posicao: 'direita' },
+
+    { alvo: '#conv-cab', capitulo: C, titulo: 'Cabeçalho do chamado',
+      texto: '<p>Número, assunto e situação. Na linha de baixo: quem abriu, a área, o <b>pedido citado</b>, por onde chegou e com quem está.</p>' + aviso,
+      antes: conversa },
+
+    { alvo: '#conv-cab .acoes', capitulo: C, titulo: 'Assumir, devolver e resolver',
+      texto: '<ul><li><b>Assumir</b>: o chamado passa a ser seu e a pessoa vê "<i>seu nome</i> entrou na conversa".</li><li><b>Devolver pra fila</b>: solta o chamado pra outro atendente pegar.</li><li><b>Resolver e enviar histórico</b>: pede um resumo (opcional), fecha o chamado e <b>manda a conversa inteira por e-mail</b> pro cliente. Cancelar a pergunta do resumo cancela tudo.</li><li><b>Reabrir</b>: aparece no chamado já resolvido.</li></ul>',
+      antes: conversa, posicao: 'baixo' },
+
+    { alvo: '#quadro-bloq', capitulo: C, titulo: 'NFs de região não atendida',
+      texto: '<p>Só aparece em chamado de <b>Envios do portal</b>: o cliente mandou pedido pra uma cidade que a gente não atende e ele ficou <b>parado esperando a sua decisão</b>.</p><ul><li><b>Liberar como dedicado</b>: informe o valor da cotação; ele é dividido entre as NFs marcadas.</li><li><b>Liberar sem dedicado</b>: segue como pedido normal.</li><li><b>Cancelar envio</b>: o pedido não é criado.</li></ul><p>Liberado, o pedido <b>segue pra Stokki</b>. Toda decisão vira mensagem que o <b>cliente vê</b> no chat.</p>',
+      antes: function () { mostrarExemplo(); quadroExemplo(true); }, posicao: 'baixo' },
+
+    { alvo: '#conv-corpo', capitulo: C, titulo: 'As mensagens',
+      texto: '<p>À <b>esquerda</b>, quem pediu ajuda; à <b>direita</b>, a equipe. Mensagem com <b>barra lateral</b> é do assistente (robô). As faixas no centro são avisos do sistema (entrou na fila, fulano assumiu, resolvido).</p><p>Quando o assistente atendeu antes, o <b>Resumo do assistente</b> no topo já diz a área, o pedido e o que a pessoa quer: leia antes de responder.</p>',
+      antes: conversa },
+
+    { alvo: '#macros', capitulo: C, titulo: 'Respostas rápidas',
+      texto: '<p>Clicar <b>só coloca o texto na caixa</b>, não envia: dá pra ajustar antes. Em chamado de motorista as frases são outras.</p>',
+      antes: conversa, posicao: 'cima' },
+
+    { alvo: '.compor', capitulo: C, titulo: 'Responder',
+      texto: '<p><b>Enter envia</b>; <b>Shift+Enter</b> quebra a linha. O clipe anexa até <b>5 arquivos</b> de 10 MB (foto, PDF, planilha, XML).</p><p>Responder um chamado sem dono <b>já assume</b> ele pra você. Responder um resolvido <b>reabre</b>.</p><p><b>Não tem como apagar</b> mensagem enviada.</p>',
+      antes: conversa, posicao: 'cima' },
+
+    { alvo: '#nota-pe', capitulo: C, titulo: 'Pra onde vai a resposta',
+      texto: '<p>Esta linha diz, a cada momento, por onde a pessoa vai receber:</p><ul><li>cliente <b>com o chat aberto</b>: vê na hora;</li><li>cliente <b>fora do chat</b>: vai por <b>e-mail</b> e fica no chamado;</li><li><b>motorista</b>: aparece na aba Ajuda do app.</li></ul>',
+      antes: conversa, posicao: 'cima' },
+
+    { alvo: '#lateral', capitulo: X, titulo: 'Quem é e do que está falando',
+      texto: '<p>Pra não precisar abrir outra tela: os dados do <b>cliente</b>, o <b>pedido citado</b> com situação, motorista, rota e parada, e o botão <b>Abrir a Torre</b>.</p><p>Em chamado de <b>motorista</b> aparece ele, a <b>rota de hoje</b>, a parada citada e o pagamento do período.</p><p>Em <b>Outros chamados</b>, clicar abre aquele chamado.</p>',
+      antes: conversa, posicao: 'esquerda' },
+
+    { alvo: '.topo a.botao-linha', capitulo: G, titulo: 'Versão celular',
+      texto: '<p>Abre a mesma tela num formato pra celular: fila, conversa e contexto, uma de cada vez.</p>',
+      antes: quadroExemplo.bind(null, false), posicao: 'baixo' },
+
+    { alvo: '#tour-abrir', capitulo: G, titulo: 'É isso',
+      texto: '<p><b>1.</b> Nome e Online. <b>2.</b> Aba Fila, de cima pra baixo. <b>3.</b> Assumir, responder, <b>Resolver</b>. <b>4.</b> Offline ao sair.</p><p>Este botão <b>Guia</b> reabre o passo a passo.</p>',
+      antes: quadroExemplo.bind(null, false), posicao: 'direita' }
+  ];
+
+  window.Tour.registrar('atendimento', passos, {
+    auto: true, titulo: 'Atendimento',
+    pronto: function () { return !!document.querySelector('#abas button'); },
+    aoSair: desfazer
+  });
+})();
+</script>
