@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-wms-recebimentos.service a cada 30 min (deslocado dos outros syncs)
+
+[Timer]
+OnCalendar=*-*-* *:09/30:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara atendimento-reenviar-pendentes.service a cada 1 min
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=false
+AccuracySec=10sec
+
+[Install]
+WantedBy=timers.target

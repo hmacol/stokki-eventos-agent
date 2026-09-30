@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-comparar-vuupt.service todo dia as 07:40 (depois dos romaneios e da expedicao da manha)
+
+[Timer]
+OnCalendar=*-*-* 07:40:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

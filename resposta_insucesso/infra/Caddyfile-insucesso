@@ -1,0 +1,23 @@
+# Bloco da página de resposta ao insucesso dentro do guarda-chuva
+# app.freshhub.com.br (mesmo padrão de painel_agentes/infra/Caddyfile-painel,
+# pedido do Hugo 16/08: tudo sob um domínio só, um caminho por serviço).
+#
+# `handle_path` tira o prefixo /insucesso antes de repassar pro backend --
+# o Flask nunca vê o prefixo na URL. `header_up X-Forwarded-Prefix /insucesso`
+# avisa o Flask (via ProxyFix, ver app.py) que ele está atrás desse
+# prefixo, pra url_for()/redirect() gerarem link com /insucesso na
+# frente.
+#
+# Este bloco entra DENTRO do site app.freshhub.com.br já existente no
+# Caddyfile real da VPS (junto do bloco /painel) -- NÃO como um site
+# novo. Sem redirect de barra aqui (diferente de /painel): a única rota
+# é /insucesso/r/<token>, sempre com barra interna, não existe uma tela
+# "/insucesso" sozinha pra normalizar.
+
+# app.freshhub.com.br {
+	handle_path /insucesso/* {
+		reverse_proxy 127.0.0.1:8072 {
+			header_up X-Forwarded-Prefix /insucesso
+		}
+	}
+# }

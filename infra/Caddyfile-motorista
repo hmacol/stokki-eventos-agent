@@ -1,0 +1,15 @@
+# Bloco da API do app de motoristas dentro do guarda-chuva app.freshhub.com.br
+# (mesmo padrão do painel: painel_agentes/infra/Caddyfile-painel).
+#
+# Entra DENTRO do site app.freshhub.com.br já existente em /etc/caddy/Caddyfile,
+# ao lado do handle_path /painel/*. O app mobile chama
+# https://app.freshhub.com.br/motorista/api/... ; o Flask (ProxyFix) só vê /api/...
+#
+# 	handle_path /motorista/* {
+# 		reverse_proxy 127.0.0.1:8073 {
+# 			header_up X-Forwarded-Prefix /motorista
+# 		}
+# 	}
+#
+# Uploads de foto: o Flask limita a 15 MB (MAX_CONTENT_LENGTH); o Caddy não
+# precisa de request_body extra pra isso.

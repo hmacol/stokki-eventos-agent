@@ -1,0 +1,1685 @@
+{% extends "base.html" %}
+{% block titulo %}Torre de Controle{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1400px; }
+
+  /* Paleta de status dos gráficos -- validada (CVD + contraste) em
+     12/08 com o validador do método de dataviz, na ordem exata em que
+     os segmentos se tocam no empilhado: sucesso | em rota | aceito |
+     atenção | falha. O âmbar (#eda100) fica abaixo de 3:1 no fundo
+     branco: por regra, sempre acompanhado de rótulo/contagem visível
+     (legendas com número ao lado). */
+  :root {
+    --st-sucesso: #0ca30c;
+    --st-rota:    #2a78d6;
+    --st-aceito:  #4a3aa7;
+    --st-atencao: #eda100;
+    --st-falha:   #d03b3b;
+    --st-neutro:  #8A8F98;
+    --trilha:     #ECEEF1;
+    --enfase-fora:#C7CCD4;
+    --trilha-verde:#DFF3DF;
+  }
+  /* Tema escuro: só a trilha do funil muda (o cinza claro ficaria uma
+     tarja clara sobre o card escuro) -- as cores de série (--st-*) são
+     as mesmas validadas em 12/08 (CVD + contraste) e não mudam com o
+     tema, já que carregam significado (sucesso/rota/aceito/etc). */
+  html.tema-escuro {
+    --trilha: #1A2130;
+    --enfase-fora: #3A4457;
+  }
+
+  .card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .card h3 {
+    margin: 0 0 12px;
+    font-size: 12.5px;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .card h3 a { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--acento); text-decoration: none; }
+  .card h3 a:hover { text-decoration: underline; }
+  .carregando { color: var(--texto-suave); font-size: 13px; padding: 8px 0; }
+  .atualizando { opacity: 0.55; transition: opacity 0.2s; }
+
+  /* ── Faixa 1: barra de utilidade ──
+     Redesenho 24/08 (opção B): a régua de KPIs saiu daqui e virou
+     cartões próprios (.card-kpis, logo abaixo) -- essa faixa fica só
+     com data / semáforo / ações de atualizar, sem competir por espaço
+     com os números. O semáforo carrega a contagem de ações da fila. */
+  .faixa-saude {
+    display: flex;
+    align-items: center;
+    gap: 8px 18px;
+    flex-wrap: wrap;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 12px 18px;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .faixa-saude input[type=date] { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .semaforo {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-weight: 700; font-size: 13px;
+    padding: 5px 14px; border-radius: 100px; background: var(--fundo);
+  }
+  .semaforo .luz { width: 11px; height: 11px; border-radius: 100px; background: var(--texto-suave); flex: none; }
+  .semaforo.ok { background: var(--sucesso-bg); color: var(--sucesso); }
+  .semaforo.ok .luz { background: var(--st-sucesso); }
+  .semaforo.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .semaforo.atencao .luz { background: var(--st-atencao); }
+  .semaforo.critico { background: var(--erro-bg); color: var(--st-falha); }
+  .semaforo.critico .luz { background: var(--st-falha); animation: pulso 1.2s ease-in-out infinite; }
+  .carimbo { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
+  .carimbo.erro { color: var(--erro); font-weight: 600; }
+  .botao-refresh {
+    background: none; border: 1px solid var(--borda); border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--texto);
+  }
+  .botao-refresh:hover { border-color: var(--acento); color: var(--acento); }
+
+  /* ── Cartões de indicador (redesenho 24/08, opção B) ──
+     Cada número ganha cartão próprio, mesmo padrão de "amanha-numeros"
+     mais abaixo na página. Cartão com pendência ganha fundo/borda de
+     cor -- não só o número -- pra chamar atenção passando o olho
+     rápido pela tela, sem depender de acuidade de cor (rótulo sempre
+     visível junto). */
+  .card-kpis { padding: 14px 18px; }
+  .grade-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+  .tile {
+    background: var(--fundo); border-radius: 8px; padding: 10px 12px;
+    border: 1px solid transparent; display: flex; flex-direction: column; gap: 2px;
+  }
+  .tile .rotulo-tile { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); }
+  .tile .valor-tile { font-size: 23px; font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .tile .valor-tile .contexto { font-size: 13px; font-weight: 600; color: var(--texto-suave); }
+  .tile .sub-tile { font-size: 11px; color: var(--texto-suave); }
+  .tile.tile-bom .valor-tile { color: var(--st-sucesso); }
+  .tile.tile-alerta { background: var(--rodando-bg); border-color: var(--rodando-texto); }
+  .tile.tile-alerta .valor-tile { color: var(--rodando-texto); }
+  .tile.tile-ruim { background: var(--erro-bg); border-color: var(--st-falha); }
+  .tile.tile-ruim .valor-tile { color: var(--st-falha); }
+
+  /* ── Seletor de período dos KPIs (24/08 -- Fase 1 do pedido do Hugo:
+     "quero semana, mês e comparação com o período anterior") -- trocar
+     de aba só re-renderiza os mesmos tiles com o slice de
+     dadosAtuais.kpis_periodo já carregado, sem novo fetch. */
+  .abas-periodo { display: inline-flex; background: var(--fundo); border-radius: 8px; padding: 3px; gap: 2px; margin-bottom: 12px; }
+  .abas-periodo button {
+    border: none; background: transparent; color: var(--texto-suave); font-size: 12.5px; font-weight: 600;
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .abas-periodo button.ativa { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,0.08); }
+  .link-trimestre {
+    font-size: 12px; color: var(--acento); background: none; border: none; cursor: pointer;
+    font-weight: 600; padding: 6px 4px; font-family: inherit; margin-top: 10px;
+  }
+  .delta { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; margin-top: 1px; }
+  .delta.pos { color: var(--st-sucesso); }
+  .delta.neg { color: var(--st-falha); }
+  .delta .rot-comp { font-weight: 500; color: var(--texto-suave); margin-left: 2px; }
+  .faixa-trimestre { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--borda); display: none; }
+  .faixa-trimestre.aberta { display: block; }
+  .faixa-trimestre .rot { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); margin-bottom: 10px; }
+  .faixa-motivos {
+    display: flex; gap: 6px 20px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--fundo); font-size: 12px; color: var(--texto-suave);
+  }
+  .faixa-motivos .n { font-weight: 700; color: var(--texto); font-variant-numeric: tabular-nums; }
+
+  /* ── Pipeline colapsado (redesenho 13/08) ──
+     O stepper completo saía do topo: etapa com erro já vira item da
+     fila de ação (com botão Reexecutar), então a linha só precisa
+     mostrar o estado. "rodar etapas" expande o stepper de sempre. */
+  .pipeline-linha {
+    display: flex; align-items: center; gap: 6px 16px; flex-wrap: wrap;
+    background: var(--superficie); border: 1px solid var(--borda);
+    border-radius: 10px; padding: 8px 18px; margin-bottom: 12px; font-size: 12px;
+  }
+  .pipeline-linha .rotulo-pipeline {
+    font-size: 11px; font-weight: 700; color: var(--texto-suave);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .etapa-mini { display: inline-flex; align-items: center; gap: 6px; color: var(--texto-suave); }
+  .etapa-mini .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa-mini.sucesso .estado { background: var(--st-sucesso); }
+  .etapa-mini.erro { color: var(--st-falha); font-weight: 700; }
+  .etapa-mini.erro .estado { background: var(--st-falha); }
+  .etapa-mini.rodando { color: var(--texto); font-weight: 600; }
+  .etapa-mini.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  .pipeline-linha .alternar {
+    margin-left: auto; background: none; border: none; color: var(--acento);
+    font-size: 12px; cursor: pointer; padding: 2px 4px;
+  }
+  .pipeline-linha .alternar:hover { text-decoration: underline; }
+
+  /* ── Stepper do pipeline (agora escondido atrás do "rodar etapas") ── */
+  .stepper {
+    display: none;
+    grid-template-columns: repeat(6, 1fr) auto;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .stepper.aberto { display: grid; }
+  .etapa {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    position: relative;
+  }
+  .etapa .topo { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .etapa .titulo { font-weight: 700; font-size: 12.5px; }
+  .etapa .detalhe { color: var(--texto-suave); font-size: 11px; }
+  .etapa .quando { color: var(--texto-suave); font-size: 11px; margin-top: 5px; }
+  .etapa .quando a { color: var(--texto-suave); }
+  .etapa .estado { width: 9px; height: 9px; border-radius: 100px; background: #D3D5DB; flex: none; }
+  .etapa.sucesso .estado { background: var(--st-sucesso); }
+  .etapa.erro .estado { background: var(--st-falha); }
+  .etapa.erro { border-color: var(--erro); }
+  .etapa.rodando .estado { background: var(--rodando); animation: pulso 1.2s ease-in-out infinite; }
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .etapa button.rodar {
+    position: absolute; top: 8px; right: 8px;
+    background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 11px; padding: 3px 8px; cursor: pointer; color: var(--texto);
+  }
+  .etapa button.rodar:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+  .etapa button.rodar:disabled { opacity: 0.4; cursor: not-allowed; }
+  .etapa-tudo {
+    display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    padding: 10px 12px;
+  }
+  .etapa-tudo button {
+    background: var(--primaria); color: #fff; border: none; border-radius: 7px;
+    padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .etapa-tudo button:hover:not(:disabled) { background: var(--primaria-clara); }
+  .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── Faixa 2 ── */
+  /* min-width: 0 nas duas colunas: sem isso a coluna "1fr" nunca encolhe
+     abaixo do conteudo mais largo (a tabela da Fila de acao) e empurra a
+     coluna da direita pra fora da tela -- a 1366px a pagina inteira
+     rolava na horizontal (achado 17/09). */
+  .corpo { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+  .corpo > div { min-width: 0; }
+
+  .legenda { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--texto); margin-bottom: 10px; }
+  .legenda .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legenda .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+  .legenda .qtd { color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+
+  .controles-rotas { display: flex; align-items: center; gap: 10px; text-transform: none; letter-spacing: 0; }
+  .controles-rotas select {
+    font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
+    background: var(--fundo); color: var(--texto); text-transform: none;
+  }
+
+  /* Barras de rota */
+  .linha-rota { display: grid; grid-template-columns: 190px 1fr 96px; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--fundo); }
+  .linha-rota:last-child { border-bottom: none; }
+  /* rota que perdeu a última parada ativa por exclusão -- some da
+     VUUPT como rota de verdade, mas a linha fica (só com o chip
+     excluído) pra não esconder o que aconteceu (mesmo padrão da
+     Expedição, Hugo 25/08) */
+  .linha-rota.cancelada { opacity: 0.65; border-bottom-style: dashed; }
+  /* fixada no topo por exclusão recente (ver MINUTOS_DESTAQUE_EXCLUSAO
+     no backend) -- destaque sutil pra explicar por que uma rota
+     "Concluída"/"Vazia" aparece antes de rotas em andamento */
+  .linha-rota.recente { background: var(--rodando-bg); border-radius: 8px; padding: 7px 10px; margin: 0 -10px; }
+  /* Torre acumulada (15/09): grupos por dia + rota atrasada. */
+  .cabecalho-dia { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); padding: 10px 0 4px; border-bottom: 1px solid var(--borda); margin-bottom: 2px; }
+  .cabecalho-dia.passado { color: var(--st-atencao); }
+  .linha-rota.atrasada { border-left: 3px solid var(--st-atencao); padding-left: 8px; }
+  .nota-atrasada, .nota-pendencia { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; margin-top: 3px; margin-left: 4px; }
+  .nota-atrasada { color: var(--st-atencao); }
+  .nota-pendencia { color: var(--st-falha); }
+  .botao-encerrar { display: inline-block; margin-left: 6px; margin-top: 3px; font-size: 10.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); cursor: pointer; }
+  .botao-encerrar:hover { border-color: var(--st-atencao); color: var(--st-atencao); }
+  .nota-recente {
+    display: block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.2px; color: var(--rodando-texto); margin-top: 2px; white-space: nowrap;
+  }
+  .linha-rota .ident { min-width: 0; }
+  .linha-rota .nome { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .linha-rota .motorista { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .linha-rota .motorista.faltando { color: var(--rodando-texto); font-weight: 600; }
+  .barra-progresso { display: flex; gap: 2px; height: 16px; }
+  .barra-progresso .seg { min-width: 4px; }
+  .barra-progresso .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-progresso .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-progresso .seg:only-child { border-radius: 4px; }
+  /* Timeline de pedidos: chip = número da parada na rota (mesma ordem
+     do planejamento), ligados por um traço que "acende" conforme a
+     parada é finalizada -- tamanho do chip é FIXO (quadrado), não
+     cresce com o número. Fica numa linha só: em vez de quebrar linha
+     com muitos pedidos (visual de timeline não pode "pular" pra baixo
+     no meio), a faixa rola horizontalmente (pedido do Hugo, 23/08). */
+  .chips-pedidos { display: flex; flex-wrap: nowrap; align-items: center; overflow-x: auto; min-width: 0; padding: 3px 2px; }
+  .chip-pedido {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 27px; height: 27px; border-radius: 7px; flex: none;
+    background: var(--fundo); border: 2px solid var(--trilha); box-sizing: border-box;
+    font-size: 12px; font-weight: 700; line-height: 1;
+    color: var(--texto-suave); font-variant-numeric: tabular-nums;
+  }
+  .chip-pedido.entregue { background: var(--st-sucesso); border-color: var(--st-sucesso); color: #fff; }
+  .chip-pedido.insucesso { background: var(--st-falha); border-color: var(--st-falha); color: #fff; }
+  .chip-pedido.em_rota { border-color: var(--st-rota); color: var(--st-rota); animation: pulso 1.4s ease-in-out infinite; }
+  /* pedido excluído da rota (botão direito -> "Excluir da Rota",
+     Hugo, 25/08 -- mesmo mecanismo da Expedição) -- nunca some do chip,
+     só muda de estado; motivo aparece no title (tooltip) ao passar o
+     mouse. */
+  .chip-pedido.excluido {
+    background: var(--erro-bg); border-color: var(--erro-bg); color: var(--texto-suave);
+    text-decoration: line-through; cursor: help;
+  }
+  .chip-pedido.excluido:hover { border-color: var(--st-falha); }
+  /* só chip pendente/em rota pode ser excluído (Hugo, 25/08: já
+     entregue/insucesso não tem o que "tirar da rota", já aconteceu) */
+  .chip-pedido.acionavel { cursor: context-menu; }
+  .chip-pedido.acionavel:hover { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .linha-conectora { width: 10px; height: 2px; background: var(--trilha); flex: none; }
+  .linha-conectora.feita { background: var(--acento); }
+
+  /* menu de contexto (botão direito) de um chip -- mesmo padrão visual
+     do menu de contexto da Expedição/planejamento */
+  .menu-contexto {
+    position: fixed; z-index: 10001;
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 4px; min-width: 170px; font-size: 12.5px;
+  }
+  .menu-contexto button {
+    display: block; width: 100%; text-align: left;
+    padding: 7px 10px; border: none; background: none; border-radius: 5px;
+    cursor: pointer; color: var(--erro); font-size: inherit;
+  }
+  .menu-contexto button:hover { background: rgba(255,92,80,0.16); }
+
+  /* modal de motivo da exclusão -- mesmo padrão da Expedição */
+  .modal-overlay-excluir {
+    display: none; position: fixed; inset: 0; z-index: 10000;
+    background: rgba(0,0,0,0.35); align-items: center; justify-content: center;
+  }
+  .modal-overlay-excluir.aberto { display: flex; }
+  .modal-excluir {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  .modal-excluir h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-excluir .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
+  .modal-excluir .campo { margin-bottom: 10px; }
+  .modal-excluir .campo > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-excluir select, .modal-excluir textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 13px; background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  .modal-excluir textarea { resize: vertical; min-height: 60px; }
+  .modal-excluir .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-excluir .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
+  .modal-excluir .acoes button.confirmar:hover { opacity: 0.88; }
+  .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
+  .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .modal-excluir .acoes button.cancelar:hover { background: var(--fundo); }
+  /* Modal "Marcar como tratada" (Hugo, 16/09): mesma casca do de
+     exclusão, só o botão de confirmar não é vermelho -- tratar não
+     destrói nada. */
+  .modal-excluir.modal-tratar .acoes button.confirmar { background: var(--primaria); }
+  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); }
+  .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
+  .linha-rota .contagem .pct { color: var(--texto-suave); margin-left: 3px; }
+  .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+  .estado-rota.em_andamento { color: var(--st-rota); }
+  .estado-rota.concluida { color: var(--st-sucesso); }
+  .estado-rota.nao_iniciada { color: var(--texto-suave); }
+  .estado-rota.vazia { color: var(--texto-suave); }
+
+  /* Pedidos do dia: barra única empilhada + legenda com contagens */
+  .barra-status { display: flex; gap: 2px; height: 22px; margin-bottom: 12px; }
+  .barra-status .seg { min-width: 5px; }
+  .barra-status .seg:first-child { border-radius: 4px 0 0 4px; }
+  .barra-status .seg:last-child { border-radius: 0 4px 4px 0; }
+  .barra-status .seg:only-child { border-radius: 4px; }
+  .lista-legenda { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .lista-legenda li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .lista-legenda .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+  .lista-legenda .qtd { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .nota-rodape { font-size: 11.5px; color: var(--texto-suave); margin-top: 10px; }
+
+  /* Funil Stokki: barras horizontais, um matiz só (magnitude) */
+  .linha-funil { display: grid; grid-template-columns: 150px 1fr 36px; gap: 10px; align-items: center; padding: 4px 0; font-size: 12px; }
+  .linha-funil .barra { height: 14px; background: var(--trilha); border-radius: 0 4px 4px 0; overflow: hidden; }
+  .linha-funil .fill { height: 100%; background: var(--st-rota); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .linha-funil .fill.zero { background: transparent; }
+  .linha-funil .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  /* Amanhã */
+  .amanha-numeros { display: flex; gap: 22px; margin-bottom: 8px; }
+  .amanha-numeros .bloco .n { font-size: 24px; font-weight: 700; }
+  .amanha-numeros .bloco .l { font-size: 11px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px; }
+  .aviso-amanha { font-size: 12px; color: var(--rodando-texto); font-weight: 600; margin-top: 4px; }
+
+  /* ── Mini mapa expansivo ── */
+  .card-mapa { position: relative; }
+  #mini-mapa { width: 100%; height: 300px; border-radius: 8px; border: 1px solid var(--borda); }
+  .card-mapa.expandido {
+    position: fixed; inset: 24px; z-index: 1000; margin: 0;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+    display: flex; flex-direction: column;
+  }
+  .card-mapa.expandido #mini-mapa { height: 100%; flex: 1; }
+  .fundo-mapa {
+    display: none; position: fixed; inset: 0; z-index: 999; background: rgba(20,20,40,0.45);
+  }
+  .fundo-mapa.visivel { display: block; }
+  .legenda-mapa { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--texto-suave); margin-top: 8px; }
+  .legenda-mapa .item { display: inline-flex; align-items: center; gap: 5px; }
+  .legenda-mapa .ponto { width: 9px; height: 9px; border-radius: 100px; flex: none; }
+
+  /* ── Badges de insucesso (fluxo automático de reentrega) ── */
+  .badge-insucesso {
+    display: inline-block; font-size: 10.5px; font-weight: 700;
+    padding: 2px 8px; border-radius: 100px; margin-left: 6px; white-space: nowrap;
+  }
+  .badge-insucesso.duplicado  { background: #E3EDFA; color: #1c5cab; }
+  .badge-insucesso.agendado   { background: var(--teste-bg); color: var(--teste-texto); }
+  .badge-insucesso.cancelado  { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-insucesso.aguardando { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-insucesso.respondido { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-insucesso.falha      { background: var(--erro-bg); color: var(--st-falha); }
+
+  /* Motorista responsável pela atualização (insucesso vem do app dele) */
+  .quem-atualizou {
+    display: inline-block; margin-left: 8px; white-space: nowrap;
+    font-size: 11.5px; font-weight: 600; color: var(--texto-suave);
+  }
+
+  /* ── Faixa 4: exceções ── */
+  .excecao-vazia { display: flex; align-items: center; gap: 10px; color: var(--st-sucesso); font-size: 13.5px; font-weight: 600; padding: 6px 0; }
+  table.tabela-excecoes { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.tabela-excecoes th {
+    padding: 0 10px 6px; text-align: left; font-size: 10.5px; font-weight: 700;
+    color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  table.tabela-excecoes th.th-acao { text-align: right; }
+  table.tabela-excecoes td { padding: 8px 10px; border-bottom: 1px solid var(--fundo); vertical-align: middle; }
+  table.tabela-excecoes tr:last-child td { border-bottom: none; }
+  .pill-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
+  .pill-sev.critico { background: var(--erro-bg); color: var(--st-falha); }
+  .pill-sev.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .td-quando { color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .td-tipo { color: var(--texto-suave); font-weight: 600; white-space: nowrap; }
+  /* Motivo do insucesso e texto livre do motorista: quebra em linha em
+     vez de esticar a tabela (par do min-width: 0 do .corpo). */
+  .td-motivo { color: var(--st-falha); font-weight: 700; overflow-wrap: anywhere; }
+  /* Abaixo de ~1100px a tabela ainda pede mais largura do que a tela tem
+     (6 colunas + os botoes de acao): quem rola e a fila, nao a pagina
+     inteira. Fica no #excecoes de proposito -- envolver a tabela numa
+     div quebraria os alvos '#excecoes > table' do guia da tela. */
+  #excecoes { overflow-x: auto; }
+  .td-acao { text-align: right; white-space: nowrap; }
+  .td-acao a, .td-acao button {
+    font-size: 11.5px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda);
+    background: var(--superficie); color: var(--texto); cursor: pointer; text-decoration: none;
+  }
+  .td-acao a:hover, .td-acao button:hover { border-color: var(--acento); color: var(--acento); }
+  .td-acao button.tratar { color: var(--texto-suave); }
+  .td-acao button.duplicar { color: #1c5cab; border-color: #C7D9F0; }
+  .td-acao button.duplicar:hover { border-color: #1c5cab; }
+  .td-acao button.notificar { color: #0a8f6e; border-color: #B7E8DA; }
+  .td-acao button.notificar:hover { border-color: #0a8f6e; }
+  details.tratadas { margin-top: 12px; font-size: 12.5px; }
+  details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
+  details.tratadas table td { color: var(--texto-suave); }
+  details.tratadas .motivo { font-style: italic; }
+
+  /* ── Faixa 5: tendência ── */
+  /* Coluna empilhada: sucesso (verde) embaixo, falha (vermelho) em cima,
+     com 2px de fundo entre os dois segmentos (Hugo, 16/09). O dia em
+     foco (data_alvo) fica a cores cheias; os outros, esmaecidos. */
+  .tendencia { display: flex; align-items: flex-end; gap: 14px; height: 150px; padding-top: 18px; }
+  .col-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+  .col-dia .valor-col { font-size: 11.5px; font-weight: 700; color: var(--texto-suave); line-height: 1.1; }
+  .col-dia.destaque .valor-col { color: var(--acento); }
+  .col-dia .parcial { font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.1; }
+  .col-dia .parcial .ok { color: var(--st-sucesso); }
+  .col-dia .parcial .ruim { color: var(--st-falha); }
+  .col-dia .parcial .sep { color: var(--texto-suave); margin: 0 2px; }
+  .col-dia .col { width: 100%; max-width: 24px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; opacity: 0.55; }
+  .col-dia.destaque .col { opacity: 1; }
+  .col-dia .seg { width: 100%; border-radius: 2px; }
+  .col-dia .seg.sucesso { background: var(--st-sucesso); border-radius: 0 0 2px 2px; }
+  .col-dia .seg.falha { background: var(--st-falha); border-radius: 4px 4px 2px 2px; }
+  .col-dia .seg.sucesso:first-child { border-radius: 4px 4px 2px 2px; }
+  .col-dia .rotulo-dia { font-size: 11px; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .base-tendencia { border-top: 1px solid var(--borda); margin-top: 0; }
+  .legenda-tendencia { margin-bottom: 0; margin-top: 2px; }
+
+  @media (max-width: 1100px) {
+    .stepper { grid-template-columns: repeat(3, 1fr); }
+    .carimbo { margin-left: 0; }
+    .corpo { grid-template-columns: 1fr; }
+    .linha-rota { grid-template-columns: 130px 1fr 92px; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="faixa-saude">
+  <strong>Torre de Controle</strong>
+  {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
+     abertas de qualquer dia; rota concluída vai pro Histórico. #}
+  <a class="botao-refresh" href="{{ url_for('consulta') }}" title="Rotas concluídas e dias passados" style="text-decoration:none;">📚 Histórico de Rotas</a>
+  <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
+  <span class="carimbo" id="carimbo">Carregando dados…</span>
+  <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
+  <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
+  <a class="botao-refresh" href="{{ url_for('torre_mobile') }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
+</div>
+
+<div class="card card-kpis" id="kpis"><div class="carregando">Carregando indicadores…</div></div>
+
+<div class="pipeline-linha" id="pipeline-linha">
+  <span class="carregando">Carregando etapas…</span>
+</div>
+<div class="stepper" id="stepper"></div>
+
+<div class="corpo">
+  <div>
+    {# Fila primeiro de propósito (redesenho 13/08): é a única parte da
+       torre que pede decisão -- o resto é acompanhamento. #}
+    <div class="card" id="card-excecoes">
+      <h3><span>Fila de ação <span id="contagem-acoes"></span></span></h3>
+      <div id="excecoes"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card" id="card-rotas">
+      <h3><span>Andamento das rotas</span>
+        <span class="controles-rotas">
+          <select id="visao-rotas" onchange="alternarVisaoRotas()" title="Como exibir o progresso de cada rota">
+            <option value="barra">Barra por rota</option>
+            <option value="chips">Chips por pedido</option>
+          </select>
+          <a href="#" id="link-mapa">ver no mapa</a>
+        </span>
+      </h3>
+      <div class="legenda" id="legenda-rotas"></div>
+      <div id="rotas"><div class="carregando">Carregando rotas…</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Entregas finalizadas — últimos 7 dias úteis</h3>
+      <div class="legenda legenda-tendencia" id="legenda-tendencia"></div>
+      <div class="tendencia base-tendencia" id="tendencia"><div class="carregando">Carregando…</div></div>
+    </div>
+  </div>
+
+  <div>
+    {% if google_maps_key %}
+    <div class="fundo-mapa" id="fundo-mapa" onclick="alternarMapa(false)"></div>
+    <div class="card card-mapa" id="card-mapa">
+      <h3><span>Mapa das rotas abertas</span><a href="#" id="botao-expandir" onclick="alternarMapa(); return false;">expandir</a></h3>
+      <div id="mini-mapa"></div>
+      <div class="legenda-mapa">
+        <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregue</span>
+        <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Insucesso</span>
+        <span class="item"><span class="ponto" style="background:var(--st-rota)"></span>Em rota</span>
+        <span class="item"><span class="ponto" style="background:#8A8F98"></span>Pendente</span>
+        <span class="item"><span class="ponto" style="background:var(--primaria)"></span>Base</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>Pedidos das rotas abertas</h3>
+      <div id="pedidos-status"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span>A caminho (Stokki)</span></h3>
+      <div id="funil-stokki"><div class="carregando">Carregando…</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento"{% if session.get('nivel_acesso') == 'atendimento' %} hidden{% endif %}>abrir planejamento</a></h3>
+      <div id="amanha"><div class="carregando">Carregando…</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-excluir" id="modal-excluir">
+  <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-excluir">
+    <h2 id="titulo-modal-excluir">Excluir pedido da rota</h2>
+    <p class="subtitulo" id="excluir-codigo">—</p>
+    <div class="campo">
+      <label for="excluir-motivo">Motivo</label>
+      <select id="excluir-motivo">
+        <option value="">Selecione...</option>
+        {% for m in motivos_exclusao %}
+        <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="excluir-observacao">Observação (opcional)</label>
+      <textarea id="excluir-observacao" placeholder="Detalhe o motivo, se precisar..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalExcluir()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-exclusao" onclick="confirmarExclusaoChip(this)">Excluir da rota</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-excluir" id="modal-tratar">
+  <div class="modal-excluir modal-tratar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tratar">
+    <h2 id="titulo-modal-tratar">Marcar como tratada</h2>
+    <p class="descricao-excecao" id="tratar-descricao">—</p>
+    <div class="campo">
+      <label for="tratar-resposta">O que foi feito</label>
+      <select id="tratar-resposta" onchange="aoMudarRespostaTratar()">
+        <option value="">Selecione...</option>
+      </select>
+    </div>
+    <div class="campo">
+      <label for="tratar-complemento" id="tratar-complemento-rotulo">Complemento (opcional)</label>
+      <textarea id="tratar-complemento" placeholder="Ex.: reagendado para 19/09, cliente avisado por WhatsApp..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalTratar()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-tratar" onclick="confirmarTratar(this)">✓ Tratar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const HOJE_ISO = {{ hoje_iso | tojson }};
+const PODE_EDITAR = {{ pode_editar | tojson }};
+// Tratar/desfazer/duplicar/notificar ocorrência: inclui o nível
+// "atendimento" (28/09), que não roda agente nem encerra rota.
+const PODE_TRATAR = {{ pode_tratar | tojson }};
+// "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo botão da Expedição,
+// mas aqui a rota pode estar rodando (ver painel_agentes.py::
+// api_torre_excluir_pedido, permitir_rota_em_andamento=True). Desde a
+// torre acumulada (15/09) toda rota na tela ainda está aberta, então a
+// opção vale sempre que o nível de acesso permitir.
+const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
+const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido') }}";
+const URL_TORRE_ENCERRAR_ROTA = "{{ url_for('api_torre_encerrar_rota') }}";
+
+// Rótulos/cores dos status de pedido -- MESMA ordem em que os
+// segmentos se tocam na barra empilhada (ordem validada contra CVD).
+const STATUS_PEDIDO = [
+  { chave: "sucesso",      rotulo: "Entregues",              cor: "var(--st-sucesso)" },
+  { chave: "on_route",     rotulo: "Em rota",                cor: "var(--st-rota)" },
+  { chave: "accepted",     rotulo: "Aceitos (atribuídos)",   cor: "var(--st-aceito)" },
+  { chave: "not_assigned", rotulo: "Sem rota (atrasados)",   cor: "var(--st-atencao)" },
+  { chave: "falha",        rotulo: "Insucessos",             cor: "var(--st-falha)" },
+];
+
+const ROTULO_ESTADO_ROTA = {
+  em_andamento: "Em andamento", concluida: "Concluída",
+  nao_iniciada: "Não iniciada", vazia: "Vazia",
+};
+
+let ultimoOk = null;        // Date do último carregamento com sucesso
+let houveErro = false;
+let algumaEtapaRodando = false;
+let dadosAtuais = null;     // última resposta boa de /api/torre/dados
+let periodoKpiAtivo = "dia"; // aba ativa da régua de KPIs -- sobrevive ao refresh de 60s
+let trimestreAberto = false; // "ver comparação trimestral" -- idem
+
+// ── Visão do andamento das rotas: barra agregada ou chip por pedido ──
+let visaoRotas = localStorage.getItem("torre_visao_rotas") || "barra";
+document.getElementById("visao-rotas").value = visaoRotas;
+
+function alternarVisaoRotas() {
+  visaoRotas = document.getElementById("visao-rotas").value;
+  localStorage.setItem("torre_visao_rotas", visaoRotas);
+  if (dadosAtuais) renderRotas(dadosAtuais);
+}
+
+// ── Alarme sonoro de novas ações na fila ────────────────────────────
+let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
+let idsExcecoesConhecidas = null; // null até o 1º carregamento — não alarma na abertura da página
+let audioCtx = null;
+
+function obterAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+// Navegador só libera áudio depois de uma interação — deixa o contexto pronto assim que possível.
+document.addEventListener("click", () => obterAudioCtx(), { once: true });
+
+function tocarAlarme() {
+  if (alarmeMutado) return;
+  try {
+    const ctx = obterAudioCtx();
+    [0, 0.22].forEach(atraso => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      const t0 = ctx.currentTime + atraso;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.2);
+    });
+  } catch (e) { console.error("torre: falha ao tocar alarme", e); }
+}
+
+function atualizarBotaoAlarme() {
+  const btn = document.getElementById("botao-alarme");
+  if (!btn) return;
+  btn.textContent = alarmeMutado ? "🔕" : "🔔";
+  btn.title = alarmeMutado
+    ? "Alarme sonoro desativado — clique pra ativar"
+    : "Alarme sonoro ativado — toca quando surge ação nova na fila";
+}
+
+function alternarAlarme() {
+  alarmeMutado = !alarmeMutado;
+  localStorage.setItem("torre_alarme_mutado", alarmeMutado ? "1" : "0");
+  atualizarBotaoAlarme();
+  if (!alarmeMutado) obterAudioCtx();
+}
+atualizarBotaoAlarme();
+
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ── Renderização ────────────────────────────────────────────────────
+
+let pipelineAberto = false;
+let ultimasEtapas = [];
+
+function alternarPipeline() {
+  pipelineAberto = !pipelineAberto;
+  renderStepper(ultimasEtapas);
+}
+
+function renderStepper(etapas) {
+  ultimasEtapas = etapas;
+  algumaEtapaRodando = etapas.some(e => e.rodando);
+
+  // Linha compacta: um ponto por etapa; erro já vira item na fila de
+  // ação com botão Reexecutar, então aqui é só estado.
+  const ok = etapas.filter(e => !e.rodando && e.status === "SUCESSO").length;
+  const minis = etapas.map(e => {
+    let classe = "", sufixo = "";
+    if (e.rodando) { classe = "rodando"; sufixo = " — rodando…"; }
+    else if (e.status === "SUCESSO") classe = "sucesso";
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; sufixo = ` — ${e.status}`; }
+    const quando = e.quando ? ` · última: ${e.quando.slice(5, 16)}` : " · nunca rodou";
+    return `<span class="etapa-mini ${classe}" title="${esc(e.detalhe)}${esc(quando)}">
+      <span class="estado"></span>${esc(e.titulo)}${esc(sufixo)}</span>`;
+  }).join("");
+  document.getElementById("pipeline-linha").innerHTML =
+    `<span class="rotulo-pipeline">Pipeline ${ok}/${etapas.length} ok</span>` + minis +
+    `<button class="alternar" onclick="alternarPipeline()">${pipelineAberto ? "esconder etapas ▴" : "rodar etapas ▾"}</button>`;
+
+  document.getElementById("stepper").classList.toggle("aberto", pipelineAberto);
+
+  const cards = etapas.map(e => {
+    let classe = "", tituloEstado = "nunca rodou";
+    if (e.rodando) { classe = "rodando"; tituloEstado = "rodando agora"; }
+    else if (e.status === "SUCESSO") { classe = "sucesso"; tituloEstado = "última execução OK"; }
+    else if (e.status === "ERRO" || e.status === "TIMEOUT") { classe = "erro"; tituloEstado = "última execução falhou (" + e.status + ")"; }
+    else if (e.status) { tituloEstado = "última execução: " + e.status; }
+
+    const quando = e.quando
+      ? `<a href="${BASE_PATH}/execucao/${e.execucao_id}" title="abrir log">${esc(e.quando.slice(5, 16))}${e.modo_teste ? " (teste)" : ""}</a>`
+      : "nunca rodou";
+    const botaoRodar = PODE_EDITAR
+      ? `<button class="rodar" onclick="rodarAgente('${e.agente_id}', '${esc(e.titulo)}')"
+                ${e.rodando ? "disabled" : ""}>${e.rodando ? "rodando…" : "▶ rodar"}</button>`
+      : "";
+    return `
+      <div class="etapa ${classe}" title="${esc(tituloEstado)}">
+        ${botaoRodar}
+        <div class="topo"><span class="estado"></span><span class="titulo">${esc(e.titulo)}</span></div>
+        <div class="detalhe">${esc(e.detalhe)}</div>
+        <div class="quando">${quando}</div>
+      </div>`;
+  }).join("");
+
+  const etapaTudo = PODE_EDITAR ? `
+    <div class="etapa etapa-tudo">
+      <button onclick="rodarAgente('executar_tudo', 'Executar Tudo')"
+              ${algumaEtapaRodando ? "disabled" : ""}>▶ Executar tudo</button>
+    </div>` : "";
+  document.getElementById("stepper").innerHTML = cards + etapaTudo;
+}
+
+const ROTULO_ABA_KPI = { dia: "Hoje", semana: "Semana", mes: "Mês" };
+const ROTULO_COMPARACAO_KPI = {
+  dia: "vs. ontem",
+  semana: "vs. semana passada",
+  mes: "vs. mesmo período, mês anterior",
+  trimestre: "vs. mesmo período, trimestre anterior",
+};
+
+function formatarDuracaoMin(min) {
+  if (min === null || min === undefined) return "–";
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h ? `${h}h${m ? " " + m + "min" : ""}` : `${m}min`;
+}
+
+// Δ em pontos percentuais (taxas: sucesso, utilização) -- "mais é
+// melhor" sempre (nenhum KPI de taxa da torre inverte esse sentido).
+function deltaPP(atual, anterior) {
+  if (atual === null || atual === undefined || anterior === null || anterior === undefined) return null;
+  const dif = atual - anterior;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = classe === "pos" ? "▲" : (classe === "neg" ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(1)}pp`, classe, seta };
+}
+
+// Δ percentual (médias: ped./rota) -- null quando não há base de
+// comparação (período anterior sem nenhuma rota).
+function deltaPercentual(atual, anterior) {
+  if (!anterior) return null;
+  const dif = ((atual - anterior) / anterior) * 100;
+  const classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif.toFixed(0)}%`, classe, seta };
+}
+
+// Δ em contagem absoluta (insucessos, duração) -- menosEhMelhor inverte
+// a cor (cair vira verde), usado pra "menos insucesso"/"rota mais rápida".
+function deltaContagem(atual, anterior, menosEhMelhor) {
+  const dif = atual - anterior;
+  let classe = dif > 0 ? "pos" : (dif < 0 ? "neg" : "flat");
+  if (menosEhMelhor) classe = dif > 0 ? "neg" : (dif < 0 ? "pos" : "flat");
+  const seta = dif > 0 ? "▲" : (dif < 0 ? "▼" : "→");
+  return { texto: `${dif >= 0 ? "+" : ""}${dif}`, classe, seta };
+}
+
+function tagDelta(delta, rotuloComparacao) {
+  if (!delta) return "";
+  return `<span class="delta ${delta.classe}">${delta.seta} ${delta.texto}<span class="rot-comp">${rotuloComparacao}</span></span>`;
+}
+
+function renderTilesPeriodo(d, periodo) {
+  const bloco = d.kpis_periodo[periodo];
+  const atual = bloco.atual, anterior = bloco.anterior;
+  const rotComp = ROTULO_COMPARACAO_KPI[periodo];
+  const tiles = [];
+
+  if (periodo === "dia") {
+    // Tiles ricos de "hoje" ficam como sempre foram (redesenho de
+    // 24/08) -- "em rota"/"sem rota" só existem em tempo real, não têm
+    // equivalente somado numa semana/mês, por isso só aparecem aqui.
+    const p = d.pedidos, r = d.rotas_resumo;
+    const pctEntregue = p.total ? Math.round(100 * p.sucesso / p.total) : 0;
+    const finalizadas = p.sucesso + p.falha;
+    const taxaHoje = finalizadas ? Math.round(100 * p.sucesso / finalizadas) : null;
+    const classeTaxa = taxaHoje === null ? "" : (taxaHoje >= 95 ? "tile-bom" : (taxaHoje >= 85 ? "tile-alerta" : "tile-ruim"));
+    const classeSemRota = p.qtd_nao_atribuidos ? "tile-ruim" : "";
+    const classeFalha = p.falha ? "tile-ruim" : "";
+    const dSucesso = (taxaHoje === null || anterior.sucesso_pct === null) ? null : deltaPP(taxaHoje, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(p.falha, anterior.insucessos, true);
+
+    tiles.push(
+      `<div class="tile tile-bom" title="${pctEntregue}% do dia entregue">
+         <span class="rotulo-tile">Entregues</span>
+         <span class="valor-tile">${p.sucesso}<span class="contexto">/${p.total}</span></span>
+       </div>`,
+      `<div class="tile ${classeTaxa}" title="${taxaHoje === null ? "sem entregas finalizadas ainda" : `meta 95% · ${p.sucesso} de ${finalizadas} finalizadas`}">
+         <span class="rotulo-tile">Sucesso</span>
+         <span class="valor-tile">${taxaHoje === null ? "–" : taxaHoje + "%"}</span>
+         ${tagDelta(dSucesso, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Em rota</span>
+         <span class="valor-tile">${p.contagem.on_route || 0}</span>
+         <span class="sub-tile">${p.contagem.accepted || 0} aguardando saída</span>
+       </div>`,
+      `<div class="tile ${classeSemRota}">
+         <span class="rotulo-tile">Sem rota</span>
+         <span class="valor-tile">${p.qtd_nao_atribuidos}</span>
+         <span class="sub-tile">pool p/ próximas: ${p.backlog_pool}</span>
+       </div>`,
+      `<div class="tile ${classeFalha}" title="${p.falha ? "detalhe na fila de ação" : "nenhum insucesso hoje"}">
+         <span class="rotulo-tile">Insucesso${p.falha === 1 ? "" : "s"}</span>
+         <span class="valor-tile">${p.falha}</span>
+         ${tagDelta(dInsucessos, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Rotas</span>
+         <span class="valor-tile">${r.concluidas}<span class="contexto">/${d.rotas.length}</span></span>
+         <span class="sub-tile">${r.em_andamento} em andamento · ${r.nao_iniciadas} não iniciada(s)</span>
+       </div>`,
+    );
+  } else {
+    const dSucesso = (atual.sucesso_pct === null || anterior.sucesso_pct === null) ? null : deltaPP(atual.sucesso_pct, anterior.sucesso_pct);
+    const dInsucessos = deltaContagem(atual.insucessos, anterior.insucessos, true);
+    const classeTaxa = atual.sucesso_pct === null ? "" : (atual.sucesso_pct >= 95 ? "tile-bom" : (atual.sucesso_pct >= 85 ? "tile-alerta" : "tile-ruim"));
+    const classeFalha = atual.insucessos ? "tile-ruim" : "";
+
+    tiles.push(
+      `<div class="tile tile-bom">
+         <span class="rotulo-tile">Entregues</span>
+         <span class="valor-tile">${atual.entregues}<span class="contexto">/${atual.total_paradas}</span></span>
+       </div>`,
+      `<div class="tile ${classeTaxa}">
+         <span class="rotulo-tile">Sucesso</span>
+         <span class="valor-tile">${atual.sucesso_pct === null ? "–" : atual.sucesso_pct + "%"}</span>
+         ${tagDelta(dSucesso, rotComp)}
+       </div>`,
+      `<div class="tile ${classeFalha}">
+         <span class="rotulo-tile">Insucesso${atual.insucessos === 1 ? "" : "s"}</span>
+         <span class="valor-tile">${atual.insucessos}</span>
+         ${tagDelta(dInsucessos, rotComp)}
+       </div>`,
+      `<div class="tile">
+         <span class="rotulo-tile">Rotas</span>
+         <span class="valor-tile">${atual.rotas_concluidas}<span class="contexto">/${atual.rotas_total}</span></span>
+       </div>`,
+    );
+  }
+
+  // Comuns a todas as abas (inclusive hoje): os 3 KPIs novos + o que
+  // até 23/08 vivia solto na "faixa-medias-kpi" (ped./rota).
+  const dPedRota = deltaPercentual(atual.ped_rota, anterior.ped_rota);
+  const dDuracao = (atual.duracao_media_min === null || anterior.duracao_media_min === null)
+    ? null : deltaContagem(Math.round(atual.duracao_media_min), Math.round(anterior.duracao_media_min), true);
+  const dUtilizacao = (atual.utilizacao_motoristas_pct === null || anterior.utilizacao_motoristas_pct === null)
+    ? null : deltaPP(atual.utilizacao_motoristas_pct, anterior.utilizacao_motoristas_pct);
+
+  tiles.push(
+    `<div class="tile">
+       <span class="rotulo-tile">Ped./rota</span>
+       <span class="valor-tile">${atual.ped_rota}</span>
+       ${tagDelta(dPedRota, rotComp)}
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Duração média de rota</span>
+       <span class="valor-tile">${formatarDuracaoMin(atual.duracao_media_min)}</span>
+       ${tagDelta(dDuracao, rotComp)}
+     </div>`,
+    `<div class="tile">
+       <span class="rotulo-tile">Utilização motoristas</span>
+       <span class="valor-tile">${atual.utilizacao_motoristas_pct === null ? "–" : atual.utilizacao_motoristas_pct + "%"}</span>
+       <span class="sub-tile">${atual.motoristas_distintos} motorista(s) rodaram</span>
+       ${tagDelta(dUtilizacao, rotComp)}
+     </div>`,
+  );
+
+  return tiles.join("");
+}
+
+function renderMotivosInsucesso(bloco) {
+  const motivos = bloco.atual.motivos_insucesso;
+  if (!motivos.length) return `<div class="faixa-motivos">Nenhum insucesso no período. 🎉</div>`;
+  const itens = motivos.map(m => `<span>${m.motivo} <span class="n">${m.qtd}</span></span>`).join("");
+  return `<div class="faixa-motivos">${itens}</div>`;
+}
+
+function trocarPeriodoKpi(periodo) {
+  periodoKpiAtivo = periodo;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+
+function alternarTrimestreKpi() {
+  trimestreAberto = !trimestreAberto;
+  if (dadosAtuais) renderKpis(dadosAtuais);
+}
+
+function renderKpis(d) {
+  // Régua de KPIs com abas (Fase 1, 24/08 -- pedido do Hugo: "semana,
+  // mês e comparação com o período anterior"). Os 4 períodos já vêm
+  // prontos em d.kpis_periodo; trocar de aba só re-renderiza, sem
+  // fetch novo (ver trocarPeriodoKpi/alternarTrimestreKpi).
+  const abas = ["dia", "semana", "mes"].map(p =>
+    `<button class="${p === periodoKpiAtivo ? "ativa" : ""}" onclick="trocarPeriodoKpi('${p}')">${ROTULO_ABA_KPI[p]}</button>`
+  ).join("");
+
+  const grade = `<div class="grade-tiles">${renderTilesPeriodo(d, periodoKpiAtivo)}</div>
+    ${renderMotivosInsucesso(d.kpis_periodo[periodoKpiAtivo])}`;
+
+  const trimestre = `
+    <button class="link-trimestre" onclick="alternarTrimestreKpi()">${trimestreAberto ? "ocultar comparação trimestral ▴" : "ver comparação trimestral ▾"}</button>
+    <div class="faixa-trimestre ${trimestreAberto ? "aberta" : ""}">
+      <div class="rot">Trimestre corrente vs. mesmo recorte do trimestre anterior</div>
+      <div class="grade-tiles">${renderTilesPeriodo(d, "trimestre")}</div>
+      ${renderMotivosInsucesso(d.kpis_periodo.trimestre)}
+    </div>`;
+
+  document.getElementById("kpis").innerHTML = `<div class="abas-periodo">${abas}</div>${grade}${trimestre}`;
+}
+
+const ROTULO_SITUACAO_PEDIDO = {
+  entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente",
+};
+
+function renderLegendaRotas() {
+  const itens = visaoRotas === "chips"
+    ? [
+        ["var(--st-sucesso)", "Entregues"],
+        ["var(--st-falha)", "Insucessos"],
+        ["var(--st-rota)", "Em rota"],
+        ["var(--trilha)", "Pendentes"],
+      ]
+    : [
+        ["var(--st-sucesso)", "Entregues"],
+        ["var(--st-falha)", "Insucessos"],
+        ["var(--trilha)", "Restantes"],
+      ];
+  document.getElementById("legenda-rotas").innerHTML = itens.map(([cor, rotulo]) =>
+    `<span class="item"><span class="ponto" style="background:${cor};border:1px solid var(--borda)"></span>${rotulo}</span>`).join("");
+}
+
+function chipsPedidosHtml(pedidos, rotaId) {
+  if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
+  const partes = pedidos.map((p, i) => {
+    const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
+    const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
+    // Só pendente/em rota pode ser excluído da rota por aqui (Hugo,
+    // 25/08) -- já entregue/insucesso já aconteceu, não tem o que tirar.
+    const acionavel = PODE_EXCLUIR_PEDIDO && (p.situacao === "pendente" || p.situacao === "em_rota");
+    const tituloAttr = p.situacao === "excluido"
+      ? `Excluído da rota — ${esc(p.motivo || "")}${p.observacao ? ": " + esc(p.observacao) : ""}`
+      : `Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})`;
+    const chip = `<span class="chip-pedido ${p.situacao}${acionavel ? " acionavel" : ""}"` +
+      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}"` +
+      ` title="${tituloAttr}">${p.ordem ?? (i + 1)}</span>`;
+    if (i === pedidos.length - 1) return chip;
+    const finalizado = p.situacao === "entregue" || p.situacao === "insucesso";
+    return chip + `<span class="linha-conectora ${finalizado ? "feita" : ""}"></span>`;
+  });
+  return `<div class="chips-pedidos">${partes.join("")}</div>`;
+}
+
+// Cabeçalho de dia entre os grupos de rotas (torre acumulada, Hugo,
+// 15/09): hoje primeiro, dias anteriores abaixo. Rota de dia anterior
+// ainda aberta é "atrasada" e ganha o botão Encerrar.
+function cabecalhoDiaHtml(r, d) {
+  const hoje = r.data_rota === d.data_alvo_iso;
+  return `<div class="cabecalho-dia${hoje ? "" : " passado"}">${hoje ? "Hoje · " : ""}${esc(r.data_rota_br)}</div>`;
+}
+
+function renderRotas(d) {
+  const alvo = document.getElementById("rotas");
+  renderLegendaRotas();
+  if (!d.rotas.length) {
+    alvo.innerHTML = `<div class="carregando">Nenhuma rota aberta. Rotas concluídas estão no Histórico de Rotas.</div>`;
+    return;
+  }
+  let diaAnterior = null;
+  alvo.innerHTML = d.rotas.map(r => {
+    let cabecalho = "";
+    if (r.data_rota !== diaAnterior) { cabecalho = cabecalhoDiaHtml(r, d); diaAnterior = r.data_rota; }
+    const finalizados = r.entregues + r.insucessos;
+    let meio;
+    if (visaoRotas === "chips") {
+      meio = chipsPedidosHtml(r.pedidos, r.id);
+    } else {
+      const segmentos = [];
+      if (r.entregues) segmentos.push(`<div class="seg" style="flex:${r.entregues};background:var(--st-sucesso)" title="${r.entregues} entregue(s)"></div>`);
+      if (r.insucessos) segmentos.push(`<div class="seg" style="flex:${r.insucessos};background:var(--st-falha)" title="${r.insucessos} insucesso(s)"></div>`);
+      if (r.restantes) segmentos.push(`<div class="seg" style="flex:${r.restantes};background:var(--trilha)" title="${r.restantes} restante(s)"></div>`);
+      const barra = segmentos.length ? segmentos.join("") : `<div class="seg" style="flex:1;background:var(--trilha)"></div>`;
+      meio = `<div class="barra-progresso">${barra}</div>`;
+    }
+    const motorista = r.motorista
+      ? `<div class="motorista" title="${esc(r.motorista)}">${esc(r.motorista)}</div>`
+      : `<div class="motorista faltando">sem motorista</div>`;
+    const rotuloEstado = r.cancelada ? "Cancelada" : (ROTULO_ESTADO_ROTA[r.estado] || r.estado);
+    // Fixada no topo por ter tido um pedido excluído recentemente (ver
+    // MINUTOS_DESTAQUE_EXCLUSAO no backend) -- sinal visual pra não
+    // parecer erro de ordenação uma rota "Concluída" aparecer antes de
+    // uma "Em andamento" (Hugo, 25/08).
+    // "30 min" abaixo precisa acompanhar MINUTOS_DESTAQUE_EXCLUSAO em
+    // torre_controle.py -- só rótulo, o backend é a fonte da verdade.
+    const notaRecente = r.excluido_recente
+      ? `<span class="nota-recente" title="Teve um pedido excluído da rota nos últimos 30 min -- fixada no topo até então">fixada · exclusão recente</span>`
+      : "";
+    const notaPendencia = r.pendencias
+      ? `<span class="nota-pendencia" title="Insucesso(s) ainda sem tratativa na Fila de ação -- a rota fica na torre até tratar">${r.pendencias} pendência(s)</span>`
+      : "";
+    const notaAtrasada = r.atrasada
+      ? `<span class="nota-atrasada" title="Rota de dia anterior que ainda não fechou">atrasada</span>` +
+        (PODE_EDITAR ? `<button type="button" class="botao-encerrar" onclick="encerrarRota(${r.id})" title="Tira a rota da torre (não mexe na VUUPT). Ela continua no Histórico.">Encerrar</button>` : "")
+      : "";
+    return cabecalho + `
+      <div class="linha-rota${r.cancelada ? " cancelada" : ""}${r.excluido_recente ? " recente" : ""}${r.atrasada ? " atrasada" : ""}">
+        <div class="ident">
+          <div class="nome" title="${esc(r.nome)}">${esc(r.nome)}</div>
+          ${motorista}
+        </div>
+        ${meio}
+        <div class="contagem">${finalizados}/${r.total}<span class="pct">${r.percentual}%</span>
+          <span class="estado-rota ${r.estado}">${rotuloEstado}</span>
+          ${notaPendencia}${notaAtrasada}${notaRecente}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function encerrarRota(rotaId) {
+  const r = (dadosAtuais && dadosAtuais.rotas || []).find(x => x.id === rotaId);
+  if (!r) return;
+  if (!confirm(`Encerrar "${r.nome}" (${r.data_rota_br}) na torre?\n\nA rota some daqui e continua no Histórico como está. Não mexe na VUUPT.`)) return;
+  try {
+    const resp = await fetch(URL_TORRE_ENCERRAR_ROTA, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rota_id: r.id, nome: r.nome, data_rota: r.data_rota }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao encerrar."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao encerrar: " + e); }
+}
+
+// ── "Excluir da Rota" do chip (Hugo, 25/08) -- mesmo mecanismo da
+// Expedição (menu de contexto -> modal de motivo -> POST), mas os
+// chips aqui são recriados a cada refresh de dados (setInterval
+// carregarDados, 60s) -- por isso o listener de contextmenu fica
+// delegado no container #rotas em vez de 1 por chip. ─────────────────
+let menuContextoChip = null;
+let chipPendenteExclusao = null;
+
+function fecharMenuContextoChip() {
+  if (menuContextoChip) { menuContextoChip.remove(); menuContextoChip = null; }
+}
+
+function abrirMenuContextoChip(chip, x, y) {
+  fecharMenuContextoChip();
+  const menu = document.createElement("div");
+  menu.className = "menu-contexto";
+  menu.innerHTML = '<button type="button">Excluir da Rota</button>';
+  menu.querySelector("button").addEventListener("click", () => {
+    fecharMenuContextoChip();
+    abrirModalExcluir(chip);
+  });
+  document.body.appendChild(menu);
+  const largura = menu.offsetWidth, altura = menu.offsetHeight;
+  let px = x, py = y;
+  if (px + largura > window.innerWidth - 8) px = Math.max(8, window.innerWidth - largura - 8);
+  if (py + altura > window.innerHeight - 8) py = Math.max(8, window.innerHeight - altura - 8);
+  menu.style.left = `${px}px`;
+  menu.style.top = `${py}px`;
+  menuContextoChip = menu;
+}
+
+document.getElementById("rotas").addEventListener("contextmenu", (e) => {
+  const chip = e.target.closest(".chip-pedido.acionavel");
+  if (!chip) return;
+  e.preventDefault();
+  abrirMenuContextoChip(chip, e.clientX, e.clientY);
+});
+
+document.addEventListener("click", (e) => {
+  if (menuContextoChip && !menuContextoChip.contains(e.target)) fecharMenuContextoChip();
+});
+document.addEventListener("scroll", fecharMenuContextoChip, true);
+
+function abrirModalExcluir(chip) {
+  chipPendenteExclusao = chip;
+  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("excluir-motivo").value = "";
+  document.getElementById("excluir-observacao").value = "";
+  document.getElementById("modal-excluir").classList.add("aberto");
+}
+
+function fecharModalExcluir() {
+  document.getElementById("modal-excluir").classList.remove("aberto");
+  chipPendenteExclusao = null;
+}
+
+document.getElementById("modal-excluir").addEventListener("click", (e) => {
+  if (e.target.id === "modal-excluir") fecharModalExcluir();
+});
+
+async function confirmarExclusaoChip(botao) {
+  if (!chipPendenteExclusao) return;
+  const motivo = document.getElementById("excluir-motivo").value;
+  if (!motivo) { alert("Selecione o motivo."); return; }
+  const observacao = document.getElementById("excluir-observacao").value.trim();
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Excluindo...";
+  try {
+    const resp = await fetch(URL_TORRE_EXCLUIR_PEDIDO, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rota_id: Number(chipPendenteExclusao.dataset.rotaId),
+        service_id: Number(chipPendenteExclusao.dataset.serviceId),
+        motivo,
+        observacao,
+      }),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao excluir da rota.");
+    fecharModalExcluir();
+    carregarDados();
+  } catch (e) {
+    alert(`Falha ao excluir da rota: ${e.message}`);
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
+function renderPedidosStatus(d) {
+  const p = d.pedidos;
+  const valores = {
+    sucesso: p.sucesso,
+    on_route: p.contagem.on_route || 0,
+    accepted: p.contagem.accepted || 0,
+    not_assigned: p.contagem.not_assigned || 0,
+    falha: p.falha,
+  };
+  const soma = Object.values(valores).reduce((a, b) => a + b, 0);
+
+  let html;
+  if (!soma) {
+    html = `<div class="carregando">Nenhum pedido em rota aberta.</div>`;
+  } else {
+    const segs = STATUS_PEDIDO
+      .filter(s => valores[s.chave] > 0)
+      .map(s => `<div class="seg" style="flex:${valores[s.chave]};background:${s.cor}"
+                      title="${esc(s.rotulo)}: ${valores[s.chave]}"></div>`)
+      .join("");
+    const legenda = STATUS_PEDIDO.map(s => `
+      <li><span class="ponto" style="background:${s.cor}"></span>${esc(s.rotulo)}
+          <span class="qtd">${valores[s.chave]}</span></li>`).join("");
+    const notas = [];
+    if (p.contagem.canceled) notas.push(`${p.contagem.canceled} cancelado(s) nas rotas do dia`);
+    if (p.backlog_pool) notas.push(`${p.backlog_pool} no pool p/ próximas rotas`);
+    if (p.backlog_futuros) notas.push(`${p.backlog_futuros} agendado(s) pra frente`);
+    const rodape = notas.length ? `<div class="nota-rodape">Fora da barra: ${notas.join(" · ")}.</div>` : "";
+    html = `<div class="barra-status">${segs}</div><ul class="lista-legenda">${legenda}</ul>${rodape}`;
+  }
+  document.getElementById("pedidos-status").innerHTML = html;
+}
+
+function badgesHtml(badges) {
+  return (badges || []).map(b =>
+    `<span class="badge-insucesso ${esc(b.tipo)}">${esc(b.texto)}</span>`).join("");
+}
+
+// Motorista da rota = quem registrou a atualização no app. Rota sem
+// motorista atribuído cai no nome da rota, pra dar onde procurar.
+function quemAtualizou(x) {
+  if (x.motorista) return ` <span class="quem-atualizou" title="Motorista da rota — responsável pela atualização">🚚 ${esc(x.motorista)}</span>`;
+  if (x.rota) return ` <span class="quem-atualizou" title="Rota sem motorista atribuído na VUUPT">🚚 rota ${esc(x.rota)}</span>`;
+  return "";
+}
+
+function renderExcecoes(d) {
+  const alvo = document.getElementById("excecoes");
+  const partes = [];
+
+  const idsAtuais = new Set(d.excecoes.map(x => x.id));
+  if (idsExcecoesConhecidas && [...idsAtuais].some(id => !idsExcecoesConhecidas.has(id))) {
+    tocarAlarme();
+  }
+  idsExcecoesConhecidas = idsAtuais;
+
+  const contagem = document.getElementById("contagem-acoes");
+  if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
+
+  if (!d.excecoes.length) {
+    partes.push(`<div class="excecao-vazia">✓ Nenhuma ação pendente — operação normal.</div>`);
+  } else {
+    const linhas = d.excecoes.map(x => {
+      let acao = "";
+      // url/link_log vem do backend relativo a raiz do painel (sem o
+      // /painel do Caddy) -- prefixar com BASE_PATH, igual todo link daqui.
+      if (x.acao && x.acao.tipo === "link") {
+        acao = `<a href="${BASE_PATH}${esc(x.acao.url)}">${esc(x.acao.rotulo || "Abrir")}</a>`;
+      } else if (x.acao && x.acao.tipo === "rodar" && PODE_EDITAR) {
+        acao = `<button onclick="rodarAgente('${esc(x.acao.agente_id)}', '${esc(x.acao.agente_titulo || x.acao.rotulo)}')">${esc(x.acao.rotulo)}</button>`;
+      }
+      if (x.link_log) acao += ` <a href="${BASE_PATH}${esc(x.link_log)}">Log</a>`;
+      if (x.pode_duplicar && PODE_TRATAR) {
+        acao += ` <button class="duplicar" title="Cria a reentrega no VUUPT agora, sem esperar resposta do remetente"
+                          onclick="duplicarPedido('${esc(x.id)}')">⧉ Duplicar</button>`;
+      }
+      if (x.pode_notificar_ocorrencia && PODE_TRATAR) {
+        acao += ` <button class="notificar" title="Manda a pergunta de reenvio ao remetente agora"
+                          onclick="notificarOcorrencia('${esc(x.id)}')">✉ Notificar</button>`;
+      }
+      if (PODE_TRATAR) {
+        acao += ` <button class="tratar" title="Tira da fila com um motivo (gera histórico)"
+                          onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
+      }
+      const icone = x.severidade === "critico" ? "✗" : "▲";
+      return `<tr>
+        <td><span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span></td>
+        <td class="td-quando">${x.quando ? esc(x.quando) : "—"}</td>
+        <td class="td-tipo">${esc(x.tipo)}</td>
+        <td>${esc(x.descricao)}${quemAtualizou(x)}${badgesHtml(x.badges)}</td>
+        <td class="td-motivo">${x.motivo_insucesso ? esc(x.motivo_insucesso) : ""}</td>
+        <td class="td-acao">${acao}</td>
+      </tr>`;
+    }).join("");
+    partes.push(`<table class="tabela-excecoes">
+      <thead><tr>
+        <th>Severidade</th><th>Quando</th><th>Tipo</th><th>Descrição</th><th>Motivo</th><th class="th-acao">Ação</th>
+      </tr></thead>
+      <tbody>${linhas}</tbody>
+    </table>`);
+  }
+
+  if (d.tratadas && d.tratadas.length) {
+    const linhasTratadas = d.tratadas.map(x => `<tr>
+      <td class="td-tipo">${esc(x.tipo)}</td>
+      <td>${esc(x.descricao)}${quemAtualizou(x)}${badgesHtml(x.badges)}
+          <div class="motivo">“${esc(x.motivo)}” — ${esc(x.tratado_em)}</div></td>
+      <td class="td-acao">${PODE_TRATAR ? `<button onclick="destratarExcecao('${esc(x.id)}')">Desfazer</button>` : ""}</td>
+    </tr>`).join("");
+    partes.push(`<details class="tratadas">
+      <summary>${d.tratadas.length} exceção(ões) tratada(s)</summary>
+      <table class="tabela-excecoes"><tbody>${linhasTratadas}</tbody></table>
+    </details>`);
+  }
+
+  alvo.innerHTML = partes.join("");
+}
+
+// "Tratar" com dropdown de respostas prontas (Hugo, 16/09) -- a lista
+// vem do backend (torre_controle.RESPOSTAS_TRATATIVA) junto com os
+// dados da torre; "Outro" exige o campo livre, nas demais o campo é um
+// complemento opcional ("Reagendado / para 19/09").
+let excecaoPendenteTratar = null;
+
+function tratarExcecao(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  excecaoPendenteTratar = x || { id, descricao: id, tipo: "", motorista: null, rota: null };
+  const respostas = (dadosAtuais && dadosAtuais.respostas_tratativa) || ["Outro"];
+  const select = document.getElementById("tratar-resposta");
+  select.innerHTML = `<option value="">Selecione...</option>` +
+    respostas.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
+  document.getElementById("tratar-descricao").textContent = excecaoPendenteTratar.descricao;
+  document.getElementById("tratar-complemento").value = "";
+  aoMudarRespostaTratar();
+  document.getElementById("modal-tratar").classList.add("aberto");
+  select.focus();
+}
+
+function aoMudarRespostaTratar() {
+  const outro = document.getElementById("tratar-resposta").value === "Outro";
+  document.getElementById("tratar-complemento-rotulo").textContent =
+    outro ? "O que foi feito (obrigatório)" : "Complemento (opcional)";
+  if (outro) document.getElementById("tratar-complemento").focus();
+}
+
+function fecharModalTratar() {
+  document.getElementById("modal-tratar").classList.remove("aberto");
+  excecaoPendenteTratar = null;
+}
+
+document.getElementById("modal-tratar").addEventListener("click", (e) => {
+  if (e.target.id === "modal-tratar") fecharModalTratar();
+});
+
+async function confirmarTratar(botao) {
+  const x = excecaoPendenteTratar;
+  if (!x) return;
+  const resposta = document.getElementById("tratar-resposta").value;
+  const complemento = document.getElementById("tratar-complemento").value.trim();
+  if (!resposta) { alert("Selecione o que foi feito."); return; }
+  if (resposta === "Outro" && !complemento) { alert("Descreva o que foi feito — é isso que vira o histórico."); return; }
+  const motivo = resposta === "Outro" ? complemento : (complemento ? `${resposta} / ${complemento}` : resposta);
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Marcando...";
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/tratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: x.id, motivo,
+        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO,
+        tipo: x.tipo || "", descricao: x.descricao || "",
+        motorista: x.motorista || null, rota: x.rota || null,
+      }),
+    });
+    if (!resp.ok) { const j = await resp.json(); throw new Error(j.erro || "Falha ao marcar."); }
+    fecharModalTratar();
+    carregarDados();
+  } catch (e) {
+    alert("Falha ao marcar: " + e.message);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
+async function destratarExcecao(id) {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/destratar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!resp.ok) { const j = await resp.json(); alert(j.erro || "Falha ao desfazer."); return; }
+    carregarDados();
+  } catch (e) { alert("Falha ao desfazer: " + e); }
+}
+
+async function duplicarPedido(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Criar uma reentrega no VUUPT agora para ${x.codigo}?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}\n\nEssa ação cria um pedido novo de verdade -- não dá pra desfazer.`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/duplicar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: x.service_id, codigo: x.codigo,
+        motorista: x.motorista, rota: x.rota,
+      }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao duplicar."); return; }
+    alert(`Reentrega criada: ${j.novo_code}`);
+    carregarDados();
+  } catch (e) { alert("Falha ao duplicar: " + e); }
+}
+
+async function notificarOcorrencia(id) {
+  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+  if (!x) return;
+  if (!confirm(`Mandar a pergunta de reenvio ao remetente de ${x.codigo} agora?\n\nMotivo do insucesso: ${x.motivo_insucesso || "não informado"}`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/notificar-ocorrencia`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: x.service_id, codigo: x.codigo }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) { alert(j.erro || "Falha ao notificar."); return; }
+    alert(j.mensagem || "E-mail enviado.");
+    carregarDados();
+  } catch (e) { alert("Falha ao notificar: " + e); }
+}
+
+function renderTendencia(d) {
+  const alvo = document.getElementById("tendencia");
+  const legenda = document.getElementById("legenda-tendencia");
+  if (!d.tendencia.length) { alvo.innerHTML = ""; legenda.innerHTML = ""; return; }
+  const ALTURA_MAX = 88;
+  const maior = Math.max(...d.tendencia.map(t => t.total), 1);
+  const somaOk = d.tendencia.reduce((a, t) => a + (t.sucesso || 0), 0);
+  const somaRuim = d.tendencia.reduce((a, t) => a + (t.falha || 0), 0);
+  legenda.innerHTML = `
+    <span class="item"><span class="ponto" style="background:var(--st-sucesso)"></span>Entregues <span class="qtd">${somaOk}</span></span>
+    <span class="item"><span class="ponto" style="background:var(--st-falha)"></span>Falhas <span class="qtd">${somaRuim}</span></span>`;
+  alvo.innerHTML = d.tendencia.map(t => {
+    const destaque = t.data === d.data_alvo_iso;
+    const ok = t.sucesso || 0, ruim = t.falha || 0;
+    // Cada segmento escala pelo mesmo maior; o mínimo de 3px só vale
+    // pra segmento com valor (zero não ganha risquinho).
+    const px = v => v ? Math.max(3, Math.round(ALTURA_MAX * v / maior)) : 0;
+    const altura = t.total ? Math.max(3, px(ok) + px(ruim) + (ok && ruim ? 2 : 0)) : 3;
+    return `<div class="col-dia ${destaque ? "destaque" : ""}" title="${esc(t.rotulo)}: ${t.total} finalizada(s) · ${ok} entregue(s) · ${ruim} falha(s)">
+      <div class="valor-col">${t.total}</div>
+      <div class="parcial"><span class="ok">${ok}</span><span class="sep">·</span><span class="ruim">${ruim}</span></div>
+      <div class="col" style="height:${altura}px">
+        ${ruim ? `<div class="seg falha" style="height:${px(ruim)}px"></div>` : ""}
+        ${ok ? `<div class="seg sucesso" style="height:${px(ok)}px"></div>` : ""}
+        ${!t.total ? `<div class="seg" style="height:3px;background:var(--enfase-fora)"></div>` : ""}
+      </div>
+      <div class="rotulo-dia">${esc(t.rotulo)}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderAmanha(d) {
+  const a = d.amanha;
+  const avisos = [];
+  if (a.qtd_rotas && a.sem_motorista) avisos.push(`▲ ${a.sem_motorista} rota(s) sem motorista`);
+  if (a.qtd_travas) avisos.push(`▲ ${a.qtd_travas} rascunho(s) com trava estourada`);
+  let corpo;
+  if (a.qtd_rotas) {
+    corpo = `<div class="amanha-numeros">
+         <div class="bloco"><div class="n">${a.qtd_rotas}</div><div class="l">rascunhos</div></div>
+         <div class="bloco"><div class="n">${a.qtd_paradas}</div><div class="l">paradas</div></div>
+         ${a.rotas_vuupt ? `<div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">já na VUUPT</div></div>` : ""}
+       </div>
+       ${avisos.map(t => `<div class="aviso-amanha">${t}</div>`).join("")}`;
+  } else if (a.rotas_vuupt) {
+    corpo = `<div class="amanha-numeros">
+         <div class="bloco"><div class="n">${a.rotas_vuupt}</div><div class="l">rotas na VUUPT</div></div>
+       </div>
+       <div class="nota-rodape">Criadas direto na VUUPT (job automático das 13h) para ${esc(a.data_rotulo)} —
+       <a href="${BASE_PATH}/mapa-rotas?data=${a.data_iso}">ver no mapa</a>.</div>`;
+  } else {
+    corpo = `<div class="carregando">Nenhum rascunho para ${esc(a.data_rotulo)} ainda — rode a etapa
+       <strong>Roteirização</strong> no topo pra gerar.</div>`;
+  }
+  document.getElementById("amanha").innerHTML = corpo;
+  document.getElementById("link-planejamento").href = `${BASE_PATH}/planejamento?data=${a.data_iso}`;
+}
+
+function renderFunilStokki(f) {
+  const alvo = document.getElementById("funil-stokki");
+  if (!f.ok && !f.estagios.length) {
+    alvo.innerHTML = `<div class="carregando">${esc(f.erro || "Contagem indisponível.")}</div>`;
+    return;
+  }
+  const maior = Math.max(...f.estagios.map(e => e.total), 1);
+  const linhas = f.estagios.map(e => `
+    <div class="linha-funil">
+      <span>${esc(e.rotulo)}</span>
+      <div class="barra"><div class="fill ${e.total ? "" : "zero"}" style="width:${Math.round(100 * e.total / maior)}%"></div></div>
+      <span class="num">${e.total}</span>
+    </div>`).join("");
+  const nota = f.adiado
+    ? `<div class="nota-rodape">▲ Consulta adiada (agente rodando) — mostrando última leitura.</div>`
+    : `<div class="nota-rodape">Pedidos ainda na Stokki (antes da importação). Atualizado ${esc(f.atualizado_em || "")}.</div>`;
+  alvo.innerHTML = linhas + nota;
+}
+
+// ── Mini mapa (Google Maps, mesmo padrão do mapa_rotas) ─────────────
+
+let mapa = null, infoWindow = null, marcadoresMapa = [], gmapsPronto = false;
+const COR_SITUACAO = { entregue: "#0ca30c", insucesso: "#d03b3b", em_rota: "#2a78d6", pendente: "#8A8F98" };
+const ROTULO_SITUACAO = { entregue: "Entregue", insucesso: "Insucesso", em_rota: "Em rota", pendente: "Pendente" };
+
+function torreMapaPronto() {   // callback global do script do Google Maps
+  gmapsPronto = true;
+  if (dadosAtuais) renderMapa(dadosAtuais);
+}
+
+function renderMapa(d) {
+  const el = document.getElementById("mini-mapa");
+  if (!el || !gmapsPronto) return;
+
+  if (!mapa) {
+    const primeira = (d.rotas.find(r => (r.paradas || []).length) || { paradas: [{ lat: -23.55, lng: -46.63 }] }).paradas[0];
+    mapa = new google.maps.Map(el, {
+      center: d.base || primeira, zoom: 11,
+      mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
+    });
+    infoWindow = new google.maps.InfoWindow();
+    if (d.base) {
+      new google.maps.Marker({
+        position: d.base, map: mapa, title: "Base",
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: "#141428", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+      });
+    }
+  }
+
+  marcadoresMapa.forEach(m => m.setMap(null));
+  marcadoresMapa = [];
+  d.rotas.forEach(r => (r.paradas || []).forEach(p => {
+    const cor = COR_SITUACAO[p.situacao] || "#8A8F98";
+    const marcador = new google.maps.Marker({
+      position: { lat: p.lat, lng: p.lng }, map: mapa, title: p.codigo,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: cor, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+    });
+    marcador.addListener("click", () => {
+      infoWindow.setContent(`<div style="font:12px 'Segoe UI',sans-serif;max-width:260px;">
+        <strong>${esc(p.codigo)}</strong> · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
+        ${esc(p.titulo)}<br>
+        <span style="color:#6B7280;">${esc(r.nome)}${r.motorista ? " · " + esc(r.motorista) : ""}</span>
+      </div>`);
+      infoWindow.open(mapa, marcador);
+    });
+    marcadoresMapa.push(marcador);
+  }));
+}
+
+function alternarMapa(forcar) {
+  const card = document.getElementById("card-mapa");
+  const fundo = document.getElementById("fundo-mapa");
+  if (!card) return;
+  const expandir = forcar !== undefined ? forcar : !card.classList.contains("expandido");
+  card.classList.toggle("expandido", expandir);
+  fundo.classList.toggle("visivel", expandir);
+  document.getElementById("botao-expandir").textContent = expandir ? "✕ fechar" : "expandir";
+  if (mapa) {
+    const centro = mapa.getCenter();
+    google.maps.event.trigger(mapa, "resize");
+    mapa.setCenter(centro);
+  }
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") alternarMapa(false); });
+
+function renderSemaforo(d) {
+  const el = document.getElementById("semaforo");
+  el.className = "semaforo " + d.semaforo;
+  const n = (d.excecoes || []).length;
+  const acoes = `${n} ${n === 1 ? "ação" : "ações"}`;
+  const rotulos = {
+    ok: "Operação normal",
+    atencao: `Atenção — ${acoes}`,
+    critico: `Crítico — ${acoes}`,
+  };
+  document.getElementById("semaforo-texto").textContent = rotulos[d.semaforo] || d.semaforo;
+}
+
+// ── Carga e ciclo de atualização ────────────────────────────────────
+
+// A torre fica aberta o dia inteiro e só refaz o fetch dos dados; sem
+// isto, uma aba aberta antes de um deploy ficava com o JS antigo pra
+// sempre (17/09: backend novo + aba velha ainda no prompt() do Tratar).
+// Guarda a primeira versão que viu e recarrega quando o backend passa a
+// mandar outra -- nunca com modal aberto (não derruba quem está no meio
+// de uma tratativa/exclusão; tenta de novo no próximo ciclo de 60 s).
+let versaoTelaCarregada = null;
+
+function conferirVersaoTela(d) {
+  if (!d || !d.versao_tela) return;
+  if (versaoTelaCarregada === null) { versaoTelaCarregada = d.versao_tela; return; }
+  if (d.versao_tela === versaoTelaCarregada) return;
+  if (document.querySelector(".modal-overlay-excluir.aberto")) return;
+  location.reload();
+}
+
+async function carregarDados() {
+  const corpo = document.querySelector(".corpo");
+  corpo.classList.add("atualizando");
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/dados`);
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.erro || resp.statusText);
+    dadosAtuais = d;
+    conferirVersaoTela(d);
+    renderSemaforo(d);
+    renderMapa(d);
+    renderStepper(d.etapas);
+    renderKpis(d);
+    renderRotas(d);
+    renderPedidosStatus(d);
+    renderExcecoes(d);
+    renderTendencia(d);
+    renderAmanha(d);
+    document.getElementById("link-mapa").href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
+    ultimoOk = new Date();
+    houveErro = false;
+  } catch (e) {
+    houveErro = true;
+    console.error("torre: falha ao carregar dados", e);
+  } finally {
+    corpo.classList.remove("atualizando");
+    atualizarCarimbo();
+  }
+}
+
+async function carregarStokki() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/stokki`);
+    if (resp.ok) renderFunilStokki(await resp.json());
+  } catch (e) { console.error("torre: falha no funil Stokki", e); }
+}
+
+async function carregarEtapas() {
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/etapas`);
+    if (resp.ok) renderStepper((await resp.json()).etapas);
+  } catch (e) { /* o ciclo principal recupera */ }
+  // Cadência dinâmica: rápida com algo rodando, lenta em repouso.
+  setTimeout(carregarEtapas, algumaEtapaRodando ? 5000 : 30000);
+}
+
+function atualizarCarimbo() {
+  const el = document.getElementById("carimbo");
+  if (!ultimoOk) {
+    el.textContent = houveErro ? "Falha ao carregar — tentando de novo…" : "Carregando dados…";
+    el.className = houveErro ? "carimbo erro" : "carimbo";
+    return;
+  }
+  const seg = Math.round((Date.now() - ultimoOk.getTime()) / 1000);
+  el.textContent = `Atualizado há ${seg < 60 ? seg + "s" : Math.floor(seg / 60) + "min"}` +
+                   (houveErro ? " · última tentativa falhou" : "");
+  el.className = houveErro ? "carimbo erro" : "carimbo";
+}
+
+async function rodarAgente(agenteId, titulo) {
+  if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+  try {
+    const resp = await fetch(`${BASE_PATH}/api/torre/rodar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agente_id: agenteId }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { alert(d.erro || "Falha ao iniciar."); return; }
+    algumaEtapaRodando = true;
+    // Feedback imediato no stepper, sem esperar o próximo ciclo.
+    fetch(`${BASE_PATH}/api/torre/etapas`).then(r => r.json()).then(j => renderStepper(j.etapas));
+  } catch (e) {
+    alert("Falha ao iniciar: " + e);
+  }
+}
+
+function carregarTudo() { carregarDados(); carregarStokki(); }
+
+carregarTudo();
+carregarEtapas();
+setInterval(carregarDados, 60000);
+setInterval(carregarStokki, 120000);
+setInterval(atualizarCarimbo, 1000);
+</script>
+{% if google_maps_key %}
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=torreMapaPronto">
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block titulo %}Central de Atendimento{% endblock %} — Freshlog</title>
+<style>
+  :root {
+    --primaria: #141428;
+    --primaria-clara: #1F1F3D;
+    --acento: #0EA575;
+    --erro: #E1483D;
+    --erro-bg: #FDEBEA;
+    --alerta: #E8A33D;
+    --alerta-bg: #FDF3E1;
+    --fundo: #F3F4F6;
+    --superficie: #FFFFFF;
+    --superficie-hover: #FAFAFB;
+    --borda: #E5E7EB;
+    --texto: #1F2937;
+    --texto-suave: #6B7280;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  .app-shell { display: flex; align-items: stretch; min-height: 100vh; }
+
+  .sidebar {
+    flex: none; width: 220px; background: var(--primaria); color: #fff;
+    display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+  }
+  .sidebar .marca { padding: 22px 20px 18px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sidebar .marca .nome { display: block; font-size: 15px; font-weight: 800; letter-spacing: 0.3px; }
+  .sidebar .marca .subtitulo { display: block; font-size: 11px; color: #A3A3C2; margin-top: 3px; }
+  .sidebar nav { flex: 1; display: flex; flex-direction: column; padding: 10px 0; }
+  .sidebar nav a {
+    color: #C7C7E0; text-decoration: none; font-size: 13px; font-weight: 600;
+    padding: 10px 20px; border-left: 3px solid transparent;
+  }
+  .sidebar nav a:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .sidebar nav a.ativo { color: #fff; background: rgba(14,165,117,0.15); border-left-color: var(--acento); }
+  .sidebar .rodape {
+    padding: 14px 20px 18px; border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .sidebar .rodape .usuario { font-size: 12px; color: #A3A3C2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar button.sair {
+    background: none; border: 1px solid #3A3A5C; color: #C7C7E0; font-size: 12px;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  }
+  .sidebar button.sair:hover { color: #fff; border-color: #C7C7E0; }
+
+  .area-conteudo { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .barra-metricas {
+    display: flex; gap: 10px; padding: 10px 20px; background: var(--superficie);
+    border-bottom: 1px solid var(--borda); align-items: center;
+    height: 44px; overflow-x: auto; overflow-y: hidden; flex: none;
+  }
+  .metrica {
+    display: flex; align-items: baseline; gap: 6px; padding: 6px 14px; border-radius: 8px;
+    background: var(--fundo); font-size: 12px; color: var(--texto-suave); white-space: nowrap;
+  }
+  .metrica .valor { font-size: 16px; font-weight: 800; color: var(--texto); }
+  .metrica.alerta { background: var(--alerta-bg); color: #9C6B0C; }
+  .metrica.alerta .valor { color: #9C6B0C; }
+  .metrica.critico { background: var(--erro-bg); color: var(--erro); }
+  .metrica.critico .valor { color: var(--erro); }
+
+  main { flex: 1; padding: 24px; min-width: 0; }
+
+  a.botao, button.botao {
+    display: inline-block; background: var(--primaria); color: #fff; border: none;
+    padding: 8px 16px; border-radius: 7px; font-size: 13px; font-weight: 600;
+    cursor: pointer; text-decoration: none; transition: background 0.15s, opacity 0.15s;
+  }
+  a.botao:hover, button.botao:hover { background: var(--primaria-clara); }
+  button.botao:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.botao.perigo { background: var(--erro); }
+</style>
+{% block estilo_extra %}{% endblock %}
+</head>
+<body>
+<script>
+  // Prefixo do app quando servido atrás de proxy sob um caminho -- vazio
+  // no acesso direto (subdomínio próprio, sem path-prefix). Usar pra
+  // montar chamadas fetch() com caminho absoluto fixo.
+  const BASE_PATH = "{{ request.script_root }}";
+</script>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="marca">
+      <span class="nome">Central de Atendimento</span>
+      <span class="subtitulo">Freshlog</span>
+    </div>
+    <nav>
+      <a href="{{ url_for('inbox') }}" class="{{ 'ativo' if request.endpoint == 'inbox' else '' }}">Inbox</a>
+      {% if session.get('papel') == 'admin' %}
+      <a href="{{ url_for('usuarios_pagina') }}" class="{{ 'ativo' if request.endpoint == 'usuarios_pagina' else '' }}">Usuários</a>
+      <a href="{{ url_for('respostas_rapidas_pagina') }}" class="{{ 'ativo' if request.endpoint == 'respostas_rapidas_pagina' else '' }}">Respostas rápidas</a>
+      <a href="{{ url_for('admin_whatsapp') }}" class="{{ 'ativo' if request.endpoint == 'admin_whatsapp' else '' }}">WhatsApp</a>
+      {% endif %}
+    </nav>
+    {% if session.get('usuario_id') %}
+    <div class="rodape">
+      <span class="usuario" title="{{ session.get('nome', '') }}">{{ session.get('nome', '') }}</span>
+      <form method="post" action="{{ url_for('logout') }}">
+        <button type="submit" class="sair">Sair</button>
+      </form>
+    </div>
+    {% endif %}
+  </aside>
+  <div class="area-conteudo">
+    {% if session.get('usuario_id') %}
+    <header class="barra-metricas" id="barra-metricas">
+      <span class="metrica"><span class="valor">—</span> na fila</span>
+    </header>
+    {% endif %}
+    <main>
+    {% block conteudo %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% if session.get('usuario_id') %}
+<script>
+  // Barra de métricas em tempo real (fila/SLA/parados/resolvidas hoje) --
+  // fica no topo do conteúdo em qualquer página logada, não só no Inbox,
+  // pra dar visão ambiente da operação o tempo todo. Poll simples, mesmo
+  // padrão de sem-websocket do resto do projeto -- não precisa ser
+  // instantâneo, é um painel de acompanhamento, não um alarme crítico.
+  (function() {
+    const alvo = document.getElementById("barra-metricas");
+    if (!alvo) return;
+    function tile(valor, rotulo, nivel) {
+      return `<span class="metrica ${nivel || ''}"><span class="valor">${valor}</span> ${rotulo}</span>`;
+    }
+    function atualizar() {
+      fetch(BASE_PATH + "/api/metricas").then(r => r.ok ? r.json() : null).then(d => {
+        if (!d) return;
+        alvo.innerHTML = [
+          tile(d.fila, "na fila", d.fila_sla_estourado > 0 ? "alerta" : ""),
+          tile(d.fila_sla_estourado, "SLA estourado", d.fila_sla_estourado > 0 ? "critico" : ""),
+          tile(d.parados, "atendimentos parados", d.parados > 0 ? "critico" : ""),
+          tile(d.resolvidas_hoje, "resolvidas hoje", ""),
+        ].join("");
+      }).catch(() => {});
+    }
+    atualizar();
+    setInterval(atualizar, 20000);
+  })();
+</script>
+<script>
+  // Notificação de mensagem nova (som + Notification API) -- roda em
+  // qualquer página logada, não só no Inbox, pra avisar mesmo se o
+  // atendente estiver em outra tela/aba deste app. Limitação: só
+  // funciona com a aba aberta (poll simples, sem push/websocket) --
+  // consistente com o resto do projeto, que não usa websockets.
+  (function() {
+    let ultimoId = null;
+    let audioCtx = null;
+    function beep() {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {}
+    }
+    if (window.Notification && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    function verificar() {
+      const qs = ultimoId === null ? "" : ("?desde=" + ultimoId);
+      fetch(BASE_PATH + "/api/mensagens/novas" + qs)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!d) return;
+          if (ultimoId !== null && d.mensagens.length) {
+            beep();
+            d.mensagens.forEach(m => {
+              if (window.Notification && Notification.permission === "granted") {
+                new Notification("Nova mensagem — " + (m.contato_nome || m.contato_telefone), {
+                  body: (m.corpo || "").slice(0, 120),
+                });
+              }
+            });
+          }
+          ultimoId = d.max_id;
+        }).catch(() => {});
+    }
+    verificar();
+    setInterval(verificar, 6000);
+  })();
+</script>
+{% endif %}
+</body>
+</html>

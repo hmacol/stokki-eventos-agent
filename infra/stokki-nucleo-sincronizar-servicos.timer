@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-nucleo-sincronizar-servicos.service a cada 15 min (deslocado do sync de rotas, que roda :15/:45)
+
+[Timer]
+OnCalendar=*-*-* *:05,20,35,50:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

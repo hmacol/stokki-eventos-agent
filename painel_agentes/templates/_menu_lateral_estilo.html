@@ -1,0 +1,157 @@
+{# CSS do menu lateral (23/09), compartilhado entre base.html e
+   base_mobile.html -- entra DENTRO do <style> de cada um. A gaveta
+   (menu que desliza por cima) vale so abaixo de 760px no base.html;
+   no base_mobile vale sempre ({% with gaveta_sempre = true %}). #}
+.sidebar {
+  flex: none;
+  width: 240px;
+  background: var(--primaria);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow: hidden;
+  transition: width 0.18s ease;
+}
+.sidebar .marca {
+  padding: 24px 22px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.sidebar .marca .nome {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.sidebar .marca .subtitulo {
+  display: block;
+  font-size: 12px;
+  color: #A3A3C2;
+  margin-top: 4px;
+  white-space: nowrap;
+}
+.sidebar .marca .marca-mini {
+  display: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--acento);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  align-items: center;
+  justify-content: center;
+}
+/* Só a LISTA rola (11/09). Com a sidebar inteira rolando, numa tela de
+   768px de altura o rodapé -- quem está logado e o botão Sair -- saía
+   de vista junto com o menu. Marca e rodapé agora ficam parados. */
+.sidebar nav {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) transparent;
+}
+.sidebar nav::-webkit-scrollbar { width: 6px; }
+.sidebar nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+.sidebar nav::-webkit-scrollbar-track { background: transparent; }
+/* Menu agrupado por momento do dia (11/09) -- 13 itens num bloco só
+   não se lê. O cabeçalho do grupo é rótulo, não link. */
+.sidebar nav .grupo { display: flex; flex-direction: column; }
+.sidebar nav .grupo + .grupo { margin-top: 12px; }
+.sidebar nav .grupo-titulo {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: #8E8EB0;  /* era #6F6F92 = 3,8:1 sobre a sidebar; agora 5,7:1 */
+  padding: 0 22px 6px;
+  white-space: nowrap;
+}
+.sidebar nav a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #C7C7E0;
+  text-decoration: none;
+  font-size: 13.5px;
+  padding: 8px 11px;
+  margin: 1px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+.sidebar nav a .icone { display: flex; flex: none; }
+.sidebar nav a .icone svg { width: 18px; height: 18px; }
+.sidebar nav a .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.sidebar nav a:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.sidebar nav a.ativo {
+  color: #fff;
+  font-weight: 600;
+  background: rgba(14,165,117,0.18);
+}
+/* Barrinha de acento por dentro da pílula (sem ela, duas pílulas de
+   grupos diferentes ficam parecidas demais no hover). */
+.sidebar nav a.ativo::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 3px; height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--acento);
+}
+/* Badge: quantos itens estão esperando ação naquela tela. Vem do JS
+   (/api/sidebar/contadores) -- nasce escondido e só aparece com
+   número > 0, senão o menu fica cheio de zeros. */
+.sidebar nav a .badge {
+  flex: none;
+  min-width: 19px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* texto escuro no badge critico: branco sobre o vermelho dava 3,0:1 (escuro) e 4,0:1 (claro) */
+.sidebar nav a .badge.critico { background: var(--erro); color: #1A0705; }
+.sidebar nav a .badge[hidden] { display: none; }
+{% if not gaveta_sempre %}@media (max-width: 760px) { {% endif %}
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    height: 100dvh;
+    width: 264px;
+    max-width: 86vw;
+    z-index: 1200;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+  /* sombra so com a gaveta aberta: fechada, ela vazava 28px na borda
+     esquerda da tela como uma faixa cinza */
+  html.menu-aberto .sidebar { box-shadow: 0 0 28px rgba(0,0,0,0.4); }
+  html.menu-aberto .sidebar { transform: translateX(0); }
+  .veu-menu {
+    display: block;
+    position: fixed; inset: 0;
+    z-index: 1199;
+    background: rgba(10, 10, 24, 0.5);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  html.menu-aberto .veu-menu { opacity: 1; pointer-events: auto; }
+  html.menu-aberto { overflow: hidden; }
+{% if not gaveta_sempre %}}{% endif %}

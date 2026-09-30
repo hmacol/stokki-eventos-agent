@@ -1,0 +1,18 @@
+[Unit]
+Description=Fresh Log - Portal do cliente: leitor de e-mail dos chamados (portal_cliente/chamados.py ler --loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/stokki-eventos
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/portal_cliente/chamados.py ler --loop
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

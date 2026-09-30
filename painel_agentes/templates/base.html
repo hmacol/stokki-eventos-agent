@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Aplica o estado recolhido da sidebar antes do primeiro paint --
+  // evita o "flash" da sidebar larga que colapsaria um instante depois.
+  if (localStorage.getItem("painel_sidebar_recolhida") === "1") {
+    document.documentElement.classList.add("sidebar-recolhida");
+  }
+  // Mesma lógica pro tema claro/escuro: sem preferência salva, usa o
+  // tema do sistema operacional como ponto de partida.
+  (function() {
+    var salvo = localStorage.getItem("painel_tema_escuro");
+    var escuro = salvo === "1" || (salvo === null && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (escuro) document.documentElement.classList.add("tema-escuro");
+  })();
+</script>
+<title>{% block titulo %}Painel de Agentes{% endblock %} — Freshlog</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+{% include "_paleta_cores.html" %}
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    background: var(--fundo);
+    color: var(--texto);
+    transition: background 0.15s, color 0.15s;
+  }
+  .shell {
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+  }
+  {% include "_menu_lateral_estilo.html" %}
+  .alterna-sidebar {
+    position: absolute;
+    top: 27px;
+    right: -12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--primaria);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #C7C7E0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    z-index: 2;
+    transition: background 0.15s, color 0.15s;
+  }
+  .alterna-sidebar:hover { background: var(--primaria-clara); color: #fff; }
+  .alterna-sidebar svg { width: 13px; height: 13px; transition: transform 0.2s; flex: none; }
+  /* Rodapé em duas linhas: quem está logado (com o nível -- é o que
+     explica por que uma tela some pro colega) e, embaixo, tema + sair.
+     O tema saiu do menu de propósito (11/09): é configuração, não
+     navegação, e estava gastando uma linha da lista de telas. */
+  .sidebar .rodape {
+    padding: 12px 14px 16px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .sidebar .rodape .usuario {
+    display: flex;
+    flex-direction: column;
+    padding: 0 4px;
+    overflow: hidden;
+  }
+  .sidebar .rodape .usuario .nome {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #DCDCEC;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sidebar .rodape .usuario .nivel {
+    font-size: 10.5px;
+    color: #7F7FA3;
+    white-space: nowrap;
+  }
+  .sidebar .rodape .botoes { display: flex; align-items: center; gap: 7px; }
+  .sidebar .sair-form { flex: 1; }
+  .sidebar .rodape button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    background: none;
+    border: 1px solid #3A3A5C;
+    color: #C7C7E0;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .sidebar .rodape button:hover { color: #fff; border-color: #C7C7E0; background: rgba(255,255,255,0.05); }
+  .sidebar .rodape button svg { width: 14px; height: 14px; flex: none; }
+  .sidebar button.alterna-tema { flex: none; width: 30px; padding: 6px 0; }
+  .sidebar button.alterna-tema .icone { display: flex; }
+  /* O JS esconde o ícone do tema que não vale agora com [hidden]; sem
+     isto o display:flex acima ganha por especificidade e os dois (sol e
+     lua) aparecem juntos -- era o que acontecia antes de 11/09. */
+  .sidebar button.alterna-tema .icone[hidden] { display: none; }
+  .sidebar button.alterna-tema .icone svg { width: 15px; height: 15px; }
+  /* Botão "Guia" (tour guiado da tela, 17/09): nasce [hidden] e só
+     aparece em tela que tem roteiro (_tour_<endpoint>.html). Mesmo
+     cuidado do ícone do tema: sem isto o display:flex do botão ganha do
+     [hidden]. */
+  .sidebar .rodape button.abre-guia { flex: none; width: auto; padding: 6px 9px; }
+  .sidebar .rodape button[hidden] { display: none; }
+  /* O guia tem que ficar por cima dos modais das telas (z-index 10000);
+     no portal do cliente o motor fica no 900 de sempre. */
+  html.tour-ativo .tour-veu { z-index: 10010; }
+  html.tour-ativo .tour-foco { z-index: 10011; }
+  html.tour-ativo .tour-balao { z-index: 10012; }
+
+  /* Sidebar recolhida -- classe fica em <html>, aplicada já no <head>
+     (ver script inline) pra não piscar a versão larga antes de colapsar. */
+  html.sidebar-recolhida .sidebar { width: 68px; }
+  html.sidebar-recolhida .sidebar .marca {
+    display: flex;
+    justify-content: center;
+    padding: 20px 0;
+  }
+  html.sidebar-recolhida .sidebar .marca .nome,
+  html.sidebar-recolhida .sidebar .marca .subtitulo { display: none; }
+  html.sidebar-recolhida .sidebar .marca .marca-mini { display: flex; }
+  html.sidebar-recolhida .alterna-sidebar svg { transform: rotate(180deg); }
+  html.sidebar-recolhida .sidebar nav a { justify-content: center; padding: 9px 0; }
+  html.sidebar-recolhida .sidebar nav a .rotulo { display: none; }
+  html.sidebar-recolhida .sidebar nav a.ativo::before { display: none; }
+  /* Sem largura pro rótulo, o cabeçalho do grupo vira só um divisor --
+     o agrupamento continua visível, sem texto cortado. */
+  html.sidebar-recolhida .sidebar nav .grupo-titulo { display: none; }
+  html.sidebar-recolhida .sidebar nav .grupo + .grupo {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid rgba(255,255,255,0.09);
+  }
+  /* Recolhido não cabe número: o badge vira um ponto em cima do ícone. */
+  html.sidebar-recolhida .sidebar nav a .badge {
+    position: absolute;
+    top: 4px;
+    right: 9px;
+    min-width: 0;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    line-height: 0;
+    /* Claro (não verde): recolhido o ponto é o único sinal, e verde ali
+       lê como "está tudo certo" -- o oposto de "tem coisa esperando".
+       Mesma semântica do badge aberto: claro = tem fila, vermelho = urgente. */
+    background: #C7C7E0;
+    border: 1.5px solid var(--primaria);
+  }
+  html.sidebar-recolhida .sidebar nav a .badge.critico { background: var(--erro); }
+  html.sidebar-recolhida .sidebar .rodape { padding: 12px 8px 16px; }
+  html.sidebar-recolhida .sidebar .rodape .usuario { display: none; }
+  html.sidebar-recolhida .sidebar .rodape .botoes { flex-direction: column; }
+  html.sidebar-recolhida .sidebar .rodape button { padding: 7px 0; }
+  html.sidebar-recolhida .sidebar button.alterna-tema { width: 100%; }
+  html.sidebar-recolhida .sidebar button.sair .rotulo-sair { display: none; }
+  html.sidebar-recolhida .sidebar .rodape button.abre-guia { width: 100%; padding: 7px 0; }
+  html.sidebar-recolhida .sidebar button.abre-guia .rotulo-guia { display: none; }
+
+  .area-conteudo {
+    flex: 1;
+    min-width: 0;
+  }
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+
+  /* ── Celular: o menu vira gaveta (21/09) ──────────────────────────
+     Ate aqui a sidebar era fixa em 240px em QUALQUER largura: num
+     celular de 390px sobravam 150px de conteudo e as telas do painel
+     (Expedicao, Pedidos Parados, Consulta, Motoristas...) ficavam
+     inutilizaveis. So o Planejamento escapava, escondendo a sidebar no
+     proprio template (html.modo-mobile), e a Torre por ter rota mobile.
+     Aqui a sidebar sai do fluxo e desliza por cima quando o ☰ e tocado.
+     Nada muda acima do breakpoint. */
+  .abre-menu { display: none; }
+  .veu-menu { display: none; }
+  @media (max-width: 760px) {
+    /* No celular a gaveta abre sempre inteira: o "recolhida" de 68px do
+       desktop (localStorage) deixaria so os icones numa tela de toque. */
+    html.sidebar-recolhida .sidebar { width: 264px; }
+    html.sidebar-recolhida .sidebar .marca .nome,
+    html.sidebar-recolhida .sidebar .marca .subtitulo { display: block; }
+    html.sidebar-recolhida .sidebar .marca .marca-mini { display: none; }
+    html.sidebar-recolhida .sidebar nav a { justify-content: flex-start; padding: 9px 14px; }
+    html.sidebar-recolhida .sidebar nav a .rotulo { display: block; }
+    html.sidebar-recolhida .sidebar nav .grupo-titulo { display: block; }
+    html.sidebar-recolhida .sidebar .rodape .usuario { display: flex; }
+    /* O botao de recolher e coisa de desktop; no celular quem fecha e o
+       ☰, o veu ou o Esc. */
+    .alterna-sidebar { display: none; }
+    .abre-menu {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 1100;
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-bottom: 1px solid var(--borda);
+      background: var(--superficie);
+      color: var(--texto);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      min-height: 46px;
+      cursor: pointer;
+    }
+    .abre-menu svg { width: 20px; height: 20px; flex: none; }
+    main { padding: 16px 14px 48px; }
+    /* Tabela larga (Consulta, Motoristas, Historico: 480 a 674px) rola
+       sozinha em vez de esticar a pagina -- o cabecalho e os filtros da
+       tela ficam parados. So pega tabela que e filha direta do main;
+       tabela dentro de card cuida da propria rolagem. */
+    main > table { display: block; overflow-x: auto; }
+  }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .badge-sucesso { background: var(--sucesso-bg); color: var(--sucesso); }
+  .badge-erro { background: var(--erro-bg); color: var(--erro); }
+  .badge-rodando { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .badge-interrompido { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .badge-timeout { background: var(--timeout-bg); color: var(--timeout-texto); }
+  .badge-nunca { background: var(--nunca-bg); color: var(--texto-suave); }
+  .badge-teste { background: var(--teste-bg); color: var(--teste-texto); }
+
+  /* Banner de aviso genérico -- compartilhado entre telas (planejamento,
+     laboratório, mapa de rotas) pra não duplicar as mesmas cores em
+     cada template. */
+  .aviso {
+    background: var(--rodando-bg);
+    border: 1px solid var(--rodando-borda);
+    color: var(--rodando-texto);
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+
+  /* Texto só pra leitor de tela (15/09): rótulo que a tela esconde
+     visualmente mas o campo/título continua precisando (WCAG 1.3.1). Não
+     usar display:none, que some da árvore de acessibilidade também. */
+  .oculto-acessivel {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  /* Quem pediu menos movimento no sistema operacional (15/09): as
+     animações infinitas (pulso de agente rodando, barra indeterminada)
+     viram estado parado -- a informação "rodando" continua pela cor. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  a.botao, button.botao {
+    display: inline-block;
+    background: var(--primaria);
+    color: #fff;
+    border: none;
+    padding: 9px 18px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  a.botao:hover, button.botao:hover { background: var(--primaria-clara); }
+  a.botao:disabled, button.botao:disabled, button.botao.desabilitado {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  code, pre, .mono {
+    font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', Menlo, monospace;
+  }
+</style>
+{% block estilo_extra %}{% endblock %}
+</head>
+<body>
+<script>
+  // Prefixo do painel quando servido atrás de proxy sob um caminho (ex:
+  // app.freshhub.com.br/painel) -- vazio no acesso direto (LAN/porta 8070).
+  // Usar pra montar chamadas fetch()/href com caminho absoluto fixo.
+  const BASE_PATH = "{{ request.script_root }}";
+</script>
+<div class="shell">
+  <aside class="sidebar" id="menu-lateral">
+    <div class="marca">
+      <span class="nome">Painel de Agentes</span>
+      <span class="subtitulo">Agente Stokki Freshlog</span>
+      <span class="marca-mini">P</span>
+    </div>
+    <button type="button" class="alterna-sidebar" id="alterna-sidebar" title="Recolher menu" aria-label="Recolher menu">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 5l-5 5 5 5"/></svg>
+    </button>
+    {% set nivel = session.get('nivel_acesso') %}
+    {% include "_menu_lateral_nav.html" %}
+    {% if nivel %}
+    <div class="rodape">
+      {% set ROTULOS_NIVEL = {'total': 'acesso total', 'operador': 'operação', 'leitura': 'somente leitura',
+                              'expedicao': 'expedição', 'galpao': 'galpão', 'atendimento': 'atendimento'} %}
+      <span class="usuario" title="{{ session.get('usuario', '') }} — {{ ROTULOS_NIVEL.get(nivel, nivel) }}">
+        <span class="nome">{{ session.get('usuario', '') }}</span>
+        <span class="nivel">{{ ROTULOS_NIVEL.get(nivel, nivel) }}</span>
+      </span>
+      <div class="botoes">
+        <button type="button" class="alterna-tema" id="alterna-tema" title="Usar tema escuro" aria-label="Usar tema escuro">
+          <span class="icone icone-tema-claro"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.8v1.8M10 15.4v1.8M17.2 10h-1.8M4.6 10H2.8M15.1 4.9l-1.3 1.3M6.2 13.8l-1.3 1.3M15.1 15.1l-1.3-1.3M6.2 6.2L4.9 4.9"/></svg></span>
+          <span class="icone icone-tema-escuro" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 11.3A7.2 7.2 0 018.7 3a7.2 7.2 0 108.3 8.3z"/></svg></span>
+        </button>
+        <button type="button" class="abre-guia" id="tour-abrir" data-tour="{{ request.endpoint }}" hidden
+                title="Guia da tela: passo a passo de cada campo e botão" aria-label="Abrir o guia desta tela">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M7.9 7.8a2.2 2.2 0 114 1.2c-.6.8-1.8 1.1-1.8 2.3"/><path d="M10.1 14.1v.1"/></svg>
+          <span class="rotulo-guia">Guia</span>
+        </button>
+        <form class="sair-form" method="post" action="{{ url_for('logout') }}">
+          <button type="submit" class="sair" title="Sair">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5H5a1.5 1.5 0 00-1.5 1.5v10A1.5 1.5 0 005 16.5h3"/><path d="M13 13.5l3.5-3.5L13 6.5"/><path d="M16.3 10H8"/></svg>
+            <span class="rotulo-sair">Sair</span>
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </aside>
+  <div class="area-conteudo">
+    {# So aparece no celular (CSS): abre a sidebar como gaveta. #}
+    <button type="button" class="abre-menu" id="abre-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="menu-lateral">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      <span>Menu</span>
+    </button>
+    <main>
+    {% block conteudo %}{% endblock %}
+    </main>
+  </div>
+  <div class="veu-menu" id="veu-menu"></div>
+</div>
+<script>
+  (function() {
+    var CHAVE = "painel_sidebar_recolhida";
+    var botao = document.getElementById("alterna-sidebar");
+    if (!botao) return;
+    function aplicar(recolhida) {
+      document.documentElement.classList.toggle("sidebar-recolhida", recolhida);
+      botao.title = recolhida ? "Expandir menu" : "Recolher menu";
+      botao.setAttribute("aria-label", botao.title);
+    }
+    aplicar(document.documentElement.classList.contains("sidebar-recolhida"));
+    botao.addEventListener("click", function() {
+      var recolhida = !document.documentElement.classList.contains("sidebar-recolhida");
+      localStorage.setItem(CHAVE, recolhida ? "1" : "0");
+      aplicar(recolhida);
+    });
+  })();
+</script>
+{% include "_menu_lateral_script.html" %}
+<script>
+  // Alternador de tema claro/escuro. Dispara "tema:alterado" no
+  // document pra páginas com conteúdo que não usa var(--...) direto
+  // (ex: estilo customizado do Google Maps em planejamento_rotas.html)
+  // poderem reagir também.
+  (function() {
+    var CHAVE = "painel_tema_escuro";
+    var botao = document.getElementById("alterna-tema");
+    if (!botao) return;
+    var rotulo = document.getElementById("rotulo-tema");
+    var iconeClaro = botao.querySelector(".icone-tema-claro");
+    var iconeEscuro = botao.querySelector(".icone-tema-escuro");
+    function aplicar(escuro, avisar) {
+      document.documentElement.classList.toggle("tema-escuro", escuro);
+      botao.title = escuro ? "Usar tema claro" : "Usar tema escuro";
+      botao.setAttribute("aria-label", botao.title);
+      if (rotulo) rotulo.textContent = escuro ? "Tema claro" : "Tema escuro";
+      if (iconeClaro) iconeClaro.hidden = escuro;
+      if (iconeEscuro) iconeEscuro.hidden = !escuro;
+      if (avisar) document.dispatchEvent(new CustomEvent("tema:alterado", { detail: { escuro: escuro } }));
+    }
+    aplicar(document.documentElement.classList.contains("tema-escuro"), false);
+    botao.addEventListener("click", function() {
+      var escuro = !document.documentElement.classList.contains("tema-escuro");
+      localStorage.setItem(CHAVE, escuro ? "1" : "0");
+      aplicar(escuro, true);
+    });
+  })();
+</script>
+{# Guia da tela (tour guiado, 17/09): o motor é o mesmo do portal do
+   cliente; o ROTEIRO de cada tela fica em _tour_<endpoint>.html e entra
+   sozinho quando existe (tela sem roteiro não ganha nada, nem o botão).
+   Pra criar o guia de uma tela nova basta criar o arquivo. #}
+{% include "_tour.html" %}
+{% include "_tour_" ~ (request.endpoint or "") ~ ".html" ignore missing %}
+<script>
+  (function() {
+    if (!window.Tour) return;
+    document.querySelectorAll("[data-tour][hidden]").forEach(function(botao) {
+      if (window.Tour.tem(botao.getAttribute("data-tour"))) botao.hidden = false;
+    });
+  })();
+</script>
+</body>
+</html>

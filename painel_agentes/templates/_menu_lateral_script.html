@@ -1,0 +1,95 @@
+{# Gaveta do menu e badges (23/09), compartilhados entre base.html e
+   base_mobile.html. Precisa de #abre-menu, #veu-menu e #menu-lateral
+   na pagina e de BASE_PATH definido antes. #}
+<script>
+  // Gaveta do menu no celular (21/09). Nada aqui roda no desktop: o ☰ e
+  // o veu so aparecem abaixo de 760px (CSS). Estado NAO vai pro
+  // localStorage de proposito -- gaveta nasce fechada a cada tela.
+  (function() {
+    var raiz = document.documentElement;
+    var botao = document.getElementById("abre-menu");
+    var veu = document.getElementById("veu-menu");
+    var menu = document.getElementById("menu-lateral");
+    if (!botao || !veu || !menu) return;
+    function aplicar(aberto) {
+      raiz.classList.toggle("menu-aberto", aberto);
+      botao.setAttribute("aria-expanded", aberto ? "true" : "false");
+      botao.setAttribute("aria-label", aberto ? "Fechar menu" : "Abrir menu");
+    }
+    function fechar(devolverFoco) {
+      if (!raiz.classList.contains("menu-aberto")) return;
+      aplicar(false);
+      if (devolverFoco) botao.focus();
+    }
+    botao.addEventListener("click", function() {
+      var aberto = !raiz.classList.contains("menu-aberto");
+      aplicar(aberto);
+      if (aberto) {
+        var primeiro = menu.querySelector("nav a");
+        if (primeiro) primeiro.focus();
+      }
+    });
+    veu.addEventListener("click", function() { fechar(true); });
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") fechar(true);
+    });
+    // Tocou num item do menu: a navegacao ja troca de pagina, mas fechar
+    // aqui evita a gaveta aberta piscando durante o load.
+    menu.addEventListener("click", function(e) {
+      if (e.target.closest("a")) fechar(false);
+    });
+    // Voltou pro desktop (girou a tela / redimensionou): some com o
+    // estado de gaveta pra nao travar o scroll do body.
+    if (window.matchMedia) {
+      var largo = window.matchMedia("(min-width: 761px)");
+      var aoMudar = function(ev) { if (ev.matches) fechar(false); };
+      if (largo.addEventListener) largo.addEventListener("change", aoMudar);
+      else if (largo.addListener) largo.addListener(aoMudar);
+    }
+  })();
+</script>
+<script>
+  // Badges do menu (11/09): quantos itens esperam ação em cada tela.
+  // Busca DEPOIS do load e nunca na renderização -- o menu está em toda
+  // página do painel e não pode atrasar nenhuma (ver contadores_menu.py).
+  (function() {
+    var INTERVALO_MS = 120000;  // 2 min; o lado caro tem cache de 3 min
+    var badges = document.querySelectorAll(".sidebar nav .badge[data-contador]");
+    if (!badges.length) return;
+
+    var ROTULOS = {
+      torre: "na fila de ação",
+      pedidos_parados: "esperando triagem",
+      pedagios: "aguardando aprovação",
+      atendimento: "esperando atendimento",
+    };
+
+    function pintar(contadores) {
+      badges.forEach(function(el) {
+        var dado = contadores[el.dataset.contador];
+        // Contador ausente = fonte falhou ou ainda não tem leitura:
+        // mantém o que estava na tela em vez de piscar pra vazio.
+        if (!dado) return;
+        var qtd = dado.qtd || 0;
+        el.hidden = qtd === 0;
+        el.textContent = qtd > 99 ? "99+" : qtd;
+        el.classList.toggle("critico", (dado.criticas || 0) > 0);
+        el.title = qtd + " " + (ROTULOS[el.dataset.contador] || "");
+      });
+    }
+
+    function buscar() {
+      if (document.hidden) return;  // aba em segundo plano não martela o servidor
+      fetch(BASE_PATH + "/api/sidebar/contadores", { credentials: "same-origin" })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { if (d && d.contadores) pintar(d.contadores); })
+        .catch(function() { /* menu sem badge é degradação aceitável */ });
+    }
+
+    buscar();
+    setInterval(buscar, INTERVALO_MS);
+    document.addEventListener("visibilitychange", function() {
+      if (!document.hidden) buscar();
+    });
+  })();
+</script>

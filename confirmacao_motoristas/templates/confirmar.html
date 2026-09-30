@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Confirmação de rota — Freshlog</title>
+<style>
+  :root {
+    --cor-primaria: #141428;
+    --cor-acento: #00C896;
+    --cor-destaque: #F5A623;
+    --cor-erro: #EF4444;
+    --cor-texto: #1F2937;
+    --cor-texto-suave: #6B7280;
+    --cor-fundo: #F3F4F6;
+    --cor-borda: #E5E7EB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px; background: var(--cor-fundo);
+    font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: var(--cor-texto);
+  }
+  .cartao {
+    max-width: 420px; margin: 0 auto; background: #FFFFFF; border-radius: 12px;
+    overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .cabecalho {
+    background: var(--cor-primaria); color: #FFFFFF; padding: 20px 24px;
+  }
+  .cabecalho h1 { margin: 0; font-size: 18px; }
+  .cabecalho p { margin: 4px 0 0; font-size: 13px; opacity: 0.8; }
+  .corpo { padding: 24px; }
+  .linha { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--cor-borda); font-size: 14px; }
+  .linha:last-child { border-bottom: none; }
+  .linha span:first-child { color: var(--cor-texto-suave); }
+  .linha span:last-child { font-weight: 600; text-align: right; }
+  .banner { border-radius: 8px; padding: 14px 16px; font-size: 14px; margin-bottom: 18px; }
+  .banner.ok { background: #E6FBF5; color: #0A6656; border: 1px solid var(--cor-acento); }
+  .banner.recusado { background: #FEF2F2; color: #991B1B; border: 1px solid var(--cor-erro); }
+  .banner.erro { background: #FEF2F2; color: #991B1B; border: 1px solid var(--cor-erro); }
+  .banner.aviso { background: #FFF8EC; color: #92600A; border: 1px solid var(--cor-destaque); }
+  label { display: block; font-size: 13px; color: var(--cor-texto-suave); margin: 16px 0 6px; }
+  input[type=text], textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--cor-borda); border-radius: 8px;
+    font-size: 16px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+  .acoes { display: flex; gap: 10px; margin-top: 20px; }
+  button {
+    flex: 1; padding: 13px 10px; border: none; border-radius: 8px; font-size: 15px;
+    font-weight: 600; cursor: pointer;
+  }
+  button.confirmar { background: var(--cor-acento); color: #FFFFFF; }
+  button.recusar { background: #FFFFFF; color: var(--cor-erro); border: 1px solid var(--cor-erro); }
+  .rodape { text-align: center; font-size: 12px; color: var(--cor-texto-suave); margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="cartao">
+  <div class="cabecalho">
+    <h1>🚚 Freshlog</h1>
+    <p>Confirmação de rota</p>
+  </div>
+  <div class="corpo">
+
+  {% if estado == "invalido" %}
+    <div class="banner erro">Esse link não é válido. Confira se copiou o endereço completo ou peça um novo aviso.</div>
+
+  {% elif estado == "expirado" %}
+    <div class="banner erro">Esse link expirou. Fale com a Freshlog pra confirmar sua rota por outro canal.</div>
+
+  {% elif estado == "nao_encontrado" %}
+    <div class="banner aviso">Ainda estamos preparando os dados da sua rota. Aguarde alguns minutos e tente abrir o link de novo.</div>
+
+  {% elif estado == "bloqueado" %}
+    <div class="banner erro">Muitas tentativas com os últimos dígitos incorretos. Fale com a Freshlog pra confirmar sua rota.</div>
+
+  {% elif estado == "formulario" %}
+    {% if rota.status == "CONFIRMADO" %}
+      <div class="banner ok">✅ Participação confirmada{% if rota.respondido_em %} em {{ rota.respondido_em }}{% endif %}. Mudou de ideia? Responda de novo abaixo.</div>
+    {% elif rota.status == "RECUSADO" %}
+      <div class="banner recusado">❌ Você marcou que não vai poder fazer essa rota{% if rota.motivo_recusa %} ({{ rota.motivo_recusa }}){% endif %}. Mudou de ideia? Responda de novo abaixo.</div>
+    {% endif %}
+
+    {% if erro %}
+      <div class="banner erro">{{ erro }}</div>
+    {% endif %}
+
+    <div class="linha"><span>Motorista</span><span>{{ rota.nome_motorista or "—" }}</span></div>
+    <div class="linha"><span>Data</span><span>{{ rota.data_rota }}</span></div>
+    <div class="linha"><span>Região/Zona</span><span>{{ rota.zona or "—" }}</span></div>
+    <div class="linha"><span>1ª parada prevista</span><span>{{ rota.horario_previsto or "a confirmar" }}</span></div>
+    <div class="linha"><span>Entregas</span><span>{{ rota.qtd_entregas if rota.qtd_entregas is not none else "—" }}</span></div>
+
+    <form method="post">
+      {% if rota.telefone_ultimos4 %}
+        <label for="ultimos4">Confirme os 4 últimos dígitos do seu telefone cadastrado</label>
+        <input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="ultimos4" id="ultimos4" required>
+      {% endif %}
+      <label for="motivo">Se não puder fazer essa rota, conte o motivo (opcional)</label>
+      <textarea name="motivo" id="motivo" placeholder="Ex.: problema no veículo, imprevisto pessoal..."></textarea>
+      <div class="acoes">
+        <button type="submit" name="acao" value="confirmar" class="confirmar">Confirmar participação</button>
+        <button type="submit" name="acao" value="recusar" class="recusar">Não vou poder</button>
+      </div>
+    </form>
+  {% endif %}
+
+    <div class="rodape">Mensagem automática — Freshlog</div>
+  </div>
+</div>
+</body>
+</html>

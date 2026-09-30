@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Backup HORARIO de dados.db + fotos do app pro GCS (retencao 48 h)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/backup_dados_gcs.py --horario

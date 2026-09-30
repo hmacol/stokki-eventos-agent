@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "FreshLog Motorista",
+    "slug": "freshlogbr",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "freshlogmotorista",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "br.com.freshlog.motorista",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Fotografar o canhoto e comprovantes de entrega.",
+        "NSLocationWhenInUseUsageDescription": "Registrar o trajeto e o local de cada entrega enquanto a rota está em andamento.",
+        "NSPhotoLibraryUsageDescription": "Anexar comprovantes já fotografados."
+      }
+    },
+    "android": {
+      "package": "br.com.freshlog.motorista",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0B1A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Fotografar o canhoto e comprovantes de entrega.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Registrar o trajeto e o local de cada entrega."
+        }
+      ],
+      "expo-notifications",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 240
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "https://app.freshhub.com.br/motorista/api",
+      "router": {},
+      "eas": {
+        "projectId": "89779e04-58f3-4c02-995b-f05e0a6a8d2e"
+      }
+    },
+    "owner": "freshlogbr",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/89779e04-58f3-4c02-995b-f05e0a6a8d2e"
+    }
+  }
+}

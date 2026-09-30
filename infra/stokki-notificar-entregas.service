@@ -1,0 +1,12 @@
+[Unit]
+Description=Stokki Eventos - E-mail por pedido pro embarcador quando a entrega e concluida (notificacao_entregas)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/notificacao_entregas/notificar_entrega_concluida.py
+# Rodada normal leva segundos; o teto protege contra SMTP/Vuupt pendurado
+# segurando a proxima rodada (oneshot nao se sobrepoe).
+TimeoutStartSec=15min

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block titulo %}Canhotos{% endblock %}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  .abas-canhoto { display: flex; gap: 6px; flex-wrap: wrap; }
+  .abas-canhoto a { padding: 6px 12px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font-size: 12.5px; text-decoration: none; }
+  .abas-canhoto a.ativa { background: var(--primaria, #141428); color: #fff; border-color: var(--primaria, #141428); }
+  .abas-canhoto a .n { opacity: 0.7; margin-left: 4px; }
+  table.tabela-canhotos { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  table.tabela-canhotos th, table.tabela-canhotos td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  table.tabela-canhotos th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-canhotos tr:last-child td { border-bottom: none; }
+  .foto-canhoto { width: 84px; height: 84px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; background: var(--fundo); }
+  .motivo-ia { color: var(--texto-suave); font-size: 12px; margin-top: 4px; max-width: 320px; }
+  .campo-obs { width: 180px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); }
+  .acoes-canhoto { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acoes-canhoto button { padding: 6px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
+  .acoes-canhoto button.aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .acoes-canhoto button.rejeitar { color: var(--erro); border-color: var(--erro); }
+  .acoes-canhoto button:disabled { opacity: 0.5; cursor: default; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .erro-linha { color: var(--erro); font-size: 12px; margin-top: 4px; display: none; }
+  .nf-chip { display: inline-block; padding: 2px 8px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; margin: 2px 3px 0 0; font-variant-numeric: tabular-nums; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Canhotos dos motoristas</h1>
+    <p>Fotos que a conferência automática <strong>reprovou</strong> ou não conseguiu conferir. A palavra final é sua — ela sobrescreve o veredito da IA.</p>
+  </div>
+  <div class="abas-canhoto">
+    {% for chave, rotulo in (("REPROVADO", "Reprovados"), ("PENDENTE", "Sem conferência"), ("APROVADO", "Aprovados"), ("TODOS", "Todos")) %}
+    <a href="{{ url_for('canhotos', resultado=chave) }}" class="{{ 'ativa' if resultado == chave else '' }}">{{ rotulo }}{% if chave != 'TODOS' %}<span class="n">{{ contagem.get(chave, 0) }}</span>{% endif %}</a>
+    {% endfor %}
+  </div>
+</div>
+
+<table class="tabela-canhotos">
+  <thead>
+    <tr>
+      <th>Foto</th><th>Pedido</th><th>Rota</th><th>Conferência</th>{% if pode_editar %}<th>Decidir</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in itens %}
+    <tr data-id="{{ c.id }}">
+      <td>
+        {% if c.caminho_local %}
+        <a href="{{ url_for('canhoto_foto', comprovante_id=c.id) }}" target="_blank" rel="noopener"><img class="foto-canhoto" src="{{ url_for('canhoto_foto', comprovante_id=c.id) }}" alt="canhoto"></a>
+        {% else %}<span class="suave">sem foto</span>{% endif %}
+        <div class="suave">{{ (c.capturado_em or c.enviado_em or '')[:16] }}</div>
+      </td>
+      <td>
+        <strong>{{ c.codigo or '—' }}</strong><br>
+        <span class="suave">{{ c.destinatario_nome or '' }}</span>
+        <div class="suave">{{ c.tipo }}</div>
+      </td>
+      <td>{{ c.data_rota or '' }}<br><span class="suave">{{ c.rota_nome or ('Rota #' ~ (c.rota_id or '?')) }}<br>{{ c.motorista_nome or '' }}</span></td>
+      <td>
+        {% if c.resultado_validacao == 'APROVADO' %}<span class="badge badge-sucesso">Aprovado</span>
+        {% elif c.resultado_validacao == 'REPROVADO' %}<span class="badge badge-erro">Reprovado</span>
+        {% else %}<span class="badge">Sem conferência</span>{% endif %}
+        <span class="suave">{{ c.validado_por or '' }}</span>
+        {% set v = c.validacao or {} %}
+        {% if v.motivo %}<div class="motivo-ia">{{ v.motivo }}</div>{% endif %}
+        {% if v.nf_alvo %}<div class="motivo-ia">NF esperada: <span class="nf-chip">{{ v.nf_alvo }}</span></div>{% endif %}
+        {% if v.nf_lidas %}<div class="motivo-ia">Lidas na foto: {% for n in v.nf_lidas %}<span class="nf-chip">{{ n }}</span>{% endfor %}</div>{% endif %}
+        {% if v.nitidez is not none %}<div class="suave">nitidez {{ v.nitidez }}{% if v.no_ato is defined and not v.no_ato %} · conferida só no envio{% endif %}</div>{% endif %}
+        {% if v.revisao %}<div class="suave">{{ v.revisao.revisor }} · {{ (v.revisao.em or '')[:16] }}{% if v.revisao.observacao %} · {{ v.revisao.observacao }}{% endif %}</div>{% endif %}
+      </td>
+      {% if pode_editar %}
+      <td>
+        <div class="acoes-canhoto">
+          <input type="text" class="campo-obs" placeholder="Observação (opcional)">
+          <button type="button" class="aprovar" data-acao="APROVADO">Aceitar foto</button>
+          <button type="button" class="rejeitar" data-acao="REPROVADO">Recusar foto</button>
+        </div>
+        <div class="erro-linha"></div>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 5 if pode_editar else 4 }}" class="suave">Nenhum canhoto {{ 'nesta situação' if resultado != 'TODOS' else 'registrado' }}.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<script>
+document.querySelectorAll('.tabela-canhotos tr[data-id]').forEach((linha) => {
+  const id = linha.dataset.id;
+  const erro = linha.querySelector('.erro-linha');
+  linha.querySelectorAll('button[data-acao]').forEach((botao) => {
+    botao.addEventListener('click', async () => {
+      const observacao = linha.querySelector('.campo-obs')?.value ?? '';
+      linha.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      if (erro) erro.style.display = 'none';
+      try {
+        const r = await fetch(`{{ url_for('revisar_canhoto', comprovante_id=0) }}`.replace('/0/', `/${id}/`), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resultado: botao.dataset.acao, observacao }),
+        });
+        const dados = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(dados.erro || `Erro ${r.status}`);
+        window.location.reload();
+      } catch (e) {
+        if (erro) { erro.textContent = e.message; erro.style.display = 'block'; }
+        linha.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      }
+    });
+  });
+});
+</script>
+{% endblock %}

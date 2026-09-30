@@ -1,0 +1,14 @@
+[Unit]
+Description=Painel de Agentes (Fase 1 - somente leitura) - Freshlog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stokki-eventos/painel_agentes
+ExecStart=/opt/stokki-eventos/venv/bin/waitress-serve --host=127.0.0.1 --port=8071 painel_agentes:app
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

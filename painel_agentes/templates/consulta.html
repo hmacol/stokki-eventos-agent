@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block titulo %}Consulta{% endblock %}
+{#
+  Consulta de rotas e pedidos (Hugo, 12/09). O histórico que a Torre não
+  dá: ela é sempre do DIA, aqui se procura no passado. Lê só o núcleo
+  próprio, nunca a VUUPT ao vivo -- por isso responde na hora.
+
+  Uma caixa de busca só: código do pedido, nº da rota, placa, motorista,
+  destinatário ou endereço. Quem interpreta o termo é
+  nucleo/consulta.py:classificar_termo -- a tela só mostra COMO foi
+  interpretado, senão "não achei" vira mistério.
+#}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  form.filtros-consulta { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .linha-busca { display: flex; gap: 8px; flex-wrap: wrap; }
+  .linha-busca input[type=search] { flex: 1 1 320px; min-width: 200px; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; font-size: 14px; background: var(--fundo); color: var(--texto); }
+  .linha-busca button { padding: 10px 18px; border: none; border-radius: 8px; background: var(--acento); color: #06170F; font-weight: 700; font-size: 13.5px; cursor: pointer; }
+  .linha-filtros { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
+  .campo-filtro { display: flex; flex-direction: column; gap: 4px; }
+  .campo-filtro label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 600; }
+  .campo-filtro input, .campo-filtro select { padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); }
+  .limpar-filtros { font-size: 12.5px; color: var(--texto-suave); text-decoration: none; padding-bottom: 8px; }
+  .limpar-filtros:hover { color: var(--texto); }
+  .abas-consulta { display: flex; gap: 6px; flex-wrap: wrap; }
+  .abas-consulta a { padding: 6px 12px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font-size: 12.5px; text-decoration: none; }
+  .abas-consulta a.ativa { background: var(--primaria, #141428); color: #fff; border-color: var(--primaria, #141428); }
+  .interpretado { font-size: 12.5px; color: var(--texto-suave); margin-bottom: 12px; }
+  .interpretado strong { color: var(--texto); }
+  table.tabela-consulta { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+  table.tabela-consulta th, table.tabela-consulta td { padding: 9px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  table.tabela-consulta th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-consulta tr:last-child td { border-bottom: none; }
+  table.tabela-consulta tbody tr:hover { background: var(--fundo); }
+  table.tabela-consulta a.link-linha { color: var(--texto); font-weight: 600; text-decoration: none; }
+  table.tabela-consulta a.link-linha:hover { text-decoration: underline; }
+  .titulo-secao { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); font-weight: 600; margin: 0 0 8px; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; padding: 2px 9px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; white-space: nowrap; }
+  .chip.ok { border-color: var(--acento); color: var(--acento); }
+  .chip.ruim { border-color: var(--erro); color: var(--erro); }
+  .chip.app { border-color: #7c6cf0; color: #7c6cf0; }
+  .vazio { background: var(--superficie); border: 1px dashed var(--borda); border-radius: 8px; padding: 28px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+  .aviso-truncado { font-size: 12px; color: var(--texto-suave); margin: -12px 0 20px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+{% macro chip_status(valor) %}
+  {% if valor in ('ENTREGUE', 'CONCLUIDA') %}<span class="chip ok">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% elif valor in ('INSUCESSO', 'CANCELADA', 'CANCELADO') %}<span class="chip ruim">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% elif valor %}<span class="chip">{{ valor|replace('_',' ')|capitalize }}</span>
+  {% else %}<span class="suave">—</span>{% endif %}
+{% endmacro %}
+
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Consulta de rotas e pedidos</h1>
+    <p>
+      Histórico do que já foi criado — a Torre mostra o dia, aqui você procura no passado.
+      {% if cobertura.rotas.de %}
+      Há registro de <strong>{{ cobertura.rotas.de }}</strong> a <strong>{{ cobertura.rotas.ate }}</strong>
+      ({{ cobertura.rotas.n }} rotas, {{ cobertura.pedidos.n }} pedidos).
+      {% endif %}
+    </p>
+  </div>
+  <div class="abas-consulta">
+    {% for chave, rotulo in (("rotas", "Rotas"), ("pedidos", "Pedidos")) %}
+    <a href="{{ url_for('consulta', aba=chave, de=filtros.de, ate=filtros.ate) }}"
+       class="{{ 'ativa' if aba == chave and not filtros.q else '' }}">{{ rotulo }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+<form class="filtros-consulta" method="get" action="{{ url_for('consulta') }}">
+  <input type="hidden" name="aba" value="{{ aba }}">
+  <div class="linha-busca">
+    <input type="search" name="q" value="{{ filtros.q }}" autofocus
+           placeholder="Código do pedido (PS-12345), nº da rota, placa, motorista, destinatário ou endereço">
+    <button type="submit">Buscar</button>
+  </div>
+  <div class="linha-filtros">
+    <div class="campo-filtro">
+      <label for="f-de">De</label>
+      <input type="date" id="f-de" name="de" value="{{ filtros.de }}">
+    </div>
+    <div class="campo-filtro">
+      <label for="f-ate">Até</label>
+      <input type="date" id="f-ate" name="ate" value="{{ filtros.ate }}">
+    </div>
+    <div class="campo-filtro">
+      <label for="f-status">Situação</label>
+      <select id="f-status" name="status">
+        <option value="">Todas</option>
+        {% for s in (('PLANEJADA','Planejada'), ('ACEITA','Aceita'), ('EM_ROTA','Em rota'),
+                     ('CONCLUIDA','Concluída'), ('CANCELADA','Cancelada')) %}
+        <option value="{{ s[0] }}" {{ 'selected' if filtros.status == s[0] else '' }}>{{ s[1] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if aba == 'rotas' %}
+    <div class="campo-filtro">
+      <label for="f-motorista">Motorista</label>
+      <select id="f-motorista" name="motorista">
+        <option value="">Todos</option>
+        {% for m in motoristas %}
+        <option value="{{ m.agent_id }}" {{ 'selected' if filtros.motorista == m.agent_id else '' }}>
+          {{ m.motorista_nome or ('agente ' ~ m.agent_id) }} ({{ m.rotas }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-provedor">Origem</label>
+      <select id="f-provedor" name="provedor">
+        <option value="">Todas</option>
+        <option value="VUUPT" {{ 'selected' if filtros.provedor == 'VUUPT' else '' }}>VUUPT</option>
+        <option value="APP" {{ 'selected' if filtros.provedor == 'APP' else '' }}>App de motoristas</option>
+      </select>
+    </div>
+    {% endif %}
+    <a class="limpar-filtros" href="{{ url_for('consulta', aba=aba) }}">Limpar</a>
+  </div>
+</form>
+
+{% if filtros.q %}
+<p class="interpretado">
+  Busquei <strong>{{ filtros.q }}</strong> como
+  {% if r.interpretado == 'PEDIDO' %}código de pedido
+  {% elif r.interpretado == 'ROTA' %}número de rota (e código de pedido)
+  {% elif r.interpretado == 'PLACA' %}placa de veículo
+  {% else %}texto livre (motorista, destinatário, embarcador, endereço){% endif %}
+  {% if r.periodo and r.interpretado != 'PEDIDO' %}
+  · período {{ r.periodo.de }} a {{ r.periodo.ate }}{% endif %}
+</p>
+{% endif %}
+
+{% if r.pedidos %}
+<p class="titulo-secao">Pedidos ({{ r.pedidos|length }})</p>
+<table class="tabela-consulta">
+  <thead>
+    <tr><th>Pedido</th><th>Destinatário</th><th>Embarcador</th><th>Data</th><th>Situação</th></tr>
+  </thead>
+  <tbody>
+    {% for p in r.pedidos %}
+    <tr>
+      <td><a class="link-linha" href="{{ url_for('consulta_pedido', codigo=p.codigo) }}">{{ p.codigo }}</a>
+          {% if p.caixas %}<div class="suave num">{{ p.caixas }} cx</div>{% endif %}</td>
+      <td>{{ p.destinatario_nome or '—' }}<div class="suave">{{ p.endereco or '' }}</div></td>
+      <td>{{ p.remetente_nome or '—' }}</td>
+      <td class="num">{{ p.data_referencia or (p.criado_em or '')[:10] }}
+          {% if p.data_rota %}<div class="suave">rota de {{ p.data_rota }}</div>{% endif %}</td>
+      <td>{{ chip_status(p.status) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if r.rotas %}
+<p class="titulo-secao">Rotas ({{ r.rotas|length }})</p>
+<table class="tabela-consulta">
+  <thead>
+    <tr><th>Rota</th><th>Data</th><th>Motorista</th><th>Paradas</th><th>Km</th><th>Situação</th></tr>
+  </thead>
+  <tbody>
+    {% for x in r.rotas %}
+    <tr>
+      <td><a class="link-linha" href="{{ url_for('consulta_rota', rota_id=x.id) }}">{{ x.nome or ('Rota #' ~ x.id) }}</a>
+          <div class="suave">#{{ x.id }}
+            {% if x.provedor == 'APP' %}<span class="chip app">app</span>{% endif %}
+          </div></td>
+      <td class="num">{{ x.data_rota }}<div class="suave">{{ (x.start_at or '')[11:16] }}</div></td>
+      <td>{{ x.motorista_nome or '—' }}<div class="suave">{{ x.tipo_veiculo or '' }}</div></td>
+      <td class="num">
+        {{ x.total_paradas or 0 }}
+        {% if x.entregues or x.insucessos %}
+        <div class="suave">{{ x.entregues or 0 }} entregues · {{ x.insucessos or 0 }} insucessos</div>
+        {% endif %}
+      </td>
+      <td class="num">{{ '%.0f'|format(x.km_real or x.km_estimado or 0) }}
+          {% if not x.km_real and x.km_estimado %}<div class="suave">estimado</div>{% endif %}</td>
+      <td>{{ chip_status(x.status) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if r.truncado %}
+<p class="aviso-truncado">Mostrando só os primeiros resultados — aperte o período ou seja mais específico na busca.</p>
+{% endif %}
+
+{% if not r.rotas and not r.pedidos %}
+<div class="vazio">
+  {% if filtros.q %}
+    Nada encontrado para <strong>{{ filtros.q }}</strong>.
+    {% if r.interpretado == 'PLACA' %}
+      A placa vem da planilha de motoristas (coluna PLACA) — se ela estiver em branco lá, a busca por placa não acha nada.
+    {% elif r.interpretado != 'PEDIDO' %}
+      O período da busca é {{ r.periodo.de }} a {{ r.periodo.ate }}; tente abrir mais as datas.
+    {% endif %}
+  {% else %}
+    Nenhuma {{ 'rota' if aba == 'rotas' else 'pedido' }} no período.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

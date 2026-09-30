@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-ensaio-restauracao.service todo domingo as 05:30
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

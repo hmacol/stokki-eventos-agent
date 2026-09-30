@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block titulo %}Respostas rápidas{% endblock %}
+{% block estilo_extra %}
+<style>
+  table { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { background: var(--fundo); color: var(--texto-suave); font-size: 11px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .form-novo { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 16px; margin-bottom: 20px; max-width: 560px; }
+  .form-novo h3 { margin: 0 0 12px; font-size: 14px; }
+  .form-novo label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
+  .form-novo input, .form-novo textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; font-family: inherit; }
+  .form-novo textarea { height: 70px; resize: vertical; }
+  .form-novo button { margin-top: 14px; }
+  .acoes-linha button { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda); background: none; cursor: pointer; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="form-novo">
+  <h3>Nova resposta rápida</h3>
+  <form id="form-nova-resposta">
+    <label>Título (aparece na lista pro atendente escolher)</label>
+    <input type="text" id="novo-titulo" required>
+    <label>Texto</label>
+    <textarea id="novo-corpo" required></textarea>
+    <button type="submit" class="botao">Criar</button>
+  </form>
+</div>
+
+<table>
+  <thead><tr><th>Título</th><th>Texto</th><th></th></tr></thead>
+  <tbody id="corpo-tabela"></tbody>
+</table>
+
+<script>
+function fetchJson(url, opcoes) {
+  return fetch(BASE_PATH + url, opcoes).then(async r => {
+    const dados = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dados.erro || ("Erro " + r.status));
+    return dados;
+  });
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function carregar() {
+  fetchJson("/api/respostas-rapidas").then(d => {
+    document.getElementById("corpo-tabela").innerHTML = d.respostas.map(r => `
+      <tr>
+        <td>${escapeHtml(r.titulo)}</td>
+        <td>${escapeHtml(r.corpo)}</td>
+        <td class="acoes-linha"><button data-id="${r.id}">Excluir</button></td>
+      </tr>
+    `).join("") || '<tr><td colspan="3">Nenhuma resposta cadastrada ainda.</td></tr>';
+  });
+}
+
+document.getElementById("form-nova-resposta").addEventListener("submit", e => {
+  e.preventDefault();
+  fetchJson("/api/respostas-rapidas", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      titulo: document.getElementById("novo-titulo").value,
+      corpo: document.getElementById("novo-corpo").value,
+    }),
+  }).then(() => { e.target.reset(); carregar(); }).catch(err => alert(err.message));
+});
+
+document.getElementById("corpo-tabela").addEventListener("click", e => {
+  const botao = e.target.closest("button[data-id]");
+  if (!botao) return;
+  if (!confirm("Excluir esta resposta rápida?")) return;
+  fetchJson(`/api/respostas-rapidas/${botao.dataset.id}/excluir`, {method: "POST"})
+    .then(carregar).catch(err => alert(err.message));
+});
+
+carregar();
+</script>
+{% endblock %}

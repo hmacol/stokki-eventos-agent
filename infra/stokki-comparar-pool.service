@@ -1,0 +1,12 @@
+[Unit]
+Description=Stokki Eventos - Compara o pool Vuupt x nucleo (sombra da Entrega 1) e avisa por e-mail se divergir
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+# Saida 2 = achou divergencia PROPRIA do espelho (nao e falha do job; o e-mail
+# ja conta a historia). Duplicado na Vuupt nao conta: so aparece no relatorio.
+SuccessExitStatus=2
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/comparar_pool.py --salvar --email

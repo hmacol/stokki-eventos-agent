@@ -1,0 +1,26 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Entrar{% endblock %}
+{% block conteudo %}
+<h1>Entrar</h1>
+<p class="suave">Use o CNPJ da sua empresa e o PIN de 6 dígitos.</p>
+{% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+<form method="post" autocomplete="off">
+  <input type="hidden" name="proximo" value="{{ proximo }}">
+  <label for="cnpj">CNPJ</label>
+  <input type="text" id="cnpj" name="cnpj" inputmode="numeric" placeholder="00.000.000/0000-00" value="{{ cnpj }}" required autofocus>
+  <label for="pin">PIN</label>
+  <input type="password" id="pin" name="pin" class="pin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="current-password" required>
+  <button type="submit" class="principal">Entrar</button>
+</form>
+<div class="links"><a href="{{ url_for('primeiro_acesso') }}">Primeiro acesso / esqueci o PIN</a></div>
+{% endblock %}
+{% block script_extra %}
+<script>
+  // Máscara simples do CNPJ enquanto digita (o servidor aceita só dígitos).
+  document.getElementById('cnpj').addEventListener('input', function () {
+    let d = this.value.replace(/\D/g, '').slice(0, 14);
+    this.value = d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+                  .replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2');
+  });
+</script>
+{% endblock %}

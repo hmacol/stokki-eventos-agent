@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block titulo %}WhatsApp{% endblock %}
+{% block estilo_extra %}
+<style>
+  .caixa { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 20px; max-width: 480px; margin-bottom: 20px; }
+  .caixa h3 { margin: 0 0 12px; font-size: 14px; }
+  .status-linha { font-size: 13px; margin-bottom: 4px; }
+  .status-linha .rotulo { color: var(--texto-suave); }
+  .caixa label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+  .caixa input { width: 100%; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; }
+  .resultado { margin-top: 16px; }
+  .resultado img { max-width: 260px; border: 1px solid var(--borda); border-radius: 8px; }
+  .resultado .codigo { font-size: 22px; font-weight: 800; letter-spacing: 2px; font-family: monospace; padding: 12px; background: var(--fundo); border-radius: 8px; text-align: center; }
+  .aviso-erro { color: var(--erro); font-size: 13px; margin-top: 10px; }
+  .texto-erro { color: var(--erro); }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="caixa">
+  <h3>Status da conexão</h3>
+  <div id="status-conteudo">Carregando...</div>
+  <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="botao" id="btn-atualizar-status">Atualizar</button>
+    <button class="botao perigo" id="btn-pausar" title="Bot de triagem e fila de reenvio param de mandar mensagens; respostas manuais continuam">Pausar envios automáticos</button>
+    <button class="botao" id="btn-retomar" title="Libera bot e reenvio, mesmo com trava 463 recente">Retomar</button>
+  </div>
+</div>
+
+<div class="caixa">
+  <h3>Parear número</h3>
+  <p style="font-size:12px;color:var(--texto-suave);">
+    Deixe o campo vazio para gerar um QR code (escaneie em WhatsApp &gt; Aparelhos conectados &gt; Conectar um aparelho).
+    Preencha o número (com DDI, só dígitos) para gerar um código de pareamento em vez disso
+    (WhatsApp &gt; Aparelhos conectados &gt; Conectar com número de telefone) — não exige câmera.
+  </p>
+  <label>Número (opcional, ex: 5511999999999)</label>
+  <input type="text" id="numero-pareamento">
+  <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="botao" id="btn-parear">Gerar</button>
+    <button class="botao perigo" id="btn-desconectar" title="Logout do número atual -- necessário antes de parear outro número">Desconectar número atual</button>
+  </div>
+  <p style="font-size:12px;color:var(--texto-suave);margin-top:8px;">
+    Trocar de número: 1) Desconectar 2) digitar o número novo e Gerar 3) no WhatsApp do número novo, Aparelhos conectados &gt; Conectar com número de telefone &gt; digitar o código (vale poucos minutos).
+  </p>
+  <div class="resultado" id="resultado-pareamento"></div>
+</div>
+
+<script>
+function fetchJson(url, opcoes) {
+  return fetch(BASE_PATH + url, opcoes).then(async r => {
+    const dados = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dados.erro || ("Erro " + r.status));
+    return dados;
+  });
+}
+
+function carregarStatus() {
+  document.getElementById("status-conteudo").textContent = "Carregando...";
+  fetchJson("/api/whatsapp/status").then(d => {
+    const linhas = [];
+    if (d.erro_live) {
+      linhas.push(`<div class="aviso-erro">Checagem ao vivo falhou: ${d.erro_live}</div>`);
+    } else {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Estado (ao vivo):</span> <strong>${(d.instance && d.instance.state) || "desconhecido"}</strong></div>`);
+    }
+    const em = d.estado_monitorado && d.estado_monitorado.mudou_em;
+    const conectadoMonitorado = d.estado_monitorado && d.estado_monitorado.conectado;
+    if (d.estado_monitorado && d.estado_monitorado.conectado !== null) {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Monitor (timer 5min):</span> <strong class="${conectadoMonitorado ? '' : 'texto-erro'}">${conectadoMonitorado ? "conectado" : "desconectado"}</strong>${em ? ` desde ${em.slice(0, 16)}` : ""}</div>`);
+    }
+    if (d.fila_reenvio) {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Fila de reenvio:</span> ${d.fila_reenvio.pendentes} pendente(s), <span class="${d.fila_reenvio.falhou ? 'texto-erro' : ''}">${d.fila_reenvio.falhou} não entregue(s)</span></div>`);
+    }
+    if (d.suspensao) {
+      const prazo = d.suspensao.manual ? "(pausa manual, até clicar em Retomar)" : `até ${d.suspensao.ate.slice(0, 16)}`;
+      linhas.push(`<div class="status-linha"><span class="rotulo">Envios automáticos:</span> <strong class="texto-erro">SUSPENSOS</strong> ${prazo} — ${escapeHtml(d.suspensao.motivo || "")}</div>`);
+    } else {
+      linhas.push(`<div class="status-linha"><span class="rotulo">Envios automáticos:</span> <strong>ativos</strong> (bot de triagem + fila de reenvio)</div>`);
+    }
+    document.getElementById("status-conteudo").innerHTML = linhas.join("");
+    // Pareamento em andamento (código renovado pelo webhook a cada ~30s):
+    // mantém a tela acompanhando até conectar.
+    const estadoLive = d.instance && d.instance.state;
+    if (d.pareamento && estadoLive !== "open" && !pollPareamento) iniciarPollPareamento();
+  }).catch(err => {
+    document.getElementById("status-conteudo").innerHTML = `<div class="aviso-erro">${err.message}</div>`;
+  });
+}
+
+let pollPareamento = null;
+function renderPareamento(p, estado) {
+  const alvo = document.getElementById("resultado-pareamento");
+  if (estado === "open") {
+    alvo.innerHTML = '<div class="status-linha"><strong>Conectado!</strong></div>';
+    clearInterval(pollPareamento); pollPareamento = null; carregarStatus();
+    return;
+  }
+  if (!p) { alvo.innerHTML = "Aguardando o código do WhatsApp..."; return; }
+  alvo.innerHTML =
+    (p.codigo ? `<div class="codigo">${escapeHtml(p.codigo)}</div>` : "") +
+    (p.qr ? `<img src="${p.qr}" alt="QR code" style="margin-top:10px;">` : "") +
+    `<div class="status-linha" style="margin-top:8px;">código atualizado há ${p.idade_s}s — o WhatsApp troca o código a cada ~30s; digite o que estiver na tela AGORA (esta tela se atualiza sozinha a cada 5s)</div>`;
+}
+function iniciarPollPareamento() {
+  if (pollPareamento) clearInterval(pollPareamento);
+  const tick = () => fetchJson("/api/whatsapp/status")
+    .then(d => renderPareamento(d.pareamento, d.instance && d.instance.state))
+    .catch(() => {});
+  tick();
+  pollPareamento = setInterval(tick, 5000);
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+document.getElementById("btn-atualizar-status").addEventListener("click", carregarStatus);
+document.getElementById("btn-pausar").addEventListener("click", () => {
+  fetchJson("/api/whatsapp/pausar", {method: "POST"}).then(carregarStatus).catch(err => alert(err.message));
+});
+document.getElementById("btn-retomar").addEventListener("click", () => {
+  if (!confirm("Retomar libera o bot de triagem e a fila de reenvio mesmo com trava 463 recente (cada envio renova a trava). Confirma?")) return;
+  fetchJson("/api/whatsapp/retomar", {method: "POST"}).then(carregarStatus).catch(err => alert(err.message));
+});
+
+document.getElementById("btn-desconectar").addEventListener("click", () => {
+  if (!confirm("Desconectar (logout) o número atual? A central para de receber até parear um número de novo.")) return;
+  const alvo = document.getElementById("resultado-pareamento");
+  alvo.innerHTML = "Desconectando...";
+  fetchJson("/api/whatsapp/desconectar", {method: "POST"})
+    .then(() => { alvo.innerHTML = "Desconectado. Agora digite o número novo e clique em Gerar."; carregarStatus(); })
+    .catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; });
+});
+
+document.getElementById("btn-parear").addEventListener("click", () => {
+  const numero = document.getElementById("numero-pareamento").value.trim();
+  const alvo = document.getElementById("resultado-pareamento");
+  alvo.innerHTML = "Gerando...";
+  fetchJson("/api/whatsapp/parear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({numero: numero || null}),
+  }).then(d => {
+    if (d.pairingCode) {
+      alvo.innerHTML = `<div class="codigo">${d.pairingCode}</div>`;
+    } else if (d.base64) {
+      alvo.innerHTML = `<img src="${d.base64}" alt="QR code">`;
+    } else if (d.code) {
+      alvo.innerHTML = `<div class="codigo">${d.code}</div>`;
+    } else {
+      alvo.innerHTML = `<pre style="white-space:pre-wrap;font-size:11px;">${JSON.stringify(d, null, 2)}</pre>`;
+    }
+    iniciarPollPareamento();  // daqui em diante mostra sempre o código ATUAL
+  }).catch(err => { alvo.innerHTML = `<div class="aviso-erro">${err.message}</div>`; iniciarPollPareamento(); });
+});
+
+carregarStatus();
+</script>
+{% endblock %}

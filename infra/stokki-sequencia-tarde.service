@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Sequencia da tarde (ExecutarTudo, VerificarDuplicados, CriarRotasDiarias, Notificador, ProcessarDocumentos)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+ExecStart=/bin/bash /opt/stokki-eventos/infra/sequencia_tarde.sh

@@ -1,0 +1,22 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Primeiro acesso{% endblock %}
+{% block conteudo %}
+<h1>Primeiro acesso / esqueci o PIN</h1>
+<p class="suave">Informe o CNPJ. Vamos enviar um link pra definir o PIN no e-mail que a Fresh Log tem cadastrado pra sua empresa.</p>
+{% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+<form method="post" autocomplete="off">
+  <label for="cnpj">CNPJ</label>
+  <input type="text" id="cnpj" name="cnpj" inputmode="numeric" placeholder="00.000.000/0000-00" value="{{ cnpj }}" required autofocus>
+  <button type="submit" class="principal">Enviar link por e-mail</button>
+</form>
+<div class="links"><a href="{{ url_for('login') }}">Voltar pro login</a></div>
+{% endblock %}
+{% block script_extra %}
+<script>
+  document.getElementById('cnpj').addEventListener('input', function () {
+    let d = this.value.replace(/\D/g, '').slice(0, 14);
+    this.value = d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+                  .replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2');
+  });
+</script>
+{% endblock %}

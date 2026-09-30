@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-nucleo-sincronizar-vuupt.service a cada 30 min (deslocado 15 min do sync de confirmacoes)
+
+[Timer]
+OnCalendar=*-*-* *:15/30:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

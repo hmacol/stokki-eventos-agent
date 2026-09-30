@@ -1,0 +1,76 @@
+{# Roteiro do "Guia da tela" da Expedição -- pedido do Hugo, 17/09 (guias
+   pros funcionários, no mesmo molde do portal do cliente).
+   Só o CONTEÚDO (ordem dos passos e textos); o motor está em _tour.html e
+   este arquivo entra sozinho pelo base.html (nome = _tour_<endpoint>.html).
+   Pra mudar um texto, é só editar aqui. Passos cujo elemento não está na
+   tela (dia sem rota, nível leitura, dia passado) são pulados sozinhos.
+   Abre sozinho na primeira visita em que houver rota na tela (?tour=1
+   força, ?tour=0 impede) e pelo botão "Guia" da barra lateral.
+   O guia NUNCA dispara ação de verdade: o modal de exclusão é aberto só
+   pela classe, sem pedido pendente, então o "Excluir da rota" dele não
+   faz nada enquanto o guia mostra. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var primeiro = function (sel) { return function () { return document.querySelector(sel); }; };
+  var podeExcluir = function () { return typeof PODE_EXCLUIR !== 'undefined' && PODE_EXCLUIR; };
+  function modalExcluir(abrir) {
+    var m = document.getElementById('modal-excluir');
+    if (!m) return;
+    if (abrir) {
+      var cod = document.getElementById('excluir-codigo');
+      if (cod) cod.textContent = 'PS-00000 (exemplo do guia)';
+    }
+    m.classList.toggle('aberto', abrir);
+  }
+  var fecharModal = function () { modalExcluir(false); };
+
+  var R = 'Rotas do dia', P = 'Pedidos da rota', G = 'Geral';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Expedição: a papelada de cada rota',
+      texto: '<p>Esta tela é do time que <b>carrega os caminhões</b>. Ela mostra as rotas do dia já confirmadas e, pra cada uma, um botão que imprime tudo o que o motorista leva.</p><p>Use <b>Próximo</b> e <b>Voltar</b> (ou as setas do teclado). Dá pra sair quando quiser e reabrir pelo botão <b>Guia</b>, embaixo no menu lateral.</p>',
+      antes: fecharModal },
+
+    { alvo: '.linha-data input[type=date]', capitulo: G, titulo: 'Dia das rotas',
+      texto: '<p>A tela abre sempre no dia de <b>hoje</b>. Troque a data pra ver as rotas de amanhã (quando o planejamento já enviou) ou conferir um dia que passou.</p><p><b>Dia que já passou é só consulta:</b> dá pra reimprimir, mas não dá pra tirar pedido da rota.</p>',
+      antes: fecharModal },
+
+    { alvo: '.vazio', capitulo: R, titulo: 'Nenhuma rota ainda',
+      texto: '<p>Quando aparece este aviso, o planejamento <b>ainda não confirmou</b> as rotas desse dia. As rotas só chegam aqui depois de enviadas à Vuupt; rascunho não aparece.</p><p>Se já era pra ter rota, avise quem está no planejamento.</p>' },
+
+    { alvo: primeiro('.cartao-rota'), capitulo: R, titulo: 'Uma rota = um cartão',
+      texto: '<p>Cada cartão é um caminhão. Tem o <b>nome da rota</b>, o <b>motorista</b> com a placa, o horário de <b>saída</b> e quantos <b>pedidos</b> vão nela.</p><p>Se aparecer <b>(sem motorista)</b> em destaque, a rota ainda não tem quem leve: confirme com o planejamento antes de separar a carga.</p>' },
+
+    { alvo: primeiro('.cartao-rota a.botao-imprimir'), capitulo: R, titulo: 'Imprimir documentos',
+      texto: '<p>Abre, numa aba nova, <b>um PDF único</b> com a papelada da rota, já <b>na ordem de entrega</b>:</p><ul><li><b>Capa</b> com a lista dos pedidos, volumes, peso e um ✓ ou ✗ dizendo se a NF e o boleto de cada um estão no PDF;</li><li>as <b>Notas Fiscais</b> e os <b>boletos</b>, pedido a pedido;</li><li>a <b>canhoteira</b>, quando a rota tem cliente ou transportadora que assina nela.</li></ul><p>O PDF é montado <b>na hora do clique</b>, então sempre traz o que chegou de documento até agora. Um <b>✗ vermelho na capa</b> quer dizer que aquele documento ainda não chegou: imprima de novo mais tarde ou avise o planejamento.</p>',
+      posicao: 'esquerda' },
+
+    { alvo: primeiro('.cartao-rota .pedidos-chip'), capitulo: P, titulo: 'Pedidos que vão no caminhão',
+      texto: '<p>Cada etiqueta é um pedido da rota. O <b>número em negrito</b> é a <b>Ordem de Entrega</b> (1 = primeira parada), a mesma numeração da capa do PDF. Ao lado, mais apagado, vem o código do pedido (PS-…).</p><p>Use isto pra conferir a carga contra a papelada. Parando o mouse em cima da etiqueta aparece o nome do cliente.</p>' },
+
+    { alvo: primeiro('.chip:not(.excluido)'), capitulo: P, titulo: 'Pedido não vai? Botão direito',
+      quando: podeExcluir,
+      texto: '<p>Se na hora de carregar um pedido <b>não foi encontrado, não coube</b> ou já tinha saído, clique nele com o <b>botão direito</b> e escolha <b>Excluir da Rota</b>.</p><p>Só funciona em rota que o motorista <b>ainda não começou</b>.</p>',
+      antes: fecharModal },
+
+    { alvo: '#modal-excluir .modal-excluir', capitulo: P, titulo: 'Excluir da rota: o que acontece',
+      quando: podeExcluir,
+      texto: '<p>Escolha o <b>motivo</b> (obrigatório) e, se ajudar, escreva uma observação. Fica registrado com o seu usuário.</p><p><b>Excluir não cancela o pedido.</b> Ele só sai desta rota e volta a ficar <b>sem rota</b>, esperando o planejamento decidir (mandar em outra rota, investigar, cancelar). Por isso <b>avise o planejamento</b> sempre que excluir.</p><p>Se era o <b>último pedido</b> da rota, a rota inteira é cancelada.</p><p style="color:var(--texto-suave)">Este é só um exemplo: o guia não exclui nada.</p>',
+      antes: function () { modalExcluir(true); }, posicao: 'direita' },
+
+    { alvo: primeiro('.chip.excluido'), capitulo: P, titulo: 'Pedido excluído fica riscado',
+      texto: '<p>O pedido tirado da rota <b>não some da tela</b>: fica riscado em vermelho, e parando o mouse em cima aparece o motivo. Assim todo mundo vê o que aconteceu com aquela carga.</p><p>Rota que perdeu todos os pedidos aparece com a borda tracejada e sem botão de imprimir.</p>',
+      antes: fecharModal },
+
+    { alvo: '#tour-abrir', capitulo: G, titulo: 'É isso',
+      texto: '<p>Sempre que tiver dúvida, este botão <b>Guia</b> reabre o passo a passo desta tela.</p>',
+      antes: fecharModal, posicao: 'direita' }
+  ];
+
+  window.Tour.registrar('expedicao', passos, {
+    auto: true, titulo: 'Expedição',
+    pronto: function () { return !!document.querySelector('.cartao-rota'); },
+    aoSair: fecharModal
+  });
+})();
+</script>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Central de Atendimento — Freshlog</title>
+<style>
+  :root {
+    --primaria: #141428;
+    --acento: #0EA575;
+    --erro: #E1483D;
+    --texto-suave: #6B7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    background: var(--primaria);
+  }
+  .caixa {
+    background: #fff;
+    border-radius: 12px;
+    padding: 40px 36px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+  }
+  .marca { text-align: center; margin-bottom: 28px; }
+  .marca .nome { font-size: 19px; font-weight: 800; color: var(--primaria); letter-spacing: 0.3px; }
+  .marca .subtitulo { font-size: 13px; color: var(--texto-suave); margin-top: 4px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--primaria); margin-bottom: 6px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 10px 12px; border: 1px solid #E5E7EB; border-radius: 7px;
+    font-size: 14px; margin-bottom: 18px;
+  }
+  input[type=text]:focus, input[type=password]:focus {
+    outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento);
+  }
+  button.entrar {
+    width: 100%; background: var(--acento); color: #fff; border: none; padding: 11px;
+    border-radius: 7px; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity 0.15s;
+  }
+  button.entrar:hover { opacity: 0.9; }
+  .erro {
+    background: #FDEBEA; color: var(--erro); font-size: 13px; padding: 10px 12px;
+    border-radius: 7px; margin-bottom: 18px;
+  }
+</style>
+</head>
+<body>
+<div class="caixa">
+  <div class="marca">
+    <div class="nome">Central de Atendimento</div>
+    <div class="subtitulo">Freshlog</div>
+  </div>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="proximo" value="{{ proximo }}">
+    <label for="usuario">Usuário</label>
+    <input type="text" id="usuario" name="usuario" required autofocus>
+    <label for="senha">Senha</label>
+    <input type="password" id="senha" name="senha" required>
+    <button type="submit" class="entrar">Entrar</button>
+  </form>
+</div>
+</body>
+</html>

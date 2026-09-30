@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Ensaio semanal de restauracao do backup do dados.db (somente leitura, manda resultado por e-mail)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/ensaiar_restauracao_backup.py --enviar-email

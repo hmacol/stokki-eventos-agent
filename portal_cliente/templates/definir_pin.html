@@ -1,0 +1,15 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Definir PIN{% endblock %}
+{% block conteudo %}
+<h1>Definir PIN de acesso</h1>
+<p><strong>{{ embarcador.nome }}</strong><br><span class="suave">CNPJ {{ cnpj_formatado }}</span></p>
+<p class="suave">Escolha um PIN de 6 números. Ele será pedido junto com o CNPJ toda vez que você entrar.</p>
+{% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+<form method="post" autocomplete="off">
+  <label for="pin">Novo PIN</label>
+  <input type="password" id="pin" name="pin" class="pin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="new-password" required autofocus>
+  <label for="pin2">Repita o PIN</label>
+  <input type="password" id="pin2" name="pin2" class="pin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="new-password" required>
+  <button type="submit" class="principal">Salvar e entrar</button>
+</form>
+{% endblock %}

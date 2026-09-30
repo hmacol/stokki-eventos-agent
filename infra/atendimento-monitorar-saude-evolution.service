@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Monitora a saude da sessao WhatsApp (Evolution API) da central de atendimento
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/atendimento/monitorar_saude_evolution.py

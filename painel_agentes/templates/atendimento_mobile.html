@@ -1,0 +1,431 @@
+{% extends "base_mobile.html" %}
+{% block titulo %}Atendimento{% endblock %}
+{% block titulo_barra %}Atendimento{% endblock %}
+{% block estilo_extra %}
+<style>
+  /* Versão celular do /atendimento (23/09). Três telas empilhadas:
+     fila (dentro do <main>), conversa e contexto (tela cheia por cima,
+     como app de chat). O "voltar" do celular fecha a de cima (history). */
+  .barra-inferior { display: none; }  /* Torre/Planejamento: o nível atendimento não entra; o ☰ navega */
+  main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  .oculto { display: none !important; }
+  .mono { font-family: 'Cascadia Code', Consolas, monospace; }
+  .rot { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); }
+  .nota { font-size: 12px; color: var(--texto-suave); }
+
+  .seg { display: flex; background: var(--fundo); border: 1px solid var(--borda); border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg button { flex: 1; font-size: 13.5px; font-weight: 600; min-height: 40px; border-radius: 8px; border: none; background: transparent; color: var(--texto-suave); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-family: inherit; }
+  .seg button.ativo { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,0.08); }
+  .seg button.ativo i { width: 8px; height: 8px; border-radius: 100px; background: var(--acento); display: inline-block; }
+  .seg button.ativo.ALMOCO i { background: var(--rodando); } .seg button.ativo.OFFLINE i { background: var(--texto-suave); }
+  .status-cartao { display: flex; flex-direction: column; gap: 10px; }
+  .status-cartao label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--texto-suave); }
+
+  .kpis { display: flex; gap: 8px; overflow-x: auto; margin: 0 -14px 12px; padding: 0 14px; scrollbar-width: none; }
+  .kpis::-webkit-scrollbar { display: none; }
+  .chip-kpi { font-size: 12.5px; color: var(--texto-suave); background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px; padding: 6px 12px; white-space: nowrap; }
+  .chip-kpi b { color: var(--texto); }
+
+  .abas { display: flex; gap: 6px; overflow-x: auto; margin: 0 -14px 10px; padding: 0 14px 2px; scrollbar-width: none; }
+  .abas::-webkit-scrollbar { display: none; }
+  .abas button { flex: none; font-size: 13px; font-weight: 600; min-height: 36px; padding: 0 12px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto-suave); display: inline-flex; gap: 6px; align-items: center; font-family: inherit; }
+  .abas button.ativa { background: var(--primaria); border-color: var(--primaria); color: #fff; }
+  html.tema-escuro .abas button.ativa { background: var(--acento); border-color: var(--acento); color: #0B0E14; }
+  .abas button em { font-style: normal; font-size: 11.5px; opacity: 0.8; }
+  .busca { margin-bottom: 12px; }
+
+  .fila { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; overflow: hidden; }
+  .item { display: flex; gap: 10px; padding: 13px 14px 13px 12px; border-bottom: 1px solid var(--borda); }
+  .item:last-child { border-bottom: none; }
+  .item:active { background: var(--superficie-hover); }
+  .item .pt { width: 8px; height: 8px; border-radius: 100px; flex: none; margin-top: 6px; background: transparent; }
+  .item.nl .pt { background: var(--acento); }
+  .item .c { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+  .item .l1 { display: flex; align-items: center; gap: 6px; }
+  .item .l1 b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .item .l1 .q { font-size: 11.5px; color: var(--texto-suave); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .item .l2 { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .l3 { font-size: 12.5px; color: var(--texto-suave); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .item .l4 { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--texto-suave); flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap; }
+  .pill i { width: 6px; height: 6px; border-radius: 100px; background: currentColor; }
+  .pill.AGUARDANDO_FL, .pill.NA_FILA { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .pill.RESPONDIDO, .pill.COM_ASSISTENTE { background: var(--teste-bg); color: var(--teste-texto); }
+  .pill.EM_ATENDIMENTO { background: var(--sucesso-bg); color: var(--sucesso); }
+  .pill.RESOLVIDO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .tag-mot { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 100px; font-size: 10px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; background: var(--rodando-bg); color: var(--rodando-texto); }
+  .vazio { padding: 28px 18px; color: var(--texto-suave); text-align: center; font-size: 14px; }
+
+  /* ── Telas cheias (conversa e contexto) ── */
+  .tela { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--fundo); height: 100vh; height: 100dvh; }
+  .tela.contexto { z-index: 61; }
+  .tela-cab { display: flex; align-items: center; gap: 6px; background: var(--primaria); color: #fff; padding: 8px 8px 8px 4px; padding-top: calc(8px + env(safe-area-inset-top)); flex: none; }
+  .tela-cab .botao-icone { flex: none; }
+  .tela-cab .ident { min-width: 0; flex: 1; }
+  .tela-cab .ident b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tela-cab .ident span { display: block; font-size: 12px; color: #A3A3C2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-info { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; background: var(--superficie); border-bottom: 1px solid var(--borda); }
+  .conv-info .meta { display: flex; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--texto-suave); flex-wrap: wrap; }
+  .conv-info .acoes { display: flex; gap: 8px; }
+  .conv-info .acoes button { flex: 1; min-height: 38px; font-size: 13px; padding: 6px 10px; }
+  .conv-corpo { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; gap: 10px; padding: 14px 12px 10px; }
+  .msg { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: 88%; }
+  .msg.eu { align-items: flex-end; align-self: flex-end; }
+  .bolha { background: var(--superficie); border: 1px solid var(--borda); border-radius: 4px 14px 14px 14px; padding: 9px 12px; font-size: 14.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  .msg.eu .bolha { background: var(--primaria); color: #fff; border-color: transparent; border-radius: 14px 14px 4px 14px; }
+  html.tema-escuro .msg.eu .bolha { background: #1E3A5F; color: var(--texto); }
+  .msg.bot .bolha { border-left: 3px solid var(--teste-texto); }
+  .meta-msg { font-size: 11px; color: var(--texto-suave); }
+  .sistema { align-self: center; font-size: 11.5px; color: var(--texto-suave); background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 4px 12px; text-align: center; }
+  .resumo { border: 1px solid var(--borda); border-left: 3px solid var(--teste-texto); border-radius: 8px; padding: 10px 12px; background: var(--superficie); display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  .resumo .t { color: var(--teste-texto); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .anexo { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 7px 10px; border-radius: 7px; background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 12.5px; text-decoration: none; }
+  .msg.eu .anexo { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); color: inherit; }
+  .conv-pe { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--superficie); border-top: 1px solid var(--borda); }
+  .macros { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .macros::-webkit-scrollbar { display: none; }
+  .macro { flex: none; font-size: 12.5px; min-height: 32px; padding: 0 11px; border-radius: 100px; border: 1px solid var(--borda); color: var(--texto); background: var(--fundo); font-family: inherit; white-space: nowrap; }
+  .compor { display: flex; align-items: flex-end; gap: 6px; }
+  .compor textarea { flex: 1; border: 1px solid var(--borda); border-radius: 20px; padding: 9px 14px; font-size: 16px; font-family: inherit; background: var(--fundo); color: var(--texto); resize: none; min-height: 42px; max-height: 140px; outline: none; }
+  .compor textarea:focus { border-color: var(--acento); }
+  .compor .ico { flex: none; width: 42px; height: 42px; border-radius: 100px; border: none; background: none; color: var(--texto-suave); display: flex; align-items: center; justify-content: center; }
+  .compor .enviar { background: var(--primaria); color: #fff; }
+  html.tema-escuro .compor .enviar { background: var(--acento); color: #0B0E14; }
+  .compor .enviar:disabled { opacity: 0.5; }
+  .pendentes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pendentes span { font-size: 12px; padding: 4px 8px; border-radius: 6px; background: var(--fundo); border: 1px solid var(--borda); }
+  .pendentes span b { color: var(--texto-suave); margin-left: 6px; padding: 0 4px; }
+  .ctx-corpo { flex: 1; overflow-y: auto; padding: 14px 14px calc(20px + env(safe-area-inset-bottom)); }
+  .ctx-corpo .cartao { display: flex; flex-direction: column; gap: 8px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .kv span:first-child { color: var(--texto-suave); flex: none; } .kv span:last-child { font-weight: 600; text-align: right; word-break: break-word; }
+  .kv[data-id] { padding: 6px 0; align-items: center; }
+  .kv[data-id] span:first-child { flex: 1; min-width: 0; color: var(--texto); }
+  .kv[data-id] span:last-child { flex: none; }
+  html.tema-escuro .conv-info .botao:not(.secundario) { background: var(--acento); color: #0B0E14; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cartao status-cartao">
+  <span class="rot">Meu status</span>
+  <div class="seg" id="seg-status">
+    <button type="button" data-st="ONLINE"><i></i>Online</button>
+    <button type="button" data-st="ALMOCO"><i></i>Almoço</button>
+    <button type="button" data-st="OFFLINE"><i></i>Offline</button>
+  </div>
+  <label>Atendente (aparece pro cliente)<input type="text" id="nome-atd" placeholder="seu nome" maxlength="60" autocomplete="name"></label>
+  <div class="nota" id="horario-txt"></div>
+</div>
+<div class="aviso oculto" id="aviso-topo"></div>
+<div class="kpis" id="kpis"></div>
+<div class="abas" id="abas"></div>
+<input type="text" class="busca" id="busca" placeholder="Cliente, pedido, NF ou nº do chamado" enterkeyhint="search">
+<div class="fila" id="fila"><div class="vazio">Carregando…</div></div>
+
+<section class="tela oculto" id="tela-conversa" aria-label="Conversa">
+  <div class="tela-cab">
+    <button type="button" class="botao-icone" id="voltar-fila" aria-label="Voltar pra fila">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="ident"><b id="conv-titulo"></b><span id="conv-sub"></span></div>
+    <button type="button" class="botao-icone" id="abrir-contexto" aria-label="Contexto do chamado" title="Contexto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg>
+    </button>
+  </div>
+  <div class="conv-info" id="conv-info"></div>
+  <div class="conv-corpo" id="conv-corpo"></div>
+  <div class="conv-pe">
+    <div class="macros" id="macros"></div>
+    <div class="pendentes oculto" id="pendentes"></div>
+    <div class="compor">
+      <button type="button" class="ico" id="anexar" aria-label="Anexar arquivo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg></button>
+      <input type="file" id="arquivos" multiple class="oculto" accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.xlsx,.xls,.csv,.txt,.xml">
+      <textarea id="texto" rows="1" placeholder="Responder…"></textarea>
+      <button type="button" class="ico enviar" id="enviar" aria-label="Enviar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+    </div>
+    <div class="nota" id="nota-pe"></div>
+  </div>
+</section>
+
+<section class="tela contexto oculto" id="tela-contexto" aria-label="Contexto do chamado">
+  <div class="tela-cab">
+    <button type="button" class="botao-icone" id="voltar-conversa" aria-label="Voltar pra conversa">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="ident"><b id="ctx-titulo">Contexto</b><span id="ctx-sub"></span></div>
+  </div>
+  <div class="ctx-corpo" id="lateral"></div>
+</section>
+{% endblock %}
+
+{% block script_extra %}
+<script>
+(function () {
+  const BOOT = {{ boot | tojson }};
+  const BASE = {{ request.script_root | tojson }};
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ICO_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
+  const ICO_MAIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>';
+  // Volante: marca o chamado que veio do app do motorista.
+  const ICO_VOLANTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:14px;height:14px;flex:none;color:var(--rodando-texto)"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3"></circle><line x1="12" y1="3" x2="12" y2="9"></line><line x1="4.3" y1="16.5" x2="9.4" y2="13.5"></line><line x1="19.7" y1="16.5" x2="14.6" y2="13.5"></line></svg>';
+  const st = { aba: 'fila', fila: [], contagens: BOOT.contagens, meuStatus: BOOT.status, nome: BOOT.nome, chamado: null, mensagens: [], contexto: null,
+               ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao };
+
+  async function api(caminho, opts) {
+    const r = await fetch(BASE + caminho, Object.assign({ credentials: 'same-origin' }, opts || {}));
+    if (r.status === 401) { location.href = `${BASE}/login?proximo=${encodeURIComponent(location.pathname)}`; throw new Error('sessão'); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.erro || 'Falha na conexão.');
+    return j;
+  }
+
+  // ── navegação: fila → conversa → contexto, com o "voltar" do celular ─────
+  // Cada tela aberta empilha um estado no history; o popstate fecha a de
+  // cima. Assim o botão voltar do Android não sai do painel.
+  function mostrarTelas(nivel) {
+    $('tela-conversa').classList.toggle('oculto', nivel < 1);
+    $('tela-contexto').classList.toggle('oculto', nivel < 2);
+    document.body.style.overflow = nivel ? 'hidden' : '';
+    if (nivel < 1) { st.chamado = null; clearTimeout(st.timerConv); renderFila(); }
+  }
+  window.addEventListener('popstate', e => mostrarTelas((e.state && e.state.nivel) || 0));
+  $('voltar-fila').addEventListener('click', () => history.back());
+  $('voltar-conversa').addEventListener('click', () => history.back());
+  $('abrir-contexto').addEventListener('click', () => { if (!st.contexto) return; history.pushState({ nivel: 2 }, ''); mostrarTelas(2); $('lateral').scrollTop = 0; });
+
+  // ── status / topo ─────────────────────────────────────────────────────────
+  function renderTopo() {
+    document.querySelectorAll('#seg-status button').forEach(b => { b.className = (b.dataset.st === st.meuStatus ? 'ativo ' + st.meuStatus : ''); });
+    if (document.activeElement !== $('nome-atd')) $('nome-atd').value = st.nome || '';
+    $('horario-txt').textContent = `Cliente: ${BOOT.horario} · Motoristas: ${BOOT.horario_logistica}`;
+    const c = st.contagens || {};
+    $('kpis').innerHTML = `<span class="chip-kpi"><b>${c.na_fila || 0}</b> na fila</span><span class="chip-kpi"><b>${c.em_atendimento || 0}</b> em atendimento</span>` +
+      `<span class="chip-kpi"><b>${c.motoristas || 0}</b> de motorista</span>` +
+      `<span class="chip-kpi"><b>${c.email || 0}</b> por e-mail</span><span class="chip-kpi">assistente resolveu <b>${c.assistente_resolveu_hoje || 0}</b> hoje</span>`;
+    const av = $('aviso-topo');
+    if (st.meuStatus !== 'ONLINE') { av.textContent = st.meuStatus === 'ALMOCO' ? 'Você está em almoço: o portal mostra o cliente como fora do atendimento e sugere deixar chamado.' : 'Você está offline: novas conversas viram chamado por e-mail até alguém ficar online.'; av.classList.remove('oculto'); }
+    else if (st.situacao && !st.situacao.dentro_horario) { av.textContent = `Fora do horário divulgado (${BOOT.horario}). Mesmo online, o portal avisa o cliente do horário.`; av.classList.remove('oculto'); }
+    else av.classList.add('oculto');
+  }
+  async function mudarStatus(status) {
+    const nome = $('nome-atd').value.trim();
+    if (status === 'ONLINE' && !nome) { alert('Informe seu nome antes de ficar online -- ele aparece pro cliente.'); $('nome-atd').focus(); return; }
+    try { const j = await api('/api/atendimento/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, nome }) }); st.meuStatus = j.status; st.nome = j.nome; st.situacao = j.situacao; renderTopo(); }
+    catch (e) { alert(e.message); }
+  }
+  $('seg-status').addEventListener('click', e => { const b = e.target.closest('[data-st]'); if (b) mudarStatus(b.dataset.st); });
+  $('nome-atd').addEventListener('change', () => { if (st.meuStatus !== 'OFFLINE') mudarStatus(st.meuStatus); });
+
+  // ── fila ──────────────────────────────────────────────────────────────────
+  async function carregarFila() {
+    try {
+      const j = await api(`/api/atendimento/fila?aba=${st.aba}`);
+      st.fila = j.chamados; st.contagens = j.contagens; st.situacao = j.situacao; st.meuStatus = j.meu_status; st.nome = j.nome || st.nome;
+      renderFila(); renderTopo();
+    } catch (e) {}
+    clearTimeout(st.timerFila); st.timerFila = setTimeout(carregarFila, 8000);
+  }
+  function renderFila() {
+    const c = st.contagens || {};
+    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos]];
+    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
+    const q = st.busca.trim().toLowerCase();
+    let lista = st.fila;
+    if (q) lista = lista.filter(x => [x.id, x.solicitante, x.assunto, x.pedido_ref, x.cnpj_embarcador].join(' ').toLowerCase().includes(q));
+    $('fila').innerHTML = lista.length ? lista.map(x => `
+      <div class="item ${x.nao_lidas ? 'nl' : ''}" data-id="${x.id}" role="button" tabindex="0"><span class="pt"></span><div class="c">
+        <div class="l1">${x.de_motorista ? ICO_VOLANTE : ''}<b>${esc(x.solicitante)}</b><span class="q">${x.origem === 'chat' ? ICO_CHAT : ICO_MAIL}${esc(x.status === 'NA_FILA' ? 'esperando ' + (x.espera || '') : x.quando)}</span></div>
+        <div class="l2">#${x.id} · ${esc(x.assunto || x.area_rotulo || 'Conversa com o assistente')}</div>
+        <div class="l3">${esc(x.resumo_assistente ? 'Assistente: ' + x.resumo_assistente : previa(x))}</div>
+        <div class="l4"><span class="pill ${x.status}"><i></i>${esc(x.status_rotulo)}</span>${x.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(x.area_rotulo || '')}</span>${x.atendente ? `<span>· ${esc(x.atendente)}</span>` : ''}</div>
+      </div></div>`).join('') : '<div class="vazio">Nada por aqui.</div>';
+  }
+  function previa(x) { const quem = x.ultima_origem_msg === 'cliente' ? 'Cliente: ' : (x.ultima_origem_msg === 'equipe' ? 'Fresh Log: ' : ''); return quem + (x.ultima_texto || '').replace(/\s+/g, ' '); }
+  $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; st.aba = b.dataset.aba; renderFila(); carregarFila(); });
+  $('busca').addEventListener('input', e => { st.busca = e.target.value; renderFila(); });
+  $('fila').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
+
+  // ── conversa ──────────────────────────────────────────────────────────────
+  async function abrir(id) {
+    try {
+      const j = await api(`/api/atendimento/chamados/${id}`);
+      const jaAberta = !!st.chamado;
+      st.chamado = j.chamado; st.mensagens = j.mensagens; st.contexto = j.contexto; st.ultimoId = st.mensagens.length ? st.mensagens[st.mensagens.length - 1].id : 0;
+      st.arquivos = []; $('texto').value = ''; $('texto').style.height = 'auto';
+      // Vindo de "outros chamados" no contexto: troca a conversa e volta
+      // um nível (fecha o contexto); vindo da fila: empilha a conversa.
+      if (jaAberta && history.state && history.state.nivel === 2) history.back();
+      else if (!jaAberta) history.pushState({ nivel: 1 }, '');
+      mostrarTelas(1);
+      renderConversa(); renderLateral(); agendarConv();
+    } catch (e) { alert(e.message); }
+  }
+  async function pollConv() {
+    if (!st.chamado) return;
+    try {
+      const j = await api(`/api/atendimento/chamados/${st.chamado.id}?desde=${st.ultimoId}`);
+      if (!st.chamado || j.chamado.id !== st.chamado.id) return;
+      const mudou = j.chamado.status !== st.chamado.status || j.chamado.atendente !== st.chamado.atendente;
+      st.chamado = j.chamado;
+      if (j.mensagens.length) { st.mensagens = st.mensagens.concat(j.mensagens); st.ultimoId = st.mensagens[st.mensagens.length - 1].id; }
+      if (j.mensagens.length || mudou) renderConversa();
+      $('nota-pe').textContent = notaPe(j.cliente_online);
+    } catch (e) {}
+    agendarConv();
+  }
+  function agendarConv() { clearTimeout(st.timerConv); if (st.chamado) st.timerConv = setTimeout(pollConv, st.chamado.status === 'EM_ATENDIMENTO' || st.chamado.status === 'NA_FILA' ? 3000 : 10000); }
+  function notaPe(solicitanteOnline) {
+    const c = st.chamado;
+    if (c.de_motorista) {
+      const mail = (st.contexto && st.contexto.motorista && st.contexto.motorista.email) || '';
+      if (c.status === 'RESOLVIDO') return 'Chamado resolvido. Responder aqui reabre o chamado e o motorista vê de novo no app.';
+      return 'A resposta aparece na aba Ajuda do app do motorista.' + (mail ? ` Ele também recebe em ${mail}.` : ' Ele não tem e-mail cadastrado, então o app é o único canal.');
+    }
+    const mail = (st.contexto && st.contexto.cliente && st.contexto.cliente.emails[0]) || 'o e-mail do cliente';
+    if (c.status === 'RESOLVIDO') return 'Chamado resolvido. Responder aqui reabre o chamado e avisa o cliente por e-mail.';
+    if (c.status === 'EM_ATENDIMENTO' && solicitanteOnline) return 'Cliente está com o chat aberto agora. Se ele fechar o portal, a resposta vai pro e-mail dele e fica no chamado.';
+    return `Cliente não está no chat: a resposta vai pra ${mail} e fica no chamado.`;
+  }
+  function renderConversa() {
+    const c = st.chamado;
+    const meu = c.atendente === BOOT.usuario;
+    $('conv-titulo').textContent = c.solicitante || (c.de_motorista ? 'Motorista' : 'Cliente');
+    $('conv-sub').textContent = `#${c.id} · ${c.assunto || c.area_rotulo || 'Conversa com o assistente'}`;
+    let acoes = '';
+    if (c.status === 'RESOLVIDO') acoes = `<button type="button" class="botao secundario" data-acao="reabrir">Reabrir</button>`;
+    else {
+      if (c.status !== 'EM_ATENDIMENTO' || !meu) acoes += `<button type="button" class="botao secundario" data-acao="assumir">Assumir</button>`;
+      if (c.status === 'EM_ATENDIMENTO' && meu) acoes += `<button type="button" class="botao secundario" data-acao="transferir">Devolver pra fila</button>`;
+      acoes += `<button type="button" class="botao" data-acao="resolver">✓ Resolver</button>`;
+    }
+    $('conv-info').innerHTML = `
+      <div class="meta"><span class="pill ${c.status}"><i></i>${esc(c.status_rotulo)}</span>${c.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(c.area_rotulo || '')}</span>${c.pedido_ref ? `<span>${c.de_motorista ? 'Parada' : 'Pedido'} <b class="mono" style="color:var(--texto)">${esc(c.pedido_ref)}</b></span>` : ''}<span>Aberto ${esc(c.quando)} pelo ${c.origem === 'chat' ? (c.de_motorista ? 'app' : 'chat') : (c.origem === 'email' ? 'e-mail' : 'portal')}</span>${c.atendente ? `<span>Com ${esc(c.atendente)}${c.assumido_em ? ' desde ' + c.assumido_em.slice(11, 16) : ''}</span>` : ''}</div>
+      <div class="acoes">${acoes}</div>`;
+    const partes = [];
+    if (c.resumo_assistente) partes.push(`<div class="resumo"><div class="t">Resumo do assistente</div><div><span style="color:var(--texto-suave)">Área:</span> <b>${esc(c.area_rotulo || '-')}</b> · <span style="color:var(--texto-suave)">Pedido:</span> <b class="mono">${esc(c.pedido_ref || '-')}</b></div><div>${esc(c.resumo_assistente)}</div></div>`);
+    for (const m of st.mensagens) partes.push(bolha(m));
+    $('conv-corpo').innerHTML = partes.join('');
+    $('conv-corpo').scrollTop = $('conv-corpo').scrollHeight;
+    const macros = c.de_motorista ? BOOT.respostas_rapidas_motorista : BOOT.respostas_rapidas;
+    $('macros').innerHTML = macros.map(r => `<button type="button" class="macro" data-macro="${esc(r)}">${esc(r.length > 34 ? r.slice(0, 32) + '…' : r)}</button>`).join('');
+    $('nota-pe').textContent = notaPe(false);
+    renderPendentes();
+  }
+  function bolha(m) {
+    const anexos = (m.anexos || []).map(a => `<a class="anexo" href="${BASE}/api/atendimento/chamados/${st.chamado.id}/anexos/${encodeURIComponent(a.arquivo)}" target="_blank" rel="noopener">📎 ${esc(a.nome)}</a>`).join(' ');
+    const canal = m.canal === 'email' ? ' · por e-mail' : (m.canal === 'portal' && m.origem === 'cliente' ? ' · pelo portal' : '');
+    if (m.origem === 'sistema') return `<div class="sistema">${esc(m.texto)} · ${esc(m.hora)}</div>`;
+    if (m.origem === 'equipe') return `<div class="msg eu"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
+    if (m.origem === 'assistente') return `<div class="msg bot"><div class="bolha">${esc(m.texto)}</div><div class="meta-msg">Assistente · ${esc(m.hora)}</div></div>`;
+    const quem = (m.autor && m.autor !== st.chamado.solicitante) ? `${esc(m.autor)} · ${esc(st.chamado.solicitante || '')}` : esc(st.chamado.solicitante || m.autor || 'Cliente');
+    return `<div class="msg"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
+  }
+  function renderPendentes() { const el = $('pendentes'); el.classList.toggle('oculto', !st.arquivos.length); el.innerHTML = st.arquivos.map((f, i) => `<span>${esc(f.name)}<b data-rm="${i}" role="button" aria-label="Remover">×</b></span>`).join(''); }
+
+  async function enviar() {
+    const texto = $('texto').value.trim();
+    if (!st.chamado || st.enviando || (!texto && !st.arquivos.length)) return;
+    if (!st.nome || st.nome === BOOT.usuario) { const n = $('nome-atd').value.trim(); if (!n) { alert('Informe seu nome na fila (Atendente) antes de responder -- ele aparece pro cliente.'); return; } }
+    const fd = new FormData(); fd.append('texto', texto); for (const f of st.arquivos) fd.append('anexos', f, f.name);
+    st.enviando = true; $('enviar').disabled = true;
+    try {
+      const j = await api(`/api/atendimento/chamados/${st.chamado.id}/mensagens`, { method: 'POST', body: fd });
+      st.chamado = j.chamado; st.mensagens = st.mensagens.concat(j.mensagens); st.ultimoId = st.mensagens[st.mensagens.length - 1].id;
+      $('texto').value = ''; $('texto').style.height = 'auto'; st.arquivos = []; $('arquivos').value = '';
+      renderConversa(); carregarFila();
+      if (j.email_enviado === 'sem_email') $('nota-pe').textContent = 'Gravado no chamado, mas o cliente não tem e-mail cadastrado (tabela interno).';
+      else if (j.email_enviado === 'so_app') $('nota-pe').textContent = 'Enviado: aparece na aba Ajuda do app do motorista.';
+      else if (j.email_enviado === 'enviando') $('nota-pe').textContent = 'Gravado no chamado e enviado por e-mail.';
+    } catch (e) { alert(e.message); }
+    st.enviando = false; $('enviar').disabled = false;
+  }
+  async function acao(tipo) {
+    if (!st.chamado) return;
+    let corpo = {};
+    if (tipo === 'resolver') { const r = prompt('Resolver o chamado e enviar o histórico por e-mail pro cliente.\nResumo da resolução (opcional):', ''); if (r === null) return; corpo = { resolucao: r }; }
+    try {
+      const j = await api(`/api/atendimento/chamados/${st.chamado.id}/${tipo}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      st.chamado = j.chamado; st.mensagens = st.mensagens.concat(j.mensagens); if (st.mensagens.length) st.ultimoId = st.mensagens[st.mensagens.length - 1].id;
+      renderConversa(); carregarFila();
+      if (tipo === 'resolver') $('nota-pe').textContent = j.historico_enviado ? 'Resolvido. Histórico enviado por e-mail pro cliente.' : 'Resolvido, mas o cliente não tem e-mail cadastrado pra receber o histórico.';
+    } catch (e) { alert(e.message); }
+  }
+  $('conv-info').addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (b) acao(b.dataset.acao); });
+  $('macros').addEventListener('click', e => { const b = e.target.closest('[data-macro]'); if (b) { const t = $('texto'); t.value = (t.value ? t.value + ' ' : '') + b.dataset.macro; t.dispatchEvent(new Event('input')); t.focus(); } });
+  // No celular o Enter quebra linha (como no WhatsApp); envia pelo botão.
+  $('enviar').addEventListener('click', enviar);
+  $('texto').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'; });
+  $('anexar').addEventListener('click', () => $('arquivos').click());
+  $('arquivos').addEventListener('change', e => { st.arquivos = Array.from(e.target.files || []).slice(0, 5); renderPendentes(); });
+  $('pendentes').addEventListener('click', e => { const b = e.target.closest('[data-rm]'); if (b) { st.arquivos.splice(Number(b.dataset.rm), 1); renderPendentes(); } });
+
+  // ── contexto ──────────────────────────────────────────────────────────────
+  const kv = (a, b) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+  const outros = (titulo, lista) => `<div class="cartao"><span class="rot">${titulo}</span>${lista.length ? lista.map(o => `<div class="kv" data-id="${o.id}" role="button"><span><span class="mono" style="color:var(--texto-suave)">#${o.id}</span> ${esc(o.assunto || '')}</span><span class="pill ${o.status}"><i></i>${esc(o.status_rotulo)}</span></div>`).join('') : '<div class="nota">Nenhum outro chamado.</div>'}</div>`;
+  const linkBotao = (href, rotulo) => `<div class="linha-botoes" style="margin-top:4px"><a class="botao" style="background:var(--fundo);color:var(--texto);border:1px solid var(--borda)" href="${href}">${rotulo}</a></div>`;
+
+  function renderLateralMotorista(cx) {
+    const m = cx.motorista, r = cx.rota, p = cx.parada, e = cx.extrato;
+    const real = v => v == null ? '—' : 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+    let html = `<div class="cartao"><span class="rot">Motorista</span><div style="font-size:15px;font-weight:700">${esc(m.nome || '—')}</div>` +
+      kv('CPF', esc(m.cpf || '—')) + kv('Telefone', m.telefone ? `<a href="tel:${esc(m.telefone)}">${esc(m.telefone)}</a>` : '—') +
+      kv('Veículo', esc(m.tipo_veiculo || 'Fiorino (padrão)')) + kv('Agente na VUUPT', esc(m.agent_id || '—')) +
+      kv('E-mail', esc(m.email || 'sem e-mail (só app)')) +
+      kv('Chamados em 30 dias', `${m.chamados_30d} · ${m.resolvidos_30d} resolvidos`) +
+      (m.perfil === 'TESTE' ? '<div class="nota">Usuário de TESTE.</div>' : '') + `</div>`;
+    if (r) {
+      html += `<div class="cartao"><span class="rot">Rota de hoje</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">` +
+        `<span class="mono" style="font-weight:700;font-size:15px">#${r.id}</span><span class="pill ${r.status === 'EM_ROTA' ? 'EM_ATENDIMENTO' : 'RESPONDIDO'}"><i></i>${esc(r.status)}</span></div>` +
+        kv('Nome', esc(r.nome || '—')) + kv('Saída', esc((r.start_at || '').slice(11, 16) || '—')) +
+        kv('Progresso', `${r.entregues || 0} de ${r.total_paradas || 0} · ${cx.paradas_pendentes} pendente(s)`) +
+        (r.insucessos ? kv('Insucessos', r.insucessos) : '') +
+        kv('Km', `${r.km_real != null ? r.km_real + ' km reais' : (r.km_estimado != null ? Number(r.km_estimado).toFixed(0) + ' km estimados' : '—')}`) +
+        linkBotao(`${BASE}/torre/mobile`, 'Abrir a Torre') + `</div>`;
+    } else {
+      html += `<div class="cartao"><span class="rot">Rota de hoje</span><div class="nota">Nenhuma rota do app pra hoje. Se a rota dele está na VUUPT, ele opera por lá.</div></div>`;
+    }
+    if (p) {
+      html += `<div class="cartao"><span class="rot">Parada citada</span><div style="font-weight:700">${esc(p.ordem != null ? p.ordem + '. ' : '')}${esc(p.destinatario_nome || p.codigo || '')}</div>` +
+        (p.codigo ? kv('Pedido', `<span class="mono">${esc(p.codigo)}</span>`) : '') + (p.endereco ? kv('Endereço', esc(p.endereco)) : '') +
+        (p.situacao ? kv('Situação', esc(p.situacao)) : '') + (p.volume_caixas ? kv('Caixas', esc(p.volume_caixas)) : '') +
+        (p.janela_inicio ? kv('Janela', `${esc(p.janela_inicio)}–${esc(p.janela_fim || '')}`) : '') +
+        (p.motivo_texto ? kv('Motivo', esc(p.motivo_texto)) : '') + (p.tentativas ? kv('Tentativas', esc(p.tentativas)) : '') + `</div>`;
+    } else if (st.chamado.pedido_ref) {
+      html += `<div class="cartao"><span class="rot">Parada citada</span><div class="mono" style="font-weight:700">${esc(st.chamado.pedido_ref)}</div><div class="nota">Não achei essa parada na rota de hoje dele.</div></div>`;
+    }
+    if (e) {
+      html += `<div class="cartao"><span class="rot">Pagamento (${esc(e.periodo)})</span>` + kv('Rotas', e.rotas) + kv('Total', real(e.total)) +
+        (e.total_pedagio ? kv('Pedágio aprovado', real(e.total_pedagio)) : '') +
+        (e.pedagio_pendente ? kv('Pedágio pendente', `<b style="color:var(--rodando-texto)">${real(e.pedagio_pendente)}</b>`) : '') +
+        (cx.tarifa ? kv('Tarifa', `${real(cx.tarifa.valor_base)} + ${cx.tarifa.km_franquia} km`) : '') + `</div>`;
+    }
+    return html + outros('Outros chamados deste motorista', cx.outros);
+  }
+
+  function renderLateral() {
+    const cx = st.contexto; if (!cx) return;
+    $('ctx-sub').textContent = `#${st.chamado.id} · ${st.chamado.solicitante || ''}`;
+    if (cx.tipo === 'MOTORISTA') { $('lateral').innerHTML = renderLateralMotorista(cx); return; }
+    const cl = cx.cliente, p = cx.pedido, k = cl.kpis;
+    let html = `<div class="cartao"><span class="rot">Cliente</span><div style="font-size:15px;font-weight:700">${esc(cl.nome)}</div>${kv('CNPJ', esc(cl.cnpj))}${kv('E-mail', esc(cl.emails.join(', ') || '—'))}${kv('Chamados em 30 dias', `${cl.chamados_30d} · ${cl.resolvidos_30d} resolvidos`)}${k ? kv('Pedidos hoje', `${k.total} · ${k.entregues} entregues`) : ''}</div>`;
+    if (p) {
+      html += `<div class="cartao"><span class="rot">Pedido citado</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="mono" style="font-weight:700;font-size:15px">${esc(p.codigo)}</span><span class="pill" style="background:var(--teste-bg);color:var(--teste-texto)"><i></i>${esc(p.situacao_rotulo || '')}</span></div>` +
+        kv('NF', esc(p.nf || '—') + (p.volumes ? ` · ${p.volumes} vol.` : '')) + kv('Destinatário', esc(p.destinatario || '—')) + (p.endereco ? kv('Endereço', esc(p.endereco)) : '') +
+        kv('Motorista / rota', esc([p.motorista, p.rota].filter(Boolean).join(' · ') || '—')) + (p.ordem ? kv('Parada', `${p.ordem} de ${p.total_paradas}`) : '') + (p.detalhe ? kv('Previsão / conclusão', esc(p.detalhe)) : '') + (p.motivo ? kv('Motivo', esc(p.motivo)) : '') +
+        linkBotao(`${BASE}/torre/mobile`, 'Abrir a Torre') + `</div>`;
+    } else if (st.chamado.pedido_ref) html += `<div class="cartao"><span class="rot">Pedido citado</span><div class="mono" style="font-weight:700">${esc(st.chamado.pedido_ref)}</div><div class="nota">Não achei esse pedido nos dados de hoje do cliente.</div></div>`;
+    $('lateral').innerHTML = html + outros('Outros chamados deste cliente', cx.outros);
+  }
+  $('lateral').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
+
+  // ── início ────────────────────────────────────────────────────────────────
+  history.replaceState({ nivel: 0 }, '');
+  renderTopo(); carregarFila();
+  if (BOOT.chamado_inicial) abrir(BOOT.chamado_inicial);
+  // heartbeat: mantém o "online" valendo enquanto a tela estiver aberta
+  setInterval(() => { if (st.meuStatus !== 'OFFLINE') api('/api/atendimento/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st.meuStatus }) }).catch(() => {}); }, 60000);
+})();
+</script>
+{% endblock %}

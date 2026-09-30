@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-reconciliar-retirada.service a cada 2h, 08:00-20:00
+
+[Timer]
+OnCalendar=*-*-* 08,10,12,14,16,18,20:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

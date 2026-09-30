@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários{% endblock %}
+{% block estilo_extra %}
+<style>
+  table { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--borda); }
+  th { background: var(--fundo); color: var(--texto-suave); font-size: 11px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 100px; font-weight: 700; }
+  .badge-ativo { background: rgba(14,165,117,0.15); color: var(--acento); }
+  .badge-inativo { background: var(--erro-bg); color: var(--erro); }
+  .form-novo { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 16px; margin-bottom: 20px; max-width: 480px; }
+  .form-novo h3 { margin: 0 0 12px; font-size: 14px; }
+  .form-novo label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
+  .form-novo input, .form-novo select { width: 100%; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; }
+  .form-novo button { margin-top: 14px; }
+  .acoes-linha button { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda); background: none; cursor: pointer; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="form-novo">
+  <h3>Novo atendente</h3>
+  <form id="form-novo-usuario">
+    <label>Login</label>
+    <input type="text" id="novo-login" required>
+    <label>Nome</label>
+    <input type="text" id="novo-nome" required>
+    <label>Senha (mín. 8 caracteres)</label>
+    <input type="password" id="novo-senha" required minlength="8">
+    <label>Papel</label>
+    <select id="novo-papel">
+      <option value="atendente">Atendente</option>
+      <option value="admin">Admin</option>
+    </select>
+    <button type="submit" class="botao">Criar</button>
+  </form>
+</div>
+
+<table>
+  <thead><tr><th>Login</th><th>Nome</th><th>Papel</th><th>Status</th><th>Último login</th><th></th></tr></thead>
+  <tbody id="corpo-tabela"></tbody>
+</table>
+
+<script>
+function fetchJson(url, opcoes) {
+  return fetch(BASE_PATH + url, opcoes).then(async r => {
+    const dados = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dados.erro || ("Erro " + r.status));
+    return dados;
+  });
+}
+
+function carregar() {
+  fetchJson("/api/usuarios").then(d => {
+    document.getElementById("corpo-tabela").innerHTML = d.usuarios.map(u => `
+      <tr>
+        <td>${u.login}</td>
+        <td>${u.nome}</td>
+        <td>${u.papel}</td>
+        <td><span class="badge ${u.ativo ? 'badge-ativo' : 'badge-inativo'}">${u.ativo ? 'ativo' : 'inativo'}</span></td>
+        <td>${u.ultimo_login_em || 'nunca'}</td>
+        <td class="acoes-linha">
+          <button data-id="${u.id}" data-acao="${u.ativo ? 'desativar' : 'reativar'}">${u.ativo ? 'Desativar' : 'Reativar'}</button>
+        </td>
+      </tr>
+    `).join("");
+  });
+}
+
+document.getElementById("form-novo-usuario").addEventListener("submit", e => {
+  e.preventDefault();
+  fetchJson("/api/usuarios", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      login: document.getElementById("novo-login").value,
+      nome: document.getElementById("novo-nome").value,
+      senha: document.getElementById("novo-senha").value,
+      papel: document.getElementById("novo-papel").value,
+    }),
+  }).then(() => { e.target.reset(); carregar(); }).catch(err => alert(err.message));
+});
+
+document.getElementById("corpo-tabela").addEventListener("click", e => {
+  const botao = e.target.closest("button[data-acao]");
+  if (!botao) return;
+  fetchJson(`/api/usuarios/${botao.dataset.id}/${botao.dataset.acao}`, {method: "POST"})
+    .then(carregar).catch(err => alert(err.message));
+});
+
+carregar();
+</script>
+{% endblock %}

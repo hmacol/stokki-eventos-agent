@@ -1,0 +1,11 @@
+[Unit]
+Description=Stokki Eventos - Reconciliar pedidos Cliente Retira ja importados no VUUPT (reconciliar_pedidos_retirada.py --cancelar)
+OnFailure=stokki-alerta-falha@%n.service
+# 15/09: unidade existia SO na VPS (/etc/systemd/system) desde antes de 12/09 -- trazida pro git
+# sem mudar o comportamento (so o OnFailure). ATENCAO: --cancelar CANCELA servico na Vuupt.
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/reconciliar_pedidos_retirada.py --cancelar

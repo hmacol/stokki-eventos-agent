@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-resumo-diario-embarcador.service todo dia as 20:00 (depois da ultima expedicao, 19:30)
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Stokki Eventos - Compara Vuupt x nucleo (Etapa 2 da saida da Vuupt) e manda o resumo por e-mail
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+# Saida 2 = achou divergencia (nao e falha do job; o e-mail ja conta a
+# historia). Sem isso, todo dia com divergencia disparava tambem o alerta
+# de "job falhou".
+SuccessExitStatus=2
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/comparar_vuupt.py --dias 3 --salvar --email
