@@ -1149,6 +1149,23 @@ def api_torre_tratar():
     return jsonify({"ok": True})
 
 
+@app.route("/api/torre/tratar-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "atendimento"))
+@exige_mesma_origem
+def api_torre_tratar_lote():
+    """Tratar por lote (30/09): varios itens da fila selecionados na
+    tela, um motivo so pra todos. Mesmo efeito do tratar unitario."""
+    body = request.get_json(force=True) or {}
+    itens = body.get("itens")
+    motivo = (body.get("motivo") or "").strip()
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum item selecionado"}), 400
+    if not motivo:
+        return jsonify({"erro": "motivo obrigatório"}), 400
+    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo)
+    return jsonify({"ok": True, "tratadas": qtd})
+
+
 @app.route("/api/torre/destratar", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "atendimento"))
 @exige_mesma_origem

@@ -1274,6 +1274,25 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
         )
 
 
+def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str) -> int:
+    """Tratar por lote (Hugo, 30/09): a Fila de acao deixa selecionar
+    varios itens e marcar todos com o mesmo motivo. Cada item e um dict
+    no formato que a tela ja manda pro tratar unitario (id, tipo,
+    descricao, motorista, rota). Devolve quantos foram marcados; item
+    sem id e ignorado."""
+    marcados = 0
+    for item in itens:
+        excecao_id = (item.get("id") or "").strip()
+        if not excecao_id:
+            continue
+        marcar_excecao_tratada(
+            excecao_id, data_alvo, item.get("tipo", ""), item.get("descricao", ""), motivo,
+            motorista_nome=item.get("motorista"), rota_nome=item.get("rota"),
+        )
+        marcados += 1
+    return marcados
+
+
 def desfazer_excecao_tratada(excecao_id: str) -> bool:
     """Desfaz um 'tratado' (clique errado) -- a linha some do histórico
     de propósito: tratado desfeito nunca aconteceu. O log de tratativas

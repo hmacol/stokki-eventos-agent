@@ -106,6 +106,63 @@ class TestDuplicarMarcaTratado(unittest.TestCase):
         self.assertEqual(torre_controle._buscar_tratadas(["insucesso:#PS-1"]), {})
 
 
+class TestTratarEmLote(unittest.TestCase):
+    """Tratar por lote (Hugo, 30/09): a Fila de acao deixa selecionar
+    varios itens e marcar todos com o mesmo motivo de uma vez."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patches = [
+            mock.patch.object(torre_controle, "_RAIZ", Path(self._tmp.name)),
+            mock.patch.object(torre_controle, "tratativas"),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        self._tmp.cleanup()
+
+    def test_marca_todos_com_o_mesmo_motivo(self):
+        itens = [
+            {"id": "insucesso:#PS-1", "tipo": "Insucesso", "descricao": "#PS-1 / A",
+             "motorista": "Joao", "rota": "Rota 1"},
+            {"id": "insucesso:#PS-2", "tipo": "Insucesso", "descricao": "#PS-2 / B",
+             "motorista": "Maria", "rota": "Rota 2"},
+            {"id": "semrota:2026-09-30:3", "tipo": "Sem rota", "descricao": "3 sem rota"},
+        ]
+        qtd = torre_controle.marcar_excecoes_tratadas(itens, "2026-09-30", "Reagendado / lote")
+
+        self.assertEqual(qtd, 3)
+        tratadas = torre_controle._buscar_tratadas([i["id"] for i in itens])
+        self.assertEqual(set(tratadas), {i["id"] for i in itens})
+        for registro in tratadas.values():
+            self.assertEqual(registro["motivo"], "Reagendado / lote")
+
+    def test_registra_tratativa_por_pedido_com_motorista_e_rota(self):
+        itens = [
+            {"id": "insucesso:#PS-1", "tipo": "Insucesso", "descricao": "#PS-1",
+             "motorista": "Joao", "rota": "Rota 1"},
+            {"id": "semrota:2026-09-30:3", "tipo": "Sem rota", "descricao": "3 sem rota"},
+        ]
+        torre_controle.marcar_excecoes_tratadas(itens, "2026-09-30", "Cliente ausente")
+
+        chamadas = torre_controle.tratativas.registrar_evento.call_args_list
+        self.assertEqual(len(chamadas), 1)   # "Sem rota" nao tem pedido por tras
+        self.assertEqual(chamadas[0].args[:3], ("#PS-1", "TORRE", "EXCECAO_TRATADA"))
+        self.assertEqual(chamadas[0].kwargs["motorista_nome"], "Joao")
+        self.assertEqual(chamadas[0].kwargs["rota_nome"], "Rota 1")
+        self.assertEqual(chamadas[0].kwargs["texto"], "Cliente ausente")
+
+    def test_item_sem_id_e_ignorado(self):
+        itens = [{"id": "", "tipo": "x"}, {"tipo": "y"},
+                 {"id": "insucesso:#PS-9", "tipo": "Insucesso", "descricao": "#PS-9"}]
+        qtd = torre_controle.marcar_excecoes_tratadas(itens, "2026-09-30", "Outro")
+        self.assertEqual(qtd, 1)
+        self.assertEqual(set(torre_controle._buscar_tratadas(["insucesso:#PS-9"])), {"insucesso:#PS-9"})
+
+
 class TestRespostasTratativa(unittest.TestCase):
 
     def test_lista_vem_do_backend_e_termina_em_outro(self):
