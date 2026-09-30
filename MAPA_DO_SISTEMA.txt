@@ -300,6 +300,9 @@
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
+ classificar_clientes_cnae.py  Consulta o CNAE dos destinatários na BrasilAPI
+                         e grava a categoria em clientes_cnae (manual, sem
+                         timer; só consulta quem ainda não tem categoria).
 
  --- Agendamento e redespacho ---
  adicionar_agendamento.py      Migração única das tabelas de agendamento.
@@ -419,6 +422,10 @@
  transportadoras.py         Tipo (ENTREGA/RETIRADA/TERCEIROS) e endereço de
                             redespacho; resolver_por_endereco.
  complexidade_entrega.py    Nível 1-4 por destinatário -> skill "{Carga}-{Nível}".
+ categoria_cliente.py       Categoria do destinatário pelo CNAE (restaurante,
+                            comércio pequeno, supermercado, atacado, pessoa
+                            física, outros); tabela clientes_cnae. Ainda não
+                            é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
