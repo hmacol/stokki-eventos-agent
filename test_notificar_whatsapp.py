@@ -623,6 +623,36 @@ class TestCorrecoesDaRevisao(_ComBanco):
             self.assertEqual(self.despachar(config=config, agora=AGORA + timedelta(minutes=13)), "falhou")
 
 
+class TestDespacharForaDoTeto(_ComBanco):
+    """Envio manual ao cliente (avisar_fora_area.py): nao conta no teto
+    diario nem na janela de repeticao, mas respeita intervalo e disjuntor."""
+
+    def test_ignora_teto_diario(self):
+        for i in range(3):   # teto_diario = 3 no _config()
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=i)), "enviado")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=10)), "nao_enviado")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=11), contar_no_teto=False), "enviado")
+        self.assertEqual(self.linhas()[-1][1], "enviado")
+
+    def test_ignora_janela_de_repeticao(self):
+        self.assertEqual(self.despachar(assinatura="x", contar_no_teto=False), "enviado")
+        self.assertEqual(self.despachar(assinatura="x", agora=AGORA + timedelta(minutes=1),
+                                        contar_no_teto=False), "enviado")
+
+    def test_respeita_o_disjuntor(self):
+        self.enviar.return_value = (False, None)
+        with patch.object(nw, "_alertar_se_canal_parou"):
+            for i in range(3):
+                self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=i)), "falhou")
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=5), contar_no_teto=False),
+                             "nao_enviado")
+
+    def test_respeita_o_intervalo(self):
+        self.despachar()
+        self.despachar(agora=AGORA + timedelta(seconds=5), contar_no_teto=False)
+        self.dormir.assert_called_once_with(15.0)
+
+
 class TestResumoDeErroLimpo(unittest.TestCase):
     def test_muitas_etapas_lista_tres_e_conta_o_resto(self):
         etapas = {f"Rota {i} — Motorista {i}": {"status": "erro", "detalhe": "x"} for i in range(20)}

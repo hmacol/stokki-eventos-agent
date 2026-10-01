@@ -331,8 +331,9 @@ def _registrar(conn, agora, origem, tipo, assinatura, situacao, motivo=None, id_
     conn.commit()
 
 
-def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime) -> str | None:
-    if assinatura:
+def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime,
+                            contar_no_teto: bool = True) -> str | None:
+    if assinatura and contar_no_teto:
         desde = _iso(agora - timedelta(minutes=_inteiro(cfg, "janela_repeticao_min", 120)))
         if conn.execute(
                 "SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
@@ -349,6 +350,8 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
         pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
         if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
             return "canal em pausa"
+    if not contar_no_teto:
+        return None
     inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
     enviadas = conn.execute(
         "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ?",
@@ -399,7 +402,8 @@ def _alertar_se_canal_parou(conn, cfg: dict, config: dict) -> None:
                  config.get("email", {}))
 
 
-def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id) -> str:
+def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id,
+               contar_no_teto=True) -> str:
     cfg = _cfg(config)
     grupo_id = grupo_id or cfg.get("grupo_id")
     if not cfg.get("ativo") or not integracao_openwa.configurado(cfg) or not grupo_id:
@@ -413,7 +417,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
         conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
         conn.execute(_SCHEMA)
-        motivo = _motivo_para_nao_enviar(conn, cfg, origem, assinatura, agora)
+        motivo = _motivo_para_nao_enviar(conn, cfg, origem, assinatura, agora, contar_no_teto)
         if motivo:
             _registrar(conn, agora, origem, tipo, assinatura, "nao_enviado", motivo)
             logger.info(f"WhatsApp nao enviado ({origem}): {motivo}.")
@@ -434,12 +438,15 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
 
 def despachar(config: dict, origem: str, tipo: str, texto: str, assinatura: str | None = None,
               modo_teste: bool = False, conn=None, agora: datetime | None = None,
-              dormir=time.sleep, grupo_id: str | None = None) -> str:
+              dormir=time.sleep, grupo_id: str | None = None, contar_no_teto: bool = True) -> str:
     """Aplica as regras e envia. Devolve a situacao: desligado | modo_teste |
     nao_enviado | enviado | falhou. Nunca levanta excecao. `grupo_id` troca
-    o destino (padrao: whatsapp_notificacoes.grupo_id)."""
+    o destino (padrao: whatsapp_notificacoes.grupo_id). `contar_no_teto=False`
+    (envio manual ao cliente, avisar_fora_area.py): sem teto diario nem
+    janela de repeticao; intervalo e disjuntor continuam."""
     try:
-        return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id)
+        return _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora, dormir, grupo_id,
+                          contar_no_teto)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
