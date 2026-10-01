@@ -489,6 +489,22 @@
     color: var(--erro-texto);
   }
   .item-parada .badge-caixas::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 2px; background: currentColor; }
+  /* Avisado pelo botão "Avisar clientes" (Hugo, 30/09) */
+  .item-parada .badge-avisado { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; padding: 1px 6px; border-radius: 100px; background: var(--ok-bg, #e6f4ea); color: var(--ok, #1e7e34); }
+  .modal-avisar-fora-area { width: 640px; }
+  .blocos-avisar { max-height: 55vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .bloco-avisar { border: 1px solid var(--borda); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+  .bloco-avisar.desabilitado { opacity: 0.55; }
+  .bloco-avisar .cab { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; cursor: pointer; }
+  .bloco-avisar .cab strong { flex: 1; }
+  .bloco-avisar .canais { display: flex; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+  .bloco-avisar .canais label { display: inline-flex; align-items: center; gap: 4px; }
+  .bloco-avisar .falta { color: var(--erro-texto); font-weight: 700; }
+  .bloco-avisar .ja-avisado { color: var(--texto-suave); }
+  .bloco-avisar ul { margin: 4px 0 0; padding-left: 18px; }
+  .bloco-avisar .resultado { margin-top: 4px; font-weight: 700; }
+  .bloco-avisar .resultado.falhou { color: var(--erro-texto); }
+  .aviso-avisar { color: var(--erro-texto); font-size: 12.5px; margin: 0 0 8px; }
   .item-parada .badge-fora-area {
     display: inline-flex;
     align-items: center;
@@ -818,6 +834,7 @@
   body.cards-numeros .item-parada .agendamento,
   body.cards-numeros .item-parada .badge-caixas,
   body.cards-numeros .item-parada .badge-fora-area,
+  body.cards-numeros .item-parada .badge-avisado,
   body.cards-numeros .item-parada .badge-dedicado,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
@@ -2016,6 +2033,21 @@
   </div>
 </div>
 
+{# Avisar clientes fora da área (Hugo, 30/09): prévia por embarcador, e-mail +
+   WhatsApp no grupo do cliente. Rotas /api/planejamento/avisar-fora-area*. #}
+<div class="modal-overlay-editar-endereco" id="modal-avisar-fora-area">
+  <div class="modal-editar-endereco modal-avisar-fora-area" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-avisar-fora-area">
+    <h2 id="titulo-modal-avisar-fora-area">Avisar clientes</h2>
+    <p class="subtitulo">E-mail com a lista dos pedidos e mensagem curta no grupo de WhatsApp de cada cliente. Quem já foi avisado vem desmarcado; marque de novo se quiser cobrar.</p>
+    <p class="aviso-avisar" id="avisar-fora-area-aviso" hidden></p>
+    <div id="avisar-fora-area-blocos" class="blocos-avisar"></div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-cancelar-avisar-fora-area">Fechar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-avisar-fora-area" disabled>Enviar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-nivel-horario" id="modal-nivel-horario">
   <div class="modal-nivel-horario" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-nivel-horario">
     <h2 id="titulo-modal-nivel-horario">Nível / horário de atendimento</h2>
@@ -2453,6 +2485,7 @@
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Fora da área de atendimento (<span id="contagem-secao-fora-area">0</span>)</span>
           <button type="button" class="botao-mini botao-selecionar-secao" data-secao="fora-area" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+          <button type="button" class="botao-mini" id="botao-avisar-fora-area" title="Avisa os embarcadores dos pedidos selecionados deste bloco (ou de todos os visíveis, se nada estiver selecionado) por e-mail e WhatsApp, com prévia antes de enviar">Avisar clientes</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-fora-area" data-list-id="pool"></ul>
       </div>
@@ -2710,6 +2743,10 @@
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
+    if (p.tipo_area && p.avisado_em) {
+      // cliente avisado pelo botão "Avisar clientes" (Hugo, 30/09)
+      partes.push(`<span class="badge-avisado" title="Cliente avisado em ${escaparHtml(p.avisado_em)} pelo botão Avisar clientes">✉ avisado ${escaparHtml(p.avisado_em.split(" ")[0])}</span>`);
+    }
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -2788,6 +2825,7 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    li.dataset.avisadoEm = p.avisado_em || "";
     li.dataset.dedicado = p.dedicado ? "1" : "";
     li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
@@ -4134,7 +4172,7 @@
     document.querySelectorAll(".secao-pool").forEach(secaoEl => {
       definirColapsoSecaoPool(secaoEl, !!secoesPoolColapsadas[secaoEl.dataset.secao]);
       secaoEl.querySelector(".cabecalho-secao-pool").addEventListener("click", (e) => {
-        if (e.target.closest(".botao-selecionar-secao")) return;
+        if (e.target.closest(".botao-selecionar-secao") || e.target.closest("#botao-avisar-fora-area")) return;
         definirColapsoSecaoPool(secaoEl, !secaoEl.classList.contains("colapsada"));
       });
       // a seção "A retirar no galpão" é só leitura e não tem o botão
@@ -5942,6 +5980,120 @@
     }
   }
 
+  // ── Avisar clientes fora da área (Hugo, 30/09) ─────────────────────────────
+  // Age sobre os selecionados do bloco "Fora da área" (ou todos os visíveis
+  // dele); prévia vem do servidor, que reclassifica e lê o histórico.
+  const ROTULO_CANAL_RESULTADO = { enviado: "enviado", falhou: "falhou", pulado: "não enviado", nao_enviado: "não enviado (canal em pausa)", desligado: "WhatsApp desligado", modo_teste: "modo teste" };
+  let previaAvisar = null;   // resposta da prévia, na ordem dos blocos
+
+  function idsParaAvisar() {
+    // mesmo critério de "visível" do Selecionar da seção (selecionarSecao)
+    const lista = document.getElementById("lista-pool-fora-area");
+    const visiveis = [...lista.querySelectorAll(".item-parada")].filter(liVisivelNoPool).map(li => Number(li.dataset.serviceId));
+    const selecionados = visiveis.filter(id => SELECIONADOS.has(id));
+    return selecionados.length ? selecionados : visiveis;
+  }
+
+  function htmlBlocoAvisar(b, i, wa) {
+    const jaAvisado = b.ultimo_aviso ? `<span class="ja-avisado">avisado em ${escaparHtml(b.ultimo_aviso.em)} por ${escaparHtml(b.ultimo_aviso.por)}</span>` : "";
+    const marcado = b.enviavel && !b.ultimo_aviso;
+    const email = b.emails.length ? escaparHtml(b.emails.join(", ")) : `<span class="falta">sem e-mail</span>`;
+    const grupo = !wa ? `<span class="falta">WhatsApp indisponível</span>`
+      : b.whatsapp_grupo_id ? escaparHtml(b.whatsapp_grupo_nome || b.whatsapp_grupo_id) : `<span class="falta">sem grupo</span>`;
+    const podeEmail = b.emails.length > 0, podeWa = wa && !!b.whatsapp_grupo_id;
+    return `<div class="bloco-avisar${b.enviavel ? "" : " desabilitado"}" data-i="${i}">
+      <label class="cab"><input type="checkbox" class="bloco-marcado" ${marcado ? "checked" : ""} ${b.enviavel ? "" : "disabled"}>
+        <strong>${escaparHtml(b.nome)}</strong><span>${escaparHtml(ROTULO_TIPO_AREA[b.tipo] || b.tipo)}</span>${jaAvisado}</label>
+      <ul>${b.pedidos.map(p => `<li>${escaparHtml(p.codigo)} · ${escaparHtml([p.cidade, p.uf].filter(Boolean).join("/") || "—")}${p.avisado_em ? ` <span class="ja-avisado">(avisado ${escaparHtml(p.avisado_em)})</span>` : ""}</li>`).join("")}</ul>
+      <div class="canais">
+        <label><input type="checkbox" class="canal-email" ${podeEmail ? "checked" : "disabled"}> E-mail: ${email}</label>
+        <label><input type="checkbox" class="canal-whatsapp" ${podeWa ? "checked" : "disabled"}> WhatsApp: ${grupo}</label>
+      </div>
+      <div class="resultado" hidden></div>
+    </div>`;
+  }
+
+  function atualizarBotaoAvisar() {
+    const n = document.querySelectorAll("#avisar-fora-area-blocos .bloco-marcado:checked").length;
+    const botao = document.getElementById("botao-confirmar-avisar-fora-area");
+    botao.disabled = n === 0;
+    botao.textContent = n ? `Enviar para ${n} cliente${n > 1 ? "s" : ""}` : "Enviar";
+  }
+
+  async function abrirModalAvisarForaArea() {
+    const ids = idsParaAvisar();
+    const aviso = document.getElementById("avisar-fora-area-aviso");
+    const blocos = document.getElementById("avisar-fora-area-blocos");
+    aviso.hidden = true; aviso.textContent = "";
+    blocos.innerHTML = "<p>Carregando…</p>";
+    previaAvisar = null;
+    document.getElementById("botao-confirmar-avisar-fora-area").disabled = true;
+    document.getElementById("modal-avisar-fora-area").classList.add("aberto");
+    if (!ids.length) { blocos.innerHTML = "<p>Nenhum pedido fora da área neste bloco.</p>"; return; }
+    try {
+      previaAvisar = await postJSON("/api/planejamento/avisar-fora-area/previa", { service_ids: ids });
+    } catch (e) {
+      blocos.innerHTML = ""; aviso.hidden = false; aviso.textContent = `Falha ao montar a prévia: ${e.message}`; return;
+    }
+    const foraDaSelecao = [...SELECIONADOS].filter(id => !ids.includes(id)).length;
+    const avisos = [];
+    if (previaAvisar.ignorados.length) avisos.push(`${previaAvisar.ignorados.length} pedido(s) não está(ão) mais fora da área e foi(ram) ignorado(s).`);
+    if (foraDaSelecao) avisos.push(`${foraDaSelecao} pedido(s) selecionado(s) fora deste bloco foi(ram) ignorado(s).`);
+    if (!previaAvisar.whatsapp_disponivel) avisos.push("WhatsApp indisponível: só o e-mail será enviado.");
+    if (avisos.length) { aviso.hidden = false; aviso.textContent = avisos.join(" "); }
+    blocos.innerHTML = previaAvisar.blocos.length
+      ? previaAvisar.blocos.map((b, i) => htmlBlocoAvisar(b, i, previaAvisar.whatsapp_disponivel)).join("")
+      : "<p>Nenhum cliente para avisar.</p>";
+    atualizarBotaoAvisar();
+  }
+
+  async function confirmarAvisarForaArea(botao) {
+    if (!previaAvisar) return;
+    const itens = [];
+    document.querySelectorAll("#avisar-fora-area-blocos .bloco-avisar").forEach(el => {
+      if (!el.querySelector(".bloco-marcado").checked) return;
+      const b = previaAvisar.blocos[Number(el.dataset.i)];
+      const canais = [];
+      if (el.querySelector(".canal-email").checked) canais.push("email");
+      if (el.querySelector(".canal-whatsapp").checked) canais.push("whatsapp");
+      if (!canais.length) return;
+      itens.push({ sender_id: b.sender_id, tipo: b.tipo, service_ids: b.pedidos.map(p => p.service_id), canais });
+    });
+    if (!itens.length) { alert("Marque ao menos um cliente com um canal."); return; }
+    if (!confirm(`Enviar o aviso para ${itens.length} cliente(s) agora?`)) return;
+    botao.disabled = true; botao.textContent = "Enviando…";
+    let dados;
+    try {
+      dados = await postJSON("/api/planejamento/avisar-fora-area", { itens });
+    } catch (e) {
+      alert(`Falha ao enviar: ${e.message}`); botao.disabled = false; atualizarBotaoAvisar(); return;
+    }
+    const hoje = new Date();
+    const rotuloHoje = `${String(hoje.getDate()).padStart(2, "0")}/${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+    dados.resultados.forEach(r => {
+      const i = previaAvisar.blocos.findIndex(b => b.sender_id === r.sender_id && b.tipo === r.tipo);
+      const el = document.querySelector(`#avisar-fora-area-blocos .bloco-avisar[data-i="${i}"]`);
+      if (!el) return;
+      const partes = [`e-mail: ${ROTULO_CANAL_RESULTADO[r.email] || r.email}`, `WhatsApp: ${ROTULO_CANAL_RESULTADO[r.whatsapp] || r.whatsapp}`];
+      if (r.detalhe) partes.push(r.detalhe);
+      const res = el.querySelector(".resultado");
+      res.hidden = false; res.textContent = partes.join(" · ");
+      res.classList.toggle("falhou", r.email === "falhou" || r.whatsapp === "falhou");
+      el.querySelector(".bloco-marcado").checked = false;
+      if (r.email === "enviado" || r.whatsapp === "enviado") {
+        previaAvisar.blocos[i].pedidos.forEach(p => {
+          if (POOL_BY_ID[p.service_id]) POOL_BY_ID[p.service_id].avisado_em = `${rotuloHoje} agora`;
+          const li = document.querySelector(`#lista-pool-fora-area .item-parada[data-service-id="${p.service_id}"]`);
+          if (li && !li.querySelector(".badge-avisado")) {
+            const badge = li.querySelector(".badge-fora-area");
+            if (badge) badge.insertAdjacentHTML("afterend", ` <span class="badge-avisado">✉ avisado ${rotuloHoje}</span>`);
+          }
+        });
+      }
+    });
+    botao.textContent = "Enviar"; atualizarBotaoAvisar();
+  }
+
   let transportadoraPendente = null;   // { itens: [{service_id, rascunho_id}] }
   let TRANSPORTADORAS_TERCEIROS = null; // cache da lista, carregada 1x por página
 
@@ -6465,7 +6617,7 @@
       // menu-risco some inteiro (só tem ações de escrita); menu-lote
       // fica -- Salvar PDF/Imprimir são leitura; menu-motoristas fica
       // só com "Copiar escala pro WhatsApp" (leitura, Hugo 09/09).
-      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-despublicar-ofertas-lote", "botao-enviar-todas", "menu-risco", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas"].forEach(id => {
+      ["botao-nova-rota", "botao-disponibilidade-motoristas", "botao-alocar-motoristas", "botao-desalocar-motoristas", "botao-publicar-ofertas-lote", "botao-despublicar-ofertas-lote", "botao-enviar-todas", "menu-risco", "botao-cancelar-todas", "botao-descartar-todas", "barra-selecao-rotas", "botao-avisar-fora-area"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
       });
@@ -6927,6 +7079,10 @@
     });
     document.getElementById("dedicado-valor").addEventListener("input", atualizarPreviaDedicado);
     document.getElementById("botao-confirmar-dedicado").addEventListener("click", (e) => confirmarDedicado(e.target));
+    document.getElementById("botao-avisar-fora-area").addEventListener("click", (e) => { e.stopPropagation(); abrirModalAvisarForaArea(); });
+    document.getElementById("botao-cancelar-avisar-fora-area").addEventListener("click", () => document.getElementById("modal-avisar-fora-area").classList.remove("aberto"));
+    document.getElementById("botao-confirmar-avisar-fora-area").addEventListener("click", (e) => confirmarAvisarForaArea(e.currentTarget));
+    document.getElementById("avisar-fora-area-blocos").addEventListener("change", atualizarBotaoAvisar);
     document.getElementById("botao-cancelar-nivel-horario").addEventListener("click", () => {
       document.getElementById("modal-nivel-horario").classList.remove("aberto");
       nivelHorarioPendente = null;
