@@ -161,8 +161,16 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        # "pulado": a VUUPT NÃO foi tocada, então o payload não é o estado do
+        # serviço -- pode estar atrás de uma edição manual (endereço trocado
+        # pelo galpão do redespacho no planejamento, PS-40473 em 01/10). Linha
+        # que já existe fica como o sync da VUUPT deixou; só a primeira
+        # passagem grava o payload, pra linha nascer com dados.
+        ja_existe = conn.execute("SELECT 1 FROM nucleo_pedidos WHERE codigo = ?",
+                                 (normalizacao.normalizar_codigo(codigo),)).fetchone() is not None
+        campos = {} if (acao or "").startswith("pulado") and ja_existe else _campos_do_payload(payload)
         upsert_pedido(
-            conn, codigo, _campos_do_payload(payload), origem=banco.ORIGEM_PIPELINE,
+            conn, codigo, campos, origem=banco.ORIGEM_PIPELINE,
             dados_json={"payload": payload, "acao": acao, "service": servico or None},
             vuupt_service_id=int(service_id) if service_id is not None else None,
         )
