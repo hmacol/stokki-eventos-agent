@@ -239,6 +239,38 @@ class TestVincularSemServiceId(_Base):
         self.assertEqual((p["status"], p["vuupt_service_id"]), ("ABERTO", None))
 
 
+class TestPipelinePuladoNaoSobrescreve(_Base):
+    def test_pulado_sem_alteracao_mantem_o_que_a_vuupt_tem(self):
+        """Produção 01/10 (PS-40473): o planejamento gravou na Vuupt o galpão da
+        Transfrios (redespacho); o pipeline de hora em hora achou o payload igual
+        ao da última importação ('pulado_sem_alteracao', Vuupt intocada) e mesmo
+        assim regravava no núcleo o destino final do payload -- o pool do núcleo
+        mostrava Curitiba até o sync das :20 restaurar."""
+        payload = {"code": "#PS-10", "title": "t", "address": "RUA X, Curitiba - PR", "latitude": -25.4,
+                   "longitude": -49.2, "customer": {"code": "123"}}
+        pedidos.registrar_importacao(payload, {"service": {"id": 1}}, "criado", conn=self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=1, code="#PS-10", latitude=-23.7, longitude=-46.9,
+                                            address="Est. Hengles, 591, TRANSFRIOS, Itapecerica da Serra - SP, 06885-160")],
+                                  self.conn)
+        pedidos.registrar_importacao(payload, None, "pulado_sem_alteracao", conn=self.conn)
+        p = self._pedido("PS-10")
+        self.assertIn("TRANSFRIOS", p["endereco"])
+        self.assertEqual((p["latitude"], p["longitude"]), (-23.7, -46.9))
+        self.assertEqual(p["vuupt_service_id"], 1)
+
+    def test_pulado_na_primeira_vez_ainda_cria_a_linha(self):
+        pedidos.registrar_importacao({"code": "#PS-20", "title": "t", "address": "Rua B, 2"}, None, "pulado_atribuido",
+                                     conn=self.conn)
+        self.assertEqual(self._pedido("PS-20")["endereco"], "Rua B, 2")
+
+    def test_criado_e_atualizado_continuam_gravando_o_payload(self):
+        pedidos.registrar_importacao({"code": "#PS-30", "title": "t", "address": "Rua C, 3"}, {"service": {"id": 3}},
+                                     "criado", conn=self.conn)
+        pedidos.registrar_importacao({"code": "#PS-30", "title": "t", "address": "Rua C, 30"}, {"service": {"id": 3}},
+                                     "atualizado", conn=self.conn)
+        self.assertEqual(self._pedido("PS-30")["endereco"], "Rua C, 30")
+
+
 class TestCursor(_Base):
     def test_grava_e_le(self):
         self.assertIsNone(sinc.ler_cursor(self.conn))

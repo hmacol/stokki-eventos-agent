@@ -650,3 +650,46 @@ class TestResumoDeErroLimpo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+LINK_AGENDA = "https://app.freshhub.com.br/painel/clientes-agenda"
+
+
+class TestTextoClientesAgenda(unittest.TestCase):
+    def test_contagens_e_link_sem_nome_de_cliente(self):
+        self.assertEqual(nw.texto_clientes_agenda(3, 8, LINK_AGENDA, agora=AGORA), "\n".join([
+            "📅 *Clientes para marcar como AGENDA* · 16/09 22:05",
+            "3 novos aguardam sua autorização (8 no total).",
+            LINK_AGENDA,
+        ]))
+
+    def test_singular(self):
+        self.assertEqual(nw.texto_clientes_agenda(1, 1, LINK_AGENDA, agora=AGORA).split("\n")[1],
+                         "1 novo aguarda sua autorização (1 no total).")
+
+    def test_cabe_em_200(self):
+        self.assertLessEqual(len(nw.texto_clientes_agenda(999, 9999, LINK_AGENDA, agora=AGORA)), nw.MAX_MENSAGEM)
+
+
+class TestAvisarClientesAgenda(_ComBanco):
+    def avisar(self, novos=3, total=8, config=None, agora=AGORA, **kw):
+        return nw.avisar_clientes_agenda(novos, total, LINK_AGENDA, config or _config(),
+                                         conn=self.conn, agora=agora, dormir=self.dormir, **kw)
+
+    def test_vai_pro_grupo_de_alertas(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "1@g.us")
+        self.assertIn(LINK_AGENDA, self.enviar.call_args[0][2])
+        self.assertEqual(self.conn.execute("SELECT origem, tipo FROM notificacoes_whatsapp").fetchone(),
+                         ("marcar_clientes_agenda", "clientes_agenda"))
+
+    def test_sem_novos_nao_avisa(self):
+        self.assertEqual(self.avisar(novos=0), "nao_relevante")
+        self.enviar.assert_not_called()
+
+    def test_modo_teste_nao_envia(self):
+        self.assertEqual(self.avisar(modo_teste=True), "modo_teste")
+        self.enviar.assert_not_called()
+
+    def test_desligado(self):
+        self.assertEqual(self.avisar(config=_config(ativo=False)), "desligado")

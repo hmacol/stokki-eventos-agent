@@ -85,6 +85,8 @@
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
+ Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
+                                             marcar_clientes_agenda.py + tela /clientes-agenda
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -292,14 +294,22 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 18h/22h). Data informada
                          vence o dia fixo da região.
- marcar_clientes_agenda.py  Quem teve data de agendamento informada vira
-                         AGENDA na BD_CLIENTES (sequências 18h/22h, backup
-                         antes de gravar). Trata cada documento uma vez
-                         (tabela clientes_agenda_marcados): AGENDA apagado
-                         à mão não volta.
+ marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
+                         na fila de autorização do Hugo pra virar AGENDA na
+                         BD_CLIENTES (sequências 18h/22h). Aviso no WhatsApp
+                         com o link da tela /clientes-agenda, onde ele
+                         Autoriza (grava na planilha; backup = o diário das
+                         03h pro GCS) ou marca
+                         Não marcar. Tabela clientes_agenda_marcados; quem
+                         já é AGENDA na planilha entra como autorizado
+                         (apagar à mão não volta). --nao-marcar pela linha
+                         de comando.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
+ classificar_clientes_cnae.py  Consulta o CNAE dos destinatários na BrasilAPI
+                         e grava a categoria em clientes_cnae (manual, sem
+                         timer; só consulta quem ainda não tem categoria).
 
  --- Agendamento e redespacho ---
  adicionar_agendamento.py      Migração única das tabelas de agendamento.
@@ -419,6 +429,10 @@
  transportadoras.py         Tipo (ENTREGA/RETIRADA/TERCEIROS) e endereço de
                             redespacho; resolver_por_endereco.
  complexidade_entrega.py    Nível 1-4 por destinatário -> skill "{Carga}-{Nível}".
+ categoria_cliente.py       Categoria do destinatário pelo CNAE (restaurante,
+                            comércio pequeno, supermercado, atacado, pessoa
+                            física, outros); tabela clientes_cnae. Ainda não
+                            é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
@@ -569,6 +583,9 @@
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
    /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
+   /clientes-agenda           clientes_agenda.html (só nível total: autoriza
+                              AGENDA na BD_CLIENTES; alimentada por
+                              marcar_clientes_agenda.py)
    /pedidos-parados           pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html

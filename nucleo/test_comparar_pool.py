@@ -76,6 +76,23 @@ class TestComparar(unittest.TestCase):
         self.assertEqual(r["divergencias_proprias"], 0)
         self.assertEqual(r["duplicados_na_vuupt"], ["PS-10"])
 
+    def test_documento_formatado_e_coordenada_na_6a_casa_nao_sao_divergencia(self):
+        """Sombra 25-30/09: 622 de ~830 'divergências' eram o CNPJ com pontuação
+        num lado e só dígitos no outro, e 172 eram a 6ª casa da coordenada
+        (-46.80513 × -46.80514: 1 metro). A tela usa só os dígitos do documento
+        (regras.complexidade_entrega._so_digitos) e 4 casas já são ~10 m."""
+        r = cp.comparar(
+            [_s(latitude=-23.50000, longitude=-46.80513,
+                customer={"code": "35064514000357", "operating_hour_start": "08:00", "operating_hour_end": "17:00"})],
+            [_s(latitude=-23.50001, longitude=-46.80514,
+                customer={"code": "35.064.514/0003-57", "operating_hour_start": "08:00", "operating_hour_end": "17:00"})],
+        )
+        self.assertEqual(r["diferentes"], [])
+
+    def test_coordenada_a_mais_de_dez_metros_e_divergencia(self):
+        r = cp.comparar([_s(longitude=-46.8051)], [_s(longitude=-46.8062)])
+        self.assertEqual(list(r["diferentes"][0]["campos"]), ["longitude"])
+
     def test_janela_e_dia_fixo_entram_na_projecao(self):
         p = cp.projetar(_s())
         self.assertEqual(p["janela"], ("11:00", "15:00"))

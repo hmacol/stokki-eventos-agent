@@ -293,6 +293,19 @@ def texto_chamado(chamado: dict, link: str, agora: datetime | None = None) -> st
     return "\n".join(linhas)
 
 
+def texto_clientes_agenda(novos: int, total: int, link: str, agora: datetime | None = None) -> str:
+    """Destinatarios com data de agendamento informada esperando o Hugo
+    autorizar a marcacao AGENDA (marcar_clientes_agenda.py). So contagens;
+    os nomes ficam na tela."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    frase = (f"{novos} novo aguarda" if novos == 1 else f"{novos} novos aguardam")
+    return "\n".join([
+        f"📅 *Clientes para marcar como AGENDA* · {quando}",
+        f"{frase} sua autorização ({total} no total).",
+        link,
+    ])
+
+
 # --- Envio --------------------------------------------------------------------
 
 def _cfg(config: dict | None) -> dict:
@@ -501,6 +514,19 @@ def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
             return "desligado"
         return despachar(config, "atendimento", "chamado", texto_chamado(chamado, link, kw.get("agora")),
                          f"chamado:{chamado['id']}", grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_clientes_agenda(novos: int, total: int, link: str, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Pendentes novos da rodada de marcar_clientes_agenda.py, uma mensagem
+    por rodada, so quando entrou alguem."""
+    try:
+        if not novos:
+            return "nao_relevante"
+        return despachar(config, "marcar_clientes_agenda", "clientes_agenda",
+                         texto_clientes_agenda(novos, total, link, kw.get("agora")), modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
