@@ -725,6 +725,30 @@ def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
     return resumo
 
 
+def _classificar_area(servicos_brutos: list[dict], gmaps_key: str) -> dict[int, str]:
+    """service_id -> tipo_area, mesma classificação do pipeline automático
+    (roteirizacao/notificar_area_nao_atendida.py). Falha vira aviso: a tela
+    segue sem a marcação."""
+    tipos_area: dict[int, str] = {}
+    try:
+        from notificar_area_nao_atendida import identificar_area_nao_atendida
+        for s, tipo in identificar_area_nao_atendida(servicos_brutos, gmaps_key):
+            tipos_area[s["id"]] = tipo
+    except Exception as e:
+        logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
+    return tipos_area
+
+
+def servicos_fora_area(config: dict | None = None) -> tuple[list[dict], dict[int, str]]:
+    """Pool ao vivo + classificação de área, pro botão "Avisar clientes"
+    (Hugo, 30/09): o servidor reclassifica em vez de confiar no tipo_area
+    que o navegador mandou."""
+    config = config or _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    servicos_brutos = listar_pool_not_assigned(config, vuupt)
+    return servicos_brutos, _classificar_area(servicos_brutos, config.get("google_maps", {}).get("api_key", ""))
+
+
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
     """
     Busca ao vivo na VUUPT os pedidos e separa em:
@@ -810,13 +834,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     # roteirização (roteirizacao/notificar_area_nao_atendida.py) -- aqui só
     # rotula o item do pool (tipo_area), não bloqueia nada: o Hugo continua
     # podendo arrastar manualmente se decidir atender mesmo assim.
-    tipos_area: dict[int, str] = {}
-    try:
-        from notificar_area_nao_atendida import identificar_area_nao_atendida
-        for s, tipo in identificar_area_nao_atendida(servicos_brutos, gmaps_key):
-            tipos_area[s["id"]] = tipo
-    except Exception as e:
-        logger.warning(f"Falha ao classificar área não atendida pro pool (tela segue sem essa marcação): {e}")
+    tipos_area = _classificar_area(servicos_brutos, gmaps_key)
 
     # Dedicado (Hugo, 23/09): só rotula o card ("Dedicado · R$ X"); quem
     # tira da rota automática é a roteirização (roteirizacao/dedicados.py).
@@ -826,6 +844,19 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         dedicados_por_id = dedicados_por_servico(servicos_brutos)
     except Exception as e:
         logger.warning(f"Falha ao marcar dedicados pro pool (tela segue sem essa marcação): {e}")
+
+    # Avisado pelo botão "Avisar clientes" (Hugo, 30/09): chip "avisado DD/MM"
+    # nos cards fora da área. Só leitura; falha não derruba a tela.
+    avisados: dict[int, dict] = {}
+    try:
+        import avisar_fora_area
+        conn_avisos = avisar_fora_area.conectar()
+        try:
+            avisados = avisar_fora_area.avisados_por_service_id(conn_avisos)
+        finally:
+            conn_avisos.close()
+    except Exception as e:
+        logger.warning(f"Falha ao carregar avisos de fora da área (tela segue sem o chip): {e}")
 
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
@@ -855,6 +886,8 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         ]
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
+            aviso = avisados.get(p["service_id"])
+            p["avisado_em"] = aviso["em"] if aviso else None
         pool.sort(key=lambda p: p["codigo"])
 
     agendamentos_por_service_id = {}

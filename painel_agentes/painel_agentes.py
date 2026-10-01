@@ -66,7 +66,7 @@ from planejamento_rotas import (
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
-    marcar_dedicados, remover_dedicados,
+    marcar_dedicados, remover_dedicados, servicos_fora_area,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
@@ -83,6 +83,8 @@ import wms
 import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
+import avisar_fora_area
+import integracao_openwa
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -2456,6 +2458,66 @@ def api_planejamento_dedicado():
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         logging.getLogger(__name__).exception("Falha em dedicado")
+        return jsonify({"erro": str(e)}), 500
+
+
+# ── Avisar clientes sobre pedidos fora da área (Hugo, 30/09) ─────────────────
+# Botão do bloco "Fora da área" do planejamento: prévia por embarcador e
+# envio de e-mail + WhatsApp (grupo do cliente). Lógica em avisar_fora_area.py.
+
+def _servicos_fora_area_pedidos(service_ids: list[int]):
+    servicos, tipos = servicos_fora_area(_carregar_config())
+    pedidos = set(service_ids)
+    return [s for s in servicos if s["id"] in pedidos], tipos
+
+
+@app.route("/api/planejamento/avisar-fora-area/previa", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_avisar_fora_area_previa():
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        ids = [int(x) for x in body.get("service_ids") or []]
+    except (TypeError, ValueError):
+        ids = []
+    if not ids:
+        return jsonify({"erro": "nenhum pedido informado"}), 400
+    try:
+        config = _carregar_config()
+        servicos, tipos = _servicos_fora_area_pedidos(ids)
+        grupos = integracao_openwa.listar_grupos(config.get("whatsapp_notificacoes") or {}) or []
+        conn = avisar_fora_area.conectar()
+        try:
+            previa = avisar_fora_area.montar_previa(servicos, tipos, config, conn,
+                                                   grupos_nomes={g["id"]: g["nome"] for g in grupos})
+        finally:
+            conn.close()
+        return jsonify(previa)
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na prévia de avisar fora da área")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/planejamento/avisar-fora-area", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_avisar_fora_area():
+    body = request.get_json(force=True, silent=True) or {}
+    itens = body.get("itens") or []
+    if not itens:
+        return jsonify({"erro": "nenhum cliente marcado"}), 400
+    por = session.get("usuario") or g.nivel_acesso
+    try:
+        config = _carregar_config()
+        ids = [int(sid) for it in itens for sid in (it.get("service_ids") or [])]
+        servicos, tipos = _servicos_fora_area_pedidos(ids)
+        conn = avisar_fora_area.conectar()
+        try:
+            return jsonify(avisar_fora_area.enviar(itens, servicos, tipos, config, por, conn))
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao avisar clientes fora da área")
         return jsonify({"erro": str(e)}), 500
 
 
