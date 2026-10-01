@@ -239,6 +239,8 @@
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
  a cada minuto               atendimento-reenviar-pendentes  atendimento/reenviar_pendentes.py
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
+ a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
+                                                             horário de atendimento dos chamados)
 
  infra/sequencia_tarde.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -325,13 +327,21 @@
  notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
  notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
- preferencias_notificacao.py   Preferências de e-mail por embarcador.
+ preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
+                               WhatsApp (coluna whatsapp) e chave chamado_sem_resposta.
+ avisar_cliente_sem_resposta.py  Timer 2 min: embarcador que ficou 10 min sem
+                               responder a equipe num chamado recebe WhatsApp com o
+                               link do portal. Só no horário de atendimento, uma
+                               tentativa por mensagem da equipe (assinatura msg:<id>),
+                               mensagem com até 3 dias, teto próprio. Desligado
+                               (whatsapp_notificacoes.clientes.ativo); --modo-teste.
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
- integracao_openwa.py          Envio de WhatsApp pelo OpenWA (só notificações internas).
+ integracao_openwa.py          Envio de WhatsApp pelo OpenWA (grupos internos e o
+                               aviso ao cliente) + numero_existe (contacts/check).
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
                                job, não expedidos, resumo das rotinas (erro ou
                                lista sempre_avisar) e insucessos novos de entrega
@@ -774,7 +784,8 @@
    documentos_processados    documentos_pedido/
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
-   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas)
+   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
+                             origem cliente_sem_resposta = aviso direto ao embarcador)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
@@ -842,6 +853,13 @@
    (whatsapp_notificacoes.grupo_atendimento_id; sem ele não envia, nunca
    cai no grupo de alertas). Desliga sozinho com avisar_chamados: false.
    O portal lê o config na subida: mudou a seção, reinicie portal-cliente.
+ - WhatsApp DIRETO AO CLIENTE (avisar_cliente_sem_resposta.py) é a única
+   notificação por WhatsApp que sai pra fora: whatsapp_notificacoes.clientes
+   {ativo, minutos, dias_max, teto_diario, forcar_destino}. Teto separado do
+   interno. Enquanto forcar_destino tiver o número do Hugo, nenhum cliente
+   recebe. Exige a chave operator do OpenWA liberada pra chat individual
+   (infra/openwa/LEIAME.md). Resposta do cliente no WhatsApp cai no celular
+   do Hugo e NÃO entra no chamado.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

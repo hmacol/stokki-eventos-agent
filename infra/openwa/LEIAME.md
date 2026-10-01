@@ -110,7 +110,27 @@ whatsapp_notificacoes:
 - Secao `whatsapp_notificacoes` incluida no `config.yaml` da VPS em 29/09/2026
   com `ativo: false`. Backup: `config.yaml.bak-20260929-antes-whatsapp`.
 
+## Conversa individual: aviso ao cliente (01/10/2026)
+
+`avisar_cliente_sem_resposta.py` manda WhatsApp pro embarcador que ficou
+10 min sem responder a equipe num chamado do portal. É a única rotina que
+fala com alguém fora dos grupos internos.
+
+- Destino: `55DDDNUMERO@c.us` (o número vem do botão Notificações do portal).
+- Antes de enviar, `GET /api/sessions/<sessao>/contacts/check/<numero>`
+  (`integracao_openwa.numero_existe`): o `send-text` devolve 201 mesmo pra
+  número que não tem WhatsApp. `exists: false` vira `nao_enviado`; 503/erro
+  não grava nada e a rotina tenta na próxima rodada.
+- A chave `operator` nasceu restrita aos dois grupos (`allowedChats`). Pra
+  esta rotina ela precisa aceitar chat individual: com a chave admin
+  (`/opt/openwa/data/.api-key`), `PUT /api/auth/api-keys/<id>` com
+  `allowedChats` vazio/nulo (mantendo `allowedSessions`). Sem isso o envio
+  ao cliente dá 403 e a rotina registra `falhou`.
+- Config: `whatsapp_notificacoes.clientes: {ativo, minutos, dias_max,
+  teto_diario, forcar_destino}`. `forcar_destino` com o número do Hugo =
+  piloto (a mensagem vai pra ele com o destino real na primeira linha).
+
 ## Pendente
 
-- Merge e deploy do ramo `whatsapp-notificacoes`.
-- Ligar (`ativo: true`) e prova real com `alertar_falha_job.py ... --forcar`.
+- Liberar a chave `operator` pra chat individual e ligar
+  `whatsapp_notificacoes.clientes.ativo` (decisão do Hugo).
