@@ -77,7 +77,7 @@ class TestApiNotificacoes(unittest.TestCase):
         self.assertTrue(ligados["entrega_concluida"])
         self.assertTrue(all(t["rotulo"] and t["descricao"] for t in corpo["tipos"]))
         self.assertEqual([t["grupo"] for t in corpo["tipos"]],
-                         ["acompanhamento"] * 4 + ["acao"] * 3)
+                         ["acompanhamento"] * 4 + ["acao"] * 3 + ["whatsapp"])
         self.assertFalse(corpo["somente_leitura"])
         self.assertEqual(corpo["emails"], [])
         self.assertEqual(corpo["emails_cadastro"], ["cadastro@alfa.com"])
