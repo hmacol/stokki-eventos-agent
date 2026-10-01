@@ -3,8 +3,9 @@
 integracao_openwa.py
 
 Envio de WhatsApp pelo gateway OpenWA (github.com/rmyndharis/OpenWA,
-auto-hospedado, nao-oficial) -- usado SO pelas notificacoes internas
-(notificar_whatsapp.py). Nao tem relacao com a central de atendimento,
+auto-hospedado, nao-oficial) -- usado pelas notificacoes internas
+(notificar_whatsapp.py) e pelo aviso manual aos clientes sobre pedidos fora
+da area (avisar_fora_area.py). Nao tem relacao com a central de atendimento,
 que usa a Evolution API (integracao_evolution.py).
 
 O numero pareado e o do proprio Hugo (decisao dele, 28/09/2026, risco de
@@ -52,3 +53,25 @@ def enviar_texto(cfg: dict, chat_id: str, texto: str) -> tuple[bool, str | None]
     except ValueError:
         dados = None
     return True, dados.get("messageId") if isinstance(dados, dict) else None
+
+
+def listar_grupos(cfg: dict) -> list[dict] | None:
+    """GET /sessions/{sessao}/groups: grupos de que o numero participa, como
+    [{"id": "...@g.us", "nome": "..."}] ordenados por nome. None quando nao
+    configurado ou quando o gateway nao responde (quem chama avisa que o
+    gateway esta fora do ar). Nunca levanta excecao."""
+    if not configurado(cfg):
+        return None
+    url = f"{cfg['base_url'].rstrip('/')}/sessions/{cfg['sessao']}/groups"
+    try:
+        resp = requests.get(url, headers={"X-API-Key": cfg["api_key"]}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        dados = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Falha ao listar grupos no OpenWA: {exc}")
+        return None
+    if not isinstance(dados, list):
+        return None
+    grupos = [{"id": g["id"], "nome": g["name"]} for g in dados
+              if isinstance(g, dict) and g.get("id") and g.get("name")]
+    return sorted(grupos, key=lambda g: g["nome"].lower())

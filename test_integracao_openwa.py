@@ -80,5 +80,39 @@ class TestEnviarTexto(unittest.TestCase):
         self.assertNotIn("chave", "\n".join(logs.output))
 
 
+class TestListarGrupos(unittest.TestCase):
+    def test_lista_ordenada_por_nome(self):
+        corpo = [{"id": "2@g.us", "name": "zeta"}, {"id": "1@g.us", "name": "Alfa"},
+                 {"id": "3@g.us", "name": "beta", "linkedParentJID": None}]
+        with patch.object(openwa.requests, "get", return_value=_resposta(corpo=corpo)) as get:
+            self.assertEqual(openwa.listar_grupos(CFG), [
+                {"id": "1@g.us", "nome": "Alfa"}, {"id": "3@g.us", "nome": "beta"}, {"id": "2@g.us", "nome": "zeta"}])
+        args, kwargs = get.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:2785/api/sessions/abc-123/groups")
+        self.assertEqual(kwargs["headers"], {"X-API-Key": "chave"})
+        self.assertEqual(kwargs["timeout"], 15)
+
+    def test_sem_config_nao_chama_a_rede(self):
+        with patch.object(openwa.requests, "get") as get:
+            self.assertIsNone(openwa.listar_grupos({}))
+            self.assertIsNone(openwa.listar_grupos(dict(CFG, sessao="")))
+        get.assert_not_called()
+
+    def test_falha_de_rede_http_ou_json_vira_none(self):
+        with patch.object(openwa.requests, "get", side_effect=requests.ConnectionError("x")):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get", return_value=_resposta(status=401)):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get", return_value=_resposta(json_invalido=True)):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get", return_value=_resposta(corpo={"nao": "lista"})):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+
+    def test_item_sem_id_ou_sem_nome_e_pulado(self):
+        corpo = [{"id": "1@g.us"}, {"name": "x"}, {"id": "2@g.us", "name": "Ok"}]
+        with patch.object(openwa.requests, "get", return_value=_resposta(corpo=corpo)):
+            self.assertEqual(openwa.listar_grupos(CFG), [{"id": "2@g.us", "nome": "Ok"}])
+
+
 if __name__ == "__main__":
     unittest.main()
