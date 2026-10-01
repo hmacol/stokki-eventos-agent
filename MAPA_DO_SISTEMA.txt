@@ -298,7 +298,8 @@
                          na fila de autorização do Hugo pra virar AGENDA na
                          BD_CLIENTES (sequências 18h/22h). Aviso no WhatsApp
                          com o link da tela /clientes-agenda, onde ele
-                         Autoriza (grava na planilha, com backup) ou marca
+                         Autoriza (grava na planilha; backup = o diário das
+                         03h pro GCS) ou marca
                          Não marcar. Tabela clientes_agenda_marcados; quem
                          já é AGENDA na planilha entra como autorizado
                          (apagar à mão não volta). --nao-marcar pela linha

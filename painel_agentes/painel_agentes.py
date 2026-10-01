@@ -836,7 +836,8 @@ def clientes_agenda():
     """Fila de destinatários com data de agendamento informada esperando
     o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
     alimenta é marcar_clientes_agenda.py (sequências 18h/22h); o link
-    chega pelo WhatsApp. Só nível total: a decisão grava na planilha."""
+    chega pelo WhatsApp. Só nível total: a decisão grava na planilha
+    (sem cópia por clique: o backup é o diário das 03h pro GCS)."""
     import marcar_clientes_agenda
     try:
         linhas = marcar_clientes_agenda.listar()
@@ -866,7 +867,7 @@ def api_clientes_agenda_decidir():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
         return jsonify({"erro": str(e)}), 500
-    return jsonify({"ok": True, "situacao": resultado["situacao"], "backup": resultado["backup"]})
+    return jsonify({"ok": True, "situacao": resultado["situacao"]})
 
 
 @app.route("/pedidos-parados")
