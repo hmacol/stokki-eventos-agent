@@ -445,6 +445,24 @@
   .td-acao button.duplicar:hover { border-color: #1c5cab; }
   .td-acao button.notificar { color: #0a8f6e; border-color: #B7E8DA; }
   .td-acao button.notificar:hover { border-color: #0a8f6e; }
+  /* Tratar por lote (Hugo, 30/09): checkbox por linha + barra que so
+     aparece com algo selecionado. A barra fica dentro do #excecoes de
+     proposito (irma da tabela), pra nao quebrar '#excecoes > table'. */
+  table.tabela-excecoes th.th-sel, table.tabela-excecoes td.td-sel { width: 28px; padding-left: 4px; padding-right: 4px; }
+  table.tabela-excecoes .th-sel input, table.tabela-excecoes .td-sel input { cursor: pointer; margin: 0; vertical-align: middle; }
+  table.tabela-excecoes tr.selecionada td { background: rgba(28,92,171,0.08); }
+  .barra-lote {
+    display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 10px; padding: 8px 12px; border-radius: 8px;
+    border: 1px solid var(--borda); background: var(--fundo); font-size: 12.5px;
+  }
+  .barra-lote.visivel { display: flex; }
+  .barra-lote .qtd { font-weight: 700; }
+  .barra-lote button { font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  .barra-lote button.tratar-lote { background: var(--primaria); color: #fff; border: none; font-weight: 700; }
+  .barra-lote button.tratar-lote:hover { opacity: 0.88; }
+  .barra-lote button.limpar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .barra-lote button.limpar:hover { border-color: var(--acento); color: var(--acento); }
   details.tratadas { margin-top: 12px; font-size: 12.5px; }
   details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
   details.tratadas table td { color: var(--texto-suave); }
@@ -659,6 +677,7 @@ function alternarVisaoRotas() {
 // ── Alarme sonoro de novas ações na fila ────────────────────────────
 let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
 let idsExcecoesConhecidas = null; // null até o 1º carregamento — não alarma na abertura da página
+let idsSelecionados = new Set();  // Fila de ação: marcados pro Tratar em lote (30/09)
 let audioCtx = null;
 
 function obterAudioCtx() {
@@ -1244,9 +1263,19 @@ function renderExcecoes(d) {
   const contagem = document.getElementById("contagem-acoes");
   if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
 
+  // Seleção pro lote: descarta o que saiu da fila entre um refresh e outro.
+  idsSelecionados = new Set([...idsSelecionados].filter(id => idsAtuais.has(id)));
+
   if (!d.excecoes.length) {
     partes.push(`<div class="excecao-vazia">✓ Nenhuma ação pendente — operação normal.</div>`);
   } else {
+    if (PODE_TRATAR) {
+      partes.push(`<div class="barra-lote" id="barra-lote">
+        <span class="qtd" id="barra-lote-qtd"></span>
+        <button type="button" class="tratar-lote" onclick="tratarSelecionadas()">✓ Tratar selecionados</button>
+        <button type="button" class="limpar" onclick="limparSelecao()">Limpar</button>
+      </div>`);
+    }
     const linhas = d.excecoes.map(x => {
       let acao = "";
       // url/link_log vem do backend relativo a raiz do painel (sem o
@@ -1270,7 +1299,13 @@ function renderExcecoes(d) {
                           onclick="tratarExcecao('${esc(x.id)}')">✓ Tratar</button>`;
       }
       const icone = x.severidade === "critico" ? "✗" : "▲";
-      return `<tr>
+      const marcada = idsSelecionados.has(x.id);
+      const sel = PODE_TRATAR
+        ? `<td class="td-sel"><input type="checkbox" ${marcada ? "checked" : ""} aria-label="Selecionar pra tratar em lote"
+                onchange="alternarSelecao('${esc(x.id)}', this.checked)"></td>`
+        : "";
+      return `<tr data-id="${esc(x.id)}" class="${marcada ? "selecionada" : ""}">
+        ${sel}
         <td><span class="pill-sev ${x.severidade}">${icone} ${x.severidade === "critico" ? "Crítico" : "Atenção"}</span></td>
         <td class="td-quando">${x.quando ? esc(x.quando) : "—"}</td>
         <td class="td-tipo">${esc(x.tipo)}</td>
@@ -1279,9 +1314,13 @@ function renderExcecoes(d) {
         <td class="td-acao">${acao}</td>
       </tr>`;
     }).join("");
+    const thSel = PODE_TRATAR
+      ? `<th class="th-sel"><input type="checkbox" id="sel-todas" aria-label="Selecionar todas"
+              title="Selecionar todas" onchange="selecionarTodas(this.checked)"></th>`
+      : "";
     partes.push(`<table class="tabela-excecoes">
       <thead><tr>
-        <th>Severidade</th><th>Quando</th><th>Tipo</th><th>Descrição</th><th>Motivo</th><th class="th-acao">Ação</th>
+        ${thSel}<th>Severidade</th><th>Quando</th><th>Tipo</th><th>Descrição</th><th>Motivo</th><th class="th-acao">Ação</th>
       </tr></thead>
       <tbody>${linhas}</tbody>
     </table>`);
@@ -1301,6 +1340,63 @@ function renderExcecoes(d) {
   }
 
   alvo.innerHTML = partes.join("");
+  atualizarBarraLote();
+}
+
+// Tratar por lote (Hugo, 30/09): a seleção (idsSelecionados, declarado
+// lá em cima) vive fora do DOM porque a fila é redesenhada a cada
+// refresh (60 s) -- renderExcecoes remarca as caixas e descarta o que
+// já saiu da fila.
+function alternarSelecao(id, marcado) {
+  if (marcado) idsSelecionados.add(id); else idsSelecionados.delete(id);
+  const tr = document.querySelector(`#excecoes tr[data-id="${CSS.escape(id)}"]`);
+  if (tr) tr.classList.toggle("selecionada", marcado);
+  atualizarBarraLote();
+}
+
+function selecionarTodas(marcado) {
+  document.querySelectorAll("#excecoes > table.tabela-excecoes tbody input[type=checkbox]").forEach(cb => {
+    cb.checked = marcado;
+    const tr = cb.closest("tr");
+    const id = tr.dataset.id;
+    if (marcado) idsSelecionados.add(id); else idsSelecionados.delete(id);
+    tr.classList.toggle("selecionada", marcado);
+  });
+  atualizarBarraLote();
+}
+
+function limparSelecao() {
+  idsSelecionados.clear();
+  document.querySelectorAll("#excecoes input[type=checkbox]").forEach(cb => { cb.checked = false; });
+  document.querySelectorAll("#excecoes tr.selecionada").forEach(tr => tr.classList.remove("selecionada"));
+  atualizarBarraLote();
+}
+
+function atualizarBarraLote() {
+  const barra = document.getElementById("barra-lote");
+  if (!barra) return;
+  const n = idsSelecionados.size;
+  barra.classList.toggle("visivel", n > 0);
+  document.getElementById("barra-lote-qtd").textContent =
+    n === 1 ? "1 selecionado" : `${n} selecionados`;
+  const todas = document.getElementById("sel-todas");
+  if (todas) {
+    const total = document.querySelectorAll("#excecoes > table.tabela-excecoes tbody tr").length;
+    todas.checked = n > 0 && n === total;
+    todas.indeterminate = n > 0 && n < total;
+  }
+}
+
+// Abre o mesmo modal do Tratar unitário com um "pendente" de lote: a
+// confirmação vê `lote` e manda tudo pra /api/torre/tratar-lote.
+function tratarSelecionadas() {
+  const lote = (dadosAtuais && dadosAtuais.excecoes || []).filter(x => idsSelecionados.has(x.id));
+  if (!lote.length) return;
+  const rotulos = lote.map(x => x.codigo || x.descricao);
+  tratarExcecao(null, {
+    lote,
+    descricao: `${lote.length} selecionado(s): ${rotulos.join(" · ")}`,
+  });
 }
 
 // "Tratar" com dropdown de respostas prontas (Hugo, 16/09) -- a lista
@@ -1309,9 +1405,16 @@ function renderExcecoes(d) {
 // complemento opcional ("Reagendado / para 19/09").
 let excecaoPendenteTratar = null;
 
-function tratarExcecao(id) {
-  const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
-  excecaoPendenteTratar = x || { id, descricao: id, tipo: "", motorista: null, rota: null };
+function tratarExcecao(id, pendenteLote) {
+  if (pendenteLote) {
+    excecaoPendenteTratar = pendenteLote;
+  } else {
+    const x = (dadosAtuais && dadosAtuais.excecoes || []).find(e => e.id === id);
+    excecaoPendenteTratar = x || { id, descricao: id, tipo: "", motorista: null, rota: null };
+  }
+  const n = excecaoPendenteTratar.lote ? excecaoPendenteTratar.lote.length : 1;
+  document.getElementById("titulo-modal-tratar").textContent =
+    n > 1 ? `Marcar ${n} como tratadas` : "Marcar como tratada";
   const respostas = (dadosAtuais && dadosAtuais.respostas_tratativa) || ["Outro"];
   const select = document.getElementById("tratar-resposta");
   select.innerHTML = `<option value="">Selecione...</option>` +
@@ -1351,17 +1454,27 @@ async function confirmarTratar(botao) {
   const original = botao.textContent;
   botao.disabled = true;
   botao.textContent = "Marcando...";
+  const data_alvo = dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO;
+  const corpo = x.lote
+    ? { url: `${BASE_PATH}/api/torre/tratar-lote`, body: {
+          motivo, data_alvo,
+          itens: x.lote.map(i => ({
+            id: i.id, tipo: i.tipo || "", descricao: i.descricao || "",
+            motorista: i.motorista || null, rota: i.rota || null,
+          })),
+        } }
+    : { url: `${BASE_PATH}/api/torre/tratar`, body: {
+          id: x.id, motivo, data_alvo,
+          tipo: x.tipo || "", descricao: x.descricao || "",
+          motorista: x.motorista || null, rota: x.rota || null,
+        } };
   try {
-    const resp = await fetch(`${BASE_PATH}/api/torre/tratar`, {
+    const resp = await fetch(corpo.url, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: x.id, motivo,
-        data_alvo: dadosAtuais ? dadosAtuais.data_alvo_iso : HOJE_ISO,
-        tipo: x.tipo || "", descricao: x.descricao || "",
-        motorista: x.motorista || null, rota: x.rota || null,
-      }),
+      body: JSON.stringify(corpo.body),
     });
     if (!resp.ok) { const j = await resp.json(); throw new Error(j.erro || "Falha ao marcar."); }
+    if (x.lote) idsSelecionados.clear();
     fecharModalTratar();
     carregarDados();
   } catch (e) {
