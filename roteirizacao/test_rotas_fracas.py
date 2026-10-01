@@ -136,5 +136,130 @@ class TestMotivoNaoSegurar(unittest.TestCase):
         self.assertIsNone(rf.motivo_nao_segurar(s, TERCA, set()))
 
 
+class TestAbsorver(unittest.TestCase):
+    """Receptoras levam 25 caixas por parada pra NAO serem fracas (senao
+    elas mesmas tentariam se juntar e o teste mediria outra coisa)."""
+
+    def setUp(self):
+        import otimizacao_rotas as ot
+        import polimento_rotas as pr
+
+        def _coords(s, k=None):
+            lat, lng = s.get("latitude"), s.get("longitude")
+            return (lat, lng) if lat is not None and lng is not None else None
+
+        # obter_coordenadas e importada POR NOME em cada modulo: sem trocar
+        # em todos, o pedido sem coordenada cairia na geocodificacao real
+        patches = [mock.patch.object(m, "obter_coordenadas", _coords) for m in (rd, ot, pr, rf)]
+        patches.append(mock.patch.object(rf, "macro_regiao_predominante_do_sublote",
+                                         lambda sub, k=None: "GRANDE_SP"))
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        rd.COORDS_BASE = BASE
+        rd.HORA_SAIDA_BASE = 6.0
+
+    def _absorver(self, sublotes, **kw):
+        params = dict(tamanho_maximo=16, volume_maximo=100, distancia_maxima_km=15, km_acumulado_maximo=60)
+        params.update(kw)
+        return rf.absorver_rotas_fracas(sublotes, *BASE, None, **params)
+
+    def test_junta_com_folga_de_distancia(self):
+        # 1 esta a ~17,8 km de 3 e 4: nao cabia com 15 km, cabe com 20
+        fraca = [_servico(1, 0.10, 0.00)]
+        vizinha = [_servico(3, 0.10, 0.16, caixas=25), _servico(4, 0.10, 0.161, caixas=25)]
+        saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(_ids(saida), [1, 3, 4])
+        self.assertEqual(rel["juntadas"], 1)
+        self.assertEqual(rel["motivos"], {})
+
+    def test_nao_junta_alem_da_folga(self):
+        # ~22 km: passa dos 20
+        fraca = [_servico(1, 0.10, 0.00)]
+        vizinha = [_servico(3, 0.10, 0.20, caixas=25), _servico(4, 0.10, 0.201, caixas=25)]
+        saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(sorted(len(s) for s in saida), [1, 2])
+        self.assertEqual(_ids(saida), [1, 3, 4])
+        self.assertEqual(rel["juntadas"], 0)
+        rota_fraca = next(s for s in saida if len(s) == 1)
+        self.assertEqual(rel["motivos"], {id(rota_fraca): "vizinha mais próxima a 22 km"})
+
+    def test_nao_cede_em_caixas(self):
+        fraca = [_servico(1, 0.10, 0.00, caixas=30)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=40), _servico(4, 0.10, 0.011, caixas=40)]
+        saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(rel["juntadas"], 0)
+        self.assertEqual(list(rel["motivos"].values()),
+                         ["não coube nas vizinhas (distância, paradas, caixas, tempo ou janela)"])
+
+    def test_folga_de_paradas_e_teto_mais_dois(self):
+        fraca = [_servico(1, 0.10, 0.00)]
+        tres = [_servico(10 + i, 0.10, 0.01 + 0.001 * i, caixas=25) for i in range(3)]
+        saida, rel = self._absorver([list(fraca), tres], tamanho_maximo=2)  # folga: 4 paradas
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(rel["juntadas"], 1)
+        # 20 caixas cada (80 + 1 = 81): quem barra aqui e o teto de paradas, nao o de caixas
+        quatro = [_servico(20 + i, 0.10, 0.01 + 0.001 * i, caixas=20) for i in range(4)]
+        saida, rel = self._absorver([list(fraca), quatro], tamanho_maximo=2)
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(rel["juntadas"], 0)
+
+    def test_reparte_entre_duas_vizinhas(self):
+        fraca = [_servico(1, 0.10, 0.00), _servico(2, 0.10, 0.30)]
+        oeste = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
+        leste = [_servico(5, 0.10, 0.301, caixas=25), _servico(6, 0.10, 0.302, caixas=25)]
+        saida, rel = self._absorver([fraca, oeste, leste])
+        grupos = sorted(sorted(s["id"] for s in sub) for sub in saida)
+        self.assertEqual(grupos, [[1, 3, 4], [2, 5, 6]])
+        self.assertEqual(rel["juntadas"], 1)
+
+    def test_tudo_ou_nada(self):
+        # 1 caberia na vizinha, 9 nao cabe em lugar nenhum: nada muda
+        fraca = [_servico(1, 0.10, 0.00), _servico(9, 0.10, 0.60)]
+        vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
+        saida, rel = self._absorver([fraca, vizinha])
+        grupos = sorted(sorted(s["id"] for s in sub) for sub in saida)
+        self.assertEqual(grupos, [[1, 9], [3, 4]])
+        self.assertEqual(rel["juntadas"], 0)
+        self.assertEqual(len(rel["motivos"]), 1)
+
+    def test_nivel4_nunca_participa(self):
+        exclusiva = [_servico(7, 0.10, 0.00, nivel=4)]
+        vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
+        saida, rel = self._absorver([exclusiva, vizinha])
+        self.assertEqual(sorted(len(s) for s in saida), [1, 2])
+        self.assertEqual(rel, {"juntadas": 0, "motivos": {}})
+
+    def test_macro_regiao_diferente_nao_junta(self):
+        fraca = [_servico(1, 0.10, 0.00)]
+        vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
+        with mock.patch.object(rf, "macro_regiao_predominante_do_sublote",
+                               lambda sub, k=None: "Campinas" if sub[0]["id"] == 1 else "GRANDE_SP"):
+            saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(list(rel["motivos"].values()), ["sem rota vizinha na mesma região"])
+
+    def test_duas_fracas_vizinhas_viram_uma(self):
+        saida, rel = self._absorver([[_servico(1, 0.10, 0.00)], [_servico(2, 0.10, 0.001)]])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(_ids(saida), [1, 2])
+        self.assertEqual(rel["juntadas"], 1)
+        # a que sobrou continua fraca e nao tem mais vizinha
+        self.assertEqual(rel["motivos"], {id(saida[0]): "sem rota vizinha na mesma região"})
+
+    def test_pedido_sem_coordenada_nao_quebra(self):
+        fraca = [_servico(1, None, None)]
+        vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
+        saida, _ = self._absorver([fraca, vizinha])
+        self.assertEqual(_ids(saida), [1, 3, 4])
+
+    def test_rota_unica_do_dia(self):
+        saida, rel = self._absorver([[_servico(1, 0.10, 0.00)]])
+        self.assertEqual(_ids(saida), [1])
+        self.assertEqual(list(rel["motivos"].values()), ["sem rota vizinha na mesma região"])
+
+
 if __name__ == "__main__":
     unittest.main()
