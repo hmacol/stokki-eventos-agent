@@ -93,6 +93,33 @@ class TestApiNotificacoes(unittest.TestCase):
         self.assertFalse(prefs["tipos"]["insucesso"])
         self.assertEqual(prefs["atualizado_por"], "cliente")
 
+    def test_get_devolve_o_whatsapp_vazio_por_padrao(self):
+        self._entrar_como_cliente()
+        corpo = self.tc.get("/api/notificacoes").get_json()
+        self.assertEqual(corpo["whatsapp"], "")
+        tipo = [t for t in corpo["tipos"] if t["tipo"] == "chamado_sem_resposta"][0]
+        self.assertEqual((tipo["grupo"], tipo["ligado"]), ("whatsapp", True))
+
+    def test_post_grava_o_whatsapp_normalizado_e_ausente_mantem(self):
+        self._entrar_como_cliente()
+        r = self.tc.post("/api/notificacoes", headers=ORIGEM, json={"tipos": {}, "whatsapp": "(11) 99999-0000"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["whatsapp"], "5511999990000")
+        r = self.tc.post("/api/notificacoes", headers=ORIGEM, json={"tipos": {"resumo_diario": True}})
+        self.assertEqual(r.get_json()["whatsapp"], "5511999990000")
+        r = self.tc.post("/api/notificacoes", headers=ORIGEM, json={"tipos": {}, "whatsapp": ""})
+        self.assertEqual(r.get_json()["whatsapp"], "")
+
+    def test_whatsapp_invalido_da_400_e_nao_grava(self):
+        self._entrar_como_cliente()
+        for corpo in ({"tipos": {}, "whatsapp": "999"}, {"tipos": {}, "whatsapp": 11999990000}):
+            with self.subTest(corpo=corpo):
+                r = self.tc.post("/api/notificacoes", headers=ORIGEM, json=corpo)
+                self.assertEqual(r.status_code, 400)
+        self.assertIn("DDD", self.tc.post("/api/notificacoes", headers=ORIGEM,
+                                          json={"tipos": {}, "whatsapp": "999"}).get_json()["erro"])
+        self.assertEqual(self._prefs(CNPJ_A)["whatsapp"], "")
+
     def test_cnpj_no_corpo_e_ignorado(self):
         self._entrar_como_cliente()
         self.tc.post("/api/notificacoes", headers=ORIGEM,
