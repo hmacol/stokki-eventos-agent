@@ -172,6 +172,15 @@ def _montar_conteudo(nome_remetente: str, tipo: str, pedidos: list[dict]) -> str
 """
 
 
+def assunto_e_conteudo(nome_remetente: str, tipo: str, pedidos: list[dict]) -> tuple[str, str]:
+    """Assunto e miolo HTML do e-mail de área não atendida -- usado pela
+    roteirização (notificar_remetentes) e pelo botão "Avisar clientes" do
+    planejamento (avisar_fora_area.py, 30/09), pra não ter dois textos."""
+    assunto_tipo = "cotação necessária" if tipo == TIPO_SP_NAO_ATENDIDO else "fora de SP — confirmar redespacho"
+    assunto = f"[Freshlog] {len(pedidos)} pedido(s) — {assunto_tipo}"
+    return assunto, _montar_conteudo(nome_remetente, tipo, pedidos)
+
+
 def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_email: dict,
                          modo_teste: bool = False, forcar_destino: str | None = None) -> dict:
     """
@@ -214,9 +223,7 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
             sem_email += 1
             continue
 
-        assunto_tipo = "cotação necessária" if tipo == TIPO_SP_NAO_ATENDIDO else "fora de SP — confirmar redespacho"
-        assunto = f"[Freshlog] {len(pedidos)} pedido(s) — {assunto_tipo}"
-        conteudo = _montar_conteudo(emb["nome"], tipo, pedidos)
+        assunto, conteudo = assunto_e_conteudo(emb["nome"], tipo, pedidos)
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
                               cor_acento=COR_DESTAQUE)
         destinos = [EMAIL_TESTE] if modo_teste else ([forcar_destino] if forcar_destino else emb["emails"])
