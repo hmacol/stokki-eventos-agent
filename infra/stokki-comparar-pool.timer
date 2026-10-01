@@ -1,8 +1,10 @@
 [Unit]
-Description=Dispara stokki-comparar-pool.service de hora em hora (07h-20h, :10, depois do sync de :05)
+Description=Dispara stokki-comparar-pool.service de hora em hora (07h-20h, :25 -- depois do sync das :20, que ja absorveu o pipeline das :00)
 
 [Timer]
-OnCalendar=*-*-* 07..20:10:00
+# Sombra 25-30/09: em :10 o comparador pegava o pedido entre o pipeline (:00)
+# e o sync (:20) -- toda "divergencia real" era desse intervalo.
+OnCalendar=*-*-* 07..20:25:00
 Persistent=false
 AccuracySec=1min
 
