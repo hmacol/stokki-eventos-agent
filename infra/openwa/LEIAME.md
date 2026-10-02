@@ -130,7 +130,8 @@ fala com alguém fora dos grupos internos.
   teto_diario, forcar_destino}`. `forcar_destino` com o número do Hugo =
   piloto (a mensagem vai pra ele com o destino real na primeira linha).
 
-## Pendente
-
-- Liberar a chave `operator` pra chat individual e ligar
-  `whatsapp_notificacoes.clientes.ativo` (decisão do Hugo).
+- **Feito em 02/10/2026** (autorizado pelo Hugo): chave `stokki-eventos
+  notificacoes` (id `32892404-…`) com `allowedChats: null`, ainda presa à
+  sessão `notificacoes`. `contacts/check` provado: número real `true`,
+  número inventado `false`. `clientes.ativo: true` com `forcar_destino` no
+  número do Hugo (piloto). Backup `config.yaml.bak-20261002-antes-ligar-clientes`.
