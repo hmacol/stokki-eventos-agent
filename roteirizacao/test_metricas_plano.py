@@ -103,6 +103,23 @@ class MetricasTestCase(unittest.TestCase):
         self.assertNotIn("sem coordenada", linha2)
         self.assertNotIn("\n", linha2)
 
+    def test_rotas_fracas_conta_paradas_e_caixas_juntas(self):
+        rotas = [[(0.1, 0.0)], [(0.1, 0.01)], [(0.1, 0.02 + 0.001 * i) for i in range(8)]]
+        # 1 parada/9 caixas = fraca; 1 parada/294 caixas = carga cheia; 8 paradas/8 caixas = nao e fraca
+        m = mp.metricas_plano(rotas, BASE, caixas=[9, 294, 8])
+        self.assertEqual(m["rotas_fracas"], 1)
+        self.assertIn("fracas 1", mp.formatar_metricas(m, "t"))
+
+    def test_sem_caixas_nao_mede_rotas_fracas(self):
+        m = mp.metricas_plano([[(0.1, 0.0)]], BASE)
+        self.assertIsNone(m["rotas_fracas"])
+        self.assertNotIn("fracas", mp.formatar_metricas(m, "t"))
+
+    def test_caixas_alinhadas_com_rotas_filtradas(self):
+        # a segunda rota ficou sem coordenada e sai da medicao junto com as caixas dela
+        m = mp.metricas_plano([[(0.1, 0.0)], []], BASE, caixas=[294, 5])
+        self.assertEqual(m["rotas_fracas"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ COMO USAR (da raiz):
     py -3.11 roteirizacao/replay_rotas.py --de 2026-08-12 --ate 2026-09-19
     py -3.11 roteirizacao/replay_rotas.py --de 2026-08-12 --ate 2026-09-19 --distancia-maxima 12
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-polimento --separar-carga
+    py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-rotas-fracas
 Saida: tabela no terminal + roteirizacao/dados/replay_resultado.txt
 
 Limite: roteiriza o conjunto que FOI enviado no dia, nao o pool inteiro
@@ -47,6 +48,10 @@ LIMITACOES CONHECIDAS:
      linha nenhuma de resultado nem aviso. Diferente do caminho de erro,
      que imprime linha comecando com ERRO. Quem reusar o script precisa
      saber desse pulo silencioso.
+
+  4. O SEGURAR NAO E SIMULADO: o replay so mede a JUNCAO das rotas fracas.
+     O historico (rascunhos_parada) nao guarda data de entrada nem
+     agendamento do pedido, entao nao da pra saber quem poderia esperar.
 """
 import argparse
 import logging
@@ -116,6 +121,10 @@ def _horas(sublotes: list[list[dict]]) -> list[float]:
     return [rd.estimar_tempo_rota(sub) if rd.exige_orcamento_horas(sub) else 0.0 for sub in sublotes]
 
 
+def _caixas(sublotes: list[list[dict]]) -> list[int]:
+    return [sum(rd.extrair_volume_caixas(s) for s in sub) for sub in sublotes]
+
+
 def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_base: tuple[float, float],
               data_alvo: date, modelo_forcado: str | None = None) -> tuple[dict, dict]:
     """(metricas do enviado, metricas do plano novo) pro mesmo conjunto."""
@@ -123,13 +132,15 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
     rd.definir_coords_base(*coords_base)
     rd.definir_hora_saida_base(rd.HORA_INICIO_ROTA)
     enviado = mp.metricas_plano(mp.plano_de_sublotes(rotas_enviadas, _coords), coords_base,
-                                horas=_horas(rotas_enviadas), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS)
+                                horas=_horas(rotas_enviadas), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
+                                caixas=_caixas(rotas_enviadas))
     planos = crd.planejar_sublotes([dict(s) for s in servicos], coords_base, None, data_alvo,
                                    sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
                                    registrar_historico=False)
     sublotes = [sub for p in planos for sub in p["sublotes"]]
     novo = mp.metricas_plano(mp.plano_de_sublotes(sublotes, _coords), coords_base,
-                             horas=_horas(sublotes), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS)
+                             horas=_horas(sublotes), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
+                             caixas=_caixas(sublotes))
     return enviado, novo
 
 
@@ -138,7 +149,7 @@ def _somar(acumulado: dict, m: dict) -> None:
     tem que cobrir TODA chave somavel que formatar_metricas imprime --
     inclusive rotas_sem_coordenada, senao o TOTAL levanta KeyError."""
     for chave in ("rotas", "paradas", "rotas_pequenas", "km_total", "cruzadas", "pares_cruzados",
-                  "rotas_acima_teto", "rotas_sem_coordenada"):
+                  "rotas_acima_teto", "rotas_sem_coordenada", "rotas_fracas"):
         acumulado[chave] = acumulado.get(chave, 0) + m[chave]
     acumulado.setdefault("diametros", []).append(m["diametro_mediano_km"])
 
@@ -161,6 +172,7 @@ def main(argv=None) -> int:
     parser.add_argument("--distancia-maxima", type=float, default=None, help="sobrescreve DISTANCIA_MAXIMA_ROTA_KM")
     parser.add_argument("--sem-polimento", action="store_true")
     parser.add_argument("--separar-carga", action="store_true", help="religa a particao Seco x Refrigerado")
+    parser.add_argument("--sem-rotas-fracas", action="store_true", help="desliga a juncao das rotas fracas")
     parser.add_argument("--modelo", default=None, help="forca um esquema (nome como no historico)")
     args = parser.parse_args(argv)
 
@@ -171,6 +183,9 @@ def main(argv=None) -> int:
         crd.POLIMENTO_ATIVO = False
     if args.separar_carga:
         crd.SEPARAR_POR_TIPO_CARGA = True
+    if args.sem_rotas_fracas:
+        import rotas_fracas
+        rotas_fracas.ROTAS_FRACAS_ATIVO = False
     coords_base = tuple(float(x) for x in args.base.split(",")) if args.base else COORDS_BASE_PADRAO
 
     conn = sqlite3.connect(f"file:{args.banco}?mode=ro", uri=True)
@@ -180,6 +195,7 @@ def main(argv=None) -> int:
 
     cabecalho = (f"Replay {args.de} a {args.ate} | distancia_maxima={crd.DISTANCIA_MAXIMA_ROTA_KM} km | "
                  f"polimento={'off' if args.sem_polimento else 'on'} | separar_carga={'on' if args.separar_carga else 'off'}"
+                 f" | rotas_fracas={'off' if args.sem_rotas_fracas else 'on'}"
                  f"{' | modelo=' + args.modelo if args.modelo else ''}")
     linhas = [cabecalho, ""]
     total_env: dict = {}

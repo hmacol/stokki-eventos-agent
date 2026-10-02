@@ -53,12 +53,16 @@ def plano_de_sublotes(sublotes: list[list[dict]], coords_fn) -> list[list[tuple[
 
 
 def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, float],
-                   horas: list[float] | None = None, teto_horas: float = 9.0) -> dict:
+                   horas: list[float] | None = None, teto_horas: float = 9.0,
+                   caixas: list[int] | None = None, paradas_fraca: int = 7, caixas_fraca: int = 40) -> dict:
     """Ver docstring do modulo. `horas` (opcional): duracao estimada por
     rota, na mesma ordem de `rotas`, pra contar rotas acima do teto.
     `rotas_sem_coordenada` sinaliza rotas que ficaram inteiramente vazias
     (todas sem coordenada). A contagem de paradas individuais descartadas nao
-    e observavel aqui porque plano_de_sublotes ja as removeu."""
+    e observavel aqui porque plano_de_sublotes ja as removeu.
+    `caixas` (opcional): soma de caixas por rota, na mesma ordem de `rotas`,
+    pra contar rotas fracas (ate `paradas_fraca` paradas E ate `caixas_fraca`
+    caixas -- ver rotas_fracas.py). Sem ela, rotas_fracas sai None."""
 
     # Contar rotas descartadas (rotas vazias na entrada) e filtrar
     # pelos mesmos indices
@@ -70,6 +74,9 @@ def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, fl
     if horas:
         horas = [horas[i] for i in indices_validos]
 
+    if caixas is not None:
+        caixas = [caixas[i] for i in indices_validos]
+
     n_rotas = len(rotas)
     tamanhos = [len(r) for r in rotas]
     paradas = sum(tamanhos)
@@ -77,7 +84,7 @@ def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, fl
         "rotas": n_rotas, "paradas": paradas, "media_paradas": 0.0, "min_paradas": 0, "max_paradas": 0,
         "rotas_pequenas": 0, "diametro_mediano_km": 0.0, "diametro_max_km": 0.0, "raio_medio_km": 0.0,
         "km_total": 0.0, "cruzadas": 0, "cruzadas_pct": 0.0, "pares_cruzados": 0, "rotas_acima_teto": 0,
-        "rotas_sem_coordenada": rotas_sem_coordenada,
+        "rotas_sem_coordenada": rotas_sem_coordenada, "rotas_fracas": 0 if caixas is not None else None,
     }
     if not rotas:
         return vazio
@@ -126,6 +133,8 @@ def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, fl
         "pares_cruzados": pares,
         "rotas_acima_teto": acima,
         "rotas_sem_coordenada": rotas_sem_coordenada,
+        "rotas_fracas": (sum(1 for t, c in zip(tamanhos, caixas) if t <= paradas_fraca and c <= caixas_fraca)
+                         if caixas is not None else None),
     }
 
 
@@ -138,6 +147,9 @@ def formatar_metricas(m: dict, titulo: str = "") -> str:
             f"raio med {m['raio_medio_km']:.1f} km | km {m['km_total']:.0f} | "
             f"cruzadas {m['cruzadas']} ({m['cruzadas_pct']:.0f}%) | pares {m['pares_cruzados']} | "
             f"acima do teto {m['rotas_acima_teto']}")
+
+    if m.get("rotas_fracas") is not None:
+        linha += f" | fracas {m['rotas_fracas']}"
 
     if m.get("rotas_sem_coordenada", 0) > 0:
         linha += f" | sem coordenada: {m['rotas_sem_coordenada']} rota(s)"

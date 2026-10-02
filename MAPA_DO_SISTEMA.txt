@@ -76,6 +76,7 @@
  Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
  Rodízio SP / zonas SP ..................... roteirizacao/rodizio_sp.py, zonas_sp.py
  Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py
+ Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
  Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
  Insucesso de entrega ...................... insucesso_entrega/ + resposta_insucesso/
@@ -464,6 +465,11 @@
  metricas_plano.py         Métricas geométricas de um plano.
  km_rodoviario.py          Km pela Google Routes (haversine de reserva).
  replay_rotas.py           Replay de dias passados para calibrar.
+ rotas_fracas.py           Rota com até 7 pedidos e até 40 caixas: junta nas
+                           vizinhas com folga, segura 1 dia útil (SEGURAR_ATIVO,
+                           desligado), ou sai com o motivo no rascunho.
+ pedidos_segurados.py      Tabela pedidos_segurados; lida pelo planejamento,
+                           vigia e incrementar.
  benchmark_modelos.py      Benchmark só leitura.
  roteirizar.py             LEGADO (agrupamento por CEP + otimizador da Vuupt).
 
@@ -769,7 +775,8 @@
    clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)
    confirmacoes_rota, ofertas_rota, ofertas_avisos,
    disponibilidade_motoristas, ajustes_complexidade_cliente   regras/
-   pedidos_roteirizados, pedidos_area_notificada   roteirizacao/
+   pedidos_roteirizados, pedidos_area_notificada,
+   pedidos_segurados         roteirizacao/
    documentos_processados    documentos_pedido/
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
@@ -848,3 +855,5 @@
    principal é encerrado.
  - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita
    "Notificador"; painel-agentes.service diz "somente leitura".
+ - Pedido segurado fica no pool de propósito até a data nova; o vigia só
+   alarma na véspera do prazo de 3 dias úteis.
