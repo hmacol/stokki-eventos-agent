@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 DB_PATH = _RAIZ / "dados" / "dados.db"
 TIPO_SP = TIPO_SP_NAO_ATENDIDO
 MAX_PEDIDOS_WHATSAPP = 10
-ORIGEM_WHATSAPP = "avisar_fora_area"
+ORIGEM_WHATSAPP = notificar_whatsapp.ORIGEM_FORA_AREA
 TIPO_WHATSAPP = "fora_area_cliente"
 
 _SCHEMA = """

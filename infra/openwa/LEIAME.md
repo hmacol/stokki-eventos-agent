@@ -110,7 +110,28 @@ whatsapp_notificacoes:
 - Secao `whatsapp_notificacoes` incluida no `config.yaml` da VPS em 29/09/2026
   com `ativo: false`. Backup: `config.yaml.bak-20260929-antes-whatsapp`.
 
-## Pendente
+## Conversa individual: aviso ao cliente (01/10/2026)
 
-- Merge e deploy do ramo `whatsapp-notificacoes`.
-- Ligar (`ativo: true`) e prova real com `alertar_falha_job.py ... --forcar`.
+`avisar_cliente_sem_resposta.py` manda WhatsApp pro embarcador que ficou
+10 min sem responder a equipe num chamado do portal. É a única rotina que
+fala com alguém fora dos grupos internos.
+
+- Destino: `55DDDNUMERO@c.us` (o número vem do botão Notificações do portal).
+- Antes de enviar, `GET /api/sessions/<sessao>/contacts/check/<numero>`
+  (`integracao_openwa.numero_existe`): o `send-text` devolve 201 mesmo pra
+  número que não tem WhatsApp. `exists: false` vira `nao_enviado`; 503/erro
+  não grava nada e a rotina tenta na próxima rodada.
+- A chave `operator` nasceu restrita aos dois grupos (`allowedChats`). Pra
+  esta rotina ela precisa aceitar chat individual: com a chave admin
+  (`/opt/openwa/data/.api-key`), `PUT /api/auth/api-keys/<id>` com
+  `allowedChats` vazio/nulo (mantendo `allowedSessions`). Sem isso o envio
+  ao cliente dá 403 e a rotina registra `falhou`.
+- Config: `whatsapp_notificacoes.clientes: {ativo, minutos, dias_max,
+  teto_diario, forcar_destino}`. `forcar_destino` com o número do Hugo =
+  piloto (a mensagem vai pra ele com o destino real na primeira linha).
+
+- **Feito em 02/10/2026** (autorizado pelo Hugo): chave `stokki-eventos
+  notificacoes` (id `32892404-…`) com `allowedChats: null`, ainda presa à
+  sessão `notificacoes`. `contacts/check` provado: número real `true`,
+  número inventado `false`. `clientes.ativo: true` com `forcar_destino` no
+  número do Hugo (piloto). Backup `config.yaml.bak-20261002-antes-ligar-clientes`.

@@ -182,6 +182,10 @@ _lock_caches = threading.Lock()
 # sozinha) e, quando ninguém está com ela aberta, de uma renovação em
 # segundo plano disparada por contadores_menu.
 _snapshot_fila_acao: dict = {"quando": 0.0, "data_iso": None, "qtd": None, "criticas": 0}
+# Irmão do de cima (30/09): resumo de rotas e pedidos do dia pra página
+# inicial do painel (pagina_inicial.py). Mesma regra: publicado de graça
+# por buscar_dados_torre, lido sem coletar nada.
+_snapshot_resumo_dia: dict = {"data_iso": None, "gerado_em": None, "rotas_resumo": None, "pedidos": None}
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
 
@@ -1274,6 +1278,25 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
         )
 
 
+def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str) -> int:
+    """Tratar por lote (Hugo, 30/09): a Fila de acao deixa selecionar
+    varios itens e marcar todos com o mesmo motivo. Cada item e um dict
+    no formato que a tela ja manda pro tratar unitario (id, tipo,
+    descricao, motorista, rota). Devolve quantos foram marcados; item
+    sem id e ignorado."""
+    marcados = 0
+    for item in itens:
+        excecao_id = (item.get("id") or "").strip()
+        if not excecao_id:
+            continue
+        marcar_excecao_tratada(
+            excecao_id, data_alvo, item.get("tipo", ""), item.get("descricao", ""), motivo,
+            motorista_nome=item.get("motorista"), rota_nome=item.get("rota"),
+        )
+        marcados += 1
+    return marcados
+
+
 def desfazer_excecao_tratada(excecao_id: str) -> bool:
     """Desfaz um 'tratado' (clique errado) -- a linha some do histórico
     de propósito: tratado desfeito nunca aconteceu. O log de tratativas
@@ -1622,19 +1645,23 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
             "qtd": len(excecoes), "criticas": qtd_criticos,
         })
 
+    gerado_em = datetime.now().strftime("%H:%M:%S")
+    rotas_resumo = {
+        "concluidas": rotas_por_estado.get("concluida", 0),
+        "em_andamento": rotas_por_estado.get("em_andamento", 0),
+        "nao_iniciadas": rotas_por_estado.get("nao_iniciada", 0),
+        "atrasadas": sum(1 for r in rotas if r.get("atrasada")),
+    }
+    _publicar_resumo_dia(data_alvo, gerado_em, rotas_resumo, pedidos)
+
     return {
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
         "data_alvo_iso": data_alvo.isoformat(),
-        "gerado_em": datetime.now().strftime("%H:%M:%S"),
+        "gerado_em": gerado_em,
         "semaforo": semaforo,
         "pedidos": pedidos,
         "rotas": rotas,
-        "rotas_resumo": {
-            "concluidas": rotas_por_estado.get("concluida", 0),
-            "em_andamento": rotas_por_estado.get("em_andamento", 0),
-            "nao_iniciadas": rotas_por_estado.get("nao_iniciada", 0),
-            "atrasadas": sum(1 for r in rotas if r.get("atrasada")),
-        },
+        "rotas_resumo": rotas_resumo,
         "janela_dias": DIAS_JANELA_TORRE,
         "etapas": etapas,
         "amanha": amanha,
@@ -1661,3 +1688,34 @@ def snapshot_fila_acao(data_alvo: date) -> dict | None:
         return None
     return {"qtd": snap["qtd"], "criticas": snap["criticas"],
             "idade_seg": time.monotonic() - snap["quando"]}
+
+
+def _publicar_resumo_dia(data_alvo: date, gerado_em: str, rotas_resumo: dict, pedidos: dict) -> None:
+    """Grava o resumo do dia pra página inicial. `pedidos` é o dicionário
+    de _montar_pedidos_dia; só os quatro números que a tela usa ficam."""
+    with _lock_caches:
+        _snapshot_resumo_dia.update({
+            "data_iso": data_alvo.isoformat(),
+            "gerado_em": gerado_em,
+            "rotas_resumo": dict(rotas_resumo),
+            "pedidos": {
+                "total": pedidos["total"],
+                "entregues": pedidos["sucesso"],
+                "insucessos": pedidos["falha"],
+                "sem_rota": pedidos["qtd_nao_atribuidos"],
+            },
+        })
+
+
+def snapshot_resumo_dia(data_alvo: date) -> dict | None:
+    """Último resumo do dia conhecido, sem disparar coleta. None se ainda
+    não há leitura ou se a última é de outro dia.
+
+    {"gerado_em": "HH:MM:SS", "rotas_resumo": {...}, "pedidos": {...}}
+    """
+    with _lock_caches:
+        snap = dict(_snapshot_resumo_dia)
+    if snap.get("data_iso") is None or snap["data_iso"] != data_alvo.isoformat():
+        return None
+    return {"gerado_em": snap["gerado_em"], "rotas_resumo": dict(snap["rotas_resumo"]),
+            "pedidos": dict(snap["pedidos"])}

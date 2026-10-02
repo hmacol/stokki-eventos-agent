@@ -79,6 +79,7 @@ import torre_controle
 import tratativas
 import pedidos_parados_triagem
 import contadores_menu
+import pagina_inicial
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
@@ -371,10 +372,11 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
-            # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
-                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
+            # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
+            # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
+            # cair nele levaria direto a um 403 pós-login.
+            pagina_padrao = {"expedicao": url_for("expedicao"),
+                             "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -502,6 +504,22 @@ def api_sidebar_contadores():
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
     return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
+
+
+@app.route("/inicio")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def inicio():
+    """Página inicial do painel (29/09): o que espera ação de quem logou,
+    números do dia e, só pro total, as rotinas. O HTML sobe sem número
+    nenhum; o JS busca /api/inicio/dados depois do load (mesma regra dos
+    badges do menu: nunca esperar fonte cara na renderização)."""
+    return render_template("inicio.html", mostra_rotinas=g.nivel_acesso == "total")
+
+
+@app.route("/api/inicio/dados")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def api_inicio_dados():
+    return jsonify(pagina_inicial.montar_dados(g.nivel_acesso, url_for))
 
 
 @app.route("/mapa-rotas")
@@ -838,7 +856,8 @@ def clientes_agenda():
     """Fila de destinatários com data de agendamento informada esperando
     o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
     alimenta é marcar_clientes_agenda.py (sequências 18h/22h); o link
-    chega pelo WhatsApp. Só nível total: a decisão grava na planilha."""
+    chega pelo WhatsApp. Só nível total: a decisão grava na planilha
+    (sem cópia por clique: o backup é o diário das 03h pro GCS)."""
     import marcar_clientes_agenda
     try:
         linhas = marcar_clientes_agenda.listar()
@@ -868,7 +887,7 @@ def api_clientes_agenda_decidir():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
         return jsonify({"erro": str(e)}), 500
-    return jsonify({"ok": True, "situacao": resultado["situacao"], "backup": resultado["backup"]})
+    return jsonify({"ok": True, "situacao": resultado["situacao"]})
 
 
 @app.route("/pedidos-parados")
@@ -1188,6 +1207,23 @@ def api_torre_tratar():
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
     return jsonify({"ok": True})
+
+
+@app.route("/api/torre/tratar-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "atendimento"))
+@exige_mesma_origem
+def api_torre_tratar_lote():
+    """Tratar por lote (30/09): varios itens da fila selecionados na
+    tela, um motivo so pra todos. Mesmo efeito do tratar unitario."""
+    body = request.get_json(force=True) or {}
+    itens = body.get("itens")
+    motivo = (body.get("motivo") or "").strip()
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum item selecionado"}), 400
+    if not motivo:
+        return jsonify({"erro": "motivo obrigatório"}), 400
+    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo)
+    return jsonify({"ok": True, "tratadas": qtd})
 
 
 @app.route("/api/torre/destratar", methods=["POST"])

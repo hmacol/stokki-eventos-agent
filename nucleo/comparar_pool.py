@@ -47,10 +47,22 @@ CAMPOS = ("id", "address", "latitude", "longitude", "dimension_3", "sender_id", 
 
 
 def _num(valor):
+    """Coordenada com 4 casas (~10 m). Sombra 25-30/09: o pipeline de hora em
+    hora regrava a coordenada do Google (6+ casas) e o sync regrava a da
+    Vuupt (5 casas); a 5ª casa oscilava entre os dois (1 m) e contava como
+    divergência."""
     try:
-        return round(float(valor), 5)
+        return round(float(valor), 4)
     except (TypeError, ValueError):
         return None
+
+
+def _so_digitos(valor) -> str | None:
+    """Documento do destinatário só com dígitos: é assim que a tela consulta
+    nível e horário (regras.complexidade_entrega._so_digitos). A Vuupt
+    devolve '35064514000357' e o pipeline grava '35.064.514/0003-57'."""
+    digitos = "".join(c for c in str(valor or "") if c.isdigit())
+    return digitos or None
 
 
 def projetar(s: dict) -> dict:
@@ -63,7 +75,7 @@ def projetar(s: dict) -> dict:
         "longitude": _num(s.get("longitude")),
         "dimension_3": s.get("dimension_3"),
         "sender_id": s.get("sender_id"),
-        "customer_code": (s.get("customer") or {}).get("code"),
+        "customer_code": _so_digitos((s.get("customer") or {}).get("code")),
         "agendado_para": (s.get("scheduled_start") or "")[:10] or None,
         "janela": (ini, fim) if ini else None,
         "dia_fixo": regra["nome"] if regra else None,

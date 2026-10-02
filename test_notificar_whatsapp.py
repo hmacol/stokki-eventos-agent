@@ -652,6 +652,15 @@ class TestDespacharForaDoTeto(_ComBanco):
         self.despachar(agora=AGORA + timedelta(seconds=5), contar_no_teto=False)
         self.dormir.assert_called_once_with(15.0)
 
+    def test_aviso_fora_do_teto_nao_consome_a_cota_interna(self):
+        # 02/10: o botao Avisar clientes nao pode comer os alertas internos do dia
+        for i in range(5):
+            self.assertEqual(self.despachar(origem="avisar_fora_area", contar_no_teto=False,
+                                            agora=AGORA + timedelta(minutes=i)), "enviado")
+        for i in range(3):   # teto_diario = 3 no _config()
+            self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=10 + i)), "enviado")
+        self.assertEqual(self.despachar(agora=AGORA + timedelta(minutes=20)), "nao_enviado")
+
 
 class TestResumoDeErroLimpo(unittest.TestCase):
     def test_muitas_etapas_lista_tres_e_conta_o_resto(self):
@@ -723,3 +732,139 @@ class TestAvisarClientesAgenda(_ComBanco):
 
     def test_desligado(self):
         self.assertEqual(self.avisar(config=_config(ativo=False)), "desligado")
+
+
+# --- Aviso direto ao cliente (cliente_sem_resposta) ------------------------------
+
+LINK_CLIENTE = "https://app.freshhub.com.br/cliente/?chamado=31"
+TEL = "5511999990000"
+
+
+def _config_clientes(**extra):
+    clientes = {"ativo": True, "teto_diario": 30, "forcar_destino": ""}
+    clientes.update(extra.pop("clientes", {}))
+    return _config(clientes=clientes, **extra)
+
+
+class TestTextoClienteSemResposta(unittest.TestCase):
+    def test_texto_sem_nome_nem_conversa(self):
+        self.assertEqual(nw.texto_cliente_sem_resposta(31, LINK_CLIENTE),
+                         "Fresh Log: respondemos o seu chamado #31 e aguardamos o seu retorno.\n"
+                         f"Responda pelo portal: {LINK_CLIENTE}")
+
+    def test_cabe_em_200(self):
+        self.assertLessEqual(len(nw.texto_cliente_sem_resposta(99999, LINK_CLIENTE)), nw.MAX_MENSAGEM)
+
+
+class TestNumeroExiste(unittest.TestCase):
+    CFG = {"base_url": "http://x/api", "api_key": "k", "sessao": "s"}
+
+    def _resposta(self, corpo=None, erro=None):
+        resp = MagicMock()
+        resp.raise_for_status.side_effect = erro
+        resp.json.return_value = corpo
+        return resp
+
+    def test_existe_e_nao_existe(self):
+        with patch.object(nw.integracao_openwa.requests, "get", return_value=self._resposta({"exists": True})) as get:
+            self.assertTrue(nw.integracao_openwa.numero_existe(self.CFG, TEL))
+        self.assertEqual(get.call_args[0][0], f"http://x/api/sessions/s/contacts/check/{TEL}")
+        with patch.object(nw.integracao_openwa.requests, "get", return_value=self._resposta({"exists": False})):
+            self.assertIs(nw.integracao_openwa.numero_existe(self.CFG, TEL), False)
+
+    def test_falha_do_gateway_e_none(self):
+        import requests
+        with patch.object(nw.integracao_openwa.requests, "get",
+                          return_value=self._resposta(erro=requests.HTTPError("503"))):
+            self.assertIsNone(nw.integracao_openwa.numero_existe(self.CFG, TEL))
+        with patch.object(nw.integracao_openwa.requests, "get", return_value=self._resposta({"outra": 1})):
+            self.assertIsNone(nw.integracao_openwa.numero_existe(self.CFG, TEL))
+        self.assertIsNone(nw.integracao_openwa.numero_existe({}, TEL))
+
+
+class TestAvisarClienteSemResposta(_ComBanco):
+    def setUp(self):
+        super().setUp()
+        self.existe = patch.object(nw.integracao_openwa, "numero_existe", return_value=True).start()
+        self.addCleanup(patch.stopall)
+
+    def avisar(self, config=None, msg_id=7, telefone=TEL, agora=AGORA, **kw):
+        return nw.avisar_cliente_sem_resposta(31, msg_id, telefone, LINK_CLIENTE, config or _config_clientes(),
+                                              conn=self.conn, agora=agora, dormir=self.dormir, **kw)
+
+    def test_envia_pro_numero_do_cliente_e_registra(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], f"{TEL}@c.us")
+        self.assertEqual(self.enviar.call_args[0][2], nw.texto_cliente_sem_resposta(31, LINK_CLIENTE))
+        self.assertEqual(self.conn.execute(
+            "SELECT origem, tipo, assinatura, situacao FROM notificacoes_whatsapp").fetchall(),
+            [("cliente_sem_resposta", "chamado", "msg:7", "enviado")])
+        self.existe.assert_called_once_with(_config_clientes()["whatsapp_notificacoes"], TEL)
+
+    def test_forcar_destino_redireciona_e_avisa_o_destino_real(self):
+        config = _config_clientes(clientes={"forcar_destino": "+55 11 98888-7777"})
+        self.assertEqual(self.avisar(config), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
+        self.assertTrue(self.enviar.call_args[0][2].startswith(f"[teste → +{TEL}]\n"))
+        self.existe.assert_called_once_with(config["whatsapp_notificacoes"], "5511988887777")
+
+    def test_numero_sem_whatsapp_registra_e_nao_envia(self):
+        self.existe.return_value = False
+        self.assertEqual(self.avisar(), "numero_sem_whatsapp")
+        self.enviar.assert_not_called()
+        self.assertEqual(self.linhas(), [("cliente_sem_resposta", "nao_enviado", "numero sem whatsapp", None)])
+
+    def test_gateway_sem_resposta_nao_grava_nada(self):
+        self.existe.return_value = None
+        self.assertEqual(self.avisar(), "indeterminado")
+        self.enviar.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0], 0)
+
+    def test_modo_teste_nao_consulta_nem_envia(self):
+        self.assertEqual(self.avisar(modo_teste=True), "modo_teste")
+        self.existe.assert_not_called()
+        self.enviar.assert_not_called()
+
+    def test_desligado(self):
+        for config in (_config(), _config(clientes={"ativo": False}), _config_clientes(ativo=False),
+                       _config_clientes(api_key="")):
+            with self.subTest(config=config):
+                self.assertEqual(self.avisar(config), "desligado")
+        self.assertEqual(self.avisar(telefone=""), "desligado")
+        self.enviar.assert_not_called()
+
+    def test_teto_dos_clientes_e_separado_do_interno(self):
+        # 3 internos enviados hoje (teto interno = 3) nao barram o cliente...
+        for i in range(3):
+            self.assertEqual(self.despachar(config=_config_clientes(), agora=AGORA + timedelta(minutes=i)), "enviado")
+        self.assertEqual(self.despachar(config=_config_clientes(), agora=AGORA + timedelta(minutes=5)), "nao_enviado")
+        self.assertEqual(self.avisar(agora=AGORA + timedelta(minutes=6)), "enviado")
+        # ...e o teto dos clientes conta so a origem deles
+        config = _config_clientes(clientes={"teto_diario": 1})
+        self.assertEqual(self.avisar(config, msg_id=8, agora=AGORA + timedelta(minutes=7)), "nao_enviado")
+        self.assertEqual(self.linhas()[-1][1:3], ("nao_enviado", "teto diario atingido"))
+
+    def test_cliente_nao_consome_o_teto_interno(self):
+        config = _config_clientes(teto_diario=1)
+        self.assertEqual(self.avisar(config), "enviado")
+        self.assertEqual(self.despachar(config=config, agora=AGORA + timedelta(minutes=1)), "enviado")
+
+    def test_sem_janela_de_repeticao_para_a_origem_cliente(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.avisar(agora=AGORA + timedelta(minutes=10)), "enviado")
+
+    def test_saldo_clientes(self):
+        config = _config_clientes()
+        self.assertEqual(nw.saldo_clientes(self.conn, config, AGORA), 30)
+        self.avisar()
+        self.avisar(msg_id=8, agora=AGORA + timedelta(minutes=1))
+        self.existe.return_value = False
+        self.avisar(msg_id=9, agora=AGORA + timedelta(minutes=2))      # nao_enviado nao conta
+        self.despachar(config=config, agora=AGORA + timedelta(minutes=3))  # outra origem nao conta
+        self.assertEqual(nw.saldo_clientes(self.conn, config, AGORA + timedelta(minutes=4)), 28)
+        self.assertEqual(nw.saldo_clientes(self.conn, config, AGORA + timedelta(days=1)), 30)
+
+    def test_clientes_ligado(self):
+        self.assertTrue(nw.clientes_ligado(_config_clientes()))
+        self.assertFalse(nw.clientes_ligado(_config()))
+        self.assertFalse(nw.clientes_ligado({}))

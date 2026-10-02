@@ -75,3 +75,24 @@ def listar_grupos(cfg: dict) -> list[dict] | None:
     grupos = [{"id": g["id"], "nome": g["name"]} for g in dados
               if isinstance(g, dict) and g.get("id") and g.get("name")]
     return sorted(grupos, key=lambda g: g["nome"].lower())
+
+
+def numero_existe(cfg: dict, numero: str) -> bool | None:
+    """GET /sessions/{sessao}/contacts/check/{numero}: o numero tem conta no
+    WhatsApp? O send-text devolve 201 mesmo pra numero que nao existe, por
+    isso a consulta antes de falar com um cliente (nono digito etc.).
+    True/False pela resposta; None quando o gateway nao soube responder
+    (503, sessao fora, erro de rede) -- quem chama decide se tenta depois."""
+    if not configurado(cfg) or not numero:
+        return None
+    url = f"{cfg['base_url'].rstrip('/')}/sessions/{cfg['sessao']}/contacts/check/{numero}"
+    try:
+        resp = requests.get(url, headers={"X-API-Key": cfg["api_key"]}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        dados = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Falha ao consultar numero no OpenWA: {exc}")
+        return None
+    if not isinstance(dados, dict) or "exists" not in dados:
+        return None
+    return bool(dados["exists"])

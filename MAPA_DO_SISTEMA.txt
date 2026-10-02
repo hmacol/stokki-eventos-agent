@@ -184,6 +184,7 @@
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
+                Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
                 /equipe com login do painel.
@@ -239,6 +240,8 @@
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
  a cada minuto               atendimento-reenviar-pendentes  atendimento/reenviar_pendentes.py
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
+ a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
+                                                             horário de atendimento dos chamados)
 
  infra/sequencia_tarde.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -298,7 +301,8 @@
                          na fila de autorização do Hugo pra virar AGENDA na
                          BD_CLIENTES (sequências 18h/22h). Aviso no WhatsApp
                          com o link da tela /clientes-agenda, onde ele
-                         Autoriza (grava na planilha, com backup) ou marca
+                         Autoriza (grava na planilha; backup = o diário das
+                         03h pro GCS) ou marca
                          Não marcar. Tabela clientes_agenda_marcados; quem
                          já é AGENDA na planilha entra como autorizado
                          (apagar à mão não volta). --nao-marcar pela linha
@@ -324,14 +328,22 @@
  notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
  notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
- preferencias_notificacao.py   Preferências de e-mail por embarcador.
+ preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
+                               WhatsApp (coluna whatsapp) e chave chamado_sem_resposta.
+ avisar_cliente_sem_resposta.py  Timer 2 min: embarcador que ficou 10 min sem
+                               responder a equipe num chamado recebe WhatsApp com o
+                               link do portal. Só no horário de atendimento, uma
+                               tentativa por mensagem da equipe (assinatura msg:<id>),
+                               mensagem com até 3 dias, teto próprio. Desligado
+                               (whatsapp_notificacoes.clientes.ativo); --modo-teste.
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
- integracao_openwa.py          Envio de WhatsApp pelo OpenWA (notificações internas
-                               e aviso manual aos clientes; lista os grupos do número).
+ integracao_openwa.py          Envio de WhatsApp pelo OpenWA (grupos internos e os
+                               avisos ao cliente) + numero_existe (contacts/check)
+                               + listar_grupos (grupos do número).
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
                                job, não expedidos, resumo das rotinas (erro ou
                                lista sempre_avisar) e insucessos novos de entrega
@@ -578,12 +590,18 @@
                            embarcador (interno.whatsapp_grupo_id), lista vinda
                            do OpenWA; usado pelo Avisar clientes do planejamento.
  contadores_menu.py        Badges do menu lateral.
+ pagina_inicial.py         Dados da página inicial /inicio (pendências por
+                           nível, resumo do dia via snapshot da Torre,
+                           rotinas do painel). Nunca chama fonte cara.
  wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
                            WMS do galpão (posições, movimentos, reservas,
                            recebimentos, etiquetas).
  test_*.py                 Testes.
 
  Telas (URL -> template)
+   /inicio                    inicio.html (página inicial; destino do login de
+                              total/operador/leitura/atendimento; números via
+                              /api/inicio/dados depois do load)
    /torre, /torre/mobile      torre_controle.html, torre_mobile.html
    /planejamento              planejamento_rotas.html (maior arquivo do repo;
                               ?modo=mobile para celular; dia passado = só leitura)
@@ -782,7 +800,9 @@
    documentos_processados    documentos_pedido/
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
-   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas)
+   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
+                             origem cliente_sem_resposta = aviso direto ao embarcador;
+                             origem avisar_fora_area = botão Avisar clientes, sem teto)
    avisos_fora_area          avisar_fora_area.py (uma linha por pedido e canal)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
@@ -853,6 +873,13 @@
    (whatsapp_notificacoes.grupo_atendimento_id; sem ele não envia, nunca
    cai no grupo de alertas). Desliga sozinho com avisar_chamados: false.
    O portal lê o config na subida: mudou a seção, reinicie portal-cliente.
+ - WhatsApp DIRETO AO CLIENTE (avisar_cliente_sem_resposta.py) é a única
+   notificação por WhatsApp que sai pra fora: whatsapp_notificacoes.clientes
+   {ativo, minutos, dias_max, teto_diario, forcar_destino}. Teto separado do
+   interno. Enquanto forcar_destino tiver o número do Hugo, nenhum cliente
+   recebe. Exige a chave operator do OpenWA liberada pra chat individual
+   (infra/openwa/LEIAME.md). Resposta do cliente no WhatsApp cai no celular
+   do Hugo e NÃO entra no chamado.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

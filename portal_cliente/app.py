@@ -551,6 +551,7 @@ def _resposta_notificacoes(prefs: dict):
                    "ligado": prefs["tipos"][tipo]} for tipo, info in preferencias.TIPOS.items()],
         "emails": prefs["emails"],
         "emails_cadastro": prefs["emails_cadastro"],
+        "whatsapp": prefs["whatsapp"],
         "max_emails": preferencias.MAX_EMAILS,
         "somente_leitura": bool(g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA),
     })
@@ -574,19 +575,20 @@ def api_notificacoes_salvar():
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     emails, tipos = corpo.get("emails", ""), corpo.get("tipos", {})
+    whatsapp = corpo.get("whatsapp")  # ausente = mantém o que está
     if isinstance(emails, str):
         emails = emails.replace(";", "\n").replace(",", "\n").splitlines()
-    if not isinstance(emails, list) or not isinstance(tipos, dict):
+    if not isinstance(emails, list) or not isinstance(tipos, dict) or not isinstance(whatsapp, (str, type(None))):
         return jsonify({"erro": "Dados inválidos."}), 400
     conn = auth.conectar()
     try:
-        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia())
+        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia(), whatsapp=whatsapp)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
         conn.close()
     logger.info(f"notificacoes cnpj={g.cliente['cnpj']} por={_quem_envia()} tipos={prefs['tipos']} "
-                f"emails={len(prefs['emails'])}")
+                f"emails={len(prefs['emails'])} whatsapp={'sim' if prefs['whatsapp'] else 'nao'}")
     return _resposta_notificacoes(prefs)
 
 

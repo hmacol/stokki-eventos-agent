@@ -32,9 +32,7 @@ duplicada/incompleta).
 import logging
 import os
 import re
-import shutil
 import unicodedata
-from datetime import datetime
 from pathlib import Path
 
 import openpyxl
@@ -180,11 +178,12 @@ def marcar_agendamento(caminho: str | Path, clientes: dict[str, str], gravar: bo
     Documento que não está: linha nova só com código, nome e AGENDA.
     Quem já tem alerta de agendamento em qualquer linha não muda.
 
-    Só grava quando há o que marcar, e antes copia a planilha pra
-    BD_CLIENTES_backup_<carimbo>_pre_agenda.xlsx na mesma pasta.
+    Só grava quando há o que marcar. Sem cópia de segurança aqui: a
+    planilha vai pro GCS todo dia às 03h (backup_dados_gcs.py), e o Hugo
+    preferiu esse backup diário ao arquivo por gravação (30/09).
     gravar=False só devolve quem seria marcado, sem tocar no arquivo.
 
-    Retorna {"marcados": [...], "incluidos": [...], "backup": caminho|None}.
+    Retorna {"marcados": [...], "incluidos": [...]}.
     """
     caminho = Path(caminho)
     wb = openpyxl.load_workbook(caminho)
@@ -241,11 +240,7 @@ def marcar_agendamento(caminho: str | Path, clientes: dict[str, str], gravar: bo
 
     if not gravar or (not marcados and not incluidos):
         wb.close()
-        return {"marcados": marcados, "incluidos": incluidos, "backup": None}
-
-    carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = caminho.with_name(f"{caminho.stem}_backup_{carimbo}_pre_agenda{caminho.suffix}")
-    shutil.copy2(caminho, backup)
+        return {"marcados": marcados, "incluidos": incluidos}
 
     # grava num arquivo ao lado e troca no fim: quem estiver lendo a
     # planilha (pipeline, painel, portal) nunca pega um arquivo pela metade
@@ -254,6 +249,5 @@ def marcar_agendamento(caminho: str | Path, clientes: dict[str, str], gravar: bo
     wb.close()
     os.replace(temporario, caminho)
 
-    logger.info(f"AGENDA gravado na planilha: {len(marcados)} marcado(s), {len(incluidos)} "
-                f"incluído(s). Backup: {backup.name}")
-    return {"marcados": marcados, "incluidos": incluidos, "backup": str(backup)}
+    logger.info(f"AGENDA gravado na planilha: {len(marcados)} marcado(s), {len(incluidos)} incluído(s).")
+    return {"marcados": marcados, "incluidos": incluidos}

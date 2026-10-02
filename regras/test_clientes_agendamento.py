@@ -44,9 +44,6 @@ class PlanilhaTemporaria(unittest.TestCase):
         wb.close()
         return linhas
 
-    def _backups(self):
-        return list(Path(self._tmp.name).glob("BD_CLIENTES_backup_*_pre_agenda.xlsx"))
-
 
 class TestLeitura(PlanilhaTemporaria):
     def test_codigo_numerico_sem_zero_a_esquerda_casa_com_cnpj_completo(self):
@@ -104,31 +101,24 @@ class TestMarcarAgendamento(PlanilhaTemporaria):
         self.assertEqual(len(linhas), 1)
         self.assertEqual(linhas[0][3], "AGENDA")
 
-    def test_quem_ja_tem_agenda_nao_muda_e_nao_gera_backup(self):
+    def test_quem_ja_tem_agenda_nao_muda(self):
         self._criar([[21590391000111, "NUTRICAR", "SAO PAULO", "AGENDAMENTO", 2]])
         resultado = marcar_agendamento(self.caminho, {"21590391000111": "NUTRICAR"})
-        self.assertEqual(resultado, {"marcados": [], "incluidos": [], "backup": None})
+        self.assertEqual(resultado, {"marcados": [], "incluidos": []})
         self.assertEqual(self._linhas()[0][3], "AGENDAMENTO")
-        self.assertEqual(self._backups(), [])
 
-    def test_backup_guarda_a_planilha_de_antes(self):
+    def test_nao_deixa_arquivo_de_backup_ao_lado(self):
+        # o backup diario e o das 03h pro GCS (backup_dados_gcs.py), decisao do Hugo, 30/09
         self._criar([[49749452000160, "VERO PANE", "SAO PAULO", None, 2]])
-        resultado = marcar_agendamento(self.caminho, {"49749452000160": "VERO PANE"})
-        backups = self._backups()
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(Path(resultado["backup"]), backups[0])
-        wb = openpyxl.load_workbook(backups[0], read_only=True, data_only=True)
-        self.assertIsNone(list(wb.active.iter_rows(min_row=2, values_only=True))[0][3])
-        wb.close()
+        marcar_agendamento(self.caminho, {"49749452000160": "VERO PANE"})
+        self.assertEqual(sorted(p.name for p in Path(self._tmp.name).iterdir()), ["BD_CLIENTES.xlsx"])
 
     def test_sem_gravar_so_informa_quem_seria_marcado(self):
         self._criar([[49749452000160, "VERO PANE", "SAO PAULO", None, 2]])
         resultado = marcar_agendamento(
             self.caminho, {"49749452000160": "VERO PANE", "59708718000180": "REAL BREAD"}, gravar=False)
-        self.assertEqual(resultado, {"marcados": ["49749452000160"], "incluidos": ["59708718000180"],
-                                     "backup": None})
+        self.assertEqual(resultado, {"marcados": ["49749452000160"], "incluidos": ["59708718000180"]})
         self.assertEqual(self._linhas(), [[49749452000160, "VERO PANE", "SAO PAULO", None, 2]])
-        self.assertEqual(self._backups(), [])
 
     def test_demais_colunas_ficam_intactas(self):
         self._criar([[49749452000160, "VERO PANE", "SAO PAULO", None, 2]])
