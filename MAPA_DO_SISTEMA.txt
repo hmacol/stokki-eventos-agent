@@ -336,6 +336,10 @@
                                lista sempre_avisar) e insucessos novos de entrega
                                (um aviso por rodada do expedir_pedidos.py, com
                                código, destinatário, remetente e motivo).
+ avisar_fora_area.py          Aviso em massa aos embarcadores sobre pedidos fora
+                               da área (botão "Avisar clientes" do planejamento):
+                               e-mail + WhatsApp no grupo do cliente, registro em
+                               avisos_fora_area. Não mexe em pedidos_area_notificada.
                                Em grupo separado (grupo_atendimento_id): chamado
                                do atendimento que passou a depender de gente,
                                com o link (chamados.whatsapp_para_atendimento).
@@ -568,6 +572,9 @@
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
+ embarcadores_whatsapp.py  /embarcadores/whatsapp: grupo de WhatsApp por
+                           embarcador (interno.whatsapp_grupo_id), lista vinda
+                           do OpenWA; usado pelo Avisar clientes do planejamento.
  contadores_menu.py        Badges do menu lateral.
  wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
                            WMS do galpão (posições, movimentos, reservas,
@@ -774,12 +781,15 @@
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas)
+   avisos_fora_area          avisar_fora_area.py (uma linha por pedido e canal)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
-   interno                   tipo de carga por embarcador (só leitura)
+   interno                   tipo de carga por embarcador; whatsapp_grupo_id
+                             (coluna criada por avisar_fora_area.garantir_coluna_grupo)
+                             editável em /embarcadores/whatsapp
    rotas, rotas_paradas      LEGADO vazio (não usar)
 
  Outros bancos: dados/atendimento.db (atendimento/),
