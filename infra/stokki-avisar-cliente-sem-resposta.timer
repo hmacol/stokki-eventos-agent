@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-avisar-cliente-sem-resposta.service a cada 2 min (so age no horario de atendimento)
+
+[Timer]
+OnCalendar=*-*-* *:00/2:00
+Persistent=false
+AccuracySec=10sec
+
+[Install]
+WantedBy=timers.target

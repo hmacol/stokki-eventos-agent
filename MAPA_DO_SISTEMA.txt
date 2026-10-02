@@ -85,6 +85,8 @@
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
+ Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
+                                             marcar_clientes_agenda.py + tela /clientes-agenda
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -238,6 +240,8 @@
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
  a cada minuto               atendimento-reenviar-pendentes  atendimento/reenviar_pendentes.py
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
+ a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
+                                                             horário de atendimento dos chamados)
 
  infra/sequencia_tarde.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -293,14 +297,22 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 18h/22h). Data informada
                          vence o dia fixo da região.
- marcar_clientes_agenda.py  Quem teve data de agendamento informada vira
-                         AGENDA na BD_CLIENTES (sequências 18h/22h, backup
-                         antes de gravar). Trata cada documento uma vez
-                         (tabela clientes_agenda_marcados): AGENDA apagado
-                         à mão não volta.
+ marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
+                         na fila de autorização do Hugo pra virar AGENDA na
+                         BD_CLIENTES (sequências 18h/22h). Aviso no WhatsApp
+                         com o link da tela /clientes-agenda, onde ele
+                         Autoriza (grava na planilha; backup = o diário das
+                         03h pro GCS) ou marca
+                         Não marcar. Tabela clientes_agenda_marcados; quem
+                         já é AGENDA na planilha entra como autorizado
+                         (apagar à mão não volta). --nao-marcar pela linha
+                         de comando.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
+ classificar_clientes_cnae.py  Consulta o CNAE dos destinatários na BrasilAPI
+                         e grava a categoria em clientes_cnae (manual, sem
+                         timer; só consulta quem ainda não tem categoria).
 
  --- Agendamento e redespacho ---
  adicionar_agendamento.py      Migração única das tabelas de agendamento.
@@ -316,13 +328,21 @@
  notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
  notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
- preferencias_notificacao.py   Preferências de e-mail por embarcador.
+ preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
+                               WhatsApp (coluna whatsapp) e chave chamado_sem_resposta.
+ avisar_cliente_sem_resposta.py  Timer 2 min: embarcador que ficou 10 min sem
+                               responder a equipe num chamado recebe WhatsApp com o
+                               link do portal. Só no horário de atendimento, uma
+                               tentativa por mensagem da equipe (assinatura msg:<id>),
+                               mensagem com até 3 dias, teto próprio. Desligado
+                               (whatsapp_notificacoes.clientes.ativo); --modo-teste.
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
- integracao_openwa.py          Envio de WhatsApp pelo OpenWA (só notificações internas).
+ integracao_openwa.py          Envio de WhatsApp pelo OpenWA (grupos internos e o
+                               aviso ao cliente) + numero_existe (contacts/check).
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
                                job, não expedidos, resumo das rotinas (erro ou
                                lista sempre_avisar) e insucessos novos de entrega
@@ -420,6 +440,10 @@
  transportadoras.py         Tipo (ENTREGA/RETIRADA/TERCEIROS) e endereço de
                             redespacho; resolver_por_endereco.
  complexidade_entrega.py    Nível 1-4 por destinatário -> skill "{Carga}-{Nível}".
+ categoria_cliente.py       Categoria do destinatário pelo CNAE (restaurante,
+                            comércio pequeno, supermercado, atacado, pessoa
+                            física, outros); tabela clientes_cnae. Ainda não
+                            é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
@@ -576,6 +600,9 @@
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
    /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
+   /clientes-agenda           clientes_agenda.html (só nível total: autoriza
+                              AGENDA na BD_CLIENTES; alimentada por
+                              marcar_clientes_agenda.py)
    /pedidos-parados           pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
@@ -764,7 +791,8 @@
    documentos_processados    documentos_pedido/
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
-   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas)
+   notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
+                             origem cliente_sem_resposta = aviso direto ao embarcador)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
@@ -832,6 +860,13 @@
    (whatsapp_notificacoes.grupo_atendimento_id; sem ele não envia, nunca
    cai no grupo de alertas). Desliga sozinho com avisar_chamados: false.
    O portal lê o config na subida: mudou a seção, reinicie portal-cliente.
+ - WhatsApp DIRETO AO CLIENTE (avisar_cliente_sem_resposta.py) é a única
+   notificação por WhatsApp que sai pra fora: whatsapp_notificacoes.clientes
+   {ativo, minutos, dias_max, teto_diario, forcar_destino}. Teto separado do
+   interno. Enquanto forcar_destino tiver o número do Hugo, nenhum cliente
+   recebe. Exige a chave operator do OpenWA liberada pra chat individual
+   (infra/openwa/LEIAME.md). Resposta do cliente no WhatsApp cai no celular
+   do Hugo e NÃO entra no chamado.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

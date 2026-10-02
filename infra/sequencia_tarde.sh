@@ -14,6 +14,9 @@ cd "$RAIZ" && "$PY" verificar_pedidos_duplicados_vuupt.py
 # 28/09: data de agendamento informada (portal/planilha/e-mail) entra no
 # servico ANTES da roteirizacao -- senao o dia fixo preenche a data dele.
 cd "$RAIZ" && "$PY" atualizar_agendamentos_confirmados.py
+# 29/09: quem teve data de agendamento informada vira AGENDA na BD_CLIENTES.
+# Falha aqui nao pode parar a roteirizacao (|| true por causa do set -e).
+cd "$RAIZ" && "$PY" marcar_clientes_agenda.py || true
 cd "$RAIZ/roteirizacao" && "$PY" criar_rotas_diarias.py --gerar-rascunho
 # 28/08: notificar_pedidos_em_espera.py saiu daqui -- roda em timer proprio
 # (stokki-notificar-pedidos-em-espera.timer, 08:20 e 15:20).

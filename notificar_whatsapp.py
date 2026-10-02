@@ -22,6 +22,13 @@ atendimento que passou a depender de gente, com o link da tela. Leva so o
 nome do embarcador.
     portal_cliente/chamados.whatsapp_para_atendimento -> avisar_chamado
 
+Origem PARA FORA da empresa (pedido do Hugo, 29/09/2026): o embarcador que
+ficou 10 min sem responder a equipe recebe o aviso no numero que ele mesmo
+cadastrou no portal. Destino individual (<numero>@c.us), teto proprio
+(clientes.teto_diario), sem janela de repeticao (a rotina garante uma
+tentativa por mensagem da equipe) e consulta de numero antes de enviar.
+    avisar_cliente_sem_resposta.py -> avisar_cliente_sem_resposta
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -44,6 +51,12 @@ config.yaml:
       janela_repeticao_min: 120
       falhas_para_alerta: 3
       pausa_canal_min: 60        # descanso depois de N falhas seguidas
+      clientes:                  # aviso ao embarcador (avisar_cliente_sem_resposta.py)
+        ativo: false
+        minutos: 10
+        dias_max: 3
+        teto_diario: 30
+        forcar_destino: ""       # numero do Hugo enquanto for piloto; vazio = envio real
 """
 import logging
 import re
@@ -62,6 +75,8 @@ MAX_DETALHE = 200
 MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 MAX_INSUCESSOS = 10
+ORIGEM_CLIENTE = "cliente_sem_resposta"
+TETO_CLIENTES_PADRAO = 30
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -115,6 +130,7 @@ CARA_DE_ERRO_TECNICO = r"Error|Exception|Traceback|[<>{}\[\]]|0x|\w\.\w+\("
 # Chave = nome da unit sem "stokki-" e sem ".service" (infra/*.service).
 NOMES_DAS_TAREFAS = {
     "acompanhar-retiradas": "Acompanhamento das retiradas no galpão",
+    "avisar-cliente-sem-resposta": "WhatsApp ao cliente que não respondeu o chamado",
     "backup-gcs": "Cópia de segurança diária dos dados",
     "backup-horario": "Cópia de segurança de hora em hora",
     "cancelar-rotas-sem-motorista": "Cancelamento das rotas de hoje sem motorista",
@@ -293,10 +309,35 @@ def texto_chamado(chamado: dict, link: str, agora: datetime | None = None) -> st
     return "\n".join(linhas)
 
 
+def texto_clientes_agenda(novos: int, total: int, link: str, agora: datetime | None = None) -> str:
+    """Destinatarios com data de agendamento informada esperando o Hugo
+    autorizar a marcacao AGENDA (marcar_clientes_agenda.py). So contagens;
+    os nomes ficam na tela."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    frase = (f"{novos} novo aguarda" if novos == 1 else f"{novos} novos aguardam")
+    return "\n".join([
+        f"📅 *Clientes para marcar como AGENDA* · {quando}",
+        f"{frase} sua autorização ({total} no total).",
+        link,
+    ])
+
+
+def texto_cliente_sem_resposta(chamado_id: int, link: str) -> str:
+    """Pro cliente: sem nome, sem assunto, sem conteudo da conversa. Pede
+    pra responder no portal (a resposta no WhatsApp cai no celular do Hugo
+    e nao entra no chamado)."""
+    return (f"Fresh Log: respondemos o seu chamado #{chamado_id} e aguardamos o seu retorno.\n"
+            f"Responda pelo portal: {link}")
+
+
 # --- Envio --------------------------------------------------------------------
 
 def _cfg(config: dict | None) -> dict:
     return (config or {}).get("whatsapp_notificacoes") or {}
+
+
+def _cfg_clientes(config: dict | None) -> dict:
+    return _cfg(config).get("clientes") or {}
 
 
 def _inteiro(cfg: dict, chave: str, padrao: int) -> int:
@@ -318,8 +359,26 @@ def _registrar(conn, agora, origem, tipo, assinatura, situacao, motivo=None, id_
     conn.commit()
 
 
+def _enviados_hoje(conn, agora: datetime, origem_cliente: bool) -> int:
+    """Teto interno e teto dos clientes nao se misturam: aviso de cliente
+    nao consome a cota dos alertas de falha, nem o contrario."""
+    inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
+    comparador = "=" if origem_cliente else "!="
+    return conn.execute(
+        f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
+        f"AND origem {comparador} ?", (inicio_do_dia, ORIGEM_CLIENTE)).fetchone()[0]
+
+
+def _teto(cfg: dict, origem: str) -> int:
+    if origem == ORIGEM_CLIENTE:
+        return _inteiro(cfg.get("clientes") or {}, "teto_diario", TETO_CLIENTES_PADRAO)
+    return _inteiro(cfg, "teto_diario", 20)
+
+
 def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime) -> str | None:
-    if assinatura:
+    # A origem dos clientes nao usa a janela: a rotina so chama uma vez por
+    # mensagem da equipe, e a janela deixaria repetir depois de 2 h.
+    if assinatura and origem != ORIGEM_CLIENTE:
         desde = _iso(agora - timedelta(minutes=_inteiro(cfg, "janela_repeticao_min", 120)))
         if conn.execute(
                 "SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
@@ -336,13 +395,18 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
         pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
         if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
             return "canal em pausa"
-    inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
-    enviadas = conn.execute(
-        "SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ?",
-        (inicio_do_dia,)).fetchone()[0]
-    if enviadas >= _inteiro(cfg, "teto_diario", 20):
+    if _enviados_hoje(conn, agora, origem == ORIGEM_CLIENTE) >= _teto(cfg, origem):
         return "teto diario atingido"
     return None
+
+
+def saldo_clientes(conn, config: dict, agora: datetime | None = None) -> int:
+    """Quantos avisos a clientes ainda cabem hoje. A rotina consulta antes
+    de comecar e para quando acaba, em vez de gravar 'nao_enviado' (que
+    contaria como a unica tentativa daquela mensagem)."""
+    agora = agora or datetime.now()
+    conn.execute(_SCHEMA)
+    return max(0, _teto(_cfg(config), ORIGEM_CLIENTE) - _enviados_hoje(conn, agora, True))
 
 
 def _esperar_intervalo(conn, cfg: dict, agora: datetime, dormir) -> datetime:
@@ -392,7 +456,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
     if not cfg.get("ativo") or not integracao_openwa.configurado(cfg) or not grupo_id:
         return "desligado"
     if modo_teste:
-        logger.info(f"[MODO TESTE] WhatsApp nao enviado ({origem}). Texto:\n{texto}")
+        logger.info(f"[MODO TESTE] WhatsApp nao enviado ({origem} -> {grupo_id}). Texto:\n{texto}")
         return "modo_teste"
     agora = agora or datetime.now()
     fechar = conn is None
@@ -409,7 +473,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
         ok, id_mensagem = integracao_openwa.enviar_texto(cfg, grupo_id, texto)
         if ok:
             _registrar(conn, agora, origem, tipo, assinatura, "enviado", None, id_mensagem)
-            logger.info(f"WhatsApp enviado ao grupo ({origem}).")
+            logger.info(f"WhatsApp enviado ({origem} -> {grupo_id}).")
             return "enviado"
         _registrar(conn, agora, origem, tipo, assinatura, "falhou", "gateway fora do ar ou envio recusado")
         _alertar_se_canal_parou(conn, cfg, config)
@@ -492,6 +556,60 @@ def chamados_ligado(config: dict) -> bool:
     return bool(cfg.get("ativo") and cfg.get("avisar_chamados", True) and cfg.get("grupo_atendimento_id"))
 
 
+def clientes_ligado(config: dict) -> bool:
+    cfg = _cfg(config)
+    return bool(cfg.get("ativo") and _cfg_clientes(config).get("ativo") and integracao_openwa.configurado(cfg))
+
+
+def _registrar_sem_whatsapp(conn, agora, assinatura: str) -> None:
+    fechar = conn is None
+    if fechar:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute(_SCHEMA)
+        _registrar(conn, agora or datetime.now(), ORIGEM_CLIENTE, "chamado", assinatura,
+                   "nao_enviado", "numero sem whatsapp")
+    finally:
+        if fechar:
+            conn.close()
+
+
+def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, link: str, config: dict,
+                                modo_teste: bool = False, **kw) -> str:
+    """Aviso direto ao embarcador (avisar_cliente_sem_resposta.py). `msg_id`
+    e a mensagem da equipe sem resposta: vira a assinatura `msg:<id>`, que
+    a rotina usa pra nunca repetir. Situacoes: desligado | modo_teste |
+    numero_sem_whatsapp | indeterminado | nao_enviado | enviado | falhou.
+    `indeterminado` = o gateway nao soube dizer se o numero existe: nada e
+    gravado, a rotina tenta na proxima rodada. Com clientes.forcar_destino
+    a mensagem vai pra esse numero com o destino real na primeira linha."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        texto = texto_cliente_sem_resposta(chamado_id, link)
+        assinatura = f"msg:{msg_id}"
+        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (chamado #{chamado_id}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                _registrar_sem_whatsapp(kw.get("conn"), kw.get("agora"), assinatura)
+                logger.info(f"WhatsApp nao enviado (chamado #{chamado_id}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, "chamado", texto, assinatura, modo_teste=modo_teste,
+                         grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
 def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
     """Chamado que passou a depender de gente (portal_cliente/chamados.py).
     Vai pro grupo do atendimento, NUNCA pro de alertas; um aviso por chamado
@@ -501,6 +619,19 @@ def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
             return "desligado"
         return despachar(config, "atendimento", "chamado", texto_chamado(chamado, link, kw.get("agora")),
                          f"chamado:{chamado['id']}", grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_clientes_agenda(novos: int, total: int, link: str, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Pendentes novos da rodada de marcar_clientes_agenda.py, uma mensagem
+    por rodada, so quando entrou alguem."""
+    try:
+        if not novos:
+            return "nao_relevante"
+        return despachar(config, "marcar_clientes_agenda", "clientes_agenda",
+                         texto_clientes_agenda(novos, total, link, kw.get("agora")), modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
