@@ -180,6 +180,8 @@
  Autenticação:
    painel    -> usuário/senha do config, 6 níveis: total, operador, leitura,
                 expedicao, galpao, atendimento. Decorador requer_auth(niveis=).
+                Login nominal: painel_agentes.usuarios_extras no config.yaml
+                (lista de {usuario, senha, nivel}); a ação fica no nome dele.
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.

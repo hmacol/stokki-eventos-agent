@@ -166,7 +166,18 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
             and hmac.compare_digest(senha, senha_atendimento):
         return "atendimento"
+    # Logins nominais (02/10, Hugo): lista usuarios_extras no config.yaml,
+    # cada item {usuario, senha, nivel}, pra pessoa ter login proprio em
+    # vez de dividir o par do nivel -- a acao fica registrada no nome dela.
+    for extra in cfg_painel.get("usuarios_extras") or []:
+        u, s, n = extra.get("usuario"), extra.get("senha"), extra.get("nivel")
+        if u and s and n in _NIVEIS_VALIDOS and hmac.compare_digest(usuario, u) \
+                and hmac.compare_digest(senha, s):
+            return n
     return None
+
+
+_NIVEIS_VALIDOS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento")
 
 
 def requer_auth(f=None, *, niveis=("total",)):
