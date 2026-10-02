@@ -578,6 +578,8 @@
  planejamento_rotas.py     Dados/ações do Planejamento.
  rascunhos_rota.py         Tabelas dos rascunhos de rota.
  expedicao.py              Tela de expedição e PDF do romaneio.
+ consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
+                           leitura): deveria estar no galpão? Não grava nada.
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
@@ -601,6 +603,8 @@
    /mapa-rotas                mapa_rotas.html
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
+   /expedicao/consulta        consulta_pedido_expedicao.html (+ /api/expedicao/consulta;
+                              níveis total/operador/expedicao/galpao)
    /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por

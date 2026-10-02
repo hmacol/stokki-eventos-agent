@@ -78,6 +78,7 @@ import rascunhos_rota
 import torre_controle
 import tratativas
 import pedidos_parados_triagem
+import consulta_expedicao
 import contadores_menu
 import pagina_inicial
 import wms
@@ -626,6 +627,35 @@ def api_expedicao_excluir_pedido():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify(resultado)
+
+
+# Consulta de pedido (Hugo, 02/10): na separação da rota o operador não
+# acha um pedido e quer saber se ele deveria estar no galpão. Só leitura;
+# o galpão também consulta. Os mesmos níveis estão no item do menu
+# (_menu_lateral_nav.html) -- mexer nos dois lugares.
+NIVEIS_CONSULTA_PEDIDO = ("total", "operador", "expedicao", "galpao")
+
+
+@app.route("/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def expedicao_consulta():
+    return render_template("consulta_pedido_expedicao.html")
+
+
+@app.route("/api/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def api_expedicao_consulta():
+    """Veredito de UM pedido cruzando Vuupt e Stokki ao vivo -- ver
+    consulta_expedicao.py. 400 código inválido, 503 Vuupt fora."""
+    try:
+        return jsonify(consulta_expedicao.consultar(request.args.get("codigo", "")))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except consulta_expedicao.ConsultaIndisponivel as e:
+        return jsonify({"erro": str(e)}), 503
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na consulta de pedido da expedição")
+        return jsonify({"erro": f"Falha na consulta: {e}"}), 500
 
 
 def _parse_data_param(padrao_amanha: bool = False) -> date:

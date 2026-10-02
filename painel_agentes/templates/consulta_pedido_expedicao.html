@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block titulo %}Consultar pedido{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .consulta { max-width: 560px; margin: 0 auto; }
+  .consulta form { display: flex; gap: 8px; margin-bottom: 18px; }
+  .consulta input#codigo {
+    flex: 1; min-width: 0; font-size: 22px; font-weight: 700; padding: 14px 16px;
+    border: 2px solid var(--borda); border-radius: 10px;
+    background: var(--superficie); color: var(--texto); font-family: inherit; letter-spacing: .5px;
+  }
+  .consulta input#codigo:focus { outline: none; border-color: var(--acento); }
+  .consulta button {
+    flex: none; background: var(--acento); color: #fff; border: 0; border-radius: 10px;
+    font-size: 16px; font-weight: 700; padding: 0 22px; cursor: pointer; font-family: inherit;
+  }
+  .consulta button:disabled { opacity: .6; cursor: wait; }
+  .ajuda { font-size: 13px; color: var(--texto-suave); margin: -8px 0 18px; }
+
+  .veredito {
+    border-radius: 14px; padding: 22px 20px; border: 2px solid transparent;
+    background: var(--superficie);
+  }
+  .veredito .codigo { font-size: 13px; font-weight: 700; color: var(--texto-suave); letter-spacing: .5px; }
+  .veredito .titulo { font-size: 26px; font-weight: 800; line-height: 1.15; margin: 6px 0 8px; }
+  .veredito .contexto { font-size: 16px; line-height: 1.4; }
+  .veredito .faixa { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; }
+  .veredito .faixa.divergencia { background: #fff3cd; color: #7a5200; }
+  .veredito .faixa.aviso { background: var(--fundo); color: var(--texto-suave); }
+  .veredito .brutos { margin-top: 14px; font-size: 12.5px; color: var(--texto-suave); line-height: 1.6; }
+
+  .veredito.galpao        { border-color: #2e9e5b; } .veredito.galpao .titulo        { color: #23824a; }
+  .veredito.entregue      { border-color: #2f6fd6; } .veredito.entregue .titulo      { color: #2a62bd; }
+  .veredito.saiu          { border-color: #d9a300; } .veredito.saiu .titulo          { color: #9a7300; }
+  .veredito.retirado,
+  .veredito.cancelado     { border-color: #8a8f98; } .veredito.retirado .titulo,
+                                                     .veredito.cancelado .titulo     { color: #5f646c; }
+  .veredito.nao_encontrado{ border-color: var(--borda); border-style: dashed; }
+  .veredito.erro          { border-color: #c0392b; } .veredito.erro .titulo          { color: #c0392b; font-size: 20px; }
+  .carregando { font-size: 15px; color: var(--texto-suave); padding: 18px 4px; }
+
+  @media (max-width: 520px) {
+    .consulta input#codigo { font-size: 20px; }
+    .veredito .titulo { font-size: 23px; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="consulta">
+  <form id="form-consulta" autocomplete="off">
+    <input id="codigo" name="codigo" inputmode="numeric" placeholder="PS-38123" aria-label="Código do pedido" autofocus>
+    <button type="submit" id="botao">Consultar</button>
+  </form>
+  <p class="ajuda">Digite o código do pedido (com ou sem PS). Consulta a Vuupt e a Stokki agora.</p>
+  <div id="resultado" aria-live="polite"></div>
+</div>
+
+<script>
+(function () {
+  const URL_API = "{{ url_for('api_expedicao_consulta') }}";
+  const form = document.getElementById("form-consulta");
+  const campo = document.getElementById("codigo");
+  const botao = document.getElementById("botao");
+  const saida = document.getElementById("resultado");
+
+  function el(tag, classe, texto) {
+    const e = document.createElement(tag);
+    if (classe) e.className = classe;
+    if (texto) e.textContent = texto;
+    return e;
+  }
+
+  function mostrar(r) {
+    const card = el("div", "veredito " + r.veredito);
+    card.appendChild(el("div", "codigo", r.codigo));
+    card.appendChild(el("div", "titulo", r.titulo));
+    card.appendChild(el("div", "contexto", r.contexto));
+    if (r.divergencia) card.appendChild(el("div", "faixa divergencia", "⚠ Divergência: " + r.divergencia + ". Avise o responsável."));
+    if (r.aviso) card.appendChild(el("div", "faixa aviso", r.aviso));
+    const brutos = el("div", "brutos");
+    brutos.appendChild(el("div", "", r.stokki_bruto));
+    brutos.appendChild(el("div", "", r.vuupt_bruto));
+    card.appendChild(brutos);
+    saida.replaceChildren(card);
+  }
+
+  function erro(msg) {
+    const card = el("div", "veredito erro");
+    card.appendChild(el("div", "titulo", msg));
+    saida.replaceChildren(card);
+  }
+
+  form.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    const codigo = campo.value.trim();
+    if (!codigo) { campo.focus(); return; }
+    botao.disabled = true;
+    saida.replaceChildren(el("div", "carregando", "Consultando Vuupt e Stokki…"));
+    // Sem resposta em 40s o operador recebe recado em vez de "Consultando…" sem fim
+    const controle = new AbortController();
+    const prazo = setTimeout(() => controle.abort(), 40000);
+    try {
+      const resp = await fetch(URL_API + "?codigo=" + encodeURIComponent(codigo),
+                               {credentials: "same-origin", signal: controle.signal});
+      if (resp.status === 401) { window.location.reload(); return; }
+      const dados = await resp.json().catch(() => ({}));
+      if (!resp.ok) erro(dados.erro || ("Falha na consulta (" + resp.status + ")"));
+      else mostrar(dados);
+    } catch (e) {
+      erro(e.name === "AbortError" ? "Demorou demais. Tente de novo." : "Sem conexão com o painel. Tente de novo.");
+    } finally {
+      clearTimeout(prazo);
+      botao.disabled = false;
+      campo.focus();
+      campo.select();
+    }
+  });
+})();
+</script>
+{% endblock %}
