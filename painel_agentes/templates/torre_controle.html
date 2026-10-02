@@ -463,6 +463,11 @@
   .barra-lote button.tratar-lote:hover { opacity: 0.88; }
   .barra-lote button.limpar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .barra-lote button.limpar:hover { border-color: var(--acento); color: var(--acento); }
+  .barra-lote button.duplicar-lote { background: var(--superficie); color: #1c5cab; border: 1px solid #C7D9F0; }
+  .barra-lote button.notificar-lote { background: var(--superficie); color: #0a8f6e; border: 1px solid #B7E8DA; }
+  .barra-lote button.duplicar-lote:hover:not(:disabled) { border-color: #1c5cab; }
+  .barra-lote button.notificar-lote:hover:not(:disabled) { border-color: #0a8f6e; }
+  .barra-lote button:disabled { opacity: 0.45; cursor: not-allowed; }
   details.tratadas { margin-top: 12px; font-size: 12.5px; }
   details.tratadas summary { cursor: pointer; color: var(--texto-suave); font-weight: 600; }
   details.tratadas table td { color: var(--texto-suave); }
@@ -1272,6 +1277,10 @@ function renderExcecoes(d) {
     if (PODE_TRATAR) {
       partes.push(`<div class="barra-lote" id="barra-lote">
         <span class="qtd" id="barra-lote-qtd"></span>
+        <button type="button" class="duplicar-lote" id="botao-duplicar-lote" onclick="executarLote('duplicar', this)"
+                title="Cria a reentrega no VUUPT pra cada insucesso selecionado, um por vez">⧉ Duplicar</button>
+        <button type="button" class="notificar-lote" id="botao-notificar-lote" onclick="executarLote('notificar', this)"
+                title="Manda a pergunta de reenvio ao remetente de cada insucesso selecionado, um por vez">✉ Notificar</button>
         <button type="button" class="tratar-lote" onclick="tratarSelecionadas()">✓ Tratar selecionados</button>
         <button type="button" class="limpar" onclick="limparSelecao()">Limpar</button>
       </div>`);
@@ -1385,12 +1394,83 @@ function atualizarBarraLote() {
     todas.checked = n > 0 && n === total;
     todas.indeterminate = n > 0 && n < total;
   }
+  // Duplicar/Notificar só valem pra insucesso que ainda permite a ação:
+  // o botão mostra quantos da seleção entram e desliga quando é zero.
+  const sel = selecionadas();
+  const qtdDup = sel.filter(x => x.pode_duplicar).length;
+  const qtdNot = sel.filter(x => x.pode_notificar_ocorrencia).length;
+  const bDup = document.getElementById("botao-duplicar-lote");
+  const bNot = document.getElementById("botao-notificar-lote");
+  if (bDup) { bDup.disabled = !qtdDup; bDup.textContent = qtdDup ? `⧉ Duplicar (${qtdDup})` : "⧉ Duplicar"; }
+  if (bNot) { bNot.disabled = !qtdNot; bNot.textContent = qtdNot ? `✉ Notificar (${qtdNot})` : "✉ Notificar"; }
+}
+
+function selecionadas() {
+  return (dadosAtuais && dadosAtuais.excecoes || []).filter(x => idsSelecionados.has(x.id));
+}
+
+// Duplicar/Notificar em lote (Hugo, 30/09): uma confirmação só, depois
+// as MESMAS rotas unitárias, uma por vez (a Vuupt e o rate-limit de
+// e-mail continuam vendo um pedido de cada vez). Quem deu certo sai da
+// seleção; quem falhou fica marcado pra tentar de novo.
+const LOTES = {
+  duplicar: {
+    verbo: "Duplicar", filtro: x => x.pode_duplicar, url: "/api/torre/duplicar",
+    corpo: x => ({ service_id: x.service_id, codigo: x.codigo, motorista: x.motorista, rota: x.rota }),
+    pergunta: n => `Criar uma reentrega no VUUPT agora para ${n} pedido(s)?`,
+    aviso: "\n\nEssa ação cria pedidos novos de verdade -- não dá pra desfazer.",
+    resultado: (x, j) => `${x.codigo} → ${j.novo_code}`, titulo: "Reentregas criadas",
+  },
+  notificar: {
+    verbo: "Notificar", filtro: x => x.pode_notificar_ocorrencia, url: "/api/torre/notificar-ocorrencia",
+    corpo: x => ({ service_id: x.service_id, codigo: x.codigo }),
+    pergunta: n => `Mandar a pergunta de reenvio ao remetente de ${n} pedido(s) agora?`,
+    aviso: "",
+    resultado: (x, j) => `${x.codigo}: ${j.mensagem || "e-mail enviado"}`, titulo: "Notificados",
+  },
+};
+
+async function executarLote(tipo, botao) {
+  const cfg = LOTES[tipo];
+  const sel = selecionadas();
+  const alvos = sel.filter(cfg.filtro);
+  if (!alvos.length) return;
+  const fora = sel.length - alvos.length;
+  const lista = alvos.map(x => `${x.codigo} (${x.motivo_insucesso || "motivo não informado"})`).join("\n");
+  const nota = fora ? `\n\n${fora} selecionado(s) não permite(m) ${cfg.verbo.toLowerCase()} e fica(m) de fora.` : "";
+  if (!confirm(`${cfg.pergunta(alvos.length)}\n\n${lista}${nota}${cfg.aviso}`)) return;
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  const feitos = [], falhas = [];
+  for (let i = 0; i < alvos.length; i++) {
+    const x = alvos[i];
+    botao.textContent = `${cfg.verbo}... ${i + 1}/${alvos.length}`;
+    try {
+      const resp = await fetch(`${BASE_PATH}${cfg.url}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg.corpo(x)),
+      });
+      const j = await resp.json();
+      if (!resp.ok) { falhas.push(`${x.codigo}: ${j.erro || "falha"}`); continue; }
+      feitos.push(cfg.resultado(x, j));
+      idsSelecionados.delete(x.id);
+    } catch (e) {
+      falhas.push(`${x.codigo}: ${e.message || e}`);
+    }
+  }
+  botao.disabled = false;
+  botao.textContent = original;
+  let resumo = `${cfg.titulo}: ${feitos.length}` + (feitos.length ? `\n${feitos.join("\n")}` : "");
+  if (falhas.length) resumo += `\n\nFalhas: ${falhas.length}\n${falhas.join("\n")}\n\n(os que falharam continuam selecionados)`;
+  alert(resumo);
+  carregarDados();
 }
 
 // Abre o mesmo modal do Tratar unitário com um "pendente" de lote: a
 // confirmação vê `lote` e manda tudo pra /api/torre/tratar-lote.
 function tratarSelecionadas() {
-  const lote = (dadosAtuais && dadosAtuais.excecoes || []).filter(x => idsSelecionados.has(x.id));
+  const lote = selecionadas();
   if (!lote.length) return;
   const rotulos = lote.map(x => x.codigo || x.descricao);
   tratarExcecao(null, {
