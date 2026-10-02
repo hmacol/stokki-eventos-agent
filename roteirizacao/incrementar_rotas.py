@@ -470,6 +470,12 @@ def main(modo_teste: bool = False):
         except Exception as e:
             logger.error(f"Falha ao separar pedidos dedicados (seguem no incremento normal): {e}")
 
+        # Segurado (Hugo, 29/09): pedido de rota fraca adiado pra depois
+        # desta data alvo não é encaixado -- senão o incremento desfaz a
+        # decisão da roteirização. Só some do lote deste ciclo.
+        from pedidos_segurados import separar_segurados
+        servicos, _segurados = separar_segurados(servicos, data_alvo)
+
         # Área não atendida (pedido do Hugo, 02/08) -- diferente do
         # agendamento pendente, esse aviso é ÚNICO (não é rate-limitado
         # por dia) e pode surgir a qualquer hora, então notifica aqui
