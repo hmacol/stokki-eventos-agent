@@ -1050,6 +1050,12 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
 
         planos = planejar_sublotes(servicos, coords_base, gmaps_key, data_alvo)
         resumo_fracas = _aplicar_segurar(planos, data_alvo, gmaps_key, modo_teste)
+        try:
+            from notificar_whatsapp import avisar_rotas_fracas
+            situacao = avisar_rotas_fracas(data_alvo, resumo_fracas, config, modo_teste=modo_teste)
+            logger.info(f"Aviso de rotas fracas no WhatsApp: {situacao}")
+        except Exception as e:
+            logger.warning(f"Falha ao avisar rotas fracas no WhatsApp (não afeta a criação de rotas): {e}")
         for plano in planos:
             logger.info(f"Partição '{plano['label']}': modelo {plano['modelo']}, {len(plano['sublotes'])} rota(s).")
             modelos_vencedores[plano["label"]] = plano["modelo"]

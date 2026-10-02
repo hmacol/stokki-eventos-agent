@@ -693,3 +693,59 @@ class TestAvisarClientesAgenda(_ComBanco):
 
     def test_desligado(self):
         self.assertEqual(self.avisar(config=_config(ativo=False)), "desligado")
+
+
+import datetime as _dt
+
+
+class TestRotasFracas(unittest.TestCase):
+    ALVO = _dt.date(2026, 9, 30)
+
+    def _resumo(self, **extra):
+        base = {"juntadas": 0, "seguradas": 0, "pedidos_segurados": 0, "data_nova": _dt.date(2026, 10, 1),
+                "sobraram": 0, "pedidos_sobraram": 0, "caixas_sobraram": 0}
+        base.update(extra)
+        return base
+
+    def test_completo(self):
+        r = self._resumo(juntadas=2, seguradas=1, pedidos_segurados=3,
+                         sobraram=1, pedidos_sobraram=2, caixas_sobraram=9)
+        self.assertEqual(nw.texto_rotas_fracas(self.ALVO, r), "\n".join([
+            "⚠️ *Rotas fracas* · rotas de 30/09",
+            "• 2 juntadas em rotas vizinhas",
+            "• 1 segurada para 01/10 (3 pedidos)",
+            "• 1 saiu fraca (2 pedidos, 9 caixas)",
+            "Veja no Planejamento.",
+        ]))
+
+    def test_linha_zerada_e_omitida(self):
+        texto = nw.texto_rotas_fracas(self.ALVO, self._resumo(juntadas=1))
+        self.assertEqual(texto, "\n".join([
+            "⚠️ *Rotas fracas* · rotas de 30/09",
+            "• 1 juntada em rota vizinha",
+            "Veja no Planejamento.",
+        ]))
+
+    def test_cabe_em_200_com_numeros_grandes(self):
+        r = self._resumo(juntadas=9999, seguradas=9999, pedidos_segurados=9999,
+                         sobraram=9999, pedidos_sobraram=9999, caixas_sobraram=9999)
+        self.assertLessEqual(len(nw.texto_rotas_fracas(self.ALVO, r)), nw.MAX_MENSAGEM)
+
+    def test_sem_rota_fraca_nao_envia(self):
+        with patch.object(nw, "despachar") as despachar:
+            self.assertEqual(nw.avisar_rotas_fracas(self.ALVO, self._resumo(), {}), "nao_relevante")
+        despachar.assert_not_called()
+
+    def test_envia_uma_por_data_alvo(self):
+        with patch.object(nw, "despachar", return_value="enviado") as despachar:
+            saida = nw.avisar_rotas_fracas(self.ALVO, self._resumo(sobraram=1, pedidos_sobraram=2, caixas_sobraram=9),
+                                           {"x": 1}, modo_teste=True)
+        self.assertEqual(saida, "enviado")
+        args, kwargs = despachar.call_args
+        self.assertEqual(args[:3], ({"x": 1}, "criar_rotas_diarias", "rotas_fracas"))
+        self.assertEqual(args[4], "rotas_fracas:2026-09-30")
+        self.assertTrue(kwargs["modo_teste"])
+
+    def test_falha_no_envio_nao_levanta(self):
+        with patch.object(nw, "despachar", side_effect=RuntimeError("boom")):
+            self.assertEqual(nw.avisar_rotas_fracas(self.ALVO, self._resumo(juntadas=1), {}), "falhou")

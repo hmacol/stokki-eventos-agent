@@ -249,6 +249,24 @@ def texto_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int) -> str:
     return "\n".join(linhas)
 
 
+def texto_rotas_fracas(data_alvo, resumo: dict) -> str:
+    """Resumo das rotas fracas da rodada (roteirizacao/rotas_fracas.py).
+    `resumo` e o dict de criar_rotas_diarias._aplicar_segurar."""
+    linhas = [f"⚠️ *Rotas fracas* · rotas de {data_alvo:%d/%m}"]
+    if resumo.get("juntadas"):
+        linhas.append("• " + _plural(resumo["juntadas"], "juntada em rota vizinha", "juntadas em rotas vizinhas"))
+    if resumo.get("seguradas"):
+        linhas.append("• " + _plural(resumo["seguradas"], "segurada", "seguradas")
+                      + f" para {resumo['data_nova']:%d/%m} ("
+                      + _plural(resumo["pedidos_segurados"], "pedido", "pedidos") + ")")
+    if resumo.get("sobraram"):
+        linhas.append("• " + _plural(resumo["sobraram"], "saiu fraca", "saíram fracas") + " ("
+                      + _plural(resumo["pedidos_sobraram"], "pedido", "pedidos") + ", "
+                      + _plural(resumo["caixas_sobraram"], "caixa", "caixas") + ")")
+    linhas.append("Veja no Planejamento.")
+    return "\n".join(linhas)
+
+
 def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     """Cada item: {"codigo", "destinatario", "remetente", "motivo"}."""
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
@@ -481,6 +499,19 @@ def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config:
     try:
         return despachar(config, "verificar_entregues_nao_expedidos", "nao_expedidos",
                          texto_nao_expedidos(n_alertas, n_rotas, n_retiradas), **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_rotas_fracas(data_alvo, resumo: dict, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Uma mensagem por data alvo (a assinatura barra a repeticao se o
+    job rodar de novo dentro da janela)."""
+    try:
+        if not (resumo.get("juntadas") or resumo.get("seguradas") or resumo.get("sobraram")):
+            return "nao_relevante"
+        return despachar(config, "criar_rotas_diarias", "rotas_fracas", texto_rotas_fracas(data_alvo, resumo),
+                         f"rotas_fracas:{data_alvo.isoformat()}", modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
