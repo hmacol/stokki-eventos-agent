@@ -181,6 +181,10 @@ TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 (pedido do Hugo, 22/08) -- mesm
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -- acompanha criar_rotas_diarias.py (constantes separadas de propósito, sem import entre os dois módulos)
+# Rota fraca (Hugo, 29/09): mesmo corte de roteirizacao/rotas_fracas.py
+# (constantes separadas de propósito, sem import entre os dois módulos).
+PARADAS_ROTA_FRACA = 7
+CAIXAS_ROTA_FRACA = 40
 # Orçamento de horas por rota: TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_
 # HORAS e ROTA_TEMPO_MAXIMO_HORAS vêm IMPORTADOS de roteirizacao_dados
 # (25/08 -- antes eram cópias locais, e o estimador do badge era uma
@@ -426,6 +430,13 @@ def _badges_trava(rascunho: dict) -> list[str]:
             else:
                 continue
             break
+
+    # Rota fraca (Hugo, 29/09): o motivo vem da roteirização (não coube
+    # em vizinha nem pôde ser segurada). Se a rota foi editada e passou
+    # do corte, o aviso some sozinho.
+    motivo_fraca = rascunho.get("rota_fraca_motivo")
+    if motivo_fraca and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA:
+        badges.append(f"rota fraca: {len(paradas)} pedido(s), {caixas} caixa(s). {motivo_fraca}")
 
     return badges
 
@@ -827,6 +838,15 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao marcar dedicados pro pool (tela segue sem essa marcação): {e}")
 
+    # Segurado (Hugo, 29/09): pedido de rota fraca adiado pra consolidar.
+    # Só rotula o card; continua selecionável pra rota manual.
+    segurados_por_id: dict[int, dict] = {}
+    try:
+        from pedidos_segurados import segurados_por_servico
+        segurados_por_id = segurados_por_servico(servicos_brutos, data_alvo)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar segurados pro pool (tela segue sem essa marcação): {e}")
+
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
     fora_dia_fixo: dict[int, str] = {}
@@ -855,6 +875,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         ]
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
+            p["segurado"] = segurados_por_id.get(p["service_id"])
         pool.sort(key=lambda p: p["codigo"])
 
     agendamentos_por_service_id = {}

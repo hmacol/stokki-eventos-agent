@@ -2707,6 +2707,11 @@
         ? ` title="Cotação R$ ${brl(p.dedicado.valor_total)} dividida entre ${p.dedicado.n_grupo} pedidos"` : "";
       partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}</span>`);
     }
+    // segurado (Hugo, 29/09): rota fraca adiada pra juntar com o volume do dia seguinte
+    if (p.segurado) {
+      const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+      partes.push(`<span class="badge-dedicado" title="Rota fraca: pedido adiado para ${dm(p.segurado.data_nova)}. Pode ser colocado em rota à mão.">⏸ Segurado · prazo ${dm(p.segurado.prazo_final)}</span>`);
+    }
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }

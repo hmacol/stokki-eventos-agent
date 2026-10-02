@@ -64,5 +64,41 @@ class TestColunaMotivo(unittest.TestCase):
         self.assertIsNone(rascunhos_rota.listar_rascunhos_do_dia(date(2026, 9, 30))[0]["rota_fraca_motivo"])
 
 
+import planejamento_rotas  # noqa: E402
+
+
+def _parada(i, caixas=1):
+    return {"service_id": i, "codigo": f"PS-{1000 + i}", "endereco": f"Rua {i}", "sender_id": 1,
+            "latitude": -23.50, "longitude": -46.60 + i * 0.001, "nivel_dificuldade": 1,
+            "volume_caixas": caixas, "janela_inicio": None, "janela_fim": None}
+
+
+class TestEtiqueta(unittest.TestCase):
+    MOTIVO = "vizinha mais próxima a 27 km"
+
+    def setUp(self):
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+                        mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _badges(self, paradas, motivo):
+        return planejamento_rotas._badges_trava(
+            {"paradas": paradas, "tipo_veiculo": None, "tipo_rota": "GRANDE_SP", "rota_fraca_motivo": motivo})
+
+    def test_rota_fraca_com_motivo_ganha_etiqueta(self):
+        badges = self._badges([_parada(1, 9), _parada(2, 4), _parada(3, 4)], self.MOTIVO)
+        self.assertIn("rota fraca: 3 pedido(s), 17 caixa(s). vizinha mais próxima a 27 km", badges)
+
+    def test_sem_motivo_nao_ganha(self):
+        self.assertEqual(self._badges([_parada(1)], None), [])
+
+    def test_passou_de_sete_pedidos_a_etiqueta_some(self):
+        self.assertEqual(self._badges([_parada(i) for i in range(8)], self.MOTIVO), [])
+
+    def test_passou_de_quarenta_caixas_a_etiqueta_some(self):
+        self.assertEqual(self._badges([_parada(1, 41)], self.MOTIVO), [])
+
+
 if __name__ == "__main__":
     unittest.main()
