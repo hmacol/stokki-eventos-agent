@@ -8,6 +8,8 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
 
   SEM_SERVICO          aberto na Stokki e sem serviço na Vuupt      4h
   NO_POOL              no pool, sem rota                           1 dia útil
+                       (segurado pra consolidar rota fraca)       19h do último dia útil antes do
+                                                                    prazo de 3 dias úteis (Hugo, 29/09)
   AGUARDANDO_CLIENTE   agendamento pedido ao embarcador            2 dias úteis
   EM_RASCUNHO          rascunho não enviado                        19h do último dia útil antes da data
   RASCUNHO_COM_ERRO    rascunho em ERRO_ENVIO                      na hora
@@ -95,11 +97,16 @@ def ultimo_dia_util_antes(d: date) -> date:
     return atual
 
 
-def prazo(estado: str, desde: datetime, *, data_rascunho: date | None = None) -> datetime | None:
-    """Quando o prazo do estado vence (None = estado sem prazo)."""
+def prazo(estado: str, desde: datetime, *, data_rascunho: date | None = None,
+          prazo_segurado: date | None = None) -> datetime | None:
+    """Quando o prazo do estado vence (None = estado sem prazo).
+    `prazo_segurado`: prazo final de entrega do pedido segurado de
+    propósito pela regra de rota fraca (roteirizacao/rotas_fracas.py)."""
     if estado == SEM_SERVICO:
         return desde + timedelta(hours=HORAS_SEM_SERVICO)
     if estado == NO_POOL:
+        if prazo_segurado:
+            return datetime.combine(ultimo_dia_util_antes(prazo_segurado), HORA_LIMITE_RASCUNHO)
         return somar_dias_uteis(desde, DIAS_UTEIS_NO_POOL)
     if estado in (AGUARDANDO_CLIENTE, RECUSADO):
         return somar_dias_uteis(desde, DIAS_UTEIS_CLIENTE)

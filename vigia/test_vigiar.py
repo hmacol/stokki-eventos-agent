@@ -164,6 +164,38 @@ class TestRodada(unittest.TestCase):
         self.assertEqual(e["PS-7"]["estado"], "SEM_SERVICO")
         self.assertEqual(e["PS-3"]["estado"], "INSUCESSO")
 
+    def _segurar(self, codigo, data_nova, prazo_final):
+        self.conn.execute("CREATE TABLE IF NOT EXISTS pedidos_segurados (codigo TEXT PRIMARY KEY, "
+                          "service_id INTEGER, segurado_em TEXT, data_alvo_original TEXT, data_nova TEXT, "
+                          "prazo_final TEXT, motivo TEXT)")
+        self.conn.execute("INSERT INTO pedidos_segurados VALUES (?, NULL, '2026-09-28 18:05:00', '2026-09-29', ?, ?, "
+                          "'2 pedidos, 9 caixas')", (codigo, data_nova, prazo_final))
+        self.conn.commit()
+
+    def test_pedido_segurado_nao_alarma_enquanto_espera(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, vuupt_route_id, "
+                          "criado_em_provedor, fluxo) VALUES ('PS-8', 8, 'ABERTO', NULL, '2026-09-28 09:00:00', 'ENTREGA')")
+        self._segurar("PS-8", "2026-09-30", "2026-10-01")
+        vigiar.rodar(self.conn, agora=AGORA)  # terca 29/09 10h
+        e = self._estados()["PS-8"]
+        self.assertEqual(e["estado"], "NO_POOL")
+        self.assertEqual(e["motivo"], "segurado para consolidar (prazo 01/10)")
+        self.assertEqual(e["vence_em"], "2026-09-30 19:00:00")
+        self.assertEqual(e["vencido"], 0)
+
+    def test_pedido_segurado_volta_a_alarmar_quando_a_data_chega(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, vuupt_route_id, "
+                          "criado_em_provedor, fluxo) VALUES ('PS-8', 8, 'ABERTO', NULL, '2026-09-28 09:00:00', 'ENTREGA')")
+        self._segurar("PS-8", "2026-09-30", "2026-10-01")
+        vigiar.rodar(self.conn, agora=datetime(2026, 9, 30, 10, 0))  # quarta: devia estar em rota
+        e = self._estados()["PS-8"]
+        self.assertEqual(e["motivo"], "aguardando roteirização")
+        self.assertEqual(e["vencido"], 1)
+
+    def test_sem_a_tabela_de_segurados_o_vigia_roda_igual(self):
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertEqual(self._estados()["PS-1"]["estado"], "NO_POOL")
+
 
 if __name__ == "__main__":
     unittest.main()

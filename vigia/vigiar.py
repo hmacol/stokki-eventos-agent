@@ -162,6 +162,10 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
         conn, "SELECT codigo_pedido FROM pedidos_dedicados WHERE removido_em IS NULL AND codigo_pedido IS NOT NULL")}
     area_nao_atendida = {r["service_id"]: r["notificado_em"] for r in _consultar(
         conn, "SELECT service_id, notificado_em FROM pedidos_area_notificada")}
+    # Rota fraca adiada de propósito (roteirizacao/rotas_fracas.py): só
+    # conta enquanto a data nova não chegou.
+    segurados = {banco.normalizar(r["codigo"]): r["prazo_final"] for r in _consultar(
+        conn, "SELECT codigo, prazo_final FROM pedidos_segurados WHERE data_nova > ?", (hoje.isoformat(),))}
     conclusoes = {r["service_id"]: (r["completed_at"], r["motivo_texto"]) for r in _consultar(conn, """
         SELECT service_id, MAX(completed_at) AS completed_at, motivo_texto FROM nucleo_paradas
         WHERE service_id IS NOT NULL AND completed_at IS NOT NULL GROUP BY service_id
@@ -199,7 +203,10 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
             "motivo_pool": ("dedicado -- transporte cotado à parte, fora da rota compartilhada"
                             if codigo in dedicados or base in dedicados else
                             f"área não atendida (embarcador avisado em {str(area_nao_atendida[sid])[:10]})"
-                            if sid in area_nao_atendida else None),
+                            if sid in area_nao_atendida else
+                            f"segurado para consolidar (prazo {_d(segurados[base]):%d/%m})"
+                            if base in segurados else None),
+            "prazo_segurado": _d(segurados[base]) if base in segurados else None,
             # carimbos pro 'desde'
             "_criado": _dt(s["criado_em_provedor"]) or _dt(s["criado_em"]),
             "_atualizado": _dt(s["atualizado_em_provedor"]),
@@ -273,7 +280,8 @@ def rodar(conn: sqlite3.Connection, agora: datetime | None = None, gravar: bool 
             desde = _dt(ant["desde"]) or agora
         else:
             desde = _desde_estimado(estado, f, agora)
-        vence = regras.prazo(estado, desde, data_rascunho=f.get("rascunho_data"))
+        vence = regras.prazo(estado, desde, data_rascunho=f.get("rascunho_data"),
+                             prazo_segurado=f.get("prazo_segurado"))
         novos[f["codigo"]] = {
             "codigo": f["codigo"], "estado": estado, "motivo": (motivo or "")[:300],
             "desde": desde.strftime(banco.FMT),

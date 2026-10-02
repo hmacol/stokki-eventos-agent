@@ -39,6 +39,20 @@ class TestPrazos(unittest.TestCase):
         self.assertEqual(r.prazo(r.EM_RASCUNHO, datetime(2026, 10, 2, 18, 0), data_rascunho=segunda),
                          datetime(2026, 10, 2, 19, 0))
 
+    def test_pedido_segurado_vence_na_vespera_do_prazo_final(self):
+        desde = datetime(2026, 9, 28, 9, 0)
+        # prazo final quinta 01/10 -> alarme quarta 30/09 19h
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1)),
+                         datetime(2026, 9, 30, 19, 0))
+        # prazo final segunda 05/10 -> alarme sexta 02/10 19h
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 5)),
+                         datetime(2026, 10, 2, 19, 0))
+
+    def test_prazo_segurado_so_vale_no_pool(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.SEM_SERVICO, desde, prazo_segurado=date(2026, 10, 1)),
+                         datetime(2026, 9, 29, 12, 0))
+
 
 class TestClassificar(unittest.TestCase):
     def test_aberto_na_stokki_sem_servico(self):
