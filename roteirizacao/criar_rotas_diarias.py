@@ -89,7 +89,7 @@ from roteirizacao_dados import (
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
     injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
-    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota,
+    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota, extrair_volume_caixas,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -120,6 +120,8 @@ from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_eq
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo
 from regras.prioridade_ofertas import carregar_historico_justica
+import rotas_fracas
+import pedidos_segurados
 
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
@@ -413,6 +415,35 @@ def _polir_particao(sublotes: list[list[dict]], coords_base, gmaps_key: str | No
     return polidos
 
 
+def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key: str | None, label: str,
+                              tamanho_maximo: int = TAMANHO_MAXIMO_ROTA) -> tuple[list[list[dict]], dict]:
+    """Junção das rotas fracas de UMA partição (Hugo, 29/09 -- ver
+    rotas_fracas.py). Roda depois do polimento. Devolve (sublotes,
+    relatório); sem base, com a chave desligada ou com falha, devolve a
+    entrada intocada e o relatório vazio."""
+    vazio = {"juntadas": 0, "motivos": {}}
+    if not rotas_fracas.ROTAS_FRACAS_ATIVO or not coords_base:
+        return sublotes, vazio
+    try:
+        novos, relatorio = rotas_fracas.absorver_rotas_fracas(
+            sublotes, coords_base[0], coords_base[1], gmaps_key,
+            tamanho_maximo=tamanho_maximo, volume_maximo=VOLUME_MAXIMO_ROTA,
+            distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+            distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+            km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+            km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+            eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+        )
+    except Exception as e:
+        # mesma postura do polimento: etapa opcional, plano sem ela já é um plano bom
+        logger.exception(f"[{label}] Falha na junção das rotas fracas (seguindo com as rotas como estavam): {e}")
+        return sublotes, vazio
+    if relatorio["juntadas"] or relatorio["motivos"]:
+        logger.info(f"[{label}] Rotas fracas: {relatorio['juntadas']} juntada(s) em vizinhas, "
+                    f"{len(relatorio['motivos'])} continuam fraca(s) -- {len(sublotes)} -> {len(novos)} rota(s).")
+    return novos, relatorio
+
+
 def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, data_alvo: date, *,
                       sufixo_label: str = "", modelo_forcado: str | None = None,
                       tamanho_maximo: int = TAMANHO_MAXIMO_ROTA,
@@ -421,15 +452,16 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
     """Miolo UNICO do criador de rotas (18/09): particao (tipo de carga,
     ver SEPARAR_POR_TIPO_CARGA) -> selecao diaria de modelo (ou fluxo de
     reserva sem base) -> fusao de sublotes pequenos entre macro-regioes
-    -> polimento entre rotas. Usado por main() (job das 22h, teto de
-    tempo POLIMENTO_TEMPO_MAXIMO_S), por roteirizar_para_rascunhos
-    (botao Roteirizar da tela de Planejamento, sincrono, teto
-    POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S -- fix final, 20/09) e pelo
-    replay (replay_rotas.py, com registrar_historico=False). Os servicos
-    ja chegam classificados (_nivel_dificuldade, _tipo_carga, janelas) e
-    a base, quando existe, ja foi registrada com definir_coords_base.
-    Devolve [{"label", "modelo", "sublotes"}], uma entrada por particao
-    nao vazia, sublotes ja sequenciados."""
+    -> polimento entre rotas -> junção das rotas fracas. Usado por main()
+    (job das 22h, teto de tempo POLIMENTO_TEMPO_MAXIMO_S), por
+    roteirizar_para_rascunhos (botao Roteirizar da tela de Planejamento,
+    sincrono, teto POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S -- fix final,
+    20/09) e pelo replay (replay_rotas.py, com
+    registrar_historico=False). Os servicos ja chegam classificados
+    (_nivel_dificuldade, _tipo_carga, janelas) e a base, quando existe,
+    ja foi registrada com definir_coords_base.
+    Devolve [{"label", "modelo", "sublotes", "rotas_fracas"}], uma
+    entrada por particao nao vazia, sublotes ja sequenciados."""
     particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
     planos: list[dict] = []
     for label, servicos_particao in particoes:
@@ -467,6 +499,7 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
         sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, rotulo)
         sublotes = _polir_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
                                    polimento_tempo_maximo_s)
+        sublotes, fracas = _absorver_fracas_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo)
         # Conferencia de cobertura POS fusao/polimento (fix final, 20/09):
         # a mesma checagem "nenhum pedido perdido, nenhum duplicado" que
         # selecao_modelo._validar ja faz roda ANTES da fusao e do
@@ -485,8 +518,95 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
             logger.error(f"[{rotulo}] [ALERTA_COBERTURA] Divergencia de cobertura apos fusao/polimento -- "
                         f"entrada {sum(ids_entrada.values())} pedido(s), saida {sum(ids_saida.values())} "
                         f"pedido(s). Perdido(s): {perdidos or 'nenhum'}. Duplicado(s): {duplicados or 'nenhum'}.")
-        planos.append({"label": label, "modelo": modelo, "sublotes": sublotes})
+        planos.append({"label": label, "modelo": modelo, "sublotes": sublotes, "rotas_fracas": fracas})
     return planos
+
+
+def _tentar_segurar(sublote: list[dict], data_alvo: date, data_nova: date, ja_segurados: set[str],
+                    gmaps_key: str | None, modo_teste: bool) -> str | None:
+    """None = segurou a rota inteira. Senão, por que não segurou."""
+    for s in sublote:
+        impedimento = rotas_fracas.motivo_nao_segurar(s, data_alvo, ja_segurados, gmaps_key)
+        if impedimento:
+            return f"{str(s.get('code') or '').lstrip('#').strip()} {impedimento}"
+    if modo_teste:
+        return None
+    try:
+        conn = pedidos_segurados.conectar()
+        try:
+            pedidos_segurados.marcar(
+                conn, [(s, rotas_fracas.prazo_final(rotas_fracas.data_entrada(s))) for s in sublote],
+                data_alvo, data_nova, rotas_fracas.resumo_da_rota(sublote))
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Falha ao registrar pedidos segurados (a rota sai normalmente): {e}")
+        return "falha ao registrar o adiamento"
+    return None
+
+
+def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None, modo_teste: bool) -> dict:
+    """Segundo passo das rotas fracas (Hugo, 29/09), SÓ no job automático:
+    a rota que continuou fraca depois da junção não é criada se TODOS os
+    pedidos dela puderem esperar 1 dia útil. Roda antes de alocar
+    motorista. MUTA `planos`: tira os sublotes segurados e completa o
+    motivo dos que ficaram. Devolve o resumo pro log e pro WhatsApp."""
+    data_nova = rotas_fracas.proximo_dia_util(data_alvo)
+    resumo = {"juntadas": 0, "seguradas": 0, "pedidos_segurados": 0, "data_nova": data_nova,
+              "sobraram": 0, "pedidos_sobraram": 0, "caixas_sobraram": 0}
+    ja_segurados: set[str] | None = None
+    pode_segurar = rotas_fracas.SEGURAR_ATIVO
+    for plano in planos:
+        fracas = plano.get("rotas_fracas") or {"juntadas": 0, "motivos": {}}
+        resumo["juntadas"] += fracas["juntadas"]
+        motivos = fracas["motivos"]
+        restantes = []
+        for sub in plano["sublotes"]:
+            if id(sub) not in motivos:
+                restantes.append(sub)
+                continue
+            if pode_segurar and ja_segurados is None:
+                try:
+                    conn = pedidos_segurados.conectar()
+                    try:
+                        ja_segurados = pedidos_segurados.codigos_segurados(conn)
+                    finally:
+                        conn.close()
+                except Exception as e:
+                    # sem saber quem já foi segurado não dá pra garantir o máximo de 1 adiamento
+                    logger.error(f"Falha ao ler pedidos segurados -- nesta rodada ninguém é segurado: {e}")
+                    pode_segurar = False
+            impedimento = (_tentar_segurar(sub, data_alvo, data_nova, ja_segurados, gmaps_key, modo_teste)
+                           if pode_segurar else "")
+            if impedimento is None:
+                codigos = [s.get("code") for s in sub]
+                logger.info(f"{'[TESTE] Seguraria' if modo_teste else 'Segurada'} rota fraca "
+                            f"({rotas_fracas.resumo_da_rota(sub)}) para {data_nova:%d/%m/%Y}: {codigos}")
+                resumo["seguradas"] += 1
+                resumo["pedidos_segurados"] += len(sub)
+                del motivos[id(sub)]
+                continue
+            if impedimento:
+                motivos[id(sub)] = f"{motivos[id(sub)]}; {impedimento}"
+            resumo["sobraram"] += 1
+            resumo["pedidos_sobraram"] += len(sub)
+            resumo["caixas_sobraram"] += sum(extrair_volume_caixas(s) for s in sub)
+            restantes.append(sub)
+        plano["sublotes"] = restantes
+    return resumo
+
+
+def _frase_rotas_fracas(resumo: dict) -> str:
+    partes = []
+    if resumo["juntadas"]:
+        partes.append(f"{resumo['juntadas']} juntada(s) em vizinhas")
+    if resumo["seguradas"]:
+        partes.append(f"{resumo['seguradas']} segurada(s) para {resumo['data_nova']:%d/%m} "
+                      f"({resumo['pedidos_segurados']} pedido(s))")
+    if resumo["sobraram"]:
+        partes.append(f"{resumo['sobraram']} sem solução ({resumo['pedidos_sobraram']} pedido(s), "
+                      f"{resumo['caixas_sobraram']} caixa(s))")
+    return f" Rotas fracas: {', '.join(partes)}." if partes else ""
 
 
 def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
@@ -573,6 +693,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     rascunhos: list[dict] = []
     for plano in planos:
         label, sublotes = plano["label"], plano["sublotes"]
+        motivos_fracas = (plano.get("rotas_fracas") or {}).get("motivos") or {}
         for sublote in sublotes:
             nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
             indice += 1
@@ -605,6 +726,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 "start_at": start_at,
                 "km_estimado": km_estimado,
                 "horas_estimadas": round(horas_sublote, 2),
+                "rota_fraca_motivo": motivos_fracas.get(id(sublote)),
                 "sublote": sublote,
             })
             veiculo_str = f" [veículo: {tipo_veiculo.nome}]" if tipo_veiculo else ""
@@ -681,6 +803,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             servicos_brutos, _dedicados = separar_dedicados(servicos_brutos)
         except Exception as e:
             logger.error(f"Falha ao separar pedidos dedicados (seguem na roteirização normal): {e}")
+
+        # Segurado (Hugo, 29/09): pedido de rota fraca adiado pra DEPOIS
+        # desta data alvo não volta à roteirização -- sem isso, rodar o
+        # job de novo na mesma noite recriaria a rota fraca.
+        servicos_brutos, _segurados = pedidos_segurados.separar_segurados(servicos_brutos, data_alvo)
 
         # Área não atendida (pedido do Hugo, 02/08): pedido fora de
         # toda região com dia fixo E fora do raio da Grande SP (ou
@@ -794,7 +921,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         rascunhos_acumulados: list[dict] = []
         historico = carregar_historico_justica(data_alvo, config)
 
-        def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]]):
+        def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]], motivos_fracas: dict[int, str]):
             nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_sem_motorista
 
             # Ordena por escassez de motorista ANTES de alocar (mais restrito
@@ -867,6 +994,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         "start_at": start_at,
                         "km_estimado": km_estimado,
                         "horas_estimadas": round(horas_sublote, 2),
+                        "rota_fraca_motivo": motivos_fracas.get(id(sublote)),
                         "sublote": sublote,
                     })
                     logger.info(f"[RASCUNHO] [{label}] '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
@@ -921,10 +1049,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     logger.error(f"Falha ao criar rota '{nome_rota}': {e}")
 
         planos = planejar_sublotes(servicos, coords_base, gmaps_key, data_alvo)
+        resumo_fracas = _aplicar_segurar(planos, data_alvo, gmaps_key, modo_teste)
         for plano in planos:
             logger.info(f"Partição '{plano['label']}': modelo {plano['modelo']}, {len(plano['sublotes'])} rota(s).")
             modelos_vencedores[plano["label"]] = plano["modelo"]
-            _rotear_particao(plano["label"], plano["sublotes"])
+            _rotear_particao(plano["label"], plano["sublotes"], plano["rotas_fracas"]["motivos"])
 
         if gerar_rascunho and rascunhos_acumulados:
             lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)
@@ -940,6 +1069,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         resumo_etapas["Criação de rotas"] = {
             "status": "ok",
             "detalhe": detalhe_criacao
+                      + _frase_rotas_fracas(resumo_fracas)
                       + (" Modelo do dia: " + "; ".join(f"{l}: {m}" for l, m in modelos_vencedores.items()) + "."
                          if modelos_vencedores else "")
                       + (f" [ALERTA_NIVEL] {len(cnpjs_pendentes_nivel)} CNPJ(s) de destinatário sem "
