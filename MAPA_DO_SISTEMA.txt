@@ -182,6 +182,7 @@
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
+                Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
                 /equipe com login do painel.
@@ -556,12 +557,18 @@
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  contadores_menu.py        Badges do menu lateral.
+ pagina_inicial.py         Dados da página inicial /inicio (pendências por
+                           nível, resumo do dia via snapshot da Torre,
+                           rotinas do painel). Nunca chama fonte cara.
  wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
                            WMS do galpão (posições, movimentos, reservas,
                            recebimentos, etiquetas).
  test_*.py                 Testes.
 
  Telas (URL -> template)
+   /inicio                    inicio.html (página inicial; destino do login de
+                              total/operador/leitura/atendimento; números via
+                              /api/inicio/dados depois do load)
    /torre, /torre/mobile      torre_controle.html, torre_mobile.html
    /planejamento              planejamento_rotas.html (maior arquivo do repo;
                               ?modo=mobile para celular; dia passado = só leitura)

@@ -79,6 +79,7 @@ import torre_controle
 import tratativas
 import pedidos_parados_triagem
 import contadores_menu
+import pagina_inicial
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
@@ -369,10 +370,11 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
-            # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
-                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
+            # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
+            # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
+            # cair nele levaria direto a um 403 pós-login.
+            pagina_padrao = {"expedicao": url_for("expedicao"),
+                             "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -500,6 +502,22 @@ def api_sidebar_contadores():
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
     return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
+
+
+@app.route("/inicio")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def inicio():
+    """Página inicial do painel (29/09): o que espera ação de quem logou,
+    números do dia e, só pro total, as rotinas. O HTML sobe sem número
+    nenhum; o JS busca /api/inicio/dados depois do load (mesma regra dos
+    badges do menu: nunca esperar fonte cara na renderização)."""
+    return render_template("inicio.html", mostra_rotinas=g.nivel_acesso == "total")
+
+
+@app.route("/api/inicio/dados")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def api_inicio_dados():
+    return jsonify(pagina_inicial.montar_dados(g.nivel_acesso, url_for))
 
 
 @app.route("/mapa-rotas")

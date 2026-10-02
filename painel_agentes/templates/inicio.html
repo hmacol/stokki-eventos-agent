@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block titulo %}Início{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  /* Página inicial (29/09): três blocos, todos preenchidos por JS a
+     partir de /api/inicio/dados -- o HTML sobe sem número nenhum.
+     Mesma linguagem dos cartões do index.html (Agentes). */
+  .cabecalho-inicio { margin-bottom: 28px; }
+  .cabecalho-inicio h1 { margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+  .cabecalho-inicio p { margin: 0; font-size: 13px; color: var(--texto-suave); }
+  .cabecalho-inicio p::first-letter { text-transform: uppercase; }
+
+  .secao { margin-bottom: 36px; }
+  .secao h2 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 14px 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .secao h2 .quando { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .vazio {
+    background: var(--superficie);
+    border: 1px dashed var(--borda);
+    border-radius: 10px;
+    padding: 18px 20px;
+    font-size: 13px;
+    color: var(--texto-suave);
+  }
+
+  /* Bloco 1: um cartão por fila, clicável. */
+  .grade-pendencias { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  a.pendencia {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-left: 4px solid var(--borda);
+    border-radius: 10px;
+    padding: 16px 18px 14px;
+    color: inherit;
+    text-decoration: none;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  a.pendencia:hover { background: var(--superficie-hover); border-color: var(--texto-suave); }
+  a.pendencia:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  a.pendencia .numero { font-size: 30px; font-weight: 700; line-height: 1.1; letter-spacing: -0.5px; }
+  a.pendencia .rotulo { font-size: 14px; font-weight: 600; }
+  a.pendencia .apoio { font-size: 12px; color: var(--texto-suave); }
+  a.pendencia.pendente { border-left-color: var(--acento); }
+  a.pendencia.critico { border-left-color: var(--erro); }
+  a.pendencia.critico .numero { color: var(--erro-texto); }
+  a.pendencia.critico .apoio { color: var(--erro-texto); font-weight: 600; }
+  a.pendencia.zerado .numero,
+  a.pendencia.carregando .numero { font-size: 15px; font-weight: 600; color: var(--texto-suave); padding: 7px 0 8px; }
+  a.pendencia.zerado .numero { color: var(--acento-texto); }
+
+  /* Bloco 2: números do dia em duas fileiras (rotas, pedidos). */
+  .grupo-numeros { margin-bottom: 12px; }
+  .grupo-numeros h3 { margin: 0 0 8px 4px; font-size: 12px; font-weight: 600; color: var(--texto-suave); }
+  .grade-numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .numero-dia {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .numero-dia .valor { font-size: 24px; font-weight: 700; line-height: 1.1; }
+  .numero-dia .rotulo { font-size: 12px; color: var(--texto-suave); }
+  .numero-dia.alerta .valor { color: var(--erro-texto); }
+
+  /* Bloco 3: rotinas (só total). */
+  .lista-rotinas { display: flex; flex-direction: column; gap: 8px; }
+  .rotina {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .rotina .nome { font-weight: 600; flex: 1; min-width: 0; }
+  .rotina .quando { color: var(--texto-suave); font-size: 12px; white-space: nowrap; }
+  .rotina a { color: var(--acento-texto); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .rotina a:hover { text-decoration: underline; }
+  .rodape-secao { margin-top: 10px; font-size: 12px; }
+  .rodape-secao a { color: var(--acento-texto); font-weight: 600; text-decoration: none; }
+  .rodape-secao a:hover { text-decoration: underline; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<header class="cabecalho-inicio">
+  <h1 id="saudacao">Olá, {{ session.get('usuario', '') }}</h1>
+  <p id="data-hoje"></p>
+</header>
+
+<section class="secao" aria-labelledby="titulo-pendencias">
+  <h2 id="titulo-pendencias">Esperando você</h2>
+  <div id="pendencias" class="grade-pendencias" aria-live="polite">
+    <div class="vazio">Carregando…</div>
+  </div>
+</section>
+
+<section class="secao" aria-labelledby="titulo-operacao">
+  <h2 id="titulo-operacao">Hoje na operação <span class="quando" id="operacao-quando"></span></h2>
+  <div id="operacao">
+    <div class="vazio">Carregando…</div>
+  </div>
+</section>
+
+{% if mostra_rotinas %}
+<section class="secao" id="rotinas" aria-labelledby="titulo-rotinas">
+  <h2 id="titulo-rotinas">Rotinas</h2>
+  <div id="rotinas-lista" class="lista-rotinas">
+    <div class="vazio">Carregando…</div>
+  </div>
+  <p class="rodape-secao"><a href="{{ url_for('index') }}">Ver agentes</a> · <a href="{{ url_for('historico') }}">Histórico de execuções</a></p>
+</section>
+{% endif %}
+
+<script>
+  (function() {
+    var INTERVALO_MS = 120000;  // 2 min, igual aos badges do menu
+    var pendenciasEl = document.getElementById("pendencias");
+    var operacaoEl = document.getElementById("operacao");
+    var operacaoQuandoEl = document.getElementById("operacao-quando");
+    var rotinasEl = document.getElementById("rotinas-lista");
+
+    var agora = new Date();
+    var hora = agora.getHours();
+    document.getElementById("saudacao").textContent =
+      (hora < 12 ? "Bom dia" : hora < 18 ? "Boa tarde" : "Boa noite") + ", {{ session.get('usuario', '') }}";
+    document.getElementById("data-hoje").textContent =
+      agora.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+
+    function el(tag, classe, texto) {
+      var n = document.createElement(tag);
+      if (classe) n.className = classe;
+      if (texto !== undefined && texto !== null) n.textContent = texto;
+      return n;
+    }
+    function vazio(container, texto) {
+      container.replaceChildren(el("div", "vazio", texto));
+    }
+
+    function pintarPendencias(cartoes) {
+      if (!cartoes.length) { vazio(pendenciasEl, "Nenhuma fila pra acompanhar neste acesso."); return; }
+      var frag = document.createDocumentFragment();
+      cartoes.forEach(function(c) {
+        var a = el("a", "pendencia");
+        a.href = c.url;
+        var estado, numero, apoio;
+        if (c.qtd === null) {
+          estado = "carregando"; numero = "Carregando…"; apoio = c.apoio;
+        } else if (c.criticas > 0) {
+          estado = "critico"; numero = String(c.qtd);
+          apoio = c.criticas + " " + (c.apoio_critico || "críticas") + " · " + c.apoio;
+        } else if (c.qtd > 0) {
+          estado = "pendente"; numero = String(c.qtd); apoio = c.apoio;
+        } else {
+          estado = "zerado"; numero = "Em dia"; apoio = "sem pendência";
+        }
+        a.classList.add(estado);
+        a.appendChild(el("span", "numero", numero));
+        a.appendChild(el("span", "rotulo", c.rotulo));
+        a.appendChild(el("span", "apoio", apoio));
+        a.title = c.rotulo + " — abrir";
+        frag.appendChild(a);
+      });
+      pendenciasEl.replaceChildren(frag);
+    }
+
+    function tile(rotulo, valor, alerta) {
+      var d = el("div", "numero-dia" + (alerta && valor > 0 ? " alerta" : ""));
+      d.appendChild(el("span", "valor", String(valor)));
+      d.appendChild(el("span", "rotulo", rotulo));
+      return d;
+    }
+    function grupo(titulo, tiles) {
+      var g = el("div", "grupo-numeros");
+      g.appendChild(el("h3", null, titulo));
+      var grade = el("div", "grade-numeros");
+      tiles.forEach(function(t) { grade.appendChild(t); });
+      g.appendChild(grade);
+      return g;
+    }
+    function pintarOperacao(op) {
+      if (!op) {
+        operacaoQuandoEl.textContent = "";
+        vazio(operacaoEl, "Os números de hoje ainda estão sendo coletados. Eles chegam em até um minuto.");
+        return;
+      }
+      operacaoQuandoEl.textContent = "atualizado às " + op.gerado_em;
+      var r = op.rotas, p = op.pedidos;
+      operacaoEl.replaceChildren(
+        grupo("Rotas", [
+          tile("concluídas", r.concluidas), tile("em andamento", r.em_andamento),
+          tile("não iniciadas", r.nao_iniciadas), tile("atrasadas", r.atrasadas, true),
+        ]),
+        grupo("Pedidos", [
+          tile("no dia", p.total), tile("entregues", p.entregues),
+          tile("insucessos", p.insucessos, true), tile("sem rota", p.sem_rota, true),
+        ])
+      );
+    }
+
+    var ROTULO_STATUS = { ERRO: "Erro", TIMEOUT: "Tempo esgotado", INTERROMPIDO: "Interrompido" };
+    function pintarRotinas(rot) {
+      if (!rotinasEl) return;
+      var frag = document.createDocumentFragment();
+      rot.rodando.forEach(function(x) {
+        var linha = el("div", "rotina");
+        linha.appendChild(el("span", "badge badge-rodando", "Rodando"));
+        linha.appendChild(el("span", "nome", x.nome));
+        linha.appendChild(el("span", "quando", "desde " + x.iniciado_em));
+        frag.appendChild(linha);
+      });
+      rot.falhas.forEach(function(f) {
+        var linha = el("div", "rotina");
+        var classe = f.status === "TIMEOUT" ? "badge-timeout" : f.status === "INTERROMPIDO" ? "badge-interrompido" : "badge-erro";
+        linha.appendChild(el("span", "badge " + classe, ROTULO_STATUS[f.status] || f.status));
+        linha.appendChild(el("span", "nome", f.nome));
+        linha.appendChild(el("span", "quando", f.quando));
+        var link = el("a", null, "ver log");
+        link.href = f.url;
+        linha.appendChild(link);
+        frag.appendChild(linha);
+      });
+      if (!frag.childNodes.length) { vazio(rotinasEl, "Nenhuma falha nas últimas 24 horas."); return; }
+      rotinasEl.replaceChildren(frag);
+    }
+
+    function buscar() {
+      if (document.hidden) return;
+      fetch(BASE_PATH + "/api/inicio/dados", { credentials: "same-origin" })
+        .then(function(r) {
+          if (r.status === 401) { window.location.href = BASE_PATH + "/login"; return null; }
+          return r.ok ? r.json() : null;
+        })
+        .then(function(d) {
+          if (!d) return;
+          pintarPendencias(d.pendencias || []);
+          pintarOperacao(d.operacao);
+          if (d.rotinas) pintarRotinas(d.rotinas);
+        })
+        .catch(function() { /* mantém o que está na tela; tenta de novo no próximo ciclo */ });
+    }
+
+    buscar();
+    setInterval(buscar, INTERVALO_MS);
+    document.addEventListener("visibilitychange", function() { if (!document.hidden) buscar(); });
+  })();
+</script>
+{% endblock %}
