@@ -231,6 +231,37 @@ class Enviar(_ComBanco):
         self.assertIn("#PS-1", self.enviar_email.call_args[0][2])
         self.assertNotIn("#PS-2", self.enviar_email.call_args[0][2])
 
+    def test_pedido_de_outro_embarcador_e_ignorado(self):
+        # revisao 02/10: o servidor nunca cruza clientes, mesmo com payload errado
+        self.conn.execute("UPDATE interno SET email = 'b@beta.com' WHERE sender_id = 20")
+        r = afa.enviar([self.item(sender_id=20, canais=("email",))], SERVICOS, TIPOS, _config(), "hugo", self.conn, agora=AGORA)
+        self.assertEqual(r["ignorados"], [1, 2])
+        self.enviar_email.assert_not_called()
+        self.assertEqual(self.linhas(), [])
+
+    def test_whatsapp_respeita_intervalo_entre_blocos(self):
+        # revisao 02/10: cada bloco usa o relogio de verdade, senao o 3o em
+        # diante sai em rajada e grava criado_em fora de ordem
+        self.wa.stop()
+        self.addCleanup(self.wa.start)
+        self.conn.execute("INSERT INTO interno (cnpj_embarcador, nome_remetente, apelido, email, sender_id) "
+                          "VALUES ('3', 'GAMA', NULL, '', 30)")
+        self.conn.execute("UPDATE interno SET whatsapp_grupo_id = '222@g.us' WHERE sender_id = 20")
+        self.conn.execute("UPDATE interno SET whatsapp_grupo_id = '333@g.us' WHERE sender_id = 30")
+        config = _config(intervalo_min_seg=1)
+        with patch.object(afa.notificar_whatsapp.integracao_openwa, "enviar_texto", return_value=(True, "m")):
+            r = afa.enviar([self.item(canais=("whatsapp",)),
+                            self.item(20, afa.TIPO_SP, (3,), ("whatsapp",)),
+                            self.item(30, afa.TIPO_FORA_SP, (5,), ("whatsapp",))],
+                           SERVICOS, TIPOS, config, "hugo", self.conn)
+        self.assertEqual([x["whatsapp"] for x in r["resultados"]], ["enviado"] * 3)
+        horarios = [h for (h,) in self.conn.execute(
+            "SELECT criado_em FROM notificacoes_whatsapp WHERE situacao = 'enviado' ORDER BY id")]
+        self.assertEqual(len(horarios), 3)
+        self.assertEqual(horarios, sorted(horarios))
+        self.assertLess(horarios[0], horarios[1])
+        self.assertLess(horarios[1], horarios[2])
+
     def test_tipo_do_item_diferente_da_classificacao_e_ignorado(self):
         r = afa.enviar([self.item(tipo=afa.TIPO_SP, canais=("email",))], SERVICOS, TIPOS, _config(), "hugo", self.conn, agora=AGORA)
         self.assertEqual(r["ignorados"], [1, 2])

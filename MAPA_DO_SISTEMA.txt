@@ -330,16 +330,13 @@
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
- integracao_openwa.py          Envio de WhatsApp pelo OpenWA (só notificações internas).
+ integracao_openwa.py          Envio de WhatsApp pelo OpenWA (notificações internas
+                               e aviso manual aos clientes; lista os grupos do número).
  notificar_whatsapp.py         Aviso curto no grupo interno de WhatsApp: falha de
                                job, não expedidos, resumo das rotinas (erro ou
                                lista sempre_avisar) e insucessos novos de entrega
                                (um aviso por rodada do expedir_pedidos.py, com
                                código, destinatário, remetente e motivo).
- avisar_fora_area.py          Aviso em massa aos embarcadores sobre pedidos fora
-                               da área (botão "Avisar clientes" do planejamento):
-                               e-mail + WhatsApp no grupo do cliente, registro em
-                               avisos_fora_area. Não mexe em pedidos_area_notificada.
                                Em grupo separado (grupo_atendimento_id): chamado
                                do atendimento que passou a depender de gente,
                                com o link (chamados.whatsapp_para_atendimento).
@@ -348,6 +345,11 @@
                                exceção crua) e mensagem inteira em 200 caracteres
                                (insucesso é exceção): unit nova em infra/ precisa
                                de nome em NOMES_DAS_TAREFAS, senão o teste falha.
+ avisar_fora_area.py           Aviso em massa aos embarcadores sobre pedidos fora
+                               da área (botão "Avisar clientes" do planejamento):
+                               e-mail + WhatsApp no grupo do cliente (fora do teto
+                               diário), registro em avisos_fora_area. Não mexe em
+                               pedidos_area_notificada.
  integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
 
  --- WMS (sincronizações com a Stokki, embarcador piloto) ---

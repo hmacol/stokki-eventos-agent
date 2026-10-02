@@ -226,7 +226,8 @@ def enviar(itens: list[dict], servicos: list[dict], tipos_area: dict, config: di
         lista = []
         for sid in dict.fromkeys(item.get("service_ids") or []):
             s = por_id.get(sid)
-            if not s or tipos_area.get(sid) != tipo:
+            # pedido de outro embarcador nunca entra no bloco, mesmo com payload errado
+            if not s or tipos_area.get(sid) != tipo or s.get("sender_id") != sender_id:
                 ignorados.append(sid)
                 continue
             lista.append(s)
@@ -261,8 +262,10 @@ def enviar(itens: list[dict], servicos: list[dict], tipos_area: dict, config: di
             quer_wa = False
         if quer_wa:
             texto = texto_whatsapp(tipo, pedidos, com_email=r["email"] in ("enviado", "modo_teste"))
+            # sem `agora` aqui: cada bloco usa o relogio de verdade, senao o
+            # intervalo minimo entre mensagens deixa de valer a partir do 3o
             situacao = notificar_whatsapp.despachar(config, ORIGEM_WHATSAPP, TIPO_WHATSAPP, texto, None,
-                                                    modo_teste=modo_teste, conn=conn, agora=agora,
+                                                    modo_teste=modo_teste, conn=conn,
                                                     grupo_id=emb["whatsapp_grupo_id"], contar_no_teto=False)
             r["whatsapp"] = situacao
             if situacao in ("enviado", "falhou", "nao_enviado"):

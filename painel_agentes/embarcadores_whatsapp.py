@@ -28,7 +28,8 @@ import integracao_openwa  # noqa: E402
 logger = logging.getLogger(__name__)
 
 NIVEIS = ("total", "operador")
-_FORMATO_GRUPO = re.compile(r"^\d+@g\.us$")
+# grupos novos: 120363...@g.us; grupos antigos (antes de 2022): <criador>-<timestamp>@g.us
+_FORMATO_GRUPO = re.compile(r"^\d+(-\d+)?@g\.us$")
 
 
 def listar(conn) -> list[dict]:

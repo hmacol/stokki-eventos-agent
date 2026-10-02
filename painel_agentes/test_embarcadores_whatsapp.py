@@ -55,6 +55,11 @@ class Nucleo(unittest.TestCase):
         ew.salvar_grupo(self.conn, "22", "")
         self.assertIsNone(ew.listar(self.conn)[0]["whatsapp_grupo_id"])
 
+    def test_grupo_antigo_com_hifen_vale(self):
+        # revisao 02/10: grupos criados antes de 2022 tem JID <criador>-<timestamp>@g.us
+        ew.salvar_grupo(self.conn, "22", "5511999999999-1601234567@g.us")
+        self.assertEqual(ew.listar(self.conn)[0]["whatsapp_grupo_id"], "5511999999999-1601234567@g.us")
+
     def test_formato_invalido(self):
         for ruim in ("https://chat.whatsapp.com/abc", "123", "123@c.us", " 123@g.us "):
             with self.assertRaises(ValueError, msg=ruim):

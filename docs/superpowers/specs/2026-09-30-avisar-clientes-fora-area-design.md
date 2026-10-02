@@ -142,8 +142,9 @@ grupos). Opção "— nenhum —" para tirar. Botão "Salvar" por linha.
   troca o `<select>` por um campo de texto para colar o `...@g.us` à mão, com
   aviso "gateway do WhatsApp fora do ar".
 - `POST /api/embarcadores/<cnpj>/whatsapp-grupo` com `{grupo_id}`: valida o
-  formato (`^\d+@g\.us$` ou vazio), grava em `interno`, registra em log quem
-  mudou (usuário da sessão).
+  formato (`^\d+(-\d+)?@g\.us$` ou vazio; o `-<timestamp>` é o JID dos grupos
+  criados antes de 2022), grava em `interno`, registra em log quem mudou
+  (usuário da sessão).
 
 **Chave do OpenWA.** A chave `operator` da VPS é restrita ao grupo ALERTAS FRESH.
 No deploy o Hugo (ou o Claude com o ok dele) cria uma chave `operator` da mesma
