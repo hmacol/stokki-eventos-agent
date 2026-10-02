@@ -3229,6 +3229,11 @@ def wms_etiquetas_pdf():
 import atendimento_chamados as _atendimento_web
 _atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem, carregar_config=_carregar_config)
 
+# ── WhatsApp dos clientes: grupo por embarcador (Hugo, 30/09) ───────────────
+import embarcadores_whatsapp as _embarcadores_whatsapp_web
+_embarcadores_whatsapp_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem,
+                                     carregar_config=_carregar_config)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8070, debug=False)

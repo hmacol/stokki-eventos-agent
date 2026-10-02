@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block titulo %}WhatsApp dos clientes{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 14px; line-height: 1.5; }
+  .busca { margin: 0 0 12px; }
+  .busca input { width: 100%; max-width: 420px; padding: 8px 10px; border: 1px solid var(--borda); border-radius: 8px; font-size: 13px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; color: var(--texto-suave); }
+  td select, td input[type=text] { width: 100%; max-width: 360px; padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; }
+  .acoes { white-space: nowrap; }
+  .estado { font-size: 12px; margin-left: 8px; color: var(--texto-suave); }
+  .estado.erro { color: var(--erro); }
+  .aviso { color: var(--erro); font-size: 13px; margin: 0 0 10px; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>WhatsApp dos clientes</h1>
+<p class="sub">
+  Grupo de WhatsApp que a Fresh já tem com cada embarcador. É para lá que vai o aviso do botão
+  <strong>Avisar clientes</strong> do Planejamento (pedidos fora da área de atendimento). A lista de grupos vem do
+  número da Fresh; se o gateway estiver fora do ar, cole o id do grupo (<span class="mono">123456789@g.us</span>).
+</p>
+<p class="aviso" id="aviso" hidden></p>
+<div class="busca"><input type="search" id="busca" placeholder="Filtrar embarcadores ou grupos…" autocomplete="off"></div>
+<div class="tabela-wrap">
+  <table>
+    <thead><tr><th>Embarcador</th><th>E-mail</th><th>Grupo de WhatsApp</th><th></th></tr></thead>
+    <tbody>
+    {% for e in embarcadores %}
+      <tr data-cnpj="{{ e.cnpj }}" data-grupo="{{ e.whatsapp_grupo_id or '' }}" data-busca="{{ (e.nome ~ ' ' ~ e.email) | lower }}">
+        <td>{{ e.nome or '(sem nome)' }}<div class="mono">{{ e.cnpj }}</div></td>
+        <td class="mono">{{ e.email or '—' }}</td>
+        <td class="celula-grupo"><input type="text" value="{{ e.whatsapp_grupo_id or '' }}" placeholder="123456789@g.us"></td>
+        <td class="acoes"><button type="button" class="botao" data-acao="salvar">Salvar</button><span class="estado"></span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+(function () {
+  const aviso = document.getElementById("aviso");
+  let GRUPOS = null;
+
+  function escapar(texto) {
+    const div = document.createElement("div");
+    div.textContent = texto == null ? "" : String(texto);
+    return div.innerHTML;
+  }
+
+  function montarSelect(linha) {
+    const atual = linha.dataset.grupo;
+    const opcoes = ['<option value="">— nenhum —</option>']
+      .concat(GRUPOS.map(g => `<option value="${escapar(g.id)}" ${g.id === atual ? "selected" : ""}>${escapar(g.nome)}</option>`));
+    if (atual && !GRUPOS.some(g => g.id === atual)) opcoes.push(`<option value="${escapar(atual)}" selected>${escapar(atual)} (grupo não encontrado)</option>`);
+    const select = document.createElement("select");
+    select.innerHTML = opcoes.join("");
+    linha.querySelector(".celula-grupo").replaceChildren(select);
+  }
+
+  async function carregarGrupos() {
+    try {
+      const resp = await fetch(BASE_PATH + "/api/embarcadores/whatsapp/grupos");
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao listar grupos");
+      if (dados.indisponivel) { aviso.hidden = false; aviso.textContent = "Gateway do WhatsApp fora do ar: cole o id do grupo à mão."; return; }
+      GRUPOS = dados.grupos;
+      document.querySelectorAll("tr[data-cnpj]").forEach(montarSelect);
+    } catch (e) {
+      aviso.hidden = false; aviso.textContent = e.message;
+    }
+  }
+
+  document.getElementById("busca").addEventListener("input", (ev) => {
+    const termo = ev.target.value.trim().toLowerCase();
+    document.querySelectorAll("tr[data-cnpj]").forEach(linha => {
+      const campo = linha.querySelector("select, input[type=text]");
+      const texto = campo && campo.tagName === "SELECT" ? campo.options[campo.selectedIndex].text.toLowerCase() : (campo ? campo.value.toLowerCase() : "");
+      linha.hidden = !!termo && !linha.dataset.busca.includes(termo) && !texto.includes(termo);
+    });
+  });
+
+  document.querySelectorAll("tr[data-cnpj] button[data-acao=salvar]").forEach(botao => {
+    botao.addEventListener("click", async () => {
+      const linha = botao.closest("tr");
+      const campo = linha.querySelector("select, input[type=text]");
+      const estado = linha.querySelector(".estado");
+      botao.disabled = true; estado.className = "estado"; estado.textContent = "Salvando…";
+      try {
+        const resp = await fetch(BASE_PATH + "/api/embarcadores/" + encodeURIComponent(linha.dataset.cnpj) + "/whatsapp-grupo", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ grupo_id: campo.value }),
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || "Falha ao salvar");
+        linha.dataset.grupo = dados.whatsapp_grupo_id || "";
+        estado.textContent = "Salvo";
+      } catch (e) {
+        estado.className = "estado erro"; estado.textContent = e.message;
+      } finally {
+        botao.disabled = false;
+      }
+    });
+  });
+
+  carregarGrupos();
+})();
+</script>
+{% endblock %}
