@@ -318,7 +318,7 @@ class TestAbsorver(unittest.TestCase):
         vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
         saida, rel = self._absorver([exclusiva, vizinha])
         self.assertEqual(sorted(len(s) for s in saida), [1, 2])
-        self.assertEqual(rel, {"juntadas": 0, "motivos": {}, "receptoras": set()})
+        self.assertEqual(rel, {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False})
 
     def test_macro_regiao_diferente_nao_junta(self):
         fraca = [_servico(1, 0.10, 0.00)]
@@ -375,6 +375,67 @@ class TestAbsorver(unittest.TestCase):
         saida, rel = self._absorver([[_servico(1, 0.10, 0.00)]])
         self.assertEqual(_ids(saida), [1])
         self.assertEqual(list(rel["motivos"].values()), ["sem rota vizinha na mesma região"])
+
+
+class TestAbrirEspaco(unittest.TestCase):
+    """Mudanca 3 (Hugo, 03/10): o pedido da fraca que nao cabe direto em
+    vizinha nenhuma pode entrar na vizinha j se um pedido q de j for pra
+    uma terceira rota k (uma troca so por pedido)."""
+
+    setUp = TestAbsorver.setUp
+    _absorver = TestAbsorver._absorver
+
+    def _cenario(self):
+        # p (11 cx) a ~11 km de j e ~22 km de k: direto em k nao cabe
+        # (distancia), direto em j nao cabe (100 + 11 = 111 caixas). Tirando
+        # q (50 cx) de j, p entra (61 cx), e q cabe em k (50 + 50 = 100)
+        p = _servico(1, 0.10, 0.00, caixas=11)
+        q = _servico(3, 0.10, 0.10, caixas=50)
+        a = _servico(4, 0.10, 0.101, caixas=50)
+        b = _servico(5, 0.10, 0.20, caixas=25)
+        c = _servico(6, 0.10, 0.201, caixas=25)
+        return [p], [q, a], [b, c]
+
+    def test_p_so_entra_se_q_for_para_k(self):
+        fraca, j, k = self._cenario()
+        entrada = [fraca, j, k]
+        ids_entrada = _ids(entrada)
+        saida, rel = self._absorver(entrada)
+        grupos = sorted(sorted(s["id"] for s in sub) for sub in saida)
+        self.assertEqual(grupos, [[1, 4], [3, 5, 6]])
+        self.assertEqual(_ids(saida), ids_entrada)  # nada perdido nem duplicado
+        self.assertEqual(rel["juntadas"], 1)
+        self.assertEqual(rel["motivos"], {})
+        self.assertEqual(rel["receptoras"], {id(sub) for sub in saida})  # j e k
+        self.assertFalse(rel["estourou_tempo"])
+
+    def test_sem_a_troca_nao_juntaria(self):
+        # sem k nao ha pra onde mandar q: p fica
+        fraca, j, _ = self._cenario()
+        saida, rel = self._absorver([fraca, j])
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(rel["juntadas"], 0)
+
+    def test_tudo_ou_nada_desfaz_a_troca(self):
+        # p cabe so com a troca; o 9 nao cabe em lugar nenhum: tudo volta
+        fraca, j, k = self._cenario()
+        fraca.append(_servico(9, 0.10, -0.60, caixas=1))
+        entrada = [fraca, j, k]
+        saida, rel = self._absorver(entrada)
+        self.assertEqual([[s["id"] for s in sub] for sub in saida], [[1, 9], [3, 4], [5, 6]])
+        self.assertEqual(_ids(saida), _ids(entrada))
+        self.assertEqual(rel["juntadas"], 0)
+        self.assertEqual(rel["receptoras"], set())
+        self.assertEqual(len(rel["motivos"]), 1)
+
+    def test_teto_de_tempo_zero_devolve_entrada_intacta(self):
+        fraca, j, k = self._cenario()
+        entrada = [fraca, j, k]
+        saida, rel = self._absorver(entrada, tempo_maximo_s=0)
+        self.assertEqual([[s["id"] for s in sub] for sub in saida], [[s["id"] for s in sub] for sub in entrada])
+        self.assertEqual(rel["juntadas"], 0)
+        self.assertEqual(rel["receptoras"], set())
+        self.assertTrue(rel["estourou_tempo"])
 
 
 class TestRotaValidaTempo(unittest.TestCase):

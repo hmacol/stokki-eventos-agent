@@ -200,6 +200,11 @@ POLIMENTO_TEMPO_MAXIMO_S = 15.0
 # roda por timer, sem ninguem esperando) pesam demais ali. 5s ainda cobre
 # a faixa de maior ganho (3-15s, ver comentario acima) sem travar a tela.
 POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S = 5.0
+# Teto de tempo da junção das rotas fracas (Hugo, 03/10 -- a troca de
+# "abrir espaço" em rota cheia, rotas_fracas.py, multiplica as tentativas).
+# Mesmo padrão do polimento: job noturno x botão "Roteirizar" (síncrono).
+JUNCAO_TEMPO_MAXIMO_S = 10.0
+JUNCAO_TEMPO_MAXIMO_INTERATIVO_S = 3.0
 
 
 def _carregar_config() -> dict:
@@ -416,12 +421,13 @@ def _polir_particao(sublotes: list[list[dict]], coords_base, gmaps_key: str | No
 
 
 def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key: str | None, label: str,
-                              tamanho_maximo: int = TAMANHO_MAXIMO_ROTA) -> tuple[list[list[dict]], dict]:
+                              tamanho_maximo: int = TAMANHO_MAXIMO_ROTA,
+                              tempo_maximo_s: float = JUNCAO_TEMPO_MAXIMO_S) -> tuple[list[list[dict]], dict]:
     """Junção das rotas fracas de UMA partição (Hugo, 29/09 -- ver
     rotas_fracas.py). Roda depois do polimento. Devolve (sublotes,
     relatório); sem base, com a chave desligada ou com falha, devolve a
     entrada intocada e o relatório vazio."""
-    vazio = {"juntadas": 0, "motivos": {}, "receptoras": set()}
+    vazio = {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False}
     if not rotas_fracas.ROTAS_FRACAS_ATIVO or not coords_base:
         return sublotes, vazio
     try:
@@ -433,14 +439,16 @@ def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key
             km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
             km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
             eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+            tempo_maximo_s=tempo_maximo_s,
         )
     except Exception as e:
         # mesma postura do polimento: etapa opcional, plano sem ela já é um plano bom
         logger.exception(f"[{label}] Falha na junção das rotas fracas (seguindo com as rotas como estavam): {e}")
         return sublotes, vazio
-    if relatorio["juntadas"] or relatorio["motivos"]:
+    if relatorio["juntadas"] or relatorio["motivos"] or relatorio.get("estourou_tempo"):
         logger.info(f"[{label}] Rotas fracas: {relatorio['juntadas']} juntada(s) em vizinhas, "
-                    f"{len(relatorio['motivos'])} continuam fraca(s) -- {len(sublotes)} -> {len(novos)} rota(s).")
+                    f"{len(relatorio['motivos'])} continuam fraca(s) -- {len(sublotes)} -> {len(novos)} rota(s)"
+                    f"{' (teto de tempo atingido)' if relatorio.get('estourou_tempo') else ''}.")
     return novos, relatorio
 
 
@@ -448,15 +456,16 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
                       sufixo_label: str = "", modelo_forcado: str | None = None,
                       tamanho_maximo: int = TAMANHO_MAXIMO_ROTA,
                       polimento_tempo_maximo_s: float = POLIMENTO_TEMPO_MAXIMO_S,
+                      juncao_tempo_maximo_s: float = JUNCAO_TEMPO_MAXIMO_S,
                       registrar_historico: bool = True) -> list[dict]:
     """Miolo UNICO do criador de rotas (18/09): particao (tipo de carga,
     ver SEPARAR_POR_TIPO_CARGA) -> selecao diaria de modelo (ou fluxo de
     reserva sem base) -> fusao de sublotes pequenos entre macro-regioes
     -> polimento entre rotas -> junção das rotas fracas. Usado por main()
-    (job das 22h, teto de tempo POLIMENTO_TEMPO_MAXIMO_S), por
-    roteirizar_para_rascunhos (botao Roteirizar da tela de Planejamento,
-    sincrono, teto POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S -- fix final,
-    20/09) e pelo replay (replay_rotas.py, com
+    (job das 22h, tetos de tempo POLIMENTO_TEMPO_MAXIMO_S e
+    JUNCAO_TEMPO_MAXIMO_S), por roteirizar_para_rascunhos (botao Roteirizar
+    da tela de Planejamento, sincrono, tetos POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S
+    -- fix final, 20/09 -- e JUNCAO_TEMPO_MAXIMO_INTERATIVO_S) e pelo replay (replay_rotas.py, com
     registrar_historico=False). Os servicos ja chegam classificados
     (_nivel_dificuldade, _tipo_carga, janelas) e a base, quando existe,
     ja foi registrada com definir_coords_base.
@@ -499,7 +508,8 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
         sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, rotulo)
         sublotes = _polir_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
                                    polimento_tempo_maximo_s)
-        sublotes, fracas = _absorver_fracas_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo)
+        sublotes, fracas = _absorver_fracas_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
+                                                     juncao_tempo_maximo_s)
         # Conferencia de cobertura POS fusao/polimento (fix final, 20/09):
         # a mesma checagem "nenhum pedido perdido, nenhum duplicado" que
         # selecao_modelo._validar ja faz roda ANTES da fusao e do
@@ -557,7 +567,8 @@ def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None,
     ja_segurados: set[str] | None = None
     pode_segurar = rotas_fracas.SEGURAR_ATIVO
     for plano in planos:
-        fracas = plano.get("rotas_fracas") or {"juntadas": 0, "motivos": {}, "receptoras": set()}
+        fracas = plano.get("rotas_fracas") or {"juntadas": 0, "motivos": {}, "receptoras": set(),
+                                               "estourou_tempo": False}
         resumo["juntadas"] += fracas["juntadas"]
         motivos = fracas["motivos"]
         restantes = []
@@ -694,7 +705,8 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                                modelo_forcado=modelo_forcado, tamanho_maximo=tamanho_maximo_efetivo,
                                # botao "Roteirizar" e SINCRONO (pessoa esperando na tela) -- teto de
                                # tempo mais curto que o do job noturno (fix final, 20/09)
-                               polimento_tempo_maximo_s=POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S)
+                               polimento_tempo_maximo_s=POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S,
+                               juncao_tempo_maximo_s=JUNCAO_TEMPO_MAXIMO_INTERATIVO_S)
 
     historico = carregar_historico_justica(data_alvo, config)
     indice = indice_inicial

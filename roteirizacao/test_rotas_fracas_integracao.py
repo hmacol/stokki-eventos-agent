@@ -47,7 +47,7 @@ class TestPlanejarSublotes(unittest.TestCase):
 
     def test_plano_traz_o_relatorio_e_cobre_tudo(self):
         planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
-        self.assertEqual(set(planos[0]["rotas_fracas"]), {"juntadas", "motivos", "receptoras"})
+        self.assertEqual(set(planos[0]["rotas_fracas"]), {"juntadas", "motivos", "receptoras", "estourou_tempo"})
         ids = sorted(s["id"] for p in planos for sub in p["sublotes"] for s in sub)
         self.assertEqual(ids, sorted(s["id"] for s in self.servicos))
 
@@ -55,14 +55,24 @@ class TestPlanejarSublotes(unittest.TestCase):
         with mock.patch.object(rf, "ROTAS_FRACAS_ATIVO", False), \
              mock.patch.object(rf, "absorver_rotas_fracas", side_effect=AssertionError("nao deveria rodar")):
             planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
-        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set()})
+        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False})
 
     def test_falha_na_juncao_nao_derruba_o_plano(self):
         with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=RuntimeError("boom")):
             planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
         ids = sorted(s["id"] for p in planos for sub in p["sublotes"] for s in sub)
         self.assertEqual(ids, sorted(s["id"] for s in self.servicos))
-        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set()})
+        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False})
+
+    def test_teto_de_tempo_da_juncao(self):
+        # job: JUNCAO_TEMPO_MAXIMO_S (10s); botao Roteirizar passa o interativo (3s)
+        vazio = {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False}
+        with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=lambda sub, *a, **k: (sub, vazio)) as juncao:
+            crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
+            crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False,
+                                  juncao_tempo_maximo_s=crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S)
+        self.assertEqual([c.kwargs["tempo_maximo_s"] for c in juncao.call_args_list], [10.0, 3.0])
+        self.assertEqual((crd.JUNCAO_TEMPO_MAXIMO_S, crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S), (10.0, 3.0))
 
     def test_sem_base_nao_chama_a_juncao(self):
         with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=AssertionError("nao deveria rodar")):
@@ -153,12 +163,13 @@ class TestRascunhoMarcaReceptora(unittest.TestCase):
         historico = mock.Mock()
         historico.parametros_alocacao.return_value = {}
         self.selecionar = mock.Mock(return_value=None)
+        self.planejar = mock.Mock(return_value=[plano])
         patches = dict(
             CatalogoMotoristas=mock.Mock(**{"carregar.return_value": mock.Mock(motoristas=[])}),
             carregar_ajustes_dia=mock.Mock(return_value={}), carregar_niveis=mock.Mock(return_value={}),
             carregar_horarios=mock.Mock(return_value={}), carregar_ajustes_manuais=mock.Mock(return_value={}),
             carregar_tipos_carga_por_sender=mock.Mock(return_value={}), _preparar_janelas=mock.Mock(),
-            geocodificar=mock.Mock(return_value=None), planejar_sublotes=mock.Mock(return_value=[plano]),
+            geocodificar=mock.Mock(return_value=None), planejar_sublotes=self.planejar,
             carregar_historico_justica=mock.Mock(return_value=historico),
             classificar_rota_viagem=mock.Mock(return_value=False), classificar_rota_zona=mock.Mock(return_value=None),
             estimar_tempo_rota=mock.Mock(return_value=1.0), selecionar_motorista_equitativo=self.selecionar,
@@ -169,6 +180,9 @@ class TestRascunhoMarcaReceptora(unittest.TestCase):
     def test_recebeu_rota_fraca_no_rascunho(self):
         rascunhos = self._rascunhos([_servico(1), _servico(2)], [_servico(3), _servico(4)])
         self.assertEqual([r["recebeu_rota_fraca"] for r in rascunhos], [True, False])
+        # botao Roteirizar: teto de tempo interativo na juncao
+        self.assertEqual(self.planejar.call_args.kwargs["juncao_tempo_maximo_s"],
+                         crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S)
 
     def test_receptora_de_105_caixas_continua_fiorino(self):
         # Hugo, 03/10: a receptora vai ate 110 caixas sem virar veiculo grande;

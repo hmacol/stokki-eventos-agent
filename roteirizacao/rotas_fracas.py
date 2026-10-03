@@ -23,6 +23,7 @@ antes. SEGURAR_ATIVO liga so o adiamento.
 """
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
                           distancia_maxima_viagem_km: float | None = None,
                           km_acumulado_maximo: float | None = None,
                           km_acumulado_maximo_viagem: float | None = None,
-                          eh_viagem_fn=None) -> tuple[list[list[dict]], dict]:
+                          eh_viagem_fn=None, tempo_maximo_s: float = 10.0) -> tuple[list[list[dict]], dict]:
     """Distribui cada rota fraca nas vizinhas da mesma macro-regiao, com
     folga de distancia/km acumulado/paradas/caixas (110) e tempo (10h30)
     SO na rota que recebe. Tudo ou nada por rota fraca: se um pedido nao
@@ -173,12 +174,26 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     como esta). Nivel 4, veiculo grande e destino inviavel ficam de fora
     (mesmo criterio de polimento_rotas._rota_polivel).
 
+    Abrir espaco (Hugo, 03/10): pedido p da fraca que nao cabe direto em
+    vizinha nenhuma tenta UMA troca -- por vizinha j (ordem de distancia),
+    por pedido q de j (ordem na rota; nunca um pedido que veio da propria
+    fraca), por terceira rota k (participante, nao vazia, da macro de q,
+    ordem de distancia do centroide de k ate q): q vai pra k na melhor
+    insercao, p entra em j sem q, e as duas tem que ficar validas com os
+    limites de receptora. Primeira combinacao valida vence. j e k viram
+    receptoras.
+
+    Teto de tempo (`tempo_maximo_s`): ao estourar, a tentativa em curso e
+    desfeita, nenhuma fraca nova e tentada e o relatorio sai com
+    "estourou_tempo": True (as fracas nao tentadas ficam sem motivo).
+
     Nunca perde nem duplica pedido. Devolve (sublotes, relatorio):
     relatorio = {"juntadas": n, "motivos": {id(sublote): texto},
-    "receptoras": {id(sublote)}} com o motivo de cada rota que continuou
-    fraca e as rotas devolvidas que receberam pedido de fraca (o painel
-    aplica nelas o mesmo teto com folga; uma receptora que terminou fraca
-    aparece nos dois)."""
+    "receptoras": {id(sublote)}, "estourou_tempo": bool} com o motivo de
+    cada rota que continuou fraca e as rotas devolvidas que receberam
+    pedido de fraca ou de troca (o painel aplica nelas o mesmo teto com
+    folga; uma receptora que terminou fraca aparece nos dois)."""
+    inicio = time.monotonic()
     base = (base_lat, base_lng)
     rotas: list[list[dict]] = [list(s) for s in sublotes]
     participantes = [i for i, r in enumerate(rotas) if _rota_polivel(r, api_key, base)]
@@ -198,46 +213,103 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
         centro = _centroide(rota, api_key)
         return _distancia_km(*ponto, *centro) if ponto and centro else 0.0
 
+    def _tempo_esgotado() -> bool:
+        return time.monotonic() - inicio >= tempo_maximo_s
+
+    def _inserir_valida(parada: dict, rota: list[dict]) -> list[dict] | None:
+        """Rota com `parada` na melhor insercao, sequenciada, ou None se
+        nao fica valida com os limites de receptora."""
+        _, candidata = _melhor_insercao(parada, rota, base, api_key)
+        sequenciada = ordenar_2opt(candidata, base_lat, base_lng, api_key)
+        return sequenciada if _valida(sequenciada) else None
+
+    def _abrir_espaco(parada: dict, i: int, ordem_j: list[int], da_fraca: set[int]) -> bool:
+        """Uma troca (ver docstring): grava em rotas[j] e rotas[k] e
+        devolve True na primeira combinacao valida. Sem tempo, False."""
+        caixas_p = extrair_volume_caixas(parada)
+        for j in ordem_j:
+            for q in rotas[j]:
+                if _tempo_esgotado():
+                    return False
+                if id(q) in da_fraca:
+                    continue
+                resto_j = [s for s in rotas[j] if s is not q]
+                # filtro barato antes do 2-opt (o _valida reprovaria igual)
+                if len(resto_j) + 1 > tamanho_folga or _caixas(resto_j) + caixas_p > volume_folga:
+                    continue
+                # p em j-sem-q nao depende de k: confere uma vez so por q
+                nova_j = _inserir_valida(parada, resto_j)
+                if nova_j is None:
+                    continue
+                ponto_q = obter_coordenadas(q, api_key)
+                macro_q = macro_regiao_do_servico(q, api_key)
+                caixas_q = extrair_volume_caixas(q)
+                ks = [k for k in participantes
+                      if k != i and k != j and rotas[k] and macro[k] == macro_q
+                      and len(rotas[k]) + 1 <= tamanho_folga and _caixas(rotas[k]) + caixas_q <= volume_folga]
+                for k in sorted(ks, key=lambda k: (_distancia_da_rota(ponto_q, rotas[k]), k)):
+                    if _tempo_esgotado():
+                        return False
+                    nova_k = _inserir_valida(q, rotas[k])
+                    if nova_k is not None:
+                        rotas[j], rotas[k] = nova_j, nova_k
+                        return True
+        return False
+
     juntadas = 0
+    estourou_tempo = False
     motivos_por_indice: dict[int, str] = {}
     receptoras_idx: set[int] = set()
     # menor primeiro: a rota mais fraca e a que mais precisa de lugar
     fracas = sorted((i for i in participantes if eh_rota_fraca(rotas[i], api_key, base)),
                     key=lambda i: (len(rotas[i]), _caixas(rotas[i]), i))
     for i in fracas:
+        if _tempo_esgotado():
+            estourou_tempo = True
+            break
         if not rotas[i] or not eh_rota_fraca(rotas[i], api_key, base):
             continue  # ja foi absorvida, ou recebeu outra fraca e deixou de ser
         vizinhas = [j for j in participantes if j != i and rotas[j] and macro[j] == macro[i]]
-        # as listas sao TROCADAS a cada insercao (nunca mutadas), entao
-        # guardar a referencia basta pra desfazer
-        backup = {j: rotas[j] for j in vizinhas}
+        # snapshot de TODAS as rotas: as listas sao TROCADAS a cada
+        # insercao (nunca mutadas), entao guardar as referencias basta pra
+        # desfazer -- inclusive a terceira rota k da troca
+        snapshot = list(rotas)
+        da_fraca = {id(s) for s in rotas[i]}
         coube = bool(vizinhas)
-        for parada in rotas[i]:
+        for parada in snapshot[i]:
             if not coube:
                 break
             ponto = obter_coordenadas(parada, api_key)
             macro_parada = macro_regiao_do_servico(parada, api_key)
             coube = False
             mesma_macro = [j for j in vizinhas if macro[j] == macro_parada]
-            for j in sorted(mesma_macro, key=lambda j: (_distancia_da_rota(ponto, rotas[j]), j)):
-                _, candidata = _melhor_insercao(parada, rotas[j], base, api_key)
-                sequenciada = ordenar_2opt(candidata, base_lat, base_lng, api_key)
-                if _valida(sequenciada):
+            ordem_j = sorted(mesma_macro, key=lambda j: (_distancia_da_rota(ponto, rotas[j]), j))
+            for j in ordem_j:
+                if _tempo_esgotado():
+                    break
+                sequenciada = _inserir_valida(parada, rotas[j])
+                if sequenciada is not None:
                     rotas[j] = sequenciada
                     coube = True
                     break
+            if not coube:
+                coube = _abrir_espaco(parada, i, ordem_j, da_fraca)
+            if not coube and _tempo_esgotado():
+                estourou_tempo = True
         if coube:
             rotas[i] = []
             juntadas += 1
-            receptoras_idx.update(j for j in vizinhas if rotas[j] is not backup[j])
+            receptoras_idx.update(k for k in participantes if k != i and rotas[k] is not snapshot[k])
         else:
-            for j, original in backup.items():
-                rotas[j] = original
-            motivos_por_indice[i] = _motivo_nao_juntou(rotas[i], [backup[j] for j in vizinhas], api_key)
+            rotas[:] = snapshot
+            if estourou_tempo:
+                break  # tentativa interrompida pelo teto de tempo: sem motivo, nada mais e tentado
+            motivos_por_indice[i] = _motivo_nao_juntou(rotas[i], [rotas[j] for j in vizinhas], api_key)
 
     # motivo so vale pra quem TERMINOU fraca (uma fraca que falhou pode
     # ter recebido outra depois e deixado de ser)
     motivos = {id(rotas[i]): m for i, m in motivos_por_indice.items() if rotas[i] and eh_rota_fraca(rotas[i], api_key, base)}
     # receptora que depois foi absorvida por outra some da saida
     receptoras = {id(rotas[j]) for j in receptoras_idx if rotas[j]}
-    return [r for r in rotas if r], {"juntadas": juntadas, "motivos": motivos, "receptoras": receptoras}
+    return [r for r in rotas if r], {"juntadas": juntadas, "motivos": motivos, "receptoras": receptoras,
+                                     "estourou_tempo": estourou_tempo}
