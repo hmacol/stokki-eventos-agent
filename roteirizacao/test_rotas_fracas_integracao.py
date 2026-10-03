@@ -123,6 +123,9 @@ class TestAplicarSegurar(unittest.TestCase):
         self.assertEqual(self.planos[0]["rotas_fracas"]["motivos"][id(self.fraca)], "[teste] seria segurada para 30/09")
         self.assertEqual((resumo["seguradas"], resumo["pedidos_segurados"], resumo["sobraram"]), (1, 2, 0))
 
+    def test_segurar_ligado(self):
+        self.assertTrue(rf.SEGURAR_ATIVO)
+
     def test_um_pedido_que_nao_pode_esperar_trava_a_rota(self):
         with mock.patch.object(rf, "SEGURAR_ATIVO", True), \
              mock.patch.object(rf, "motivo_nao_segurar",

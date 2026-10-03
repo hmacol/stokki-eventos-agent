@@ -41,7 +41,7 @@ from polimento_rotas import _rota_polivel, _rota_valida, _melhor_insercao, _cent
 from regioes_dia_fixo import regra_dia_fixo_do_servico  # noqa: E402
 
 ROTAS_FRACAS_ATIVO = True
-SEGURAR_ATIVO = False            # liga depois da primeira semana em producao (decisao do Hugo)
+SEGURAR_ATIVO = True             # ligado em 03/10 pelo Hugo
 PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
 HORAS_ROTA_FRACA = 5.0           # fraca so com MENOS de 5h estimadas (Hugo, 03/10)
