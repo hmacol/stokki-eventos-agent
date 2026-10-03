@@ -120,6 +120,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <input type="search" id="env-busca" placeholder="Buscar por NF, destinatário ou pedido">
           </div>
+          <button type="button" class="botao-linha oculto" id="env-reenviar-todos" data-acao="reenviar-todos"></button>
           <button type="button" class="botao-linha" id="env-atualizar">Atualizar</button>
         </div>
         <div class="rolagem"><table id="env-tabela"><thead><tr><th>Enviado em</th><th>NF / Pedido</th><th>Destinatário</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Pedido</th><th>Entrega</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
@@ -282,6 +283,11 @@
     if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.envios.length ? 'Nenhum pedido nessa situação.' : 'Você ainda não enviou nenhum pedido por aqui.'); }
     else vazio.classList.add('oculto');
     $('env-contagem').textContent = lista.length ? `${lista.length} pedido${lista.length > 1 ? 's' : ''}` : '';
+    // reenviar em lote (02/10): só na aba Erros e com 2+ erros
+    const nErros = dados.envios.filter(x => x.status === 'ERRO').length;
+    const btLote = $('env-reenviar-todos');
+    btLote.classList.toggle('oculto', !(PODE_ENVIAR && aba === 'erros' && nErros >= 2));
+    btLote.textContent = `Reenviar todos (${nErros})`;
   }
 
   function renderLateral() {
@@ -297,7 +303,7 @@
     const card = $('env-atencao');
     if (!pend.length && !erros.length) { card.classList.add('oculto'); card.innerHTML = ''; return; }
     card.classList.remove('oculto');
-    card.innerHTML = `<h3>Precisa da sua atenção (${pend.length + erros.length})</h3>` +
+    card.innerHTML = `<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">Precisa da sua atenção (${pend.length + erros.length})${PODE_ENVIAR && erros.length >= 2 ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar-todos">Reenviar todos com erro (${erros.length})</button>` : ''}</h3>` +
       pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
       erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
   }
@@ -430,7 +436,30 @@
     return j;
   }
 
+  function reenviarTodos() {
+    const n = dados.envios.filter(x => x.status === 'ERRO').length;
+    if (!n) return;
+    modal(`<h3>Reenviar todos com erro</h3><p>Os <b>${n}</b> pedidos com erro voltam pra fila e serão criados na Stokki de novo. Pedidos de região não atendida voltam pra liberação da Fresh Log.</p>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Reenviar ${n} pedidos</button></div>`);
+    $('m-ok').addEventListener('click', async () => {
+      $('m-ok').disabled = true;
+      try {
+        const r = await fetch(`${BASE}/api/envios/reenviar-erros`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.erro || 'Falha ao reenviar.');
+        fecharModal();
+        mensagem(j.mensagem, 'ok');
+        aba = 'fila';
+        carregar();
+      } catch (e) {
+        const m = $('m-msg'); m.className = 'msg erro'; m.textContent = e.message; $('m-ok').disabled = false;
+      }
+    });
+  }
+
   function abrirAcao(tipo, id) {
+    if (tipo === 'reenviar-todos') { reenviarTodos(); return; }
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
     if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }

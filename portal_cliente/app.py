@@ -819,6 +819,32 @@ def api_envios_confirmar():
     return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem})
 
 
+@app.route("/api/envios/reenviar-erros", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_reenviar_erros():
+    """Reenvia de uma vez todos os pedidos com erro da empresa (Hugo, 02/10)."""
+    _exige_pode_enviar()
+    conn = envios.conectar()
+    try:
+        r = envios.reenviar_erros(conn, _empresa_envio()['cnpj'], _quem_envia())
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"reenviar-erros cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} -> {r}")
+    n = r["na_fila"] + r["liberacao"]
+    if not n:
+        mensagem = "Nenhum pedido com erro pra reenviar."
+    else:
+        mensagem = f"{n} pedido{'s' if n > 1 else ''} reenviado{'s' if n > 1 else ''}"
+        mensagem += f": {r['na_fila']} de volta à fila" if r["liberacao"] else " -- de volta à fila, serão enviados à Stokki em instantes"
+        if r["liberacao"]:
+            mensagem += f" e {r['liberacao']} aguardando liberação da Fresh Log (região não atendida)"
+        mensagem += "."
+    return jsonify({"ok": True, **r, "mensagem": mensagem})
+
+
 @app.route("/api/envios/<int:envio_id>/acao", methods=["POST"])
 @requer_cliente
 @exige_mesma_origem

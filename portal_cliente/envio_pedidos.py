@@ -1461,6 +1461,20 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             "mensagem": f"Reagendamento pra {detalhe} registrado -- a Fresh Log aplica assim que o pedido estiver identificado."}
 
 
+def reenviar_erros(conn: sqlite3.Connection, cnpj_embarcador: str, por: str) -> dict:
+    """Reenvia de uma vez todos os envios com ERRO da empresa (Hugo, 02/10).
+    Passa pelo mesmo aplicar_acao do reenvio unitário: quem tinha bloqueio de
+    área volta pra liberação, o resto vai pra fila. Cancelados ficam de fora."""
+    rows = conn.execute("SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND status = ?",
+                        (_so_digitos(cnpj_embarcador), STATUS_ERRO)).fetchall()
+    contagem = {"na_fila": 0, "liberacao": 0}
+    for r in rows:
+        envio = dict(r)
+        aplicar_acao(conn, envio, "reenviar", {}, por)
+        contagem["liberacao" if envio.get("bloqueio_motivo") else "na_fila"] += 1
+    return contagem
+
+
 def registrar_agendamento_pedido(conn: sqlite3.Connection, envio: dict, por: str = "portal") -> bool:
     """Grava em agendamentos_pedido (status RESPONDIDO) pra
     atualizar_agendamentos_confirmados.py aplicar a data no VUUPT --
