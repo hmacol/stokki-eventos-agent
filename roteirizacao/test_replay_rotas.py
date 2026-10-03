@@ -56,6 +56,19 @@ class LeituraTestCase(unittest.TestCase):
         self.assertEqual((servicos, rotas), ([], []))
 
 
+class HorasDaReceptoraTestCase(unittest.TestCase):
+    """Receptora de rota fraca com 101-110 caixas continua Fiorino (Hugo,
+    03/10): o replay estima as horas dela (exige_orcamento_horas a trataria
+    como veiculo grande e devolveria 0, escondendo rota acima de 10h30)."""
+
+    def test_receptora_acima_de_100_caixas_tem_horas(self):
+        rota = [{"id": i, "latitude": -23.5, "longitude": -46.6 + 0.01 * i, "dimension_3": 35,
+                 "address": f"Rua {i}", "_nivel_dificuldade": 1} for i in range(3)]  # 105 caixas
+        with mock.patch.object(rr.rd, "estimar_tempo_rota", return_value=7.0):
+            self.assertEqual(rr._horas([rota], {id(rota)}), [7.0])
+            self.assertEqual(rr._horas([rota]), [0.0])
+
+
 class CorteDaRotaFracaTestCase(unittest.TestCase):
     """O replay conta rota fraca com o MESMO corte da roteirizacao
     (rotas_fracas.py), nao com o padrao de metricas_plano."""

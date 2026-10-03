@@ -118,8 +118,17 @@ def _coords(s: dict):
     return rd.coordenada_embutida(s)
 
 
-def _horas(sublotes: list[list[dict]]) -> list[float]:
-    return [rd.estimar_tempo_rota(sub) if rd.exige_orcamento_horas(sub) else 0.0 for sub in sublotes]
+def _horas(sublotes: list[list[dict]], receptoras: set[int] = frozenset()) -> list[float]:
+    """Horas por rota onde o orcamento de horas vale (0.0 nas outras).
+    Receptora de rota fraca (id em `receptoras`) com 101-110 caixas
+    continua Fiorino (Hugo, 03/10) e tem horas estimadas mesmo assim --
+    exige_orcamento_horas a trataria como veiculo grande e esconderia uma
+    rota acima de 10h30."""
+    def _conta(sub: list[dict]) -> bool:
+        if rd.exige_orcamento_horas(sub):
+            return True
+        return id(sub) in receptoras and len(sub) > 1 and not rd._orcamento_inviavel_por_distancia(sub)
+    return [rd.estimar_tempo_rota(sub) if _conta(sub) else 0.0 for sub in sublotes]
 
 
 def _caixas(sublotes: list[list[dict]]) -> list[int]:
@@ -141,8 +150,9 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
                                    sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
                                    registrar_historico=False)
     sublotes = [sub for p in planos for sub in p["sublotes"]]
+    receptoras = {r for p in planos for r in (p.get("rotas_fracas") or {}).get("receptoras", set())}
     novo = mp.metricas_plano(mp.plano_de_sublotes(sublotes, _coords), coords_base,
-                             horas=_horas(sublotes), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
+                             horas=_horas(sublotes, receptoras), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
                              caixas=_caixas(sublotes), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
                              caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
                              horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
@@ -154,7 +164,7 @@ def _somar(acumulado: dict, m: dict) -> None:
     tem que cobrir TODA chave somavel que formatar_metricas imprime --
     inclusive rotas_sem_coordenada, senao o TOTAL levanta KeyError."""
     for chave in ("rotas", "paradas", "rotas_pequenas", "km_total", "cruzadas", "pares_cruzados",
-                  "rotas_acima_teto", "rotas_sem_coordenada", "rotas_fracas"):
+                  "rotas_acima_teto", "rotas_acima_teto_folga", "rotas_sem_coordenada", "rotas_fracas"):
         acumulado[chave] = acumulado.get(chave, 0) + m[chave]
     acumulado.setdefault("diametros", []).append(m["diametro_mediano_km"])
 

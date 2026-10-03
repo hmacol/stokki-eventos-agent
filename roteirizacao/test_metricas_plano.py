@@ -125,6 +125,17 @@ class MetricasTestCase(unittest.TestCase):
         m = mp.metricas_plano([[(0.1, 0.0)]], BASE, horas=[5.5], caixas=[9], horas_fraca=6.0)
         self.assertEqual(m["rotas_fracas"], 1)
 
+    def test_acima_do_teto_com_folga(self):
+        # receptora de rota fraca pode ir ate 10h30 (Hugo, 03/10): conta a parte
+        m = mp.metricas_plano([[(0.1, 0.0)], [(0.2, 0.0)], [(0.3, 0.0)]], BASE, horas=[9.5, 10.5, 10.6])
+        self.assertEqual((m["rotas_acima_teto"], m["rotas_acima_teto_folga"]), (3, 1))
+        self.assertIn("acima de 10h30 1", mp.formatar_metricas(m, "t"))
+
+    def test_teto_folga_parametrizavel(self):
+        m = mp.metricas_plano([[(0.1, 0.0)]], BASE, horas=[10.6], teto_horas_folga=11.0)
+        self.assertEqual(m["rotas_acima_teto_folga"], 0)
+        self.assertEqual(mp.metricas_plano([], BASE)["rotas_acima_teto_folga"], 0)
+
     def test_caixas_alinhadas_com_rotas_filtradas(self):
         # a segunda rota ficou sem coordenada e sai da medicao junto com as caixas dela
         m = mp.metricas_plano([[(0.1, 0.0)], []], BASE, caixas=[294, 5])
