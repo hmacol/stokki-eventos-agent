@@ -6,7 +6,9 @@ Rota fraca (Hugo, 29/09 -- spec docs/superpowers/specs/
 2026-09-29-rotas-fracas-design.md): rota com poucos pedidos E poucas
 caixas ao mesmo tempo. Pouco pedido sozinho nao basta -- medido em
 producao (30/08 a 29/09): 30 das 58 rotas com ate 5 pedidos levavam mais
-de 40 caixas, ou seja, carga cheia com poucas paradas.
+de 40 caixas, ou seja, carga cheia com poucas paradas. Desde 03/10
+(Hugo) tambem precisa ter menos de 5h estimadas: rota curta em paradas
+mas longa em tempo ja ocupa o dia do motorista.
 
 Tres saidas, nesta ordem:
   1. juntar: distribuir os pedidos nas rotas vizinhas com folga de
@@ -31,7 +33,7 @@ import pedidos_dedicados  # noqa: E402  (normalizacao do codigo do pedido)
 
 from roteirizacao_dados import (  # noqa: E402
     extrair_volume_caixas, macro_regiao_do_servico, MACRO_GRANDE_SP,
-    obter_coordenadas, _distancia_km, macro_regiao_predominante_do_sublote,
+    obter_coordenadas, _distancia_km, macro_regiao_predominante_do_sublote, estimar_tempo_rota,
 )
 from otimizacao_rotas import ordenar_2opt  # noqa: E402
 from polimento_rotas import _rota_polivel, _rota_valida, _melhor_insercao, _centroide  # noqa: E402
@@ -41,6 +43,7 @@ ROTAS_FRACAS_ATIVO = True
 SEGURAR_ATIVO = False            # liga depois da primeira semana em producao (decisao do Hugo)
 PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
+HORAS_ROTA_FRACA = 5.0           # fraca so com MENOS de 5h estimadas (Hugo, 03/10)
 FOLGA_DISTANCIA_KM = 20          # distancia entre dois pedidos da rota que recebe (normal: 15)
 FOLGA_KM_ACUMULADO_KM = 75       # km acumulado da rota que recebe (normal: 60)
 FOLGA_PARADAS_EXTRA = 2          # paradas alem do teto da rodada (16 + 2 = 18)
@@ -56,8 +59,15 @@ def _caixas(sublote: list[dict]) -> int:
     return sum(extrair_volume_caixas(s) for s in sublote)
 
 
-def eh_rota_fraca(sublote: list[dict]) -> bool:
-    return bool(sublote) and len(sublote) <= PARADAS_ROTA_FRACA and _caixas(sublote) <= CAIXAS_ROTA_FRACA
+def eh_rota_fraca(sublote: list[dict], api_key: str | None = None,
+                  base: tuple[float, float] | None = None) -> bool:
+    """Ate 7 pedidos E ate 40 caixas E menos de 5h estimadas
+    (roteirizacao_dados.estimar_tempo_rota, que inclui a perna da base --
+    vale tambem pra rota de 1 parada). O tempo so e estimado quando os
+    dois primeiros cortes ja passaram."""
+    if not sublote or len(sublote) > PARADAS_ROTA_FRACA or _caixas(sublote) > CAIXAS_ROTA_FRACA:
+        return False
+    return estimar_tempo_rota(sublote, api_key, base) < HORAS_ROTA_FRACA
 
 
 def resumo_da_rota(sublote: list[dict]) -> str:
@@ -192,10 +202,10 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     motivos_por_indice: dict[int, str] = {}
     receptoras_idx: set[int] = set()
     # menor primeiro: a rota mais fraca e a que mais precisa de lugar
-    fracas = sorted((i for i in participantes if eh_rota_fraca(rotas[i])),
+    fracas = sorted((i for i in participantes if eh_rota_fraca(rotas[i], api_key, base)),
                     key=lambda i: (len(rotas[i]), _caixas(rotas[i]), i))
     for i in fracas:
-        if not rotas[i] or not eh_rota_fraca(rotas[i]):
+        if not rotas[i] or not eh_rota_fraca(rotas[i], api_key, base):
             continue  # ja foi absorvida, ou recebeu outra fraca e deixou de ser
         vizinhas = [j for j in participantes if j != i and rotas[j] and macro[j] == macro[i]]
         # as listas sao TROCADAS a cada insercao (nunca mutadas), entao
@@ -227,7 +237,7 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
 
     # motivo so vale pra quem TERMINOU fraca (uma fraca que falhou pode
     # ter recebido outra depois e deixado de ser)
-    motivos = {id(rotas[i]): m for i, m in motivos_por_indice.items() if rotas[i] and eh_rota_fraca(rotas[i])}
+    motivos = {id(rotas[i]): m for i, m in motivos_por_indice.items() if rotas[i] and eh_rota_fraca(rotas[i], api_key, base)}
     # receptora que depois foi absorvida por outra some da saida
     receptoras = {id(rotas[j]) for j in receptoras_idx if rotas[j]}
     return [r for r in rotas if r], {"juntadas": juntadas, "motivos": motivos, "receptoras": receptoras}

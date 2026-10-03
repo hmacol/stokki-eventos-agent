@@ -54,7 +54,8 @@ def plano_de_sublotes(sublotes: list[list[dict]], coords_fn) -> list[list[tuple[
 
 def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, float],
                    horas: list[float] | None = None, teto_horas: float = 9.0,
-                   caixas: list[int] | None = None, paradas_fraca: int = 7, caixas_fraca: int = 40) -> dict:
+                   caixas: list[int] | None = None, paradas_fraca: int = 7, caixas_fraca: int = 40,
+                   horas_fraca: float = 5.0) -> dict:
     """Ver docstring do modulo. `horas` (opcional): duracao estimada por
     rota, na mesma ordem de `rotas`, pra contar rotas acima do teto.
     `rotas_sem_coordenada` sinaliza rotas que ficaram inteiramente vazias
@@ -62,7 +63,9 @@ def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, fl
     e observavel aqui porque plano_de_sublotes ja as removeu.
     `caixas` (opcional): soma de caixas por rota, na mesma ordem de `rotas`,
     pra contar rotas fracas (ate `paradas_fraca` paradas E ate `caixas_fraca`
-    caixas -- ver rotas_fracas.py). Sem ela, rotas_fracas sai None."""
+    caixas -- ver rotas_fracas.py). Sem ela, rotas_fracas sai None. Com
+    `horas`, a rota fraca tambem precisa ter menos de `horas_fraca` horas
+    (Hugo, 03/10)."""
 
     # Contar rotas descartadas (rotas vazias na entrada) e filtrar
     # pelos mesmos indices
@@ -133,7 +136,9 @@ def metricas_plano(rotas: list[list[tuple[float, float]]], base: tuple[float, fl
         "pares_cruzados": pares,
         "rotas_acima_teto": acima,
         "rotas_sem_coordenada": rotas_sem_coordenada,
-        "rotas_fracas": (sum(1 for t, c in zip(tamanhos, caixas) if t <= paradas_fraca and c <= caixas_fraca)
+        "rotas_fracas": (sum(1 for k, (t, c) in enumerate(zip(tamanhos, caixas))
+                             if t <= paradas_fraca and c <= caixas_fraca
+                             and (not horas or horas[k] < horas_fraca))
                          if caixas is not None else None),
     }
 

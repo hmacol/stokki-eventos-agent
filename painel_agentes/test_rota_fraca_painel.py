@@ -107,6 +107,16 @@ class TestEtiqueta(unittest.TestCase):
     def test_passou_de_quarenta_caixas_a_etiqueta_some(self):
         self.assertEqual(self._badges([_parada(1, 41)], self.MOTIVO), [])
 
+    def test_com_5h_ou_mais_a_etiqueta_some(self):
+        # Hugo, 03/10: rota fraca tambem exige menos de 5h estimadas
+        with mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: 5.0):
+            self.assertEqual(self._badges([_parada(1, 9), _parada(2, 4)], self.MOTIVO), [])
+
+    def test_com_4h54_a_etiqueta_fica(self):
+        with mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: 4.9):
+            self.assertIn("rota fraca: 2 pedido(s), 13 caixa(s). vizinha mais próxima a 27 km",
+                          self._badges([_parada(1, 9), _parada(2, 4)], self.MOTIVO))
+
 
 class TestTetoDaReceptora(unittest.TestCase):
     """Rota que recebeu pedido de rota fraca foi formada com teto + 2

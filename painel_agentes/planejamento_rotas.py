@@ -185,6 +185,7 @@ DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -
 # (constantes separadas de propósito, sem import entre os dois módulos).
 PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
+HORAS_ROTA_FRACA = 5.0  # fraca só com MENOS de 5h estimadas (Hugo, 03/10)
 # Folga que a junção dá SÓ à rota que recebe pedido de rota fraca (mesmos
 # valores de rotas_fracas.FOLGA_PARADAS_EXTRA, FOLGA_DISTANCIA_KM,
 # FOLGA_CAIXAS_EXTRA e FOLGA_TEMPO_MAXIMO_HORAS): o aviso de limite usa
@@ -368,6 +369,21 @@ def _badges_trava(rascunho: dict) -> list[str]:
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
 
+    def _tempo_estimado() -> float:
+        # MESMO estimador que formou a rota (roteirizacao_dados.
+        # estimar_tempo_rota: paradas calibradas + perna da base +
+        # fator estrada + velocidade urbana/rodovia), na ordem em que
+        # as paradas estão no rascunho. As paradas já carregam
+        # lat/lng -- coords_fn evita re-geocodificar o endereço.
+        pseudo_servicos = [
+            {"_nivel_dificuldade": p["nivel_dificuldade"] or 1, "latitude": p["latitude"], "longitude": p["longitude"]}
+            for p in paradas
+        ]
+        return estimar_tempo_rota(
+            pseudo_servicos, coords_base=_garantir_coords_base(),
+            coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+        )
+
     # Janela de horário do cliente (Hugo, 09/09): na ordem atual do
     # rascunho, alguma parada chega depois da janela fechar? Mesmo
     # simulador que sequencia/forma as rotas (roteirizacao_dados.
@@ -427,19 +443,7 @@ def _badges_trava(rascunho: dict) -> list[str]:
         if len(paradas) > 1 and any(n >= 4 for n in niveis) and not grupo_nivel4_legitimo:
             badges.append("entrega nível 4 dividindo rota com outras")
         else:
-            # MESMO estimador que formou a rota (roteirizacao_dados.
-            # estimar_tempo_rota: paradas calibradas + perna da base +
-            # fator estrada + velocidade urbana/rodovia), na ordem em que
-            # as paradas estão no rascunho. As paradas já carregam
-            # lat/lng -- coords_fn evita re-geocodificar o endereço.
-            pseudo_servicos = [
-                {"_nivel_dificuldade": n, "latitude": p["latitude"], "longitude": p["longitude"]}
-                for n, p in zip(niveis, paradas)
-            ]
-            tempo_estimado = estimar_tempo_rota(
-                pseudo_servicos, coords_base=_garantir_coords_base(),
-                coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
-            )
+            tempo_estimado = _tempo_estimado()
             if tempo_estimado > max_horas:
                 tempo_paradas = sum(TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis)
                 qtd_nivel3 = sum(1 for n in niveis if n == 3)
@@ -462,9 +466,11 @@ def _badges_trava(rascunho: dict) -> list[str]:
 
     # Rota fraca (Hugo, 29/09): o motivo vem da roteirização (não coube
     # em vizinha nem pôde ser segurada). Se a rota foi editada e passou
-    # do corte, o aviso some sozinho.
+    # de um dos três cortes (pedidos, caixas, menos de 5h -- 03/10), o
+    # aviso some sozinho.
     motivo_fraca = rascunho.get("rota_fraca_motivo")
-    if motivo_fraca and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA:
+    if (motivo_fraca and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
+            and _tempo_estimado() < HORAS_ROTA_FRACA):
         badges.append(f"rota fraca: {len(paradas)} pedido(s), {caixas} caixa(s). {motivo_fraca}")
 
     return badges

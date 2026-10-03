@@ -135,7 +135,8 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
     enviado = mp.metricas_plano(mp.plano_de_sublotes(rotas_enviadas, _coords), coords_base,
                                 horas=_horas(rotas_enviadas), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
                                 caixas=_caixas(rotas_enviadas), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
-                                caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA)
+                                caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
+                                horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
     planos = crd.planejar_sublotes([dict(s) for s in servicos], coords_base, None, data_alvo,
                                    sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
                                    registrar_historico=False)
@@ -143,7 +144,8 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
     novo = mp.metricas_plano(mp.plano_de_sublotes(sublotes, _coords), coords_base,
                              horas=_horas(sublotes), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
                              caixas=_caixas(sublotes), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
-                             caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA)
+                             caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
+                             horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
     return enviado, novo
 
 

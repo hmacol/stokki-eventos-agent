@@ -34,10 +34,38 @@ def _ids(sublotes):
 
 
 class TestCorte(unittest.TestCase):
-    def test_sete_pedidos_e_quarenta_caixas_e_fraca(self):
-        rota = [_servico(i, caixas=5) for i in range(7)] + []
+    def setUp(self):
+        self.horas = 1.0
+        self.chamadas = []
+
+        def _estimar(sub, k=None, b=None):
+            self.chamadas.append((len(sub), k, b))
+            return self.horas
+        p = mock.patch.object(rf, "estimar_tempo_rota", _estimar)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _sete_com_quarenta(self):
+        rota = [_servico(i, caixas=5) for i in range(7)]
         rota[0]["dimension_3"] = 10  # 10 + 6*5 = 40
-        self.assertTrue(rf.eh_rota_fraca(rota))
+        return rota
+
+    def test_sete_pedidos_e_quarenta_caixas_e_fraca(self):
+        self.assertTrue(rf.eh_rota_fraca(self._sete_com_quarenta()))
+
+    def test_sete_pedidos_quarenta_caixas_e_4h54_e_fraca(self):
+        self.horas = 4.9
+        self.assertTrue(rf.eh_rota_fraca(self._sete_com_quarenta(), "chave", BASE))
+        self.assertEqual(self.chamadas, [(7, "chave", BASE)])
+
+    def test_com_5h_nao_e_fraca(self):
+        self.horas = 5.0
+        self.assertFalse(rf.eh_rota_fraca(self._sete_com_quarenta()))
+
+    def test_rota_de_uma_parada_usa_o_mesmo_estimador(self):
+        self.horas = 5.2  # 1 parada longe da base: a perna da base pesa
+        self.assertFalse(rf.eh_rota_fraca([_servico(1)], None, BASE))
+        self.assertEqual(self.chamadas, [(1, None, BASE)])
 
     def test_oito_pedidos_nao_e_fraca(self):
         self.assertFalse(rf.eh_rota_fraca([_servico(i) for i in range(8)]))

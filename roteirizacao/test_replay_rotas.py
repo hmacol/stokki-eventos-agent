@@ -69,6 +69,7 @@ class CorteDaRotaFracaTestCase(unittest.TestCase):
         self.assertEqual(metricas.call_count, 2)
         for chamada in metricas.call_args_list:
             self.assertEqual((chamada.kwargs["paradas_fraca"], chamada.kwargs["caixas_fraca"]), (3, 11))
+            self.assertEqual(chamada.kwargs["horas_fraca"], rotas_fracas.HORAS_ROTA_FRACA)
 
 
 if __name__ == "__main__":

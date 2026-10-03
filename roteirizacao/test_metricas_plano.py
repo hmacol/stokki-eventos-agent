@@ -115,6 +115,16 @@ class MetricasTestCase(unittest.TestCase):
         self.assertIsNone(m["rotas_fracas"])
         self.assertNotIn("fracas", mp.formatar_metricas(m, "t"))
 
+    def test_rota_fraca_exige_menos_de_5h_quando_ha_horas(self):
+        # Hugo, 03/10: fraca = poucas paradas E poucas caixas E menos de 5h
+        rotas = [[(0.1, 0.0)], [(0.1, 0.01)], [(0.1, 0.02)]]
+        m = mp.metricas_plano(rotas, BASE, horas=[4.9, 5.0, 0.0], caixas=[9, 9, 9])
+        self.assertEqual(m["rotas_fracas"], 2)
+
+    def test_horas_fraca_parametrizavel(self):
+        m = mp.metricas_plano([[(0.1, 0.0)]], BASE, horas=[5.5], caixas=[9], horas_fraca=6.0)
+        self.assertEqual(m["rotas_fracas"], 1)
+
     def test_caixas_alinhadas_com_rotas_filtradas(self):
         # a segunda rota ficou sem coordenada e sai da medicao junto com as caixas dela
         m = mp.metricas_plano([[(0.1, 0.0)], []], BASE, caixas=[294, 5])
