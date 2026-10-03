@@ -127,6 +127,21 @@ def classificar_tipo_veiculo(caixas: int, enderecos_distintos: int) -> TipoVeicu
     return None
 
 
+def classificar_tipo_veiculo_com_folga(caixas: int, enderecos_distintos: int,
+                                       folga_fiorino_cx: int = 0) -> TipoVeiculo | None:
+    """
+    Igual a classificar_tipo_veiculo, mas a rota comum (Fiorino) vai até
+    o teto do FIORINO + `folga_fiorino_cx` caixas antes de virar veículo
+    grande. Usada pra rota que recebeu pedido de rota fraca, que pode
+    chegar a 110 caixas e continua sendo Fiorino (Hugo, 03/10 -- ver
+    roteirizacao/rotas_fracas.py, FOLGA_CAIXAS_EXTRA). Com folga 0 é
+    idêntica a classificar_tipo_veiculo.
+    """
+    if caixas <= _TIPOS_POR_CODIGO["FIORINO"].volume_maximo_cx + folga_fiorino_cx:
+        return None
+    return classificar_tipo_veiculo(caixas, enderecos_distintos)
+
+
 def veiculo_comporta(tipo_motorista: str | None, tipo_necessario: str | None) -> bool:
     """
     True se um motorista com veículo `tipo_motorista` pode atender uma

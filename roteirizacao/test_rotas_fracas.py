@@ -190,14 +190,66 @@ class TestAbsorver(unittest.TestCase):
         self.assertEqual(rel["motivos"], {id(rota_fraca): "vizinha mais próxima a 22 km"})
         self.assertEqual(rel["receptoras"], set())
 
-    def test_nao_cede_em_caixas(self):
+    def test_nao_cede_em_caixas_alem_da_folga(self):
+        # 30 + 90 = 120: passa ate dos 110 da receptora
         fraca = [_servico(1, 0.10, 0.00, caixas=30)]
-        vizinha = [_servico(3, 0.10, 0.01, caixas=40), _servico(4, 0.10, 0.011, caixas=40)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=45), _servico(4, 0.10, 0.011, caixas=45)]
         saida, rel = self._absorver([fraca, vizinha])
         self.assertEqual(len(saida), 2)
         self.assertEqual(rel["juntadas"], 0)
         self.assertEqual(list(rel["motivos"].values()),
                          ["não coube nas vizinhas (distância, paradas, caixas, tempo ou janela)"])
+
+    def test_receptora_aceita_110_caixas(self):
+        fraca = [_servico(1, 0.10, 0.00, caixas=10)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=50), _servico(4, 0.10, 0.011, caixas=50)]
+        saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(sum(s["dimension_3"] for s in saida[0]), 110)
+        self.assertEqual(rel["juntadas"], 1)
+        self.assertEqual(rel["receptoras"], {id(saida[0])})
+
+    def test_receptora_recusa_111_caixas(self):
+        fraca = [_servico(1, 0.10, 0.00, caixas=11)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=50), _servico(4, 0.10, 0.011, caixas=50)]
+        saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(rel["juntadas"], 0)
+
+    def _tempo_fixo(self, horas_receptora):
+        """Rota de 3+ paradas leva `horas_receptora`; as menores, 1h."""
+        import polimento_rotas as pr
+        return mock.patch.object(pr, "estimar_tempo_rota",
+                                 lambda sub, k=None, b=None: horas_receptora if len(sub) >= 3 else 1.0)
+
+    def test_receptora_aceita_10h30(self):
+        fraca = [_servico(1, 0.10, 0.00)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=25), _servico(4, 0.10, 0.011, caixas=25)]
+        with self._tempo_fixo(10.5):
+            saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(rel["juntadas"], 1)
+
+    def test_receptora_recusa_10h31(self):
+        fraca = [_servico(1, 0.10, 0.00)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=25), _servico(4, 0.10, 0.011, caixas=25)]
+        with self._tempo_fixo(10.5 + 1 / 60):
+            saida, rel = self._absorver([fraca, vizinha])
+        self.assertEqual(len(saida), 2)
+        self.assertEqual(rel["juntadas"], 0)
+
+    def test_receptora_que_passou_de_100_continua_recebendo(self):
+        # participantes sao calculados UMA vez no inicio: a vizinha que
+        # chegou a 105 com a 1a fraca (101-110 seria VAN_HR pela regra
+        # antiga, fora de _rota_polivel) recebe a 2a e fecha 110
+        fraca_a = [_servico(1, 0.10, 0.009, caixas=5)]
+        fraca_b = [_servico(2, 0.10, 0.012, caixas=5)]
+        vizinha = [_servico(3, 0.10, 0.01, caixas=50), _servico(4, 0.10, 0.011, caixas=50)]
+        saida, rel = self._absorver([fraca_a, fraca_b, vizinha])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(_ids(saida), [1, 2, 3, 4])
+        self.assertEqual(sum(s["dimension_3"] for s in saida[0]), 110)
+        self.assertEqual(rel["receptoras"], {id(saida[0])})
 
     def test_folga_de_paradas_e_teto_mais_dois(self):
         fraca = [_servico(1, 0.10, 0.00)]
@@ -295,6 +347,35 @@ class TestAbsorver(unittest.TestCase):
         saida, rel = self._absorver([[_servico(1, 0.10, 0.00)]])
         self.assertEqual(_ids(saida), [1])
         self.assertEqual(list(rel["motivos"].values()), ["sem rota vizinha na mesma região"])
+
+
+class TestRotaValidaTempo(unittest.TestCase):
+    """_rota_valida: teto de horas parametrizavel; o padrao (polimento)
+    continua 9h."""
+
+    def setUp(self):
+        import polimento_rotas as pr
+        self.pr = pr
+        p = mock.patch.object(pr, "estimar_tempo_rota", lambda sub, k=None, b=None: 9.5)
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = mock.patch.object(pr, "obter_coordenadas", lambda s, k=None: (s["latitude"], s["longitude"]))
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def _valida(self, **kw):
+        rota = [_servico(1, 0.10, 0.00), _servico(2, 0.10, 0.001)]
+        return self.pr._rota_valida(rota, None, 16, 100, 15, None, None, BASE, **kw)
+
+    def test_padrao_continua_9h(self):
+        self.assertFalse(self._valida())
+
+    def test_teto_informado_vale(self):
+        self.assertTrue(self._valida(tempo_maximo_horas=10.5))
+
+    def test_caixas_padrao_continua_100(self):
+        rota = [_servico(1, 0.10, 0.00, caixas=51), _servico(2, 0.10, 0.001, caixas=50)]
+        self.assertFalse(self.pr._rota_valida(rota, None, 16, 100, 15, None, None, BASE, tempo_maximo_horas=10.5))
 
 
 if __name__ == "__main__":

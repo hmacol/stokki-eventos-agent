@@ -152,5 +152,44 @@ class TestTetoDaReceptora(unittest.TestCase):
         self.assertIn("paradas a 25km entre si (máx 20km, com folga de rota fraca)", self._badges(paradas, 1))
 
 
+class TestCaixasETempoDaReceptora(unittest.TestCase):
+    """Folga de caixas (110) e de tempo (10h30) da receptora (Hugo, 03/10):
+    só no rascunho com recebeu_rota_fraca; a rota comum continua 100/9h."""
+
+    def setUp(self):
+        self.horas = 1.0
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+                        mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None),
+                        mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: self.horas)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _badges(self, caixas_por_parada, recebeu, n=3):
+        paradas = [_parada(i, c) for i, c in enumerate(caixas_por_parada[:n])]
+        return planejamento_rotas._badges_trava(
+            {"paradas": paradas, "tipo_veiculo": None, "tipo_rota": "GRANDE_SP", "recebeu_rota_fraca": recebeu})
+
+    def test_receptora_com_105_caixas_e_10h_nao_avisa(self):
+        self.horas = 10.0
+        self.assertEqual(self._badges([35, 35, 35], 1), [])
+
+    def test_receptora_com_111_caixas_avisa_citando_a_folga(self):
+        self.assertIn("111 caixa(s) (máx 110, com folga de rota fraca)", self._badges([37, 37, 37], 1))
+
+    def test_receptora_acima_de_10h30_avisa_citando_a_folga(self):
+        self.horas = 10.6
+        badges = self._badges([5, 5, 5], 1)
+        self.assertTrue(any(b.startswith("tempo estimado 10.6h (máx 10h30, com folga de rota fraca") for b in badges),
+                        badges)
+
+    def test_rota_comum_com_101_caixas_avisa_como_antes(self):
+        self.assertIn("101 caixa(s) (máx 100)", self._badges([34, 34, 33], 0))
+
+    def test_rota_comum_acima_de_9h_avisa_como_antes(self):
+        self.horas = 9.5
+        badges = self._badges([5, 5, 5], 0)
+        self.assertTrue(any(b.startswith("tempo estimado 9.5h (máx 9h,") for b in badges), badges)
+
+
 if __name__ == "__main__":
     unittest.main()

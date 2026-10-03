@@ -118,7 +118,7 @@ from regras.complexidade_entrega import (
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, TIPOS_CARGA_FRIA
 from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_equitativo, contar_motoristas_elegiveis
 from zonas_sp import classificar_rota_zona
-from regras.tipo_veiculo import classificar_tipo_veiculo
+from regras.tipo_veiculo import classificar_tipo_veiculo_com_folga
 from regras.prioridade_ofertas import carregar_historico_justica
 import rotas_fracas
 import pedidos_segurados
@@ -596,6 +596,14 @@ def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None,
     return resumo
 
 
+def _folga_fiorino(sublote: list[dict], receptoras: set[int]) -> int:
+    """Caixas além de 100 que a rota ainda leva como Fiorino: só a que
+    recebeu pedido de rota fraca (Hugo, 03/10 -- vai até 110 na junção,
+    rotas_fracas.FOLGA_CAIXAS_EXTRA). As demais, 0 (classificação de
+    sempre)."""
+    return rotas_fracas.FOLGA_CAIXAS_EXTRA if id(sublote) in receptoras else 0
+
+
 def _frase_rotas_fracas(resumo: dict) -> str:
     partes = []
     if resumo["juntadas"]:
@@ -700,11 +708,14 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
             indice += 1
             eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
             zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
-            tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+            folga_fiorino = _folga_fiorino(sublote, receptoras)
+            tipo_veiculo = classificar_tipo_veiculo_com_folga(*caixas_e_enderecos(sublote),
+                                                              folga_fiorino_cx=folga_fiorino)
             horas_sublote = estimar_tempo_rota(sublote, gmaps_key, coords_base)
             motorista = selecionar_motorista_equitativo(
                 sublote, data_alvo, catalogo_motoristas.motoristas, contagem, gmaps_key,
                 ajustes_disponibilidade=ajustes_disponibilidade,
+                folga_fiorino_cx=folga_fiorino,
                 **historico.parametros_alocacao(horas_sublote),
             )
             if motorista:
@@ -945,6 +956,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     contar_motoristas_elegiveis(
                         sub, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
                         ajustes_disponibilidade=ajustes_disponibilidade,
+                        folga_fiorino_cx=_folga_fiorino(sub, receptoras),
                     ),
                     -horas_por_sublote[id(sub)],
                 ),
@@ -965,12 +977,16 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 # de verdade (não conta alocação de rota que falhou).
                 eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
                 tipo_rota_str = "VIAGEM" if eh_viagem else f"Grande SP/{classificar_rota_zona(sublote, gmaps_key) or '?'}"
-                tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+                # receptora de rota fraca vai ate 110 caixas e continua Fiorino (Hugo, 03/10)
+                folga_fiorino = _folga_fiorino(sublote, receptoras)
+                tipo_veiculo = classificar_tipo_veiculo_com_folga(*caixas_e_enderecos(sublote),
+                                                                  folga_fiorino_cx=folga_fiorino)
                 if tipo_veiculo:
                     tipo_rota_str += f" [veículo: {tipo_veiculo.nome}]"
                 motorista = selecionar_motorista_equitativo(
                     sublote, data_alvo, catalogo_motoristas.motoristas, contagem_alocacoes_dia, gmaps_key,
                     ajustes_disponibilidade=ajustes_disponibilidade,
+                    folga_fiorino_cx=folga_fiorino,
                     **historico.parametros_alocacao(horas_sublote),
                 )
                 agent_id = motorista.agent_id if motorista else None

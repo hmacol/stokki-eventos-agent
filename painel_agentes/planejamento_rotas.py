@@ -186,10 +186,13 @@ DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -
 PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
 # Folga que a junção dá SÓ à rota que recebe pedido de rota fraca (mesmos
-# valores de rotas_fracas.FOLGA_PARADAS_EXTRA e FOLGA_DISTANCIA_KM): o
-# aviso de limite usa esse teto no rascunho com recebeu_rota_fraca.
+# valores de rotas_fracas.FOLGA_PARADAS_EXTRA, FOLGA_DISTANCIA_KM,
+# FOLGA_CAIXAS_EXTRA e FOLGA_TEMPO_MAXIMO_HORAS): o aviso de limite usa
+# esse teto no rascunho com recebeu_rota_fraca.
 FOLGA_PARADAS_ROTA_FRACA = 2
 FOLGA_DISTANCIA_ROTA_FRACA_KM = 20
+FOLGA_CAIXAS_ROTA_FRACA = 10          # 100 + 10 = 110, continua Fiorino (Hugo, 03/10)
+FOLGA_TEMPO_ROTA_FRACA_HORAS = 10.5   # teto de tempo da receptora (normal: ROTA_TEMPO_MAXIMO_HORAS)
 # Orçamento de horas por rota: TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_
 # HORAS e ROTA_TEMPO_MAXIMO_HORAS vêm IMPORTADOS de roteirizacao_dados
 # (25/08 -- antes eram cópias locais, e o estimador do badge era uma
@@ -334,6 +337,12 @@ def _simular_rascunho(paradas: list[dict]) -> dict | None:
         return None
 
 
+def _horas_para_hhmm_teto(horas: float) -> str:
+    """Teto de horas do aviso: '9h' (como sempre foi) ou '10h30'."""
+    inteiras, minutos = int(horas), round((horas - int(horas)) * 60)
+    return f"{inteiras}h{minutos:02d}" if minutos else f"{inteiras}h"
+
+
 def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
@@ -378,14 +387,19 @@ def _badges_trava(rascunho: dict) -> list[str]:
     tipo_veiculo = tipo_por_codigo(rascunho.get("tipo_veiculo"))
 
     # Rota que recebeu pedido de rota fraca foi formada com teto de
-    # paradas e de distância maiores (roteirizacao/rotas_fracas.py) --
-    # aviso só quando estoura esse teto. Caixas, tempo e janela não mudam.
+    # paradas, distância, caixas (110) e tempo (10h30) maiores
+    # (roteirizacao/rotas_fracas.py, Hugo 03/10) -- aviso só quando
+    # estoura esse teto. Janela não muda. Até 110 caixas ela continua
+    # Fiorino (o rascunho já grava tipo_veiculo None).
     if rascunho.get("recebeu_rota_fraca"):
         max_paradas = TAMANHO_MAXIMO_ROTA + FOLGA_PARADAS_ROTA_FRACA
         max_distancia_km = max(DISTANCIA_MAXIMA_ROTA_KM, FOLGA_DISTANCIA_ROTA_FRACA_KM)
+        max_caixas = VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA
+        max_horas = FOLGA_TEMPO_ROTA_FRACA_HORAS
         nota_folga = ", com folga de rota fraca"
     else:
         max_paradas, max_distancia_km, nota_folga = TAMANHO_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, ""
+        max_caixas, max_horas = VOLUME_MAXIMO_ROTA, ROTA_TEMPO_MAXIMO_HORAS
 
     if tipo_veiculo:
         enderecos_distintos = {p["endereco"] for p in paradas}
@@ -399,8 +413,8 @@ def _badges_trava(rascunho: dict) -> list[str]:
     else:
         if len(paradas) > max_paradas:
             badges.append(f"{len(paradas)} paradas (máx {max_paradas}{nota_folga})")
-        if caixas > VOLUME_MAXIMO_ROTA:
-            badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
+        if caixas > max_caixas:
+            badges.append(f"{caixas} caixa(s) (máx {max_caixas}{nota_folga})")
 
         niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
         # Nível 4 só pode dividir rota com outro nível 4 do MESMO
@@ -426,11 +440,11 @@ def _badges_trava(rascunho: dict) -> list[str]:
                 pseudo_servicos, coords_base=_garantir_coords_base(),
                 coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
             )
-            if tempo_estimado > ROTA_TEMPO_MAXIMO_HORAS:
+            if tempo_estimado > max_horas:
                 tempo_paradas = sum(TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis)
                 qtd_nivel3 = sum(1 for n in niveis if n == 3)
                 badges.append(
-                    f"tempo estimado {tempo_estimado:.1f}h (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h, "
+                    f"tempo estimado {tempo_estimado:.1f}h (máx {_horas_para_hhmm_teto(max_horas)}{nota_folga}, "
                     f"{qtd_nivel3} nível 3, +{tempo_estimado - tempo_paradas:.1f}h deslocamento)"
                 )
 

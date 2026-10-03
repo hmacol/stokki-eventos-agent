@@ -20,7 +20,7 @@ from roteirizacao_dados import macro_regiao_do_servico, MACRO_GRANDE_SP, caixas_
 from zonas_sp import classificar_rota_zona
 from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
-from regras.tipo_veiculo import classificar_tipo_veiculo, veiculo_comporta
+from regras.tipo_veiculo import classificar_tipo_veiculo_com_folga, veiculo_comporta
 from regras.tipo_carga_embarcador import carga_seca_confirmada
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ def selecionar_motorista_equitativo(
     rotas_30d: dict[int, int] | None = None,
     longas_7d: dict[int, int] | None = None,
     rota_longa: bool = False,
+    folga_fiorino_cx: int = 0,
 ) -> "MotoristaPreferencias | None":
     """
     Seleciona o motorista elegível com a menor carga do dia (Least-
@@ -122,6 +123,11 @@ def selecionar_motorista_equitativo(
     isso (estimar_tempo_rota > roteirizacao.rota_longa_horas) -- este
     módulo não estima tempo.
 
+    `folga_fiorino_cx` (Hugo, 03/10): rota que recebeu pedido de rota
+    fraca vai até 100 + folga caixas e continua sendo Fiorino (ver
+    regras/tipo_veiculo.classificar_tipo_veiculo_com_folga). Padrão 0 =
+    classificação de sempre.
+
     Tudo isto é ORDENAÇÃO, nunca filtro: nenhum motorista deixa de ser
     elegível por histórico, e nenhuma rota fica sem motorista por causa
     dessa ordem.
@@ -132,6 +138,7 @@ def selecionar_motorista_equitativo(
     """
     elegiveis, tipo_str, rodizio_str, veiculo_str = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
 
     if not elegiveis:
@@ -174,6 +181,7 @@ def _elegibilidade_sublote(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ):
     """Filtro de elegibilidade compartilhado por selecionar_motorista_equitativo
     (escolhe 1) e contar_motoristas_elegiveis (só quer o tamanho, pra ordenar
@@ -184,7 +192,7 @@ def _elegibilidade_sublote(
     zona = None if eh_viagem else classificar_rota_zona(sublote, api_key)
     dia_semana = data_rota.weekday()
 
-    tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+    tipo_veiculo = classificar_tipo_veiculo_com_folga(*caixas_e_enderecos(sublote), folga_fiorino_cx=folga_fiorino_cx)
     tipo_veiculo_necessario = tipo_veiculo.codigo if tipo_veiculo else None
 
     # Rodízio de placas de SP: só vale a pena checar a área do sublote
@@ -227,6 +235,7 @@ def contar_motoristas_elegiveis(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ) -> int:
     """
     Quantos motoristas do catálogo estão elegíveis pra esse sublote agora
@@ -242,6 +251,7 @@ def contar_motoristas_elegiveis(
     """
     elegiveis, _, _, _ = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
     return len(elegiveis)
 

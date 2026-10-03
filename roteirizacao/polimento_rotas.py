@@ -68,10 +68,15 @@ def _rota_valida(sublote: list[dict], api_key: str | None, tamanho_maximo: int, 
                  distancia_maxima_km: float | None, distancia_maxima_viagem_km: float | None,
                  eh_viagem_fn, base: tuple[float, float] | None = None,
                  km_acumulado_maximo: float | None = None,
-                 km_acumulado_maximo_viagem: float | None = None) -> bool:
+                 km_acumulado_maximo_viagem: float | None = None,
+                 tempo_maximo_horas: float = ROTA_TEMPO_MAXIMO_HORAS) -> bool:
     """Travas de producao na ORDEM DADA: tamanho, caixas, distancia
     par-a-par, km acumulado, orcamento de horas, janela. Rota vazia e
     valida (vai sumir).
+
+    `tempo_maximo_horas` (Hugo, 03/10): so a juncao das rotas fracas
+    passa um teto maior (10h30 na rota que recebe, ver rotas_fracas.py);
+    o polimento usa o padrao de 9h.
 
     `base` passada explicitamente pras chamadas de orcamento de horas e
     janela (fix final, 20/09): antes elas nao recebiam `base` e liam a
@@ -107,7 +112,7 @@ def _rota_valida(sublote: list[dict], api_key: str | None, tamanho_maximo: int, 
     limite_acumulado = limite_distancia(sublote, km_acumulado_maximo, km_acumulado_maximo_viagem, eh_viagem_fn)
     if limite_acumulado is not None and _km_acumulado_sequencial(sublote, api_key) > limite_acumulado:
         return False
-    if len(sublote) > 1 and not (estimar_tempo_rota(sublote, api_key, base) <= ROTA_TEMPO_MAXIMO_HORAS
+    if len(sublote) > 1 and not (estimar_tempo_rota(sublote, api_key, base) <= tempo_maximo_horas
                                  or _orcamento_inviavel_por_distancia(sublote, api_key, base)):
         return False
     return janela_respeitada(sublote, api_key, base)

@@ -75,6 +75,21 @@ class TestElegibilidade(unittest.TestCase):
         self.assertIsNone(alocacao_motoristas.selecionar_motorista_equitativo(
             ROTA_COMUM, DATA, [self.van, self.vuc, self.truck], {}))
 
+    def test_receptora_de_105_caixas_com_folga_aceita_fiorino(self):
+        # Hugo, 03/10: rota que recebeu pedido de rota fraca vai ate 110 cx e continua Fiorino
+        rota_105 = [{"address": "Rua X, 100", "dimension_3": 60}, {"address": "Rua Y, 1", "dimension_3": 45}]
+        escolhido = alocacao_motoristas.selecionar_motorista_equitativo(
+            rota_105, DATA, [self.van, self.fiorino], {}, folga_fiorino_cx=10)
+        self.assertEqual(escolhido.agent_id, 2)
+        self.assertEqual(alocacao_motoristas.contar_motoristas_elegiveis(
+            rota_105, DATA, [self.van, self.fiorino], {}, folga_fiorino_cx=10), 1)
+
+    def test_105_caixas_sem_folga_exige_van_hr(self):
+        rota_105 = [{"address": "Rua X, 100", "dimension_3": 60}, {"address": "Rua Y, 1", "dimension_3": 45}]
+        escolhido = alocacao_motoristas.selecionar_motorista_equitativo(
+            rota_105, DATA, [self.van, self.fiorino], {})
+        self.assertEqual(escolhido.agent_id, 1)
+
     def test_rota_vuc_sem_vuc_fica_sem_motorista_mesmo_com_truck(self):
         self.assertIsNone(alocacao_motoristas.selecionar_motorista_equitativo(
             ROTA_VUC, DATA, [self.fiorino, self.truck], {}))

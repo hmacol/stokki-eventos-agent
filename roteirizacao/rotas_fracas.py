@@ -10,7 +10,7 @@ de 40 caixas, ou seja, carga cheia com poucas paradas.
 
 Tres saidas, nesta ordem:
   1. juntar: distribuir os pedidos nas rotas vizinhas com folga de
-     distancia e de paradas (absorver_rotas_fracas);
+     distancia, paradas, caixas e tempo (absorver_rotas_fracas);
   2. segurar: adiar os pedidos por 1 dia util, dentro do prazo de 3 dias
      uteis da entrada (motivo_nao_segurar decide; quem grava e o
      criar_rotas_diarias.main, so no job automatico);
@@ -44,6 +44,8 @@ CAIXAS_ROTA_FRACA = 40
 FOLGA_DISTANCIA_KM = 20          # distancia entre dois pedidos da rota que recebe (normal: 15)
 FOLGA_KM_ACUMULADO_KM = 75       # km acumulado da rota que recebe (normal: 60)
 FOLGA_PARADAS_EXTRA = 2          # paradas alem do teto da rodada (16 + 2 = 18)
+FOLGA_CAIXAS_EXTRA = 10          # caixas alem do teto (100 + 10 = 110); continua Fiorino (Hugo, 03/10)
+FOLGA_TEMPO_MAXIMO_HORAS = 10.5  # tempo estimado da rota que recebe (normal: 9h) (Hugo, 03/10)
 PRAZO_ENTREGA_DIAS_UTEIS = 3
 
 TZ_BRASILIA = timezone(timedelta(hours=-3))
@@ -143,12 +145,17 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
                           km_acumulado_maximo_viagem: float | None = None,
                           eh_viagem_fn=None) -> tuple[list[list[dict]], dict]:
     """Distribui cada rota fraca nas vizinhas da mesma macro-regiao, com
-    folga de distancia/km acumulado/paradas SO na rota que recebe. Tudo
-    ou nada por rota fraca: se um pedido nao cabe em lugar nenhum, nada
-    muda. Diferente do esvaziar do polimento, nao exige queda de km -- o
-    ganho aqui e a rota a menos.
+    folga de distancia/km acumulado/paradas/caixas (110) e tempo (10h30)
+    SO na rota que recebe. Tudo ou nada por rota fraca: se um pedido nao
+    cabe em lugar nenhum, nada muda. Diferente do esvaziar do polimento,
+    nao exige queda de km -- o ganho aqui e a rota a menos.
 
-    Caixas, 9h, janela e macro-regiao nao cedem -- inclusive por parada:
+    Os participantes sao calculados UMA vez, no inicio: uma receptora que
+    chega a 101-110 caixas (veiculo grande pela regra sem folga, fora de
+    _rota_polivel) continua podendo receber de outra fraca -- ela segue
+    Fiorino (classificar_tipo_veiculo_com_folga, Hugo 03/10).
+
+    Janela e macro-regiao nao cedem -- inclusive por parada:
     um pedido so entra em rota da MESMA macro-regiao dele (uma parada de
     viagem numa fraca de Grande SP nao vai pra receptora de Grande SP,
     que passaria a ser tratada como viagem). Viagem nao ganha folga
@@ -169,11 +176,13 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     distancia_folga = None if distancia_maxima_km is None else max(distancia_maxima_km, FOLGA_DISTANCIA_KM)
     acumulado_folga = None if km_acumulado_maximo is None else max(km_acumulado_maximo, FOLGA_KM_ACUMULADO_KM)
     tamanho_folga = tamanho_maximo + FOLGA_PARADAS_EXTRA
+    volume_folga = volume_maximo + FOLGA_CAIXAS_EXTRA
 
     def _valida(rota: list[dict]) -> bool:
-        return _rota_valida(rota, api_key, tamanho_folga, volume_maximo, distancia_folga,
+        return _rota_valida(rota, api_key, tamanho_folga, volume_folga, distancia_folga,
                             distancia_maxima_viagem_km, eh_viagem_fn, base,
-                            acumulado_folga, km_acumulado_maximo_viagem)
+                            acumulado_folga, km_acumulado_maximo_viagem,
+                            tempo_maximo_horas=FOLGA_TEMPO_MAXIMO_HORAS)
 
     def _distancia_da_rota(ponto, rota: list[dict]) -> float:
         centro = _centroide(rota, api_key)

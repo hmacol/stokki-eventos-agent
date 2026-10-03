@@ -147,13 +147,12 @@ class TestRascunhoMarcaReceptora(unittest.TestCase):
     """roteirizar_para_rascunhos leva pro rascunho quem recebeu pedido de
     rota fraca (o painel usa o teto com folga nessas)."""
 
-    def test_recebeu_rota_fraca_no_rascunho(self):
-        receptora = [_servico(1), _servico(2)]
-        comum = [_servico(3), _servico(4)]
+    def _rascunhos(self, receptora, comum):
         plano = {"label": "Geral", "modelo": "X", "sublotes": [receptora, comum],
                  "rotas_fracas": {"juntadas": 1, "motivos": {}, "receptoras": {id(receptora)}}}
         historico = mock.Mock()
         historico.parametros_alocacao.return_value = {}
+        self.selecionar = mock.Mock(return_value=None)
         patches = dict(
             CatalogoMotoristas=mock.Mock(**{"carregar.return_value": mock.Mock(motoristas=[])}),
             carregar_ajustes_dia=mock.Mock(return_value={}), carregar_niveis=mock.Mock(return_value={}),
@@ -162,11 +161,28 @@ class TestRascunhoMarcaReceptora(unittest.TestCase):
             geocodificar=mock.Mock(return_value=None), planejar_sublotes=mock.Mock(return_value=[plano]),
             carregar_historico_justica=mock.Mock(return_value=historico),
             classificar_rota_viagem=mock.Mock(return_value=False), classificar_rota_zona=mock.Mock(return_value=None),
-            estimar_tempo_rota=mock.Mock(return_value=1.0), selecionar_motorista_equitativo=mock.Mock(return_value=None),
+            estimar_tempo_rota=mock.Mock(return_value=1.0), selecionar_motorista_equitativo=self.selecionar,
         )
         with mock.patch.multiple(crd, **patches):
-            rascunhos = crd.roteirizar_para_rascunhos(receptora + comum, TERCA, config={"google_maps": {}})
+            return crd.roteirizar_para_rascunhos(receptora + comum, TERCA, config={"google_maps": {}})
+
+    def test_recebeu_rota_fraca_no_rascunho(self):
+        rascunhos = self._rascunhos([_servico(1), _servico(2)], [_servico(3), _servico(4)])
         self.assertEqual([r["recebeu_rota_fraca"] for r in rascunhos], [True, False])
+
+    def test_receptora_de_105_caixas_continua_fiorino(self):
+        # Hugo, 03/10: a receptora vai ate 110 caixas sem virar veiculo grande;
+        # a rota comum com as mesmas 105 caixas continua VAN_HR
+        rascunhos = self._rascunhos([_servico(1, caixas=60), _servico(2, caixas=45)],
+                                    [_servico(3, caixas=60), _servico(4, caixas=45)])
+        self.assertEqual([r["tipo_veiculo"] for r in rascunhos], [None, "VAN_HR"])
+        folgas = [c.kwargs.get("folga_fiorino_cx", 0) for c in self.selecionar.call_args_list]
+        self.assertEqual(folgas, [rf.FOLGA_CAIXAS_EXTRA, 0])
+
+    def test_folga_fiorino_so_para_receptora(self):
+        receptora, comum = [_servico(1)], [_servico(2)]
+        self.assertEqual(crd._folga_fiorino(receptora, {id(receptora)}), rf.FOLGA_CAIXAS_EXTRA)
+        self.assertEqual(crd._folga_fiorino(comum, {id(receptora)}), 0)
 
 
 class TestFrase(unittest.TestCase):
