@@ -131,6 +131,14 @@ def _carregar_cliente():
             conn.close()
         if not g.cliente:
             session.clear()
+        elif g.cliente.get("trocar_pin") and request.endpoint not in _LIVRES_ANTES_DA_TROCA:
+            # Conta criada com o PIN padrao (02/10): nada abre antes da troca.
+            if request.path.startswith("/api/"):
+                return jsonify({"erro": "Antes de continuar, é preciso trocar o PIN."}), 403
+            return redirect(url_for("trocar_pin"))
+
+
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude"}
 
 
 def requer_cliente(f):
@@ -393,6 +401,38 @@ def definir_pin(token):
                                cnpj_formatado=auth.formatar_cnpj(v["cnpj"]), erro=erro)
     finally:
         conn.close()
+
+
+@app.route("/trocar-pin", methods=["GET", "POST"])
+def trocar_pin():
+    """Troca obrigatória de quem entrou com o PIN padrão (02/10). Só o
+    cliente logado; a equipe e quem já trocou vão direto pro início."""
+    if g.get("equipe"):
+        return redirect(url_for("inicio"))
+    if not g.cliente:
+        return redirect(url_for("login"))
+    if not g.cliente.get("trocar_pin"):
+        return redirect(url_for("inicio"))
+    erro = None
+    if request.method == "POST":
+        pin, conf = (request.form.get("pin") or "").strip(), (request.form.get("pin2") or "").strip()
+        conn = auth.conectar()
+        try:
+            auth.validar_pin_formato(pin)
+            if pin != conf:
+                raise ValueError("Os dois PINs não conferem.")
+            conta = auth.trocar_pin_obrigatorio(conn, g.cliente["cnpj"], pin)
+            session.clear()
+            session["cnpj"] = conta["cnpj"]
+            session["v"] = auth.versao_conta(conta)
+            session.permanent = True
+            logger.info(f"PIN padrao trocado cnpj={conta['cnpj']}")
+            return redirect(url_for("inicio"))
+        except ValueError as e:
+            erro = str(e)
+        finally:
+            conn.close()
+    return render_template("trocar_pin.html", erro=erro)
 
 
 # ── Telas ──────────────────────────────────────────────────────────────────────

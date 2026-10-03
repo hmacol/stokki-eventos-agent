@@ -14,6 +14,8 @@ local -- mesmo dados.db):
     py -3 portal_cliente/gerenciar_clientes.py desativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py ativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py link 29909190000146   # só imprime o link, sem e-mail
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456              # só mostra quem ganharia conta
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456 --confirmar  # cria; troca obrigatória no 1º acesso
 
 Grupo econômico (17/09) -- um login enxerga os pedidos de várias empresas:
     py -3 portal_cliente/gerenciar_clientes.py grupos                                   # lista os grupos
@@ -235,6 +237,10 @@ def main(argv=None) -> int:
     dp = sub.add_parser("definir-pin")
     dp.add_argument("cnpj")
     dp.add_argument("pin")
+    cp = sub.add_parser("criar-pin-padrao", help="cria conta com o mesmo PIN pra todo embarcador sem conta "
+                                                 "(menos cancelados e membros de grupo); troca obrigatória no 1º acesso")
+    cp.add_argument("pin")
+    cp.add_argument("--confirmar", action="store_true", help="sem isto só lista quem seria criado")
     ev = sub.add_parser("envio", help="parâmetros da máscara de envio (Stokki) por embarcador")
     ev.add_argument("cnpj")
     ev.add_argument("--regra", choices=sorted(envios.REGRAS_XML))
@@ -277,6 +283,18 @@ def main(argv=None) -> int:
                     print(f"  {auth.formatar_cnpj(e['cnpj'])}  {e['nome']}")
                 return 2
             _imprimir_checagem(checar(conn, achados[0]["cnpj"]))
+            return 0
+
+        if args.cmd == "criar-pin-padrao":
+            try:
+                auth.validar_pin_formato(args.pin)
+            except ValueError as e:
+                print(f"Nada gravado: {e}")
+                return 2
+            lista = auth.criar_contas_pin_padrao(conn, args.pin) if args.confirmar else auth.candidatos_pin_padrao(conn)
+            for e in lista:
+                print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
+            print(f"{len(lista)} conta(s) {'criada(s), com troca de PIN no 1º acesso' if args.confirmar else 'seriam criadas (rode com --confirmar)'}.")
             return 0
 
         if args.cmd == "grupos":

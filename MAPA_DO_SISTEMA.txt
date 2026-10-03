@@ -643,7 +643,9 @@
  app.py                    Flask: login, acompanhamento do dia, canhoto,
                            resposta de insucesso, notificações, envios,
                            /equipe, exportação xlsx.
- auth_cliente.py           CNPJ + PIN, grupos econômicos.
+ auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
+                           PIN padrão (clientes_portal.trocar_pin=1) só
+                           abre /trocar-pin até o cliente trocar.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright).
@@ -653,7 +655,9 @@
                            (oculta do cliente por padrão).
  link_canhoto.py           /c/<token>: canhoto sem login.
  bloqueio_area.py          Bloqueio de área não atendida.
- gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN.
+ gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
+                           criar-pin-padrao (lote; pula cancelados e membros
+                           de grupo; só grava com --confirmar).
  templates/                acompanhamento.html é a tela principal.
  test_*.py                 Testes.
 
