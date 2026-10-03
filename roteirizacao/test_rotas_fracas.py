@@ -153,6 +153,9 @@ class TestAbsorver(unittest.TestCase):
         patches = [mock.patch.object(m, "obter_coordenadas", _coords) for m in (rd, ot, pr, rf)]
         patches.append(mock.patch.object(rf, "macro_regiao_predominante_do_sublote",
                                          lambda sub, k=None: "GRANDE_SP"))
+        # macro de cada parada (filtro da receptora): sem isso a
+        # geocodificacao real rodaria
+        patches.append(mock.patch.object(rf, "macro_regiao_do_servico", lambda s, k=None: "GRANDE_SP"))
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -173,6 +176,7 @@ class TestAbsorver(unittest.TestCase):
         self.assertEqual(_ids(saida), [1, 3, 4])
         self.assertEqual(rel["juntadas"], 1)
         self.assertEqual(rel["motivos"], {})
+        self.assertEqual(rel["receptoras"], {id(saida[0])})
 
     def test_nao_junta_alem_da_folga(self):
         # ~22 km: passa dos 20
@@ -184,6 +188,7 @@ class TestAbsorver(unittest.TestCase):
         self.assertEqual(rel["juntadas"], 0)
         rota_fraca = next(s for s in saida if len(s) == 1)
         self.assertEqual(rel["motivos"], {id(rota_fraca): "vizinha mais próxima a 22 km"})
+        self.assertEqual(rel["receptoras"], set())
 
     def test_nao_cede_em_caixas(self):
         fraca = [_servico(1, 0.10, 0.00, caixas=30)]
@@ -214,6 +219,7 @@ class TestAbsorver(unittest.TestCase):
         grupos = sorted(sorted(s["id"] for s in sub) for sub in saida)
         self.assertEqual(grupos, [[1, 3, 4], [2, 5, 6]])
         self.assertEqual(rel["juntadas"], 1)
+        self.assertEqual(rel["receptoras"], {id(sub) for sub in saida})
 
     def test_tudo_ou_nada(self):
         # 1 caberia na vizinha, 9 nao cabe em lugar nenhum: nada muda
@@ -224,13 +230,15 @@ class TestAbsorver(unittest.TestCase):
         self.assertEqual(grupos, [[1, 9], [3, 4]])
         self.assertEqual(rel["juntadas"], 0)
         self.assertEqual(len(rel["motivos"]), 1)
+        # a vizinha chegou a receber o 1, mas a juncao foi desfeita
+        self.assertEqual(rel["receptoras"], set())
 
     def test_nivel4_nunca_participa(self):
         exclusiva = [_servico(7, 0.10, 0.00, nivel=4)]
         vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)]
         saida, rel = self._absorver([exclusiva, vizinha])
         self.assertEqual(sorted(len(s) for s in saida), [1, 2])
-        self.assertEqual(rel, {"juntadas": 0, "motivos": {}})
+        self.assertEqual(rel, {"juntadas": 0, "motivos": {}, "receptoras": set()})
 
     def test_macro_regiao_diferente_nao_junta(self):
         fraca = [_servico(1, 0.10, 0.00)]
@@ -248,6 +256,34 @@ class TestAbsorver(unittest.TestCase):
         self.assertEqual(rel["juntadas"], 1)
         # a que sobrou continua fraca e nao tem mais vizinha
         self.assertEqual(rel["motivos"], {id(saida[0]): "sem rota vizinha na mesma região"})
+        # recebeu e continuou fraca: esta nos dois
+        self.assertEqual(rel["receptoras"], {id(saida[0])})
+
+    def test_fraca_absorvida_depois_de_receber_nao_conta(self):
+        # 1 entra na 2 (as duas fracas); a 2, ainda fraca, entra na vizinha
+        # cheia. So a vizinha devolvida e receptora
+        um, dois = [_servico(1, 0.10, 0.00)], [_servico(2, 0.10, 0.001), _servico(5, 0.10, 0.0011)]
+        vizinha = [_servico(3, 0.10, 0.002, caixas=25), _servico(4, 0.10, 0.0021, caixas=25)]
+        saida, rel = self._absorver([um, dois, vizinha])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(_ids(saida), [1, 2, 3, 4, 5])
+        self.assertEqual(rel["receptoras"], {id(saida[0])})
+
+    def test_parada_de_fora_nao_entra_em_receptora_da_grande_sp(self):
+        # fraca quase toda Grande SP com 1 parada de Campinas: a vizinha
+        # Grande SP caberia pela distancia, mas a parada de fora nao pode
+        # entrar nela -- tudo ou nada, a fraca fica com o motivo
+        fraca = [_servico(1, 0.10, 0.00), _servico(2, 0.10, 0.002)]
+        vizinha = [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.0011, caixas=25)]
+        with mock.patch.object(rf, "macro_regiao_do_servico",
+                               lambda s, k=None: "Campinas" if s["id"] == 2 else "GRANDE_SP"):
+            saida, rel = self._absorver([fraca, vizinha])
+        grupos = sorted(sorted(s["id"] for s in sub) for sub in saida)
+        self.assertEqual(grupos, [[1, 2], [3, 4]])
+        self.assertEqual(rel["juntadas"], 0)
+        self.assertEqual(rel["receptoras"], set())
+        rota_fraca = next(s for s in saida if s[0]["id"] in (1, 2))
+        self.assertIn(id(rota_fraca), rel["motivos"])
 
     def test_pedido_sem_coordenada_nao_quebra(self):
         fraca = [_servico(1, None, None)]

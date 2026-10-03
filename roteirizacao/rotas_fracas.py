@@ -19,7 +19,6 @@ Tres saidas, nesta ordem:
 Retorno rapido: ROTAS_FRACAS_ATIVO = False volta ao comportamento de
 antes. SEGURAR_ATIVO liga so o adiamento.
 """
-import logging
 import re
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -37,8 +36,6 @@ from roteirizacao_dados import (  # noqa: E402
 from otimizacao_rotas import ordenar_2opt  # noqa: E402
 from polimento_rotas import _rota_polivel, _rota_valida, _melhor_insercao, _centroide  # noqa: E402
 from regioes_dia_fixo import regra_dia_fixo_do_servico  # noqa: E402
-
-logger = logging.getLogger(__name__)
 
 ROTAS_FRACAS_ATIVO = True
 SEGURAR_ATIVO = False            # liga depois da primeira semana em producao (decisao do Hugo)
@@ -151,14 +148,20 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     muda. Diferente do esvaziar do polimento, nao exige queda de km -- o
     ganho aqui e a rota a menos.
 
-    Caixas, 9h, janela e macro-regiao nao cedem. Viagem nao ganha folga
+    Caixas, 9h, janela e macro-regiao nao cedem -- inclusive por parada:
+    um pedido so entra em rota da MESMA macro-regiao dele (uma parada de
+    viagem numa fraca de Grande SP nao vai pra receptora de Grande SP,
+    que passaria a ser tratada como viagem). Viagem nao ganha folga
     (distancia de viagem ja e sem teto; o km acumulado de viagem fica
     como esta). Nivel 4, veiculo grande e destino inviavel ficam de fora
     (mesmo criterio de polimento_rotas._rota_polivel).
 
     Nunca perde nem duplica pedido. Devolve (sublotes, relatorio):
-    relatorio = {"juntadas": n, "motivos": {id(sublote): texto}} com o
-    motivo de cada rota que continuou fraca."""
+    relatorio = {"juntadas": n, "motivos": {id(sublote): texto},
+    "receptoras": {id(sublote)}} com o motivo de cada rota que continuou
+    fraca e as rotas devolvidas que receberam pedido de fraca (o painel
+    aplica nelas o mesmo teto com folga; uma receptora que terminou fraca
+    aparece nos dois)."""
     base = (base_lat, base_lng)
     rotas: list[list[dict]] = [list(s) for s in sublotes]
     participantes = [i for i, r in enumerate(rotas) if _rota_polivel(r, api_key, base)]
@@ -178,6 +181,7 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
 
     juntadas = 0
     motivos_por_indice: dict[int, str] = {}
+    receptoras_idx: set[int] = set()
     # menor primeiro: a rota mais fraca e a que mais precisa de lugar
     fracas = sorted((i for i in participantes if eh_rota_fraca(rotas[i])),
                     key=lambda i: (len(rotas[i]), _caixas(rotas[i]), i))
@@ -193,8 +197,10 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
             if not coube:
                 break
             ponto = obter_coordenadas(parada, api_key)
+            macro_parada = macro_regiao_do_servico(parada, api_key)
             coube = False
-            for j in sorted(vizinhas, key=lambda j: (_distancia_da_rota(ponto, rotas[j]), j)):
+            mesma_macro = [j for j in vizinhas if macro[j] == macro_parada]
+            for j in sorted(mesma_macro, key=lambda j: (_distancia_da_rota(ponto, rotas[j]), j)):
                 _, candidata = _melhor_insercao(parada, rotas[j], base, api_key)
                 sequenciada = ordenar_2opt(candidata, base_lat, base_lng, api_key)
                 if _valida(sequenciada):
@@ -204,6 +210,7 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
         if coube:
             rotas[i] = []
             juntadas += 1
+            receptoras_idx.update(j for j in vizinhas if rotas[j] is not backup[j])
         else:
             for j, original in backup.items():
                 rotas[j] = original
@@ -212,4 +219,6 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     # motivo so vale pra quem TERMINOU fraca (uma fraca que falhou pode
     # ter recebido outra depois e deixado de ser)
     motivos = {id(rotas[i]): m for i, m in motivos_por_indice.items() if rotas[i] and eh_rota_fraca(rotas[i])}
-    return [r for r in rotas if r], {"juntadas": juntadas, "motivos": motivos}
+    # receptora que depois foi absorvida por outra some da saida
+    receptoras = {id(rotas[j]) for j in receptoras_idx if rotas[j]}
+    return [r for r in rotas if r], {"juntadas": juntadas, "motivos": motivos, "receptoras": receptoras}

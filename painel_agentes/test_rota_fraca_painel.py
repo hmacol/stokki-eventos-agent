@@ -49,7 +49,9 @@ class TestColunaMotivo(unittest.TestCase):
         conn.close()
         conn = rascunhos_rota._conectar()
         try:
-            self.assertIn("rota_fraca_motivo", {r["name"] for r in conn.execute("PRAGMA table_info(rascunhos_rota)")})
+            colunas = {r["name"] for r in conn.execute("PRAGMA table_info(rascunhos_rota)")}
+            self.assertIn("rota_fraca_motivo", colunas)
+            self.assertIn("recebeu_rota_fraca", colunas)
         finally:
             conn.close()
 
@@ -62,6 +64,12 @@ class TestColunaMotivo(unittest.TestCase):
     def test_sem_motivo_fica_nulo(self):
         rascunhos_rota.criar_lote_rascunhos(date(2026, 9, 30), [self._rascunho()])
         self.assertIsNone(rascunhos_rota.listar_rascunhos_do_dia(date(2026, 9, 30))[0]["rota_fraca_motivo"])
+
+    def test_marca_de_receptora_gravada_volta_na_leitura(self):
+        rascunhos_rota.criar_lote_rascunhos(date(2026, 9, 30), [
+            self._rascunho(nome="Rota 1", recebeu_rota_fraca=True), self._rascunho(nome="Rota 2")])
+        rotas = sorted(rascunhos_rota.listar_rascunhos_do_dia(date(2026, 9, 30)), key=lambda r: r["nome"])
+        self.assertEqual([r["recebeu_rota_fraca"] for r in rotas], [1, 0])
 
 
 import planejamento_rotas  # noqa: E402
@@ -98,6 +106,50 @@ class TestEtiqueta(unittest.TestCase):
 
     def test_passou_de_quarenta_caixas_a_etiqueta_some(self):
         self.assertEqual(self._badges([_parada(1, 41)], self.MOTIVO), [])
+
+
+class TestTetoDaReceptora(unittest.TestCase):
+    """Rota que recebeu pedido de rota fraca foi formada com teto + 2
+    paradas e 20 km entre paradas (roteirizacao/rotas_fracas.py): o aviso
+    de limite usa o mesmo teto nela, e só nela."""
+
+    def setUp(self):
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+                        mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None),
+                        mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: 1.0)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _badges(self, paradas, recebeu):
+        return planejamento_rotas._badges_trava(
+            {"paradas": paradas, "tipo_veiculo": None, "tipo_rota": "GRANDE_SP", "recebeu_rota_fraca": recebeu})
+
+    def _distantes(self):
+        # ~18 km entre as duas: passa dos 15, cabe nos 20
+        a, b = _parada(1, 30), _parada(2, 30)
+        b["longitude"] = a["longitude"] + 0.176
+        return [a, b]
+
+    def test_receptora_com_17_paradas_nao_avisa(self):
+        self.assertEqual(self._badges([_parada(i, 5) for i in range(17)], 1), [])
+
+    def test_receptora_com_19_paradas_avisa_com_a_folga(self):
+        self.assertIn("19 paradas (máx 18, com folga de rota fraca)",
+                      self._badges([_parada(i, 5) for i in range(19)], 1))
+
+    def test_rota_comum_com_17_paradas_continua_avisando(self):
+        self.assertIn("17 paradas (máx 16)", self._badges([_parada(i, 5) for i in range(17)], 0))
+
+    def test_receptora_com_18_km_nao_avisa(self):
+        self.assertEqual(self._badges(self._distantes(), 1), [])
+
+    def test_rota_comum_com_18_km_continua_avisando(self):
+        self.assertIn("paradas a 18km entre si (máx 15km)", self._badges(self._distantes(), 0))
+
+    def test_receptora_alem_de_20_km_avisa_com_a_folga(self):
+        paradas = self._distantes()
+        paradas[1]["longitude"] = paradas[0]["longitude"] + 0.25  # ~25 km
+        self.assertIn("paradas a 25km entre si (máx 20km, com folga de rota fraca)", self._badges(paradas, 1))
 
 
 if __name__ == "__main__":

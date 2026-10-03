@@ -421,7 +421,7 @@ def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key
     rotas_fracas.py). Roda depois do polimento. Devolve (sublotes,
     relatório); sem base, com a chave desligada ou com falha, devolve a
     entrada intocada e o relatório vazio."""
-    vazio = {"juntadas": 0, "motivos": {}}
+    vazio = {"juntadas": 0, "motivos": {}, "receptoras": set()}
     if not rotas_fracas.ROTAS_FRACAS_ATIVO or not coords_base:
         return sublotes, vazio
     try:
@@ -557,7 +557,7 @@ def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None,
     ja_segurados: set[str] | None = None
     pode_segurar = rotas_fracas.SEGURAR_ATIVO
     for plano in planos:
-        fracas = plano.get("rotas_fracas") or {"juntadas": 0, "motivos": {}}
+        fracas = plano.get("rotas_fracas") or {"juntadas": 0, "motivos": {}, "receptoras": set()}
         resumo["juntadas"] += fracas["juntadas"]
         motivos = fracas["motivos"]
         restantes = []
@@ -694,6 +694,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     for plano in planos:
         label, sublotes = plano["label"], plano["sublotes"]
         motivos_fracas = (plano.get("rotas_fracas") or {}).get("motivos") or {}
+        receptoras = (plano.get("rotas_fracas") or {}).get("receptoras") or set()
         for sublote in sublotes:
             nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
             indice += 1
@@ -727,6 +728,7 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                 "km_estimado": km_estimado,
                 "horas_estimadas": round(horas_sublote, 2),
                 "rota_fraca_motivo": motivos_fracas.get(id(sublote)),
+                "recebeu_rota_fraca": id(sublote) in receptoras,
                 "sublote": sublote,
             })
             veiculo_str = f" [veículo: {tipo_veiculo.nome}]" if tipo_veiculo else ""
@@ -921,7 +923,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         rascunhos_acumulados: list[dict] = []
         historico = carregar_historico_justica(data_alvo, config)
 
-        def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]], motivos_fracas: dict[int, str]):
+        def _rotear_particao(label: str, sublotes_do_dia: list[list[dict]], motivos_fracas: dict[int, str],
+                             receptoras: set[int]):
             nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_sem_motorista
 
             # Ordena por escassez de motorista ANTES de alocar (mais restrito
@@ -995,6 +998,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         "km_estimado": km_estimado,
                         "horas_estimadas": round(horas_sublote, 2),
                         "rota_fraca_motivo": motivos_fracas.get(id(sublote)),
+                        "recebeu_rota_fraca": id(sublote) in receptoras,
                         "sublote": sublote,
                     })
                     logger.info(f"[RASCUNHO] [{label}] '{nome_rota}' [{tipo_rota_str}] com {len(sublote)} pedido(s) "
@@ -1059,7 +1063,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         for plano in planos:
             logger.info(f"Partição '{plano['label']}': modelo {plano['modelo']}, {len(plano['sublotes'])} rota(s).")
             modelos_vencedores[plano["label"]] = plano["modelo"]
-            _rotear_particao(plano["label"], plano["sublotes"], plano["rotas_fracas"]["motivos"])
+            _rotear_particao(plano["label"], plano["sublotes"], plano["rotas_fracas"]["motivos"],
+                             plano["rotas_fracas"]["receptoras"])
 
         if gerar_rascunho and rascunhos_acumulados:
             lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)

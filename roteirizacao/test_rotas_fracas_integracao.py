@@ -47,7 +47,7 @@ class TestPlanejarSublotes(unittest.TestCase):
 
     def test_plano_traz_o_relatorio_e_cobre_tudo(self):
         planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
-        self.assertEqual(set(planos[0]["rotas_fracas"]), {"juntadas", "motivos"})
+        self.assertEqual(set(planos[0]["rotas_fracas"]), {"juntadas", "motivos", "receptoras"})
         ids = sorted(s["id"] for p in planos for sub in p["sublotes"] for s in sub)
         self.assertEqual(ids, sorted(s["id"] for s in self.servicos))
 
@@ -55,14 +55,14 @@ class TestPlanejarSublotes(unittest.TestCase):
         with mock.patch.object(rf, "ROTAS_FRACAS_ATIVO", False), \
              mock.patch.object(rf, "absorver_rotas_fracas", side_effect=AssertionError("nao deveria rodar")):
             planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
-        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}})
+        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set()})
 
     def test_falha_na_juncao_nao_derruba_o_plano(self):
         with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=RuntimeError("boom")):
             planos = crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
         ids = sorted(s["id"] for p in planos for sub in p["sublotes"] for s in sub)
         self.assertEqual(ids, sorted(s["id"] for s in self.servicos))
-        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}})
+        self.assertEqual(planos[0]["rotas_fracas"], {"juntadas": 0, "motivos": {}, "receptoras": set()})
 
     def test_sem_base_nao_chama_a_juncao(self):
         with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=AssertionError("nao deveria rodar")):
@@ -141,6 +141,32 @@ class TestAplicarSegurar(unittest.TestCase):
         resumo = crd._aplicar_segurar(planos, TERCA, None, modo_teste=False)
         self.assertEqual(planos[0]["sublotes"], [self.normal])
         self.assertEqual((resumo["juntadas"], resumo["sobraram"]), (0, 0))
+
+
+class TestRascunhoMarcaReceptora(unittest.TestCase):
+    """roteirizar_para_rascunhos leva pro rascunho quem recebeu pedido de
+    rota fraca (o painel usa o teto com folga nessas)."""
+
+    def test_recebeu_rota_fraca_no_rascunho(self):
+        receptora = [_servico(1), _servico(2)]
+        comum = [_servico(3), _servico(4)]
+        plano = {"label": "Geral", "modelo": "X", "sublotes": [receptora, comum],
+                 "rotas_fracas": {"juntadas": 1, "motivos": {}, "receptoras": {id(receptora)}}}
+        historico = mock.Mock()
+        historico.parametros_alocacao.return_value = {}
+        patches = dict(
+            CatalogoMotoristas=mock.Mock(**{"carregar.return_value": mock.Mock(motoristas=[])}),
+            carregar_ajustes_dia=mock.Mock(return_value={}), carregar_niveis=mock.Mock(return_value={}),
+            carregar_horarios=mock.Mock(return_value={}), carregar_ajustes_manuais=mock.Mock(return_value={}),
+            carregar_tipos_carga_por_sender=mock.Mock(return_value={}), _preparar_janelas=mock.Mock(),
+            geocodificar=mock.Mock(return_value=None), planejar_sublotes=mock.Mock(return_value=[plano]),
+            carregar_historico_justica=mock.Mock(return_value=historico),
+            classificar_rota_viagem=mock.Mock(return_value=False), classificar_rota_zona=mock.Mock(return_value=None),
+            estimar_tempo_rota=mock.Mock(return_value=1.0), selecionar_motorista_equitativo=mock.Mock(return_value=None),
+        )
+        with mock.patch.multiple(crd, **patches):
+            rascunhos = crd.roteirizar_para_rascunhos(receptora + comum, TERCA, config={"google_maps": {}})
+        self.assertEqual([r["recebeu_rota_fraca"] for r in rascunhos], [True, False])
 
 
 class TestFrase(unittest.TestCase):

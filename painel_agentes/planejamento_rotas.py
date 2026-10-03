@@ -185,6 +185,11 @@ DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -
 # (constantes separadas de propósito, sem import entre os dois módulos).
 PARADAS_ROTA_FRACA = 7
 CAIXAS_ROTA_FRACA = 40
+# Folga que a junção dá SÓ à rota que recebe pedido de rota fraca (mesmos
+# valores de rotas_fracas.FOLGA_PARADAS_EXTRA e FOLGA_DISTANCIA_KM): o
+# aviso de limite usa esse teto no rascunho com recebeu_rota_fraca.
+FOLGA_PARADAS_ROTA_FRACA = 2
+FOLGA_DISTANCIA_ROTA_FRACA_KM = 20
 # Orçamento de horas por rota: TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_
 # HORAS e ROTA_TEMPO_MAXIMO_HORAS vêm IMPORTADOS de roteirizacao_dados
 # (25/08 -- antes eram cópias locais, e o estimador do badge era uma
@@ -372,6 +377,16 @@ def _badges_trava(rascunho: dict) -> list[str]:
         badges.append(f"motorista espera ~{sim['espera_h']:.1f}h por cliente abrir (ordem atual)")
     tipo_veiculo = tipo_por_codigo(rascunho.get("tipo_veiculo"))
 
+    # Rota que recebeu pedido de rota fraca foi formada com teto de
+    # paradas e de distância maiores (roteirizacao/rotas_fracas.py) --
+    # aviso só quando estoura esse teto. Caixas, tempo e janela não mudam.
+    if rascunho.get("recebeu_rota_fraca"):
+        max_paradas = TAMANHO_MAXIMO_ROTA + FOLGA_PARADAS_ROTA_FRACA
+        max_distancia_km = max(DISTANCIA_MAXIMA_ROTA_KM, FOLGA_DISTANCIA_ROTA_FRACA_KM)
+        nota_folga = ", com folga de rota fraca"
+    else:
+        max_paradas, max_distancia_km, nota_folga = TAMANHO_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, ""
+
     if tipo_veiculo:
         enderecos_distintos = {p["endereco"] for p in paradas}
         if caixas > tipo_veiculo.volume_maximo_cx:
@@ -382,8 +397,8 @@ def _badges_trava(rascunho: dict) -> list[str]:
                 f"(máx {tipo_veiculo.max_enderecos_distintos} p/ {tipo_veiculo.nome})"
             )
     else:
-        if len(paradas) > TAMANHO_MAXIMO_ROTA:
-            badges.append(f"{len(paradas)} paradas (máx {TAMANHO_MAXIMO_ROTA})")
+        if len(paradas) > max_paradas:
+            badges.append(f"{len(paradas)} paradas (máx {max_paradas}{nota_folga})")
         if caixas > VOLUME_MAXIMO_ROTA:
             badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
 
@@ -424,8 +439,8 @@ def _badges_trava(rascunho: dict) -> list[str]:
         for i in range(len(coords)):
             for j in range(i + 1, len(coords)):
                 dist = _distancia_km(*coords[i], *coords[j])
-                if dist > DISTANCIA_MAXIMA_ROTA_KM:
-                    badges.append(f"paradas a {dist:.0f}km entre si (máx {DISTANCIA_MAXIMA_ROTA_KM}km)")
+                if dist > max_distancia_km:
+                    badges.append(f"paradas a {dist:.0f}km entre si (máx {max_distancia_km}km{nota_folga})")
                     break
             else:
                 continue
