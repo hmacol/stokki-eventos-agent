@@ -75,6 +75,7 @@ logger = logging.getLogger("replay_rotas")
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga
 import roteirizacao_dados as rd
 import metricas_plano as mp
+import rotas_fracas
 
 COORDS_BASE_PADRAO = (-23.4930, -46.6640)  # Rua Zilda, Casa Verde Alta (aprox.); use --base pra sobrescrever
 ARQUIVO_RESULTADO = _RAIZ_LOCAL / "dados" / "replay_resultado.txt"
@@ -133,14 +134,16 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
     rd.definir_hora_saida_base(rd.HORA_INICIO_ROTA)
     enviado = mp.metricas_plano(mp.plano_de_sublotes(rotas_enviadas, _coords), coords_base,
                                 horas=_horas(rotas_enviadas), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
-                                caixas=_caixas(rotas_enviadas))
+                                caixas=_caixas(rotas_enviadas), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
+                                caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA)
     planos = crd.planejar_sublotes([dict(s) for s in servicos], coords_base, None, data_alvo,
                                    sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
                                    registrar_historico=False)
     sublotes = [sub for p in planos for sub in p["sublotes"]]
     novo = mp.metricas_plano(mp.plano_de_sublotes(sublotes, _coords), coords_base,
                              horas=_horas(sublotes), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
-                             caixas=_caixas(sublotes))
+                             caixas=_caixas(sublotes), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
+                             caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA)
     return enviado, novo
 
 
@@ -184,7 +187,6 @@ def main(argv=None) -> int:
     if args.separar_carga:
         crd.SEPARAR_POR_TIPO_CARGA = True
     if args.sem_rotas_fracas:
-        import rotas_fracas
         rotas_fracas.ROTAS_FRACAS_ATIVO = False
     coords_base = tuple(float(x) for x in args.base.split(",")) if args.base else COORDS_BASE_PADRAO
 

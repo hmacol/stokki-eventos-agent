@@ -5,7 +5,9 @@ Rodar (da raiz): py -3.11 -m unittest roteirizacao.test_replay_rotas -v"""
 import sqlite3
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -52,6 +54,21 @@ class LeituraTestCase(unittest.TestCase):
     def test_dia_sem_rotas(self):
         servicos, rotas = rr.servicos_do_dia(_banco(), "2026-09-18", {})
         self.assertEqual((servicos, rotas), ([], []))
+
+
+class CorteDaRotaFracaTestCase(unittest.TestCase):
+    """O replay conta rota fraca com o MESMO corte da roteirizacao
+    (rotas_fracas.py), nao com o padrao de metricas_plano."""
+
+    def test_metricas_usam_o_corte_de_rotas_fracas(self):
+        import criar_rotas_diarias as crd
+        import rotas_fracas
+        rota = [{"id": 1, "latitude": -23.5, "longitude": -46.6, "dimension_3": 1, "_nivel_dificuldade": 1}]
+        with mock.patch.object(rotas_fracas, "PARADAS_ROTA_FRACA", 3),              mock.patch.object(rotas_fracas, "CAIXAS_ROTA_FRACA", 11),              mock.patch.object(crd, "planejar_sublotes", return_value=[{"sublotes": [rota]}]),              mock.patch.object(rr.mp, "metricas_plano", return_value={}) as metricas:
+            rr.rodar_dia(rota, [rota], (-23.49, -46.66), date(2026, 9, 17))
+        self.assertEqual(metricas.call_count, 2)
+        for chamada in metricas.call_args_list:
+            self.assertEqual((chamada.kwargs["paradas_fraca"], chamada.kwargs["caixas_fraca"]), (3, 11))
 
 
 if __name__ == "__main__":
