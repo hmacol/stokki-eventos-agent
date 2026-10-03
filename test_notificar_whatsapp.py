@@ -749,3 +749,28 @@ class TestRotasFracas(unittest.TestCase):
     def test_falha_no_envio_nao_levanta(self):
         with patch.object(nw, "despachar", side_effect=RuntimeError("boom")):
             self.assertEqual(nw.avisar_rotas_fracas(self.ALVO, self._resumo(juntadas=1), {}), "falhou")
+
+
+class TestRotasFracasUmaPorData(_ComBanco):
+    """Spec 6.8: deduplicada por data alvo, sem limite de tempo (a janela
+    de 2h do despachar nao basta se o job roda de novo no dia seguinte)."""
+    RESUMO = {"juntadas": 1, "seguradas": 0, "pedidos_segurados": 0, "data_nova": _dt.date(2026, 10, 1),
+              "sobraram": 0, "pedidos_sobraram": 0, "caixas_sobraram": 0}
+
+    def avisar(self, alvo, agora=AGORA):
+        return nw.avisar_rotas_fracas(alvo, self.RESUMO, _config(), conn=self.conn, agora=agora, dormir=self.dormir)
+
+    def test_mesma_data_nao_repete_nem_um_dia_depois(self):
+        self.assertEqual(self.avisar(_dt.date(2026, 9, 30)), "enviado")
+        self.assertEqual(self.avisar(_dt.date(2026, 9, 30), agora=AGORA + timedelta(days=1)), "nao_enviado")
+        self.assertEqual(self.enviar.call_count, 1)
+
+    def test_data_diferente_envia(self):
+        self.assertEqual(self.avisar(_dt.date(2026, 9, 30)), "enviado")
+        self.assertEqual(self.avisar(_dt.date(2026, 10, 1), agora=AGORA + timedelta(days=1)), "enviado")
+        self.assertEqual(self.enviar.call_count, 2)
+
+    def test_banco_sem_a_tabela_ainda_envia(self):
+        # primeira mensagem da vida: ler o historico falha (tabela nao existe) e nao pode barrar
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0], 0)
+        self.assertEqual(self.avisar(_dt.date(2026, 9, 30)), "enviado")

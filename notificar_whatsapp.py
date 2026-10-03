@@ -504,14 +504,38 @@ def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config:
         return "falhou"
 
 
+def _ja_enviada_alguma_vez(conn, origem: str, assinatura: str) -> bool:
+    """Ja saiu (situacao 'enviado') alguma vez, sem limite de tempo? Falha
+    ao ler (banco travado, tabela que ainda nao existe) conta como nao."""
+    fechar = conn is None
+    try:
+        if fechar:
+            conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            return conn.execute(
+                "SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
+                "AND situacao = 'enviado' LIMIT 1", (origem, assinatura)).fetchone() is not None
+        finally:
+            if fechar:
+                conn.close()
+    except Exception as exc:
+        logger.info(f"Historico do WhatsApp ilegivel ({origem}), seguindo sem deduplicar: {exc}")
+        return False
+
+
 def avisar_rotas_fracas(data_alvo, resumo: dict, config: dict, modo_teste: bool = False, **kw) -> str:
-    """Uma mensagem por data alvo (a assinatura barra a repeticao se o
-    job rodar de novo dentro da janela)."""
+    """Uma mensagem por data alvo, sem limite de tempo (spec 6.8): a janela
+    de repeticao do despachar so cobre 2h, e o job pode rodar de novo no
+    dia seguinte pra mesma data."""
     try:
         if not (resumo.get("juntadas") or resumo.get("seguradas") or resumo.get("sobraram")):
             return "nao_relevante"
-        return despachar(config, "criar_rotas_diarias", "rotas_fracas", texto_rotas_fracas(data_alvo, resumo),
-                         f"rotas_fracas:{data_alvo.isoformat()}", modo_teste=modo_teste, **kw)
+        origem, assinatura = "criar_rotas_diarias", f"rotas_fracas:{data_alvo.isoformat()}"
+        if _cfg(config).get("ativo") and not modo_teste and _ja_enviada_alguma_vez(kw.get("conn"), origem, assinatura):
+            logger.info(f"WhatsApp nao enviado ({origem}): rotas fracas de {data_alvo:%d/%m} ja avisadas.")
+            return "nao_enviado"
+        return despachar(config, origem, "rotas_fracas", texto_rotas_fracas(data_alvo, resumo),
+                         assinatura, modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
