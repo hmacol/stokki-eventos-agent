@@ -112,12 +112,16 @@ class TestAplicarSegurar(unittest.TestCase):
         self.assertEqual((data_alvo, data_nova, motivo), (TERCA, QUARTA, "2 pedidos, 9 caixas"))
         self.assertEqual((resumo["seguradas"], resumo["pedidos_segurados"], resumo["sobraram"]), (1, 2, 0))
 
-    def test_modo_teste_tira_da_lista_mas_nao_grava(self):
+    def test_modo_teste_nao_tira_da_lista_nem_grava(self):
+        # Hugo, 03/10: em teste a rota continua no plano (rascunho de teste
+        # mostra tudo), com o motivo dizendo que seria segurada, e conta
+        # como segurada no resumo (WhatsApp de teste mostra o efeito)
         with mock.patch.object(rf, "SEGURAR_ATIVO", True):
             resumo = crd._aplicar_segurar(self.planos, TERCA, None, modo_teste=True)
-        self.assertEqual(self.planos[0]["sublotes"], [self.normal])
+        self.assertEqual(self.planos[0]["sublotes"], [self.fraca, self.normal])
         self.marcar.assert_not_called()
-        self.assertEqual(resumo["seguradas"], 1)
+        self.assertEqual(self.planos[0]["rotas_fracas"]["motivos"][id(self.fraca)], "[teste] seria segurada para 30/09")
+        self.assertEqual((resumo["seguradas"], resumo["pedidos_segurados"], resumo["sobraram"]), (1, 2, 0))
 
     def test_um_pedido_que_nao_pode_esperar_trava_a_rota(self):
         with mock.patch.object(rf, "SEGURAR_ATIVO", True), \

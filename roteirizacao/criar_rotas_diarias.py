@@ -560,7 +560,12 @@ def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None,
     a rota que continuou fraca depois da junção não é criada se TODOS os
     pedidos dela puderem esperar 1 dia útil. Roda antes de alocar
     motorista. MUTA `planos`: tira os sublotes segurados e completa o
-    motivo dos que ficaram. Devolve o resumo pro log e pro WhatsApp."""
+    motivo dos que ficaram. Devolve o resumo pro log e pro WhatsApp.
+
+    Em `modo_teste` (Hugo, 03/10) nada é gravado e a rota que seria
+    segurada NÃO sai do plano: fica com o motivo "[teste] seria segurada
+    para dd/mm" e conta como segurada no resumo (o WhatsApp de teste
+    mostra o efeito)."""
     data_nova = rotas_fracas.proximo_dia_util(data_alvo)
     resumo = {"juntadas": 0, "seguradas": 0, "pedidos_segurados": 0, "data_nova": data_nova,
               "sobraram": 0, "pedidos_sobraram": 0, "caixas_sobraram": 0}
@@ -595,6 +600,10 @@ def _aplicar_segurar(planos: list[dict], data_alvo: date, gmaps_key: str | None,
                             f"({rotas_fracas.resumo_da_rota(sub)}) para {data_nova:%d/%m/%Y}: {codigos}")
                 resumo["seguradas"] += 1
                 resumo["pedidos_segurados"] += len(sub)
+                if modo_teste:
+                    motivos[id(sub)] = f"[teste] seria segurada para {data_nova:%d/%m}"
+                    restantes.append(sub)
+                    continue
                 del motivos[id(sub)]
                 continue
             if impedimento:
