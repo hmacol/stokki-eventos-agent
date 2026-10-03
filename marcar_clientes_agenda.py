@@ -14,8 +14,8 @@ a rotina NÃO grava mais sozinha. Ela deixa o destinatário PENDENTE na
 tabela clientes_agenda_marcados, avisa no WhatsApp (grupo interno) com
 o link da tela do painel (/clientes-agenda), e o Hugo decide lá:
 Autorizar grava AGENDA na planilha (regras/clientes_agendamento.
-marcar_agendamento, com backup); Não marcar tira o cliente da fila pra
-sempre. Quem já está como AGENDA na planilha entra direto como
+marcar_agendamento; o backup é o diário das 03h pro GCS); Não marcar
+tira o cliente da fila pra sempre. Quem já está como AGENDA na planilha entra direto como
 AUTORIZADO (se o Hugo apagar depois, a rotina respeita).
 
 Fonte: agendamentos_pedido com status RESPONDIDO e data preenchida. Data
@@ -200,8 +200,8 @@ def listar(situacao: str | None = None) -> list[dict]:
 
 
 def decidir(documento: str, autorizar: bool, caminho_planilha) -> dict:
-    """Decisão do Hugo na tela. Autorizar grava AGENDA na planilha na hora
-    (com backup); Não marcar só muda a situação. Só vale pra PENDENTE."""
+    """Decisão do Hugo na tela. Autorizar grava AGENDA na planilha na hora;
+    Não marcar só muda a situação. Só vale pra PENDENTE."""
     doc = _so_digitos(documento)
     conn = _conectar()
     try:
@@ -211,10 +211,9 @@ def decidir(documento: str, autorizar: bool, caminho_planilha) -> dict:
     if not row or row["situacao"] != PENDENTE:
         raise ValueError(f"{formatar_documento(doc)} não está aguardando decisão.")
 
-    resultado = {"documento": doc, "nome": row["nome"] or "", "backup": None}
+    resultado = {"documento": doc, "nome": row["nome"] or ""}
     if autorizar:
         gravacao = marcar_agendamento(caminho_planilha, {doc: row["nome"] or ""})
-        resultado["backup"] = gravacao["backup"]
         resultado["incluido"] = doc in gravacao["incluidos"]
         situacao = AUTORIZADO
     else:
@@ -227,7 +226,7 @@ def decidir(documento: str, autorizar: bool, caminho_planilha) -> dict:
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"{row['nome']} ({doc}): {ROTULOS[situacao]}" + (f" -- backup {resultado['backup']}" if resultado["backup"] else ""))
+    logger.info(f"{row['nome']} ({doc}): {ROTULOS[situacao]}")
     resultado["situacao"] = situacao
     return resultado
 

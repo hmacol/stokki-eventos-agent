@@ -15,7 +15,7 @@ Idioma do projeto: português (código, comentários, commits, respostas). Comen
 - Banco: `dados/dados.db` (SQLite, 45+ tabelas). O de produção é o da VPS; o local está congelado desde 17/08 e serve só pra desenvolvimento.
 - Painel local (`painel_agentes/`, porta 8070) pode estar rodando de verdade. Teste **sempre em outra porta**:
   `py -3.11 -c "import painel_agentes; painel_agentes.app.run(host='127.0.0.1', port=8099)"` (de dentro de `painel_agentes/`). Nunca `Stop-Process` em PID que já existia antes da sessão.
-- Só o `print_agent/` continua no Agendador do Windows (04h05 até 07h, a cada 10 min). O resto foi pra VPS.
+- Só o `print_agent/` continua no Agendador do Windows (04h05 até 07h, a cada 10 min). O resto foi pra VPS. Tarefa nova: `schtasks /Create` sem admin (`Register-ScheduledTask` S4U dá acesso negado); `.ps1` sem BOM corrompe acento.
 
 ## Produção (VPS Hostinger, Ubuntu 24.04)
 
@@ -39,10 +39,10 @@ Idioma do projeto: português (código, comentários, commits, respostas). Comen
 ## Verificação antes de entregar
 
 - `py -3.11 -m py_compile <arquivos>` em tudo que editou (o hook faz isso automático em Edit/Write).
-- Testes existentes: `py -3.11 -m unittest <modulo>` (ex.: `roteirizacao/test_*.py`, `portal_cliente/test_*.py`, `regras/test_*.py`). Não há pytest configurado.
+- Testes existentes: `py -3.11 -m unittest <modulo>` (ex.: `roteirizacao/test_*.py`, `portal_cliente/test_*.py`, `regras/test_*.py`). Não há pytest configurado. Nunca misture `roteirizacao`/`nucleo` com `painel_agentes` no mesmo comando (o sys.path faz `painel_agentes.py` ganhar do pacote); testes de `painel_agentes` rodam de dentro de `painel_agentes/`.
 - Scripts de lote aceitam `--modo-teste` (não escreve em Stokki/Vuupt, e-mails vão pra `forcar_destino`). Use antes de qualquer execução real.
 - Playwright/Stokki: use as funções prontas em `stokki/` (`StokkiSession`, `contar_pedidos`, `listar_transportadoras`...). Chamada manual ao DataTables da Stokki dá 500.
-- Vuupt: `created_at`/`start_at` vêm em UTC sem fuso. Códigos de pedido variam (`#PS-1`, `PS-1`, `#PS-1-R2`): normalizar com `normalizar_order_number` antes de comparar.
+- Vuupt: `created_at`/`start_at` vêm em UTC sem fuso (exceção conhecida, bug não corrigido: `portal_cliente/dados_cliente._parse_dt` trata data sem fuso como São Paulo). Códigos de pedido variam (`#PS-1`, `PS-1`, `#PS-1-R2`): normalizar com `normalizar_order_number` antes de comparar.
 
 ## Trabalho em paralelo (importante)
 

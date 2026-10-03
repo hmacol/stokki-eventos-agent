@@ -269,6 +269,19 @@ class RotasGrupoTest(_BancoTemporario):
         self.assertEqual(r.status_code, 403)
         listar.assert_not_called()
 
+    def test_reenviar_erros_na_empresa_do_grupo_escolhida(self):
+        cfg = {"regra_xml": "nenhuma", "envio_ativo": True, "client_id": 61}
+        with mock.patch.object(self.portal.envios, "reenviar_erros", return_value={"na_fila": 2, "liberacao": 1}) as reenviar, \
+             mock.patch.object(self.portal.envios, "config_stokki_cliente", return_value=cfg):
+            r = self.cli.post("/api/envios/reenviar-erros", base_url=self.HTTPS, headers={"X-Portal-Empresa": MEMBRO_A})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(reenviar.call_args.args[1], MEMBRO_A)
+            self.assertIn("3 pedidos reenviados", r.get_json()["mensagem"])
+            self.assertIn("1 aguardando liberação", r.get_json()["mensagem"])
+            r = self.cli.post("/api/envios/reenviar-erros", base_url=self.HTTPS, headers={"X-Portal-Empresa": MEMBRO_B})
+            self.assertEqual(r.status_code, 403)
+            self.assertEqual(reenviar.call_count, 1)
+
 
 class ValidarItemDoGrupoTest(unittest.TestCase):
     def setUp(self):

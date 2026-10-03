@@ -81,6 +81,16 @@ TIPOS = {
                      "para o dia fixo da região.",
         "default": True,
     },
+    # Unico tipo que sai por WhatsApp, nao por e-mail (Hugo, 29/09/2026): so
+    # vale com um numero gravado na coluna `whatsapp`. Ligado por padrao pra
+    # preencher o numero bastar; a chave serve pra pausar sem apagar o numero.
+    "chamado_sem_resposta": {
+        "grupo": "whatsapp",
+        "rotulo": "Chamado aguardando sua resposta",
+        "descricao": "Se a Fresh Log responder um chamado e você não retornar em 10 minutos, avisamos "
+                     "neste WhatsApp com o link do chamado. Só em horário de atendimento.",
+        "default": True,
+    },
 }
 TIPOS_OPT_IN_SE_NOTIFICAR_EMAIL_0 = ("nfs_em_rota", "entrega_concluida", "resumo_diario",
                                      "faltas_recebimento")
@@ -88,6 +98,8 @@ CHAVES = ("sender_id", "stkkc_id")
 MAX_EMAILS = 5
 
 _RE_EMAIL = re.compile(r"[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+")
+# 55 + DDD (sem zero) + numero de 8 ou 9 digitos (celular comeca com 9).
+_RE_WHATSAPP = re.compile(r"55[1-9]\d(9\d{8}|[2-5]\d{7})")
 
 
 def _agora() -> str:
@@ -111,9 +123,11 @@ def _garantir_tabela(conn: sqlite3.Connection) -> None:
     colunas = ", ".join(f"{tipo} INTEGER NOT NULL DEFAULT {int(info['default'])}" for tipo, info in TIPOS.items())
     conn.execute(
         "CREATE TABLE IF NOT EXISTS preferencias_notificacao ("
-        "cnpj_embarcador TEXT PRIMARY KEY, emails TEXT NOT NULL DEFAULT '', "
+        "cnpj_embarcador TEXT PRIMARY KEY, emails TEXT NOT NULL DEFAULT '', whatsapp TEXT NOT NULL DEFAULT '', "
         f"{colunas}, atualizado_em TEXT, atualizado_por TEXT)"
     )
+    if "whatsapp" not in _colunas(conn):
+        conn.execute("ALTER TABLE preferencias_notificacao ADD COLUMN whatsapp TEXT NOT NULL DEFAULT ''")
     # CREATE TABLE IF NOT EXISTS nao mexe em tabela que ja existe: tipo novo
     # em TIPOS precisa do ALTER TABLE, senao o banco que ja rodou (a VPS)
     # estoura "no such column" no primeiro SELECT depois do deploy. A coluna
@@ -147,6 +161,20 @@ def _validar_emails(emails) -> list[str]:
     return limpos
 
 
+def normalizar_whatsapp(valor) -> str:
+    """Celular/fixo brasileiro com DDD -> '55DDDNUMERO' (12 ou 13 digitos).
+    Aceita com ou sem pontuacao, com ou sem +55. Vazio -> ''. Invalido ->
+    ValueError com mensagem pronta pra tela."""
+    if not str(valor or "").strip():
+        return ""
+    digitos = _so_digitos(valor)
+    if len(digitos) in (10, 11):
+        digitos = "55" + digitos
+    if not _RE_WHATSAPP.fullmatch(digitos):
+        raise ValueError("Informe o celular com DDD, ex.: (11) 99999-0000.")
+    return digitos
+
+
 def _default_do_tipo(tipo: str, notificar_email) -> bool:
     """Padrao de quem nunca salvou preferencia. notificar_email = 0 na
     `interno` faz os tipos novos nascerem desmarcados (NULL conta como 1,
@@ -173,31 +201,33 @@ def ler(conn: sqlite3.Connection, cnpj) -> dict:
     _garantir_tabela(conn)
     colunas = ", ".join(TIPOS)
     row = conn.execute(
-        f"SELECT emails, atualizado_em, atualizado_por, {colunas} FROM preferencias_notificacao "
+        f"SELECT emails, atualizado_em, atualizado_por, whatsapp, {colunas} FROM preferencias_notificacao "
         "WHERE cnpj_embarcador = ?", (cnpj_cadastro,)
     ).fetchone()
     tipos = {tipo: _default_do_tipo(tipo, notificar_email) for tipo in TIPOS}
     if row:
-        tipos = {tipo: bool(row[3 + i]) for i, tipo in enumerate(TIPOS)}
+        tipos = {tipo: bool(row[4 + i]) for i, tipo in enumerate(TIPOS)}
     return {
         "cnpj": cnpj_cadastro,
         "emails": _emails_do_campo(row[0]) if row else [],
         "emails_cadastro": _emails_do_campo(email_cadastro),
+        "whatsapp": (row[3] or "") if row else "",
         "tipos": tipos,
         "atualizado_em": row[1] if row else None,
         "atualizado_por": row[2] if row else None,
     }
 
 
-def salvar(conn: sqlite3.Connection, cnpj, emails, flags: dict, por: str) -> dict:
+def salvar(conn: sqlite3.Connection, cnpj, emails, flags: dict, por: str, whatsapp=None) -> dict:
     """Valida e grava (upsert). `flags` pode ser parcial: tipo nao informado
-    mantem o que ja estava. Levanta ValueError com mensagem pronta pra tela;
-    com erro, nada e gravado."""
+    mantem o que ja estava; `whatsapp` None mantem, '' apaga. Levanta
+    ValueError com mensagem pronta pra tela; com erro, nada e gravado."""
     desconhecidos = [t for t in (flags or {}) if t not in TIPOS]
     if desconhecidos:
         raise ValueError(f"Tipo de notificação desconhecido: {', '.join(map(str, desconhecidos))}.")
     limpos = _validar_emails(emails)
     atuais = ler(conn, cnpj)
+    numero = atuais["whatsapp"] if whatsapp is None else normalizar_whatsapp(whatsapp)
 
     tipos = dict(atuais["tipos"])
     tipos.update({t: bool(v) for t, v in (flags or {}).items()})
@@ -206,14 +236,29 @@ def salvar(conn: sqlite3.Connection, cnpj, emails, flags: dict, por: str) -> dic
     marcadores = ", ".join("?" for _ in TIPOS)
     atualizacoes = ", ".join(f"{t} = excluded.{t}" for t in TIPOS)
     conn.execute(
-        f"INSERT INTO preferencias_notificacao (cnpj_embarcador, emails, {colunas}, atualizado_em, atualizado_por) "
-        f"VALUES (?, ?, {marcadores}, ?, ?) "
-        f"ON CONFLICT(cnpj_embarcador) DO UPDATE SET emails = excluded.emails, {atualizacoes}, "
-        "atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por",
-        (atuais["cnpj"], ", ".join(limpos), *(int(tipos[t]) for t in TIPOS), _agora(), str(por or "")[:40]),
+        f"INSERT INTO preferencias_notificacao (cnpj_embarcador, emails, whatsapp, {colunas}, atualizado_em, atualizado_por) "
+        f"VALUES (?, ?, ?, {marcadores}, ?, ?) "
+        f"ON CONFLICT(cnpj_embarcador) DO UPDATE SET emails = excluded.emails, whatsapp = excluded.whatsapp, "
+        f"{atualizacoes}, atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por",
+        (atuais["cnpj"], ", ".join(limpos), numero, *(int(tipos[t]) for t in TIPOS), _agora(), str(por or "")[:40]),
     )
     conn.commit()
     return ler(conn, cnpj)
+
+
+def whatsapp_do_embarcador(conn: sqlite3.Connection, cnpj) -> str | None:
+    """Numero pro aviso de chamado sem resposta (avisar_cliente_sem_resposta.py):
+    so com a chave `chamado_sem_resposta` ligada e numero valido gravado.
+    So leitura: sem tabela ou sem coluna (ninguem salvou ainda) e None."""
+    if not _tabela_existe(conn) or "whatsapp" not in _colunas(conn):
+        return None
+    row = conn.execute(
+        "SELECT whatsapp, chamado_sem_resposta FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
+        (_so_digitos(cnpj),)).fetchone()
+    if not row or not row[1]:
+        return None
+    numero = _so_digitos(row[0])
+    return numero if _RE_WHATSAPP.fullmatch(numero) else None
 
 
 def carregar_embarcadores(tipo: str, chave: str = "sender_id", db_path=None) -> dict:

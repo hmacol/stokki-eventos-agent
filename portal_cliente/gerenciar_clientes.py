@@ -9,10 +9,13 @@ local -- mesmo dados.db):
     py -3 portal_cliente/gerenciar_clientes.py checar maiz            # antes do convite: conta, grupo, insucessos, envio (CNPJ ou nome)
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --para hugo@freshlogbr.com   # convite vai pra quem repassa, não pro cliente
+    py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --cc hugo@freshlogbr.com     # e-mails do cadastro, com cópia
     py -3 portal_cliente/gerenciar_clientes.py definir-pin 29909190000146 123456
     py -3 portal_cliente/gerenciar_clientes.py desativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py ativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py link 29909190000146   # só imprime o link, sem e-mail
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456              # só mostra quem ganharia conta
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456 --confirmar  # cria; troca obrigatória no 1º acesso
 
 Grupo econômico (17/09) -- um login enxerga os pedidos de várias empresas:
     py -3 portal_cliente/gerenciar_clientes.py grupos                                   # lista os grupos
@@ -225,6 +228,7 @@ def main(argv=None) -> int:
         sp.add_argument("cnpj")
         if nome == "enviar-link":
             sp.add_argument("--para", help="manda o convite SÓ pra este e-mail (quem repassa ao cliente), não pros do cadastro")
+            sp.add_argument("--cc", action="append", default=[], help="e-mail em cópia (pode repetir)")
     sub.add_parser("grupos")
     gp = sub.add_parser("grupo", help="empresas que o login enxerga (grupo econômico)")
     gp.add_argument("cnpj", help="CNPJ que faz o login")
@@ -233,6 +237,10 @@ def main(argv=None) -> int:
     dp = sub.add_parser("definir-pin")
     dp.add_argument("cnpj")
     dp.add_argument("pin")
+    cp = sub.add_parser("criar-pin-padrao", help="cria conta com o mesmo PIN pra todo embarcador sem conta "
+                                                 "(menos cancelados e membros de grupo); troca obrigatória no 1º acesso")
+    cp.add_argument("pin")
+    cp.add_argument("--confirmar", action="store_true", help="sem isto só lista quem seria criado")
     ev = sub.add_parser("envio", help="parâmetros da máscara de envio (Stokki) por embarcador")
     ev.add_argument("cnpj")
     ev.add_argument("--regra", choices=sorted(envios.REGRAS_XML))
@@ -277,6 +285,18 @@ def main(argv=None) -> int:
             _imprimir_checagem(checar(conn, achados[0]["cnpj"]))
             return 0
 
+        if args.cmd == "criar-pin-padrao":
+            try:
+                auth.validar_pin_formato(args.pin)
+            except ValueError as e:
+                print(f"Nada gravado: {e}")
+                return 2
+            lista = auth.criar_contas_pin_padrao(conn, args.pin) if args.confirmar else auth.candidatos_pin_padrao(conn)
+            for e in lista:
+                print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
+            print(f"{len(lista)} conta(s) {'criada(s), com troca de PIN no 1º acesso' if args.confirmar else 'seriam criadas (rode com --confirmar)'}.")
+            return 0
+
         if args.cmd == "grupos":
             grupos = auth.listar_grupos(conn)
             if not grupos:
@@ -310,6 +330,11 @@ def main(argv=None) -> int:
             if para and not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", para):
                 print(f"--para {para!r} não é um e-mail válido. Nada enviado.")
                 return 2
+            cc = [c.strip() for c in args.cc if c.strip()]
+            for c in cc:
+                if not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", c):
+                    print(f"--cc {c!r} não é um e-mail válido. Nada enviado.")
+                    return 2
             if not para and not emb["emails"]:
                 print("Embarcador sem e-mail em `interno`.")
                 return 2
@@ -334,8 +359,9 @@ def main(argv=None) -> int:
                 rodape="Fresh Log · Portal de acompanhamento de entregas")
             assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
                        else "Fresh Log · Seu acesso ao portal de entregas")
-            ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}))
-            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos))
+            ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}), cc=cc or None)
+            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos)
+                  + (f" (cc: {', '.join(cc)})" if cc else ""))
             return 0 if ok else 1
         elif args.cmd in ("desativar", "ativar"):
             if auth.definir_ativo(conn, emb["cnpj"], args.cmd == "ativar"):

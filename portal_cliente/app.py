@@ -131,6 +131,14 @@ def _carregar_cliente():
             conn.close()
         if not g.cliente:
             session.clear()
+        elif g.cliente.get("trocar_pin") and request.endpoint not in _LIVRES_ANTES_DA_TROCA:
+            # Conta criada com o PIN padrao (02/10): nada abre antes da troca.
+            if request.path.startswith("/api/"):
+                return jsonify({"erro": "Antes de continuar, é preciso trocar o PIN."}), 403
+            return redirect(url_for("trocar_pin"))
+
+
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude"}
 
 
 def requer_cliente(f):
@@ -395,6 +403,38 @@ def definir_pin(token):
         conn.close()
 
 
+@app.route("/trocar-pin", methods=["GET", "POST"])
+def trocar_pin():
+    """Troca obrigatória de quem entrou com o PIN padrão (02/10). Só o
+    cliente logado; a equipe e quem já trocou vão direto pro início."""
+    if g.get("equipe"):
+        return redirect(url_for("inicio"))
+    if not g.cliente:
+        return redirect(url_for("login"))
+    if not g.cliente.get("trocar_pin"):
+        return redirect(url_for("inicio"))
+    erro = None
+    if request.method == "POST":
+        pin, conf = (request.form.get("pin") or "").strip(), (request.form.get("pin2") or "").strip()
+        conn = auth.conectar()
+        try:
+            auth.validar_pin_formato(pin)
+            if pin != conf:
+                raise ValueError("Os dois PINs não conferem.")
+            conta = auth.trocar_pin_obrigatorio(conn, g.cliente["cnpj"], pin)
+            session.clear()
+            session["cnpj"] = conta["cnpj"]
+            session["v"] = auth.versao_conta(conta)
+            session.permanent = True
+            logger.info(f"PIN padrao trocado cnpj={conta['cnpj']}")
+            return redirect(url_for("inicio"))
+        except ValueError as e:
+            erro = str(e)
+        finally:
+            conn.close()
+    return render_template("trocar_pin.html", erro=erro)
+
+
 # ── Telas ──────────────────────────────────────────────────────────────────────
 
 def _data_da_query() -> date:
@@ -551,6 +591,7 @@ def _resposta_notificacoes(prefs: dict):
                    "ligado": prefs["tipos"][tipo]} for tipo, info in preferencias.TIPOS.items()],
         "emails": prefs["emails"],
         "emails_cadastro": prefs["emails_cadastro"],
+        "whatsapp": prefs["whatsapp"],
         "max_emails": preferencias.MAX_EMAILS,
         "somente_leitura": bool(g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA),
     })
@@ -574,19 +615,20 @@ def api_notificacoes_salvar():
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     emails, tipos = corpo.get("emails", ""), corpo.get("tipos", {})
+    whatsapp = corpo.get("whatsapp")  # ausente = mantém o que está
     if isinstance(emails, str):
         emails = emails.replace(";", "\n").replace(",", "\n").splitlines()
-    if not isinstance(emails, list) or not isinstance(tipos, dict):
+    if not isinstance(emails, list) or not isinstance(tipos, dict) or not isinstance(whatsapp, (str, type(None))):
         return jsonify({"erro": "Dados inválidos."}), 400
     conn = auth.conectar()
     try:
-        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia())
+        prefs = preferencias.salvar(conn, g.cliente["cnpj"], emails, tipos, _quem_envia(), whatsapp=whatsapp)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
         conn.close()
     logger.info(f"notificacoes cnpj={g.cliente['cnpj']} por={_quem_envia()} tipos={prefs['tipos']} "
-                f"emails={len(prefs['emails'])}")
+                f"emails={len(prefs['emails'])} whatsapp={'sim' if prefs['whatsapp'] else 'nao'}")
     return _resposta_notificacoes(prefs)
 
 
@@ -775,6 +817,32 @@ def api_envios_confirmar():
         mensagem = (f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
                     f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
     return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem})
+
+
+@app.route("/api/envios/reenviar-erros", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_reenviar_erros():
+    """Reenvia de uma vez todos os pedidos com erro da empresa (Hugo, 02/10)."""
+    _exige_pode_enviar()
+    conn = envios.conectar()
+    try:
+        r = envios.reenviar_erros(conn, _empresa_envio()['cnpj'], _quem_envia())
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"reenviar-erros cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} -> {r}")
+    n = r["na_fila"] + r["liberacao"]
+    if not n:
+        mensagem = "Nenhum pedido com erro pra reenviar."
+    else:
+        mensagem = f"{n} pedido{'s' if n > 1 else ''} reenviado{'s' if n > 1 else ''}"
+        mensagem += f": {r['na_fila']} de volta à fila" if r["liberacao"] else " -- de volta à fila, serão enviados à Stokki em instantes"
+        if r["liberacao"]:
+            mensagem += f" e {r['liberacao']} aguardando liberação da Fresh Log (região não atendida)"
+        mensagem += "."
+    return jsonify({"ok": True, **r, "mensagem": mensagem})
 
 
 @app.route("/api/envios/<int:envio_id>/acao", methods=["POST"])

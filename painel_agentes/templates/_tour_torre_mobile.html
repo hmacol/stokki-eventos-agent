@@ -102,7 +102,7 @@
     { alvo: q('#excecoes > .cartao-excecao'), capitulo: F, titulo: 'Um item da fila',
       texto: function () {
         return '<p>Gravidade, quando foi, pedido e cliente, o <b>motorista</b> que marcou e o <b>motivo</b>.</p>' + (podeEditar()
-          ? '<p><b>Duplicar</b>: cria já uma entrega nova na Vuupt (<b>sem desfazer</b>) e tira o item da fila. <b>Notificar</b>: e-mail de verdade pro remetente. <b>Tratar</b>: registra o que foi feito. Todos pedem confirmação.</p>'
+          ? '<p><b>Duplicar</b>: cria já uma entrega nova na Vuupt (<b>sem desfazer</b>) e tira o item da fila. <b>Notificar</b>: e-mail de verdade pro remetente. <b>Tratar</b>: registra o que foi feito. Todos pedem confirmação.</p><p>Pra vários de uma vez: marque a <b>caixinha</b> dos cartões (ou <b>Todos</b>) e use os botões da barra no topo da fila. Duplicar e Notificar em lote rodam um pedido por vez e mostram no fim o que deu certo e o que falhou.</p>'
           : '<p>Com o seu acesso aparecem só os links que levam pra tela onde se resolve.</p>');
       },
       antes: limpo() },

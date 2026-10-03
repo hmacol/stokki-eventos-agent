@@ -1,0 +1,16 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Trocar PIN{% endblock %}
+{% block conteudo %}
+<h1>Crie seu PIN</h1>
+<p><strong>{{ cliente.nome }}</strong><br><span class="suave">CNPJ {{ cliente.cnpj_formatado }}</span></p>
+<p class="suave">Este é seu primeiro acesso. Troque o PIN que você recebeu por um de 6 números só seu. Ele será pedido junto com o CNPJ toda vez que você entrar.</p>
+{% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+<form method="post" autocomplete="off">
+  <label for="pin">Novo PIN</label>
+  <input type="password" id="pin" name="pin" class="pin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="new-password" required autofocus>
+  <label for="pin2">Repita o PIN</label>
+  <input type="password" id="pin2" name="pin2" class="pin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="new-password" required>
+  <button type="submit" class="principal">Salvar e entrar</button>
+</form>
+<p class="suave"><a href="{{ url_for('sair') }}">Sair</a></p>
+{% endblock %}

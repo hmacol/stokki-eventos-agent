@@ -78,7 +78,9 @@ import rascunhos_rota
 import torre_controle
 import tratativas
 import pedidos_parados_triagem
+import consulta_expedicao
 import contadores_menu
+import pagina_inicial
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
@@ -165,7 +167,18 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
             and hmac.compare_digest(senha, senha_atendimento):
         return "atendimento"
+    # Logins nominais (02/10, Hugo): lista usuarios_extras no config.yaml,
+    # cada item {usuario, senha, nivel}, pra pessoa ter login proprio em
+    # vez de dividir o par do nivel -- a acao fica registrada no nome dela.
+    for extra in cfg_painel.get("usuarios_extras") or []:
+        u, s, n = extra.get("usuario"), extra.get("senha"), extra.get("nivel")
+        if u and s and n in _NIVEIS_VALIDOS and hmac.compare_digest(usuario, u) \
+                and hmac.compare_digest(senha, s):
+            return n
     return None
+
+
+_NIVEIS_VALIDOS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento")
 
 
 def requer_auth(f=None, *, niveis=("total",)):
@@ -369,10 +382,11 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
-            # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
-                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
+            # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
+            # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
+            # cair nele levaria direto a um 403 pós-login.
+            pagina_padrao = {"expedicao": url_for("expedicao"),
+                             "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -502,6 +516,22 @@ def api_sidebar_contadores():
     return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
 
 
+@app.route("/inicio")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def inicio():
+    """Página inicial do painel (29/09): o que espera ação de quem logou,
+    números do dia e, só pro total, as rotinas. O HTML sobe sem número
+    nenhum; o JS busca /api/inicio/dados depois do load (mesma regra dos
+    badges do menu: nunca esperar fonte cara na renderização)."""
+    return render_template("inicio.html", mostra_rotinas=g.nivel_acesso == "total")
+
+
+@app.route("/api/inicio/dados")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def api_inicio_dados():
+    return jsonify(pagina_inicial.montar_dados(g.nivel_acesso, url_for))
+
+
 @app.route("/mapa-rotas")
 @requer_auth(niveis=("total", "operador", "leitura"))
 def mapa_rotas():
@@ -597,6 +627,35 @@ def api_expedicao_excluir_pedido():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify(resultado)
+
+
+# Consulta de pedido (Hugo, 02/10): na separação da rota o operador não
+# acha um pedido e quer saber se ele deveria estar no galpão. Só leitura;
+# o galpão também consulta. Os mesmos níveis estão no item do menu
+# (_menu_lateral_nav.html) -- mexer nos dois lugares.
+NIVEIS_CONSULTA_PEDIDO = ("total", "operador", "expedicao", "galpao")
+
+
+@app.route("/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def expedicao_consulta():
+    return render_template("consulta_pedido_expedicao.html")
+
+
+@app.route("/api/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def api_expedicao_consulta():
+    """Veredito de UM pedido cruzando Vuupt e Stokki ao vivo -- ver
+    consulta_expedicao.py. 400 código inválido, 503 Vuupt fora."""
+    try:
+        return jsonify(consulta_expedicao.consultar(request.args.get("codigo", "")))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except consulta_expedicao.ConsultaIndisponivel as e:
+        return jsonify({"erro": str(e)}), 503
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na consulta de pedido da expedição")
+        return jsonify({"erro": f"Falha na consulta: {e}"}), 500
 
 
 def _parse_data_param(padrao_amanha: bool = False) -> date:
@@ -836,7 +895,8 @@ def clientes_agenda():
     """Fila de destinatários com data de agendamento informada esperando
     o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
     alimenta é marcar_clientes_agenda.py (sequências 18h/22h); o link
-    chega pelo WhatsApp. Só nível total: a decisão grava na planilha."""
+    chega pelo WhatsApp. Só nível total: a decisão grava na planilha
+    (sem cópia por clique: o backup é o diário das 03h pro GCS)."""
     import marcar_clientes_agenda
     try:
         linhas = marcar_clientes_agenda.listar()
@@ -866,7 +926,7 @@ def api_clientes_agenda_decidir():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
         return jsonify({"erro": str(e)}), 500
-    return jsonify({"ok": True, "situacao": resultado["situacao"], "backup": resultado["backup"]})
+    return jsonify({"ok": True, "situacao": resultado["situacao"]})
 
 
 @app.route("/pedidos-parados")
@@ -1186,6 +1246,23 @@ def api_torre_tratar():
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
     return jsonify({"ok": True})
+
+
+@app.route("/api/torre/tratar-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "atendimento"))
+@exige_mesma_origem
+def api_torre_tratar_lote():
+    """Tratar por lote (30/09): varios itens da fila selecionados na
+    tela, um motivo so pra todos. Mesmo efeito do tratar unitario."""
+    body = request.get_json(force=True) or {}
+    itens = body.get("itens")
+    motivo = (body.get("motivo") or "").strip()
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum item selecionado"}), 400
+    if not motivo:
+        return jsonify({"erro": "motivo obrigatório"}), 400
+    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo)
+    return jsonify({"ok": True, "tratadas": qtd})
 
 
 @app.route("/api/torre/destratar", methods=["POST"])

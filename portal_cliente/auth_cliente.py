@@ -67,6 +67,10 @@ def conectar() -> sqlite3.Connection:
             ultimo_login_em TEXT
         )
     """)
+    # PIN padrao (02/10): conta criada em lote com o mesmo PIN pra todos fica
+    # com trocar_pin=1 e o portal so libera depois da troca.
+    if "trocar_pin" not in {r[1] for r in conn.execute("PRAGMA table_info(clientes_portal)")}:
+        conn.execute("ALTER TABLE clientes_portal ADD COLUMN trocar_pin INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS portal_tentativas (
             escopo    TEXT NOT NULL,
@@ -253,9 +257,11 @@ def buscar_conta(conn: sqlite3.Connection, cnpj: str) -> dict | None:
     return dict(row) if row else None
 
 
-def definir_pin(conn: sqlite3.Connection, cnpj: str, pin: str) -> dict:
+def definir_pin(conn: sqlite3.Connection, cnpj: str, pin: str, trocar_pin: bool = False) -> dict:
     """Cria a conta (se não existir) ou troca o PIN. Só pra CNPJ que está
-    em `interno` com sender_id -- levanta ValueError caso contrário."""
+    em `interno` com sender_id -- levanta ValueError caso contrário.
+    `trocar_pin=True` (PIN padrão) obriga a troca no próximo acesso;
+    o padrão False desliga a marca (PIN escolhido pelo cliente)."""
     emb = buscar_embarcador(conn, cnpj)
     if not emb:
         raise ValueError("CNPJ não cadastrado como embarcador (tabela interno sem sender_id).")
@@ -265,15 +271,50 @@ def definir_pin(conn: sqlite3.Connection, cnpj: str, pin: str) -> dict:
     agora = _agora()
     conn.execute("""
         INSERT INTO clientes_portal (cnpj, sender_id, nome, pin_hash, pin_salt, tentativas_pin, bloqueado_ate,
-                                     ativo, criado_em, atualizado_em)
-        VALUES (?, ?, ?, ?, ?, 0, NULL, 1, ?, ?)
+                                     ativo, criado_em, atualizado_em, trocar_pin)
+        VALUES (?, ?, ?, ?, ?, 0, NULL, 1, ?, ?, ?)
         ON CONFLICT(cnpj) DO UPDATE SET
             sender_id = excluded.sender_id, nome = excluded.nome,
             pin_hash = excluded.pin_hash, pin_salt = excluded.pin_salt,
-            tentativas_pin = 0, bloqueado_ate = NULL, atualizado_em = excluded.atualizado_em
-    """, (emb["cnpj"], emb["sender_id"], emb["nome"], pin_hash, salt, agora, agora))
+            tentativas_pin = 0, bloqueado_ate = NULL, atualizado_em = excluded.atualizado_em,
+            trocar_pin = excluded.trocar_pin
+    """, (emb["cnpj"], emb["sender_id"], emb["nome"], pin_hash, salt, agora, agora, int(trocar_pin)))
     conn.commit()
     return buscar_conta(conn, emb["cnpj"])
+
+
+def candidatos_pin_padrao(conn: sqlite3.Connection) -> list[dict]:
+    """Quem ganha conta no lote do PIN padrão (02/10): embarcador de
+    `interno` com sender_id, sem conta no portal, não marcado como
+    CANCELADO em `observacoes` e que não é membro de grupo de outro login
+    (o membro já enxerga tudo pelo login do grupo)."""
+    membros = {r["cnpj_membro"] for r in conn.execute(
+        "SELECT cnpj_membro FROM portal_grupos WHERE cnpj_membro <> cnpj_login")}
+    cancelados = {r["cnpj_embarcador"] for r in conn.execute(
+        "SELECT cnpj_embarcador FROM interno WHERE UPPER(COALESCE(observacoes, '')) LIKE 'CANCELADO%'")}
+    return [e for e in listar_embarcadores(conn)
+            if e["ativo"] is None and e["cnpj"] not in membros and e["cnpj"] not in cancelados]
+
+
+def criar_contas_pin_padrao(conn: sqlite3.Connection, pin: str) -> list[dict]:
+    """Cria as contas dos candidatos com o mesmo PIN e a troca obrigatória
+    ligada. Quem já tem conta não é tocado. Devolve quem foi criado."""
+    pin = validar_pin_formato(pin)
+    criados = candidatos_pin_padrao(conn)
+    for e in criados:
+        definir_pin(conn, e["cnpj"], pin, trocar_pin=True)
+    return criados
+
+
+def trocar_pin_obrigatorio(conn: sqlite3.Connection, cnpj: str, pin_novo: str) -> dict:
+    """Troca do primeiro acesso: o PIN novo não pode ser o atual (o padrão)."""
+    pin_novo = validar_pin_formato(pin_novo)
+    conta = buscar_conta(conn, cnpj)
+    if not conta or not conta.get("pin_hash"):
+        raise ValueError("Conta não encontrada.")
+    if hmac.compare_digest(_hash_pin(pin_novo, conta["pin_salt"]), conta["pin_hash"]):
+        raise ValueError("Escolha um PIN diferente do que você recebeu.")
+    return definir_pin(conn, cnpj, pin_novo)
 
 
 def definir_ativo(conn: sqlite3.Connection, cnpj: str, ativo: bool) -> bool:
@@ -326,7 +367,10 @@ def sessao_valida(conn: sqlite3.Connection, cnpj: str, versao: str) -> dict | No
     conta = buscar_conta(conn, cnpj)
     if not conta or not conta.get("ativo") or versao_conta(conta) != versao:
         return None
-    return montar_cliente(conn, cnpj, versao)
+    cliente = montar_cliente(conn, cnpj, versao)
+    if cliente:
+        cliente["trocar_pin"] = bool(conta.get("trocar_pin"))
+    return cliente
 
 
 # ── Link de definição de PIN (primeiro acesso / esqueci o PIN) ─────────────────
