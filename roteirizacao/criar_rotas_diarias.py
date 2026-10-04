@@ -202,8 +202,10 @@ POLIMENTO_TEMPO_MAXIMO_S = 15.0
 POLIMENTO_TEMPO_MAXIMO_INTERATIVO_S = 5.0
 # Teto de tempo da junção das rotas fracas (Hugo, 03/10 -- a troca de
 # "abrir espaço" em rota cheia, rotas_fracas.py, multiplica as tentativas).
-# Mesmo padrão do polimento: job noturno x botão "Roteirizar" (síncrono).
-JUNCAO_TEMPO_MAXIMO_S = 10.0
+# Mesmo padrão do polimento: job por timer x botão "Roteirizar" (síncrono).
+# 60s no job: com 10s o modo teste de 03/10 (31 rotas) estourou o teto;
+# ninguém espera o job, e fraca não analisada perde a chance de juntar.
+JUNCAO_TEMPO_MAXIMO_S = 60.0
 JUNCAO_TEMPO_MAXIMO_INTERATIVO_S = 3.0
 
 
@@ -430,6 +432,7 @@ def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key
     vazio = {"juntadas": 0, "motivos": {}, "receptoras": set(), "estourou_tempo": False}
     if not rotas_fracas.ROTAS_FRACAS_ATIVO or not coords_base:
         return sublotes, vazio
+    inicio = time.monotonic()
     try:
         novos, relatorio = rotas_fracas.absorver_rotas_fracas(
             sublotes, coords_base[0], coords_base[1], gmaps_key,
@@ -446,9 +449,12 @@ def _absorver_fracas_particao(sublotes: list[list[dict]], coords_base, gmaps_key
         logger.exception(f"[{label}] Falha na junção das rotas fracas (seguindo com as rotas como estavam): {e}")
         return sublotes, vazio
     if relatorio["juntadas"] or relatorio["motivos"] or relatorio.get("estourou_tempo"):
+        nao_analisadas = sum(1 for m in relatorio["motivos"].values() if m == rotas_fracas.MOTIVO_NAO_ANALISADA)
+        teto = (f" (teto de tempo atingido, {nao_analisadas} não analisada(s))"
+                if relatorio.get("estourou_tempo") else "")
         logger.info(f"[{label}] Rotas fracas: {relatorio['juntadas']} juntada(s) em vizinhas, "
-                    f"{len(relatorio['motivos'])} continuam fraca(s) -- {len(sublotes)} -> {len(novos)} rota(s)"
-                    f"{' (teto de tempo atingido)' if relatorio.get('estourou_tempo') else ''}.")
+                    f"{len(relatorio['motivos'])} continuam fraca(s) -- {len(sublotes)} -> {len(novos)} rota(s) "
+                    f"em {time.monotonic() - inicio:.1f}s{teto}.")
     return novos, relatorio
 
 

@@ -71,8 +71,20 @@ class TestPlanejarSublotes(unittest.TestCase):
             crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False)
             crd.planejar_sublotes(self.servicos, BASE, None, TERCA, registrar_historico=False,
                                   juncao_tempo_maximo_s=crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S)
-        self.assertEqual([c.kwargs["tempo_maximo_s"] for c in juncao.call_args_list], [10.0, 3.0])
-        self.assertEqual((crd.JUNCAO_TEMPO_MAXIMO_S, crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S), (10.0, 3.0))
+        self.assertEqual([c.kwargs["tempo_maximo_s"] for c in juncao.call_args_list], [60.0, 3.0])
+        self.assertEqual((crd.JUNCAO_TEMPO_MAXIMO_S, crd.JUNCAO_TEMPO_MAXIMO_INTERATIVO_S), (60.0, 3.0))
+
+    def test_log_conta_nao_analisadas_e_tempo(self):
+        sub = [self.servicos[0]]
+        rel = {"juntadas": 0, "motivos": {id(sub): rf.MOTIVO_NAO_ANALISADA, 1: "outro"}, "receptoras": set(),
+               "estourou_tempo": True}
+        with mock.patch.object(rf, "absorver_rotas_fracas", return_value=([sub], rel)), \
+             self.assertLogs("criar_rotas_diarias", level="INFO") as logs:
+            crd._absorver_fracas_particao([sub], BASE, None, "Geral")
+        linha = next(l for l in logs.output if "Rotas fracas:" in l)
+        self.assertIn("1 não analisada(s)", linha)
+        self.assertIn("teto de tempo atingido", linha)
+        self.assertRegex(linha, r"em \d+\.\ds")
 
     def test_sem_base_nao_chama_a_juncao(self):
         with mock.patch.object(rf, "absorver_rotas_fracas", side_effect=AssertionError("nao deveria rodar")):
