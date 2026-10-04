@@ -479,9 +479,12 @@
  metricas_plano.py         Métricas geométricas de um plano.
  km_rodoviario.py          Km pela Google Routes (haversine de reserva).
  replay_rotas.py           Replay de dias passados para calibrar.
- rotas_fracas.py           Rota com até 7 pedidos e até 40 caixas: junta nas
-                           vizinhas com folga, segura 1 dia útil (SEGURAR_ATIVO,
-                           desligado), ou sai com o motivo no rascunho.
+ rotas_fracas.py           Rota com até 7 pedidos, até 40 caixas e menos de 5h:
+                           junta nas vizinhas com folga (a que recebe vai até
+                           110 cx e 10h30 e continua Fiorino), abre espaço em
+                           rota cheia (1 troca por pedido), segura 1 dia útil
+                           (SEGURAR_ATIVO, ligado 03/10), ou sai com o motivo
+                           no rascunho.
  pedidos_segurados.py      Tabela pedidos_segurados; lida pelo planejamento,
                            vigia e incrementar.
  benchmark_modelos.py      Benchmark só leitura.
