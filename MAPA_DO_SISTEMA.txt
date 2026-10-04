@@ -768,6 +768,13 @@
  freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
                            parados, tarefas do Kanban.
 
+ batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
+   regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
+               DIVERGENCIA (puro, testado). Lista fechada de destinos e motivos.
+   medir.py    medição só leitura (manual, VPS): lista a Stokki toda desde o
+               corte (28/09), cruza com Vuupt + banco, gera xlsx em dados/.
+               Sem timer, sem tabela ainda (04/10).
+
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
    regras.py   estados e prazos (puro, testado).
    vigiar.py   job de 15 min: junta núcleo + retrato da Stokki + rascunhos

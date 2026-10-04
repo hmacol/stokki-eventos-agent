@@ -54,7 +54,9 @@ Uma lista de problemas não garante nada; a equação garante.
 | Data de corte | Última semana: pedidos criados na Stokki a partir de **28/09/2026**. Nada antes entra. |
 | Destinos finais | A tabela abaixo, com Dedicado e Lalamove separados. |
 | Evidência | **Sempre** precisa de documento assinado confirmando recebimento. Sem documento não é destino final, é divergência. |
-| Quem trata divergência | O agente analista monta a ação com a evidência como **sugestão aprovada**: uma pessoa aprova antes de qualquer escrita na Stokki ou na Vuupt; nada automático (ajuste vindo da spec do agente, 04/10, a confirmar com o Hugo). O que o agente não cobrir vai pra Torre. |
+| Quem trata divergência | O agente analista monta a ação com a evidência como **sugestão aprovada**: uma pessoa aprova antes de qualquer escrita na Stokki ou na Vuupt; nada automático (confirmado pelo Hugo, 04/10). O que o agente não cobrir vai pra Torre. |
+| Redespacho/retirada sem comprovante | **Opção A** (Hugo, 04/10): entram como divergência desde o dia 1; a fila é a lista de "cobrar comprovante". Captura (foto do protocolo, assinatura no galpão) fica pra depois da medição. |
+| Canhoto sem validação | **Vale** como documento (Hugo, 04/10). Validado fica como coluna à parte. |
 | Serviço com mais de um pedido | Não existe mais. Não tratar. |
 | Feriados | Em aberto, decisão única para batimento e agente. |
 
@@ -82,17 +84,26 @@ Pedido fechado na Stokki que não se encaixa em nenhuma linha é
 | CANCELADO_VUUPT_STOKKI_ABERTO | o `pulado_cancelado_vuupt` do pipeline |
 | REDESPACHO_SEM_COMPROVANTE | transportadora recebeu, sem documento |
 | RETIRADA_SEM_COMPROVANTE | retirada fechada, sem documento |
+| LALAMOVE_SEM_COMPROVANTE | Lalamove entregou, `pod_image` não guardada |
+| EXPEDIDO_COM_INSUCESSO_ABERTO | Stokki expedido, último serviço fechou em insucesso |
 | STATUS_STOKKI_DESCONHECIDO | status da Stokki fora do de-para conhecido |
 
 Pedido ABERTO na Stokki não é classificado aqui: é do vigia. O batimento só
 registra que ele está "em andamento" e se o vigia o considera no prazo.
 
-## Peças (a implementar)
+## Peças
 
-- `batimento/regras.py` — puro, testado: dado o retrato de um pedido (status
-  Stokki, status núcleo, comprovantes, transportadora, dedicado, Lalamove,
-  resposta de insucesso), devolve `(destino | DIVERGENCIA, motivo, evidencias)`.
-  Mesmo padrão de `vigia/regras.py`.
+Feitas em 04/10 (sem timer, sem tabela ainda):
+
+- `batimento/regras.py` — puro, testado (`test_regras.py`): dado o retrato
+  de um pedido (status Stokki, status núcleo, comprovantes, transportadora,
+  dedicado, Lalamove, resposta de insucesso), devolve
+  `(DESTINO | EM_ANDAMENTO | DIVERGENCIA, rótulo, evidências)`. Mesmo padrão
+  de `vigia/regras.py`. `situacao_stokki()` resume o texto da coluna
+  "state" em ABERTO/EXPEDIDO/CANCELADO por "contém" (inglês e português).
+- `batimento/medir.py` — a medição do primeiro passo (abaixo). Só leitura.
+
+A implementar:
 - `batimento/banco.py` — tabela `batimento_pedidos`, uma linha por
   pedido-base, **nunca apagada**:
   `codigo, criado_stokki_em, embarcador, status_stokki, status_nucleo,
@@ -125,13 +136,33 @@ pesado que o pipeline; medir o tempo na primeira rodada antes de fixar.
 Login concorrente derruba a outra sessão (inclusive a do
 `agente-importacao-stokki`): obrigatório `aguardar_vez_para_login`.
 
-## Primeiro passo (antes de qualquer timer)
+## Primeiro passo (antes de qualquer timer): `batimento/medir.py`
 
-Script de medição, só leitura, rodado uma vez na VPS como www-data:
-lista a Stokki desde 28/09, cruza com o banco, gera xlsx em
-`dados/batimento_medicao_<data>.xlsx` com a classificação de cada pedido.
-Mostra o tamanho real do buraco e quais divergências aparecem de fato. O
-banco local está congelado desde 17/08: a medição só vale na VPS.
+Só leitura, rodado uma vez na VPS como www-data, num horário sem outra
+sessão Stokki (ex.: depois das 07h15 e antes das 08h, ou à noite):
+
+```
+cd /opt/stokki-eventos
+sudo -u www-data venv/bin/python -m batimento.medir
+sudo -u www-data venv/bin/python -m batimento.medir --data-corte 2026-09-28 --dias-vuupt 30
+```
+
+O que faz: acha o id da Stokki de corte (menor PS que o núcleo viu nascer
+desde a data de corte; `--id-minimo N` força), pega a trava
+`stokki/sessao_uso.py`, lista a Stokki com `status=all` do mais novo pro
+mais velho até o corte, lê os serviços `done` da Vuupt (com
+`checklistAnswers`), cruza com `nucleo_pedidos`, `nucleo_paradas/rotas`,
+`nucleo_comprovantes`, `expedicoes_processadas/falhas`, `pedidos_dedicados`,
+`insucessos_duplicados`, `insucessos_aguardando_resposta`, `vigia_pedidos`
+e BD_TRANSPORTADORAS, classifica e grava
+`dados/batimento_medicao_<hoje>.xlsx` (abas Resumo, Pedidos, Status Stokki).
+A aba "Status Stokki" mostra os nomes de status que a Stokki devolve: é dela
+que sai o de-para definitivo (ver riscos). Testado em 04/10 só com banco
+sintético; a primeira rodada real é na VPS.
+
+Evidência de canhoto, nesta ordem: `nucleo_comprovantes` (app) >
+`images_quantity` do checklist da Vuupt > `expedicoes_processadas.canhoto_anexado`.
+Comprovante de redespacho, retirada e Lalamove é sempre "não" (opção A).
 
 ## Pendências e riscos
 
