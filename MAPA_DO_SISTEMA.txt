@@ -391,7 +391,9 @@
  CLAUDE.md                     Regras de trabalho, ambiente, deploy. LEIA.
  DOC_EXECUCAO_CLAUDE_*.md      Especificação por feature (leia a do módulo
                                antes de mexer): ALOCACAO_MOTORISTAS,
-                               APP_MOTORISTAS, BOLETOS_PARCELADOS,
+                               APP_MOTORISTAS, BATIMENTO_PEDIDOS (destino
+                               final de cada pedido; só spec, 04/10),
+                               BOLETOS_PARCELADOS,
                                CODE (= duplicados na Vuupt), COTACAO_FRETE,
                                MIGRACAO_VPS, NOTIFICACAO_ENTREGAS,
                                NOTIFICACAO_MOTORISTAS, NOTIFICACAO_TRANSPORTADORAS,
