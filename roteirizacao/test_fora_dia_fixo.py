@@ -39,7 +39,7 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db = Path(self.tmp.name) / "t.db"
-        for alvo, valor in (("DETECCAO_A_PARTIR_DE", date(2026, 10, 6)), ("calcular_valor", lambda s, c, t: 784.09)):
+        for alvo, valor in (("DETECCAO_A_PARTIR_DE", date(2026, 10, 5)), ("calcular_valor", lambda s, c, t: 784.09)):
             p = mock.patch.object(fdf, alvo, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -124,11 +124,14 @@ class TestDeteccaoEMarcacao(Base):
 
     def test_pedido_criado_antes_do_corte_nao_marca(self):
         # dia fixo antigo gravou datas que a tabela nova nao conhece
-        self.assertEqual(self._marcar([_servico(criado="2026-10-05 15:00:00")]), [])
+        self.assertEqual(self._marcar([_servico(criado="2026-10-04 15:00:00")]), [])
 
     def test_created_at_em_utc_conta_o_dia_de_brasilia(self):
-        # 02:30 UTC de terca = 23:30 de segunda em Brasilia -> antes do corte
-        self.assertEqual(self._marcar([_servico(criado="2026-10-06 02:30:00")]), [])
+        # 02:30 UTC de segunda = 23:30 de domingo em Brasilia -> antes do corte
+        self.assertEqual(self._marcar([_servico(criado="2026-10-05 02:30:00")]), [])
+
+    def test_criado_no_dia_do_corte_marca(self):
+        self.assertEqual(len(self._marcar([_servico(criado="2026-10-05 15:00:00")])), 1)
 
     def test_data_vencida_ou_malformada_nao_marca(self):
         self.assertEqual(self._marcar([_servico(data="2026-10-01")]), [])
@@ -238,6 +241,12 @@ class TestPendentesDeAviso(Base):
         with mock.patch.object(fdf, "calcular_valor", lambda s, c, t: None):
             self._marcar([_servico()])
         self.assertTrue(fdf.pendentes_de_aviso([_servico()], hoje=HOJE, db_path=self.db)[0]["valor_pendente"])
+
+
+class TestCorte(unittest.TestCase):
+    def test_corte_e_a_segunda_do_deploy(self):
+        # decisao do Hugo: pedido criado de 05/10/2026 em diante entra na regra
+        self.assertEqual(fdf.DETECCAO_A_PARTIR_DE, date(2026, 10, 5))
 
 
 class TestCalcularValor(unittest.TestCase):

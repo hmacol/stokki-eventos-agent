@@ -45,8 +45,8 @@ from nucleo.normalizacao import vuupt_para_local  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Dia do deploy (ajustar no commit do deploy): pedido criado antes não é marcado.
-DETECCAO_A_PARTIR_DE = date(2026, 10, 6)
+# Segunda do deploy (Hugo): pedido criado antes não é marcado.
+DETECCAO_A_PARTIR_DE = date(2026, 10, 5)
 POR = pedidos_dedicados.POR_FORA_DIA_FIXO
 POR_VALOR_PENDENTE = POR + " (valor pendente)"
 

@@ -191,7 +191,7 @@ class TestAvisar(Base):
 class TestTratar(Base):
     def setUp(self):
         super().setUp()
-        for alvo, obj, valor in (("DETECCAO_A_PARTIR_DE", fdf, date(2026, 10, 6)),
+        for alvo, obj, valor in (("DETECCAO_A_PARTIR_DE", fdf, date(2026, 10, 5)),
                                  ("calcular_valor", fdf, lambda s, c, t: 784.09)):
             p = mock.patch.object(obj, alvo, valor)
             p.start()

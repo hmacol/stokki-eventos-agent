@@ -498,13 +498,17 @@
  zonas_sp.py               Zonas da Grande SP.
  rodizio_sp.py             Rodízio municipal por placa.
  regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (Sorocaba
-                           quinzenal), prazo por nível, cidade truncada.
+                           quinzenal, 1ª visita 06/10/2026), prazo por nível,
+                           cidade truncada.
  fora_dia_fixo.py          Data do embarcador fora do dia de visita: marca
                            dedicado (valor da calculadora, km em linha reta)
                            e chama o aviso. Roda no job das 18h e no
-                           incremento.
+                           incremento. Dedicado removido pela equipe não é
+                           remarcado; data já passada não é avisada.
  notificar_fora_dia_fixo.py  Aviso único ao embarcador (e-mail + WhatsApp).
-                           fora_dia_fixo.forcar_destino ausente = hugo@.
+                           fora_dia_fixo.forcar_destino ausente = hugo@
+                           (piloto, sai mesmo com notificacoes_automaticas
+                           desligada); "" = envio real, exige a chave geral.
  registro_dia_fixo.py      Tabelas agendamentos_origem (origem da data
                            gravada pelo sistema: DIA_FIXO ou EQUIPE) e
                            avisos_fora_dia_fixo.
@@ -896,7 +900,8 @@
    grava EQUIPE em agendamentos_origem e fica protegido; data trocada
    direto na tela da Vuupt não passa pelo sistema, conta como do cliente e
    vira dedicado se cair fora do dia de visita. Pedido criado antes de
-   fora_dia_fixo.DETECCAO_A_PARTIR_DE não é marcado.
+   fora_dia_fixo.DETECCAO_A_PARTIR_DE (05/10/2026) não é marcado. "Remover
+   dedicado" no Planejamento vale: a rodada seguinte não marca de novo.
  - WhatsApp das notificações internas (whatsapp_notificacoes.ativo) sai do
    número do Hugo por gateway não-oficial (OpenWA). Sem reenvio, teto de
    20/dia. Não tem relação com atendimento/ nem com a Evolution. Ligar é
