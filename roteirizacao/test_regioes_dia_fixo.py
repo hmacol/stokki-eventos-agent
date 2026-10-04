@@ -9,6 +9,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -99,6 +100,37 @@ class TestProximaData(unittest.TestCase):
     def test_descricao_dias(self):
         self.assertEqual(rdf.descricao_dias(QUINZENAL), "Terças (quinzenal)")
         self.assertEqual(rdf.descricao_dias(rdf.regra_dia_fixo_do_servico(ABCD)), "Segundas e Quintas")
+
+
+SJC_TRUNCADO = {"address": "Av. Cassiano Ricardo 601, Jardim Aquarius, SAO JOSE DOS CA - SP, 12246-870, Brasil"}
+
+
+class TestCidadeTruncada(unittest.TestCase):
+    def test_nome_truncado_reconhece_a_cidade(self):
+        regra = rdf.regra_dia_fixo_do_servico(SJC_TRUNCADO)
+        self.assertEqual(regra["regiao"], "Vale do Paraíba")
+        self.assertEqual(regra["nome"], "Sao Jose Dos Campos")
+        self.assertEqual(regra["dias"], [rdf.SEGUNDA])
+
+    def test_truncado_vale_pra_viagem_e_mensagens(self):
+        self.assertEqual(rdf.regiao_externa_da_cidade("SAO JOSE DOS CA"), "Vale do Paraíba")
+        self.assertEqual(rdf.regiao_da_cidade("Sao Jose dos Ca"), "Vale do Paraíba")
+        self.assertEqual(rdf.dias_fixos_da_cidade("SAO JOSE DOS CA"), [rdf.SEGUNDA])
+
+    def test_prefixo_curto_nao_reconhece(self):
+        self.assertIsNone(rdf.regiao_da_cidade("SAO JOSE"))      # 7 letras
+        self.assertIsNone(rdf.regiao_da_cidade("SANTO"))
+
+    def test_prefixo_ambiguo_nao_reconhece(self):
+        extra = {"SAO JOSE DOS CAMPINHOS": {"dias": [rdf.SEXTA], "regiao": "Teste", "externa": True,
+                                            "frequencia": rdf.FREQUENCIA_SEMANAL, "ancora": None,
+                                            "cidade": "SAO JOSE DOS CAMPINHOS"}}
+        with mock.patch.dict(rdf._INDICE_CIDADES, extra):
+            self.assertIsNone(rdf.regiao_da_cidade("SAO JOSE DOS CA"))
+
+    def test_nome_completo_continua_igual(self):
+        self.assertEqual(rdf.regiao_da_cidade("São José dos Campos"), "Vale do Paraíba")
+        self.assertEqual(rdf.regra_dia_fixo_do_servico(CAMPINAS)["nome"], "Campinas")
 
 
 if __name__ == "__main__":

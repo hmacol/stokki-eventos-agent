@@ -160,11 +160,28 @@ def _montar_indice() -> dict[str, dict]:
                 "externa": regiao.get("externa", False),
                 "frequencia": regiao.get("frequencia", FREQUENCIA_SEMANAL),
                 "ancora": regiao.get("ancora"),
+                "cidade": _normalizar_texto(cidade),
             }
     return indice
 
 
 _INDICE_CIDADES = _montar_indice()
+
+# Cidade truncada no endereço (Hugo, 03/10: "SAO JOSE DOS CA - SP" escapava
+# do dia fixo): nome com pelo menos MIN_LETRAS_CIDADE_TRUNCADA letras que é
+# prefixo de UMA só cidade cadastrada vale essa cidade.
+MIN_LETRAS_CIDADE_TRUNCADA = 10
+
+
+def _info_cidade(cidade) -> dict | None:
+    nome = _normalizar_texto(cidade)
+    if not nome:
+        return None
+    info = _INDICE_CIDADES.get(nome)
+    if info or sum(c.isalpha() for c in nome) < MIN_LETRAS_CIDADE_TRUNCADA:
+        return info
+    candidatas = [k for k in _INDICE_CIDADES if k.startswith(nome)]
+    return _INDICE_CIDADES[candidatas[0]] if len(candidatas) == 1 else None
 
 
 def extrair_cidade(servico: dict) -> str | None:
@@ -208,7 +225,7 @@ def extrair_uf(servico: dict) -> str | None:
 def dias_fixos_da_cidade(cidade: str) -> list[int] | None:
     """Dias da semana fixos (date.weekday()) dessa cidade, ou None se
     ela não estiver em nenhuma região com dia fixo."""
-    info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
+    info = _info_cidade(cidade)
     return info["dias"] if info else None
 
 
@@ -225,7 +242,7 @@ def dia_fixo_da_cidade(cidade: str) -> int | None:
 def regiao_da_cidade(cidade: str) -> str | None:
     """Nome da região (pra mensagens/log) que essa cidade pertence, ou
     None se não estiver em nenhuma região com dia fixo."""
-    info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
+    info = _info_cidade(cidade)
     return info["regiao"] if info else None
 
 
@@ -236,7 +253,7 @@ def regiao_externa_da_cidade(cidade: str) -> str | None:
     de dia fixo (Barueri, ABCD -- dentro da Grande SP). É a função certa
     pra decidir Viagem x Grande SP; regiao_da_cidade serve pra dia fixo
     e mensagens."""
-    info = _INDICE_CIDADES.get(_normalizar_texto(cidade))
+    info = _info_cidade(cidade)
     return info["regiao"] if info and info["externa"] else None
 
 
@@ -279,11 +296,12 @@ def regra_dia_fixo_do_servico(servico: dict) -> dict | None:
                 })
 
     cidade = extrair_cidade(servico)
-    info = _INDICE_CIDADES.get(_normalizar_texto(cidade)) if cidade else None
+    info = _info_cidade(cidade) if cidade else None
     if info:
+        exata = _normalizar_texto(cidade) in _INDICE_CIDADES
         return _regra_completa({
-            "nome": cidade.title(), "dias": info["dias"], "origem": "cidade",
-            "regiao": info["regiao"], "externa": info["externa"],
+            "nome": cidade.title() if exata else info["cidade"].title(), "dias": info["dias"],
+            "origem": "cidade", "regiao": info["regiao"], "externa": info["externa"],
             "frequencia": info["frequencia"], "ancora": info["ancora"],
         })
     return None
