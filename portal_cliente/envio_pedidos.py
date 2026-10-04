@@ -116,6 +116,11 @@ class ErroEnvio(Exception):
     pass
 
 
+# Dedicado por data fora do dia fixo (Hugo, 03/10/2026 -- spec dias fixos v2):
+# texto do detalhe do chip "Envio dedicado".
+MOTIVO_DEDICADO_FORA_DIA_FIXO = "data fora do dia de visita da região"
+
+
 # ── Banco ──────────────────────────────────────────────────────────────────────
 
 def conectar() -> sqlite3.Connection:
@@ -1138,6 +1143,55 @@ def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
         return None
 
 
+def _regioes_dia_fixo():
+    """roteirizacao/regioes_dia_fixo.py (caminho pelo próprio arquivo: os
+    testes trocam _RAIZ por uma pasta temporária)."""
+    pasta = str(Path(__file__).resolve().parent.parent / "roteirizacao")
+    if pasta not in sys.path:
+        sys.path.insert(0, pasta)
+    import regioes_dia_fixo
+    return regioes_dia_fixo
+
+
+def _endereco_sintetico(nfe: dict) -> str:
+    """Endereço no formato da Vuupt ('..., Cidade - UF, CEP, Brasil'), que é o
+    que regioes_dia_fixo.extrair_cidade lê."""
+    cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
+    partes = [nfe.get("destinatario_endereco") or "S/N", cidade_uf, nfe.get("destinatario_cep")]
+    return ", ".join(p for p in partes if p) + ", Brasil"
+
+
+def avisos_fora_dia_fixo(itens: list[dict]) -> list[dict]:
+    """Itens do confirmar (mesmo formato de confirmar_envios) com data de
+    agendamento escolhida fora do dia de visita da região do destino (Hugo,
+    03/10 -- spec dias fixos v2, 5.2). Fica de fora: sem data, agendamento
+    pendente, data inválida ou passada, e quem já confirmou assim mesmo
+    (aceita_fora_dia_fixo). Relê o temporário, como confirmar_envios."""
+    rdf = _regioes_dia_fixo()
+    hoje = date.today()
+    avisos = []
+    for item in itens:
+        if item.get("aceita_fora_dia_fixo") or item.get("agendamento_pendente") or not item.get("agendamento_data"):
+            continue
+        try:
+            data = date.fromisoformat(str(item.get("agendamento_data")))
+        except ValueError:
+            continue
+        if data < hoje:
+            continue
+        caminho = _caminho_temporario(item.get("token", ""))
+        conteudo = caminho.read_bytes()
+        nfe = json.loads(conteudo.decode("utf-8")) if caminho.suffix == ".json" else ler_nfe(conteudo)
+        regra = rdf.regra_dia_fixo_do_servico({"address": _endereco_sintetico(nfe)})
+        if not regra or rdf.data_valida_na_regiao(regra, data):
+            continue
+        avisos.append({"token": item.get("token"), "rotulo": rotulo_envio(nfe),
+                       "destinatario_nome": nfe.get("destinatario_nome") or "",
+                       "data_br": data.strftime("%d/%m/%Y"), "regiao": regra.get("regiao") or regra["nome"],
+                       "dias": rdf.descricao_dias(regra)})
+    return avisos
+
+
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
                      config: dict | None, regra_xml: str) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
@@ -1321,12 +1375,24 @@ def listar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DI
     linhas = [_linha(r, sol) for r in rows]
     # Marca de envio dedicado (Hugo, 23/09): pedidos_dedicados mora no mesmo
     # dados.db; a checagem em sqlite_master cobre banco sem a tabela ainda.
-    dedicados = {}
+    # 03/10: casa também pelo código do pedido (a marcação automática de data
+    # fora do dia fixo não conhece o envio_id) e traz o motivo.
+    import pedidos_dedicados
+    por_envio: dict[int, dict] = {}
+    por_codigo: dict[str, dict] = {}
     if conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pedidos_dedicados'").fetchone():
-        dedicados = {r["envio_id"]: r["valor"] for r in conn.execute(
-            "SELECT envio_id, valor FROM pedidos_dedicados WHERE removido_em IS NULL AND envio_id IS NOT NULL")}
+        for r in conn.execute("SELECT envio_id, codigo_pedido, valor, marcado_por FROM pedidos_dedicados "
+                              "WHERE removido_em IS NULL"):
+            info = {"valor": r["valor"]}
+            if str(r["marcado_por"] or "").startswith(pedidos_dedicados.POR_FORA_DIA_FIXO):
+                info["motivo"] = MOTIVO_DEDICADO_FORA_DIA_FIXO
+            if r["envio_id"] is not None:
+                por_envio[r["envio_id"]] = info
+            if r["codigo_pedido"]:
+                por_codigo[r["codigo_pedido"]] = info
     for l in linhas:
-        l["dedicado"] = {"valor": dedicados[l["id"]]} if l["id"] in dedicados else None
+        codigo = pedidos_dedicados.normalizar_codigo(l.get("codigo_pedido")) if l.get("codigo_pedido") else None
+        l["dedicado"] = por_envio.get(l["id"]) or (por_codigo.get(codigo) if codigo else None)
     return linhas
 
 

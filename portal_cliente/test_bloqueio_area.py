@@ -278,10 +278,11 @@ class LinhaEAcao(unittest.TestCase):
             destinatario_uf, agendamento_data, numero_nf, referencia, data_expedicao, xml_path, origem, agendamento_pendente,
             bloqueio_motivo, bloqueio_chamado_id, codigo_pedido);
             CREATE TABLE portal_solicitacoes (id INTEGER PRIMARY KEY, envio_id, cnpj_embarcador, tipo, detalhes, status, solicitado_por, criado_em, concluido_em, resposta);
-            CREATE TABLE pedidos_dedicados (id INTEGER PRIMARY KEY, envio_id INTEGER, valor REAL, removido_em TEXT);
+            CREATE TABLE pedidos_dedicados (id INTEGER PRIMARY KEY, codigo_pedido TEXT, envio_id INTEGER, valor REAL,
+                marcado_por TEXT, removido_em TEXT);
             INSERT INTO portal_envios (id, cnpj_embarcador, status, criado_em, numero_nf, xml_path, origem, agendamento_pendente)
               VALUES (1, '1', 'NA_FILA', '2099-01-01 00:00:00', '1', 'a.xml', 'xml', 0), (2, '1', 'NA_FILA', '2099-01-01 00:00:00', '2', 'b.xml', 'xml', 0);
-            INSERT INTO pedidos_dedicados VALUES (1, 1, 33.34, NULL), (2, 2, 5, '2026-01-01');""")
+            INSERT INTO pedidos_dedicados (id, envio_id, valor, removido_em) VALUES (1, 1, 33.34, NULL), (2, 2, 5, '2026-01-01');""")
         lista = {l["id"]: l for l in ep.listar_envios(conn, "1")}
         self.assertEqual(lista[1]["dedicado"], {"valor": 33.34})
         self.assertIsNone(lista[2]["dedicado"])

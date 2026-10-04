@@ -268,7 +268,7 @@
       <td class="nw">${docCurto(x)}</td>
       <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
-      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
+      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>${x.dedicado.motivo ? `<div class="bloq-txt">${esc(x.dedicado.motivo)}</div>` : ''}` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
       <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
       <td class="nw">${entrega(x)}</td>
       <td><div class="acoes-linha">
@@ -385,7 +385,7 @@
     });
   });
 
-  async function confirmar() {
+  async function confirmar(aceitos = new Set()) {
     const p = previa;
     const horarios = {};
     for (const el of $('previa-dest').querySelectorAll('.dest')) {
@@ -398,6 +398,7 @@
       const rotuloIt = it.rotulo || ('NF ' + it.numero_nf);
       const tr = $('previa-tabela').querySelector(`tr[data-i="${i}"]`);
       const item = { token: it.token, horario_inicio: h.ini, horario_fim: h.fim, requer_agendamento: h.ag };
+      if (aceitos.has(it.token)) item.aceita_fora_dia_fixo = true;
       if (h.ag) {
         const pend = tr.querySelector('.ag-pend'), data = tr.querySelector('.ag-data');
         item.agendamento_pendente = !!(pend && pend.checked);
@@ -413,6 +414,12 @@
     try {
       const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens }) });
       const j = await r.json();
+      if (r.status === 409 && j.fora_dia_fixo) {
+        mensagem('', '');
+        $('btn-confirmar').disabled = false;
+        perguntarForaDiaFixo(j.fora_dia_fixo, aceitos);
+        return;
+      }
       if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
       previa = null; $('previa').classList.remove('aberta');
       mensagem(j.mensagem, (j.bloqueados || []).length ? 'info' : 'ok');
@@ -422,6 +429,20 @@
       mensagem(e.message, 'erro');
       $('btn-confirmar').disabled = false;
     }
+  }
+
+  // Data fora do dia de visita da região (Hugo, 03/10): o embarcador troca a
+  // data na prévia ou confirma assim mesmo (vira envio dedicado, com valor).
+  function perguntarForaDiaFixo(lista, aceitos) {
+    modal(`<h3>Data fora do dia de visita da região</h3>
+      <p>Atendemos estas regiões só em alguns dias da semana. Se a data for mantida, o pedido vai como <b>envio dedicado</b>, com valor calculado pela tabela de frete dedicado da Fresh Log.</p>
+      <ul style="margin:0 0 12px;padding-left:18px;font-size:13px;">${lista.map(a => `<li><b>${esc(a.rotulo)}</b> · ${esc(a.destinatario_nome)} · ${esc(a.data_br)} — ${esc(a.regiao)}: ${esc(a.dias)}</li>`).join('')}</ul>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Trocar a data</button><button type="button" class="botao" id="m-ok">Confirmar assim mesmo</button></div>`);
+    $('m-ok').addEventListener('click', () => {
+      lista.forEach(a => aceitos.add(a.token));
+      fecharModal();
+      confirmar(aceitos);
+    });
   }
 
   // ── Ações sobre pedidos ────────────────────────────────────────────────────
@@ -499,7 +520,7 @@
   ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
   ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));
   zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
-  $('btn-confirmar').addEventListener('click', confirmar);
+  $('btn-confirmar').addEventListener('click', () => confirmar());
   $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
   if ($('env-empresa')) {
     const trocarEmpresa = () => {
