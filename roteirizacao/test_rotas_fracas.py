@@ -441,6 +441,71 @@ class TestAbrirEspaco(unittest.TestCase):
         self.assertEqual(rf.MOTIVO_NAO_ANALISADA, "não analisada (tempo da junção esgotado)")
 
 
+class TestPodaDeCandidatos(unittest.TestCase):
+    """Poda (Hugo, 03/10): rota que o _rota_valida reprovaria em qualquer
+    ordem (paradas, caixas ou parada alem do limite par-a-par) nem chega
+    ao 2-opt. A poda nao pode mudar o resultado."""
+
+    setUp = TestAbsorver.setUp
+    _absorver = TestAbsorver._absorver
+
+    def _cenarios(self):
+        def abrir_espaco():
+            return TestAbrirEspaco._cenario(self)
+
+        def tudo_ou_nada_com_troca():
+            fraca, j, k = TestAbrirEspaco._cenario(self)
+            fraca.append(_servico(9, 0.10, -0.60, caixas=1))
+            return [fraca, j, k]
+        return [
+            list(abrir_espaco()),
+            tudo_ou_nada_com_troca(),
+            [[_servico(1, 0.10, 0.00)], [_servico(3, 0.10, 0.16, caixas=25), _servico(4, 0.10, 0.161, caixas=25)]],
+            [[_servico(1, 0.10, 0.00)], [_servico(3, 0.10, 0.20, caixas=25), _servico(4, 0.10, 0.201, caixas=25)]],
+            [[_servico(1, 0.10, 0.00), _servico(2, 0.10, 0.30)],
+             [_servico(3, 0.10, 0.001, caixas=25), _servico(4, 0.10, 0.002, caixas=25)],
+             [_servico(5, 0.10, 0.301, caixas=25), _servico(6, 0.10, 0.302, caixas=25)]],
+            [[_servico(1, 0.10, 0.00, caixas=30)], [_servico(3, 0.10, 0.01, caixas=45), _servico(4, 0.10, 0.011, caixas=45)]],
+        ]
+
+    @staticmethod
+    def _resumo(saida, rel):
+        ids = {id(sub): tuple(s["id"] for s in sub) for sub in saida}
+        return ([tuple(s["id"] for s in sub) for sub in saida], rel["juntadas"],
+                sorted(ids[k] for k in rel["receptoras"]), sorted((ids[k], m) for k, m in rel["motivos"].items()))
+
+    def test_poda_nao_muda_o_resultado(self):
+        for cenario in self._cenarios():
+            com_poda = self._resumo(*self._absorver([list(r) for r in cenario]))
+            with mock.patch.object(rf, "_pode_caber", lambda *a, **k: True):
+                sem_poda = self._resumo(*self._absorver([list(r) for r in cenario]))
+            self.assertEqual(com_poda, sem_poda, cenario)
+
+    def test_rota_distante_nunca_vai_ao_2opt(self):
+        # a vizinha a ~33 km passa do limite par-a-par de receptora (20 km)
+        fraca = [_servico(1, 0.10, 0.00)]
+        perto = [_servico(3, 0.10, 0.01, caixas=25), _servico(4, 0.10, 0.011, caixas=25)]
+        longe = [_servico(5, 0.10, 0.30, caixas=25), _servico(6, 0.10, 0.301, caixas=25)]
+        tentadas = []
+        original = rf.ordenar_2opt
+
+        def _espiao(sub, *a, **k):
+            tentadas.append({s["id"] for s in sub})
+            return original(sub, *a, **k)
+        with mock.patch.object(rf, "ordenar_2opt", _espiao), \
+             mock.patch.object(rf, "_rota_valida", lambda *a, **k: False):  # nada cabe: forca tentar tudo
+            self._absorver([fraca, perto, longe])
+        self.assertTrue(tentadas)
+        self.assertFalse([t for t in tentadas if t & {5, 6}], tentadas)
+
+    def test_viagem_nao_e_podada_por_distancia(self):
+        # receptora de viagem nao tem limite par-a-par: a distancia nao poda
+        fraca = [_servico(1, 0.10, 0.00)]
+        longe = [_servico(5, 0.10, 0.30, caixas=25), _servico(6, 0.10, 0.301, caixas=25)]
+        self.assertTrue(rf._pode_caber(fraca[0], longe, None, 18, 110, 20, None, lambda sub: True))
+        self.assertFalse(rf._pode_caber(fraca[0], longe, None, 18, 110, 20, None, lambda sub: False))
+
+
 class TestRotaValidaTempo(unittest.TestCase):
     """_rota_valida: teto de horas parametrizavel; o padrao (polimento)
     continua 9h."""

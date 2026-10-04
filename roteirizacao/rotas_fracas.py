@@ -36,7 +36,7 @@ from roteirizacao_dados import (  # noqa: E402
     extrair_volume_caixas, macro_regiao_do_servico, MACRO_GRANDE_SP,
     obter_coordenadas, _distancia_km, macro_regiao_predominante_do_sublote, estimar_tempo_rota,
 )
-from otimizacao_rotas import ordenar_2opt  # noqa: E402
+from otimizacao_rotas import ordenar_2opt, limite_distancia  # noqa: E402
 from polimento_rotas import _rota_polivel, _rota_valida, _melhor_insercao, _centroide  # noqa: E402
 from regioes_dia_fixo import regra_dia_fixo_do_servico  # noqa: E402
 
@@ -135,6 +135,31 @@ def motivo_nao_segurar(servico: dict, data_alvo: date, ja_segurados: set[str],
     return None
 
 
+def _pode_caber(parada: dict, rota: list[dict], api_key: str | None, tamanho_maximo: int, volume_maximo: int,
+                distancia_maxima_km: float | None, distancia_maxima_viagem_km: float | None,
+                eh_viagem_fn) -> bool:
+    """Poda EXATA antes da melhor insercao e do 2-opt (Hugo, 03/10):
+    False so quando _rota_valida reprovaria rota + [parada] em QUALQUER
+    ordem -- paradas, caixas ou a parada alem do limite par-a-par de
+    alguma parada da rota (limite_distancia sobre o conjunto, entao rota
+    de viagem, sem limite, nunca e podada por distancia). Km acumulado,
+    tempo e janela dependem da ordem e ficam pro _rota_valida."""
+    candidata = rota + [parada]
+    if len(candidata) > tamanho_maximo:
+        return False
+    if _caixas(candidata) > volume_maximo and len(candidata) != 1:
+        return False
+    limite = limite_distancia(candidata, distancia_maxima_km, distancia_maxima_viagem_km, eh_viagem_fn)
+    ponto = obter_coordenadas(parada, api_key) if limite is not None else None
+    if not ponto:
+        return True
+    for s in rota:
+        c = obter_coordenadas(s, api_key)
+        if c and _distancia_km(*ponto, *c) > limite:
+            return False
+    return True
+
+
 MOTIVO_SEM_VIZINHA = "sem rota vizinha na mesma região"
 MOTIVO_NAO_COUBE = "não coube nas vizinhas (distância, paradas, caixas, tempo ou janela)"
 MOTIVO_NAO_ANALISADA = "não analisada (tempo da junção esgotado)"
@@ -220,7 +245,11 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
 
     def _inserir_valida(parada: dict, rota: list[dict]) -> list[dict] | None:
         """Rota com `parada` na melhor insercao, sequenciada, ou None se
-        nao fica valida com os limites de receptora."""
+        nao fica valida com os limites de receptora. A poda (_pode_caber)
+        descarta antes do 2-opt quem seria reprovado de qualquer jeito."""
+        if not _pode_caber(parada, rota, api_key, tamanho_folga, volume_folga, distancia_folga,
+                           distancia_maxima_viagem_km, eh_viagem_fn):
+            return None
         _, candidata = _melhor_insercao(parada, rota, base, api_key)
         sequenciada = ordenar_2opt(candidata, base_lat, base_lng, api_key)
         return sequenciada if _valida(sequenciada) else None
@@ -228,7 +257,6 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
     def _abrir_espaco(parada: dict, i: int, ordem_j: list[int], da_fraca: set[int]) -> bool:
         """Uma troca (ver docstring): grava em rotas[j] e rotas[k] e
         devolve True na primeira combinacao valida. Sem tempo, False."""
-        caixas_p = extrair_volume_caixas(parada)
         for j in ordem_j:
             for q in rotas[j]:
                 if _tempo_esgotado():
@@ -236,19 +264,16 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
                 if id(q) in da_fraca:
                     continue
                 resto_j = [s for s in rotas[j] if s is not q]
-                # filtro barato antes do 2-opt (o _valida reprovaria igual)
-                if len(resto_j) + 1 > tamanho_folga or _caixas(resto_j) + caixas_p > volume_folga:
-                    continue
                 # p em j-sem-q nao depende de k: confere uma vez so por q
                 nova_j = _inserir_valida(parada, resto_j)
                 if nova_j is None:
                     continue
                 ponto_q = obter_coordenadas(q, api_key)
                 macro_q = macro_regiao_do_servico(q, api_key)
-                caixas_q = extrair_volume_caixas(q)
                 ks = [k for k in participantes
                       if k != i and k != j and rotas[k] and macro[k] == macro_q
-                      and len(rotas[k]) + 1 <= tamanho_folga and _caixas(rotas[k]) + caixas_q <= volume_folga]
+                      and _pode_caber(q, rotas[k], api_key, tamanho_folga, volume_folga, distancia_folga,
+                                      distancia_maxima_viagem_km, eh_viagem_fn)]
                 for k in sorted(ks, key=lambda k: (_distancia_da_rota(ponto_q, rotas[k]), k)):
                     if _tempo_esgotado():
                         return False
