@@ -53,6 +53,21 @@ class TestPrazos(unittest.TestCase):
         self.assertEqual(r.prazo(r.SEM_SERVICO, desde, prazo_segurado=date(2026, 10, 1)),
                          datetime(2026, 9, 29, 12, 0))
 
+    def test_no_pool_de_regiao_semanal_ou_quinzenal_usa_dias_corridos(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=7), datetime(2026, 10, 6, 8, 0))
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=15), datetime(2026, 10, 14, 8, 0))
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=None), datetime(2026, 9, 30, 8, 0))
+
+    def test_segurado_vence_o_prazo_da_regiao(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1), prazo_dias_regiao=7),
+                         r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1)))
+
+    def test_prazo_da_regiao_so_vale_no_pool(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.SEM_SERVICO, desde, prazo_dias_regiao=7), datetime(2026, 9, 29, 12, 0))
+
 
 class TestClassificar(unittest.TestCase):
     def test_aberto_na_stokki_sem_servico(self):

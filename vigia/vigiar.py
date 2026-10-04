@@ -32,6 +32,7 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
 from vigia import banco, regras  # noqa: E402
+from roteirizacao.regioes_dia_fixo import NIVEL_QUINZENAL, NIVEL_SEMANAL, regra_dia_fixo_do_servico  # noqa: E402
 
 logger = logging.getLogger("vigia")
 
@@ -82,6 +83,20 @@ def _consultar(conn: sqlite3.Connection, sql: str, params=()) -> list[sqlite3.Ro
         return []
 
 
+def _prazo_dias_regiao(endereco) -> int | None:
+    """Dias corridos do prazo de pedido de região semanal/quinzenal (Hugo,
+    03/10); None pra Grande SP, região interna ou endereço sem região."""
+    if not endereco:
+        return None
+    try:
+        regra = regra_dia_fixo_do_servico({"address": endereco})
+    except Exception:
+        return None
+    if regra and regra.get("nivel") in (NIVEL_SEMANAL, NIVEL_QUINZENAL):
+        return regra["prazo_dias"]
+    return None
+
+
 # ── Coleta ──────────────────────────────────────────────────────────────────
 
 def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
@@ -92,7 +107,7 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
     servicos = _consultar(conn, """
         SELECT codigo, vuupt_service_id, status, agendamento_inicio, vuupt_route_id,
                criado_em_provedor, atualizado_em_provedor, criado_em, remetente_nome,
-               destinatario_nome, fluxo, excluido_em, reentrega_de_service_id
+               destinatario_nome, fluxo, excluido_em, reentrega_de_service_id, endereco
         FROM nucleo_pedidos
     """)
     duplicados = {r["service_id_original"]: r["cancelado_em"] for r in _consultar(
@@ -207,6 +222,7 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
                             f"segurado para consolidar (prazo {_d(segurados[base]):%d/%m})"
                             if base in segurados else None),
             "prazo_segurado": _d(segurados[base]) if base in segurados else None,
+            "prazo_dias_regiao": None if s["agendamento_inicio"] else _prazo_dias_regiao(s["endereco"]),
             # carimbos pro 'desde'
             "_criado": _dt(s["criado_em_provedor"]) or _dt(s["criado_em"]),
             "_atualizado": _dt(s["atualizado_em_provedor"]),
@@ -281,7 +297,8 @@ def rodar(conn: sqlite3.Connection, agora: datetime | None = None, gravar: bool 
         else:
             desde = _desde_estimado(estado, f, agora)
         vence = regras.prazo(estado, desde, data_rascunho=f.get("rascunho_data"),
-                             prazo_segurado=f.get("prazo_segurado"))
+                             prazo_segurado=f.get("prazo_segurado"),
+                             prazo_dias_regiao=f.get("prazo_dias_regiao"))
         novos[f["codigo"]] = {
             "codigo": f["codigo"], "estado": estado, "motivo": (motivo or "")[:300],
             "desde": desde.strftime(banco.FMT),
