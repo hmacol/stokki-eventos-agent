@@ -95,12 +95,30 @@ class TestAvisar(Base):
         self.assertEqual((r["falhas"], r["registrados"]), (1, 0))
         self.assertFalse(self._avisado())
 
-    def test_notificacoes_desligadas_nao_envia_nem_registra(self):
-        config = {"notificacoes_automaticas": {"ativo": False}, "email": {}}
-        r = nfdf.avisar([_item()], config, db_path=self.db, embarcadores=EMBS)
+    def test_envio_real_com_notificacoes_desligadas_nao_envia_nem_registra(self):
+        config = {"notificacoes_automaticas": {"ativo": False}, "email": {}, "fora_dia_fixo": {"forcar_destino": ""}}
+        with mock.patch.object(nfdf.preferencias_notificacao, "whatsapp_do_embarcador", return_value="5511988887777"), \
+             mock.patch.object(nfdf.notificar_whatsapp, "avisar_cliente_fora_dia_fixo", return_value="enviado") as wpp:
+            r = nfdf.avisar([_item()], config, db_path=self.db, embarcadores=EMBS)
         self.assertEqual(r["desligado"], 1)
         self.email.assert_not_called()
-        self.assertFalse(self._avisado())
+        wpp.assert_not_called()
+        self.assertFalse(self._avisado())   # tenta de novo quando a chave geral ligar
+
+    def test_piloto_sai_pro_hugo_mesmo_com_notificacoes_desligadas(self):
+        # producao tem notificacoes_automaticas.ativo = False; o piloto nao depende dela
+        config = {"notificacoes_automaticas": {"ativo": False}, "email": {}}
+        r = nfdf.avisar([_item()], config, db_path=self.db, embarcadores=EMBS)
+        self.assertEqual((r["emails"], r["registrados"], r["desligado"]), (1, 1, 0))
+        self.assertEqual(self.email.call_args[0][0], [nfdf.EMAIL_TESTE])
+        self.assertTrue(self._avisado())
+
+    def test_piloto_com_forcar_destino_preenchido_nao_depende_da_chave_geral(self):
+        config = {"notificacoes_automaticas": {"ativo": False}, "email": {},
+                  "fora_dia_fixo": {"forcar_destino": "outro@freshlogbr.com"}}
+        r = nfdf.avisar([_item()], config, db_path=self.db, embarcadores=EMBS)
+        self.assertEqual(r["registrados"], 1)
+        self.assertEqual(self.email.call_args[0][0], ["outro@freshlogbr.com"])
 
     def test_embarcador_sem_email_registra_nenhum(self):
         nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores={})

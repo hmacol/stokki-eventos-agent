@@ -9,8 +9,11 @@ avisos_fora_dia_fixo), por e-mail (um por embarcador por rodada) e por
 WhatsApp (notificar_whatsapp.avisar_cliente_fora_dia_fixo).
 
 Chaves do config.yaml:
-  notificacoes_automaticas.ativo  desligada -> nada sai, nada é registrado
-  fora_dia_fixo.forcar_destino    ausente = hugo@ (piloto); "" = envio real
+  fora_dia_fixo.forcar_destino    ausente = hugo@ (piloto); preenchido = vai pra
+                                  esse endereço (piloto); "" = envio real
+  notificacoes_automaticas.ativo  só vale no envio real: desligada -> nada sai,
+                                  nada é registrado (tenta de novo depois).
+                                  O piloto não depende dela.
   whatsapp_notificacoes.clientes  ativo / forcar_destino / teto_diario
 Destinatário do e-mail: preferências do portal, tipo "agendamento" (o mesmo
 dos avisos de dia fixo; quem desligou não recebe e-mail).
@@ -127,7 +130,10 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
     resultado = {"emails": 0, "falhas": 0, "whatsapp": 0, "registrados": 0, "desligado": 0}
     if not itens:
         return resultado
-    if not notificacoes_automaticas_ativas(config):
+    forcar = forcar_destino_do_config(config)
+    # piloto (forcar_destino ausente ou preenchido) sai mesmo com a chave geral
+    # desligada; envio real ao embarcador exige a chave geral
+    if not forcar and not notificacoes_automaticas_ativas(config):
         logger.info(f"{len(itens)} aviso(s) de data fora do dia fixo não enviados: notificações automáticas desligadas.")
         resultado["desligado"] = len(itens)
         return resultado
@@ -140,7 +146,6 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
             logger.warning(f"nao carregou os embarcadores ({e}); {len(itens)} aviso(s) ficam pra proxima rodada")
             resultado["falhas"] = len(itens)
             return resultado
-    forcar = forcar_destino_do_config(config)
     grupos: dict = defaultdict(list)
     for item in itens:
         grupos[item["servico"].get("sender_id")].append(item)

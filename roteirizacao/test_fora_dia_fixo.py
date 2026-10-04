@@ -211,7 +211,7 @@ class TestDeteccaoEMarcacao(Base):
 class TestPendentesDeAviso(Base):
     def test_marcado_e_nao_avisado_e_pendente(self):
         self._marcar([_servico()])
-        pend = fdf.pendentes_de_aviso([_servico(), _servico(i=2, endereco=SAO_PAULO)], db_path=self.db)
+        pend = fdf.pendentes_de_aviso([_servico(), _servico(i=2, endereco=SAO_PAULO)], hoje=HOJE, db_path=self.db)
         self.assertEqual([p["servico"]["id"] for p in pend], [1])
         self.assertEqual((pend[0]["valor"], pend[0]["valor_pendente"], pend[0]["data"]), (784.09, False, date(2026, 10, 8)))
 
@@ -220,18 +220,24 @@ class TestPendentesDeAviso(Base):
         conn = reg.conectar(self.db)
         reg.registrar_aviso(conn, _servico(), date(2026, 10, 8), ["email"])
         conn.close()
-        self.assertEqual(fdf.pendentes_de_aviso([_servico()], db_path=self.db), [])
+        self.assertEqual(fdf.pendentes_de_aviso([_servico()], hoje=HOJE, db_path=self.db), [])
 
     def test_dedicado_manual_nao_e_pendente(self):
         conn = pedidos_dedicados.conectar(self.db)
         pedidos_dedicados.marcar(conn, [{"codigo_pedido": "PS-1001"}], 500.0, "hugo")
         conn.close()
-        self.assertEqual(fdf.pendentes_de_aviso([_servico()], db_path=self.db), [])
+        self.assertEqual(fdf.pendentes_de_aviso([_servico()], hoje=HOJE, db_path=self.db), [])
+
+    def test_data_ja_passada_nao_entra(self):
+        # marcado na terca pra quinta; na sexta o aviso nao sai mais (data vencida)
+        self._marcar([_servico()])
+        self.assertEqual(len(fdf.pendentes_de_aviso([_servico()], hoje=date(2026, 10, 8), db_path=self.db)), 1)
+        self.assertEqual(fdf.pendentes_de_aviso([_servico()], hoje=date(2026, 10, 9), db_path=self.db), [])
 
     def test_valor_pendente_vem_marcado(self):
         with mock.patch.object(fdf, "calcular_valor", lambda s, c, t: None):
             self._marcar([_servico()])
-        self.assertTrue(fdf.pendentes_de_aviso([_servico()], db_path=self.db)[0]["valor_pendente"])
+        self.assertTrue(fdf.pendentes_de_aviso([_servico()], hoje=HOJE, db_path=self.db)[0]["valor_pendente"])
 
 
 class TestCalcularValor(unittest.TestCase):

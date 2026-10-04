@@ -172,9 +172,11 @@ def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None =
     return marcados
 
 
-def pendentes_de_aviso(servicos: list[dict], db_path=None) -> list[dict]:
+def pendentes_de_aviso(servicos: list[dict], hoje: date | None = None, db_path=None) -> list[dict]:
     """Pedidos da lista marcados por ESTA regra e ainda não avisados
-    (inclui os de rodadas anteriores cujo aviso falhou)."""
+    (inclui os de rodadas anteriores cujo aviso falhou). Data agendada já
+    passada fica de fora: não adianta avisar depois do dia."""
+    hoje = hoje or date.today()
     db = db_path or pedidos_dedicados.DB_PATH
     conn_reg = registro_dia_fixo.conectar(db)
     conn_ded = pedidos_dedicados.conectar(db)
@@ -187,7 +189,7 @@ def pendentes_de_aviso(servicos: list[dict], db_path=None) -> list[dict]:
             if not por.startswith(POR) or registro_dia_fixo.ja_avisado(conn_reg, s):
                 continue
             regra, data = regra_dia_fixo_do_servico(s), data_agendada(s)
-            if not regra or not data:
+            if not regra or not data or data < hoje:
                 continue
             itens.append({"servico": s, "regra": regra, "data": data, "valor": float(linha["valor"] or 0.0),
                           "valor_pendente": por == POR_VALOR_PENDENTE})
@@ -219,7 +221,7 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
         marcados = marcar_fora_dia_fixo(servicos, config, hoje=hoje, db_path=db_path)
         resumo["marcados"] = len(marcados)
         import notificar_fora_dia_fixo
-        avisos = notificar_fora_dia_fixo.avisar(pendentes_de_aviso(servicos, db_path=db_path), config,
+        avisos = notificar_fora_dia_fixo.avisar(pendentes_de_aviso(servicos, hoje=hoje, db_path=db_path), config,
                                                 db_path=db_path)
         if marcados or avisos.get("registrados") or avisos.get("falhas"):
             logger.info(f"Fora do dia fixo: {len(marcados)} marcado(s) como dedicado; avisos {avisos}.")
