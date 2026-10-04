@@ -186,6 +186,27 @@ class TestDeteccaoEMarcacao(Base):
         self._marcar([_servico()])
         self.assertEqual(self._marcar([_servico()]), [])
 
+    def _remover(self, **kw):
+        conn = pedidos_dedicados.conectar(self.db)
+        try:
+            pedidos_dedicados.remover(conn, por="hugo", **kw)
+        finally:
+            conn.close()
+
+    def test_dedicado_removido_pela_equipe_nao_e_remarcado(self):
+        # "Remover dedicado" no Planejamento: a decisao da equipe vale nas rodadas seguintes
+        self.assertEqual(len(self._marcar([_servico()])), 1)
+        self._remover(codigo_pedido="PS-1001")
+        self.assertEqual(self._marcar([_servico()]), [])
+        self.assertEqual(self._ativos(), {})
+        self.assertEqual(len(self._marcar([_servico(i=2)])), 1)   # outro pedido continua marcando
+
+    def test_servico_removido_volta_com_outro_codigo_e_nao_e_remarcado(self):
+        self._marcar([_servico(code="#PS-1001, PS-1002")])
+        self._remover(service_id=1)
+        self.assertEqual(self._marcar([_servico(code="PS-1002")]), [])
+        self.assertEqual(self._ativos(), {})
+
 
 class TestPendentesDeAviso(Base):
     def test_marcado_e_nao_avisado_e_pendente(self):

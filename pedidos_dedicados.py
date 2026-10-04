@@ -160,12 +160,14 @@ def ativos_por_codigo(conn: sqlite3.Connection) -> dict[str, dict]:
     return {r["codigo_pedido"]: dict(r) for r in rows}
 
 
-def ativos_por_service_id(conn: sqlite3.Connection) -> set[int]:
-    """service_id com dedicado ativo. Codigo combinado ('#PS-1, PS-2') grava so
-    o primeiro codigo; quem marca automatico confere tambem o servico pra nao
-    duplicar quando o mesmo servico volta com outro codigo."""
-    rows = conn.execute("SELECT DISTINCT service_id FROM pedidos_dedicados WHERE removido_em IS NULL AND service_id IS NOT NULL").fetchall()
-    return {r["service_id"] for r in rows}
+def codigos_e_servicos_ja_marcados(conn: sqlite3.Connection) -> tuple[set[str], set[int]]:
+    """(codigos, service_ids) com QUALQUER linha, ativa ou removida. A marcacao
+    automatica nao volta a marcar o que a equipe ja tirou ("Remover dedicado").
+    Codigo combinado ('#PS-1, PS-2') grava so o primeiro codigo; por isso o
+    service_id tambem conta (o mesmo servico volta com outro codigo)."""
+    rows = conn.execute("SELECT codigo_pedido, service_id FROM pedidos_dedicados").fetchall()
+    return ({r["codigo_pedido"] for r in rows if r["codigo_pedido"]},
+            {r["service_id"] for r in rows if r["service_id"] is not None})
 
 
 def ativo_por_envio(conn: sqlite3.Connection, envio_id: int) -> dict | None:

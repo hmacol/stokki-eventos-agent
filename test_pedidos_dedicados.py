@@ -84,12 +84,12 @@ class Marcacao(unittest.TestCase):
         self.assertEqual(list(ativos), ["PS-2"])
         self.assertEqual(ativos["PS-2"]["valor"], 5.0)
 
-    def test_ativos_por_service_id(self):
+    def test_codigos_e_servicos_ja_marcados_inclui_removidos(self):
         conn = _conn()
         pd.marcar(conn, [{"codigo_pedido": "PS-1", "service_id": 11}, {"codigo_pedido": "PS-2", "service_id": 22},
-                         {"codigo_pedido": "PS-3"}], 30, "a")
+                         {"codigo_pedido": "PS-3"}, {"envio_id": 9}], 40, "a")
         pd.remover(conn, codigo_pedido="PS-2", por="b")
-        self.assertEqual(pd.ativos_por_service_id(conn), {11})
+        self.assertEqual(pd.codigos_e_servicos_ja_marcados(conn), ({"PS-1", "PS-2", "PS-3"}, {11, 22}))
 
     def test_vincular_codigo(self):
         conn = _conn()

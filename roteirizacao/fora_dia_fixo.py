@@ -128,8 +128,9 @@ def _nomes_remetentes(db_path) -> dict:
 
 def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None = None,
                          db_path=None) -> list[dict]:
-    """Marca como dedicado cada pedido detectado. Dedicado ativo (qualquer
-    código do serviço) não é remarcado. Devolve os marcados nesta rodada:
+    """Marca como dedicado cada pedido detectado. Pedido que já teve dedicado
+    (qualquer código do serviço ou o mesmo serviço), ativo OU removido pela
+    equipe, não é remarcado. Devolve os marcados nesta rodada:
     [{"servico", "regra", "data", "valor", "valor_pendente"}]."""
     hoje = hoje or date.today()
     db = db_path or pedidos_dedicados.DB_PATH
@@ -139,13 +140,13 @@ def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None =
     conn_reg = registro_dia_fixo.conectar(db)
     conn_ded = pedidos_dedicados.conectar(db)
     try:
-        ativos = pedidos_dedicados.ativos_por_codigo(conn_ded)
-        # codigo combinado grava so o primeiro: o servico tambem conta, senao
-        # o mesmo servico com outro codigo virava 2a linha (cobranca dobrada)
-        servicos_ativos = pedidos_dedicados.ativos_por_service_id(conn_ded)
+        # linha removida tambem conta: "Remover dedicado" da equipe nao e desfeito
+        # na rodada seguinte. Codigo combinado grava so o primeiro: o servico
+        # tambem conta, senao o mesmo servico com outro codigo virava 2a linha
+        ja_marcados, servicos_marcados = pedidos_dedicados.codigos_e_servicos_ja_marcados(conn_ded)
         for s in servicos:
             codigos = pedidos_dedicados.codigos_do_servico(s)
-            if not codigos or any(c in ativos for c in codigos) or s.get("id") in servicos_ativos:
+            if not codigos or any(c in ja_marcados for c in codigos) or s.get("id") in servicos_marcados:
                 continue
             achado = detectar(s, hoje, conn_reg)
             if not achado:
@@ -157,9 +158,9 @@ def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None =
                 "codigo_pedido": codigos[0], "service_id": s.get("id"), "sender_id": s.get("sender_id"),
                 "remetente_nome": nomes.get(s.get("sender_id")),
             }], valor or 0.0, por)
-            ativos[codigos[0]] = {"marcado_por": por}
+            ja_marcados.add(codigos[0])
             if s.get("id") is not None:
-                servicos_ativos.add(s.get("id"))
+                servicos_marcados.add(s.get("id"))
             logger.info(f"  {s.get('code')}: data {data:%d/%m} fora dos dias de "
                         f"{regra.get('regiao') or regra['nome']} -- marcado como dedicado "
                         f"({'valor pendente' if valor is None else f'R$ {valor:.2f}'}).")
