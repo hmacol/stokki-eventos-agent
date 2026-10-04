@@ -836,6 +836,15 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta a criação de rotas): {e}")
 
+        # Fora do dia fixo (Hugo, 03/10): data do embarcador fora do dia de
+        # visita da região vira dedicado (sai da rota logo abaixo, em
+        # separar_dedicados) e o embarcador é avisado uma vez.
+        try:
+            from fora_dia_fixo import tratar_fora_dia_fixo
+            tratar_fora_dia_fixo(servicos_brutos, config, modo_teste=modo_teste)
+        except Exception as e:
+            logger.error(f"Falha na regra de data fora do dia fixo (não afeta a criação de rotas): {e}")
+
         # Dedicado (Hugo, 23/09): transporte cotado à parte -- sai ANTES da
         # checagem de área não atendida pra não gerar e-mail nem entrar em rota.
         try:
