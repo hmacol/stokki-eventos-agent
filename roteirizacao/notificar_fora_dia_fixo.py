@@ -16,8 +16,9 @@ Destinatário do e-mail: preferências do portal, tipo "agendamento" (o mesmo
 dos avisos de dia fixo; quem desligou não recebe e-mail).
 
 Registro: grava quando pelo menos um canal saiu, ou quando o embarcador não
-tem canal nenhum ("nenhum"). E-mail que falhou sem WhatsApp enviado não
-grava: a próxima rodada tenta de novo.
+tem canal nenhum ("nenhum"). Não grava (a próxima rodada tenta de novo) quando
+o e-mail falhou ou a leitura do WhatsApp falhou e nada saiu, quando a lista de
+embarcadores não carregou, ou quando o registro do pedido deu erro.
 """
 import html
 import logging
@@ -135,8 +136,10 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
         try:
             embarcadores = preferencias_notificacao.carregar_embarcadores("agendamento", db_path=db)
         except Exception as e:
-            logger.warning(f"nao carregou os embarcadores ({e}); avisos sem e-mail")
-            embarcadores = {}
+            # sem a lista não dá pra saber quem não tem canal: nada é registrado, a próxima rodada tenta de novo
+            logger.warning(f"nao carregou os embarcadores ({e}); {len(itens)} aviso(s) ficam pra proxima rodada")
+            resultado["falhas"] = len(itens)
+            return resultado
     forcar = forcar_destino_do_config(config)
     grupos: dict = defaultdict(list)
     for item in itens:
@@ -160,21 +163,30 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
                     email_falhou = True
                     resultado["falhas"] += 1
             telefone = None
+            leitura_falhou = False
             if emb.get("cnpj"):
                 try:
                     telefone = preferencias_notificacao.whatsapp_do_embarcador(conn_pref, emb["cnpj"])
                 except Exception as e:
+                    leitura_falhou = True
                     logger.warning(f"nao leu o WhatsApp do embarcador {sender_id} ({e})")
             for item in grupo:
-                canais = ["email"] if email_ok else []
-                if telefone and notificar_whatsapp.avisar_cliente_fora_dia_fixo(
-                        _codigo(item["servico"]), telefone, _texto_whatsapp(item), config) == "enviado":
-                    canais.append("whatsapp")
-                    resultado["whatsapp"] += 1
-                if email_falhou and not canais:
-                    continue  # tenta de novo na próxima rodada
-                registro_dia_fixo.registrar_aviso(conn_reg, item["servico"], item["data"], canais)
-                resultado["registrados"] += 1
+                # cada pedido independente: falha num não deixa os outros sem registro
+                # (senão o e-mail já enviado sairia de novo na próxima rodada)
+                try:
+                    canais = ["email"] if email_ok else []
+                    if telefone and notificar_whatsapp.avisar_cliente_fora_dia_fixo(
+                            _codigo(item["servico"]), telefone, _texto_whatsapp(item), config) == "enviado":
+                        canais.append("whatsapp")
+                        resultado["whatsapp"] += 1
+                    if (email_falhou or leitura_falhou) and not canais:
+                        continue  # tenta de novo na próxima rodada
+                    registro_dia_fixo.registrar_aviso(conn_reg, item["servico"], item["data"], canais)
+                    resultado["registrados"] += 1
+                except Exception as e:
+                    resultado["falhas"] += 1
+                    logger.warning(f"aviso de {item['servico'].get('code')} sem registro ({e}); "
+                                   f"tenta de novo na proxima rodada")
     finally:
         conn_reg.close()
         conn_pref.close()

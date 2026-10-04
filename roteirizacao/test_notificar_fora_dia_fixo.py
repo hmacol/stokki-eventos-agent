@@ -4,6 +4,7 @@ Aviso ao embarcador de data fora do dia de visita (dias fixos v2, Hugo
 03/10) e o ponto de chamada tratar_fora_dia_fixo.
 Rodar (da raiz): py -3.11 -m unittest roteirizacao.test_notificar_fora_dia_fixo -v
 """
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -128,6 +129,46 @@ class TestAvisar(Base):
             nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores=EMBS)
         self.assertEqual(self._canais(), "whatsapp")
 
+    def test_falha_ao_carregar_embarcadores_nao_registra_e_tenta_de_novo(self):
+        with mock.patch.object(nfdf.preferencias_notificacao, "carregar_embarcadores",
+                               side_effect=sqlite3.OperationalError("database is locked")),              self.assertLogs(nfdf.logger, "WARNING"):
+            r = nfdf.avisar([_item()], CONFIG, db_path=self.db)
+        self.assertEqual((r["falhas"], r["registrados"]), (1, 0))
+        self.email.assert_not_called()
+        self.assertFalse(self._avisado())
+        with mock.patch.object(nfdf.preferencias_notificacao, "carregar_embarcadores", return_value=EMBS):
+            nfdf.avisar([_item()], CONFIG, db_path=self.db)
+        self.assertEqual(self.email.call_count, 1)
+        self.assertTrue(self._avisado())
+
+    def test_falha_ao_ler_whatsapp_sem_email_nao_registra(self):
+        embs = {7: {**EMBS[7], "emails": []}}
+        with mock.patch.object(nfdf.preferencias_notificacao, "whatsapp_do_embarcador",
+                               side_effect=sqlite3.OperationalError("database is locked")),              self.assertLogs(nfdf.logger, "WARNING"):
+            r = nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores=embs)
+        self.assertEqual(r["registrados"], 0)
+        self.assertFalse(self._avisado())
+
+    def test_falha_ao_ler_whatsapp_com_email_enviado_registra_email(self):
+        with mock.patch.object(nfdf.preferencias_notificacao, "whatsapp_do_embarcador",
+                               side_effect=sqlite3.OperationalError("database is locked")),              self.assertLogs(nfdf.logger, "WARNING"):
+            nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores=EMBS)
+        self.assertEqual(self._canais(), "email")
+
+    def test_falha_no_pedido_2_registra_o_1(self):
+        original = reg.registrar_aviso
+
+        def registrar(conn, servico, *a, **kw):
+            if "1002" in servico["code"]:
+                raise sqlite3.OperationalError("database is locked")
+            return original(conn, servico, *a, **kw)
+
+        with mock.patch.object(reg, "registrar_aviso", side_effect=registrar), self.assertLogs(nfdf.logger, "WARNING"):
+            r = nfdf.avisar([_item(1), _item(2)], CONFIG, db_path=self.db, embarcadores=EMBS)
+        self.assertEqual((r["registrados"], r["falhas"]), (1, 1))
+        self.assertTrue(self._avisado(1))
+        self.assertFalse(self._avisado(2))
+
 
 class TestTratar(Base):
     def setUp(self):
@@ -137,12 +178,14 @@ class TestTratar(Base):
             p = mock.patch.object(obj, alvo, valor)
             p.start()
             self.addCleanup(p.stop)
-        p = mock.patch.object(nfdf.preferencias_notificacao, "carregar_embarcadores", return_value=EMBS)
-        p.start()
-        self.addCleanup(p.stop)
+        for obj, alvo, valor in ((nfdf.preferencias_notificacao, "carregar_embarcadores", EMBS),
+                                 (fdf, "carregar_tipos_carga", {})):
+            p = mock.patch.object(obj, alvo, return_value=valor)
+            p.start()
+            self.addCleanup(p.stop)
 
-    def _tratar(self, **kw):
-        return fdf.tratar_fora_dia_fixo([_servico()], CONFIG, hoje=HOJE, db_path=self.db, **kw)
+    def _tratar(self, servicos=None, **kw):
+        return fdf.tratar_fora_dia_fixo(servicos or [_servico()], CONFIG, hoje=HOJE, db_path=self.db, **kw)
 
     def test_tratar_duas_vezes_marca_e_avisa_uma_vez(self):
         self.assertEqual(self._tratar()["marcados"], 1)
@@ -182,8 +225,43 @@ class TestTratar(Base):
             conn.close()
 
     def test_nunca_levanta(self):
-        with mock.patch.object(fdf, "marcar_fora_dia_fixo", side_effect=RuntimeError("banco travado")):
+        with mock.patch.object(fdf, "marcar_fora_dia_fixo", side_effect=RuntimeError("banco travado")),              self.assertLogs(fdf.logger, "ERROR"):
             self.assertIn("erro", self._tratar())
+
+    def test_avisar_que_levanta_mantem_os_marcados(self):
+        with mock.patch.object(nfdf, "avisar", side_effect=RuntimeError("banco travado")),              self.assertLogs(fdf.logger, "ERROR"):
+            r = self._tratar()
+        self.assertEqual(r["marcados"], 1)
+        self.assertIn("erro", r)
+
+    def test_falha_no_pedido_2_nao_reenvia_o_1_na_rodada_seguinte(self):
+        servicos = [_servico(1), _servico(2)]
+        original = reg.registrar_aviso
+
+        def registrar(conn, servico, *a, **kw):
+            if "1002" in servico["code"]:
+                raise sqlite3.OperationalError("database is locked")
+            return original(conn, servico, *a, **kw)
+
+        with mock.patch.object(reg, "registrar_aviso", side_effect=registrar), self.assertLogs(nfdf.logger, "WARNING"):
+            self._tratar(servicos)
+        self.assertEqual(self.email.call_count, 1)
+        self._tratar(servicos)
+        self.assertEqual(self.email.call_count, 2)
+        corpo = self.email.call_args[0][2]
+        self.assertIn("#PS-1002", corpo)
+        self.assertNotIn("#PS-1001", corpo)
+        self._tratar(servicos)
+        self.assertEqual(self.email.call_count, 2)
+        self.assertTrue(self._avisado(1) and self._avisado(2))
+
+    def test_codigo_combinado_avisado_nao_avisa_de_novo_pelo_outro_codigo(self):
+        s1 = {**_servico(1), "code": "#PS-1001, PS-1002"}
+        self._tratar([s1])
+        self.assertEqual(self.email.call_count, 1)
+        s2 = {**_servico(1), "code": "PS-1002"}
+        self._tratar([s2])
+        self.assertEqual(self.email.call_count, 1)
 
 
 if __name__ == "__main__":

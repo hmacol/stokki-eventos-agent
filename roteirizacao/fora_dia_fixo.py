@@ -195,7 +195,9 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
                          hoje: date | None = None, db_path=None) -> dict:
     """Ponto de chamada do criar_rotas_diarias / incrementar_rotas: marca os
     pedidos novos e avisa os pendentes (inclusive de rodadas anteriores).
-    Em modo teste só loga os candidatos. Nunca levanta."""
+    Em modo teste só loga os candidatos. Nunca levanta; se o aviso falhar
+    depois da marcação, o resumo mantém "marcados" junto com "erro"."""
+    resumo: dict = {}
     try:
         hoje = hoje or date.today()
         if modo_teste:
@@ -209,6 +211,7 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
                             f"{regra.get('regiao') or regra['nome']} -- seria marcado como dedicado (não marcado).")
             return {"marcados": 0, "candidatos": len(achados)}
         marcados = marcar_fora_dia_fixo(servicos, config, hoje=hoje, db_path=db_path)
+        resumo["marcados"] = len(marcados)
         import notificar_fora_dia_fixo
         avisos = notificar_fora_dia_fixo.avisar(pendentes_de_aviso(servicos, db_path=db_path), config,
                                                 db_path=db_path)
@@ -217,4 +220,4 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
         return {"marcados": len(marcados), "avisos": avisos}
     except Exception as e:
         logger.error(f"Falha na regra de data fora do dia fixo (não afeta a roteirização): {e}")
-        return {"erro": str(e)}
+        return {**resumo, "erro": str(e)}
