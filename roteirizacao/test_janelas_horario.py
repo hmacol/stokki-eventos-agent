@@ -169,6 +169,40 @@ class SimuladorTestCase(_SemGeocodificar):
         self.assertTrue(rd.janela_respeitada(rota, coords_base=BASE))
 
 
+class TetoDeTempoDaJanelaTestCase(unittest.TestCase):
+    """A janela do cliente nao cede, mas a duracao com esperas segue o
+    teto do dia da rota: 9h normal, 10h30 na receptora de rota fraca
+    (Hugo, 03/10)."""
+
+    def setUp(self):
+        self.sim = {"atraso_h": 0.0, "duracao_h": 10.0}
+        for p in (mock.patch.object(rd, "simular_horarios", lambda *a, **k: self.sim),
+                  mock.patch.object(rd, "_atraso_intrinseco", lambda *a, **k: 0.0),
+                  mock.patch.object(rd, "_orcamento_inviavel_por_distancia", lambda *a, **k: False)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.rota = [_servico(1, 0.0, 0.0, ("08:00", "18:00")), _servico(2, 0.01, 0.0)]
+
+    def test_10h_com_janela_passa_no_teto_de_10h30(self):
+        self.assertTrue(rd.janela_respeitada(self.rota, coords_base=BASE, tempo_maximo_horas=10.5))
+
+    def test_10h_com_janela_reprova_no_padrao_de_9h(self):
+        self.assertFalse(rd.janela_respeitada(self.rota, coords_base=BASE))
+
+    def test_tolerancia_de_atraso_nao_muda(self):
+        self.sim = {"atraso_h": rd.TOLERANCIA_JANELA_HORAS + 0.1, "duracao_h": 5.0}
+        self.assertFalse(rd.janela_respeitada(self.rota, coords_base=BASE, tempo_maximo_horas=10.5))
+
+    def test_rota_valida_repassa_o_teto(self):
+        import polimento_rotas as pr
+        with mock.patch.object(pr, "janela_respeitada", return_value=True) as janela, \
+             mock.patch.object(pr, "estimar_tempo_rota", lambda *a, **k: 1.0):
+            pr._rota_valida(self.rota, None, 16, 100, None, None, None, BASE, tempo_maximo_horas=10.5)
+            self.assertEqual(janela.call_args.kwargs["tempo_maximo_horas"], 10.5)
+            pr._rota_valida(self.rota, None, 16, 100, None, None, None, BASE)
+            self.assertEqual(janela.call_args.kwargs["tempo_maximo_horas"], rd.ROTA_TEMPO_MAXIMO_HORAS)
+
+
 class SequenciamentoTestCase(_SemGeocodificar):
 
     def setUp(self):

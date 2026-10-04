@@ -115,7 +115,7 @@ def _rota_valida(sublote: list[dict], api_key: str | None, tamanho_maximo: int, 
     if len(sublote) > 1 and not (estimar_tempo_rota(sublote, api_key, base) <= tempo_maximo_horas
                                  or _orcamento_inviavel_por_distancia(sublote, api_key, base)):
         return False
-    return janela_respeitada(sublote, api_key, base)
+    return janela_respeitada(sublote, api_key, base, tempo_maximo_horas=tempo_maximo_horas)
 
 
 def _km(sublote: list[dict], base: tuple[float, float], api_key: str | None) -> float:

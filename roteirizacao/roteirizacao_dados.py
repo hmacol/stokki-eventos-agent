@@ -1182,17 +1182,21 @@ def _atraso_intrinseco(sublote: list[dict], api_key=None, coords_base=None, coor
 
 
 def janela_respeitada(sublote: list[dict], api_key: str | None = None,
-                      coords_base: tuple[float, float] | None = None, coords_fn=None) -> bool:
+                      coords_base: tuple[float, float] | None = None, coords_fn=None,
+                      tempo_maximo_horas: float = ROTA_TEMPO_MAXIMO_HORAS) -> bool:
     """Trava de janela na ORDEM DADA (ordem final, pós-sequenciamento):
     atraso evitável dentro da tolerância E duração com esperas dentro
     do orçamento de horas (exceto rota já inviável só por distância).
-    Sem janela em nenhum pedido: True sem custo nenhum."""
+    Sem janela em nenhum pedido: True sem custo nenhum.
+    `tempo_maximo_horas`: orçamento do dia (a receptora de rota fraca
+    passa 10h30 via polimento_rotas._rota_valida, Hugo 03/10); a janela
+    do cliente e a tolerância de atraso não mudam."""
     if len(sublote) <= 1 or not tem_janela(sublote):
         return True
     sim = simular_horarios(sublote, api_key, coords_base, coords_fn)
     if sim["atraso_h"] - _atraso_intrinseco(sublote, api_key, coords_base, coords_fn) > TOLERANCIA_JANELA_HORAS:
         return False
-    if (sim["duracao_h"] > ROTA_TEMPO_MAXIMO_HORAS
+    if (sim["duracao_h"] > tempo_maximo_horas
             and not _orcamento_inviavel_por_distancia(sublote, api_key, coords_base)):
         return False
     return True
