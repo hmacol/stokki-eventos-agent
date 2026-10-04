@@ -29,7 +29,7 @@ class TestConteudo(unittest.TestCase):
                          ("Semanal", "até 7 dias corridos"))
         self.assertEqual((linhas["Sorocaba"]["frequencia"], linhas["Sorocaba"]["prazo"]),
                          ("Quinzenal", "até 15 dias corridos"))
-        self.assertIn("a cada 15 dias", linhas["Sorocaba"]["dias"])
+        self.assertIn("a cada 15 dias, a partir de 06/10/2026", linhas["Sorocaba"]["dias"])
         self.assertIn("São José dos Campos", linhas["Vale do Paraíba"]["cidades"])
 
     def test_nome_bonito(self):

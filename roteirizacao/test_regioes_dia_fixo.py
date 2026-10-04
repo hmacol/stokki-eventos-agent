@@ -44,6 +44,7 @@ class TestConfiguracao(unittest.TestCase):
         regra = rdf.regra_dia_fixo_do_servico(SOROCABA)
         self.assertEqual(regra["frequencia"], rdf.FREQUENCIA_QUINZENAL)
         self.assertEqual(date.fromisoformat(regra["ancora"]).weekday(), rdf.TERCA)
+        self.assertEqual(regra["ancora"], "2026-10-06")   # 1a visita: terca seguinte ao deploy (Hugo)
         self.assertEqual(regra["nivel"], rdf.NIVEL_QUINZENAL)
         self.assertEqual((regra["prazo_dias"], regra["prazo_dias_uteis"]), (15, False))
 

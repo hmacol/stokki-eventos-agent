@@ -91,7 +91,7 @@ REGIOES: list[dict] = [
     {"nome": "Baixada Santista", "dias": [TERCA], "externa": True,
      "cidades": ["CUBATAO", "SAO VICENTE", "SANTOS", "GUARUJA", "PRAIA GRANDE"]},
     {"nome": "Sorocaba", "dias": [TERCA], "externa": True,
-     "frequencia": FREQUENCIA_QUINZENAL, "ancora": "2026-10-13",  # 1ª terça de visita (ajustar no deploy)
+     "frequencia": FREQUENCIA_QUINZENAL, "ancora": "2026-10-06",  # 1ª terça de visita: a seguinte ao deploy (Hugo)
      "cidades": ["SOROCABA", "VOTORANTIM", "SAO ROQUE", "ITU", "SALTO"]},
     {"nome": "Campinas", "dias": [QUARTA], "externa": True,
      "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA",
