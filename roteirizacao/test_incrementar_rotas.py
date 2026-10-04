@@ -97,6 +97,29 @@ def _rota_comum(qtd, caixas):
             "tipo_veiculo": None}
 
 
+class TestReceptoraDeRotaFracaNoIncremento(unittest.TestCase):
+    """Rota com 101-110 caixas pode ser receptora de rota fraca rodando de
+    Fiorino (Hugo, 03/10): o incremento nao pode le-la como VAN/HR e deixar
+    crescer ate 400 caixas."""
+
+    def test_101_a_110_com_fiorino_ou_sem_motorista_e_fiorino_com_teto_110(self):
+        for tipo_motorista in ("FIORINO", None):
+            tipo, teto = inc._veiculo_da_rota_existente(105, 3, tipo_motorista)
+            self.assertIsNone(tipo)
+            self.assertEqual(teto, 110)
+            rota = {"qtd": 4, "caixas": 105, "enderecos": {"a", "b", "c"}, "tipo_veiculo": tipo, "teto_caixas": teto}
+            self.assertTrue(inc._cabe_na_rota(rota, 5, "d"))
+            self.assertFalse(inc._cabe_na_rota(rota, 6, "d"))
+
+    def test_101_a_110_com_van_hr_continua_van_hr(self):
+        tipo, _ = inc._veiculo_da_rota_existente(105, 3, "VAN_HR")
+        self.assertEqual(tipo.codigo, "VAN_HR")
+
+    def test_acima_de_110_e_rota_comum_nao_mudam(self):
+        self.assertEqual(inc._veiculo_da_rota_existente(150, 1, "FIORINO")[0].codigo, "VAN_HR")
+        self.assertEqual(inc._veiculo_da_rota_existente(80, 3, "FIORINO"), (None, VOLUME_MAXIMO_ROTA))
+
+
 class TestSemTetoDePedidos(unittest.TestCase):
 
     def test_rota_comum_com_muitos_pedidos_ainda_cabe(self):

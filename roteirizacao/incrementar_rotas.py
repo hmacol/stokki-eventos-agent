@@ -125,7 +125,7 @@ from email_utils import notificacoes_automaticas_ativas
 from regras.preferencias_motoristas import CatalogoMotoristas
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regras.tipo_veiculo import classificar_tipo_veiculo
+from regras.tipo_veiculo import classificar_tipo_veiculo, tipo_por_codigo
 
 
 def _carregar_config() -> dict:
@@ -332,6 +332,26 @@ def _centroide_rota(rota: dict, api_key: str | None) -> tuple[float, float] | No
     )
 
 
+# Receptora de rota fraca (Hugo, 03/10): vai ate 100 + 10 caixas e
+# continua Fiorino -- mesmo valor de rotas_fracas.FOLGA_CAIXAS_EXTRA.
+FOLGA_CAIXAS_ROTA_FRACA = 10
+
+
+def _veiculo_da_rota_existente(caixas: int, enderecos: int, tipo_motorista: str | None):
+    """(tipo_veiculo, teto de caixas da rota comum) de uma rota que JA
+    existe na Vuupt. A Vuupt nao guarda se a rota foi receptora de rota
+    fraca: rota com 101-110 caixas classificada como VAN/HR mas rodando
+    de Fiorino (ou sem motorista conhecido -- na duvida, Fiorino) e
+    tratada como Fiorino com teto de 110, senao cresceria ate 400."""
+    tipo = classificar_tipo_veiculo(caixas, enderecos)
+    teto_fiorino = VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA
+    if tipo is not None and tipo.codigo == "VAN_HR" and caixas <= teto_fiorino:
+        motorista = tipo_por_codigo(tipo_motorista)
+        if motorista is None or motorista.codigo == "FIORINO":
+            return None, teto_fiorino
+    return tipo, VOLUME_MAXIMO_ROTA
+
+
 def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
     """
     True se `cx_pedido` (do endereço `endereco_pedido`) ainda cabe na
@@ -354,7 +374,7 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
         caixas_cabe = rota["caixas"] + cx_pedido <= tipo.volume_maximo_cx
         enderecos_cabe = len(rota["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos
         return caixas_cabe and enderecos_cabe
-    return rota["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+    return rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA)
 
 
 def main(modo_teste: bool = False):
@@ -633,6 +653,9 @@ def main(modo_teste: bool = False):
             macro_rota = Counter(macros_rota).most_common(1)[0][0] if macros_rota else None
             enderecos_rota = {s.get("address") for s in servicos_rota}
             caixas_rota = sum(extrair_volume_caixas(s) for s in servicos_rota)
+            motorista_rota = motoristas_por_id.get(r.get("agent_id"))
+            tipo_veiculo_rota, teto_caixas_rota = _veiculo_da_rota_existente(
+                caixas_rota, len(enderecos_rota), getattr(motorista_rota, "tipo_veiculo", None))
             info_rotas.append({
                 "id": r["id"], "nome": r["name"],
                 "centroide": _centroide_rota(r, gmaps_key), "qtd": len(servicos_rota),
@@ -646,7 +669,8 @@ def main(modo_teste: bool = False):
                 # do PRÓPRIO tipo ao receber pedido novo por hora, em
                 # vez do teto genérico de 100 caixas/16 paradas.
                 "enderecos": enderecos_rota,
-                "tipo_veiculo": classificar_tipo_veiculo(caixas_rota, len(enderecos_rota)),
+                "tipo_veiculo": tipo_veiculo_rota,
+                "teto_caixas": teto_caixas_rota,
                 "service_ids": [s["id"] for s in servicos_rota],
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
