@@ -2720,7 +2720,9 @@
       const brl = v => Number(v).toFixed(2).replace(".", ",");
       const titulo = p.dedicado.n_grupo > 1
         ? ` title="Cotação R$ ${brl(p.dedicado.valor_total)} dividida entre ${p.dedicado.n_grupo} pedidos"` : "";
-      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}</span>`);
+      // motivo (Hugo, 03/10): marcado sozinho por data fora do dia fixo da região
+      const motivo = p.dedicado.motivo ? ` · ${p.dedicado.motivo}` : "";
+      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}${motivo}</span>`);
     }
     // segurado (Hugo, 29/09): rota fraca adiada pra juntar com o volume do dia seguinte
     if (p.segurado) {

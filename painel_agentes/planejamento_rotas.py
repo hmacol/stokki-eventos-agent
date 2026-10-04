@@ -44,7 +44,7 @@ from roteirizacao_dados import (
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias, extrair_cidade, nomes_dias,
+from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias, extrair_cidade,
                               regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
@@ -729,13 +729,16 @@ def _aviso_dia_fixo(servico: dict, data_alvo: date, data_agendada: date | None =
 
     `data_agendada` (Hugo, 28/09, caso PS-40316): data de agendamento
     INFORMADA vence o dia fixo -- se é a do planejamento, não avisa.
+
+    03/10 (dias fixos v2): respeita a frequência -- Sorocaba quinzenal
+    avisa na semana sem visita ("Sorocaba: só Terças (quinzenal)").
     """
     if data_agendada and data_agendada == data_alvo:
         return None
     regra = regra_dia_fixo_do_servico(servico)
-    if not regra or data_alvo.weekday() in regra["dias"]:
+    if not regra or data_valida_na_regiao(regra, data_alvo):
         return None
-    return f"{regra['nome']}: só {nomes_dias(regra['dias'])}"
+    return f"{regra['nome']}: só {descricao_dias(regra)}"
 
 
 def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
