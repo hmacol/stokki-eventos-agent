@@ -64,7 +64,7 @@ from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, sincronizar_pool_agora, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
-    reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
+    reagendar_pedidos, checar_reagendamento_dia_fixo, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
     marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
@@ -2388,6 +2388,28 @@ def api_reagendar_pedidos():
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True, "falhas": resultado["falhas"]})
+
+
+@app.route("/api/planejamento/checar-dia-fixo", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_checar_dia_fixo():
+    """Antes de reagendar (um ou lote): quais pedidos ficam fora do dia de
+    visita da região, com o valor da calculadora de frete dedicado (Hugo,
+    03/10 -- spec dias fixos v2, 5.4). Mesma permissão do reagendar. Só lê."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        service_ids = [int(s) for s in body.get("service_ids") or []]
+    except (TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    try:
+        resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao checar dia fixo do reagendamento")
+        return jsonify({"erro": str(e)}), 500
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
 
 
 @app.route("/api/planejamento/editar-endereco", methods=["POST"])

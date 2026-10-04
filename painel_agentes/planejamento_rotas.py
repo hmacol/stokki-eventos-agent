@@ -44,7 +44,8 @@ from roteirizacao_dados import (
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, nomes_dias, regiao_da_cidade, regra_dia_fixo_do_servico
+from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias, extrair_cidade, nomes_dias,
+                              regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
     definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
@@ -1928,6 +1929,53 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
         _ressincronizar(vuupt, ok_ids)
         _registrar_agendamento_equipe(ok_ids, scheduled_start)
     return {"ok": True, "falhas": falhas}
+
+
+def checar_reagendamento_dia_fixo(service_ids: list[int], data: str) -> dict:
+    """
+    Reagendamento pela equipe fora do dia de visita (Hugo, 03/10 -- spec
+    dias fixos v2, 5.4): antes de salvar, a tela pergunta se o pedido vira
+    dedicado. Devolve {"ok": True, "fora_do_dia": [{service_id, codigo,
+    regiao, dias, valor}]} só com os pedidos de região de dia fixo em que
+    `data` (AAAA-MM-DD) não é dia de visita. `valor` vem da calculadora de
+    frete dedicado (roteirizacao/fora_dia_fixo.calcular_valor, km em linha
+    reta) ou é None quando não dá pra calcular -- o modal de dedicado abre
+    vazio pra digitar. Pedido que não carrega da Vuupt fica de fora (nunca
+    trava o reagendamento). Só lê: nada é gravado aqui.
+    """
+    try:
+        alvo = date.fromisoformat(str(data))
+    except ValueError:
+        return {"ok": False, "erro": f"Data inválida: {data}"}
+    if not service_ids:
+        return {"ok": True, "fora_do_dia": []}
+    import fora_dia_fixo
+    import pedidos_dedicados
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    tipos = fora_dia_fixo.carregar_tipos_carga(rascunhos_rota.DB_PATH)
+    fora = []
+    for sid in service_ids:
+        try:
+            servico = vuupt.buscar_servico_por_id(int(sid))
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: serviço {sid} não carregou ({e}); segue sem a pergunta.")
+            continue
+        if not servico:
+            continue
+        regra = regra_dia_fixo_do_servico(servico)
+        if not regra or data_valida_na_regiao(regra, alvo):
+            continue
+        try:
+            valor = fora_dia_fixo.calcular_valor(servico, config, tipos)
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: calculadora falhou no serviço {sid} ({e}).")
+            valor = None
+        codigos = pedidos_dedicados.codigos_do_servico(servico)
+        fora.append({"service_id": int(sid), "codigo": codigos[0] if codigos else "",
+                     "regiao": regra.get("regiao") or regra["nome"], "dias": descricao_dias(regra),
+                     "valor": valor})
+    return {"ok": True, "fora_do_dia": fora}
 
 
 def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
