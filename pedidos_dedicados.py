@@ -25,6 +25,11 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 _PADRAO_PS = re.compile(r"^#?\s*PS\s*[-._ ]?\s*(\d{1,7})", re.IGNORECASE)
 _CAMPOS_IDENTIDADE = ("codigo_pedido", "service_id", "envio_id", "sender_id", "remetente_nome", "numero_nf")
 
+# Marcacao automatica de data fora do dia fixo (Hugo, 03/10/2026 --
+# roteirizacao/fora_dia_fixo.py). Quem le o motivo (pool do planejamento,
+# portal) compara o inicio de marcado_por com isto.
+POR_FORA_DIA_FIXO = "automatico: fora do dia fixo"
+
 
 def conectar(db_path=DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=30)
