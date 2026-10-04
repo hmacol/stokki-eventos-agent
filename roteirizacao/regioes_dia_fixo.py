@@ -12,13 +12,14 @@ identificados por trechos de rua/CEP, ver ENDERECOS_DIA_FIXO):
   São José dos Campos) -- Segunda
   Baixada Santista (Cubatão, São Vicente, Santos, Guarujá, Praia
   Grande) -- Terça
-  Sorocaba (Sorocaba, Votorantim, São Roque, Itu, Salto) -- Terça
+  Sorocaba (Sorocaba, Votorantim, São Roque, Itu, Salto) -- Terça,
+  quinzenal (03/10/2026)
   Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva, Caieiras,
   Cajamar, Franco da Rocha, Francisco Morato, Louveira) -- Quarta
   Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta
   Barueri (Barueri, Santana do Parnaíba, Jandira) -- Terça e Quinta
   ABCD (Santo André, São Bernardo do Campo, São Caetano do Sul,
-  Diadema, Ribeirão Pires, Mauá) -- Segunda, Quarta e Sexta
+  Diadema, Ribeirão Pires, Mauá) -- Segunda e Quinta (03/10/2026)
 
 Cidades fora dessas regiões: se estiverem dentro do raio da Grande SP
 (RAIO_GRANDE_SP_KM de São Paulo), entrega normal, sem restrição. Fora
@@ -51,6 +52,25 @@ SEGUNDA, TERCA, QUARTA, QUINTA, SEXTA, SABADO, DOMINGO = range(7)
 DIAS_NOMES = {SEGUNDA: "Segunda", TERCA: "Terça", QUARTA: "Quarta",
              QUINTA: "Quinta", SEXTA: "Sexta", SABADO: "Sábado", DOMINGO: "Domingo"}
 
+# Dias fixos v2 (Hugo, 03/10/2026 -- spec docs/superpowers/specs/
+# 2026-10-03-dias-fixos-v2-design.md). Região sem o campo "frequencia" é
+# semanal. Quinzenal visita só nas semanas PARES contadas a partir de
+# "ancora" (primeira terça de visita, gravada no deploy).
+FREQUENCIA_SEMANAL = "semanal"
+FREQUENCIA_QUINZENAL = "quinzenal"
+
+# Prazo de entrega por nível: (dias, conta só dia útil?). Interna = entrega
+# diária da Grande SP e regiões internas de dia fixo (Barueri, ABCD,
+# galpões por endereço); semanal = regiões externas; quinzenal = Sorocaba.
+NIVEL_INTERNA = "interna"
+NIVEL_SEMANAL = "semanal"
+NIVEL_QUINZENAL = "quinzenal"
+PRAZO_POR_NIVEL = {
+    NIVEL_INTERNA: (3, True),
+    NIVEL_SEMANAL: (7, False),
+    NIVEL_QUINZENAL: (15, False),
+}
+
 # Regiões confirmadas com o Hugo, 02/08 -- cada uma com nome (pra
 # mensagens/logs), dias da semana (12/08: virou LISTA -- Barueri e ABCD
 # recebem em mais de um dia) e lista de cidades. Biritiba Mirim
@@ -71,6 +91,7 @@ REGIOES: list[dict] = [
     {"nome": "Baixada Santista", "dias": [TERCA], "externa": True,
      "cidades": ["CUBATAO", "SAO VICENTE", "SANTOS", "GUARUJA", "PRAIA GRANDE"]},
     {"nome": "Sorocaba", "dias": [TERCA], "externa": True,
+     "frequencia": FREQUENCIA_QUINZENAL, "ancora": "2026-10-13",  # 1ª terça de visita (ajustar no deploy)
      "cidades": ["SOROCABA", "VOTORANTIM", "SAO ROQUE", "ITU", "SALTO"]},
     {"nome": "Campinas", "dias": [QUARTA], "externa": True,
      "cidades": ["CAMPINAS", "JUNDIAI", "VALINHOS", "VINHEDO", "CABREUVA",
@@ -80,7 +101,7 @@ REGIOES: list[dict] = [
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
     {"nome": "Barueri", "dias": [TERCA, QUINTA], "externa": False,
      "cidades": ["BARUERI", "SANTANA DO PARNAIBA", "JANDIRA"]},
-    {"nome": "ABCD", "dias": [SEGUNDA, QUARTA, SEXTA], "externa": False,
+    {"nome": "ABCD", "dias": [SEGUNDA, QUINTA], "externa": False,
      "cidades": ["SANTO ANDRE", "SAO BERNARDO DO CAMPO", "SAO CAETANO DO SUL",
                  "DIADEMA", "RIBEIRAO PIRES", "MAUA"]},
 ]
@@ -101,7 +122,8 @@ ENDERECOS_DIA_FIXO: list[dict] = [
     {"nome": "Centrosul", "dias": [QUARTA, SEXTA],
      "padroes": ["MAKITA BRASIL", "09852-080", "09852080"]},
     # Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra/SP
-    {"nome": "Transfrios", "dias": [SEGUNDA, QUARTA],
+    # 03/10/2026: Terça e Quinta (a maioria das entregas já caía nesses dias).
+    {"nome": "Transfrios", "dias": [TERCA, QUINTA],
      "padroes": ["FRANCISCO HENGLES", "06885-160", "06885160"]},
     # Av. Arterial Sul, 451 (tb. Rod. Raposo Tavares km 20,5) - Parque Ipê, São Paulo/SP
     {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA],
@@ -136,6 +158,8 @@ def _montar_indice() -> dict[str, dict]:
             indice[_normalizar_texto(cidade)] = {
                 "dias": regiao["dias"], "regiao": regiao["nome"],
                 "externa": regiao.get("externa", False),
+                "frequencia": regiao.get("frequencia", FREQUENCIA_SEMANAL),
+                "ancora": regiao.get("ancora"),
             }
     return indice
 
@@ -216,25 +240,52 @@ def regiao_externa_da_cidade(cidade: str) -> str | None:
     return info["regiao"] if info and info["externa"] else None
 
 
+def nivel_da_regra(regra: dict) -> str:
+    """interna | semanal | quinzenal -- define o prazo (PRAZO_POR_NIVEL)."""
+    if regra.get("frequencia") == FREQUENCIA_QUINZENAL:
+        return NIVEL_QUINZENAL
+    if regra.get("externa"):
+        return NIVEL_SEMANAL
+    return NIVEL_INTERNA
+
+
+def _regra_completa(regra: dict) -> dict:
+    nivel = nivel_da_regra(regra)
+    regra["nivel"] = nivel
+    regra["prazo_dias"], regra["prazo_dias_uteis"] = PRAZO_POR_NIVEL[nivel]
+    return regra
+
+
 def regra_dia_fixo_do_servico(servico: dict) -> dict | None:
     """
     Resolve a regra de dia fixo que vale pra ESTE serviço, olhando o
     campo 'address': primeiro as regiões por ENDEREÇO (mais
     específicas -- galpão/operador logístico), depois a cidade.
 
-    Retorna {"nome": str, "dias": list[int], "origem": "endereco"|"cidade"}
-    ou None se nenhuma regra se aplica (entrega sem restrição de dia).
+    Retorna {"nome", "dias", "origem": "endereco"|"cidade", "regiao",
+    "externa", "frequencia", "ancora", "nivel", "prazo_dias",
+    "prazo_dias_uteis"} ou None se nenhuma regra se aplica (entrega sem
+    restrição de dia). "nome" é o galpão ou a cidade (mensagens curtas);
+    "regiao" é o nome da região (Vale do Paraíba, ABCD...).
     """
     endereco_norm = _normalizar_texto(servico.get("address") or "")
     if endereco_norm:
         for regra in ENDERECOS_DIA_FIXO:
             if any(_normalizar_texto(p) in endereco_norm for p in regra["padroes"] if p):
-                return {"nome": regra["nome"], "dias": regra["dias"], "origem": "endereco"}
+                return _regra_completa({
+                    "nome": regra["nome"], "dias": regra["dias"], "origem": "endereco",
+                    "regiao": regra["nome"], "externa": False,
+                    "frequencia": regra.get("frequencia", FREQUENCIA_SEMANAL), "ancora": regra.get("ancora"),
+                })
 
     cidade = extrair_cidade(servico)
-    dias = dias_fixos_da_cidade(cidade) if cidade else None
-    if dias:
-        return {"nome": cidade.title(), "dias": dias, "origem": "cidade"}
+    info = _INDICE_CIDADES.get(_normalizar_texto(cidade)) if cidade else None
+    if info:
+        return _regra_completa({
+            "nome": cidade.title(), "dias": info["dias"], "origem": "cidade",
+            "regiao": info["regiao"], "externa": info["externa"],
+            "frequencia": info["frequencia"], "ancora": info["ancora"],
+        })
     return None
 
 
@@ -256,6 +307,41 @@ def proxima_data_dias_semana(dias_semana: list[int], a_partir_de: date) -> date:
     estritamente após `a_partir_de` -- regiões com mais de um dia fixo
     (ex.: ABCD = seg/qua/sex) entregam no primeiro dia que chegar."""
     return min(proxima_data_dia_semana(d, a_partir_de) for d in dias_semana)
+
+
+def _inicio_da_semana(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def data_valida_na_regiao(regra: dict, data: date) -> bool:
+    """`data` é dia de visita da região? Dia da semana certo e, se a região
+    é quinzenal, semana PAR contada a partir da âncora (semanas de segunda
+    a domingo -- vale antes da âncora também)."""
+    if data.weekday() not in regra["dias"]:
+        return False
+    if regra.get("frequencia") != FREQUENCIA_QUINZENAL or not regra.get("ancora"):
+        return True
+    ancora = date.fromisoformat(regra["ancora"])
+    semanas = (_inicio_da_semana(data) - _inicio_da_semana(ancora)).days // 7
+    return semanas % 2 == 0
+
+
+def proxima_data_valida(regra: dict, a_partir_de: date) -> date:
+    """Primeiro dia de visita da região estritamente APÓS `a_partir_de`
+    (respeita a frequência; proxima_data_dias_semana só olha o dia da
+    semana)."""
+    d = a_partir_de
+    for _ in range(28):
+        d += timedelta(days=1)
+        if data_valida_na_regiao(regra, d):
+            return d
+    raise ValueError(f"região sem dia de visita em 4 semanas: {regra.get('nome')}")
+
+
+def descricao_dias(regra: dict) -> str:
+    """nomes_dias + "(quinzenal)" quando for o caso -- pra mensagens."""
+    texto = nomes_dias(regra["dias"])
+    return f"{texto} (quinzenal)" if regra.get("frequencia") == FREQUENCIA_QUINZENAL else texto
 
 
 def nomes_dias(dias_semana: list[int]) -> str:
@@ -282,9 +368,9 @@ def ajustar_data_por_dia_fixo(servico: dict, data: date) -> tuple[date, dict | N
     que quem chama usa pra logar/notificar o remetente.
     """
     regra = regra_dia_fixo_do_servico(servico)
-    if not regra or data.weekday() in regra["dias"]:
+    if not regra or data_valida_na_regiao(regra, data):
         return data, None
-    return proxima_data_dias_semana(regra["dias"], data), regra
+    return proxima_data_valida(regra, data), regra
 
 
 def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None) -> list[dict]:
@@ -314,7 +400,7 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
         if not regra:
             continue
 
-        data_alvo = proxima_data_dias_semana(regra["dias"], hoje)
+        data_alvo = proxima_data_valida(regra, hoje)
         scheduled_start = f"{data_alvo.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00"
         scheduled_end = f"{data_alvo.isoformat()}T{HORARIO_FIM_PADRAO}-03:00"
 
@@ -326,7 +412,7 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
             s["scheduled_start"] = scheduled_start  # reflete no dict em memória também
             s["scheduled_end"] = scheduled_end
             logger.info(f"  {s.get('code')}: {regra['origem']} '{regra['nome']}' "
-                       f"(entrega às {nomes_dias(regra['dias'])}) -- "
+                       f"(entrega às {descricao_dias(regra)}) -- "
                        f"agendado pra {data_alvo.strftime('%d/%m/%Y')} (próxima ocorrência).")
             atualizados.append({"servico": s, "regiao": regra["nome"],
                                 "dias": regra["dias"], "data": data_alvo})
