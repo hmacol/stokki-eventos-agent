@@ -1806,6 +1806,22 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     return {"ok": True}
 
 
+def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str) -> None:
+    """Data agendada pela equipe não é data do cliente (Hugo, 03/10 -- dias
+    fixos v2): grava a origem EQUIPE em agendamentos_origem, pra regra de
+    data fora do dia fixo (roteirizacao/fora_dia_fixo.py) não transformar o
+    pedido em dedicado. Nunca levanta: o reagendamento na Vuupt já foi feito."""
+    if not service_ids:
+        return
+    try:
+        import registro_dia_fixo
+        data = date.fromisoformat(str(scheduled_start)[:10])
+        registro_dia_fixo.registrar_origens([{"servico": {"id": sid}, "data": data} for sid in service_ids],
+                                            registro_dia_fixo.ORIGEM_EQUIPE, registro_dia_fixo.DB_PATH)
+    except Exception as e:
+        logger.warning(f"Não registrou a origem EQUIPE do reagendamento {service_ids}: {e}")
+
+
 def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str) -> dict:
     """
     Agenda/reagenda um pedido na VUUPT (PUT /services/{id}, campos
@@ -1822,7 +1838,8 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     NÃO mexe em nada na Stokki, só no agendamento da VUUPT -- e não
     reaplica as regras de dia fixo por região (essas são só pro
     reagendamento automático via e-mail); aqui é uma escolha manual do
-    usuário, vai pra VUUPT como digitada.
+    usuário, vai pra VUUPT como digitada. 03/10: a data fica registrada
+    como EQUIPE (não vira dedicado por data fora do dia fixo).
 
     Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
     """
@@ -1841,6 +1858,7 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
+    _registrar_agendamento_equipe([service_id], scheduled_start)
 
     return {"ok": True}
 
@@ -1908,6 +1926,7 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
 
     if ok_ids:
         _ressincronizar(vuupt, ok_ids)
+        _registrar_agendamento_equipe(ok_ids, scheduled_start)
     return {"ok": True, "falhas": falhas}
 
 

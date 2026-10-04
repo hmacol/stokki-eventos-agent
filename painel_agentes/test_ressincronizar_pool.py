@@ -28,8 +28,9 @@ class TestRessincronizaDepoisDeEscrever(unittest.TestCase):
         p2 = mock.patch.object(pr, "_carregar_config", return_value={"vuupt_api": {"token": "t"}, "google_maps": {}})
         p3 = mock.patch.object(pr, "_ressincronizar")
         p4 = mock.patch.object(pr.rascunhos_rota, "buscar_rascunho", return_value=None)
+        p5 = mock.patch.object(pr, "_registrar_agendamento_equipe")
         self.ressinc = p3.start()
-        for p in (p1, p2, p4):
+        for p in (p1, p2, p4, p5):
             p.start()
         self.addCleanup(mock.patch.stopall)
 
