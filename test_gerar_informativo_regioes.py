@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -35,6 +36,31 @@ class TestConteudo(unittest.TestCase):
         self.assertEqual(gir.nome_bonito("SAO JOSE DOS CAMPOS"), "São José dos Campos")
         self.assertEqual(gir.nome_bonito("SANTANA DO PARNAIBA"), "Santana do Parnaíba")
         self.assertEqual(gir.nome_bonito("JACAREI"), "Jacareí")
+
+    def test_enderecos_mostram_cidade_do_galpao_nao_o_padrao(self):
+        linhas = {l["regiao"]: l for l in gir.linhas_informativo()}
+        esperado = {
+            "Centrosul": "São Bernardo do Campo",
+            "Transfrios": "Itapecerica da Serra",
+            "Superfrio/TAC": "São Paulo",
+            "TAFF": "Barueri",
+        }
+        for nome, cidade in esperado.items():
+            self.assertEqual(linhas[nome]["cidades"], f"Galpão em {cidade}")
+        for regra in rdf.ENDERECOS_DIA_FIXO:
+            texto = linhas[regra["nome"]]["cidades"].upper()
+            for padrao in regra["padroes"]:
+                self.assertNotIn(padrao.upper(), texto)
+
+
+class TestPrazoEntregaParagrafo(unittest.TestCase):
+    def test_prazo_entrega_vem_de_prazo_por_nivel(self):
+        novo = {rdf.NIVEL_INTERNA: (99, True), rdf.NIVEL_SEMANAL: (88, False), rdf.NIVEL_QUINZENAL: (77, False)}
+        with mock.patch.object(rdf, "PRAZO_POR_NIVEL", novo):
+            texto = gir._texto_prazo_entrega()
+        self.assertIn("99 dias úteis", texto)
+        self.assertIn("88 dias corridos", texto)
+        self.assertIn("77 dias corridos", texto)
 
 
 class TestPdf(unittest.TestCase):

@@ -41,20 +41,30 @@ _PALAVRAS = {"SAO": "São", "JOSE": "José", "JACAREI": "Jacareí", "CUBATAO": "
              "PARNAIBA": "Parnaíba", "ANDRE": "André", "MAUA": "Mauá", "RIBEIRAO": "Ribeirão"}
 _MINUSCULAS = {"DA", "DAS", "DE", "DO", "DOS"}
 
-TEXTOS = [
-    ("Como funciona",
-     "Fora da Grande São Paulo, cada região é visitada em dias fixos da semana. Pedido sem data de entrega é "
-     "agendado automaticamente para o próximo dia de visita da região."),
-    ("Data escolhida pelo embarcador",
-     "Se o pedido chega com data de entrega fora dos dias de visita da região, a data é respeitada e o pedido "
-     "é tratado como envio dedicado, com valor calculado pela tabela de frete dedicado da Fresh Log. Você "
-     "recebe um aviso por e-mail (e por WhatsApp, se cadastrado no portal) e pode pedir outra data dentro dos "
-     "dias de visita. No envio pelo portal, o aviso aparece antes de confirmar."),
-    ("Prazo de entrega",
-     "Até 3 dias úteis na Grande São Paulo e nas regiões internas; até 7 dias corridos nas regiões de visita "
-     "semanal; até 15 dias corridos na região de visita quinzenal."),
-    ("Contato", f"Dúvidas e pedidos de data: {CONTATO} ou pelo chat do portal do cliente."),
-]
+def _texto_prazo_entrega() -> str:
+    """Monta o parágrafo de prazos a partir de PRAZO_POR_NIVEL (em vez de
+    valores fixos no texto), pra não desatualizar se o prazo mudar."""
+    def fmt(nivel):
+        dias, uteis = rdf.PRAZO_POR_NIVEL[nivel]
+        return f"{dias} dias {'úteis' if uteis else 'corridos'}"
+    return (f"Até {fmt(rdf.NIVEL_INTERNA)} na Grande São Paulo e nas regiões internas; "
+            f"até {fmt(rdf.NIVEL_SEMANAL)} nas regiões de visita semanal; "
+            f"até {fmt(rdf.NIVEL_QUINZENAL)} na região de visita quinzenal.")
+
+
+def _textos() -> list[tuple[str, str]]:
+    return [
+        ("Como funciona",
+         "Fora da Grande São Paulo, cada região é visitada em dias fixos da semana. Pedido sem data de entrega é "
+         "agendado automaticamente para o próximo dia de visita da região."),
+        ("Data escolhida pelo embarcador",
+         "Se o pedido chega com data de entrega fora dos dias de visita da região, a data é respeitada e o pedido "
+         "é tratado como envio dedicado, com valor calculado pela tabela de frete dedicado da Fresh Log. Você "
+         "recebe um aviso por e-mail (e por WhatsApp, se cadastrado no portal) e pode pedir outra data dentro dos "
+         "dias de visita. No envio pelo portal, o aviso aparece antes de confirmar."),
+        ("Prazo de entrega", _texto_prazo_entrega()),
+        ("Contato", f"Dúvidas e pedidos de data: {CONTATO} ou pelo chat do portal do cliente."),
+    ]
 
 
 def nome_bonito(cidade: str) -> str:
@@ -93,7 +103,7 @@ def linhas_informativo() -> list[dict]:
         linhas.append({"regiao": r["nome"], "cidades": ", ".join(nome_bonito(c) for c in r["cidades"]),
                        "dias": _dias(r), "frequencia": _frequencia(r), "prazo": _prazo(r, r.get("externa", False))})
     for e in rdf.ENDERECOS_DIA_FIXO:
-        linhas.append({"regiao": e["nome"], "cidades": f"Ponto de entrega: {nome_bonito(e['padroes'][0])}",
+        linhas.append({"regiao": e["nome"], "cidades": f"Galpão em {nome_bonito(e['cidade'])}",
                        "dias": _dias(e), "frequencia": _frequencia(e), "prazo": _prazo(e, False)})
     return linhas
 
@@ -149,7 +159,7 @@ def gerar_pdf(linhas: list[dict], caminho: Path) -> Path:
         draw.line([(MARGEM, y), (A4[0] - MARGEM, y)], fill=CINZA_LINHA, width=1)
 
     y += 30
-    for titulo, texto in TEXTOS:
+    for titulo, texto in _textos():
         corpo = _quebrar(draw, texto, _fonte(21), A4[0] - 2 * MARGEM)
         if y + 40 + 30 * len(corpo) > altura_util:
             paginas.append(img)

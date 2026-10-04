@@ -119,17 +119,17 @@ ENDERECOS_DIA_FIXO: list[dict] = [
     # BD_TRANSPORTADORAS, mesmo da Andrea Belotto/Frezze/Gessy Lopes).
     # São Bernardo é cidade da região ABCD (seg/qua/sex), mas esta regra
     # por endereço tem prioridade: no galpão, só quarta/sexta.
-    {"nome": "Centrosul", "dias": [QUARTA, SEXTA],
+    {"nome": "Centrosul", "dias": [QUARTA, SEXTA], "cidade": "SAO BERNARDO DO CAMPO",
      "padroes": ["MAKITA BRASIL", "09852-080", "09852080"]},
     # Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra/SP
     # 03/10/2026: Terça e Quinta (a maioria das entregas já caía nesses dias).
-    {"nome": "Transfrios", "dias": [TERCA, QUINTA],
+    {"nome": "Transfrios", "dias": [TERCA, QUINTA], "cidade": "ITAPECERICA DA SERRA",
      "padroes": ["FRANCISCO HENGLES", "06885-160", "06885160"]},
     # Av. Arterial Sul, 451 (tb. Rod. Raposo Tavares km 20,5) - Parque Ipê, São Paulo/SP
-    {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA],
+    {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA], "cidade": "SAO PAULO",
      "padroes": ["ARTERIAL SUL", "05577-300", "05577300"]},
     # Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri/SP
-    {"nome": "TAFF", "dias": [TERCA, QUINTA],
+    {"nome": "TAFF", "dias": [TERCA, QUINTA], "cidade": "BARUERI",
      "padroes": ["VILA LOBOS QUERO", "06422-122", "06422122"]},
 ]
 
