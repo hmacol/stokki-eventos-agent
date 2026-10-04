@@ -391,7 +391,8 @@ def ajustar_data_por_dia_fixo(servico: dict, data: date) -> tuple[date, dict | N
     return proxima_data_valida(regra, data), regra
 
 
-def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None) -> list[dict]:
+def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = None,
+                             db_path=None) -> list[dict]:
     """
     Pra cada serviço SEM scheduled_start ainda, que caia numa regra de
     dia fixo (cidade da região OU endereço cadastrado -- ver
@@ -406,6 +407,10 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
     usa pra notificar os remetentes (pedido do Hugo, 12/08:
     "notificação aos clientes que o pedido deles foi agendado para a
     data correta" -- notificar_agendamento_dia_fixo.py).
+
+    03/10/2026 (dias fixos v2): cada data gravada aqui vai pra tabela
+    agendamentos_origem com origem DIA_FIXO (registro_dia_fixo.py) -- é ela
+    que separa a data do sistema da data do cliente. `db_path` só pra teste.
     """
     hoje = hoje or date.today()
     atualizados: list[dict] = []
@@ -437,4 +442,14 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
         except Exception as e:
             logger.warning(f"  {s.get('code')}: falha ao aplicar dia fixo de '{regra['nome']}': {e}")
 
+    if atualizados:
+        try:
+            try:
+                import registro_dia_fixo
+            except ImportError:
+                from roteirizacao import registro_dia_fixo
+            registro_dia_fixo.registrar_origens(atualizados, registro_dia_fixo.ORIGEM_DIA_FIXO,
+                                                db_path or registro_dia_fixo.DB_PATH)
+        except Exception as e:
+            logger.warning(f"Falha ao registrar a origem dos agendamentos por dia fixo: {e}")
     return atualizados
