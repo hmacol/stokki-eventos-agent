@@ -140,9 +140,12 @@ def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None =
     conn_ded = pedidos_dedicados.conectar(db)
     try:
         ativos = pedidos_dedicados.ativos_por_codigo(conn_ded)
+        # codigo combinado grava so o primeiro: o servico tambem conta, senao
+        # o mesmo servico com outro codigo virava 2a linha (cobranca dobrada)
+        servicos_ativos = pedidos_dedicados.ativos_por_service_id(conn_ded)
         for s in servicos:
             codigos = pedidos_dedicados.codigos_do_servico(s)
-            if not codigos or any(c in ativos for c in codigos):
+            if not codigos or any(c in ativos for c in codigos) or s.get("id") in servicos_ativos:
                 continue
             achado = detectar(s, hoje, conn_reg)
             if not achado:
@@ -155,6 +158,8 @@ def marcar_fora_dia_fixo(servicos: list[dict], config: dict, hoje: date | None =
                 "remetente_nome": nomes.get(s.get("sender_id")),
             }], valor or 0.0, por)
             ativos[codigos[0]] = {"marcado_por": por}
+            if s.get("id") is not None:
+                servicos_ativos.add(s.get("id"))
             logger.info(f"  {s.get('code')}: data {data:%d/%m} fora dos dias de "
                         f"{regra.get('regiao') or regra['nome']} -- marcado como dedicado "
                         f"({'valor pendente' if valor is None else f'R$ {valor:.2f}'}).")

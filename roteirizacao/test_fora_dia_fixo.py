@@ -159,6 +159,29 @@ class TestDeteccaoEMarcacao(Base):
         self.assertEqual(len(marcados), 1)
         self.assertIn("PS-1001", self._ativos())
 
+    def _linhas_dedicados(self):
+        conn = pedidos_dedicados.conectar(self.db)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM pedidos_dedicados").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_mesmo_service_id_com_outro_codigo_nao_duplica(self):
+        # "#PS-1001, PS-1002" grava so PS-1001; depois o servico volta como "PS-1002"
+        self.assertEqual(len(self._marcar([_servico(code="#PS-1001, PS-1002")])), 1)
+        self.assertEqual(self._marcar([_servico(code="PS-1002")]), [])
+        self.assertEqual(self._linhas_dedicados(), 1)
+
+    def test_mesmo_service_id_duas_vezes_na_mesma_rodada_marca_uma(self):
+        marcados = self._marcar([_servico(code="#PS-1001"), _servico(code="#PS-1002")])
+        self.assertEqual(len(marcados), 1)
+        self.assertEqual(self._linhas_dedicados(), 1)
+
+    def test_outro_service_id_com_codigo_novo_marca(self):
+        self._marcar([_servico(code="#PS-1001, PS-1002")])
+        self.assertEqual(len(self._marcar([_servico(i=2, code="PS-3003")])), 1)
+        self.assertEqual(self._linhas_dedicados(), 2)
+
     def test_rodado_duas_vezes_marca_uma(self):
         self._marcar([_servico()])
         self.assertEqual(self._marcar([_servico()]), [])

@@ -160,6 +160,14 @@ def ativos_por_codigo(conn: sqlite3.Connection) -> dict[str, dict]:
     return {r["codigo_pedido"]: dict(r) for r in rows}
 
 
+def ativos_por_service_id(conn: sqlite3.Connection) -> set[int]:
+    """service_id com dedicado ativo. Codigo combinado ('#PS-1, PS-2') grava so
+    o primeiro codigo; quem marca automatico confere tambem o servico pra nao
+    duplicar quando o mesmo servico volta com outro codigo."""
+    rows = conn.execute("SELECT DISTINCT service_id FROM pedidos_dedicados WHERE removido_em IS NULL AND service_id IS NOT NULL").fetchall()
+    return {r["service_id"] for r in rows}
+
+
 def ativo_por_envio(conn: sqlite3.Connection, envio_id: int) -> dict | None:
     r = _ativo(conn, envio_id=envio_id)
     return dict(r) if r else None
