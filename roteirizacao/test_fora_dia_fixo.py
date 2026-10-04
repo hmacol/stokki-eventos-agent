@@ -134,6 +134,26 @@ class TestDeteccaoEMarcacao(Base):
         self.assertEqual(self._marcar([_servico(data="2026-10-01")]), [])
         self.assertEqual(self._marcar([_servico(i=2, data=None, scheduled_start="amanha")]), [])
 
+    def test_scheduled_sem_fuso_e_utc_e_vale_o_dia_de_brasilia(self):
+        # 01:00 UTC de quinta = 22:00 de quarta em Brasilia -> dia de visita de Campinas
+        s = _servico(data=None, scheduled_start="2026-10-08 01:00:00")
+        self.assertEqual(fdf.data_agendada(s), date(2026, 10, 7))
+        self.assertEqual(self._marcar([s]), [])
+
+    def test_scheduled_com_offset_explicito_continua_valendo(self):
+        s = _servico(data=None, scheduled_start="2026-10-08T23:30:00-03:00")
+        self.assertEqual(fdf.data_agendada(s), date(2026, 10, 8))
+        marcados = self._marcar([s])
+        self.assertEqual([m["data"] for m in marcados], [date(2026, 10, 8)])
+
+    def test_registro_de_origem_compara_com_o_dia_de_brasilia(self):
+        # 01:00 UTC de sexta 09/10 = 22:00 de quinta 08/10; registro DIA_FIXO de 08/10 protege
+        s = _servico(data=None, scheduled_start="2026-10-09 01:00:00")
+        conn = reg.conectar(self.db)
+        reg.registrar_origem(conn, s, date(2026, 10, 8), reg.ORIGEM_DIA_FIXO)
+        conn.close()
+        self.assertEqual(self._marcar([s]), [])
+
     def test_reentrega_segue_a_mesma_regra(self):
         marcados = self._marcar([_servico(code="#PS-1001-R1")])
         self.assertEqual(len(marcados), 1)
@@ -186,6 +206,11 @@ class TestCalcularValor(unittest.TestCase):
 
     def test_carga_acima_da_tabela(self):
         self.assertIsNone(fdf.calcular_valor(_servico(dimension_3=5000), {}, {}))
+
+    def test_erro_inesperado_da_calculadora_vira_none(self):
+        from portal_cliente import cotacao
+        with mock.patch.object(cotacao, "regras_de", side_effect=ValueError("config quebrada")):
+            self.assertIsNone(fdf.calcular_valor(_servico(), {}, {}))
 
 
 if __name__ == "__main__":

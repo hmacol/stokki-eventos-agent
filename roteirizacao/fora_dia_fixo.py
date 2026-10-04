@@ -41,6 +41,7 @@ from regioes_dia_fixo import data_valida_na_regiao, regra_dia_fixo_do_servico  #
 from roteirizacao_dados import coordenada_embutida, extrair_volume_caixas  # noqa: E402
 from rotas_fracas import data_entrada  # noqa: E402
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classificar_tipo_carga  # noqa: E402
+from nucleo.normalizacao import vuupt_para_local  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,10 @@ POR_VALOR_PENDENTE = POR + " (valor pendente)"
 
 
 def data_agendada(servico: dict) -> date | None:
+    """Dia de Brasilia do scheduled_start. A Vuupt devolve sem fuso e em UTC
+    ("2026-10-08 01:00:00" = quarta 07/10 22:00); offset explicito e respeitado."""
     try:
-        return date.fromisoformat(str(servico.get("scheduled_start") or "")[:10])
+        return date.fromisoformat(str(vuupt_para_local(servico.get("scheduled_start")) or "")[:10])
     except ValueError:
         return None
 
@@ -79,23 +82,26 @@ def calcular_valor(servico: dict, config: dict, tipos_carga: dict) -> float | No
     """Total da calculadora de frete dedicado (portal_cliente/cotacao.py):
     base -> destino -> base em linha reta, caixas do pedido, tipo de carga do
     embarcador. None quando não dá pra calcular (sem coordenada, carga acima
-    da tabela, entrada inválida)."""
+    da tabela, entrada inválida, erro inesperado -- nunca derruba a rodada)."""
     from portal_cliente import cotacao
     coords = coordenada_embutida(servico)
     if not coords:
         return None
-    regras = cotacao.regras_de(config)
-    trajeto = km_rodoviario.calcular_trajeto(tuple(regras["origem_coords"]), [coords], None,
-                                             voltar=bool(regras.get("considerar_retorno", True)))
-    if trajeto is None:
-        return None
-    tipo, _ = classificar_tipo_carga(servico.get("sender_id"), tipos_carga)
     try:
+        regras = cotacao.regras_de(config)
+        trajeto = km_rodoviario.calcular_trajeto(tuple(regras["origem_coords"]), [coords], None,
+                                                 voltar=bool(regras.get("considerar_retorno", True)))
+        if trajeto is None:
+            return None
+        tipo, _ = classificar_tipo_carga(servico.get("sender_id"), tipos_carga)
         r = cotacao.calcular({"caixas": extrair_volume_caixas(servico), "peso_kg": 0, "tipo_carga": tipo.upper(),
                               "urgente": False, "valor_nf": None, "km_total": trajeto.km_total, "pedagio": None},
                              regras)
     except cotacao.ErroCotacao as e:
         logger.info(f"  {servico.get('code')}: calculadora de frete dedicado sem valor ({e})")
+        return None
+    except Exception as e:
+        logger.warning(f"  {servico.get('code')}: erro na calculadora de frete dedicado ({e}); valor pendente")
         return None
     return r["total"]
 
