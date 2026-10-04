@@ -137,6 +137,7 @@ def motivo_nao_segurar(servico: dict, data_alvo: date, ja_segurados: set[str],
 
 MOTIVO_SEM_VIZINHA = "sem rota vizinha na mesma região"
 MOTIVO_NAO_COUBE = "não coube nas vizinhas (distância, paradas, caixas, tempo ou janela)"
+MOTIVO_NAO_ANALISADA = "não analisada (tempo da junção esgotado)"
 
 
 def _motivo_nao_juntou(fraca: list[dict], vizinhas: list[list[dict]], api_key: str | None) -> str:
@@ -185,7 +186,8 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
 
     Teto de tempo (`tempo_maximo_s`): ao estourar, a tentativa em curso e
     desfeita, nenhuma fraca nova e tentada e o relatorio sai com
-    "estourou_tempo": True (as fracas nao tentadas ficam sem motivo).
+    "estourou_tempo": True; cada fraca nao analisada ganha o motivo
+    MOTIVO_NAO_ANALISADA (etiqueta e segurar continuam valendo pra ela).
 
     Nunca perde nem duplica pedido. Devolve (sublotes, relatorio):
     relatorio = {"juntadas": n, "motivos": {id(sublote): texto},
@@ -303,8 +305,13 @@ def absorver_rotas_fracas(sublotes: list[list[dict]], base_lat: float, base_lng:
         else:
             rotas[:] = snapshot
             if estourou_tempo:
-                break  # tentativa interrompida pelo teto de tempo: sem motivo, nada mais e tentado
+                break  # tentativa interrompida pelo teto de tempo: nada mais e tentado
             motivos_por_indice[i] = _motivo_nao_juntou(rotas[i], [rotas[j] for j in vizinhas], api_key)
+
+    if estourou_tempo:
+        for i in fracas:
+            if i not in motivos_por_indice and rotas[i]:
+                motivos_por_indice[i] = MOTIVO_NAO_ANALISADA
 
     # motivo so vale pra quem TERMINOU fraca (uma fraca que falhou pode
     # ter recebido outra depois e deixado de ser)

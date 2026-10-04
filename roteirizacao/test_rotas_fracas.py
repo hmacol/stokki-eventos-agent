@@ -436,6 +436,9 @@ class TestAbrirEspaco(unittest.TestCase):
         self.assertEqual(rel["juntadas"], 0)
         self.assertEqual(rel["receptoras"], set())
         self.assertTrue(rel["estourou_tempo"])
+        # a fraca nao tentada ganha motivo (etiqueta + segurar)
+        self.assertEqual(rel["motivos"], {id(saida[0]): rf.MOTIVO_NAO_ANALISADA})
+        self.assertEqual(rf.MOTIVO_NAO_ANALISADA, "não analisada (tempo da junção esgotado)")
 
 
 class TestRotaValidaTempo(unittest.TestCase):
