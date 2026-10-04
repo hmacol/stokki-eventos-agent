@@ -2953,8 +2953,10 @@
       return barraCapacidadeHtml("caixas", caixas, infoVeiculo.volume_maximo_cx) +
              barraCapacidadeHtml("endereços", enderecos, infoVeiculo.max_enderecos_distintos);
     }
-    return barraCapacidadeHtml("caixas", caixas, TRAVAS.max_caixas) +
-           barraCapacidadeHtml("paradas", rascunho.paradas.length, TRAVAS.max_paradas);
+    const receptora = rascunho.recebeu_rota_fraca;  // folga de rota fraca (Hugo, 03/10)
+    return barraCapacidadeHtml("caixas", caixas, receptora ? TRAVAS.max_caixas_receptora : TRAVAS.max_caixas) +
+           barraCapacidadeHtml("paradas", rascunho.paradas.length,
+                               receptora ? TRAVAS.max_paradas_receptora : TRAVAS.max_paradas);
   }
 
   function badgesHtml(badges) {
@@ -4708,7 +4710,8 @@
         // mesma régua do capacidadeHtml: veículo grande conta só caixas
         // contra o teto do tipo; rota comum, caixas e paradas
         const infoVeiculo = r.tipo_veiculo && TRAVAS.tipos_veiculo[r.tipo_veiculo];
-        const maxCx = infoVeiculo ? infoVeiculo.volume_maximo_cx : TRAVAS.max_caixas;
+        const maxCx = infoVeiculo ? infoVeiculo.volume_maximo_cx
+          : (r.recebeu_rota_fraca ? TRAVAS.max_caixas_receptora : TRAVAS.max_caixas);
         const fmt = (v, max, rot) => {
           const txt = max ? `${v}/${max} ${rot}` : `${v} ${rot}`;
           return max && v > max ? `<span class="estoura">⚠ ${txt}</span>` : txt;

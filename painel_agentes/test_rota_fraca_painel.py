@@ -201,5 +201,85 @@ class TestCaixasETempoDaReceptora(unittest.TestCase):
         self.assertTrue(any(b.startswith("tempo estimado 9.5h (máx 9h,") for b in badges), badges)
 
 
+class TestMotoristaDaReceptoraNoPainel(unittest.TestCase):
+    """"Alocar motoristas" e "Publicar para motoristas" (Hugo, 03/10): a
+    receptora de rota fraca com 101-110 caixas continua Fiorino; a rota
+    comum com as mesmas caixas exige VAN_HR."""
+
+    def setUp(self):
+        from regras.preferencias_motoristas import MotoristaPreferencias
+        import alocacao_motoristas
+
+        def _m(agent_id, tipo):
+            return MotoristaPreferencias(
+                agent_id=agent_id, vehicle_id=None, nome=f"M{agent_id}", aceita_viagens=True,
+                dias_disponiveis=list(range(7)), max_rotas_dia=1, ativo=True,
+                zonas_preferidas=["ZONA NORTE"], tipo_veiculo=tipo)
+        self.motoristas = [_m(1, "VAN_HR"), _m(2, "FIORINO")]
+        historico = mock.Mock()
+        historico.parametros_alocacao.return_value = {}
+        self.trocar = mock.Mock()
+        catalogo = mock.Mock(motoristas=self.motoristas)
+        for patcher in (
+            mock.patch.object(planejamento_rotas, "_carregar_config", lambda: {}),
+            mock.patch.object(planejamento_rotas.CatalogoMotoristas, "carregar", lambda *a, **k: catalogo),
+            mock.patch.object(planejamento_rotas, "carregar_ajustes_dia", lambda d: {}),
+            mock.patch.object(planejamento_rotas, "carregar_historico_justica", lambda *a, **k: historico),
+            mock.patch.object(planejamento_rotas, "carregar_tipos_carga_por_sender", lambda *a, **k: {}),
+            mock.patch.object(planejamento_rotas.rascunhos_rota, "trocar_motorista", self.trocar),
+            mock.patch.object(alocacao_motoristas, "classificar_rota_viagem", lambda *a, **k: False),
+            mock.patch.object(alocacao_motoristas, "classificar_rota_zona", lambda *a, **k: None),
+            mock.patch.object(alocacao_motoristas, "sublote_em_area_rodizio", lambda *a, **k: False),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _rascunho(self, recebeu, rid=1):
+        return {"id": rid, "nome": f"Rota {rid}", "status": rascunhos_rota.STATUS_RASCUNHO, "agent_id": None,
+                "data_alvo": "2026-10-06", "horas_estimadas": 3.0, "recebeu_rota_fraca": recebeu,
+                "paradas": [_parada(1, 60), _parada(2, 45)]}  # 105 caixas, 2 enderecos
+
+    def _alocar(self, recebeu):
+        with mock.patch.object(planejamento_rotas.rascunhos_rota, "listar_rascunhos_do_dia",
+                               lambda d: [self._rascunho(recebeu)]):
+            res = planejamento_rotas.alocar_motoristas_rascunhos(date(2026, 10, 6))
+        return [a["agent_id"] for a in res["alocados"]]
+
+    def test_alocar_receptora_de_105_caixas_pega_fiorino(self):
+        self.assertEqual(self._alocar(1), [2])
+
+    def test_alocar_rota_comum_de_105_caixas_exige_van_hr(self):
+        self.assertEqual(self._alocar(0), [1])
+
+    def _publicar(self, recebeu):
+        from regras import ofertas_rota, prioridade_ofertas, resumo_oferta
+        import rodizio_sp
+        with mock.patch.object(planejamento_rotas.rascunhos_rota, "buscar_rascunho",
+                               lambda rid: self._rascunho(recebeu)), \
+             mock.patch.object(planejamento_rotas.rascunhos_rota, "listar_rascunhos_do_dia", lambda d: []), \
+             mock.patch.object(planejamento_rotas.rascunhos_rota, "publicar_oferta", lambda rid: None), \
+             mock.patch.object(ofertas_rota, "criar_ou_atualizar_oferta", lambda *a, **k: None), \
+             mock.patch.object(resumo_oferta, "montar_resumo", lambda *a, **k: {}), \
+             mock.patch.object(rodizio_sp, "sublote_em_area_rodizio", lambda *a, **k: False), \
+             mock.patch.object(prioridade_ofertas, "priorizar",
+                               lambda el, *a, **k: [mock.Mock(motorista=m, para_json=lambda: {}) for m in el]), \
+             mock.patch.object(prioridade_ofertas, "resumo_ondas", lambda p: {}):
+            res = planejamento_rotas.publicar_oferta_rascunho(1)
+        return [m.agent_id for m in res["elegiveis"]]
+
+    def test_publicar_receptora_de_105_caixas_oferece_a_fiorino(self):
+        self.assertEqual(self._publicar(1), [2])
+
+    def test_publicar_rota_comum_de_105_caixas_exige_van_hr(self):
+        self.assertEqual(self._publicar(0), [1])
+
+
+class TestTravasDaBarra(unittest.TestCase):
+    def test_travas_trazem_o_teto_da_receptora(self):
+        travas = planejamento_rotas._travas_card()
+        self.assertEqual((travas["max_caixas"], travas["max_paradas"]), (100, 16))
+        self.assertEqual((travas["max_caixas_receptora"], travas["max_paradas_receptora"]), (110, 18))
+
+
 if __name__ == "__main__":
     unittest.main()

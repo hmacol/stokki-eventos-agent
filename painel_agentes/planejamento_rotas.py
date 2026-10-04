@@ -338,6 +338,24 @@ def _simular_rascunho(paradas: list[dict]) -> dict | None:
         return None
 
 
+def _travas_card() -> dict:
+    """Limites pra barra de ocupação do card (redesenho 13/08)."""
+    return {
+        "max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA,
+        # receptora de rota fraca (recebeu_rota_fraca): teto com folga (Hugo, 03/10)
+        "max_paradas_receptora": TAMANHO_MAXIMO_ROTA + FOLGA_PARADAS_ROTA_FRACA,
+        "max_caixas_receptora": VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA,
+        # Limites por tipo de veículo grande (ver regras/tipo_veiculo.py)
+        # -- o card de uma rota classificada troca a barra de
+        # paradas/caixas genérica pela capacidade do PRÓPRIO tipo.
+        "tipos_veiculo": {
+            t.codigo: {"nome": t.nome, "volume_maximo_cx": t.volume_maximo_cx,
+                      "max_enderecos_distintos": t.max_enderecos_distintos}
+            for t in TIPOS_VEICULO
+        },
+    }
+
+
 def _horas_para_hhmm_teto(horas: float) -> str:
     """Teto de horas do aviso: '9h' (como sempre foi) ou '10h30'."""
     inteiras, minutos = int(horas), round((horas - int(horas)) * 60)
@@ -1094,17 +1112,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # barra ANTES de estourar (redesenho 13/08) -- os badges de
         # trava continuam sendo a palavra final (nível/distância não
         # viram barra).
-        "travas": {
-            "max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA,
-            # Limites por tipo de veículo grande (ver regras/tipo_veiculo.py)
-            # -- o card de uma rota classificada troca a barra de
-            # paradas/caixas genérica pela capacidade do PRÓPRIO tipo.
-            "tipos_veiculo": {
-                t.codigo: {"nome": t.nome, "volume_maximo_cx": t.volume_maximo_cx,
-                          "max_enderecos_distintos": t.max_enderecos_distintos}
-                for t in TIPOS_VEICULO
-            },
-        },
+        "travas": _travas_card(),
         # {sender_id: "Seco"|"Refrigerado"|"Congelado"} pro chip do modo "só
         # número" mostrar a faixa de carga (Hugo, 14/08) -- sender_id sem
         # entrada aqui é tratado como Seco no cliente (mesmo padrão de
@@ -1492,6 +1500,7 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         motorista = selecionar_motorista_equitativo(
             sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
             ajustes_disponibilidade=ajustes_disponibilidade,
+            folga_fiorino_cx=_folga_fiorino_rascunho(r),
             **historico.parametros_alocacao(horas_rota),
         )
         if not motorista:
@@ -1532,6 +1541,12 @@ def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
         desalocados.append({"rascunho_id": r["id"], "nome": r["nome"]})
 
     return {"desalocados": desalocados, "sem_motorista": sem_motorista}
+
+
+def _folga_fiorino_rascunho(rascunho: dict) -> int:
+    """Receptora de rota fraca vai até 110 caixas e continua Fiorino
+    (Hugo, 03/10 -- mesma regra do criar_rotas_diarias._folga_fiorino)."""
+    return FOLGA_CAIXAS_ROTA_FRACA if rascunho.get("recebeu_rota_fraca") else 0
 
 
 def _sublote_para_elegibilidade(paradas: list[dict], mapa_tipos_carga: dict | None = None) -> list[dict]:
@@ -1608,6 +1623,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     elegiveis = listar_motoristas_elegiveis(
         sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
         ajustes_disponibilidade=ajustes_disponibilidade,
+        folga_fiorino_cx=_folga_fiorino_rascunho(rascunho),
     )
     if not elegiveis:
         return {"ok": False, "erro": "Nenhum motorista elegível pra essa rota -- ninguém veria a oferta."}

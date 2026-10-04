@@ -263,6 +263,7 @@ def listar_motoristas_elegiveis(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ) -> list[MotoristaPreferencias]:
     """
     Lista completa de motoristas elegíveis pra esse sublote (mesmos
@@ -272,5 +273,6 @@ def listar_motoristas_elegiveis(
     """
     elegiveis, _, _, _ = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
     return elegiveis

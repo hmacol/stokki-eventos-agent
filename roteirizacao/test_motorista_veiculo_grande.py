@@ -84,6 +84,13 @@ class TestElegibilidade(unittest.TestCase):
         self.assertEqual(alocacao_motoristas.contar_motoristas_elegiveis(
             rota_105, DATA, [self.van, self.fiorino], {}, folga_fiorino_cx=10), 1)
 
+    def test_listar_elegiveis_aceita_folga(self):
+        rota_105 = [{"address": "Rua X, 100", "dimension_3": 60}, {"address": "Rua Y, 1", "dimension_3": 45}]
+        self.assertEqual({m.agent_id for m in alocacao_motoristas.listar_motoristas_elegiveis(
+            rota_105, DATA, [self.van, self.fiorino], {}, folga_fiorino_cx=10)}, {2})
+        self.assertEqual({m.agent_id for m in alocacao_motoristas.listar_motoristas_elegiveis(
+            rota_105, DATA, [self.van, self.fiorino], {})}, {1})
+
     def test_105_caixas_sem_folga_exige_van_hr(self):
         rota_105 = [{"address": "Rua X, 100", "dimension_3": 60}, {"address": "Rua Y, 1", "dimension_3": 45}]
         escolhido = alocacao_motoristas.selecionar_motorista_equitativo(
