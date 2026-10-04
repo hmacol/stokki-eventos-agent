@@ -54,7 +54,7 @@ Uma lista de problemas não garante nada; a equação garante.
 | Data de corte | Última semana: pedidos criados na Stokki a partir de **28/09/2026**. Nada antes entra. |
 | Destinos finais | A tabela abaixo, com Dedicado e Lalamove separados. |
 | Evidência | **Sempre** precisa de documento assinado confirmando recebimento. Sem documento não é destino final, é divergência. |
-| Quem trata divergência | Pode ser o agente analista, caso a caso, conforme a spec dele definir. O que ele não tratar vai pra uma pessoa (Torre). |
+| Quem trata divergência | O agente analista monta a ação com a evidência como **sugestão aprovada**: uma pessoa aprova antes de qualquer escrita na Stokki ou na Vuupt; nada automático (ajuste vindo da spec do agente, 04/10, a confirmar com o Hugo). O que o agente não cobrir vai pra Torre. |
 | Serviço com mais de um pedido | Não existe mais. Não tratar. |
 | Feriados | Em aberto, decisão única para batimento e agente. |
 
