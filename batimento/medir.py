@@ -64,6 +64,7 @@ DONO_TRAVA = "batimento-medicao"
 
 _RE_SUFIXO = re.compile(r"-[RC]\d+$")
 _RE_PS = re.compile(r"PS-(\d+)")
+_RE_CNPJ = re.compile(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}")
 
 
 def _limpar(html) -> str:
@@ -94,18 +95,48 @@ def _parse_utc(texto):
 # ── Corte ─────────────────────────────────────────────────────────────────────
 
 def id_de_corte(conn: sqlite3.Connection, data_corte: date) -> int | None:
-    """Menor numero PS entre os pedidos que o nucleo viu nascer na Vuupt a
-    partir da data de corte. O id da Stokki e crescente, entao listar ate ele
-    cobre tudo que foi lancado desde a data (com folga, nunca com falta)."""
+    """Maior numero PS que o nucleo viu nascer na Vuupt ANTES da data de
+    corte, mais um. O id da Stokki e crescente, entao todo pedido acima dele
+    foi lancado depois. O menor PS criado DESDE o corte nao serve: pedido
+    antigo reimportado (ex.: PS-31190 criado na Vuupt em 29/09) puxa o
+    corte pra semanas atras (medicao real de 04/10)."""
     rows = conn.execute("""
         SELECT codigo FROM nucleo_pedidos
-        WHERE criado_em_provedor >= ? AND codigo GLOB 'PS-*'
+        WHERE criado_em_provedor < ? AND codigo GLOB 'PS-*'
     """, (data_corte.strftime("%Y-%m-%d 00:00:00"),)).fetchall()
     numeros = [n for n in (numero_ps(r[0]) for r in rows) if n]
-    return min(numeros) if numeros else None
+    return max(numeros) + 1 if numeros else None
 
 
 # ── Stokki ────────────────────────────────────────────────────────────────────
+
+# Medicao real de 04/10: na tabela, state="" traz so os status em aberto
+# ("all" voltou sem linhas); expedido e cancelado tem filtro proprio
+# (Sent=Enviado, Canceled=Cancelado).
+STATUS_LISTAGEM = ("", "Sent", "Canceled")
+
+
+def _iterar_desc(sessao: StokkiSession, status: str, id_minimo: int, por_pagina: int = 100):
+    """Um status, id mais novo primeiro, ate passar de id_minimo.
+    iterar_todos_pedidos nao ordena, entao pagina listar_pedidos direto."""
+    pagina = 0
+    while True:
+        dados = stokki_pedidos.listar_pedidos(sessao, status=status, pagina=pagina, por_pagina=por_pagina,
+                                              ordenar_coluna="1", ordenar_dir="desc")
+        linhas = dados.get("aaData") or []
+        if pagina == 0:
+            total = dados.get("recordsFiltered") or dados.get("iTotalDisplayRecords") or 0
+            logger.info(f"Stokki tabela state={status!r}: total filtrado {total}")
+        if not linhas:
+            return
+        for linha in linhas:
+            id_stokki = stokki_pedidos.extrair_id_da_linha(linha)
+            if id_stokki is not None and id_stokki < id_minimo:
+                return
+            yield linha
+        pagina += 1
+        time.sleep(0.5)
+
 
 def listar_stokki(sessao: StokkiSession, id_minimo: int) -> tuple[list[dict], dict]:
     """Todos os status, do mais novo pro mais velho, ate chegar em id_minimo.
@@ -117,15 +148,13 @@ def listar_stokki(sessao: StokkiSession, id_minimo: int) -> tuple[list[dict], di
     except Exception as e:  # noqa: BLE001 -- a contagem e informativa
         logger.warning(f"Stokki: contar_pedidos falhou: {e}")
 
-    linhas, vistos = [], 0
-    for linha in stokki_pedidos.iterar_todos_pedidos(
-            sessao, status=stokki_pedidos.STATUS_TODOS, ordenar_coluna="1", ordenar_dir="desc"):
+    linhas, vistos, ids = [], 0, set()
+    for linha in (l for st in STATUS_LISTAGEM for l in _iterar_desc(sessao, st, id_minimo)):
         vistos += 1
         id_stokki = stokki_pedidos.extrair_id_da_linha(linha)
-        if id_stokki is None:
+        if id_stokki is None or id_stokki in ids:
             continue
-        if id_stokki < id_minimo:
-            break
+        ids.add(id_stokki)
         d = linha if isinstance(linha, dict) else {}
         linhas.append({
             "codigo": f"PS-{id_stokki}",
@@ -152,9 +181,15 @@ def listar_vuupt_done(token: str, dias: int) -> dict[str, dict]:
     por_base: dict[str, dict] = {}
     page = 1
     while True:
-        resp = requests.get(VUUPT_BASE, headers=headers, timeout=60,
-                            params={"page": page, "per_page": 100, "sort": "-completed_at",
-                                    "include": "checklistAnswers"})
+        for tentativa in range(5):
+            resp = requests.get(VUUPT_BASE, headers=headers, timeout=60,
+                                params={"page": page, "per_page": 100, "sort": "-completed_at",
+                                        "include": "checklistAnswers"})
+            if resp.status_code != 429:
+                break
+            espera = int(resp.headers.get("Retry-After") or 30 * (tentativa + 1))
+            logger.warning(f"Vuupt 429 na pagina {page}; esperando {espera}s.")
+            time.sleep(espera)
         resp.raise_for_status()
         body = resp.json()
         registros = body.get("data", [])
@@ -322,8 +357,12 @@ def carregar_catalogo():
 def tipo_transportadora(catalogo, nome: str) -> str | None:
     if not catalogo or not nome or nome.lower().startswith("não informado") or nome.lower().startswith("nao informado"):
         return None
+    # A Stokki manda "TRANSFRIOS TRANSPORTES LTDA 80.654.387/0003-09": o nome
+    # com o CNPJ colado nao casa no catalogo (medicao real de 04/10).
+    m = _RE_CNPJ.search(nome)
+    cnpj = re.sub(r"\D", "", m.group(0)) if m else ""
     try:
-        return catalogo.resolver(nome).tipo
+        return catalogo.resolver(_RE_CNPJ.sub("", nome).strip(), cnpj=cnpj).tipo
     except Exception:  # noqa: BLE001
         return None
 

@@ -19,6 +19,7 @@ class SituacaoStokki(unittest.TestCase):
         self.assertEqual(r.situacao_stokki("Waiting for Carrier"), r.STOKKI_ABERTO)
         self.assertEqual(r.situacao_stokki("Aguardando Transportador"), r.STOKKI_ABERTO)
         self.assertEqual(r.situacao_stokki("On hold"), r.STOKKI_ABERTO)
+        self.assertEqual(r.situacao_stokki("Em Conferência"), r.STOKKI_ABERTO)
         self.assertEqual(r.situacao_stokki("Sent"), r.STOKKI_EXPEDIDO)
         self.assertEqual(r.situacao_stokki("Enviado"), r.STOKKI_EXPEDIDO)
         self.assertEqual(r.situacao_stokki("Cancelado"), r.STOKKI_CANCELADO)

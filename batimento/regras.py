@@ -69,7 +69,7 @@ STOKKI_DESCONHECIDO = "DESCONHECIDO"
 # tela pode vir em portugues). Comparacao por "contem", em minusculas.
 _ABERTO = ("waiting for carrier", "aguardando transportador", "open", "aberto",
            "separating", "separando", "ready to pack", "pack", "on hold", "em espera",
-           "picking", "separacao", "separação")
+           "picking", "separacao", "separação", "em conferência", "em conferencia")
 _EXPEDIDO = ("sent", "enviado", "expedido", "shipped", "delivered", "entregue")
 _CANCELADO = ("cancel",)
 
