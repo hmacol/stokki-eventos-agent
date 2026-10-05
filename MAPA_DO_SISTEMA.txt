@@ -214,6 +214,8 @@
  04:10                       notificar-transportadoras       notificacao_transportadoras/notificar_transportadoras.py
  07:00                       notificar-nfs-em-rota           notificar_nfs_em_rota.py --data hoje
  07:15                       verificar-entregues-nao-exp.    verificar_entregues_nao_expedidos.py
+ 07:25                       batimento-pedidos               python -m batimento.bater (lê Stokki/Vuupt,
+                                                             grava batimento_*; trava sessao_uso)
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
  07-20h xx:10                comparar-pool                   nucleo/comparar_pool.py (sombra)
  seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
@@ -771,9 +773,16 @@
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
                DIVERGENCIA (puro, testado). Lista fechada de destinos e motivos.
-   medir.py    medição só leitura (manual, VPS): lista a Stokki toda desde o
-               corte (28/09), cruza com Vuupt + banco, gera xlsx em dados/.
-               Sem timer, sem tabela ainda (04/10).
+   medir.py    medição só leitura (manual, VPS): lista a Stokki desde o corte
+               (28/09 = PS-40267) nos filtros "" (abertos), Sent e Canceled,
+               id da faixa que nenhum filtro traz vai pro /show ("Importação"
+               e 500 ficam fora dos lançados, Hugo 05/10). Cruza com Vuupt +
+               banco, gera xlsx em dados/. coletar() é a mesma leitura do bater.py.
+   bater.py    job diário 07:25 (stokki-batimento-pedidos): grava
+               batimento_pedidos (1 linha por PS, nunca apagada; DESTINO fica
+               congelado) e batimento_rodadas. Equação que não fecha = exit 1
+               (alerta de falha). --resumo/--modo-teste só imprime.
+   banco.py    tabelas batimento_pedidos e batimento_rodadas.
 
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
    regras.py   estados e prazos (puro, testado).

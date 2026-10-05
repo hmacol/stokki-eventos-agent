@@ -4,8 +4,9 @@ Especificação de 04/10/2026, a pedido do Hugo: "um batimento que garanta que
 todos os pedidos lançados têm um destino bem definido, ou seja, que saibamos
 exatamente o que aconteceu com cada um".
 
-Status: **especificado, não implementado**. Decisões abaixo são do Hugo
-(04/10). Ver também a spec do Agente Analista de Logística (sessão paralela),
+Status (05/10): **job diário pronto (`batimento/bater.py`, timer 07h25),
+sem deploy**. Medição real na VPS em 04/10 e 05/10. Falta a saída (aba,
+Torre, e-mail). Decisões abaixo são do Hugo (04/10 e 05/10). Ver também a spec do Agente Analista de Logística (sessão paralela),
 que consome esta camada e não a implementa.
 
 ## Por que existe
@@ -59,6 +60,7 @@ Uma lista de problemas não garante nada; a equação garante.
 | Canhoto sem validação | **Vale** como documento (Hugo, 04/10). Validado fica como coluna à parte. |
 | Serviço com mais de um pedido | Não existe mais. Não tratar. |
 | Feriados | Em aberto, decisão única para batimento e agente. |
+| Id da faixa fora de toda listagem | (05/10) Situação "Importação" no `/show` **não conta** como lançado; `/show` com HTTP 500 = **inexistente**, não conta. Os dois ficam registrados na rodada (`cobertura`). |
 
 ## Destinos finais e evidência exigida
 
@@ -93,7 +95,7 @@ registra que ele está "em andamento" e se o vigia o considera no prazo.
 
 ## Peças
 
-Feitas em 04/10 (sem timer, sem tabela ainda):
+Feitas (04/10 e 05/10):
 
 - `batimento/regras.py` — puro, testado (`test_regras.py`): dado o retrato
   de um pedido (status Stokki, status núcleo, comprovantes, transportadora,
@@ -101,24 +103,23 @@ Feitas em 04/10 (sem timer, sem tabela ainda):
   `(DESTINO | EM_ANDAMENTO | DIVERGENCIA, rótulo, evidências)`. Mesmo padrão
   de `vigia/regras.py`. `situacao_stokki()` resume o texto da coluna
   "state" em ABERTO/EXPEDIDO/CANCELADO por "contém" (inglês e português).
-- `batimento/medir.py` — a medição do primeiro passo (abaixo). Só leitura.
+- `batimento/medir.py` — a leitura (`coletar()`), usada pela medição manual
+  (xlsx) e pelo job. Lista a Stokki em ordem de id decrescente até o corte
+  nos filtros `""` (só abertos; `all` volta sem linhas), `Sent` e
+  `Canceled`; todo id da faixa que nenhum filtro trouxe é aberto no `/show`
+  (`cobrir_faixa`). Nome da transportadora vem com CNPJ colado: separado
+  antes do `resolver`. 429 da Vuupt espera e tenta de novo.
+- `batimento/banco.py` — `batimento_pedidos` (uma linha por pedido-base,
+  **nunca apagada**: caixa, rótulo, evidências, `desde`, `fechado_em`,
+  `visto_em`, `tratado_em/por`) e `batimento_rodadas` (totais, fecha ou não,
+  resumo com a cobertura da faixa). Pedido que chegou a DESTINO fica
+  **congelado**: a Vuupt é lida só nos últimos 30 dias, e reclassificar
+  faria entrega antiga virar divergência.
+- `batimento/bater.py` — job diário (`infra/stokki-batimento-pedidos.*`,
+  07h25). Equação que não fecha sai com código 1 (alerta de falha do
+  systemd). `--resumo`/`--modo-teste` só imprime.
 
 A implementar:
-- `batimento/banco.py` — tabela `batimento_pedidos`, uma linha por
-  pedido-base, **nunca apagada**:
-  `codigo, criado_stokki_em, embarcador, status_stokki, status_nucleo,
-  destino, motivo, evidencias_json, fechado_em, visto_em, tratado_em,
-  tratado_por`. Mais `batimento_rodadas` (quando rodou, totais da equação,
-  fechou ou não).
-- `batimento/listar_stokki.py` — lista TODOS os status da Stokki a partir da
-  data de corte, incremental por id (ordenar coluna 1 desc), pelas funções de
-  `stokki/pedidos.py`. Confere o total contra `contar_pedidos` por status; se
-  não bate, a rodada é "incompleta" e não fecha ninguém (mesma regra do
-  retrato do vigia). Pega a trava de `stokki/sessao_uso.py`.
-- `batimento/bater.py` — job diário: junta a listagem com `nucleo_pedidos`,
-  `nucleo_paradas`, `nucleo_comprovantes`, `expedicoes_processadas`
-  (`canhoto_anexado`), `pedidos_dedicados`, Lalamove, `vigia_pedidos`;
-  aplica as regras; grava; confere a equação. `--resumo` só imprime.
 - Saída: aba "Fechamento" em `/vigia`, exceção na Torre quando a equação não
   fecha ou há divergência vencida, e-mail interno. O
   `verificar_entregues_nao_expedidos.py` vira caso particular e pode ser
@@ -131,8 +132,8 @@ reentrega herda o pedido-base; o destino é um só por pedido.
 
 Rodar uma vez por dia num horário sem outra sessão Stokki aberta. Candidato:
 **07h25**, depois do `verificar-entregues-nao-expedidos` (07h15) e antes do
-`comparar-vuupt` (07h40) e da expedição (08h). Listar todos os status é mais
-pesado que o pipeline; medir o tempo na primeira rodada antes de fixar.
+`comparar-vuupt` (07h40) e da expedição (08h). Medido em 05/10: ~10 s de
+listagem, ~90 s de `/show` (101 ids fora das listagens) e ~45 s de Vuupt.
 Login concorrente derruba a outra sessão (inclusive a do
 `agente-importacao-stokki`): obrigatório `aguardar_vez_para_login`.
 
@@ -147,18 +148,20 @@ sudo -u www-data venv/bin/python -m batimento.medir
 sudo -u www-data venv/bin/python -m batimento.medir --data-corte 2026-09-28 --dias-vuupt 30
 ```
 
-O que faz: acha o id da Stokki de corte (menor PS que o núcleo viu nascer
-desde a data de corte; `--id-minimo N` força), pega a trava
-`stokki/sessao_uso.py`, lista a Stokki com `status=all` do mais novo pro
-mais velho até o corte, lê os serviços `done` da Vuupt (com
+O que faz: acha o id da Stokki de corte (maior PS que o núcleo viu nascer
+ANTES da data de corte, mais um: o menor PS criado desde o corte não serve,
+pedido antigo reimportado puxava pra PS-31190; `--id-minimo N` força; 28/09
+= PS-40267), pega a trava `stokki/sessao_uso.py`, lista a Stokki (ver
+Peças) do mais novo pro mais velho até o corte, lê os serviços `done` da Vuupt (com
 `checklistAnswers`), cruza com `nucleo_pedidos`, `nucleo_paradas/rotas`,
 `nucleo_comprovantes`, `expedicoes_processadas/falhas`, `pedidos_dedicados`,
 `insucessos_duplicados`, `insucessos_aguardando_resposta`, `vigia_pedidos`
 e BD_TRANSPORTADORAS, classifica e grava
 `dados/batimento_medicao_<hoje>.xlsx` (abas Resumo, Pedidos, Status Stokki).
 A aba "Status Stokki" mostra os nomes de status que a Stokki devolve: é dela
-que sai o de-para definitivo (ver riscos). Testado em 04/10 só com banco
-sintético; a primeira rodada real é na VPS.
+que sai o de-para definitivo. Rodado na VPS em 04/10 (574 lançados = 255
+destino + 280 em andamento + 39 divergência) e 05/10 (636 = 335 + 256 + 45;
+faixa 40267..41003 = 636 listados + 81 Importação + 20 inexistentes).
 
 Evidência de canhoto, nesta ordem: `nucleo_comprovantes` (app) >
 `images_quantity` do checklist da Vuupt > `expedicoes_processadas.canhoto_anexado`.
@@ -169,17 +172,15 @@ Comprovante de redespacho, retirada e Lalamove é sempre "não" (opção A).
 - **Comprovante de redespacho e de retirada não existe no sistema.** A regra
   "sempre documento assinado" faz TODO redespacho e TODA retirada nascerem
   como divergência até existir captura (foto do protocolo da transportadora;
-  assinatura de quem retirou no galpão, via `/wms` ou app). Decidir com o
-  Hugo: capturar antes de ligar o batimento, ou aceitar a divergência como
-  fila de trabalho desde o dia 1.
-- Nomes dos status da Stokki para cancelado/devolvido não estão no código
-  (conhecidos: Waiting for Carrier, Open, Separating, Ready to Pack, On hold,
-  Sent). Rodar `contar_pedidos(STATUS_TODOS)` na VPS antes de escrever o
-  de-para; status fora do de-para vira `STATUS_STOKKI_DESCONHECIDO`.
+  assinatura de quem retirou no galpão, via `/wms` ou app). Decidido (opção
+  A): a divergência é a fila de trabalho desde o dia 1.
+- De-para da Stokki visto na VPS (05/10): abertos = Aguardando Transportador,
+  Aberto, Em Conferência, Em espera, Em separação; expedido = Enviado
+  (`Sent`); cancelado = Cancelado (`Canceled`); "Importação" só no `/show`.
+  Status novo fora do de-para vira `STATUS_STOKKI_DESCONHECIDO`.
+- Os ids em "Importação" (80 JERSEY VALE 40769..40848, 1 BURIN 40605) são
+  abertos no `/show` toda rodada enquanto não saírem desse estado.
 - Lalamove: `pod_image` vem como URL temporária; guardar a imagem no GCS
   (`pedidos/{PS}/canhoto/`) no `sincronizar_lalamove.py`, senão a evidência
   some.
-- Canhoto na Vuupt "com foto, sem validar" conta como documento? Hoje a
-  expedição aceita (expede e anexa). Proposta: conta, e `validado` fica como
-  coluna à parte. Confirmar com o Hugo.
 - Feriados (decisão em aberto, compartilhada com o agente).

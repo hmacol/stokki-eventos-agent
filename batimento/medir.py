@@ -168,7 +168,58 @@ def listar_stokki(sessao: StokkiSession, id_minimo: int) -> tuple[list[dict], di
             "marcador": _limpar(d.get("marker")),
         })
     logger.info(f"Stokki: {len(linhas)} pedido(s) com id >= {id_minimo} ({vistos} linha(s) lidas).")
-    return linhas, contagem
+
+    cobertura = cobrir_faixa(sessao, id_minimo, ids, linhas)
+    return linhas, contagem, cobertura
+
+
+_RE_SITUACAO = re.compile(r"Situa[çc][ãa]o:\s*</th>\s*<td>(.*?)</td>", re.S)
+
+
+def situacao_no_show(sessao: StokkiSession, id_stokki: int) -> str | None:
+    """Texto da "Situacao:" na pagina do pedido. None = Stokki devolve 500
+    (id que nao existe; decisao do Hugo 05/10)."""
+    resp = sessao.get(f"{stokki_pedidos.BASE_URL}/pt-br/administrator/inventory/outbound/show/{id_stokki}")
+    if resp.status_code == 500:
+        return None
+    resp.raise_for_status()
+    m = _RE_SITUACAO.search(resp.text)
+    return _limpar(m.group(1)) if m else ""
+
+
+def cobrir_faixa(sessao: StokkiSession, id_minimo: int, ids: set[int], linhas: list[dict]) -> dict:
+    """Todo id de id_minimo ate o maior listado precisa ter explicacao. Os
+    que nenhum filtro da tabela traz sao abertos um a um no /show:
+      - "Importacao" (pedido que nao terminou de entrar) NAO conta como lancado;
+      - 500 = id inexistente, NAO conta;
+      - qualquer outra situacao entra nos lancados com o texto do /show
+        (fora do de-para vira STATUS_STOKKI_DESCONHECIDO).
+    Decisao do Hugo 05/10 (101 ids de 40267..40942 fora das listagens)."""
+    if not ids:
+        return {"faixa": None, "listados": 0, "pelo_show": 0, "importacao": [], "inexistentes": []}
+    maior = max(ids)
+    faltantes = [i for i in range(id_minimo, maior + 1) if i not in ids]
+    importacao, inexistentes, pelo_show = [], [], 0
+    for i in faltantes:
+        sit = situacao_no_show(sessao, i)
+        if sit is None:
+            inexistentes.append(i)
+        elif "importa" in sit.lower():
+            importacao.append(i)
+        else:
+            pelo_show += 1
+            linhas.append({"codigo": f"PS-{i}", "id_stokki": i, "embarcador": "", "transportadora": "",
+                           "destinatario": "", "tipo": "", "data_saida": "", "marcador": "",
+                           "status_stokki_bruto": sit})
+        time.sleep(0.3)
+    listados = len(ids)
+    cob = {"faixa": f"{id_minimo}..{maior}", "listados": listados, "pelo_show": pelo_show,
+           "importacao": importacao, "inexistentes": inexistentes}
+    total = listados + pelo_show + len(importacao) + len(inexistentes)
+    logger.info(f"Faixa {id_minimo}..{maior} ({maior - id_minimo + 1} ids): {listados} listados, "
+                f"{pelo_show} so pelo /show, {len(importacao)} em Importacao, {len(inexistentes)} inexistentes "
+                f"(soma {total}).")
+    return cob
 
 
 # ── Vuupt ─────────────────────────────────────────────────────────────────────
@@ -489,6 +540,53 @@ def _celula(v):
     return v
 
 
+# ── Coleta (usada aqui e no bater.py) ────────────────────────────────────────
+
+def coletar(data_corte: date, id_minimo: int | None, dias_vuupt: int, esperar_stokki: int,
+            dono_trava: str) -> tuple[list[dict], dict, dict, int]:
+    """Le Stokki, Vuupt e banco e classifica. So leitura.
+    Devolve (pedidos classificados, resumo, contagem da Stokki, id_minimo)."""
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+    token = (config.get("vuupt_api") or {}).get("token", "")
+    if not token:
+        raise SystemExit("Token da Vuupt nao configurado (vuupt_api.token).")
+    agent_lalamove = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
+
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        id_minimo = id_minimo or id_de_corte(conn, data_corte)
+        if not id_minimo:
+            raise SystemExit(f"Nucleo nao tem pedido criado antes de {data_corte}; informe --id-minimo.")
+        logger.info(f"Corte: pedidos com id Stokki >= {id_minimo} (data de corte {data_corte}).")
+
+        if not sessao_uso.adquirir(dono_trava, ttl_segundos=1800, esperar_segundos=esperar_stokki):
+            raise SystemExit(f"Stokki em uso por {sessao_uso.em_uso()}; tente mais tarde.")
+        try:
+            sessao = StokkiSession(config)
+            linhas, contagem, cobertura = listar_stokki(sessao, id_minimo)
+        finally:
+            sessao_uso.liberar(dono_trava)
+
+        vuupt = listar_vuupt_done(token, dias_vuupt)
+        banco = ler_banco(conn, {l["codigo"] for l in linhas}, agent_lalamove)
+    finally:
+        conn.close()
+
+    resultado, resumo = medir(linhas, banco, vuupt, carregar_catalogo())
+    resumo["cobertura"] = cobertura
+    return resultado, resumo, contagem, id_minimo
+
+
+def logar_resumo(resumo: dict) -> None:
+    logger.info(f"LANCADOS={resumo['lancados']} | "
+                + " | ".join(f"{c}={sum(resumo[c].values())}" for c in (regras.DESTINO, regras.EM_ANDAMENTO, regras.DIVERGENCIA))
+                + f" | sem_classificar={resumo['sem_classificar']} | equacao {'FECHA' if resumo['equacao_fecha'] else 'NAO FECHA'}")
+    for caixa in (regras.DESTINO, regras.EM_ANDAMENTO, regras.DIVERGENCIA):
+        for rotulo, n in sorted(resumo[caixa].items(), key=lambda kv: -kv[1]):
+            logger.info(f"  {caixa:<13} {rotulo:<34} {n}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> int:
@@ -501,45 +599,14 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     data_corte = date.fromisoformat(args.data_corte)
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-    token = (config.get("vuupt_api") or {}).get("token", "")
-    if not token:
-        raise SystemExit("Token da Vuupt nao configurado (vuupt_api.token).")
-    agent_lalamove = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
-
-    conn = sqlite3.connect(DB_PATH)
-    id_minimo = args.id_minimo or id_de_corte(conn, data_corte)
-    if not id_minimo:
-        raise SystemExit(f"Nucleo nao tem pedido criado desde {data_corte}; informe --id-minimo.")
-    logger.info(f"Corte: pedidos com id Stokki >= {id_minimo} (data de corte {data_corte}).")
-
-    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=1800, esperar_segundos=args.esperar_stokki):
-        raise SystemExit(f"Stokki em uso por {sessao_uso.em_uso()}; tente mais tarde.")
-    try:
-        sessao = StokkiSession(config)
-        linhas, contagem = listar_stokki(sessao, id_minimo)
-    finally:
-        sessao_uso.liberar(DONO_TRAVA)
-
-    vuupt = listar_vuupt_done(token, args.dias_vuupt)
-    bases = {l["codigo"] for l in linhas}
-    banco = ler_banco(conn, bases, agent_lalamove)
-    conn.close()
-    catalogo = carregar_catalogo()
-
-    resultado, resumo = medir(linhas, banco, vuupt, catalogo)
-
-    logger.info(f"LANCADOS={resumo['lancados']} | "
-                + " | ".join(f"{c}={sum(resumo[c].values())}" for c in (regras.DESTINO, regras.EM_ANDAMENTO, regras.DIVERGENCIA))
-                + f" | sem_classificar={resumo['sem_classificar']} | equacao {'FECHA' if resumo['equacao_fecha'] else 'NAO FECHA'}")
-    for caixa in (regras.DESTINO, regras.EM_ANDAMENTO, regras.DIVERGENCIA):
-        for rotulo, n in sorted(resumo[caixa].items(), key=lambda kv: -kv[1]):
-            logger.info(f"  {caixa:<13} {rotulo:<34} {n}")
+    resultado, resumo, contagem, id_minimo = coletar(data_corte, args.id_minimo, args.dias_vuupt,
+                                                     args.esperar_stokki, DONO_TRAVA)
+    logar_resumo(resumo)
 
     saida = Path(args.saida) if args.saida else _RAIZ / "dados" / f"batimento_medicao_{date.today().isoformat()}.xlsx"
     gravar_xlsx(saida, resultado, resumo, contagem,
                 {"data_corte": data_corte, "id_minimo_stokki": id_minimo, "dias_vuupt": args.dias_vuupt,
+                 **{f"faixa_{k}": (len(v) if isinstance(v, list) else v) for k, v in resumo["cobertura"].items()},
                  "gerado_em": datetime.now().strftime("%Y-%m-%d %H:%M")})
     logger.info(f"Planilha: {saida}")
     return 0
