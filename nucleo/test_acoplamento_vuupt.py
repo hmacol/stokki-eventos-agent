@@ -60,6 +60,7 @@ PERMITIDOS = {
     "painel_agentes/rascunhos_rota.py",
     "painel_agentes/test_editar_endereco_pedido.py",
     "painel_agentes/test_editar_endereco_pedidos_lote.py",
+    "painel_agentes/test_agendamento_equipe.py",  # 04/10: so simula a Vuupt (mock) pro reagendar da equipe
     "painel_agentes/test_reagendar_pedidos_lote.py",
     "painel_agentes/torre_controle.py",
     "pipeline.py",
