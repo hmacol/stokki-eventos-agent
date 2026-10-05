@@ -40,8 +40,15 @@ Stokki, confirmação por e-mail, etc.), nem fica reagendando indefinidamente.
 """
 import logging
 import re
+import sys
 import unicodedata
 from datetime import date, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).resolve().parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import calendario  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +255,12 @@ def proxima_data_dia_semana(dia_semana_alvo: int, a_partir_de: date) -> date:
     dias_ate = (dia_semana_alvo - a_partir_de.weekday()) % 7
     if dias_ate == 0:
         dias_ate = 7
-    return a_partir_de + timedelta(days=dias_ate)
+    data = a_partir_de + timedelta(days=dias_ate)
+    # Não há rota em feriado (Hugo, 04/10): dia fixo que cai em feriado
+    # pula pra semana seguinte.
+    while calendario.eh_feriado(data):
+        data += timedelta(days=7)
+    return data
 
 
 def proxima_data_dias_semana(dias_semana: list[int], a_partir_de: date) -> date:
@@ -282,7 +294,7 @@ def ajustar_data_por_dia_fixo(servico: dict, data: date) -> tuple[date, dict | N
     que quem chama usa pra logar/notificar o remetente.
     """
     regra = regra_dia_fixo_do_servico(servico)
-    if not regra or data.weekday() in regra["dias"]:
+    if not regra or (data.weekday() in regra["dias"] and not calendario.eh_feriado(data)):
         return data, None
     return proxima_data_dias_semana(regra["dias"], data), regra
 

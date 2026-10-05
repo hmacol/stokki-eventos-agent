@@ -22,7 +22,14 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
 Estados sem prazo (só aparecem na lista): AGENDADO (data futura), EM_ROTA
 (rota de hoje ou futura).
 """
+import sys
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import calendario  # noqa: E402
 
 SEM_SERVICO = "SEM_SERVICO"
 NO_POOL = "NO_POOL"
@@ -61,21 +68,15 @@ HORA_LIMITE_RASCUNHO = time(19, 0)
 
 
 def eh_dia_util(d: date) -> bool:
-    return d.weekday() < 5
+    """Seg-sex e não feriado -- calendário único (regras/calendario.py,
+    Hugo 04/10: feriado é dia não útil para todos)."""
+    return calendario.eh_dia_util(d)
 
 
 def somar_dias_uteis(inicio: datetime, dias: int) -> datetime:
-    """Mesmo horário, `dias` dias úteis depois (sábado/domingo não contam;
-    começar num fim de semana conta a partir da segunda)."""
-    atual = inicio
-    while not eh_dia_util(atual.date()):
-        atual = datetime.combine(atual.date() + timedelta(days=1), time(0, 0))
-    restantes = dias
-    while restantes > 0:
-        atual += timedelta(days=1)
-        if eh_dia_util(atual.date()):
-            restantes -= 1
-    return atual
+    """Mesmo horário, `dias` dias úteis depois (fim de semana e feriado não
+    contam; começar num dia não útil conta a partir do próximo, às 00:00)."""
+    return calendario.somar_dias_uteis(inicio, dias)
 
 
 def proxima_rodada_expedicao(dt: datetime) -> datetime:
@@ -91,10 +92,7 @@ def proxima_rodada_expedicao(dt: datetime) -> datetime:
 
 
 def ultimo_dia_util_antes(d: date) -> date:
-    atual = d - timedelta(days=1)
-    while not eh_dia_util(atual):
-        atual -= timedelta(days=1)
-    return atual
+    return calendario.dia_util_anterior(d)
 
 
 def prazo(estado: str, desde: datetime, *, data_rascunho: date | None = None,

@@ -153,13 +153,13 @@ Não há critério por valor do pedido nem por "cliente irritado".
 
 ## Ordem de construção
 
-1. **Calendário de feriados**, função única usada por todos. Hoje cada módulo
-   faz `weekday() >= 5` por conta própria: `vigia/regras.py`,
-   `roteirizacao/rotas_fracas.py`, `criar_rotas_diarias.py`,
-   `incrementar_rotas.py`, `pipeline.py`, `relatorio_operacional.py`,
-   `painel_agentes/torre_controle.py`, `insucesso_entrega/fingerprint_duplicacao_agendada.py`,
-   `coleta_emporio_quatro_estrelas/lancar_coleta.py`, `portal_cliente/chamados.py`.
-   Fonte: nacionais + São Paulo, em arquivo ou BrasilAPI.
+1. **Calendário de feriados** — FEITO em 05/10: `regras/calendario.py`
+   (nacionais + SP + móveis pela Páscoa, ajustes em `dados/feriados.json`),
+   com os doze pontos que faziam `weekday() >= 5` migrados: vigia, rotas
+   fracas, criar_rotas_diarias, incrementar_rotas, pipeline, relatório
+   operacional, Torre, insucesso (duplicação agendada), coleta Empório,
+   chamados (horário de atendimento), rodízio (suspenso em feriado) e dia
+   fixo (feriado pula pra semana seguinte).
 2. **Batimento de pedidos** (spec própria).
 3. **Migração das rotas para o app próprio** (pré-requisito do fluxo de
    15 minutos).

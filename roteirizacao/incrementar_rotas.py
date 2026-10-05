@@ -109,6 +109,7 @@ from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
+from regras import calendario
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
@@ -143,12 +144,9 @@ HORA_CORTE_PEDIDO = 19
 
 
 def _dia_util_anterior(data: date) -> date:
-    """Último dia útil (seg-sex) ESTRITAMENTE anterior a `data` -- mesmo
-    critério simples, sem feriados, de criar_rotas_diarias._proximo_dia_util."""
-    anterior = data - timedelta(days=1)
-    while anterior.weekday() >= 5:
-        anterior -= timedelta(days=1)
-    return anterior
+    """Último dia útil ESTRITAMENTE anterior a `data` (seg-sex e não
+    feriado, calendário único de regras/calendario.py)."""
+    return calendario.dia_util_anterior(data)
 
 
 def limite_corte_pedidos(data_alvo: date) -> datetime:

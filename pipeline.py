@@ -37,6 +37,7 @@ _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 (_RAIZ / "dados").mkdir(parents=True, exist_ok=True)
 
+from regras import calendario
 from regras.embarcadores import embarcador_prioritario, resolver_stkkc_id_por_nome
 from regras.endereco import resolver_endereco_entrega
 from regras.transportadoras import CatalogoTransportadoras
@@ -189,11 +190,9 @@ TIPOS_CARGA_VALIDOS = {"Congelado", "Seco", "Refrigerado"}
 TIPO_CARGA_PADRAO   = "Seco"
 
 def _proximo_dia_util(data):
-    """Rola a data para frente até cair em dia útil (seg-sex)."""
-    from datetime import timedelta
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex e não feriado,
+    calendário único de regras/calendario.py)."""
+    return calendario.proximo_dia_util(data, inclusive=True)
 
 
 def calcular_data_entrega(data_saida_str: str):

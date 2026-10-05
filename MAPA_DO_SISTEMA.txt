@@ -438,6 +438,11 @@
  Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx,
  BD_TRANSPORTADORAS.xlsx) e tabela `interno`.
 
+ calendario.py              Dia útil e feriado, ÚNICO pro sistema (Hugo,
+                            04/10: feriado é dia não útil pra todos). Nacionais
+                            + SP + móveis pela Páscoa; ajuste sem código em
+                            dados/feriados.json ({"incluir": {...}, "excluir":
+                            [...]}). Nenhum outro arquivo faz weekday() >= 5.
  embarcadores.py            Identificação do embarcador.
  endereco.py                Endereço final: LLM > Local de Entrega >
                             redespacho TERCEIROS > destino.
@@ -897,3 +902,7 @@
    "Notificador"; painel-agentes.service diz "somente leitura".
  - Pedido segurado fica no pool de propósito até a data nova; o vigia só
    alarma na véspera do prazo de 3 dias úteis.
+ - Feriado conta como dia não útil em TODO prazo, rota e relatório
+   (regras/calendario.py). Dia fixo que cai em feriado pula pra semana
+   seguinte; rodízio não vale em feriado; atendimento fecha. Pra abrir uma
+   exceção, use dados/feriados.json, não o código.

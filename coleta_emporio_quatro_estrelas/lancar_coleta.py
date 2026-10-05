@@ -58,6 +58,7 @@ _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 sys.path.insert(0, str(_RAIZ_PROJETO / "roteirizacao"))
 (_RAIZ_LOCAL / "dados").mkdir(parents=True, exist_ok=True)
+from regras import calendario  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -191,10 +192,11 @@ def main(modo_teste: bool = False):
             raise RuntimeError("config.yaml sem vuupt_api.token.")
 
         hoje = date.today()
-        if hoje.weekday() >= 5:
-            logger.info(f"{prefixo}Hoje ({hoje:%d/%m/%Y}) é fim de semana -- rotina só roda em dias úteis, nada a fazer.")
+        if not calendario.eh_dia_util(hoje):
+            motivo = calendario.nome_feriado(hoje) or "fim de semana"
+            logger.info(f"{prefixo}Hoje ({hoje:%d/%m/%Y}) é {motivo} -- rotina só roda em dias úteis, nada a fazer.")
             resumo_etapas["Coleta Empório Quatro Estrelas"] = {
-                "status": "ok", "detalhe": "Fim de semana -- rotina não roda.",
+                "status": "ok", "detalhe": f"{motivo.capitalize()} -- rotina não roda.",
             }
         else:
             estado = _carregar_estado()

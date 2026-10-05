@@ -26,7 +26,8 @@ há mais tempo do que devia, alguém fica sabendo.
 | Embarcador recusou | respondeu "não reenviar" e o pedido segue aberto na Stokki | 2 dias úteis |
 | Agendado / Em rota | data futura / rota de hoje em diante | sem prazo |
 
-Dia útil = segunda a sexta (sem feriados, por enquanto).
+Dia útil = segunda a sexta e não feriado, pelo calendário único
+`regras/calendario.py` (desde 05/10; antes feriado contava como dia útil).
 
 ## Peças
 
@@ -94,7 +95,6 @@ código novo (é ela que grava o retrato).
 - ROTA_PASSADA de rota com mais de 14 dias não é devolvida sozinha (só
   alertada); rodar `--resumo` antes de ligar pra ver o volume.
 
-- Feriados não contam como dia não útil.
 - O retrato cobre o que o pipeline lista: "Aguardando Transportador" de
   todos + todos os status dos 3 prioritários + Estação de Impressão. "On hold"
   de outros embarcadores não entra.

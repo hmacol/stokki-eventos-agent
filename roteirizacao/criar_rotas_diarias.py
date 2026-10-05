@@ -101,6 +101,7 @@ sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
 from rascunhos_rota import criar_lote_rascunhos
 from nucleo.pool import listar_pool_not_assigned
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
+from regras import calendario
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
@@ -237,12 +238,10 @@ HORA_CORTE_MESMO_DIA = 14  # pedido do Hugo, 10/08
 
 
 def _proximo_dia_util(data: date) -> date:
-    """Rola a data para frente até cair em dia útil (seg-sex) -- mesmo
-    critério simples (sem calendário de feriados) já usado em
-    pipeline.py::_proximo_dia_util."""
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex e não feriado,
+    calendário único de regras/calendario.py -- não há rota em feriado,
+    Hugo 04/10)."""
+    return calendario.proximo_dia_util(data, inclusive=True)
 
 
 def _data_alvo_rotas(agora: datetime) -> date:
