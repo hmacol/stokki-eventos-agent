@@ -52,6 +52,7 @@ PERMITIDOS = {
     "nucleo/sincronizar_servicos_vuupt.py",  # 16/09: espelha o pedido fora da rota (pool, retirada, reentrega)
     "nucleo/sincronizar_vuupt.py",          # a ponte Vuupt -> núcleo (morre na virada)
     "notificacao_entregas/vuupt_entregas.py",  # 17/09: só lê concluídos + canhoto; peça isolada que troca por nucleo_* na saída
+    "painel_agentes/consulta_expedicao.py",  # 02/10: Consultar pedido cruza Vuupt e Stokki ao vivo (so leitura)
     "painel_agentes/expedicao.py",
     "painel_agentes/laboratorio_rotas.py",
     "painel_agentes/mapa_rotas.py",
