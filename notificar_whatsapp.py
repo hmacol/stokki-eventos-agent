@@ -130,6 +130,7 @@ CARA_DE_ERRO_TECNICO = r"Error|Exception|Traceback|[<>{}\[\]]|0x|\w\.\w+\("
 # Chave = nome da unit sem "stokki-" e sem ".service" (infra/*.service).
 NOMES_DAS_TAREFAS = {
     "acompanhar-retiradas": "Acompanhamento das retiradas no galpão",
+    "agente-analisar": "Agente analista de logística",
     "avisar-cliente-sem-resposta": "WhatsApp ao cliente que não respondeu o chamado",
     "backup-gcs": "Cópia de segurança diária dos dados",
     "backup-horario": "Cópia de segurança de hora em hora",
@@ -627,6 +628,38 @@ def _registrar_sem_whatsapp(conn, agora, assinatura: str) -> None:
     finally:
         if fechar:
             conn.close()
+
+
+def avisar_embarcador(telefone: str, texto: str, assinatura: str, config: dict, tipo: str = "agente",
+                      modo_teste: bool = False, **kw) -> str:
+    """Aviso direto ao embarcador com texto pronto (agente analista). Mesmas
+    regras do aviso de chamado sem resposta: canal de clientes ligado, numero
+    conferido no gateway, teto diario de clientes, clientes.forcar_destino
+    redireciona tudo (piloto). Situacoes: desligado | modo_teste |
+    numero_sem_whatsapp | indeterminado | nao_enviado | enviado | falhou."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado ({assinatura}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                _registrar_sem_whatsapp(kw.get("conn"), kw.get("agora"), assinatura)
+                logger.info(f"WhatsApp nao enviado ({assinatura}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, tipo, texto, assinatura, modo_teste=modo_teste,
+                         grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
 
 
 def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, link: str, config: dict,

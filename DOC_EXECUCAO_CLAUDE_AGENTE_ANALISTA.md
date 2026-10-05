@@ -4,9 +4,13 @@ Especificação de 04/10/2026, a partir do questionário respondido pelo Hugo
 nesse dia. Registra o que o sistema já faz, as decisões tomadas e o que o
 agente precisa fazer a mais.
 
-Status: **especificado, não implementado**. Depende do batimento de
-pedidos (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md) e do calendário de
-feriados, nessa ordem.
+Status (05/10): **núcleo implementado, desligado por padrão**. Feito:
+calendário de feriados (`regras/calendario.py`) e o pacote `agente/`
+(regras, tabela `agente_acoes`, templates, job `analisar.py`, timer
+`stokki-agente-analisar`). Falta: fluxo de 15 min no app, `executar.py` e
+botão na Torre, tela `/agente`, leitura de resposta com IA, indicadores.
+O batimento (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md) é de outra sessão; o
+job já lê `batimento_pedidos` quando a tabela existir.
 
 ## O que o agente é (e o que não é)
 
@@ -163,8 +167,13 @@ Não há critério por valor do pedido nem por "cliente irritado".
 2. **Batimento de pedidos** (spec própria).
 3. **Migração das rotas para o app próprio** (pré-requisito do fluxo de
    15 minutos).
-4. **Agente**: fluxo de 15 min, sugestões sobre divergências, avisos OpenWA,
-   indicadores.
+4. **Agente** — núcleo FEITO em 05/10 (`agente/`: regras, banco, templates,
+   analisar, timer). Reage hoje a três estados do vigia: AGUARDANDO_CLIENTE
+   vencido (cobra a data), INSUCESSO (avisa a falha; na 3ª tentativa pede
+   confirmação de devolução) e RECUSADO (pede confirmação de devolução).
+   Divergências do batimento viram PROPOSTA assim que a tabela existir.
+   Falta: fluxo de 15 min, `executar.py` + botão na Torre, tela `/agente`,
+   leitura de resposta com IA, indicadores.
 
 ## Arquitetura
 
@@ -202,15 +211,21 @@ Peças:
   Entrada: um fato (estado do vigia vencido, divergência do batimento,
   evento de parada, mensagem de chamado). Saída: lista de ações com
   `tipo`, `destinatario`, `template`, `precisa_aprovacao`.
-- `agente/acoes.py` — tabela `agente_acoes`: `id, pedido, fato_origem,
-  tipo, destinatario, texto, status (PROPOSTA | ENVIADA | APROVADA |
-  RECUSADA | EXECUTADA | FALHOU), criado_em, aprovado_por, executado_em,
-  resultado`. Append-only: nunca apaga, nunca reescreve texto enviado.
-  Idempotência por `(pedido, fato_origem, tipo)`: o mesmo fato não gera a
-  mesma ação duas vezes.
-- `agente/analisar.py` — job de 5 min (`stokki-agente-analisar`). Só lê o
-  banco (como o vigia): nunca chama Stokki nem Vuupt. Executa ações que
-  não precisam de aprovação (avisos) e deixa as outras em PROPOSTA.
+- `agente/banco.py` — tabela `agente_acoes`: `id, codigo, fato_origem,
+  tipo, template, destinatario, texto, dados_json, status (PROPOSTA |
+  APROVADA | RECUSADA | ENVIADA | DESLIGADA | EXECUTADA | FALHOU),
+  resultado, criado_em, atualizado_em, aprovado_por, executado_em`.
+  Append-only: nunca apaga, nunca reescreve texto enviado. Idempotência
+  por `UNIQUE(codigo, fato_origem, template)`: o mesmo fato não gera a
+  mesma ação duas vezes. `agente_rodadas` guarda os totais de cada rodada.
+  DESLIGADA = aviso que teria saído com `agente.ativo` desligado; ao ligar,
+  esses fatos antigos NÃO são reenviados (sem rajada na ativação).
+- `agente/analisar.py` — job de 15 min (`stokki-agente-analisar`, 2 min
+  depois do vigia). Só lê o banco (como o vigia): nunca chama Stokki nem
+  Vuupt. Executa ações que não precisam de aprovação (avisos) e deixa as
+  outras em PROPOSTA. `--modo-teste` não grava nem envia. Config em
+  `agente:` (`ativo`, `forcar_destino_email`, `link_atendimento`); o
+  WhatsApp obedece também `whatsapp_notificacoes.clientes`.
 - `agente/executar.py` — chamado pelo botão da Torre. É o único lugar que
   escreve na Stokki/Vuupt, e só para ações APROVADAS. Pega a trava de
   `stokki/sessao_uso.py`.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-agente-analisar.service a cada 15 min (2 min depois do vigia, que roda :10/:25/:40/:55)
+
+[Timer]
+OnCalendar=*-*-* *:12,27,42,57:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

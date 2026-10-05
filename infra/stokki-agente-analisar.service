@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Agente analista (le vigia/batimento, avisa embarcador e propoe acoes; so le o banco)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m agente.analisar

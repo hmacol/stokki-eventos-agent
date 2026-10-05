@@ -86,6 +86,8 @@
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
+ Agente analista (avisos/propostas) ........ agente/ (regras.py decide; templates.py = textos)
+ Dia útil / feriado ........................ regras/calendario.py (+ dados/feriados.json)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
@@ -227,6 +229,8 @@
  seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario (desiste se a Stokki
                                                              estiver em uso -- ver stokki/sessao_uso.py)
  xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
+ xx:12/27/42/57              agente-analisar                 python -m agente.analisar (só lê o banco;
+                                                             avisos desligados até agente.ativo)
  17:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (+ devolve ao pool pedido NÃO iniciado de
                                                              rota de dia anterior)
@@ -772,6 +776,18 @@
  freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
                            parados, tarefas do Kanban.
 
+ agente/                   Agente analista (DOC_EXECUCAO_CLAUDE_AGENTE_ANALISTA.md).
+   regras.py   fato (linha do vigia ou divergência do batimento) -> ações
+               AVISAR (embarcador) / PROPOR (Torre aprova). Puro, testado.
+   banco.py    agente_acoes (append-only, UNIQUE codigo+fato+template) e
+               agente_rodadas.
+   templates.py textos fixos (WhatsApp, e-mail, proposta); sem LLM.
+   analisar.py job de 15 min: só lê o banco; AVISAR vai por OpenWA
+               (notificar_whatsapp.avisar_embarcador) + e-mail; sem
+               agente.ativo grava DESLIGADA com o texto. --modo-teste não
+               grava nem envia. Nunca escreve em Stokki/Vuupt.
+   test_*.py   regras, banco e rodada com banco temporário.
+
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
    regras.py   estados e prazos (puro, testado).
    vigiar.py   job de 15 min: junta núcleo + retrato da Stokki + rascunhos
@@ -822,6 +838,7 @@
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
+   agente_acoes, agente_rodadas  agente/banco.py
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
    interno                   tipo de carga por embarcador (só leitura)
