@@ -2316,7 +2316,7 @@ def api_cancelar_rota():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_cancelar_pedido():
-    """Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id}) --
+    """Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel) --
     botão "Cancelar pedido" da tela, em qualquer lugar onde ele esteja
     (pool, rascunho ainda não enviado, ou rota já enviada -- ver
     planejamento_rotas.cancelar_pedido)."""

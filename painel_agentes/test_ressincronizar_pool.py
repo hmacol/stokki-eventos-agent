@@ -38,6 +38,14 @@ class TestRessincronizaDepoisDeEscrever(unittest.TestCase):
         self.assertEqual(pr.cancelar_pedido(111), {"ok": True})
         self.ressinc.assert_called_once_with(self.mock_vuupt, [111])
 
+    def test_cancelar_pedido_deixa_status_canceled_em_vez_de_apagar(self):
+        """05/10 (PS-38284, PS-39959): o DELETE apagava o serviço e o pipeline,
+        sem achar nada com aquele código, recriava o pedido ainda aberto na
+        Stokki. Com status 'canceled' ele cai em pulado_cancelado_vuupt."""
+        pr.cancelar_pedido(111)
+        self.mock_vuupt.cancelar_servico_oficial.assert_called_once_with(111)
+        self.mock_vuupt.cancelar_servico.assert_not_called()
+
     def test_reagendar_pedido(self):
         self.assertEqual(pr.reagendar_pedido(111, "2026-09-25", "08:00", "12:00"), {"ok": True})
         self.ressinc.assert_called_once_with(self.mock_vuupt, [111])
@@ -54,7 +62,7 @@ class TestRessincronizaDepoisDeEscrever(unittest.TestCase):
         self.ressinc.assert_called_once_with(self.mock_vuupt, [111])
 
     def test_falha_na_vuupt_nao_ressincroniza(self):
-        self.mock_vuupt.cancelar_servico.side_effect = pr.VuuptAPIError("500")
+        self.mock_vuupt.cancelar_servico_oficial.side_effect = pr.VuuptAPIError("500")
         self.assertFalse(pr.cancelar_pedido(111)["ok"])
         self.ressinc.assert_not_called()
 

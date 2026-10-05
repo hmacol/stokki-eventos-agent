@@ -1764,9 +1764,12 @@ def limpar_disponibilidade_dia(agent_id: int, data_alvo: date) -> dict:
 
 def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     """
-    Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id} --
-    VuuptClient.cancelar_servico) direto da tela de planejamento --
-    botão "Cancelar pedido" (Hugo, 15/08). Cobre os 3 lugares onde um
+    Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel --
+    VuuptClient.cancelar_servico_oficial) direto da tela de planejamento --
+    botão "Cancelar pedido" (Hugo, 15/08). Até 05/10 era DELETE: o serviço
+    sumia e o pipeline, sem achar nada com aquele código, recriava o
+    pedido ainda aberto na Stokki (PS-38284, PS-39959). Com status
+    'canceled' ele cai em pulado_cancelado_vuupt. Cobre os 3 lugares onde um
     pedido pode estar quando o usuário clica:
 
       - No pool (not_assigned, fora de rascunho): cancela direto.
@@ -1799,7 +1802,7 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
 
     vuupt = VuuptClient(token)
     try:
-        vuupt.cancelar_servico(service_id)
+        vuupt.cancelar_servico_oficial(service_id)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
