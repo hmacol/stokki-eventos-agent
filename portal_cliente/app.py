@@ -788,6 +788,12 @@ def api_envios_confirmar():
         return jsonify({"erro": "Envie no máximo 200 notas por vez."}), 400
     conn = envios.conectar()
     try:
+        # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
+        # gravar; o embarcador troca a data ou confirma assim mesmo
+        # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
+        fora = envios.avisos_fora_dia_fixo(itens)
+        if fora:
+            return jsonify({"erro": "Há pedidos com data fora do dia de visita da região.", "fora_dia_fixo": fora}), 409
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
         criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"])
         # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a

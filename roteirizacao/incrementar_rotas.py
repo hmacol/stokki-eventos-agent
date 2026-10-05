@@ -482,6 +482,14 @@ def main(modo_teste: bool = False):
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta o incremento): {e}")
 
+        # Fora do dia fixo (Hugo, 03/10): mesma regra do criar_rotas_diarias --
+        # data do embarcador fora do dia de visita vira dedicado e é avisada.
+        try:
+            from fora_dia_fixo import tratar_fora_dia_fixo
+            tratar_fora_dia_fixo(servicos, config, modo_teste=modo_teste)
+        except Exception as e:
+            logger.error(f"Falha na regra de data fora do dia fixo (não afeta o incremento): {e}")
+
         # Dedicado (Hugo, 23/09): sai antes da checagem de área não atendida
         # (sem e-mail, sem rota compartilhada). Só some do lote deste ciclo.
         try:

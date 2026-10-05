@@ -20,6 +20,7 @@ COMO USAR (da raiz):
     py -3.11 roteirizacao/replay_rotas.py --de 2026-08-12 --ate 2026-09-19 --distancia-maxima 12
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-polimento --separar-carga
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-rotas-fracas
+    py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --dias-fixos-v2
 Saida: tabela no terminal + roteirizacao/dados/replay_resultado.txt
 
 Limite: roteiriza o conjunto que FOI enviado no dia, nao o pool inteiro
@@ -52,6 +53,18 @@ LIMITACOES CONHECIDAS:
   4. O SEGURAR NAO E SIMULADO: o replay so mede a JUNCAO das rotas fracas.
      O historico (rascunhos_parada) nao guarda data de entrada nem
      agendamento do pedido, entao nao da pra saber quem poderia esperar.
+
+  5. DIAS FIXOS V2 SEM DEDICADO: --dias-fixos-v2 so muda de dia quem caiu
+     no dia pela regra antiga (ABCD qua/sex, Transfrios seg/qua, Sorocaba
+     em semana impar). Pedido com data do embarcador fora do dia continua
+     no dia dele; na operacao ele vira dedicado e sai da rota.
+
+  6. COPIA DO BANCO ANTERIOR A CONFIGURACAO NOVA: a validacao de
+     --dias-fixos-v2 de 04/10 usou dados_replay.db de 21/09 (anterior as
+     mudancas de regioes_dia_fixo), nao uma copia pos-02/10 como pedido
+     originalmente. Aceito pelo Hugo: o replay sempre roda a CONFIGURACAO
+     ATUAL sobre rotas historicas enviadas, entao o periodo 12/08-19/09
+     continua representativo pra medir a redistribuicao de dias.
 """
 import argparse
 import logging
@@ -76,9 +89,37 @@ from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, classi
 import roteirizacao_dados as rd
 import metricas_plano as mp
 import rotas_fracas
+import regioes_dia_fixo as rdf
 
 COORDS_BASE_PADRAO = (-23.4930, -46.6640)  # Rua Zilda, Casa Verde Alta (aprox.); use --base pra sobrescrever
 ARQUIVO_RESULTADO = _RAIZ_LOCAL / "dados" / "replay_resultado.txt"
+
+# Dias de visita ANTES de 03/10 (dias fixos v2), pra --dias-fixos-v2 saber
+# quem so caiu naquele dia por causa da regra antiga. Regiao fora daqui nao
+# mudou de dia (Sorocaba mudou so de frequencia: semana impar sai).
+DIAS_ANTIGOS = {"ABCD": [rdf.SEGUNDA, rdf.QUARTA, rdf.SEXTA], "Transfrios": [rdf.SEGUNDA, rdf.QUARTA]}
+
+
+def _valido_na_regra_antiga(regra: dict, dia: date) -> bool:
+    return dia.weekday() in DIAS_ANTIGOS.get(regra.get("regiao") or regra["nome"], regra["dias"])
+
+
+def redistribuir_dias_fixos_v2(servicos_por_dia: dict[date, list[dict]]) -> tuple[dict[date, list[dict]], int]:
+    """Move pro proximo dia de visita da regra NOVA o pedido que caiu num dia
+    valido da regra antiga e invalido da nova. Pedido com data do embarcador
+    fora do dia (invalido nas duas) fica onde esta: o replay nao simula a
+    marcacao como dedicado. Devolve (novo mapa, quantos mudaram de dia)."""
+    novo: dict[date, list[dict]] = {d: [] for d in servicos_por_dia}
+    movidos = 0
+    for dia in sorted(servicos_por_dia):
+        for s in servicos_por_dia[dia]:
+            regra = rdf.regra_dia_fixo_do_servico(s)
+            if regra and _valido_na_regra_antiga(regra, dia) and not rdf.data_valida_na_regiao(regra, dia):
+                novo.setdefault(rdf.proxima_data_valida(regra, dia), []).append(s)
+                movidos += 1
+            else:
+                novo[dia].append(s)
+    return novo, movidos
 
 
 def servicos_do_dia(conn: sqlite3.Connection, dia: str, mapa_tipos: dict) -> tuple[list[dict], list[list[dict]]]:
@@ -189,6 +230,8 @@ def main(argv=None) -> int:
     parser.add_argument("--separar-carga", action="store_true", help="religa a particao Seco x Refrigerado")
     parser.add_argument("--sem-rotas-fracas", action="store_true", help="desliga a juncao das rotas fracas")
     parser.add_argument("--modelo", default=None, help="forca um esquema (nome como no historico)")
+    parser.add_argument("--dias-fixos-v2", action="store_true",
+                        help="move pro proximo dia de visita o pedido que so caiu no dia pela regra antiga")
     args = parser.parse_args(argv)
 
     import criar_rotas_diarias as crd
@@ -210,27 +253,37 @@ def main(argv=None) -> int:
     cabecalho = (f"Replay {args.de} a {args.ate} | distancia_maxima={crd.DISTANCIA_MAXIMA_ROTA_KM} km | "
                  f"polimento={'off' if args.sem_polimento else 'on'} | separar_carga={'on' if args.separar_carga else 'off'}"
                  f" | rotas_fracas={'off' if args.sem_rotas_fracas else 'on'}"
+                 f" | dias_fixos_v2={'on' if args.dias_fixos_v2 else 'off'}"
                  f"{' | modelo=' + args.modelo if args.modelo else ''}")
     linhas = [cabecalho, ""]
     total_env: dict = {}
     total_novo: dict = {}
+    dias = []
     dia = date.fromisoformat(args.de)
     fim = date.fromisoformat(args.ate)
     while dia <= fim:
-        servicos, rotas = servicos_do_dia(conn, dia.isoformat(), mapa_tipos)
+        dias.append(dia)
+        dia += timedelta(days=1)
+    lidos = {d: servicos_do_dia(conn, d.isoformat(), mapa_tipos) for d in dias}
+    servicos_por_dia = {d: servicos for d, (servicos, _rotas) in lidos.items()}
+    if args.dias_fixos_v2:
+        servicos_por_dia, movidos = redistribuir_dias_fixos_v2(servicos_por_dia)
+        depois = sum(len(v) for d, v in servicos_por_dia.items() if d > fim)
+        linhas.append(f"dias_fixos_v2: {movidos} pedido(s) mudaram de dia; {depois} caíram depois de {fim} "
+                      f"(fora da medição)")
+    for dia in dias:
+        servicos, rotas = servicos_por_dia.get(dia, []), lidos[dia][1]
         # Aviso: dias com menos de 2 pedidos sao pulados sem imprimir nada (ver limitacao #3 no docstring).
-        if len(servicos) >= 2:
+        if len(servicos) >= 2 and rotas:
             try:
                 env, novo = rodar_dia(servicos, rotas, coords_base, dia, args.modelo)
             except Exception as e:
                 linhas.append(f"{dia}: ERRO {e}")
-                dia += timedelta(days=1)
                 continue
             _somar(total_env, env)
             _somar(total_novo, novo)
             linhas.append(mp.formatar_metricas(env, f"{dia} enviado"))
             linhas.append(mp.formatar_metricas(novo, f"{dia} novo   "))
-        dia += timedelta(days=1)
     if total_env:
         linhas += ["", mp.formatar_metricas(_fechar(total_env), "TOTAL enviado"),
                    mp.formatar_metricas(_fechar(total_novo), "TOTAL novo   ")]

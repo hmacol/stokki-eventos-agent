@@ -1960,6 +1960,21 @@
   </div>
 </div>
 
+{# Reagendamento fora do dia de visita da região (Hugo, 03/10 -- dias fixos v2,
+   spec 5.4): pergunta antes de salvar. Sim = salva a data e abre o modal de
+   dedicado com o valor da calculadora; Não = salva normal (fica como EQUIPE). #}
+<div class="modal-overlay-reagendar" id="modal-fora-dia-fixo">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-fora-dia-fixo">
+    <h2 id="titulo-modal-fora-dia-fixo">Fora do dia de visita da região</h2>
+    <p class="subtitulo" id="fora-dia-fixo-texto"></p>
+    <ul id="fora-dia-fixo-lista" style="margin:0 0 10px; padding-left:18px; font-size:12.5px; max-height:160px; overflow:auto;"></ul>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-fora-dia-fixo-nao">Não, só reagendar</button>
+      <button type="button" class="confirmar" id="botao-fora-dia-fixo-sim">Sim, marcar como dedicado</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-editar-endereco" id="modal-editar-endereco">
   <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-editar-endereco">
     <h2 id="titulo-modal-editar-endereco">Editar endereço</h2>
@@ -2705,7 +2720,9 @@
       const brl = v => Number(v).toFixed(2).replace(".", ",");
       const titulo = p.dedicado.n_grupo > 1
         ? ` title="Cotação R$ ${brl(p.dedicado.valor_total)} dividida entre ${p.dedicado.n_grupo} pedidos"` : "";
-      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}</span>`);
+      // motivo (Hugo, 03/10): marcado sozinho por data fora do dia fixo da região
+      const motivo = p.dedicado.motivo ? ` · ${p.dedicado.motivo}` : "";
+      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}${motivo}</span>`);
     }
     // segurado (Hugo, 29/09): rota fraca adiada pra juntar com o volume do dia seguinte
     if (p.segurado) {
@@ -5770,7 +5787,48 @@
     document.getElementById("modal-reagendar").classList.add("aberto");
   }
 
-  async function confirmarReagendamento(botao) {
+  // Reagendamento fora do dia de visita (Hugo, 03/10 -- dias fixos v2, spec
+  // 5.4): antes de salvar, pergunta se os pedidos fora do dia viram dedicado.
+  // Falha na checagem não trava o reagendamento (segue sem a pergunta).
+  let foraDiaFixoPendente = null;  // { fora: [{service_id, codigo, regiao, dias, valor}], botao }
+
+  async function checarForaDiaFixo(serviceIds, data) {
+    try {
+      const resp = await postJSON("/api/planejamento/checar-dia-fixo", { service_ids: serviceIds, data });
+      return resp.fora_do_dia || [];
+    } catch (e) {
+      console.warn("Checagem de dia fixo falhou; reagendando sem a pergunta.", e);
+      return [];
+    }
+  }
+
+  function perguntarForaDiaFixo(fora, botao) {
+    const texto = fora.length === 1
+      ? `Este pedido é de ${fora[0].regiao}, com visita só às ${fora[0].dias}. Marcar como dedicado?`
+      : `Estes ${fora.length} pedidos ficam fora do dia de visita da região. Marcar como dedicado? Os demais selecionados são reagendados normalmente.`;
+    document.getElementById("fora-dia-fixo-texto").textContent = texto;
+    document.getElementById("fora-dia-fixo-lista").innerHTML = fora.length > 1
+      ? fora.map(f => `<li>${escaparHtml(f.codigo || "#" + f.service_id)} — ${escaparHtml(f.regiao)}: só ${escaparHtml(f.dias)}</li>`).join("")
+      : "";
+    foraDiaFixoPendente = { fora, botao };
+    document.getElementById("modal-fora-dia-fixo").classList.add("aberto");
+  }
+
+  async function salvarReagendamento(pendente, data, horaInicio, horaFim) {
+    if (pendente.itens) {
+      const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
+        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
+      });
+      return resp.falhas || [];
+    }
+    await postJSON("/api/planejamento/reagendar-pedido", {
+      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+    });
+    return [];
+  }
+
+  // marcarDedicado: null = ainda não perguntou; [] = "Não"; lista = "Sim" (pedidos fora do dia)
+  async function confirmarReagendamento(botao, marcarDedicado = null) {
     const pendente = reagendarPendente;
     if (!pendente) return;
     const data = document.getElementById("reagendar-data").value;
@@ -5781,21 +5839,27 @@
     botao.disabled = true;
     botao.textContent = "Salvando...";
     try {
-      let falhas = [];
-      if (pendente.itens) {
-        const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
-          itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
-        });
-        falhas = resp.falhas || [];
-      } else {
-        await postJSON("/api/planejamento/reagendar-pedido", {
-          service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
-        });
+      if (marcarDedicado === null) {
+        const ids = pendente.itens ? pendente.itens.map(it => it.service_id) : [pendente.serviceId];
+        const fora = await checarForaDiaFixo(ids, data);
+        if (fora.length) {
+          botao.disabled = false;
+          botao.textContent = original;
+          perguntarForaDiaFixo(fora, botao);
+          return;
+        }
       }
+      const falhas = await salvarReagendamento(pendente, data, horaInicio, horaFim);
       document.getElementById("modal-reagendar").classList.remove("aberto");
       if (falhas.length) {
         alert(`Agendamento aplicado, mas ${falhas.length} de ${pendente.itens.length} pedido(s) falharam:\n` +
           falhas.map(f => `#${f.service_id}: ${f.erro}`).join("\n"));
+      }
+      if (marcarDedicado && marcarDedicado.length) {
+        // só os que a Vuupt aceitou viram dedicado
+        const falhou = new Set(falhas.map(f => f.service_id));
+        const aceitos = marcarDedicado.filter(f => !falhou.has(f.service_id));
+        if (aceitos.length) { abrirModalDedicadoForaDia(aceitos); return; }
       }
       // recarrega -- o novo agendado_para pode mudar a seção/urgência
       // do card (mesmo padrão de cancelarPedido)
@@ -5882,6 +5946,9 @@
   // eles. POST/DELETE /api/planejamento/dedicado; depois location.reload()
   // (mesmo padrão da transportadora) pra chip e menu refletirem a marca.
   let dedicadoPendente = null;  // { itens: [{service_id, codigo, sender_id, remetente_nome, numero_nf}] }
+  // reagendamento fora do dia (03/10): a data já foi salva quando o modal de
+  // dedicado abre por ele -- fechar sem marcar precisa recarregar a tela.
+  let recarregarAoFecharDedicado = false;
 
   function itemDedicadoDe(serviceId) {
     const p = POOL_BY_ID[serviceId];
@@ -5917,6 +5984,21 @@
     document.getElementById("dedicado-valor").value = "";
     atualizarPreviaDedicado();
     document.getElementById("modal-dedicado").classList.add("aberto");
+  }
+
+  // Sim no "Fora do dia de visita" (03/10): abre o modal de dedicado com os
+  // pedidos fora do dia e o valor da calculadora já somado (editável). Valor
+  // que não deu pra calcular deixa o campo vazio pra digitar.
+  function abrirModalDedicadoForaDia(fora) {
+    dedicadoPendente = null;
+    abrirModalDedicado(fora.map(f => f.service_id));
+    if (!dedicadoPendente) { location.reload(); return; }
+    const valores = fora.map(f => f.valor);
+    if (valores.every(v => typeof v === "number" && v > 0)) {
+      document.getElementById("dedicado-valor").value = valores.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ",");
+    }
+    atualizarPreviaDedicado();
+    recarregarAoFecharDedicado = true;
   }
 
   async function confirmarDedicado(botao) {
@@ -6932,6 +7014,19 @@
     document.getElementById("botao-cancelar-dedicado").addEventListener("click", () => {
       document.getElementById("modal-dedicado").classList.remove("aberto");
       dedicadoPendente = null;
+      if (recarregarAoFecharDedicado) location.reload();  // a data já foi salva (reagendamento fora do dia)
+    });
+    document.getElementById("botao-fora-dia-fixo-nao").addEventListener("click", () => {
+      const p = foraDiaFixoPendente;
+      foraDiaFixoPendente = null;
+      document.getElementById("modal-fora-dia-fixo").classList.remove("aberto");
+      if (p) confirmarReagendamento(p.botao, []);
+    });
+    document.getElementById("botao-fora-dia-fixo-sim").addEventListener("click", () => {
+      const p = foraDiaFixoPendente;
+      foraDiaFixoPendente = null;
+      document.getElementById("modal-fora-dia-fixo").classList.remove("aberto");
+      if (p) confirmarReagendamento(p.botao, p.fora);
     });
     document.getElementById("dedicado-valor").addEventListener("input", atualizarPreviaDedicado);
     document.getElementById("botao-confirmar-dedicado").addEventListener("click", (e) => confirmarDedicado(e.target));

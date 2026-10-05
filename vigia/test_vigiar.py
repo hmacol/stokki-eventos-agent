@@ -19,7 +19,7 @@ ESQUEMA = """
 CREATE TABLE nucleo_pedidos (codigo TEXT PRIMARY KEY, vuupt_service_id INTEGER, status TEXT,
     agendamento_inicio TEXT, vuupt_route_id INTEGER, criado_em_provedor TEXT, atualizado_em_provedor TEXT,
     criado_em TEXT, remetente_nome TEXT, destinatario_nome TEXT, fluxo TEXT, excluido_em TEXT,
-    reentrega_de_service_id INTEGER);
+    reentrega_de_service_id INTEGER, endereco TEXT);
 CREATE TABLE nucleo_rotas (vuupt_route_id INTEGER, data_rota TEXT);
 CREATE TABLE nucleo_paradas (service_id INTEGER, completed_at TEXT, motivo_texto TEXT);
 CREATE TABLE rascunhos_rota (id INTEGER PRIMARY KEY, data_alvo TEXT, lote_id TEXT, nome TEXT,
@@ -195,6 +195,25 @@ class TestRodada(unittest.TestCase):
     def test_sem_a_tabela_de_segurados_o_vigia_roda_igual(self):
         vigiar.rodar(self.conn, agora=AGORA)
         self.assertEqual(self._estados()["PS-1"]["estado"], "NO_POOL")
+
+    def test_pool_de_regiao_semanal_tem_prazo_de_7_dias(self):
+        self.conn.execute(
+            "INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, criado_em_provedor, fluxo, endereco) "
+            "VALUES ('PS-10', 10, 'ABERTO', '2026-09-25 09:00:00', 'ENTREGA', "
+            "'Rua Barão de Jaguara 900, Centro, Campinas - SP, 13015-001, Brasil')")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        e = self._estados()
+        self.assertEqual(e["PS-10"]["estado"], "NO_POOL")
+        self.assertEqual(e["PS-10"]["vence_em"], "2026-10-02 09:00:00")
+        self.assertEqual(e["PS-10"]["vencido"], 0)
+        self.assertEqual(e["PS-1"]["vencido"], 1)   # Grande SP / sem endereço: 1 dia útil
+
+    def test_prazo_dias_regiao(self):
+        self.assertEqual(vigiar._prazo_dias_regiao("Rua A 1, Centro, Campinas - SP, 13000-000, Brasil"), 7)
+        self.assertEqual(vigiar._prazo_dias_regiao("Rua A 1, Centro, Sorocaba - SP, 18000-000, Brasil"), 15)
+        self.assertIsNone(vigiar._prazo_dias_regiao("Rua A 1, Centro, Santo André - SP, 09000-000, Brasil"))
+        self.assertIsNone(vigiar._prazo_dias_regiao(None))
 
 
 if __name__ == "__main__":

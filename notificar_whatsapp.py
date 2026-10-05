@@ -29,6 +29,12 @@ cadastrou no portal. Destino individual (<numero>@c.us), teto proprio
 tentativa por mensagem da equipe) e consulta de numero antes de enviar.
     avisar_cliente_sem_resposta.py -> avisar_cliente_sem_resposta
 
+Mesma origem de cliente (Hugo, 03/10/2026, dias fixos v2): pedido com data
+fora do dia de visita da regiao virou envio dedicado. Um aviso por pedido
+(quem garante e roteirizacao/registro_dia_fixo.py), mesmo teto e mesmo
+forcar_destino dos clientes.
+    roteirizacao/notificar_fora_dia_fixo.py -> avisar_cliente_fora_dia_fixo
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -348,6 +354,27 @@ def texto_cliente_sem_resposta(chamado_id: int, link: str) -> str:
             f"Responda pelo portal: {link}")
 
 
+def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None) -> str:
+    """Pro embarcador, ate MAX_MENSAGEM. Encurta tirando primeiro a regiao e
+    os dias, depois o valor -- codigo, data e "envio dedicado" ficam sempre."""
+    codigo = str(codigo or "").lstrip("#")
+    quando = data.strftime("%d/%m")
+    if valor is None:
+        preco = "valor a confirmar"
+    else:
+        preco = "R$ " + f"{float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    fim = "Para outra data, responda pelo portal."
+    opcoes = [
+        f"Fresh Log: o pedido {codigo} está para {quando}, fora dos dias de visita da região {regiao} ({dias}). "
+        f"Vai como envio dedicado, {preco}. {fim}",
+        f"Fresh Log: o pedido {codigo} está para {quando}, fora dos dias de visita da região. "
+        f"Vai como envio dedicado, {preco}. {fim}",
+        f"Fresh Log: o pedido {codigo} está para {quando}, fora dos dias de visita da região. "
+        f"Vai como envio dedicado. {fim}",
+    ]
+    return next((t for t in opcoes if len(t) <= MAX_MENSAGEM), opcoes[-1][:MAX_MENSAGEM])
+
+
 # --- Envio --------------------------------------------------------------------
 
 def _cfg(config: dict | None) -> dict:
@@ -660,6 +687,37 @@ def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, lin
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_CLIENTE, "chamado", texto, assinatura, modo_teste=modo_teste,
                          grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config: dict,
+                                 modo_teste: bool = False, **kw) -> str:
+    """Aviso direto ao embarcador (roteirizacao/notificar_fora_dia_fixo.py):
+    data escolhida fora do dia de visita virou envio dedicado. Sem janela de
+    repeticao (origem de cliente): quem chama garante um aviso por pedido.
+    Com clientes.forcar_destino a mensagem vai pra esse numero com o destino
+    real na primeira linha."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (fora do dia fixo {codigo}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado (fora do dia fixo {codigo}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, "fora_dia_fixo", texto, f"fora_dia_fixo:{codigo}",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

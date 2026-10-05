@@ -44,7 +44,8 @@ from roteirizacao_dados import (
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, nomes_dias, regiao_da_cidade, regra_dia_fixo_do_servico
+from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias, extrair_cidade,
+                              regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
     definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
@@ -728,13 +729,16 @@ def _aviso_dia_fixo(servico: dict, data_alvo: date, data_agendada: date | None =
 
     `data_agendada` (Hugo, 28/09, caso PS-40316): data de agendamento
     INFORMADA vence o dia fixo -- se é a do planejamento, não avisa.
+
+    03/10 (dias fixos v2): respeita a frequência -- Sorocaba quinzenal
+    avisa na semana sem visita ("Sorocaba: só Terças (quinzenal)").
     """
     if data_agendada and data_agendada == data_alvo:
         return None
     regra = regra_dia_fixo_do_servico(servico)
-    if not regra or data_alvo.weekday() in regra["dias"]:
+    if not regra or data_valida_na_regiao(regra, data_alvo):
         return None
-    return f"{regra['nome']}: só {nomes_dias(regra['dias'])}"
+    return f"{regra['nome']}: só {descricao_dias(regra)}"
 
 
 def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
@@ -1760,9 +1764,12 @@ def limpar_disponibilidade_dia(agent_id: int, data_alvo: date) -> dict:
 
 def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     """
-    Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id} --
-    VuuptClient.cancelar_servico) direto da tela de planejamento --
-    botão "Cancelar pedido" (Hugo, 15/08). Cobre os 3 lugares onde um
+    Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel --
+    VuuptClient.cancelar_servico_oficial) direto da tela de planejamento --
+    botão "Cancelar pedido" (Hugo, 15/08). Até 05/10 era DELETE: o serviço
+    sumia e o pipeline, sem achar nada com aquele código, recriava o
+    pedido ainda aberto na Stokki (PS-38284, PS-39959). Com status
+    'canceled' ele cai em pulado_cancelado_vuupt. Cobre os 3 lugares onde um
     pedido pode estar quando o usuário clica:
 
       - No pool (not_assigned, fora de rascunho): cancela direto.
@@ -1795,7 +1802,7 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
 
     vuupt = VuuptClient(token)
     try:
-        vuupt.cancelar_servico(service_id)
+        vuupt.cancelar_servico_oficial(service_id)
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
@@ -1804,6 +1811,22 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
         rascunhos_rota.remover_parada(rascunho_id, service_id)
 
     return {"ok": True}
+
+
+def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str) -> None:
+    """Data agendada pela equipe não é data do cliente (Hugo, 03/10 -- dias
+    fixos v2): grava a origem EQUIPE em agendamentos_origem, pra regra de
+    data fora do dia fixo (roteirizacao/fora_dia_fixo.py) não transformar o
+    pedido em dedicado. Nunca levanta: o reagendamento na Vuupt já foi feito."""
+    if not service_ids:
+        return
+    try:
+        import registro_dia_fixo
+        data = date.fromisoformat(str(scheduled_start)[:10])
+        registro_dia_fixo.registrar_origens([{"servico": {"id": sid}, "data": data} for sid in service_ids],
+                                            registro_dia_fixo.ORIGEM_EQUIPE, registro_dia_fixo.DB_PATH)
+    except Exception as e:
+        logger.warning(f"Não registrou a origem EQUIPE do reagendamento {service_ids}: {e}")
 
 
 def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str) -> dict:
@@ -1822,7 +1845,8 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     NÃO mexe em nada na Stokki, só no agendamento da VUUPT -- e não
     reaplica as regras de dia fixo por região (essas são só pro
     reagendamento automático via e-mail); aqui é uma escolha manual do
-    usuário, vai pra VUUPT como digitada.
+    usuário, vai pra VUUPT como digitada. 03/10: a data fica registrada
+    como EQUIPE (não vira dedicado por data fora do dia fixo).
 
     Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
     """
@@ -1841,6 +1865,7 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
+    _registrar_agendamento_equipe([service_id], scheduled_start)
 
     return {"ok": True}
 
@@ -1908,7 +1933,55 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
 
     if ok_ids:
         _ressincronizar(vuupt, ok_ids)
+        _registrar_agendamento_equipe(ok_ids, scheduled_start)
     return {"ok": True, "falhas": falhas}
+
+
+def checar_reagendamento_dia_fixo(service_ids: list[int], data: str) -> dict:
+    """
+    Reagendamento pela equipe fora do dia de visita (Hugo, 03/10 -- spec
+    dias fixos v2, 5.4): antes de salvar, a tela pergunta se o pedido vira
+    dedicado. Devolve {"ok": True, "fora_do_dia": [{service_id, codigo,
+    regiao, dias, valor}]} só com os pedidos de região de dia fixo em que
+    `data` (AAAA-MM-DD) não é dia de visita. `valor` vem da calculadora de
+    frete dedicado (roteirizacao/fora_dia_fixo.calcular_valor, km em linha
+    reta) ou é None quando não dá pra calcular -- o modal de dedicado abre
+    vazio pra digitar. Pedido que não carrega da Vuupt fica de fora (nunca
+    trava o reagendamento). Só lê: nada é gravado aqui.
+    """
+    try:
+        alvo = date.fromisoformat(str(data))
+    except ValueError:
+        return {"ok": False, "erro": f"Data inválida: {data}"}
+    if not service_ids:
+        return {"ok": True, "fora_do_dia": []}
+    import fora_dia_fixo
+    import pedidos_dedicados
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    tipos = fora_dia_fixo.carregar_tipos_carga(rascunhos_rota.DB_PATH)
+    fora = []
+    for sid in service_ids:
+        try:
+            servico = vuupt.buscar_servico_por_id(int(sid))
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: serviço {sid} não carregou ({e}); segue sem a pergunta.")
+            continue
+        if not servico:
+            continue
+        regra = regra_dia_fixo_do_servico(servico)
+        if not regra or data_valida_na_regiao(regra, alvo):
+            continue
+        try:
+            valor = fora_dia_fixo.calcular_valor(servico, config, tipos)
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: calculadora falhou no serviço {sid} ({e}).")
+            valor = None
+        codigos = pedidos_dedicados.codigos_do_servico(servico)
+        fora.append({"service_id": int(sid), "codigo": codigos[0] if codigos else "",
+                     "regiao": regra.get("regiao") or regra["nome"], "dias": descricao_dias(regra),
+                     "valor": valor})
+    return {"ok": True, "fora_do_dia": fora}
 
 
 def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,

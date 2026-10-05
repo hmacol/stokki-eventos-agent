@@ -25,6 +25,11 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 _PADRAO_PS = re.compile(r"^#?\s*PS\s*[-._ ]?\s*(\d{1,7})", re.IGNORECASE)
 _CAMPOS_IDENTIDADE = ("codigo_pedido", "service_id", "envio_id", "sender_id", "remetente_nome", "numero_nf")
 
+# Marcacao automatica de data fora do dia fixo (Hugo, 03/10/2026 --
+# roteirizacao/fora_dia_fixo.py). Quem le o motivo (pool do planejamento,
+# portal) compara o inicio de marcado_por com isto.
+POR_FORA_DIA_FIXO = "automatico: fora do dia fixo"
+
 
 def conectar(db_path=DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=30)
@@ -153,6 +158,16 @@ def remover(conn: sqlite3.Connection, *, codigo_pedido=None, envio_id=None, serv
 def ativos_por_codigo(conn: sqlite3.Connection) -> dict[str, dict]:
     rows = conn.execute("SELECT * FROM pedidos_dedicados WHERE removido_em IS NULL AND codigo_pedido IS NOT NULL ORDER BY id").fetchall()
     return {r["codigo_pedido"]: dict(r) for r in rows}
+
+
+def codigos_e_servicos_ja_marcados(conn: sqlite3.Connection) -> tuple[set[str], set[int]]:
+    """(codigos, service_ids) com QUALQUER linha, ativa ou removida. A marcacao
+    automatica nao volta a marcar o que a equipe ja tirou ("Remover dedicado").
+    Codigo combinado ('#PS-1, PS-2') grava so o primeiro codigo; por isso o
+    service_id tambem conta (o mesmo servico volta com outro codigo)."""
+    rows = conn.execute("SELECT codigo_pedido, service_id FROM pedidos_dedicados").fetchall()
+    return ({r["codigo_pedido"] for r in rows if r["codigo_pedido"]},
+            {r["service_id"] for r in rows if r["service_id"] is not None})
 
 
 def ativo_por_envio(conn: sqlite3.Connection, envio_id: int) -> dict | None:

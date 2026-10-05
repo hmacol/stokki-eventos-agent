@@ -12,7 +12,7 @@ Rodar com (a partir da raiz do repo):
 """
 import sys
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -20,10 +20,13 @@ sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import planejamento_rotas
+import regioes_dia_fixo
 
 AMERICANA = {"address": "Rua Benedito Soares de Barros 74, Centro, Americana - SP, 13465-510, Brasil"}
 TAFF = {"address": "Av. Prefeito João Vila Lobos Quero, 1505, Jardim Belval, Barueri - SP, 06422-122, Brasil"}
 SAO_PAULO = {"address": "Rua Augusta 100, Consolação, São Paulo - SP, 01304-000, Brasil"}
+ABCD = {"address": "Rua das Figueiras 100, Jardim, Santo André - SP, 09080-300, Brasil"}
+SOROCABA = {"address": "Rua XV de Novembro 10, Centro, Sorocaba - SP, 18010-080, Brasil"}
 
 QUARTA = date(2026, 9, 23)
 QUINTA = date(2026, 9, 24)
@@ -53,6 +56,17 @@ class AvisoDiaFixoTestCase(unittest.TestCase):
     def test_agendado_pra_outro_dia_continua_avisando(self):
         self.assertEqual(planejamento_rotas._aviso_dia_fixo(AMERICANA, QUINTA, data_agendada=QUARTA),
                          "Americana: só Quartas")
+
+    def test_abcd_agora_segunda_e_quinta(self):
+        self.assertEqual(planejamento_rotas._aviso_dia_fixo(ABCD, QUARTA), "Santo André: só Segundas e Quintas")
+        self.assertIsNone(planejamento_rotas._aviso_dia_fixo(ABCD, QUINTA))
+
+    def test_sorocaba_quinzenal_avisa_na_semana_sem_visita(self):
+        regra = regioes_dia_fixo.regra_dia_fixo_do_servico(SOROCABA)
+        visita = regioes_dia_fixo.proxima_data_valida(regra, date(2026, 10, 3))
+        self.assertIsNone(planejamento_rotas._aviso_dia_fixo(SOROCABA, visita))
+        self.assertEqual(planejamento_rotas._aviso_dia_fixo(SOROCABA, visita + timedelta(days=7)),
+                         "Sorocaba: só Terças (quinzenal)")
 
 
 if __name__ == "__main__":

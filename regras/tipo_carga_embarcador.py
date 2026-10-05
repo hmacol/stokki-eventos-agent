@@ -48,10 +48,12 @@ def carregar_tipos_carga_por_sender(db_path: str | Path) -> dict[int, str]:
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT sender_id, habilidade FROM interno WHERE sender_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT sender_id, habilidade FROM interno WHERE sender_id IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
 
     mapa: dict[int, str] = {}
     for row in rows:

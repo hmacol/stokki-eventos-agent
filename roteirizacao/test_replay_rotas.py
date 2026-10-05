@@ -85,5 +85,30 @@ class CorteDaRotaFracaTestCase(unittest.TestCase):
             self.assertEqual(chamada.kwargs["horas_fraca"], rotas_fracas.HORAS_ROTA_FRACA)
 
 
+class DiasFixosV2TestCase(unittest.TestCase):
+    ABCD = "Rua A 1, Centro, Santo André - SP, 09000-000, Brasil"
+    TRANSFRIOS = "Estrada Francisco Hengles, 591, Potuvera, Itapecerica da Serra - SP, 06885-160, Brasil"
+    CAMPINAS = "Rua B 2, Centro, Campinas - SP, 13000-000, Brasil"
+    SP = "Rua C 3, Centro, Sao Paulo - SP, 01000-000, Brasil"
+
+    def test_move_so_quem_caiu_no_dia_pela_regra_antiga(self):
+        seg, ter, qua, qui, sex = (date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30),
+                                   date(2026, 10, 1), date(2026, 10, 2))
+        s = lambda i, endereco: {"id": i, "address": endereco}  # noqa: E731
+        mapa = {seg: [s(1, self.ABCD), s(6, self.TRANSFRIOS)],
+                qua: [s(2, self.ABCD), s(3, self.CAMPINAS), s(4, self.SP)],
+                qui: [s(5, self.CAMPINAS)],
+                sex: [s(7, self.ABCD)]}
+        novo, movidos = rr.redistribuir_dias_fixos_v2(mapa)
+        ids = lambda d: sorted(x["id"] for x in novo.get(d, []))  # noqa: E731
+        self.assertEqual(movidos, 3)
+        self.assertEqual(ids(seg), [1])
+        self.assertEqual(ids(ter), [6])              # Transfrios segunda -> terça
+        self.assertEqual(ids(qua), [3, 4])
+        self.assertEqual(ids(qui), [2, 5])           # ABCD quarta -> quinta; Campinas quinta (embarcador) fica
+        self.assertEqual(ids(sex), [])
+        self.assertEqual(ids(date(2026, 10, 5)), [7])  # ABCD sexta -> segunda
+
+
 if __name__ == "__main__":
     unittest.main()

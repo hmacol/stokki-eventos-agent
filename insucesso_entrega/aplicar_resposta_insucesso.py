@@ -19,9 +19,9 @@ perguntar" -- só muda O MOMENTO/CANAL da aplicação, não a regra):
     start/scheduled_end formando uma janela de 2h a partir do horário
     pedido (VUUPT) -- a roteirização só pega o pedido no dia certo
     (roteirizacao_dados.py::elegivel_para_data), o horário é preferência
-    pro planejamento da rota. Cidade com dia fixo de entrega
-    (regioes_dia_fixo.py) tem a DATA ajustada pra próxima ocorrência do
-    dia da região; o horário pedido nunca muda.
+    pro planejamento da rota. A data escolhida vale como veio, mesmo
+    em cidade com dia fixo de entrega (Hugo, 28/09: data escolhida
+    sempre vence o dia fixo).
   - "Sim, reenviar" -> DUPLICA AGORA (próximo dia útil).
 
 A ação sempre se aplica aos pedidos ATUALMENTE pendentes pro grupo
@@ -146,25 +146,6 @@ def _cancelar_reentrega(pendente: dict, vuupt: "VuuptClient") -> bool:
     return True
 
 
-def _ajustar_data_por_dia_fixo(servico: dict, nova_data: date) -> tuple[date, str | None]:
-    """
-    Regras de dia fixo de entrega (regioes_dia_fixo.py) valem também
-    pro reagendamento pedido pelo remetente (pedido do Hugo, 12/08): se
-    a data pedida cai num dia fora da regra, empurra pra PRÓXIMA data
-    válida a partir dela. Retorna (data_final, aviso) -- aviso é None
-    quando nada mudou.
-    """
-    from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
-
-    data_final, regra = ajustar_data_por_dia_fixo(servico, nova_data)
-    if not regra:
-        return nova_data, None
-    aviso = (f"{regra['nome']} só recebe às {nomes_dias(regra['dias'])} -- "
-             f"data pedida {nova_data.strftime('%d/%m')} ajustada pra "
-             f"{data_final.strftime('%d/%m/%Y')}")
-    return data_final, aviso
-
-
 def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
                          vuupt: "VuuptClient") -> date | None:
     """
@@ -172,9 +153,8 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
     pelo remetente na página de resposta (campo de horário adicionado
     18/08, pedido do Hugo -- antes a janela era sempre fixa 08h-16h):
 
-      - Regra de dia fixo: a data pedida é ajustada pra próxima data
-        válida (_ajustar_data_por_dia_fixo) -- só a DATA, o horário
-        pedido nunca muda.
+      - A data pedida vale como veio: o dia fixo da região NÃO empurra
+        mais essa data (Hugo, 28/09 -- data escolhida sempre vence).
       - A janela gravada (scheduled_start/scheduled_end) começa no
         horário pedido e dura 2h -- a roteirização só pega o pedido no
         dia certo (roteirizacao_dados.py::elegivel_para_data), o
@@ -183,8 +163,7 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
       - Senão: duplica AGORA já com a janela, e cancela o agendamento
         local se havia um.
 
-    Retorna a DATA final agendada (pode diferir da pedida por causa do
-    dia fixo), ou None se não conseguiu reagendar.
+    Retorna a DATA agendada, ou None se não conseguiu reagendar.
     """
     import fingerprint_duplicacao_insucesso
     import fingerprint_duplicacao_agendada
@@ -209,9 +188,7 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
                 logger.warning(f"  Reentrega {novo_code} de {code} não encontrada no VUUPT -- "
                                "nada reagendado (verificar manualmente).")
                 return None
-            data_final, aviso = _ajustar_data_por_dia_fixo(duplicado, nova_data)
-            if aviso:
-                logger.info(f"  {code}: {aviso}.")
+            data_final = nova_data
             vuupt.atualizar_servico(duplicado["id"], _agendamento(data_final))
             logger.info(f"  Reentrega de {code} ({novo_code}) reagendada no VUUPT "
                         f"pra {data_final.strftime('%d/%m/%Y')}.")
@@ -224,9 +201,7 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
     if not servico_original:
         logger.warning(f"  Não achei o serviço {code} no VUUPT pra duplicar com a nova data -- pulando.")
         return None
-    data_final, aviso = _ajustar_data_por_dia_fixo(servico_original, nova_data)
-    if aviso:
-        logger.info(f"  {code}: {aviso}.")
+    data_final = nova_data
 
     novo = duplicar_servico_por_insucesso(vuupt, servico_original)
     if not novo:

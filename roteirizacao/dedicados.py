@@ -17,6 +17,10 @@ import pedidos_dedicados  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# Chip do pool (Hugo, 03/10): marcacao automatica de data fora do dia fixo
+# (roteirizacao/fora_dia_fixo.py) mostra o motivo.
+MOTIVO_FORA_DIA_FIXO = "fora do dia fixo"
+
 
 def carregar_dedicados() -> dict[str, dict]:
     """{codigo PS-NNNNN: linha} dos dedicados ativos. Falha -> {} com WARNING
@@ -42,7 +46,7 @@ def separar_dedicados(servicos: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def dedicados_por_servico(servicos: list[dict]) -> dict[int, dict]:
-    """{service_id: {valor, valor_total, n_grupo}} pros servicos marcados."""
+    """{service_id: {valor, valor_total, n_grupo[, motivo]}} pros servicos marcados."""
     ativos = carregar_dedicados()
     if not ativos:
         return {}
@@ -55,5 +59,7 @@ def dedicados_por_servico(servicos: list[dict]) -> dict[int, dict]:
             if c in ativos:
                 d = ativos[c]
                 mapa[s["id"]] = {"valor": d["valor"], "valor_total": d["valor_total_grupo"], "n_grupo": n_por_grupo[d["grupo_id"]]}
+                if str(d.get("marcado_por") or "").startswith(pedidos_dedicados.POR_FORA_DIA_FIXO):
+                    mapa[s["id"]]["motivo"] = MOTIVO_FORA_DIA_FIXO
                 break
     return mapa
