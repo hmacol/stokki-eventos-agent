@@ -389,6 +389,7 @@ def _resumir_servico(s: dict) -> dict:
         "codigo": s.get("code", ""),
         "titulo": (s.get("title") or "")[:90],
         "completed_at": s.get("completed_at"),
+        "sender_id": s.get("sender_id"),
     }
 
 
@@ -562,6 +563,10 @@ def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
         "falha": agregado["insucessos"],
         "nao_atribuidos": backlog["atrasados"][:30],
         "qtd_nao_atribuidos": qtd_atrasados,
+        # Filtro por embarcador da tela (05/10): "sem rota" por remetente,
+        # já que a lista acima é cortada em 30.
+        "atrasados_por_sender": dict(Counter(str(p["sender_id"]) for p in backlog["atrasados"]
+                                             if p.get("sender_id"))),
         "backlog_pool": backlog["pool"],
         "backlog_futuros": backlog["futuros"],
         # Sem corte: o [:30] antigo (na ordem da API, não por idade)
@@ -774,6 +779,7 @@ def _montar_card_rota(rota: dict, data_rota: date, nomes_motoristas: dict[int, s
             "titulo": (s.get("title") or "")[:70],
             "situacao": situacao,
             "service_id": s.get("id"),
+            "sender_id": s.get("sender_id"),
         })
 
         # Parada georreferenciada pro mini mapa -- serviço sem
@@ -786,6 +792,7 @@ def _montar_card_rota(rota: dict, data_rota: date, nomes_motoristas: dict[int, s
                     "codigo": s.get("code", ""),
                     "titulo": (s.get("title") or "")[:70],
                     "situacao": situacao,
+                    "sender_id": s.get("sender_id"),
                 })
         except (TypeError, ValueError):
             pass
@@ -1403,6 +1410,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "rota": i.get("rota"),
             "badges": badges,
             "service_id": i.get("service_id"),
+            "sender_id": i.get("sender_id"),
             "codigo": i.get("codigo"),
             "pode_notificar_ocorrencia": pode_notificar_ocorrencia,
             # Botão 'Duplicar pedido' (pedido do Hugo, 17/08): some
@@ -1431,6 +1439,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
     for r in sem_motorista:
         excecoes.append({
             "id": f"semmotorista:{r['id']}",
+            "rota_id": r["id"],
             "severidade": "atencao",
             "tipo": "Sem motorista",
             "descricao": f"Rota '{r['nome']}' ({r['total']} parada(s)) sem motorista atribuído.",
@@ -1585,6 +1594,46 @@ def buscar_funil_stokki(forcar: bool = False) -> dict:
 
 # ── Visão completa ────────────────────────────────────────────────────────────
 
+def montar_opcoes_embarcador(linhas: list[tuple]) -> list[dict]:
+    """Opções do filtro por embarcador da tela (Hugo, 05/10: "ver somente
+    os pedidos da MARCHEF"). `linhas` = (sender_id, nome_remetente) do
+    `interno`. Remetentes "GRUPO - FILIAL" (MARCHEF - JEE, MARCHEF -
+    ALMAZ...) ganham também uma opção do grupo inteiro, com todos os
+    sender_id dele; cada remetente continua escolhível sozinho."""
+    por_grupo: dict[str, list[tuple[int, str]]] = {}
+    for sender_id, nome in linhas:
+        if not sender_id or not nome:
+            continue
+        nome = nome.strip()
+        por_grupo.setdefault(nome.split(" - ")[0].strip().upper(), []).append((int(sender_id), nome))
+
+    opcoes = []
+    for grupo in sorted(por_grupo):
+        membros = sorted(por_grupo[grupo], key=lambda m: m[1].upper())
+        if len(membros) > 1:
+            opcoes.append({"chave": f"g:{grupo}", "rotulo": f"{grupo} (grupo, {len(membros)})",
+                           "sender_ids": [m[0] for m in membros], "grupo": True})
+        for sender_id, nome in membros:
+            opcoes.append({"chave": f"s:{sender_id}", "rotulo": nome,
+                           "sender_ids": [sender_id], "grupo": False})
+    return opcoes
+
+
+def _opcoes_embarcador() -> list[dict]:
+    db = _RAIZ / "dados" / "dados.db"
+    try:
+        conn = sqlite3.connect(db)
+        try:
+            linhas = conn.execute(
+                "SELECT sender_id, nome_remetente FROM interno WHERE sender_id IS NOT NULL").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"[torre] Falha ao ler embarcadores pro filtro: {e}")
+        return []
+    return montar_opcoes_embarcador(linhas)
+
+
 def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     """Tudo que a torre mostra, menos o funil Stokki (endpoint próprio,
     com cache e trava de sessão) -- 1 fetch de serviços + 1 de rotas +
@@ -1672,6 +1721,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "respostas_tratativa": RESPOSTAS_TRATATIVA,
         "versao_tela": VERSAO_TELA,
         "base": base,
+        "embarcadores": _opcoes_embarcador(),
     }
 
 

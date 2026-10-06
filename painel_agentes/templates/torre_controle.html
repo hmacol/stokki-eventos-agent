@@ -92,6 +92,22 @@
   }
   .botao-refresh:hover { border-color: var(--acento); color: var(--acento); }
 
+  /* Filtro por embarcador (05/10): com filtro ligado o seletor e o aviso
+     ficam no acento, pra ninguém esquecer que está vendo só um pedaço. */
+  .filtro-embarcador {
+    border: 1px solid var(--borda); border-radius: 6px; padding: 5px 8px;
+    font-size: 12px; background: var(--superficie); color: var(--texto); max-width: 260px;
+  }
+  .filtro-embarcador.ativo { border-color: var(--acento); color: var(--acento); font-weight: 600; }
+  .aviso-filtro {
+    border: 1px solid var(--acento); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px;
+    font-size: 12.5px; color: var(--texto); display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+  .aviso-filtro[hidden] { display: none; }
+  .aviso-filtro strong { color: var(--acento); }
+  .aviso-filtro .suave { color: var(--texto-suave); }
+  .aviso-filtro button { margin-left: auto; }
+
   /* ── Cartões de indicador (redesenho 24/08, opção B) ──
      Cada número ganha cartão próprio, mesmo padrão de "amanha-numeros"
      mais abaixo na página. Cartão com pendência ganha fundo/borda de
@@ -510,12 +526,18 @@
   {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
      abertas de qualquer dia; rota concluída vai pro Histórico. #}
   <a class="botao-refresh" href="{{ url_for('consulta') }}" title="Rotas concluídas e dias passados" style="text-decoration:none;">📚 Histórico de Rotas</a>
+  <select class="filtro-embarcador" id="filtro-embarcador" onchange="alternarFiltroEmbarcador()"
+          title="Mostrar só os pedidos de um embarcador (rotas, mapa, pedidos e Fila de ação)">
+    <option value="">Todos os embarcadores</option>
+  </select>
   <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
   <span class="carimbo" id="carimbo">Carregando dados…</span>
   <button class="botao-refresh" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button class="botao-refresh" onclick="carregarTudo()">Atualizar agora</button>
   <a class="botao-refresh" href="{{ url_for('torre_mobile') }}" title="Versão mobile" style="text-decoration:none;">📱 mobile</a>
 </div>
+
+<div class="aviso-filtro" id="aviso-filtro" hidden></div>
 
 <div class="card card-kpis" id="kpis"><div class="carregando">Carregando indicadores…</div></div>
 
@@ -676,7 +698,119 @@ document.getElementById("visao-rotas").value = visaoRotas;
 function alternarVisaoRotas() {
   visaoRotas = document.getElementById("visao-rotas").value;
   localStorage.setItem("torre_visao_rotas", visaoRotas);
-  if (dadosAtuais) renderRotas(dadosAtuais);
+  if (dadosAtuais) renderRotas(dadosVisiveis());
+}
+
+// ── Filtro por embarcador (Hugo, 05/10: "ver somente os pedidos da
+// MARCHEF") -- filtra no navegador o que já veio de /api/torre/dados
+// (cada pedido traz o sender_id da Vuupt), sem pedir outra coleta ao
+// backend. Vale pra rotas, mapa, "Pedidos das rotas abertas" e Fila de
+// ação; KPIs, tendência, Stokki e amanhã continuam da operação toda.
+let filtroEmbarcador = "";
+try { filtroEmbarcador = localStorage.getItem("torre_filtro_embarcador") || ""; } catch (e) {}
+
+function opcaoFiltroAtual(d) {
+  if (!filtroEmbarcador || !d) return null;
+  return (d.embarcadores || []).find(o => o.chave === filtroEmbarcador) || null;
+}
+
+function alternarFiltroEmbarcador(valor) {
+  filtroEmbarcador = valor !== undefined ? valor : document.getElementById("filtro-embarcador").value;
+  try { localStorage.setItem("torre_filtro_embarcador", filtroEmbarcador); } catch (e) {}
+  idsSelecionados.clear();
+  if (dadosAtuais) renderVisaoFiltrada();
+}
+
+// Só entram no seletor os embarcadores com pedido na torre agora (mais o
+// escolhido, mesmo que tenha zerado -- senão o filtro sumiria sozinho).
+function renderSeletorEmbarcador(d) {
+  const el = document.getElementById("filtro-embarcador");
+  const qtd = {};
+  const conta = sid => { if (sid != null) qtd[sid] = (qtd[sid] || 0) + 1; };
+  d.rotas.forEach(r => (r.pedidos || []).forEach(p => { if (p.situacao !== "excluido") conta(p.sender_id); }));
+  Object.entries(d.pedidos.atrasados_por_sender || {}).forEach(([sid, n]) => { qtd[sid] = (qtd[sid] || 0) + n; });
+  const opcoes = (d.embarcadores || [])
+    .map(o => ({ ...o, n: o.sender_ids.reduce((s, sid) => s + (qtd[sid] || 0), 0) }))
+    .filter(o => o.n > 0 || o.chave === filtroEmbarcador);
+  el.innerHTML = `<option value="">Todos os embarcadores</option>` + opcoes.map(o =>
+    `<option value="${esc(o.chave)}">${o.grupo ? "" : "  "}${esc(o.rotulo)} · ${o.n}</option>`).join("");
+  el.value = opcoes.some(o => o.chave === filtroEmbarcador) ? filtroEmbarcador : "";
+  el.classList.toggle("ativo", !!el.value);
+}
+
+// Cópia de `d` só com os pedidos do embarcador escolhido. Rota entra se
+// tiver ao menos 1 pedido dele; os números da rota são refeitos só com
+// esses pedidos. Chip "excluido" não tem remetente e sai do filtro.
+function filtrarPorEmbarcador(d, opcao) {
+  const ids = new Set(opcao.sender_ids.map(String));
+  const doEmb = x => x.sender_id != null && ids.has(String(x.sender_id));
+  const idsFila = new Set(d.excecoes.map(x => x.id));
+  const cont = { sucesso: 0, falha: 0, on_route: 0, accepted: 0 };
+
+  const rotas = d.rotas.map(r => {
+    const pedidos = (r.pedidos || []).filter(doEmb);
+    if (!pedidos.length) return null;
+    const n = s => pedidos.filter(p => p.situacao === s).length;
+    const entregues = n("entregue"), insucessos = n("insucesso"), emRota = n("em_rota");
+    const total = pedidos.length, finalizados = entregues + insucessos;
+    cont.sucesso += entregues; cont.falha += insucessos;
+    cont.on_route += emRota; cont.accepted += n("pendente");
+    const estado = finalizados >= total ? "concluida"
+      : (finalizados > 0 || emRota > 0) ? "em_andamento" : "nao_iniciada";
+    return {
+      ...r, pedidos, total, entregues, insucessos, estado,
+      paradas: (r.paradas || []).filter(doEmb),
+      restantes: total - finalizados,
+      percentual: Math.round(finalizados / total * 100),
+      pendencias: pedidos.filter(p => p.situacao === "insucesso" && idsFila.has(`insucesso:${p.codigo}`)).length,
+    };
+  }).filter(Boolean);
+
+  const rotaIds = new Set(rotas.map(r => r.id));
+  const naFila = x => (x.tipo === "Insucesso" && doEmb(x)) || (x.tipo === "Sem motorista" && rotaIds.has(x.rota_id));
+  const excecoes = d.excecoes.filter(naFila);
+  const semRota = opcao.sender_ids.reduce((s, sid) => s + ((d.pedidos.atrasados_por_sender || {})[sid] || 0), 0);
+
+  return {
+    ...d, rotas, excecoes,
+    tratadas: (d.tratadas || []).filter(naFila),
+    gerais_ocultas: d.excecoes.filter(x => x.tipo !== "Insucesso" && x.tipo !== "Sem motorista").length,
+    pedidos: {
+      ...d.pedidos,
+      sucesso: cont.sucesso, falha: cont.falha,
+      contagem: { on_route: cont.on_route, accepted: cont.accepted, not_assigned: semRota, canceled: 0 },
+      backlog_pool: 0, backlog_futuros: 0,
+    },
+  };
+}
+
+function dadosVisiveis() {
+  const opcao = opcaoFiltroAtual(dadosAtuais);
+  return opcao ? filtrarPorEmbarcador(dadosAtuais, opcao) : dadosAtuais;
+}
+
+function renderAvisoFiltro(opcao, v) {
+  const el = document.getElementById("aviso-filtro");
+  if (!opcao) { el.hidden = true; el.innerHTML = ""; return; }
+  const qtdPedidos = v.rotas.reduce((s, r) => s + r.total, 0);
+  const gerais = v.gerais_ocultas
+    ? ` · ${v.gerais_ocultas} alerta(s) geral(is) da Fila escondido(s) (pipeline, vigia, planejamento)` : "";
+  el.innerHTML = `<span>Filtrando: <strong>${esc(opcao.rotulo)}</strong></span>
+    <span class="suave">${v.rotas.length} rota(s) · ${qtdPedidos} pedido(s) em rota${gerais}.
+      Indicadores, tendência, Stokki e amanhã continuam da operação toda.</span>
+    <button type="button" class="botao-refresh" onclick="alternarFiltroEmbarcador('')">Ver todos</button>`;
+  el.hidden = false;
+}
+
+function renderVisaoFiltrada() {
+  const d = dadosAtuais;
+  renderSeletorEmbarcador(d);
+  const v = dadosVisiveis();
+  renderAvisoFiltro(opcaoFiltroAtual(d), v);
+  renderMapa(v);
+  renderRotas(v);
+  renderPedidosStatus(v);
+  renderExcecoes(v);
 }
 
 // ── Alarme sonoro de novas ações na fila ────────────────────────────
@@ -1259,11 +1393,14 @@ function renderExcecoes(d) {
   const alvo = document.getElementById("excecoes");
   const partes = [];
 
-  const idsAtuais = new Set(d.excecoes.map(x => x.id));
-  if (idsExcecoesConhecidas && [...idsAtuais].some(id => !idsExcecoesConhecidas.has(id))) {
+  // Alarme pela fila inteira, não pela filtrada: trocar o filtro de
+  // embarcador não pode tocar (nem calar) o alarme.
+  const idsTodos = new Set(dadosAtuais.excecoes.map(x => x.id));
+  if (idsExcecoesConhecidas && [...idsTodos].some(id => !idsExcecoesConhecidas.has(id))) {
     tocarAlarme();
   }
-  idsExcecoesConhecidas = idsAtuais;
+  idsExcecoesConhecidas = idsTodos;
+  const idsAtuais = new Set(d.excecoes.map(x => x.id));
 
   const contagem = document.getElementById("contagem-acoes");
   if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
@@ -1696,7 +1833,7 @@ const ROTULO_SITUACAO = { entregue: "Entregue", insucesso: "Insucesso", em_rota:
 
 function torreMapaPronto() {   // callback global do script do Google Maps
   gmapsPronto = true;
-  if (dadosAtuais) renderMapa(dadosAtuais);
+  if (dadosAtuais) renderMapa(dadosVisiveis());
 }
 
 function renderMapa(d) {
@@ -1795,12 +1932,9 @@ async function carregarDados() {
     dadosAtuais = d;
     conferirVersaoTela(d);
     renderSemaforo(d);
-    renderMapa(d);
     renderStepper(d.etapas);
     renderKpis(d);
-    renderRotas(d);
-    renderPedidosStatus(d);
-    renderExcecoes(d);
+    renderVisaoFiltrada();
     renderTendencia(d);
     renderAmanha(d);
     document.getElementById("link-mapa").href = `${BASE_PATH}/mapa-rotas?data=${d.data_alvo_iso}`;
