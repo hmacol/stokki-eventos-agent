@@ -685,7 +685,7 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     linhas = conn.execute(
         "SELECT DISTINCT codigo_pedido, "
         "REPLACE(REPLACE(REPLACE(COALESCE(cnpj_contraparte,''),'.',''),'/',''),'-','') AS dest "
-        "FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND numero_nf = ? "
+        "FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND numero_nf = ? "
         "AND COALESCE(codigo_pedido,'') != ''", (envio["numero_nf"],)).fetchall()
     if not linhas:
         return None

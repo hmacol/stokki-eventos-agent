@@ -29,6 +29,10 @@ _COLUNAS_NOVAS = [
     ("total_parcelas", "INTEGER"),
     ("numero_nf", "TEXT"),
     ("cnpj_contraparte", "TEXT"),
+    # 1 = a DANFE traz duplicata com vencimento (há cobrança, boleto
+    # esperado); 0 = quadro de fatura sem duplicata; NULL = sem quadro
+    # ou não é NF. Ver regras_documentos.cobranca_da_danfe (05/10).
+    ("cobranca", "INTEGER"),
 ]
 
 
@@ -80,7 +84,7 @@ def marcar_processado(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: 
                       codigo_pedido: str | None, status: str, motivo: str | None = None,
                       gcs_path: str | None = None, numero_nf: str | None = None,
                       numero_parcela: int | None = None, total_parcelas: int | None = None,
-                      cnpj_contraparte: str | None = None):
+                      cnpj_contraparte: str | None = None, cobranca: int | None = None):
     """
     status: 'ENVIADO' (casou com pedido e foi pro GCS) ou
     'REVISAO_MANUAL' (não conseguiu casar com nenhum pedido -- motivo
@@ -98,17 +102,18 @@ def marcar_processado(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: 
     conn.execute("""
         INSERT INTO documentos_processados
             (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, motivo, gcs_path,
-             numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, processado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, cobranca, processado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash_conteudo) DO UPDATE SET
             status = excluded.status, motivo = excluded.motivo,
             gcs_path = excluded.gcs_path, processado_em = excluded.processado_em,
             numero_nf = COALESCE(excluded.numero_nf, numero_nf),
             numero_parcela = COALESCE(excluded.numero_parcela, numero_parcela),
             total_parcelas = COALESCE(excluded.total_parcelas, total_parcelas),
-            cnpj_contraparte = COALESCE(excluded.cnpj_contraparte, cnpj_contraparte)
+            cnpj_contraparte = COALESCE(excluded.cnpj_contraparte, cnpj_contraparte),
+            cobranca = COALESCE(excluded.cobranca, cobranca)
     """, (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, motivo, gcs_path,
-          numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, agora))
+          numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, cobranca, agora))
     conn.commit()
     conn.close()
 
@@ -116,10 +121,13 @@ def marcar_processado(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: 
 def carregar_indice_nf() -> list[dict]:
     """Linhas de Nota Fiscal já casadas com pedido e com número de NF
     conhecido -- base do índice NF->pedido do matcher.IndexadorNF."""
+    # status='ENVIADO' (05/10): revisão manual agora também grava o
+    # pedido quando ele é conhecido (DANFE suspeita, placeholder) -- sem
+    # o filtro, uma DANFE de outra entrega envenenaria o índice.
     conn = _conectar()
     rows = conn.execute(
         "SELECT DISTINCT numero_nf, cnpj_contraparte, codigo_pedido FROM documentos_processados "
-        "WHERE tipo = 'Nota Fiscal' AND numero_nf IS NOT NULL AND codigo_pedido IS NOT NULL"
+        "WHERE tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND numero_nf IS NOT NULL AND codigo_pedido IS NOT NULL"
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -129,10 +137,13 @@ def pedidos_nf_pendentes() -> set[str]:
     """Pedidos com Nota Fiscal registrada mas sem numero_nf preenchido
     (linhas anteriores à migração de 11/08) -- candidatos ao backfill
     a partir dos PDFs de DANFE ainda salvos localmente."""
+    # status='ENVIADO' (05/10): revisão manual agora também grava o
+    # pedido quando ele é conhecido (DANFE suspeita, placeholder) -- sem
+    # o filtro, uma DANFE de outra entrega envenenaria o índice.
     conn = _conectar()
     rows = conn.execute(
         "SELECT DISTINCT codigo_pedido FROM documentos_processados "
-        "WHERE tipo = 'Nota Fiscal' AND numero_nf IS NULL AND codigo_pedido IS NOT NULL"
+        "WHERE tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND numero_nf IS NULL AND codigo_pedido IS NOT NULL"
     ).fetchall()
     conn.close()
     return {r["codigo_pedido"] for r in rows}
@@ -163,6 +174,22 @@ def ja_enviado_para_pedido(codigo_pedido: str, tipo: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM documentos_processados WHERE codigo_pedido = ? AND tipo = ? AND status = 'ENVIADO'",
         (codigo_pedido, tipo),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def ja_em_revisao(codigo_pedido: str, tipo: str | None, numero_nf: str | None, motivo: str) -> bool:
+    """True se a MESMA revisão (pedido + tipo + NF + motivo) já está
+    registrada. A DANFE é regerada a cada rodada com hash novo -- sem
+    isso, um XML errado na Stokki (PS-37626) virava uma linha nova por
+    rodada (166 em 6 semanas, até 05/10)."""
+    conn = _conectar()
+    row = conn.execute(
+        "SELECT 1 FROM documentos_processados WHERE status = 'REVISAO_MANUAL' AND codigo_pedido = ? "
+        "AND COALESCE(tipo, '') = COALESCE(?, '') AND COALESCE(numero_nf, '') = COALESCE(?, '') "
+        "AND motivo = ?",
+        (codigo_pedido, tipo, numero_nf, motivo),
     ).fetchone()
     conn.close()
     return row is not None

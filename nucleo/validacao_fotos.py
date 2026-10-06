@@ -209,10 +209,10 @@ def nfs_do_pedido(conn: sqlite3.Connection, codigo: str | None) -> list[str]:
     try:
         rows = conn.execute(f"""
             SELECT DISTINCT d.numero_nf FROM documentos_processados d
-            WHERE UPPER(d.codigo_pedido) IN ({marcadores}) AND d.tipo = 'Nota Fiscal'
+            WHERE UPPER(d.codigo_pedido) IN ({marcadores}) AND d.tipo = 'Nota Fiscal' AND d.status = 'ENVIADO'
               AND d.numero_nf IS NOT NULL AND d.numero_nf != ''
               AND (SELECT COUNT(DISTINCT o.codigo_pedido) FROM documentos_processados o
-                   WHERE o.numero_nf = d.numero_nf AND o.tipo = 'Nota Fiscal' AND o.codigo_pedido IS NOT NULL) = 1
+                   WHERE o.numero_nf = d.numero_nf AND o.tipo = 'Nota Fiscal' AND o.status = 'ENVIADO' AND o.codigo_pedido IS NOT NULL) = 1
             ORDER BY d.numero_nf
         """, bases).fetchall()
     except sqlite3.OperationalError:

@@ -76,11 +76,13 @@ from notificar_execucao_agente import notificar_execucao
 
 from classificador import classificar_documento
 from matcher import (casar_documento_com_pedido, extrair_nf_da_danfe,
-                     extrair_numero_e_cnpj_pedido_venda, IndexadorNF)
+                     extrair_numero_e_cnpj_pedido_venda, IndexadorNF,
+                     extrair_codigo_pedido)
 from boleto_parser import extrair_metadados_boleto
 from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
                                     pedidos_nf_pendentes, atualizar_nf_pedido,
-                                    listar_pendentes_revisao, pedidos_com_documento_enviado)
+                                    listar_pendentes_revisao, pedidos_com_documento_enviado,
+                                    ja_em_revisao)
 from email_documentos import buscar_pdfs_por_email
 import storage_gcs
 
@@ -178,32 +180,25 @@ def _validar_danfe_do_stokki(vuupt, codigo_pedido: str, numero_nf: str | None,
             f"anexado no pedido. Conferir na Stokki qual NF pertence a esse pedido.")
 
 
-def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
-                           tipos_permitidos: set[str] | None = None,
-                           indexador_nf: IndexadorNF | None = None,
-                           ignorar_ja_processado: bool = False) -> str:
-    """
-    item: {"caminho_local", "nome_arquivo", "assunto_email" (opcional)}
-    tipos_permitidos: se informado, documento classificado com um tipo
-    fora desse conjunto é ignorado (status "FORA_DE_ESCOPO") -- usado
-    pela busca de e-mail de embarcadores conhecidos, que por enquanto
-    só trata Boleto (pedido do Hugo, 10/08).
-    indexador_nf: índice NF->pedido compartilhado da execução -- as
-    DANFEs processadas o alimentam, os boletos consultam (spec de
-    boletos parcelados, 11/08).
-    ignorar_ja_processado: usado só por retentar_revisao_manual() --
-    reprocessa um hash que já está no banco (com status REVISAO_MANUAL)
-    de propósito, em vez de pular como "já visto".
-    Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL",
-    "FORA_DE_ESCOPO", "ERRO".
-    """
+def _registrar_revisao(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: str | None,
+                       codigo_pedido: str | None, motivo: str, modo_teste: bool, **extras) -> None:
+    """Grava REVISAO_MANUAL, sem duplicar a mesma revisão do mesmo
+    pedido (ver fingerprint_documentos.ja_em_revisao)."""
+    if modo_teste:
+        return
+    if codigo_pedido and ja_em_revisao(codigo_pedido, tipo, extras.get("numero_nf"), motivo):
+        logger.info(f"  {nome_arquivo}: mesma revisão já registrada pra {codigo_pedido} -- não duplica.")
+        return
+    marcar_processado(hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido,
+                      "REVISAO_MANUAL", motivo=motivo, **extras)
+
+
+def _processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
+                            tipos_permitidos: set[str] | None, indexador_nf: IndexadorNF | None,
+                            hash_conteudo: str) -> str:
     caminho = item["caminho_local"]
     nome_arquivo = item["nome_arquivo"]
     assunto_email = item.get("assunto_email")
-
-    hash_conteudo = calcular_hash(caminho)
-    if not ignorar_ja_processado and ja_processado(hash_conteudo):
-        return "JA_PROCESSADO"
 
     classificacao = classificar_documento(caminho)
     if tipos_permitidos is not None and classificacao["tipo"] not in tipos_permitidos:
@@ -223,10 +218,9 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         motivo_placeholder = _motivo_danfe_placeholder(texto_completo)
         if motivo_placeholder:
             logger.warning(f"  {nome_arquivo}: {motivo_placeholder}")
-            if not modo_teste:
-                marcar_processado(hash_conteudo, "email" if assunto_email is not None else "stokki",
-                                 nome_arquivo, classificacao["tipo"], None,
-                                 "REVISAO_MANUAL", motivo=motivo_placeholder, numero_nf=numero_nf)
+            _registrar_revisao(hash_conteudo, "email" if assunto_email is not None else "stokki",
+                               nome_arquivo, classificacao["tipo"], extrair_codigo_pedido(nome_arquivo),
+                               motivo_placeholder, modo_teste, numero_nf=numero_nf)
             return "REVISAO_MANUAL"
     elif classificacao["tipo"] == "Pedido de Venda":
         numero_nf, cnpj_contraparte = extrair_numero_e_cnpj_pedido_venda(texto_completo)
@@ -247,11 +241,10 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
 
     if not codigo_pedido:
         logger.warning(f"  {nome_arquivo}: não casou com nenhum pedido -- {correspondencia['motivo_falha']}")
-        if not modo_teste:
-            marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], None,
-                             "REVISAO_MANUAL", motivo=correspondencia["motivo_falha"],
-                             numero_nf=numero_nf, numero_parcela=numero_parcela,
-                             total_parcelas=total_parcelas, cnpj_contraparte=cnpj_contraparte)
+        _registrar_revisao(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], None,
+                           correspondencia["motivo_falha"], modo_teste,
+                           numero_nf=numero_nf, numero_parcela=numero_parcela,
+                           total_parcelas=total_parcelas, cnpj_contraparte=cnpj_contraparte)
         return "REVISAO_MANUAL"
 
     # DANFE da Stokki casada pelo nome do arquivo (PS-XXXXX_...): a
@@ -262,10 +255,9 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         motivo_suspeita = _validar_danfe_do_stokki(vuupt, codigo_pedido, numero_nf, cnpj_contraparte)
         if motivo_suspeita:
             logger.warning(f"  {nome_arquivo}: {motivo_suspeita}")
-            if not modo_teste:
-                marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], None,
-                                 "REVISAO_MANUAL", motivo=motivo_suspeita,
-                                 numero_nf=numero_nf, cnpj_contraparte=cnpj_contraparte)
+            _registrar_revisao(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], codigo_pedido,
+                               motivo_suspeita, modo_teste,
+                               numero_nf=numero_nf, cnpj_contraparte=cnpj_contraparte)
             return "REVISAO_MANUAL"
 
     info_parcela = (f", parcela {numero_parcela}/{total_parcelas or '?'}"
@@ -293,6 +285,50 @@ def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         return "ENVIADO"
     except Exception as e:
         logger.error(f"  {nome_arquivo}: falha ao enviar pro GCS: {e}")
+        # Antes (até 05/10) o documento sumia: e-mail já marcado como lido
+        # e nada no banco. Como revisão, a retentativa da rodada completa
+        # tenta subir de novo.
+        _registrar_revisao(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], codigo_pedido,
+                           f"Falha ao enviar pro GCS: {e}", modo_teste,
+                           numero_nf=numero_nf, numero_parcela=numero_parcela,
+                           total_parcelas=total_parcelas, cnpj_contraparte=cnpj_contraparte)
+        return "ERRO"
+
+
+def processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
+                           tipos_permitidos: set[str] | None = None,
+                           indexador_nf: IndexadorNF | None = None,
+                           ignorar_ja_processado: bool = False) -> str:
+    """
+    item: {"caminho_local", "nome_arquivo", "assunto_email" (opcional)}
+    tipos_permitidos: se informado, documento classificado com um tipo
+    fora desse conjunto é ignorado (status "FORA_DE_ESCOPO") -- usado
+    pela busca de e-mail de embarcadores conhecidos, que por enquanto
+    só trata Boleto (pedido do Hugo, 10/08).
+    indexador_nf: índice NF->pedido compartilhado da execução -- as
+    DANFEs processadas o alimentam, os boletos consultam (spec de
+    boletos parcelados, 11/08).
+    ignorar_ja_processado: usado só por retentar_revisao_manual() --
+    reprocessa um hash que já está no banco (com status REVISAO_MANUAL)
+    de propósito, em vez de pular como "já visto".
+    Retorna o status final: "JA_PROCESSADO", "ENVIADO", "REVISAO_MANUAL",
+    "FORA_DE_ESCOPO", "ERRO".
+
+    Nunca levanta exceção (05/10): erro inesperado (Vuupt fora, PDF
+    estranho) vira REVISAO_MANUAL e devolve "ERRO" -- antes abortava a
+    rodada inteira com os e-mails já marcados como lidos.
+    """
+    hash_conteudo = calcular_hash(item["caminho_local"])
+    if not ignorar_ja_processado and ja_processado(hash_conteudo):
+        return "JA_PROCESSADO"
+    try:
+        return _processar_um_documento(item, vuupt, config, modo_teste, tipos_permitidos,
+                                       indexador_nf, hash_conteudo)
+    except Exception as e:
+        logger.exception(f"  {item['nome_arquivo']}: erro inesperado -- vai pra revisão manual: {e}")
+        _registrar_revisao(hash_conteudo, "email" if item.get("assunto_email") is not None else "stokki",
+                           item["nome_arquivo"], None, extrair_codigo_pedido(item["nome_arquivo"]),
+                           f"Erro inesperado no processamento: {e}", modo_teste)
         return "ERRO"
 
 

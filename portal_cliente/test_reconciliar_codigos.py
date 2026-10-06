@@ -37,7 +37,7 @@ def _conn() -> sqlite3.Connection:
             agendamento_data TEXT, agendamento_pendente INTEGER,
             agendamento_aplicado_em TEXT, atualizado_em TEXT);
         CREATE TABLE documentos_processados (
-            hash_conteudo TEXT PRIMARY KEY, tipo TEXT, codigo_pedido TEXT,
+            hash_conteudo TEXT PRIMARY KEY, tipo TEXT, codigo_pedido TEXT, status TEXT,
             numero_nf TEXT, cnpj_contraparte TEXT);
         CREATE TABLE pedidos_historico (
             id_pedido TEXT, numero_nfe TEXT, cliente_cnpj TEXT, atualizado_em TEXT);
@@ -54,8 +54,8 @@ def _envio(conn, envio_id: int, numero_nf: str, embarcador: str = EMB_A,
 
 def _danfe(conn, numero_nf: str, codigo_pedido: str | None, contraparte: str | None,
            hash_conteudo: str | None = None) -> None:
-    conn.execute("INSERT INTO documentos_processados (hash_conteudo, tipo, codigo_pedido, numero_nf, cnpj_contraparte) "
-                 "VALUES (?, 'Nota Fiscal', ?, ?, ?)",
+    conn.execute("INSERT INTO documentos_processados (hash_conteudo, tipo, status, codigo_pedido, numero_nf, cnpj_contraparte) "
+                 "VALUES (?, 'Nota Fiscal', 'ENVIADO', ?, ?, ?)",
                  (hash_conteudo or f"h{numero_nf}{codigo_pedido}{contraparte}", codigo_pedido, numero_nf, contraparte))
     conn.commit()
 
