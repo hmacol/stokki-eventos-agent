@@ -634,6 +634,8 @@
                            Filtro por embarcador (05/10) é só no navegador:
                            cada pedido leva sender_id; opções vêm do interno
                            ("GRUPO - FILIAL" vira opção do grupo inteiro).
+                           JS em templates/_torre_filtro_embarcador.js.html,
+                           incluído pelo desktop e pelo mobile.
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);

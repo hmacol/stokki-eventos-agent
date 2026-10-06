@@ -19,6 +19,24 @@
   .linha-data input[type=date] { flex: 1; }
   .linha-data .botao-icone { background: var(--superficie); border: 1px solid var(--borda); color: var(--texto); }
 
+  /* Filtro por embarcador (mesmo JS do desktop, _torre_filtro_embarcador). */
+  .filtro-embarcador {
+    width: 100%; margin-bottom: 10px; padding: 10px 12px; font-size: 14px; border-radius: 10px;
+    border: 1px solid var(--borda); background: var(--superficie); color: var(--texto);
+  }
+  .filtro-embarcador.ativo { border-color: var(--acento); color: var(--acento); font-weight: 600; }
+  .aviso-filtro {
+    border: 1px solid var(--acento); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+    font-size: 12.5px; color: var(--texto); display: flex; flex-direction: column; gap: 6px;
+  }
+  .aviso-filtro[hidden] { display: none; }
+  .aviso-filtro strong { color: var(--acento); }
+  .aviso-filtro .suave { color: var(--texto-suave); }
+  .aviso-filtro button {
+    align-self: flex-start; padding: 8px 14px; border-radius: 8px; font-size: 13px;
+    border: 1px solid var(--borda); background: var(--superficie); color: var(--texto);
+  }
+
   .semaforo {
     display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 14px;
     padding: 10px 16px; border-radius: 12px; background: var(--superficie); border: 1px solid var(--borda);
@@ -312,6 +330,12 @@
   <button type="button" class="botao-icone" onclick="carregarTudo()" title="Atualizar agora">↻</button>
 </div>
 
+<select class="filtro-embarcador" id="filtro-embarcador" onchange="alternarFiltroEmbarcador()"
+        aria-label="Filtrar por embarcador">
+  <option value="">Todos os embarcadores</option>
+</select>
+<div class="aviso-filtro" id="aviso-filtro" hidden></div>
+
 <span class="semaforo" id="semaforo"><span class="luz"></span><span id="semaforo-texto">Carregando…</span></span>
 <div class="carimbo" id="carimbo">Carregando dados…</div>
 
@@ -458,8 +482,10 @@ document.getElementById("visao-rotas").value = visaoRotas;
 function alternarVisaoRotas() {
   visaoRotas = document.getElementById("visao-rotas").value;
   localStorage.setItem("torre_visao_rotas", visaoRotas);
-  if (dadosAtuais) renderRotas(dadosAtuais);
+  if (dadosAtuais) renderRotas(dadosVisiveis());
 }
+
+{% include "_torre_filtro_embarcador.js.html" %}
 
 let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
 let idsExcecoesConhecidas = null;
@@ -875,9 +901,11 @@ function quemAtualizou(x) {
 function renderExcecoes(d) {
   const alvo = document.getElementById("excecoes");
   const partes = [];
+  // Alarme pela fila inteira, não pela filtrada (filtro por embarcador).
+  const idsTodos = new Set(dadosAtuais.excecoes.map(x => x.id));
+  if (idsExcecoesConhecidas && [...idsTodos].some(id => !idsExcecoesConhecidas.has(id))) tocarAlarme();
+  idsExcecoesConhecidas = idsTodos;
   const idsAtuais = new Set(d.excecoes.map(x => x.id));
-  if (idsExcecoesConhecidas && [...idsAtuais].some(id => !idsExcecoesConhecidas.has(id))) tocarAlarme();
-  idsExcecoesConhecidas = idsAtuais;
 
   const contagem = document.getElementById("contagem-acoes");
   if (contagem) contagem.textContent = d.excecoes.length ? `(${d.excecoes.length})` : "";
@@ -1243,7 +1271,7 @@ const ROTULO_SITUACAO = { entregue: "Entregue", insucesso: "Insucesso", em_rota:
 
 function torreMapaPronto() {
   gmapsPronto = true;
-  if (dadosAtuais) renderMapa(dadosAtuais);
+  if (dadosAtuais) renderMapa(dadosVisiveis());
 }
 function renderMapa(d) {
   const el = document.getElementById("mini-mapa");
@@ -1310,11 +1338,8 @@ async function carregarDados() {
     dadosAtuais = d;
     conferirVersaoTela(d);
     renderSemaforo(d);
-    renderMapa(d);
     renderKpis(d);
-    renderRotas(d);
-    renderPedidosStatus(d);
-    renderExcecoes(d);
+    renderVisaoFiltrada();
     renderTendencia(d);
     renderAmanha(d);
     // O card do mapa so existe com google_maps_key no config: sem chave,

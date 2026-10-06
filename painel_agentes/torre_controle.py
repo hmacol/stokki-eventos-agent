@@ -131,6 +131,7 @@ _ARQUIVOS_DA_TELA = [
     Path(__file__),
     Path(__file__).parent / "templates" / "torre_controle.html",
     Path(__file__).parent / "templates" / "torre_mobile.html",
+    Path(__file__).parent / "templates" / "_torre_filtro_embarcador.js.html",
     Path(__file__).parent / "templates" / "base.html",
 ]
 
