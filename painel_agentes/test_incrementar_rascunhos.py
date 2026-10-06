@@ -99,6 +99,14 @@ class IncrementarRascunhosTestCase(unittest.TestCase):
         self.adicionar.assert_called_once_with(1, pedido, None)
         self.otimizar.assert_called_once_with(1)
 
+    def test_modo_teste_decide_mas_nao_grava(self):
+        # incrementar_rotas.py --modo-teste (05/10)
+        self.rascunhos = [_rascunho(1, "#1 Norte", [_parada(11, *ZONA_NORTE)])]
+        r = pr.incrementar_rascunhos_com_selecionados(DATA, [_parada(99, -23.47, -46.61)], modo_teste=True)
+        self.assertEqual([a["rascunho_id"] for a in r["alocados"]], [1])
+        self.adicionar.assert_not_called()
+        self.otimizar.assert_not_called()
+
     def test_fora_do_raio_vira_orfao(self):
         self.rascunhos = [_rascunho(1, "#1", [_parada(11, *ZONA_NORTE)])]
         pedido = _parada(99, -23.90, -47.10)  # ~65 km

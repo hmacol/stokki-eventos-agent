@@ -1,5 +1,5 @@
 [Unit]
-Description=Stokki Eventos - Sequencia da noite (Impressao, Importacao, Expedicao, Documentos, PDFs de romaneio)
+Description=Stokki Eventos - Sequencia da noite (Impressao, Importacao, Incremento, Expedicao, Documentos, PDFs de romaneio)
 OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
