@@ -65,6 +65,15 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
             resumo_json     TEXT
         );
     """)
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(batimento_pedidos)")}
+    if "tratado_obs" not in colunas:
+        # Duas threads do painel podem chegar aqui juntas no 1o acesso pos-deploy.
+        try:
+            conn.execute("ALTER TABLE batimento_pedidos ADD COLUMN tratado_obs TEXT")
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
 
 
 def gravar_rodada(conn: sqlite3.Connection, pedidos: list[dict], resumo: dict, id_minimo: int | None,
@@ -98,7 +107,7 @@ def gravar_rodada(conn: sqlite3.Connection, pedidos: list[dict], resumo: dict, i
             UPDATE batimento_pedidos SET
                 id_stokki = ?, embarcador = ?, transportadora = ?, status_stokki = ?, status_nucleo = ?,
                 caixa = ?, rotulo = ?, evidencias_json = ?, fechado_em = ?, visto_em = ?
-                {", desde = ?" if trocou else ""}
+                {", desde = ?, tratado_em = NULL, tratado_por = NULL, tratado_obs = NULL" if trocou else ""}
             WHERE codigo = ?
         """, (p.get("id_stokki"), p.get("embarcador"), p.get("transportadora"), p.get("status_stokki_bruto"),
               p.get("nucleo_status"), p["caixa"], p["rotulo"], evid, fechado, agora_txt,
@@ -118,6 +127,23 @@ def gravar_rodada(conn: sqlite3.Connection, pedidos: list[dict], resumo: dict, i
           json.dumps({**resumo, "mudancas": mudou}, ensure_ascii=False, default=str)))
     conn.commit()
     return {**mudou, "totais": totais, "fecha": fecha}
+
+
+def marcar_tratado(conn: sqlite3.Connection, codigo: str, por: str, obs: str,
+                   agora: datetime | None = None) -> None:
+    """Tratativa manual de uma divergencia (aba Fechamento). Vale enquanto
+    o pedido nao trocar de motivo: gravar_rodada limpa na troca."""
+    obs = (obs or "").strip()
+    if not obs:
+        raise ValueError("Escreva o que foi feito (observação obrigatória).")
+    row = conn.execute("SELECT caixa FROM batimento_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+    if row is None:
+        raise ValueError(f"{codigo} não está no batimento.")
+    if row[0] != "DIVERGENCIA":
+        raise ValueError(f"{codigo} não está em divergência.")
+    conn.execute("UPDATE batimento_pedidos SET tratado_em = ?, tratado_por = ?, tratado_obs = ? WHERE codigo = ?",
+                 ((agora or datetime.now()).strftime(FMT), por, obs[:300], codigo))
+    conn.commit()
 
 
 def totais_da_rodada(conn: sqlite3.Connection, visto_em: str) -> dict:

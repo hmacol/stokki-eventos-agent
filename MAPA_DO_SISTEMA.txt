@@ -645,7 +645,9 @@
    /expedicao                 expedicao.html
    /expedicao/consulta        consulta_pedido_expedicao.html (+ /api/expedicao/consulta;
                               níveis total/operador/expedicao/galpao)
-   /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
+   /vigia                     vigia_pedidos.html (lista do vigia, só leitura;
+                              aba ?aba=fechamento = _vigia_fechamento.html,
+                              batimento com botão Tratar)
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
@@ -808,8 +810,12 @@
    bater.py    job diário 07:25 (stokki-batimento-pedidos): grava
                batimento_pedidos (1 linha por PS, nunca apagada; DESTINO fica
                congelado) e batimento_rodadas. Equação que não fecha = exit 1
-               (alerta de falha). --resumo/--modo-teste só imprime.
-   banco.py    tabelas batimento_pedidos e batimento_rodadas.
+               (alerta de falha). --resumo/--modo-teste só imprime. E-mail
+               interno só com divergência nova ou conta que não fecha.
+   banco.py    tabelas batimento_pedidos e batimento_rodadas (+ tratativa).
+   consulta.py aba Fechamento (/vigia?aba=fechamento), excecoes_torre
+               (só divergência real > 1 dia útil + crítico se não fecha),
+               novidades pro e-mail, tratar (POST /api/batimento/tratar).
 
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
    regras.py   estados e prazos (puro, testado).

@@ -39,11 +39,30 @@
             letter-spacing: 0.3px; text-transform: uppercase; background: var(--teste-bg); color: var(--teste-texto); white-space: nowrap; }
   .pilula.vencido { background: var(--erro); color: #fff; }
   .suave { color: var(--texto-suave); }
+  .abas { display: flex; gap: 6px; margin: 0 0 16px; border-bottom: 1px solid var(--borda); }
+  .abas a { padding: 8px 14px; text-decoration: none; color: var(--texto-suave); font-weight: 700; font-size: 13px;
+            border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .abas a.ativa { color: var(--texto); border-bottom-color: var(--acento-real); }
+  .conta { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
+           padding: 14px 16px; margin: 0 0 18px; font-size: 14px; }
+  .conta .numero { font-size: 22px; font-weight: 700; }
+  .selo { display: inline-block; padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; }
+  .selo.ok { background: var(--teste-bg); color: var(--teste-texto); }
+  .selo.erro { background: var(--erro); color: #fff; }
+  .evid { font-size: 12px; color: var(--texto-suave); }
+  h2.secao { font-size: 15px; margin: 22px 0 8px; }
   @media (max-width: 700px) { .card { min-width: calc(50% - 5px); } }
 </style>
 {% endblock %}
 
 {% block conteudo %}
+<nav class="abas">
+  <a href="{{ url_for('vigia_pedidos') }}" class="{{ 'ativa' if aba != 'fechamento' }}">Pedidos abertos</a>
+  <a href="{{ url_for('vigia_pedidos', aba='fechamento') }}" class="{{ 'ativa' if aba == 'fechamento' }}">Fechamento</a>
+</nav>
+{% if aba == 'fechamento' %}
+{% include "_vigia_fechamento.html" %}
+{% else %}
 <h1>Vigia de pedidos abertos</h1>
 <p class="sub">
   Todo pedido aberto, em que pé está, há quanto tempo e se o prazo venceu.
@@ -111,4 +130,5 @@
   </tbody>
 </table>
 </div>
+{% endif %}
 {% endblock %}

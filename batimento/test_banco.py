@@ -71,11 +71,61 @@ class GravarRodada(unittest.TestCase):
         r = banco.gravar_rodada(self.conn, [ped("PS-1", "DESTINO", "ENTREGUE")], resumo(1, fecha=False), 1, self.t1)
         self.assertFalse(r["fecha"])
 
+    def test_marcar_tratado_grava_quem_quando_obs(self):
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t1)
+        banco.marcar_tratado(self.conn, "PS-5", "hugo", "  cliente confirmou recebimento  ", self.t2)
+        l = self.linha("PS-5")
+        self.assertEqual((l["tratado_por"], l["tratado_obs"], l["tratado_em"]),
+                         ("hugo", "cliente confirmou recebimento", "2026-10-06 07:25:00"))
+
+    def test_marcar_tratado_recusa_obs_vazia_e_fora_de_divergencia(self):
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA"),
+                                        ped("PS-6", "DESTINO", "ENTREGUE")], resumo(2), 1, self.t1)
+        with self.assertRaises(ValueError):
+            banco.marcar_tratado(self.conn, "PS-5", "hugo", "   ")
+        with self.assertRaises(ValueError):
+            banco.marcar_tratado(self.conn, "PS-6", "hugo", "x")
+        with self.assertRaises(ValueError):
+            banco.marcar_tratado(self.conn, "PS-404", "hugo", "x")
+
+    def test_troca_de_motivo_limpa_tratativa(self):
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t1)
+        banco.marcar_tratado(self.conn, "PS-5", "hugo", "vendo com o motorista", self.t1)
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t2)
+        self.assertEqual(self.linha("PS-5")["tratado_por"], "hugo")      # mesmo motivo: mantem
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_DOCUMENTO")], resumo(1), 1,
+                            datetime(2026, 10, 7, 7, 25))
+        l = self.linha("PS-5")
+        self.assertIsNone(l["tratado_em"])
+        self.assertIsNone(l["tratado_por"])
+        self.assertIsNone(l["tratado_obs"])
+
     def test_pedido_de_rodada_antiga_nao_entra_na_conta_de_hoje(self):
         banco.gravar_rodada(self.conn, [ped("PS-1", "DESTINO", "ENTREGUE")], resumo(1), 1, self.t1)
         r = banco.gravar_rodada(self.conn, [ped("PS-2", "EM_ANDAMENTO", "NO_POOL")], resumo(1), 2, self.t2)
         self.assertEqual(r["totais"], {"EM_ANDAMENTO": 1})
         self.assertTrue(r["fecha"])
+
+
+class _ConexaoAtrasada:
+    """Finge que outra thread criou a coluna entre o PRAGMA e o ALTER."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *a):
+        if sql.startswith("PRAGMA table_info(batimento_pedidos)"):
+            return iter([])
+        return self._conn.execute(sql, *a)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
+
+class EsquemaConcorrente(unittest.TestCase):
+    def test_alter_duplicado_por_outra_thread_nao_quebra(self):
+        conn = sqlite3.connect(":memory:")
+        banco.garantir_esquema(conn)                   # coluna ja existe
+        banco.garantir_esquema(_ConexaoAtrasada(conn))  # PRAGMA diz que falta: ALTER duplicado
 
 
 if __name__ == "__main__":

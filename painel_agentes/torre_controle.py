@@ -1469,6 +1469,16 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
     except Exception as e:
         logger.warning(f"[torre] Vigia indisponível: {e}")
 
+    # Batimento (05/10): divergencia REAL parada ha mais de 1 dia util, um
+    # item por pedido, e um critico se a ultima rodada nao fechou. Só lê
+    # batimento_* -- quem calcula é o timer das 07h25.
+    try:
+        from batimento.consulta import excecoes_torre as batimento_excecoes
+        for x in batimento_excecoes(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Batimento indisponível: {e}")
+
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []
     for x in excecoes:

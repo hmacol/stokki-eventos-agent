@@ -869,7 +869,30 @@ def historico_tratativas():
 def vigia_pedidos():
     """Vigia de pedidos abertos (Hugo, 28/09): cada pedido aberto com o
     estado, há quanto tempo e se o prazo venceu. Só leitura -- quem
-    calcula é vigia/vigiar.py (timer de 15 min)."""
+    calcula é vigia/vigiar.py (timer de 15 min). Aba "fechamento" (05/10):
+    resultado do batimento (batimento/bater.py, 07h25)."""
+    aba = "fechamento" if (request.args.get("aba") or "").lower() == "fechamento" else "abertos"
+    if aba == "fechamento":
+        from batimento import consulta as batimento_consulta
+        from batimento.regras import ROTULOS_DIVERGENCIA
+        filtros = {
+            "motivo": request.args.get("motivo", ""),
+            "reais": request.args.get("reais", "") == "1",
+            "tratadas": request.args.get("tratadas", "") == "1",
+            "busca": request.args.get("busca", ""),
+        }
+        try:
+            dados = batimento_consulta.fechamento(filtros["motivo"], filtros["reais"], filtros["tratadas"],
+                                                  filtros["busca"])
+            erro = None
+        except Exception as e:
+            logging.getLogger(__name__).exception("Falha ao ler o batimento")
+            dados = {"linhas": [], "por_motivo": [], "total_abertas": 0, "ultima": None, "rodadas": []}
+            erro = str(e)
+        return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
+                               motivos=list(ROTULOS_DIVERGENCIA.items()),
+                               pode_tratar=g.nivel_acesso in ("total", "operador"))
+
     from vigia import consulta as vigia_consulta
     filtros = {
         "estado": request.args.get("estado", ""),
@@ -885,8 +908,23 @@ def vigia_pedidos():
                  "ultima_rodada": None, "ultima_listagem_stokki": None}
         erro = str(e)
     from vigia.regras import ORDEM, ROTULOS
-    return render_template("vigia_pedidos.html", dados=dados, filtros=filtros, erro=erro,
+    return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
                            estados=[(e, ROTULOS[e]) for e in ORDEM])
+
+
+@app.route("/api/batimento/tratar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_batimento_tratar():
+    """Marca uma divergência do batimento como tratada (aba Fechamento)."""
+    from batimento import consulta as batimento_consulta
+    body = request.get_json(force=True) or {}
+    try:
+        batimento_consulta.tratar(str(body.get("codigo") or ""), session.get("usuario") or g.nivel_acesso,
+                                  str(body.get("obs") or ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True})
 
 
 @app.route("/clientes-agenda")
