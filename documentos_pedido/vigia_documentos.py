@@ -125,7 +125,14 @@ def checar_pendencias(servicos: list[dict], docs_por_pedido: dict) -> dict:
             grupos[chave].append((s["embarcador"], s["codigo"]))
     resultado = {}
     for nome, itens in grupos.items():
-        if itens:
+        if itens and nome == "Boleto (rotas do dia)":
+            # Decisão 06/10: boleto faltando é diário (~48 de 180 NFs
+            # faturadas sem boleto em 05/10) -- vai no e-mail, mas fica
+            # "ok" pra não disparar WhatsApp no grupo todo dia.
+            resultado[nome] = {"status": "ok",
+                               "detalhe": f"ATENÇÃO: {len(itens)} pedido(s) sem boleto -- "
+                                          f"{_detalhe_por_embarcador(itens)}"}
+        elif itens:
             resultado[nome] = {"status": "erro",
                                "detalhe": f"{len(itens)} pedido(s) -- {_detalhe_por_embarcador(itens)}"}
         else:
