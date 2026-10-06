@@ -1263,10 +1263,12 @@ def _pedido_code_da_excecao(excecao_id: str) -> str | None:
 def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
                            descricao: str, motivo: str,
                            motorista_nome: str | None = None, rota_nome: str | None = None,
-                           registrar_tratativa: bool = True):
+                           registrar_tratativa: bool = True, por: str | None = None):
     """`registrar_tratativa=False` só grava a tabela da torre, sem o
     evento EXCECAO_TRATADA no log de tratativas -- pra quem já registrou
-    a ação de outro jeito (duplicar_pedido_manual → REENVIO_MANUAL)."""
+    a ação de outro jeito (duplicar_pedido_manual → REENVIO_MANUAL).
+    Item do batimento também grava a tratativa em batimento_pedidos
+    (`por` = quem tratou)."""
     conn = _conectar_tratadas()
     conn.execute("""
         INSERT INTO torre_excecoes_tratadas (id, data_alvo, tipo, descricao, motivo, tratado_em)
@@ -1284,8 +1286,26 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
             motorista_nome=motorista_nome, rota_nome=rota_nome, texto=motivo,
         )
 
+    codigo = _pedido_do_batimento(excecao_id)
+    if codigo:
+        motivo = (motivo or "").strip()
+        try:
+            from batimento import consulta as batimento_consulta
+            batimento_consulta.tratar(codigo, por or "torre", f"[Torre] {motivo}" if motivo else "Tratado na Torre")
+        except Exception as e:
+            logger.warning(f"[torre] Tratativa do batimento não gravada para {codigo}: {e}")
 
-def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str) -> int:
+
+def _pedido_do_batimento(excecao_id: str) -> str | None:
+    """'batimento:PS-1:MOTIVO' -> 'PS-1'. Os itens 'batimento:nao-fecha:...'
+    e 'batimento:sem-rodada:...' não têm pedido."""
+    partes = (excecao_id or "").split(":")
+    if len(partes) >= 3 and partes[0] == "batimento" and partes[1].startswith("PS-"):
+        return partes[1]
+    return None
+
+
+def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str, por: str | None = None) -> int:
     """Tratar por lote (Hugo, 30/09): a Fila de acao deixa selecionar
     varios itens e marcar todos com o mesmo motivo. Cada item e um dict
     no formato que a tela ja manda pro tratar unitario (id, tipo,
@@ -1298,7 +1318,7 @@ def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str) -> 
             continue
         marcar_excecao_tratada(
             excecao_id, data_alvo, item.get("tipo", ""), item.get("descricao", ""), motivo,
-            motorista_nome=item.get("motorista"), rota_nome=item.get("rota"),
+            motorista_nome=item.get("motorista"), rota_nome=item.get("rota"), por=por,
         )
         marcados += 1
     return marcados
@@ -1316,6 +1336,18 @@ def desfazer_excecao_tratada(excecao_id: str) -> bool:
     pedido_code = _pedido_code_da_excecao(excecao_id)
     if pedido_code:
         tratativas.registrar_evento(pedido_code, "TORRE", "EXCECAO_DESTRATADA", texto="(desfeito)")
+
+    codigo = _pedido_do_batimento(excecao_id)
+    if codigo:
+        try:
+            from batimento import banco as batimento_banco
+            conn_b = batimento_banco.conectar()
+            try:
+                batimento_banco.desmarcar_tratado(conn_b, codigo)
+            finally:
+                conn_b.close()
+        except Exception as e:
+            logger.warning(f"[torre] Tratativa do batimento não desfeita para {codigo}: {e}")
 
     return cur.rowcount > 0
 
@@ -1468,6 +1500,16 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             excecoes.append({**x, "_epoch": 0.0})
     except Exception as e:
         logger.warning(f"[torre] Vigia indisponível: {e}")
+
+    # Batimento (05/10): divergencia REAL parada ha mais de 1 dia util, um
+    # item por pedido, e um critico se a ultima rodada nao fechou. Só lê
+    # batimento_* -- quem calcula é o timer das 07h25.
+    try:
+        from batimento.consulta import excecoes_torre as batimento_excecoes
+        for x in batimento_excecoes(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Batimento indisponível: {e}")
 
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []

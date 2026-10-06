@@ -121,8 +121,13 @@ def transformar_xml(regra: str, origem: Path, destino: Path, px) -> None:
 
 def _credenciais(config: dict) -> tuple[str, str]:
     cfg = _cfg_portal(config).get("stokki") or {}
-    usuario = cfg.get("usuario") or config.get("stokki", {}).get("usuario", "")
-    senha = cfg.get("senha") or config.get("stokki", {}).get("senha", "")
+    if cfg.get("usuario") and cfg.get("senha"):
+        usuario, senha = cfg["usuario"], cfg["senha"]
+    else:
+        # 05/10: conta da trava que o worker pegou (principal ou, com ela
+        # ocupada, a provider -- stokki/contas.py).
+        from stokki.contas import credenciais
+        usuario, senha = credenciais(config, sessao_uso.conta_do_processo() or "principal")
     if not usuario or not senha:
         raise RuntimeError("Credenciais da Stokki ausentes (portal_cliente.stokki ou stokki no config.yaml).")
     return usuario, senha
@@ -566,8 +571,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
             resultados += [{"arquivo": p.name, "criado": True, "erro": ""} for p in arquivos_plan.values()]
             respostas, codigos = {}, {}
         else:
-            espera = int(_cfg_portal(config).get("espera_stokki_minutos") or 45) * 60
-            if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera):
+            # 05/10 (Hugo): fila da Stokki, até 2h (antes:
+            # portal_cliente.espera_stokki_minutos, 45).
+            espera = sessao_uso.ESPERA_MAXIMA_SEGUNDOS
+            if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera, alternativa=True):
                 ocupante = sessao_uso.em_uso()
                 logger.warning(f"[{cfg['nome']}] Stokki ocupada por '{ocupante}' há mais de {espera // 60} min -- lote volta pra fila.")
                 conn.execute(f"UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id IN ({','.join('?' * len(prontos))})",

@@ -159,6 +159,7 @@ NOMES_DAS_TAREFAS = {
     "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
     "resumo-diario-embarcador": "E-mail da noite com o resumo do dia",
     "romaneios-manha": "Geração dos romaneios da manhã",
+    "sequencia-incremento": "Incremento das rotas das 18h",
     "sequencia-noite": "Rotina da noite",
     "sequencia-tarde": "Rotina da tarde",
     "sincronizar-confirmacoes": "Leitura das confirmações de rota dos motoristas",

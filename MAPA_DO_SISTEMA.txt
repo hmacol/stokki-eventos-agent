@@ -70,7 +70,7 @@
  Tipo de carga (Seco/Refrig/Congelado) ..... regras/tipo_carga_embarcador.py
  Transportadora / redespacho ............... regras/transportadoras.py
  Tipo de veículo (FIORINO, VAN/HR, VUC...) . regras/tipo_veiculo.py
- Criar rotas do dia (18h, rascunho) ........ roteirizacao/criar_rotas_diarias.py
+ Criar rotas do dia (16h, rascunho) ........ roteirizacao/criar_rotas_diarias.py
  Algoritmos de agrupamento/sequência ....... roteirizacao/otimizacao_rotas.py,
                                              selecao_modelo.py, polimento_rotas.py
  Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
@@ -122,17 +122,18 @@
     (agendamento_confirmacao.py) e redespacho (redespacho_confirmacao.py),
     e cria/atualiza o SERVIÇO na Vuupt (vuupt_client.py). Grava em paralelo
     em nucleo_pedidos. Retiradas viram serviço avulso (retiradas/).
- 4) 18h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
+ 4) 16h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
     pool (nucleo/pool.py) -> dia fixo / dedicados / área não atendida ->
     partição por carga -> agrupamento + seleção de modelo + polimento ->
     alocação de motorista -> grava RASCUNHOS (rascunhos_rota/parada).
  5) Operador revisa no /planejamento e clica "Confirmar e Enviar"
     -> rotas_client.criar_rota (POST /routes na Vuupt)
     -> nucleo/rotas.registrar_rota_enviada.
-    ATENÇÃO: desde 09/09 NADA envia rascunho esquecido nem encaixa pedido
-    novo sozinho -- a sequência das 22h deixou de roteirizar.
-    incrementar_rotas.py é só botão do painel; enviar_rascunhos_pendentes.py
-    não é chamado por ninguém. Rascunho não confirmado = pedido perde o dia.
+    Desde 05/10, 18h e 22h: incrementar_rotas.py encaixa pedido novo
+    (corte 22h) na rota já enviada ou, se não couber, no rascunho ainda
+    não confirmado. Nada envia rascunho esquecido sozinho
+    (enviar_rascunhos_pendentes.py não é chamado por ninguém): rascunho
+    não confirmado = pedido perde o dia.
  6) Documentos (NF/boleto) são casados com o pedido e subidos ao GCS
     (documentos_pedido/). 04h: gerar_pdf_romaneios.py gera 1 PDF por rota;
     o print_agent/ no Windows do escritório imprime.
@@ -231,10 +232,12 @@
  seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario (desiste se a Stokki
                                                              estiver em uso -- ver stokki/sessao_uso.py)
  xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
- 17:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
-                                                             (+ devolve ao pool pedido NÃO iniciado de
-                                                             rota de dia anterior)
- 18:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
+ 15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
+                                                             (só devolve ao pool pedido NÃO iniciado de
+                                                             rota de dia anterior; desde 05/10 NÃO cancela
+                                                             rota de hoje sem motorista)
+ 16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
+ 18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
  22:00                       sequencia-noite                 infra/sequencia_noite.sh (abaixo)
  a cada 15 min               nucleo-sincronizar-servicos     nucleo/sincronizar_servicos_vuupt.py
@@ -250,14 +253,19 @@
  a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
                                                              horário de atendimento dos chamados)
 
- infra/sequencia_tarde.sh (18h, para no 1º erro):
+ infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
-   atualizar_agendamentos_confirmados.py ->
+   atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
    roteirizacao/criar_rotas_diarias.py --gerar-rascunho ->
    documentos_pedido/processar_documentos.py
+ infra/sequencia_incremento.sh (18h, para no 1º erro):
+   executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
+   atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
+   roteirizacao/incrementar_rotas.py
  infra/sequencia_noite.sh (22h, continua mesmo com erro):
    somente_impressao.py -> pipeline.py ->
-   atualizar_agendamentos_confirmados.py -> expedir_pedidos.py ->
+   atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
+   roteirizacao/incrementar_rotas.py -> expedir_pedidos.py ->
    documentos_pedido/processar_documentos.py ->
    roteirizacao/gerar_pdf_romaneios.py --data amanha
 
@@ -302,11 +310,11 @@
  verificar_pedidos_duplicados_vuupt.py  Audita/cancela duplicados.
  reconciliar_pedidos_retirada.py  Cancela serviço que virou RETIRADA.
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
-                         (roda nas sequências 18h/22h). Data informada
+                         (roda nas sequências 16h/18h/22h). Data informada
                          vence o dia fixo da região.
  marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
                          na fila de autorização do Hugo pra virar AGENDA na
-                         BD_CLIENTES (sequências 18h/22h). Aviso no WhatsApp
+                         BD_CLIENTES (sequências 16h/18h/22h). Aviso no WhatsApp
                          com o link da tela /clientes-agenda, onde ele
                          Autoriza (grava na planilha; backup = o diário das
                          03h pro GCS) ou marca
@@ -421,8 +429,14 @@
 ==============================================================================
 
  Sem API pública: login Playwright uma vez, cookies em sessao_stokki.json,
- depois requests. LOGIN NOVO DERRUBA A SESSÃO ANTERIOR (inclusive a do
- outro projeto agente_importacao_stokki). Use sempre as funções prontas.
+ depois requests. LOGIN NOVO DERRUBA A SESSÃO ANTERIOR DO MESMO USUÁRIO
+ (inclusive a do outro projeto agente_importacao_stokki). Use sempre as
+ funções prontas. Contas (contas.py, desde 05/10): principal (admin,
+ stokki.usuario), reserva (2ª admin, stokki.reserva -- opcional; entra
+ quando a principal está ocupada) e provider (stokki.provider, só área
+ /provider/: expedição, documentos, estação -- NÃO entra em /administrator).
+ Cada conta tem trava e arquivo de cookies próprios (sessao_stokki.json /
+ sessao_stokki_reserva.json).
 
  auth.py              StokkiSession(config): login, .get/.post, renova em
                       401/403. SessaoExpiradaError.
@@ -433,8 +447,17 @@
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
                       imprimir_pedidos_pendentes.
- sessao_uso.py        Trava cooperativa de uso da sessão (adquirir/liberar/
-                      aguardar_vez_para_login). Obrigatória antes de logar.
+ sessao_uso.py        Trava POR CONTA com FILA por ordem de chegada
+                      (tabelas stokki_sessao_uso + stokki_fila). adquirir
+                      (esperar_segundos=None espera sem limite;
+                      alternativa=True cai na reserva), garantir_vez (fica
+                      com a conta até o fim do processo), na_vez_da_provider
+                      (Estação), liberar. StokkiSession entra na fila sozinha
+                      na thread principal (até 2h; sem a vez, desiste sem
+                      logar por cima). Recorrentes (WMS, expedição, importação
+                      horária, documentos) esperam sem limite; sequências,
+                      portal e importador do 2º projeto, até 2h.
+ contas.py            Credenciais por conta e ordem principal -> reserva.
  fixtures/, test_*.py Parsers testados com HTML salvo (não conectar na Stokki
                       a partir da máquina local).
 
@@ -479,7 +502,7 @@
  roteirizacao_dados.py     Biblioteca central: seleção, agrupamento por região,
                            fusão/divisão de sublotes, macro-região, janela de
                            horário, orçamento de horas.
- criar_rotas_diarias.py    Job principal (18h). --gerar-rascunho grava rascunhos;
+ criar_rotas_diarias.py    Job principal (16h). --gerar-rascunho grava rascunhos;
                            sem a flag cria direto na Vuupt. Também expõe
                            roteirizar_para_rascunhos (botão "Roteirizar").
  otimizacao_rotas.py       Modelos: Sweep Polar, Clarke-Wright, 2-Opt, CEP, K-means.
@@ -526,9 +549,10 @@
  otimizacao_client.py      /route-optimization (só calcula).
  enviar_rascunhos_pendentes.py  Envia rascunhos não confirmados. SEM TIMER
                            desde 09/09 (não é chamado por ninguém).
- incrementar_rotas.py      Encaixa pedidos novos nas rotas (corte 19h). Só
-                           botão do painel desde 09/09.
- cancelar_rotas_sem_motorista.py  17h45.
+ incrementar_rotas.py      Encaixa pedidos novos nas rotas enviadas e, o que
+                           sobra, nos rascunhos abertos (corte 22h). 18h e
+                           22h desde 05/10 (+ botão do painel).
+ cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
@@ -646,7 +670,9 @@
    /expedicao                 expedicao.html
    /expedicao/consulta        consulta_pedido_expedicao.html (+ /api/expedicao/consulta;
                               níveis total/operador/expedicao/galpao)
-   /vigia                     vigia_pedidos.html (lista do vigia, só leitura)
+   /vigia                     vigia_pedidos.html (lista do vigia, só leitura;
+                              aba ?aba=fechamento = _vigia_fechamento.html,
+                              batimento com botão Tratar)
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
@@ -811,8 +837,12 @@
    bater.py    job diário 07:25 (stokki-batimento-pedidos): grava
                batimento_pedidos (1 linha por PS, nunca apagada; DESTINO fica
                congelado) e batimento_rodadas. Equação que não fecha = exit 1
-               (alerta de falha). --resumo/--modo-teste só imprime.
-   banco.py    tabelas batimento_pedidos e batimento_rodadas.
+               (alerta de falha). --resumo/--modo-teste só imprime. E-mail
+               interno só com divergência nova ou conta que não fecha.
+   banco.py    tabelas batimento_pedidos e batimento_rodadas (+ tratativa).
+   consulta.py aba Fechamento (/vigia?aba=fechamento), excecoes_torre
+               (só divergência real > 1 dia útil + crítico se não fecha),
+               novidades pro e-mail, tratar (POST /api/batimento/tratar).
 
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
    regras.py   estados e prazos (puro, testado).

@@ -28,6 +28,18 @@ class SituacaoStokki(unittest.TestCase):
         self.assertEqual(r.situacao_stokki("Xyz"), r.STOKKI_DESCONHECIDO)
 
 
+class GruposDivergencia(unittest.TestCase):
+    def test_grupos_cobrem_todos_os_motivos_sem_sobrepor(self):
+        motivos = {r.EXPEDIDO_SEM_ENTREGA, r.EXPEDIDO_SEM_DOCUMENTO, r.ENTREGUE_NAO_EXPEDIDO,
+                   r.CANCELADO_STOKKI_SERVICO_VIVO, r.CANCELADO_VUUPT_STOKKI_ABERTO,
+                   r.REDESPACHO_SEM_COMPROVANTE, r.RETIRADA_SEM_COMPROVANTE, r.LALAMOVE_SEM_COMPROVANTE,
+                   r.EXPEDIDO_COM_INSUCESSO_ABERTO, r.STATUS_STOKKI_DESCONHECIDO}
+        reais, comp = set(r.DIVERGENCIAS_REAIS), set(r.DIVERGENCIAS_COMPROVANTE)
+        self.assertEqual(reais | comp, motivos)
+        self.assertFalse(reais & comp)
+        self.assertEqual(set(r.ROTULOS_DIVERGENCIA), motivos)
+
+
 class Classificar(unittest.TestCase):
     def test_entregue_com_canhoto_sem_validar_vale(self):
         caixa, destino, ev = r.classificar(fato())

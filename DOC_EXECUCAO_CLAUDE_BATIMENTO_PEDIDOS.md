@@ -4,9 +4,9 @@ Especificação de 04/10/2026, a pedido do Hugo: "um batimento que garanta que
 todos os pedidos lançados têm um destino bem definido, ou seja, que saibamos
 exatamente o que aconteceu com cada um".
 
-Status (05/10): **job diário pronto (`batimento/bater.py`, timer 07h25),
-sem deploy**. Medição real na VPS em 04/10 e 05/10. Falta a saída (aba,
-Torre, e-mail). Decisões abaixo são do Hugo (04/10 e 05/10). Ver também a spec do Agente Analista de Logística (sessão paralela),
+Status (06/10): **job diário no ar desde 05/10 (`batimento/bater.py`,
+timer 07h25)**. Saída (aba Fechamento, Torre, e-mail) conforme
+`docs/superpowers/specs/2026-10-05-batimento-saida-design.md`. Decisões abaixo são do Hugo (04/10 e 05/10). Ver também a spec do Agente Analista de Logística (sessão paralela),
 que consome esta camada e não a implementa.
 
 ## Por que existe
@@ -117,13 +117,27 @@ Feitas (04/10 e 05/10):
   faria entrega antiga virar divergência.
 - `batimento/bater.py` — job diário (`infra/stokki-batimento-pedidos.*`,
   07h25). Equação que não fecha sai com código 1 (alerta de falha do
-  systemd). `--resumo`/`--modo-teste` só imprime.
+  systemd). `--resumo`/`--modo-teste` só imprime. No fim da rodada manda
+  e-mail interno (`notificacao_execucao.destinatario`) só se houver
+  divergência nova ou a conta não fechar.
+- `batimento/consulta.py` — aba `/vigia?aba=fechamento` (conta da última
+  rodada, divergências por motivo, histórico de 14 rodadas, botão Tratar
+  para total/operador via `POST /api/batimento/tratar`; a tratativa some
+  quando o pedido troca de motivo) e `excecoes_torre`: na Torre entra só
+  divergência **real** sem tratativa há mais de 1 dia útil (seg-sex), um
+  item por pedido, e um crítico se a última rodada não fechou. As "sem
+  comprovante" ficam só na aba e no e-mail (Hugo, 05/10). "Tratar" e
+  "Desfazer" na Torre (unitário e lote) também gravam/limpam a tratativa em
+  `batimento_pedidos` (obs "[Torre] <motivo>"; Hugo, 06/10).
+- Oscilação (06/10): `div_rotulo`/`div_desde` guardam o motivo de
+  divergência e desde quando; só mudam com motivo NOVO. Prazo da Torre,
+  e-mail de "nova" e a coluna "Desde" da aba usam `div_desde`; a tratativa
+  só some com motivo novo. Rodada com mais de 26h = item crítico "sem
+  rodada" na Torre e selo "rodada atrasada" na aba.
 
-A implementar:
-- Saída: aba "Fechamento" em `/vigia`, exceção na Torre quando a equação não
-  fecha ou há divergência vencida, e-mail interno. O
-  `verificar_entregues_nao_expedidos.py` vira caso particular e pode ser
-  absorvido depois (não no primeiro commit).
+A implementar depois:
+- O `verificar_entregues_nao_expedidos.py` vira caso particular e pode ser
+  absorvido.
 
 Pedido-base: agrupar `-R1`, `-R2`, `-C` com `nucleo/normalizacao.py`. A
 reentrega herda o pedido-base; o destino é um só por pedido.

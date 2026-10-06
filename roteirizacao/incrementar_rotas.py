@@ -11,6 +11,14 @@ nunca têm -- a ordem final não importa de qualquer forma, o bloco de
 resequenciamento mais abaixo reordena tudo por distância da base
 depois).
 
+05/10 (Hugo): rascunho às 16h, incremento automático às 18h e às 22h
+(infra/sequencia_incremento.sh e sequencia_noite.sh). Pedido que não
+cabe em rota já enviada vai pro RASCUNHO ainda não confirmado mais
+próximo (planejamento_rotas.incrementar_rascunhos_com_selecionados, o
+mesmo do botão "Incrementar" do pool); pedido já em rascunho não é
+"novo". O corte por pedido passou de 19h pra 22h -- os exemplos abaixo
+são da regra antiga de 19h.
+
 Dois padrões fixos (pedido do Hugo, 10/09 -- valem sempre, sem flag):
 
   - CORTE DE 19h POR PEDIDO (HORA_CORTE_PEDIDO): só entra no
@@ -109,6 +117,7 @@ from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
+import rascunhos_rota  # painel_agentes/ -- criar_rotas_diarias já pôs no sys.path
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
@@ -138,8 +147,10 @@ PADRAO_DATA_ROTA = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 # Corte de horário do pedido (pedido do Hugo, 10/09): pedido que chegou
 # na VUUPT depois das 19h do último dia útil anterior à data alvo NÃO
 # entra no incremento -- fica pro rascunho do dia seguinte. Ver docstring
-# do módulo pros exemplos.
-HORA_CORTE_PEDIDO = 19
+# do módulo pros exemplos. 05/10 (Hugo): rascunho passou pras 16h e o
+# incremento roda às 18h e às 22h -- o corte foi pras 22h, pra rodada
+# das 22h pegar tudo que chegou até ela.
+HORA_CORTE_PEDIDO = 22
 
 
 def _dia_util_anterior(data: date) -> date:
@@ -568,6 +579,19 @@ def main(modo_teste: bool = False):
             and s["id"] not in ids_apos_corte
         ]
 
+        # Rascunhos do lote ativo (Hugo, 05/10): o incremento também
+        # encaixa pedido em rascunho ainda não confirmado. Pedido que já
+        # está em parada de rascunho continua not_assigned na VUUPT, mas
+        # não é "novo" -- senão iria pra uma rota enviada e ficaria
+        # duplicado no rascunho.
+        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+        ids_em_rascunho = {p["service_id"] for r in rascunhos_do_dia for p in r["paradas"]}
+        tem_rascunho_aberto = any(r.get("status") == rascunhos_rota.STATUS_RASCUNHO for r in rascunhos_do_dia)
+        ja_em_rascunho = [s for s in novos if s["id"] in ids_em_rascunho]
+        if ja_em_rascunho:
+            logger.info(f"{len(ja_em_rascunho)} pedido(s) já estão em rascunho de {data_alvo_br} e ficam onde estão.")
+        novos = [s for s in novos if s["id"] not in ids_em_rascunho]
+
         # Detalhamento completo do que aconteceu com CADA pedido not_assigned
         # (pedido do Hugo, 06/08: "só 36 de 76 foram roteirizados, quero
         # entender o motivo") -- antes só logava o total elegível, sem
@@ -619,11 +643,14 @@ def main(modo_teste: bool = False):
         # o que já estava desenhado no rascunho. Agora falha explícito
         # (status erro + e-mail de alerta) em vez de mascarar o
         # esquecimento com uma duplicidade silenciosa.
-        if not rotas_hoje:
+        # 05/10 (Hugo): com rascunho ainda aberto, os pedidos vão pra ele
+        # (bloco dos órfãos, abaixo) -- só falha se não há nem rota
+        # enviada nem rascunho.
+        if not rotas_hoje and not tem_rascunho_aberto:
             raise RuntimeError(
-                f"Nenhuma rota de hoje ('{prefixo_hoje}*') encontrada na VUUPT -- rascunho de "
-                f"{data_alvo_br} não foi confirmado em /planejamento. {len(novos)} pedido(s) novo(s) "
-                f"ficaram sem alocar; confirme o rascunho e rode o incremento de novo."
+                f"Nenhuma rota de hoje ('{prefixo_hoje}*') na VUUPT nem rascunho aberto de "
+                f"{data_alvo_br} em /planejamento. {len(novos)} pedido(s) novo(s) "
+                f"ficaram sem alocar; gere ou confirme o rascunho e rode o incremento de novo."
             )
 
         # TRAVA DE SEGURANÇA (06/08, pedido do Hugo -- crítico): motorista
@@ -892,8 +919,26 @@ def main(modo_teste: bool = False):
                 # recolhe no rascunho do dia seguinte.
                 orfaos.append(pedido)
 
+        # Sobra vai pros rascunhos ainda não confirmados (Hugo, 05/10):
+        # mesma lógica do botão "Incrementar" do pool -- rascunho mais
+        # próximo que comporte, com as mesmas travas.
+        alocados_rascunho = 0
+        if orfaos and tem_rascunho_aberto:
+            from planejamento_rotas import incrementar_rascunhos_com_selecionados
+            from mapa_util import carregar_remetentes_por_sender_id
+            remetentes_por_id = carregar_remetentes_por_sender_id()
+            try:
+                res = incrementar_rascunhos_com_selecionados(
+                    data_alvo, [rascunhos_rota._parada_de_servico(p, remetentes_por_id) for p in orfaos],
+                    modo_teste=modo_teste)
+                alocados_rascunho = len(res["alocados"])
+                codigos_orfaos = set(res["orfaos"])
+                orfaos = [p for p in orfaos if p.get("code", "") in codigos_orfaos]
+            except Exception as e:
+                logger.error(f"Falha ao encaixar pedidos nos rascunhos (ficam not_assigned): {e}")
+
         if orfaos:
-            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente -- "
+            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente nem rascunho -- "
                        f"ficam not_assigned pro rascunho do dia seguinte: "
                        f"{[p.get('code') for p in orfaos]}")
 
@@ -938,7 +983,8 @@ def main(modo_teste: bool = False):
         prefixo_teste = "[Teste] " if modo_teste else ""
         resumo_etapas["Incremento de rotas"] = {
             "status": "ok",
-            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente"
+            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente, "
+                      f"{alocados_rascunho} em rascunho"
                       + (f", {len(orfaos)} pedido(s) sem rota com espaço/compatibilidade hoje "
                          f"(ficam pro rascunho do dia seguinte)." if orfaos else "."),
         }

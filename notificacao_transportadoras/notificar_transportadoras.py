@@ -323,7 +323,7 @@ def main(modo_teste: bool, data_str: str) -> int:
         # usuário (importadores :35/:45, documentos incremental, portal). Com
         # a trava, eles esperam a vez -- e este agente espera se alguém já
         # estiver no meio de uma execução.
-        if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=600, esperar_segundos=1200):
+        if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=600, esperar_segundos=1200, alternativa=True):
             # Desiste em vez de atropelar: o login derrubaria a sessão de quem
             # está usando (401 em massa no importador/painel). O e-mail de
             # execução avisa e a próxima rodada tenta de novo (fingerprint

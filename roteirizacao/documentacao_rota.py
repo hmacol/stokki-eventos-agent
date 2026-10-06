@@ -322,7 +322,7 @@ def _buscar_documentos_stokki(codigos: set[str]) -> bool:
     from stokki import sessao_uso
 
     if not sessao_uso.adquirir(DONO_TRAVA_STOKKI, ttl_segundos=TTL_TRAVA_STOKKI_SEGUNDOS,
-                               esperar_segundos=ESPERA_STOKKI_SEGUNDOS):
+                               esperar_segundos=ESPERA_STOKKI_SEGUNDOS, conta="provider"):
         logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
                        f"{ESPERA_STOKKI_SEGUNDOS // 60} min -- etapa de documentos pulada pra "
                        f"{len(codigos)} pedido(s) sem NF: {sorted(codigos)}. O PDF sai com o que já existe.")

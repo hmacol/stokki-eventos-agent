@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sequencia_tarde.sh -- equivalente ao rodar_sequencial.ps1, pra rodar via
-# systemd timer na VPS (StokkiEventos_SequenciaTarde, 18:00 local ->
+# systemd timer na VPS (StokkiEventos_SequenciaTarde, 16:00 desde 05/10 ->
 # stokki-eventos-sequencia-tarde.timer na VPS). Cada passo so comeca depois
 # que o anterior termina de verdade (set -e -- para a sequencia inteira se
 # um passo falhar, mesmo comportamento do -Wait do PowerShell original).

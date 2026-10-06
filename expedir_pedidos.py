@@ -130,7 +130,6 @@ MAX_REENTREGAS_AUTO = 2
 # Trava cooperativa da sessão Stokki (stokki/sessao_uso.py) em volta do
 # Playwright da expedição.
 DONO_TRAVA_STOKKI = "expedicao"
-ESPERA_TRAVA_STOKKI_S = 10 * 60
 TTL_TRAVA_STOKKI_S = 15 * 60
 
 # O e-mail de "dia sem insucesso" só sai nas execuções finais do dia
@@ -1510,15 +1509,12 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     # sessão da Stokki (28/09: com o pipeline de hora em hora, o login da
     # expedição derrubava a sessão dele e vice-versa) -- se continuar
     # ocupada, fica pra próxima rodada (30 min).
+    # 05/10 (Hugo): a trava é por conta -- a expedição entra pela conta
+    # provider -- e é uma FILA: espera a vez sem limite, por ordem de
+    # chegada (o systemd não dispara outra rodada enquanto esta espera).
     from stokki import sessao_uso
-    ocupante = sessao_uso.aguardar_vez_para_login(ESPERA_TRAVA_STOKKI_S)
-    if ocupante:
-        logger.warning(f"Stokki em uso por '{ocupante}' -- expedicao de {len(validados)} pedido(s) "
-                       f"fica pra proxima rodada.")
-        return
-    # Sem a trava (ex.: rodando pelo painel, que já conta como "em uso")
-    # segue como antes: o login acima já esperou quem segurava a linha.
-    tem_trava = sessao_uso.adquirir(DONO_TRAVA_STOKKI, ttl_segundos=TTL_TRAVA_STOKKI_S)
+    tem_trava = sessao_uso.adquirir(DONO_TRAVA_STOKKI, ttl_segundos=TTL_TRAVA_STOKKI_S,
+                                    esperar_segundos=None, conta="provider")
     try:
         pw, browser, page = _setup_playwright(config)
     except Exception:
