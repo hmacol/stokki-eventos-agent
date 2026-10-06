@@ -122,5 +122,38 @@ class TestModoCompleto(_Base):
         self.assertIn("ENVIADO", m["contadores"])
 
 
+class TestErroImap(unittest.TestCase):
+    def test_erro_imap_do_inbox_vira_erro_no_resumo_geral(self):
+        import email_documentos
+
+        def _busca_com_erro(config, modo_teste=False):
+            email_documentos.ULTIMO_ERRO_IMAP["inbox"] = "timeout"
+            return []
+
+        anterior = email_documentos.ULTIMO_ERRO_IMAP["inbox"]
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(pdoc, "_carregar_config", return_value={}))
+                stack.enter_context(patch.object(pdoc, "VuuptClient"))
+                stack.enter_context(patch.object(pdoc, "IndexadorNF"))
+                stack.enter_context(patch.object(pdoc, "_backfill_nf_danfes_locais"))
+                stack.enter_context(patch.object(pdoc, "_backfill_cobranca_nfs"))
+                stack.enter_context(patch.object(pdoc, "buscar_pdfs_por_email", side_effect=_busca_com_erro))
+                stack.enter_context(patch.object(pdoc, "_etapas_email_embarcadores"))
+                stack.enter_context(patch.object(
+                    pdoc, "retentar_revisao_manual",
+                    return_value={"resolvidos": 0, "sem_arquivo": 0, "ainda_pendente": 0}))
+                notificar = stack.enter_context(patch.object(pdoc, "notificar_execucao"))
+                stack.enter_context(patch("selecionar_pedidos.descobrir_pedidos",
+                                          return_value=([], set(), set())))
+                pdoc.main()
+        finally:
+            email_documentos.ULTIMO_ERRO_IMAP["inbox"] = anterior
+        resumo = notificar.call_args.args[0]
+        self.assertEqual(resumo["Documentos (e-mail)"]["status"], "erro")
+        self.assertIn("timeout", resumo["Documentos (e-mail)"]["detalhe"])
+        self.assertEqual(resumo["Resumo geral"]["status"], "erro")
+
+
 if __name__ == "__main__":
     unittest.main()

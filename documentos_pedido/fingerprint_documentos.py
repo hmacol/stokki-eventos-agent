@@ -106,6 +106,8 @@ def marcar_processado(hash_conteudo: str, origem: str, nome_arquivo: str, tipo: 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash_conteudo) DO UPDATE SET
             status = excluded.status, motivo = excluded.motivo,
+            tipo = COALESCE(excluded.tipo, tipo),
+            codigo_pedido = COALESCE(excluded.codigo_pedido, codigo_pedido),
             gcs_path = excluded.gcs_path, processado_em = excluded.processado_em,
             numero_nf = COALESCE(excluded.numero_nf, numero_nf),
             numero_parcela = COALESCE(excluded.numero_parcela, numero_parcela),
@@ -156,7 +158,7 @@ def atualizar_nf_pedido(codigo_pedido: str, numero_nf: str, cnpj_contraparte: st
     conn = _conectar()
     conn.execute(
         "UPDATE documentos_processados SET numero_nf = ?, cnpj_contraparte = ? "
-        "WHERE codigo_pedido = ? AND tipo = 'Nota Fiscal' AND numero_nf IS NULL",
+        "WHERE codigo_pedido = ? AND tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND numero_nf IS NULL",
         (numero_nf, cnpj_contraparte, codigo_pedido),
     )
     conn.commit()
@@ -179,20 +181,35 @@ def ja_enviado_para_pedido(codigo_pedido: str, tipo: str) -> bool:
     return row is not None
 
 
-def ja_em_revisao(codigo_pedido: str, tipo: str | None, numero_nf: str | None, motivo: str) -> bool:
-    """True se a MESMA revisão (pedido + tipo + NF + motivo) já está
-    registrada. A DANFE é regerada a cada rodada com hash novo -- sem
-    isso, um XML errado na Stokki (PS-37626) virava uma linha nova por
-    rodada (166 em 6 semanas, até 05/10)."""
+def ja_em_revisao(codigo_pedido: str, tipo: str | None, numero_nf: str | None, motivo: str,
+                  nome_arquivo: str) -> bool:
+    """True se a MESMA revisão (pedido + tipo + NF + motivo + nome do
+    arquivo) já está registrada. A DANFE é regerada a cada rodada com
+    hash novo -- sem isso, um XML errado na Stokki (PS-37626) virava uma
+    linha nova por rodada (166 em 6 semanas, até 05/10); a DANFE da
+    Stokki tem sempre o mesmo nome ({PS}_DANFE.pdf), então continua
+    deduplicada. O nome entra na chave porque parcelas 1..N do mesmo
+    boleto (BOLETOS_1.pdf, BOLETOS_2.pdf) têm a mesma NF/motivo/pedido e
+    são documentos distintos -- sem ele só a primeira era registrada."""
     conn = _conectar()
     row = conn.execute(
         "SELECT 1 FROM documentos_processados WHERE status = 'REVISAO_MANUAL' AND codigo_pedido = ? "
         "AND COALESCE(tipo, '') = COALESCE(?, '') AND COALESCE(numero_nf, '') = COALESCE(?, '') "
-        "AND motivo = ?",
-        (codigo_pedido, tipo, numero_nf, motivo),
+        "AND motivo = ? AND nome_arquivo = ?",
+        (codigo_pedido, tipo, numero_nf, motivo, nome_arquivo),
     ).fetchone()
     conn.close()
     return row is not None
+
+
+def marcar_substituido(hash_conteudo: str) -> None:
+    """Revisão cujo arquivo em disco foi sobrescrito por uma versão nova que
+    acabou ENVIADA (DANFE regerada): sai da fila de revisão (05/10)."""
+    conn = _conectar()
+    conn.execute("UPDATE documentos_processados SET status = 'SUBSTITUIDO' "
+                 "WHERE hash_conteudo = ? AND status = 'REVISAO_MANUAL'", (hash_conteudo,))
+    conn.commit()
+    conn.close()
 
 
 def pedidos_com_documento_enviado(tipos: tuple[str, ...] = ("Nota Fiscal", "Pedido de Venda")) -> set[str]:

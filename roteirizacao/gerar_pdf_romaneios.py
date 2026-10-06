@@ -38,7 +38,8 @@ os documentos):
      critério da notificação de transportadoras).
 
 Pendências (sem NF, sem boleto, arquivo ilegível) aparecem como X
-vermelho na capa e listadas no _resumo.txt + notificação.
+vermelho na capa e listadas no _resumo.txt + notificação. "Sem boleto"
+só quando o boleto é esperado (regras_documentos.boleto_esperado).
 
 Idempotente: regerar a mesma data sobrescreve tudo daquela pasta.
 

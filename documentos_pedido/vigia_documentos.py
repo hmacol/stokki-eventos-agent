@@ -24,7 +24,7 @@ import re
 import sqlite3
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -54,12 +54,14 @@ def _quando(texto: str) -> datetime:
 
 def checar_rodadas(linhas_log: list[str], agora: datetime) -> dict:
     """Rodadas reais das últimas 24h: pelo menos uma, nenhuma com ERRO,
-    nenhuma falha geral/IMAP. Rodada [MODO TESTE] não conta."""
+    nenhuma falha geral/IMAP. Rodada [MODO TESTE] ou [ESCOPADO] (só a
+    Stokki de uma rota, sem e-mail) não conta."""
     limite = agora - timedelta(hours=JANELA_HORAS)
     reais, com_erro, graves = 0, 0, []
     for linha in linhas_log:
         m = _RE_FIM_RODADA.match(linha)
-        if m and _quando(m.group(1)) >= limite and "[MODO TESTE]" not in linha:
+        if (m and _quando(m.group(1)) >= limite
+                and "[MODO TESTE]" not in linha and "[ESCOPADO]" not in linha):
             reais += 1
             m_erro = _RE_CONTADOR_ERRO.search(m.group(2))
             if m_erro and int(m_erro.group(1)) > 0:
@@ -149,13 +151,14 @@ def main(data_iso: str | None = None, modo_teste: bool = False, notificar: bool 
     resumo: dict = {}
 
     try:
-        linhas = LOG_DOCUMENTOS.read_text(encoding="utf-8", errors="ignore").splitlines()[-20000:]
+        with open(LOG_DOCUMENTOS, encoding="utf-8", errors="ignore") as f:
+            linhas = [l.rstrip("\r\n") for l in deque(f, maxlen=20000)]
     except OSError as e:
         linhas = []
         resumo["Log do processar_documentos"] = {"status": "erro", "detalhe": f"não deu pra ler: {e}"}
     resumo["Rodadas do fluxo"] = checar_rodadas(linhas, agora)
 
-    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
     try:
         servicos = servicos_do_dia(con, data_iso)
         resumo["Rotas do dia"] = {"status": "ok", "detalhe": f"{len(servicos)} entrega(s) em {data_iso}"}

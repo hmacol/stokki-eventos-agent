@@ -42,9 +42,45 @@ class Fingerprint(_BancoTemp):
     def test_ja_em_revisao(self):
         fp.marcar_processado("h1", "stokki", "PS-1_DANFE.pdf", "Nota Fiscal", "PS-1", "REVISAO_MANUAL",
                              motivo="XML errado", numero_nf="24944")
-        self.assertTrue(fp.ja_em_revisao("PS-1", "Nota Fiscal", "24944", "XML errado"))
-        self.assertFalse(fp.ja_em_revisao("PS-1", "Nota Fiscal", "24945", "XML errado"))
-        self.assertFalse(fp.ja_em_revisao("PS-9", "Nota Fiscal", "24944", "XML errado"))
+        self.assertTrue(fp.ja_em_revisao("PS-1", "Nota Fiscal", "24944", "XML errado", "PS-1_DANFE.pdf"))
+        self.assertFalse(fp.ja_em_revisao("PS-1", "Nota Fiscal", "24945", "XML errado", "PS-1_DANFE.pdf"))
+        self.assertFalse(fp.ja_em_revisao("PS-9", "Nota Fiscal", "24944", "XML errado", "PS-1_DANFE.pdf"))
+
+    def test_ja_em_revisao_arquivo_diferente_nao_deduplica(self):
+        # parcelas 1..N do mesmo boleto (mesma NF/motivo/pedido) são arquivos distintos
+        fp.marcar_processado("h1", "email", "BOLETOS_1.pdf", "Boleto", "PS-1", "REVISAO_MANUAL",
+                             motivo="Falha ao enviar pro GCS: 403", numero_nf="24944")
+        self.assertTrue(fp.ja_em_revisao("PS-1", "Boleto", "24944", "Falha ao enviar pro GCS: 403",
+                                         "BOLETOS_1.pdf"))
+        self.assertFalse(fp.ja_em_revisao("PS-1", "Boleto", "24944", "Falha ao enviar pro GCS: 403",
+                                          "BOLETOS_2.pdf"))
+
+    def test_upsert_revisao_resolvida_preenche_tipo_e_codigo(self):
+        fp.marcar_processado("h1", "email", "x.pdf", None, None, "REVISAO_MANUAL", motivo="Erro inesperado")
+        fp.marcar_processado("h1", "email", "x.pdf", "Nota Fiscal", "PS-12345", "ENVIADO", gcs_path="gs://x")
+        con = fp._conectar()
+        row = con.execute("select tipo, codigo_pedido, status from documentos_processados").fetchone()
+        con.close()
+        self.assertEqual(tuple(row), ("Nota Fiscal", "PS-12345", "ENVIADO"))
+
+    def test_marcar_substituido_so_mexe_em_revisao(self):
+        fp.marcar_processado("h1", "stokki", "a.pdf", "Nota Fiscal", "PS-1", "REVISAO_MANUAL", motivo="m")
+        fp.marcar_processado("h2", "stokki", "b.pdf", "Nota Fiscal", "PS-2", "ENVIADO")
+        fp.marcar_substituido("h1")
+        fp.marcar_substituido("h2")
+        con = fp._conectar()
+        st = {r[0]: r[1] for r in con.execute("select hash_conteudo, status from documentos_processados")}
+        con.close()
+        self.assertEqual(st, {"h1": "SUBSTITUIDO", "h2": "ENVIADO"})
+
+    def test_atualizar_nf_pedido_ignora_revisao(self):
+        fp.marcar_processado("h1", "stokki", "a.pdf", "Nota Fiscal", "PS-1", "REVISAO_MANUAL", motivo="m")
+        fp.marcar_processado("h2", "stokki", "b.pdf", "Nota Fiscal", "PS-1", "ENVIADO")
+        fp.atualizar_nf_pedido("PS-1", "99", None)
+        con = fp._conectar()
+        nf = {r[0]: r[1] for r in con.execute("select hash_conteudo, numero_nf from documentos_processados")}
+        con.close()
+        self.assertEqual(nf, {"h1": None, "h2": "99"})
 
     def test_coluna_cobranca(self):
         fp.marcar_processado("h1", "stokki", "PS-1_DANFE.pdf", "Nota Fiscal", "PS-1", "ENVIADO",
@@ -97,6 +133,31 @@ class ProcessarUmDocumento(unittest.TestCase):
         self.assertEqual(status, "ERRO")
         self.assertEqual(marcar.call_args.args[5], "REVISAO_MANUAL")
         self.assertIn("vuupt fora", marcar.call_args.kwargs["motivo"])
+
+
+class RetentarRevisao(unittest.TestCase):
+    def _rodar(self, hash_disco, status="ENVIADO", modo_teste=False):
+        row = {"nome_arquivo": "PS-1_DANFE.pdf", "origem": "stokki", "tipo": "Nota Fiscal",
+               "hash_conteudo": "hAntigo"}
+        with patch.object(pdoc, "listar_pendentes_revisao", return_value=[row]), \
+             patch.object(pdoc, "resolver_arquivo_local", return_value=Path("PS-1_DANFE.pdf")), \
+             patch.object(pdoc, "processar_um_documento", return_value=status), \
+             patch.object(pdoc, "calcular_hash", return_value=hash_disco), \
+             patch.object(pdoc, "marcar_substituido") as sub:
+            pdoc.retentar_revisao_manual(MagicMock(), {}, modo_teste, MagicMock())
+        return sub
+
+    def test_hash_diferente_marca_antiga_como_substituida(self):
+        self._rodar("hNovo").assert_called_once_with("hAntigo")
+
+    def test_hash_igual_nao_marca(self):
+        self._rodar("hAntigo").assert_not_called()
+
+    def test_nao_resolvido_nao_marca(self):
+        self._rodar("hNovo", status="REVISAO_MANUAL").assert_not_called()
+
+    def test_modo_teste_nao_marca(self):
+        self._rodar("hNovo", modo_teste=True).assert_not_called()
 
 
 if __name__ == "__main__":

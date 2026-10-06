@@ -41,6 +41,11 @@ class Rodadas(unittest.TestCase):
         ]
         self.assertEqual(vd.checar_rodadas(linhas, AGORA)["status"], "erro")
 
+    def test_so_rodada_escopada_e_erro(self):
+        linhas = ["2026-10-05 20:27:20,2 [INFO] processar_documentos - [ESCOPADO] Processamento "
+                  "de documentos finalizado em 31.2s. Contadores: {'ERRO': 0}"]
+        self.assertEqual(vd.checar_rodadas(linhas, AGORA)["status"], "erro")
+
     def test_falha_imap_e_erro(self):
         linhas = [
             "2026-10-05 22:31:10,1 [INFO] processar_documentos - Processamento de documentos "

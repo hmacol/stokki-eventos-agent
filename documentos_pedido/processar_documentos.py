@@ -83,7 +83,7 @@ from regras_documentos import cobranca_da_danfe
 from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
                                     pedidos_nf_pendentes, atualizar_nf_pedido,
                                     listar_pendentes_revisao, pedidos_com_documento_enviado,
-                                    ja_em_revisao)
+                                    ja_em_revisao, marcar_substituido)
 import email_documentos
 from email_documentos import buscar_pdfs_por_email
 from localizar_arquivos import resolver_arquivo_local
@@ -189,7 +189,7 @@ def _registrar_revisao(hash_conteudo: str, origem: str, nome_arquivo: str, tipo:
     pedido (ver fingerprint_documentos.ja_em_revisao)."""
     if modo_teste:
         return
-    if codigo_pedido and ja_em_revisao(codigo_pedido, tipo, extras.get("numero_nf"), motivo):
+    if codigo_pedido and ja_em_revisao(codigo_pedido, tipo, extras.get("numero_nf"), motivo, nome_arquivo):
         logger.info(f"  {nome_arquivo}: mesma revisão já registrada pra {codigo_pedido} -- não duplica.")
         return
     marcar_processado(hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido,
@@ -412,6 +412,10 @@ def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf:
                                         indexador_nf=indexador_nf, ignorar_ja_processado=True)
         if status == "ENVIADO":
             contadores["resolvidos"] += 1
+            # DANFE regerada: o arquivo em disco foi sobrescrito e a linha
+            # ENVIADO nova tem outro hash -- fecha a revisão antiga.
+            if not modo_teste and calcular_hash(caminho) != row["hash_conteudo"]:
+                marcar_substituido(row["hash_conteudo"])
             logger.info(f"  [retentativa] {row['nome_arquivo']} ({row['tipo']}): revisão manual resolvida.")
         else:
             contadores["ainda_pendente"] += 1
