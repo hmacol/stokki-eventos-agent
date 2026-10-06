@@ -164,7 +164,17 @@ def _extrair_id(codigo_ps: str) -> str:
 
 
 def _credenciais_provider(config: dict) -> tuple[str, str]:
-    """Mesmo padrão de expedir_pedidos.py::_credenciais_provider."""
+    """Retorna (usuario, senha) para login na area /provider/ do Stokki.
+    Chamada logo antes de cada login: espera a vez na trava da conta
+    provider: entra na fila e fica com ela até o processo terminar (05/10,
+    stokki/sessao_uso.vez_da_provider_para_login). Sem a vez em 2h,
+    RuntimeError -- desiste em vez de derrubar a expedição."""
+    import sqlite3
+    from stokki import sessao_uso
+    try:
+        sessao_uso.vez_da_provider_para_login()
+    except sqlite3.Error as e:
+        logger.warning(f"Fila da Stokki indisponivel ({e}) -- seguindo com o login.")
     provider = config.get("stokki", {}).get("provider", {})
     usuario = provider.get("usuario") or config.get("stokki", {}).get("usuario", "")
     senha = provider.get("senha") or config.get("stokki", {}).get("senha", "")

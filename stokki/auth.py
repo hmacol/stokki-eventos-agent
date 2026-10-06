@@ -35,17 +35,24 @@ BASE_URL = "https://freshlog.stokki.com.br"
 URL_LOGIN = f"{BASE_URL}/pt-br/administrator/login"
 
 # Arquivo onde os cookies são persistidos entre execuções.
-# Fica ao lado deste arquivo, dentro de stokki/.
+# Fica ao lado deste arquivo, dentro de stokki/. Um por conta (05/10,
+# stokki/contas.py): o da principal manteve o nome antigo.
 COOKIES_PATH = Path(__file__).parent / "sessao_stokki.json"
+COOKIES_PATH_RESERVA = Path(__file__).parent / "sessao_stokki_reserva.json"
+
+
+def caminho_cookies(conta: str) -> Path:
+    return COOKIES_PATH_RESERVA if conta == "reserva" else COOKIES_PATH
 
 # Quantas vezes tentar renovar a sessão antes de desistir.
 MAX_TENTATIVAS_RENOVACAO = 2
 
-# Quanto um login novo espera a trava cooperativa (stokki/sessao_uso.py)
-# ficar livre antes de seguir mesmo assim. Só vale na thread principal
-# (jobs agendados); dentro do painel web (threads do waitress) não espera:
+# Fila da Stokki (stokki/sessao_uso.py, 05/10): na thread principal (jobs
+# agendados, scripts que o painel dispara) a sessão entra na fila da conta
+# e espera a vez até sessao_uso.ESPERA_MAXIMA_SEGUNDOS (2h) -- sem a vez,
+# desiste (SessaoExpiradaError) em vez de logar por cima de quem está
+# usando. Dentro do painel web (threads do waitress) não entra na fila:
 # falha na hora com "Stokki em uso", que as telas já tratam.
-ESPERA_TRAVA_LOGIN_SEGUNDOS = 15 * 60
 
 
 class SessaoExpiradaError(Exception):
@@ -58,14 +65,20 @@ class StokkiSession:
     Transparente para o chamador: use .get() / .post() normalmente.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, conta: str | None = None):
         """
         config: dicionário lido do config.yaml. Espera as chaves:
             stokki.usuario  — e-mail de login
             stokki.senha    — senha
+            (stokki.reserva.usuario / senha -- 2ª conta admin, opcional)
+        conta: "principal" ou "reserva" (a provider não entra na área
+        admin). Sem conta: na thread principal, entra na fila da Stokki
+        (principal, ou a reserva se ela estiver livre antes) e fica com a
+        conta até o processo terminar; fora dela, a conta da trava que o
+        processo segura ou a principal (ver _aguardar_trava_stokki).
         """
-        self._usuario = config.get("stokki", {}).get("usuario", "")
-        self._senha = config.get("stokki", {}).get("senha", "")
+        self._config = config
+        self._usar_conta(conta or self._entrar_na_fila())
         if not self._usuario or not self._senha:
             raise ValueError(
                 "Credenciais do Stokki não encontradas em config.yaml "
@@ -91,6 +104,34 @@ class StokkiSession:
         return self._executar("POST", url, **kwargs)
 
     # ── Internos ───────────────────────────────────────────────────────────────
+
+    def _entrar_na_fila(self) -> str:
+        """Conta com que esta sessão vai trabalhar. Thread principal: espera
+        a vez na fila (até 2h) e fica com a conta até o processo terminar.
+        Problema na própria fila (banco sem permissão, lock do SQLite)
+        nunca impede a sessão -- segue pela principal, como antes."""
+        try:
+            from stokki import sessao_uso
+            if threading.current_thread() is not threading.main_thread():
+                return sessao_uso.conta_do_processo() or "principal"
+            conta = sessao_uso.garantir_vez("principal", sessao_uso.ESPERA_MAXIMA_SEGUNDOS)
+        except SessaoExpiradaError:
+            raise
+        except Exception as e:
+            logger.warning(f"Fila da Stokki indisponível ({e}) -- seguindo pela conta principal.")
+            return "principal"
+        if not conta:
+            raise SessaoExpiradaError(
+                f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
+                f"{sessao_uso.ESPERA_MAXIMA_SEGUNDOS // 3600}h -- desisti pra não derrubar a sessão de quem está usando."
+            )
+        return conta
+
+    def _usar_conta(self, conta: str):
+        from stokki.contas import credenciais
+        self._conta = conta
+        self._usuario, self._senha = credenciais(self._config, conta)
+        self._cookies_path = caminho_cookies(conta)
 
     def _executar(self, metodo: str, url: str, **kwargs) -> requests.Response:
         """Executa a requisição, renovando a sessão automaticamente se necessário."""
@@ -129,7 +170,7 @@ class StokkiSession:
 
     def _carregar_ou_renovar_sessao(self):
         """Tenta carregar cookies salvos; faz login se não existirem ou estiverem expirados."""
-        if COOKIES_PATH.exists():
+        if self._cookies_path.exists():
             try:
                 self._carregar_cookies()
                 # Verifica rapidamente se a sessão ainda é válida
@@ -137,7 +178,7 @@ class StokkiSession:
                     f"{BASE_URL}/pt-br/administrator", timeout=15, allow_redirects=False
                 )
                 if not self._sessao_invalida(resp):
-                    logger.info("Sessão carregada dos cookies salvos.")
+                    logger.info(f"Sessão carregada dos cookies salvos (conta {self._conta}).")
                     return
                 logger.info("Cookies salvos expirados — fazendo novo login.")
             except Exception as e:
@@ -147,7 +188,7 @@ class StokkiSession:
 
     def _carregar_cookies(self):
         """Carrega cookies e CSRF token do arquivo JSON para a requests.Session."""
-        with open(COOKIES_PATH, encoding="utf-8") as f:
+        with open(self._cookies_path, encoding="utf-8") as f:
             dados = json.load(f)
 
         # Suporta formato novo {cookies, csrf_token} e antigo [lista]
@@ -170,7 +211,7 @@ class StokkiSession:
     def _salvar_cookies(self, playwright_cookies: list):
         """Persiste os cookies e CSRF token para uso em chamadas requests futuras."""
         dados = {"cookies": playwright_cookies, "csrf_token": self._csrf_token}
-        COOKIES_PATH.write_text(
+        self._cookies_path.write_text(
             json.dumps(dados, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
@@ -180,32 +221,32 @@ class StokkiSession:
             # num host compartilhado. Sem efeito real no Windows (ACLs, não
             # bits POSIX), mas inofensivo lá e efetivo se isso um dia rodar
             # em Linux/Mac.
-            os.chmod(COOKIES_PATH, 0o600)
+            os.chmod(self._cookies_path, 0o600)
         except OSError:
             pass
-        logger.info(f"Cookies salvos em {COOKIES_PATH} ({len(playwright_cookies)} cookies).")
+        logger.info(f"Cookies salvos em {self._cookies_path} ({len(playwright_cookies)} cookies).")
 
     def _aguardar_trava_stokki(self):
         """Um login novo derruba a sessão de quem já está logado com o mesmo
-        usuário (importador por e-mail, máscara do portal...). Se outro
-        processo segura a trava, espera a vez. Problema na própria trava
-        (banco sem permissão, lock do SQLite) nunca impede o login."""
+        usuário (importador por e-mail, máscara do portal...). Na thread
+        principal a sessão já pegou a vez na fila ao ser criada (o processo
+        segura a conta) -- nada a esperar. Em thread do painel: usa a conta
+        livre (principal ou reserva) ou falha na hora. Problema na própria
+        trava (banco sem permissão, lock do SQLite) nunca impede o login."""
+        if threading.current_thread() is threading.main_thread():
+            return
         try:
             from stokki import sessao_uso
-            em_thread_principal = threading.current_thread() is threading.main_thread()
-            espera = ESPERA_TRAVA_LOGIN_SEGUNDOS if em_thread_principal else 0
-            ocupante = sessao_uso.aguardar_vez_para_login(espera)
+            conta, ocupante = sessao_uso.escolher_conta_login(self._conta, 0)
         except Exception as e:
             logger.warning(f"Trava de sessão da Stokki indisponível ({e}) -- seguindo com o login.")
             return
-        if not ocupante:
-            return
-        if not em_thread_principal:
+        if conta != self._conta:
+            self._usar_conta(conta)
+        if ocupante:
             raise SessaoExpiradaError(
                 f"Stokki em uso por '{ocupante}' -- login adiado pra não derrubar a sessão dele."
             )
-        logger.warning(f"Stokki ainda em uso por '{ocupante}' após {ESPERA_TRAVA_LOGIN_SEGUNDOS // 60} min "
-                       f"-- seguindo com o login mesmo assim.")
 
     def _fazer_login_playwright(self):
         """
@@ -214,7 +255,7 @@ class StokkiSession:
         e o adiciona como header padrão da session (exigido pelo Laravel).
         """
         self._aguardar_trava_stokki()
-        logger.info("Fazendo login no Stokki via Playwright...")
+        logger.info(f"Fazendo login no Stokki via Playwright (conta {self._conta})...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:

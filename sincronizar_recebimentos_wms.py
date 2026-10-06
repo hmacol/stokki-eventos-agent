@@ -69,7 +69,7 @@ logger = logging.getLogger("sincronizar_recebimentos_wms")
 # faz sentido esperar mais que isso -- so perderia a proxima janela tambem.
 DONO_TRAVA = "wms-recebimentos"
 TRAVA_TTL_SEGUNDOS = 600
-TRAVA_ESPERA_SEGUNDOS = 120
+TRAVA_ESPERA_SEGUNDOS = None  # 05/10 (Hugo): fila, espera a vez sem limite
 
 _PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
 
@@ -221,7 +221,7 @@ def main(argv=None) -> int:
     # tocar em nada. Vale tambem pro --modo-teste (ele le da Stokki de
     # verdade, so pula a escrita).
     if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
-                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS):
+                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS, alternativa=True):
         # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
         # falha (o .service tem OnFailure=stokki-alerta-falha@%n, que
         # alertava a cada rodada). Mesmo precedente de

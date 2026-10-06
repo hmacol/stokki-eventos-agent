@@ -22,6 +22,10 @@ from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
 
+# 05/10: cada operação da Estação entra na fila da conta provider e
+# libera ao terminar (stokki/sessao_uso.na_vez_da_provider).
+from stokki.sessao_uso import na_vez_da_provider  # noqa: E402
+
 BASE_URL     = "https://freshlog.stokki.com.br"
 URL_PRINTING = f"{BASE_URL}/pt-br/provider/operation/order/printing"
 URL_ORDER    = f"{BASE_URL}/pt-br/provider/operation/order/printing/order"
@@ -88,6 +92,7 @@ def _preencher_form_login(page, usuario, senha, tentativas=3, timeout_ms=15_000)
     raise ultimo_erro
 
 
+@na_vez_da_provider
 def listar_pedidos_em_espera(config: dict) -> list:
     """
     Retorna a lista de pedidos em espera na Estacao de Impressao.
@@ -139,6 +144,7 @@ def listar_pedidos_em_espera(config: dict) -> list:
     return pedidos
 
 
+@na_vez_da_provider
 def buscar_pedido_por_nf(config: dict, numero_nf: str):
     """
     Busca um pedido especifico pelo numero da NF ou PO.
@@ -412,6 +418,7 @@ def _aguardar_fluxo_impressao(page, data_id: str, timeout_s: int = 60) -> bool:
     return False
 
 
+@na_vez_da_provider
 def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                                visivel: bool = False,
                                apenas_ids: set | None = None) -> dict:
