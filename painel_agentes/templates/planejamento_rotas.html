@@ -5089,7 +5089,8 @@
     const valorAtual = select.value;
     const opcoes = RASCUNHOS.filter(r => r.status === "RASCUNHO")
       .map(r => `<option value="${r.id}">${escaparHtml(r.nome)}</option>`).join("");
-    select.innerHTML = `<option value="">Mover pra...</option>${opcoes}`;
+    // "nova" (Hugo, 06/10): cria um rascunho vazio na hora e move pra ele
+    select.innerHTML = `<option value="">Mover pra...</option>${opcoes}<option value="nova">+ Nova rota</option>`;
     if (valorAtual) select.value = valorAtual;
     document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !select.value;
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
@@ -5139,8 +5140,10 @@
   }
 
   async function moverSelecionados(botao) {
-    const destinoId = Number(document.getElementById("select-destino-mover").value);
-    if (!destinoId || !SELECIONADOS_ROTA.size) return;
+    const valorDestino = document.getElementById("select-destino-mover").value;
+    const criarNova = valorDestino === "nova";
+    let destinoId = criarNova ? null : Number(valorDestino);
+    if ((!destinoId && !criarNova) || !SELECIONADOS_ROTA.size) return;
     // origem de cada item lida do DOM agora, não de um estado guardado
     // na hora do clique no checkbox -- ver comentário de SELECIONADOS_ROTA
     const itens = Array.from(SELECIONADOS_ROTA).map(serviceId => {
@@ -5151,8 +5154,15 @@
     if (!itens.length) return;
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Movendo...";
+    botao.textContent = criarNova ? "Criando rota..." : "Movendo...";
     try {
+      if (criarNova) {
+        // mesmo rascunho vazio do "+ Nova rota" da coluna; se o mover
+        // abaixo falhar, ele fica na tela (descartar pelo card)
+        const resp = await postJSON("/api/planejamento/nova-rota", { data_alvo: DATA_ALVO_ISO });
+        destinoId = resp.rascunho.id;
+        botao.textContent = "Movendo...";
+      }
       await postJSON("/api/planejamento/mover-paradas", { itens, rascunho_destino_id: destinoId });
       location.reload();
     } catch (e) {

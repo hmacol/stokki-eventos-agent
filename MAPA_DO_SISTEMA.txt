@@ -214,6 +214,7 @@
  dom 05:30                   ensaio-restauracao              ensaiar_restauracao_backup.py
  04:00                       romaneios-manha                 roteirizacao/gerar_pdf_romaneios.py --data hoje
  04:10                       notificar-transportadoras       notificacao_transportadoras/notificar_transportadoras.py
+ 06:43                       vigia-documentos                documentos_pedido/vigia_documentos.py (só lê; e-mail diário)
  07:00                       notificar-nfs-em-rota           notificar_nfs_em_rota.py --data hoje
  07:15                       verificar-entregues-nao-exp.    verificar_entregues_nao_expedidos.py
  07:25                       batimento-pedidos               python -m batimento.bater (lê Stokki/Vuupt,
@@ -779,6 +780,8 @@
                            na Stokki, classifica, separa PDFs compostos, casa
                            com o pedido e sobe ao GCS (pedidos/{PS}/{tipo}/).
    processar_documentos.py  Orquestrador (completo / --incremental / --pedidos).
+   regras_documentos.py     Boleto esperado (quadro de duplicata da DANFE + lista de fallback).
+   vigia_documentos.py      Vigia diário 06:43: rotas do dia x NF/boleto/arquivo, rodadas do log.
    classificador.py, matcher.py, *_splitter.py, boleto_parser.py,
    email_documentos.py, stokki_documentos.py, storage_gcs.py,
    fingerprint_documentos.py (tabela documentos_processados),
@@ -884,7 +887,7 @@
    pedidos_roteirizados, pedidos_area_notificada,
    pedidos_segurados, agendamentos_origem, avisos_fora_dia_fixo
                              roteirizacao/
-   documentos_processados    documentos_pedido/
+   documentos_processados    documentos_pedido/ (coluna cobranca: 1 duplicata / 0 quadro vazio / -1 sem quadro)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;

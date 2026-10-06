@@ -209,7 +209,7 @@ class TestNfsDoPedido(unittest.TestCase):
         self._patch.start()
         self.conn = banco.conectar()
         self.conn.execute("""CREATE TABLE documentos_processados (hash_conteudo TEXT PRIMARY KEY, tipo TEXT,
-                             codigo_pedido TEXT, numero_nf TEXT)""")
+                             codigo_pedido TEXT, numero_nf TEXT, status TEXT)""")
 
     def tearDown(self):
         self.conn.close()
@@ -217,7 +217,7 @@ class TestNfsDoPedido(unittest.TestCase):
         self._tmp.cleanup()
 
     def _doc(self, h, codigo, nf, tipo="Nota Fiscal"):
-        self.conn.execute("INSERT INTO documentos_processados VALUES (?, ?, ?, ?)", (h, tipo, codigo, nf))
+        self.conn.execute("INSERT INTO documentos_processados VALUES (?, ?, ?, ?, 'ENVIADO')", (h, tipo, codigo, nf))
 
     def test_nf_do_pedido_e_normalizacao(self):
         self._doc("h1", "PS-1", "000012345")
@@ -278,8 +278,8 @@ class TestApiValidacao(unittest.TestCase):
         self.cli = self.app.test_client()
         conn = banco.conectar()
         conn.execute("""CREATE TABLE documentos_processados (hash_conteudo TEXT PRIMARY KEY, tipo TEXT,
-                        codigo_pedido TEXT, numero_nf TEXT)""")
-        conn.execute("INSERT INTO documentos_processados VALUES ('h1', 'Nota Fiscal', 'PS-A', '12345')")
+                        codigo_pedido TEXT, numero_nf TEXT, status TEXT)""")
+        conn.execute("INSERT INTO documentos_processados VALUES ('h1', 'Nota Fiscal', 'PS-A', '12345', 'ENVIADO')")
         conn.commit()
         auth.criar_ou_atualizar_motorista(conn, CPF, "Motorista Teste", PIN, agent_id=AGENT, tipo_veiculo="VAN_HR")
         conn.close()

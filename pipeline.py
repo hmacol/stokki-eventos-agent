@@ -117,10 +117,13 @@ STATUSES_EM_ABERTO              = [
 # O filtro 'cliente=' da listagem usa o ID NUMÉRICO do Stokki
 # (confirmado via outbound/select — nome como texto é ignorado).
 # Formato: {id_stokki: nome_legivel}
+# Decisão do Hugo, 05/10/2026: Padrão Puro, Dourado e Quatro Estrelas
+# (Jersey Vale saiu; Padrão Puro entrou). Mesma lista de
+# documentos_pedido/selecionar_pedidos.py::EMBARCADORES_QUALQUER_STATUS.
 EMBARCADORES_IMPORTAR_ABERTOS: dict[str, str] = {
     "98": "COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA",
     "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
-    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
+    "23": "PADRAO PURO LTDA",
 }
 
 
