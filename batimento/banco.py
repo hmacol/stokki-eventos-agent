@@ -146,6 +146,14 @@ def marcar_tratado(conn: sqlite3.Connection, codigo: str, por: str, obs: str,
     conn.commit()
 
 
+def desmarcar_tratado(conn: sqlite3.Connection, codigo: str) -> bool:
+    """Desfaz a tratativa ("Desfazer" na Torre). True se havia o que limpar."""
+    cur = conn.execute("UPDATE batimento_pedidos SET tratado_em = NULL, tratado_por = NULL, tratado_obs = NULL "
+                       "WHERE codigo = ? AND tratado_em IS NOT NULL", (codigo,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def totais_da_rodada(conn: sqlite3.Connection, visto_em: str) -> dict:
     return {r["caixa"]: r["n"] for r in conn.execute(
         "SELECT caixa, COUNT(*) AS n FROM batimento_pedidos WHERE visto_em = ? GROUP BY caixa", (visto_em,))}

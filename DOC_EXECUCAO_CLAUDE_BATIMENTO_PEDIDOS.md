@@ -126,7 +126,9 @@ Feitas (04/10 e 05/10):
   quando o pedido troca de motivo) e `excecoes_torre`: na Torre entra só
   divergência **real** sem tratativa há mais de 1 dia útil (seg-sex), um
   item por pedido, e um crítico se a última rodada não fechou. As "sem
-  comprovante" ficam só na aba e no e-mail (Hugo, 05/10).
+  comprovante" ficam só na aba e no e-mail (Hugo, 05/10). "Tratar" e
+  "Desfazer" na Torre (unitário e lote) também gravam/limpam a tratativa em
+  `batimento_pedidos` (obs "[Torre] <motivo>"; Hugo, 06/10).
 
 A implementar depois:
 - O `verificar_entregues_nao_expedidos.py` vira caso particular e pode ser

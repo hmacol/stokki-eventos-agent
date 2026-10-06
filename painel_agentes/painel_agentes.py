@@ -1280,6 +1280,7 @@ def api_torre_tratar():
             body["id"], body.get("data_alvo", ""), body.get("tipo", ""),
             body.get("descricao", ""), body.get("motivo", ""),
             motorista_nome=body.get("motorista"), rota_nome=body.get("rota"),
+            por=session.get("usuario") or g.nivel_acesso,
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
@@ -1299,7 +1300,8 @@ def api_torre_tratar_lote():
         return jsonify({"erro": "nenhum item selecionado"}), 400
     if not motivo:
         return jsonify({"erro": "motivo obrigatório"}), 400
-    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo)
+    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo,
+                                                  por=session.get("usuario") or g.nivel_acesso)
     return jsonify({"ok": True, "tratadas": qtd})
 
 

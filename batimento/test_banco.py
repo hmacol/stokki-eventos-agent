@@ -88,6 +88,14 @@ class GravarRodada(unittest.TestCase):
         with self.assertRaises(ValueError):
             banco.marcar_tratado(self.conn, "PS-404", "hugo", "x")
 
+    def test_desmarcar_tratado_limpa_e_ignora_quem_nao_existe(self):
+        banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t1)
+        banco.marcar_tratado(self.conn, "PS-5", "hugo", "ok", self.t1)
+        self.assertTrue(banco.desmarcar_tratado(self.conn, "PS-5"))
+        l = self.linha("PS-5")
+        self.assertEqual((l["tratado_em"], l["tratado_por"], l["tratado_obs"]), (None, None, None))
+        self.assertFalse(banco.desmarcar_tratado(self.conn, "PS-404"))
+
     def test_troca_de_motivo_limpa_tratativa(self):
         banco.gravar_rodada(self.conn, [ped("PS-5", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t1)
         banco.marcar_tratado(self.conn, "PS-5", "hugo", "vendo com o motorista", self.t1)
