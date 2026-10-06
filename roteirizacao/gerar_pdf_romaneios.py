@@ -94,6 +94,7 @@ from avisar_motoristas_rotas import (
     buscar_rotas_do_dia,
 )
 from localizar_arquivos import resolver_arquivo_local
+from regras_documentos import boleto_esperado as _boleto_esperado
 from notificar_execucao_agente import notificar_execucao
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
@@ -731,7 +732,10 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
             draw.text((_COL_NF_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
         else:
             _marca(draw, _COL_NF_CX, meio, item["tem_nf"])
-        _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
+        if item.get("boleto_dispensado"):
+            draw.text((_COL_BOL_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
+        else:
+            _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
         y += altura_linha
 
     _rodape(img, draw)
@@ -978,6 +982,32 @@ def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], l
     return abertos, problemas
 
 
+def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedido: dict) -> dict:
+    """NF/boletos utilizáveis do pedido e o que falta -- a mesma régua da
+    capa do romaneio, reaproveitada pelo vigia de documentos (05/10).
+    "sem boleto" só quando o boleto é esperado (regras_documentos)."""
+    docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
+    nf_dispensada = sender_id in SENDERS_SEM_NF
+    if nf_dispensada:
+        nfs, problemas_nf = [], []
+    else:
+        nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
+        if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
+            nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
+    boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
+    esperado = _boleto_esperado(sender_id, [row.get("cobranca") for row, _r in nfs
+                                            if row.get("tipo") == "Nota Fiscal"])
+
+    faltas = []
+    if not nfs and not nf_dispensada:
+        faltas.append("sem nota fiscal")
+    if not boletos and esperado:
+        faltas.append("sem boleto")
+    faltas.extend(problemas_nf + problemas_bol)
+    return {"nfs": nfs, "boletos": boletos, "nf_dispensada": nf_dispensada,
+            "boleto_esperado": esperado, "faltas": faltas}
+
+
 def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
                     embarcadores: dict[int, str], fatores: dict[int, float],
                     nome_motorista: str, data_alvo: date, caminho_saida: Path,
@@ -1002,33 +1032,12 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
         sender_id = s.get("sender_id")
         embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
-        docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
-
-        nf_dispensada = sender_id in SENDERS_SEM_NF
-        if nf_dispensada:
-            # Esses embarcadores são controlados pela CANHOTEIRA, não
-            # pela NF -- mesmo que uma NF antiga esteja no banco
-            # (achado real, 20/08: NF de Padrão Puro indo emendada no
-            # romaneio de entrega), ela nunca é aberta, emendada ou
-            # contada pra eles.
-            nfs, problemas_nf = [], []
-        else:
-            nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
-            # Sem NF, mas De Tommaso costuma mandar um "Pedido de Venda"
-            # padronizado no lugar dela (pedido do Hugo, 20/08) -- conta
-            # como se fosse a própria NF daqui pra baixo (capa, volumes/
-            # peso, páginas emendadas), só o número exibido leva "PV ".
-            if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
-                nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
-        boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
-
-        faltas = []
-        if not nfs and not nf_dispensada:
-            faltas.append("sem nota fiscal")
-        if not boletos:
-            faltas.append("sem boleto")
-        faltas.extend(problemas_nf + problemas_bol)
-        pendencias.extend(f"{codigo}: {f}" for f in faltas)
+        # nf_dispensada: embarcadores da CANHOTEIRA -- NF nunca aberta,
+        # emendada ou contada (achado 20/08). Régua completa em
+        # avaliar_documentos_pedido().
+        av = avaliar_documentos_pedido(codigo, sender_id, docs_por_pedido)
+        nfs, boletos, nf_dispensada = av["nfs"], av["boletos"], av["nf_dispensada"]
+        pendencias.extend(f"{codigo}: {f}" for f in av["faltas"])
 
         numeros_nf = [_nf_norm(row.get("numero_nf")) for row, _r in nfs]
         veio_de_pedido_venda = bool(nfs) and all(
@@ -1055,6 +1064,9 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             # NF dispensada -> capa mostra "—" no lugar da marca (nfs
             # já vem sempre vazio pra esses embarcadores, ver acima).
             "nf_dispensada": nf_dispensada,
+            # boleto não esperado (NF à vista / embarcador fora da lista)
+            # -> capa mostra "—" em vez do X vermelho (05/10)
+            "boleto_dispensado": not boletos and not av["boleto_esperado"],
             "_abertos_nf": nfs, "_abertos_bol": boletos,
         })
 
