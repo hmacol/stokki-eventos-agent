@@ -379,7 +379,7 @@ def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf:
 # quanto esperar a vez (documentação de rota, portal...) e validade da
 # trava (folga sobre os 2-4 min esperados da rodada).
 DONO_TRAVA_INCREMENTAL = "documentos-incremental"
-ESPERA_TRAVA_INCREMENTAL_SEGUNDOS = 5 * 60
+ESPERA_TRAVA_INCREMENTAL_SEGUNDOS = None  # 05/10 (Hugo): fila, espera a vez sem limite
 TTL_TRAVA_INCREMENTAL_SEGUNDOS = 25 * 60
 
 
@@ -521,10 +521,10 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
             from stokki import sessao_uso
             trava_stokki = sessao_uso.adquirir(DONO_TRAVA_INCREMENTAL,
                                                ttl_segundos=TTL_TRAVA_INCREMENTAL_SEGUNDOS,
-                                               esperar_segundos=ESPERA_TRAVA_INCREMENTAL_SEGUNDOS)
+                                               esperar_segundos=ESPERA_TRAVA_INCREMENTAL_SEGUNDOS,
+                                               conta="provider")
             if not trava_stokki:
-                logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
-                               f"{ESPERA_TRAVA_INCREMENTAL_SEGUNDOS // 60} min -- etapa da Stokki pulada "
+                logger.warning(f"Stokki ocupada por '{sessao_uso.em_uso(conta='provider')}' -- etapa da Stokki pulada "
                                f"nesta rodada ({len(lista_pedidos)} pedido(s) ficam pra próxima).")
                 resumo_etapas["Documentos (Stokki)"] = {"status": "ok",
                                                         "detalhe": "Stokki ocupada -- pulada nesta rodada"}
