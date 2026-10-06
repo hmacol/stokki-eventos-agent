@@ -1335,7 +1335,15 @@ def _dt_br(valor: str | None) -> str:
 def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     d = dict(r)
     pend = [s for s in solicitacoes.get(d["id"], []) if s["status"] == "PENDENTE"]
+    cancelamento_pedido = any(s["tipo"] == "cancelar" for s in pend)
     d.setdefault("origem", ORIGEM_XML)
+    # Cancelamento solicitado (pedido ja criado na Stokki, a Fresh Log ainda
+    # vai cancelar): o portal para de cobrar agendamento e nao oferece
+    # reagendar -- a unica pendencia que fica e a do cancelamento (Hugo,
+    # 06/10, caso PS-39959: cobrou "Definir data" por 2 semanas depois do
+    # cliente pedir pra cancelar).
+    if cancelamento_pedido:
+        d["agendamento_pendente"] = 0
     d.update({
         "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
         "criado_em_br": _dt_br(d["criado_em"]),
@@ -1353,9 +1361,9 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
         "bloqueio_texto": (f"Não atendemos a região de {d.get('destinatario_municipio') or '?'}/{d.get('destinatario_uf') or '?'}."
                            if d["status"] == STATUS_AGUARDANDO_LIBERACAO else ""),
         "bloqueio_chamado_id": d.get("bloqueio_chamado_id"),
-        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO) and not any(s["tipo"] == "cancelar" for s in pend),
+        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO) and not cancelamento_pedido,
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
-        "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO),
+        "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido,
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
     })
     d.pop("xml_path", None)
