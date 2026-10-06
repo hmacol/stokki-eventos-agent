@@ -34,8 +34,13 @@ TIPOS_DOCUMENTO = [
     # venda" pode aparecer em dados adicionais de DANFE legítima.
     ("Pedido de Venda", [r"pedido\s*de\s*venda"],
      [r"p\s+e\s+d\s+i\s+d\s+o\s+d\s+e\s+v\s+e\s+n\s+d\s+a"]),
+    # "vencimento" sozinho saiu em 05/10: toda DANFE faturada tem
+    # "Venc." no quadro FATURA/DUPLICATA, e Boleto vem antes de Nota
+    # Fiscal nesta lista -- a DANFE da NUU ("NFS SP.pdf") virava boleto.
+    # Ficam só marcas que DANFE não tem.
     ("Boleto", [r"boleto", r"\bbolet[oa]\b"],
-     [r"linha digit[aá]vel", r"vencimento", r"c[oó]digo de barras", r"boleto banc[aá]rio"]),
+     [r"linha digit[aá]vel", r"c[oó]digo de barras", r"boleto banc[aá]rio",
+      r"local de pagamento", r"recibo do pagador", r"nosso n[uú]mero"]),
     ("Agendamento", [r"agendamento", r"\bagenda\b"],
      [r"data de agendamento", r"hor[aá]rio de entrega agendad", r"confirma[cç][aã]o de agendamento"]),
     ("Nota Fiscal", [r"\bnf-?e?\b", r"nota.*fiscal", r"\bdanfe\b"],
