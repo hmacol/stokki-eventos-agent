@@ -416,8 +416,14 @@
 ==============================================================================
 
  Sem API pública: login Playwright uma vez, cookies em sessao_stokki.json,
- depois requests. LOGIN NOVO DERRUBA A SESSÃO ANTERIOR (inclusive a do
- outro projeto agente_importacao_stokki). Use sempre as funções prontas.
+ depois requests. LOGIN NOVO DERRUBA A SESSÃO ANTERIOR DO MESMO USUÁRIO
+ (inclusive a do outro projeto agente_importacao_stokki). Use sempre as
+ funções prontas. Contas (contas.py, desde 05/10): principal (admin,
+ stokki.usuario), reserva (2ª admin, stokki.reserva -- opcional; entra
+ quando a principal está ocupada) e provider (stokki.provider, só área
+ /provider/: expedição, documentos, estação -- NÃO entra em /administrator).
+ Cada conta tem trava e arquivo de cookies próprios (sessao_stokki.json /
+ sessao_stokki_reserva.json).
 
  auth.py              StokkiSession(config): login, .get/.post, renova em
                       401/403. SessaoExpiradaError.
@@ -428,8 +434,17 @@
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
                       imprimir_pedidos_pendentes.
- sessao_uso.py        Trava cooperativa de uso da sessão (adquirir/liberar/
-                      aguardar_vez_para_login). Obrigatória antes de logar.
+ sessao_uso.py        Trava POR CONTA com FILA por ordem de chegada
+                      (tabelas stokki_sessao_uso + stokki_fila). adquirir
+                      (esperar_segundos=None espera sem limite;
+                      alternativa=True cai na reserva), garantir_vez (fica
+                      com a conta até o fim do processo), na_vez_da_provider
+                      (Estação), liberar. StokkiSession entra na fila sozinha
+                      na thread principal (até 2h; sem a vez, desiste sem
+                      logar por cima). Recorrentes (WMS, expedição, importação
+                      horária, documentos) esperam sem limite; sequências,
+                      portal e importador do 2º projeto, até 2h.
+ contas.py            Credenciais por conta e ordem principal -> reserva.
  fixtures/, test_*.py Parsers testados com HTML salvo (não conectar na Stokki
                       a partir da máquina local).
 

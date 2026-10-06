@@ -409,7 +409,8 @@ class TestTravaStokki(unittest.TestCase):
 
         self.assertEqual(codigo, 0)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
-                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
+                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS,
+                                          alternativa=True)
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
         liberar.assert_not_called()  # nunca adquiriu -- nao ha o que liberar
