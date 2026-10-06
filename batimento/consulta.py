@@ -14,6 +14,18 @@ from pathlib import Path
 from batimento import banco, regras
 
 RODADAS_NO_HISTORICO = 14
+HORAS_RODADA_ATRASADA = 26   # o timer roda todo dia as 07h25, inclusive fim de semana
+
+
+def atrasada(ultima: dict | None, agora: datetime) -> bool:
+    """Ultima rodada com mais de 26h = timer parado ou falhando."""
+    if not ultima:
+        return False
+    try:
+        quando = datetime.strptime(ultima["rodada_em"], banco.FMT)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return agora - quando > timedelta(hours=HORAS_RODADA_ATRASADA)
 
 
 def _proximo_dia_util(dt: datetime) -> datetime:
@@ -51,7 +63,9 @@ def _linha(row, agora: datetime) -> dict:
     l = dict(row)
     l["motivo_txt"] = regras.ROTULOS_DIVERGENCIA.get(l["rotulo"], l["rotulo"])
     l["real"] = l["rotulo"] in regras.DIVERGENCIAS_REAIS
-    l["vencida"] = vencida(l["desde"], agora)
+    # div_desde nao zera quando o pedido oscila e volta ao mesmo motivo
+    l["div_desde"] = l.get("div_desde") or l["desde"]
+    l["vencida"] = vencida(l["div_desde"], agora)
     l["tratada"] = bool(l.get("tratado_em"))
     try:
         l["evidencias"] = [e for e in json.loads(l.get("evidencias_json") or "[]") if e]
@@ -66,7 +80,8 @@ def fechamento(motivo: str = "", so_reais: bool = False, incluir_tratadas: bool 
     conn = banco.conectar(db_path)
     try:
         todas = [_linha(r, agora) for r in conn.execute(
-            "SELECT * FROM batimento_pedidos WHERE caixa = 'DIVERGENCIA' ORDER BY desde, codigo")]
+            "SELECT * FROM batimento_pedidos WHERE caixa = 'DIVERGENCIA' "
+            "ORDER BY COALESCE(div_desde, desde), codigo")]
         ultima = ultima_rodada(conn)
         rodadas = [_rodada(r) for r in conn.execute(
             "SELECT * FROM batimento_rodadas ORDER BY id DESC LIMIT ?", (RODADAS_NO_HISTORICO,))]
@@ -92,14 +107,15 @@ def fechamento(motivo: str = "", so_reais: bool = False, incluir_tratadas: bool 
              or termo in (l["transportadora"] or "").upper())
     ]
     return {"linhas": linhas, "por_motivo": por_motivo, "total_abertas": len(abertas),
-            "ultima": ultima, "rodadas": rodadas}
+            "ultima": ultima, "rodadas": rodadas, "atrasada": atrasada(ultima, agora)}
 
 
 def novidades(conn: sqlite3.Connection, rodada_em: str) -> list[dict]:
-    """Divergencias que entraram (ou trocaram de motivo) nesta rodada."""
+    """Divergencias que entraram num motivo NOVO nesta rodada. Voltar ao
+    mesmo motivo depois de oscilar nao e novidade (div_desde nao muda)."""
     agora = datetime.strptime(rodada_em, banco.FMT)
     return [_linha(r, agora) for r in conn.execute(
-        "SELECT * FROM batimento_pedidos WHERE caixa = 'DIVERGENCIA' AND desde = ? AND visto_em = ? "
+        "SELECT * FROM batimento_pedidos WHERE caixa = 'DIVERGENCIA' AND div_desde = ? AND visto_em = ? "
         "ORDER BY codigo", (rodada_em, rodada_em))]
 
 
@@ -119,13 +135,23 @@ def excecoes_torre(data_iso: str, db_path: Path | None = None, agora: datetime |
             return []
         marcas = ",".join("?" * len(regras.DIVERGENCIAS_REAIS))
         rows = conn.execute(
-            f"SELECT codigo, embarcador, rotulo, desde FROM batimento_pedidos "
-            f"WHERE caixa = 'DIVERGENCIA' AND tratado_em IS NULL AND rotulo IN ({marcas}) ORDER BY desde, codigo",
+            f"SELECT codigo, embarcador, rotulo, COALESCE(div_desde, desde) AS desde FROM batimento_pedidos "
+            f"WHERE caixa = 'DIVERGENCIA' AND tratado_em IS NULL AND rotulo IN ({marcas}) "
+            f"ORDER BY COALESCE(div_desde, desde), codigo",
             regras.DIVERGENCIAS_REAIS).fetchall()
     finally:
         conn.close()
 
     itens = []
+    if atrasada(ultima, agora):
+        quando = datetime.strptime(ultima["rodada_em"], banco.FMT).strftime("%d/%m %H:%M")
+        itens.append({
+            "id": f"batimento:sem-rodada:{ultima['rodada_em']}",
+            "severidade": "critico", "tipo": "Batimento",
+            "descricao": f"Batimento sem rodada desde {quando}: o job das 07h25 não rodou ou falhou.",
+            "quando": None,
+            "acao": {"tipo": "link", "url": "/vigia?aba=fechamento", "rotulo": "Ver no Fechamento"},
+        })
     if not ultima["fecha"]:
         itens.append({
             "id": f"batimento:nao-fecha:{ultima['rodada_em']}",

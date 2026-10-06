@@ -87,6 +87,11 @@ class TestAbaFechamento(unittest.TestCase):
                               headers={"Origin": "http://localhost"})
         self.assertEqual(r.status_code, 400)
 
+    def test_rodada_atrasada_aparece_na_aba(self):
+        self._gravar()   # rodada de 05/10 07:25, bem mais de 26h atras
+        self._logar("leitura")
+        self.assertIn("rodada atrasada", self.cliente.get("/vigia?aba=fechamento").get_data(as_text=True))
+
     def test_aba_padrao_continua_sendo_pedidos_abertos(self):
         self._logar("leitura")
         r = self.cliente.get("/vigia")

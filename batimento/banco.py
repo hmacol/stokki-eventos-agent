@@ -21,6 +21,7 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 FMT = "%Y-%m-%d %H:%M:%S"
 DESTINO = "DESTINO"
+DIVERGENCIA = "DIVERGENCIA"
 
 
 def conectar(db_path: Path | None = None) -> sqlite3.Connection:
@@ -66,14 +67,29 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
         );
     """)
     colunas = {r[1] for r in conn.execute("PRAGMA table_info(batimento_pedidos)")}
-    if "tratado_obs" not in colunas:
-        # Duas threads do painel podem chegar aqui juntas no 1o acesso pos-deploy.
-        try:
-            conn.execute("ALTER TABLE batimento_pedidos ADD COLUMN tratado_obs TEXT")
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            if "duplicate column" not in str(e).lower():
-                raise
+    _adicionar_coluna(conn, colunas, "tratado_obs")
+    # div_rotulo/div_desde (06/10): motivo de divergencia e desde quando, que
+    # NAO mudam quando o pedido oscila pra EM_ANDAMENTO e volta ao mesmo motivo.
+    _adicionar_coluna(conn, colunas, "div_rotulo")
+    if _adicionar_coluna(conn, colunas, "div_desde"):
+        conn.execute("UPDATE batimento_pedidos SET div_rotulo = rotulo, div_desde = desde "
+                     "WHERE caixa = 'DIVERGENCIA' AND div_desde IS NULL")
+        conn.commit()
+
+
+def _adicionar_coluna(conn: sqlite3.Connection, colunas: set, nome: str) -> bool:
+    """ALTER idempotente. True se esta chamada criou a coluna. Duas threads
+    do painel podem chegar aqui juntas no 1o acesso pos-deploy."""
+    if nome in colunas:
+        return False
+    try:
+        conn.execute(f"ALTER TABLE batimento_pedidos ADD COLUMN {nome} TEXT")
+        conn.commit()
+        return True
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
+        return False
 
 
 def gravar_rodada(conn: sqlite3.Connection, pedidos: list[dict], resumo: dict, id_minimo: int | None,
@@ -84,34 +100,47 @@ def gravar_rodada(conn: sqlite3.Connection, pedidos: list[dict], resumo: dict, i
     mudou = {"novos": 0, "mudaram": 0, "congelados": 0, "iguais": 0}
     for p in pedidos:
         codigo = p["codigo"]
-        atual = conn.execute("SELECT caixa, rotulo FROM batimento_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+        atual = conn.execute("SELECT caixa, rotulo, div_rotulo FROM batimento_pedidos WHERE codigo = ?",
+                             (codigo,)).fetchone()
         if atual and atual["caixa"] == DESTINO:
             conn.execute("UPDATE batimento_pedidos SET visto_em = ? WHERE codigo = ?", (agora_txt, codigo))
             mudou["congelados"] += 1
             continue
         evid = json.dumps(str(p.get("evidencias") or "").split(" | "), ensure_ascii=False)
         fechado = agora_txt if p["caixa"] == DESTINO else None
+        divergente = p["caixa"] == DIVERGENCIA
         if atual is None:
             conn.execute("""
                 INSERT INTO batimento_pedidos
                     (codigo, id_stokki, embarcador, transportadora, status_stokki, status_nucleo,
-                     caixa, rotulo, evidencias_json, desde, fechado_em, primeira_vez_em, visto_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     caixa, rotulo, evidencias_json, desde, fechado_em, primeira_vez_em, visto_em,
+                     div_rotulo, div_desde)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (codigo, p.get("id_stokki"), p.get("embarcador"), p.get("transportadora"),
                   p.get("status_stokki_bruto"), p.get("nucleo_status"), p["caixa"], p["rotulo"], evid,
-                  agora_txt, fechado, agora_txt, agora_txt))
+                  agora_txt, fechado, agora_txt, agora_txt,
+                  p["rotulo"] if divergente else None, agora_txt if divergente else None))
             mudou["novos"] += 1
             continue
         trocou = (atual["caixa"], atual["rotulo"]) != (p["caixa"], p["rotulo"])
+        # Motivo de divergencia NOVO reinicia div_desde e apaga a tratativa
+        # (ela valia pro motivo anterior). Oscilar pra EM_ANDAMENTO e voltar
+        # ao mesmo motivo nao mexe em nenhum dos dois (Hugo, 06/10).
+        div_novo = divergente and atual["div_rotulo"] != p["rotulo"]
+        extra, valores = "", []
+        if trocou:
+            extra += ", desde = ?"
+            valores.append(agora_txt)
+        if div_novo:
+            extra += ", div_rotulo = ?, div_desde = ?, tratado_em = NULL, tratado_por = NULL, tratado_obs = NULL"
+            valores += [p["rotulo"], agora_txt]
         conn.execute(f"""
             UPDATE batimento_pedidos SET
                 id_stokki = ?, embarcador = ?, transportadora = ?, status_stokki = ?, status_nucleo = ?,
-                caixa = ?, rotulo = ?, evidencias_json = ?, fechado_em = ?, visto_em = ?
-                {", desde = ?, tratado_em = NULL, tratado_por = NULL, tratado_obs = NULL" if trocou else ""}
+                caixa = ?, rotulo = ?, evidencias_json = ?, fechado_em = ?, visto_em = ?{extra}
             WHERE codigo = ?
         """, (p.get("id_stokki"), p.get("embarcador"), p.get("transportadora"), p.get("status_stokki_bruto"),
-              p.get("nucleo_status"), p["caixa"], p["rotulo"], evid, fechado, agora_txt,
-              *([agora_txt] if trocou else []), codigo))
+              p.get("nucleo_status"), p["caixa"], p["rotulo"], evid, fechado, agora_txt, *valores, codigo))
         mudou["mudaram" if trocou else "iguais"] += 1
 
     # A equacao vale sobre o que ESTA rodada listou, com os congelados

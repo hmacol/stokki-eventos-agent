@@ -1297,10 +1297,10 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
 
 
 def _pedido_do_batimento(excecao_id: str) -> str | None:
-    """'batimento:PS-1:MOTIVO' -> 'PS-1'. O item 'batimento:nao-fecha:...'
-    não tem pedido."""
+    """'batimento:PS-1:MOTIVO' -> 'PS-1'. Os itens 'batimento:nao-fecha:...'
+    e 'batimento:sem-rodada:...' não têm pedido."""
     partes = (excecao_id or "").split(":")
-    if len(partes) >= 3 and partes[0] == "batimento" and partes[1] != "nao-fecha":
+    if len(partes) >= 3 and partes[0] == "batimento" and partes[1].startswith("PS-"):
         return partes[1]
     return None
 

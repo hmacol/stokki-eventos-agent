@@ -887,7 +887,8 @@ def vigia_pedidos():
             erro = None
         except Exception as e:
             logging.getLogger(__name__).exception("Falha ao ler o batimento")
-            dados = {"linhas": [], "por_motivo": [], "total_abertas": 0, "ultima": None, "rodadas": []}
+            dados = {"linhas": [], "por_motivo": [], "total_abertas": 0, "ultima": None, "rodadas": [],
+                     "atrasada": False}
             erro = str(e)
         return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
                                motivos=list(ROTULOS_DIVERGENCIA.items()),

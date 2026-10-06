@@ -76,6 +76,12 @@ class TestTorreTrataBatimento(unittest.TestCase):
         self.assertIn("batimento:PS-3:EXPEDIDO_SEM_ENTREGA",
                       torre_controle._buscar_tratadas(["batimento:PS-3:EXPEDIDO_SEM_ENTREGA"]))
 
+    def test_so_codigo_ps_vira_pedido(self):
+        self.assertEqual(torre_controle._pedido_do_batimento(ID), "PS-1")
+        for outro in ("batimento:sem-rodada:2026-10-05 07:25:00", "batimento:nao-fecha:2026-10-05 07:25:00",
+                      "vigia:NO_POOL:2026-10-06:3:PS-1"):
+            self.assertIsNone(torre_controle._pedido_do_batimento(outro), outro)
+
     def test_item_nao_fecha_fica_so_na_torre(self):
         torre_controle.marcar_excecao_tratada("batimento:nao-fecha:2026-10-06 07:25:00", "2026-10-06",
                                               "Batimento", "", "x", por="ana")

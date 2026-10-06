@@ -12,6 +12,7 @@
     &nbsp;<span class="selo {{ 'ok' if u.fecha else 'erro' }}">{{ 'fecha' if u.fecha else 'NÃO fecha' }}</span>
     <div class="suave" style="font-size:12px;margin-top:6px;">
       Rodada de {{ u.rodada_em[:16] }}
+      {% if dados.atrasada %}<span class="selo erro">rodada atrasada</span>{% endif %}
       {% set c = u.resumo.get('cobertura') or {} %}
       {% if c.get('faixa') %} · faixa {{ c.faixa }}: {{ c.listados }} listados, {{ (c.importacao or [])|length }} em Importação, {{ (c.inexistentes or [])|length }} inexistentes{% endif %}
     </div>
@@ -64,7 +65,7 @@
     <tr class="{% if l.real and l.vencida and not l.tratada %}vencido{% endif %}">
       <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
       <td><span class="pilula {% if l.real %}vencido{% endif %}">{{ l.motivo_txt }}</span></td>
-      <td class="mono">{{ l.desde[:16] }}{% if l.real and l.vencida and not l.tratada %}<div class="suave">mais de 1 dia útil</div>{% endif %}</td>
+      <td class="mono">{{ l.div_desde[:16] }}{% if l.real and l.vencida and not l.tratada %}<div class="suave">mais de 1 dia útil</div>{% endif %}</td>
       <td>{{ l.embarcador or '—' }}<div class="suave">{{ l.transportadora or '' }}</div></td>
       <td class="evid">{{ l.evidencias|join(' · ') }}</td>
       <td>

@@ -129,6 +129,11 @@ Feitas (04/10 e 05/10):
   comprovante" ficam só na aba e no e-mail (Hugo, 05/10). "Tratar" e
   "Desfazer" na Torre (unitário e lote) também gravam/limpam a tratativa em
   `batimento_pedidos` (obs "[Torre] <motivo>"; Hugo, 06/10).
+- Oscilação (06/10): `div_rotulo`/`div_desde` guardam o motivo de
+  divergência e desde quando; só mudam com motivo NOVO. Prazo da Torre,
+  e-mail de "nova" e a coluna "Desde" da aba usam `div_desde`; a tratativa
+  só some com motivo novo. Rodada com mais de 26h = item crítico "sem
+  rodada" na Torre e selo "rodada atrasada" na aba.
 
 A implementar depois:
 - O `verificar_entregues_nao_expedidos.py` vira caso particular e pode ser

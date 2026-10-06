@@ -108,6 +108,27 @@ class GravarRodada(unittest.TestCase):
         self.assertIsNone(l["tratado_por"])
         self.assertIsNone(l["tratado_obs"])
 
+    def test_oscilar_mantem_div_desde_e_tratativa(self):
+        t3 = datetime(2026, 10, 7, 7, 25)
+        banco.gravar_rodada(self.conn, [ped("PS-7", "DIVERGENCIA", "CANCELADO_VUUPT_STOKKI_ABERTO")], resumo(1), 1, self.t1)
+        banco.marcar_tratado(self.conn, "PS-7", "hugo", "vendo", self.t1)
+        banco.gravar_rodada(self.conn, [ped("PS-7", "EM_ANDAMENTO", "NO_POOL")], resumo(1), 1, self.t2)
+        banco.gravar_rodada(self.conn, [ped("PS-7", "DIVERGENCIA", "CANCELADO_VUUPT_STOKKI_ABERTO")], resumo(1), 1, t3)
+        l = self.linha("PS-7")
+        self.assertEqual((l["div_rotulo"], l["div_desde"]), ("CANCELADO_VUUPT_STOKKI_ABERTO", "2026-10-05 07:25:00"))
+        self.assertEqual(l["desde"], "2026-10-07 07:25:00")
+        self.assertEqual(l["tratado_por"], "hugo")
+
+    def test_motivo_novo_reinicia_div_desde(self):
+        banco.gravar_rodada(self.conn, [ped("PS-8", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], resumo(1), 1, self.t1)
+        banco.gravar_rodada(self.conn, [ped("PS-8", "DIVERGENCIA", "EXPEDIDO_SEM_DOCUMENTO")], resumo(1), 1, self.t2)
+        l = self.linha("PS-8")
+        self.assertEqual((l["div_rotulo"], l["div_desde"]), ("EXPEDIDO_SEM_DOCUMENTO", "2026-10-06 07:25:00"))
+
+    def test_em_andamento_nao_tem_div(self):
+        banco.gravar_rodada(self.conn, [ped("PS-9", "EM_ANDAMENTO", "NO_POOL")], resumo(1), 1, self.t1)
+        self.assertIsNone(self.linha("PS-9")["div_desde"])
+
     def test_pedido_de_rodada_antiga_nao_entra_na_conta_de_hoje(self):
         banco.gravar_rodada(self.conn, [ped("PS-1", "DESTINO", "ENTREGUE")], resumo(1), 1, self.t1)
         r = banco.gravar_rodada(self.conn, [ped("PS-2", "EM_ANDAMENTO", "NO_POOL")], resumo(1), 2, self.t2)
@@ -127,6 +148,22 @@ class _ConexaoAtrasada:
 
     def __getattr__(self, nome):
         return getattr(self._conn, nome)
+
+
+class EsquemaAntigo(unittest.TestCase):
+    def test_linhas_antigas_ganham_div_a_partir_de_rotulo_e_desde(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("""CREATE TABLE batimento_pedidos (codigo TEXT PRIMARY KEY, id_stokki INTEGER, embarcador TEXT,
+            transportadora TEXT, status_stokki TEXT, status_nucleo TEXT, caixa TEXT NOT NULL, rotulo TEXT NOT NULL,
+            evidencias_json TEXT, desde TEXT NOT NULL, fechado_em TEXT, primeira_vez_em TEXT NOT NULL,
+            visto_em TEXT NOT NULL, tratado_em TEXT, tratado_por TEXT)""")
+        conn.execute("INSERT INTO batimento_pedidos (codigo, caixa, rotulo, desde, primeira_vez_em, visto_em) "
+                     "VALUES ('PS-1', 'DIVERGENCIA', 'EXPEDIDO_SEM_ENTREGA', '2026-10-05 20:59:00', 'x', 'x'), "
+                     "('PS-2', 'EM_ANDAMENTO', 'NO_POOL', '2026-10-05 20:59:00', 'x', 'x')")
+        banco.garantir_esquema(conn)
+        r = {x["codigo"]: (x["div_rotulo"], x["div_desde"]) for x in conn.execute("SELECT * FROM batimento_pedidos")}
+        self.assertEqual(r, {"PS-1": ("EXPEDIDO_SEM_ENTREGA", "2026-10-05 20:59:00"), "PS-2": (None, None)})
 
 
 class EsquemaConcorrente(unittest.TestCase):

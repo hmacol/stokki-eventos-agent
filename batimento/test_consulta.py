@@ -89,6 +89,45 @@ class Novidades(Base):
         self.assertEqual([n["codigo"] for n in novas], ["PS-2"])
 
 
+class Oscilacao(Base):
+    def setUp(self):
+        super().setUp()
+        self.gravar([ped("PS-1", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], datetime(2026, 10, 5, 7, 25))
+        self.gravar([ped("PS-1", "EM_ANDAMENTO", "NO_POOL")], datetime(2026, 10, 6, 7, 25))
+        self.gravar([ped("PS-1", "DIVERGENCIA", "EXPEDIDO_SEM_ENTREGA")], datetime(2026, 10, 7, 7, 25))
+
+    def test_volta_ao_mesmo_motivo_nao_e_novidade(self):
+        conn = banco.conectar(self.db)
+        try:
+            self.assertEqual(consulta.novidades(conn, "2026-10-07 07:25:00"), [])
+        finally:
+            conn.close()
+
+    def test_prazo_da_torre_conta_da_primeira_vez(self):
+        itens = consulta.excecoes_torre("2026-10-07", db_path=self.db, agora=datetime(2026, 10, 7, 9, 0))
+        self.assertEqual([x["id"] for x in itens], ["batimento:PS-1:EXPEDIDO_SEM_ENTREGA"])
+        self.assertIn("desde 05/10", itens[0]["descricao"])
+        d = consulta.fechamento(db_path=self.db, agora=datetime(2026, 10, 7, 9, 0))
+        self.assertEqual(d["linhas"][0]["div_desde"], "2026-10-05 07:25:00")
+
+
+class RodadaAtrasada(Base):
+    def test_rodada_com_mais_de_26h_gera_critico_e_marca_a_aba(self):
+        self.gravar([ped("PS-1", "EM_ANDAMENTO", "NO_POOL")], datetime(2026, 10, 5, 7, 25))
+        agora = datetime(2026, 10, 6, 9, 26)
+        itens = consulta.excecoes_torre("2026-10-06", db_path=self.db, agora=agora)
+        self.assertEqual([(x["id"], x["severidade"]) for x in itens],
+                         [("batimento:sem-rodada:2026-10-05 07:25:00", "critico")])
+        self.assertIn("sem rodada desde 05/10 07:25", itens[0]["descricao"])
+        self.assertTrue(consulta.fechamento(db_path=self.db, agora=agora)["atrasada"])
+
+    def test_rodada_de_hoje_nao_esta_atrasada(self):
+        self.gravar([ped("PS-1", "EM_ANDAMENTO", "NO_POOL")], datetime(2026, 10, 5, 7, 25))
+        agora = datetime(2026, 10, 6, 9, 24)
+        self.assertEqual(consulta.excecoes_torre("2026-10-06", db_path=self.db, agora=agora), [])
+        self.assertFalse(consulta.fechamento(db_path=self.db, agora=agora)["atrasada"])
+
+
 class ExcecoesTorre(Base):
     def test_sem_rodada_nao_gera_nada(self):
         self.assertEqual(consulta.excecoes_torre("2026-10-07", db_path=self.db), [])
@@ -98,7 +137,8 @@ class ExcecoesTorre(Base):
                      ped("PS-2", "DIVERGENCIA", "REDESPACHO_SEM_COMPROVANTE"),
                      ped("PS-3", "DIVERGENCIA", "ENTREGUE_NAO_EXPEDIDO")], datetime(2026, 10, 5, 7, 25))
         consulta.tratar("PS-3", "hugo", "ok", db_path=self.db)
-        itens = consulta.excecoes_torre("2026-10-07", db_path=self.db, agora=datetime(2026, 10, 7, 9, 0))
+        itens = [x for x in consulta.excecoes_torre("2026-10-07", db_path=self.db, agora=datetime(2026, 10, 7, 9, 0))
+                 if not x["id"].startswith("batimento:sem-rodada:")]   # rodada de 2 dias atras: coberto em RodadaAtrasada
         self.assertEqual([x["id"] for x in itens], ["batimento:PS-1:EXPEDIDO_SEM_ENTREGA"])
         x = itens[0]
         self.assertEqual((x["tipo"], x["severidade"]), ("Batimento", "atencao"))
