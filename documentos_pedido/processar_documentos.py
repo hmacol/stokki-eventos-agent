@@ -84,6 +84,7 @@ from fingerprint_documentos import (calcular_hash, ja_processado, marcar_process
                                     listar_pendentes_revisao, pedidos_com_documento_enviado,
                                     ja_em_revisao)
 from email_documentos import buscar_pdfs_por_email
+from localizar_arquivos import resolver_arquivo_local
 import storage_gcs
 
 
@@ -355,18 +356,6 @@ def _backfill_nf_danfes_locais(indexador: IndexadorNF):
         logger.info(f"Backfill de NF: {preenchidos} DANFE(s) antiga(s) indexada(s) a partir dos PDFs locais.")
 
 
-# Pastas onde os PDFs ficam em cache local depois de baixados/separados
-# -- nenhuma delas é limpa depois do processamento (achado 20/08:
-# investigando por que documentos em REVISAO_MANUAL nunca se resolviam
-# sozinhos mesmo depois do pedido aparecer no VUUPT).
-_PASTAS_CACHE_DOCUMENTOS = [
-    Path(__file__).parent / "dados" / "boletos_separados",
-    Path(__file__).parent / "dados" / "nfs_separadas",
-    Path(__file__).parent / "dados" / "downloads_stokki_temp",
-    Path(__file__).parent / "dados" / "anexos_temp",
-]
-
-
 def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf: IndexadorNF) -> dict:
     """
     Retenta o casamento dos documentos que ficaram em REVISAO_MANUAL.
@@ -379,7 +368,7 @@ def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf:
     minutos depois -- sem isso, é a maior causa de Boleto nunca casado.
 
     Usa o arquivo já em cache em disco (nenhuma das pastas de
-    documentos separados/baixados é limpa depois do processamento) pra
+    `localizar_arquivos.PASTAS_BUSCA` é limpa depois do processamento) pra
     reclassificar, re-extrair metadados e re-tentar o casamento do
     zero -- se resolver agora, sobe pro GCS de verdade (documento em
     REVISAO_MANUAL nunca foi enviado). Documento cujo arquivo não está
@@ -390,8 +379,7 @@ def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf:
 
     contadores = {"resolvidos": 0, "sem_arquivo": 0, "ainda_pendente": 0}
     for row in pendentes:
-        caminho = next((p / row["nome_arquivo"] for p in _PASTAS_CACHE_DOCUMENTOS
-                        if (p / row["nome_arquivo"]).exists()), None)
+        caminho = resolver_arquivo_local(row["nome_arquivo"])
         if not caminho:
             contadores["sem_arquivo"] += 1
             continue

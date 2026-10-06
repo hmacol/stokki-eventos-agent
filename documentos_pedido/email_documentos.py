@@ -286,7 +286,9 @@ def _extrair_pdfs_anexados(msg, uid: int, message_id: str) -> list[dict]:
         with open(caminho_local, "wb") as f:
             f.write(conteudo)
         itens.append({
-            "caminho_local": caminho_local, "nome_arquivo": nome_arquivo,
+            # Nome COM o prefixo do UID, igual ao arquivo em disco (05/10):
+            # sem ele o romaneio e a retentativa não achavam o arquivo.
+            "caminho_local": caminho_local, "nome_arquivo": caminho_local.name,
             "assunto_email": assunto, "remetente_email": remetente,
             "message_id": message_id,
         })

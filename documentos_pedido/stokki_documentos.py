@@ -416,6 +416,23 @@ def _gerar_danfe_por_file_url(page, codigo_ps: str, file_url: str, token: str,
     return caminho_local
 
 
+def _nome_unico(nome: str, usados: set[str]) -> str:
+    """Dois anexos com o mesmo rótulo no pedido ("BOLETO" duas vezes,
+    parcelas) viravam o mesmo arquivo em disco e o segundo apagava o
+    primeiro antes de ser processado (achado 05/10). O primeiro mantém
+    o nome de sempre; os seguintes ganham _2, _3..."""
+    if nome not in usados:
+        usados.add(nome)
+        return nome
+    base, ponto, ext = nome.rpartition(".")
+    i = 2
+    while f"{base}_{i}{ponto}{ext}" in usados:
+        i += 1
+    novo = f"{base}_{i}{ponto}{ext}"
+    usados.add(novo)
+    return novo
+
+
 def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
                                 buscar_nf: bool = True) -> list[dict]:
     """
@@ -453,11 +470,13 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
         for caminho_danfe in gerar_danfes(page, codigo_ps):
             baixados.append({"caminho_local": caminho_danfe, "nome_arquivo": caminho_danfe.name})
 
+    nomes_usados: set[str] = set()
     for doc in listar_documentos_da_aba(page):
         nome_arquivo = doc["nome_visivel"]
         if not nome_arquivo.lower().endswith(".pdf"):
             nome_arquivo += ".pdf"
         nome_arquivo = f"{codigo_ps}_{nome_arquivo}"
+        nome_arquivo = _nome_unico(nome_arquivo, nomes_usados)
 
         caminho_local = baixar_documento(page, doc["href"], nome_arquivo)
         if caminho_local:
