@@ -57,6 +57,11 @@ PASTA_TEMP_ANEXOS = Path(__file__).parent / "dados" / "anexos_temp"
 # comando IMAP quando a primeira execução pega a janela de 7 dias inteira.
 _LOTE_FETCH_HEADERS = 500
 
+# Última falha de IMAP de cada busca (None = rodou sem erro). Até 05/10
+# a falha virava lista vazia e a etapa saía "ok, 0 encontrado(s)" na
+# notificação; processar_documentos.py lê isto pra marcar como erro.
+ULTIMO_ERRO_IMAP: dict[str, str | None] = {"inbox": None, "embarcadores": None}
+
 
 def _conectar_controle():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +375,7 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7,
 
     PASTA_TEMP_ANEXOS.mkdir(parents=True, exist_ok=True)
     resultado = []
+    ULTIMO_ERRO_IMAP["inbox"] = None
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=30)
@@ -390,6 +396,7 @@ def buscar_pdfs_por_email(config: dict, dias_retroativos: int = 7,
 
     except Exception as e:
         logger.exception(f"Erro ao buscar PDFs por e-mail: {e}")
+        ULTIMO_ERRO_IMAP["inbox"] = str(e)
 
     logger.info(f"{len(resultado)} PDF(s) novo(s) baixado(s) de e-mail.")
     return resultado
@@ -480,6 +487,7 @@ def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7,
 
     PASTA_TEMP_ANEXOS.mkdir(parents=True, exist_ok=True)
     resultado = []
+    ULTIMO_ERRO_IMAP["embarcadores"] = None
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=30)
@@ -511,6 +519,7 @@ def buscar_pdfs_por_email_embarcadores(config: dict, dias_retroativos: int = 7,
 
     except Exception as e:
         logger.exception(f"Erro ao buscar PDFs de embarcadores conhecidos: {e}")
+        ULTIMO_ERRO_IMAP["embarcadores"] = str(e)
 
     logger.info(f"{len(resultado)} PDF(s) novo(s) baixado(s) de embarcadores conhecidos.")
     return resultado

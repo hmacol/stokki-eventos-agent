@@ -83,6 +83,7 @@ from fingerprint_documentos import (calcular_hash, ja_processado, marcar_process
                                     pedidos_nf_pendentes, atualizar_nf_pedido,
                                     listar_pendentes_revisao, pedidos_com_documento_enviado,
                                     ja_em_revisao)
+import email_documentos
 from email_documentos import buscar_pdfs_por_email
 from localizar_arquivos import resolver_arquivo_local
 import storage_gcs
@@ -453,10 +454,11 @@ def _etapas_email_embarcadores(config: dict, vuupt, modo_teste: bool, indexador_
                 contadores[status] = contadores.get(status, 0) + 1
                 total_boletos += 1
 
-    resumo_etapas["Documentos (e-mail embarcadores)"] = {
-        "status": "ok",
-        "detalhe": f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)",
-    }
+    detalhe = f"{total_boletos} documento(s) de {len(itens_embarcadores)} anexo(s)"
+    erro_imap = email_documentos.ULTIMO_ERRO_IMAP.get("embarcadores")
+    resumo_etapas["Documentos (e-mail embarcadores)"] = (
+        {"status": "erro", "detalhe": f"falha no IMAP: {erro_imap}"} if erro_imap
+        else {"status": "ok", "detalhe": detalhe})
 
 
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True,
@@ -496,10 +498,10 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                                                indexador_nf=indexador_nf)
                 contadores[status] = contadores.get(status, 0) + 1
 
-            resumo_etapas["Documentos (e-mail)"] = {
-                "status": "ok",
-                "detalhe": f"{len(itens_email)} encontrado(s)",
-            }
+            erro_imap = email_documentos.ULTIMO_ERRO_IMAP.get("inbox")
+            resumo_etapas["Documentos (e-mail)"] = (
+                {"status": "erro", "detalhe": f"falha no IMAP: {erro_imap}"} if erro_imap
+                else {"status": "ok", "detalhe": f"{len(itens_email)} encontrado(s)"})
 
         # ── Etapa 2: Stokki ────────────────────────────────────────────────
         # Lista de pedidos: se --pedidos foi passado explicitamente, usa ela
@@ -576,6 +578,10 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                         buscar_nf=codigo_ps not in pedidos_sem_nf
                                   and codigo_ps not in pedidos_danfe_somente_email)
                     total_stokki += len(itens_stokki)
+                    if not itens_stokki:
+                        # Antes ficava em silêncio (PS-35977 no teste de 05/10)
+                        logger.info(f"  {codigo_ps}: nenhum documento novo na Stokki "
+                                    f"(sem DANFE a gerar e aba Documentos vazia).")
                     for item in itens_stokki:
                         item["assunto_email"] = None  # marca origem como stokki
                         status = processar_um_documento(item, vuupt, config, modo_teste,
@@ -629,7 +635,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
                 logger.warning(f"Falha ao liberar a trava da Stokki: {e}")
 
     resumo_etapas["Resumo geral"] = {
-        "status": "erro" if contadores["ERRO"] or "Erro geral" in resumo_etapas else "ok",
+        "status": "erro" if contadores["ERRO"] or any(
+            (info or {}).get("status") != "ok" for info in resumo_etapas.values()) else "ok",
         "detalhe": f"{contadores['ENVIADO']} enviado(s), {contadores['REVISAO_MANUAL']} pra revisão manual, "
                   f"{contadores['JA_PROCESSADO']} já processado(s) antes, {contadores['ERRO']} erro(s)",
     }
