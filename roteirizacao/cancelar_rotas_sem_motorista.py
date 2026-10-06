@@ -2,9 +2,14 @@
 """
 cancelar_rotas_sem_motorista.py
 
-Rotina diária de proteção (17h45, ver infra/stokki-cancelar-rotas-sem-
-motorista.timer) -- pedido do Hugo, 19/08, depois de achar o PS-36801
-"preso" numa rota de véspera sem motorista que nunca foi cancelada.
+Rotina diária de proteção (15h45 desde 05/10, antes da rodada das 16h;
+ver infra/stokki-cancelar-rotas-sem-motorista.timer) -- pedido do Hugo,
+19/08, depois de achar o PS-36801 "preso" numa rota de véspera sem
+motorista que nunca foi cancelada.
+
+05/10 (Hugo): o PASSO 1 abaixo (cancelar rota de HOJE sem motorista)
+FOI DESLIGADO -- rota enviada à VUUPT sem motorista não é mais
+cancelada. Só roda o PASSO 2. O texto do passo 1 fica como histórico.
 
 Por quê: enviar uma rota sem motorista atribuído é fluxo normal e
 suportado (rotas_client.criar_rota permite agent_id=None, pra
@@ -119,20 +124,6 @@ def _data_inicio_rota(rota: dict) -> date | None:
         return None
 
 
-def _elegivel(rota: dict, hoje: date) -> tuple[bool, str]:
-    """Retorna (elegível, motivo_se_nao)."""
-    if rota.get("status") == "canceled":
-        return False, "já está cancelada"
-    if rota.get("agent_id") is not None:
-        return False, f"tem motorista atribuído (agent_id={rota.get('agent_id')})"
-    data_inicio = _data_inicio_rota(rota)
-    if data_inicio is None:
-        return False, "start_at ausente/irreconhecível -- não dá pra confirmar que é hoje"
-    if data_inicio != hoje:
-        return False, f"start_at ({data_inicio}) não é hoje ({hoje})"
-    return True, ""
-
-
 def _mexeu_hoje(servicos: list[dict], hoje: date) -> bool:
     """Algum serviço da rota teve saída/chegada/conclusão HOJE (horário da
     Vuupt vem em UTC sem fuso -> converte pra data local)."""
@@ -215,11 +206,11 @@ def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: boo
                 tratativas.registrar_evento(
                     code, "ROTAS_PASSADAS", "DEVOLVIDO_AO_POOL", service_id=s["id"],
                     texto=f"Rota '{nome}' de {data_rota:%d/%m} não terminou -- pedido não iniciado "
-                          f"voltou pro pool antes da roteirização das 18h.")
+                          f"voltou pro pool antes da roteirização das 16h.")
             except Exception as e:
                 logger.warning(f"  Tratativa de {code} não registrada: {e}")
 
-    # Espelho do núcleo já reflete a devolução (o pool das 18h pode ler de
+    # Espelho do núcleo já reflete a devolução (o pool das 16h pode ler de
     # lá). Best-effort: o timer de 15 min alcança se falhar.
     if ids_devolvidos:
         try:
@@ -234,85 +225,15 @@ def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: boo
 def main(modo_teste: bool = False):
     inicio = time.time()
     prefixo = "[MODO TESTE] " if modo_teste else ""
-    logger.info(f"{prefixo}Cancelamento de rotas sem motorista iniciado.")
+    logger.info(f"{prefixo}Devolução de pedidos de rotas passadas iniciada.")
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     resumo_etapas = {}
 
-    try:
-        if not token:
-            raise RuntimeError("config.yaml sem vuupt_api.token.")
-
-        hoje = date.today()
-        # filtra por start_at de hoje direto na API -- sem isso
-        # listar_rotas traz o HISTÓRICO INTEIRO (milhares de rotas
-        # passadas, minutos de paginação) só pra descartar quase tudo
-        # depois em Python. Mesmo padrão de incrementar_rotas.py: cai
-        # pro histórico completo se o filtro falhar por algum motivo
-        # (nunca finge que não há rota nenhuma só porque o filtro deu
-        # erro).
-        filtro_hoje = [
-            {"field": "start_at", "operator": "gte", "value": hoje.strftime("%Y-%m-%d") + " 00:00:00"},
-            {"field": "start_at", "operator": "lt", "value": (hoje + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"},
-        ]
-        try:
-            todas_rotas = listar_rotas(token, filtro=filtro_hoje)
-            logger.info(f"{prefixo}{len(todas_rotas)} rota(s) de hoje encontrada(s) via filtro.")
-        except Exception as e:
-            logger.warning(f"{prefixo}Filtro por start_at falhou ({e}) -- caindo pro histórico completo (mais lento).")
-            todas_rotas = listar_rotas(token)
-            logger.info(f"{prefixo}{len(todas_rotas)} rota(s) encontrada(s) no total na VUUPT.")
-
-        elegiveis = []
-        for rota in todas_rotas:
-            ok, motivo = _elegivel(rota, hoje)
-            if ok:
-                elegiveis.append(rota)
-            else:
-                logger.debug(f"  ignorada: rota {rota.get('id')} '{rota.get('name')}' -- {motivo}")
-
-        if not elegiveis:
-            logger.info(f"{prefixo}Nenhuma rota de hoje sem motorista pra cancelar.")
-            resumo_etapas["Cancelamento de rotas sem motorista"] = {
-                "status": "ok",
-                "detalhe": "Nenhuma rota de hoje sem motorista encontrada.",
-            }
-        else:
-            logger.info(f"{prefixo}{len(elegiveis)} rota(s) de hoje sem motorista, candidata(s) a cancelamento:")
-            for rota in elegiveis:
-                logger.info(f"{prefixo}  - id={rota.get('id')} '{rota.get('name')}' start_at={rota.get('start_at')} "
-                            f"prevision_number_services={rota.get('prevision_number_services')}")
-
-            canceladas, com_erro = [], []
-            for rota in elegiveis:
-                route_id = rota.get("id")
-                nome = rota.get("name")
-                if modo_teste:
-                    canceladas.append(nome)
-                    continue
-                try:
-                    cancelar_rota(token, route_id, services_action="unassign")
-                    rascunho_id = reverter_por_vuupt_route_id(route_id)
-                    aviso_rascunho = f" (rascunho local #{rascunho_id} revertido pra RASCUNHO)" if rascunho_id else ""
-                    logger.info(f"  OK: rota {route_id} '{nome}' cancelada, pedidos desatribuídos{aviso_rascunho}.")
-                    canceladas.append(nome)
-                except Exception as e:
-                    logger.error(f"  FALHA ao cancelar rota {route_id} '{nome}': {e}")
-                    com_erro.append(f"{nome} ({e})")
-
-            detalhe = f"{prefixo}{len(canceladas)} rota(s) sem motorista canceladas: {', '.join(canceladas)}."
-            if com_erro:
-                detalhe += f" [ALERTA_CANCELAMENTO_ROTA] {len(com_erro)} falha(s): {'; '.join(com_erro)}."
-            resumo_etapas["Cancelamento de rotas sem motorista"] = {
-                "status": "ok" if not com_erro else "erro",
-                "detalhe": detalhe,
-            }
-
-    except Exception as e:
-        logger.exception(f"Erro no cancelamento de rotas sem motorista: {e}")
-        resumo_etapas["Cancelamento de rotas sem motorista"] = {"status": "erro", "detalhe": str(e)}
-
+    # 05/10 (Hugo): o passo 1 (cancelar rota de HOJE sem motorista e
+    # devolver os pedidos ao pool) saiu -- rota enviada à VUUPT fica,
+    # mesmo sem motorista. Fica só o passo 2 (rotas de dias anteriores).
     try:
         if not token:
             raise RuntimeError("config.yaml sem vuupt_api.token.")
@@ -332,7 +253,7 @@ def main(modo_teste: bool = False):
         resumo_etapas["Pedidos presos em rotas de dias anteriores"] = {"status": "erro", "detalhe": str(e)}
 
     duracao = time.time() - inicio
-    logger.info(f"{prefixo}Cancelamento de rotas sem motorista finalizado em {duracao:.1f}s.")
+    logger.info(f"{prefixo}Devolução de pedidos de rotas passadas finalizada em {duracao:.1f}s.")
 
     try:
         notificar_execucao(resumo_etapas, duracao, modo_teste, config)
@@ -342,10 +263,10 @@ def main(modo_teste: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Cancela na VUUPT toda rota de HOJE sem motorista atribuído até o fim do dia.",
+        description="Devolve ao pool os pedidos não iniciados de rotas de dias anteriores.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--modo-teste", action="store_true",
-                        help="Só lista as rotas candidatas, não cancela nada de verdade.")
+                        help="Só lista o que devolveria, não mexe em nada de verdade.")
     args = parser.parse_args()
     main(modo_teste=args.modo_teste)

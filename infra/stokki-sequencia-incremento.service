@@ -1,0 +1,8 @@
+[Unit]
+Description=Stokki Eventos - Sequencia das 18h (ExecutarTudo, VerificarDuplicados, Agendamentos, IncrementarRotas)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+ExecStart=/bin/bash /opt/stokki-eventos/infra/sequencia_incremento.sh

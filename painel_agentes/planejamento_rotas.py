@@ -1264,7 +1264,7 @@ def _cabe_no_rascunho(info: dict, cx_pedido: int, endereco_pedido: str | None) -
     return info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
 
 
-def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict]) -> dict:
+def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict], modo_teste: bool = False) -> dict:
     """
     Botão "Incrementar" da barra de seleção do pool (Hugo, 10/09):
     complementa as rotas EM RASCUNHO do lote ativo da data com os
@@ -1291,6 +1291,9 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
     não bate na VUUPT. Rascunhos que ganharam pedido são reordenados com
     o 2-opt (rascunhos_rota.otimizar_sequencia), como o incremento
     automático faz na VUUPT.
+
+    modo_teste=True (incrementar_rotas.py --modo-teste) decide igual mas
+    não grava nem reordena nada.
 
     Retorna {"alocados": [{codigo, rascunho_id, rascunho_nome}],
     "orfaos": [codigos], "pedidos_indisponiveis": N, "rotas_afetadas": N}.
@@ -1405,7 +1408,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
             orfaos.append(parada.get("codigo", ""))
             continue
 
-        rascunhos_rota.adicionar_parada(escolhida["id"], parada, None)
+        if not modo_teste:
+            rascunhos_rota.adicionar_parada(escolhida["id"], parada, None)
         escolhida["qtd"] += 1
         escolhida["caixas"] += cx_pedido
         escolhida["enderecos"].add(parada.get("endereco"))
@@ -1423,7 +1427,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
         logger.info(f"  Incrementar rascunhos: {parada.get('codigo')} -> '{escolhida['nome']}' "
                     f"({escolhida['qtd']} pedido(s), {escolhida['caixas']} cx)")
 
-    for rascunho_id in sorted(rotas_afetadas):
+    for rascunho_id in sorted(rotas_afetadas) if not modo_teste else []:
         try:
             rascunhos_rota.otimizar_sequencia(rascunho_id)
         except Exception as e:
