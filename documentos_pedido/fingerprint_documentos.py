@@ -225,3 +225,24 @@ def listar_pendentes_revisao(limite: int = 100) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def listar_nfs_sem_cobranca(dias: int = 30) -> list[dict]:
+    """NFs ENVIADAS recentes gravadas antes da coluna cobranca (05/10) --
+    candidatas ao backfill a partir do PDF local."""
+    conn = _conectar()
+    rows = conn.execute(
+        "SELECT hash_conteudo, nome_arquivo FROM documentos_processados "
+        "WHERE tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND cobranca IS NULL "
+        "AND processado_em >= datetime('now', ?)", (f"-{int(dias)} days",)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def atualizar_cobranca(hash_conteudo: str, cobranca: int | None) -> None:
+    conn = _conectar()
+    conn.execute("UPDATE documentos_processados SET cobranca = ? WHERE hash_conteudo = ?",
+                 (cobranca, hash_conteudo))
+    conn.commit()
+    conn.close()

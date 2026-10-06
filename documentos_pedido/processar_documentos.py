@@ -79,6 +79,7 @@ from matcher import (casar_documento_com_pedido, extrair_nf_da_danfe,
                      extrair_numero_e_cnpj_pedido_venda, IndexadorNF,
                      extrair_codigo_pedido)
 from boleto_parser import extrair_metadados_boleto
+from regras_documentos import cobranca_da_danfe
 from fingerprint_documentos import (calcular_hash, ja_processado, marcar_processado,
                                     pedidos_nf_pendentes, atualizar_nf_pedido,
                                     listar_pendentes_revisao, pedidos_com_documento_enviado,
@@ -213,10 +214,12 @@ def _processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
     # Metadados específicos por tipo: NF da DANFE alimenta o índice,
     # metadados do boleto habilitam o casamento por NF (regras 2/3)
     numero_nf = cnpj_contraparte = None
+    cobranca = None
     numero_parcela = total_parcelas = None
     metadados_boleto = None
     if classificacao["tipo"] == "Nota Fiscal":
         numero_nf, cnpj_contraparte = extrair_nf_da_danfe(texto_completo)
+        cobranca = cobranca_da_danfe(texto_completo)
         motivo_placeholder = _motivo_danfe_placeholder(texto_completo)
         if motivo_placeholder:
             logger.warning(f"  {nome_arquivo}: {motivo_placeholder}")
@@ -283,7 +286,9 @@ def _processar_um_documento(item: dict, vuupt, config: dict, modo_teste: bool,
         marcar_processado(hash_conteudo, origem, nome_arquivo, classificacao["tipo"], codigo_pedido,
                          "ENVIADO", gcs_path=gcs_path, numero_nf=numero_nf,
                          numero_parcela=numero_parcela, total_parcelas=total_parcelas,
-                         cnpj_contraparte=cnpj_contraparte)
+                         cnpj_contraparte=cnpj_contraparte,
+                         cobranca=(cobranca if cobranca is not None else -1)
+                         if classificacao["tipo"] == "Nota Fiscal" else None)
         return "ENVIADO"
     except Exception as e:
         logger.error(f"  {nome_arquivo}: falha ao enviar pro GCS: {e}")
@@ -355,6 +360,22 @@ def _backfill_nf_danfes_locais(indexador: IndexadorNF):
             preenchidos += 1
     if preenchidos:
         logger.info(f"Backfill de NF: {preenchidos} DANFE(s) antiga(s) indexada(s) a partir dos PDFs locais.")
+
+
+def _backfill_cobranca_nfs(dias: int = 30) -> None:
+    """NFs enviadas antes de 05/10 não têm a coluna cobranca. Lê o PDF
+    local uma vez e grava (1/0, ou -1 = sem quadro de fatura)."""
+    from fingerprint_documentos import listar_nfs_sem_cobranca, atualizar_cobranca
+    preenchidas = 0
+    for row in listar_nfs_sem_cobranca(dias):
+        caminho = resolver_arquivo_local(row["nome_arquivo"])
+        if not caminho:
+            continue
+        valor = cobranca_da_danfe(_extrair_texto_pdf_completo(caminho))
+        atualizar_cobranca(row["hash_conteudo"], -1 if valor is None else valor)
+        preenchidas += 1
+    if preenchidas:
+        logger.info(f"Backfill de cobrança: {preenchidas} NF(s) marcada(s).")
 
 
 def retentar_revisao_manual(vuupt, config: dict, modo_teste: bool, indexador_nf: IndexadorNF) -> dict:
@@ -607,6 +628,9 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
         # são das rodadas completa/incremental.
         if not escopado:
             _etapas_email_embarcadores(config, vuupt, modo_teste, indexador_nf, contadores, resumo_etapas)
+
+        if not escopado and not incremental and not modo_teste:
+            _backfill_cobranca_nfs()
 
         # ── Etapa 4: retentativa de REVISAO_MANUAL ────────────────────────
         # Cobre a corrida comum entre o documento chegar e o pedido ser

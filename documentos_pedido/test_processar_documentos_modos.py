@@ -33,6 +33,7 @@ class _Base(unittest.TestCase):
             m["vuupt"] = stack.enter_context(patch.object(pdoc, "VuuptClient"))
             m["indexador"] = stack.enter_context(patch.object(pdoc, "IndexadorNF"))
             stack.enter_context(patch.object(pdoc, "_backfill_nf_danfes_locais"))
+            stack.enter_context(patch.object(pdoc, "_backfill_cobranca_nfs"))
             m["email"] = stack.enter_context(patch.object(pdoc, "buscar_pdfs_por_email", return_value=[]))
             m["embarcadores"] = stack.enter_context(patch.object(pdoc, "_etapas_email_embarcadores"))
             m["retentar"] = stack.enter_context(patch.object(
