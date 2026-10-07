@@ -739,7 +739,7 @@ def processar_pedido(
         # só traz HORÁRIO (a data ali é calculada por nós).
         if payload.get("scheduled_start") and fonte_agendamento != "confirmado_email":
             try:
-                from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
+                from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, descricao_dias
                 data_original = date.fromisoformat(payload["scheduled_start"][:10])
                 data_final, regra = ajustar_data_por_dia_fixo(
                     {"address": payload.get("customer", {}).get("address", "")}, data_original)
@@ -749,7 +749,7 @@ def processar_pedido(
                         payload["scheduled_end"] = data_final.isoformat() + payload["scheduled_end"][10:]
                     logger.info(
                         f"  {codigo_ps}: agendamento {data_original.strftime('%d/%m')} cai fora dos dias de "
-                        f"'{regra['nome']}' ({nomes_dias(regra['dias'])}) — ajustado pra "
+                        f"'{regra['nome']}' ({descricao_dias(regra)}) — ajustado pra "
                         f"{data_final.strftime('%d/%m/%Y')}."
                     )
                     data_ja_no_vuupt = ((servico_existente or {}).get("scheduled_start") or "")[:10]

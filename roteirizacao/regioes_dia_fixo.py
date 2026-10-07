@@ -469,7 +469,7 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
                        f"(entrega às {descricao_dias(regra)}) -- "
                        f"agendado pra {data_alvo.strftime('%d/%m/%Y')} (próxima ocorrência).")
             atualizados.append({"servico": s, "regiao": regra["nome"],
-                                "dias": regra["dias"], "data": data_alvo})
+                                "dias": regra["dias"], "regra": regra, "data": data_alvo})
         except Exception as e:
             logger.warning(f"  {s.get('code')}: falha ao aplicar dia fixo de '{regra['nome']}': {e}")
 

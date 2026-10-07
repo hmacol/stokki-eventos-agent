@@ -105,14 +105,14 @@ def _dias_fixos_do_grupo(pedidos: list[dict]) -> tuple[dict[str, str], bool]:
     caem em regra de dia fixo -- quando sim, o texto do prazo não pode
     falar em "próximo dia útil" (pedido do Hugo, 13/08).
     """
-    from roteirizacao.regioes_dia_fixo import regra_dia_fixo_do_servico, nomes_dias
+    from roteirizacao.regioes_dia_fixo import regra_dia_fixo_do_servico, descricao_dias
 
     dias = {}
     todos = bool(pedidos)
     for p in pedidos:
         regra = regra_dia_fixo_do_servico(p)
         if regra:
-            dias[regra["nome"]] = nomes_dias(regra["dias"])
+            dias[regra["nome"]] = descricao_dias(regra)   # "Quartas (quinzenal)" quando for o caso
         else:
             todos = False
     return dias, todos
