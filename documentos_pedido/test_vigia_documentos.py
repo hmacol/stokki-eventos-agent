@@ -69,6 +69,12 @@ class Pendencias(unittest.TestCase):
         self.assertIn("NUU: PS-2", r["Boleto (rotas do dia)"]["detalhe"])
         self.assertEqual(r["Arquivos (rotas do dia)"]["status"], "erro")
 
+    def test_situacao_do_cliente_chega_na_avaliacao(self):
+        servicos = [{"codigo": "PS-1", "sender_id": 1, "embarcador": "NUU", "situacao_cliente": "NAO_TEM_BOLETO"}]
+        with patch.object(vd, "_avaliar_romaneio", return_value={"faltas": []}) as av:
+            vd.checar_pendencias(servicos, {})
+        self.assertEqual(av.call_args.kwargs["situacao_cliente"], "NAO_TEM_BOLETO")
+
     def test_dia_sem_rotas_nao_e_alerta(self):
         r = vd.checar_pendencias([], {})
         self.assertTrue(all(v["status"] == "ok" for v in r.values()))

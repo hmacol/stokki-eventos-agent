@@ -983,10 +983,12 @@ def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], l
     return abertos, problemas
 
 
-def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedido: dict) -> dict:
+def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedido: dict,
+                              situacao_cliente: str | None = None) -> dict:
     """NF/boletos utilizáveis do pedido e o que falta -- a mesma régua da
     capa do romaneio, reaproveitada pelo vigia de documentos (05/10).
-    "sem boleto" só quando o boleto é esperado (regras_documentos)."""
+    "sem boleto" só quando o boleto é esperado (regras_documentos).
+    situacao_cliente: marcação do par em regras/clientes_boleto (06/10)."""
     docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
     nf_dispensada = sender_id in SENDERS_SEM_NF
     if nf_dispensada:
@@ -997,7 +999,8 @@ def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedid
             nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
     boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
     esperado = _boleto_esperado(sender_id, [row.get("cobranca") for row, _r in nfs
-                                            if row.get("tipo") == "Nota Fiscal"])
+                                            if row.get("tipo") == "Nota Fiscal"],
+                                 situacao_cliente=situacao_cliente)
 
     faltas = []
     if not nfs and not nf_dispensada:
@@ -1028,6 +1031,13 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     # a capa precisa do status de tudo antes de qualquer página.
     itens: list[dict] = []
     total = len(servicos)
+    try:
+        from regras import clientes_boleto
+        situacoes = clientes_boleto.situacao_por_pedido(
+            {c for s in servicos for c in _codigos_base_lista(s.get("code") or "")})
+    except Exception as e:
+        logger.warning(f"  Clientes com boleto indisponível ({e}) -- romaneio segue pela regra da NF.")
+        situacoes = {}
     for posicao, s in enumerate(servicos, start=1):
         codigo = (s.get("code") or "").lstrip("#")
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
@@ -1036,7 +1046,8 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         # nf_dispensada: embarcadores da CANHOTEIRA -- NF nunca aberta,
         # emendada ou contada (achado 20/08). Régua completa em
         # avaliar_documentos_pedido().
-        av = avaliar_documentos_pedido(codigo, sender_id, docs_por_pedido)
+        situacao = next((situacoes[c] for c in _codigos_base_lista(codigo) if c in situacoes), None)
+        av = avaliar_documentos_pedido(codigo, sender_id, docs_por_pedido, situacao_cliente=situacao)
         nfs, boletos, nf_dispensada = av["nfs"], av["boletos"], av["nf_dispensada"]
         pendencias.extend(f"{codigo}: {f}" for f in av["faltas"])
 

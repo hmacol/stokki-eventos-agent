@@ -50,6 +50,17 @@ class AvaliarDocumentos(unittest.TestCase):
     def test_sem_nf_acusa_nf(self):
         self.assertIn("sem nota fiscal", self._av(SENDER_COMUM, [])["faltas"])
 
+    def _av_sit(self, sender, docs, situacao):
+        with patch.object(gpr, "_abrir_documentos", side_effect=_abrir_tudo):
+            return gpr.avaliar_documentos_pedido("PS-1", sender, {"PS-1": docs}, situacao_cliente=situacao)
+
+    def test_nao_tem_boleto_desliga_cobranca(self):
+        r = self._av_sit(SENDER_COMUM, [_nf(1)], "NAO_TEM_BOLETO")
+        self.assertNotIn("sem boleto", r["faltas"])
+
+    def test_tem_boleto_liga_mesmo_sem_quadro(self):
+        self.assertIn("sem boleto", self._av_sit(SENDER_COMUM, [_nf(-1)], "TEM_BOLETO")["faltas"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,9 +63,17 @@ def cobranca_da_danfe(texto: str) -> int | None:
     return 1 if _RE_DUPLICATA.search(quadro) else 0
 
 
-def boleto_esperado(sender_id: int | None, cobrancas: list[int | None]) -> bool:
+def boleto_esperado(sender_id: int | None, cobrancas: list[int | None],
+                    situacao_cliente: str | None = None) -> bool:
     """cobrancas: o valor de cobranca_da_danfe de cada NF do pedido
-    (lista vazia = pedido sem NF). -1 (gravado pelo backfill) = sem quadro."""
+    (lista vazia = pedido sem NF). -1 (gravado pelo backfill) = sem quadro.
+    situacao_cliente: decisão do time em regras/clientes_boleto.py (06/10) --
+    TEM_BOLETO/NAO_TEM_BOLETO vencem a NF; sem decisão (None/PENDENTE) vale
+    a regra pela NF."""
+    if situacao_cliente == "NAO_TEM_BOLETO":
+        return False
+    if situacao_cliente == "TEM_BOLETO":
+        return True
     cobrancas = [None if c == -1 else c for c in cobrancas]
     if any(c == 1 for c in cobrancas):
         return True

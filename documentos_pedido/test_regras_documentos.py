@@ -59,6 +59,15 @@ class BoletoEsperado(unittest.TestCase):
         self.assertFalse(boleto_esperado(QUATRO_ESTRELAS, [-1]))
         self.assertTrue(boleto_esperado(DOURADO, [-1]))
 
+    def test_marcacao_vence_a_nf(self):
+        self.assertFalse(boleto_esperado(QUATRO_ESTRELAS, [1], "NAO_TEM_BOLETO"))
+        self.assertTrue(boleto_esperado(QUATRO_ESTRELAS, [0], "TEM_BOLETO"))
+        self.assertTrue(boleto_esperado(None, [], "TEM_BOLETO"))
+
+    def test_pendente_usa_a_regra_atual(self):
+        self.assertTrue(boleto_esperado(QUATRO_ESTRELAS, [1], "PENDENTE"))
+        self.assertFalse(boleto_esperado(QUATRO_ESTRELAS, [-1], "PENDENTE"))
+
 
 if __name__ == "__main__":
     unittest.main()

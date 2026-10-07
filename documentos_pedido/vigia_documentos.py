@@ -95,9 +95,14 @@ def servicos_do_dia(con: sqlite3.Connection, data_iso: str) -> list[dict]:
             for c, s, n in rows]
 
 
-def _avaliar(servico: dict, docs_por_pedido: dict) -> dict:
+def _avaliar_romaneio(codigo, sender_id, docs_por_pedido, situacao_cliente=None):
     import gerar_pdf_romaneios as gpr
-    return gpr.avaliar_documentos_pedido(servico["codigo"], servico["sender_id"], docs_por_pedido)
+    return gpr.avaliar_documentos_pedido(codigo, sender_id, docs_por_pedido, situacao_cliente=situacao_cliente)
+
+
+def _avaliar(servico: dict, docs_por_pedido: dict) -> dict:
+    return _avaliar_romaneio(servico["codigo"], servico["sender_id"], docs_por_pedido,
+                             situacao_cliente=servico.get("situacao_cliente"))
 
 
 def _detalhe_por_embarcador(itens: list[tuple[str, str]]) -> str:
@@ -164,6 +169,14 @@ def main(data_iso: str | None = None, modo_teste: bool = False, notificar: bool 
         resumo["Rotas do dia"] = {"status": "ok", "detalhe": f"{len(servicos)} entrega(s) em {data_iso}"}
         import gerar_pdf_romaneios as gpr
         codigos = {c for s in servicos for c in gpr._codigos_base_lista(s["codigo"])}
+        try:
+            from regras import clientes_boleto
+            situacoes = clientes_boleto.situacao_por_pedido(codigos)
+        except Exception:
+            situacoes = {}
+        for s in servicos:
+            s["situacao_cliente"] = next(
+                (situacoes[c] for c in gpr._codigos_base_lista(s["codigo"]) if c in situacoes), None)
         docs_por_pedido, _ = gpr.carregar_documentos_por_pedido(codigos)
         resumo.update(checar_pendencias(servicos, docs_por_pedido))
         resumo["Revisão manual (24h)"] = checar_revisoes(con, agora)
