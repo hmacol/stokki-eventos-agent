@@ -58,10 +58,12 @@ for _p in (_RAIZ, _AQUI):
 
 import yaml
 
+import cancelamento as cm
 import envio_pedidos as ep
 import pedidos_dedicados
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
+from stokki.auth import StokkiSession
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("portal_envios")
@@ -741,6 +743,55 @@ def reconciliar_codigos(conn) -> int:
     return achados
 
 
+# ── Cancelamentos pedidos pelo cliente (06/10) ────────────────────────────────
+
+def resetar_orfaos(conn) -> None:
+    """ENVIANDO/CANCELANDO órfão (worker caiu no meio) volta depois de 30 min."""
+    conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
+                 "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
+    conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
+                 "WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
+                 (ep.STATUS_CRIADO, ep.STATUS_CANCELANDO))
+    conn.commit()
+
+
+def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Cancela na Vuupt e na Stokki o que o cliente pediu (status CANCELANDO),
+    dentro da trava da Stokki. Sem CANCELANDO não abre sessão nenhuma."""
+    vazio = {"cancelados": 0, "operacao": 0, "falhas": 0}
+    n = conn.execute("SELECT COUNT(*) FROM portal_envios WHERE status = ?", (ep.STATUS_CANCELANDO,)).fetchone()[0]
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} cancelamento(s) ficam como estão.")
+        return vazio
+    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=60, alternativa=True):
+        logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) esperam o próximo ciclo.")
+        return vazio
+    try:
+        sessao = StokkiSession(config)
+        token = (config.get("vuupt_api") or {}).get("token", "")
+
+        def cancelar_vuupt(service_id):
+            from roteirizacao.cancelar_servico import cancelar_servico_completo
+            return cancelar_servico_completo(token, service_id)
+
+        def cancelar_stokki(id_stokki, motivo):
+            from stokki.cancelar import cancelar_pedido
+            return cancelar_pedido(sessao, id_stokki, motivo)
+
+        def avisar(envio, motivo, erro):
+            try:
+                envio = {**envio, "nome_embarcador": ep.config_stokki_cliente(conn, envio["cnpj_embarcador"], config)["nome"]}
+            except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o CNPJ
+                pass
+            cm.avisar_operacao(config, envio, motivo, erro)
+
+        return cm.processar_cancelamentos(conn, config, cancelar_vuupt, cancelar_stokki, avisar)
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+
+
 # ── Ciclo ──────────────────────────────────────────────────────────────────────
 
 def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
@@ -748,15 +799,16 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
     conn = ep.conectar()
     try:
         lote_max = int(_cfg_portal(config).get("lote_maximo") or 30)
-        # ENVIANDO órfão (worker caiu no meio) volta pra fila depois de 30 min
-        conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
-                     "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
-        conn.commit()
+        resetar_orfaos(conn)
+        total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
+        try:
+            total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- cancelamento não derruba a fila de envios
+            logger.error(f"cancelamentos falharam: {e}\n{traceback.format_exc()}")
         rows = conn.execute("SELECT * FROM portal_envios WHERE status = 'NA_FILA' ORDER BY cnpj_embarcador, criado_em, id").fetchall()
         por_cliente: dict[str, list[dict]] = {}
         for r in rows:
             por_cliente.setdefault(r["cnpj_embarcador"], []).append(dict(r))
-        total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
         for cnpj, envios in por_cliente.items():
             for i in range(0, len(envios), lote_max):
                 resumo = processar_lote(conn, cnpj, envios[i:i + lote_max], config, simular=simular, headless=headless)
@@ -788,7 +840,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"]:
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values()):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")
