@@ -78,6 +78,7 @@
  Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py, fora_dia_fixo.py
  Feriados / dia útil ....................... regras/feriados.py (único lugar); reagendar_feriado.py
  Informativo de regiões (PDF) .............. gerar_informativo_regioes.py
+ Informativo mensal (dia 1, e-mail+WhatsApp) gerar_informativo_mensal.py (timer stokki-informativo-mensal)
  Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
  Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
@@ -359,6 +360,15 @@
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  gerar_informativo_regioes.py  PDF do informativo de regiões
                                (dados/informativos/). Envio é manual, do Hugo.
+ gerar_informativo_mensal.py   Dia 1 às 07h (stokki-informativo-mensal.timer):
+                               HTML (mesmo template da página /cliente/regioes,
+                               logo embutido) + PDF via Playwright em
+                               dados/informativos/, e-mail com anexos
+                               (informativo_mensal.forcar_destino; sem a chave
+                               vai pro Hugo) e aviso no WhatsApp do grupo com o
+                               link. A partir do dia 25 o alvo é o mês seguinte.
+                               O /inicio do painel mostra "Virada de mês" nos
+                               últimos 7 dias (pagina_inicial.montar_virada_de_mes).
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.

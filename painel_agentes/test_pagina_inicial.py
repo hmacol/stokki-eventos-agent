@@ -168,6 +168,15 @@ class TestMontarDados(unittest.TestCase):
             execucoes=lambda: [],
         )
 
+    def test_virada_de_mes_so_na_ultima_semana(self):
+        kw = dict(contadores=lambda n: {}, niveis_por_contador={}, snapshot=lambda d: None, execucoes=lambda: [])
+        meio = pagina_inicial.montar_dados("total", lambda r: "/" + r, hoje=date(2026, 10, 7), **kw)
+        self.assertIsNone(meio["virada_mes"])
+        fim = pagina_inicial.montar_dados("leitura", lambda r: "/" + r, hoje=date(2026, 10, 28), **kw)
+        self.assertEqual(fim["virada_mes"]["titulo_mes"], "Novembro de 2026")
+        self.assertEqual(fim["virada_mes"]["dias_para_virar"], 4)
+        self.assertTrue(fim["virada_mes"]["url"].endswith("?mes=2026-11"))
+
     def test_rotinas_so_para_total(self):
         self.assertIn("rotinas", self._dados("total"))
         for nivel in ("operador", "leitura", "atendimento"):

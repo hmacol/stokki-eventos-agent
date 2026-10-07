@@ -50,20 +50,20 @@ def _pascoa(ano: int) -> date:
 def feriados_do_ano(ano: int) -> dict[date, str]:
     pascoa = _pascoa(ano)
     return {
-        date(ano, 1, 1): "Confraternizacao Universal",
-        date(ano, 1, 25): "Aniversario de Sao Paulo",
+        date(ano, 1, 1): "Confraternização Universal",
+        date(ano, 1, 25): "Aniversário de São Paulo",
         pascoa - timedelta(days=48): "Carnaval",
         pascoa - timedelta(days=47): "Carnaval",
         pascoa - timedelta(days=2): "Sexta-feira Santa",
         date(ano, 4, 21): "Tiradentes",
         date(ano, 5, 1): "Dia do Trabalho",
         pascoa + timedelta(days=60): "Corpus Christi",
-        date(ano, 7, 9): "Revolucao Constitucionalista",
-        date(ano, 9, 7): "Independencia do Brasil",
+        date(ano, 7, 9): "Revolução Constitucionalista",
+        date(ano, 9, 7): "Independência do Brasil",
         date(ano, 10, 12): "Nossa Senhora Aparecida",
         date(ano, 11, 2): "Finados",
-        date(ano, 11, 15): "Proclamacao da Republica",
-        date(ano, 11, 20): "Consciencia Negra",
+        date(ano, 11, 15): "Proclamação da República",
+        date(ano, 11, 20): "Consciência Negra",
         date(ano, 12, 25): "Natal",
     }
 

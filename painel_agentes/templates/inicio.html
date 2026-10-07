@@ -35,6 +35,9 @@
 
   /* Bloco 1: um cartão por fila, clicável. */
   .grade-pendencias { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  #virada-mes { border-left: 4px solid var(--acento, #0EA575); padding-left: 14px; }
+  .virada-titulo { margin: 0 0 8px; font-weight: 600; }
+  .virada-lista { margin: 0 0 10px; padding-left: 18px; line-height: 1.5; }
   a.pendencia {
     display: flex;
     flex-direction: column;
@@ -111,6 +114,11 @@
   <div id="pendencias" class="grade-pendencias" aria-live="polite">
     <div class="vazio">Carregando…</div>
   </div>
+</section>
+
+<section class="secao" id="virada-mes" aria-labelledby="titulo-virada" hidden>
+  <h2 id="titulo-virada">Virada de mês</h2>
+  <div id="virada-conteudo"></div>
 </section>
 
 <section class="secao" aria-labelledby="titulo-operacao">
@@ -242,6 +250,29 @@
       rotinasEl.replaceChildren(frag);
     }
 
+    function pintarVirada(v) {
+      var secao = document.getElementById("virada-mes");
+      var alvo = document.getElementById("virada-conteudo");
+      if (!v) { secao.hidden = true; return; }
+      var frag = document.createDocumentFragment();
+      frag.appendChild(el("p", "virada-titulo",
+        v.titulo_mes + " começa em " + v.dias_para_virar + (v.dias_para_virar === 1 ? " dia" : " dias") +
+        ". Confira feriados e datas antes de virar o mês."));
+      var ul = el("ul", "virada-lista");
+      if (!v.notas.length) ul.appendChild(el("li", null, "Nenhum feriado em dia útil no mês."));
+      v.notas.forEach(function(n) { ul.appendChild(el("li", null, n)); });
+      v.quinzenais.forEach(function(q) { ul.appendChild(el("li", null, q.nome + " (quinzenal): " + q.datas.join(", "))); });
+      frag.appendChild(ul);
+      var p = el("p", "rodape-secao");
+      var a = el("a", null, "Ver calendário público de " + v.titulo_mes);
+      a.href = v.url; a.target = "_blank"; a.rel = "noopener";
+      p.appendChild(a);
+      p.appendChild(document.createTextNode(" · No dia 1 o informativo sai por e-mail e no WhatsApp do grupo."));
+      frag.appendChild(p);
+      alvo.replaceChildren(frag);
+      secao.hidden = false;
+    }
+
     function buscar() {
       if (document.hidden) return;
       fetch(BASE_PATH + "/api/inicio/dados", { credentials: "same-origin" })
@@ -252,6 +283,7 @@
         .then(function(d) {
           if (!d) return;
           pintarPendencias(d.pendencias || []);
+          pintarVirada(d.virada_mes || null);
           pintarOperacao(d.operacao);
           if (d.rotinas) pintarRotinas(d.rotinas);
         })

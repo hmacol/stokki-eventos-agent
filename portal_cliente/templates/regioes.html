@@ -105,7 +105,7 @@
 <div class="folha">
   <header class="capa">
     <div class="capa-topo">
-      <span class="logo"><img src="{{ url_for('regioes_logo') }}" alt="Fresh Log"></span>
+      <span class="logo"><img src="{{ logo_src }}" alt="Fresh Log"></span>
       <span class="eyebrow">Informativo aos embarcadores</span>
     </div>
     <h1>Dias de atendimento por região</h1>
@@ -161,9 +161,9 @@
     <section>
       <h2>Calendário <small>Grande São Paulo é atendida em todos os dias úteis; o calendário mostra as regiões de dia fixo</small></h2>
       <nav class="mes-nav" aria-label="Mês">
-        {% if d.pode_voltar %}<a href="{{ url_for('regioes', mes=d.mes_anterior) }}">‹ mês anterior</a>{% else %}<span class="off">‹ mês anterior</span>{% endif %}
+        {% if d.pode_voltar %}<a href="{{ url_mes_anterior }}">‹ mês anterior</a>{% else %}<span class="off">‹ mês anterior</span>{% endif %}
         <strong>{{ d.titulo_mes }}</strong>
-        {% if d.pode_avancar %}<a href="{{ url_for('regioes', mes=d.mes_seguinte) }}">próximo mês ›</a>{% else %}<span class="off">próximo mês ›</span>{% endif %}
+        {% if d.pode_avancar %}<a href="{{ url_mes_seguinte }}">próximo mês ›</a>{% else %}<span class="off">próximo mês ›</span>{% endif %}
       </nav>
       <div class="legenda">
         <span><b style="background:var(--mint-light);box-shadow:inset 0 0 0 1px #9ED9C3"></b>Regiões semanais</span>
@@ -204,7 +204,7 @@
     <div class="contato">
       <strong>Fale com a gente</strong>
       <span>E-mail: <a href="mailto:entregas@freshlogbr.com">entregas@freshlogbr.com</a></span>
-      <span>Portal do cliente: <a href="{{ url_for('login') }}">app.freshhub.com.br/cliente</a></span>
+      <span>Portal do cliente: <a href="{{ url_portal }}">app.freshhub.com.br/cliente</a></span>
     </div>
     <small>Fresh Log · Fresh Hub · Os dias de visita valem para os meses seguintes; use as setas para ver as datas.</small>
   </footer>

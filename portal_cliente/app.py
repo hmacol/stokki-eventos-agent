@@ -497,7 +497,13 @@ def regioes():
     dentro da janela permitida; fora dela cai no mês corrente."""
     hoje = date.today()
     ano, mes = regioes_info.validar_mes(request.args.get("mes"), hoje)
-    resp = Response(render_template("regioes.html", d=regioes_info.montar(ano, mes, hoje)))
+    d = regioes_info.montar(ano, mes, hoje)
+    # O mesmo template vira o informativo mensal (gerar_informativo_mensal.py),
+    # por isso os links entram como variáveis, não como url_for no HTML.
+    resp = Response(render_template("regioes.html", d=d, logo_src=url_for("regioes_logo"),
+                                    url_mes_anterior=url_for("regioes", mes=d["mes_anterior"]),
+                                    url_mes_seguinte=url_for("regioes", mes=d["mes_seguinte"]),
+                                    url_portal=url_for("login")))
     resp.headers["Cache-Control"] = "public, max-age=900"
     return resp
 

@@ -125,8 +125,22 @@ def montar_rotinas(execucoes: list[dict], url_de, agora: datetime | None = None)
     return {"rodando": rodando, "falhas": falhas}
 
 
+def montar_virada_de_mes(hoje: date | None = None) -> dict | None:
+    """Lembrete dos últimos dias do mês (Hugo, 07/10/2026): feriados do mês
+    seguinte, visitas que caem no dia útil seguinte e datas das regiões
+    quinzenais. Lê só a configuração (portal_cliente/regioes_atendimento.py)."""
+    import sys
+    from pathlib import Path
+    raiz = Path(__file__).parent.parent
+    for p in (raiz, raiz / "portal_cliente"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    import regioes_atendimento
+    return regioes_atendimento.virada_de_mes(hoje)
+
+
 def montar_dados(nivel_acesso: str, url_de, *, contadores=None, niveis_por_contador=None,
-                 snapshot=None, execucoes=None) -> dict:
+                 snapshot=None, execucoes=None, hoje: date | None = None) -> dict:
     """JSON de /api/inicio/dados. Sem argumentos de fonte, usa as reais.
     Falha numa fonte nao derruba as outras: o bloco vem vazio e o erro
     vai pro log."""
@@ -154,6 +168,11 @@ def montar_dados(nivel_acesso: str, url_de, *, contadores=None, niveis_por_conta
         dados["operacao"] = montar_operacao(snapshot(date.today()))
     except Exception as e:
         logger.warning(f"[inicio] Falha no resumo do dia: {e}")
+    try:
+        dados["virada_mes"] = montar_virada_de_mes(hoje)
+    except Exception as e:
+        logger.warning(f"[inicio] Falha no lembrete de virada de mes: {e}")
+        dados["virada_mes"] = None
 
     if nivel_acesso == "total":
         try:
