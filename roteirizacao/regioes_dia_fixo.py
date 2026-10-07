@@ -127,16 +127,20 @@ ENDERECOS_DIA_FIXO: list[dict] = [
     # São Bernardo é cidade da região ABCD (seg/qua/sex), mas esta regra
     # por endereço tem prioridade: no galpão, só quarta/sexta.
     {"nome": "Centrosul", "dias": [QUARTA, SEXTA], "cidade": "SAO BERNARDO DO CAMPO",
+     "endereco": "Rua Makita Brasil, 300 - Cooperativa, São Bernardo do Campo",  # só exibição (portal /regioes)
      "padroes": ["MAKITA BRASIL", "09852-080", "09852080"]},
     # Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra/SP
     # 03/10/2026: Terça e Quinta (a maioria das entregas já caía nesses dias).
     {"nome": "Transfrios", "dias": [TERCA, QUINTA], "cidade": "ITAPECERICA DA SERRA",
+     "endereco": "Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra",
      "padroes": ["FRANCISCO HENGLES", "06885-160", "06885160"]},
     # Av. Arterial Sul, 451 (tb. Rod. Raposo Tavares km 20,5) - Parque Ipê, São Paulo/SP
     {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA], "cidade": "SAO PAULO",
+     "endereco": "Av. Arterial Sul, 451 - Parque Ipê, São Paulo",
      "padroes": ["ARTERIAL SUL", "05577-300", "05577300"]},
     # Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri/SP
     {"nome": "TAFF", "dias": [TERCA, QUINTA], "cidade": "BARUERI",
+     "endereco": "Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri",
      "padroes": ["VILA LOBOS QUERO", "06422-122", "06422122"]},
 ]
 
@@ -338,7 +342,7 @@ def _inicio_da_semana(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def _visita_nominal(regra: dict, data: date) -> bool:
+def visita_nominal(regra: dict, data: date) -> bool:
     """Dia da semana certo e, se a região é quinzenal, semana PAR contada a
     partir da âncora (semanas de segunda a domingo -- vale antes da âncora
     também). Não olha feriado."""
@@ -352,17 +356,17 @@ def _visita_nominal(regra: dict, data: date) -> bool:
 
 
 def data_valida_na_regiao(regra: dict, data: date) -> bool:
-    """`data` é dia de visita da região? Dia nominal (_visita_nominal) que
+    """`data` é dia de visita da região? Dia nominal (visita_nominal) que
     seja dia útil, OU o dia útil seguinte a um feriado que seria dia de
     visita (Hugo, 07/10/2026: não há operação em feriado e a visita passa
     pro próximo dia). Ex.: ABCD (seg/qui) com 12/10 feriado -> 13/10 vale."""
     if not feriados.eh_dia_util(data):
         return False
-    if _visita_nominal(regra, data):
+    if visita_nominal(regra, data):
         return True
     anterior = data - timedelta(days=1)
     while not feriados.eh_dia_util(anterior):
-        if feriados.eh_feriado(anterior) and _visita_nominal(regra, anterior):
+        if feriados.eh_feriado(anterior) and visita_nominal(regra, anterior):
             return True
         anterior -= timedelta(days=1)
     return False

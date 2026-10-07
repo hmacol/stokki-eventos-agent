@@ -97,6 +97,7 @@
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
+ Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
@@ -723,7 +724,12 @@
  README.md                 Doc principal do portal.
  app.py                    Flask: login, acompanhamento do dia, canhoto,
                            resposta de insucesso, notificações, envios,
-                           /equipe, exportação xlsx.
+                           /equipe, exportação xlsx, /regioes (pública).
+ regioes_atendimento.py    Dados da página pública /regioes (regiões, dias de
+                           visita, galpões, calendário do mês com feriados),
+                           lidos de roteirizacao/regioes_dia_fixo.py e
+                           regras/feriados.py. ?mes=AAAA-MM (1 atrás, 3 à
+                           frente). Logo servido de assets/ em /regioes/logo.png.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.

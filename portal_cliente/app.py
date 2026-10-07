@@ -46,6 +46,7 @@ import dados_cliente as dados
 import envio_pedidos as envios
 from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
+import regioes_atendimento as regioes_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 
@@ -138,7 +139,7 @@ def _carregar_cliente():
             return redirect(url_for("trocar_pin"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
 
 
 def requer_cliente(f):
@@ -484,6 +485,26 @@ def inicio():
 @app.route("/saude")
 def saude():
     return jsonify({"ok": True, "agora": datetime.now().isoformat(timespec="seconds")})
+
+
+# ── Página pública: regiões e dias de atendimento (Hugo, 07/10) ────────────────
+
+@app.route("/regioes")
+def regioes():
+    """Informativo aos embarcadores, sem login: regiões, dias de visita,
+    galpões e calendário do mês, lidos da configuração de dia fixo e do
+    calendário de feriados (regioes_atendimento.py). `?mes=AAAA-MM` navega
+    dentro da janela permitida; fora dela cai no mês corrente."""
+    hoje = date.today()
+    ano, mes = regioes_info.validar_mes(request.args.get("mes"), hoje)
+    resp = Response(render_template("regioes.html", d=regioes_info.montar(ano, mes, hoje)))
+    resp.headers["Cache-Control"] = "public, max-age=900"
+    return resp
+
+
+@app.route("/regioes/logo.png")
+def regioes_logo():
+    return send_file(_RAIZ / "assets" / "logo_freshlog.png", mimetype="image/png", max_age=86400)
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
