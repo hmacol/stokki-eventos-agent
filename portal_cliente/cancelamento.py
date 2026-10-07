@@ -15,6 +15,7 @@ significa só "atribuído a uma rota" (status_provedor = assigned).
 Três fins: CANCELADO (as duas pontas), CRIADO + solicitação PENDENTE +
 aviso (precisa da operação ou falha técnica). Nunca fica tentando sozinho.
 """
+import html as html_mod
 import logging
 import re
 import sqlite3
@@ -164,15 +165,18 @@ def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str) -> None:
     pode derrubar o ciclo."""
     rotulo = ep.rotulo_envio(envio)
     ps = envio.get("codigo_pedido") or "(código ainda não identificado)"
+    # nome do destinatário vem do XML do cliente e o erro vem da Stokki:
+    # tudo escapado antes de entrar no HTML do e-mail
+    esc = lambda v: html_mod.escape(str(v or ""))  # noqa: E731
     try:
         email_cfg = config.get("email", {}) or {}
         destino = email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
         if destino:
             html = envelope_html(
-                f"<p>O cliente <b>{envio.get('nome_embarcador') or envio.get('cnpj_embarcador')}</b> pediu pelo portal o "
-                f"<b>cancelamento</b> do pedido {ps} · {rotulo} · {envio.get('destinatario_nome') or ''}.</p>"
-                f"<p>O sistema não cancelou sozinho: <b>{motivo}</b>.</p>"
-                + (f"<p style='color:#B91C1C'>Erro: {erro[:400]}</p>" if erro else "")
+                f"<p>O cliente <b>{esc(envio.get('nome_embarcador') or envio.get('cnpj_embarcador'))}</b> pediu pelo portal o "
+                f"<b>cancelamento</b> do pedido {esc(ps)} · {esc(rotulo)} · {esc(envio.get('destinatario_nome'))}.</p>"
+                f"<p>O sistema não cancelou sozinho: <b>{esc(motivo)}</b>.</p>"
+                + (f"<p style='color:#B91C1C'>Erro: {esc(erro[:400])}</p>" if erro else "")
                 + "<p>Cancele na Vuupt e na Stokki e feche a solicitação: "
                   "<code>portal_cliente/gerenciar_clientes.py solicitacoes</code> / <code>concluir &lt;id&gt; \"motivo\"</code>.</p>",
                 rodape="Fresh Log · Portal do cliente · cancelamento", cor_acento="#F5A623")

@@ -254,16 +254,64 @@ class AvisarOperacao(unittest.TestCase):
     def test_manda_email_e_whatsapp_e_nunca_levanta(self):
         from unittest import mock
         config = {"email": {"email_atendimento": "atendimento@x.com"}, "whatsapp_notificacoes": {}}
-        e = {"id": 50, "numero_nf": "9959", "codigo_pedido": "PS-39959", "destinatario_nome": "D", "cnpj_embarcador": "111"}
+        e = {"id": 50, "numero_nf": "9959", "codigo_pedido": "PS-39959", "destinatario_nome": "D <script>x</script>", "cnpj_embarcador": "111"}
         with mock.patch.object(cm, "enviar_email", return_value=True) as em, \
              mock.patch("notificar_whatsapp.avisar_cancelamento_pendente", return_value="modo_teste") as wa:
-            cm.avisar_operacao(config, e, "motorista em rota", "")
+            cm.avisar_operacao(config, e, "motorista em rota", "Stokki <b>500</b>")
         self.assertEqual(em.call_args.args[0], ["atendimento@x.com"])
         self.assertIn("PS-39959", em.call_args.args[1])
         self.assertIn("motorista em rota", em.call_args.args[2])
+        # texto vindo do XML do cliente / da Stokki entra escapado no HTML do e-mail
+        self.assertNotIn("<script>", em.call_args.args[2])
+        self.assertIn("&lt;script&gt;", em.call_args.args[2])
+        self.assertIn("Stokki &lt;b&gt;500", em.call_args.args[2])
         wa.assert_called_once()
         with mock.patch.object(cm, "enviar_email", side_effect=RuntimeError("smtp fora")):
             cm.avisar_operacao(config, e, "x", "")  # nao levanta
+
+
+class Worker(unittest.TestCase):
+    def test_ciclo_processa_cancelando_sob_a_trava(self):
+        from unittest import mock
+        import enviar_stokki as es
+        conn = conn_completo([(50, ep.STATUS_CRIADO, "9959", "PS-39959")])
+        ep.aplicar_acao(conn, envio(conn, 50), "cancelar", {}, "cliente")
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value=True) as adq, \
+             mock.patch.object(es.sessao_uso, "liberar") as lib, \
+             mock.patch.object(es, "StokkiSession") as sess, \
+             mock.patch.object(es.cm, "processar_cancelamentos", return_value={"cancelados": 1, "operacao": 0, "falhas": 0}) as proc:
+            r = es.processar_cancelamentos_do_ciclo(conn, {"vuupt_api": {"token": "t"}})
+        self.assertEqual(r["cancelados"], 1)
+        adq.assert_called_once()
+        lib.assert_called_once_with(es.DONO_TRAVA)
+        sess.assert_called_once()
+        self.assertEqual(proc.call_args.args[0], conn)
+
+    def test_sem_cancelando_nao_abre_sessao(self):
+        from unittest import mock
+        import enviar_stokki as es
+        conn = conn_completo([(50, ep.STATUS_CRIADO, "9959", "PS-39959")])
+        with mock.patch.object(es, "StokkiSession") as sess, mock.patch.object(es.sessao_uso, "adquirir") as adq:
+            self.assertEqual(es.processar_cancelamentos_do_ciclo(conn, {}), {"cancelados": 0, "operacao": 0, "falhas": 0})
+        sess.assert_not_called()
+        adq.assert_not_called()
+
+    def test_trava_ocupada_deixa_pro_proximo_ciclo(self):
+        from unittest import mock
+        import enviar_stokki as es
+        conn = conn_completo([(50, ep.STATUS_CRIADO, "9959", "PS-39959")])
+        ep.aplicar_acao(conn, envio(conn, 50), "cancelar", {}, "cliente")
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value=False), mock.patch.object(es.sessao_uso, "em_uso", return_value="pipeline"):
+            es.processar_cancelamentos_do_ciclo(conn, {})
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CANCELANDO)
+
+    def test_cancelando_orfao_volta_pra_criado(self):
+        import enviar_stokki as es
+        conn = conn_completo([(50, ep.STATUS_CANCELANDO, "9959", "PS-39959")])
+        conn.execute("UPDATE portal_envios SET atualizado_em = datetime('now','localtime','-31 minutes') WHERE id = 50")
+        conn.commit()
+        es.resetar_orfaos(conn)
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CRIADO)
 
 
 if __name__ == "__main__":
