@@ -968,6 +968,44 @@ def api_clientes_agenda_decidir():
     return jsonify({"ok": True, "situacao": resultado["situacao"]})
 
 
+@app.route("/clientes-boleto")
+@requer_auth
+def clientes_boleto():
+    """Clientes que pagam com boleto, por embarcador (06/10). Quem alimenta
+    é marcar_clientes_boleto.py (sequência das 18h): par com DANFE com
+    duplicata vira PENDENTE e o time decide aqui. Só TEM_BOLETO gera aviso
+    de boleto faltando ao embarcador (aviso_boleto_faltando.py)."""
+    from regras import clientes_boleto as cb
+    try:
+        linhas, erro = cb.listar(), None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar clientes com boleto")
+        linhas, erro = [], str(e)
+    pendentes = [l for l in linhas if l["situacao"] == cb.PENDENTE]
+    decididos = [l for l in linhas if l["situacao"] != cb.PENDENTE]
+    return render_template("clientes_boleto.html", pendentes=pendentes, decididos=decididos, erro=erro)
+
+
+@app.route("/api/clientes-boleto/decidir", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_clientes_boleto_decidir():
+    from regras import clientes_boleto as cb
+    body = request.get_json(force=True) or {}
+    acao = body.get("acao")
+    if acao not in ("tem", "nao_tem"):
+        return jsonify({"erro": "ação inválida"}), 400
+    try:
+        resultado = cb.decidir(int(body.get("sender_id") or 0), body.get("documento", ""), acao == "tem",
+                               session.get("usuario", ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao decidir cliente com boleto")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "situacao": resultado["situacao"]})
+
+
 @app.route("/pedidos-parados")
 @requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
 def pedidos_parados():
