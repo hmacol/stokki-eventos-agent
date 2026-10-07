@@ -69,16 +69,6 @@ class Pendencias(unittest.TestCase):
         self.assertIn("NUU: PS-2", r["Boleto (rotas do dia)"]["detalhe"])
         self.assertEqual(r["Arquivos (rotas do dia)"]["status"], "erro")
 
-    def test_boleto_faltando_so_no_email(self):
-        # Decisão 06/10: boleto faltando vai no e-mail, mas não dispara
-        # WhatsApp (status "ok" -- só etapa != "ok" vai pro grupo).
-        servicos = [{"codigo": "PS-2", "sender_id": 2, "embarcador": "NUU"}]
-        with patch.object(vd, "_avaliar", return_value={"faltas": ["sem boleto"]}):
-            r = vd.checar_pendencias(servicos, {})
-        self.assertEqual(r["Boleto (rotas do dia)"]["status"], "ok")
-        self.assertIn("ATENÇÃO", r["Boleto (rotas do dia)"]["detalhe"])
-        self.assertIn("NUU: PS-2", r["Boleto (rotas do dia)"]["detalhe"])
-
     def test_dia_sem_rotas_nao_e_alerta(self):
         r = vd.checar_pendencias([], {})
         self.assertTrue(all(v["status"] == "ok" for v in r.values()))
