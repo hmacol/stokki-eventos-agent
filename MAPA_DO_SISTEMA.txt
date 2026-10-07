@@ -97,6 +97,9 @@
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
+                                             enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
+                                             -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
@@ -443,6 +446,9 @@
  pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
                       iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
                       listar_transportadoras, listar_embarcadores, parsers de linha.
+ cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
+                      poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
+                      só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
@@ -553,6 +559,9 @@
                            sobra, nos rascunhos abertos (corte 22h). 18h e
                            22h desde 05/10 (+ botão do painel).
  cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
+ cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
+                           rota enviada) fora do painel; sempre PUT /cancel. Usado
+                           pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
@@ -715,7 +724,12 @@
                            abre /trocar-pin até o cliente trocar.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
- enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright).
+ enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
+                           ciclo, executa os cancelamentos CANCELANDO sob a trava.
+ cancelamento.py           Cancelamento pedido pelo cliente (06/10): regra sozinho x
+                           operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
+                           entregue, insucesso, Lalamove -> operação), executa na Vuupt
+                           e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  assistente.py             Triagem com Claude no chat.
  cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado

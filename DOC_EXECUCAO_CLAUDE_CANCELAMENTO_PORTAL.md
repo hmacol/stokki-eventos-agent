@@ -5,8 +5,10 @@ Especificação de 06/10/2026, a pedido do Hugo, depois do caso PS-39959
 duas semanas vivo na Stokki e na Vuupt, e o portal continuou cobrando
 agendamento.
 
-Status: **especificado, não implementado**. Decisões abaixo são do Hugo
-(06/10).
+Status: **implementado em 07/10/2026, sem deploy** (ramo
+`cancelar-agendamento`; plano em
+`docs/superpowers/plans/2026-10-06-cancelamento-pedido-portal.md`).
+Decisões abaixo são do Hugo (06/10).
 
 ## Por que existe
 
