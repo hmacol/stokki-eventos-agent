@@ -211,7 +211,8 @@
       $('env-carimbo').textContent = e.message;
     }
     clearTimeout(timer);
-    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    // 06/10: cancelamento roda no worker (ciclo de 20 s): recarrega enquanto houver "Cancelando"
+    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO' || x.status === 'CANCELANDO');
     timer = setTimeout(carregar, ativo ? 20000 : 120000);
   }
 
