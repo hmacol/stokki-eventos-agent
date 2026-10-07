@@ -10,7 +10,6 @@ e o chamado. Usado por aviso_boleto_faltando.py (18h30, pedidos de
 amanhã) e pelo resumo das 20h (entregues hoje).
 """
 import html
-import re
 import sqlite3
 import sys
 from datetime import datetime
@@ -26,7 +25,7 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 EMAIL_RESPOSTA = "entregas@freshlogbr.com"
 URL_PORTAL = "https://app.freshhub.com.br/cliente"
 AREA_CHAMADO = "boleto"
-STATUS_RASCUNHO_VIVO = ("RASCUNHO", "ENVIADO", "ERRO_ENVIO")
+STATUS_RASCUNHO_DESCARTADO = "DESCARTADO"
 
 
 def pedidos_da_data(conn: sqlite3.Connection, data_iso: str) -> list[dict]:
@@ -39,8 +38,8 @@ def pedidos_da_data(conn: sqlite3.Connection, data_iso: str) -> list[dict]:
         SELECT p.codigo, p.sender_id, p.destinatario_codigo, p.destinatario_nome, p.remetente_nome
         FROM rascunhos_rota r JOIN rascunhos_parada rp ON rp.rascunho_id = r.id
              JOIN nucleo_pedidos p ON p.vuupt_service_id = rp.service_id
-        WHERE r.data_alvo = ? AND r.status IN (?, ?, ?) AND p.excluido_em IS NULL AND p.tipo = 'delivery'
-    """, (data_iso, data_iso, *STATUS_RASCUNHO_VIVO)).fetchall()
+        WHERE r.data_alvo = ? AND r.status != ? AND p.excluido_em IS NULL AND p.tipo = 'delivery'
+    """, (data_iso, data_iso, STATUS_RASCUNHO_DESCARTADO)).fetchall()
     vistos, saida = set(), []
     for codigo, sid, dest, nome, emb in rows:
         base = codigo_base(codigo)
@@ -130,7 +129,7 @@ def email_aviso(nome_emb: str, itens: list[dict], data_entrega: str,
 def registrar_no_chamado(emb: dict, sender_id: int, texto: str, pedido_ref: str, config: dict,
                          modulo_chamados=None) -> int | None:
     """Mensagem no chamado de boleto aberto do embarcador, ou abre um
-    (área 'boleto'). Devolve o id ou None se falhar (não derruba o aviso)."""
+    (área 'boleto'). Devolve o id. Exceções propagam para quem chama (que decide se derruba o aviso)."""
     ch = modulo_chamados
     if ch is None:
         sys.path.insert(0, str(_RAIZ / "portal_cliente"))

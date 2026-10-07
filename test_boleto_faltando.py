@@ -26,9 +26,11 @@ def _con():
           ('PS-1', 101, 11, '12345678000190', 'MERCADO A', 'NUU', 'delivery', 1, NULL),
           ('PS-2', 102, 11, '12345678000190', 'MERCADO A', 'NUU', 'delivery', NULL, NULL),
           ('PS-3', 103, 22, '98765432000110', 'PADARIA B', 'SOTILLE', 'delivery', 2, NULL),
-          ('PS-4-R1', 104, 11, '12345678000190', 'MERCADO A', 'NUU', 'delivery', 1, NULL);
-        INSERT INTO rascunhos_rota VALUES (7, '2026-10-07', 'RASCUNHO'), (8, '2026-10-07', 'DESCARTADO');
-        INSERT INTO rascunhos_parada VALUES (7, 102, 'PS-2', 11), (7, 101, 'PS-1', 11), (8, 103, 'PS-3', 22);
+          ('PS-4-R1', 104, 11, '12345678000190', 'MERCADO A', 'NUU', 'delivery', 1, NULL),
+          ('PS-5', 105, 11, '12345678000190', 'MERCADO A', 'NUU', 'delivery', NULL, NULL);
+        INSERT INTO rascunhos_rota VALUES (7, '2026-10-07', 'RASCUNHO'), (8, '2026-10-07', 'DESCARTADO'),
+                                    (9, '2026-10-07', 'OFERTADA');
+        INSERT INTO rascunhos_parada VALUES (7, 102, 'PS-2', 11), (7, 101, 'PS-1', 11), (8, 103, 'PS-3', 22), (9, 105, 'PS-5', 11);
         INSERT INTO documentos_processados VALUES ('n1', 'Nota Fiscal', 'PS-1', 'ENVIADO', '40958'),
                                                   ('b4', 'Boleto', 'PS-4', 'ENVIADO', NULL),
                                                   ('b2', 'Boleto', 'PS-2', 'REVISAO_MANUAL', NULL);
@@ -37,9 +39,13 @@ def _con():
 
 
 class Selecao(unittest.TestCase):
+    def test_rascunho_ofertado_entra(self):
+        cods = [p["codigo"] for p in bf.pedidos_da_data(_con(), "2026-10-07")]
+        self.assertIn("PS-5", cods)
+
     def test_rota_e_rascunho_sem_duplicar_sem_cancelada_sem_descartado(self):
         cods = sorted(p["codigo"] for p in bf.pedidos_da_data(_con(), "2026-10-07"))
-        self.assertEqual(cods, ["PS-1", "PS-2", "PS-4"])
+        self.assertEqual(cods, ["PS-1", "PS-2", "PS-4", "PS-5"])
 
     def test_faltando_so_tem_boleto_sem_boleto_enviado(self):
         c = _con()
