@@ -105,6 +105,7 @@ AREAS = {
     "cadastro": "Cadastro / acesso",
     "outro": "Outro",
     "envios": "Envios do portal",  # bloqueio de área não atendida (23/09), aberto pelo sistema
+    "boleto": "Boleto",  # boleto faltando (06/10), aberto pelo sistema -- aviso_boleto_faltando.py
 }
 
 # Assuntos do motorista (Hugo, 12/09) -- o que ele escolhe ao abrir a conversa.

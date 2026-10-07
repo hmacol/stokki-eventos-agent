@@ -81,6 +81,16 @@ TIPOS = {
                      "para o dia fixo da região.",
         "default": True,
     },
+    # Aviso ao embarcador quando falta boleto de cliente que paga com boleto
+    # (aviso_boleto_faltando.py, 06/10/2026). Vale pro e-mail e, com número
+    # gravado, pro WhatsApp.
+    "boleto_faltando": {
+        "grupo": "acao",
+        "rotulo": "Boleto faltando",
+        "descricao": "Na véspera da entrega, os pedidos de clientes que pagam com boleto e ainda estão sem o "
+                     "boleto, para você enviar a tempo de ir junto com a mercadoria.",
+        "default": True,
+    },
     # Unico tipo que sai por WhatsApp, nao por e-mail (Hugo, 29/09/2026): so
     # vale com um numero gravado na coluna `whatsapp`. Ligado por padrao pra
     # preencher o numero bastar; a chave serve pra pausar sem apagar o numero.
@@ -246,14 +256,16 @@ def salvar(conn: sqlite3.Connection, cnpj, emails, flags: dict, por: str, whatsa
     return ler(conn, cnpj)
 
 
-def whatsapp_do_embarcador(conn: sqlite3.Connection, cnpj) -> str | None:
-    """Numero pro aviso de chamado sem resposta (avisar_cliente_sem_resposta.py):
-    so com a chave `chamado_sem_resposta` ligada e numero valido gravado.
-    So leitura: sem tabela ou sem coluna (ninguem salvou ainda) e None."""
-    if not _tabela_existe(conn) or "whatsapp" not in _colunas(conn):
+def whatsapp_do_embarcador(conn: sqlite3.Connection, cnpj, tipo: str = "chamado_sem_resposta") -> str | None:
+    """Numero do WhatsApp do embarcador pra um aviso do `tipo` (chamado sem
+    resposta, boleto faltando...): so com a chave do tipo ligada e numero
+    valido gravado. So leitura: sem tabela ou sem coluna e None."""
+    if tipo not in TIPOS:
+        raise ValueError(f"Tipo de notificacao desconhecido: {tipo}")
+    if not _tabela_existe(conn) or "whatsapp" not in _colunas(conn) or tipo not in _colunas(conn):
         return None
     row = conn.execute(
-        "SELECT whatsapp, chamado_sem_resposta FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
+        f"SELECT whatsapp, {tipo} FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
         (_so_digitos(cnpj),)).fetchone()
     if not row or not row[1]:
         return None

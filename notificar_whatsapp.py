@@ -361,6 +361,20 @@ def texto_clientes_boleto(novos: int, total: int, link: str, agora: datetime | N
     ])
 
 
+def texto_boleto_faltando(codigos: list[str], quando: str) -> str:
+    """Pro embarcador, até MAX_MENSAGEM: quantos pedidos estão sem boleto e
+    os primeiros códigos que couberem (aviso_boleto_faltando.py, 06/10)."""
+    n = len(codigos)
+    cabeca = f"Fresh Log: {n} pedido{'s' if n != 1 else ''} de {quando} sem boleto"
+    rodape = "Detalhes no e-mail e no portal."
+    for k in range(n, 0, -1):
+        lista = ", ".join(codigos[:k]) + (f" +{n - k}" if k < n else "")
+        texto = f"{cabeca} ({lista}). {rodape}"
+        if len(texto) <= MAX_MENSAGEM:
+            return texto
+    return f"{cabeca}. {rodape}"[:MAX_MENSAGEM]
+
+
 def texto_cliente_sem_resposta(chamado_id: int, link: str) -> str:
     """Pro cliente: sem nome, sem assunto, sem conteudo da conversa. Pede
     pra responder no portal (a resposta no WhatsApp cai no celular do Hugo
@@ -732,6 +746,34 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
                 logger.info(f"WhatsApp nao enviado (fora do dia fixo {codigo}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_CLIENTE, "fora_dia_fixo", texto, f"fora_dia_fixo:{codigo}",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_cliente_boleto_faltando(chave: str, telefone: str, texto: str, config: dict,
+                                   modo_teste: bool = False, **kw) -> str:
+    """Aviso direto ao embarcador (aviso_boleto_faltando.py e resumo das 20h).
+    `chave` e a assinatura de nao-repeticao."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (boleto faltando {chave}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado (boleto faltando {chave}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, "boleto_faltando", texto, chave,
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
