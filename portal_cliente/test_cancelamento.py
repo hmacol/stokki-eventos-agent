@@ -250,5 +250,21 @@ class Processar(unittest.TestCase):
         self.assertEqual(self.rodar(conn), {"cancelados": 0, "operacao": 0, "falhas": 0})
 
 
+class AvisarOperacao(unittest.TestCase):
+    def test_manda_email_e_whatsapp_e_nunca_levanta(self):
+        from unittest import mock
+        config = {"email": {"email_atendimento": "atendimento@x.com"}, "whatsapp_notificacoes": {}}
+        e = {"id": 50, "numero_nf": "9959", "codigo_pedido": "PS-39959", "destinatario_nome": "D", "cnpj_embarcador": "111"}
+        with mock.patch.object(cm, "enviar_email", return_value=True) as em, \
+             mock.patch("notificar_whatsapp.avisar_cancelamento_pendente", return_value="modo_teste") as wa:
+            cm.avisar_operacao(config, e, "motorista em rota", "")
+        self.assertEqual(em.call_args.args[0], ["atendimento@x.com"])
+        self.assertIn("PS-39959", em.call_args.args[1])
+        self.assertIn("motorista em rota", em.call_args.args[2])
+        wa.assert_called_once()
+        with mock.patch.object(cm, "enviar_email", side_effect=RuntimeError("smtp fora")):
+            cm.avisar_operacao(config, e, "x", "")  # nao levanta
+
+
 if __name__ == "__main__":
     unittest.main()

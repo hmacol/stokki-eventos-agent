@@ -29,6 +29,7 @@ for _p in (_RAIZ, _AQUI):
         sys.path.insert(0, str(_p))
 
 import envio_pedidos as ep  # noqa: E402
+from email_utils import enviar_email, envelope_html  # noqa: E402
 
 logger = logging.getLogger("portal_cancelamento")
 
@@ -155,3 +156,31 @@ def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuu
         logger.info(f"{rotulo} PS-{id_stokki}: cancelado na Vuupt e na Stokki.")
         total["cancelados"] += 1
     return total
+
+
+def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str) -> None:
+    """E-mail ao atendimento + WhatsApp no grupo do atendimento. Best-effort:
+    o envio já voltou pra CRIADO com a solicitação PENDENTE; o aviso não
+    pode derrubar o ciclo."""
+    rotulo = ep.rotulo_envio(envio)
+    ps = envio.get("codigo_pedido") or "(código ainda não identificado)"
+    try:
+        email_cfg = config.get("email", {}) or {}
+        destino = email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
+        if destino:
+            html = envelope_html(
+                f"<p>O cliente <b>{envio.get('nome_embarcador') or envio.get('cnpj_embarcador')}</b> pediu pelo portal o "
+                f"<b>cancelamento</b> do pedido {ps} · {rotulo} · {envio.get('destinatario_nome') or ''}.</p>"
+                f"<p>O sistema não cancelou sozinho: <b>{motivo}</b>.</p>"
+                + (f"<p style='color:#B91C1C'>Erro: {erro[:400]}</p>" if erro else "")
+                + "<p>Cancele na Vuupt e na Stokki e feche a solicitação: "
+                  "<code>portal_cliente/gerenciar_clientes.py solicitacoes</code> / <code>concluir &lt;id&gt; \"motivo\"</code>.</p>",
+                rodape="Fresh Log · Portal do cliente · cancelamento", cor_acento="#F5A623")
+            enviar_email([destino], f"[Portal] Cancelamento precisa da operação · {rotulo} · {ps}", html, email_cfg)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"e-mail do cancelamento {envio.get('id')} falhou: {e}")
+    try:
+        import notificar_whatsapp
+        notificar_whatsapp.avisar_cancelamento_pendente(envio, motivo, erro, config)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"WhatsApp do cancelamento {envio.get('id')} falhou: {e}")

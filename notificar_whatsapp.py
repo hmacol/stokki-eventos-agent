@@ -583,6 +583,32 @@ def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config:
         return "falhou"
 
 
+def texto_cancelamento_pendente(envio: dict, motivo: str, erro: str) -> str:
+    """Cancelamento pedido pelo cliente no portal que o worker nao conseguiu
+    fazer sozinho (06/10). Cabe em MAX_MENSAGEM."""
+    nf = envio.get("numero_nf") or envio.get("referencia") or "?"
+    ps = envio.get("codigo_pedido") or "sem PS"
+    emb = (envio.get("nome_embarcador") or envio.get("cnpj_embarcador") or "")[:30]
+    detalhe = f"falhou: {erro}" if erro else motivo
+    texto = f"Cancelamento pedido pelo cliente: NF {nf} · {ps} · {emb} · {detalhe} -- precisa cancelar à mão"
+    return texto[:MAX_MENSAGEM - 1] + "…" if len(texto) > MAX_MENSAGEM else texto
+
+
+def avisar_cancelamento_pendente(envio: dict, motivo: str, erro: str, config: dict, **kw) -> str:
+    """Grupo do ATENDIMENTO (grupo_atendimento_id), nao o dos alertas.
+    Assinatura por envio: o mesmo pedido nao repete no dia."""
+    try:
+        grupo = _cfg(config).get("grupo_atendimento_id")
+        if not grupo:
+            return "desligado"
+        return despachar(config, "portal_cancelamento", "cancelamento",
+                         texto_cancelamento_pendente(envio, motivo, erro), f"cancelamento:{envio['id']}",
+                         grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
 def _ja_enviada_alguma_vez(conn, origem: str, assinatura: str) -> bool:
     """Ja saiu (situacao 'enviado') alguma vez, sem limite de tempo? Falha
     ao ler (banco travado, tabela que ainda nao existe) conta como nao."""
