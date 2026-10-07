@@ -27,6 +27,7 @@ Tabelas (dados/dados.db):
 
 Status da fila (portal_envios.status):
   NA_FILA -> ENVIANDO -> CRIADO | ERRO | DUPLICADO ; CANCELADO (antes de ir)
+  CRIADO/DUPLICADO -> CANCELANDO -> CANCELADO | CRIADO (precisa da operação)  (06/10)
 
 Origem do pedido (portal_envios.origem), 09/09/2026:
   xml       -- NF-e (fluxo original); chave_nfe é a chave de acesso real.
@@ -75,6 +76,7 @@ STATUS_CRIADO = "CRIADO"
 STATUS_ERRO = "ERRO"
 STATUS_DUPLICADO = "DUPLICADO"
 STATUS_CANCELADO = "CANCELADO"
+STATUS_CANCELANDO = "CANCELANDO"   # cancelamento pedido pelo cliente, worker ainda vai executar (06/10)
 # Área não atendida (Hugo, 23/09): não vai pra Stokki até a equipe liberar
 # no /atendimento do painel. O worker só pega NA_FILA, então fica parado.
 STATUS_AGUARDANDO_LIBERACAO = "AGUARDANDO_LIBERACAO"
@@ -86,6 +88,7 @@ ROTULOS_STATUS = {
     STATUS_ERRO: "Erro",
     STATUS_DUPLICADO: "Já existia na Stokki",
     STATUS_CANCELADO: "Cancelado",
+    STATUS_CANCELANDO: "Cancelando",
     STATUS_AGUARDANDO_LIBERACAO: "Aguardando liberação",
 }
 MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora da área atendida em SP"}
@@ -1335,7 +1338,7 @@ def _dt_br(valor: str | None) -> str:
 def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     d = dict(r)
     pend = [s for s in solicitacoes.get(d["id"], []) if s["status"] == "PENDENTE"]
-    cancelamento_pedido = any(s["tipo"] == "cancelar" for s in pend)
+    cancelamento_pedido = d["status"] == STATUS_CANCELANDO or any(s["tipo"] == "cancelar" for s in pend)
     d.setdefault("origem", ORIGEM_XML)
     # Cancelamento solicitado (pedido ja criado na Stokki, a Fresh Log ainda
     # vai cancelar): o portal para de cobrar agendamento e nao oferece
@@ -1464,16 +1467,22 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             raise ErroEnvio("Esse pedido está sendo enviado à Stokki agora -- tente de novo em alguns instantes.")
         if st == STATUS_CANCELADO:
             raise ErroEnvio("Esse pedido já está cancelado.")
+        if st == STATUS_CANCELANDO:
+            raise ErroEnvio("O cancelamento desse pedido já está em andamento.")
         if st in (STATUS_NA_FILA, STATUS_ERRO, STATUS_AGUARDANDO_LIBERACAO):
             conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELADO, agora, envio["id"]))
             _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por, status="CONCLUIDA")
             _remover_dedicado(conn, envio["id"], por)
             conn.commit()
             return {"aplicado": True, "precisa_operacao": False, "mensagem": "Pedido cancelado -- não será enviado à Stokki."}
+        # Já criado na Stokki (CRIADO/DUPLICADO): o worker portal-cliente-envios
+        # cancela na Vuupt e na Stokki no próximo ciclo (06/10, spec do
+        # cancelamento). Se o motorista já saiu, ele devolve pra operação.
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELANDO, agora, envio["id"]))
         _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por)
         conn.commit()
-        return {"aplicado": False, "precisa_operacao": True,
-                "mensagem": "Pedido de cancelamento registrado. A Fresh Log vai cancelar o pedido na Stokki e você verá aqui quando estiver feito."}
+        return {"aplicado": False, "precisa_operacao": False, "em_andamento": True,
+                "mensagem": "Cancelamento em andamento -- você verá aqui em instantes."}
 
     if tipo == "reenviar":
         if st not in (STATUS_ERRO, STATUS_CANCELADO):
@@ -1587,7 +1596,21 @@ def listar_solicitacoes_pendentes(conn: sqlite3.Connection, cnpj_embarcador: str
     return [dict(r) for r in conn.execute(sql + " ORDER BY s.criado_em", args)]
 
 
+def buscar_solicitacao_cancelamento(conn: sqlite3.Connection, envio_id: int) -> dict | None:
+    r = conn.execute("SELECT * FROM portal_solicitacoes WHERE envio_id = ? AND tipo = 'cancelar' AND status = 'PENDENTE' "
+                     "ORDER BY id DESC LIMIT 1", (envio_id,)).fetchone()
+    return dict(r) if r else None
+
+
 def concluir_solicitacao(conn: sqlite3.Connection, solicitacao_id: int, resposta: str, recusada: bool = False) -> None:
+    """Fecha a solicitação. Cancelamento concluído (não recusado) também
+    marca o envio como CANCELADO -- é a CLI da operação fechando o que o
+    worker devolveu pra ela (06/10)."""
+    s = conn.execute("SELECT envio_id, tipo FROM portal_solicitacoes WHERE id = ?", (solicitacao_id,)).fetchone()
     conn.execute("UPDATE portal_solicitacoes SET status = ?, resposta = ?, concluido_em = ? WHERE id = ?",
                  ("RECUSADA" if recusada else "CONCLUIDA", resposta, _agora(), solicitacao_id))
+    if s and s["tipo"] == "cancelar" and not recusada:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?",
+                     (STATUS_CANCELADO, _agora(), s["envio_id"]))
+        _remover_dedicado(conn, s["envio_id"], "conclusao")
     conn.commit()
