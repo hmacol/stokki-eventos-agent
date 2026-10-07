@@ -16,7 +16,8 @@ identificados por trechos de rua/CEP, ver ENDERECOS_DIA_FIXO):
   quinzenal (03/10/2026)
   Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva, Caieiras,
   Cajamar, Franco da Rocha, Francisco Morato, Louveira) -- Quarta
-  Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta
+  Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta,
+  quinzenal (07/10/2026)
   Barueri (Barueri, Santana do Parnaíba, Jandira) -- Terça e Quinta
   ABCD (Santo André, São Bernardo do Campo, São Caetano do Sul,
   Diadema, Ribeirão Pires, Mauá) -- Segunda e Quinta (03/10/2026)
@@ -68,7 +69,8 @@ FREQUENCIA_QUINZENAL = "quinzenal"
 
 # Prazo de entrega por nível: (dias, conta só dia útil?). Interna = entrega
 # diária da Grande SP e regiões internas de dia fixo (Barueri, ABCD,
-# galpões por endereço); semanal = regiões externas; quinzenal = Sorocaba.
+# galpões por endereço); semanal = regiões externas; quinzenal = Sorocaba e
+# Piracicaba (07/10/2026).
 NIVEL_INTERNA = "interna"
 NIVEL_SEMANAL = "semanal"
 NIVEL_QUINZENAL = "quinzenal"
@@ -105,6 +107,7 @@ REGIOES: list[dict] = [
                  "CAIEIRAS", "CAJAMAR", "FRANCO DA ROCHA", "FRANCISCO MORATO",
                  "LOUVEIRA"]},
     {"nome": "Piracicaba", "dias": [QUARTA], "externa": True,
+     "frequencia": FREQUENCIA_QUINZENAL, "ancora": "2026-10-14",  # Hugo 07/10: quinzenal; 1ª visita na quarta seguinte
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
     {"nome": "Barueri", "dias": [TERCA, QUINTA], "externa": False,
      "cidades": ["BARUERI", "SANTANA DO PARNAIBA", "JANDIRA"]},

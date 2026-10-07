@@ -538,8 +538,9 @@
  alocacao_motoristas.py    Alocação equitativa com travas.
  zonas_sp.py               Zonas da Grande SP.
  rodizio_sp.py             Rodízio municipal por placa.
- regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (Sorocaba
-                           quinzenal, 1ª visita 06/10/2026), prazo por nível,
+ regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (quinzenais:
+                           Sorocaba ter desde 06/10/2026, Piracicaba qua desde
+                           14/10/2026), prazo por nível,
                            cidade truncada. Feriado não é dia de visita; o dia
                            útil seguinte herda a visita (regras/feriados.py).
  fora_dia_fixo.py          Data do embarcador fora do dia de visita: marca

@@ -43,6 +43,14 @@ class TestOutubro2026(unittest.TestCase):
         self.assertEqual([d.day for d in s["datas"]], [6, 20])
         self.assertEqual((s["frequencia"], s["prazo"], s["quinzenal"]), ("Quinzenal", "até 15 dias corridos", True))
 
+    def test_piracicaba_quinzenal_14_e_28(self):
+        p = self._regiao("Piracicaba")
+        self.assertEqual([d.day for d in p["datas"]], [14, 28])
+        self.assertEqual((p["frequencia"], p["quinzenal"]), ("Quinzenal", True))
+        celulas = {c["dia"]: c for semana in self.d["semanas"] for c in semana if c}
+        self.assertNotIn("Piracicaba", [c["nome"] for c in celulas[21]["chips"]])
+        self.assertIn("Piracicaba", [c["nome"] for c in celulas[28]["chips"]])
+
     def test_galpao_tem_endereco_da_configuracao(self):
         taff = next(g for g in self.d["galpoes"] if g["nome"] == "TAFF")
         self.assertIn("Vila Lobos Quero", taff["endereco"])

@@ -53,6 +53,16 @@ class TestConfiguracao(unittest.TestCase):
         self.assertEqual((regra["dias"], regra["frequencia"]), ([rdf.QUARTA], rdf.FREQUENCIA_SEMANAL))
         self.assertEqual((regra["nivel"], regra["prazo_dias"], regra["prazo_dias_uteis"]), (rdf.NIVEL_SEMANAL, 7, False))
 
+    def test_piracicaba_quinzenal_nas_quartas(self):
+        # Hugo, 07/10/2026: Piracicaba quinzenal; 1a visita na quarta seguinte (14/10)
+        regra = rdf.regra_dia_fixo_do_servico({"address": "Rua A 1, Centro, Americana - SP, 13465-000, Brasil"})
+        self.assertEqual((regra["dias"], regra["frequencia"], regra["ancora"]), ([rdf.QUARTA], rdf.FREQUENCIA_QUINZENAL, "2026-10-14"))
+        self.assertEqual((regra["nivel"], regra["prazo_dias"]), (rdf.NIVEL_QUINZENAL, 15))
+        self.assertTrue(rdf.data_valida_na_regiao(regra, date(2026, 10, 14)))
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 10, 21)))
+        self.assertTrue(rdf.data_valida_na_regiao(regra, date(2026, 10, 28)))
+        self.assertEqual(rdf.proxima_data_valida(regra, date(2026, 10, 14)), date(2026, 10, 28))
+
     def test_grande_sp_sem_regra(self):
         self.assertIsNone(rdf.regra_dia_fixo_do_servico(SAO_PAULO))
 
