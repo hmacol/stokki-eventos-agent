@@ -120,6 +120,7 @@ from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_eq
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo_com_folga
 from regras.prioridade_ofertas import carregar_historico_justica
+from regras import feriados
 import rotas_fracas
 import pedidos_segurados
 
@@ -237,12 +238,9 @@ HORA_CORTE_MESMO_DIA = 14  # pedido do Hugo, 10/08
 
 
 def _proximo_dia_util(data: date) -> date:
-    """Rola a data para frente até cair em dia útil (seg-sex) -- mesmo
-    critério simples (sem calendário de feriados) já usado em
-    pipeline.py::_proximo_dia_util."""
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex, sem feriado
+    -- regras/feriados.py, Hugo 07/10/2026: não há rota em feriado)."""
+    return feriados.rolar_para_dia_util(data)
 
 
 def _data_alvo_rotas(agora: datetime) -> date:

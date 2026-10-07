@@ -41,8 +41,15 @@ Stokki, confirmação por e-mail, etc.), nem fica reagendando indefinidamente.
 """
 import logging
 import re
+import sys
 import unicodedata
 from datetime import date, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import feriados  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -331,10 +338,10 @@ def _inicio_da_semana(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def data_valida_na_regiao(regra: dict, data: date) -> bool:
-    """`data` é dia de visita da região? Dia da semana certo e, se a região
-    é quinzenal, semana PAR contada a partir da âncora (semanas de segunda
-    a domingo -- vale antes da âncora também)."""
+def _visita_nominal(regra: dict, data: date) -> bool:
+    """Dia da semana certo e, se a região é quinzenal, semana PAR contada a
+    partir da âncora (semanas de segunda a domingo -- vale antes da âncora
+    também). Não olha feriado."""
     if data.weekday() not in regra["dias"]:
         return False
     if regra.get("frequencia") != FREQUENCIA_QUINZENAL or not regra.get("ancora"):
@@ -342,6 +349,23 @@ def data_valida_na_regiao(regra: dict, data: date) -> bool:
     ancora = date.fromisoformat(regra["ancora"])
     semanas = (_inicio_da_semana(data) - _inicio_da_semana(ancora)).days // 7
     return semanas % 2 == 0
+
+
+def data_valida_na_regiao(regra: dict, data: date) -> bool:
+    """`data` é dia de visita da região? Dia nominal (_visita_nominal) que
+    seja dia útil, OU o dia útil seguinte a um feriado que seria dia de
+    visita (Hugo, 07/10/2026: não há operação em feriado e a visita passa
+    pro próximo dia). Ex.: ABCD (seg/qui) com 12/10 feriado -> 13/10 vale."""
+    if not feriados.eh_dia_util(data):
+        return False
+    if _visita_nominal(regra, data):
+        return True
+    anterior = data - timedelta(days=1)
+    while not feriados.eh_dia_util(anterior):
+        if feriados.eh_feriado(anterior) and _visita_nominal(regra, anterior):
+            return True
+        anterior -= timedelta(days=1)
+    return False
 
 
 def proxima_data_valida(regra: dict, a_partir_de: date) -> date:

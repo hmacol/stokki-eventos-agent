@@ -23,7 +23,14 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
 Estados sem prazo (só aparecem na lista): AGENDADO (data futura), EM_ROTA
 (rota de hoje ou futura).
 """
+import sys
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import feriados  # noqa: E402
 
 SEM_SERVICO = "SEM_SERVICO"
 NO_POOL = "NO_POOL"
@@ -62,7 +69,7 @@ HORA_LIMITE_RASCUNHO = time(19, 0)
 
 
 def eh_dia_util(d: date) -> bool:
-    return d.weekday() < 5
+    return feriados.eh_dia_util(d)
 
 
 def somar_dias_uteis(inicio: datetime, dias: int) -> datetime:

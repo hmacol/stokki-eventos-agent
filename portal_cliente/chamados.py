@@ -53,6 +53,7 @@ import yaml
 
 from email_leitura_utils import decodificar_header, extrair_texto_corpo, fetch_em_lote, remover_texto_citado
 from email_utils import enviar_email, envelope_html
+from regras import feriados
 
 logger = logging.getLogger("portal_cliente.chamados")
 
@@ -434,9 +435,9 @@ def situacao_horario(config: dict, agora: datetime | None = None, perfil: str = 
     ai, af = hc["almoco_inicio"][0] * 60 + hc["almoco_inicio"][1], hc["almoco_fim"][0] * 60 + hc["almoco_fim"][1]
 
     def proximo_dia_util(d: date) -> date:
-        for _ in range(8):
+        for _ in range(10):
             d = d + timedelta(days=1)
-            if d.weekday() in hc["dias"]:
+            if d.weekday() in hc["dias"] and not feriados.eh_feriado(d):
                 return d
         return d
 
@@ -445,7 +446,7 @@ def situacao_horario(config: dict, agora: datetime | None = None, perfil: str = 
             return "amanhã"
         return DIAS_SEMANA[d.weekday()]
 
-    if agora.weekday() not in hc["dias"]:
+    if agora.weekday() not in hc["dias"] or feriados.eh_feriado(agora.date()):
         prox = proximo_dia_util(agora.date())
         return {"dentro": False, "motivo": "fora_dia", "volta_em": f"{rotulo_dia(prox)} às {_fmt_hm(hc['inicio'])}"}
     if minutos < ini:

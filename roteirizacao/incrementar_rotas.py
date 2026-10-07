@@ -75,7 +75,7 @@ import re
 import sys
 import time
 from collections import Counter
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 
 _RAIZ_LOCAL   = Path(__file__).parent
@@ -124,6 +124,7 @@ from regras.complexidade_entrega import (
 )
 from notificar_agendamento_pendente import identificar_pendentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
+from regras import feriados
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
@@ -154,12 +155,9 @@ HORA_CORTE_PEDIDO = 22
 
 
 def _dia_util_anterior(data: date) -> date:
-    """Último dia útil (seg-sex) ESTRITAMENTE anterior a `data` -- mesmo
-    critério simples, sem feriados, de criar_rotas_diarias._proximo_dia_util."""
-    anterior = data - timedelta(days=1)
-    while anterior.weekday() >= 5:
-        anterior -= timedelta(days=1)
-    return anterior
+    """Último dia útil ESTRITAMENTE anterior a `data` (seg-sex sem feriado,
+    regras/feriados.py)."""
+    return feriados.dia_util_anterior(data)
 
 
 def limite_corte_pedidos(data_alvo: date) -> datetime:

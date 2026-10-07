@@ -86,6 +86,46 @@ class TestDataValida(unittest.TestCase):
         self.assertTrue(rdf.data_valida_na_regiao({"nome": "X", "dias": [rdf.TERCA]}, date(2026, 10, 20)))
 
 
+class TestFeriado(unittest.TestCase):
+    """Hugo, 07/10/2026: nao ha visita em feriado; a visita que cairia no
+    feriado e feita no dia util seguinte."""
+
+    def test_feriado_nao_e_dia_de_visita(self):
+        regra = rdf.regra_dia_fixo_do_servico(ABCD)                              # segunda e quinta
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 10, 12)))  # feriado numa segunda
+
+    def test_dia_util_seguinte_ao_feriado_herda_a_visita(self):
+        regra = rdf.regra_dia_fixo_do_servico(ABCD)
+        self.assertTrue(rdf.data_valida_na_regiao(regra, date(2026, 10, 13)))   # terca vale pelo ABCD
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 10, 14)))  # quarta nao
+
+    def test_terca_comum_continua_invalida(self):
+        regra = rdf.regra_dia_fixo_do_servico(ABCD)
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 10, 20)))
+
+    def test_feriado_na_sexta_passa_pra_segunda(self):
+        centrosul = {"address": "Rua Makita Brasil, 300, Cooperativa, São Bernardo do Campo - SP, 09852-080, Brasil"}
+        regra = rdf.regra_dia_fixo_do_servico(centrosul)                         # quarta e sexta
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 11, 20)))  # Consciencia Negra
+        self.assertTrue(rdf.data_valida_na_regiao(regra, date(2026, 11, 23)))   # segunda seguinte
+
+    def test_quinzenal_so_herda_na_semana_de_visita(self):
+        regra = dict(QUINZENAL, ancora="2026-10-06")                             # visita 06/10 e 20/10
+        feriado_terca = {"nome": "Y", "dias": [rdf.SEGUNDA, rdf.TERCA], "frequencia": rdf.FREQUENCIA_QUINZENAL,
+                         "ancora": "2026-10-13"}                                 # semana de 12/10 e' impar pra Sorocaba
+        self.assertFalse(rdf.data_valida_na_regiao(regra, date(2026, 10, 13)))  # Sorocaba nao visita 13/10
+        self.assertTrue(rdf.data_valida_na_regiao(feriado_terca, date(2026, 10, 13)))
+
+    def test_proxima_data_valida_pula_o_feriado(self):
+        vale = rdf.regra_dia_fixo_do_servico({"address": "Rua A 1, Centro, Jacareí - SP, 12300-000, Brasil"})
+        self.assertEqual(rdf.proxima_data_valida(vale, date(2026, 10, 8)), date(2026, 10, 13))
+
+    def test_ajustar_data_no_feriado_vai_pro_dia_util_seguinte(self):
+        data, regra = rdf.ajustar_data_por_dia_fixo(ABCD, date(2026, 10, 12))
+        self.assertEqual(data, date(2026, 10, 13))
+        self.assertEqual(regra["regiao"], "ABCD")
+
+
 class TestProximaData(unittest.TestCase):
     def test_quinzenal_pula_a_semana_sem_visita(self):
         self.assertEqual(rdf.proxima_data_valida(QUINZENAL, date(2026, 10, 13)), date(2026, 10, 27))

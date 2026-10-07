@@ -98,6 +98,12 @@ class TestPrazo(unittest.TestCase):
         self.assertEqual(rf.proximo_dia_util(date(2026, 10, 2)), date(2026, 10, 5))
         self.assertEqual(rf.proximo_dia_util(date(2026, 9, 29)), date(2026, 9, 30))
 
+    def test_proximo_dia_util_pula_feriado(self):
+        # sexta 09/10 -> fds -> 12/10 feriado -> terca 13/10 (Hugo, 07/10: nao opera em feriado)
+        self.assertEqual(rf.proximo_dia_util(date(2026, 10, 9)), date(2026, 10, 13))
+        # prazo de 3 uteis a partir de quinta 08/10: sex 09, ter 13, qua 14
+        self.assertEqual(rf.prazo_final(date(2026, 10, 8)), date(2026, 10, 14))
+
     def test_entrada_converte_utc_para_brasilia(self):
         # 01:30 UTC de terca = 22:30 de segunda em Brasilia
         self.assertEqual(rf.data_entrada({"created_at": "2026-09-29 01:30:00"}), date(2026, 9, 28))

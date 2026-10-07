@@ -76,6 +76,7 @@
  Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
  Rodízio SP / zonas SP ..................... roteirizacao/rodizio_sp.py, zonas_sp.py
  Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py, fora_dia_fixo.py
+ Feriados / dia útil ....................... regras/feriados.py (único lugar); reagendar_feriado.py
  Informativo de regiões (PDF) .............. gerar_informativo_regioes.py
  Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
@@ -312,6 +313,9 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 16h/18h/22h). Data informada
                          vence o dia fixo da região.
+ reagendar_feriado.py     Pedidos do pool agendados pra um feriado vão pro dia
+                         útil seguinte (ou próxima visita da região); registra
+                         origem DIA_FIXO. Manual, --modo-teste; sem timer.
  marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
                          na fila de autorização do Hugo pra virar AGENDA na
                          BD_CLIENTES (sequências 16h/18h/22h). Aviso no WhatsApp
@@ -481,6 +485,13 @@
                             é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
+                            Christi, 09/07, 25/01; móveis pela Páscoa) e as
+                            funções de dia útil usadas por rota do dia, dia
+                            fixo, prazo, vigia, batimento, rodízio, chamados.
+                            ARMADILHA: não recriar "weekday() >= 5" em módulo
+                            novo; importar daqui. Visita de dia fixo em
+                            feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
  preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
  cadastro_motoristas.py     Grava motorista novo na planilha.
@@ -528,7 +539,8 @@
  rodizio_sp.py             Rodízio municipal por placa.
  regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (Sorocaba
                            quinzenal, 1ª visita 06/10/2026), prazo por nível,
-                           cidade truncada.
+                           cidade truncada. Feriado não é dia de visita; o dia
+                           útil seguinte herda a visita (regras/feriados.py).
  fora_dia_fixo.py          Data do embarcador fora do dia de visita: marca
                            dedicado (valor da calculadora, km em linha reta)
                            e chama o aviso. Roda no job das 18h e no

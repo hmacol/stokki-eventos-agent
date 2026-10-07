@@ -50,6 +50,7 @@ from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
 from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
+from regras import feriados
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
 import redespacho_confirmacao
@@ -192,11 +193,9 @@ TIPOS_CARGA_VALIDOS = {"Congelado", "Seco", "Refrigerado"}
 TIPO_CARGA_PADRAO   = "Seco"
 
 def _proximo_dia_util(data):
-    """Rola a data para frente até cair em dia útil (seg-sex)."""
-    from datetime import timedelta
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex sem feriado,
+    regras/feriados.py)."""
+    return feriados.rolar_para_dia_util(data)
 
 
 def calcular_data_entrega(data_saida_str: str):
