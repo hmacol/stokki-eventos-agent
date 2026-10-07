@@ -347,6 +347,18 @@ def texto_clientes_agenda(novos: int, total: int, link: str, agora: datetime | N
     ])
 
 
+def texto_clientes_boleto(novos: int, total: int, link: str, agora: datetime | None = None) -> str:
+    """Pares embarcador+cliente sugeridos como "tem boleto" esperando o time
+    decidir (marcar_clientes_boleto.py). So contagens; os nomes ficam na tela."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    frase = (f"{novos} novo aguarda" if novos == 1 else f"{novos} novos aguardam")
+    return "\n".join([
+        f"💳 *Clientes com boleto* · {quando}",
+        f"{frase} decisão ({total} no total).",
+        link,
+    ])
+
+
 def texto_cliente_sem_resposta(chamado_id: int, link: str) -> str:
     """Pro cliente: sem nome, sem assunto, sem conteudo da conversa. Pede
     pra responder no portal (a resposta no WhatsApp cai no celular do Hugo
@@ -746,6 +758,18 @@ def avisar_clientes_agenda(novos: int, total: int, link: str, config: dict, modo
             return "nao_relevante"
         return despachar(config, "marcar_clientes_agenda", "clientes_agenda",
                          texto_clientes_agenda(novos, total, link, kw.get("agora")), modo_teste=modo_teste, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_clientes_boleto(novos: int, total: int, link: str, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Pendentes novos de marcar_clientes_boleto.py, uma mensagem por rodada."""
+    try:
+        if not novos:
+            return "nao_relevante"
+        return despachar(config, "marcar_clientes_boleto", "clientes_boleto",
+                         texto_clientes_boleto(novos, total, link, kw.get("agora")), modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
