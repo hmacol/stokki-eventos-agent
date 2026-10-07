@@ -1263,9 +1263,12 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     gravados na criação do rascunho.
 
     Idempotente: rascunho que não está mais em status RASCUNHO (já
-    ENVIADO, DESCARTADO, ou já em ERRO_ENVIO de uma tentativa anterior
-    -- esse último só é reenviado se chamado de novo explicitamente,
-    nunca automaticamente) é pulado sem reprocessar.
+    ENVIADO ou DESCARTADO) é pulado sem reprocessar. ERRO_ENVIO de uma
+    tentativa anterior é aceito (Hugo, 07/10): o clique em "Confirmar e
+    enviar" é a tentativa explícita de reenvio -- antes o card ficava
+    preso com a mensagem velha e só saía dali descartando a rota ou
+    mexendo no banco. "Confirmar e enviar todas" continua mandando só
+    os RASCUNHO (filtro na tela), nunca reenvia erro sozinho.
 
     Se algum(ns) pedido(s) do rascunho já estavam em outra rota
     (conflito com dado desatualizado, mesmo achado de produção que
@@ -1282,7 +1285,7 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     rascunho = buscar_rascunho(rascunho_id)
     if not rascunho:
         return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
-    if rascunho["status"] != STATUS_RASCUNHO:
+    if rascunho["status"] not in (STATUS_RASCUNHO, STATUS_ERRO_ENVIO):
         return {"rascunho_id": rascunho_id, "ok": False, "erro": f"Rascunho não está pendente de envio (status={rascunho['status']})."}
     if not rascunho["paradas"]:
         marcar_erro_envio(rascunho_id, "Rascunho sem paradas -- nada pra enviar.")
