@@ -73,7 +73,10 @@
   .resumo .t { display: flex; align-items: center; gap: 6px; color: var(--teste-texto); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
   .anexo { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 9px; border-radius: 7px; background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 11.5px; text-decoration: none; }
   .msg.eu .anexo { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); color: inherit; }
-  .anexo-audio { display: block; margin-top: 6px; width: 260px; max-width: 100%; height: 36px; }
+  .bolha.com-audio { width: min(100%, 320px); min-width: 240px; }
+  .anexo-audio { display: block; margin-top: 6px; width: 100%; height: 36px; }
+  .anexo-foto { display: block; margin-top: 6px; }
+  .anexo-foto img { display: block; width: 200px; max-width: 100%; border-radius: 8px; border: 1px solid var(--borda); }
   .conv-pe { padding: 10px 16px 12px; border-top: 1px solid var(--borda); display: flex; flex-direction: column; gap: 8px; }
   .macros { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .macro { font-size: 11.5px; padding: 4px 9px; border-radius: 100px; border: 1px solid var(--borda); color: var(--texto); background: none; cursor: pointer; font-family: inherit; white-space: nowrap; }
@@ -324,14 +327,16 @@
     const anexos = (m.anexos || []).map(a => {
       const href = `${BASE}/api/atendimento/chamados/${st.chamado.id}/anexos/${encodeURIComponent(a.arquivo)}`;
       if (a.tipo === 'm4a') return `<audio class="anexo-audio" controls preload="none" src="${href}"></audio>`;
+      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(a.tipo)) return `<a class="anexo-foto" href="${href}" target="_blank" rel="noopener"><img src="${href}" alt="${esc(a.nome)}" loading="lazy"></a>`;
       return `<a class="anexo" href="${href}" target="_blank" rel="noopener">📎 ${esc(a.nome)}</a>`;
     }).join(' ');
+    const classeBolha = (m.anexos || []).some(a => a.tipo === 'm4a') ? 'bolha com-audio' : 'bolha';
     const canal = m.canal === 'email' ? ' · por e-mail' : (m.canal === 'portal' && m.origem === 'cliente' ? ' · pelo portal' : '');
     if (m.origem === 'sistema') return `<div class="sistema">${esc(m.texto)} · ${esc(m.hora)}</div>`;
-    if (m.origem === 'equipe') return `<div class="msg eu"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
+    if (m.origem === 'equipe') return `<div class="msg eu"><div class="${classeBolha}">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
     if (m.origem === 'assistente') return `<div class="msg bot"><div class="bolha">${esc(m.texto)}</div><div class="meta-msg">Assistente · ${esc(m.hora)}</div></div>`;
     const quem = (m.autor && m.autor !== st.chamado.solicitante) ? `${esc(m.autor)} · ${esc(st.chamado.solicitante || '')}` : esc(st.chamado.solicitante || m.autor || 'Cliente');
-    return `<div class="msg"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
+    return `<div class="msg"><div class="${classeBolha}">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
   }
   function renderPendentes() { const el = $('pendentes'); el.classList.toggle('oculto', !st.arquivos.length); el.innerHTML = st.arquivos.map((f, i) => `<span>${esc(f.name)}<b data-rm="${i}">×</b></span>`).join(''); }
 

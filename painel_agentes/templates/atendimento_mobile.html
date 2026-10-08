@@ -81,7 +81,12 @@
   .resumo .t { color: var(--teste-texto); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
   .anexo { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 7px 10px; border-radius: 7px; background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 12.5px; text-decoration: none; }
   .msg.eu .anexo { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); color: inherit; }
-  .anexo-audio { display: block; margin-top: 6px; width: 100%; height: 36px; }
+  /* Bolha com áudio precisa de largura própria: o <audio> dentro de uma
+     bolha dimensionada pelo texto virava só o botão de "mais" (Hugo, 08/10). */
+  .bolha.com-audio { width: min(100%, 320px); min-width: 240px; }
+  .anexo-audio { display: block; margin-top: 6px; width: 100%; height: 40px; }
+  .anexo-foto { display: block; margin-top: 6px; }
+  .anexo-foto img { display: block; width: 220px; max-width: 100%; border-radius: 8px; border: 1px solid var(--borda); }
   .conv-pe { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--superficie); border-top: 1px solid var(--borda); }
   .macros { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
   .macros::-webkit-scrollbar { display: none; }
@@ -316,17 +321,20 @@
   }
   function bolha(m) {
     // Áudio do motorista (app, 08/10) toca na própria conversa.
+    // Foto vira miniatura (toque abre), áudio vira player; o resto fica como anexo.
     const anexos = (m.anexos || []).map(a => {
       const href = `${BASE}/api/atendimento/chamados/${st.chamado.id}/anexos/${encodeURIComponent(a.arquivo)}`;
       if (a.tipo === 'm4a') return `<audio class="anexo-audio" controls preload="none" src="${href}"></audio>`;
+      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(a.tipo)) return `<a class="anexo-foto" href="${href}" target="_blank" rel="noopener"><img src="${href}" alt="${esc(a.nome)}" loading="lazy"></a>`;
       return `<a class="anexo" href="${href}" target="_blank" rel="noopener">📎 ${esc(a.nome)}</a>`;
     }).join(' ');
+    const classeBolha = (m.anexos || []).some(a => a.tipo === 'm4a') ? 'bolha com-audio' : 'bolha';
     const canal = m.canal === 'email' ? ' · por e-mail' : (m.canal === 'portal' && m.origem === 'cliente' ? ' · pelo portal' : '');
     if (m.origem === 'sistema') return `<div class="sistema">${esc(m.texto)} · ${esc(m.hora)}</div>`;
-    if (m.origem === 'equipe') return `<div class="msg eu"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
+    if (m.origem === 'equipe') return `<div class="msg eu"><div class="${classeBolha}">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;
     if (m.origem === 'assistente') return `<div class="msg bot"><div class="bolha">${esc(m.texto)}</div><div class="meta-msg">Assistente · ${esc(m.hora)}</div></div>`;
     const quem = (m.autor && m.autor !== st.chamado.solicitante) ? `${esc(m.autor)} · ${esc(st.chamado.solicitante || '')}` : esc(st.chamado.solicitante || m.autor || 'Cliente');
-    return `<div class="msg"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
+    return `<div class="msg"><div class="${classeBolha}">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${quem} · ${esc(m.quando)}${canal}</div></div>`;
   }
   function renderPendentes() { const el = $('pendentes'); el.classList.toggle('oculto', !st.arquivos.length); el.innerHTML = st.arquivos.map((f, i) => `<span>${esc(f.name)}<b data-rm="${i}" role="button" aria-label="Remover">×</b></span>`).join(''); }
 
