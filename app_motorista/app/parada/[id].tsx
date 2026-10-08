@@ -17,6 +17,7 @@ import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
 import { Deslizar } from '../../src/deslizar';
+import { conferirPermissao } from '../../src/permissoes';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, hoje } from '../../src/tema';
 import type { CampoChecklist, Checklist, Parada, SituacaoParada } from '../../src/tipos';
@@ -177,8 +178,7 @@ export default function RegistroParada() {
   // substituir=true (documento): a nova foto toma o lugar da anterior;
   // senão ela é acrescentada à lista do campo.
   const tirarFoto = async (chave: string, substituir = false) => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o comprovante.');
+    if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o comprovante.')) return;
     const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
     const uri = !r.canceled ? r.assets[0]?.uri : null;
     if (!uri) return;

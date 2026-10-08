@@ -13,6 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as api from '../../src/api';
 import { Botao, Cartao, Carregando, Vazio } from '../../src/componentes';
+import { conferirPermissao } from '../../src/permissoes';
 import { cores } from '../../src/tema';
 import type { Chamado, EstadoAtendimento, MensagemChamado, OpcaoMensagem, SituacaoAtendimento } from '../../src/tipos';
 
@@ -240,8 +241,7 @@ export default function Ajuda() {
 
   const mandarFoto = () => comErro(async () => {
     if (!chamado) return;
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra mandar uma foto.');
+    if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra mandar uma foto.')) return;
     const f = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
     if (f.canceled || !f.assets[0]) return;
     const r = await api.enviarFotoChamado(chamado.id, f.assets[0].uri, texto.trim() || 'Foto');
@@ -250,8 +250,7 @@ export default function Ajuda() {
   });
 
   const iniciarGravacao = async () => {
-    const perm = await requestRecordingPermissionsAsync();
-    if (!perm.granted) return Alert.alert('Microfone', 'Permita o uso do microfone pra mandar áudio.');
+    if (!conferirPermissao(await requestRecordingPermissionsAsync(), 'Microfone', 'Permita o uso do microfone pra mandar áudio.')) return;
     try {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await gravador.prepareToRecordAsync();
