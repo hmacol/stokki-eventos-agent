@@ -2,7 +2,7 @@
   "expo": {
     "name": "FreshLog Motorista",
     "slug": "freshlogbr",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "freshlogmotorista",
@@ -43,7 +43,7 @@
         "expo-image-picker",
         {
           "cameraPermission": "Fotografar o canhoto e comprovantes de entrega.",
-          "microphonePermission": false
+          "microphonePermission": "Gravar áudio pra logística na aba Ajuda."
         }
       ],
       [

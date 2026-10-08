@@ -570,3 +570,23 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   tela `trocar-pin.tsx`. 17 logins já criados com 123456 ficam limitados
   à troca até cada um entrar. Permissão bloqueada de vez abre as
   configurações do app (`src/permissoes.ts`, commit c441bc4, OTA 71d0faba).
+- **08/10 (noite) — Cadastro pelo app: "Meus dados" + auto-cadastro com
+  aprovação.** Pedido do Hugo: motoristas mudam telefone/PIX/e-mail/placa e
+  motoristas novos se cadastram, com aprovação dele. Decisões: vale na hora
+  (aviso no WhatsApp ALERTAS); auto-cadastro exige CNH, CRLV, zonas e dias;
+  aprovação escolhe o agente Vuupt (criado à mão). Spec em
+  docs/superpowers/specs/2026-10-08-cadastro-motorista-app-design.md.
+  Código: `nucleo/cadastro_motorista.py` (regras + banco:
+  `motoristas.chave_pix/placa`, `motoristas_alteracoes`,
+  `motoristas_cadastros`, fotos em dados/cadastros_motoristas/<id>/),
+  API `PUT /api/eu`, `POST /api/cadastro`, `POST /api/cadastro/<id>/documentos`
+  (sem login; chave_envio autoriza), `regras/cadastro_motoristas.atualizar_contato_planilha`;
+  painel: seção "Cadastros pelo app" em /motoristas (só total), rotas
+  aprovar/recusar/documento, contador `motoristas` (badge + cartão no /inicio);
+  app: Perfil mostra PIX/placa + "Meus dados" (`app/meus-dados.tsx`), login
+  com "Ainda não sou cadastrado" (`app/cadastro.tsx`). Testes:
+  nucleo/test_cadastro_motorista.py (5) e painel_agentes/test_cadastros_motoristas.py (3).
+  **BUG achado pelo Hugo:** Android não oferecia microfone — os APKs 1.0.0 e
+  1.1.0 saíram SEM `RECORD_AUDIO` porque o plugin do expo-image-picker estava
+  com `microphonePermission: false` (que remove a permissão do manifesto).
+  Corrigido no app.json; build 1.1.1.

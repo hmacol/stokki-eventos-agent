@@ -11,7 +11,21 @@ export type Motorista = {
   perfil: 'MOTORISTA' | 'TESTE';
   /** PIN inicial/resetado pela operação: o app obriga a troca antes de seguir. */
   trocar_pin?: boolean;
+  chave_pix?: string | null;
+  placa?: string | null;
 };
+
+/** Campos que o motorista edita em "Meus dados" (valem na hora, Hugo 08/10). */
+export type MeusDados = { telefone?: string; email?: string; chave_pix?: string; placa?: string };
+export type MudancaCadastro = { campo: string; rotulo: string; de: string | null; para: string | null };
+
+/** Pedido de cadastro de motorista novo (sem login) e o que a API devolve. */
+export type NovoCadastro = {
+  cpf: string; nome: string; telefone: string; email: string; chave_pix: string; placa: string;
+  tipo_veiculo: string; zonas: string[]; dias: string[]; aceita_viagens: boolean;
+};
+export type CadastroCriado = { id: number; chave_envio: string };
+export type CadastroSituacao = { id: number; status: string; tem_cnh: boolean; tem_crlv: boolean; completo: boolean };
 
 export type SituacaoParada = 'PENDENTE' | 'EM_DESLOCAMENTO' | 'EM_ROTA' | 'ENTREGUE' | 'PARCIAL' | 'INSUCESSO' | 'CANCELADA';
 export type StatusRota = 'PLANEJADA' | 'ACEITA' | 'EM_ROTA' | 'CONCLUIDA' | 'CANCELADA';

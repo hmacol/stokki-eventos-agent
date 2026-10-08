@@ -10,10 +10,12 @@ type Sessao = {
   motorista: Motorista | null;
   entrar: (cpf: string, pin: string) => Promise<void>;
   trocarPin: (pinAtual: string, pinNovo: string) => Promise<void>;
+  /** Depois de "Meus dados": a API devolve o cadastro atualizado. */
+  atualizarMotorista: (m: Motorista) => void;
   sair: () => Promise<void>;
 };
 
-const Ctx = createContext<Sessao>({ pronto: false, motorista: null, entrar: async () => {}, trocarPin: async () => {}, sair: async () => {} });
+const Ctx = createContext<Sessao>({ pronto: false, motorista: null, entrar: async () => {}, trocarPin: async () => {}, atualizarMotorista: () => {}, sair: async () => {} });
 
 export function ProvedorSessao({ children }: { children: React.ReactNode }) {
   const [pronto, setPronto] = useState(false);
@@ -44,12 +46,14 @@ export function ProvedorSessao({ children }: { children: React.ReactNode }) {
     setMotorista(await api.trocarPin(pinAtual, pinNovo));
   }, []);
 
+  const atualizarMotorista = useCallback((m: Motorista) => setMotorista(m), []);
+
   const sair = useCallback(async () => {
     await api.limparTokens();
     setMotorista(null);
   }, []);
 
-  return <Ctx.Provider value={{ pronto, motorista, entrar, trocarPin, sair }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ pronto, motorista, entrar, trocarPin, atualizarMotorista, sair }}>{children}</Ctx.Provider>;
 }
 
 export const useSessao = () => useContext(Ctx);

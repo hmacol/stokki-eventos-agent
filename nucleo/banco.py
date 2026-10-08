@@ -288,7 +288,45 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("bloqueado_ate", "TEXT"),
     ("perfil", "TEXT NOT NULL DEFAULT 'MOTORISTA'"),  # MOTORISTA | TESTE (usuário do Hugo no piloto)
     ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
+    ("chave_pix", "TEXT"),            # 08/10: o motorista edita no app (nucleo/cadastro_motorista.py)
+    ("placa", "TEXT"),                # idem; espelhada na BD_MOTORISTAS.xlsx
 ]
+
+# Cadastro pelo app (08/10): histórico das edições e fila de auto-cadastro.
+_DDL_CADASTRO = """
+CREATE TABLE IF NOT EXISTS motoristas_alteracoes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    cpf           TEXT NOT NULL,
+    campo         TEXT NOT NULL,
+    valor_antigo  TEXT,
+    valor_novo    TEXT,
+    alterado_em   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS motoristas_cadastros (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cpf             TEXT NOT NULL,
+    nome            TEXT NOT NULL,
+    telefone        TEXT,
+    email           TEXT,
+    chave_pix       TEXT,
+    placa           TEXT,
+    tipo_veiculo    TEXT,
+    zonas           TEXT,                 -- csv, mesmos valores da planilha
+    dias            TEXT,                 -- csv SEGUNDA..DOMINGO
+    aceita_viagens  INTEGER NOT NULL DEFAULT 0,
+    chave_envio     TEXT NOT NULL,        -- autoriza o envio dos documentos
+    cnh_arquivo     TEXT,
+    crlv_arquivo    TEXT,
+    status          TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | RECUSADO
+    motivo          TEXT,
+    agent_id        INTEGER,
+    criado_em       TEXT NOT NULL,
+    revisado_em     TEXT,
+    revisado_por    TEXT,
+    avisado_em      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_motoristas_cadastros_status ON motoristas_cadastros(status);
+"""
 
 
 # Colunas novas de nucleo_pedidos (16/09): o pedido passa a ser espelhado
@@ -357,6 +395,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     """Cria o que falta e aplica migrações aditivas. Seguro rodar a cada
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
     conn.executescript(_DDL)
+    conn.executescript(_DDL_CADASTRO)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)

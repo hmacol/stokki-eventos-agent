@@ -34,6 +34,22 @@
   .modal-motorista .acoes button.confirmar:hover { background: #26C49A; }
   .modal-motorista .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-motorista .acoes button.cancelar:hover { background: var(--fundo); }
+
+  /* Cadastros pelo app esperando aprovação (08/10) */
+  .pendentes { margin-bottom: 24px; }
+  .pendentes h2 { font-size: 16px; margin: 0 0 4px; }
+  .pendentes-ajuda { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 12px; }
+  .cartao-cadastro { background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .cadastro-cab { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+  .cadastro-meta { font-size: 12px; color: var(--texto-suave); margin-top: 3px; }
+  .cadastro-docs { display: flex; gap: 8px; white-space: nowrap; }
+  .cadastro-docs a { background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; font-weight: 600; color: var(--texto); text-decoration: none; }
+  .cadastro-docs .falta { color: var(--erro); font-size: 12.5px; font-weight: 600; }
+  .cadastro-acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  .cadastro-acoes button { padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .cadastro-acoes .botao-aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+  .cadastro-acoes .botao-aprovar:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cadastro-acoes .botao-recusar { background: var(--superficie); color: var(--erro); border: 1px solid var(--erro); }
 </style>
 {% endblock %}
 
@@ -48,6 +64,63 @@
 {% if erro %}
 <div class="erro-caixa">Falha ao carregar motoristas: {{ erro }}</div>
 {% elif dados %}
+{% if pode_aprovar and dados.cadastros_pendentes %}
+<section class="pendentes" aria-labelledby="titulo-pendentes">
+  <h2 id="titulo-pendentes">Cadastros pelo app esperando aprovação ({{ dados.cadastros_pendentes | length }})</h2>
+  <p class="pendentes-ajuda">Crie o agente na Vuupt antes de aprovar. Aprovar grava na BD_MOTORISTAS e cria o login do app com um PIN provisório sorteado, mostrado uma única vez pra você mandar no WhatsApp do motorista; o app obriga a troca no primeiro acesso.</p>
+  {% for c in dados.cadastros_pendentes %}
+  <article class="cartao-cadastro" data-id="{{ c.id }}">
+    <div class="cadastro-cab">
+      <div>
+        <strong>{{ c.nome }}</strong> <span class="mono">CPF {{ c.cpf }}</span>
+        <div class="cadastro-meta">{{ c.criado_em }} · {{ c.telefone or "sem telefone" }} · {{ c.email or "sem e-mail" }} · PIX {{ c.chave_pix }} · placa {{ c.placa }}</div>
+      </div>
+      <div class="cadastro-docs">
+        {% if c.tem_cnh %}<a href="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo='cnh') }}" target="_blank" rel="noopener">CNH</a>{% else %}<span class="falta">sem CNH</span>{% endif %}
+        {% if c.tem_crlv %}<a href="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo='crlv') }}" target="_blank" rel="noopener">CRLV</a>{% else %}<span class="falta">sem CRLV</span>{% endif %}
+      </div>
+    </div>
+    <div class="linha-dois-campos">
+      <div class="campo-motorista">
+        <label>Motorista (VUUPT)</label>
+        <select class="cad-agente"><option value="">Carregando...</option></select>
+      </div>
+      <div class="campo-motorista">
+        <label>Tipo de veículo</label>
+        <select class="cad-tipo">
+          {% for t in dados.tipos_veiculo %}
+          <option value="{{ t.codigo }}" {% if t.codigo == c.tipo_veiculo %}selected{% endif %}>{{ t.nome }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label>Dias</label>
+      <div class="grade-checkbox">
+        {% for codigo, rotulo in dados.dias_semana %}
+        <label><input type="checkbox" class="cad-dia" value="{{ codigo }}" {% if codigo in c.dias %}checked{% endif %}> {{ rotulo }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label>Zonas</label>
+      <div class="grade-checkbox">
+        {% for zona in dados.zonas_disponiveis %}
+        <label><input type="checkbox" class="cad-zona" value="{{ zona }}" {% if zona in c.zonas %}checked{% endif %}> {{ zona }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" class="cad-viagens" {% if c.aceita_viagens %}checked{% endif %}> Aceita viagens</label>
+    </div>
+    <div class="cadastro-acoes">
+      <button type="button" class="botao-recusar">Recusar</button>
+      <button type="button" class="botao-aprovar" {% if not c.completo %}disabled title="Faltam documentos"{% endif %}>Aprovar e criar login</button>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 <table class="tabela-motoristas">
   <thead>
     <tr>
@@ -213,6 +286,63 @@ async function postJSON(url, body) {
 
   document.getElementById("botao-novo-motorista").addEventListener("click", abrirModalMotorista);
   document.getElementById("botao-cancelar-motorista").addEventListener("click", fecharModalMotorista);
+
+  // ── Cadastros pelo app (08/10): um select de agente Vuupt por cartão ──
+  const cartoes = Array.from(document.querySelectorAll(".cartao-cadastro"));
+  if (cartoes.length) {
+    fetch(BASE_PATH + "/api/motoristas/vuupt-disponiveis").then(r => r.json()).then(dados => {
+      const agentes = dados.agentes || [];
+      for (const cartao of cartoes) {
+        const sel = cartao.querySelector(".cad-agente");
+        const nome = cartao.querySelector("strong").textContent.trim().toLowerCase();
+        sel.innerHTML = "";
+        const ph = document.createElement("option");
+        ph.value = ""; ph.textContent = agentes.length ? "Selecione..." : "Nenhum agente novo na Vuupt — crie lá primeiro";
+        sel.appendChild(ph);
+        for (const a of agentes) {
+          const opt = document.createElement("option");
+          opt.value = String(a.agent_id); opt.textContent = `${a.nome} (#${a.agent_id})`;
+          // Pré-seleciona se o primeiro nome bate (o Hugo confere antes de aprovar)
+          if (nome && a.nome && a.nome.trim().toLowerCase().split(" ")[0] === nome.split(" ")[0]) opt.selected = true;
+          sel.appendChild(opt);
+        }
+      }
+    }).catch(e => {
+      for (const cartao of cartoes) cartao.querySelector(".cad-agente").innerHTML = `<option value="">Falha ao carregar: ${e.message}</option>`;
+    });
+  }
+  for (const cartao of cartoes) {
+    const id = cartao.dataset.id;
+    cartao.querySelector(".botao-aprovar").addEventListener("click", async (ev) => {
+      const agentId = Number(cartao.querySelector(".cad-agente").value);
+      if (!agentId) { alert("Escolha o agente da Vuupt (crie lá antes, se ainda não existir)."); return; }
+      const botao = ev.currentTarget; botao.disabled = true; botao.textContent = "Aprovando...";
+      try {
+        const r = await postJSON(`/api/motoristas/cadastros/${id}/aprovar`, {
+          agent_id: agentId,
+          tipo_veiculo: cartao.querySelector(".cad-tipo").value,
+          dias: Array.from(cartao.querySelectorAll(".cad-dia:checked")).map(c => c.value),
+          zonas: Array.from(cartao.querySelectorAll(".cad-zona:checked")).map(c => c.value),
+          aceita_viagens: cartao.querySelector(".cad-viagens").checked,
+        });
+        alert(`Aprovado. Login criado: CPF ${r.motorista.cpf}, PIN provisório ${r.pin}. Mande no WhatsApp do motorista (${r.motorista.telefone || "sem telefone"}).`);
+        location.reload();
+      } catch (e) {
+        alert(`Falha ao aprovar: ${e.message}`);
+        botao.disabled = false; botao.textContent = "Aprovar e criar login";
+      }
+    });
+    cartao.querySelector(".botao-recusar").addEventListener("click", async () => {
+      const motivo = prompt("Motivo da recusa (fica só no painel):");
+      if (motivo === null) return;
+      try {
+        await postJSON(`/api/motoristas/cadastros/${id}/recusar`, { motivo });
+        location.reload();
+      } catch (e) {
+        alert(`Falha ao recusar: ${e.message}`);
+      }
+    });
+  }
 
   document.getElementById("botao-salvar-motorista").addEventListener("click", async (ev) => {
     const botao = ev.currentTarget;

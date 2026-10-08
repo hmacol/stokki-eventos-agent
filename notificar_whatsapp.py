@@ -379,6 +379,29 @@ def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float 
     return next((t for t in opcoes if len(t) <= MAX_MENSAGEM), opcoes[-1][:MAX_MENSAGEM])
 
 
+def texto_cadastro_motorista(cadastro: dict, link: str, agora: datetime | None = None) -> str:
+    """Motorista novo pediu cadastro pelo app e ja mandou CNH e CRLV
+    (nucleo/cadastro_motorista.py). O Hugo aprova no painel."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    nome = _uma_linha(cadastro.get("nome"), 40) or "Motorista"
+    veiculo = _uma_linha(cadastro.get("tipo_veiculo"), 12)
+    linhas = [f"🧑‍✈️ *Motorista novo pediu cadastro* · {quando}",
+              f"{nome}" + (f" · {veiculo}" if veiculo else "") + f" · placa {cadastro.get('placa') or '-'}",
+              "Aprove no painel (precisa do agente na Vuupt antes):",
+              link]
+    return "\n".join(linhas)
+
+
+def texto_alteracao_cadastro(nome: str, mudancas: list[dict], agora: datetime | None = None) -> str:
+    """Motorista mudou telefone/e-mail/PIX/placa pelo app. Vale na hora
+    (decisao do Hugo, 08/10); o aviso e so pra ele saber."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    linhas = [f"✏️ *Motorista alterou o cadastro* · {quando}", _uma_linha(nome, 40) or "Motorista"]
+    for m in mudancas[:4]:
+        linhas.append(f"{m.get('rotulo') or m.get('campo')}: {_uma_linha(m.get('de') or '-', 30)} → {_uma_linha(m.get('para') or '-', 30)}")
+    return "\n".join(linhas)
+
+
 # --- Envio --------------------------------------------------------------------
 
 def texto_informativo_mensal(titulo_mes: str, feriados: list, link: str, agora: datetime | None = None) -> str:

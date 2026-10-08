@@ -63,6 +63,7 @@ NIVEIS_POR_CONTADOR = {
     "pedagios": ("total", "operador", "leitura"),
     "canhotos": ("total", "operador", "leitura"),
     "atendimento": ("total", "operador", "atendimento"),
+    "motoristas": ("total",),   # auto-cadastros do app esperando aprovação (08/10)
 }
 
 _snapshots: dict[str, dict] = {}   # chave -> {"quando": monotonic, "valor": dict|None}
@@ -181,6 +182,18 @@ def _contar_atendimento() -> dict:
     return {"qtd": c["fila"], "criticas": 0}
 
 
+def _contar_cadastros_motoristas() -> dict:
+    """Motoristas novos que pediram cadastro pelo app e já mandaram CNH e
+    CRLV (nucleo/cadastro_motorista.py). Barato: COUNT no SQLite do núcleo."""
+    from nucleo import banco as nucleo_banco, cadastro_motorista as cad
+    conn = nucleo_banco.conectar()
+    try:
+        qtd = cad.contar_pendentes(conn)
+    finally:
+        conn.close()
+    return {"qtd": qtd, "criticas": 0}
+
+
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
 def contadores(nivel_acesso: str) -> dict:
@@ -193,6 +206,7 @@ def contadores(nivel_acesso: str) -> dict:
         "pedagios": _contar_pedagios,
         "canhotos": _contar_canhotos,
         "atendimento": _contar_atendimento,
+        "motoristas": _contar_cadastros_motoristas,
     }
     resultado = {}
     for chave, fonte in fontes.items():

@@ -42,7 +42,7 @@ from flask import Flask, g, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from nucleo import auth_motorista as auth, banco, financeiro, operacao, validacao_fotos
+from nucleo import auth_motorista as auth, banco, cadastro_motorista as cadastro, financeiro, operacao, validacao_fotos
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -141,6 +141,11 @@ def criar_app(config: dict | None = None) -> Flask:
         logger.info("Auth recusou %s %s: %s", request.method, request.path, e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
+    @app.errorhandler(cadastro.CadastroInvalido)
+    def _erro_cadastro(e):
+        logger.info("Cadastro recusou %s %s: %s", request.method, request.path, e.mensagem)
+        return jsonify({"erro": e.mensagem}), e.codigo
+
     @app.errorhandler(404)
     def _404(_e):
         return jsonify({"erro": "Rota não encontrada."}), 404
@@ -207,6 +212,79 @@ def criar_app(config: dict | None = None) -> Flask:
         d = corpo()
         m = auth.trocar_pin(conn(), g.motorista["cpf"], str(d.get("pin_atual") or ""), str(d.get("pin_novo") or ""))
         return jsonify({**auth.emitir_tokens(app.config["SECRET_TOKENS"], m), "motorista": auth.publico(m)})
+
+    # ── Cadastro pelo app (Hugo, 08/10): meus dados + auto-cadastro ──────────
+    def _url_painel() -> str:
+        cfg = app.config["CONFIG_PROJETO"].get("portal_cliente", {}).get("chamados", {})
+        return (cfg.get("url_painel") or "https://app.freshhub.com.br/painel").rstrip("/")
+
+    def _avisar_whatsapp(tipo: str, texto: str, assinatura: str | None = None) -> None:
+        """Grupo ALERTAS FRESH (whatsapp_notificacoes); nunca derruba a rota."""
+        try:
+            import notificar_whatsapp
+            notificar_whatsapp.despachar(app.config["CONFIG_PROJETO"], "cadastro_motorista", tipo, texto, assinatura)
+        except Exception as e:
+            logger.warning("Aviso de cadastro no WhatsApp falhou: %s", e)
+
+    @app.put("/api/eu")
+    @requer_motorista
+    def editar_eu():
+        """Telefone, e-mail, chave PIX e placa valem na hora (decisão do
+        Hugo); telefone/e-mail/placa vão também pra BD_MOTORISTAS.xlsx."""
+        m, mudancas = cadastro.atualizar_meus_dados(conn(), g.motorista["cpf"], corpo())
+        if mudancas:
+            na_planilha = {x["campo"]: (x["para"] or "") for x in mudancas if x["campo"] in ("telefone", "email", "placa")}
+            if na_planilha:
+                try:
+                    from regras.cadastro_motoristas import atualizar_contato_planilha
+                    atualizar_contato_planilha(app.config["CONFIG_PROJETO"], m["cpf"], **na_planilha)
+                except Exception as e:
+                    logger.warning("Planilha de motoristas não atualizada pra %s: %s", m["cpf"], e)
+            import notificar_whatsapp
+            _avisar_whatsapp("alteracao_cadastro", notificar_whatsapp.texto_alteracao_cadastro(m["nome"], mudancas))
+        return jsonify({"motorista": auth.publico(m), "mudancas": mudancas})
+
+    # Rota pública: freio simples em memória contra enxurrada (5 pedidos por
+    # IP a cada hora, 40 por dia no total). O IP real vem do ProxyFix (x_for).
+    _pedidos_cadastro: dict[str, list[float]] = {}
+    LIMITE_CADASTRO_IP, LIMITE_CADASTRO_DIA = 5, 40
+
+    def _freio_cadastro(ip: str) -> None:
+        agora = time.time()
+        for chave in list(_pedidos_cadastro):
+            _pedidos_cadastro[chave] = [t for t in _pedidos_cadastro[chave] if agora - t < 86400]
+            if not _pedidos_cadastro[chave]:
+                del _pedidos_cadastro[chave]
+        por_ip = [t for t in _pedidos_cadastro.get(ip, []) if agora - t < 3600]
+        total_dia = sum(len(v) for v in _pedidos_cadastro.values())
+        if len(por_ip) >= LIMITE_CADASTRO_IP or total_dia >= LIMITE_CADASTRO_DIA:
+            raise cadastro.CadastroInvalido("Muitos pedidos de cadastro. Tente de novo mais tarde.", 429)
+
+    @app.post("/api/cadastro")
+    def cadastro_novo():
+        """Sem login: motorista novo pede cadastro. Fica PENDENTE até o
+        Hugo aprovar no painel; os documentos sobem na rota abaixo. Só o
+        cadastro CRIADO conta no freio (erro de digitação não gasta cota)."""
+        ip = request.remote_addr or "?"
+        _freio_cadastro(ip)
+        r = cadastro.criar_cadastro(conn(), corpo())
+        _pedidos_cadastro.setdefault(ip, []).append(time.time())
+        return jsonify(r), 201
+
+    @app.post("/api/cadastro/<int:cadastro_id>/documentos")
+    def cadastro_documento(cadastro_id):
+        arq = request.files.get("arquivo")
+        if arq is None or not arq.filename:
+            raise cadastro.CadastroInvalido("Mande a foto no campo 'arquivo'.")
+        c = cadastro.guardar_documento(conn(), cadastro_id, request.form.get("chave_envio"), request.form.get("tipo"),
+                                       arq.filename, arq.read())
+        if c["completo"] and not c.get("avisado_em"):
+            import notificar_whatsapp
+            _avisar_whatsapp("cadastro_novo", notificar_whatsapp.texto_cadastro_motorista(c, f"{_url_painel()}/motoristas"),
+                             assinatura=f"cadastro:{cadastro_id}")
+            cadastro.marcar_avisado(conn(), cadastro_id)
+            c = cadastro.buscar_cadastro(conn(), cadastro_id)
+        return jsonify(c)
 
     @app.post("/api/push-token")
     @requer_motorista

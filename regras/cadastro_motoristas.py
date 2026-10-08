@@ -157,4 +157,31 @@ def cadastrar_motorista(config: dict, dados: dict) -> dict:
         )
 
     logger.info(f"Motorista cadastrado: {nome} (agent_id={agent_id}).")
+
+
+def atualizar_contato_planilha(config: dict, cpf: str, telefone=None, email=None, placa=None) -> bool:
+    """Espelha o que o motorista mudou no app (08/10) na linha dele da
+    planilha, achada pelo CPF. Só mexe nas colunas informadas (None =
+    não mexe; "" = limpa). Devolve False se o CPF não está na planilha."""
+    cpf = re.sub(r"\D", "", str(cpf or ""))
+    caminho_planilha = Path(config.get("motoristas", {}).get("planilha", ""))
+    if not cpf or not caminho_planilha.exists():
+        return False
+    df = pd.read_excel(caminho_planilha, dtype={"CPF_MOTORISTA": str})
+    if "CPF_MOTORISTA" not in df.columns:
+        return False
+    cpfs = df["CPF_MOTORISTA"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
+    linhas = df.index[cpfs == cpf].tolist()
+    if not linhas:
+        return False
+    novos = {"TELEFONE_MOTORISTA": telefone, "EMAIL_MOTORISTA": email, "PLACA": placa}
+    for coluna, valor in novos.items():
+        if valor is None:
+            continue
+        if coluna not in df.columns:
+            df[coluna] = None
+        df.loc[linhas, coluna] = (str(valor).strip().upper() if coluna == "PLACA" else str(valor).strip()) or None
+    df.to_excel(caminho_planilha, index=False)
+    logger.info(f"Planilha: contato do CPF ...{cpf[-4:]} atualizado ({', '.join(k for k, v in novos.items() if v is not None)}).")
+    return True
     return {"agent_id": agent_id, "nome": nome}

@@ -131,7 +131,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, Checklist, EstadoAtendimento, Extrato, Motorista, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa } from './tipos';
+import type { Ajuste, CadastroCriado, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -154,6 +154,14 @@ export async function trocarPin(pinAtual: string, pinNovo: string): Promise<Moto
 }
 
 export const eu = () => chamar<Motorista>('/eu');
+/** Meus dados (Hugo, 08/10): telefone, e-mail, PIX e placa valem na hora. */
+export const atualizarMeusDados = (dados: MeusDados) =>
+  chamar<{ motorista: Motorista; mudancas: MudancaCadastro[] }>('/eu', { metodo: 'PUT', corpo: dados });
+/** Auto-cadastro, sem login. A chave_envio autoriza só o envio dos documentos deste cadastro. */
+export const criarCadastro = (dados: NovoCadastro) =>
+  chamar<CadastroCriado>('/cadastro', { metodo: 'POST', corpo: dados, semAuth: true });
+export const enviarDocumentoCadastro = (id: number, chave: string, tipo: 'cnh' | 'crlv', uri: string) =>
+  enviarArquivo<CadastroSituacao>(`/cadastro/${id}/documentos`, uri, { tipo, chave_envio: chave }, true, 'arquivo');
 export const rotas = (de?: string, ate?: string) =>
   chamar<{ rotas: Rota[] }>(`/rotas${de ? `?de=${de}&ate=${ate ?? de}` : ''}`).then((r) => r.rotas);
 export const rota = (id: number) => chamar<Rota>(`/rotas/${id}`);

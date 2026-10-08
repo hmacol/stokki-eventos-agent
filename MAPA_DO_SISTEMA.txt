@@ -637,6 +637,12 @@
  auth_motorista.py         Login CPF+PIN, tokens, troca de PIN (POST /api/trocar-pin).
  motoristas_cli.py         CLI de usuários do app (importar-planilha --pin-inicial
                            e resetar-pin marcam trocar_pin=1).
+ cadastro_motorista.py     "Meus dados" (PUT /api/eu: telefone/e-mail/PIX/placa valem
+                           na hora, histórico em motoristas_alteracoes, espelho na
+                           BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
+                           CNH/CRLV em dados/cadastros_motoristas/; aprovação no
+                           painel /motoristas cria linha na planilha + login
+                           provisório). Aviso no WhatsApp ALERTAS.
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.
@@ -808,6 +814,13 @@
  app/login.tsx             CPF + PIN.
  app/trocar-pin.tsx        Troca de PIN (obrigatória quando motoristas.trocar_pin=1:
                            PIN inicial/resetado; opcional pelo Perfil).
+ app/meus-dados.tsx        Telefone, e-mail, PIX e placa (PUT /api/eu).
+ app/cadastro.tsx          Auto-cadastro sem login (link no login): dados, veículo,
+                           zonas/dias, CNH e CRLV -> POST /api/cadastro + documentos.
+ src/permissoes.ts         Permissão negada de vez -> botão "Abrir configurações".
+                           ARMADILHA: expo-image-picker com microphonePermission:false
+                           REMOVE o RECORD_AUDIO do manifesto (APKs 1.0.0/1.1.0 saíram
+                           sem microfone por isso; 1.1.1 corrige).
  app/(tabs)/               rotas, ofertas (marketplace), financeiro,
                            disponibilidade, perfil, ajuda (chat; áudio .m4a
                            via expo-audio só com a conversa na logística).

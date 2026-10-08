@@ -63,4 +63,21 @@ def dados_pagina_motoristas() -> dict:
         "zonas_disponiveis": ZONAS_DISPONIVEIS,
         "dias_semana": DIAS_SEMANA,
         "tipos_veiculo": [{"codigo": t.codigo, "nome": t.nome} for t in TIPOS_VEICULO],
+        "cadastros_pendentes": cadastros_pendentes(),
     }
+
+
+def cadastros_pendentes() -> list[dict]:
+    """Auto-cadastros vindos do app (nucleo/cadastro_motorista.py, 08/10)
+    esperando o Hugo aprovar. Nunca derruba a tela: sem núcleo, lista vazia."""
+    try:
+        from nucleo import banco as nucleo_banco, cadastro_motorista as cad
+        conn = nucleo_banco.conectar()
+        try:
+            return cad.listar_pendentes(conn)
+        finally:
+            conn.close()
+    except Exception as e:   # pragma: no cover - defesa
+        import logging
+        logging.getLogger(__name__).warning(f"Cadastros pendentes indisponíveis: {e}")
+        return []

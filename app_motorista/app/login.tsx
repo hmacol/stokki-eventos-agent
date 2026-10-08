@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Image, KeyboardAvoidingView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
 import { ErroApi, ErroRede } from '../src/api';
@@ -13,6 +14,7 @@ function mascaraCpf(v: string): string {
 
 export default function Login() {
   const { entrar } = useSessao();
+  const router = useRouter();
   const [cpf, setCpf] = useState('');
   const [pin, setPin] = useState('');
   const [erro, setErro] = useState<string | null>(null);
@@ -57,6 +59,7 @@ export default function Login() {
           {erro ? <Text style={s.erro}>{erro}</Text> : null}
           <Botao titulo="Entrar" onPress={enviar} carregando={carregando} estilo={{ marginTop: 16 }} />
           <Text style={s.ajuda}>Não tem PIN? Fale com a operação da FreshLog.</Text>
+          <Botao titulo="Ainda não sou cadastrado" tipo="secundario" onPress={() => router.push('/cadastro')} estilo={{ marginTop: 14 }} />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

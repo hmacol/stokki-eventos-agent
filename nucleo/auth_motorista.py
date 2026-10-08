@@ -221,4 +221,5 @@ def publico(m: dict) -> dict:
         "telefone": m.get("telefone"), "email": m.get("email"), "tipo_veiculo": m.get("tipo_veiculo"),
         "perfil": m.get("perfil") or PERFIL_MOTORISTA,
         "trocar_pin": bool(m.get("trocar_pin")),
+        "chave_pix": m.get("chave_pix"), "placa": m.get("placa"),
     }
