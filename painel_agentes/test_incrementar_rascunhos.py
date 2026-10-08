@@ -116,11 +116,17 @@ class IncrementarRascunhosTestCase(unittest.TestCase):
         self.adicionar.assert_not_called()
         self.otimizar.assert_not_called()
 
-    def test_sem_teto_de_pedidos(self):
-        muitas = [_parada(100 + i, -23.48 + i * 0.001, -46.62) for i in range(30)]
-        self.rascunhos = [_rascunho(1, "#1", muitas)]
+    def test_teto_de_15_pedidos(self):
+        # 07/10 (Hugo): rascunho com 14 recebe o 15º; com 15 não recebe
+        catorze = [_parada(100 + i, -23.48 + i * 0.001, -46.62) for i in range(14)]
+        self.rascunhos = [_rascunho(1, "#1", catorze)]
         r = pr.incrementar_rascunhos_com_selecionados(DATA, [_parada(99, -23.47, -46.61)])
         self.assertEqual(len(r["alocados"]), 1)
+        quinze = [_parada(100 + i, -23.48 + i * 0.001, -46.62) for i in range(15)]
+        self.rascunhos = [_rascunho(1, "#1", quinze)]
+        r = pr.incrementar_rascunhos_com_selecionados(DATA, [_parada(98, -23.47, -46.61)])
+        self.assertEqual(r["alocados"], [])
+        self.assertEqual(r["orfaos"], ["#PS-98"])
 
     # -- rotas que nunca são candidatas ----------------------------------
 

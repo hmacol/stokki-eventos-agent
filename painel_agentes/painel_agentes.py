@@ -2241,7 +2241,7 @@ def api_incrementar_selecionados():
     """Botão "Incrementar" da seleção do pool (Hugo, 10/09): põe cada
     pedido selecionado no rascunho (status RASCUNHO, nunca rota já
     enviada à VUUPT) mais próximo que o comporte, com as travas do
-    incremento automático e sem teto de pedidos por rota. Recebe os
+    incremento automático (até 15 pedidos por rota comum). Recebe os
     itens do pool como a tela já os tem (mesmo contrato de
     /adicionar-parada)."""
     body = request.get_json(force=True)

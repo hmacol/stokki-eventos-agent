@@ -31,11 +31,12 @@ Dois padrões fixos (pedido do Hugo, 10/09 -- valem sempre, sem flag):
     rodada de quarta 15h mira quinta -> corte = quarta 19h, ainda no
     futuro, então nada é barrado por horário.
 
-  - SEM TETO DE PEDIDOS POR ROTA: o incremento não aplica mais o
-    limite de entregas por rota (TAMANHO_MAXIMO_ROTA do criador
-    diário). Continuam valendo o teto de caixas (VOLUME_MAXIMO_ROTA),
-    os limites do tipo de veículo grande, o raio de 20 km, macro-região,
-    zona, viagem e janela de horário.
+  - TETO DE PEDIDOS POR ROTA: de 10/09 a 07/10 o incremento não
+    olhava a quantidade de entregas. 07/10 (Hugo): rota comum recebe
+    pedido só até TAMANHO_MAXIMO_ROTA (15) pedidos, o mesmo teto do
+    rascunho; rota de veículo grande segue os limites do tipo. Valem
+    também o teto de caixas (VOLUME_MAXIMO_ROTA), o raio de 20 km,
+    macro-região, zona, viagem e janela de horário.
 
 "Novo" é decidido CONTRA A API, não por um fingerprint local (mudado
 06/08, pedido do Hugo): busca todas as rotas existentes com
@@ -114,7 +115,7 @@ from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
 from criar_rotas_diarias import (
-    ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
+    ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
 import rascunhos_rota  # painel_agentes/ -- criar_rotas_diarias já pôs no sys.path
@@ -371,19 +372,20 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
     endereços diferentes do PRÓPRIO tipo -- em vez do teto genérico de
     última milha (`VOLUME_MAXIMO_ROTA`), que não faz sentido pra uma
     rota dessas (pode ter dezenas de pedidos pro MESMO endereço, e cabe
-    bem mais que 100 caixas). Rota comum só respeita o teto de caixas.
+    bem mais que 100 caixas). Rota comum respeita o teto de caixas e o
+    de pedidos.
 
-    SEM TETO DE PEDIDOS (pedido do Hugo, 10/09): o incremento não olha
-    mais a quantidade de entregas da rota (antes: < TAMANHO_MAXIMO_ROTA)
-    -- a ideia é COMPLEMENTAR as rotas vigentes com tudo que chegou
-    dentro do corte, e não deixar pedido pra trás por causa do teto.
+    TETO DE PEDIDOS: de 10/09 a 07/10 não havia (a ideia era complementar
+    as rotas com tudo que chegou dentro do corte). 07/10 (Hugo): rota
+    comum fica em até TAMANHO_MAXIMO_ROTA (15) pedidos, como o rascunho.
     """
     tipo = rota["tipo_veiculo"]
     if tipo is not None:
         caixas_cabe = rota["caixas"] + cx_pedido <= tipo.volume_maximo_cx
         enderecos_cabe = len(rota["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos
         return caixas_cabe and enderecos_cabe
-    return rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA)
+    return (rota["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA
+            and rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA))
 
 
 def main(modo_teste: bool = False):
@@ -854,8 +856,8 @@ def main(modo_teste: bool = False):
                 elif not pedido_eh_viagem and candidatas_com_espaco:
                     # sem coordenada do pedido (ou nenhuma rota com centroide
                     # disponível) -- pega a rota com MENOS pedidos, último
-                    # recurso (sem teto de pedidos desde 10/09, "mais espaço
-                    # livre" virou simplesmente "menos entregas"). Pedido de
+                    # recurso ("mais espaço livre" = "menos entregas"; o teto de
+                    # 15 pedidos já entrou em _cabe_na_rota). Pedido de
                     # VIAGEM nunca usa esse caminho (trava de macro-região,
                     # pedido do Hugo, 12/08): sem coordenada não dá pra
                     # verificar proximidade, mas a CIDADE já diz que ele é

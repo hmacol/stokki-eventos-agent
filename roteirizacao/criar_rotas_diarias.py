@@ -128,7 +128,7 @@ ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
-TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
+TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota, no rascunho e no incremento (rota comum; veículo grande segue o tipo). Antes: voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
 # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo,
 # 09/08 -- ajustado 10/08 pra 20). Hugo, 20/09: 15 km, calibrado pelo
