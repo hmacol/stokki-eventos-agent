@@ -261,7 +261,8 @@
  infra/sequencia_incremento.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
-   roteirizacao/incrementar_rotas.py
+   roteirizacao/incrementar_rotas.py -> marcar_clientes_boleto.py ->
+   aviso_boleto_faltando.py
  infra/sequencia_noite.sh (22h, continua mesmo com erro):
    somente_impressao.py -> pipeline.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
@@ -322,6 +323,11 @@
                          já é AGENDA na planilha entra como autorizado
                          (apagar à mão não volta). --nao-marcar pela linha
                          de comando.
+ marcar_clientes_boleto.py  Sugere clientes que pagam com boleto (PENDENTE p/
+                         o time decidir).
+ aviso_boleto_faltando.py   18h30: avisa o embarcador dos pedidos de amanhã
+                         sem boleto (e-mail, WhatsApp, chamado).
+ boleto_faltando.py        Peças do aviso: seleção, avisados, e-mail, chamado.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
  vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
@@ -481,6 +487,8 @@
                             é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ clientes_boleto.py         Par embarcador+cliente que paga com boleto
+                            (sugestão/decisão).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
  preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
  cadastro_motoristas.py     Grava motorista novo na planilha.
@@ -678,6 +686,9 @@
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
+   /clientes-boleto           clientes_boleto.html (só nível total: decidir
+                              clientes com boleto; alimentada por
+                              marcar_clientes_boleto.py)
    /pedidos-parados           pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
@@ -894,6 +905,8 @@
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
                              origem cliente_sem_resposta = aviso direto ao embarcador)
+   clientes_boleto, boleto_faltando_avisos  marcar_clientes_boleto.py,
+                             aviso_boleto_faltando.py
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
@@ -953,6 +966,10 @@
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão
    (notificacoes_automaticas.ativo, forcar_destino). Ligar é decisão do Hugo.
+   Aviso de boleto faltando: aviso_boleto_faltando.ativo e .forcar_destino
+   (sem a chave = hugo@); seção do resumo diário atrás de
+   resumo_diario_embarcador.secao_boleto (padrão False); chamado abre de
+   verdade mesmo em piloto.
  - Data só vira dedicado quando é do cliente: reagendar pelo Planejamento
    grava EQUIPE em agendamentos_origem e fica protegido; data trocada
    direto na tela da Vuupt não passa pelo sistema, conta como do cliente e
@@ -983,3 +1000,5 @@
    "Notificador"; painel-agentes.service diz "somente leitura".
  - Pedido segurado fica no pool de propósito até a data nova; o vigia só
    alarma na véspera do prazo de 3 dias úteis.
+ - Chamado de boleto (área `boleto`) abre de verdade mesmo com o aviso em
+   piloto — o embarcador vê no portal.
