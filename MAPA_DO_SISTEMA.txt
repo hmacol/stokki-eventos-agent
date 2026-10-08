@@ -968,7 +968,7 @@
    (notificacoes_automaticas.ativo, forcar_destino). Ligar é decisão do Hugo.
    Aviso de boleto faltando: aviso_boleto_faltando.ativo e .forcar_destino
    (sem a chave = hugo@); seção do resumo diário atrás de
-   resumo_diario_embarcador.secao_boleto (padrão False); chamado abre de
+   resumo_diario_embarcador.secao_boleto (padrão false); chamado abre de
    verdade mesmo em piloto.
  - Data só vira dedicado quando é do cliente: reagendar pelo Planejamento
    grava EQUIPE em agendamentos_origem e fica protegido; data trocada
