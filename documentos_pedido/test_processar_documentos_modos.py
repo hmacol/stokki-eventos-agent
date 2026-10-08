@@ -77,6 +77,18 @@ class TestModoEscopado(_Base):
         m["retentar"].assert_not_called()
 
 
+class EscopadoComEmail(_Base):
+    def test_escopado_com_email_roda_embarcadores(self):
+        m = self._rodar(pedidos_stokki=["PS-9"], com_email_embarcadores=True)
+        m["embarcadores"].assert_called_once()
+        m["email"].assert_not_called()          # busca ampla da INBOX continua de fora
+        m["retentar"].assert_not_called()
+
+    def test_escopado_padrao_continua_sem_email(self):
+        m = self._rodar(pedidos_stokki=["PS-9"])
+        m["embarcadores"].assert_not_called()
+
+
 class TestModoIncremental(_Base):
     def test_visita_so_quem_ainda_nao_tem_nf(self):
         m = self._rodar(incremental=True)

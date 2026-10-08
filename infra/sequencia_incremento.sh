@@ -5,6 +5,7 @@
 # que chegou, e incrementar_rotas.py poe cada pedido novo na rota ja
 # enviada ou no rascunho ainda nao confirmado mais proximo. O mesmo
 # incremento roda de novo no fim da sequencia das 22h.
+# Depois do incremento: sugere clientes com boleto e avisa o embarcador dos pedidos de amanha sem boleto (06/10).
 # set -e como a da tarde: se a importacao ou a checagem de duplicados
 # falhar, nao incrementa com dado pela metade.
 set -e
@@ -17,3 +18,5 @@ cd "$RAIZ" && "$PY" verificar_pedidos_duplicados_vuupt.py
 cd "$RAIZ" && "$PY" atualizar_agendamentos_confirmados.py
 cd "$RAIZ" && "$PY" marcar_clientes_agenda.py || true
 cd "$RAIZ/roteirizacao" && "$PY" incrementar_rotas.py
+cd "$RAIZ" && "$PY" marcar_clientes_boleto.py || true
+cd "$RAIZ" && "$PY" aviso_boleto_faltando.py || true

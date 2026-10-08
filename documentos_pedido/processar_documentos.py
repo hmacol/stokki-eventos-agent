@@ -487,7 +487,8 @@ def _etapas_email_embarcadores(config: dict, vuupt, modo_teste: bool, indexador_
 
 
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True,
-         incremental: bool = False):
+         incremental: bool = False, com_email_embarcadores: bool = False):
+    """com_email_embarcadores: no modo escopado, roda também a etapa de e-mail dos embarcadores."""
     inicio = time.time()
     escopado = pedidos_stokki is not None
     modo = "[MODO TESTE] " if modo_teste else ""
@@ -630,7 +631,8 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
 
         # Modo escopado termina aqui: e-mail de embarcadores e retentativa
         # são das rodadas completa/incremental.
-        if not escopado:
+        # 06/10: aviso_boleto_faltando.py pede o e-mail dos embarcadores no modo escopado (boleto que chegou depois das 16h)
+        if not escopado or com_email_embarcadores:
             _etapas_email_embarcadores(config, vuupt, modo_teste, indexador_nf, contadores, resumo_etapas)
 
         if not escopado and not incremental and not modo_teste:
