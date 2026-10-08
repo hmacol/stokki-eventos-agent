@@ -9,6 +9,8 @@ export type Motorista = {
   email: string | null;
   tipo_veiculo: string | null;
   perfil: 'MOTORISTA' | 'TESTE';
+  /** PIN inicial/resetado pela operação: o app obriga a troca antes de seguir. */
+  trocar_pin?: boolean;
 };
 
 export type SituacaoParada = 'PENDENTE' | 'EM_DESLOCAMENTO' | 'EM_ROTA' | 'ENTREGUE' | 'PARCIAL' | 'INSUCESSO' | 'CANCELADA';

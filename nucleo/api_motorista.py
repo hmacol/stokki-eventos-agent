@@ -195,6 +195,15 @@ def criar_app(config: dict | None = None) -> Flask:
     def eu():
         return jsonify(auth.publico(g.motorista))
 
+    @app.post("/api/trocar-pin")
+    @requer_motorista
+    def trocar_pin():
+        # Obrigatória quando o cadastro marcou trocar_pin (PIN inicial igual
+        # pra todos, 08/10); o motorista também pode trocar quando quiser.
+        d = corpo()
+        m = auth.trocar_pin(conn(), g.motorista["cpf"], str(d.get("pin_atual") or ""), str(d.get("pin_novo") or ""))
+        return jsonify({**auth.emitir_tokens(app.config["SECRET_TOKENS"], m), "motorista": auth.publico(m)})
+
     @app.post("/api/push-token")
     @requer_motorista
     def push_token():

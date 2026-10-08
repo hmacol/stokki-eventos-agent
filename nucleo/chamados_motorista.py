@@ -194,6 +194,12 @@ def registrar(app, *, requer_motorista, carregar_config):
             chamado = _meu_chamado(conn, chamado_id)
             texto = _campo("texto")
             chip = _campo("chip") or None
+            # Áudio só com a logística (Hugo, 08/10): o assistente não ouve.
+            # Conferido ANTES de gravar em disco.
+            tem_audio = any(Path(f.filename or "").suffix.lower() in ch.EXTENSOES_AUDIO
+                            for f in request.files.getlist("anexos") + request.files.getlist("arquivo"))
+            if tem_audio and chamado["status"] == ch.STATUS_COM_ASSISTENTE:
+                return jsonify({"erro": "Áudio só depois que a conversa chega na logística. Por enquanto, escreva."}), 409
             try:
                 anexos = _anexos_do_form(chamado_id)
             except ch.ErroChamado as e:
@@ -267,5 +273,7 @@ def registrar(app, *, requer_motorista, carregar_config):
         p = ch.caminho_anexo(chamado_id, arquivo)
         if not p:
             abort(404)
-        return send_file(p, as_attachment=p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"),
-                         max_age=0)
+        ext = p.suffix.lower()
+        # conditional=True aceita Range: o player de áudio pede por trechos.
+        return send_file(p, as_attachment=ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf") and ext not in ch.EXTENSOES_AUDIO,
+                         mimetype=ch.MIME_AUDIO.get(ext), max_age=0, conditional=True)

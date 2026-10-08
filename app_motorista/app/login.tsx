@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
@@ -36,7 +36,7 @@ export default function Login() {
 
   return (
     <SafeAreaView style={s.tela}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <View style={s.topo}>
           <View style={s.logoCaixa}>
             <Image source={require('../assets/logo_freshlog.png')} style={s.logo} resizeMode="contain" accessibilityLabel="FreshLog" />

@@ -81,6 +81,7 @@
   .resumo .t { color: var(--teste-texto); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
   .anexo { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 7px 10px; border-radius: 7px; background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 12.5px; text-decoration: none; }
   .msg.eu .anexo { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); color: inherit; }
+  .anexo-audio { display: block; margin-top: 6px; width: 100%; height: 36px; }
   .conv-pe { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--superficie); border-top: 1px solid var(--borda); }
   .macros { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
   .macros::-webkit-scrollbar { display: none; }
@@ -314,7 +315,12 @@
     renderPendentes();
   }
   function bolha(m) {
-    const anexos = (m.anexos || []).map(a => `<a class="anexo" href="${BASE}/api/atendimento/chamados/${st.chamado.id}/anexos/${encodeURIComponent(a.arquivo)}" target="_blank" rel="noopener">📎 ${esc(a.nome)}</a>`).join(' ');
+    // Áudio do motorista (app, 08/10) toca na própria conversa.
+    const anexos = (m.anexos || []).map(a => {
+      const href = `${BASE}/api/atendimento/chamados/${st.chamado.id}/anexos/${encodeURIComponent(a.arquivo)}`;
+      if (a.tipo === 'm4a') return `<audio class="anexo-audio" controls preload="none" src="${href}"></audio>`;
+      return `<a class="anexo" href="${href}" target="_blank" rel="noopener">📎 ${esc(a.nome)}</a>`;
+    }).join(' ');
     const canal = m.canal === 'email' ? ' · por e-mail' : (m.canal === 'portal' && m.origem === 'cliente' ? ' · pelo portal' : '');
     if (m.origem === 'sistema') return `<div class="sistema">${esc(m.texto)} · ${esc(m.hora)}</div>`;
     if (m.origem === 'equipe') return `<div class="msg eu"><div class="bolha">${esc(m.texto)}${anexos ? '<br>' + anexos : ''}</div><div class="meta-msg">${esc(m.autor || 'Fresh Log')} · ${esc(m.quando)}${canal}</div></div>`;

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSessao } from '../../src/sessao';
 import { Botao, Cartao, Linha } from '../../src/componentes';
 import * as fila from '../../src/fila';
@@ -12,6 +13,7 @@ const ROTULO_TIPO: Record<string, string> = {
 
 export default function Perfil() {
   const { motorista, sair } = useSessao();
+  const router = useRouter();
   const [itens, setItens] = useState<Awaited<ReturnType<typeof fila.listar>>>([]);
   const [descartados, setDescartados] = useState<{ motivo: string; em: string }[]>([]);
   const [ultimoErro, setUltimoErro] = useState<fila.UltimoErro | null>(null);
@@ -54,6 +56,7 @@ export default function Perfil() {
         <Linha rotulo="Veículo" valor={motorista?.tipo_veiculo ?? 'Fiorino (padrão)'} />
         <Linha rotulo="Telefone" valor={motorista?.telefone ?? '—'} />
         {motorista?.perfil === 'TESTE' ? <Text style={s.teste}>Usuário de teste</Text> : null}
+        <Botao titulo="Trocar PIN" tipo="secundario" onPress={() => router.push('/trocar-pin')} estilo={{ marginTop: 12 }} />
       </Cartao>
       <Cartao>
         <Linha rotulo="Registros aguardando envio" valor={String(pendentes)} />

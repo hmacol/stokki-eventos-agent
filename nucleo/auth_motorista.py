@@ -63,9 +63,10 @@ def criar_ou_atualizar_motorista(conn: sqlite3.Connection, cpf: str, nome: str, 
                                  agent_id: int | None = None, vehicle_id: int | None = None,
                                  telefone: str | None = None, email: str | None = None,
                                  tipo_veiculo: str | None = None, perfil: str = PERFIL_MOTORISTA,
-                                 ativo: bool = True) -> dict:
-    """Upsert por CPF. `pin` None em atualização mantém o PIN atual; em
-    criação é obrigatório."""
+                                 ativo: bool = True, trocar_pin: bool = False) -> dict:
+    """Upsert por CPF. `pin` None em atualização mantém o PIN atual (e a
+    flag trocar_pin); em criação é obrigatório. `trocar_pin=True` marca que
+    o PIN gravado é provisório e o app exige a troca no próximo login."""
     cpf = normalizar_cpf(cpf)
     if len(cpf) != 11:
         raise ValueError("CPF precisa ter 11 dígitos.")
@@ -74,16 +75,18 @@ def criar_ou_atualizar_motorista(conn: sqlite3.Connection, cpf: str, nome: str, 
         pin = validar_pin_formato(pin)
         salt = secrets.token_hex(16)
         pin_hash = _hash_pin(pin, salt)
+        flag_trocar = int(bool(trocar_pin))
     elif existente:
         salt, pin_hash = existente["pin_salt"], existente["pin_hash"]
+        flag_trocar = int(existente["trocar_pin"] or 0)
     else:
         raise ValueError("PIN é obrigatório pra criar o motorista.")
 
     agora = banco.agora()
     conn.execute("""
         INSERT INTO motoristas (cpf, nome, pin_hash, pin_salt, telefone, ativo, agent_id, vehicle_id, email,
-                                tipo_veiculo, perfil, tentativas_pin, bloqueado_ate, criado_em, atualizado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+                                tipo_veiculo, perfil, trocar_pin, tentativas_pin, bloqueado_ate, criado_em, atualizado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
         ON CONFLICT(cpf) DO UPDATE SET
             nome = excluded.nome, pin_hash = excluded.pin_hash, pin_salt = excluded.pin_salt,
             telefone = COALESCE(excluded.telefone, motoristas.telefone), ativo = excluded.ativo,
@@ -91,11 +94,31 @@ def criar_ou_atualizar_motorista(conn: sqlite3.Connection, cpf: str, nome: str, 
             vehicle_id = COALESCE(excluded.vehicle_id, motoristas.vehicle_id),
             email = COALESCE(excluded.email, motoristas.email),
             tipo_veiculo = COALESCE(excluded.tipo_veiculo, motoristas.tipo_veiculo),
-            perfil = excluded.perfil, tentativas_pin = 0, bloqueado_ate = NULL, atualizado_em = excluded.atualizado_em
+            perfil = excluded.perfil, trocar_pin = excluded.trocar_pin,
+            tentativas_pin = 0, bloqueado_ate = NULL, atualizado_em = excluded.atualizado_em
     """, (cpf, nome, pin_hash, salt, telefone, int(ativo), agent_id, vehicle_id, email, tipo_veiculo, perfil,
-          agora, agora))
+          flag_trocar, agora, agora))
     conn.commit()
     return dict(conn.execute("SELECT * FROM motoristas WHERE cpf = ?", (cpf,)).fetchone())
+
+
+def trocar_pin(conn: sqlite3.Connection, cpf: str, pin_atual: str, pin_novo: str) -> dict:
+    """Troca feita pelo próprio motorista no app. Confere o PIN atual pela
+    mesma trava de tentativas do login; o novo precisa ter 6 dígitos e ser
+    diferente. Limpa trocar_pin e, como o hash muda, derruba as sessões
+    antigas (o app guarda os tokens novos que a API devolve)."""
+    m = autenticar(conn, cpf, pin_atual)
+    try:
+        pin_novo = validar_pin_formato(pin_novo)
+    except ValueError as e:
+        raise AutenticacaoInvalida(str(e), 400)
+    if pin_novo == str(pin_atual or "").strip():
+        raise AutenticacaoInvalida("O PIN novo precisa ser diferente do atual.", 400)
+    salt = secrets.token_hex(16)
+    conn.execute("UPDATE motoristas SET pin_hash = ?, pin_salt = ?, trocar_pin = 0, atualizado_em = ? WHERE cpf = ?",
+                 (_hash_pin(pin_novo, salt), salt, banco.agora(), m["cpf"]))
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM motoristas WHERE cpf = ?", (m["cpf"],)).fetchone())
 
 
 def buscar_motorista(conn: sqlite3.Connection, cpf: str) -> dict | None:
@@ -182,4 +205,5 @@ def publico(m: dict) -> dict:
         "cpf": m["cpf"], "nome": m["nome"], "agent_id": m.get("agent_id"), "vehicle_id": m.get("vehicle_id"),
         "telefone": m.get("telefone"), "email": m.get("email"), "tipo_veiculo": m.get("tipo_veiculo"),
         "perfil": m.get("perfil") or PERFIL_MOTORISTA,
+        "trocar_pin": bool(m.get("trocar_pin")),
     }

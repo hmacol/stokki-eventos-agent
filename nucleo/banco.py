@@ -287,6 +287,7 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("tentativas_pin", "INTEGER NOT NULL DEFAULT 0"),
     ("bloqueado_ate", "TEXT"),
     ("perfil", "TEXT NOT NULL DEFAULT 'MOTORISTA'"),  # MOTORISTA | TESTE (usuário do Hugo no piloto)
+    ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
 ]
 
 

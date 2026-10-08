@@ -532,3 +532,32 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   (`chamados.horario_logistica`). API em `nucleo/chamados_motorista.py`;
   app em `app/(tabs)/ajuda.tsx`. Validado em produção com o usuário TESTE
   (chamado #5 deixado aberto). **Falta publicar a OTA** do app.
+- **08/10 — Distribuição pros motoristas (Android) + troca obrigatória de
+  PIN.** Hugo: "quero pedir para meus motoristas baixarem e acessarem o
+  app"; decidiu PIN inicial igual pra todos, com troca exigida no primeiro
+  acesso, sempre 6 dígitos. Estado encontrado: APK de 26/08 expirado no
+  Expo (404), só o login TESTE existia, Fase C não começou (o app lista
+  as rotas VUUPT só pra consulta/aceite). Implementado: coluna
+  `motoristas.trocar_pin`, `auth.trocar_pin` + `POST /api/trocar-pin`
+  (devolve tokens novos), `importar-planilha --pin-inicial` e
+  `resetar-pin` marcam a flag; app com `app/trocar-pin.tsx`, Guarda do
+  `_layout` prende o motorista na troca enquanto `trocar_pin` for true, e
+  botão "Trocar PIN" no Perfil. Teste
+  `test_troca_de_pin_obrigatoria_no_primeiro_acesso`. APK novo buildado
+  pelo perfil preview (mesmo runtime 1.0.0; leva o ícone de 11/09).
+- **08/10 (tarde) — Teclado na Ajuda + áudio pra logística.** Print do
+  Hugo: o teclado cobria o campo de escrever. Causa: Android em tela cheia
+  (edge-to-edge, SDK 54+) não redimensiona a janela; fix =
+  `KeyboardAvoidingView behavior="padding"` também no Android (ajuda,
+  login, trocar-pin). OTA `ffe26b0a` no canal preview. **Áudio** (decisão
+  do Hugo: "somente quando chegar no atendimento humano"): `expo-audio`
+  (módulo nativo → build novo, `version` 1.1.0 = runtime nova,
+  `autoIncrement` no perfil preview), botão de microfone no lugar do
+  enviar quando `chamado.status != COM_ASSISTENTE`; gravação `.m4a`
+  sobe como anexo (`texto` "Áudio"); a API recusa com 409 se ainda está
+  com o assistente (`EXTENSOES_AUDIO`/`MIME_AUDIO` em
+  portal_cliente/chamados.py); bolha com player (arquivo baixado pro cache
+  com o token); painel `/atendimento` (desktop e mobile) mostra `<audio>`.
+  Teste `test_audio_so_no_atendimento_humano`. APK fixo em
+  https://app.freshhub.com.br/motorista/app.apk (Caddy →
+  dados/app_motorista/freshlog-motorista.apk).

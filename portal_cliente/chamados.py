@@ -125,7 +125,9 @@ def areas_do_tipo(tipo: str | None) -> dict:
 def perfil_do_tipo(tipo: str | None) -> str:
     return PERFIL_LOGISTICA if tipo == TIPO_MOTORISTA else PERFIL_CLIENTE
 
-EXTENSOES_ANEXO = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".xlsx", ".xls", ".csv", ".txt", ".xml"}
+EXTENSOES_AUDIO = {".m4a"}   # gravação do app do motorista (expo-audio, AAC)
+EXTENSOES_ANEXO = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".xlsx", ".xls", ".csv", ".txt", ".xml"} | EXTENSOES_AUDIO
+MIME_AUDIO = {".m4a": "audio/mp4"}
 MAX_ANEXO_BYTES = 10 * 1024 * 1024
 MAX_ANEXOS_POR_MENSAGEM = 5
 MAX_TEXTO = 5000

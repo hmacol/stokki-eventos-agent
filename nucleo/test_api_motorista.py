@@ -521,6 +521,37 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(r["fluxos"]["ENTREGUE"][0]["chave"], "nome_recebedor")
         self.assertEqual(r["motivos"][0]["motivo_texto"], "Local fechado")
 
+    def test_troca_de_pin_obrigatoria_no_primeiro_acesso(self):
+        # PIN inicial igual pra todos (Hugo, 08/10): o cadastro marca trocar_pin
+        # e o app obriga a troca no primeiro acesso.
+        conn = banco.conectar()
+        auth.criar_ou_atualizar_motorista(conn, "98765432100", "Novato", "123456", agent_id=7, trocar_pin=True)
+        conn.close()
+        r = self._login(cpf="98765432100", pin="123456")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["motorista"]["trocar_pin"])
+        self.assertFalse(self._login().get_json()["motorista"]["trocar_pin"])   # motorista do setUp: sem troca
+        h = {"Authorization": f"Bearer {r.get_json()['acesso']}"}
+
+        # PIN atual errado -> 401 (e conta tentativa como no login)
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "000000", "pin_novo": "654321"}, headers=h)
+        self.assertEqual(r.status_code, 401)
+        # PIN novo fora do formato ou igual ao atual -> 400
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "12345"}, headers=h)
+        self.assertEqual(r.status_code, 400)
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "123456"}, headers=h)
+        self.assertEqual(r.status_code, 400)
+
+        # Troca certa: tokens novos, flag limpa, token antigo morre, PIN novo entra
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "654321"}, headers=h)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        novo = r.get_json()
+        self.assertFalse(novo["motorista"]["trocar_pin"])
+        self.assertEqual(self.cli.get("/api/eu", headers=h).status_code, 401)
+        self.assertEqual(self.cli.get("/api/eu", headers={"Authorization": f"Bearer {novo['acesso']}"}).status_code, 200)
+        self.assertEqual(self._login(cpf="98765432100", pin="123456").status_code, 401)
+        self.assertFalse(self._login(cpf="98765432100", pin="654321").get_json()["motorista"]["trocar_pin"])
+
 
 if __name__ == "__main__":
     unittest.main()

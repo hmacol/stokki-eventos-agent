@@ -2,7 +2,7 @@
   "expo": {
     "name": "FreshLog Motorista",
     "slug": "freshlogbr",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "freshlogmotorista",
@@ -13,7 +13,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Fotografar o canhoto e comprovantes de entrega.",
         "NSLocationWhenInUseUsageDescription": "Registrar o trajeto e o local de cada entrega enquanto a rota está em andamento.",
-        "NSPhotoLibraryUsageDescription": "Anexar comprovantes já fotografados."
+        "NSPhotoLibraryUsageDescription": "Anexar comprovantes já fotografados.",
+        "NSMicrophoneUsageDescription": "Gravar áudio pra logística na aba Ajuda."
       }
     },
     "android": {
@@ -27,7 +28,8 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -58,6 +60,12 @@
           "backgroundColor": "#FFFFFF",
           "image": "./assets/splash-icon.png",
           "imageWidth": 240
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Gravar áudio pra logística na aba Ajuda."
         }
       ]
     ],

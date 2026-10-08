@@ -143,6 +143,16 @@ export async function login(cpf: string, pin: string): Promise<Motorista> {
   return r.motorista;
 }
 
+/** Troca de PIN pelo motorista. A API devolve tokens novos (o hash muda e derruba a sessão antiga). */
+export async function trocarPin(pinAtual: string, pinNovo: string): Promise<Motorista> {
+  const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/trocar-pin', {
+    metodo: 'POST',
+    corpo: { pin_atual: pinAtual, pin_novo: pinNovo },
+  });
+  await guardarTokens(r);
+  return r.motorista;
+}
+
 export const eu = () => chamar<Motorista>('/eu');
 export const rotas = (de?: string, ate?: string) =>
   chamar<{ rotas: Rota[] }>(`/rotas${de ? `?de=${de}&ate=${ate ?? de}` : ''}`).then((r) => r.rotas);
@@ -262,5 +272,29 @@ export const enviarMensagemChamado = (id: number, texto: string, chip?: string |
   chamar<RespostaChamado>(`/atendimento/chamados/${id}/mensagens`, { metodo: 'POST', corpo: { texto, chip: chip ?? '' } });
 export const enviarFotoChamado = (id: number, uri: string, texto: string) =>
   enviarArquivo<RespostaChamado>(`/atendimento/chamados/${id}/mensagens`, uri, { texto }, false, 'anexos');
+// Áudio (Hugo, 08/10): só quando a conversa já está com a logística -- a API
+// recusa (409) enquanto o assistente atende.
+export const enviarAudioChamado = (id: number, uri: string) =>
+  enviarArquivo<RespostaChamado>(`/atendimento/chamados/${id}/mensagens`, uri, { texto: 'Áudio' }, false, 'anexos');
+/** Baixa um anexo da conversa pro cache (a URL exige o token, então o player
+ * não consegue buscar direto). Devolve o caminho local. */
+export async function baixarAnexoChamado(chamadoId: number, arquivo: string): Promise<string> {
+  const destino = `${FileSystem.cacheDirectory}chamado-${chamadoId}-${arquivo}`;
+  const info = await FileSystem.getInfoAsync(destino).catch(() => ({ exists: false }));
+  if (info.exists) return destino;
+  let r: FileSystem.FileSystemDownloadResult;
+  try {
+    r = await FileSystem.downloadAsync(`${API_URL}/atendimento/chamados/${chamadoId}/anexos/${encodeURIComponent(arquivo)}`, destino, {
+      headers: acesso ? { Authorization: `Bearer ${acesso}` } : {},
+    });
+  } catch (e) {
+    throw new ErroRede((e as Error).message || 'falha ao baixar o áudio');
+  }
+  if (r.status < 200 || r.status >= 300) {
+    await FileSystem.deleteAsync(destino, { idempotent: true }).catch(() => {});
+    throw new ErroApi(r.status, `Erro ${r.status} ao baixar o áudio`);
+  }
+  return destino;
+}
 export const acaoChamado = (id: number, tipo: 'atendente' | 'resolvido') =>
   chamar<RespostaChamado>(`/atendimento/chamados/${id}/acao`, { metodo: 'POST', corpo: { tipo } });
