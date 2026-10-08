@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from batimento import banco, regras
+from regras import feriados
 
 RODADAS_NO_HISTORICO = 14
 HORAS_RODADA_ATRASADA = 26   # o timer roda todo dia as 07h25, inclusive fim de semana
@@ -30,7 +31,7 @@ def atrasada(ultima: dict | None, agora: datetime) -> bool:
 
 def _proximo_dia_util(dt: datetime) -> datetime:
     d = dt + timedelta(days=1)
-    while d.weekday() >= 5:   # sabado/domingo; feriados ainda em aberto
+    while not feriados.eh_dia_util(d):   # fim de semana e feriado (regras/feriados.py)
         d += timedelta(days=1)
     return d
 

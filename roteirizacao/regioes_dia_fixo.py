@@ -16,7 +16,8 @@ identificados por trechos de rua/CEP, ver ENDERECOS_DIA_FIXO):
   quinzenal (03/10/2026)
   Campinas (Campinas, Jundiaí, Valinhos, Vinhedo, Cabreúva, Caieiras,
   Cajamar, Franco da Rocha, Francisco Morato, Louveira) -- Quarta
-  Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta
+  Piracicaba (Piracicaba, Americana, Hortolândia, Sumaré) -- Quarta,
+  quinzenal (07/10/2026)
   Barueri (Barueri, Santana do Parnaíba, Jandira) -- Terça e Quinta
   ABCD (Santo André, São Bernardo do Campo, São Caetano do Sul,
   Diadema, Ribeirão Pires, Mauá) -- Segunda e Quinta (03/10/2026)
@@ -41,8 +42,15 @@ Stokki, confirmação por e-mail, etc.), nem fica reagendando indefinidamente.
 """
 import logging
 import re
+import sys
 import unicodedata
 from datetime import date, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import feriados  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +69,8 @@ FREQUENCIA_QUINZENAL = "quinzenal"
 
 # Prazo de entrega por nível: (dias, conta só dia útil?). Interna = entrega
 # diária da Grande SP e regiões internas de dia fixo (Barueri, ABCD,
-# galpões por endereço); semanal = regiões externas; quinzenal = Sorocaba.
+# galpões por endereço); semanal = regiões externas; quinzenal = Sorocaba e
+# Piracicaba (07/10/2026).
 NIVEL_INTERNA = "interna"
 NIVEL_SEMANAL = "semanal"
 NIVEL_QUINZENAL = "quinzenal"
@@ -98,6 +107,7 @@ REGIOES: list[dict] = [
                  "CAIEIRAS", "CAJAMAR", "FRANCO DA ROCHA", "FRANCISCO MORATO",
                  "LOUVEIRA"]},
     {"nome": "Piracicaba", "dias": [QUARTA], "externa": True,
+     "frequencia": FREQUENCIA_QUINZENAL, "ancora": "2026-10-14",  # Hugo 07/10: quinzenal; 1ª visita na quarta seguinte
      "cidades": ["PIRACICABA", "AMERICANA", "HORTOLANDIA", "SUMARE"]},
     {"nome": "Barueri", "dias": [TERCA, QUINTA], "externa": False,
      "cidades": ["BARUERI", "SANTANA DO PARNAIBA", "JANDIRA"]},
@@ -120,16 +130,20 @@ ENDERECOS_DIA_FIXO: list[dict] = [
     # São Bernardo é cidade da região ABCD (seg/qua/sex), mas esta regra
     # por endereço tem prioridade: no galpão, só quarta/sexta.
     {"nome": "Centrosul", "dias": [QUARTA, SEXTA], "cidade": "SAO BERNARDO DO CAMPO",
+     "endereco": "Rua Makita Brasil, 300 - Cooperativa, São Bernardo do Campo",  # só exibição (portal /regioes)
      "padroes": ["MAKITA BRASIL", "09852-080", "09852080"]},
     # Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra/SP
     # 03/10/2026: Terça e Quinta (a maioria das entregas já caía nesses dias).
     {"nome": "Transfrios", "dias": [TERCA, QUINTA], "cidade": "ITAPECERICA DA SERRA",
+     "endereco": "Estrada Francisco Hengles, 591 - Potuvera, Itapecerica da Serra",
      "padroes": ["FRANCISCO HENGLES", "06885-160", "06885160"]},
     # Av. Arterial Sul, 451 (tb. Rod. Raposo Tavares km 20,5) - Parque Ipê, São Paulo/SP
     {"nome": "Superfrio/TAC", "dias": [SEGUNDA, QUARTA], "cidade": "SAO PAULO",
+     "endereco": "Av. Arterial Sul, 451 - Parque Ipê, São Paulo",
      "padroes": ["ARTERIAL SUL", "05577-300", "05577300"]},
     # Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri/SP
     {"nome": "TAFF", "dias": [TERCA, QUINTA], "cidade": "BARUERI",
+     "endereco": "Av. Prefeito João Vila Lobos Quero, 1505 - Jardim Belval, Barueri",
      "padroes": ["VILA LOBOS QUERO", "06422-122", "06422122"]},
 ]
 
@@ -331,10 +345,10 @@ def _inicio_da_semana(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def data_valida_na_regiao(regra: dict, data: date) -> bool:
-    """`data` é dia de visita da região? Dia da semana certo e, se a região
-    é quinzenal, semana PAR contada a partir da âncora (semanas de segunda
-    a domingo -- vale antes da âncora também)."""
+def visita_nominal(regra: dict, data: date) -> bool:
+    """Dia da semana certo e, se a região é quinzenal, semana PAR contada a
+    partir da âncora (semanas de segunda a domingo -- vale antes da âncora
+    também). Não olha feriado."""
     if data.weekday() not in regra["dias"]:
         return False
     if regra.get("frequencia") != FREQUENCIA_QUINZENAL or not regra.get("ancora"):
@@ -342,6 +356,23 @@ def data_valida_na_regiao(regra: dict, data: date) -> bool:
     ancora = date.fromisoformat(regra["ancora"])
     semanas = (_inicio_da_semana(data) - _inicio_da_semana(ancora)).days // 7
     return semanas % 2 == 0
+
+
+def data_valida_na_regiao(regra: dict, data: date) -> bool:
+    """`data` é dia de visita da região? Dia nominal (visita_nominal) que
+    seja dia útil, OU o dia útil seguinte a um feriado que seria dia de
+    visita (Hugo, 07/10/2026: não há operação em feriado e a visita passa
+    pro próximo dia). Ex.: ABCD (seg/qui) com 12/10 feriado -> 13/10 vale."""
+    if not feriados.eh_dia_util(data):
+        return False
+    if visita_nominal(regra, data):
+        return True
+    anterior = data - timedelta(days=1)
+    while not feriados.eh_dia_util(anterior):
+        if feriados.eh_feriado(anterior) and visita_nominal(regra, anterior):
+            return True
+        anterior -= timedelta(days=1)
+    return False
 
 
 def proxima_data_valida(regra: dict, a_partir_de: date) -> date:
@@ -438,7 +469,7 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
                        f"(entrega às {descricao_dias(regra)}) -- "
                        f"agendado pra {data_alvo.strftime('%d/%m/%Y')} (próxima ocorrência).")
             atualizados.append({"servico": s, "regiao": regra["nome"],
-                                "dias": regra["dias"], "data": data_alvo})
+                                "dias": regra["dias"], "regra": regra, "data": data_alvo})
         except Exception as e:
             logger.warning(f"  {s.get('code')}: falha ao aplicar dia fixo de '{regra['nome']}': {e}")
 

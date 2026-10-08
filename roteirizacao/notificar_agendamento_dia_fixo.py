@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent))  # regioes_dia_fixo é módulo ir
 from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ACENTO,
 )
-from regioes_dia_fixo import nomes_dias
+from regioes_dia_fixo import descricao_dias
 import preferencias_notificacao
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,12 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     preferências do portal (17/09: o embarcador escolhe no botão
     Notificações o e-mail e se quer receber os avisos de agendamento)."""
     return preferencias_notificacao.carregar_embarcadores("agendamento")
+
+
+def _dias_da_regiao(i: dict) -> str:
+    """"Quartas (quinzenal)" quando o item traz a regra (aplicar_regioes_dia_fixo,
+    07/10); só os nomes dos dias quando vem apenas a lista `dias`."""
+    return descricao_dias(i.get("regra") or {"dias": i["dias"]})
 
 
 def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
@@ -71,7 +77,7 @@ def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + (i['servico'].get('code', '') or '').lstrip('#'))}</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape((i['servico'].get('title') or '')[:50])}</td>
-      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(i['regiao'])} ({nomes_dias(i['dias'])})</td>
+      <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape(i['regiao'])} ({_dias_da_regiao(i)})</td>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{_celula_data(i)}</td>
     </tr>""" for i in itens)
 

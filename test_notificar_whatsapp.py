@@ -97,6 +97,19 @@ class TestCabeEm200(unittest.TestCase):
     def test_conferencia_com_numeros_grandes(self):
         self.conferir(nw.texto_nao_expedidos(9999, 9999, 9999))
 
+    def test_informativo_mensal_cabe_e_nunca_corta_o_link(self):
+        from datetime import date as _d
+        link = "https://app.freshhub.com.br/cliente/regioes?mes=2026-11"
+        feriados = [_d(2026, 11, 2), _d(2026, 11, 20)]
+        texto = nw.texto_informativo_mensal("Novembro de 2026", feriados, link)
+        self.conferir(texto)
+        self.assertIn(link, texto)
+        self.assertIn("02/11 e 20/11", texto)
+        self.conferir(nw.texto_informativo_mensal("M" * 300, [_d(2026, 2, 16), _d(2026, 2, 17), _d(2026, 2, 18), _d(2026, 2, 19)], link))
+        sem = nw.texto_informativo_mensal("Agosto de 2026", [], link)
+        self.conferir(sem)
+        self.assertIn("Sem feriado", sem)
+
     def test_rotina_com_nomes_e_detalhes_compridos(self):
         for qtd in (1, 2, 3, 20, 150):
             etapas = {f"Etapa {i} " + "n" * 80: {"status": "erro", "detalhe": "d" * 500} for i in range(qtd)}

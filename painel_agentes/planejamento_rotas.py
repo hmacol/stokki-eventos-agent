@@ -61,6 +61,7 @@ from regras.tipo_carga_embarcador import (
 )
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from regras.prioridade_ofertas import carregar_historico_justica
+from regras import feriados
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
@@ -1641,7 +1642,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     # Mesmo critério de área de _elegibilidade_sublote (só dia útil tem
     # rodízio); geocodificação vem do cache, já aquecida pela chamada de
     # listar_motoristas_elegiveis logo acima.
-    rota_em_area_rodizio = data_alvo.weekday() in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, gmaps_key)
+    rota_em_area_rodizio = feriados.eh_dia_util(data_alvo) and sublote_em_area_rodizio(sublote, gmaps_key)
     priorizados = priorizar(elegiveis, data_alvo, rota_em_area_rodizio, contagem_alocacoes_dia, config)
 
     ofertas_rota.criar_ou_atualizar_oferta(

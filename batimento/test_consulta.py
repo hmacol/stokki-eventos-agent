@@ -32,9 +32,14 @@ class Vencida(unittest.TestCase):
         self.assertFalse(consulta.vencida("2026-10-05 07:25:00", datetime(2026, 10, 6, 7, 24)))   # seg -> ter
         self.assertTrue(consulta.vencida("2026-10-05 07:25:00", datetime(2026, 10, 6, 7, 25)))
 
-    def test_sexta_so_vence_na_segunda(self):
-        self.assertFalse(consulta.vencida("2026-10-09 07:25:00", datetime(2026, 10, 11, 23, 0)))  # domingo
-        self.assertTrue(consulta.vencida("2026-10-09 07:25:00", datetime(2026, 10, 12, 7, 25)))   # segunda
+    def test_sexta_so_vence_no_proximo_dia_util(self):
+        self.assertFalse(consulta.vencida("2026-10-02 07:25:00", datetime(2026, 10, 4, 23, 0)))   # domingo
+        self.assertTrue(consulta.vencida("2026-10-02 07:25:00", datetime(2026, 10, 5, 7, 25)))    # segunda
+
+    def test_feriado_nao_conta_como_dia_util(self):
+        # sexta 09/10 -> 12/10 e feriado (regras/feriados.py) -> vence terca 13/10
+        self.assertFalse(consulta.vencida("2026-10-09 07:25:00", datetime(2026, 10, 12, 7, 25)))
+        self.assertTrue(consulta.vencida("2026-10-09 07:25:00", datetime(2026, 10, 13, 7, 25)))
 
     def test_desde_invalido_nao_vence(self):
         self.assertFalse(consulta.vencida(None, datetime(2026, 10, 12)))

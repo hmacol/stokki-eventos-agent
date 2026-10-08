@@ -76,7 +76,9 @@
  Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
  Rodízio SP / zonas SP ..................... roteirizacao/rodizio_sp.py, zonas_sp.py
  Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py, fora_dia_fixo.py
+ Feriados / dia útil ....................... regras/feriados.py (único lugar); reagendar_feriado.py
  Informativo de regiões (PDF) .............. gerar_informativo_regioes.py
+ Informativo mensal (dia 1, e-mail+WhatsApp) gerar_informativo_mensal.py (timer stokki-informativo-mensal)
  Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
  Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
@@ -96,6 +98,7 @@
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
+ Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
@@ -315,6 +318,9 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 16h/18h/22h). Data informada
                          vence o dia fixo da região.
+ reagendar_feriado.py     Pedidos do pool agendados pra um feriado vão pro dia
+                         útil seguinte (ou próxima visita da região); registra
+                         origem DIA_FIXO. Manual, --modo-teste; sem timer.
  marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
                          na fila de autorização do Hugo pra virar AGENDA na
                          BD_CLIENTES (sequências 16h/18h/22h). Aviso no WhatsApp
@@ -357,6 +363,15 @@
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  gerar_informativo_regioes.py  PDF do informativo de regiões
                                (dados/informativos/). Envio é manual, do Hugo.
+ gerar_informativo_mensal.py   Dia 1 às 07h (stokki-informativo-mensal.timer):
+                               HTML (mesmo template da página /cliente/regioes,
+                               logo embutido) + PDF via Playwright em
+                               dados/informativos/, e-mail com anexos
+                               (informativo_mensal.forcar_destino; sem a chave
+                               vai pro Hugo) e aviso no WhatsApp do grupo com o
+                               link. A partir do dia 25 o alvo é o mês seguinte.
+                               O /inicio do painel mostra "Virada de mês" nos
+                               últimos 7 dias (pagina_inicial.montar_virada_de_mes).
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
@@ -487,6 +502,13 @@
                             é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
+                            Christi, 09/07, 25/01; móveis pela Páscoa) e as
+                            funções de dia útil usadas por rota do dia, dia
+                            fixo, prazo, vigia, batimento, rodízio, chamados.
+                            ARMADILHA: não recriar "weekday() >= 5" em módulo
+                            novo; importar daqui. Visita de dia fixo em
+                            feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
  preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
  cadastro_motoristas.py     Grava motorista novo na planilha.
@@ -532,9 +554,11 @@
  alocacao_motoristas.py    Alocação equitativa com travas.
  zonas_sp.py               Zonas da Grande SP.
  rodizio_sp.py             Rodízio municipal por placa.
- regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (Sorocaba
-                           quinzenal, 1ª visita 06/10/2026), prazo por nível,
-                           cidade truncada.
+ regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (quinzenais:
+                           Sorocaba ter desde 06/10/2026, Piracicaba qua desde
+                           14/10/2026), prazo por nível,
+                           cidade truncada. Feriado não é dia de visita; o dia
+                           útil seguinte herda a visita (regras/feriados.py).
  fora_dia_fixo.py          Data do embarcador fora do dia de visita: marca
                            dedicado (valor da calculadora, km em linha reta)
                            e chama o aviso. Roda no job das 18h e no
@@ -643,6 +667,8 @@
                            Filtro por embarcador (05/10) é só no navegador:
                            cada pedido leva sender_id; opções vêm do interno
                            ("GRUPO - FILIAL" vira opção do grupo inteiro).
+                           JS em templates/_torre_filtro_embarcador.js.html,
+                           incluído pelo desktop e pelo mobile.
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);
@@ -718,7 +744,12 @@
  README.md                 Doc principal do portal.
  app.py                    Flask: login, acompanhamento do dia, canhoto,
                            resposta de insucesso, notificações, envios,
-                           /equipe, exportação xlsx.
+                           /equipe, exportação xlsx, /regioes (pública).
+ regioes_atendimento.py    Dados da página pública /regioes (regiões, dias de
+                           visita, galpões, calendário do mês com feriados),
+                           lidos de roteirizacao/regioes_dia_fixo.py e
+                           regras/feriados.py. ?mes=AAAA-MM (1 atrás, 3 à
+                           frente). Logo servido de assets/ em /regioes/logo.png.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dias de atendimento por região — Fresh Log</title>
+<meta name="description" content="Regiões atendidas pela Fresh Log, dias de visita, frequência, prazo de entrega e calendário do mês.">
+<style>
+  :root { --navy: #141428; --mint: #00C896; --mint-dark: #0EA575; --mint-light: #E6FBF5; --amber: #F5A623; --amber-light: #FFF4DE;
+          --red: #E1483D; --red-texto: #B9382E; --red-light: #FDECEA; --texto: #1F2937; --suave: #6B7280; --borda: #E5E7EB; --fundo: #EEF0F3; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fundo); color: var(--texto); font-size: 15px; line-height: 1.5; padding: 24px 16px;
+         font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; }
+  .folha { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 40px rgba(20,20,40,.10); }
+  .capa { background: var(--navy); color: #fff; padding: 32px 36px 28px; position: relative; overflow: hidden; }
+  .capa::after { content: ""; position: absolute; right: -80px; top: -80px; width: 320px; height: 320px; border-radius: 50%;
+                 background: radial-gradient(circle at 30% 30%, rgba(0,200,150,.55), rgba(0,200,150,0) 70%); pointer-events: none; }
+  .capa > * { position: relative; z-index: 1; }
+  .capa-topo { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .logo { background: #fff; border-radius: 10px; padding: 8px 14px; display: inline-flex; align-items: center; }
+  .logo img { height: 40px; width: auto; display: block; }
+  .eyebrow { font-weight: 700; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--mint); }
+  .capa h1 { font-weight: 800; font-size: clamp(26px, 4vw, 36px); line-height: 1.1; margin: 22px 0 10px; max-width: 620px; }
+  .capa p { margin: 0; max-width: 640px; color: #CBD0DC; }
+  .miolo { padding: 8px 36px 36px; }
+  section { padding-top: 32px; }
+  h2 { font-weight: 800; font-size: 20px; margin: 0 0 6px; color: var(--navy); }
+  h2 small { display: block; font-weight: 500; font-size: 14px; color: var(--suave); margin-top: 2px; }
+  .lead { margin: 12px 0 0; color: var(--suave); max-width: 70ch; }
+  .tabela-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 560px; }
+  thead th { text-align: left; font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--suave);
+             padding: 0 10px 8px; border-bottom: 2px solid var(--navy); }
+  tbody td { padding: 12px 10px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.c-reg strong { display: block; font-weight: 800; font-size: 15px; color: var(--navy); }
+  .cidades { display: block; color: var(--suave); font-size: 13px; margin-top: 2px; max-width: 34ch; }
+  td.c-dias { white-space: nowrap; }
+  .dias-txt { display: block; font-size: 13px; color: var(--suave); margin-top: 4px; white-space: normal; }
+  td.c-freq, td.c-prazo, td.c-datas { font-weight: 600; }
+  td.c-datas { font-variant-numeric: tabular-nums; min-width: 14ch; }
+  tr.diaria td.c-freq { color: var(--mint-dark); }
+  tr.quinzenal td.c-freq { color: #B9770E; }
+  .semana { display: inline-flex; gap: 3px; }
+  .semana i { font-style: normal; font-weight: 700; font-size: 12px; width: 34px; height: 24px; display: inline-grid; place-items: center;
+              border-radius: 6px; background: #F3F4F6; color: #5F6675; }
+  .semana i.on { color: #fff; background: var(--navy); }
+  .semana i.on.externa, .semana i.on.diaria { background: var(--mint-dark); }
+  .semana i.on.quinzenal { background: var(--amber); color: var(--navy); }
+  .semana i.on.galpao { background: #fff; color: var(--navy); box-shadow: inset 0 0 0 2px var(--navy); }
+  .mes-nav { display: flex; align-items: center; gap: 12px; margin: 14px 0; flex-wrap: wrap; }
+  .mes-nav a, .mes-nav span.off { display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--borda); font-size: 13px;
+                                  font-weight: 600; color: var(--navy); text-decoration: none; }
+  .mes-nav a:hover { border-color: var(--mint-dark); }
+  .mes-nav span.off { color: #5F6675; }
+  .mes-nav strong { font-size: 16px; color: var(--navy); margin: 0 4px; }
+  .legenda { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 14px; font-size: 13px; color: var(--suave); }
+  .legenda span { display: inline-flex; align-items: center; gap: 6px; }
+  .legenda b { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+  .cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+  .cal-h { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--suave); padding: 0 4px 4px; }
+  .dia { border: 1px solid var(--borda); border-radius: 10px; padding: 8px; min-height: 108px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .dia.vazio { border-color: transparent; }
+  .dia.fds { background: #F7F8FA; border-style: dashed; min-height: 0; }
+  .dia.fds .num { color: #5F6675; }
+  .dia.hoje { border-color: var(--mint-dark); box-shadow: inset 0 0 0 1px var(--mint-dark); }
+  .dia .num { font-weight: 800; font-size: 15px; color: var(--navy); }
+  .dia .wd { display: none; }
+  .chip { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1.25; padding: 3px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+  .chip.externa { background: var(--mint-light); color: #0B6B4D; }
+  .chip.interna { background: var(--navy); color: #fff; }
+  .chip.galpao { background: #fff; color: var(--navy); box-shadow: inset 0 0 0 1.5px #C9CCD6; }
+  .chip.quinzenal { background: var(--amber-light); color: #8A5A00; box-shadow: inset 0 0 0 1.5px var(--amber); }
+  .chip.transferida { border-bottom: 2px dashed var(--red); border-radius: 6px 6px 2px 2px; }
+  .dia.feriado { background: var(--red-light); border-color: #F3C2BD; }
+  .chip.feriado-chip { background: #fff; color: var(--red-texto); box-shadow: inset 0 0 0 1.5px var(--red); }
+  .sem-visita { font-size: 12px; font-weight: 600; color: var(--red-texto); margin-top: auto; }
+  .nota { margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--red-light); color: #7F2B24; font-size: 14px; }
+  .passos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; counter-reset: p; }
+  .passos li { counter-increment: p; border: 1px solid var(--borda); border-radius: 12px; padding: 16px 16px 16px 58px; position: relative; min-width: 0; }
+  .passos li::before { content: counter(p); position: absolute; left: 16px; top: 14px; width: 30px; height: 30px; border-radius: 50%; background: var(--mint);
+                       color: var(--navy); font-weight: 800; font-size: 14px; display: grid; place-items: center; }
+  .passos li strong { display: block; font-weight: 800; color: var(--navy); margin-bottom: 4px; }
+  .passos li p { margin: 0; font-size: 14px; }
+  .destaque { margin-top: 14px; padding: 14px 16px; border-radius: 12px; background: var(--mint-light); border-left: 4px solid var(--mint); font-size: 14px; }
+  .rodape { background: var(--navy); color: #CBD0DC; padding: 26px 36px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .rodape strong { color: #fff; display: block; margin-bottom: 4px; }
+  .contato { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .contato a { color: var(--mint); text-decoration: none; font-weight: 600; }
+  .rodape small { font-size: 12px; }
+  @media (max-width: 680px) {
+    .capa, .miolo, .rodape { padding-inline: 20px; }
+    .passos { grid-template-columns: 1fr; }
+    .cal { grid-template-columns: 1fr; }
+    .cal-h, .dia.vazio, .dia.fds { display: none; }
+    .dia { min-height: 0; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .dia .num { width: 28px; }
+    .dia .wd { display: inline; font-size: 13px; color: var(--suave); width: 72px; }
+    .sem-visita { margin-top: 0; }
+  }
+  @media print { body { background: #fff; padding: 0; } .folha { box-shadow: none; border-radius: 0; } .mes-nav a, .mes-nav span.off { display: none; } }
+</style>
+</head>
+<body>
+<div class="folha">
+  <header class="capa">
+    <div class="capa-topo">
+      <span class="logo"><img src="{{ logo_src }}" alt="Fresh Log"></span>
+      <span class="eyebrow">Informativo aos embarcadores</span>
+    </div>
+    <h1>Dias de atendimento por região</h1>
+    <p>Entregamos todos os dias úteis na Grande São Paulo e visitamos as demais regiões em dias fixos da semana. Aqui estão as regiões atendidas, os dias de visita e as datas de {{ d.titulo_mes|lower }}.</p>
+  </header>
+
+  <div class="miolo">
+    <section>
+      <h2>Regiões e dias de visita <small>Prazo contado a partir do recebimento do pedido. Datas de {{ d.titulo_mes|lower }} na última coluna.</small></h2>
+      <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Região</th><th>Dias de visita</th><th>Frequência</th><th>Prazo de entrega</th><th>Datas em {{ d.titulo_mes.split(' ')[0]|lower }}</th></tr></thead>
+        <tbody>
+        {% for r in d.regioes %}
+          <tr class="{{ r.classe }}">
+            <td class="c-reg"><strong>{{ r.nome }}</strong><span class="cidades">{{ r.cidades }}</span></td>
+            <td class="c-dias">
+              <span class="semana" aria-label="{{ r.dias_texto }}">{% for i in range(5) %}<i class="{% if i in r.dias %}on {{ r.classe }}{% endif %}">{{ d.dias_curtos[i] }}</i>{% endfor %}</span>
+              <span class="dias-txt">{{ r.dias_texto }}{% if r.quinzenal %} · a cada duas semanas{% endif %}</span>
+            </td>
+            <td class="c-freq">{{ r.frequencia }}</td>
+            <td class="c-prazo">{{ r.prazo }}</td>
+            <td class="c-datas">{% if r.classe == 'diaria' %}Todos os dias úteis{% else %}{% for dt in r.datas %}{{ '%02d' % dt.day }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <p class="lead">Cidades fora dessas regiões, ou fora do estado de São Paulo, são atendidas mediante orçamento. Fale com a nossa equipe.</p>
+    </section>
+
+    <section>
+      <h2>Galpões e operadores logísticos <small>Entregas para estes endereços seguem o dia do galpão, não o da cidade</small></h2>
+      <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Destino</th><th>Dias de visita</th><th>Datas em {{ d.titulo_mes.split(' ')[0]|lower }}</th></tr></thead>
+        <tbody>
+        {% for g in d.galpoes %}
+          <tr class="galpao">
+            <td class="c-reg"><strong>{{ g.nome }}</strong><span class="cidades">{{ g.endereco }}</span></td>
+            <td class="c-dias">
+              <span class="semana" aria-label="{{ g.dias_texto }}">{% for i in range(5) %}<i class="{% if i in g.dias %}on galpao{% endif %}">{{ d.dias_curtos[i] }}</i>{% endfor %}</span>
+              <span class="dias-txt">{{ g.dias_texto }}</span>
+            </td>
+            <td class="c-datas">{% for dt in g.datas %}{{ '%02d' % dt.day }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Calendário <small>Grande São Paulo é atendida em todos os dias úteis; o calendário mostra as regiões de dia fixo</small></h2>
+      <nav class="mes-nav" aria-label="Mês">
+        {% if d.pode_voltar %}<a href="{{ url_mes_anterior }}">‹ mês anterior</a>{% else %}<span class="off">‹ mês anterior</span>{% endif %}
+        <strong>{{ d.titulo_mes }}</strong>
+        {% if d.pode_avancar %}<a href="{{ url_mes_seguinte }}">próximo mês ›</a>{% else %}<span class="off">próximo mês ›</span>{% endif %}
+      </nav>
+      <div class="legenda">
+        <span><b style="background:var(--mint-light);box-shadow:inset 0 0 0 1px #9ED9C3"></b>Regiões semanais</span>
+        <span><b style="background:var(--navy)"></b>ABCD e Barueri</span>
+        <span><b style="background:#fff;box-shadow:inset 0 0 0 1.5px #C9CCD6"></b>Galpões</span>
+        <span><b style="background:var(--amber-light);box-shadow:inset 0 0 0 1.5px var(--amber)"></b>Quinzenais (Sorocaba, Piracicaba)</span>
+        <span><b style="background:var(--red-light);box-shadow:inset 0 0 0 1.5px var(--red)"></b>Feriado</span>
+        <span><b style="background:var(--mint-light);border-bottom:2px dashed var(--red);border-radius:4px 4px 1px 1px"></b>Visita transferida do feriado</span>
+      </div>
+      <div class="cal">
+        {% for n in d.dias_curtos %}<div class="cal-h">{{ n }}</div>{% endfor %}
+        {% for semana in d.semanas %}{% for c in semana %}
+          {% if c is none %}<div class="dia vazio" aria-hidden="true"></div>
+          {% elif c.fds %}<div class="dia fds"><span class="num">{{ c.dia }}</span></div>
+          {% elif c.feriado %}<div class="dia feriado{% if c.hoje %} hoje{% endif %}"><span class="num">{{ c.dia }}</span><span class="wd">{{ c.semana }}</span>
+              <span class="chip feriado-chip">Feriado · {{ c.feriado }}</span><span class="sem-visita">Sem visita · entregas no dia útil seguinte</span></div>
+          {% else %}<div class="dia{% if c.hoje %} hoje{% endif %}"><span class="num">{{ c.dia }}</span><span class="wd">{{ c.semana }}</span>
+              {% for ch in c.chips %}<span class="chip {{ ch.classe }}{% if ch.transferida %} transferida{% endif %}">{{ ch.nome }}</span>{% endfor %}</div>
+          {% endif %}
+        {% endfor %}{% endfor %}
+      </div>
+      {% for nota in d.notas %}<p class="nota"><strong>{{ nota }}</strong></p>{% endfor %}
+    </section>
+
+    <section>
+      <h2>Como programar sua entrega</h2>
+      <ol class="passos">
+        <li><strong>Envie o pedido até a véspera</strong><p>Pelo portal do cliente ou pelo canal habitual, até o dia anterior à visita da região.</p></li>
+        <li><strong>Sem data? Nós programamos</strong><p>O pedido entra na próxima visita da região, dentro do prazo da tabela.</p></li>
+        <li><strong>Prefere uma data? Informe no envio</strong><p>Datas que caem no dia de visita entram na rota normal da região, sem custo adicional.</p></li>
+        <li><strong>Data fora do dia de visita</strong><p>A entrega é feita na data pedida como envio dedicado, com valor cotado à parte. Você recebe o aviso com o valor estimado e pode manter a data ou trocar para o dia de visita.</p></li>
+      </ol>
+      <p class="destaque">As entregas acontecem entre <strong>8h e 16h</strong>. Reagendamentos feitos pela nossa equipe não geram cobrança de envio dedicado.</p>
+    </section>
+  </div>
+
+  <footer class="rodape">
+    <div class="contato">
+      <strong>Fale com a gente</strong>
+      <span>E-mail: <a href="mailto:entregas@freshlogbr.com">entregas@freshlogbr.com</a></span>
+      <span>Portal do cliente: <a href="{{ url_portal }}">app.freshhub.com.br/cliente</a></span>
+    </div>
+    <small>Fresh Log · Fresh Hub · Os dias de visita valem para os meses seguintes; use as setas para ver as datas.</small>
+  </footer>
+</div>
+</body>
+</html>
