@@ -487,8 +487,10 @@ def _etapas_email_embarcadores(config: dict, vuupt, modo_teste: bool, indexador_
 
 
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True,
-         incremental: bool = False, com_email_embarcadores: bool = False):
-    """com_email_embarcadores: no modo escopado, roda também a etapa de e-mail dos embarcadores."""
+         incremental: bool = False, com_email_embarcadores: bool = False,
+         resumo_saida: dict | None = None):
+    """com_email_embarcadores: no modo escopado, roda também a etapa de e-mail dos embarcadores.
+    resumo_saida: se informado, recebe o resumo por etapa (quem chama com notificar=False vê os erros)."""
     inicio = time.time()
     escopado = pedidos_stokki is not None
     modo = "[MODO TESTE] " if modo_teste else ""
@@ -673,6 +675,9 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
 
     duracao = time.time() - inicio
     logger.info(f"{modo}Processamento de documentos finalizado em {duracao:.1f}s. Contadores: {contadores}")
+
+    if resumo_saida is not None:
+        resumo_saida.update(resumo_etapas)
 
     # Incremental roda 5x por dia: e-mail de execução só quando deu erro.
     if notificar and (not incremental or resumo_etapas["Resumo geral"]["status"] == "erro"):

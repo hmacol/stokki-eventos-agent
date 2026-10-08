@@ -81,6 +81,27 @@ class Executar(unittest.TestCase):
         r, docs, *_ = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], atualizar=False)
         docs.assert_not_called()
 
+    def test_embarcador_desconhecido_sem_cnpj_nao_abre_chamado(self):
+        conn = MagicMock()
+        with patch.object(abf.bf, "pedidos_da_data", return_value=PEDIDOS), \
+             patch.object(abf.bf, "faltando", return_value=[PEDIDOS[2]]), \
+             patch.object(abf.bf, "ja_avisados", return_value=set()), \
+             patch.object(abf.bf, "registrar_avisados") as reg, \
+             patch.object(abf.bf, "registrar_no_chamado") as cham:
+            r = abf.executar(CFG, "2026-10-07", conn=conn, enviar=MagicMock(), situacoes={}, embarcadores={},
+                             rodar_documentos=MagicMock(), atualizar=False)
+        cham.assert_not_called()
+        reg.assert_not_called()
+        self.assertTrue(any("sem CNPJ" in f for f in r["falhas"]))
+
+    def test_whatsapp_numero_sem_whatsapp_nao_e_falha(self):
+        r, *_ = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], zap="numero_sem_whatsapp")
+        self.assertEqual(r["falhas"], [])
+
+    def test_whatsapp_indeterminado_e_falha(self):
+        r, *_ = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], zap="indeterminado")
+        self.assertTrue(any("WhatsApp" in f for f in r["falhas"]))
+
     def test_falha_na_atualizacao_segue_e_marca_falha(self):
         conn = MagicMock()
         with patch.object(abf.bf, "pedidos_da_data", return_value=PEDIDOS), \
@@ -93,6 +114,42 @@ class Executar(unittest.TestCase):
                              situacoes={}, embarcadores=EMBS, rodar_documentos=MagicMock(side_effect=RuntimeError("stokki")))
         self.assertEqual(r["avisados"], 1)
         self.assertTrue(any("stokki" in f for f in r["falhas"]))
+
+
+class RodarDocumentos(unittest.TestCase):
+    def _com_main(self, resumo, adquirir=True):
+        def _main(**kw):
+            kw["resumo_saida"].update(resumo)
+        falso = MagicMock()
+        m = falso.main
+        m.side_effect = _main
+        with patch.dict("sys.modules", {"processar_documentos": falso}), \
+             patch("stokki.sessao_uso.adquirir", return_value=adquirir) as adq, \
+             patch("stokki.sessao_uso.liberar") as lib:
+            try:
+                abf._rodar_documentos(["PS-1"], False)
+                erro = None
+            except RuntimeError as e:
+                erro = e
+        return m, adq, lib, erro
+
+    def test_etapa_com_erro_levanta(self):
+        m, adq, lib, erro = self._com_main({"Erro geral": {"status": "erro", "detalhe": "stokki caiu"},
+                                            "Documentos (Stokki)": {"status": "ok", "detalhe": "x"}})
+        self.assertIn("stokki caiu", str(erro))
+        lib.assert_called_once_with(abf.DONO_TRAVA)
+
+    def test_tudo_ok_nao_levanta(self):
+        m, adq, lib, erro = self._com_main({"Resumo geral": {"status": "ok", "detalhe": "x"}})
+        self.assertIsNone(erro)
+        self.assertEqual(adq.call_args.kwargs["esperar_segundos"], 20 * 60)
+        self.assertEqual(adq.call_args.kwargs["conta"], "provider")
+
+    def test_stokki_ocupada_levanta_sem_rodar(self):
+        m, adq, lib, erro = self._com_main({}, adquirir=False)
+        self.assertIn("Stokki ocupada", str(erro))
+        m.assert_not_called()
+        lib.assert_not_called()
 
 
 if __name__ == "__main__":

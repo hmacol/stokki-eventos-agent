@@ -89,6 +89,15 @@ class EscopadoComEmail(_Base):
         m["embarcadores"].assert_not_called()
 
 
+    def test_resumo_saida_recebe_as_etapas_e_o_erro(self):
+        saida = {}
+        self._rodar(login_erro=RuntimeError("stokki caiu"), pedidos_stokki=["PS-9"], notificar=False,
+                    resumo_saida=saida)
+        self.assertEqual(saida["Erro geral"]["status"], "erro")
+        self.assertIn("stokki caiu", saida["Erro geral"]["detalhe"])
+        self.assertIn("Resumo geral", saida)
+
+
 class TestModoIncremental(_Base):
     def test_visita_so_quem_ainda_nao_tem_nf(self):
         m = self._rodar(incremental=True)

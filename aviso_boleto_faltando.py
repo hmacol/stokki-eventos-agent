@@ -50,6 +50,7 @@ from regras import clientes_boleto
 logger = logging.getLogger("aviso_boleto_faltando")
 TITULO = "Aviso de boleto faltando"
 EMAIL_TESTE = "hugo@freshlogbr.com"
+DONO_TRAVA = "aviso-boleto-faltando"
 
 
 def _carregar_config() -> dict:
@@ -77,10 +78,24 @@ def _telefone(cnpj: str) -> str | None:
 
 
 def _rodar_documentos(codigos: list[str], modo_teste: bool) -> None:
+    """Atualiza os documentos dos pedidos. Levanta RuntimeError se a Stokki não liberou em 20 min
+    ou se alguma etapa da atualização deu erro (o executar segue com os dados do banco e marca falha)."""
     sys.path.insert(0, str(_RAIZ / "documentos_pedido"))
     import processar_documentos
-    processar_documentos.main(modo_teste=modo_teste, pedidos_stokki=codigos, notificar=False,
-                              com_email_embarcadores=True)
+    from stokki import sessao_uso
+    # Espera limitada: a fila da provider pode passar de 2h e o aviso não pode virar 20h30.
+    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=20 * 60, conta="provider"):
+        raise RuntimeError("Stokki ocupada há mais de 20 min -- aviso segue com os dados do banco")
+    try:
+        resumo = {}
+        processar_documentos.main(modo_teste=modo_teste, pedidos_stokki=codigos, notificar=False,
+                                  com_email_embarcadores=True, resumo_saida=resumo)
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+    erros = [f"{etapa}: {(info or {}).get('detalhe', '')}" for etapa, info in resumo.items()
+             if (info or {}).get("status") != "ok"]
+    if erros:
+        raise RuntimeError("; ".join(erros))
 
 
 def executar(config: dict, data_iso: str, modo_teste: bool = False, atualizar: bool = True, conn=None,
@@ -141,10 +156,13 @@ def executar(config: dict, data_iso: str, modo_teste: bool = False, atualizar: b
                         config, modo_teste=modo_teste)
                     if st in ("enviado", "modo_teste"):
                         canais.append("whatsapp")
-                    elif st not in ("desligado", "nao_enviado"):
+                    elif st not in ("desligado", "nao_enviado", "numero_sem_whatsapp"):
                         r["falhas"].append(f"{nome}: WhatsApp {st}")
 
-            if not modo_teste:
+            if not modo_teste and not emb.get("cnpj"):
+                # sem CNPJ todos os desconhecidos cairiam no mesmo chamado
+                r["falhas"].append(f"{nome}: sem CNPJ do embarcador, chamado não aberto")
+            elif not modo_teste:
                 texto = (f"Pedidos com entrega em {data_br} de clientes que pagam com boleto, ainda sem boleto: "
                          + ", ".join(f"{i['codigo']}{' (NF ' + i['nf'] + ')' if i.get('nf') else ''} - {i['cliente']}"
                                      for i in lista)
