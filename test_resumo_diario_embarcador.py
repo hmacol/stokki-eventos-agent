@@ -229,5 +229,35 @@ class TestExecutar(_ComBanco):
         self.assertTrue(mod.TRATATIVA_GENERICA in self.enviados[0][2])
 
 
+class SecaoBoleto(unittest.TestCase):
+    BLOCOS = {"entregues": [{"codigo": "PS-1", "nf": "40958", "destinatario": "MERCADO A", "endereco": "",
+                             "concluido_em": "10:00"}], "falhas": [], "abertos": []}
+
+    def test_bloco_aparece_com_pedidos(self):
+        assunto, corpo = mod.montar_email("NUU", self.BLOCOS, date(2026, 10, 7), {}, lambda p: None,
+                                          sem_boleto=[{"codigo": "PS-1", "nf": "40958", "cliente": "MERCADO A"}])
+        self.assertIn("Entregues sem boleto", corpo)
+        self.assertIn("40958", corpo)
+
+    def test_sem_lista_nao_tem_bloco(self):
+        _a, corpo = mod.montar_email("NUU", self.BLOCOS, date(2026, 10, 7), {}, lambda p: None)
+        self.assertNotIn("Entregues sem boleto", corpo)
+
+    def test_chave_desligada_por_padrao(self):
+        self.assertFalse(mod.secao_boleto_ligada({}))
+        self.assertTrue(mod.secao_boleto_ligada({"resumo_diario_embarcador": {"secao_boleto": True}}))
+
+    def test_entregues_sem_boleto_filtra(self):
+        with mock.patch.object(mod, "_situacoes", return_value={"PS-1": "TEM_BOLETO"}),              mock.patch.object(mod.boleto_faltando, "faltando",
+                               side_effect=lambda c, p, s: [{**x, "nf": "40958"} for x in p
+                                                            if s.get(x["codigo"]) == "TEM_BOLETO"]):
+            r = mod.entregues_sem_boleto(mock.MagicMock(), self.BLOCOS["entregues"])
+        self.assertEqual([i["codigo"] for i in r], ["PS-1"])
+
+    def test_aviso_nunca_levanta_excecao(self):
+        with mock.patch.object(mod.boleto_faltando, "registrar_no_chamado", side_effect=RuntimeError("x")):
+            mod._avisar_sem_boleto({}, 1, {"cnpj": ""}, [{"codigo": "PS-1", "nf": "9"}], date(2026, 10, 7))
+
+
 if __name__ == "__main__":
     unittest.main()

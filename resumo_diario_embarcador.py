@@ -64,6 +64,8 @@ from email_utils import (COR_BORDA, COR_ERRO, COR_PRIMARIA, COR_PRIMARIA_CLARA, 
                          COR_TEXTO_SUAVE, enviar_email, envelope_html)
 from notificar_execucao_agente import notificar_execucao
 from portal_cliente import dados_cliente, link_canhoto
+import boleto_faltando
+import notificar_whatsapp
 import preferencias_notificacao
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -107,6 +109,12 @@ def _secao(config: dict) -> dict:
 
 def rotina_ativa(config: dict) -> bool:
     return bool(_secao(config).get("ativo", True))
+
+
+def secao_boleto_ligada(config: dict) -> bool:
+    """Seção "Entregues sem boleto" (06/10): desligada por padrão porque o
+    resumo já sai de verdade pro embarcador -- ligar é decisão do Hugo."""
+    return bool(_secao(config).get("secao_boleto", False))
 
 
 def forcar_destino_do_config(config: dict) -> str:
@@ -324,6 +332,50 @@ def _bloco_falhas(pedidos: list[dict], tratativas: dict[str, str]) -> str:
                    ("NF / pedido", "Destinatário", "Motivo e tratativa"), linhas)
 
 
+def _situacoes(codigos: list[str]) -> dict[str, str]:
+    from regras import clientes_boleto
+    return clientes_boleto.situacao_por_pedido(codigos)
+
+
+def entregues_sem_boleto(conn: sqlite3.Connection, entregues: list[dict]) -> list[dict]:
+    """Entregues hoje de clientes TEM_BOLETO sem boleto ENVIADO."""
+    from regras.clientes_boleto import codigo_base
+    pedidos = [{"codigo": codigo_base(p["codigo"]), "sender_id": p.get("sender_id"),
+                "cliente": p.get("destinatario") or "", "embarcador": ""} for p in entregues]
+    if not pedidos:
+        return []
+    return boleto_faltando.faltando(conn, pedidos, _situacoes([p["codigo"] for p in pedidos]))
+
+
+def _avisar_sem_boleto(config: dict, sid: int, emb: dict, itens: list[dict], data_alvo: date) -> None:
+    """WhatsApp com a contagem + mensagem no chamado de boleto (06/10, opção
+    A do Hugo). Falha aqui nunca derruba o resumo."""
+    codigos = [i["codigo"] for i in itens]
+    try:
+        if emb.get("cnpj"):
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            try:
+                tel = preferencias_notificacao.whatsapp_do_embarcador(conn, emb["cnpj"], tipo="boleto_faltando")
+            finally:
+                conn.close()
+            if tel:
+                notificar_whatsapp.avisar_cliente_boleto_faltando(
+                    f"boleto_entregues:{sid}:{data_alvo.isoformat()}", tel,
+                    notificar_whatsapp.texto_boleto_faltando(codigos, "hoje"), config)
+        boleto_faltando.registrar_no_chamado(
+            emb, sid, f"Entregues em {data_alvo.strftime('%d/%m/%Y')} sem boleto: "
+                      + ", ".join(f"{i['codigo']}{' (NF ' + i['nf'] + ')' if i.get('nf') else ''}" for i in itens)
+                      + ". Envie o boleto respondendo aqui ou por e-mail.", codigos[0], config)
+    except Exception as e:
+        logger.warning(f"  Aviso de entregues sem boleto falhou ({e}) -- resumo já saiu.")
+
+
+def _bloco_sem_boleto(itens: list[dict]) -> str:
+    linhas = "".join("<tr>" + _nf({"nf": i.get("nf"), "codigo": i["codigo"]})
+                     + _td(html.escape(i.get("cliente") or "")) + "</tr>" for i in itens)
+    return _tabela(f"Entregues sem boleto ({len(itens)})", COR_AMBAR_TEXTO, ("NF / pedido", "Cliente"), linhas)
+
+
 def _bloco_abertos(pedidos: list[dict]) -> str:
     linhas = ""
     for p in _ordenar(pedidos):
@@ -338,7 +390,8 @@ def _plural(n: int, singular: str, plural: str) -> str:
 
 
 def montar_email(nome_emb: str, blocos: dict[str, list[dict]], data_alvo: date, tratativas: dict[str, str],
-                 link_do_canhoto, destino_original: list[str] | None = None) -> tuple[str, str] | None:
+                 link_do_canhoto, destino_original: list[str] | None = None,
+                 sem_boleto: list[dict] | None = None) -> tuple[str, str] | None:
     """(assunto, corpo_html), ou None se o embarcador nao teve nota em rota."""
     entregues, falhas, abertos = blocos["entregues"], blocos["falhas"], blocos["abertos"]
     total = len(entregues) + len(falhas) + len(abertos)
@@ -372,12 +425,18 @@ def montar_email(nome_emb: str, blocos: dict[str, list[dict]], data_alvo: date, 
                + "</tr></table>")
 
     corpo_blocos = ((_bloco_falhas(falhas, tratativas) if falhas else "")
+                    + (_bloco_sem_boleto(sem_boleto) if sem_boleto else "")
                     + (_bloco_abertos(abertos) if abertos else "")
                     + (_bloco_entregues(entregues, link_do_canhoto) if entregues else ""))
 
     nota_canhoto = (f"<p style='margin:0 0 20px;font-size:12px;color:{COR_TEXTO_SUAVE};line-height:1.6;'>"
                     f"\"Ver canhoto\" abre o comprovante sem precisar de senha. Se o motorista ainda não enviou a "
                     f"foto, o mesmo link passa a funcionar assim que ela chegar.</p>") if entregues else ""
+
+    nota_boleto = (f"<p style='margin:0 0 20px;font-size:12px;color:{COR_TEXTO_SUAVE};line-height:1.6;'>"
+                   f"Os pedidos em <strong>Entregues sem boleto</strong> são de clientes que pagam com boleto e o "
+                   f"boleto não chegou até nós. Responda este e-mail com o boleto ou anexe no pedido da Stokki."
+                   f"</p>") if sem_boleto else ""
 
     conteudo = f"""
     {aviso}
@@ -390,6 +449,7 @@ def montar_email(nome_emb: str, blocos: dict[str, list[dict]], data_alvo: date, 
     {numeros}
     {corpo_blocos}
     {nota_canhoto}
+    {nota_boleto}
     <p style="margin:0 0 24px;font-size:14px;color:{COR_TEXTO};line-height:1.6;">
       O detalhe de cada entrega está no
       <a href="{URL_PORTAL}" style="color:{COR_VERDE_TEXTO};font-weight:600;">portal do cliente</a>.
@@ -457,13 +517,22 @@ def executar(config: dict, data_alvo: date, modo_teste: bool = False, sender_id:
                     continue
 
                 tratativas = carregar_tratativas(conn, [p["codigo"] for p in blocos["falhas"]])
+                sem_boleto = []
+                if secao_boleto_ligada(config):
+                    try:
+                        sem_boleto = entregues_sem_boleto(conn, blocos["entregues"])
+                    except Exception as e:
+                        logger.warning(f"  {nome}: seção sem boleto indisponível ({e}) -- resumo segue sem ela.")
                 assunto, corpo = montar_email(nome, blocos, data_alvo, tratativas, link_do_canhoto,
-                                              destino_original=emb["emails"] if redirecionado else None)
+                                              destino_original=emb["emails"] if redirecionado else None,
+                                              sem_boleto=sem_boleto)
                 if enviar(destinos, assunto, corpo, config.get("email", {})):
                     r["enviados"] += 1
                     r["notas"] += total
                     if not modo_teste:
                         registrar_envio(conn, chave)
+                    if sem_boleto and not modo_teste:
+                        _avisar_sem_boleto(config, sid, emb, sem_boleto, data_alvo)
                     logger.info(f"  OK: {nome} -> {', '.join(destinos)}"
                                 f"{' (original: ' + ', '.join(emb['emails']) + ')' if redirecionado else ''}"
                                 f" | {len(blocos['entregues'])} entregue(s), {len(blocos['falhas'])} falha(s), "
