@@ -124,11 +124,18 @@ class TestReceptoraDeRotaFracaNoIncremento(unittest.TestCase):
         self.assertEqual(inc._veiculo_da_rota_existente(80, 3, "FIORINO"), (None, VOLUME_MAXIMO_ROTA))
 
 
-class TestSemTetoDePedidos(unittest.TestCase):
+class TestTetoDePedidos(unittest.TestCase):
 
-    def test_rota_comum_com_muitos_pedidos_ainda_cabe(self):
-        # 30 pedidos e só 40 caixas: antes barrava por qtd >= 16, agora cabe
-        self.assertTrue(inc._cabe_na_rota(_rota_comum(30, 40), 1, "novo"))
+    def test_rota_comum_vai_ate_15_pedidos(self):
+        # 07/10 (Hugo): 14 pedidos recebe o 15º; 15 não recebe mais nada
+        self.assertTrue(inc._cabe_na_rota(_rota_comum(14, 40), 1, "novo"))
+        self.assertFalse(inc._cabe_na_rota(_rota_comum(15, 40), 1, "novo"))
+        self.assertFalse(inc._cabe_na_rota(_rota_comum(30, 40), 1, "novo"))
+
+    def test_veiculo_grande_nao_tem_teto_de_pedidos(self):
+        tipo = classificar_tipo_veiculo(150, 1)
+        rota = {"qtd": 30, "caixas": 150, "enderecos": {"cd"}, "tipo_veiculo": tipo}
+        self.assertTrue(inc._cabe_na_rota(rota, 1, "cd"))
 
     def test_rota_comum_respeita_teto_de_caixas(self):
         self.assertTrue(inc._cabe_na_rota(_rota_comum(5, VOLUME_MAXIMO_ROTA - 2), 2, "novo"))

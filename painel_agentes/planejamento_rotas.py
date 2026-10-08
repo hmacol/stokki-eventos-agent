@@ -179,7 +179,7 @@ def _codigos_base_lista(codigo: str) -> list[str]:
     return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
 
 
-TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 (pedido do Hugo, 22/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
+TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota (antes 16, desde 22/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -- acompanha criar_rotas_diarias.py (constantes separadas de propósito, sem import entre os dois módulos)
@@ -1254,15 +1254,15 @@ def _carga_compativel(classes_rota: set[str], classe_pedido: str) -> bool:
 
 
 def _cabe_no_rascunho(info: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
-    """Mesma regra de incrementar_rotas._cabe_na_rota (10/09, sem teto
-    de pedidos): rota comum só respeita o teto de caixas; rota
-    classificada como veículo grande respeita caixas + endereços
-    distintos do PRÓPRIO tipo."""
+    """Mesma regra de incrementar_rotas._cabe_na_rota: rota comum
+    respeita o teto de caixas e, desde 07/10 (Hugo), o de pedidos
+    (TAMANHO_MAXIMO_ROTA, 15); rota classificada como veículo grande
+    respeita caixas + endereços distintos do PRÓPRIO tipo."""
     tipo = info["tipo_veiculo"]
     if tipo is not None:
         return (info["caixas"] + cx_pedido <= tipo.volume_maximo_cx
                 and len(info["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos)
-    return info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+    return info["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA and info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
 
 
 def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict], modo_teste: bool = False) -> dict:
@@ -1276,8 +1276,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
 
     Cada pedido vai pro rascunho mais próximo (centroide das paradas
     dentro de DISTANCIA_MAXIMA_ROTA_KM) que ainda o comporte, com as
-    MESMAS travas do incremento automático, sem teto de pedidos por
-    rota: caixas (VOLUME_MAXIMO_ROTA ou o do tipo de veículo grande do
+    MESMAS travas do incremento automático: até TAMANHO_MAXIMO_ROTA (15)
+    pedidos por rota comum (07/10), caixas (VOLUME_MAXIMO_ROTA ou o do tipo de veículo grande do
     rascunho), macro-região, classe de carga (seco x frio, pelo conteúdo
     da rota), janela de horário, e viagem/zona contra o motorista já
     escolhido no rascunho (rascunho sem motorista não restringe).

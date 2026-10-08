@@ -575,7 +575,9 @@
                            desde 09/09 (não é chamado por ninguém).
  incrementar_rotas.py      Encaixa pedidos novos nas rotas enviadas e, o que
                            sobra, nos rascunhos abertos (corte 22h). 18h e
-                           22h desde 05/10 (+ botão do painel).
+                           22h desde 05/10 (+ botão do painel). Até 15
+                           pedidos por rota comum (07/10; mesmo
+                           TAMANHO_MAXIMO_ROTA do rascunho).
  cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
