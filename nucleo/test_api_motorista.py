@@ -533,24 +533,30 @@ class TestApiMotorista(unittest.TestCase):
         self.assertFalse(self._login().get_json()["motorista"]["trocar_pin"])   # motorista do setUp: sem troca
         h = {"Authorization": f"Bearer {r.get_json()['acesso']}"}
 
-        # PIN atual errado -> 401 (e conta tentativa como no login)
-        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "000000", "pin_novo": "654321"}, headers=h)
-        self.assertEqual(r.status_code, 401)
-        # PIN novo fora do formato ou igual ao atual -> 400
-        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "12345"}, headers=h)
-        self.assertEqual(r.status_code, 400)
-        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "123456"}, headers=h)
-        self.assertEqual(r.status_code, 400)
+        # Com o PIN provisório só /eu e /trocar-pin respondem (revisão 08/10)
+        self.assertEqual(self.cli.get("/api/eu", headers=h).status_code, 200)
+        self.assertEqual(self.cli.get("/api/rotas", headers=h).status_code, 403)
+        self.assertEqual(self.cli.get("/api/atendimento/nao-lidas", headers=h).status_code, 403)
 
-        # Troca certa: tokens novos, flag limpa, token antigo morre, PIN novo entra
-        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "654321"}, headers=h)
+        # PIN atual errado -> 401 (e conta tentativa como no login)
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "000000", "pin_novo": "482913"}, headers=h)
+        self.assertEqual(r.status_code, 401)
+        # PIN novo fora do formato, igual ao atual ou fácil demais -> 400
+        for fraco in ("12345", "123456", "111111", "654321", "012345", "987654"):
+            r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": fraco}, headers=h)
+            self.assertEqual(r.status_code, 400, fraco)
+
+        # Troca certa: tokens novos, flag limpa, token antigo morre, PIN novo entra e libera o resto
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "482913"}, headers=h)
         self.assertEqual(r.status_code, 200, r.get_json())
         novo = r.get_json()
         self.assertFalse(novo["motorista"]["trocar_pin"])
         self.assertEqual(self.cli.get("/api/eu", headers=h).status_code, 401)
-        self.assertEqual(self.cli.get("/api/eu", headers={"Authorization": f"Bearer {novo['acesso']}"}).status_code, 200)
+        h2 = {"Authorization": f"Bearer {novo['acesso']}"}
+        self.assertEqual(self.cli.get("/api/eu", headers=h2).status_code, 200)
+        self.assertEqual(self.cli.get("/api/rotas", headers=h2).status_code, 200)
         self.assertEqual(self._login(cpf="98765432100", pin="123456").status_code, 401)
-        self.assertFalse(self._login(cpf="98765432100", pin="654321").get_json()["motorista"]["trocar_pin"])
+        self.assertFalse(self._login(cpf="98765432100", pin="482913").get_json()["motorista"]["trocar_pin"])
 
 
 if __name__ == "__main__":

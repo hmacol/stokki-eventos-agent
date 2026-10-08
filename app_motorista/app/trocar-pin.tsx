@@ -20,12 +20,21 @@ export default function TrocarPin() {
   const [carregando, setCarregando] = useState(false);
 
   const soDigitos = (v: string) => v.replace(/\D/g, '').slice(0, 6);
+  // Mesma regra do servidor (auth.validar_pin_forte): sem repetidos nem sequências.
+  const facil = (p: string) => {
+    const d = p.split('').map(Number);
+    const iguais = new Set(d).size === 1;
+    const cresc = d.every((x, i) => i === 0 || x - d[i - 1] === 1);
+    const decresc = d.every((x, i) => i === 0 || d[i - 1] - x === 1);
+    return iguais || cresc || decresc || p === '123456';
+  };
 
   const enviar = async () => {
     setErro(null);
     if (atual.length !== 6) return setErro('Digite o PIN atual (6 dígitos).');
     if (novo.length !== 6) return setErro('O PIN novo precisa ter 6 dígitos.');
     if (novo === atual) return setErro('O PIN novo precisa ser diferente do atual.');
+    if (facil(novo)) return setErro('PIN fácil demais: evite sequências (123456) e números repetidos (111111).');
     if (novo !== confirmar) return setErro('A confirmação não confere com o PIN novo.');
     setCarregando(true);
     try {
@@ -46,8 +55,8 @@ export default function TrocarPin() {
         <Text style={s.titulo}>{obrigatoria ? 'Crie o seu PIN' : 'Trocar PIN'}</Text>
         <Text style={s.texto}>
           {obrigatoria
-            ? 'O PIN que você recebeu é provisório. Escolha um PIN de 6 números só seu antes de continuar.'
-            : 'Escolha um PIN novo de 6 números.'}
+            ? 'O PIN que você recebeu é provisório. Escolha um PIN de 6 números só seu antes de continuar. Evite sequências e números repetidos.'
+            : 'Escolha um PIN novo de 6 números. Evite sequências e números repetidos.'}
         </Text>
 
         <Text style={s.rotulo}>PIN atual</Text>

@@ -44,7 +44,8 @@ function Guarda() {
   }, [pronto, motorista, segments, router]);
 
   useEffect(() => {
-    if (!motorista) return;
+    // Com PIN provisório a API responde 403 em tudo: fila e push esperam a troca.
+    if (!motorista || motorista.trocar_pin) return;
     void fila.processar();
     void registrarPush();
     const sub = AppState.addEventListener('change', (st) => {

@@ -561,3 +561,12 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   Teste `test_audio_so_no_atendimento_humano`. APK fixo em
   https://app.freshhub.com.br/motorista/app.apk (Caddy →
   dados/app_motorista/freshlog-motorista.apk).
+- **08/10 (fim da tarde) — PIN blindado (achados 2 e 3 da revisão
+  docs/revisoes/2026-10-08-app-motorista-pin-audio.md):** com
+  `trocar_pin=1` a API responde 403 em tudo exceto `/api/eu` e
+  `/api/trocar-pin` (o app não liga fila/push até trocar);
+  `auth.validar_pin_forte` recusa 111111/123456/654321/012345 na troca
+  pelo motorista (o PIN da operação segue livre), com a mesma regra na
+  tela `trocar-pin.tsx`. 17 logins já criados com 123456 ficam limitados
+  à troca até cada um entrar. Permissão bloqueada de vez abre as
+  configurações do app (`src/permissoes.ts`, commit c441bc4, OTA 71d0faba).

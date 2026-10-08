@@ -59,6 +59,21 @@ def validar_pin_formato(pin: str) -> str:
     return pin
 
 
+def validar_pin_forte(pin: str) -> str:
+    """PIN escolhido pelo motorista (revisão 08/10): além do formato, recusa
+    os óbvios -- todos iguais (111111), sequência crescente ou decrescente
+    (123456, 654321, 012345) e o provisório 123456. O PIN da operação
+    (criar/resetar) não passa por aqui de propósito."""
+    pin = validar_pin_formato(pin)
+    digitos = [int(c) for c in pin]
+    iguais = len(set(digitos)) == 1
+    crescente = all(b - a == 1 for a, b in zip(digitos, digitos[1:]))
+    decrescente = all(a - b == 1 for a, b in zip(digitos, digitos[1:]))
+    if iguais or crescente or decrescente or pin == "123456":
+        raise ValueError("PIN fácil demais: evite sequências (123456) e números repetidos (111111).")
+    return pin
+
+
 def criar_ou_atualizar_motorista(conn: sqlite3.Connection, cpf: str, nome: str, pin: str | None = None,
                                  agent_id: int | None = None, vehicle_id: int | None = None,
                                  telefone: str | None = None, email: str | None = None,
@@ -109,7 +124,7 @@ def trocar_pin(conn: sqlite3.Connection, cpf: str, pin_atual: str, pin_novo: str
     antigas (o app guarda os tokens novos que a API devolve)."""
     m = autenticar(conn, cpf, pin_atual)
     try:
-        pin_novo = validar_pin_formato(pin_novo)
+        pin_novo = validar_pin_forte(pin_novo)
     except ValueError as e:
         raise AutenticacaoInvalida(str(e), 400)
     if pin_novo == str(pin_atual or "").strip():
