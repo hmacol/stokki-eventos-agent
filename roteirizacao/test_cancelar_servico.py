@@ -52,6 +52,15 @@ class CancelarServicoCompleto(unittest.TestCase):
         self.assertEqual((r["ok"], r["ja_estava"]), (True, True))
         self.vuupt.cancelar_servico_oficial.assert_not_called()
 
+    def test_servico_em_andamento_ou_concluido_na_vuupt_nao_cancela(self):
+        for status in ("on_route", "arrived", "done"):
+            self.vuupt.buscar_servico_por_id.return_value = {"id": 111, "status": status}
+            with mock.patch.object(cs, "rascunho_do_servico", return_value=(None, None)):
+                r = cs.cancelar_servico_completo("tok", 111, vuupt=self.vuupt)
+            self.assertFalse(r["ok"], status)
+            self.assertIn(status, r["erro"])
+        self.vuupt.cancelar_servico_oficial.assert_not_called()
+
     def test_erro_vuupt_vira_falha(self):
         self.vuupt.cancelar_servico_oficial.side_effect = cs.VuuptAPIError("409 ja done")
         with mock.patch.object(cs, "rascunho_do_servico", return_value=(None, None)):

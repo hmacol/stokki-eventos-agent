@@ -84,9 +84,12 @@ def servicos_do_pedido(conn: sqlite3.Connection, codigo_base: str) -> tuple[list
     ids = [s["vuupt_route_id"] for s in servicos if s.get("vuupt_route_id")]
     rotas = {}
     if ids:
+        # nucleo_pedidos.vuupt_route_id e o id da rota NA VUUPT; nucleo_rotas.id
+        # e a chave local (revisao 07/10: buscar por id deixava rotas vazio)
         marcas = ",".join("?" * len(ids))
-        for r in conn.execute(f"SELECT id, status, status_provedor, iniciada_em, agent_id FROM nucleo_rotas WHERE id IN ({marcas})", ids):
-            rotas[r["id"]] = dict(r)
+        for r in conn.execute(f"SELECT vuupt_route_id, status, status_provedor, iniciada_em, agent_id "
+                              f"FROM nucleo_rotas WHERE vuupt_route_id IN ({marcas})", ids):
+            rotas[r["vuupt_route_id"]] = dict(r)
     return servicos, rotas
 
 
@@ -105,11 +108,77 @@ def _concluir(conn, envio: dict, agora: str, quando: datetime) -> None:
     conn.commit()
 
 
+_SERVICO_EM_ANDAMENTO = ("on_route", "arrived", "done")
+FALHA_TECNICA = "falha técnica no cancelamento automático"
+
+
+def _processar_um(conn, envio: dict, agent_lalamove: int, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt,
+                  agora_txt: str, quando: datetime) -> str:
+    """Um envio CANCELANDO -> "cancelados" | "operacao" | "falhas"."""
+    sol = ep.buscar_solicitacao_cancelamento(conn, envio["id"]) or {}
+    motivo_cliente = sol.get("detalhes") or ""
+    rotulo = ep.rotulo_envio(envio)
+    id_stokki = id_stokki_do_codigo(envio.get("codigo_pedido"))
+    if not id_stokki:
+        _voltar_pra_operacao(conn, envio, agora_txt)
+        avisar(envio, "código do pedido ainda não identificado", "")
+        return "operacao"
+    codigo = f"PS-{id_stokki}"
+
+    servicos, rotas = servicos_do_pedido(conn, codigo)
+    if not servicos and buscar_vuupt:
+        # Núcleo pode estar até 15 min atrás da Vuupt (timer :05/:20/:35/:50):
+        # sem linha, pergunta à Vuupt antes de concluir que não há serviço.
+        s = buscar_vuupt(codigo)
+        if s and s.get("status") != "canceled":
+            if s.get("status") in _SERVICO_EM_ANDAMENTO:
+                _voltar_pra_operacao(conn, envio, agora_txt)
+                avisar(envio, f"serviço {s.get('id')} está '{s.get('status')}' na Vuupt (núcleo ainda sem a linha)", "")
+                return "operacao"
+            servicos = [{"codigo": codigo, "vuupt_service_id": s.get("id"), "status": "ABERTO",
+                         "status_provedor": s.get("status"), "vuupt_route_id": None, "excluido_em": None}]
+
+    vivos = _vivos(servicos)
+    if any(not s.get("vuupt_service_id") for s in vivos):
+        _voltar_pra_operacao(conn, envio, agora_txt)
+        avisar(envio, f"serviço do {codigo} sem id da Vuupt no núcleo", "")
+        return "operacao"
+
+    decisao, motivo = decidir(servicos, rotas, agent_lalamove)
+    if decisao == OPERACAO:
+        logger.info(f"{rotulo} {codigo}: precisa da operação ({motivo}).")
+        _voltar_pra_operacao(conn, envio, agora_txt)
+        avisar(envio, motivo, "")
+        return "operacao"
+
+    erro = ""
+    for s in vivos:
+        res = cancelar_vuupt(s["vuupt_service_id"])
+        if not res.get("ok"):
+            erro = f"Vuupt ({s['codigo']}): {res.get('erro')}"
+            break
+    if not erro:
+        res = cancelar_stokki(id_stokki, motivo_cliente)
+        if not res.get("ok"):
+            erro = f"Stokki: {res.get('erro')}"
+    if erro:
+        logger.warning(f"{rotulo} {codigo}: cancelamento falhou -- {erro}")
+        _voltar_pra_operacao(conn, envio, agora_txt)
+        avisar(envio, FALHA_TECNICA, erro)
+        return "falhas"
+
+    _concluir(conn, envio, agora_txt, quando)
+    logger.info(f"{rotulo} {codigo}: cancelado na Vuupt e na Stokki.")
+    return "cancelados"
+
+
 def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuupt, cancelar_stokki, avisar,
-                            agora: datetime | None = None) -> dict:
+                            agora: datetime | None = None, buscar_vuupt=None) -> dict:
     """`cancelar_vuupt(service_id)` e `cancelar_stokki(id_stokki, motivo)`
     devolvem {"ok", "erro"}; `avisar(envio, motivo, erro)` manda e-mail +
-    WhatsApp. Injetados pra teste; o worker passa os reais."""
+    WhatsApp; `buscar_vuupt(codigo)` devolve o serviço da Vuupt ou None.
+    Injetados pra teste; o worker passa os reais. Exceção num envio vira
+    falha técnica dele (aviso) e a fila segue -- nunca trava em silêncio."""
     quando = agora or datetime.now()
     agora_txt = quando.strftime("%Y-%m-%d %H:%M:%S")
     agent_lalamove = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
@@ -117,45 +186,18 @@ def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuu
     rows = conn.execute("SELECT * FROM portal_envios WHERE status = ? ORDER BY id", (ep.STATUS_CANCELANDO,)).fetchall()
     for r in rows:
         envio = dict(r)
-        sol = ep.buscar_solicitacao_cancelamento(conn, envio["id"]) or {}
-        motivo_cliente = sol.get("detalhes") or ""
-        rotulo = ep.rotulo_envio(envio)
-        id_stokki = id_stokki_do_codigo(envio.get("codigo_pedido"))
-        if not id_stokki:
+        try:
+            fim = _processar_um(conn, envio, agent_lalamove, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt,
+                                agora_txt, quando)
+        except Exception as e:  # noqa: BLE001 -- rede, Stokki, SQLite: o envio volta pra operação, a fila continua
+            logger.error(f"{ep.rotulo_envio(envio)}: exceção no cancelamento: {e}", exc_info=True)
             _voltar_pra_operacao(conn, envio, agora_txt)
-            avisar(envio, "código do pedido ainda não identificado", "")
-            total["operacao"] += 1
-            continue
-
-        servicos, rotas = servicos_do_pedido(conn, f"PS-{id_stokki}")
-        decisao, motivo = decidir(servicos, rotas, agent_lalamove)
-        if decisao == OPERACAO:
-            logger.info(f"{rotulo} PS-{id_stokki}: precisa da operação ({motivo}).")
-            _voltar_pra_operacao(conn, envio, agora_txt)
-            avisar(envio, motivo, "")
-            total["operacao"] += 1
-            continue
-
-        erro = ""
-        for s in _vivos(servicos):
-            res = cancelar_vuupt(s["vuupt_service_id"])
-            if not res.get("ok"):
-                erro = f"Vuupt ({s['codigo']}): {res.get('erro')}"
-                break
-        if not erro:
-            res = cancelar_stokki(id_stokki, motivo_cliente)
-            if not res.get("ok"):
-                erro = f"Stokki: {res.get('erro')}"
-        if erro:
-            logger.warning(f"{rotulo} PS-{id_stokki}: cancelamento falhou -- {erro}")
-            _voltar_pra_operacao(conn, envio, agora_txt)
-            avisar(envio, "falha técnica no cancelamento automático", erro)
-            total["falhas"] += 1
-            continue
-
-        _concluir(conn, envio, agora_txt, quando)
-        logger.info(f"{rotulo} PS-{id_stokki}: cancelado na Vuupt e na Stokki.")
-        total["cancelados"] += 1
+            try:
+                avisar(envio, FALHA_TECNICA, f"{type(e).__name__}: {e}")
+            except Exception as e2:  # noqa: BLE001
+                logger.warning(f"aviso do cancelamento {envio['id']} falhou: {e2}")
+            fim = "falhas"
+        total[fim] += 1
     return total
 
 

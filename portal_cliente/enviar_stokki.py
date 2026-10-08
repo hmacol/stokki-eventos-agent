@@ -745,19 +745,41 @@ def reconciliar_codigos(conn) -> int:
 
 # ── Cancelamentos pedidos pelo cliente (06/10) ────────────────────────────────
 
-def resetar_orfaos(conn) -> None:
-    """ENVIANDO/CANCELANDO órfão (worker caiu no meio) volta depois de 30 min."""
+def _avisar_operacao(conn, config: dict, envio: dict, motivo: str, erro: str) -> None:
+    try:
+        envio = {**envio, "nome_embarcador": ep.config_stokki_cliente(conn, envio["cnpj_embarcador"], config)["nome"]}
+    except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o CNPJ
+        pass
+    cm.avisar_operacao(config, envio, motivo, erro)
+
+
+def resetar_orfaos(conn, avisar=None) -> None:
+    """ENVIANDO órfão (worker caiu no meio) volta pra fila depois de 30 min.
+    CANCELANDO órfão (Stokki ocupada por mais de 30 min ou worker parado)
+    volta pra CRIADO e AVISA a operação -- a solicitação continua PENDENTE
+    (revisão 07/10: sem aviso o pedido ficava no limbo de novo)."""
     conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
                  "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
-    conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
-                 "WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
-                 (ep.STATUS_CRIADO, ep.STATUS_CANCELANDO))
+    orfaos = [dict(r) for r in conn.execute(
+        "SELECT * FROM portal_envios WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
+        (ep.STATUS_CANCELANDO,))]
+    for e in orfaos:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
+                     (ep.STATUS_CRIADO, e["id"]))
     conn.commit()
+    for e in orfaos:
+        logger.warning(f"{ep.rotulo_envio(e)}: cancelamento não executado em 30 min -- volta pra operação.")
+        if avisar:
+            try:
+                avisar(e, "cancelamento não executado em 30 min (Stokki ocupada ou worker parado)", "")
+            except Exception as ex:  # noqa: BLE001
+                logger.warning(f"aviso do órfão {e['id']} falhou: {ex}")
 
 
 def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
     """Cancela na Vuupt e na Stokki o que o cliente pediu (status CANCELANDO),
-    dentro da trava da Stokki. Sem CANCELANDO não abre sessão nenhuma."""
+    dentro da trava da Stokki. Sem CANCELANDO não abre sessão nenhuma; a
+    sessão da Stokki só é aberta no primeiro cancelamento que chega nela."""
     vazio = {"cancelados": 0, "operacao": 0, "falhas": 0}
     n = conn.execute("SELECT COUNT(*) FROM portal_envios WHERE status = ?", (ep.STATUS_CANCELANDO,)).fetchone()[0]
     if not n:
@@ -769,8 +791,13 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
         logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) esperam o próximo ciclo.")
         return vazio
     try:
-        sessao = StokkiSession(config)
         token = (config.get("vuupt_api") or {}).get("token", "")
+        sessao_cache: dict = {}
+
+        def _sessao():
+            if "s" not in sessao_cache:
+                sessao_cache["s"] = StokkiSession(config)
+            return sessao_cache["s"]
 
         def cancelar_vuupt(service_id):
             from roteirizacao.cancelar_servico import cancelar_servico_completo
@@ -778,16 +805,16 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
 
         def cancelar_stokki(id_stokki, motivo):
             from stokki.cancelar import cancelar_pedido
-            return cancelar_pedido(sessao, id_stokki, motivo)
+            return cancelar_pedido(_sessao(), id_stokki, motivo)
+
+        def buscar_vuupt(codigo):
+            from vuupt_client import VuuptClient
+            return VuuptClient(token).buscar_servico_por_code(codigo)
 
         def avisar(envio, motivo, erro):
-            try:
-                envio = {**envio, "nome_embarcador": ep.config_stokki_cliente(conn, envio["cnpj_embarcador"], config)["nome"]}
-            except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o CNPJ
-                pass
-            cm.avisar_operacao(config, envio, motivo, erro)
+            _avisar_operacao(conn, config, envio, motivo, erro)
 
-        return cm.processar_cancelamentos(conn, config, cancelar_vuupt, cancelar_stokki, avisar)
+        return cm.processar_cancelamentos(conn, config, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt=buscar_vuupt)
     finally:
         sessao_uso.liberar(DONO_TRAVA)
 
@@ -799,7 +826,7 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
     conn = ep.conectar()
     try:
         lote_max = int(_cfg_portal(config).get("lote_maximo") or 30)
-        resetar_orfaos(conn)
+        resetar_orfaos(conn, avisar=lambda e, m, err: _avisar_operacao(conn, config, e, m, err))
         total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
         try:
             total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)

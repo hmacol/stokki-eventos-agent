@@ -29,6 +29,9 @@ from vuupt_client import VuuptAPIError, VuuptClient  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# status da Vuupt em que o motorista ja esta com a mercadoria (ou ja entregou)
+_EM_ANDAMENTO = ("on_route", "arrived", "done")
+
 
 def _conectar_rascunhos() -> sqlite3.Connection:
     conn = sqlite3.connect(rascunhos_rota.DB_PATH, timeout=30)
@@ -59,6 +62,11 @@ def cancelar_servico_completo(token: str, service_id: int, vuupt=None) -> dict:
         return {"ok": False, "ja_estava": False, "erro": f"Vuupt nao respondeu o servico {service_id}: {e}"}
     if atual.get("status") == "canceled":
         return {"ok": True, "ja_estava": True, "erro": ""}
+    if atual.get("status") in _EM_ANDAMENTO:
+        # checagem AO VIVO: o nucleo pode estar ate 15 min atras, e rota sem
+        # rascunho (Lalamove, criada fora do painel) nao tem outra guarda
+        return {"ok": False, "ja_estava": False,
+                "erro": f"servico {service_id} esta '{atual['status']}' na Vuupt: nao cancela sozinho"}
 
     rascunho_id, status_rascunho = rascunho_do_servico(service_id)
     if rascunho_id and status_rascunho == rascunhos_rota.STATUS_ENVIADO:

@@ -154,7 +154,7 @@ def conn_completo(envios=()):
     conn = conn_portal(envios)
     conn.executescript("""
         CREATE TABLE nucleo_pedidos (codigo TEXT, vuupt_service_id INTEGER, status TEXT, status_provedor TEXT, vuupt_route_id INTEGER, excluido_em TEXT);
-        CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, status TEXT, status_provedor TEXT, iniciada_em TEXT, agent_id INTEGER);
+        CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, vuupt_route_id INTEGER, status TEXT, status_provedor TEXT, iniciada_em TEXT, agent_id INTEGER);
     """)
     return conn
 
@@ -163,28 +163,39 @@ class Processar(unittest.TestCase):
     def setUp(self):
         self.vuupt_chamadas, self.stokki_chamadas, self.avisos = [], [], []
         self.vuupt_ok, self.stokki_ok = True, True
+        self.vuupt_levanta, self.stokki_levanta = None, None
+        self.servico_vuupt = None
 
     def cancelar_vuupt(self, sid):
         self.vuupt_chamadas.append(sid)
+        if self.vuupt_levanta:
+            raise self.vuupt_levanta
         return {"ok": self.vuupt_ok, "erro": "" if self.vuupt_ok else "Vuupt: 409"}
 
     def cancelar_stokki(self, id_stokki, motivo):
         self.stokki_chamadas.append((id_stokki, motivo))
+        if self.stokki_levanta:
+            raise self.stokki_levanta
         return {"ok": self.stokki_ok, "erro": "" if self.stokki_ok else "Stokki 500"}
+
+    def buscar_vuupt(self, codigo):
+        return self.servico_vuupt
 
     def avisar(self, envio, motivo, erro):
         self.avisos.append((envio["id"], motivo, erro))
 
     def rodar(self, conn):
-        return cm.processar_cancelamentos(conn, {"lalamove": {"agent_id_vuupt": 99}}, self.cancelar_vuupt, self.cancelar_stokki, self.avisar)
+        return cm.processar_cancelamentos(conn, {"lalamove": {"agent_id_vuupt": 99}}, self.cancelar_vuupt, self.cancelar_stokki,
+                                          self.avisar, buscar_vuupt=self.buscar_vuupt)
 
-    def preparar(self, status_nucleo="ABERTO", route=None, rota=None, codigo="PS-39959"):
+    def preparar(self, status_nucleo="ABERTO", route=None, rota=None, codigo="PS-39959", service_id=111):
         conn = conn_completo([(50, ep.STATUS_CRIADO, "9959", codigo)])
         ep.aplicar_acao(conn, envio(conn, 50), "cancelar", {"motivo": "cliente desistiu"}, "cliente")
         if status_nucleo:
-            conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-39959', 111, ?, 'not_assigned', ?, NULL)", (status_nucleo, route))
+            conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-39959', ?, ?, 'not_assigned', ?, NULL)", (service_id, status_nucleo, route))
         if rota:
-            conn.execute("INSERT INTO nucleo_rotas VALUES (?, ?, ?, ?, ?)", rota)
+            # (id local, vuupt_route_id, status, status_provedor, iniciada_em, agent_id): id local != id da Vuupt
+            conn.execute("INSERT INTO nucleo_rotas VALUES (?, ?, ?, ?, ?, ?)", rota)
         conn.commit()
         return conn
 
@@ -208,7 +219,8 @@ class Processar(unittest.TestCase):
         self.assertEqual(len(self.stokki_chamadas), 1)
 
     def test_em_rota_volta_pra_criado_e_avisa(self):
-        conn = self.preparar("EM_ROTA", 10, (10, "EM_ROTA", "started", "2026-10-06 08:00:00", 5))
+        # rota 5147819 na Vuupt gravada com id local 1: a busca tem que ser por vuupt_route_id
+        conn = self.preparar("EM_ROTA", 5147819, (1, 5147819, "EM_ROTA", "started", "2026-10-06 08:00:00", 5))
         r = self.rodar(conn)
         self.assertEqual(r, {"cancelados": 0, "operacao": 1, "falhas": 0})
         self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CRIADO)
@@ -249,6 +261,50 @@ class Processar(unittest.TestCase):
         conn = conn_completo([(50, ep.STATUS_CRIADO, "9959", "PS-39959")])
         self.assertEqual(self.rodar(conn), {"cancelados": 0, "operacao": 0, "falhas": 0})
 
+    def test_excecao_num_envio_vira_falha_e_nao_trava_a_fila(self):
+        conn = self.preparar()
+        conn.execute("INSERT INTO portal_envios (id, cnpj_embarcador, status, criado_em, numero_nf, codigo_pedido, requer_agendamento, agendamento_pendente, destinatario_nome) "
+                     "VALUES (51, '111', ?, datetime('now','localtime'), '9960', 'PS-39960', 0, 0, 'OUTRO')", (ep.STATUS_CANCELANDO,))
+        conn.commit()
+        self.vuupt_levanta = ConnectionError("Vuupt fora do ar")
+        r = self.rodar(conn)
+        self.assertEqual(r["falhas"], 1)                      # o 50 (tem servico na Vuupt) falhou
+        self.assertEqual(r["cancelados"], 1)                  # o 51 (sem servico) seguiu e cancelou na Stokki
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CRIADO)
+        self.assertEqual(envio(conn, 51)["status"], ep.STATUS_CANCELADO)
+        self.assertIn("Vuupt fora do ar", self.avisos[0][2])
+
+    def test_excecao_na_stokki_vira_falha(self):
+        conn = self.preparar(status_nucleo=None)
+        self.stokki_levanta = RuntimeError("login da Stokki falhou")
+        self.assertEqual(self.rodar(conn)["falhas"], 1)
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CRIADO)
+        self.assertIn("login da Stokki falhou", self.avisos[0][2])
+
+    def test_servico_sem_id_na_vuupt_vai_pra_operacao(self):
+        conn = self.preparar(service_id=None)
+        self.assertEqual(self.rodar(conn)["operacao"], 1)
+        self.assertEqual(self.vuupt_chamadas + self.stokki_chamadas, [])
+        self.assertIn("sem id", self.avisos[0][1])
+
+    def test_sem_nucleo_consulta_a_vuupt_e_cancela_o_que_achar(self):
+        conn = self.preparar(status_nucleo=None)
+        self.servico_vuupt = {"id": 333, "code": "PS-39959", "status": "not_assigned"}
+        self.assertEqual(self.rodar(conn)["cancelados"], 1)
+        self.assertEqual(self.vuupt_chamadas, [333])
+
+    def test_sem_nucleo_servico_em_rota_na_vuupt_vai_pra_operacao(self):
+        conn = self.preparar(status_nucleo=None)
+        self.servico_vuupt = {"id": 333, "code": "PS-39959", "status": "on_route"}
+        self.assertEqual(self.rodar(conn)["operacao"], 1)
+        self.assertEqual(self.vuupt_chamadas + self.stokki_chamadas, [])
+
+    def test_sem_nucleo_servico_cancelado_na_vuupt_segue_sozinho(self):
+        conn = self.preparar(status_nucleo=None)
+        self.servico_vuupt = {"id": 333, "code": "PS-39959", "status": "canceled"}
+        self.assertEqual(self.rodar(conn)["cancelados"], 1)
+        self.assertEqual(self.vuupt_chamadas, [])
+
 
 class AvisarOperacao(unittest.TestCase):
     def test_manda_email_e_whatsapp_e_nunca_levanta(self):
@@ -281,10 +337,17 @@ class Worker(unittest.TestCase):
              mock.patch.object(es, "StokkiSession") as sess, \
              mock.patch.object(es.cm, "processar_cancelamentos", return_value={"cancelados": 1, "operacao": 0, "falhas": 0}) as proc:
             r = es.processar_cancelamentos_do_ciclo(conn, {"vuupt_api": {"token": "t"}})
+            # a sessao da Stokki so abre quando algum cancelamento chega na Stokki, e uma vez so
+            sess.assert_not_called()
+            cancelar_stokki = proc.call_args.args[3]
+            with mock.patch("stokki.cancelar.cancelar_pedido", return_value={"ok": True}) as cp:
+                cancelar_stokki(39959, "x")
+                cancelar_stokki(39960, "y")
+            sess.assert_called_once()
+            self.assertEqual(cp.call_count, 2)
         self.assertEqual(r["cancelados"], 1)
         adq.assert_called_once()
         lib.assert_called_once_with(es.DONO_TRAVA)
-        sess.assert_called_once()
         self.assertEqual(proc.call_args.args[0], conn)
 
     def test_sem_cancelando_nao_abre_sessao(self):
@@ -310,8 +373,12 @@ class Worker(unittest.TestCase):
         conn = conn_completo([(50, ep.STATUS_CANCELANDO, "9959", "PS-39959")])
         conn.execute("UPDATE portal_envios SET atualizado_em = datetime('now','localtime','-31 minutes') WHERE id = 50")
         conn.commit()
-        es.resetar_orfaos(conn)
+        avisos = []
+        es.resetar_orfaos(conn, avisar=lambda e, m, err: avisos.append((e["id"], m)))
         self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CRIADO)
+        # a operacao fica sabendo que o cancelamento nao saiu (Stokki ocupada / worker parado)
+        self.assertEqual(avisos[0][0], 50)
+        self.assertIn("30 min", avisos[0][1])
 
 
 if __name__ == "__main__":
