@@ -449,4 +449,7 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
         p = ch.caminho_anexo(chamado_id, arquivo)
         if not p:
             abort(404)
-        return send_file(p, as_attachment=p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"), max_age=0)
+        ext = p.suffix.lower()
+        # Áudio do motorista toca na própria conversa (<audio>); conditional=True aceita Range.
+        return send_file(p, as_attachment=ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf") and ext not in ch.EXTENSOES_AUDIO,
+                         mimetype=ch.MIME_AUDIO.get(ext), max_age=0, conditional=True)

@@ -10,6 +10,7 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, Sc
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as api from '../../src/api';
 import { Botao, Cartao, Carregando, Vazio } from '../../src/componentes';
 import { cores } from '../../src/tema';
@@ -47,15 +48,64 @@ function CartaoPedido({ o, onPress, desativado }: { o: OpcaoMensagem; onPress: (
   );
 }
 
-function Bolha({ m }: { m: MensagemChamado }) {
+const tempo = (seg: number) => `${Math.floor(seg / 60)}:${String(Math.floor(seg % 60)).padStart(2, '0')}`;
+
+// Áudio na conversa (Hugo, 08/10). A URL do anexo exige o token, então o
+// arquivo é baixado pro cache no primeiro toque e tocado de lá.
+function Audio({ chamadoId, arquivo, meu }: { chamadoId: number; arquivo: string; meu: boolean }) {
+  const player = useAudioPlayer(null);
+  const st = useAudioPlayerStatus(player);
+  const [pronto, setPronto] = useState(false);
+  const [baixando, setBaixando] = useState(false);
+  const cor = meu ? '#fff' : cores.texto;
+
+  const tocar = async () => {
+    if (!pronto) {
+      setBaixando(true);
+      try {
+        player.replace(await api.baixarAnexoChamado(chamadoId, arquivo));
+        setPronto(true);
+        player.play();
+      } catch (e) {
+        Alert.alert('Não deu', e instanceof api.ErroRede ? 'Sem conexão pra baixar o áudio.' : (e as Error).message);
+      } finally {
+        setBaixando(false);
+      }
+      return;
+    }
+    if (st.playing) return player.pause();
+    if (st.duration > 0 && st.currentTime >= st.duration - 0.3) await player.seekTo(0);
+    player.play();
+  };
+
+  const fim = st.duration > 0 && !st.playing && st.currentTime >= st.duration - 0.3;
+  return (
+    <Pressable onPress={() => void tocar()} disabled={baixando} style={s.audio}>
+      {baixando ? <ActivityIndicator color={cor} /> : <Ionicons name={st.playing ? 'pause-circle' : 'play-circle'} size={34} color={cor} />}
+      <View style={{ flex: 1 }}>
+        <View style={[s.audioTrilho, { backgroundColor: meu ? 'rgba(255,255,255,0.35)' : cores.borda }]}>
+          <View style={[s.audioFeito, { backgroundColor: cor, width: `${st.duration > 0 && !fim ? Math.min(100, (st.currentTime / st.duration) * 100) : 0}%` }]} />
+        </View>
+        <Text style={[s.audioTempo, { color: cor }]}>
+          {pronto && st.duration > 0 ? `${tempo(fim ? st.duration : st.currentTime)} / ${tempo(st.duration)}` : 'Áudio'}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function Bolha({ m, chamadoId }: { m: MensagemChamado; chamadoId: number }) {
   if (m.origem === 'sistema') return <Text style={s.sistema}>{m.texto}</Text>;
   const meu = m.origem === 'cliente';
   const quem = meu ? 'Você' : m.origem === 'assistente' ? 'Assistente' : (m.autor || 'Fresh Log');
+  const audios = m.anexos.filter((a) => a.tipo === 'm4a');
+  const outros = m.anexos.filter((a) => a.tipo !== 'm4a');
   return (
     <View style={[s.msg, meu && s.msgEu]}>
-      <View style={[s.bolha, meu ? s.bolhaEu : m.origem === 'assistente' && s.bolhaBot]}>
-        <Text style={[s.bolhaTexto, meu && { color: '#fff' }]}>{m.texto}</Text>
-        {m.anexos.map((a) => (
+      <View style={[s.bolha, meu ? s.bolhaEu : m.origem === 'assistente' && s.bolhaBot, audios.length > 0 && { minWidth: 230 }]}>
+        {audios.length === 0 || m.texto !== 'Áudio' ? <Text style={[s.bolhaTexto, meu && { color: '#fff' }]}>{m.texto}</Text> : null}
+        {audios.map((a) => <Audio key={a.arquivo} chamadoId={chamadoId} arquivo={a.arquivo} meu={meu} />)}
+        {outros.map((a) => (
           <Text key={a.arquivo} style={[s.anexo, meu && { color: '#D8F3E8' }]}>📎 {a.nome}</Text>
         ))}
       </View>
@@ -75,6 +125,11 @@ export default function Ajuda() {
   const rolagem = useRef<ScrollView | null>(null);
   const ultimoId = useRef(0);
   const topoPedidos = useRef<number | null>(null);
+  // Gravação de áudio (Hugo, 08/10): só quando a conversa já está com a
+  // logística -- o assistente não ouve áudio (a API também recusa).
+  const gravador = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const gravacao = useAudioRecorderState(gravador);
+  const [gravando, setGravando] = useState(false);
 
   const aplicar = useCallback((c: Chamado, msgs: MensagemChamado[], substituir: boolean) => {
     setChamado(c);
@@ -194,6 +249,33 @@ export default function Ajuda() {
     aplicar(r.chamado, r.mensagens, false);
   });
 
+  const iniciarGravacao = async () => {
+    const perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) return Alert.alert('Microfone', 'Permita o uso do microfone pra mandar áudio.');
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await gravador.prepareToRecordAsync();
+      gravador.record();
+      setGravando(true);
+    } catch (e) {
+      Alert.alert('Não deu', `Não foi possível gravar: ${(e as Error).message}`);
+    }
+  };
+
+  const pararGravacao = async (enviar: boolean) => {
+    const duracao = gravacao.durationMillis;
+    try { await gravador.stop(); } catch { /* já parado */ }
+    setGravando(false);
+    void setAudioModeAsync({ allowsRecording: false }).catch(() => {});
+    const uri = gravador.uri;
+    if (!enviar || !uri || !chamado) return;
+    if (duracao < 1000) return Alert.alert('Áudio curto demais', 'Segure um pouco mais e fale a mensagem.');
+    await comErro(async () => {
+      const r = await api.enviarAudioChamado(chamado.id, uri);
+      aplicar(r.chamado, r.mensagens, false);
+    });
+  };
+
   if (!estado) return <Carregando texto="Abrindo o atendimento…" />;
 
   const sit = estado.situacao;
@@ -206,6 +288,7 @@ export default function Ajuda() {
   const opcoes = todasOpcoes.filter((o) => !o.pedido);
   const naFila = chamado && ['NA_FILA', 'AGUARDANDO_FL'].includes(chamado.status);
   const resolvido = chamado?.status === 'RESOLVIDO';
+  const podeAudio = !!chamado && chamado.status !== 'COM_ASSISTENTE' && !resolvido;
 
   // ── lista de conversas anteriores ──
   if (verLista || !chamado) {
@@ -244,7 +327,10 @@ export default function Ajuda() {
 
   // ── conversa aberta ──
   return (
-    <KeyboardAvoidingView style={s.tela} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+    // Android em tela cheia (edge-to-edge, SDK 54+) não redimensiona a janela
+    // pro teclado: sem o "padding" o teclado cobria o campo de escrever
+    // (Hugo, 08/10). O offset de 90 é só do cabeçalho do iOS.
+    <KeyboardAvoidingView style={s.tela} behavior="padding" keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
       <View style={s.barra}>
         <View style={s.linhaStatus}>
           <Ponto cor={COR_ESTADO[sit.estado] ?? cores.textoSuave} />
@@ -271,7 +357,7 @@ export default function Ajuda() {
             {sit.estado === 'online' ? 'Você está na fila da logística. Alguém assume em instantes.' : `${sit.texto}. Deixamos registrado: a equipe responde aqui.`}
           </Text>
         ) : null}
-        {mensagens.map((m) => <Bolha key={m.id} m={m} />)}
+        {mensagens.map((m) => <Bolha key={m.id} m={m} chamadoId={chamado.id} />)}
         {pedidos.length && !resolvido ? (
           <View style={s.pedidos} onLayout={(e) => {
             topoPedidos.current = e.nativeEvent.layout.y;
@@ -303,23 +389,44 @@ export default function Ajuda() {
         </View>
       ) : null}
 
-      <View style={s.compor}>
-        <Pressable onPress={mandarFoto} disabled={ocupado} style={s.icone} hitSlop={8}>
-          <Ionicons name="camera" size={24} color={cores.textoSuave} />
-        </Pressable>
-        <TextInput
-          style={s.campo}
-          placeholder="Escreva sua mensagem…"
-          placeholderTextColor="#9CA3AF"
-          value={texto}
-          onChangeText={setTexto}
-          multiline
-        />
-        <Pressable onPress={() => mandar()} disabled={ocupado || !texto.trim()}
-          style={[s.enviar, (ocupado || !texto.trim()) && { opacity: 0.4 }]}>
-          <Ionicons name="send" size={20} color="#fff" />
-        </Pressable>
-      </View>
+      {gravando ? (
+        <View style={s.compor}>
+          <Pressable onPress={() => void pararGravacao(false)} style={s.icone} hitSlop={8} accessibilityLabel="Cancelar gravação">
+            <Ionicons name="trash" size={24} color={cores.perigo} />
+          </Pressable>
+          <View style={s.gravandoCaixa}>
+            <View style={s.gravandoPonto} />
+            <Text style={s.gravandoTexto}>Gravando… {tempo(gravacao.durationMillis / 1000)}</Text>
+          </View>
+          <Pressable onPress={() => void pararGravacao(true)} disabled={ocupado} style={s.enviar} accessibilityLabel="Enviar áudio">
+            <Ionicons name="send" size={20} color="#fff" />
+          </Pressable>
+        </View>
+      ) : (
+        <View style={s.compor}>
+          <Pressable onPress={mandarFoto} disabled={ocupado} style={s.icone} hitSlop={8}>
+            <Ionicons name="camera" size={24} color={cores.textoSuave} />
+          </Pressable>
+          <TextInput
+            style={s.campo}
+            placeholder="Escreva sua mensagem…"
+            placeholderTextColor="#9CA3AF"
+            value={texto}
+            onChangeText={setTexto}
+            multiline
+          />
+          {podeAudio && !texto.trim() ? (
+            <Pressable onPress={() => void iniciarGravacao()} disabled={ocupado} style={[s.enviar, ocupado && { opacity: 0.4 }]} accessibilityLabel="Gravar áudio">
+              <Ionicons name="mic" size={22} color="#fff" />
+            </Pressable>
+          ) : (
+            <Pressable onPress={() => mandar()} disabled={ocupado || !texto.trim()}
+              style={[s.enviar, (ocupado || !texto.trim()) && { opacity: 0.4 }]}>
+              <Ionicons name="send" size={20} color="#fff" />
+            </Pressable>
+          )}
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -358,6 +465,13 @@ const s = StyleSheet.create({
   icone: { paddingVertical: 10, paddingHorizontal: 4 },
   campo: { flex: 1, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15.5, color: cores.texto, backgroundColor: cores.fundo, maxHeight: 110 },
   enviar: { width: 46, height: 46, borderRadius: 12, backgroundColor: cores.acento, alignItems: 'center', justifyContent: 'center' },
+  gravandoCaixa: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 46, paddingHorizontal: 12, borderRadius: 12, backgroundColor: cores.fundo, borderWidth: 1, borderColor: cores.borda },
+  gravandoPonto: { width: 12, height: 12, borderRadius: 6, backgroundColor: cores.perigo },
+  gravandoTexto: { color: cores.texto, fontWeight: '700', fontSize: 15 },
+  audio: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4, minHeight: 44 },
+  audioTrilho: { height: 4, borderRadius: 2, overflow: 'hidden' },
+  audioFeito: { height: 4 },
+  audioTempo: { fontSize: 12, marginTop: 5, fontWeight: '600' },
   rodapeResolvido: { paddingHorizontal: 14, paddingBottom: 8, gap: 8 },
   resolvidoTexto: { color: cores.textoSuave, fontSize: 13, textAlign: 'center' },
   itemCab: { flexDirection: 'row', alignItems: 'center', gap: 8 },

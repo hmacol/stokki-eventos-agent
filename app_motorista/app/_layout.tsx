@@ -36,8 +36,11 @@ function Guarda() {
   useEffect(() => {
     if (!pronto) return;
     const emLogin = segments[0] === 'login';
+    const emTrocaPin = segments[0] === 'trocar-pin';
     if (!motorista && !emLogin) router.replace('/login');
-    if (motorista && emLogin) router.replace('/(tabs)/rotas');
+    // PIN provisório (cadastro/reset pela operação): não sai da troca sem trocar
+    if (motorista?.trocar_pin && !emTrocaPin) router.replace('/trocar-pin');
+    else if (motorista && emLogin) router.replace('/(tabs)/rotas');
   }, [pronto, motorista, segments, router]);
 
   useEffect(() => {
@@ -59,6 +62,7 @@ function Guarda() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="trocar-pin" options={{ title: 'PIN', headerBackVisible: false, gestureEnabled: false }} />
       <Stack.Screen name="rota/[id]" options={{ title: 'Rota' }} />
       <Stack.Screen name="parada/[id]" options={{ title: 'Parada' }} />
     </Stack>

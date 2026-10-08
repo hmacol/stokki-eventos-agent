@@ -64,8 +64,9 @@ def cmd_resetar_pin(args):
         if not m:
             print("Motorista não encontrado.")
             return 1
-        auth.criar_ou_atualizar_motorista(conn, m["cpf"], m["nome"], args.pin, perfil=m["perfil"] or auth.PERFIL_MOTORISTA)
-        print(f"PIN redefinido pra {m['nome']} (sessões antigas invalidadas).")
+        auth.criar_ou_atualizar_motorista(conn, m["cpf"], m["nome"], args.pin, perfil=m["perfil"] or auth.PERFIL_MOTORISTA,
+                                          trocar_pin=True)
+        print(f"PIN redefinido pra {m['nome']} (sessões antigas invalidadas; o app vai pedir um PIN novo no login).")
     finally:
         conn.close()
 
@@ -86,7 +87,8 @@ def cmd_importar_planilha(args):
     """Cria login pra cada motorista ATIVO da planilha que tem CPF (11
     dígitos). Quem já existe só tem agent_id/telefone/tipo atualizados
     (PIN preservado). PIN novo é aleatório e impresso UMA vez -- Hugo
-    repassa ao motorista; depois só via resetar-pin."""
+    repassa ao motorista; depois só via resetar-pin. Com --pin-inicial
+    (mesmo PIN pra todos) o app obriga a troca no primeiro acesso."""
     from regras.preferencias_motoristas import CatalogoMotoristas
     cfg = _config().get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
@@ -104,6 +106,7 @@ def cmd_importar_planilha(args):
             auth.criar_ou_atualizar_motorista(
                 conn, m.cpf, m.nome, pin, agent_id=m.agent_id, vehicle_id=m.vehicle_id, telefone=m.telefone,
                 email=m.email, tipo_veiculo=m.tipo_veiculo, perfil=auth.PERFIL_MOTORISTA,
+                trocar_pin=bool(pin and args.pin_inicial),
             )
             if existente:
                 atualizados += 1

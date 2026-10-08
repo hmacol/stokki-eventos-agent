@@ -10,6 +10,7 @@ separando motorista de cliente. Sem rede, sem e-mail, sem Claude:
 SQLite temporário e o cliente Anthropic trocado por um duplo.
     python -m unittest nucleo.test_chamados_motorista -v
 """
+import io
 import json
 import sys
 import tempfile
@@ -374,6 +375,31 @@ class TestChatMotorista(unittest.TestCase):
             r = self.cli.post(f"/api/atendimento/chamados/{chamado_id}/acao", headers=h, json={"tipo": "atendente"})
         self.assertEqual(r.get_json()["chamado"]["status"], "NA_FILA")
         self.assertEqual(self.emails, [])
+
+    def test_audio_so_no_atendimento_humano(self):
+        # Hugo, 08/10: o motorista manda áudio só depois que a conversa chega
+        # na logística; o assistente não ouve áudio.
+        h = self._auth()
+        chamado_id = self._iniciar(h)["chamado"]["id"]
+        url = f"/api/atendimento/chamados/{chamado_id}/mensagens"
+        gravacao = lambda: {"texto": "Áudio", "anexos": (io.BytesIO(b"\x00\x00\x00\x18ftypM4A "), "gravacao.m4a")}
+
+        r = self.cli.post(url, headers=h, data=gravacao(), content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 409, r.get_json())
+        self.assertEqual(list((Path(self._tmp.name) / "chamados").rglob("*.m4a")), [])
+
+        conn = ch.conectar()
+        ch.entrar_na_fila(conn, ch.buscar_chamado(conn, chamado_id), self.config)
+        conn.close()
+        r = self.cli.post(url, headers=h, data=gravacao(), content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200, r.get_json())
+        anexo = next(m for m in r.get_json()["mensagens"] if m["anexos"])["anexos"][0]
+        self.assertEqual(anexo["tipo"], "m4a")
+
+        r = self.cli.get(f"/api/atendimento/chamados/{chamado_id}/anexos/{anexo['arquivo']}", headers=h)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.mimetype.startswith("audio/"), r.mimetype)
+        self.assertNotIn("attachment", r.headers.get("Content-Disposition", ""))
 
     def test_resposta_da_equipe_chega_no_app_e_conta_como_nao_lida(self):
         h = self._auth()

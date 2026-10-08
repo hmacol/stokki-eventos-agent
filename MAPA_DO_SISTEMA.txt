@@ -632,8 +632,9 @@
  api_motorista.py          API Flask (porta 8073).
  operacao.py               Regras: aceitar/iniciar, eventos, checklist,
                            comprovantes, GPS, ofertas, disponibilidade, pedágios.
- auth_motorista.py         Login CPF+PIN, tokens.
- motoristas_cli.py         CLI de usuários do app.
+ auth_motorista.py         Login CPF+PIN, tokens, troca de PIN (POST /api/trocar-pin).
+ motoristas_cli.py         CLI de usuários do app (importar-planilha --pin-inicial
+                           e resetar-pin marcam trocar_pin=1).
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.
@@ -803,8 +804,11 @@
  app.freshhub.com.br/motorista/api (código em nucleo/api_motorista.py).
 
  app/login.tsx             CPF + PIN.
+ app/trocar-pin.tsx        Troca de PIN (obrigatória quando motoristas.trocar_pin=1:
+                           PIN inicial/resetado; opcional pelo Perfil).
  app/(tabs)/               rotas, ofertas (marketplace), financeiro,
-                           disponibilidade, perfil, ajuda (chat).
+                           disponibilidade, perfil, ajuda (chat; áudio .m4a
+                           via expo-audio só com a conversa na logística).
  app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
@@ -814,7 +818,11 @@
  app.json, eas.json        Config e perfis de build (preview/production).
 
  Publicar: mudança só de JS -> OTA (npx eas-cli update --channel preview);
- mudança nativa -> novo build + subir android.versionCode.
+ mudança nativa -> novo build (versionCode sobe sozinho: autoIncrement no
+ perfil preview) + subir "version" no app.json, que é a runtimeVersion:
+ assim a OTA nova não chega num APK antigo sem o módulo nativo.
+ APK com link fixo: https://app.freshhub.com.br/motorista/app.apk (arquivo
+ em dados/app_motorista/ na VPS, servido pelo Caddy; ver infra/Caddyfile-motorista).
 
 
 ==============================================================================
