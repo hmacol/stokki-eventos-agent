@@ -1194,6 +1194,7 @@
   html.topo-recolhido:not(.modo-mobile) #barra-agentes-planejamento,
   html.topo-recolhido:not(.modo-mobile) #painel-importacao-filtro,
   html.topo-recolhido:not(.modo-mobile) #painel-expedicao-selecao,
+  html.topo-recolhido:not(.modo-mobile) #painel-romaneios-data,
   html.topo-recolhido:not(.modo-mobile) #resumo-agendados-container { display: none !important; }
 
   .painel-importacao-filtro {
@@ -1528,6 +1529,7 @@
   html.modo-mobile:not([data-aba="mais"]) #barra-agentes-planejamento,
   html.modo-mobile:not([data-aba="mais"]) #painel-importacao-filtro,
   html.modo-mobile:not([data-aba="mais"]) #painel-expedicao-selecao,
+  html.modo-mobile:not([data-aba="mais"]) #painel-romaneios-data,
   html.modo-mobile:not([data-aba="mais"]) #resumo-agendados-container { display: none !important; }
   html.modo-mobile[data-aba="mais"] .painel-mais-mobile { display: block; }
   /* "▶ rodar" das pílulas: no desktop é um botãozinho de 18px de altura;
@@ -1858,6 +1860,21 @@
   </div>
 </div>
 
+{# Mesmo padrão dos dois painéis acima -- pedido do Hugo, 07/10: o
+   "▶ rodar" do romaneio gerava sempre os PDFs de hoje; agora pergunta
+   a data (abre com a data da tela). Vazio = hoje, igual ao timer das 04h. #}
+<div class="painel-importacao-filtro" id="painel-romaneios-data">
+  <strong>Gerar PDFs de Romaneio</strong>
+  <label>Data das rotas (vazio = hoje)
+    <input type="date" id="data-romaneios"
+           title="Dia das rotas cujos PDFs serão gerados. Abre com a data que esta tela está planejando.">
+  </label>
+  <div class="acoes">
+    <button type="button" class="botao" onclick="rodarRomaneiosComData()">Gerar romaneios</button>
+    <button type="button" onclick="fecharPainelRomaneios()">Cancelar</button>
+  </div>
+</div>
+
 <div class="modal-overlay-tipo-roteirizacao" id="modal-tipo-roteirizacao">
   <div class="modal-tipo-roteirizacao" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tipo-roteirizacao">
     <h2 id="titulo-modal-tipo-roteirizacao">Qual tipo de roteirização?</h2>
@@ -2149,6 +2166,8 @@
         ? "abrirPainelImportacao()"
         : e.agente_id === "somente_expedicao"
         ? "abrirPainelExpedicao()"
+        : e.agente_id === "gerar_romaneios"
+        ? "abrirPainelRomaneios()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
       const desabilitado = e.rodando || e.na_fila;
       // Pílula (cockpit compacto, 30/08): sem botão enquanto roda/na fila
@@ -2300,6 +2319,31 @@
     fecharPainelExpedicao();
     try {
       await iniciarExecucaoAgentePlanejamento("somente_expedicao", { pedidos });
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  // Gerar PDFs de Romaneio com escolha da data (Hugo, 07/10) -- mesmo
+  // padrão dos painéis da Importação e da Expedição. O campo abre com a
+  // data que a tela está planejando (DATA_ALVO_ISO); o backend já
+  // traduz "data" em --data (agentes.py["parametros"]). Vazio = hoje.
+  function abrirPainelRomaneios() {
+    document.getElementById("data-romaneios").value = DATA_ALVO_ISO;
+    abrirPainelAgente("painel-romaneios-data");
+  }
+  function fecharPainelRomaneios() {
+    document.getElementById("painel-romaneios-data").classList.remove("aberto");
+  }
+  async function rodarRomaneiosComData() {
+    const data = document.getElementById("data-romaneios").value;
+    const pergunta = data
+      ? `Gerar os PDFs de romaneio das rotas de ${data.split("-").reverse().join("/")} (modo real)?`
+      : "Gerar os PDFs de romaneio das rotas de HOJE (modo real)?";
+    if (!confirm(pergunta)) return;
+    fecharPainelRomaneios();
+    try {
+      await iniciarExecucaoAgentePlanejamento("gerar_romaneios", { data });
     } catch (e) {
       alert(`Falha ao iniciar: ${e.message}`);
     }

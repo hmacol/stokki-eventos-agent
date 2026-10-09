@@ -1380,11 +1380,24 @@ function atualizarCarimbo() {
   el.innerHTML = `<span>Atualizado há ${seg < 60 ? seg + "s" : Math.floor(seg / 60) + "min"}${houveErro ? " · última tentativa falhou" : ""}</span>`;
   el.className = houveErro ? "carimbo erro" : "carimbo";
 }
+// Gerar Romaneios pergunta a data das rotas antes de rodar (Hugo, 07/10) --
+// mesmo comportamento da torre desktop. Vazio = hoje, Cancelar desiste.
+function perguntarDataRomaneios() {
+  const hoje = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const data = prompt("Data das rotas dos romaneios (AAAA-MM-DD). Em branco = hoje.", hoje);
+  return data === null ? null : data.trim();
+}
 async function rodarAgente(agenteId, titulo) {
-  if (!confirm(`Rodar "${titulo}" agora (modo real)?`)) return;
+  const corpo = { agente_id: agenteId };
+  if (agenteId === "gerar_romaneios") {
+    const data = perguntarDataRomaneios();
+    if (data === null) return;
+    corpo.data = data;
+  }
+  if (!confirm(`Rodar "${titulo}"${corpo.data ? ` para ${corpo.data}` : ""} agora (modo real)?`)) return;
   try {
     const resp = await fetch(`${BASE_PATH}/api/torre/rodar`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agente_id: agenteId }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo),
     });
     const d = await resp.json();
     if (!resp.ok) { alert(d.erro || "Falha ao iniciar."); return; }

@@ -1265,7 +1265,14 @@ def api_torre_rodar():
         return jsonify({"erro": "Agente não encontrado."}), 404
     if ha_execucao_rodando(agente_id):
         return jsonify({"erro": "Esse agente já está rodando -- espera terminar antes de rodar de novo."}), 409
-    execucao_id = iniciar_execucao(agente, modo_teste=False)
+    # Campos declarados em agentes.py["parametros"] (hoje: "data" do
+    # Gerar Romaneios -> --data) -- pedido do Hugo, 07/10: o Reexecutar
+    # da torre gerava sempre os PDFs de hoje, sem perguntar a data.
+    try:
+        args_extra = montar_args_parametros(agente, body) or None
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    execucao_id = iniciar_execucao(agente, modo_teste=False, args_extra=args_extra)
     return jsonify({"ok": True, "execucao_id": execucao_id})
 
 
