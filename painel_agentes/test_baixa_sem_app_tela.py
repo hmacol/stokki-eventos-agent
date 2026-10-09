@@ -41,7 +41,7 @@ class TestTelaBaixa(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         for p in (mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "dados.db"),
-                  mock.patch("rotas_client.buscar_rota", return_value=ROTA),
+                  mock.patch("rotas_client.buscar_rota", return_value={"route": ROTA}),
                   mock.patch("regras.preferencias_motoristas.agent_ids_sem_app", return_value={50191}),
                   mock.patch("nucleo.baixa_sem_app.executar_lote")):
             p.start()

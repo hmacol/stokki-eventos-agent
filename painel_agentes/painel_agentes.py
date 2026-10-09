@@ -931,9 +931,11 @@ def api_batimento_tratar():
 def _rota_sem_app(route_id: int) -> tuple[dict | None, str | None]:
     """Rota da Vuupt + checagem de motorista SEM_APP. (rota, erro)."""
     import rotas_client
+    from nucleo.sincronizar_vuupt import _rota_do_corpo
     from regras import preferencias_motoristas
     token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
-    rota = rotas_client.buscar_rota(token, route_id, include=["services"])
+    # GET /routes/{id} vem embrulhado em {"route": {...}} (visto na prova de 09/10)
+    rota = _rota_do_corpo(rotas_client.buscar_rota(token, route_id, include=["services"]))
     if not rota:
         return None, "Rota não encontrada na Vuupt."
     if rota.get("agent_id") not in preferencias_motoristas.agent_ids_sem_app():
