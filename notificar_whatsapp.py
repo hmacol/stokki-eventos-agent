@@ -138,6 +138,7 @@ NOMES_DAS_TAREFAS = {
     "acompanhar-retiradas": "Acompanhamento das retiradas no galpão",
     "avisar-cliente-sem-resposta": "WhatsApp ao cliente que não respondeu o chamado",
     "backup-gcs": "Cópia de segurança diária dos dados",
+    "batimento-pedidos": "Batimento diário dos pedidos",
     "backup-horario": "Cópia de segurança de hora em hora",
     "batimento-pedidos": "Batimento do destino final dos pedidos",
     "cancelar-rotas-sem-motorista": "Cancelamento das rotas de hoje sem motorista",
@@ -148,6 +149,7 @@ NOMES_DAS_TAREFAS = {
     "documentos-incremental": "Busca das notas fiscais dos pedidos",
     "ensaio-restauracao": "Teste semanal da cópia de segurança",
     "expedicao-frequente": "Baixa das entregas na Stokki",
+    "informativo-mensal": "Informativo mensal de dias de entrega",
     "exportar-vuupt": "Cópia do histórico da Vuupt",
     "lancar-lalamove": "Pedido de corridas na Lalamove",
     "notificar-entregas": "E-mail de entrega concluída para os clientes",
@@ -166,7 +168,7 @@ NOMES_DAS_TAREFAS = {
     "sincronizar-confirmacoes": "Leitura das confirmações de rota dos motoristas",
     "sincronizar-lalamove": "Atualização das corridas da Lalamove",
     "verificar-entregues-nao-expedidos": "Conferência diária das entregas",
-    "vigia-documentos": "Vigia diário dos documentos (NF e boleto)",
+    "vigia-documentos": "Vigia dos documentos dos pedidos",
     "vigia-pedidos": "Vigia dos pedidos em aberto",
     "wms-recebimentos": "Atualização dos recebimentos do estoque",
     "wms-reservar-pedidos": "Reserva de estoque para os pedidos",
@@ -404,7 +406,43 @@ def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float 
     return next((t for t in opcoes if len(t) <= MAX_MENSAGEM), opcoes[-1][:MAX_MENSAGEM])
 
 
+def texto_cadastro_motorista(cadastro: dict, link: str, agora: datetime | None = None) -> str:
+    """Motorista novo pediu cadastro pelo app e ja mandou CNH e CRLV
+    (nucleo/cadastro_motorista.py). O Hugo aprova no painel."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    nome = _uma_linha(cadastro.get("nome"), 40) or "Motorista"
+    veiculo = _uma_linha(cadastro.get("tipo_veiculo"), 12)
+    linhas = [f"🧑‍✈️ *Motorista novo pediu cadastro* · {quando}",
+              f"{nome}" + (f" · {veiculo}" if veiculo else "") + f" · placa {cadastro.get('placa') or '-'}",
+              "Aprove no painel (precisa do agente na Vuupt antes):",
+              link]
+    return "\n".join(linhas)
+
+
+def texto_alteracao_cadastro(nome: str, mudancas: list[dict], agora: datetime | None = None) -> str:
+    """Motorista mudou telefone/e-mail/PIX/placa pelo app. Vale na hora
+    (decisao do Hugo, 08/10); o aviso e so pra ele saber."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    linhas = [f"✏️ *Motorista alterou o cadastro* · {quando}", _uma_linha(nome, 40) or "Motorista"]
+    for m in mudancas[:4]:
+        linhas.append(f"{m.get('rotulo') or m.get('campo')}: {_uma_linha(m.get('de') or '-', 30)} → {_uma_linha(m.get('para') or '-', 30)}")
+    return "\n".join(linhas)
+
+
 # --- Envio --------------------------------------------------------------------
+
+def texto_informativo_mensal(titulo_mes: str, feriados: list, link: str, agora: datetime | None = None) -> str:
+    """Virada de mês (Hugo, 07/10/2026): link da página pública + feriados em
+    dia útil. O link nunca é cortado; o título do mês é o que encurta."""
+    if feriados:
+        datas = " e ".join(f.strftime("%d/%m") for f in feriados[:3]) + (" e outros" if len(feriados) > 3 else "")
+        feriado = f"Feriados no mês: {datas} (sem visita)."
+    else:
+        feriado = "Sem feriado em dia útil no mês."
+    fixo = len(f"Dias de entrega de  já estão no site:\n{link}\n{feriado}\n{RODAPE_EMAIL}")
+    titulo = _uma_linha(titulo_mes, max(1, MAX_MENSAGEM - fixo))
+    return f"Dias de entrega de {titulo} já estão no site:\n{link}\n{feriado}\n{RODAPE_EMAIL}"
+
 
 def _cfg(config: dict | None) -> dict:
     return (config or {}).get("whatsapp_notificacoes") or {}
@@ -611,6 +649,32 @@ def avisar_nao_expedidos(n_alertas: int, n_rotas: int, n_retiradas: int, config:
         return "falhou"
 
 
+def texto_cancelamento_pendente(envio: dict, motivo: str, erro: str) -> str:
+    """Cancelamento pedido pelo cliente no portal que o worker nao conseguiu
+    fazer sozinho (06/10). Cabe em MAX_MENSAGEM."""
+    nf = envio.get("numero_nf") or envio.get("referencia") or "?"
+    ps = envio.get("codigo_pedido") or "sem PS"
+    emb = (envio.get("nome_embarcador") or envio.get("cnpj_embarcador") or "")[:30]
+    detalhe = f"falhou: {erro}" if erro else motivo
+    texto = f"Cancelamento pedido pelo cliente: NF {nf} · {ps} · {emb} · {detalhe} -- precisa cancelar à mão"
+    return texto[:MAX_MENSAGEM - 1] + "…" if len(texto) > MAX_MENSAGEM else texto
+
+
+def avisar_cancelamento_pendente(envio: dict, motivo: str, erro: str, config: dict, **kw) -> str:
+    """Grupo do ATENDIMENTO (grupo_atendimento_id), nao o dos alertas.
+    Assinatura por envio: o mesmo pedido nao repete no dia."""
+    try:
+        grupo = _cfg(config).get("grupo_atendimento_id")
+        if not grupo:
+            return "desligado"
+        return despachar(config, "portal_cancelamento", "cancelamento",
+                         texto_cancelamento_pendente(envio, motivo, erro), f"cancelamento:{envio['id']}",
+                         grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
 def _ja_enviada_alguma_vez(conn, origem: str, assinatura: str) -> bool:
     """Ja saiu (situacao 'enviado') alguma vez, sem limite de tempo? Falha
     ao ler (banco travado, tabela que ainda nao existe) conta como nao."""
@@ -789,6 +853,18 @@ def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
             return "desligado"
         return despachar(config, "atendimento", "chamado", texto_chamado(chamado, link, kw.get("agora")),
                          f"chamado:{chamado['id']}", grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_informativo_mensal(titulo_mes: str, feriados: list, link: str, config: dict,
+                              modo_teste: bool = False, **kw) -> str:
+    """Dia 1 (gerar_informativo_mensal.py): uma mensagem por mês no grupo."""
+    try:
+        return despachar(config, "informativo_mensal", "informativo_mensal",
+                         texto_informativo_mensal(titulo_mes, feriados, link, kw.get("agora")),
+                         assinatura=f"informativo:{titulo_mes}", modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

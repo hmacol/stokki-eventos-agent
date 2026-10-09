@@ -12,10 +12,15 @@ depois -> em cada execução seguinte de expedir_pedidos.py, checa se
 alguma duplicação agendada já venceu -> se sim, duplica de verdade.
 """
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import feriados  # noqa: E402
+
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
 
@@ -40,12 +45,13 @@ def _conectar():
 
 
 def adicionar_dias_uteis(data_inicial: date, dias_uteis: int) -> date:
-    """Soma N dias ÚTEIS (pula sábado e domingo) a partir de uma data."""
+    """Soma N dias ÚTEIS (pula fim de semana e feriado, regras/feriados.py)
+    a partir de uma data."""
     data = data_inicial
     dias_adicionados = 0
     while dias_adicionados < dias_uteis:
         data += timedelta(days=1)
-        if data.weekday() < 5:  # 0=segunda ... 4=sexta
+        if feriados.eh_dia_util(data):
             dias_adicionados += 1
     return data
 

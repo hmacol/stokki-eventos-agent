@@ -43,8 +43,14 @@ trava de rodízio desligada até o arquivo existir.
 """
 import json
 import logging
+import sys
 from datetime import date
 from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
+from regras import feriados  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +195,8 @@ def rota_bloqueada_por_rodizio(placa: str | None, sublote: list[dict], data_rota
     ausente não bloqueia -- fica a cargo de ATIVO/ZONAS/etc. filtrar
     esse motorista se for o caso)."""
     if not placa:
+        return False
+    if feriados.eh_feriado(data_rota):   # rodizio suspenso em feriado (regras/feriados.py)
         return False
     if not placa_restrita_no_dia(placa, data_rota.weekday()):
         return False

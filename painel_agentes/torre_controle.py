@@ -69,6 +69,7 @@ import yaml
 from vuupt_client import VuuptClient
 from rotas_client import listar_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras import feriados
 from mapa_util import extrair_servicos_da_rota
 from executor import buscar_ultima_execucao
 from motivos_falha import texto_do_motivo
@@ -951,7 +952,7 @@ def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, s
 # ── Tendência (7 dias úteis, com cache) ───────────────────────────────────────
 
 def _eh_fim_de_semana(dia: date) -> bool:
-    return dia.weekday() >= 5
+    return not feriados.eh_dia_util(dia)   # sabado, domingo ou feriado
 
 
 def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> list[dict]:

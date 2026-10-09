@@ -31,6 +31,7 @@ _RAIZ = Path(__file__).parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 import pedidos_dedicados  # noqa: E402  (normalizacao do codigo do pedido)
+from regras import feriados  # noqa: E402
 
 from roteirizacao_dados import (  # noqa: E402
     extrair_volume_caixas, macro_regiao_do_servico, MACRO_GRANDE_SP,
@@ -93,23 +94,16 @@ def data_entrada(servico: dict) -> date | None:
 
 
 def proximo_dia_util(d: date) -> date:
-    """Dia util estritamente depois de `d` (sem calendario de feriados,
-    igual ao resto do sistema)."""
-    d += timedelta(days=1)
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d
+    """Dia util estritamente depois de `d` (seg-sex sem feriado,
+    regras/feriados.py)."""
+    return feriados.proximo_dia_util(d)
 
 
 def prazo_final(entrada: date) -> date:
     """Ultimo dia em que o pedido pode ser ENTREGUE: entrada + 3 dias
-    uteis. Entrada no fim de semana conta a partir da segunda."""
-    atual = entrada
-    while atual.weekday() >= 5:
-        atual += timedelta(days=1)
-    for _ in range(PRAZO_ENTREGA_DIAS_UTEIS):
-        atual = proximo_dia_util(atual)
-    return atual
+    uteis. Entrada em fim de semana ou feriado conta a partir do dia util
+    seguinte."""
+    return feriados.somar_dias_uteis(entrada, PRAZO_ENTREGA_DIAS_UTEIS)
 
 
 def motivo_nao_segurar(servico: dict, data_alvo: date, ja_segurados: set[str],

@@ -1912,7 +1912,90 @@ def motoristas():
         logging.getLogger(__name__).exception("Falha ao montar dados da tela de motoristas")
         dados = None
         erro = str(e)
-    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador"))
+    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador"),
+                           pode_aprovar=g.nivel_acesso == "total")
+
+
+# ── Auto-cadastro pelo app (Hugo, 08/10): aprovação só do nível total ────────
+def _cadastro_conn():
+    from nucleo import banco as nucleo_banco
+    return nucleo_banco.conectar()
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/documento/<tipo>")
+@requer_auth(niveis=("total",))
+def api_cadastro_documento(cadastro_id, tipo):
+    from nucleo import cadastro_motorista as cad
+    conn = _cadastro_conn()
+    try:
+        p = cad.caminho_documento(conn, cadastro_id, tipo)
+    finally:
+        conn.close()
+    if not p:
+        abort(404)
+    return send_file(p, max_age=0)
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/aprovar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_aprovar(cadastro_id):
+    """Linha na BD_MOTORISTAS (precisa do agente Vuupt criado à mão) +
+    login no app com PIN provisório. Devolve o PIN pra mandar ao motorista."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        r = cad.aprovar(conn, cadastro_id, _carregar_config(), agent_id=body.get("agent_id"),
+                        zonas=body.get("zonas"), dias=body.get("dias"), tipo_veiculo=body.get("tipo_veiculo"),
+                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso,
+                        dono_veiculo=body.get("dono_veiculo"))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"erro": str(e)}), 409
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao aprovar cadastro de motorista")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/motoristas/<cpf>/ve-financeiro", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_ve_financeiro(cpf):
+    """Chave "Vê financeiro" da tabela (Hugo, 08/10): quem dirige carro de
+    outro não vê o extrato no app. Pedágio continua."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        m = cad.definir_ve_financeiro(conn, cpf, bool(body.get("ve")))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cpf": m["cpf"], "ve_financeiro": bool(m["ve_financeiro"])})
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/recusar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_recusar(cadastro_id):
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        c = cad.recusar(conn, cadastro_id, body.get("motivo") or "", session.get("usuario") or g.nivel_acesso)
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cadastro": c})
 
 
 # ── Pedágios dos motoristas (app de motoristas; Hugo, 11/09) ─────────────────
@@ -2279,7 +2362,7 @@ def api_incrementar_selecionados():
     """Botão "Incrementar" da seleção do pool (Hugo, 10/09): põe cada
     pedido selecionado no rascunho (status RASCUNHO, nunca rota já
     enviada à VUUPT) mais próximo que o comporte, com as travas do
-    incremento automático e sem teto de pedidos por rota. Recebe os
+    incremento automático (até 15 pedidos por rota comum). Recebe os
     itens do pool como a tela já os tem (mesmo contrato de
     /adicionar-parada)."""
     body = request.get_json(force=True)

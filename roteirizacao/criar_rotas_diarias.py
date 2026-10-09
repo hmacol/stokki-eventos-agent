@@ -120,6 +120,7 @@ from alocacao_motoristas import classificar_rota_viagem, selecionar_motorista_eq
 from zonas_sp import classificar_rota_zona
 from regras.tipo_veiculo import classificar_tipo_veiculo_com_folga
 from regras.prioridade_ofertas import carregar_historico_justica
+from regras import feriados
 import rotas_fracas
 import pedidos_segurados
 
@@ -127,7 +128,7 @@ ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"
 BASE_LOCATION_ID = 6950  # confirmado em produção (operational_base_id da base, visto em dados reais do VUUPT)
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 TAMANHO_MINIMO_ROTA = 10
-TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
+TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota, no rascunho e no incremento (rota comum; veículo grande segue o tipo). Antes: voltou de 14 para 16 entregas por rota (pedido do Hugo, 22/08 -- dado real de 21 dias mostrou que a imensa maioria das rotas nunca chega perto do teto, então a folga extra tem baixo risco; ver estimar_tempo_rota/VELOCIDADE_MEDIA_KMH pra rede de segurança de tempo, agora com deslocamento real embutido)
 VOLUME_MAXIMO_ROTA = 100  # Novo limite máximo de caixas/volumes por rota (pedido do Hugo, 09/08)
 # Máximo entre pedidos da mesma rota DENTRO da Grande SP (pedido do Hugo,
 # 09/08 -- ajustado 10/08 pra 20). Hugo, 20/09: 15 km, calibrado pelo
@@ -237,12 +238,9 @@ HORA_CORTE_MESMO_DIA = 14  # pedido do Hugo, 10/08
 
 
 def _proximo_dia_util(data: date) -> date:
-    """Rola a data para frente até cair em dia útil (seg-sex) -- mesmo
-    critério simples (sem calendário de feriados) já usado em
-    pipeline.py::_proximo_dia_util."""
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex, sem feriado
+    -- regras/feriados.py, Hugo 07/10/2026: não há rota em feriado)."""
+    return feriados.rolar_para_dia_util(data)
 
 
 def _data_alvo_rotas(agora: datetime) -> date:

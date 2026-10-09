@@ -143,12 +143,13 @@ class TestTetoDaReceptora(unittest.TestCase):
     def test_receptora_com_17_paradas_nao_avisa(self):
         self.assertEqual(self._badges([_parada(i, 5) for i in range(17)], 1), [])
 
-    def test_receptora_com_19_paradas_avisa_com_a_folga(self):
-        self.assertIn("19 paradas (máx 18, com folga de rota fraca)",
-                      self._badges([_parada(i, 5) for i in range(19)], 1))
+    def test_receptora_com_18_paradas_avisa_com_a_folga(self):
+        # 07/10: teto de 15 pedidos + folga de 2 da receptora = 17
+        self.assertIn("18 paradas (máx 17, com folga de rota fraca)",
+                      self._badges([_parada(i, 5) for i in range(18)], 1))
 
-    def test_rota_comum_com_17_paradas_continua_avisando(self):
-        self.assertIn("17 paradas (máx 16)", self._badges([_parada(i, 5) for i in range(17)], 0))
+    def test_rota_comum_com_16_paradas_continua_avisando(self):
+        self.assertIn("16 paradas (máx 15)", self._badges([_parada(i, 5) for i in range(16)], 0))
 
     def test_receptora_com_18_km_nao_avisa(self):
         self.assertEqual(self._badges(self._distantes(), 1), [])
@@ -277,8 +278,8 @@ class TestMotoristaDaReceptoraNoPainel(unittest.TestCase):
 class TestTravasDaBarra(unittest.TestCase):
     def test_travas_trazem_o_teto_da_receptora(self):
         travas = planejamento_rotas._travas_card()
-        self.assertEqual((travas["max_caixas"], travas["max_paradas"]), (100, 16))
-        self.assertEqual((travas["max_caixas_receptora"], travas["max_paradas_receptora"]), (110, 18))
+        self.assertEqual((travas["max_caixas"], travas["max_paradas"]), (100, 15))
+        self.assertEqual((travas["max_caixas_receptora"], travas["max_paradas_receptora"]), (110, 17))
 
 
 if __name__ == "__main__":

@@ -13,3 +13,14 @@
 #
 # Uploads de foto: o Flask limita a 15 MB (MAX_CONTENT_LENGTH); o Caddy não
 # precisa de request_body extra pra isso.
+#
+# APK com link fixo pros motoristas (08/10): o link do artefato do Expo
+# expira em 14-30 dias, então o arquivo fica na VPS em
+# dados/app_motorista/freshlog-motorista.apk (fora do git) e o Caddy serve
+# ANTES do handle_path acima. Build novo = scp do APK por cima + chown www-data.
+#
+# 	handle /motorista/app.apk {
+# 		root * /opt/stokki-eventos/dados/app_motorista
+# 		rewrite * /freshlog-motorista.apk
+# 		file_server
+# 	}

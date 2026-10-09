@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
+import { CampoPin } from '../src/campoPin';
 import { ErroApi, ErroRede } from '../src/api';
 import { cores } from '../src/tema';
 
@@ -13,6 +15,7 @@ function mascaraCpf(v: string): string {
 
 export default function Login() {
   const { entrar } = useSessao();
+  const router = useRouter();
   const [cpf, setCpf] = useState('');
   const [pin, setPin] = useState('');
   const [erro, setErro] = useState<string | null>(null);
@@ -36,7 +39,7 @@ export default function Login() {
 
   return (
     <SafeAreaView style={s.tela}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <View style={s.topo}>
           <View style={s.logoCaixa}>
             <Image source={require('../assets/logo_freshlog.png')} style={s.logo} resizeMode="contain" accessibilityLabel="FreshLog" />
@@ -50,13 +53,11 @@ export default function Login() {
             placeholder="000.000.000-00" placeholderTextColor="#9CA3AF" autoComplete="off" textContentType="none" returnKeyType="next"
           />
           <Text style={s.rotulo}>PIN (6 dígitos)</Text>
-          <TextInput
-            style={s.campo} value={pin} onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 6))}
-            keyboardType="number-pad" secureTextEntry placeholder="••••••" placeholderTextColor="#9CA3AF" onSubmitEditing={enviar} returnKeyType="go"
-          />
+          <CampoPin value={pin} onChangeText={setPin} onSubmitEditing={enviar} returnKeyType="go" />
           {erro ? <Text style={s.erro}>{erro}</Text> : null}
           <Botao titulo="Entrar" onPress={enviar} carregando={carregando} estilo={{ marginTop: 16 }} />
           <Text style={s.ajuda}>Não tem PIN? Fale com a operação da FreshLog.</Text>
+          <Botao titulo="Ainda não sou cadastrado" tipo="secundario" onPress={() => router.push('/cadastro')} estilo={{ marginTop: 14 }} />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

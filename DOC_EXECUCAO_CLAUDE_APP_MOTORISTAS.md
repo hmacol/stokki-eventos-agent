@@ -532,3 +532,74 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   (`chamados.horario_logistica`). API em `nucleo/chamados_motorista.py`;
   app em `app/(tabs)/ajuda.tsx`. Validado em produção com o usuário TESTE
   (chamado #5 deixado aberto). **Falta publicar a OTA** do app.
+- **08/10 — Distribuição pros motoristas (Android) + troca obrigatória de
+  PIN.** Hugo: "quero pedir para meus motoristas baixarem e acessarem o
+  app"; decidiu PIN inicial igual pra todos, com troca exigida no primeiro
+  acesso, sempre 6 dígitos. Estado encontrado: APK de 26/08 expirado no
+  Expo (404), só o login TESTE existia, Fase C não começou (o app lista
+  as rotas VUUPT só pra consulta/aceite). Implementado: coluna
+  `motoristas.trocar_pin`, `auth.trocar_pin` + `POST /api/trocar-pin`
+  (devolve tokens novos), `importar-planilha --pin-inicial` e
+  `resetar-pin` marcam a flag; app com `app/trocar-pin.tsx`, Guarda do
+  `_layout` prende o motorista na troca enquanto `trocar_pin` for true, e
+  botão "Trocar PIN" no Perfil. Teste
+  `test_troca_de_pin_obrigatoria_no_primeiro_acesso`. APK novo buildado
+  pelo perfil preview (mesmo runtime 1.0.0; leva o ícone de 11/09).
+- **08/10 (tarde) — Teclado na Ajuda + áudio pra logística.** Print do
+  Hugo: o teclado cobria o campo de escrever. Causa: Android em tela cheia
+  (edge-to-edge, SDK 54+) não redimensiona a janela; fix =
+  `KeyboardAvoidingView behavior="padding"` também no Android (ajuda,
+  login, trocar-pin). OTA `ffe26b0a` no canal preview. **Áudio** (decisão
+  do Hugo: "somente quando chegar no atendimento humano"): `expo-audio`
+  (módulo nativo → build novo, `version` 1.1.0 = runtime nova,
+  `autoIncrement` no perfil preview), botão de microfone no lugar do
+  enviar quando `chamado.status != COM_ASSISTENTE`; gravação `.m4a`
+  sobe como anexo (`texto` "Áudio"); a API recusa com 409 se ainda está
+  com o assistente (`EXTENSOES_AUDIO`/`MIME_AUDIO` em
+  portal_cliente/chamados.py); bolha com player (arquivo baixado pro cache
+  com o token); painel `/atendimento` (desktop e mobile) mostra `<audio>`.
+  Teste `test_audio_so_no_atendimento_humano`. APK fixo em
+  https://app.freshhub.com.br/motorista/app.apk (Caddy →
+  dados/app_motorista/freshlog-motorista.apk).
+- **08/10 (fim da tarde) — PIN blindado (achados 2 e 3 da revisão
+  docs/revisoes/2026-10-08-app-motorista-pin-audio.md):** com
+  `trocar_pin=1` a API responde 403 em tudo exceto `/api/eu` e
+  `/api/trocar-pin` (o app não liga fila/push até trocar);
+  `auth.validar_pin_forte` recusa 111111/123456/654321/012345 na troca
+  pelo motorista (o PIN da operação segue livre), com a mesma regra na
+  tela `trocar-pin.tsx`. 17 logins já criados com 123456 ficam limitados
+  à troca até cada um entrar. Permissão bloqueada de vez abre as
+  configurações do app (`src/permissoes.ts`, commit c441bc4, OTA 71d0faba).
+- **08/10 (noite) — Cadastro pelo app: "Meus dados" + auto-cadastro com
+  aprovação.** Pedido do Hugo: motoristas mudam telefone/PIX/e-mail/placa e
+  motoristas novos se cadastram, com aprovação dele. Decisões: vale na hora
+  (aviso no WhatsApp ALERTAS); auto-cadastro exige CNH, CRLV, zonas e dias;
+  aprovação escolhe o agente Vuupt (criado à mão). Spec em
+  docs/superpowers/specs/2026-10-08-cadastro-motorista-app-design.md.
+  Código: `nucleo/cadastro_motorista.py` (regras + banco:
+  `motoristas.chave_pix/placa`, `motoristas_alteracoes`,
+  `motoristas_cadastros`, fotos em dados/cadastros_motoristas/<id>/),
+  API `PUT /api/eu`, `POST /api/cadastro`, `POST /api/cadastro/<id>/documentos`
+  (sem login; chave_envio autoriza), `regras/cadastro_motoristas.atualizar_contato_planilha`;
+  painel: seção "Cadastros pelo app" em /motoristas (só total), rotas
+  aprovar/recusar/documento, contador `motoristas` (badge + cartão no /inicio);
+  app: Perfil mostra PIX/placa + "Meus dados" (`app/meus-dados.tsx`), login
+  com "Ainda não sou cadastrado" (`app/cadastro.tsx`). Testes:
+  nucleo/test_cadastro_motorista.py (5) e painel_agentes/test_cadastros_motoristas.py (3).
+  **BUG achado pelo Hugo:** Android não oferecia microfone — os APKs 1.0.0 e
+  1.1.0 saíram SEM `RECORD_AUDIO` porque o plugin do expo-image-picker estava
+  com `microphonePermission: false` (que remove a permissão do manifesto).
+  Corrigido no app.json; build 1.1.1.
+- **08/10 (noite) — Motorista que não é dono do carro: sem extrato.** Hugo:
+  "ocultar o financeiro" nesses casos; decidiu que o pedágio continua e que
+  ele marca no painel. `motoristas.ve_financeiro` (padrão 1) e
+  `motoristas_cadastros.dono_veiculo`; `GET /api/financeiro` responde 403
+  quando 0; `auth.publico` expõe `ve_financeiro`. App: a aba Financeiro vira
+  "Despesas" (só lançamento de pedágio/despesas, sem extrato) quando
+  `ve_financeiro === false`; o auto-cadastro pergunta "O veículo é seu?".
+  Painel /motoristas: coluna "App · Financeiro" com a chave Vê extrato /
+  Sem extrato por motorista com login (só total;
+  `POST /api/motoristas/<cpf>/ve-financeiro`), e o cartão de aprovação tem
+  "Dono do veículo" pré-marcado pela resposta dele. Também: olho pra ver o
+  PIN (`src/campoPin.tsx`, OTA a8105ca2) e player/miniatura no
+  /atendimento (commit 47f57b9).

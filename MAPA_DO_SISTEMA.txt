@@ -76,7 +76,9 @@
  Alocação de motorista ..................... roteirizacao/alocacao_motoristas.py
  Rodízio SP / zonas SP ..................... roteirizacao/rodizio_sp.py, zonas_sp.py
  Dia fixo por região ....................... roteirizacao/regioes_dia_fixo.py, fora_dia_fixo.py
+ Feriados / dia útil ....................... regras/feriados.py (único lugar); reagendar_feriado.py
  Informativo de regiões (PDF) .............. gerar_informativo_regioes.py
+ Informativo mensal (dia 1, e-mail+WhatsApp) gerar_informativo_mensal.py (timer stokki-informativo-mensal)
  Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
  Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
@@ -96,7 +98,11 @@
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
+ Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
+                                             enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
+                                             -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
@@ -313,6 +319,9 @@
  atualizar_agendamentos_confirmados.py  Aplica data confirmada no serviço
                          (roda nas sequências 16h/18h/22h). Data informada
                          vence o dia fixo da região.
+ reagendar_feriado.py     Pedidos do pool agendados pra um feriado vão pro dia
+                         útil seguinte (ou próxima visita da região); registra
+                         origem DIA_FIXO. Manual, --modo-teste; sem timer.
  marcar_clientes_agenda.py  Quem teve data de agendamento informada entra
                          na fila de autorização do Hugo pra virar AGENDA na
                          BD_CLIENTES (sequências 16h/18h/22h). Aviso no WhatsApp
@@ -360,6 +369,15 @@
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  gerar_informativo_regioes.py  PDF do informativo de regiões
                                (dados/informativos/). Envio é manual, do Hugo.
+ gerar_informativo_mensal.py   Dia 1 às 07h (stokki-informativo-mensal.timer):
+                               HTML (mesmo template da página /cliente/regioes,
+                               logo embutido) + PDF via Playwright em
+                               dados/informativos/, e-mail com anexos
+                               (informativo_mensal.forcar_destino; sem a chave
+                               vai pro Hugo) e aviso no WhatsApp do grupo com o
+                               link. A partir do dia 25 o alvo é o mês seguinte.
+                               O /inicio do painel mostra "Virada de mês" nos
+                               últimos 7 dias (pagina_inicial.montar_virada_de_mes).
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
@@ -449,6 +467,9 @@
  pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
                       iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
                       listar_transportadoras, listar_embarcadores, parsers de linha.
+ cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
+                      poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
+                      só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
@@ -489,6 +510,13 @@
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
  clientes_boleto.py         Par embarcador+cliente que paga com boleto
                             (sugestão/decisão).
+ feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
+                            Christi, 09/07, 25/01; móveis pela Páscoa) e as
+                            funções de dia útil usadas por rota do dia, dia
+                            fixo, prazo, vigia, batimento, rodízio, chamados.
+                            ARMADILHA: não recriar "weekday() >= 5" em módulo
+                            novo; importar daqui. Visita de dia fixo em
+                            feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
  preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
  cadastro_motoristas.py     Grava motorista novo na planilha.
@@ -534,9 +562,11 @@
  alocacao_motoristas.py    Alocação equitativa com travas.
  zonas_sp.py               Zonas da Grande SP.
  rodizio_sp.py             Rodízio municipal por placa.
- regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (Sorocaba
-                           quinzenal, 1ª visita 06/10/2026), prazo por nível,
-                           cidade truncada.
+ regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (quinzenais:
+                           Sorocaba ter desde 06/10/2026, Piracicaba qua desde
+                           14/10/2026), prazo por nível,
+                           cidade truncada. Feriado não é dia de visita; o dia
+                           útil seguinte herda a visita (regras/feriados.py).
  fora_dia_fixo.py          Data do embarcador fora do dia de visita: marca
                            dedicado (valor da calculadora, km em linha reta)
                            e chama o aviso. Roda no job das 18h e no
@@ -559,8 +589,13 @@
                            desde 09/09 (não é chamado por ninguém).
  incrementar_rotas.py      Encaixa pedidos novos nas rotas enviadas e, o que
                            sobra, nos rascunhos abertos (corte 22h). 18h e
-                           22h desde 05/10 (+ botão do painel).
+                           22h desde 05/10 (+ botão do painel). Até 15
+                           pedidos por rota comum (07/10; mesmo
+                           TAMANHO_MAXIMO_ROTA do rascunho).
  cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
+ cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
+                           rota enviada) fora do painel; sempre PUT /cancel. Usado
+                           pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
@@ -607,8 +642,17 @@
  api_motorista.py          API Flask (porta 8073).
  operacao.py               Regras: aceitar/iniciar, eventos, checklist,
                            comprovantes, GPS, ofertas, disponibilidade, pedágios.
- auth_motorista.py         Login CPF+PIN, tokens.
- motoristas_cli.py         CLI de usuários do app.
+ auth_motorista.py         Login CPF+PIN, tokens, troca de PIN (POST /api/trocar-pin).
+ motoristas_cli.py         CLI de usuários do app (importar-planilha --pin-inicial
+                           e resetar-pin marcam trocar_pin=1).
+ cadastro_motorista.py     "Meus dados" (PUT /api/eu: telefone/e-mail/PIX/placa valem
+                           na hora, histórico em motoristas_alteracoes, espelho na
+                           BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
+                           CNH/CRLV em dados/cadastros_motoristas/; aprovação no
+                           painel /motoristas cria linha na planilha + login
+                           provisório). Aviso no WhatsApp ALERTAS. Chave
+                           ve_financeiro (não é dono do carro = sem extrato no
+                           app, só Despesas; marcada na tabela /motoristas).
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.
@@ -722,13 +766,23 @@
  README.md                 Doc principal do portal.
  app.py                    Flask: login, acompanhamento do dia, canhoto,
                            resposta de insucesso, notificações, envios,
-                           /equipe, exportação xlsx.
+                           /equipe, exportação xlsx, /regioes (pública).
+ regioes_atendimento.py    Dados da página pública /regioes (regiões, dias de
+                           visita, galpões, calendário do mês com feriados),
+                           lidos de roteirizacao/regioes_dia_fixo.py e
+                           regras/feriados.py. ?mes=AAAA-MM (1 atrás, 3 à
+                           frente). Logo servido de assets/ em /regioes/logo.png.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
- enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright).
+ enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
+                           ciclo, executa os cancelamentos CANCELANDO sob a trava.
+ cancelamento.py           Cancelamento pedido pelo cliente (06/10): regra sozinho x
+                           operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
+                           entregue, insucesso, Lalamove -> operação), executa na Vuupt
+                           e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  assistente.py             Triagem com Claude no chat.
  cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado
@@ -771,8 +825,18 @@
  app.freshhub.com.br/motorista/api (código em nucleo/api_motorista.py).
 
  app/login.tsx             CPF + PIN.
+ app/trocar-pin.tsx        Troca de PIN (obrigatória quando motoristas.trocar_pin=1:
+                           PIN inicial/resetado; opcional pelo Perfil).
+ app/meus-dados.tsx        Telefone, e-mail, PIX e placa (PUT /api/eu).
+ app/cadastro.tsx          Auto-cadastro sem login (link no login): dados, veículo,
+                           zonas/dias, CNH e CRLV -> POST /api/cadastro + documentos.
+ src/permissoes.ts         Permissão negada de vez -> botão "Abrir configurações".
+                           ARMADILHA: expo-image-picker com microphonePermission:false
+                           REMOVE o RECORD_AUDIO do manifesto (APKs 1.0.0/1.1.0 saíram
+                           sem microfone por isso; 1.1.1 corrige).
  app/(tabs)/               rotas, ofertas (marketplace), financeiro,
-                           disponibilidade, perfil, ajuda (chat).
+                           disponibilidade, perfil, ajuda (chat; áudio .m4a
+                           via expo-audio só com a conversa na logística).
  app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
@@ -782,7 +846,11 @@
  app.json, eas.json        Config e perfis de build (preview/production).
 
  Publicar: mudança só de JS -> OTA (npx eas-cli update --channel preview);
- mudança nativa -> novo build + subir android.versionCode.
+ mudança nativa -> novo build (versionCode sobe sozinho: autoIncrement no
+ perfil preview) + subir "version" no app.json, que é a runtimeVersion:
+ assim a OTA nova não chega num APK antigo sem o módulo nativo.
+ APK com link fixo: https://app.freshhub.com.br/motorista/app.apk (arquivo
+ em dados/app_motorista/ na VPS, servido pelo Caddy; ver infra/Caddyfile-motorista).
 
 
 ==============================================================================

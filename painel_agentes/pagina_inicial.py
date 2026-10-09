@@ -34,6 +34,8 @@ CARTOES = [
      "apoio": "aguardando aprovação", "apoio_critico": None},
     {"chave": "canhotos", "rota": "canhotos", "rotulo": "Canhotos",
      "apoio": "reprovados na conferência", "apoio_critico": None},
+    {"chave": "motoristas", "rota": "motoristas", "rotulo": "Cadastros de motorista",
+     "apoio": "esperando aprovação", "apoio_critico": None},
 ]
 
 FALHAS_MAX = 5

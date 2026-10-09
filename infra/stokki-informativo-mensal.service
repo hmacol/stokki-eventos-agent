@@ -1,0 +1,10 @@
+[Unit]
+Description=Stokki Eventos - Informativo mensal de dias de entrega (HTML + PDF em dados/informativos, e-mail e WhatsApp do grupo)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/gerar_informativo_mensal.py

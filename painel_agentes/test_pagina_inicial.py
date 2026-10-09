@@ -33,6 +33,7 @@ NIVEIS = {
     "pedagios": ("total", "operador", "leitura"),
     "canhotos": ("total", "operador", "leitura"),
     "atendimento": ("total", "operador", "atendimento"),
+    "motoristas": ("total",),
 }
 
 
@@ -42,9 +43,10 @@ class TestPendenciasPorNivel(unittest.TestCase):
         cartoes = pagina_inicial.montar_pendencias(nivel, contadores or {}, NIVEIS, _url)
         return [c["chave"] for c in cartoes]
 
-    def test_total_ve_os_cinco_cartoes(self):
+    def test_total_ve_os_seis_cartoes(self):
         self.assertEqual(set(self._chaves("total")),
-                         {"torre", "pedidos_parados", "atendimento", "pedagios", "canhotos"})
+                         {"torre", "pedidos_parados", "atendimento", "pedagios", "canhotos", "motoristas"})
+        self.assertNotIn("motoristas", self._chaves("operador"))   # aprovação de cadastro é só do total
 
     def test_leitura_nao_ve_atendimento(self):
         self.assertNotIn("atendimento", self._chaves("leitura"))
@@ -81,11 +83,12 @@ class TestOrdemDosCartoes(unittest.TestCase):
             "atendimento": {"qtd": 4, "criticas": 0},
             "pedagios": {"qtd": 1, "criticas": 1},
             "canhotos": {"qtd": 0, "criticas": 0},
+            "motoristas": {"qtd": 0, "criticas": 0},
         }
         chaves = [c["chave"] for c in pagina_inicial.montar_pendencias("total", contadores, NIVEIS, _url)]
         self.assertEqual(chaves[0], "pedagios")
         self.assertEqual(set(chaves[1:3]), {"torre", "atendimento"})
-        self.assertEqual(set(chaves[3:]), {"pedidos_parados", "canhotos"})
+        self.assertEqual(set(chaves[3:]), {"pedidos_parados", "canhotos", "motoristas"})
 
     def test_sem_leitura_fica_entre_pendentes_e_zerados(self):
         contadores = {"torre": {"qtd": 0, "criticas": 0}, "atendimento": {"qtd": 1, "criticas": 0}}
@@ -183,7 +186,7 @@ class TestMontarDados(unittest.TestCase):
             "total", _url, contadores=lambda n: {}, niveis_por_contador=NIVEIS,
             snapshot=lambda d: None, execucoes=explode)
         self.assertEqual(dados["rotinas"], {"rodando": [], "falhas": []})
-        self.assertEqual(len(dados["pendencias"]), 5)
+        self.assertEqual(len(dados["pendencias"]), 6)
 
 
 if __name__ == "__main__":

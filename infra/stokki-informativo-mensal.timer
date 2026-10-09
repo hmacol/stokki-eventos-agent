@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-informativo-mensal.service todo dia 1 as 07:00 (virada de mes, Hugo 07/10/2026)
+
+[Timer]
+OnCalendar=*-*-01 07:00:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -79,6 +79,7 @@ import json
 import yaml
 
 from vuupt_client import VuuptClient
+from regras import feriados
 from rotas_client import criar_rota
 from notificar_execucao_agente import notificar_execucao
 from http_retry import chamar_com_retry
@@ -191,10 +192,10 @@ def main(modo_teste: bool = False):
             raise RuntimeError("config.yaml sem vuupt_api.token.")
 
         hoje = date.today()
-        if hoje.weekday() >= 5:
-            logger.info(f"{prefixo}Hoje ({hoje:%d/%m/%Y}) é fim de semana -- rotina só roda em dias úteis, nada a fazer.")
+        if not feriados.eh_dia_util(hoje):
+            logger.info(f"{prefixo}Hoje ({hoje:%d/%m/%Y}) é fim de semana ou feriado -- rotina só roda em dias úteis, nada a fazer.")
             resumo_etapas["Coleta Empório Quatro Estrelas"] = {
-                "status": "ok", "detalhe": "Fim de semana -- rotina não roda.",
+                "status": "ok", "detalhe": "Fim de semana ou feriado -- rotina não roda.",
             }
         else:
             estado = _carregar_estado()
