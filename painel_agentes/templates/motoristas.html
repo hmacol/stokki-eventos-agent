@@ -35,6 +35,11 @@
   .modal-motorista .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-motorista .acoes button.cancelar:hover { background: var(--fundo); }
 
+  .sem-login { color: var(--texto-suave); font-size: 12px; }
+  .chave-financeiro { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--erro); background: var(--superficie); color: var(--erro); }
+  .chave-financeiro.ligada { border-color: var(--acento); color: var(--acento); }
+  .chave-financeiro:disabled { opacity: 0.5; }
+
   /* Cadastros pelo app esperando aprovação (08/10) */
   .pendentes { margin-bottom: 24px; }
   .pendentes h2 { font-size: 16px; margin: 0 0 4px; }
@@ -113,6 +118,9 @@
     <div class="campo-motorista">
       <label><input type="checkbox" class="cad-viagens" {% if c.aceita_viagens %}checked{% endif %}> Aceita viagens</label>
     </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" class="cad-dono" {% if c.dono_veiculo %}checked{% endif %}> Dono do veículo (vê o extrato no app){% if not c.dono_veiculo %} — <strong>ele informou que dirige carro de outro</strong>{% endif %}</label>
+    </div>
     <div class="cadastro-acoes">
       <button type="button" class="botao-recusar">Recusar</button>
       <button type="button" class="botao-aprovar" {% if not c.completo %}disabled title="Faltam documentos"{% endif %}>Aprovar e criar login</button>
@@ -124,7 +132,7 @@
 <table class="tabela-motoristas">
   <thead>
     <tr>
-      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th>
+      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>
     </tr>
   </thead>
   <tbody>
@@ -138,9 +146,18 @@
       <td>{{ m.tipo_veiculo or "—" }}</td>
       <td>{{ m.telefone or "—" }}</td>
       <td>{{ m.placa or "—" }}</td>
+      <td>
+        {% if not m.cpf_login %}<span class="sem-login">sem login</span>
+        {% elif pode_aprovar %}
+        <button type="button" class="chave-financeiro {% if m.ve_financeiro %}ligada{% endif %}" data-cpf="{{ m.cpf_login }}" data-ve="{{ 1 if m.ve_financeiro else 0 }}"
+                title="{% if m.ve_financeiro %}Vê o extrato. Clique se ele dirige carro de outro.{% else %}Não vê o extrato (dirige carro de outro). Clique pra mostrar.{% endif %}">
+          {% if m.ve_financeiro %}Vê extrato{% else %}Sem extrato{% endif %}
+        </button>
+        {% else %}{% if m.ve_financeiro %}Vê extrato{% else %}Sem extrato{% endif %}{% endif %}
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="8">Nenhum motorista cadastrado.</td></tr>
+    <tr><td colspan="9">Nenhum motorista cadastrado.</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -287,6 +304,24 @@ async function postJSON(url, body) {
   document.getElementById("botao-novo-motorista").addEventListener("click", abrirModalMotorista);
   document.getElementById("botao-cancelar-motorista").addEventListener("click", fecharModalMotorista);
 
+  // ── Chave "Vê extrato" por motorista com login (08/10) ──
+  for (const botao of document.querySelectorAll(".chave-financeiro")) {
+    botao.addEventListener("click", async () => {
+      const ve = botao.dataset.ve !== "1";
+      botao.disabled = true;
+      try {
+        await postJSON(`/api/motoristas/${botao.dataset.cpf}/ve-financeiro`, { ve });
+        botao.dataset.ve = ve ? "1" : "0";
+        botao.textContent = ve ? "Vê extrato" : "Sem extrato";
+        botao.classList.toggle("ligada", ve);
+      } catch (e) {
+        alert(`Falha ao mudar: ${e.message}`);
+      } finally {
+        botao.disabled = false;
+      }
+    });
+  }
+
   // ── Cadastros pelo app (08/10): um select de agente Vuupt por cartão ──
   const cartoes = Array.from(document.querySelectorAll(".cartao-cadastro"));
   if (cartoes.length) {
@@ -324,6 +359,7 @@ async function postJSON(url, body) {
           dias: Array.from(cartao.querySelectorAll(".cad-dia:checked")).map(c => c.value),
           zonas: Array.from(cartao.querySelectorAll(".cad-zona:checked")).map(c => c.value),
           aceita_viagens: cartao.querySelector(".cad-viagens").checked,
+          dono_veiculo: cartao.querySelector(".cad-dono").checked,
         });
         alert(`Aprovado. Login criado: CPF ${r.motorista.cpf}, PIN provisório ${r.pin}. Mande no WhatsApp do motorista (${r.motorista.telefone || "sem telefone"}).`);
         location.reload();

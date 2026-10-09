@@ -1910,7 +1910,8 @@ def api_cadastro_aprovar(cadastro_id):
     try:
         r = cad.aprovar(conn, cadastro_id, _carregar_config(), agent_id=body.get("agent_id"),
                         zonas=body.get("zonas"), dias=body.get("dias"), tipo_veiculo=body.get("tipo_veiculo"),
-                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso)
+                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso,
+                        dono_veiculo=body.get("dono_veiculo"))
     except cad.CadastroInvalido as e:
         return jsonify({"erro": e.mensagem}), e.codigo
     except ValueError as e:
@@ -1923,6 +1924,24 @@ def api_cadastro_aprovar(cadastro_id):
     finally:
         conn.close()
     return jsonify({"ok": True, **r})
+
+
+@app.route("/api/motoristas/<cpf>/ve-financeiro", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_ve_financeiro(cpf):
+    """Chave "Vê financeiro" da tabela (Hugo, 08/10): quem dirige carro de
+    outro não vê o extrato no app. Pedágio continua."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        m = cad.definir_ve_financeiro(conn, cpf, bool(body.get("ve")))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cpf": m["cpf"], "ve_financeiro": bool(m["ve_financeiro"])})
 
 
 @app.route("/api/motoristas/cadastros/<int:cadastro_id>/recusar", methods=["POST"])

@@ -642,7 +642,9 @@
                            BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
                            CNH/CRLV em dados/cadastros_motoristas/; aprovação no
                            painel /motoristas cria linha na planilha + login
-                           provisório). Aviso no WhatsApp ALERTAS.
+                           provisório). Aviso no WhatsApp ALERTAS. Chave
+                           ve_financeiro (não é dono do carro = sem extrato no
+                           app, só Despesas; marcada na tabela /motoristas).
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.

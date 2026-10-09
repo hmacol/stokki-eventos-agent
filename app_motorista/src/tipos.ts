@@ -13,6 +13,8 @@ export type Motorista = {
   trocar_pin?: boolean;
   chave_pix?: string | null;
   placa?: string | null;
+  /** false = dirige carro de outro: a aba Financeiro vira só "Despesas" (sem extrato). */
+  ve_financeiro?: boolean;
 };
 
 /** Campos que o motorista edita em "Meus dados" (valem na hora, Hugo 08/10). */
@@ -22,7 +24,7 @@ export type MudancaCadastro = { campo: string; rotulo: string; de: string | null
 /** Pedido de cadastro de motorista novo (sem login) e o que a API devolve. */
 export type NovoCadastro = {
   cpf: string; nome: string; telefone: string; email: string; chave_pix: string; placa: string;
-  tipo_veiculo: string; zonas: string[]; dias: string[]; aceita_viagens: boolean;
+  tipo_veiculo: string; zonas: string[]; dias: string[]; aceita_viagens: boolean; dono_veiculo: boolean;
 };
 export type CadastroCriado = { id: number; chave_envio: string };
 export type CadastroSituacao = { id: number; status: string; tem_cnh: boolean; tem_crlv: boolean; completo: boolean };

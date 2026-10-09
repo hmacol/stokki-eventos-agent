@@ -584,6 +584,10 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.get("/api/financeiro")
     @requer_motorista
     def extrato():
+        # Motorista que dirige carro de outro não vê o extrato (Hugo, 08/10);
+        # pedágio e despesas continuam nas rotas de /pedagios.
+        if not g.motorista.get("ve_financeiro", 1):
+            raise OperacaoInvalida("O extrato desta rota vai pro dono do veículo.", 403)
         hoje = date.today()
         de = _data(request.args.get("de"), hoje.replace(day=1))
         ate = _data(request.args.get("ate"), hoje)

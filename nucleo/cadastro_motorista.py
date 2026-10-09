@@ -166,6 +166,7 @@ def _montar(row) -> dict:
     c["zonas"] = [z for z in (c.get("zonas") or "").split(",") if z]
     c["dias"] = [d for d in (c.get("dias") or "").split(",") if d]
     c["aceita_viagens"] = bool(c.get("aceita_viagens"))
+    c["dono_veiculo"] = bool(c.get("dono_veiculo", 1))
     c["tem_cnh"] = bool(c.get("cnh_arquivo"))
     c["tem_crlv"] = bool(c.get("crlv_arquivo"))
     c["completo"] = c["tem_cnh"] and c["tem_crlv"]
@@ -220,6 +221,7 @@ def criar_cadastro(conn: sqlite3.Connection, dados: dict) -> dict:
     if not dias:
         raise CadastroInvalido("Marque pelo menos um dia da semana.")
     aceita_viagens = bool(dados.get("aceita_viagens"))
+    dono_veiculo = bool(dados.get("dono_veiculo", True))
 
     if auth.buscar_motorista(conn, cpf):
         raise CadastroInvalido("Este CPF já tem cadastro. Entre com o seu PIN ou fale com a Fresh Log.", 409)
@@ -229,10 +231,10 @@ def criar_cadastro(conn: sqlite3.Connection, dados: dict) -> dict:
     chave = secrets.token_urlsafe(24)
     cur = conn.execute("""
         INSERT INTO motoristas_cadastros (cpf, nome, telefone, email, chave_pix, placa, tipo_veiculo, zonas, dias,
-                                          aceita_viagens, chave_envio, status, criado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                          aceita_viagens, dono_veiculo, chave_envio, status, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (cpf, nome, telefone, email, chave_pix, placa, tipo_veiculo, ",".join(zonas), ",".join(dias),
-          int(aceita_viagens), chave, STATUS_PENDENTE, banco.agora()))
+          int(aceita_viagens), int(dono_veiculo), chave, STATUS_PENDENTE, banco.agora()))
     conn.commit()
     logger.info("cadastro #%s criado pra %s (%s)", cur.lastrowid, nome, tipo_veiculo)
     return {"id": cur.lastrowid, "chave_envio": chave}
@@ -285,7 +287,7 @@ def marcar_avisado(conn: sqlite3.Connection, cadastro_id: int) -> None:
 
 def aprovar(conn: sqlite3.Connection, cadastro_id: int, config: dict, *, agent_id, zonas, dias, tipo_veiculo,
             aceita_viagens: bool, revisado_por: str, pin_inicial: str | None = None,
-            gravar_planilha=None) -> dict:
+            gravar_planilha=None, dono_veiculo: bool | None = None) -> dict:
     """Aprovação pelo painel: linha na BD_MOTORISTAS (regras/cadastro_motoristas)
     + login no app com PIN provisório sorteado (devolvido UMA vez em `pin`).
     `gravar_planilha` e `pin_inicial` só existem pros testes."""
@@ -321,16 +323,36 @@ def aprovar(conn: sqlite3.Connection, cadastro_id: int, config: dict, *, agent_i
                                           telefone=c["telefone"], email=c["email"], tipo_veiculo=tipo_veiculo,
                                           trocar_pin=True)
     agora = banco.agora()
-    conn.execute("UPDATE motoristas SET chave_pix = ?, placa = ?, atualizado_em = ? WHERE cpf = ?",
-                 (c["chave_pix"], c["placa"], agora, c["cpf"]))
+    dono = c["dono_veiculo"] if dono_veiculo is None else bool(dono_veiculo)
+    conn.execute("UPDATE motoristas SET chave_pix = ?, placa = ?, ve_financeiro = ?, atualizado_em = ? WHERE cpf = ?",
+                 (c["chave_pix"], c["placa"], int(dono), agora, c["cpf"]))
     conn.execute("""UPDATE motoristas_cadastros SET status = ?, agent_id = ?, zonas = ?, dias = ?, tipo_veiculo = ?,
-                    aceita_viagens = ?, revisado_em = ?, revisado_por = ? WHERE id = ?""",
+                    aceita_viagens = ?, dono_veiculo = ?, revisado_em = ?, revisado_por = ? WHERE id = ?""",
                  (STATUS_APROVADO, agent_id, ",".join(zonas), ",".join(dias), tipo_veiculo, int(bool(aceita_viagens)),
-                  agora, revisado_por, cadastro_id))
+                  int(dono), agora, revisado_por, cadastro_id))
     conn.commit()
     logger.info("cadastro #%s aprovado por %s: %s -> agent %s", cadastro_id, revisado_por, c["nome"], agent_id)
     m = auth.buscar_motorista(conn, c["cpf"])
     return {"cadastro": buscar_cadastro(conn, cadastro_id), "motorista": auth.publico(m), "pin": pin_inicial}
+
+
+def definir_ve_financeiro(conn: sqlite3.Connection, cpf: str, ve: bool) -> dict:
+    """Chave "Vê financeiro" da tela /motoristas (Hugo, 08/10): motorista que
+    dirige carro de outro não vê o extrato no app; pedágio continua."""
+    m = auth.buscar_motorista(conn, cpf)
+    if not m:
+        raise CadastroInvalido("Motorista sem login no app.", 404)
+    conn.execute("UPDATE motoristas SET ve_financeiro = ?, atualizado_em = ? WHERE cpf = ?",
+                 (int(bool(ve)), banco.agora(), m["cpf"]))
+    conn.commit()
+    return auth.buscar_motorista(conn, cpf)
+
+
+def logins_por_agent_id(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Pra tela /motoristas cruzar a planilha com quem tem login no app."""
+    rows = conn.execute("SELECT cpf, agent_id, ve_financeiro, ultimo_login_em, trocar_pin FROM motoristas "
+                        "WHERE agent_id IS NOT NULL AND ativo = 1").fetchall()
+    return {int(r["agent_id"]): dict(r) for r in rows}
 
 
 def recusar(conn: sqlite3.Connection, cadastro_id: int, motivo: str, revisado_por: str) -> dict:
