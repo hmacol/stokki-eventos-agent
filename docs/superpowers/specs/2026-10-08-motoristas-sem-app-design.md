@@ -138,7 +138,7 @@ agent_id, criado_por, criado_em, itens_json` (com status por item),
   certos (Vuupt mockada), pula já fechado, registra lote.
 - Playwright local: Torre → tela → desmarcar 1 → confirmar → andamento.
 
-## 7. Canhoto na tela de baixa (Hugo, 09/10)
+## 7. Canhoto na tela de baixa (Hugo, 09/10) — implementado (plano 2026-10-09-canhoto-baixa-sem-app)
 
 Decisões: canhoto **opcional** (quem não tiver baixa assim mesmo); guardado
 por nós e anexado na Stokki pela expedição (não pelo checklist da Vuupt).

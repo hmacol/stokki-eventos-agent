@@ -928,6 +928,9 @@ def api_batimento_tratar():
     return jsonify({"ok": True})
 
 
+LIMITE_REQUISICAO_BAIXA = 60 * 1024 * 1024  # baixa sem app com canhotos (09/10)
+
+
 def _rota_sem_app(route_id: int) -> tuple[dict | None, str | None]:
     """Rota da Vuupt + checagem de motorista SEM_APP. (rota, erro)."""
     import rotas_client
@@ -971,7 +974,17 @@ def api_baixa_sem_app():
     from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
     from vuupt_client import VuuptClient
     from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
-    body = request.get_json(force=True) or {}
+    # Recusa antes de ler: canhotos de 15 MB cada, nunca uma rota inteira de fotos gigantes.
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Envio grande demais: mande menos canhotos de cada vez ou fotos menores."}), 413
+    # multipart quando vem canhoto (09/10): o JSON de antes vai no campo "dados"
+    if (request.content_type or "").startswith("multipart/form-data"):
+        try:
+            body = json.loads(request.form.get("dados") or "{}")
+        except ValueError:
+            return jsonify({"erro": "dados inválidos"}), 400
+    else:
+        body = request.get_json(force=True) or {}
     try:
         route_id = int(body.get("rota"))
     except (TypeError, ValueError):
@@ -985,14 +998,33 @@ def api_baixa_sem_app():
     rota, erro = _rota_sem_app(route_id)
     if erro:
         return jsonify({"erro": erro}), 400
-    ids_rota = {s.get("id") for s in extrair_servicos_da_rota(rota)}
-    if any(int(i.get("service_id") or 0) not in ids_rota for i in itens):
+    # O código do pedido vem da ROTA, nunca do navegador: vira nome de
+    # arquivo do canhoto e entra na tratativa.
+    codigo_por_id = {s.get("id"): (s.get("code") or "").lstrip("#") for s in extrair_servicos_da_rota(rota)}
+    if any(int(i.get("service_id") or 0) not in codigo_por_id for i in itens):
         return jsonify({"erro": "pedido que não é dessa rota"}), 400
+    for i in itens:
+        i["codigo"] = codigo_por_id[int(i["service_id"])]
     conn = nucleo_banco.conectar()
     try:
         if bsa.lote_em_andamento(conn, route_id):
             return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
-        lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), session.get("usuario") or g.nivel_acesso, itens)
+        # Canhoto ANTES do lote: a expedicao roda a cada 30 min e a Stokki
+        # nao aceita anexo em pedido ja expedido. Valida todos, depois grava.
+        from nucleo import canhotos_manuais
+        canhotos = []
+        for i in itens:
+            arq = request.files.get(f"canhoto_{int(i.get('service_id') or 0)}")
+            if not arq or not i.get("entregue"):
+                continue
+            try:
+                canhotos.append((i, canhotos_manuais.para_pdf(arq.read())))
+            except canhotos_manuais.CanhotoInvalido as e:
+                return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+        por = session.get("usuario") or g.nivel_acesso
+        for i, pdf in canhotos:
+            canhotos_manuais.salvar(conn, i.get("codigo") or "", int(i["service_id"]), pdf, por, _carregar_config())
+        lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
     finally:
         conn.close()
     token = (_carregar_config().get("vuupt_api") or {}).get("token", "")

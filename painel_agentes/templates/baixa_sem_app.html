@@ -6,7 +6,8 @@
   h1 { font-size: 20px; margin: 0 0 6px; }
   .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
   .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
-  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  input.canhoto { font-size: 12px; max-width: 200px; }
   th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
   th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; }
   tr:last-child td { border-bottom: none; }
@@ -26,13 +27,14 @@
 <p class="sub">{{ rota.name }} · {{ (rota.start_at or '')[:10] }} · agent {{ rota.agent_id }}.
   Tudo marcado como entregue: desmarque o que voltou e escolha o motivo.</p>
 <div class="tabela-wrap"><table>
-  <thead><tr><th>Entregue</th><th>Pedido</th><th>Cliente</th><th>Motivo (se voltou)</th><th>Status</th></tr></thead>
+  <thead><tr><th>Entregue</th><th>Pedido</th><th>Cliente</th><th>Canhoto</th><th>Motivo (se voltou)</th><th>Status</th></tr></thead>
   <tbody>
   {% for s in servicos %}
     <tr class="{{ 'fechado' if s.fechado }}" data-id="{{ s.id }}" data-codigo="{{ s.codigo }}">
       <td>{% if not s.fechado %}<input type="checkbox" class="entregue" checked aria-label="Entregue {{ s.codigo }}">{% endif %}</td>
       <td class="mono">{{ s.codigo }}</td>
       <td>{{ s.titulo }}<div class="suave">{{ s.endereco }}</div></td>
+      <td>{% if not s.fechado %}<input type="file" class="canhoto" accept="image/*,application/pdf" capture="environment" aria-label="Canhoto {{ s.codigo }}">{% endif %}</td>
       <td>{% if not s.fechado %}
         <select class="motivo" disabled aria-label="Motivo {{ s.codigo }}"><option value="">—</option>
           {% for k, t in motivos %}<option value="{{ k }}">{{ t }}</option>{% endfor %}
@@ -49,7 +51,11 @@
 <script>
 document.querySelectorAll('tr[data-id]').forEach(function (tr) {
   var cb = tr.querySelector('.entregue'), sel = tr.querySelector('.motivo');
-  if (cb) cb.addEventListener('change', function () { sel.disabled = cb.checked; if (cb.checked) sel.value = ''; });
+  var fc = tr.querySelector('.canhoto');
+  if (cb) cb.addEventListener('change', function () {
+    sel.disabled = cb.checked; if (cb.checked) sel.value = '';
+    if (fc) { fc.disabled = !cb.checked; if (!cb.checked) fc.value = ''; }
+  });
 });
 document.getElementById('confirmar').addEventListener('click', async function () {
   var btn = this, itens = [];
@@ -61,10 +67,15 @@ document.getElementById('confirmar').addEventListener('click', async function ()
   });
   if (!itens.length) return;
   var voltou = itens.filter(function (i) { return !i.entregue; }).length;
-  if (!confirm('Concluir ' + (itens.length - voltou) + ' como entregue e ' + voltou + ' como insucesso na Vuupt?')) return;
+  var fd = new FormData(), nCanhotos = 0;
+  fd.append('dados', JSON.stringify({rota: {{ rota.id }}, itens: itens}));
+  document.querySelectorAll('tr[data-id]').forEach(function (tr) {
+    var fc = tr.querySelector('.canhoto'), cb = tr.querySelector('.entregue');
+    if (fc && cb && cb.checked && fc.files.length) { fd.append('canhoto_' + tr.dataset.id, fc.files[0]); nCanhotos++; }
+  });
+  if (!confirm('Concluir ' + (itens.length - voltou) + ' como entregue (' + nCanhotos + ' com canhoto) e ' + voltou + ' como insucesso na Vuupt?')) return;
   btn.disabled = true;
-  var r = await fetch('{{ url_for("api_baixa_sem_app") }}', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rota: {{ rota.id }}, itens: itens})});
+  var r = await fetch('{{ url_for("api_baixa_sem_app") }}', {method: 'POST', body: fd});
   var j = {}; try { j = await r.json(); } catch (e) {}
   if (!r.ok) { alert(j.erro || ('Falha (' + r.status + ')')); btn.disabled = false; return; }
   var url = '{{ url_for("api_baixa_sem_app_status", lote=0) }}'.replace(/0$/, j.lote);

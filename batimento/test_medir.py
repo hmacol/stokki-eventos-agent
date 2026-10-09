@@ -59,5 +59,20 @@ class IdDeCorte(unittest.TestCase):
         self.assertEqual(medir.id_de_corte(conn, date(2026, 9, 28)), 201)
 
 
+class CanhotoPainel(unittest.TestCase):
+    def test_canhoto_manual_vira_fonte_painel(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE nucleo_pedidos (codigo TEXT, status TEXT, fluxo TEXT, status_provedor TEXT, "
+                     "status_done_provedor TEXT, excluido_em TEXT, vuupt_route_id INTEGER, qtd_checklists INTEGER, "
+                     "criado_em_provedor TEXT)")
+        conn.execute("CREATE TABLE canhotos_manuais (codigo TEXT PRIMARY KEY, service_id INTEGER, caminho TEXT, "
+                     "caminho_gcs TEXT, enviado_por TEXT, enviado_em TEXT, origem TEXT)")
+        conn.execute("INSERT INTO canhotos_manuais (codigo, caminho, enviado_em) VALUES ('PS-1', 'x', 'y')")
+        banco = medir.ler_banco(conn, {"PS-1"}, 0)
+        fato = medir.montar_fato({"codigo": "PS-1", "transportadora": ""}, banco["PS-1"], None, None)
+        self.assertEqual(fato["canhoto_fonte"], "painel")
+
+
 if __name__ == "__main__":
     unittest.main()

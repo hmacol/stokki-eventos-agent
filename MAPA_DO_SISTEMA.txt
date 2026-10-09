@@ -108,7 +108,10 @@
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
-                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS
+                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
+                                             Canhoto opcional na tela -> nucleo/canhotos_manuais.py
+                                             (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
+                                             (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py

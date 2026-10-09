@@ -77,6 +77,63 @@ class TestTelaBaixa(unittest.TestCase):
         st = self.cliente.get(f"/api/baixa-sem-app/{lote}").get_json()
         self.assertEqual(st["itens"][0]["failed_reason_id"], 5433)
 
+    def _post_multipart(self, dados, arquivos):
+        import io
+        import json
+        data = {"dados": json.dumps(dados)}
+        for nome, conteudo in arquivos.items():
+            data[nome] = (io.BytesIO(conteudo), "canhoto.pdf")
+        return self.cliente.post("/api/baixa-sem-app", data=data, content_type="multipart/form-data",
+                                 headers={"Origin": "http://localhost"})
+
+    def test_canhoto_gravado_antes_do_lote(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}) as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True}]},
+                                     {"canhoto_1": b"%PDF-1.4 x"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_called_once()
+        self.assertEqual(salvar.call_args.args[1], "PS-1")
+
+    def test_codigo_do_canhoto_vem_da_rota_nao_do_navegador(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}) as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [{"service_id": 1, "codigo": "../../X", "entregue": True}]},
+                                     {"canhoto_1": b"%PDF-1.4 x"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(salvar.call_args.args[1], "PS-1")
+
+    def test_requisicao_grande_demais(self):
+        self._logar("operador")
+        # o test_client recalcula o Content-Length: baixa o limite em vez de mandar 60 MB
+        with mock.patch.object(painel_agentes, "LIMITE_REQUISICAO_BAIXA", 5):
+            r = self.cliente.post("/api/baixa-sem-app", data=b"x" * 10, content_type="multipart/form-data",
+                                  headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 413)
+
+    def test_canhoto_invalido_nao_grava_nada(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar") as salvar, \
+             mock.patch("nucleo.baixa_sem_app.criar_lote") as criar:
+            r = self._post_multipart({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True}]},
+                                     {"canhoto_1": b"nao sou imagem"})
+        self.assertEqual(r.status_code, 400)
+        salvar.assert_not_called()
+        criar.assert_not_called()
+
+    def test_canhoto_de_item_que_voltou_e_ignorado(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar") as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": False,
+                                                               "failed_reason_id": 5433}]},
+                                     {"canhoto_1": b"%PDF-1.4 x"})
+        self.assertEqual(r.status_code, 200)
+        salvar.assert_not_called()
+
+    def test_tela_tem_campo_de_canhoto(self):
+        self._logar("operador")
+        self.assertIn('class="canhoto"', self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True))
+
     def test_segundo_lote_da_mesma_rota_e_recusado(self):
         self._logar("operador")
         body = {"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True}]}
