@@ -151,6 +151,18 @@ class Pendentes(unittest.TestCase):
         self.assertEqual(r["total"], 1)
         self.assertEqual(r["linhas"][0]["motorista"], "Iago")
 
+    def test_entregue_sem_parada_entra_com_data_aproximada(self):
+        for cod, atualizado in (("PS-8", "2026-10-02 10:00:00"), ("PS-9", "2026-07-01 10:00:00")):
+            self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, qtd_checklists, remetente_nome, "
+                              "destinatario_nome, origem, atualizado_em) VALUES (?, ?, 'ENTREGUE', 0, 'EMB', 'Cli', 'VUUPT', ?)",
+                              (cod, int(cod[3:]), atualizado))
+        self.conn.commit()
+        linhas = cm.pendentes(self.conn, "2026-08-10")["linhas"]
+        self.assertEqual([l["codigo"] for l in linhas], ["PS-8"])
+        self.assertEqual((linhas[0]["data_rota"], linhas[0]["motorista"], linhas[0]["data_aproximada"]),
+                         ("2026-10-02", None, True))
+        self.assertEqual(cm.pendentes(self.conn, "2026-08-10", motorista="iago")["linhas"], [])
+
     def test_filtros_e_paginacao(self):
         for i in range(1, 6):
             self.pedido(f"PS-{i}", f"2026-10-0{i}", motorista="Watson" if i % 2 else "Iago",

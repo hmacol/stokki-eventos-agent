@@ -129,7 +129,10 @@ def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motori
     """Pedidos ENTREGUES (rota com data >= `desde`) sem nenhum comprovante:
     checklist da Vuupt com 0 fotos (NULL = sem informacao, fica fora pra nao
     listar quem talvez tenha foto), sem canhoto/assinatura do app e sem
-    canhoto ja enviado pelo painel. Mais recentes primeiro."""
+    canhoto ja enviado pelo painel. Mais recentes primeiro.
+    Pedido entregue SEM nenhuma parada no nucleo (rota fora do espelho)
+    entra tambem: data = atualizado_em do pedido (`data_aproximada`) e sem
+    motorista (Hugo, 09/10)."""
     garantir_tabela(conn)
     filtros, params = [], [desde]
     if embarcador.strip():
@@ -142,22 +145,28 @@ def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motori
         filtros.append("ped.codigo LIKE ?")
         params.append(f"%{normalizar(busca)}%")
     extra = "".join(f" AND {f}" for f in filtros)
+    data = "COALESCE(r.data_rota, SUBSTR(ped.atualizado_em, 1, 10))"
     base = f"""
         FROM nucleo_pedidos ped
-        JOIN nucleo_paradas p ON REPLACE(p.codigo, '#', '') = ped.codigo AND p.situacao IN ('ENTREGUE', 'PARCIAL')
-        JOIN nucleo_rotas r ON r.id = p.rota_id
-        WHERE ped.status = 'ENTREGUE' AND ped.qtd_checklists = 0 AND r.data_rota >= ?
+        LEFT JOIN nucleo_paradas p ON REPLACE(p.codigo, '#', '') = ped.codigo AND p.situacao IN ('ENTREGUE', 'PARCIAL')
+        LEFT JOIN nucleo_rotas r ON r.id = p.rota_id
+        WHERE ped.status = 'ENTREGUE' AND ped.qtd_checklists = 0 AND {data} >= ?
+          AND (p.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM nucleo_paradas p2
+                                               WHERE REPLACE(p2.codigo, '#', '') = ped.codigo))
           AND ped.codigo NOT IN (SELECT codigo FROM canhotos_manuais)
           AND NOT EXISTS (SELECT 1 FROM nucleo_comprovantes c
                           WHERE c.parada_id = p.id AND c.tipo IN ('CANHOTO', 'ASSINATURA'))
           {extra}"""
     total = conn.execute(f"SELECT COUNT(DISTINCT ped.codigo) {base}", params).fetchone()[0]
     pagina = max(1, int(pagina or 1))
-    linhas = [dict(zip(("codigo", "service_id", "data_rota", "motorista", "embarcador", "destinatario"), row))
-              for row in conn.execute(f"""
-        SELECT ped.codigo, ped.vuupt_service_id, MAX(r.data_rota), MAX(r.motorista_nome),
-               MAX(ped.remetente_nome), MAX(ped.destinatario_nome)
+    linhas = []
+    for row in conn.execute(f"""
+        SELECT ped.codigo, ped.vuupt_service_id, MAX({data}), MAX(r.motorista_nome),
+               MAX(ped.remetente_nome), MAX(ped.destinatario_nome), MAX(r.id) IS NULL
         {base}
-        GROUP BY ped.codigo ORDER BY MAX(r.data_rota) DESC, ped.codigo DESC LIMIT ? OFFSET ?""",
-                                         (*params, por_pagina, (pagina - 1) * por_pagina))]
+        GROUP BY ped.codigo ORDER BY MAX({data}) DESC, ped.codigo DESC LIMIT ? OFFSET ?""",
+                            (*params, por_pagina, (pagina - 1) * por_pagina)):
+        l = dict(zip(("codigo", "service_id", "data_rota", "motorista", "embarcador", "destinatario"), row[:6]))
+        l["data_aproximada"] = bool(row[6])
+        linhas.append(l)
     return {"linhas": linhas, "total": total, "pagina": pagina, "por_pagina": por_pagina}

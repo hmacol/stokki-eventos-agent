@@ -39,12 +39,12 @@
 </form>
 
 <div class="tabela-wrap"><table>
-  <thead><tr><th>Pedido</th><th>Rota de</th><th>Motorista</th><th>Embarcador / destinatário</th><th>Canhoto</th><th>Status</th></tr></thead>
+  <thead><tr><th>Pedido</th><th>Entregue em</th><th>Motorista</th><th>Embarcador / destinatário</th><th>Canhoto</th><th>Status</th></tr></thead>
   <tbody>
   {% for l in dados.linhas %}
     <tr data-codigo="{{ l.codigo }}">
       <td class="mono">{{ l.codigo }}</td>
-      <td class="mono">{{ l.data_rota[8:10] }}/{{ l.data_rota[5:7] }}</td>
+      <td class="mono" {% if l.data_aproximada %}title="Sem rota no nosso registro: data aproximada (última atualização do pedido)"{% endif %}>{% if l.data_aproximada %}≈ {% endif %}{{ l.data_rota[8:10] }}/{{ l.data_rota[5:7] }}</td>
       <td>{{ l.motorista or '—' }}</td>
       <td>{{ l.embarcador or '—' }}<div class="suave">{{ l.destinatario or '' }}</div></td>
       <td><input type="file" class="canhoto" accept="image/*,application/pdf" capture="environment" aria-label="Canhoto {{ l.codigo }}"></td>
