@@ -140,6 +140,7 @@ class MotoristaPreferencias:
     tipo_veiculo: str | None = None  # coluna TIPO_VEICULO -- código de regras/tipo_veiculo.py, usado pela trava de veículo grande
     cpf: str | None = None  # coluna CPF_MOTORISTA -- só dígitos; identificação do motorista no marketplace de rotas (ver regras/ofertas_rota.py)
     apenas_carga_seca: bool = False  # coluna APENAS_CARGA_SECA -- só rota 100% seca confirmada (ver docstring do módulo)
+    sem_app: bool = False  # coluna SEM_APP -- iPhone, sem app Vuupt (Hugo, 08/10): rota nao e devolvida as 15h45, baixa pela Torre
 
 
 def _normalizar_texto(s) -> str:
@@ -268,6 +269,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         tipo_veiculo=tipo_veiculo.codigo,
         cpf=cpf,
         apenas_carga_seca=_parse_bool(registro.get("APENAS_CARGA_SECA")),
+        sem_app=_parse_bool(registro.get("SEM_APP")),
     )
 
 
@@ -333,3 +335,22 @@ class CatalogoMotoristas:
             f"automaticamente até a base ser criada."
         )
         return cls([])
+
+
+PLANILHA_PADRAO = Path(__file__).resolve().parent.parent / "dados" / "BD_MOTORISTAS.xlsx"
+_cache_sem_app: dict[tuple[str, float], set[int]] = {}
+
+
+def agent_ids_sem_app(caminho: str | Path | None = None) -> set[int]:
+    """agent_ids marcados SEM_APP na planilha (Hugo, 08/10). Planilha
+    ausente ou sem a coluna = conjunto vazio. Cache por mtime: a Torre chama
+    isto a cada carga."""
+    caminho = Path(caminho) if caminho else PLANILHA_PADRAO
+    if not caminho.exists():
+        return set()
+    chave = (str(caminho), caminho.stat().st_mtime)
+    if chave not in _cache_sem_app:
+        catalogo = CatalogoMotoristas.carregar(caminho)
+        _cache_sem_app.clear()
+        _cache_sem_app[chave] = {m.agent_id for m in catalogo.motoristas if m.sem_app}
+    return set(_cache_sem_app[chave])

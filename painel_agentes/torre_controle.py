@@ -1513,6 +1513,15 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
     except Exception as e:
         logger.warning(f"[torre] Batimento indisponível: {e}")
 
+    # Motorista sem app (iPhone, 08/10): rota de dia anterior com pedido
+    # pendente aguardando baixa. Só lê o núcleo.
+    try:
+        from nucleo.baixa_sem_app import excecoes_torre as sem_app_excecoes
+        for x in sem_app_excecoes(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Baixa sem app indisponível: {e}")
+
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []
     for x in excecoes:

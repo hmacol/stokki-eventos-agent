@@ -106,6 +106,9 @@
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+ Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
+                                             tela /baixa-sem-app (baixa_sem_app.html, total/operador),
+                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
@@ -241,7 +244,9 @@
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (só devolve ao pool pedido NÃO iniciado de
                                                              rota de dia anterior; desde 05/10 NÃO cancela
-                                                             rota de hoje sem motorista)
+                                                             rota de hoje sem motorista; desde 09/10 pula
+                                                             motorista SEM_APP do BD_MOTORISTAS -- vai pro
+                                                             e-mail como "aguardando baixa")
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje

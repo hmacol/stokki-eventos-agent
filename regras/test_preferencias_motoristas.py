@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista  # noqa: E402
+from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista, agent_ids_sem_app  # noqa: E402
 
 
 class TestLeituraPlanilha(unittest.TestCase):
@@ -89,6 +89,31 @@ class TestCelulaVaziaNaoViraNan(unittest.TestCase):
         self.assertEqual(m.tipo_veiculo, "FIORINO")
         self.assertEqual(m.dias_disponiveis, [])
         self.assertEqual(m.zonas_preferidas, [])
+
+
+class TestSemApp(unittest.TestCase):
+    def _planilha(self, tmp, com_coluna=True):
+        caminho = Path(tmp) / "m.xlsx"
+        linhas = [{"AGENT_ID_VUUPT": 1, "NOME_MOTORISTA": "Iphone", "ATIVO": "SIM"},
+                  {"AGENT_ID_VUUPT": 2, "NOME_MOTORISTA": "Android", "ATIVO": "SIM"}]
+        if com_coluna:
+            linhas[0]["SEM_APP"] = "SIM"
+            linhas[1]["SEM_APP"] = None
+        pd.DataFrame(linhas).to_excel(caminho, index=False)
+        return caminho
+
+    def test_coluna_sim_vira_sem_app(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            caminho = self._planilha(tmp)
+            por_id = {m.agent_id: m for m in CatalogoMotoristas.carregar(str(caminho), "").motoristas}
+            self.assertTrue(por_id[1].sem_app)
+            self.assertFalse(por_id[2].sem_app)
+            self.assertEqual(agent_ids_sem_app(caminho), {1})
+
+    def test_sem_coluna_ou_sem_planilha_e_vazio(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            self.assertEqual(agent_ids_sem_app(self._planilha(tmp, com_coluna=False)), set())
+            self.assertEqual(agent_ids_sem_app(Path(tmp) / "nao_existe.xlsx"), set())
 
 
 if __name__ == "__main__":

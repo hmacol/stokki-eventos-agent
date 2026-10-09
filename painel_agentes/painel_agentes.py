@@ -928,6 +928,88 @@ def api_batimento_tratar():
     return jsonify({"ok": True})
 
 
+def _rota_sem_app(route_id: int) -> tuple[dict | None, str | None]:
+    """Rota da Vuupt + checagem de motorista SEM_APP. (rota, erro)."""
+    import rotas_client
+    from regras import preferencias_motoristas
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    rota = rotas_client.buscar_rota(token, route_id, include=["services"])
+    if not rota:
+        return None, "Rota não encontrada na Vuupt."
+    if rota.get("agent_id") not in preferencias_motoristas.agent_ids_sem_app():
+        return rota, "Essa rota não é de motorista marcado SEM_APP: a baixa é pelo app do motorista."
+    return rota, None
+
+
+@app.route("/baixa-sem-app")
+@requer_auth(niveis=("total", "operador"))
+def baixa_sem_app():
+    """Baixa de rota de motorista sem app (iPhone, Hugo 08/10): marca o que
+    voltou e conclui na Vuupt (nucleo/baixa_sem_app.py)."""
+    from mapa_util import extrair_servicos_da_rota
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    route_id = request.args.get("rota", type=int)
+    rota, erro = _rota_sem_app(route_id) if route_id else (None, "Rota não informada.")
+    servicos = []
+    for s in (extrair_servicos_da_rota(rota) if rota else []):
+        servicos.append({"id": s.get("id"), "codigo": (s.get("code") or "").lstrip("#"),
+                         "titulo": s.get("title") or "", "endereco": s.get("address") or "",
+                         "status": s.get("status") or "",
+                         "fechado": (s.get("status") or "") in ("done", "canceled", "cancelled")})
+    motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
+    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos)
+
+
+@app.route("/api/baixa-sem-app", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_baixa_sem_app():
+    import threading
+    from mapa_util import extrair_servicos_da_rota
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    from vuupt_client import VuuptClient
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    body = request.get_json(force=True) or {}
+    try:
+        route_id = int(body.get("rota"))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "rota inválida"}), 400
+    itens = body.get("itens")
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum pedido"}), 400
+    for i in itens:
+        if not i.get("entregue") and int(i.get("failed_reason_id") or 0) not in MOTIVOS_FALHA:
+            return jsonify({"erro": f"{i.get('codigo')}: escolha o motivo de quem voltou"}), 400
+    rota, erro = _rota_sem_app(route_id)
+    if erro:
+        return jsonify({"erro": erro}), 400
+    ids_rota = {s.get("id") for s in extrair_servicos_da_rota(rota)}
+    if any(int(i.get("service_id") or 0) not in ids_rota for i in itens):
+        return jsonify({"erro": "pedido que não é dessa rota"}), 400
+    conn = nucleo_banco.conectar()
+    try:
+        if bsa.lote_em_andamento(conn, route_id):
+            return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
+        lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), session.get("usuario") or g.nivel_acesso, itens)
+    finally:
+        conn.close()
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    threading.Thread(target=bsa.executar_lote, args=(lote, VuuptClient(token)), daemon=True).start()
+    return jsonify({"lote": lote})
+
+
+@app.route("/api/baixa-sem-app/<int:lote>")
+@requer_auth(niveis=("total", "operador"))
+def api_baixa_sem_app_status(lote: int):
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        d = bsa.ler_lote(conn, lote)
+    finally:
+        conn.close()
+    return (jsonify(d), 200) if d else (jsonify({"erro": "lote não encontrado"}), 404)
+
+
 @app.route("/clientes-agenda")
 @requer_auth
 def clientes_agenda():
