@@ -146,6 +146,11 @@
     { alvo: etapa('Incrementar Rotas'), capitulo: B, aba: 'mais', titulo: 'Incrementar Rotas (a rotina)',
       texto: '<p>Roda sozinha às <b>18h</b> e às <b>22h</b> (o rascunho sai às <b>16h</b>). Encaixa pedidos novos nas rotas que <b>já foram enviadas</b> à Vuupt e, o que não couber, nos <b>rascunhos ainda não confirmados</b>. Só entram pedidos que chegaram <b>até as 22h do último dia útil</b> antes da data do plano.</p><p>O botão laranja <b>Incrementar</b> do pool faz o mesmo nos rascunhos, só com os pedidos que você selecionar e sem corte de horário. Ele aparece mais à frente.</p>' },
 
+    { alvo: '#painel-romaneios-data', capitulo: B, aba: 'mais', titulo: 'Romaneios: de que dia?',
+      quando: podeRodar,
+      texto: '<p>O ▶ de <b>Gerar PDFs de Romaneio</b> também não roda direto: abre este painel perguntando a <b>data das rotas</b>, já preenchida com o dia que você está planejando. Em branco, gera os de hoje (igual à rotina das 04h).</p><p style="color:var(--texto-suave)">O guia só abriu o painel; não gerou nada.</p>',
+      antes: function () { var p = $('painel-romaneios-data'); if (p) p.classList.add('aberto'); } },
+
     { alvo: q('#barra-agentes-planejamento .etapa-tudo'), capitulo: B, aba: 'mais', titulo: 'Executar tudo',
       texto: '<p>Roda a sequência inteira, uma rotina depois da outra: Impressão, Importação (sem filtro), Criar Rotas, Incrementar, Documentos e Romaneios. <b>A Expedição fica de fora.</b></p><p>Demora e ocupa a fila das rotinas até acabar: use quando for refazer o dia inteiro; pra um ajuste, rode só a rotina que falta.</p>' },
 
