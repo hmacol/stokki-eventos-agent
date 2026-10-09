@@ -163,6 +163,12 @@ class Pendentes(unittest.TestCase):
                          ("2026-10-02", None, True))
         self.assertEqual(cm.pendentes(self.conn, "2026-08-10", motorista="iago")["linhas"], [])
 
+    def test_servico_de_registro_sem_ps_nao_entra(self):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, qtd_checklists, origem, atualizado_em) "
+                          "VALUES ('REG-CLAUD-0510-01', 99, 'ENTREGUE', 0, 'VUUPT', '2026-10-09 10:00:00')")
+        self.conn.commit()
+        self.assertEqual(cm.pendentes(self.conn, "2026-08-10")["linhas"], [])
+
     def test_filtros_e_paginacao(self):
         for i in range(1, 6):
             self.pedido(f"PS-{i}", f"2026-10-0{i}", motorista="Watson" if i % 2 else "Iago",

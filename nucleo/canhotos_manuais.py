@@ -151,6 +151,7 @@ def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motori
         LEFT JOIN nucleo_paradas p ON REPLACE(p.codigo, '#', '') = ped.codigo AND p.situacao IN ('ENTREGUE', 'PARCIAL')
         LEFT JOIN nucleo_rotas r ON r.id = p.rota_id
         WHERE ped.status = 'ENTREGUE' AND ped.qtd_checklists = 0 AND {data} >= ?
+          AND ped.codigo GLOB 'PS-*'   -- servico de registro (REG-...) nao e pedido
           AND (p.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM nucleo_paradas p2
                                                WHERE REPLACE(p2.codigo, '#', '') = ped.codigo))
           AND ped.codigo NOT IN (SELECT codigo FROM canhotos_manuais)
