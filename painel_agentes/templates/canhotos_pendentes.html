@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block titulo %}Canhotos pendentes{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1300px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  form.filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; background: var(--superficie);
+                 border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin: 0 0 18px; }
+  form.filtros .campo { display: flex; flex-direction: column; gap: 4px; }
+  form.filtros label { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  form.filtros input { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; min-width: 160px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 820px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; }
+  tr:last-child td { border-bottom: none; }
+  tr.enviado td { color: var(--texto-suave); }
+  .mono { font-size: 12px; white-space: nowrap; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  input.canhoto { font-size: 12px; max-width: 220px; }
+  .st-ok { color: var(--sucesso, #16a34a); font-weight: 700; }
+  .st-erro { color: var(--erro); font-weight: 700; }
+  .paginas { display: flex; gap: 10px; align-items: center; margin: 14px 0; font-size: 13px; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<h1>Canhotos pendentes</h1>
+<p class="sub">Pedidos entregues sem nenhum comprovante (sem foto na Vuupt, sem foto do app). O canhoto enviado aqui fica
+  guardado conosco e conta no batimento; <strong>não vai pra Stokki</strong> (pedido já expedido não aceita anexo).
+  {{ dados.total }} pedido(s) no filtro.</p>
+
+<form class="filtros" method="GET" action="{{ url_for('canhotos_pendentes') }}">
+  <div class="campo"><label for="desde">Entregue desde</label><input type="date" id="desde" name="desde" value="{{ filtros.desde }}"></div>
+  <div class="campo"><label for="embarcador">Embarcador</label><input type="text" id="embarcador" name="embarcador" value="{{ filtros.embarcador }}"></div>
+  <div class="campo"><label for="motorista">Motorista</label><input type="text" id="motorista" name="motorista" value="{{ filtros.motorista }}"></div>
+  <div class="campo"><label for="busca">Pedido</label><input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS-..."></div>
+  <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
+</form>
+
+<div class="tabela-wrap"><table>
+  <thead><tr><th>Pedido</th><th>Rota de</th><th>Motorista</th><th>Embarcador / destinatário</th><th>Canhoto</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for l in dados.linhas %}
+    <tr data-codigo="{{ l.codigo }}">
+      <td class="mono">{{ l.codigo }}</td>
+      <td class="mono">{{ l.data_rota[8:10] }}/{{ l.data_rota[5:7] }}</td>
+      <td>{{ l.motorista or '—' }}</td>
+      <td>{{ l.embarcador or '—' }}<div class="suave">{{ l.destinatario or '' }}</div></td>
+      <td><input type="file" class="canhoto" accept="image/*,application/pdf" capture="environment" aria-label="Canhoto {{ l.codigo }}"></td>
+      <td class="status suave">pendente</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="suave">Nenhum pedido pendente nesse filtro.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+{% set paginas = ((dados.total + dados.por_pagina - 1) // dados.por_pagina) %}
+{% if paginas > 1 %}
+<div class="paginas">
+  {% if dados.pagina > 1 %}<a href="{{ url_for('canhotos_pendentes', pagina=dados.pagina - 1, **filtros) }}">← anterior</a>{% endif %}
+  <span>página {{ dados.pagina }} de {{ paginas }}</span>
+  {% if dados.pagina < paginas %}<a href="{{ url_for('canhotos_pendentes', pagina=dados.pagina + 1, **filtros) }}">próxima →</a>{% endif %}
+</div>
+{% endif %}
+
+<script>
+document.querySelectorAll('input.canhoto').forEach(function (inp) {
+  inp.addEventListener('change', async function () {
+    if (!inp.files.length) return;
+    var tr = inp.closest('tr'), st = tr.querySelector('.status');
+    var fd = new FormData();
+    fd.append('codigo', tr.dataset.codigo);
+    fd.append('arquivo', inp.files[0]);
+    inp.disabled = true; st.textContent = 'enviando…'; st.className = 'status suave';
+    var j = {}, r;
+    try { r = await fetch('{{ url_for("api_canhotos_pendentes") }}', {method: 'POST', body: fd}); j = await r.json(); }
+    catch (e) { r = {ok: false}; }
+    if (r.ok) { st.textContent = 'guardado'; st.className = 'status st-ok'; tr.classList.add('enviado'); return; }
+    st.textContent = j.erro || 'falhou'; st.className = 'status st-erro'; inp.disabled = false; inp.value = '';
+  });
+});
+</script>
+{% endblock %}

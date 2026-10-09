@@ -112,5 +112,57 @@ class Salvar(unittest.TestCase):
         self.assertIsNotNone(cm.caminho_canhoto_manual("PS-3", db_path=self.db))
 
 
+class Pendentes(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Path(self._tmp.name) / "dados.db"
+        p = mock.patch.object(banco, "DB_PATH", self.db)
+        p.start()
+        self.addCleanup(p.stop)
+        self.conn = banco.conectar(self.db)
+        self.addCleanup(self.conn.close)
+
+    def pedido(self, codigo, data_rota, qtd=0, status="ENTREGUE", situacao="ENTREGUE", motorista="Iago",
+               remetente="EMB A"):
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, qtd_checklists, remetente_nome, "
+                          "destinatario_nome, origem) VALUES (?, ?, ?, ?, ?, 'Cliente', 'VUUPT')",
+                          (codigo, int(codigo.split("-")[1]), status, qtd, remetente))
+        rid = self.conn.execute("INSERT INTO nucleo_rotas (data_rota, provedor, vuupt_route_id, agent_id, motorista_nome, status) "
+                                "VALUES (?, 'VUUPT', ?, 1, ?, 'CONCLUIDA')", (data_rota, int(codigo.split("-")[1]), motorista)).lastrowid
+        pid = self.conn.execute("INSERT INTO nucleo_paradas (rota_id, ordem, codigo, situacao) VALUES (?, 0, ?, ?)",
+                                (rid, codigo, situacao)).lastrowid
+        self.conn.commit()
+        return pid
+
+    def test_filtra_quem_ja_tem_comprovante(self):
+        self.pedido("PS-1", "2026-10-01")                      # pendente
+        self.pedido("PS-2", "2026-10-02", qtd=1)               # tem checklist na Vuupt
+        self.pedido("PS-3", "2026-10-03", qtd=None)            # sem informacao: fora
+        self.pedido("PS-4", "2026-10-04", status="INSUCESSO", situacao="INSUCESSO")
+        self.pedido("PS-5", "2026-07-01")                      # antes do periodo
+        pid = self.pedido("PS-6", "2026-10-05")                # comprovante do app
+        self.conn.execute("INSERT INTO nucleo_comprovantes (parada_id, tipo, uuid) VALUES (?, 'CANHOTO', 'u')", (pid,))
+        self.pedido("PS-7", "2026-10-06")                      # canhoto ja enviado pelo painel
+        cm.salvar(self.conn, "PS-7", 7, b"%PDF-1", "hugo")
+        self.conn.commit()
+        r = cm.pendentes(self.conn, desde="2026-08-10")
+        self.assertEqual([l["codigo"] for l in r["linhas"]], ["PS-1"])
+        self.assertEqual(r["total"], 1)
+        self.assertEqual(r["linhas"][0]["motorista"], "Iago")
+
+    def test_filtros_e_paginacao(self):
+        for i in range(1, 6):
+            self.pedido(f"PS-{i}", f"2026-10-0{i}", motorista="Watson" if i % 2 else "Iago",
+                        remetente="MARIA DOLORES" if i < 3 else "SOTILLE")
+        self.assertEqual([l["codigo"] for l in cm.pendentes(self.conn, "2026-08-10", motorista="wat")["linhas"]],
+                         ["PS-5", "PS-3", "PS-1"])
+        self.assertEqual([l["codigo"] for l in cm.pendentes(self.conn, "2026-08-10", embarcador="dolores")["linhas"]],
+                         ["PS-2", "PS-1"])
+        self.assertEqual([l["codigo"] for l in cm.pendentes(self.conn, "2026-08-10", busca="ps-4")["linhas"]], ["PS-4"])
+        p2 = cm.pendentes(self.conn, "2026-08-10", pagina=2, por_pagina=2)
+        self.assertEqual(([l["codigo"] for l in p2["linhas"]], p2["total"]), (["PS-3", "PS-2"], 5))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1044,6 +1044,59 @@ def api_baixa_sem_app_status(lote: int):
     return (jsonify(d), 200) if d else (jsonify({"erro": "lote não encontrado"}), 404)
 
 
+@app.route("/canhotos-pendentes")
+@requer_auth(niveis=("total", "operador"))
+def canhotos_pendentes():
+    """Pedidos entregues sem nenhum comprovante (Hugo, 09/10): sobe o
+    canhoto e fica guardado conosco (servidor + bucket) e no batimento.
+    Não vai pra Stokki: pedido já expedido não aceita anexo."""
+    from datetime import date, timedelta
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    filtros = {
+        "desde": request.args.get("desde") or (date.today() - timedelta(days=60)).isoformat(),
+        "embarcador": request.args.get("embarcador", ""),
+        "motorista": request.args.get("motorista", ""),
+        "busca": request.args.get("busca", ""),
+    }
+    pagina = request.args.get("pagina", 1, type=int)
+    conn = nucleo_banco.conectar()
+    try:
+        dados = canhotos_manuais.pendentes(conn, filtros["desde"], filtros["embarcador"], filtros["motorista"],
+                                           filtros["busca"], pagina=pagina)
+    finally:
+        conn.close()
+    return render_template("canhotos_pendentes.html", dados=dados, filtros=filtros)
+
+
+@app.route("/api/canhotos-pendentes", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_canhotos_pendentes():
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Arquivo grande demais."}), 413
+    arq = request.files.get("arquivo")
+    if not arq:
+        return jsonify({"erro": "Escolha o arquivo do canhoto."}), 400
+    try:
+        codigo = canhotos_manuais.codigos_validos(request.form.get("codigo") or "")[0]
+        pdf = canhotos_manuais.para_pdf(arq.read())
+    except canhotos_manuais.CanhotoInvalido as e:
+        return jsonify({"erro": str(e)}), 400
+    conn = nucleo_banco.conectar()
+    try:
+        # só pedido que está mesmo pendente (entregue, sem nenhum comprovante)
+        achados = canhotos_manuais.pendentes(conn, "2000-01-01", busca=codigo, por_pagina=20)["linhas"]
+        linha = next((l for l in achados if l["codigo"] == codigo), None)
+        if not linha:
+            return jsonify({"erro": f"{codigo} não está entre os entregues sem comprovante."}), 400
+        canhotos_manuais.salvar(conn, codigo, linha["service_id"], pdf,
+                                session.get("usuario") or g.nivel_acesso, _carregar_config())
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "codigo": codigo})
+
+
 @app.route("/clientes-agenda")
 @requer_auth
 def clientes_agenda():

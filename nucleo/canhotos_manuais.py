@@ -120,3 +120,44 @@ def _salvar_um(conn: sqlite3.Connection, cod: str, service_id: int | None, pdf: 
 def caminho_canhoto_manual(codigo: str, db_path: Path | None = None) -> Path | None:
     caminho = _pasta(db_path) / f"{normalizar(codigo)}.pdf"
     return caminho if caminho.exists() else None
+
+
+# ── Lista de canhotos pendentes (Hugo, 09/10) ─────────────────────────────────
+
+def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motorista: str = "", busca: str = "",
+              pagina: int = 1, por_pagina: int = 50) -> dict:
+    """Pedidos ENTREGUES (rota com data >= `desde`) sem nenhum comprovante:
+    checklist da Vuupt com 0 fotos (NULL = sem informacao, fica fora pra nao
+    listar quem talvez tenha foto), sem canhoto/assinatura do app e sem
+    canhoto ja enviado pelo painel. Mais recentes primeiro."""
+    garantir_tabela(conn)
+    filtros, params = [], [desde]
+    if embarcador.strip():
+        filtros.append("UPPER(ped.remetente_nome) LIKE ?")
+        params.append(f"%{embarcador.strip().upper()}%")
+    if motorista.strip():
+        filtros.append("UPPER(r.motorista_nome) LIKE ?")
+        params.append(f"%{motorista.strip().upper()}%")
+    if busca.strip():
+        filtros.append("ped.codigo LIKE ?")
+        params.append(f"%{normalizar(busca)}%")
+    extra = "".join(f" AND {f}" for f in filtros)
+    base = f"""
+        FROM nucleo_pedidos ped
+        JOIN nucleo_paradas p ON REPLACE(p.codigo, '#', '') = ped.codigo AND p.situacao IN ('ENTREGUE', 'PARCIAL')
+        JOIN nucleo_rotas r ON r.id = p.rota_id
+        WHERE ped.status = 'ENTREGUE' AND ped.qtd_checklists = 0 AND r.data_rota >= ?
+          AND ped.codigo NOT IN (SELECT codigo FROM canhotos_manuais)
+          AND NOT EXISTS (SELECT 1 FROM nucleo_comprovantes c
+                          WHERE c.parada_id = p.id AND c.tipo IN ('CANHOTO', 'ASSINATURA'))
+          {extra}"""
+    total = conn.execute(f"SELECT COUNT(DISTINCT ped.codigo) {base}", params).fetchone()[0]
+    pagina = max(1, int(pagina or 1))
+    linhas = [dict(zip(("codigo", "service_id", "data_rota", "motorista", "embarcador", "destinatario"), row))
+              for row in conn.execute(f"""
+        SELECT ped.codigo, ped.vuupt_service_id, MAX(r.data_rota), MAX(r.motorista_nome),
+               MAX(ped.remetente_nome), MAX(ped.destinatario_nome)
+        {base}
+        GROUP BY ped.codigo ORDER BY MAX(r.data_rota) DESC, ped.codigo DESC LIMIT ? OFFSET ?""",
+                                         (*params, por_pagina, (pagina - 1) * por_pagina))]
+    return {"linhas": linhas, "total": total, "pagina": pagina, "por_pagina": por_pagina}

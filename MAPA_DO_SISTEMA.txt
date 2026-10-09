@@ -112,6 +112,9 @@
                                              Canhoto opcional na tela -> nucleo/canhotos_manuais.py
                                              (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
                                              (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
+ Canhotos pendentes ......................... /canhotos-pendentes (canhotos_pendentes.html, total/operador):
+                                             entregues sem nenhum comprovante (padrão 60 dias); o canhoto
+                                             fica guardado conosco (canhotos_manuais), NÃO vai pra Stokki
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
