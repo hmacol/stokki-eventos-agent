@@ -104,6 +104,29 @@ class TestCadastroMotorista(unittest.TestCase):
         self.assertEqual(len(hist), 3)
         self.assertEqual({(x["campo"], x["valor_novo"]) for x in hist} & {("placa", "ABC1D23")}, {("placa", "ABC1D23")})
 
+    def test_quem_nao_e_dono_do_carro_nao_ve_extrato(self):
+        # Hugo, 08/10: sem extrato, mas pedágio continua
+        h = self._auth()
+        self.assertTrue(self.cli.get("/api/eu", headers=h).get_json()["ve_financeiro"])
+        self.assertEqual(self.cli.get("/api/financeiro", headers=h).status_code, 200)
+        conn = banco.conectar()
+        cad.definir_ve_financeiro(conn, CPF, False)
+        conn.close()
+        self.assertFalse(self.cli.get("/api/eu", headers=h).get_json()["ve_financeiro"])
+        self.assertEqual(self.cli.get("/api/financeiro", headers=h).status_code, 403)
+        self.assertEqual(self.cli.get("/api/rotas", headers=h).status_code, 200)
+
+        # Auto-cadastro dizendo que dirige carro de outro -> aprovado sem extrato
+        cid, _ = self._criar_cadastro_completo(extra={"cpf": "22233344455", "dono_veiculo": False})
+        conn = banco.conectar()
+        c = cad.buscar_cadastro(conn, cid)
+        self.assertFalse(c["dono_veiculo"])
+        r = cad.aprovar(conn, cid, self.config, agent_id=9, zonas=None, dias=None, tipo_veiculo=None,
+                        aceita_viagens=False, revisado_por="hugo", gravar_planilha=lambda cfg, d: None)
+        self.assertFalse(r["motorista"]["ve_financeiro"])
+        self.assertEqual(cad.logins_por_agent_id(conn)[9]["ve_financeiro"], 0)
+        conn.close()
+
     def test_meus_dados_bloqueado_com_pin_provisorio(self):
         conn = banco.conectar()
         auth.criar_ou_atualizar_motorista(conn, "11122233344", "Novato", "123456", agent_id=7, trocar_pin=True)
@@ -149,8 +172,8 @@ class TestCadastroMotorista(unittest.TestCase):
         r = self.cli.post("/api/cadastro", json={**CADASTRO_OK, "cpf": "10000000009"}, environ_base={"REMOTE_ADDR": "10.0.0.10"})
         self.assertEqual(r.status_code, 201)
 
-    def _criar_cadastro_completo(self):
-        r = self.cli.post("/api/cadastro", json=CADASTRO_OK).get_json()
+    def _criar_cadastro_completo(self, extra=None):
+        r = self.cli.post("/api/cadastro", json={**CADASTRO_OK, **(extra or {})}).get_json()
         cid, chave = r["id"], r["chave_envio"]
         url = f"/api/cadastro/{cid}/documentos"
         # chave errada: como se não existisse

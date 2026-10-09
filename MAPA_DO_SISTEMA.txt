@@ -106,6 +106,15 @@
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+ Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
+                                             tela /baixa-sem-app (baixa_sem_app.html, total/operador),
+                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
+                                             Canhoto opcional na tela -> nucleo/canhotos_manuais.py
+                                             (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
+                                             (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
+ Canhotos pendentes ......................... /canhotos-pendentes (canhotos_pendentes.html, total/operador):
+                                             entregues sem nenhum comprovante (padrão 60 dias); o canhoto
+                                             fica guardado conosco (canhotos_manuais), NÃO vai pra Stokki
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
@@ -241,7 +250,9 @@
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (só devolve ao pool pedido NÃO iniciado de
                                                              rota de dia anterior; desde 05/10 NÃO cancela
-                                                             rota de hoje sem motorista)
+                                                             rota de hoje sem motorista; desde 09/10 pula
+                                                             motorista SEM_APP do BD_MOTORISTAS -- vai pro
+                                                             e-mail como "aguardando baixa")
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
@@ -642,7 +653,9 @@
                            BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
                            CNH/CRLV em dados/cadastros_motoristas/; aprovação no
                            painel /motoristas cria linha na planilha + login
-                           provisório). Aviso no WhatsApp ALERTAS.
+                           provisório). Aviso no WhatsApp ALERTAS. Chave
+                           ve_financeiro (não é dono do carro = sem extrato no
+                           app, só Despesas; marcada na tabela /motoristas).
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.

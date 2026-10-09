@@ -24,9 +24,9 @@ import cancelar_rotas_sem_motorista as crsm  # noqa: E402
 HOJE = date(2026, 9, 29)
 
 
-def _rota(servicos, status="in_progress", rota_id=10, start_at="2026-09-28 08:00:00"):
+def _rota(servicos, status="in_progress", rota_id=10, start_at="2026-09-28 08:00:00", agent_id=None):
     return {"id": rota_id, "name": "Planejamento - 28/09/2026 - #1", "status": status,
-            "start_at": start_at, "services": {"data": servicos}}
+            "start_at": start_at, "agent_id": agent_id, "services": {"data": servicos}}
 
 
 def _s(sid, status):
@@ -86,6 +86,17 @@ class TestDevolverPendentes(unittest.TestCase):
         atualizar.assert_not_called()
         cancelar.assert_not_called()
         self.assertEqual(r["devolvidos"], ["PS-2"])
+
+    def test_motorista_sem_app_nao_e_devolvido(self):
+        rotas = [_rota([_s(1, "assigned"), _s(2, "done")], rota_id=10, agent_id=50191),
+                 _rota([_s(3, "assigned")], rota_id=11, agent_id=999)]
+        with mock.patch.object(crsm, "listar_rotas", return_value=rotas),              mock.patch.object(crsm, "atualizar_rota") as atualizar,              mock.patch.object(crsm, "cancelar_rota") as cancelar,              mock.patch.object(crsm, "reverter_por_vuupt_route_id"),              mock.patch.object(crsm.tratativas, "registrar_evento"),              mock.patch("nucleo.sincronizar_servicos_vuupt.ressincronizar_ids"),              mock.patch("vuupt_client.VuuptClient"):
+            r = crsm.devolver_pendentes_de_rotas_passadas("t", HOJE, modo_teste=False, sem_app={50191})
+        cancelar.assert_called_once_with("t", 11, services_action="unassign")
+        atualizar.assert_not_called()
+        self.assertEqual(r["devolvidos"], ["PS-3"])
+        self.assertEqual(len(r["aguardando_baixa"]), 1)
+        self.assertIn("1 pedido", r["aguardando_baixa"][0])
 
 
 if __name__ == "__main__":

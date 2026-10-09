@@ -3,6 +3,7 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'r
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as api from '../../src/api';
 import * as local from '../../src/local';
+import { useSessao } from '../../src/sessao';
 import { Cartao, Linha, Vazio } from '../../src/componentes';
 import { LancarPedagio, aceitaPedagio } from '../../src/pedagios';
 import { cores, formatarData, formatarReal, hoje, somarDias } from '../../src/tema';
@@ -45,10 +46,15 @@ export default function Financeiro() {
     }
   }, []);
 
+  // Dirige carro de outro (Hugo, 08/10): sem extrato, a tela é só o lançamento de despesas.
+  const { motorista } = useSessao();
+  const soDespesas = motorista?.ve_financeiro === false;
+
   const carregar = useCallback(async () => {
     setErro(null);
     const { de, ate } = intervalo(periodo);
     void carregarRotasPedagio();
+    if (soDespesas) { setCarregando(false); return; }
     try {
       setExtrato(await api.financeiro(de, ate));
     } catch (e) {
@@ -56,7 +62,7 @@ export default function Financeiro() {
     } finally {
       setCarregando(false);
     }
-  }, [periodo, carregarRotasPedagio]);
+  }, [periodo, carregarRotasPedagio, soDespesas]);
   useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
 
   return (
@@ -64,7 +70,8 @@ export default function Financeiro() {
       refreshControl={<RefreshControl refreshing={carregando} onRefresh={carregar} />}>
       {/* Pedágio e despesas ficam aqui, com a rota escolhida no cartão (Hugo, 14/09). */}
       <LancarPedagio rotas={rotasPedagio} rotaInicial={rotaParam ? Number(rotaParam) : null} aoMudar={carregar} />
-      <View style={s.abas}>
+      {soDespesas ? <Text style={s.soDespesas}>O extrato das rotas vai pro dono do veículo. Aqui você lança pedágio e despesas pra reembolso.</Text> : null}
+      <View style={[s.abas, soDespesas && { display: 'none' }]}>
         {(['semana', 'mes', 'anterior'] as Periodo[]).map((p) => (
           <Pressable key={p} onPress={() => setPeriodo(p)} style={[s.aba, periodo === p && s.abaAtiva]}>
             <Text style={[s.abaTexto, periodo === p && { color: '#fff' }]}>{intervalo(p).rotulo}</Text>
@@ -137,4 +144,5 @@ const s = StyleSheet.create({
   rotaNome: { color: cores.texto, fontWeight: '600' },
   rotaDetalhe: { color: cores.textoSuave, fontSize: 13 },
   erro: { color: '#fff', backgroundColor: cores.alerta, padding: 8, borderRadius: 8, marginBottom: 12, textAlign: 'center' },
+  soDespesas: { color: cores.textoSuave, textAlign: 'center', marginBottom: 12, lineHeight: 19 },
 });

@@ -928,6 +928,175 @@ def api_batimento_tratar():
     return jsonify({"ok": True})
 
 
+LIMITE_REQUISICAO_BAIXA = 60 * 1024 * 1024  # baixa sem app com canhotos (09/10)
+
+
+def _rota_sem_app(route_id: int) -> tuple[dict | None, str | None]:
+    """Rota da Vuupt + checagem de motorista SEM_APP. (rota, erro)."""
+    import rotas_client
+    from nucleo.sincronizar_vuupt import _rota_do_corpo
+    from regras import preferencias_motoristas
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    # GET /routes/{id} vem embrulhado em {"route": {...}} (visto na prova de 09/10)
+    rota = _rota_do_corpo(rotas_client.buscar_rota(token, route_id, include=["services"]))
+    if not rota:
+        return None, "Rota não encontrada na Vuupt."
+    if rota.get("agent_id") not in preferencias_motoristas.agent_ids_sem_app():
+        return rota, "Essa rota não é de motorista marcado SEM_APP: a baixa é pelo app do motorista."
+    return rota, None
+
+
+@app.route("/baixa-sem-app")
+@requer_auth(niveis=("total", "operador"))
+def baixa_sem_app():
+    """Baixa de rota de motorista sem app (iPhone, Hugo 08/10): marca o que
+    voltou e conclui na Vuupt (nucleo/baixa_sem_app.py)."""
+    from mapa_util import extrair_servicos_da_rota
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    route_id = request.args.get("rota", type=int)
+    rota, erro = _rota_sem_app(route_id) if route_id else (None, "Rota não informada.")
+    servicos = []
+    for s in (extrair_servicos_da_rota(rota) if rota else []):
+        servicos.append({"id": s.get("id"), "codigo": (s.get("code") or "").lstrip("#"),
+                         "titulo": s.get("title") or "", "endereco": s.get("address") or "",
+                         "status": s.get("status") or "",
+                         "fechado": (s.get("status") or "") in ("done", "canceled", "cancelled")})
+    motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
+    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos)
+
+
+@app.route("/api/baixa-sem-app", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_baixa_sem_app():
+    import threading
+    from mapa_util import extrair_servicos_da_rota
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    from vuupt_client import VuuptClient
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    # Recusa antes de ler: canhotos de 15 MB cada, nunca uma rota inteira de fotos gigantes.
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Envio grande demais: mande menos canhotos de cada vez ou fotos menores."}), 413
+    # multipart quando vem canhoto (09/10): o JSON de antes vai no campo "dados"
+    if (request.content_type or "").startswith("multipart/form-data"):
+        try:
+            body = json.loads(request.form.get("dados") or "{}")
+        except ValueError:
+            return jsonify({"erro": "dados inválidos"}), 400
+    else:
+        body = request.get_json(force=True) or {}
+    try:
+        route_id = int(body.get("rota"))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "rota inválida"}), 400
+    itens = body.get("itens")
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum pedido"}), 400
+    for i in itens:
+        if not i.get("entregue") and int(i.get("failed_reason_id") or 0) not in MOTIVOS_FALHA:
+            return jsonify({"erro": f"{i.get('codigo')}: escolha o motivo de quem voltou"}), 400
+    rota, erro = _rota_sem_app(route_id)
+    if erro:
+        return jsonify({"erro": erro}), 400
+    # O código do pedido vem da ROTA, nunca do navegador: vira nome de
+    # arquivo do canhoto e entra na tratativa.
+    codigo_por_id = {s.get("id"): (s.get("code") or "").lstrip("#") for s in extrair_servicos_da_rota(rota)}
+    if any(int(i.get("service_id") or 0) not in codigo_por_id for i in itens):
+        return jsonify({"erro": "pedido que não é dessa rota"}), 400
+    for i in itens:
+        i["codigo"] = codigo_por_id[int(i["service_id"])]
+    conn = nucleo_banco.conectar()
+    try:
+        if bsa.lote_em_andamento(conn, route_id):
+            return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
+        # Canhoto ANTES do lote: a expedicao roda a cada 30 min e a Stokki
+        # nao aceita anexo em pedido ja expedido. Valida todos, depois grava.
+        from nucleo import canhotos_manuais
+        canhotos = []
+        for i in itens:
+            arq = request.files.get(f"canhoto_{int(i.get('service_id') or 0)}")
+            if not arq or not i.get("entregue"):
+                continue
+            try:
+                canhotos.append((i, canhotos_manuais.para_pdf(arq.read())))
+            except canhotos_manuais.CanhotoInvalido as e:
+                return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+        por = session.get("usuario") or g.nivel_acesso
+        for i, pdf in canhotos:
+            canhotos_manuais.salvar(conn, i.get("codigo") or "", int(i["service_id"]), pdf, por, _carregar_config())
+        lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
+    finally:
+        conn.close()
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    threading.Thread(target=bsa.executar_lote, args=(lote, VuuptClient(token)), daemon=True).start()
+    return jsonify({"lote": lote})
+
+
+@app.route("/api/baixa-sem-app/<int:lote>")
+@requer_auth(niveis=("total", "operador"))
+def api_baixa_sem_app_status(lote: int):
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        d = bsa.ler_lote(conn, lote)
+    finally:
+        conn.close()
+    return (jsonify(d), 200) if d else (jsonify({"erro": "lote não encontrado"}), 404)
+
+
+@app.route("/canhotos-pendentes")
+@requer_auth(niveis=("total", "operador"))
+def canhotos_pendentes():
+    """Pedidos entregues sem nenhum comprovante (Hugo, 09/10): sobe o
+    canhoto e fica guardado conosco (servidor + bucket) e no batimento.
+    Não vai pra Stokki: pedido já expedido não aceita anexo."""
+    from datetime import date, timedelta
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    filtros = {
+        "desde": request.args.get("desde") or (date.today() - timedelta(days=60)).isoformat(),
+        "embarcador": request.args.get("embarcador", ""),
+        "motorista": request.args.get("motorista", ""),
+        "busca": request.args.get("busca", ""),
+    }
+    pagina = request.args.get("pagina", 1, type=int)
+    conn = nucleo_banco.conectar()
+    try:
+        dados = canhotos_manuais.pendentes(conn, filtros["desde"], filtros["embarcador"], filtros["motorista"],
+                                           filtros["busca"], pagina=pagina)
+    finally:
+        conn.close()
+    return render_template("canhotos_pendentes.html", dados=dados, filtros=filtros)
+
+
+@app.route("/api/canhotos-pendentes", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_canhotos_pendentes():
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Arquivo grande demais."}), 413
+    arq = request.files.get("arquivo")
+    if not arq:
+        return jsonify({"erro": "Escolha o arquivo do canhoto."}), 400
+    try:
+        codigo = canhotos_manuais.codigos_validos(request.form.get("codigo") or "")[0]
+        pdf = canhotos_manuais.para_pdf(arq.read())
+    except canhotos_manuais.CanhotoInvalido as e:
+        return jsonify({"erro": str(e)}), 400
+    conn = nucleo_banco.conectar()
+    try:
+        # só pedido que está mesmo pendente (entregue, sem nenhum comprovante)
+        achados = canhotos_manuais.pendentes(conn, "2000-01-01", busca=codigo, por_pagina=20)["linhas"]
+        linha = next((l for l in achados if l["codigo"] == codigo), None)
+        if not linha:
+            return jsonify({"erro": f"{codigo} não está entre os entregues sem comprovante."}), 400
+        canhotos_manuais.salvar(conn, codigo, linha["service_id"], pdf,
+                                session.get("usuario") or g.nivel_acesso, _carregar_config())
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "codigo": codigo})
+
+
 @app.route("/clientes-agenda")
 @requer_auth
 def clientes_agenda():
@@ -1917,7 +2086,8 @@ def api_cadastro_aprovar(cadastro_id):
     try:
         r = cad.aprovar(conn, cadastro_id, _carregar_config(), agent_id=body.get("agent_id"),
                         zonas=body.get("zonas"), dias=body.get("dias"), tipo_veiculo=body.get("tipo_veiculo"),
-                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso)
+                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso,
+                        dono_veiculo=body.get("dono_veiculo"))
     except cad.CadastroInvalido as e:
         return jsonify({"erro": e.mensagem}), e.codigo
     except ValueError as e:
@@ -1930,6 +2100,24 @@ def api_cadastro_aprovar(cadastro_id):
     finally:
         conn.close()
     return jsonify({"ok": True, **r})
+
+
+@app.route("/api/motoristas/<cpf>/ve-financeiro", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_ve_financeiro(cpf):
+    """Chave "Vê financeiro" da tabela (Hugo, 08/10): quem dirige carro de
+    outro não vê o extrato no app. Pedágio continua."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        m = cad.definir_ve_financeiro(conn, cpf, bool(body.get("ve")))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cpf": m["cpf"], "ve_financeiro": bool(m["ve_financeiro"])})
 
 
 @app.route("/api/motoristas/cadastros/<int:cadastro_id>/recusar", methods=["POST"])

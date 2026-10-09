@@ -58,7 +58,10 @@ export default function Abas() {
     >
       <Tabs.Screen name="rotas" options={{ title: 'Rotas', tabBarIcon: icone('map') }} />
       <Tabs.Screen name="ofertas" options={{ title: 'Ofertas', tabBarIcon: icone('hand-right') }} />
-      <Tabs.Screen name="financeiro" options={{ title: 'Financeiro', tabBarIcon: icone('cash') }} />
+      {/* Quem dirige carro de outro não vê extrato (Hugo, 08/10): a aba vira "Despesas", só pedágio. */}
+      <Tabs.Screen name="financeiro" options={motorista?.ve_financeiro === false
+        ? { title: 'Despesas', tabBarIcon: icone('receipt') }
+        : { title: 'Financeiro', tabBarIcon: icone('cash') }} />
       <Tabs.Screen name="disponibilidade" options={{ title: 'Agenda', tabBarIcon: icone('calendar') }} />
       {/* Ajuda (Hugo, 12/09): chat com o assistente e com a logística.
           O badge mostra o que a equipe respondeu e o motorista ainda não viu. */}
