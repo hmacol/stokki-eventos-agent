@@ -489,7 +489,8 @@ def _etapas_email_embarcadores(config: dict, vuupt, modo_teste: bool, indexador_
 def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, notificar: bool = True,
          incremental: bool = False, com_email_embarcadores: bool = False,
          resumo_saida: dict | None = None):
-    """com_email_embarcadores: no modo escopado, roda também a etapa de e-mail dos embarcadores.
+    """com_email_embarcadores: no modo escopado, roda também a busca ampla da INBOX (Etapa 1; as
+    respostas ao aviso de boleto, Reply-To entregas@, caem lá) e a etapa de e-mail dos embarcadores.
     resumo_saida: se informado, recebe o resumo por etapa (quem chama com notificar=False vê os erros)."""
     inicio = time.time()
     escopado = pedidos_stokki is not None
@@ -517,8 +518,10 @@ def main(modo_teste: bool = False, pedidos_stokki: list[str] | None = None, noti
 
         # ── Etapa 1: e-mail ──────────────────────────────────────────────
         # (não no modo escopado: a rota precisa só dos pedidos dela na
-        # Stokki; o e-mail é coberto pelas rodadas completa/incremental)
-        if not escopado:
+        # Stokki; o e-mail é coberto pelas rodadas completa/incremental.
+        # Exceção 08/10: com_email_embarcadores também lê a INBOX, onde caem
+        # as respostas ao aviso de boleto faltando, que só esta busca vê)
+        if not escopado or com_email_embarcadores:
             itens_email = buscar_pdfs_por_email(config, modo_teste=modo_teste)
             logger.info(f"{len(itens_email)} PDF(s) encontrado(s) por e-mail.")
             for item in itens_email:

@@ -172,7 +172,8 @@ def main(data_iso: str | None = None, modo_teste: bool = False, notificar: bool 
         try:
             from regras import clientes_boleto
             situacoes = clientes_boleto.situacao_por_pedido(codigos)
-        except Exception:
+        except Exception as e:
+            print(f"[AVISO] situacao_por_pedido falhou ({e}) -- vigia segue sem a situação dos clientes.")
             situacoes = {}
         for s in servicos:
             s["situacao_cliente"] = next(
