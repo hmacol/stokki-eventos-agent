@@ -25,21 +25,29 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 EMAIL_RESPOSTA = "entregas@freshlogbr.com"
 URL_PORTAL = "https://app.freshhub.com.br/cliente"
 AREA_CHAMADO = "boleto"
-STATUS_RASCUNHO_DESCARTADO = "DESCARTADO"
 
 
 def pedidos_da_data(conn: sqlite3.Connection, data_iso: str) -> list[dict]:
+    """Pedidos de entrega da data: os que já estão em rota no núcleo e os de
+    rascunho vivo. O ramo do rascunho copia o critério de vigia/vigiar.py
+    (coletar_fatos): status RASCUNHO/OFERTADA/ERRO_ENVIO, só o lote mais
+    recente da data (o que a tela mostra) e pedido ainda sem rota (quem já
+    tem rota é coberto pelo ramo da rota). Cancelado nunca entra."""
     rows = conn.execute("""
         SELECT p.codigo, p.sender_id, p.destinatario_codigo, p.destinatario_nome, p.remetente_nome
         FROM nucleo_rotas r JOIN nucleo_pedidos p ON p.vuupt_route_id = r.vuupt_route_id
         WHERE r.data_rota = ? AND r.cancelada_em IS NULL AND COALESCE(r.status, '') != 'CANCELADA'
-          AND p.excluido_em IS NULL AND p.tipo = 'delivery'
+          AND p.excluido_em IS NULL AND p.tipo = 'delivery' AND COALESCE(p.status, '') != 'CANCELADO'
         UNION ALL
         SELECT p.codigo, p.sender_id, p.destinatario_codigo, p.destinatario_nome, p.remetente_nome
         FROM rascunhos_rota r JOIN rascunhos_parada rp ON rp.rascunho_id = r.id
              JOIN nucleo_pedidos p ON p.vuupt_service_id = rp.service_id
-        WHERE r.data_alvo = ? AND r.status != ? AND p.excluido_em IS NULL AND p.tipo = 'delivery'
-    """, (data_iso, data_iso, STATUS_RASCUNHO_DESCARTADO)).fetchall()
+        WHERE r.data_alvo = ? AND r.status IN ('RASCUNHO', 'OFERTADA', 'ERRO_ENVIO')
+          AND r.lote_id = (SELECT lote_id FROM rascunhos_rota WHERE data_alvo = ? AND status != 'DESCARTADO'
+                           ORDER BY criado_em DESC, id DESC LIMIT 1)
+          AND p.vuupt_route_id IS NULL
+          AND p.excluido_em IS NULL AND p.tipo = 'delivery' AND COALESCE(p.status, '') != 'CANCELADO'
+    """, (data_iso, data_iso, data_iso)).fetchall()
     vistos, saida = set(), []
     for codigo, sid, dest, nome, emb in rows:
         base = codigo_base(codigo)
@@ -53,6 +61,10 @@ def pedidos_da_data(conn: sqlite3.Connection, data_iso: str) -> list[dict]:
 
 
 def faltando(conn: sqlite3.Connection, pedidos: list[dict], situacoes: dict[str, str]) -> list[dict]:
+    """Pedidos de clientes TEM_BOLETO sem boleto ENVIADO. Também fica de fora o
+    pedido cuja(s) NF(s) ENVIADA(s) têm todas cobranca = 0 (quadro de fatura
+    sem duplicata = à vista): decisão de 08/10, falso aviso ao embarcador é o
+    pior erro. cobranca NULL (não lida) ou -1 (indefinida) não dispensa."""
     alvo = [p for p in pedidos if situacoes.get(p["codigo"]) == TEM_BOLETO]
     if not alvo:
         return []
@@ -64,7 +76,12 @@ def faltando(conn: sqlite3.Connection, pedidos: list[dict], situacoes: dict[str,
     nfs = {r[0]: r[1] for r in conn.execute(
         f"SELECT codigo_pedido, MAX(numero_nf) FROM documentos_processados WHERE status = 'ENVIADO' "
         f"AND tipo = 'Nota Fiscal' AND codigo_pedido IN ({marc}) GROUP BY codigo_pedido", codigos)}
-    return [{**p, "nf": nfs.get(p["codigo"]) or ""} for p in alvo if p["codigo"] not in com_boleto]
+    a_vista = {r[0] for r in conn.execute(
+        f"SELECT codigo_pedido FROM documentos_processados WHERE status = 'ENVIADO' "
+        f"AND tipo = 'Nota Fiscal' AND codigo_pedido IN ({marc}) GROUP BY codigo_pedido "
+        f"HAVING SUM(CASE WHEN cobranca = 0 THEN 0 ELSE 1 END) = 0", codigos)}
+    return [{**p, "nf": nfs.get(p["codigo"]) or ""} for p in alvo
+            if p["codigo"] not in com_boleto and p["codigo"] not in a_vista]
 
 
 def _garantir_tabela(conn: sqlite3.Connection) -> None:
