@@ -14,12 +14,16 @@ PEDIDOS = [
 ]
 EMBS = {11: {"nome": "NUU", "emails": ["fin@nuu.com"], "cnpj": "111", "desligado": False},
         22: {"nome": "SOTILLE", "emails": [], "cnpj": "222", "desligado": True}}
-CFG = {"aviso_boleto_faltando": {"ativo": True, "forcar_destino": "hugo@freshlogbr.com"}}
+CFG = {"aviso_boleto_faltando": {"ativo": True, "forcar_destino": "hugo@freshlogbr.com"},
+       "whatsapp_notificacoes": {"clientes": {"forcar_destino": "5511900000000"}}}
+# aviso em piloto (e-mail preso em hugo@) mas WhatsApp de clientes com envio real
+CFG_ZAP_REAL = {"aviso_boleto_faltando": {"ativo": True, "forcar_destino": "hugo@freshlogbr.com"},
+                "whatsapp_notificacoes": {"clientes": {"forcar_destino": ""}}}
 
 
 class Executar(unittest.TestCase):
     def _rodar(self, faltando_antes, faltando_depois, ja=frozenset(), modo_teste=False, atualizar=True,
-               email_ok=True, zap="enviado", chamado_ok=True):
+               email_ok=True, zap="enviado", chamado_ok=True, cfg=None):
         conn = MagicMock()
         rodar_docs = MagicMock()
         enviar = MagicMock(return_value=email_ok)
@@ -31,7 +35,7 @@ class Executar(unittest.TestCase):
              patch.object(abf.bf, "registrar_no_chamado", return_value=5 if chamado_ok else None) as cham, \
              patch.object(abf, "_telefone", return_value="5511911112222"), \
              patch.object(abf.notificar_whatsapp, "avisar_cliente_boleto_faltando", return_value=zap) as wz:
-            r = abf.executar(CFG, "2026-10-07", modo_teste=modo_teste, atualizar=atualizar, conn=conn,
+            r = abf.executar(cfg or CFG, "2026-10-07", modo_teste=modo_teste, atualizar=atualizar, conn=conn,
                              enviar=enviar, situacoes={"PS-1": "TEM_BOLETO"}, embarcadores=EMBS,
                              rodar_documentos=rodar_docs)
         return r, rodar_docs, enviar, wz, cham, reg
@@ -76,6 +80,17 @@ class Executar(unittest.TestCase):
         reg.assert_not_called()
         cham.assert_not_called()
         self.assertEqual(enviar.call_args.args[0], ["hugo@freshlogbr.com"])
+
+    def test_whatsapp_segurado_quando_aviso_em_piloto_e_zap_real(self):
+        r, docs, enviar, wz, cham, reg = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], cfg=CFG_ZAP_REAL)
+        wz.assert_not_called()
+        enviar.assert_called_once()
+        self.assertEqual(r["avisados"], 1)
+
+    def test_whatsapp_segurado_nao_vale_em_modo_teste(self):
+        r, docs, enviar, wz, cham, reg = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], cfg=CFG_ZAP_REAL,
+                                                     modo_teste=True)
+        wz.assert_called_once()
 
     def test_sem_atualizar(self):
         r, docs, *_ = self._rodar([PEDIDOS[0]], [PEDIDOS[0]], atualizar=False)

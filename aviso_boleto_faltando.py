@@ -148,7 +148,9 @@ def executar(config: dict, data_iso: str, modo_teste: bool = False, atualizar: b
                 else:
                     r["falhas"].append(f"{nome}: e-mail não saiu")
 
-            if not emb["desligado"] and emb.get("cnpj"):
+            if not emb["desligado"] and emb.get("cnpj") and not modo_teste and bf.whatsapp_segurado(config, forcar):
+                logger.info("  WhatsApp de boleto segurado: aviso em piloto e WhatsApp de clientes com envio real")
+            elif not emb["desligado"] and emb.get("cnpj"):
                 tel = _telefone(emb["cnpj"])
                 if tel:
                     st = notificar_whatsapp.avisar_cliente_boleto_faltando(

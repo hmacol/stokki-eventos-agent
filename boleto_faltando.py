@@ -27,6 +27,14 @@ URL_PORTAL = "https://app.freshhub.com.br/cliente"
 AREA_CHAMADO = "boleto"
 
 
+def whatsapp_segurado(config: dict, forcar_email: str) -> bool:
+    """True quando o e-mail do aviso está em piloto (forcar_email preenchido) mas o
+    WhatsApp de clientes está com envio real (whatsapp_notificacoes.clientes.forcar_destino
+    vazio): o WhatsApp não pode sair antes de o Hugo liberar o aviso."""
+    clientes = ((config or {}).get("whatsapp_notificacoes") or {}).get("clientes") or {}
+    return bool(forcar_email) and not str(clientes.get("forcar_destino") or "").strip()
+
+
 def pedidos_da_data(conn: sqlite3.Connection, data_iso: str) -> list[dict]:
     """Pedidos de entrega da data: os que já estão em rota no núcleo e os de
     rascunho vivo. O ramo do rascunho copia o critério de vigia/vigiar.py

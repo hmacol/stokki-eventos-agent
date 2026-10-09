@@ -340,8 +340,14 @@ def _situacoes(codigos: list[str]) -> dict[str, str]:
 def entregues_sem_boleto(conn: sqlite3.Connection, entregues: list[dict]) -> list[dict]:
     """Entregues hoje de clientes TEM_BOLETO sem boleto ENVIADO."""
     from regras.clientes_boleto import codigo_base
-    pedidos = [{"codigo": codigo_base(p["codigo"]), "sender_id": p.get("sender_id"),
-                "cliente": p.get("destinatario") or "", "embarcador": ""} for p in entregues]
+    pedidos, vistos = [], set()
+    for p in entregues:
+        base = codigo_base(p["codigo"])
+        if base in vistos:     # PS-1 e PS-1-R1 no mesmo dia viram um só
+            continue
+        vistos.add(base)
+        pedidos.append({"codigo": base, "sender_id": p.get("sender_id"),
+                        "cliente": p.get("destinatario") or "", "embarcador": ""})
     if not pedidos:
         return []
     return boleto_faltando.faltando(conn, pedidos, _situacoes([p["codigo"] for p in pedidos]))
@@ -352,7 +358,9 @@ def _avisar_sem_boleto(config: dict, sid: int, emb: dict, itens: list[dict], dat
     A do Hugo). Falha aqui nunca derruba o resumo."""
     codigos = [i["codigo"] for i in itens]
     try:
-        if emb.get("cnpj"):
+        if emb.get("cnpj") and boleto_faltando.whatsapp_segurado(config, forcar_destino_do_config(config)):
+            logger.info("  WhatsApp de boleto segurado: resumo em piloto e WhatsApp de clientes com envio real")
+        elif emb.get("cnpj"):
             conn = sqlite3.connect(DB_PATH, timeout=30)
             try:
                 tel = preferencias_notificacao.whatsapp_do_embarcador(conn, emb["cnpj"], tipo="boleto_faltando")
@@ -362,6 +370,9 @@ def _avisar_sem_boleto(config: dict, sid: int, emb: dict, itens: list[dict], dat
                 notificar_whatsapp.avisar_cliente_boleto_faltando(
                     f"boleto_entregues:{sid}:{data_alvo.isoformat()}", tel,
                     notificar_whatsapp.texto_boleto_faltando(codigos, "hoje"), config)
+        if not emb.get("cnpj"):
+            logger.warning(f"  Entregues sem boleto de {emb.get('nome') or sid}: sem CNPJ, chamado não aberto.")
+            return
         boleto_faltando.registrar_no_chamado(
             emb, sid, f"Entregues em {data_alvo.strftime('%d/%m/%Y')} sem boleto: "
                       + ", ".join(f"{i['codigo']}{' (NF ' + i['nf'] + ')' if i.get('nf') else ''}" for i in itens)

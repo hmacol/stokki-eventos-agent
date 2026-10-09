@@ -255,8 +255,35 @@ class SecaoBoleto(unittest.TestCase):
         self.assertEqual([i["codigo"] for i in r], ["PS-1"])
 
     def test_aviso_nunca_levanta_excecao(self):
-        with mock.patch.object(mod.boleto_faltando, "registrar_no_chamado", side_effect=RuntimeError("x")):
+        with mock.patch.object(mod.boleto_faltando, "registrar_no_chamado", side_effect=RuntimeError("x")),              mock.patch.object(mod.sqlite3, "connect", return_value=mock.MagicMock()),              mock.patch.object(mod.preferencias_notificacao, "whatsapp_do_embarcador", return_value=None):
+            mod._avisar_sem_boleto({}, 1, {"cnpj": "111"}, [{"codigo": "PS-1", "nf": "9"}], date(2026, 10, 7))
+
+    def test_sem_cnpj_nao_abre_chamado(self):
+        with mock.patch.object(mod.boleto_faltando, "registrar_no_chamado") as cham:
             mod._avisar_sem_boleto({}, 1, {"cnpj": ""}, [{"codigo": "PS-1", "nf": "9"}], date(2026, 10, 7))
+        cham.assert_not_called()
+
+    def _avisar_com_cfg(self, cfg):
+        with mock.patch.object(mod.boleto_faltando, "registrar_no_chamado") as cham,              mock.patch.object(mod.sqlite3, "connect", return_value=mock.MagicMock()),              mock.patch.object(mod.preferencias_notificacao, "whatsapp_do_embarcador", return_value="5511911112222"),              mock.patch.object(mod.notificar_whatsapp, "avisar_cliente_boleto_faltando", return_value="enviado") as wz:
+            mod._avisar_sem_boleto(cfg, 1, {"cnpj": "111"}, [{"codigo": "PS-1", "nf": "9"}], date(2026, 10, 7))
+        return wz, cham
+
+    def test_whatsapp_segurado_quando_resumo_em_piloto_e_zap_real(self):
+        wz, cham = self._avisar_com_cfg({"resumo_diario_embarcador": {"forcar_destino": "hugo@freshlogbr.com"},
+                                         "whatsapp_notificacoes": {"clientes": {"forcar_destino": ""}}})
+        wz.assert_not_called()
+        cham.assert_called_once()
+
+    def test_whatsapp_sai_quando_zap_em_piloto(self):
+        wz, _ = self._avisar_com_cfg({"resumo_diario_embarcador": {"forcar_destino": "hugo@freshlogbr.com"},
+                                      "whatsapp_notificacoes": {"clientes": {"forcar_destino": "5511900000000"}}})
+        wz.assert_called_once()
+
+    def test_entregues_sem_boleto_dedup_reentrega(self):
+        entregues = [{"codigo": "PS-1", "destinatario": "A"}, {"codigo": "PS-1-R1", "destinatario": "A"}]
+        with mock.patch.object(mod, "_situacoes", return_value={"PS-1": "TEM_BOLETO"}),              mock.patch.object(mod.boleto_faltando, "faltando", side_effect=lambda c, p, s: p) as f:
+            r = mod.entregues_sem_boleto(mock.MagicMock(), entregues)
+        self.assertEqual([i["codigo"] for i in r], ["PS-1"])
 
 
 if __name__ == "__main__":
