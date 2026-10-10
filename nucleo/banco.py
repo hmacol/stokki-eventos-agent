@@ -399,6 +399,9 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
     conn.executescript(_DDL_CADASTRO)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
+    # CREATE IF NOT EXISTS não acrescenta coluna.
+    _migrar_colunas(conn, "motoristas_cadastros", [("dono_veiculo", "INTEGER NOT NULL DEFAULT 1")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
