@@ -222,4 +222,6 @@ def publico(m: dict) -> dict:
         "perfil": m.get("perfil") or PERFIL_MOTORISTA,
         "trocar_pin": bool(m.get("trocar_pin")),
         "chave_pix": m.get("chave_pix"), "placa": m.get("placa"),
+        # 08/10: motorista que não é dono do carro não vê o extrato (pedágio continua)
+        "ve_financeiro": bool(m.get("ve_financeiro", 1)),
     }

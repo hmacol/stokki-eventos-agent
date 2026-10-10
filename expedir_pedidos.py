@@ -303,6 +303,25 @@ def baixar_canhoto_pdf(token: str, checklist_id: int, codigo_ps: str) -> Path | 
         return None
 
 
+def pdf_do_canhoto(vuupt_token: str, servico: dict, codigo_ps: str) -> Path | None:
+    """PDF do canhoto pra anexar na Stokki: o do checklist da Vuupt e, se
+    nao houver, o enviado pela tela de baixa de motorista sem app
+    (nucleo/canhotos_manuais.py, Hugo 09/10)."""
+    checklist_id = extrair_checklist_id(servico) if tem_canhoto(servico) else None
+    pdf = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
+    if pdf:
+        return pdf
+    try:
+        from nucleo.canhotos_manuais import caminho_canhoto_manual
+        manual = caminho_canhoto_manual(codigo_ps)
+    except Exception as e:  # noqa: BLE001 -- sem manual, segue como hoje (sem comprovante)
+        logger.warning(f"  {codigo_ps}: falha ao procurar canhoto manual: {e}")
+        return None
+    if manual:
+        logger.info(f"  {codigo_ps}: usando canhoto enviado pelo painel (baixa sem app).")
+    return manual
+
+
 # ── Notificacao interna ───────────────────────────────────────────────────────
 
 def notificar_pendencias_expedicao(sem_comprovante: list, falhas: dict,
@@ -1529,14 +1548,13 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     try:
         for i, servico in enumerate(validados, 1):
             codigo_ps    = servico.get("code", "")
-            checklist_id = extrair_checklist_id(servico) if tem_canhoto(servico) else None
             cl           = _extrair_checklist(servico)
             logger.info(
                 f"[{i}/{total}] {codigo_ps} | entregue_em={(servico.get('completed_at') or '')[:16]} | "
                 f"validado_em={(cl or {}).get('validated_at') or '-'}"[:120]
             )
 
-            pdf_path = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
+            pdf_path = pdf_do_canhoto(vuupt_token, servico, codigo_ps)
 
             resultado_exp = expedir_na_stokki(page, codigo_ps)
             situacao = None

@@ -52,6 +52,10 @@ rota com services_action=unassign (mesmo caminho do passo 1); senão
 reescreve a rota só com o que fica (mesmo PUT do "Excluir da Rota" da
 Torre). Rota 'finished'/'canceled' não é tocada.
 
+08/10 (Hugo): rota de motorista SEM_APP (iPhone, coluna do BD_MOTORISTAS)
+NÃO é devolvida -- ele fez a rota mas nada foi registrado. Vai pro resumo
+como "aguardando baixa"; a baixa é pela Torre (nucleo/baixa_sem_app.py).
+
 COMO USAR:
     py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py                # execução normal
     py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py --modo-teste   # só lista, não cancela
@@ -162,8 +166,13 @@ def plano_devolucao(rota: dict, hoje: date | None = None) -> dict:
             "manter_ids": manter, "iniciados": iniciados}
 
 
-def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: bool) -> dict:
-    """Passo 2 (ver docstring do módulo). Retorna o resumo pro e-mail."""
+def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: bool,
+                                         sem_app: set[int] | None = None) -> dict:
+    """Passo 2 (ver docstring do módulo). Retorna o resumo pro e-mail.
+    `sem_app`: agent_ids de motorista sem app (iPhone, BD_MOTORISTAS
+    SEM_APP; Hugo, 08/10) -- a rota deles NUNCA é devolvida: o motorista
+    fez a entrega mas nada foi registrado; a baixa é pela Torre."""
+    sem_app = sem_app or set()
     prefixo = "[MODO TESTE] " if modo_teste else ""
     filtro = [
         {"field": "start_at", "operator": "gte",
@@ -171,11 +180,19 @@ def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: boo
         {"field": "start_at", "operator": "lt", "value": hoje.strftime("%Y-%m-%d") + " 00:00:00"},
     ]
     rotas = listar_rotas(token, include=["services"], filtro=filtro)
-    resumo = {"devolvidos": [], "iniciados": [], "erros": []}
+    resumo = {"devolvidos": [], "iniciados": [], "erros": [], "aguardando_baixa": []}
     ids_devolvidos = []
     for rota in rotas:
         data_rota = _data_inicio_rota(rota)
         if data_rota is None or data_rota >= hoje:
+            continue
+        if rota.get("agent_id") in sem_app:
+            abertos = [s for s in extrair_servicos_da_rota(rota)
+                       if s.get("id") and (s.get("status") or "") not in ("done", "canceled", "cancelled")]
+            if rota.get("status") not in STATUS_ROTA_ENCERRADA and abertos:
+                resumo["aguardando_baixa"].append(
+                    f"{rota.get('name') or rota.get('id')} (agent {rota.get('agent_id')}, "
+                    f"{data_rota:%d/%m}, {len(abertos)} pedido(s))")
             continue
         plano = plano_devolucao(rota, hoje)
         nome = rota.get("name") or f"rota {rota.get('id')}"
@@ -235,15 +252,25 @@ def main(modo_teste: bool = False):
     # devolver os pedidos ao pool) saiu -- rota enviada à VUUPT fica,
     # mesmo sem motorista. Fica só o passo 2 (rotas de dias anteriores).
     try:
+        from regras.preferencias_motoristas import agent_ids_sem_app
+        sem_app = agent_ids_sem_app()
+    except Exception as e:
+        logger.warning(f"BD_MOTORISTAS (SEM_APP) ilegível -- segue sem exceção de motorista: {e}")
+        sem_app = set()
+
+    try:
         if not token:
             raise RuntimeError("config.yaml sem vuupt_api.token.")
-        dev = devolver_pendentes_de_rotas_passadas(token, date.today(), modo_teste)
+        dev = devolver_pendentes_de_rotas_passadas(token, date.today(), modo_teste, sem_app)
         detalhe = f"{prefixo}{len(dev['devolvidos'])} pedido(s) devolvido(s) ao pool"
         if dev["devolvidos"]:
             detalhe += f": {', '.join(dev['devolvidos'])}"
         if dev["iniciados"]:
             detalhe += (f". CONFERIR (iniciados em rota antiga, não mexidos -- pode ter sido entregue "
                         f"sem baixa): {'; '.join(dev['iniciados'])}")
+        if dev["aguardando_baixa"]:
+            detalhe += (f". Rotas de motorista sem app aguardando baixa na Torre (não devolvidas): "
+                        f"{'; '.join(dev['aguardando_baixa'])}")
         if dev["erros"]:
             detalhe += f". [ALERTA_DEVOLUCAO] {len(dev['erros'])} falha(s): {'; '.join(dev['erros'])}"
         resumo_etapas["Pedidos presos em rotas de dias anteriores"] = {

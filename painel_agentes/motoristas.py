@@ -48,12 +48,17 @@ def dados_pagina_motoristas() -> dict:
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
 
     rotulos_dias = [rotulo for _, rotulo in DIAS_SEMANA]
+    logins = logins_do_app()
     motoristas = sorted((
         {
             "agent_id": m.agent_id, "nome": m.nome, "ativo": m.ativo,
             "dias_disponiveis": ", ".join(rotulos_dias[d] for d in sorted(m.dias_disponiveis) if 0 <= d < 7),
             "zonas_preferidas": m.zonas_preferidas, "tipo_veiculo": m.tipo_veiculo,
             "telefone": m.telefone, "email": m.email, "placa": m.placa,
+            # login do app (08/10): cpf do login, se entrou e se vê o extrato
+            "cpf_login": (logins.get(m.agent_id) or {}).get("cpf"),
+            "ve_financeiro": bool((logins.get(m.agent_id) or {}).get("ve_financeiro", 1)),
+            "ultimo_login_em": (logins.get(m.agent_id) or {}).get("ultimo_login_em"),
         }
         for m in catalogo.motoristas
     ), key=lambda m: m["nome"])
@@ -65,6 +70,21 @@ def dados_pagina_motoristas() -> dict:
         "tipos_veiculo": [{"codigo": t.codigo, "nome": t.nome} for t in TIPOS_VEICULO],
         "cadastros_pendentes": cadastros_pendentes(),
     }
+
+
+def logins_do_app() -> dict[int, dict]:
+    """agent_id -> login do app (cpf, ve_financeiro, ultimo_login_em). Vazio se o núcleo falhar."""
+    try:
+        from nucleo import banco as nucleo_banco, cadastro_motorista as cad
+        conn = nucleo_banco.conectar()
+        try:
+            return cad.logins_por_agent_id(conn)
+        finally:
+            conn.close()
+    except Exception as e:   # pragma: no cover - defesa
+        import logging
+        logging.getLogger(__name__).warning(f"Logins do app indisponíveis: {e}")
+        return {}
 
 
 def cadastros_pendentes() -> list[dict]:

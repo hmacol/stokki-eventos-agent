@@ -117,6 +117,16 @@ class TestCadastrosMotoristas(unittest.TestCase):
         self.assertEqual(r.get_json()["cadastro"]["status"], "RECUSADO")
         self.assertEqual(self._post(f"/api/motoristas/cadastros/{cid2}/recusar", {"motivo": "x"}).status_code, 409)
 
+    def test_chave_ve_financeiro(self):
+        self._logar("total")
+        self._post(f"/api/motoristas/cadastros/{self.cid}/aprovar", {"agent_id": 77})
+        r = self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": False})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertFalse(r.get_json()["ve_financeiro"])
+        self.assertEqual(self._post("/api/motoristas/00000000000/ve-financeiro", {"ve": True}).status_code, 404)
+        self._logar("operador")
+        self.assertIn(self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": True}).status_code, (302, 403))
+
 
 if __name__ == "__main__":
     unittest.main()

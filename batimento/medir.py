@@ -351,6 +351,13 @@ def ler_banco(conn: sqlite3.Connection, bases: set[str], agent_lalamove: int) ->
                 if r["resultado_validacao"] == "APROVADO":
                     e["comprovante_app_validado"] = True
 
+    # canhoto enviado pela tela de baixa de motorista sem app (09/10)
+    if _tabela_existe(conn, "canhotos_manuais"):
+        for r in conn.execute("SELECT codigo FROM canhotos_manuais"):
+            e = pega(r["codigo"])
+            if e is not None:
+                e["canhoto_painel"] = True
+
     # expedicao
     if _tabela_existe(conn, "expedicoes_processadas"):
         for r in conn.execute("SELECT codigo_ps, canhoto_anexado, processado_em FROM expedicoes_processadas"):
@@ -426,6 +433,8 @@ def montar_fato(linha: dict, banco: dict, vuupt: dict, catalogo) -> dict:
         canhoto_fonte, validado = "app", bool(banco.get("comprovante_app_validado"))
     elif v.get("images_quantity"):
         canhoto_fonte, validado = "vuupt_foto", bool(v.get("validated_at"))
+    elif banco.get("canhoto_painel"):
+        canhoto_fonte, validado = "painel", False
     elif banco.get("expedicao_anexou_canhoto"):
         canhoto_fonte, validado = "expedicao_anexou", False
     else:

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block titulo %}Baixa de rota sem app{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  input.canhoto { font-size: 12px; max-width: 200px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; }
+  tr:last-child td { border-bottom: none; }
+  tr.fechado td { color: var(--texto-suave); }
+  .mono { font-size: 12px; white-space: nowrap; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  select { padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; max-width: 240px; }
+  .acoes { margin: 16px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .st-entregue { color: var(--sucesso, #16a34a); font-weight: 700; }
+  .st-insucesso, .st-erro { color: var(--erro); font-weight: 700; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<h1>Baixa de rota de motorista sem app</h1>
+{% if erro %}<p style="color:var(--erro);">{{ erro }}</p>{% endif %}
+{% if rota and not erro %}
+<p class="sub">{{ rota.name }} · {{ (rota.start_at or '')[:10] }} · agent {{ rota.agent_id }}.
+  Tudo marcado como entregue: desmarque o que voltou e escolha o motivo.</p>
+<div class="tabela-wrap"><table>
+  <thead><tr><th>Entregue</th><th>Pedido</th><th>Cliente</th><th>Canhoto</th><th>Motivo (se voltou)</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for s in servicos %}
+    <tr class="{{ 'fechado' if s.fechado }}" data-id="{{ s.id }}" data-codigo="{{ s.codigo }}">
+      <td>{% if not s.fechado %}<input type="checkbox" class="entregue" checked aria-label="Entregue {{ s.codigo }}">{% endif %}</td>
+      <td class="mono">{{ s.codigo }}</td>
+      <td>{{ s.titulo }}<div class="suave">{{ s.endereco }}</div></td>
+      <td>{% if not s.fechado %}<input type="file" class="canhoto" accept="image/*,application/pdf" capture="environment" aria-label="Canhoto {{ s.codigo }}">{% endif %}</td>
+      <td>{% if not s.fechado %}
+        <select class="motivo" disabled aria-label="Motivo {{ s.codigo }}"><option value="">—</option>
+          {% for k, t in motivos %}<option value="{{ k }}">{{ t }}</option>{% endfor %}
+        </select>{% endif %}</td>
+      <td class="status">{{ 'já fechado' if s.fechado else s.status }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<div class="acoes">
+  <button type="button" class="botao" id="confirmar">Confirmar baixa</button>
+  <span id="andamento" class="suave"></span>
+</div>
+<script>
+document.querySelectorAll('tr[data-id]').forEach(function (tr) {
+  var cb = tr.querySelector('.entregue'), sel = tr.querySelector('.motivo');
+  var fc = tr.querySelector('.canhoto');
+  if (cb) cb.addEventListener('change', function () {
+    sel.disabled = cb.checked; if (cb.checked) sel.value = '';
+    if (fc) { fc.disabled = !cb.checked; if (!cb.checked) fc.value = ''; }
+  });
+});
+document.getElementById('confirmar').addEventListener('click', async function () {
+  var btn = this, itens = [];
+  document.querySelectorAll('tr[data-id]').forEach(function (tr) {
+    var cb = tr.querySelector('.entregue'); if (!cb) return;
+    var sel = tr.querySelector('.motivo');
+    itens.push({service_id: +tr.dataset.id, codigo: tr.dataset.codigo, entregue: cb.checked,
+                failed_reason_id: cb.checked ? null : (+sel.value || null)});
+  });
+  if (!itens.length) return;
+  var voltou = itens.filter(function (i) { return !i.entregue; }).length;
+  var fd = new FormData(), nCanhotos = 0;
+  fd.append('dados', JSON.stringify({rota: {{ rota.id }}, itens: itens}));
+  document.querySelectorAll('tr[data-id]').forEach(function (tr) {
+    var fc = tr.querySelector('.canhoto'), cb = tr.querySelector('.entregue');
+    if (fc && cb && cb.checked && fc.files.length) { fd.append('canhoto_' + tr.dataset.id, fc.files[0]); nCanhotos++; }
+  });
+  if (!confirm('Concluir ' + (itens.length - voltou) + ' como entregue (' + nCanhotos + ' com canhoto) e ' + voltou + ' como insucesso na Vuupt?')) return;
+  btn.disabled = true;
+  var r = await fetch('{{ url_for("api_baixa_sem_app") }}', {method: 'POST', body: fd});
+  var j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) { alert(j.erro || ('Falha (' + r.status + ')')); btn.disabled = false; return; }
+  var url = '{{ url_for("api_baixa_sem_app_status", lote=0) }}'.replace(/0$/, j.lote);
+  (async function acompanhar() {
+    var st = await (await fetch(url)).json(), feitos = 0;
+    st.itens.forEach(function (i) {
+      var td = document.querySelector('tr[data-id="' + i.service_id + '"] .status');
+      if (td) { td.textContent = i.status + (i.erro ? ' (' + i.erro + ')' : ''); td.className = 'status st-' + i.status; }
+      if (i.status !== 'pendente') feitos++;
+    });
+    document.getElementById('andamento').textContent = feitos + ' de ' + st.itens.length + (st.terminado ? ' — concluído.' : '…');
+    if (!st.terminado) setTimeout(acompanhar, 2000);
+  })();
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
+import { CampoPin } from '../src/campoPin';
 import { ErroApi, ErroRede } from '../src/api';
 import { cores } from '../src/tema';
 
@@ -52,10 +53,7 @@ export default function Login() {
             placeholder="000.000.000-00" placeholderTextColor="#9CA3AF" autoComplete="off" textContentType="none" returnKeyType="next"
           />
           <Text style={s.rotulo}>PIN (6 dígitos)</Text>
-          <TextInput
-            style={s.campo} value={pin} onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 6))}
-            keyboardType="number-pad" secureTextEntry placeholder="••••••" placeholderTextColor="#9CA3AF" onSubmitEditing={enviar} returnKeyType="go"
-          />
+          <CampoPin value={pin} onChangeText={setPin} onSubmitEditing={enviar} returnKeyType="go" />
           {erro ? <Text style={s.erro}>{erro}</Text> : null}
           <Botao titulo="Entrar" onPress={enviar} carregando={carregando} estilo={{ marginTop: 16 }} />
           <Text style={s.ajuda}>Não tem PIN? Fale com a operação da FreshLog.</Text>

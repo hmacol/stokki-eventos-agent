@@ -35,6 +35,7 @@ export default function Cadastro() {
   const [zonas, setZonas] = useState<string[]>([]);
   const [dias, setDias] = useState<string[]>(['SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA']);
   const [viagens, setViagens] = useState(false);
+  const [dono, setDono] = useState(true);
   const [fotos, setFotos] = useState<Record<Doc, string | null>>({ cnh: null, crlv: null });
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -83,7 +84,7 @@ export default function Cadastro() {
       if (!atual) {
         const r = await api.criarCadastro({
           cpf: cpf.replace(/\D/g, ''), nome: nome.trim(), telefone: tel, email: email.trim(), chave_pix: pix.trim(),
-          placa: placa.toUpperCase(), tipo_veiculo: tipo, zonas, dias, aceita_viagens: viagens,
+          placa: placa.toUpperCase(), tipo_veiculo: tipo, zonas, dias, aceita_viagens: viagens, dono_veiculo: dono,
         });
         atual = { id: r.id, chave: r.chave_envio };
         setCriado(atual);
@@ -130,6 +131,11 @@ export default function Cadastro() {
           <Text style={s.rotulo}>Placa do veículo</Text>
           <TextInput style={s.campo} value={placa} onChangeText={(v) => setPlaca(v.toUpperCase().slice(0, 8))} autoCapitalize="characters" placeholder="ABC1D23" placeholderTextColor="#9CA3AF" />
 
+          <Text style={s.rotulo}>O veículo é seu?</Text>
+          <View style={s.chips}>
+            <Chip rotulo="Sim, é meu" ativo={dono} onPress={() => setDono(true)} />
+            <Chip rotulo="Não, dirijo pra outra pessoa" ativo={!dono} onPress={() => setDono(false)} />
+          </View>
           <Text style={s.rotulo}>Tipo de veículo</Text>
           <View style={s.chips}>{TIPOS_VEICULO.map((t) => <Chip key={t.codigo} rotulo={t.nome} ativo={tipo === t.codigo} onPress={() => setTipo(t.codigo)} />)}</View>
           <Text style={s.rotulo}>Zonas que você atende</Text>

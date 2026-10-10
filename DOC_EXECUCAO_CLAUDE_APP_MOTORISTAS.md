@@ -590,3 +590,16 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   1.1.0 saíram SEM `RECORD_AUDIO` porque o plugin do expo-image-picker estava
   com `microphonePermission: false` (que remove a permissão do manifesto).
   Corrigido no app.json; build 1.1.1.
+- **08/10 (noite) — Motorista que não é dono do carro: sem extrato.** Hugo:
+  "ocultar o financeiro" nesses casos; decidiu que o pedágio continua e que
+  ele marca no painel. `motoristas.ve_financeiro` (padrão 1) e
+  `motoristas_cadastros.dono_veiculo`; `GET /api/financeiro` responde 403
+  quando 0; `auth.publico` expõe `ve_financeiro`. App: a aba Financeiro vira
+  "Despesas" (só lançamento de pedágio/despesas, sem extrato) quando
+  `ve_financeiro === false`; o auto-cadastro pergunta "O veículo é seu?".
+  Painel /motoristas: coluna "App · Financeiro" com a chave Vê extrato /
+  Sem extrato por motorista com login (só total;
+  `POST /api/motoristas/<cpf>/ve-financeiro`), e o cartão de aprovação tem
+  "Dono do veículo" pré-marcado pela resposta dele. Também: olho pra ver o
+  PIN (`src/campoPin.tsx`, OTA a8105ca2) e player/miniatura no
+  /atendimento (commit 47f57b9).

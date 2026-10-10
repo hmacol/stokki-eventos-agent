@@ -2,10 +2,11 @@
 // (motorista.trocar_pin, a Guarda do _layout manda pra cá e não deixa
 // sair); opcional pelo Perfil. Sempre 6 dígitos.
 import React, { useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
+import { CampoPin } from '../src/campoPin';
 import { ErroApi, ErroRede } from '../src/api';
 import { cores } from '../src/tema';
 
@@ -19,7 +20,6 @@ export default function TrocarPin() {
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(false);
 
-  const soDigitos = (v: string) => v.replace(/\D/g, '').slice(0, 6);
   // Mesma regra do servidor (auth.validar_pin_forte): sem repetidos nem sequências.
   const facil = (p: string) => {
     const d = p.split('').map(Number);
@@ -60,20 +60,11 @@ export default function TrocarPin() {
         </Text>
 
         <Text style={s.rotulo}>PIN atual</Text>
-        <TextInput
-          style={s.campo} value={atual} onChangeText={(v) => setAtual(soDigitos(v))} keyboardType="number-pad"
-          secureTextEntry placeholder="••••••" placeholderTextColor="#9CA3AF" returnKeyType="next"
-        />
+        <CampoPin value={atual} onChangeText={setAtual} returnKeyType="next" />
         <Text style={s.rotulo}>PIN novo (6 dígitos)</Text>
-        <TextInput
-          style={s.campo} value={novo} onChangeText={(v) => setNovo(soDigitos(v))} keyboardType="number-pad"
-          secureTextEntry placeholder="••••••" placeholderTextColor="#9CA3AF" returnKeyType="next"
-        />
+        <CampoPin value={novo} onChangeText={setNovo} returnKeyType="next" />
         <Text style={s.rotulo}>Repita o PIN novo</Text>
-        <TextInput
-          style={s.campo} value={confirmar} onChangeText={(v) => setConfirmar(soDigitos(v))} keyboardType="number-pad"
-          secureTextEntry placeholder="••••••" placeholderTextColor="#9CA3AF" onSubmitEditing={enviar} returnKeyType="go"
-        />
+        <CampoPin value={confirmar} onChangeText={setConfirmar} onSubmitEditing={enviar} returnKeyType="go" />
         {erro ? <Text style={s.erro}>{erro}</Text> : null}
         <Botao titulo="Salvar PIN" onPress={enviar} carregando={carregando} estilo={{ marginTop: 20 }} />
         <View style={{ marginTop: 12 }}>
@@ -92,7 +83,6 @@ const s = StyleSheet.create({
   titulo: { fontSize: 22, fontWeight: '800', color: cores.texto },
   texto: { color: cores.textoSuave, marginTop: 8, lineHeight: 20 },
   rotulo: { color: cores.textoSuave, marginTop: 16, marginBottom: 6, fontWeight: '600' },
-  campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 12, padding: 16, fontSize: 20, letterSpacing: 1, color: cores.texto },
   erro: { color: cores.perigo, marginTop: 12, fontWeight: '600' },
   ajuda: { color: cores.textoSuave, textAlign: 'center', marginTop: 24 },
 });

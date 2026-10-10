@@ -290,6 +290,7 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
     ("chave_pix", "TEXT"),            # 08/10: o motorista edita no app (nucleo/cadastro_motorista.py)
     ("placa", "TEXT"),                # idem; espelhada na BD_MOTORISTAS.xlsx
+    ("ve_financeiro", "INTEGER NOT NULL DEFAULT 1"),   # 0 = não é dono do carro: sem extrato no app (Hugo, 08/10)
 ]
 
 # Cadastro pelo app (08/10): histórico das edições e fila de auto-cadastro.
@@ -314,6 +315,7 @@ CREATE TABLE IF NOT EXISTS motoristas_cadastros (
     zonas           TEXT,                 -- csv, mesmos valores da planilha
     dias            TEXT,                 -- csv SEGUNDA..DOMINGO
     aceita_viagens  INTEGER NOT NULL DEFAULT 0,
+    dono_veiculo    INTEGER NOT NULL DEFAULT 1,   -- 0 = dirige carro de outro: sem extrato no app
     chave_envio     TEXT NOT NULL,        -- autoriza o envio dos documentos
     cnh_arquivo     TEXT,
     crlv_arquivo    TEXT,
