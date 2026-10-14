@@ -784,6 +784,7 @@
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
+ static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.
  cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado
                            (oculta do cliente por padrão).

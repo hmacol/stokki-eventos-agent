@@ -8,6 +8,9 @@
   try { if (localStorage.getItem('portal_tema') === 'escuro') document.documentElement.classList.add('tema-escuro'); } catch (e) {}
 </script>
 <title>{% block titulo %}Acompanhamento de entregas{% endblock %} — Fresh Log</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 {% include "_paleta_cores.html" %}
 <style>
   :root {
