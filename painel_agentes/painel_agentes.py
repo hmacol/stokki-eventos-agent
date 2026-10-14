@@ -74,6 +74,9 @@ from planejamento_rotas import (
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
+# Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
+# botão na Torre pra consulta interna). Mesma constante que a página usa.
+from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
 import rascunhos_rota
 import torre_controle
 import tratativas
@@ -1310,6 +1313,7 @@ def torre():
     return render_template(
         "torre_controle.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
+        url_regioes=URL_PAGINA_REGIOES,   # consulta interna dos dias de atendimento (Hugo, 14/10)
         # Nível "atendimento" (Hugo, 28/09): trata ocorrência (tratar,
         # desfazer, duplicar, notificar), mas não roda agente, não
         # encerra rota nem exclui pedido -- isso segue em pode_editar.
@@ -1335,7 +1339,7 @@ def torre_mobile():
         "torre_mobile.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
         pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
-        endpoint_desktop="torre",
+        endpoint_desktop="torre", url_regioes=URL_PAGINA_REGIOES,
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         pode_excluir_pedido=pode_editar,
     )

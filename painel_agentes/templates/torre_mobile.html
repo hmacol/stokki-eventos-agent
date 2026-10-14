@@ -326,6 +326,7 @@
   {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
      abertas de qualquer dia; rota concluída vai pro Histórico. #}
   <a class="botao-icone" href="{{ url_for('consulta') }}" title="Histórico de Rotas" style="flex:1;text-decoration:none;text-align:left;">📚 Histórico de Rotas</a>
+  <a class="botao-icone" id="btn-regioes" href="{{ url_regioes }}" target="_blank" rel="noopener" title="Dias de atendimento por região" style="text-decoration:none;">📅</a>
   <button type="button" class="botao-icone" id="botao-alarme" onclick="alternarAlarme()">🔔</button>
   <button type="button" class="botao-icone" onclick="carregarTudo()" title="Atualizar agora">↻</button>
 </div>

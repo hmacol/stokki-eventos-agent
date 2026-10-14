@@ -526,6 +526,7 @@
   {# Sem seletor de data (Hugo, 15/09): a torre acumula as rotas ainda
      abertas de qualquer dia; rota concluída vai pro Histórico. #}
   <a class="botao-refresh" href="{{ url_for('consulta') }}" title="Rotas concluídas e dias passados" style="text-decoration:none;">📚 Histórico de Rotas</a>
+  <a class="botao-refresh" id="btn-regioes" href="{{ url_regioes }}" target="_blank" rel="noopener" title="Regiões, dias de visita e calendário do mês (página pública do portal)" style="text-decoration:none;">📅 Dias de atendimento</a>
   <select class="filtro-embarcador" id="filtro-embarcador" onchange="alternarFiltroEmbarcador()"
           title="Mostrar só os pedidos de um embarcador (rotas, mapa, pedidos e Fila de ação)">
     <option value="">Todos os embarcadores</option>
