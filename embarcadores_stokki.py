@@ -98,3 +98,85 @@ def celular_whatsapp(valor) -> str:
     if not numero or len(set(numero[4:])) == 1:
         return ""
     return numero
+
+
+DIAS_ATIVO = 30
+_SQL_CNPJ_REMETENTE = "REPLACE(REPLACE(REPLACE(remetente_codigo, '.', ''), '/', ''), '-', '')"
+
+
+def _fmt(agora: datetime) -> str:
+    return agora.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _tabela_existe(conn, nome: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (nome,)).fetchone() is not None
+
+
+def tem_pedido_recente(conn, cnpj: str, agora: datetime, dias: int = DIAS_ATIVO) -> bool:
+    if not _tabela_existe(conn, "nucleo_pedidos"):
+        return False
+    limite = _fmt(agora - timedelta(days=dias))
+    return conn.execute(f"SELECT 1 FROM nucleo_pedidos WHERE {_SQL_CNPJ_REMETENTE} = ? AND criado_em >= ? LIMIT 1",
+                        (cnpj, limite)).fetchone() is not None
+
+
+def sender_do_nucleo(conn, cnpj: str) -> int | None:
+    """Sender do pedido mais antigo desse remetente: e o que a Vuupt criou
+    primeiro; os pedidos seguintes passam a apontar pra ele via interno."""
+    if not _tabela_existe(conn, "nucleo_pedidos"):
+        return None
+    row = conn.execute(f"SELECT sender_id FROM nucleo_pedidos WHERE {_SQL_CNPJ_REMETENTE} = ? AND sender_id IS NOT NULL "
+                       "ORDER BY criado_em, codigo LIMIT 1", (cnpj,)).fetchone()
+    return int(row[0]) if row else None
+
+
+def resolver_sender(conn, cnpj: str, razao: str, vuupt) -> int | None:
+    sender = sender_do_nucleo(conn, cnpj)
+    if sender or vuupt is None:
+        return sender
+    try:
+        resposta = vuupt.criar_customer({"name": razao, "code": auth.formatar_cnpj(cnpj)})
+    except Exception as exc:
+        logger.warning(f"Falha ao criar o remetente de {cnpj} na Vuupt: {exc}")
+        return None
+    dados = resposta.get("customer", resposta) if isinstance(resposta, dict) else {}
+    return int(dados["id"]) if isinstance(dados, dict) and dados.get("id") else None
+
+
+def separar(clientes: list[dict], conn) -> dict:
+    """novos: CNPJ fora de interno; sem_stkkc: CNPJ em interno sem stkkc_id
+    (cadastro manual antigo); conflitos: CNPJ em interno com outro stkkc_id;
+    ignorados: rotulo sem CNPJ."""
+    por_stkkc, por_cnpj = set(), {}
+    for cnpj, stkkc in conn.execute("SELECT cnpj_embarcador, stkkc_id FROM interno").fetchall():
+        if stkkc is not None:
+            por_stkkc.add(int(stkkc))
+        por_cnpj[re.sub(r"\D", "", str(cnpj or ""))] = stkkc
+    g = {"novos": [], "sem_stkkc": [], "conflitos": [], "ignorados": []}
+    for cli in clientes:
+        if cli["stkkc_id"] in por_stkkc:
+            continue
+        if not cli["cnpj"]:
+            g["ignorados"].append(cli)
+        elif cli["cnpj"] not in por_cnpj:
+            g["novos"].append(cli)
+        elif por_cnpj[cli["cnpj"]] is None:
+            g["sem_stkkc"].append(cli)
+        else:
+            g["conflitos"].append((cli, int(por_cnpj[cli["cnpj"]])))
+    return g
+
+
+def pre_cadastrar(conn, cli: dict, contato: dict, ativo: bool, agora: datetime) -> None:
+    momento = _fmt(agora)
+    obs = f"Pré-cadastro automático {agora:%d/%m/%Y} (Stokki #stkkc-{cli['stkkc_id']})"
+    if not ativo:
+        obs += ", inativo: sem pedido nos últimos 30 dias"
+    conn.execute(
+        "INSERT INTO interno (cnpj_embarcador, stkkc_id, nome_remetente, apelido, email, fator_ponderado, habilidade, "
+        "notificar_email, observacoes, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, 1.0, NULL, ?, ?, ?, ?)",
+        (cli["cnpj"], cli["stkkc_id"], cli["razao"], cli["apelido"], contato["email"] or None,
+         1 if ativo else 0, obs, momento, momento))
+    conn.commit()
+    cad.registrar(conn, cli["cnpj"], cli["stkkc_id"], cad.PENDENTE if ativo else cad.INATIVO,
+                  celular=contato["celular"], email=contato["email"], agora=agora)
