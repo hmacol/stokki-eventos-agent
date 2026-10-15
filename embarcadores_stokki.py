@@ -180,3 +180,147 @@ def pre_cadastrar(conn, cli: dict, contato: dict, ativo: bool, agora: datetime) 
     conn.commit()
     cad.registrar(conn, cli["cnpj"], cli["stkkc_id"], cad.PENDENTE if ativo else cad.INATIVO,
                   celular=contato["celular"], email=contato["email"], agora=agora)
+
+
+DIAS_REENVIO = 3
+ORIGEM_GRUPO = "embarcadores_stokki"
+FORCAR_EMAIL_PADRAO = "hugo@freshlogbr.com"
+_DESFECHOS = {"whatsapp": "Convite por WhatsApp.", "email": "Sem WhatsApp válido, convite por e-mail.",
+              "nenhum": "Sem contato na Stokki, cadastrar à mão."}
+
+
+def link_convite(conn, config: dict, cnpj: str) -> str:
+    portal = config.get("portal_cliente") or {}
+    if not portal.get("secret_key"):
+        raise RuntimeError("portal_cliente.secret_key ausente no config.yaml")
+    url_base = (portal.get("url_base") or "https://app.freshhub.com.br/cliente").rstrip("/")
+    return f"{url_base}/definir-pin/{auth.gerar_token_definir_pin(portal['secret_key'], conn, cnpj)}"
+
+
+def texto_convite(link: str) -> str:
+    return f"Fresh Log: complete o cadastro da sua empresa: {link}"
+
+
+def texto_grupo_novo(nome: str, razao: str, canal: str) -> str:
+    return f"Embarcador novo na Stokki: {nome} ({razao[:40]}). {_DESFECHOS[canal]}"
+
+
+def texto_reenvio(nome: str) -> str:
+    return f"Convite reenviado a {nome}: ainda sem cadastro depois de {DIAS_REENVIO} dias."
+
+
+def texto_conflito(cli: dict, outro: int) -> str:
+    return (f"Stokki #{cli['stkkc_id']} ({cli['apelido'] or cli['razao'][:30]}): CNPJ "
+            f"{auth.formatar_cnpj(cli['cnpj'])} já está em interno com stkkc_id {outro}. Conferir.")
+
+
+def texto_sem_sender(nome: str) -> str:
+    return f"Embarcador novo na Stokki: {nome}. Não consegui o remetente na Vuupt; tento de novo na próxima hora."
+
+
+def texto_inativos(n: int) -> str:
+    return f"{n} embarcador(es) da Stokki sem pedido nos últimos {DIAS_ATIVO} dias entraram como inativos (sem convite)."
+
+
+def destino_email(config: dict, email: str) -> tuple[list[str], bool]:
+    """Ausente = Hugo; envio real so com forcar_destino_email: '' explicito."""
+    forcar = str((config.get("cadastro_embarcador") or {}).get("forcar_destino_email", FORCAR_EMAIL_PADRAO) or "").strip()
+    return ([forcar], True) if forcar else ([email], False)
+
+
+def enviar_convite_email(config: dict, nome: str, cnpj: str, email: str, link: str, enviar=None) -> bool:
+    from email_utils import envelope_html
+    if enviar is None:
+        from email_utils import enviar_email as enviar
+    destinos, teste = destino_email(config, email)
+    nome_html, cnpj_fmt = html_lib.escape(nome), auth.formatar_cnpj(cnpj)
+    aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
+             f"<b>Convite pra repassar.</b> Pré-cadastro automático de <b>{nome_html}</b> (CNPJ {cnpj_fmt}). "
+             f"E-mail da Stokki: {html_lib.escape(email)}.</p>") if teste else ""
+    corpo = envelope_html(
+        aviso +
+        f"<p>Olá, <strong>{nome_html}</strong>.</p>"
+        f"<p>A Fresh Log abriu o cadastro da sua empresa (CNPJ {cnpj_fmt}). Falta pouco: defina seu PIN e informe "
+        f"o tipo de carga e os contatos para os avisos de entrega.</p>"
+        f"<p style='margin:24px 0'><a href='{link}' style='background:#0EA575;color:#fff;padding:12px 22px;"
+        f"border-radius:7px;text-decoration:none;font-weight:700'>Completar cadastro</a></p>"
+        f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas e só funciona uma vez.</p>",
+        rodape="Fresh Log · Portal de acompanhamento de entregas")
+    assunto = (f"[Convite pra repassar] {nome} · pré-cadastro na Fresh Log" if teste
+               else "Fresh Log · Complete o cadastro da sua empresa")
+    return bool(enviar(destinos, assunto, corpo, config.get("email", {})))
+
+
+def _ja_avisado(conn, assinatura: str) -> bool:
+    conn.execute(nw._SCHEMA)
+    return conn.execute("SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
+                        "AND situacao = 'enviado' LIMIT 1", (ORIGEM_GRUPO, assinatura)).fetchone() is not None
+
+
+def avisar_grupo(conn, config: dict, texto: str, assinatura: str, modo_teste: bool = False, **kw) -> str:
+    """Grupo ALERTAS, uma vez por evento (a janela de 2 h do despachar nao basta)."""
+    if _ja_avisado(conn, assinatura):
+        return "repetido"
+    return nw.despachar(config, ORIGEM_GRUPO, "cadastro", texto[:nw.MAX_MENSAGEM], assinatura,
+                        modo_teste=modo_teste, conn=conn, **kw)
+
+
+def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = False, enviar_email=None,
+             reenvio: bool = False, **kw) -> str:
+    """Convite pelo melhor canal: whatsapp | email | nenhum | adiado. Adiado
+    (teto, gateway ou SMTP fora) nao grava nada: tenta na proxima rodada."""
+    c = cad.buscar(conn, cnpj)
+    emb = conn.execute("SELECT apelido, nome_remetente, email FROM interno WHERE cnpj_embarcador = ?",
+                       (c["cnpj_embarcador"],)).fetchone()
+    nome = emb[0] or emb[1] or c["cnpj_embarcador"]
+    email = (c["email_stokki"] or emb[2] or "").split(",")[0].strip()
+    link = link_convite(conn, config, c["cnpj_embarcador"])
+    numero = celular_whatsapp(c["celular_stokki"])
+    canal = None
+    if numero:
+        if not modo_teste and not pn.ler(conn, c["cnpj_embarcador"])["whatsapp"]:
+            pn.salvar(conn, c["cnpj_embarcador"], [], {}, "pre-cadastro", whatsapp=numero)
+        assinatura = f"cadastro:{c['cnpj_embarcador']}:{'reenvio' if reenvio else 'convite'}"
+        situacao = nw.avisar_cliente_cadastro(c["cnpj_embarcador"], numero, texto_convite(link), assinatura, config,
+                                              modo_teste=modo_teste, conn=conn, agora=agora, **kw)
+        if situacao in ("enviado", "modo_teste"):
+            canal = "whatsapp"
+        elif situacao in ("nao_enviado", "indeterminado", "falhou"):
+            logger.info(f"Convite de {nome} adiado (WhatsApp: {situacao}).")
+            return "adiado"
+    if canal is None and email:
+        if modo_teste:
+            logger.info(f"[MODO TESTE] convite por e-mail pra {destino_email(config, email)[0]} ({nome}).")
+            canal = "email"
+        elif enviar_convite_email(config, nome, c["cnpj_embarcador"], email, link, enviar_email):
+            canal = "email"
+        else:
+            logger.info(f"Convite de {nome} adiado (e-mail falhou).")
+            return "adiado"
+    canal = canal or "nenhum"
+    if not modo_teste:
+        if reenvio:
+            cad.atualizar(conn, cnpj, agora, situacao=cad.REENVIADO, reenvio_em=_fmt(agora), canal_convite=canal)
+        else:
+            cad.atualizar(conn, cnpj, agora, situacao=cad.CONVIDADO if canal != "nenhum" else cad.SEM_CONTATO,
+                          canal_convite=canal, convite_enviado_em=_fmt(agora))
+    return canal
+
+
+def reenviar_vencidos(conn, config: dict, agora: datetime, modo_teste: bool = False, enviar_email=None, **kw) -> int:
+    """CONVIDADO ha mais de DIAS_REENVIO dias sem PIN definido: reenvia uma vez."""
+    limite = _fmt(agora - timedelta(days=DIAS_REENVIO))
+    rows = conn.execute("""
+        SELECT c.cnpj_embarcador, COALESCE(i.apelido, i.nome_remetente, c.cnpj_embarcador)
+        FROM cadastro_embarcador c
+        LEFT JOIN interno i ON i.cnpj_embarcador = c.cnpj_embarcador
+        LEFT JOIN clientes_portal p ON p.cnpj = c.cnpj_embarcador
+        WHERE c.situacao = ? AND c.convite_enviado_em <= ? AND p.pin_hash IS NULL
+    """, (cad.CONVIDADO, limite)).fetchall()
+    enviados = 0
+    for cnpj, nome in rows:
+        if convidar(conn, config, cnpj, agora, modo_teste, enviar_email, reenvio=True, **kw) == "adiado":
+            continue
+        enviados += 1
+        avisar_grupo(conn, config, texto_reenvio(nome), f"reenvio:{cnpj}", modo_teste, **kw)
+    return enviados

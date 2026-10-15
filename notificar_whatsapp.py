@@ -789,6 +789,37 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
         return "falhou"
 
 
+def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: str, config: dict,
+                            modo_teste: bool = False, **kw) -> str:
+    """Convite do pre-cadastro automatico (embarcadores_stokki.py): link pra
+    completar o cadastro no portal. Quem chama garante uma tentativa por
+    convite (assinatura cadastro:<cnpj>:convite|reenvio). Com
+    clientes.forcar_destino a mensagem vai pra esse numero com o destino real
+    na primeira linha."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (cadastro {cnpj}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado (cadastro {cnpj}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, "cadastro", texto, assinatura, modo_teste=modo_teste,
+                         grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
 def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
     """Chamado que passou a depender de gente (portal_cliente/chamados.py).
     Vai pro grupo do atendimento, NUNCA pro de alertas; um aviso por chamado

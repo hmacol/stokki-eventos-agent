@@ -184,5 +184,125 @@ class TestDeteccao(_ComBanco):
         self.assertEqual(cad.buscar(self.conn, ANTIGO["cnpj"])["situacao"], "INATIVO")
 
 
+class _ComCadastro(_ComBanco):
+    def preparar(self, cli, ativo=True, sender=23084712):
+        rot.pre_cadastrar(self.conn, cli, rot.extrair_contato(CONTATOS.get(cli["stkkc_id"], "")), ativo, AGORA)
+        if sender:
+            self.conn.execute("UPDATE interno SET sender_id = ? WHERE cnpj_embarcador = ?", (sender, cli["cnpj"]))
+            self.conn.commit()
+
+    def convidar(self, cli, config=None, agora=AGORA, **kw):
+        return rot.convidar(self.conn, config or _config(), cli["cnpj"], agora, enviar_email=self.email,
+                            dormir=self.dormir, **kw)
+
+    def grupo(self):
+        return [c.args[2] for c in self.enviar.call_args_list if c.args[1] == "1@g.us"]
+
+
+class TestConvite(_ComCadastro):
+    def test_celular_valido_vai_por_whatsapp_e_guarda_o_numero(self):
+        self.preparar(NONNA)
+        self.assertEqual(self.convidar(NONNA), "whatsapp")
+        chat, texto = self.enviar.call_args.args[1], self.enviar.call_args.args[2]
+        self.assertEqual(chat, "5511988887777@c.us")
+        self.assertIn("https://app.freshhub.com.br/cliente/definir-pin/", texto)
+        self.assertLessEqual(len(rot.texto_convite("x")), 60)
+        c = cad.buscar(self.conn, NONNA["cnpj"])
+        self.assertEqual((c["situacao"], c["canal_convite"], c["convite_enviado_em"]),
+                         ("CONVIDADO", "whatsapp", "2026-10-10 09:10:00"))
+        self.assertEqual(rot.pn.ler(self.conn, NONNA["cnpj"])["whatsapp"], "5511988887777")
+        self.email.assert_not_called()
+
+    def test_celular_de_mentira_vai_por_email(self):
+        self.preparar(RIC)
+        self.assertEqual(self.convidar(RIC), "email")
+        destinos, assunto, corpo = self.email.call_args.args[:3]
+        self.assertEqual(destinos, ["contato@ric.com"])
+        self.assertIn("/definir-pin/", corpo)
+        self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["canal_convite"], "email")
+        self.enviar.assert_not_called()
+
+    def test_sem_forcar_configurado_o_email_vai_pro_hugo(self):
+        self.preparar(RIC)
+        config = _config()
+        del config["cadastro_embarcador"]
+        self.convidar(RIC, config=config)
+        destinos, assunto, corpo = self.email.call_args.args[:3]
+        self.assertEqual(destinos, ["hugo@freshlogbr.com"])
+        self.assertIn("Convite pra repassar", corpo)
+        self.assertIn("contato@ric.com", corpo)
+
+    def test_numero_sem_whatsapp_cai_no_email(self):
+        self.preparar(NONNA)
+        self.existe.return_value = False
+        self.assertEqual(self.convidar(NONNA), "email")
+        self.assertEqual(self.email.call_args.args[0], ["mariana@fabenne.com"])
+
+    def test_sem_contato(self):
+        self.preparar(ANTIGO)
+        self.assertEqual(self.convidar(ANTIGO), "nenhum")
+        self.assertEqual(cad.buscar(self.conn, ANTIGO["cnpj"])["situacao"], "SEM_CONTATO")
+        self.email.assert_not_called()
+        self.enviar.assert_not_called()
+
+    def test_gateway_sem_resposta_adia_sem_gravar(self):
+        self.preparar(NONNA)
+        self.existe.return_value = None
+        self.assertEqual(self.convidar(NONNA), "adiado")
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "PENDENTE")
+        self.email.assert_not_called()
+
+    def test_email_que_falha_adia(self):
+        self.preparar(RIC)
+        self.email.return_value = False
+        self.assertEqual(self.convidar(RIC), "adiado")
+        self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["situacao"], "PENDENTE")
+
+    def test_modo_teste_nao_grava_nem_envia(self):
+        self.preparar(NONNA)
+        self.preparar(RIC, sender=22872019)
+        self.assertEqual(self.convidar(NONNA, modo_teste=True), "whatsapp")
+        self.assertEqual(self.convidar(RIC, modo_teste=True), "email")
+        self.enviar.assert_not_called()
+        self.email.assert_not_called()
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "PENDENTE")
+        self.assertEqual(rot.pn.ler(self.conn, NONNA["cnpj"])["whatsapp"], "")
+
+    def test_reenvio_unico_depois_de_3_dias(self):
+        self.preparar(NONNA)
+        self.convidar(NONNA, agora=AGORA - timedelta(days=4))
+        self.assertEqual(rot.reenviar_vencidos(self.conn, _config(), AGORA, enviar_email=self.email,
+                                               dormir=self.dormir), 1)
+        c = cad.buscar(self.conn, NONNA["cnpj"])
+        self.assertEqual((c["situacao"], c["reenvio_em"]), ("REENVIADO", "2026-10-10 09:10:00"))
+        self.assertEqual(rot.reenviar_vencidos(self.conn, _config(), AGORA + timedelta(days=5),
+                                               enviar_email=self.email, dormir=self.dormir), 0)
+        self.assertEqual(len(self.grupo()), 1)
+        self.assertIn("reenviado", self.grupo()[0])
+
+    def test_reenvio_pula_convite_recente_e_quem_ja_definiu_pin(self):
+        self.preparar(NONNA)
+        self.preparar(RIC, sender=22872019)
+        self.convidar(NONNA, agora=AGORA - timedelta(days=2))
+        self.convidar(RIC, agora=AGORA - timedelta(days=4))
+        rot.auth.definir_pin(self.conn, RIC["cnpj"], "135790")
+        self.assertEqual(rot.reenviar_vencidos(self.conn, _config(), AGORA, enviar_email=self.email,
+                                               dormir=self.dormir), 0)
+
+    def test_aviso_no_grupo_sai_uma_vez_por_assinatura(self):
+        self.assertEqual(rot.avisar_grupo(self.conn, _config(), "oi", "novo:1", dormir=self.dormir), "enviado")
+        self.assertEqual(rot.avisar_grupo(self.conn, _config(), "oi", "novo:1", dormir=self.dormir), "repetido")
+        self.assertEqual(len(self.grupo()), 1)
+
+    def test_whatsapp_com_forcar_destino_vai_pro_numero_do_teste(self):
+        config = _config()
+        config["whatsapp_notificacoes"]["clientes"]["forcar_destino"] = "5511000001111"
+        r = nw.avisar_cliente_cadastro(NONNA["cnpj"], "5511988887777", "Fresh Log: x", "cadastro:1:convite", config,
+                                       conn=self.conn, dormir=self.dormir)
+        self.assertEqual(r, "enviado")
+        self.assertEqual(self.enviar.call_args.args[1], "5511000001111@c.us")
+        self.assertTrue(self.enviar.call_args.args[2].startswith("[teste → +5511988887777]"))
+
+
 if __name__ == "__main__":
     unittest.main()
