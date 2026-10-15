@@ -331,3 +331,131 @@ def reenviar_vencidos(conn, config: dict, agora: datetime, modo_teste: bool = Fa
         enviados += 1
         avisar_grupo(conn, config, texto_reenvio(nome), f"reenvio:{cnpj}", modo_teste, **kw)
     return enviados
+
+
+def executar(config: dict, conn, clientes: list[dict], ler_contato, vuupt, agora: datetime | None = None,
+             modo_teste: bool = False, enviar_email=None, **kw) -> dict:
+    """Uma rodada. `clientes` vem de clientes_do_select; `ler_contato(id)`
+    devolve o HTML da tela de edicao do cliente na Stokki. `kw` (ex.: dormir)
+    so nos testes."""
+    agora = agora or datetime.now()
+    cad.garantir_tabela(conn)
+    resumo = {"novos": 0, "ativos": 0, "inativos": 0, "convites": {}, "reenvios": 0, "conflitos": 0,
+              "sem_sender": 0, "stkkc_preenchido": 0}
+    grupos = separar(clientes, conn)
+
+    for cli in grupos["ignorados"]:
+        logger.warning(f"Stokki #{cli['stkkc_id']} ({cli['razao']}): rotulo sem CNPJ, ignorado.")
+    for cli in grupos["sem_stkkc"]:
+        resumo["stkkc_preenchido"] += 1
+        logger.info(f"Stokki #{cli['stkkc_id']}: CNPJ {cli['cnpj']} ja em interno sem stkkc_id, preenchendo.")
+        if not modo_teste:
+            conn.execute("UPDATE interno SET stkkc_id = ?, atualizado_em = ? WHERE cnpj_embarcador = ?",
+                         (cli["stkkc_id"], _fmt(agora), cli["cnpj"]))
+            conn.commit()
+    for cli, outro in grupos["conflitos"]:
+        resumo["conflitos"] += 1
+        avisar_grupo(conn, config, texto_conflito(cli, outro), f"conflito:{cli['stkkc_id']}", modo_teste, **kw)
+
+    novos_inativos = 0
+    for cli in grupos["novos"]:
+        resumo["novos"] += 1
+        try:
+            contato = extrair_contato(ler_contato(cli["stkkc_id"]) or "")
+        except Exception as exc:
+            logger.warning(f"Contato do cliente #{cli['stkkc_id']} nao lido na Stokki ({exc}): segue sem contato.")
+            contato = extrair_contato("")
+        ativo = tem_pedido_recente(conn, cli["cnpj"], agora)
+        if modo_teste:
+            resumo["ativos" if ativo else "inativos"] += 1
+            logger.info(f"[MODO TESTE] novo #{cli['stkkc_id']} {cli['apelido'] or cli['razao']} ({cli['cnpj']}): "
+                        f"{'ativo' if ativo else 'inativo'}, sender do nucleo {sender_do_nucleo(conn, cli['cnpj'])}, "
+                        f"celular {'valido' if celular_whatsapp(contato['celular']) else 'invalido'}, "
+                        f"e-mail {contato['email'] or '-'}")
+            continue
+        pre_cadastrar(conn, cli, contato, ativo, agora)
+        if not ativo:
+            novos_inativos += 1
+    if novos_inativos:
+        avisar_grupo(conn, config, texto_inativos(novos_inativos), f"inativos:{_fmt(agora)[:13]}", modo_teste, **kw)
+
+    pendentes = conn.execute("SELECT cnpj_embarcador, situacao FROM cadastro_embarcador WHERE situacao IN (?, ?) "
+                             "ORDER BY criado_em, cnpj_embarcador", (cad.PENDENTE, cad.INATIVO)).fetchall()
+    for cnpj, situacao in pendentes:
+        try:
+            if situacao == cad.INATIVO and not tem_pedido_recente(conn, cnpj, agora):
+                if not modo_teste:
+                    resumo["inativos"] += 1
+                continue
+            emb = conn.execute("SELECT apelido, nome_remetente, sender_id FROM interno WHERE cnpj_embarcador = ?",
+                               (cnpj,)).fetchone()
+            if emb is None:
+                continue
+            resumo["ativos"] += 1
+            nome = emb[0] or emb[1] or cnpj
+            sender = emb[2] or resolver_sender(conn, cnpj, emb[1] or nome, None if modo_teste else vuupt)
+            if not sender:
+                resumo["sem_sender"] += 1
+                avisar_grupo(conn, config, texto_sem_sender(nome), f"sem_sender:{cnpj}", modo_teste, **kw)
+                continue
+            if not modo_teste:
+                if not emb[2]:
+                    conn.execute("UPDATE interno SET sender_id = ?, notificar_email = 1, atualizado_em = ? "
+                                 "WHERE cnpj_embarcador = ?", (sender, _fmt(agora), cnpj))
+                    conn.commit()
+                if situacao == cad.INATIVO:
+                    cad.atualizar(conn, cnpj, agora, situacao=cad.PENDENTE)
+            canal = convidar(conn, config, cnpj, agora, modo_teste, enviar_email, **kw)
+            if canal == "adiado":
+                continue
+            resumo["convites"][cnpj] = canal
+            avisar_grupo(conn, config, texto_grupo_novo(nome, emb[1] or "", canal), f"novo:{cnpj}", modo_teste, **kw)
+        except Exception as exc:
+            logger.warning(f"Pre-cadastro de {cnpj} falhou nesta rodada ({exc}): tenta na proxima.")
+            continue
+
+    resumo["reenvios"] = reenviar_vencidos(conn, config, agora, modo_teste, enviar_email, **kw)
+    return resumo
+
+
+def _carregar_config() -> dict:
+    import yaml
+    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Pre-cadastro de embarcador novo da Stokki.")
+    parser.add_argument("--modo-teste", action="store_true", help="so mostra o que faria, sem gravar nem enviar")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    config = _carregar_config()
+    try:
+        from stokki.auth import StokkiSession
+        from stokki.pedidos import BASE_URL, listar_embarcadores
+        sessao = StokkiSession(config)
+        clientes = clientes_do_select(listar_embarcadores(sessao))
+    except Exception as exc:
+        logger.warning(f"Stokki indisponivel ({exc}): tenta na proxima rodada.")
+        return 0
+
+    def ler_contato(stkkc_id: int) -> str:
+        resp = sessao.get(f"{BASE_URL}/pt-br/administrator/client/edit/{stkkc_id}")
+        resp.raise_for_status()
+        return resp.text
+
+    from vuupt_client import VuuptClient
+    vuupt = VuuptClient((config.get("vuupt_api") or {}).get("token", ""))
+    conn = auth.conectar()
+    try:
+        resumo = executar(config, conn, clientes, ler_contato, vuupt, modo_teste=args.modo_teste)
+    finally:
+        conn.close()
+    logger.info(f"Resumo: {resumo}")
+    return 0
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    sys.exit(main())

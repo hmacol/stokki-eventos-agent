@@ -342,5 +342,102 @@ class TestConvite(_ComCadastro):
         self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "CONVIDADO")
 
 
+class TestRodada(_ComCadastro):
+    def rodar(self, clientes, agora=AGORA, vuupt=None, **kw):
+        return rot.executar(_config(), self.conn, clientes, lambda cid: CONTATOS.get(cid, ""),
+                            vuupt or mock.MagicMock(), agora=agora, enviar_email=self.email, dormir=self.dormir, **kw)
+
+    def test_primeira_rodada(self):
+        self.pedido("PS-1", "49.874.051/0001-31", 23084712, 1)
+        self.pedido("PS-2", "02.368.118/0006-07", 22872019, 3)
+        r = self.rodar([COGUMELADO, NONNA, RIC, ANTIGO])
+        self.assertEqual(r["novos"], 3)
+        self.assertEqual(r["convites"], {NONNA["cnpj"]: "whatsapp", RIC["cnpj"]: "email"})
+        self.assertEqual(self.interno(NONNA["cnpj"])["sender_id"], 23084712)
+        self.assertEqual(self.interno(RIC["cnpj"])["sender_id"], 22872019)
+        antigo = self.interno(ANTIGO["cnpj"])
+        self.assertEqual((antigo["sender_id"], antigo["notificar_email"]), (None, 0))
+        self.assertEqual(cad.buscar(self.conn, ANTIGO["cnpj"])["situacao"], "INATIVO")
+        grupo = self.grupo()
+        self.assertEqual(len(grupo), 3)
+        self.assertTrue(any("1 embarcador(es)" in t for t in grupo))
+        self.assertTrue(any("FABENNE" in t and "WhatsApp" in t for t in grupo))
+        self.assertTrue(any("TERRA NUTRI" in t and "e-mail" in t for t in grupo))
+
+    def test_segunda_rodada_nao_repete_nada(self):
+        self.pedido("PS-1", "49.874.051/0001-31", 23084712, 1)
+        self.pedido("PS-2", "02.368.118/0006-07", 22872019, 3)
+        self.rodar([COGUMELADO, NONNA, RIC, ANTIGO])
+        envios, emails = self.enviar.call_count, self.email.call_count
+        r = self.rodar([COGUMELADO, NONNA, RIC, ANTIGO], agora=AGORA + timedelta(hours=1))
+        self.assertEqual((r["novos"], r["convites"]), (0, {}))
+        self.assertEqual((self.enviar.call_count, self.email.call_count), (envios, emails))
+
+    def test_inativo_que_ganha_pedido_recebe_convite(self):
+        self.rodar([ANTIGO])
+        self.pedido("PS-9", "33.333.333/0001-33", 22999999, 0)
+        r = self.rodar([ANTIGO], agora=AGORA + timedelta(hours=1))
+        self.assertEqual(r["convites"], {ANTIGO["cnpj"]: "nenhum"})
+        self.assertEqual(self.interno(ANTIGO["cnpj"])["sender_id"], 22999999)
+        self.assertEqual(self.interno(ANTIGO["cnpj"])["notificar_email"], 1)
+        self.assertEqual(cad.buscar(self.conn, ANTIGO["cnpj"])["situacao"], "SEM_CONTATO")
+
+    def test_sem_sender_avisa_uma_vez_e_tenta_de_novo(self):
+        self.pedido("PS-1", "49.874.051/0001-31", None, 1)
+        vuupt = mock.MagicMock()
+        vuupt.criar_customer.side_effect = RuntimeError("fora")
+        r = self.rodar([NONNA], vuupt=vuupt)
+        self.assertEqual((r["sem_sender"], r["convites"]), (1, {}))
+        self.rodar([NONNA], vuupt=vuupt, agora=AGORA + timedelta(hours=3))
+        self.assertEqual(len([t for t in self.grupo() if "remetente" in t]), 1)
+        vuupt.criar_customer.side_effect = None
+        vuupt.criar_customer.return_value = {"customer": {"id": 777}}
+        r = self.rodar([NONNA], vuupt=vuupt, agora=AGORA + timedelta(hours=4))
+        self.assertEqual(r["convites"], {NONNA["cnpj"]: "whatsapp"})
+        self.assertEqual(self.interno(NONNA["cnpj"])["sender_id"], 777)
+
+    def test_preenche_stkkc_de_cadastro_manual_sem_convidar(self):
+        self.conn.execute("INSERT INTO interno (cnpj_embarcador, nome_remetente, sender_id, stkkc_id) "
+                          "VALUES ('02368118000607', 'RIC', 22872019, NULL)")
+        self.conn.commit()
+        r = self.rodar([RIC])
+        self.assertEqual((r["stkkc_preenchido"], r["novos"], r["convites"]), (1, 0, {}))
+        self.assertEqual(self.interno(RIC["cnpj"])["stkkc_id"], 56)
+        self.assertIsNone(cad.buscar(self.conn, RIC["cnpj"]))
+
+    def test_modo_teste_nao_grava_nem_envia(self):
+        self.pedido("PS-1", "49.874.051/0001-31", 23084712, 1)
+        r = self.rodar([COGUMELADO, NONNA, ANTIGO], modo_teste=True)
+        self.assertEqual((r["novos"], r["ativos"], r["inativos"]), (2, 1, 1))
+        self.assertIsNone(self.interno(NONNA["cnpj"]))
+        self.assertIsNone(cad.buscar(self.conn, NONNA["cnpj"]))
+        self.enviar.assert_not_called()
+        self.email.assert_not_called()
+
+    def test_falha_numa_linha_nao_derruba_a_rodada(self):
+        self.pedido("PS-1", "49.874.051/0001-31", 23084712, 1)
+        self.pedido("PS-2", "02.368.118/0006-07", 22872019, 3)
+        real = rot.link_convite
+
+        def seletivo(conn, config, cnpj):
+            if cnpj == NONNA["cnpj"]:
+                raise RuntimeError("falha")
+            return real(conn, config, cnpj)
+        with mock.patch.object(rot, "link_convite", side_effect=seletivo):
+            r = self.rodar([NONNA, RIC])
+        self.assertEqual(r["convites"], {RIC["cnpj"]: "email"})
+        self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["situacao"], "CONVIDADO")
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "PENDENTE")
+
+
+class TestMain(unittest.TestCase):
+    def test_stokki_fora_sai_sem_erro(self):
+        with mock.patch.object(rot, "_carregar_config", return_value=_config()), \
+             mock.patch("stokki.auth.StokkiSession", side_effect=RuntimeError("Stokki ocupada")), \
+             mock.patch.object(rot, "executar") as executar:
+            self.assertEqual(rot.main([]), 0)
+        executar.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
