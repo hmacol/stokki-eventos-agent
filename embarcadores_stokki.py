@@ -278,13 +278,15 @@ def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = 
     numero = celular_whatsapp(c["celular_stokki"])
     canal = None
     if numero:
-        if not modo_teste and not pn.ler(conn, c["cnpj_embarcador"])["whatsapp"]:
-            pn.salvar(conn, c["cnpj_embarcador"], [], {}, "pre-cadastro", whatsapp=numero)
         assinatura = f"cadastro:{c['cnpj_embarcador']}:{'reenvio' if reenvio else 'convite'}"
         situacao = nw.avisar_cliente_cadastro(c["cnpj_embarcador"], numero, texto_convite(link), assinatura, config,
                                               modo_teste=modo_teste, conn=conn, agora=agora, **kw)
         if situacao in ("enviado", "modo_teste"):
             canal = "whatsapp"
+            if situacao == "enviado":
+                prefs = pn.ler(conn, c["cnpj_embarcador"])
+                if not prefs["whatsapp"]:
+                    pn.salvar(conn, c["cnpj_embarcador"], prefs["emails"], {}, "pre-cadastro", whatsapp=numero)
         elif situacao in ("nao_enviado", "indeterminado", "falhou"):
             logger.info(f"Convite de {nome} adiado (WhatsApp: {situacao}).")
             return "adiado"
@@ -319,7 +321,12 @@ def reenviar_vencidos(conn, config: dict, agora: datetime, modo_teste: bool = Fa
     """, (cad.CONVIDADO, limite)).fetchall()
     enviados = 0
     for cnpj, nome in rows:
-        if convidar(conn, config, cnpj, agora, modo_teste, enviar_email, reenvio=True, **kw) == "adiado":
+        try:
+            canal = convidar(conn, config, cnpj, agora, modo_teste, enviar_email, reenvio=True, **kw)
+        except Exception as exc:
+            logger.warning(f"Reenvio de {nome} falhou (segue pro proximo): {exc}")
+            continue
+        if canal in ("adiado", "nenhum"):
             continue
         enviados += 1
         avisar_grupo(conn, config, texto_reenvio(nome), f"reenvio:{cnpj}", modo_teste, **kw)

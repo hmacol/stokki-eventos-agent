@@ -304,5 +304,43 @@ class TestConvite(_ComCadastro):
         self.assertTrue(self.enviar.call_args.args[2].startswith("[teste → +5511988887777]"))
 
 
+    def test_emails_salvos_antes_continuam_depois_do_convite(self):
+        self.preparar(NONNA)
+        rot.pn.salvar(self.conn, NONNA["cnpj"], ["fin@fabenne.com"], {}, "teste")
+        self.convidar(NONNA)
+        p = rot.pn.ler(self.conn, NONNA["cnpj"])
+        self.assertEqual(p["emails"], ["fin@fabenne.com"])
+        self.assertEqual(p["whatsapp"], "5511988887777")
+
+    def test_numero_sem_whatsapp_nao_e_gravado(self):
+        self.preparar(NONNA)
+        self.existe.return_value = False
+        self.convidar(NONNA)
+        self.assertEqual(rot.pn.ler(self.conn, NONNA["cnpj"])["whatsapp"], "")
+
+    def test_gateway_indeterminado_nao_grava_numero(self):
+        self.preparar(NONNA)
+        self.existe.return_value = None
+        self.convidar(NONNA)
+        self.assertEqual(rot.pn.ler(self.conn, NONNA["cnpj"])["whatsapp"], "")
+
+    def test_reenvio_segue_quando_uma_linha_levanta(self):
+        self.preparar(NONNA)
+        self.preparar(RIC, sender=22872019)
+        self.convidar(NONNA, agora=AGORA - timedelta(days=4))
+        self.convidar(RIC, agora=AGORA - timedelta(days=4))
+        real = rot.link_convite
+
+        def seletivo(conn, config, cnpj):
+            if cnpj == NONNA["cnpj"]:
+                raise RuntimeError("falha")
+            return real(conn, config, cnpj)
+        with mock.patch.object(rot, "link_convite", side_effect=seletivo):
+            n = rot.reenviar_vencidos(self.conn, _config(), AGORA, enviar_email=self.email, dormir=self.dormir)
+        self.assertEqual(n, 1)
+        self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["situacao"], "REENVIADO")
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "CONVIDADO")
+
+
 if __name__ == "__main__":
     unittest.main()
