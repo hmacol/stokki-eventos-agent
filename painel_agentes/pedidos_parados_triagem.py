@@ -482,6 +482,40 @@ def _resolver_embarcador(order_number: str) -> dict | None:
     }
 
 
+def _embarcadores_por_pedido(conn, ids_stokki: dict[str, str]) -> dict[str, str]:
+    """
+    Nome do embarcador de cada pedido da lista, pra coluna/filtro da tela
+    (pedido do Hugo, 15/10). Usa o ID Stokki já resolvido por
+    _resolver_ids_stokki (cobre o caso order_number = NF) e cruza
+    `pedidos_historico` com `interno` pelos dígitos do CNPJ, como
+    _resolver_embarcador. Prefere `nome_remetente` (nome curto, ex.
+    "FAZENDA BURIN"); sem cadastro em `interno`, cai no `cliente` do
+    histórico. Pedido fora do histórico fica sem embarcador.
+    """
+    if not ids_stokki:
+        return {}
+    numero_por_id = {}
+    for numero, id_stokki in ids_stokki.items():
+        numero_por_id[f"#PS-{id_stokki}"] = numero
+        numero_por_id[f"PS-{id_stokki}"] = numero
+    marcadores = ",".join("?" * len(numero_por_id))
+    linhas = conn.execute(
+        f"SELECT id_pedido, cliente, cliente_cnpj FROM pedidos_historico WHERE id_pedido IN ({marcadores})",
+        list(numero_por_id),
+    ).fetchall()
+    nome_por_cnpj = {
+        re.sub(r"\D", "", r["cnpj_embarcador"] or ""): r["nome_remetente"]
+        for r in conn.execute("SELECT cnpj_embarcador, nome_remetente FROM interno").fetchall()
+    }
+    resultado = {}
+    for linha in linhas:
+        digitos = re.sub(r"\D", "", linha["cliente_cnpj"] or "")
+        nome = (nome_por_cnpj.get(digitos) if digitos else None) or linha["cliente"]
+        if nome:
+            resultado[numero_por_id[linha["id_pedido"]]] = nome.strip()
+    return resultado
+
+
 def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
     conn = _conectar()
     conn.execute("""
@@ -645,6 +679,7 @@ def listar_com_classificacao() -> list[dict]:
         vuupt_visto = {r["order_number"]: dict(r) for r in conn.execute(
             "SELECT * FROM pedidos_parados_vuupt"
         ).fetchall()}
+        embarcadores = _embarcadores_por_pedido(conn, ids_stokki)
     finally:
         conn.close()
 
@@ -681,6 +716,7 @@ def listar_com_classificacao() -> list[dict]:
             "stokki_consultado_em": stk.get("consultado_em"),
             "order_number": numero,
             "freshhub_id": p["id"],
+            "embarcador": embarcadores.get(numero),
             "volumes": p["volumes"],
             "recebedor_name": p["recebedor_name"],
             "created_at": p["created_at"],
