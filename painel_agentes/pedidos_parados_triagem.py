@@ -486,22 +486,20 @@ def _embarcadores_por_pedido(conn, ids_stokki: dict[str, str]) -> dict[str, str]
     """
     Nome do embarcador de cada pedido da lista, pra coluna/filtro da tela
     (pedido do Hugo, 15/10). Usa o ID Stokki já resolvido por
-    _resolver_ids_stokki (cobre o caso order_number = NF) e cruza
-    `pedidos_historico` com `interno` pelos dígitos do CNPJ, como
-    _resolver_embarcador. Prefere `nome_remetente` (nome curto, ex.
-    "FAZENDA BURIN"); sem cadastro em `interno`, cai no `cliente` do
-    histórico. Pedido fora do histórico fica sem embarcador.
+    _resolver_ids_stokki (cobre o caso order_number = NF) e lê
+    `nucleo_pedidos` (codigo "PS-x"; `pedidos_historico` parou de ser
+    alimentado em ago/26, não serve). Cruza `remetente_codigo` (CNPJ) com
+    `interno` pelos dígitos pra pegar `nome_remetente` (nome curto, ex.
+    "FAZENDA BURIN"); sem cadastro em `interno`, cai no `remetente_nome`
+    do núcleo. Pedido fora do núcleo fica sem embarcador.
     """
     if not ids_stokki:
         return {}
-    numero_por_id = {}
-    for numero, id_stokki in ids_stokki.items():
-        numero_por_id[f"#PS-{id_stokki}"] = numero
-        numero_por_id[f"PS-{id_stokki}"] = numero
-    marcadores = ",".join("?" * len(numero_por_id))
+    numero_por_codigo = {f"PS-{id_stokki}": numero for numero, id_stokki in ids_stokki.items()}
+    marcadores = ",".join("?" * len(numero_por_codigo))
     linhas = conn.execute(
-        f"SELECT id_pedido, cliente, cliente_cnpj FROM pedidos_historico WHERE id_pedido IN ({marcadores})",
-        list(numero_por_id),
+        f"SELECT codigo, remetente_nome, remetente_codigo FROM nucleo_pedidos WHERE codigo IN ({marcadores})",
+        list(numero_por_codigo),
     ).fetchall()
     nome_por_cnpj = {
         re.sub(r"\D", "", r["cnpj_embarcador"] or ""): r["nome_remetente"]
@@ -509,10 +507,10 @@ def _embarcadores_por_pedido(conn, ids_stokki: dict[str, str]) -> dict[str, str]
     }
     resultado = {}
     for linha in linhas:
-        digitos = re.sub(r"\D", "", linha["cliente_cnpj"] or "")
-        nome = (nome_por_cnpj.get(digitos) if digitos else None) or linha["cliente"]
+        digitos = re.sub(r"\D", "", linha["remetente_codigo"] or "")
+        nome = (nome_por_cnpj.get(digitos) if digitos else None) or linha["remetente_nome"]
         if nome:
-            resultado[numero_por_id[linha["id_pedido"]]] = nome.strip()
+            resultado[numero_por_codigo[linha["codigo"]]] = nome.strip()
     return resultado
 
 
