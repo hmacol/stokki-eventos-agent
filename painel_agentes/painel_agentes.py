@@ -2140,6 +2140,26 @@ def api_cadastro_recusar(cadastro_id):
     return jsonify({"ok": True, "cadastro": c})
 
 
+# ── Pre-cadastro de embarcador da Stokki (10/10): aprovação só do nível total ──
+@app.route("/api/cadastro-embarcador/<cnpj>/aprovar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_embarcador_aprovar(cnpj):
+    """Grava em interno.habilidade o tipo de carga que o cliente informou no
+    portal, ou o do corpo ({"habilidade": ...}) se a equipe corrigir."""
+    import cadastro_embarcador as cad_emb
+    from nucleo import banco as nucleo_banco
+    body = request.get_json(silent=True) or {}
+    conn = nucleo_banco.conectar()
+    try:
+        c = cad_emb.aprovar(conn, cnpj, session.get("usuario") or g.nivel_acesso, habilidade=body.get("habilidade"))
+    except cad_emb.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cadastro": c})
+
+
 # ── Pedágios dos motoristas (app de motoristas; Hugo, 11/09) ─────────────────
 # O motorista informa valor + foto do recibo no app (nucleo_pedagios,
 # PENDENTE). Aqui o Hugo aprova (com o valor que vale) ou rejeita; só o

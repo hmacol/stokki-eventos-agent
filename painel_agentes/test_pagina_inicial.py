@@ -189,5 +189,38 @@ class TestMontarDados(unittest.TestCase):
         self.assertEqual(len(dados["pendencias"]), 6)
 
 
+class TestCadastrosEmbarcador(unittest.TestCase):
+    LINHAS = [
+        {"cnpj_embarcador": "49874051000131", "nome": "FABENNE", "situacao": "PREENCHIDO", "habilidade_informada": "Seco",
+         "preenchido_em": "2026-10-10 10:00:00", "convite_enviado_em": "2026-10-09 09:10:00", "reenvio_em": None,
+         "canal_convite": "whatsapp"},
+        {"cnpj_embarcador": "02368118000607", "nome": "TERRA NUTRI", "situacao": "CONVIDADO", "habilidade_informada": None,
+         "preenchido_em": None, "convite_enviado_em": "2026-10-09 09:10:00", "reenvio_em": None, "canal_convite": "email"},
+        {"cnpj_embarcador": "33333333000133", "nome": "ANTIGO", "situacao": "SEM_CONTATO", "habilidade_informada": None,
+         "preenchido_em": None, "convite_enviado_em": "2026-10-09 09:10:00", "reenvio_em": None, "canal_convite": "nenhum"},
+    ]
+
+    def test_montar_cadastros(self):
+        c = pagina_inicial.montar_cadastros(self.LINHAS)
+        self.assertEqual([(x["nome"], x["pode_aprovar"]) for x in c],
+                         [("FABENNE", True), ("TERRA NUTRI", False), ("ANTIGO", False)])
+        self.assertEqual(c[0]["detalhe"], "informou Seco em 10/10")
+        self.assertEqual(c[1]["detalhe"], "convidado em 09/10 por email, sem resposta")
+        self.assertEqual(c[2]["detalhe"], "sem contato na Stokki, cadastrar à mão")
+
+    def test_so_o_total_recebe_o_bloco(self):
+        fontes = dict(contadores=lambda n: {}, niveis_por_contador=NIVEIS, snapshot=lambda d: None,
+                      execucoes=lambda: [], cadastros=lambda: self.LINHAS)
+        self.assertEqual(len(pagina_inicial.montar_dados("total", _url, **fontes)["cadastros_embarcador"]), 3)
+        self.assertNotIn("cadastros_embarcador", pagina_inicial.montar_dados("operador", _url, **fontes))
+
+    def test_fonte_que_falha_vira_lista_vazia(self):
+        def quebra():
+            raise RuntimeError("banco travado")
+        d = pagina_inicial.montar_dados("total", _url, contadores=lambda n: {}, niveis_por_contador=NIVEIS,
+                                        snapshot=lambda d: None, execucoes=lambda: [], cadastros=quebra)
+        self.assertEqual(d["cadastros_embarcador"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
