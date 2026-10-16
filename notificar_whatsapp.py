@@ -146,6 +146,7 @@ NOMES_DAS_TAREFAS = {
     "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
     "dedicados-financeiro": "E-mail dos pedidos dedicados para o financeiro",
     "documentos-incremental": "Busca das notas fiscais dos pedidos",
+    "embarcadores-novos": "Pré-cadastro de embarcador novo da Stokki",
     "ensaio-restauracao": "Teste semanal da cópia de segurança",
     "expedicao-frequente": "Baixa das entregas na Stokki",
     "informativo-mensal": "Informativo mensal de dias de entrega",
