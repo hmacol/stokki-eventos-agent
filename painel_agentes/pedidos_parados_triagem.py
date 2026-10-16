@@ -430,31 +430,33 @@ def _resolver_embarcador(order_number: str) -> dict | None:
     """
     Acha o embarcador (nome + e-mails cadastrados) do pedido pra
     notificação de "Cliente Retira" (pedido do Hugo, 25/08) -- cruza
-    `pedidos_historico` (mesma ambiguidade de order_number = ID Stokki
-    OU NF do cliente que _resolver_pedido trata pra Vuupt) com
-    `interno` pelo CNPJ, não pelo nome (mais confiável que fuzzy match):
-    `pedidos_historico.cliente_cnpj` vem formatado (com pontuação),
-    `interno.cnpj_embarcador` vem só dígitos -- comparamos só os
-    dígitos dos dois lados.
+    `nucleo_pedidos` com `interno` pelo CNPJ, não pelo nome (mais
+    confiável que fuzzy match), comparando só os dígitos. order_number
+    pode ser a NF do cliente: traduz pelo id Stokki que a listagem já
+    gravou em `pedidos_parados_id_stokki`. (Lia `pedidos_historico`, que
+    parou de ser alimentado em ago/26 -- 16/10.)
 
-    Retorna None se o pedido não estiver em `pedidos_historico` (ainda
+    Retorna None se o pedido não estiver em `nucleo_pedidos` (ainda
     não passou pelo pipeline), se o embarcador não estiver cadastrado em
     `interno`, se `notificar_email` estiver desligado pra ele, ou se não
     houver e-mail válido cadastrado -- em qualquer um desses casos quem
     chama decide como avisar (não dá pra mandar e-mail sem destinatário).
     """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = _conectar()  # garante pedidos_parados_id_stokki
     try:
-        row = conn.execute(
-            "SELECT id_pedido, cliente, cliente_cnpj FROM pedidos_historico "
-            "WHERE id_pedido = ? OR id_pedido = ? OR numero_nfe = ?",
-            (f"#PS-{order_number}", f"PS-{order_number}", order_number),
+        traduzido = conn.execute(
+            "SELECT id_stokki FROM pedidos_parados_id_stokki WHERE order_number = ?",
+            (order_number,),
         ).fetchone()
-        if not row or not row["cliente_cnpj"]:
+        id_stokki = traduzido["id_stokki"] if traduzido else order_number
+        row = conn.execute(
+            "SELECT remetente_nome, remetente_codigo FROM nucleo_pedidos WHERE codigo = ?",
+            (f"PS-{id_stokki}",),
+        ).fetchone()
+        if not row or not row["remetente_codigo"]:
             return None
 
-        digitos = re.sub(r"\D", "", row["cliente_cnpj"])
+        digitos = re.sub(r"\D", "", row["remetente_codigo"])
         if not digitos:
             return None
 
@@ -476,10 +478,42 @@ def _resolver_embarcador(order_number: str) -> dict | None:
         return None
 
     return {
-        "codigo": row["id_pedido"] or f"PS-{order_number}",
-        "nome": emb["apelido"] or emb["nome_remetente"] or row["cliente"] or "",
+        "codigo": f"#PS-{id_stokki}",
+        "nome": emb["apelido"] or emb["nome_remetente"] or row["remetente_nome"] or "",
         "emails": emails,
     }
+
+
+def _embarcadores_por_pedido(conn, ids_stokki: dict[str, str]) -> dict[str, str]:
+    """
+    Nome do embarcador de cada pedido da lista, pra coluna/filtro da tela
+    (pedido do Hugo, 15/10). Usa o ID Stokki já resolvido por
+    _resolver_ids_stokki (cobre o caso order_number = NF) e lê
+    `nucleo_pedidos` (codigo "PS-x"; `pedidos_historico` parou de ser
+    alimentado em ago/26, não serve). Cruza `remetente_codigo` (CNPJ) com
+    `interno` pelos dígitos pra pegar `nome_remetente` (nome curto, ex.
+    "FAZENDA BURIN"); sem cadastro em `interno`, cai no `remetente_nome`
+    do núcleo. Pedido fora do núcleo fica sem embarcador.
+    """
+    if not ids_stokki:
+        return {}
+    numero_por_codigo = {f"PS-{id_stokki}": numero for numero, id_stokki in ids_stokki.items()}
+    marcadores = ",".join("?" * len(numero_por_codigo))
+    linhas = conn.execute(
+        f"SELECT codigo, remetente_nome, remetente_codigo FROM nucleo_pedidos WHERE codigo IN ({marcadores})",
+        list(numero_por_codigo),
+    ).fetchall()
+    nome_por_cnpj = {
+        re.sub(r"\D", "", r["cnpj_embarcador"] or ""): r["nome_remetente"]
+        for r in conn.execute("SELECT cnpj_embarcador, nome_remetente FROM interno").fetchall()
+    }
+    resultado = {}
+    for linha in linhas:
+        digitos = re.sub(r"\D", "", linha["remetente_codigo"] or "")
+        nome = (nome_por_cnpj.get(digitos) if digitos else None) or linha["remetente_nome"]
+        if nome:
+            resultado[numero_por_codigo[linha["codigo"]]] = nome.strip()
+    return resultado
 
 
 def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
@@ -519,7 +553,12 @@ def _codes_entregues_recentes(vuupt: VuuptClient, dias: int = DIAS_JANELA_ENTREG
     entre reaproveitar o último resultado bom e não filtrar nada).
     """
     inicio = date.today() - timedelta(days=dias)
-    filtros = [{"field": "completed_at", "operator": "gte", "value": inicio.strftime("%Y-%m-%d")}]
+    # status=done é obrigatório: só com completed_at a Vuupt devolve 400
+    # ("A busca abrange registros demais") na ÚLTIMA página, após ~50s
+    # (desde 12/10; ~300 falhas/dia e a tela parava de esconder entregues).
+    # Não muda o resultado: todo serviço com completed_at já está done.
+    filtros = [{"field": "status", "operator": "eq", "value": "done"},
+               {"field": "completed_at", "operator": "gte", "value": inicio.strftime("%Y-%m-%d")}]
     servicos = vuupt.listar_servicos(filtros)
     return {
         s["code"].lstrip("#")
@@ -645,6 +684,7 @@ def listar_com_classificacao() -> list[dict]:
         vuupt_visto = {r["order_number"]: dict(r) for r in conn.execute(
             "SELECT * FROM pedidos_parados_vuupt"
         ).fetchall()}
+        embarcadores = _embarcadores_por_pedido(conn, ids_stokki)
     finally:
         conn.close()
 
@@ -681,6 +721,7 @@ def listar_com_classificacao() -> list[dict]:
             "stokki_consultado_em": stk.get("consultado_em"),
             "order_number": numero,
             "freshhub_id": p["id"],
+            "embarcador": embarcadores.get(numero),
             "volumes": p["volumes"],
             "recebedor_name": p["recebedor_name"],
             "created_at": p["created_at"],

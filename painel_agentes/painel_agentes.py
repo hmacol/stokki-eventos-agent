@@ -77,6 +77,9 @@ from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_d
 # Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
 # botão na Torre pra consulta interna). Mesma constante que a página usa.
 from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
+# Calculadora de frete dedicado do portal (Hugo, 14/10: botão na Torre). Oculta
+# dos clientes; abre com o login do cliente teste (portal_cliente.cotacao.cnpjs_liberados).
+URL_PAGINA_COTACAO = "https://app.freshhub.com.br/cliente/cotacao"
 import rascunhos_rota
 import torre_controle
 import tratativas
@@ -1314,6 +1317,7 @@ def torre():
         "torre_controle.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
         url_regioes=URL_PAGINA_REGIOES,   # consulta interna dos dias de atendimento (Hugo, 14/10)
+        url_cotacao=URL_PAGINA_COTACAO,
         # Nível "atendimento" (Hugo, 28/09): trata ocorrência (tratar,
         # desfazer, duplicar, notificar), mas não roda agente, não
         # encerra rota nem exclui pedido -- isso segue em pode_editar.
@@ -1339,7 +1343,7 @@ def torre_mobile():
         "torre_mobile.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
         pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
-        endpoint_desktop="torre", url_regioes=URL_PAGINA_REGIOES,
+        endpoint_desktop="torre", url_regioes=URL_PAGINA_REGIOES, url_cotacao=URL_PAGINA_COTACAO,
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         pode_excluir_pedido=pode_editar,
     )
@@ -1393,6 +1397,27 @@ def api_torre_excluir_pedido():
                                        session.get("usuario", ""), permitir_rota_em_andamento=True)
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/torre/marcar-entregue", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_torre_marcar_entregue():
+    """"Marcar como entregue" do menu de contexto do chip da Torre e da
+    parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
+    hora, por API, sem passar pelo app do motorista (ver
+    torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
+    rota" -- muda o pedido na VUUPT."""
+    body = request.get_json(force=True) or {}
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    resultado = torre_controle.marcar_entregue_manual(
+        service_id, session.get("usuario", ""), body.get("observacao") or "")
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
     return jsonify(resultado)
 
 

@@ -22,6 +22,8 @@ Oculta do cliente (Hugo, 17/09): com portal_cliente.cotacao.visivel_cliente
 desligado (padrão), só a equipe Fresh Log operando em nome do cliente vê a
 tela; pro cliente o link some e as rotas logadas dão 404. O aceite pelo link
 do e-mail continua valendo (proposta enviada pela equipe).
+Exceção (Hugo, 14/10): os CNPJs de portal_cliente.cotacao.cnpjs_liberados
+(padrão: só o cliente teste) veem a tela mesmo com ela oculta.
 """
 import logging
 from functools import wraps
@@ -67,7 +69,10 @@ def registrar(app, *, requer_cliente, exige_mesma_origem, config: dict, secret: 
         return f"{url_base}/cotacao?ver={cot['id']}"
 
     def _visivel() -> bool:
-        return bool(g.get("equipe")) or bool(_regras().get("visivel_cliente"))
+        if g.get("equipe") or _regras().get("visivel_cliente"):
+            return True
+        cliente = g.get("cliente")
+        return bool(cliente) and cliente.get("cnpj") in (_regras().get("cnpjs_liberados") or [])
 
     def exige_visivel(f):
         @wraps(f)

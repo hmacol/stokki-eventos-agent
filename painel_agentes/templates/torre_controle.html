@@ -351,6 +351,7 @@
   .modal-excluir .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
   .modal-excluir .acoes button.confirmar:hover { opacity: 0.88; }
+  .modal-excluir .acoes button.confirmar.sucesso { background: var(--st-sucesso); color: #06170F; }
   .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
   .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-excluir .acoes button.cancelar:hover { background: var(--fundo); }
@@ -527,6 +528,7 @@
      abertas de qualquer dia; rota concluída vai pro Histórico. #}
   <a class="botao-refresh" href="{{ url_for('consulta') }}" title="Rotas concluídas e dias passados" style="text-decoration:none;">📚 Histórico de Rotas</a>
   <a class="botao-refresh" id="btn-regioes" href="{{ url_regioes }}" target="_blank" rel="noopener" title="Regiões, dias de visita e calendário do mês (página pública do portal)" style="text-decoration:none;">📅 Dias de atendimento</a>
+  <a class="botao-refresh" id="btn-cotacao" href="{{ url_cotacao }}" target="_blank" rel="noopener" title="Calculadora de frete dedicado (portal do cliente, entrar com o login do cliente teste)" style="text-decoration:none;">💲 Cotação</a>
   <select class="filtro-embarcador" id="filtro-embarcador" onchange="alternarFiltroEmbarcador()"
           title="Mostrar só os pedidos de um embarcador (rotas, mapa, pedidos e Fila de ação)">
     <option value="">Todos os embarcadores</option>
@@ -634,6 +636,25 @@
   </div>
 </div>
 
+{# "Marcar como entregue" do chip (Hugo, 08/10): fecha o servico na VUUPT
+   por API, sem canhoto nem checklist -- a observacao e obrigatoria e vira
+   auditoria (torre_entregas_manuais + tratativas). #}
+<div class="modal-overlay-excluir" id="modal-entregue">
+  <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
+    <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
+    <p class="subtitulo" id="entregue-codigo">—</p>
+    <p class="subtitulo">Fecha o pedido na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <div class="campo">
+      <label for="entregue-observacao">Como a entrega foi confirmada</label>
+      <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
+      <button type="button" class="confirmar sucesso" id="botao-confirmar-entregue" onclick="confirmarEntregueChip(this)">Marcar como entregue</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-excluir" id="modal-tratar">
   <div class="modal-excluir modal-tratar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tratar">
     <h2 id="titulo-modal-tratar">Marcar como tratada</h2>
@@ -668,6 +689,7 @@ const PODE_TRATAR = {{ pode_tratar | tojson }};
 // opção vale sempre que o nível de acesso permitir.
 const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
 const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido') }}";
+const URL_TORRE_MARCAR_ENTREGUE = "{{ url_for('api_torre_marcar_entregue') }}";
 const URL_TORRE_ENCERRAR_ROTA = "{{ url_for('api_torre_encerrar_rota') }}";
 
 // Rótulos/cores dos status de pedido -- MESMA ordem em que os
@@ -1159,10 +1181,14 @@ function abrirMenuContextoChip(chip, x, y) {
   fecharMenuContextoChip();
   const menu = document.createElement("div");
   menu.className = "menu-contexto";
-  menu.innerHTML = '<button type="button">Excluir da Rota</button>';
-  menu.querySelector("button").addEventListener("click", () => {
+  menu.innerHTML = '<button type="button" data-acao="entregue">Marcar como entregue</button>' +
+                   '<button type="button" data-acao="excluir">Excluir da Rota</button>';
+  menu.addEventListener("click", (e) => {
+    const botao = e.target.closest("button");
+    if (!botao) return;
     fecharMenuContextoChip();
-    abrirModalExcluir(chip);
+    if (botao.dataset.acao === "entregue") abrirModalEntregue(chip);
+    else abrirModalExcluir(chip);
   });
   document.body.appendChild(menu);
   const largura = menu.offsetWidth, altura = menu.offsetHeight;
@@ -1229,6 +1255,55 @@ async function confirmarExclusaoChip(botao) {
     carregarDados();
   } catch (e) {
     alert(`Falha ao excluir da rota: ${e.message}`);
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
+// ── "Marcar como entregue" do chip (Hugo, 08/10) -- mesmo mecanismo do
+// Excluir (menu de contexto -> modal -> POST), fechando o serviço na
+// VUUPT por API. ─────────────────────────────────────────────────────
+let chipPendenteEntregue = null;
+
+function abrirModalEntregue(chip) {
+  chipPendenteEntregue = chip;
+  document.getElementById("entregue-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("entregue-observacao").value = "";
+  document.getElementById("modal-entregue").classList.add("aberto");
+  document.getElementById("entregue-observacao").focus();
+}
+
+function fecharModalEntregue() {
+  document.getElementById("modal-entregue").classList.remove("aberto");
+  chipPendenteEntregue = null;
+}
+
+document.getElementById("modal-entregue").addEventListener("click", (e) => {
+  if (e.target.id === "modal-entregue") fecharModalEntregue();
+});
+
+async function confirmarEntregueChip(botao) {
+  if (!chipPendenteEntregue) return;
+  const observacao = document.getElementById("entregue-observacao").value.trim();
+  if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Fechando na VUUPT...";
+  try {
+    const resp = await fetch(URL_TORRE_MARCAR_ENTREGUE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: Number(chipPendenteEntregue.dataset.serviceId), observacao }),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar como entregue.");
+    fecharModalEntregue();
+    if (dados.ja_estava) alert(`${dados.codigo} já constava como entregue na VUUPT.`);
+    carregarDados();
+  } catch (e) {
+    alert(`Falha ao marcar como entregue: ${e.message}`);
+  } finally {
     botao.disabled = false;
     botao.textContent = original;
   }

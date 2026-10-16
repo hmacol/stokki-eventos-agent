@@ -478,3 +478,16 @@ def test_oculta_do_cliente_equipe_continua_vendo(cliente_http, monkeypatch):
     assert r.status_code == 200 and "Aprovar a proposta" in html and 'href="/cotacao"' not in html
     r = tc.post(f"/cotacao/aceite/{token}", data={"nome": "Fulano"})
     assert r.status_code == 200 and ct.buscar(conn, cot["id"])["status"] == "ACEITA"
+
+
+def test_oculta_mas_liberada_pro_cliente_teste(cliente_http, monkeypatch):
+    # Hugo, 14/10: calculadora aberta só pro login do cliente teste (botão na Torre)
+    tc, conn, enviados = cliente_http
+    monkeypatch.setitem(VISIVEL, "cliente", False)
+    assert ct.REGRAS_PADRAO["cnpjs_liberados"] == ["00000000000191"]
+    assert tc.get("/cotacao").status_code == 404
+    regras_de = ct.regras_de
+    monkeypatch.setattr(ct, "regras_de", lambda cfg: {**regras_de(cfg), "cnpjs_liberados": [CNPJ]})
+    assert tc.get("/cotacao").status_code == 200
+    r = tc.post("/api/cotacao/calcular", json=_entrada(), headers={"Origin": "http://localhost"})
+    assert r.status_code == 200
