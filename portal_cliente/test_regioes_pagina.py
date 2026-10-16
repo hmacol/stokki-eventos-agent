@@ -34,6 +34,11 @@ class TestPaginaRegioes(unittest.TestCase):
         self.assertEqual(self.tc.get("/regioes?mes=2026-13").status_code, 200)
         self.assertEqual(self.tc.get("/regioes?mes=abc").status_code, 200)
 
+    def test_login_tem_link_direto_pra_pagina(self):
+        html = self.tc.get("/login", headers={"X-Forwarded-Prefix": "/cliente"}).get_data(as_text=True)
+        self.assertIn('href="/cliente/regioes"', html)
+        self.assertIn("Dias de atendimento por região", html)
+
     def test_logo(self):
         r = self.tc.get("/regioes/logo.png")
         self.assertEqual((r.status_code, r.mimetype), (200, "image/png"))

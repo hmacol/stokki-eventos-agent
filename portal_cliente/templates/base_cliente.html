@@ -8,6 +8,9 @@
   try { if (localStorage.getItem('portal_tema') === 'escuro') document.documentElement.classList.add('tema-escuro'); } catch (e) {}
 </script>
 <title>{% block titulo %}Acompanhamento de entregas{% endblock %} — Fresh Log</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 {% include "_paleta_cores.html" %}
 <style>
   :root {
@@ -77,6 +80,10 @@
   </div>
   {% endif %}
   <div class="acoes">
+    <a class="botao-cab" id="btn-regioes" href="{{ url_for('regioes') }}" target="_blank" rel="noopener" title="Regiões atendidas, dias de visita e calendário do mês">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+      <span class="rotulo">Dias de atendimento</span>
+    </a>
     {% if cliente %}
     <button type="button" class="botao-cab" id="tour-abrir" data-tour="portal" title="Guia da tela: passo a passo de cada campo">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>

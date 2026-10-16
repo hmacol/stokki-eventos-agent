@@ -98,6 +98,9 @@ REGRAS_PADRAO = {
     # Hugo, 17/09: calculadora oculta do cliente (link some, rotas dão 404).
     # A equipe Fresh Log operando em nome do cliente continua vendo. True reabre.
     "visivel_cliente": False,
+    # Hugo, 14/10: mesmo oculta, estes CNPJs (só dígitos) veem a calculadora.
+    # Padrão: só o CLIENTE TESTE FRESH LOG, aberto pelo botão "Cotação" da Torre.
+    "cnpjs_liberados": ["00000000000191"],
     "veiculos": VEICULOS_PADRAO,
 }
 
