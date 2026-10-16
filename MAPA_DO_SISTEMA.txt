@@ -691,6 +691,12 @@
                            ("GRUPO - FILIAL" vira opção do grupo inteiro).
                            JS em templates/_torre_filtro_embarcador.js.html,
                            incluído pelo desktop e pelo mobile.
+                           "Marcar como entregue" (08/10): menu do chip da Torre
+                           e da parada em rota enviada no Planejamento -> POST
+                           /api/torre/marcar-entregue -> marcar_entregue_manual
+                           fecha na Vuupt por API (concluir_como_agente, sem
+                           canhoto; expedição sai "sem comprovante"). Auditoria
+                           em torre_entregas_manuais + tratativas ENTREGUE_MANUAL.
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);
@@ -976,6 +982,9 @@
                              origem cliente_sem_resposta = aviso direto ao embarcador)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
+   torre_excecoes_tratadas, torre_rotas_encerradas, torre_entregas_manuais
+                             painel_agentes/torre_controle.py (fila tratada, rota
+                             encerrada na torre, pedido fechado como entregue pelo painel)
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py

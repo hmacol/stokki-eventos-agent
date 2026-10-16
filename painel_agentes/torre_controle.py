@@ -345,6 +345,97 @@ def notificar_ocorrencia_manual(service_id: int, codigo: str) -> dict:
     return {"ok": False, "erro": "Falha ao enviar o e-mail (ver log de expedição)."}
 
 
+# Status da Vuupt em que o servico tem motorista e ainda esta aberto --
+# os unicos que concluir_como_agente consegue levar ate 'done'.
+_STATUS_SERVICO_ABERTO_COM_MOTORISTA = ("assigned", "accepted", "on_route", "arrived")
+
+
+def marcar_entregue_manual(service_id: int, usuario: str, observacao: str) -> dict:
+    """
+    Fecha um pedido como ENTREGUE direto na Vuupt, sem passar pelo app
+    do motorista -- "Marcar como entregue" do menu de contexto da Torre
+    e do Planejamento (Hugo, 08/10): motorista sem bateria, app travado,
+    entrega confirmada por telefone/WhatsApp etc.
+
+    Usa concluir_como_agente (mesmo caminho que fecha as retiradas no
+    galpao): percorre accept/start/check-in/check-out por API a partir
+    do status atual. Consequencias que o Hugo aceitou: fica 'done' sem
+    canhoto e sem checklist (o expedir_pedidos expede na Stokki como
+    "sem comprovante"), e a hora da entrega e a do clique.
+
+    Travas: so servico com motorista e ainda aberto. 'done' devolve ok
+    sem mexer (ja_estava=True); not_assigned, canceled e failed
+    recusam -- insucesso tem o caminho dele (Duplicar), nao e pra virar
+    done por cima.
+    """
+    observacao = (observacao or "").strip()
+    if not observacao:
+        return {"ok": False, "erro": "Informe como a entrega foi confirmada."}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    servico = vuupt.buscar_servico_por_id(service_id)
+    if not servico:
+        return {"ok": False, "erro": f"Pedido {service_id} não encontrado na VUUPT."}
+    codigo = servico.get("code") or f"#{service_id}"
+    status = servico.get("status") or ""
+
+    if status == "done":
+        return {"ok": True, "ja_estava": True, "codigo": codigo}
+    if status == "canceled":
+        return {"ok": False, "erro": f"Pedido {codigo} está cancelado na VUUPT."}
+    if status == "failed":
+        return {"ok": False, "erro": f"Pedido {codigo} já está com insucesso na VUUPT -- "
+                                     "use Duplicar pra reentrega."}
+    if status not in _STATUS_SERVICO_ABERTO_COM_MOTORISTA:
+        return {"ok": False, "erro": f"Pedido {codigo} está sem motorista na VUUPT "
+                                     f"(status '{status}') -- não dá pra fechar sem alguém atribuído."}
+
+    try:
+        vuupt.concluir_como_agente(service_id, sucesso=True, status_atual=status)
+    except Exception as e:
+        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {e}"}
+
+    _registrar_entrega_manual(service_id, codigo, status, usuario, observacao)
+    tratativas.registrar_evento(
+        codigo, "TORRE", "ENTREGUE_MANUAL", service_id=service_id,
+        texto=f"Marcado como entregue pelo painel por {usuario or '?'}: {observacao}",
+    )
+    return {"ok": True, "codigo": codigo}
+
+
+def _registrar_entrega_manual(service_id: int, codigo: str, status_anterior: str,
+                              usuario: str, observacao: str) -> None:
+    conn = _conectar_tratadas()
+    conn.execute("""
+        INSERT INTO torre_entregas_manuais
+            (service_id, codigo, status_anterior, usuario, observacao, marcado_em)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (int(service_id), (codigo or "")[:60], (status_anterior or "")[:30], (usuario or "")[:100],
+          observacao[:500], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+
+def _buscar_entregas_manuais(service_ids: list[int]) -> dict[int, dict]:
+    """Ultimo registro por service_id (usado nos testes e disponivel pra
+    quem quiser mostrar 'entregue pelo painel' na tela)."""
+    if not service_ids:
+        return {}
+    conn = _conectar_tratadas()
+    marcas = ",".join("?" * len(service_ids))
+    rows = conn.execute(f"""
+        SELECT service_id, codigo, status_anterior, usuario, observacao, marcado_em
+          FROM torre_entregas_manuais
+         WHERE service_id IN ({marcas})
+         ORDER BY marcado_em
+    """, [int(s) for s in service_ids]).fetchall()
+    conn.close()
+    return {int(r["service_id"]): dict(r) for r in rows}
+
+
 # ── Faixa 1: etapas do pipeline ────────────────────────────────────────────────
 
 def montar_etapas_pipeline() -> list[dict]:
@@ -1223,6 +1314,19 @@ def _conectar_tratadas():
             data_rota    TEXT,
             usuario      TEXT,
             encerrada_em TEXT NOT NULL
+        )
+    """)
+    # Pedido fechado como entregue pelo painel (Hugo, 08/10) -- ver
+    # marcar_entregue_manual. Auditoria de quem marcou e como confirmou.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS torre_entregas_manuais (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_id      INTEGER NOT NULL,
+            codigo          TEXT,
+            status_anterior TEXT,
+            usuario         TEXT,
+            observacao      TEXT,
+            marcado_em      TEXT NOT NULL
         )
     """)
     conn.commit()
