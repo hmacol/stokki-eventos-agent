@@ -1077,6 +1077,9 @@
  - Pré-cadastro automático ESCREVE em `interno` (embarcadores_stokki.py). E-mail
    do convite vai pro Hugo enquanto cadastro_embarcador.forcar_destino_email não
    for "" explícito; WhatsApp segue whatsapp_notificacoes.clientes.forcar_destino.
+ Pré-cadastro só fecha pela aprovação (/inicio ou gerenciar_clientes.py cadastro
+ aprovar|habilidade); gravar interno.habilidade à mão deixa o cliente preso em
+ /completar-cadastro. interno.email fica NULL até aprovar.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

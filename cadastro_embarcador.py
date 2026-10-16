@@ -150,6 +150,13 @@ def aprovar(conn, cnpj, por: str, habilidade: str | None = None, agora: datetime
     if cur.rowcount == 0:
         conn.rollback()
         raise CadastroInvalido("Embarcador não está em interno.", 404)
+    if not (conn.execute("SELECT email FROM interno WHERE cnpj_embarcador = ?",
+                         (c["cnpj_embarcador"],)).fetchone()[0] or "").strip():
+        import preferencias_notificacao as pn
+        emails = pn.ler(conn, c["cnpj_embarcador"])["emails"] or ([c["email_stokki"]] if c["email_stokki"] else [])
+        if emails:
+            conn.execute("UPDATE interno SET email = ? WHERE cnpj_embarcador = ?",
+                         (", ".join(emails), c["cnpj_embarcador"]))
     return atualizar(conn, cnpj, agora, situacao=APROVADO, aprovado_em=_fmt(agora),
                      aprovado_por=str(por or "")[:40], habilidade_informada=tipo)
 

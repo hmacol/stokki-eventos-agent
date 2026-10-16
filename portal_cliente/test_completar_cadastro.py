@@ -38,10 +38,10 @@ class TestCompletarCadastro(unittest.TestCase):
                      "email TEXT, notificar_email INTEGER NOT NULL DEFAULT 1, sender_id INTEGER, stkkc_id INTEGER, "
                      "habilidade TEXT, atualizado_em TEXT)")
         conn.executemany("INSERT INTO interno VALUES (?,?,?,?,?,?,?,NULL,NULL)", [
-            (CNPJ_A, "NONNA DISTRIBUICAO", "FABENNE", "mariana@fabenne.com", 1, 23084712, 100),
+            (CNPJ_A, "NONNA DISTRIBUICAO", "FABENNE", None, 1, 23084712, 100),
             (CNPJ_B, "Beta SA", "Beta", "cadastro@beta.com", 1, 102, 9002)])
         conn.commit()
-        cad.registrar(conn, CNPJ_A, 100, cad.CONVIDADO)
+        cad.registrar(conn, CNPJ_A, 100, cad.CONVIDADO, email="mariana@fabenne.com")
         for cnpj in (CNPJ_A, CNPJ_B):
             portal.auth.definir_pin(conn, cnpj, "135790")
         self.versao = {c: portal.auth.versao_conta(portal.auth.buscar_conta(conn, c)) for c in (CNPJ_A, CNPJ_B)}

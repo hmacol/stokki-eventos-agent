@@ -175,9 +175,10 @@ def pre_cadastrar(conn, cli: dict, contato: dict, ativo: bool, agora: datetime) 
     conn.execute(
         "INSERT INTO interno (cnpj_embarcador, stkkc_id, nome_remetente, apelido, email, fator_ponderado, habilidade, "
         "notificar_email, observacoes, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, 1.0, NULL, ?, ?, ?, ?)",
-        (cli["cnpj"], cli["stkkc_id"], cli["razao"], cli["apelido"], contato["email"] or None,
+        (cli["cnpj"], cli["stkkc_id"], cli["razao"], cli["apelido"], None,
          1 if ativo else 0, obs, momento, momento))
-    conn.commit()
+    # sem commit aqui: cad.registrar grava os dois INSERTs juntos. interno.email
+    # fica NULL ate a aprovacao (o e-mail da Stokki vive em cadastro_embarcador).
     cad.registrar(conn, cli["cnpj"], cli["stkkc_id"], cad.PENDENTE if ativo else cad.INATIVO,
                   celular=contato["celular"], email=contato["email"], agora=agora)
 
@@ -284,12 +285,17 @@ def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = 
         if situacao in ("enviado", "modo_teste"):
             canal = "whatsapp"
             if situacao == "enviado":
-                prefs = pn.ler(conn, c["cnpj_embarcador"])
-                if not prefs["whatsapp"]:
-                    pn.salvar(conn, c["cnpj_embarcador"], prefs["emails"], {}, "pre-cadastro", whatsapp=numero)
+                try:
+                    prefs = pn.ler(conn, c["cnpj_embarcador"])
+                    if not prefs["whatsapp"]:
+                        pn.salvar(conn, c["cnpj_embarcador"], prefs["emails"], {}, "pre-cadastro", whatsapp=numero)
+                except Exception as exc:
+                    logger.warning(f"WhatsApp de {nome} nao guardado nas preferencias ({exc}): convite segue registrado.")
         elif situacao in ("nao_enviado", "indeterminado", "falhou"):
             logger.info(f"Convite de {nome} adiado (WhatsApp: {situacao}).")
             return "adiado"
+        elif situacao == "desligado":
+            logger.info(f"WhatsApp de clientes desligado: convite de {nome} vai por e-mail.")
     if canal is None and email:
         if modo_teste:
             logger.info(f"[MODO TESTE] convite por e-mail pra {destino_email(config, email)[0]} ({nome}).")
@@ -361,21 +367,26 @@ def executar(config: dict, conn, clientes: list[dict], ler_contato, vuupt, agora
     for cli in grupos["novos"]:
         resumo["novos"] += 1
         try:
-            contato = extrair_contato(ler_contato(cli["stkkc_id"]) or "")
+            try:
+                contato = extrair_contato(ler_contato(cli["stkkc_id"]) or "")
+            except Exception as exc:
+                logger.warning(f"Contato do cliente #{cli['stkkc_id']} nao lido na Stokki ({exc}): segue sem contato.")
+                contato = extrair_contato("")
+            ativo = tem_pedido_recente(conn, cli["cnpj"], agora)
+            if modo_teste:
+                resumo["ativos" if ativo else "inativos"] += 1
+                logger.info(f"[MODO TESTE] novo #{cli['stkkc_id']} {cli['apelido'] or cli['razao']} ({cli['cnpj']}): "
+                            f"{'ativo' if ativo else 'inativo'}, sender do nucleo {sender_do_nucleo(conn, cli['cnpj'])}, "
+                            f"celular {'valido' if celular_whatsapp(contato['celular']) else 'invalido'}, "
+                            f"e-mail {contato['email'] or '-'}")
+                continue
+            pre_cadastrar(conn, cli, contato, ativo, agora)
+            if not ativo:
+                novos_inativos += 1
         except Exception as exc:
-            logger.warning(f"Contato do cliente #{cli['stkkc_id']} nao lido na Stokki ({exc}): segue sem contato.")
-            contato = extrair_contato("")
-        ativo = tem_pedido_recente(conn, cli["cnpj"], agora)
-        if modo_teste:
-            resumo["ativos" if ativo else "inativos"] += 1
-            logger.info(f"[MODO TESTE] novo #{cli['stkkc_id']} {cli['apelido'] or cli['razao']} ({cli['cnpj']}): "
-                        f"{'ativo' if ativo else 'inativo'}, sender do nucleo {sender_do_nucleo(conn, cli['cnpj'])}, "
-                        f"celular {'valido' if celular_whatsapp(contato['celular']) else 'invalido'}, "
-                        f"e-mail {contato['email'] or '-'}")
+            conn.rollback()
+            logger.warning(f"Pre-cadastro de {cli['cnpj']} falhou nesta rodada ({exc}): tenta na proxima.")
             continue
-        pre_cadastrar(conn, cli, contato, ativo, agora)
-        if not ativo:
-            novos_inativos += 1
     if novos_inativos:
         avisar_grupo(conn, config, texto_inativos(novos_inativos), f"inativos:{_fmt(agora)[:13]}", modo_teste, **kw)
 

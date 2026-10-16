@@ -88,6 +88,27 @@ class TestPreenchimentoEAprovacao(_Base):
         c = cad.aprovar(self.conn, CNPJ, "hugo", habilidade="congelado", agora=AGORA)
         self.assertEqual((c["habilidade_informada"], self.habilidade_interno()), ("Congelado", "Congelado"))
 
+    def email_interno(self):
+        return self.conn.execute("SELECT email FROM interno WHERE cnpj_embarcador = ?", (CNPJ,)).fetchone()[0]
+
+    def test_aprovar_preenche_interno_email_vazio_com_o_da_stokki(self):
+        self.conn.execute("UPDATE cadastro_embarcador SET email_stokki = 'mariana@fabenne.com' WHERE cnpj_embarcador = ?",
+                          (CNPJ,))
+        self.conn.commit()
+        self.assertIsNone(self.email_interno())
+        cad.salvar_preenchimento(self.conn, CNPJ, "Seco", agora=AGORA)
+        cad.aprovar(self.conn, CNPJ, "hugo", agora=AGORA)
+        self.assertEqual(self.email_interno(), "mariana@fabenne.com")
+
+    def test_aprovar_nao_sobrescreve_interno_email_existente(self):
+        self.conn.execute("UPDATE cadastro_embarcador SET email_stokki = 'mariana@fabenne.com' WHERE cnpj_embarcador = ?",
+                          (CNPJ,))
+        self.conn.execute("UPDATE interno SET email = 'antigo@fabenne.com' WHERE cnpj_embarcador = ?", (CNPJ,))
+        self.conn.commit()
+        cad.salvar_preenchimento(self.conn, CNPJ, "Seco", agora=AGORA)
+        cad.aprovar(self.conn, CNPJ, "hugo", agora=AGORA)
+        self.assertEqual(self.email_interno(), "antigo@fabenne.com")
+
     def test_aprovar_sem_preenchimento_da_409(self):
         with self.assertRaises(cad.CadastroInvalido) as ctx:
             cad.aprovar(self.conn, CNPJ, "hugo", agora=AGORA)

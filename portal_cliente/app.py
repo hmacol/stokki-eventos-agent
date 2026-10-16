@@ -467,7 +467,7 @@ def completar_cadastro():
         if not cad_emb.precisa_completar(conn, cnpj):
             return redirect(url_for("inicio"))
         prefs = preferencias.ler(conn, cnpj)
-        valores = {"habilidade": "", "emails": "\n".join(prefs["emails"] or prefs["emails_cadastro"]),
+        valores = {"habilidade": "", "emails": "\n".join(prefs["emails"] or [(cad_emb.buscar(conn, cnpj) or {}).get("email_stokki") or ""]),
                    "whatsapp": prefs["whatsapp"]}
         erro = None
         if request.method == "POST":

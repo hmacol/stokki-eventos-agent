@@ -43,8 +43,8 @@ class TestAprovarCadastroEmbarcador(unittest.TestCase):
         self.cliente = painel_agentes.app.test_client()
         conn = banco.conectar()
         conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT PRIMARY KEY, nome_remetente TEXT, apelido TEXT, "
-                     "habilidade TEXT, atualizado_em TEXT)")
-        conn.execute("INSERT INTO interno VALUES (?, 'NONNA', 'FABENNE', NULL, NULL)", (CNPJ,))
+                     "habilidade TEXT, atualizado_em TEXT, email TEXT, notificar_email INTEGER NOT NULL DEFAULT 1)")
+        conn.execute("INSERT INTO interno (cnpj_embarcador, nome_remetente, apelido) VALUES (?, 'NONNA', 'FABENNE')", (CNPJ,))
         conn.commit()
         cad.registrar(conn, CNPJ, 100, cad.CONVIDADO)
         cad.salvar_preenchimento(conn, CNPJ, "Refrigerado")

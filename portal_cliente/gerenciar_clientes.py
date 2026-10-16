@@ -239,6 +239,9 @@ def _comando_cadastro(conn, args) -> int:
     if args.acao == "habilidade" and not args.tipo:
         print("Informe o tipo: Seco, Refrigerado ou Congelado.")
         return 2
+    if args.acao == "aprovar" and args.tipo:
+        print("Use `cadastro habilidade <cnpj> <tipo>` pra aprovar com outro tipo.")
+        return 2
     try:
         c = cad_emb.aprovar(conn, args.cnpj, "cli", habilidade=args.tipo if args.acao == "habilidade" else None)
     except cad_emb.CadastroInvalido as e:

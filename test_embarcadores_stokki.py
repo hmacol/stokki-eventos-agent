@@ -174,7 +174,7 @@ class TestDeteccao(_ComBanco):
         n = self.interno(NONNA["cnpj"])
         self.assertEqual((n["stkkc_id"], n["nome_remetente"], n["apelido"], n["email"], n["habilidade"],
                           n["notificar_email"], n["sender_id"], n["fator_ponderado"]),
-                         (100, NONNA["razao"], "FABENNE", "mariana@fabenne.com", None, 1, None, 1.0))
+                         (100, NONNA["razao"], "FABENNE", None, None, 1, None, 1.0))
         self.assertIn("Pré-cadastro automático 10/10/2026 (Stokki #stkkc-100)", n["observacoes"])
         a = self.interno(ANTIGO["cnpj"])
         self.assertEqual((a["notificar_email"], a["email"]), (0, None))
@@ -182,6 +182,23 @@ class TestDeteccao(_ComBanco):
         self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "PENDENTE")
         self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["celular_stokki"], "(11) 98888-7777")
         self.assertEqual(cad.buscar(self.conn, ANTIGO["cnpj"])["situacao"], "INATIVO")
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["email_stokki"], "mariana@fabenne.com")
+
+    def test_falha_no_registro_nao_deixa_orfao_e_nao_barra_os_outros(self):
+        registrar = cad.registrar
+
+        def quebra_so_na_nonna(conn, cnpj, *a, **kw):
+            if cnpj == NONNA["cnpj"]:
+                raise RuntimeError("disco cheio")
+            return registrar(conn, cnpj, *a, **kw)
+
+        with mock.patch.object(rot.cad, "registrar", side_effect=quebra_so_na_nonna):
+            rot.executar(_config(), self.conn, [NONNA, RIC], lambda i: CONTATOS[i], None, agora=AGORA,
+                         dormir=self.dormir, enviar_email=self.email)
+        self.assertIsNone(self.interno(NONNA["cnpj"]))
+        self.assertIsNone(cad.buscar(self.conn, NONNA["cnpj"]))
+        self.assertIsNotNone(self.interno(RIC["cnpj"]))
+        self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["situacao"], "INATIVO")
 
 
 class _ComCadastro(_ComBanco):
@@ -257,6 +274,20 @@ class TestConvite(_ComCadastro):
         self.email.return_value = False
         self.assertEqual(self.convidar(RIC), "adiado")
         self.assertEqual(cad.buscar(self.conn, RIC["cnpj"])["situacao"], "PENDENTE")
+
+    def test_falha_ao_guardar_whatsapp_nao_impede_registrar_convite(self):
+        self.preparar(NONNA)
+        with mock.patch.object(rot.pn, "salvar", side_effect=RuntimeError("locked")):
+            self.assertEqual(self.convidar(NONNA), "whatsapp")
+        self.assertEqual(cad.buscar(self.conn, NONNA["cnpj"])["situacao"], "CONVIDADO")
+
+    def test_whatsapp_desligado_cai_no_email_e_loga(self):
+        self.preparar(NONNA)
+        config = _config()
+        config["whatsapp_notificacoes"]["clientes"]["ativo"] = False
+        with self.assertLogs(rot.logger, level="INFO") as logs:
+            self.assertEqual(self.convidar(NONNA, config=config), "email")
+        self.assertTrue(any("desligado" in l for l in logs.output))
 
     def test_modo_teste_nao_grava_nem_envia(self):
         self.preparar(NONNA)

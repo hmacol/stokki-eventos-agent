@@ -31,8 +31,8 @@ class TestCliCadastro(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         conn = gc.auth.conectar()
         conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT PRIMARY KEY, nome_remetente TEXT, apelido TEXT, "
-                     "habilidade TEXT, atualizado_em TEXT)")
-        conn.execute("INSERT INTO interno VALUES (?, 'NONNA', 'FABENNE', NULL, NULL)", (CNPJ,))
+                     "habilidade TEXT, atualizado_em TEXT, email TEXT, notificar_email INTEGER NOT NULL DEFAULT 1)")
+        conn.execute("INSERT INTO interno (cnpj_embarcador, nome_remetente, apelido) VALUES (?, 'NONNA', 'FABENNE')", (CNPJ,))
         conn.commit()
         cad.registrar(conn, CNPJ, 100, cad.CONVIDADO)
         cad.salvar_preenchimento(conn, CNPJ, "Refrigerado")
@@ -74,6 +74,10 @@ class TestCliCadastro(unittest.TestCase):
         codigo, saida = self.rodar("cadastro", "habilidade", CNPJ, "quente")
         self.assertEqual(codigo, 2)
         self.assertIn("Nada gravado", saida)
+        self.assertIsNone(self.habilidade())
+        codigo, saida = self.rodar("cadastro", "aprovar", CNPJ, "Seco")
+        self.assertEqual(codigo, 2)
+        self.assertIn("cadastro habilidade", saida)
         self.assertIsNone(self.habilidade())
 
 

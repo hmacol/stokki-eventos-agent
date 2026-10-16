@@ -208,6 +208,11 @@ class TestCadastrosEmbarcador(unittest.TestCase):
         self.assertEqual(c[1]["detalhe"], "convidado em 09/10 por email, sem resposta")
         self.assertEqual(c[2]["detalhe"], "sem contato na Stokki, cadastrar à mão")
 
+    def test_reenviado_sem_contato_usa_o_texto_de_sem_contato(self):
+        linha = dict(self.LINHAS[1], situacao="REENVIADO", canal_convite="nenhum", reenvio_em="2026-10-12 09:10:00")
+        self.assertEqual(pagina_inicial.montar_cadastros([linha])[0]["detalhe"],
+                         "sem contato na Stokki, cadastrar à mão")
+
     def test_so_o_total_recebe_o_bloco(self):
         fontes = dict(contadores=lambda n: {}, niveis_por_contador=NIVEIS, snapshot=lambda d: None,
                       execucoes=lambda: [], cadastros=lambda: self.LINHAS)

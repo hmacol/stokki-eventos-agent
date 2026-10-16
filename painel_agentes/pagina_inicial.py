@@ -139,7 +139,7 @@ def montar_cadastros(linhas: list[dict]) -> list[dict]:
         situacao = l["situacao"]
         if situacao == "PREENCHIDO":
             detalhe = f"informou {l['habilidade_informada']} em {_dia_mes(l['preenchido_em'])}"
-        elif situacao == "SEM_CONTATO":
+        elif situacao == "SEM_CONTATO" or l.get("canal_convite") == "nenhum":
             detalhe = "sem contato na Stokki, cadastrar à mão"
         elif situacao == "PENDENTE":
             detalhe = "aguardando remetente ou convite"
