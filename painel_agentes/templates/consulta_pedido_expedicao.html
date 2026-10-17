@@ -82,6 +82,7 @@
     const brutos = el("div", "brutos");
     brutos.appendChild(el("div", "", r.stokki_bruto));
     brutos.appendChild(el("div", "", r.vuupt_bruto));
+    if (r.lalamove_bruto) brutos.appendChild(el("div", "", r.lalamove_bruto));
     card.appendChild(brutos);
     saida.replaceChildren(card);
   }

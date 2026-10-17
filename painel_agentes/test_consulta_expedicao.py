@@ -186,6 +186,58 @@ class TestDecidirVeredito(unittest.TestCase):
         self.assertIn("accepted", r["vuupt_bruto"])
         self.assertIn("#3", r["vuupt_bruto"])
         self.assertEqual(r["titulo"], ce.TITULOS["galpao"])
+        self.assertIsNone(r["lalamove_bruto"])
+
+
+ROTA_LALAMOVE = {**ROTA_PARADA, "motorista": "LALAMOVE (virtual)", "placa": None}
+SERVICO_LALAMOVE = {"status": "assigned", "route_id": 9, "title": "[LALAMOVE 3571817] #PS-1 - X"}
+
+
+class TestVereditoLalamove(unittest.TestCase):
+    """Rota do motorista virtual LALAMOVE: a Vuupt fica parada até o sync,
+    quem diz se saiu é a corrida (16/10)."""
+
+    def _v(self, status, servico=SERVICO_LALAMOVE, estado="ok"):
+        lala = {"estado": estado, "order_id": "3571817", "status": status}
+        return ce.decidir_veredito(servico, ROTA_LALAMOVE, STOKKI_AGUARDANDO, AGORA, lalamove=lala)
+
+    def test_coletado_saiu(self):
+        r = self._v("PICKED_UP")
+        self.assertEqual(r["veredito"], "saiu")
+        self.assertIn("3571817", r["contexto"])
+        self.assertEqual(r["lalamove_bruto"], "Lalamove: corrida #3571817 · PICKED_UP")
+        self.assertIsNone(r["divergencia"])
+
+    def test_completed_antes_do_sync_e_entregue(self):
+        self.assertEqual(self._v("COMPLETED")["veredito"], "entregue")
+
+    def test_motorista_indo_buscar_continua_no_galpao(self):
+        r = self._v("ON_GOING")
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn("a caminho da coleta", r["contexto"])
+
+    def test_procurando_motorista_continua_no_galpao(self):
+        r = self._v("ASSIGNING_DRIVER")
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn("procurando motorista", r["contexto"])
+
+    def test_corrida_cancelada_avisa_outro_motorista(self):
+        r = self._v("CANCELED")
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn("outro motorista", r["contexto"])
+
+    def test_nao_conferida_decide_pela_vuupt_com_aviso(self):
+        r = self._v(None, estado="nao_conferida")
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn(ce.AVISO_LALAMOVE_NAO_CONFERIDA, r["aviso"])
+        self.assertIn("não conferida", r["lalamove_bruto"])
+
+    def test_servico_ja_fechado_na_vuupt_vale_a_vuupt(self):
+        # insucesso concluido na Vuupt nao vira "entregue" pela corrida COMPLETED
+        with mock.patch.object(ce, "texto_do_motivo", return_value="Cliente ausente"):
+            r = self._v("COMPLETED", servico={**SERVICO_LALAMOVE, "status": "done", "status_done": "failed"})
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn("insucesso", r["contexto"].lower())
 
 
 class _VuuptFalso:
@@ -301,6 +353,36 @@ class TestConsultar(unittest.TestCase):
         self.vuupt.servico = {"id": 1, "status": "not_assigned"}
         ce.consultar("38123")
         ce.buscar_rota.assert_not_called()
+
+    def test_sem_carimbo_nao_chama_lalamove(self):
+        with mock.patch.object(ce, "_consultar_lalamove") as lala:
+            r = ce.consultar("38123")
+        lala.assert_not_called()
+        self.assertIsNone(r["lalamove_bruto"])
+
+    def test_carimbo_no_titulo_consulta_a_corrida(self):
+        self.vuupt.servico = {"id": 1, "status": "assigned", "route_id": 9, "title": "[LALAMOVE 3571817] #PS-38123"}
+        cliente = mock.Mock()
+        cliente.consultar_pedido.return_value = {"orderId": "3571817", "status": "PICKED_UP", "stops": []}
+        with mock.patch("lalamove_integracao.cliente_de_config", return_value=cliente):
+            r = ce.consultar("38123")
+        cliente.consultar_pedido.assert_called_once_with("3571817")
+        self.assertEqual(cliente.timeout, ce.TIMEOUT_LALAMOVE_S)
+        self.assertEqual(r["veredito"], "saiu")
+
+    def test_lalamove_fora_vira_nao_conferida(self):
+        self.vuupt.servico = {"id": 1, "status": "assigned", "route_id": 9, "title": "[LALAMOVE 3571817] #PS-38123"}
+        with mock.patch("lalamove_integracao.cliente_de_config", side_effect=ValueError("sem chave")):
+            r = ce.consultar("38123")
+        self.assertEqual(r["veredito"], "galpao")
+        self.assertIn(ce.AVISO_LALAMOVE_NAO_CONFERIDA, r["aviso"])
+
+    def test_servico_fechado_nao_chama_lalamove(self):
+        self.vuupt.servico = {"id": 1, "status": "done", "status_done": "success",
+                              "title": "[LALAMOVE 3571817] #PS-38123"}
+        with mock.patch.object(ce, "_consultar_lalamove") as lala:
+            ce.consultar("38123")
+        lala.assert_not_called()
 
 
 import importlib.util  # noqa: E402

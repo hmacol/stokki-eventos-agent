@@ -57,6 +57,13 @@ _RE_STOKKI_NO_GALPAO = re.compile(r"aguardando|em espera|aberto|confer|separa|fa
 
 _RE_CODIGO = re.compile(r"^#?(?:PS[.\-_]*)?(\d{4,6})((?:-[RC]\d+)*)$")
 
+# Rota com o motorista virtual LALAMOVE (Hugo, 16/10): na Vuupt a rota
+# fica parada até o sync (15 min) concluir os serviços, então quem diz se
+# o pedido já saiu é a corrida. O código vem carimbado no título do
+# serviço ("[LALAMOVE 1234] ...", lalamove_integracao._carimbar_titulos).
+AVISO_LALAMOVE_NAO_CONFERIDA = "Lalamove não conferida — tente de novo em 1 min."
+TIMEOUT_LALAMOVE_S = 10
+
 
 def normalizar_codigo(texto) -> str | None:
     """'ps 38123-r1' -> 'PS-38123-R1'; sem código reconhecível -> None."""
@@ -150,8 +157,26 @@ def _veredito_vuupt(servico: dict, rota: dict | None, agora: datetime,
     return "galpao", "Sem rota (no pool da roteirização)"
 
 
+def _ajustar_por_lalamove(veredito: str, contexto: str, lalamove: dict) -> tuple[str, str]:
+    """A Vuupt diz 'galpão' (rota parada); a corrida Lalamove diz se o
+    motorista já coletou. ON_GOING = aceitou e vai buscar: ainda está aqui."""
+    corrida = f"corrida Lalamove #{lalamove['order_id']}"
+    status = lalamove.get("status") or ""
+    if veredito != "galpao" or lalamove.get("estado") != "ok":
+        return veredito, contexto
+    if status == "PICKED_UP":
+        return "saiu", f"Saiu com a Lalamove ({corrida}, motorista já coletou)"
+    if status == "COMPLETED":
+        return "entregue", f"Entregue pela Lalamove ({corrida})"
+    if status == "ON_GOING":
+        return veredito, f"Na {corrida}: motorista a caminho da coleta"
+    if status == "ASSIGNING_DRIVER":
+        return veredito, f"Na {corrida}: procurando motorista"
+    return veredito, f"{contexto} — {corrida} {status or 'sem status'}, precisa de outro motorista"
+
+
 def decidir_veredito(servico: dict | None, rota: dict | None, stokki: dict, agora: datetime,
-                     agente_retirada: int | None = None) -> dict:
+                     agente_retirada: int | None = None, lalamove: dict | None = None) -> dict:
     estado_stokki = stokki.get("estado", "nao_conferida")
     status_stokki = stokki.get("status") or ""
     cancelado_stokki = estado_stokki == "ok" and re.search(r"cancel", status_stokki, re.IGNORECASE)
@@ -179,6 +204,9 @@ def decidir_veredito(servico: dict | None, rota: dict | None, stokki: dict, agor
             veredito, contexto = "nao_encontrado", "Não está na Vuupt e a Stokki não pôde ser conferida"
     else:
         veredito, contexto = _veredito_vuupt(servico, rota, agora, agente_retirada)
+        # Serviço fechado na Vuupt (o sync já concluiu, ou insucesso) vale a Vuupt
+        if lalamove and servico.get("status") not in ("done", "canceled"):
+            veredito, contexto = _ajustar_por_lalamove(veredito, contexto, lalamove)
         if veredito == "galpao" and (enviado_stokki or desconhecida_stokki):
             divergencia = f"Stokki diz {status_stokki}"
         elif veredito == "entregue" and no_galpao_stokki:
@@ -187,14 +215,26 @@ def decidir_veredito(servico: dict | None, rota: dict | None, stokki: dict, agor
                 divergencia = (f"Stokki diz {status_stokki} (entregue há mais de "
                                f"{HORAS_DIVERGENCIA_EXPEDICAO}h e não expedido)")
 
+    avisos = []
+    if estado_stokki == "nao_conferida":
+        avisos.append(AVISO_STOKKI_NAO_CONFERIDA)
+    lalamove_bruto = None
+    if lalamove:
+        if lalamove.get("estado") == "ok":
+            lalamove_bruto = f"Lalamove: corrida #{lalamove['order_id']} · {lalamove.get('status') or '?'}"
+        else:
+            lalamove_bruto = f"Lalamove: corrida #{lalamove['order_id']} não conferida"
+            if veredito == "galpao":
+                avisos.append(AVISO_LALAMOVE_NAO_CONFERIDA)
     return {
         "veredito": veredito,
         "titulo": TITULOS[veredito],
         "contexto": contexto,
         "divergencia": divergencia,
-        "aviso": AVISO_STOKKI_NAO_CONFERIDA if estado_stokki == "nao_conferida" else None,
+        "aviso": " ".join(avisos) or None,
         "stokki_bruto": _bruto_stokki(stokki),
         "vuupt_bruto": _bruto_vuupt(servico, rota),
+        "lalamove_bruto": lalamove_bruto,
     }
 
 
@@ -253,6 +293,28 @@ def _consultar_stokki(id_stokki: str) -> dict:
     return {"estado": "ok", "status": visto["status"], "transportadora": visto["transportadora"], "retira": retira}
 
 
+def _order_id_lalamove(servico: dict | None, config: dict) -> str | None:
+    """Código da corrida carimbado no título do serviço ainda aberto."""
+    if not servico or servico.get("status") in ("done", "canceled"):
+        return None
+    prefixo = str((config.get("lalamove") or {}).get("prefixo_titulo") or "LALAMOVE")
+    m = re.search(rf"\[{re.escape(prefixo)} (\d+)\]", servico.get("title") or "")
+    return m.group(1) if m else None
+
+
+def _consultar_lalamove(order_id: str, config: dict) -> dict:
+    """GET da corrida ao vivo (só leitura). Falha vira 'não conferida'."""
+    from lalamove_integracao import cfg_lalamove, cliente_de_config, resumir_pedido
+    try:
+        cliente = cliente_de_config(cfg_lalamove(config))
+        cliente.timeout = TIMEOUT_LALAMOVE_S
+        status = resumir_pedido(cliente.consultar_pedido(order_id))["status"]
+    except Exception as e:
+        logger.warning(f"[consulta-expedicao] Lalamove falhou pra corrida {order_id}: {e}")
+        return {"estado": "nao_conferida", "order_id": order_id}
+    return {"estado": "ok", "order_id": order_id, "status": status}
+
+
 def consultar(codigo_digitado: str) -> dict:
     codigo = normalizar_codigo(codigo_digitado)
     if not codigo:
@@ -272,8 +334,12 @@ def consultar(codigo_digitado: str) -> dict:
         raise ConsultaIndisponivel("Vuupt indisponível — tente de novo.") from e
 
     id_stokki = re.search(r"\d+", codigo).group(0)
-    agente_retirada = _carregar_config().get("retiradas", {}).get("agent_id")
+    config = _carregar_config()
+    agente_retirada = config.get("retiradas", {}).get("agent_id")
+    order_id = _order_id_lalamove(servico, config)
+    lalamove = _consultar_lalamove(order_id, config) if order_id else None
     resultado = decidir_veredito(servico, rota, _consultar_stokki(id_stokki), datetime.now(FUSO_LOCAL),
-                                 agente_retirada=int(agente_retirada) if agente_retirada else None)
+                                 agente_retirada=int(agente_retirada) if agente_retirada else None,
+                                 lalamove=lalamove)
     resultado["codigo"] = codigo
     return resultado

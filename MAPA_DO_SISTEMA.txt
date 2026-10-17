@@ -726,6 +726,8 @@
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.
+                           Serviço com [LALAMOVE <id>] no título: consulta a
+                           corrida (PICKED_UP = saiu, COMPLETED = entregue).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
