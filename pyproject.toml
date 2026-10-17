@@ -50,7 +50,7 @@ ignore = ["S101", "N818"]  # S101: assert e normal em teste; N818: excecoes com 
 known-first-party = ["freshhub"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S607"]  # senhas de mentira e `git` por caminho parcial em teste
+"tests/**" = ["S105", "S106", "S603", "S607"]  # senhas de mentira e subprocess com args fixos em teste
 
 [tool.mypy]
 python_version = "3.11"
