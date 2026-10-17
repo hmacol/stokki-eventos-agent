@@ -1096,10 +1096,14 @@
    do Hugo e NÃO entra no chamado.
  - Pré-cadastro automático ESCREVE em `interno` (embarcadores_stokki.py). E-mail
    do convite vai pro Hugo enquanto cadastro_embarcador.forcar_destino_email não
-   for "" explícito; WhatsApp segue whatsapp_notificacoes.clientes.forcar_destino.
+   for "" explícito; WhatsApp do convite segue cadastro_embarcador.
+   forcar_destino_whatsapp ("" = envio real só do convite) e, sem essa chave,
+   whatsapp_notificacoes.clientes.forcar_destino.
  Pré-cadastro só fecha pela aprovação (/inicio ou gerenciar_clientes.py cadastro
  aprovar|habilidade); gravar interno.habilidade à mão deixa o cliente preso em
- /completar-cadastro. interno.email fica NULL até aprovar.
+ /completar-cadastro. interno.email nasce com o e-mail da Stokki e vira o do
+ cliente quando ele completa o cadastro (sem esperar aprovação): a partir daí
+ os e-mails do pipeline (redespacho, agendamento) já saem pra ele.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.
