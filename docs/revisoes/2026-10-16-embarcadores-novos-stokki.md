@@ -23,3 +23,7 @@ Diff: `7e10cc9..origin/master` (24c3e35), parte exposta: `portal_cliente/app.py`
 ## Limites
 
 Revisão do diff exposto e das funções chamadas por ele. `embarcadores_stokki.py` (rotina interna de timer, sem entrada externa além da Stokki) foi lido só pelos pontos de envio de mensagem.
+
+## Adendo 17/10 (f975280): e-mail no pré-cadastro
+
+`cadastro_embarcador.salvar_preenchimento`, chamada pelo POST público de `/cliente/completar-cadastro`, passou a gravar `interno.email` com os e-mails que o cliente informou, sem esperar a aprovação. Sem achado novo: os e-mails já passaram por `preferencias_notificacao._validar_emails` (formato, limite de 5) antes, o CNPJ vem da sessão e o UPDATE é parametrizado. Efeito de negócio aceito pelo Hugo: os e-mails do pipeline (redespacho, agendamento) saem para o endereço que o próprio cliente digitou antes da aprovação.
