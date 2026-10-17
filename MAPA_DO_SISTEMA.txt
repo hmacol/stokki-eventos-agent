@@ -37,7 +37,7 @@
               (vuupt_client.py, roteirizacao/rotas_client.py).
    Lalamove = entregas avulsas (lalamove_client.py).
    Fresh Hub (freshhub.com.br) = SPA interno em Supabase, fonte dos
-              "pedidos parados" (pasta freshhub/). Não confundir com
+              "pedidos parados" (pasta lovable/). Não confundir com
               app.freshhub.com.br, que é o nosso guarda-chuva no Caddy.
 
  O que é nosso:
@@ -941,8 +941,11 @@
                            marketplace. Banco próprio (confirmacoes.db), não
                            usa config.yaml. Deploy manual em outro diretório.
 
- freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
-                           parados, tarefas do Kanban.
+ lovable/                  Scraping do Fresh Hub do Lovable (Supabase): auth
+                           (Playwright CPF+PIN -> token), pedidos parados,
+                           tasks. Era freshhub/ ate 17/10/2026; o nome
+                           freshhub/ passou a ser o pacote do sistema novo.
+                           Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
@@ -1060,7 +1063,11 @@
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
-   fica em freshhub/pedidos_parados.py e só 2 arquivos a usam).
+   fica em lovable/pedidos_parados.py e só 2 arquivos a usam).
+ - Renomeacao freshhub/ -> lovable/ (17/10/2026): no deploy, mover na VPS o
+   arquivo gitignored `freshhub/sessao_freshhub.json` para
+   `lovable/sessao_freshhub.json` (como www-data) ANTES de reiniciar
+   painel-agentes; sem isso o Lovable refaz login Playwright a cada chamada.
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
  - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada
    rodada sem filtro. Sem listagem completa em 30h, "sem serviço" e

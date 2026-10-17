@@ -4,7 +4,7 @@ investigacao/testar_freshhub_pedidos_parados.py
 
 Script de validação SÓ DE LEITURA -- não cria nada em Demandas, não
 duplica nada na Vuupt. Confirma que o login + leitura de pedidos
-parados no Fresh Hub (freshhub/auth.py + freshhub/pedidos_parados.py)
+parados no Fresh Hub (lovable/auth.py + lovable/pedidos_parados.py)
 funciona de ponta a ponta.
 
 Também lista as task_categories e task_areas cadastradas no Fresh Hub,
@@ -23,8 +23,8 @@ import yaml
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from freshhub.auth import SUPABASE_URL, FreshHubSession
-from freshhub.pedidos_parados import listar_pedidos_parados
+from lovable.auth import SUPABASE_URL, FreshHubSession
+from lovable.pedidos_parados import listar_pedidos_parados
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
