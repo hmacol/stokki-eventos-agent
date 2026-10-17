@@ -465,6 +465,12 @@
                                VIGIA, VOLUMES_VUUPT.
  TRATATIVAS_PEDIDOS_PARADOS.md Contexto operacional da tela /pedidos-parados.
  PRODUCT.md                    Contexto de produto/design.
+ docs/adr/                     Registros de decisão (ADR): por que o sistema é
+                               assim (saída da Vuupt, Stokki sem API, rascunho
+                               confirmado à mão...). Decisão nova ou revertida =
+                               ADR novo; nunca reescrever um antigo. Ler os da
+                               área antes de propor refatoração.
+ docs/revisoes/                Relatórios de code review antes de deploy.
  docs/superpowers/             Specs e planos de setembro/2026.
  README.md                     Desatualizado (2 linhas).
  requirements.txt              Dependências Python.
@@ -642,8 +648,9 @@
 
  Base
  banco.py                  Esquema idempotente e conexão.
- normalizacao.py           Código do pedido (sem "#", maiúsculo, sufixos -R/-C)
-                           e fuso. Use antes de comparar códigos.
+ normalizacao.py           Código do pedido (sem "#", maiúsculo) e fuso. NÃO tira
+                           sufixo -R/-C ("PS-1-R2" é outro pedido). Use antes
+                           de comparar códigos.
  pedidos.py                nucleo_pedidos (upsert, nunca apaga).
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
@@ -1052,7 +1059,8 @@
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
-   comparar (normalizar_order_number / nucleo/normalizacao.py).
+   comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
+   fica em freshhub/pedidos_parados.py e só 2 arquivos a usam).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
  - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada
    rodada sem filtro. Sem listagem completa em 30h, "sem serviço" e
