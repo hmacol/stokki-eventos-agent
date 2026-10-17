@@ -77,5 +77,8 @@ name = "api e jobs nao falam direto com modelos nem adaptadores"
 type = "forbidden"
 source_modules = ["freshhub.api", "freshhub.jobs"]
 forbidden_modules = ["freshhub.modelos", "freshhub.adaptadores"]
-ignore_imports = ["freshhub.api.saude -> freshhub.modelos.sessao"]
+ignore_imports = [
+  "freshhub.api.saude -> freshhub.modelos.sessao",
+  "freshhub.api.app -> freshhub.modelos.sessao",
+]
 unmatched_ignore_imports_alerting = "warn"

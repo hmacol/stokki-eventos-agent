@@ -11,7 +11,11 @@ PREFIXO_URL = "postgresql+psycopg://"
 def criar_motor(url: str) -> Engine:
     if not url.startswith(PREFIXO_URL):
         raise ValueError(f"URL do banco precisa comecar com {PREFIXO_URL}")
-    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    # connect_timeout: banco fora nao pode prender API nem job (no Windows a
+    # conexao recusada leva ~65 s sem isso)
+    return create_engine(
+        url, pool_pre_ping=True, pool_size=5, max_overflow=5, connect_args={"connect_timeout": 5}
+    )
 
 
 FabricaSessao = sessionmaker[Session]
