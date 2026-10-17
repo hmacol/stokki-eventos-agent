@@ -52,9 +52,9 @@
    - App Expo dos motoristas (app_motorista/)
    - "Núcleo": tabelas próprias (nucleo_*) que espelham a Vuupt e vão
      substituí-la aos poucos (ver DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md).
-   - freshhub/: o SISTEMA NOVO (plano mestre de 17/10/2026, sem Stokki,
-     Vuupt e Lovable). API FastAPI em 127.0.0.1:8100 (dev), Postgres
-     próprio, migrações Alembic. Ver freshhub/README.md e ADR-0010/0011.
+   - SISTEMA NOVO (freshhub): plano mestre de 17/10/2026, sem Stokki,
+     Vuupt e Lovable. Vive em REPOSITÓRIO PRÓPRIO (C:\freshhub), nada
+     dele entra aqui (ADR-0010). Este repo vai sendo esvaziado por fase.
 
  Produção: VPS Ubuntu, repo em /opt/stokki-eventos, serviços systemd
  (waitress atrás do Caddy), rotinas em timers systemd (infra/*.timer).
@@ -944,15 +944,9 @@
                            marketplace. Banco próprio (confirmacoes.db), não
                            usa config.yaml. Deploy manual em outro diretório.
 
- freshhub/                 Sistema próprio (plano mestre 17/10/2026,
-                           docs/superpowers/specs/2026-10-17-freshhub-sistema-proprio-design.md).
-                           Camadas dominio -> servicos -> api/jobs; modelos +
-                           migracoes (Alembic, alembic.ini na raiz);
-                           adaptadores. Config só por variáveis FH_* (nunca
-                           o arquivo de segredos do legado). Testes em tests/
-                           (pytest). CI: .github/workflows/freshhub.yml.
- infra/postgres-dev/       Postgres 16 em Docker na VPS pra dev/teste do
-                           freshhub (túnel SSH 5433 -> 5432). Nunca produção.
+ tests/legado/             Testes de convivência com o sistema novo (pytest):
+                           hoje só o da renomeação freshhub/ -> lovable/.
+                           Rodar: py -3.11 -m pytest tests/legado -q
  lovable/                  Scraping do Fresh Hub do Lovable (Supabase): auth
                            (Playwright CPF+PIN -> token), pedidos parados,
                            tasks. Era freshhub/ ate 17/10/2026; o nome
@@ -1050,13 +1044,8 @@
                      (NUNCA use a 8070, pode estar rodando de verdade)
    API motorista:    py -3.11 nucleo/api_motorista.py --porta 8073
    Testes:           py -3.11 -m unittest <modulo>   (ex. roteirizacao.test_polimento_rotas)
-                     Não há pytest no legado.
-   Sistema novo (freshhub/): py -3.11 -m pip install -e ".[dev]"; túnel
-                     bash infra/postgres-dev/tunel.sh; FH_ENV_ARQUIVO=freshhub-dev.env
-                     py -3.11 -m alembic upgrade head; py -3.11 -m freshhub (API 8100).
-                     Verificar: py -3.11 -m ruff check freshhub tests; py -3.11 -m mypy;
-                     lint-imports; FH_TEST_DATABASE_URL=... py -3.11 -m pytest.
-                     Detalhes em freshhub/README.md.
+                     Sem pytest configurado (exceção: tests/legado/, ver seção 14).
+   Sistema novo:     repositório próprio C:\freshhub (CLAUDE.md e README de lá).
    Compilar:         py -3.11 -m py_compile <arquivos>
    Scripts de lote:  quase todos aceitam --modo-teste (não escreve na
                      Stokki/Vuupt; e-mail vai para forcar_destino). Use antes

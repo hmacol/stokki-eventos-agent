@@ -21,5 +21,4 @@ Regras:
 | [0007](0007-agendamento-informado-vence-dia-fixo.md) | Agendamento informado vence o dia fixo da região | Aceito |
 | [0008](0008-km-e-tarifa-do-motorista-calculo-proprio.md) | Km e valor do motorista: cálculo próprio é a base, o da Vuupt é ignorado | Aceito |
 | [0009](0009-roteirizador-proprio-vuupt-so-executa.md) | Roteirizador próprio; a Vuupt só executa a rota | Aceito |
-| [0010](0010-postgres-gerenciado-como-banco-unico-do-sistema-novo.md) | Postgres gerenciado como banco único do sistema novo (`freshhub/`) | Aceito |
-| [0011](0011-orm-e-migracoes-no-pacote-novo.md) | ORM (SQLAlchemy 2) e migrações versionadas (Alembic) no pacote novo | Aceito |
+| [0010](0010-sistema-novo-em-repositorio-proprio.md) | O sistema novo (freshhub) vive em repositório próprio (`C:\freshhub`); aqui fica só a convivência | Aceito |
