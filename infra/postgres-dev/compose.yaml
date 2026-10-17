@@ -1,0 +1,27 @@
+# Postgres de DESENVOLVIMENTO e TESTE do pacote freshhub (Fase 0.1).
+# So escuta em 127.0.0.1 da VPS; acesso local por tunel SSH (tunel.sh).
+# Nunca recebe dado de producao. Producao e homologacao usam Postgres
+# gerenciado (plano 0.3).
+services:
+  postgres:
+    image: postgres:16
+    container_name: freshhub-postgres-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    env_file:
+      - /etc/freshhub/postgres-dev.env   # POSTGRES_PASSWORD=...
+    environment:
+      POSTGRES_USER: freshhub
+      POSTGRES_DB: freshhub_dev
+      TZ: America/Sao_Paulo
+    volumes:
+      - freshhub-postgres-dev:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U freshhub -d freshhub_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  freshhub-postgres-dev:
