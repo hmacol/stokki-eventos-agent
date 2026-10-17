@@ -100,6 +100,8 @@
   .rodape-secao { margin-top: 10px; font-size: 12px; }
   .rodape-secao a { color: var(--acento-texto); font-weight: 600; text-decoration: none; }
   .rodape-secao a:hover { text-decoration: underline; }
+  .rotina button.botao { white-space: nowrap; }
+  .erro-decisao { color: var(--erro); font-size: 13px; margin: 8px 0 0; min-height: 18px; }
 </style>
 {% endblock %}
 
@@ -129,6 +131,14 @@
 </section>
 
 {% if mostra_rotinas %}
+<section class="secao" id="cadastros-embarcador" aria-labelledby="titulo-cadastros" hidden>
+  <h2 id="titulo-cadastros">Cadastros de embarcador</h2>
+  <div id="cadastros-lista" class="lista-rotinas"></div>
+  <p class="erro-decisao" id="cadastros-aviso" role="status"></p>
+</section>
+{% endif %}
+
+{% if mostra_rotinas %}
 <section class="secao" id="rotinas" aria-labelledby="titulo-rotinas">
   <h2 id="titulo-rotinas">Rotinas</h2>
   <div id="rotinas-lista" class="lista-rotinas">
@@ -145,6 +155,9 @@
     var operacaoEl = document.getElementById("operacao");
     var operacaoQuandoEl = document.getElementById("operacao-quando");
     var rotinasEl = document.getElementById("rotinas-lista");
+    var cadastrosSecao = document.getElementById("cadastros-embarcador");
+    var cadastrosEl = document.getElementById("cadastros-lista");
+    var cadastrosAviso = document.getElementById("cadastros-aviso");
 
     var agora = new Date();
     var hora = agora.getHours();
@@ -250,6 +263,39 @@
       rotinasEl.replaceChildren(frag);
     }
 
+    function aprovarCadastro(c, botao) {
+      if (!window.confirm("Gravar " + c.habilidade + " como tipo de carga de " + c.nome + "? Passa a valer no roteirizador.")) return;
+      botao.disabled = true;
+      cadastrosAviso.textContent = "";
+      fetch(BASE_PATH + "/api/cadastro-embarcador/" + encodeURIComponent(c.cnpj) + "/aprovar", {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}"
+      }).then(function(r) {
+        return r.json().then(function(d) { if (!r.ok) throw new Error(d.erro || "Falha ao aprovar."); });
+      }).then(buscar).catch(function(e) {
+        cadastrosAviso.textContent = e.message;
+        botao.disabled = false;
+      });
+    }
+
+    function pintarCadastros(lista) {
+      if (!cadastrosSecao) return;
+      cadastrosSecao.hidden = !lista.length;
+      var frag = document.createDocumentFragment();
+      lista.forEach(function(c) {
+        var linha = el("div", "rotina");
+        linha.appendChild(el("span", "nome", c.nome));
+        linha.appendChild(el("span", "quando", c.detalhe));
+        if (c.pode_aprovar) {
+          var b = el("button", "botao", "Aprovar " + c.habilidade);
+          b.type = "button";
+          b.addEventListener("click", function() { aprovarCadastro(c, b); });
+          linha.appendChild(b);
+        }
+        frag.appendChild(linha);
+      });
+      cadastrosEl.replaceChildren(frag);
+    }
+
     function pintarVirada(v) {
       var secao = document.getElementById("virada-mes");
       var alvo = document.getElementById("virada-conteudo");
@@ -286,6 +332,7 @@
           pintarVirada(d.virada_mes || null);
           pintarOperacao(d.operacao);
           if (d.rotinas) pintarRotinas(d.rotinas);
+          if (d.cadastros_embarcador) pintarCadastros(d.cadastros_embarcador);
         })
         .catch(function() { /* mantém o que está na tela; tenta de novo no próximo ciclo */ });
     }

@@ -98,6 +98,9 @@
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
+ Embarcador novo na Stokki (pré-cadastro) .. embarcadores_stokki.py (timer stokki-embarcadores-novos, 07h-19h)
+                                             + cadastro_embarcador.py; tela /cliente/completar-cadastro;
+                                             aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
@@ -269,6 +272,8 @@
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
  a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
                                                              horário de atendimento dos chamados)
+ 07..19:10 (1h)              stokki-embarcadores-novos       embarcadores_stokki.py (pré-cadastro + convite;
+                                                             --modo-teste)
 
  infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -371,6 +376,19 @@
                                tentativa por mensagem da equipe (assinatura msg:<id>),
                                mensagem com até 3 dias, teto próprio. Desligado
                                (whatsapp_notificacoes.clientes.ativo); --modo-teste.
+ embarcadores_stokki.py        De hora em hora (07h-19h): cliente da Stokki fora de
+                               `interno` vira pré-cadastro (sem habilidade), ganha o
+                               sender da Vuupt (pedido mais antigo do núcleo ou
+                               POST /customers) e convite pra completar o cadastro
+                               no portal: WhatsApp do celular da Stokki, senão
+                               e-mail, senão aviso no grupo. Sem pedido em 30 dias
+                               = INATIVO, sem convite. Reenvio único em 3 dias.
+                               Situação PENDENTE = ativo sem sender ou sem convite;
+                               convidar só grava o WhatsApp da Stokki nas
+                               preferências depois do envio ("enviado"), preservando
+                               e-mails; erro numa linha não derruba a rodada.
+ cadastro_embarcador.py        Tabela cadastro_embarcador (situação do pré-cadastro)
+                               e aprovação: só aprovar() grava interno.habilidade.
  notificar_dedicados_financeiro.py  Quinzenal ao financeiro.
  gerar_informativo_regioes.py  PDF do informativo de regiões
                                (dados/informativos/). Envio é manual, do Hugo.
@@ -691,6 +709,12 @@
                            ("GRUPO - FILIAL" vira opção do grupo inteiro).
                            JS em templates/_torre_filtro_embarcador.js.html,
                            incluído pelo desktop e pelo mobile.
+                           "Marcar como entregue" (08/10): menu do chip da Torre
+                           e da parada em rota enviada no Planejamento -> POST
+                           /api/torre/marcar-entregue -> marcar_entregue_manual
+                           fecha na Vuupt por API (concluir_como_agente, sem
+                           canhoto; expedição sai "sem comprovante"). Auditoria
+                           em torre_entregas_manuais + tratativas ENTREGUE_MANUAL.
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);
@@ -775,6 +799,9 @@
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.
+                           Cliente com pré-cadastro aberto (cadastro_embarcador)
+                           só abre /completar-cadastro até informar tipo de
+                           carga, e-mails e WhatsApp.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
@@ -976,6 +1003,9 @@
                              origem cliente_sem_resposta = aviso direto ao embarcador)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
    tratativas_pedido         tratativas.py
+   torre_excecoes_tratadas, torre_rotas_encerradas, torre_entregas_manuais
+                             painel_agentes/torre_controle.py (fila tratada, rota
+                             encerrada na torre, pedido fechado como entregue pelo painel)
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
@@ -1054,6 +1084,12 @@
    recebe. Exige a chave operator do OpenWA liberada pra chat individual
    (infra/openwa/LEIAME.md). Resposta do cliente no WhatsApp cai no celular
    do Hugo e NÃO entra no chamado.
+ - Pré-cadastro automático ESCREVE em `interno` (embarcadores_stokki.py). E-mail
+   do convite vai pro Hugo enquanto cadastro_embarcador.forcar_destino_email não
+   for "" explícito; WhatsApp segue whatsapp_notificacoes.clientes.forcar_destino.
+ Pré-cadastro só fecha pela aprovação (/inicio ou gerenciar_clientes.py cadastro
+ aprovar|habilidade); gravar interno.habilidade à mão deixa o cliente preso em
+ /completar-cadastro. interno.email fica NULL até aprovar.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

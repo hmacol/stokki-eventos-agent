@@ -86,6 +86,7 @@
   <thead>
     <tr>
       <th>Pedido</th>
+      <th>Embarcador</th>
       <th>Volumes</th>
       <th>Registrado em</th>
       <th>Dias parado</th>
@@ -94,6 +95,11 @@
     </tr>
     <tr>
       <th class="col-filtro"><input type="text" id="filtro-pedido" placeholder="Filtrar…" oninput="atualizarFiltro('pedido', this.value)"></th>
+      <th class="col-filtro">
+        <select id="filtro-embarcador" onchange="atualizarFiltro('embarcador', this.value)">
+          <option value="">-- todos --</option>
+        </select>
+      </th>
       <th class="col-filtro"><input type="text" id="filtro-volumes" placeholder="Filtrar…" oninput="atualizarFiltro('volumes', this.value)"></th>
       <th class="col-filtro"><input type="text" id="filtro-registrado" placeholder="Filtrar…" oninput="atualizarFiltro('registrado', this.value)"></th>
       <th class="col-filtro"><input type="text" id="filtro-dias" placeholder="Filtrar…" oninput="atualizarFiltro('dias', this.value)"></th>
@@ -114,7 +120,7 @@
     </tr>
   </thead>
   <tbody id="corpo-tabela">
-    <tr><td colspan="6" class="carregando">Carregando pedidos parados…</td></tr>
+    <tr><td colspan="7" class="carregando">Carregando pedidos parados…</td></tr>
   </tbody>
 </table>
 </div>
@@ -145,7 +151,7 @@ const AREA_POR_CLASSIFICACAO = {
 let pedidosAtuais = [];
 let ultimoOk = null;
 let houveErro = false;
-const filtros = { pedido: "", volumes: "", registrado: "", dias: "", classificacao: "", tratativa: "" };
+const filtros = { pedido: "", embarcador: "", volumes: "", registrado: "", dias: "", classificacao: "", tratativa: "" };
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -161,6 +167,20 @@ function esc(s) {
   });
 })();
 
+// Opções do filtro de embarcador saem da própria lista (refeitas a cada
+// carga), mantendo a escolha atual mesmo se ela sumir dos dados.
+function preencherFiltroEmbarcador() {
+  const sel = document.getElementById("filtro-embarcador");
+  const nomes = [...new Set(pedidosAtuais.map(p => p.embarcador).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  if (filtros.embarcador && filtros.embarcador !== "__vazio__" && !nomes.includes(filtros.embarcador)) {
+    nomes.unshift(filtros.embarcador);
+  }
+  sel.innerHTML = `<option value="">-- todos --</option><option value="__vazio__">(sem embarcador)</option>` +
+    nomes.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  sel.value = filtros.embarcador;
+}
+
 function atualizarFiltro(campo, valor) {
   filtros[campo] = valor;
   renderTabela();
@@ -169,6 +189,11 @@ function atualizarFiltro(campo, valor) {
 function linhaPassaFiltros(p) {
   const contem = (valor, termo) => String(valor ?? "").toLowerCase().includes(termo.toLowerCase());
   if (filtros.pedido && !contem(p.order_number, filtros.pedido)) return false;
+  if (filtros.embarcador) {
+    if (filtros.embarcador === "__vazio__") {
+      if (p.embarcador) return false;
+    } else if (p.embarcador !== filtros.embarcador) return false;
+  }
   if (filtros.volumes && !contem(p.volumes, filtros.volumes)) return false;
   if (filtros.registrado && !contem(p.created_at.replace('T', ' ').slice(0, 16), filtros.registrado)) return false;
   if (filtros.dias && !contem(p.dias_parado, filtros.dias)) return false;
@@ -205,7 +230,7 @@ function renderTabela() {
   const linhas = linhasFiltradas();
 
   if (!linhas.length) {
-    alvo.innerHTML = `<tr><td colspan="6" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
+    alvo.innerHTML = `<tr><td colspan="7" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
     return;
   }
 
@@ -261,6 +286,7 @@ function renderTabela() {
           </div>
           ${stokkiInfo}${vuuptInfo}
         </td>
+        <td>${p.embarcador ? esc(p.embarcador) : `<span class="sem-dado">—</span>`}</td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
         <td>${p.prioridade ? `<span class="badge badge-prioridade">${p.dias_parado}d</span>` : p.dias_parado + 'd'}</td>
@@ -458,6 +484,7 @@ async function carregarDados() {
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.erro || resp.statusText);
     pedidosAtuais = d.pedidos;
+    preencherFiltroEmbarcador();
     renderTabela();
     ultimoOk = new Date();
     houveErro = false;

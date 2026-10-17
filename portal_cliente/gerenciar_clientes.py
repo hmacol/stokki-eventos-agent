@@ -32,6 +32,11 @@ Máscara de envio de pedidos (08/09):
     py -3 portal_cliente/gerenciar_clientes.py concluir 12 "cancelado na Stokki"         # marca a solicitação 12 como atendida
     py -3 portal_cliente/gerenciar_clientes.py fila                                       # o que está NA_FILA/ENVIANDO/ERRO
 
+Pré-cadastro automático da Stokki (10/10) -- embarcadores_stokki.py:
+    py -3 portal_cliente/gerenciar_clientes.py cadastro                                  # o que não está APROVADO
+    py -3 portal_cliente/gerenciar_clientes.py cadastro aprovar 49874051000131           # grava o tipo que o cliente informou
+    py -3 portal_cliente/gerenciar_clientes.py cadastro habilidade 49874051000131 Seco   # aprova com outro tipo
+
 Quem pode ter conta é quem está em `interno` com sender_id -- pra liberar
 um embarcador novo, primeiro cadastre CNPJ/sender_id/e-mail lá (é a
 mesma tabela usada pelas notificações de insucesso).
@@ -217,6 +222,35 @@ def _imprimir_grupo(empresas: list[dict]) -> None:
         print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
 
 
+def _comando_cadastro(conn, args) -> int:
+    import cadastro_embarcador as cad_emb
+    if not args.acao:
+        linhas = cad_emb.listar_abertos(conn)
+        if not linhas:
+            print("Nenhum pré-cadastro aberto.")
+        for l in linhas:
+            quando = (l["reenvio_em"] or l["convite_enviado_em"] or "")[:16]
+            print(f"{auth.formatar_cnpj(l['cnpj_embarcador'])}  {l['situacao']:<11} {l['nome'][:30]:<30} "
+                  f"tipo informado: {l['habilidade_informada'] or '-':<11} convite: {l['canal_convite'] or '-'} {quando}")
+        return 0
+    if not args.cnpj:
+        print("Informe o CNPJ.")
+        return 2
+    if args.acao == "habilidade" and not args.tipo:
+        print("Informe o tipo: Seco, Refrigerado ou Congelado.")
+        return 2
+    if args.acao == "aprovar" and args.tipo:
+        print("Use `cadastro habilidade <cnpj> <tipo>` pra aprovar com outro tipo.")
+        return 2
+    try:
+        c = cad_emb.aprovar(conn, args.cnpj, "cli", habilidade=args.tipo if args.acao == "habilidade" else None)
+    except cad_emb.CadastroInvalido as e:
+        print(f"Nada gravado: {e.mensagem}")
+        return 2
+    print(f"Aprovado: {auth.formatar_cnpj(c['cnpj_embarcador'])} com tipo de carga {c['habilidade_informada']}.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Contas do portal do cliente")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -258,6 +292,10 @@ def main(argv=None) -> int:
     cc.add_argument("id", type=int)
     cc.add_argument("resposta", nargs="?", default="")
     cc.add_argument("--recusar", action="store_true")
+    ce = sub.add_parser("cadastro", help="pré-cadastros automáticos da Stokki: lista, aprova ou corrige o tipo de carga")
+    ce.add_argument("acao", nargs="?", choices=["aprovar", "habilidade"])
+    ce.add_argument("cnpj", nargs="?")
+    ce.add_argument("tipo", nargs="?", help="Seco | Refrigerado | Congelado (só com 'habilidade')")
     args = p.parse_args(argv)
 
     cfg = _config()
@@ -265,6 +303,8 @@ def main(argv=None) -> int:
         return _comandos_envio(args, cfg)
     conn = auth.conectar()
     try:
+        if args.cmd == "cadastro":
+            return _comando_cadastro(conn, args)
         if args.cmd == "listar":
             for e in auth.listar_embarcadores(conn):
                 estado = "sem conta" if e["ativo"] is None else ("ATIVA" if e["ativo"] else "desativada")

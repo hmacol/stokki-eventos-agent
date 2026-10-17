@@ -1400,6 +1400,27 @@ def api_torre_excluir_pedido():
     return jsonify(resultado)
 
 
+@app.route("/api/torre/marcar-entregue", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_torre_marcar_entregue():
+    """"Marcar como entregue" do menu de contexto do chip da Torre e da
+    parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
+    hora, por API, sem passar pelo app do motorista (ver
+    torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
+    rota" -- muda o pedido na VUUPT."""
+    body = request.get_json(force=True) or {}
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    resultado = torre_controle.marcar_entregue_manual(
+        service_id, session.get("usuario", ""), body.get("observacao") or "")
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
+    return jsonify(resultado)
+
+
 @app.route("/api/torre/encerrar-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador"))
 @exige_mesma_origem
@@ -2138,6 +2159,26 @@ def api_cadastro_recusar(cadastro_id):
     try:
         c = cad.recusar(conn, cadastro_id, body.get("motivo") or "", session.get("usuario") or g.nivel_acesso)
     except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cadastro": c})
+
+
+# ── Pre-cadastro de embarcador da Stokki (10/10): aprovação só do nível total ──
+@app.route("/api/cadastro-embarcador/<cnpj>/aprovar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_embarcador_aprovar(cnpj):
+    """Grava em interno.habilidade o tipo de carga que o cliente informou no
+    portal, ou o do corpo ({"habilidade": ...}) se a equipe corrigir."""
+    import cadastro_embarcador as cad_emb
+    from nucleo import banco as nucleo_banco
+    body = request.get_json(silent=True) or {}
+    conn = nucleo_banco.conectar()
+    try:
+        c = cad_emb.aprovar(conn, cnpj, session.get("usuario") or g.nivel_acesso, habilidade=body.get("habilidade"))
+    except cad_emb.CadastroInvalido as e:
         return jsonify({"erro": e.mensagem}), e.codigo
     finally:
         conn.close()

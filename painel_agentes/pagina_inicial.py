@@ -127,8 +127,42 @@ def montar_rotinas(execucoes: list[dict], url_de, agora: datetime | None = None)
     return {"rodando": rodando, "falhas": falhas}
 
 
+def _dia_mes(texto: str | None) -> str:
+    return f"{texto[8:10]}/{texto[5:7]}" if texto else "-"
+
+
+def montar_cadastros(linhas: list[dict]) -> list[dict]:
+    """Bloco "Cadastros de embarcador" (so total, 10/10): PREENCHIDO tem
+    botao Aprovar; o resto so informa em que pe esta."""
+    saida = []
+    for l in linhas:
+        situacao = l["situacao"]
+        if situacao == "PREENCHIDO":
+            detalhe = f"informou {l['habilidade_informada']} em {_dia_mes(l['preenchido_em'])}"
+        elif situacao == "SEM_CONTATO" or l.get("canal_convite") == "nenhum":
+            detalhe = "sem contato na Stokki, cadastrar à mão"
+        elif situacao == "PENDENTE":
+            detalhe = "aguardando remetente ou convite"
+        else:
+            detalhe = (f"convidado em {_dia_mes(l['reenvio_em'] or l['convite_enviado_em'])} "
+                       f"por {l['canal_convite']}, sem resposta")
+        saida.append({"cnpj": l["cnpj_embarcador"], "nome": l["nome"], "situacao": situacao, "detalhe": detalhe,
+                      "pode_aprovar": situacao == "PREENCHIDO", "habilidade": l["habilidade_informada"]})
+    return saida
+
+
+def _cadastros_reais() -> list[dict]:
+    from nucleo import banco as nucleo_banco
+    import cadastro_embarcador as cad_emb
+    conn = nucleo_banco.conectar()
+    try:
+        return cad_emb.listar_abertos(conn)
+    finally:
+        conn.close()
+
+
 def montar_dados(nivel_acesso: str, url_de, *, contadores=None, niveis_por_contador=None,
-                 snapshot=None, execucoes=None) -> dict:
+                 snapshot=None, execucoes=None, cadastros=None) -> dict:
     """JSON de /api/inicio/dados. Sem argumentos de fonte, usa as reais.
     Falha numa fonte nao derruba as outras: o bloco vem vazio e o erro
     vai pro log."""
@@ -163,4 +197,9 @@ def montar_dados(nivel_acesso: str, url_de, *, contadores=None, niveis_por_conta
         except Exception as e:
             logger.warning(f"[inicio] Falha ao ler execucoes: {e}")
             dados["rotinas"] = {"rodando": [], "falhas": []}
+        try:
+            dados["cadastros_embarcador"] = montar_cadastros((cadastros or _cadastros_reais)())
+        except Exception as e:
+            logger.warning(f"[inicio] Falha ao ler cadastros de embarcador: {e}")
+            dados["cadastros_embarcador"] = []
     return dados

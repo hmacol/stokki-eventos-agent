@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-embarcadores-novos.service de hora em hora, 07h10 as 19h10
+
+[Timer]
+OnCalendar=*-*-* 07..19:10:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

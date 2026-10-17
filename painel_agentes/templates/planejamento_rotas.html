@@ -1363,6 +1363,11 @@
   .modal-reagendar .acoes button.confirmar:hover { background: #26C49A; }
   .modal-reagendar .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-reagendar .acoes button.cancelar:hover { background: var(--fundo); }
+  .modal-reagendar textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 60px;
+    padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: var(--fundo); color: var(--texto);
+  }
 
   /* Modal "Editar endereço" do menu de contexto (Hugo, 18/08) -- mesmo
      esqueleto visual do modal de reagendamento. */
@@ -2024,6 +2029,23 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-reagendar">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-reagendar">Salvar agendamento</button>
+    </div>
+  </div>
+</div>
+
+{# "Marcar como entregue" de parada em rota já enviada (Hugo, 08/10): fecha o
+   servico na VUUPT por API (POST /api/torre/marcar-entregue), sem canhoto. #}
+<div class="modal-overlay-reagendar" id="modal-entregue">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
+    <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
+    <p class="subtitulo">Pedido <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <div class="campo-reagendar">
+      <label for="entregue-observacao">Como a entrega foi confirmada</label>
+      <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
+      <button type="button" class="confirmar" onclick="confirmarEntregue(this)">Marcar como entregue</button>
     </div>
   </div>
 </div>
@@ -5901,6 +5923,51 @@
     }
   }
 
+  // "Marcar como entregue" do menu de contexto, só em rota já enviada
+  // (Hugo, 08/10): fecha o serviço na VUUPT por API, mesmo endpoint do
+  // chip da Torre. A observação é obrigatória e vira auditoria.
+  let entreguePendente = null;
+
+  function abrirModalEntregue(li, serviceId) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("entregue-codigo").textContent = codigo;
+    document.getElementById("entregue-observacao").value = "";
+    entreguePendente = { serviceId, codigo };
+    document.getElementById("modal-entregue").classList.add("aberto");
+    document.getElementById("entregue-observacao").focus();
+  }
+
+  function fecharModalEntregue() {
+    document.getElementById("modal-entregue").classList.remove("aberto");
+    entreguePendente = null;
+  }
+
+  document.getElementById("modal-entregue").addEventListener("click", (e) => {
+    if (e.target.id === "modal-entregue") fecharModalEntregue();
+  });
+
+  async function confirmarEntregue(botao) {
+    const pendente = entreguePendente;
+    if (!pendente) return;
+    const observacao = document.getElementById("entregue-observacao").value.trim();
+    if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Fechando na VUUPT...";
+    try {
+      const dados = await postJSON("/api/torre/marcar-entregue", { service_id: pendente.serviceId, observacao });
+      fecharModalEntregue();
+      alert(dados.ja_estava
+        ? `${dados.codigo} já constava como entregue na VUUPT.`
+        : `${dados.codigo} marcado como entregue na VUUPT.`);
+    } catch (e) {
+      alert(`Falha ao marcar como entregue: ${e.message}`);
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
   // pedido (ou lote de pedidos, ver abrirModalReagendarLote) sendo
   // agendado/reagendado pelo modal -- guardado pra confirmarReagendamento
   // saber quem atualizar (mesmo padrão de botaoRoteirizarPendente).
@@ -6510,6 +6577,11 @@
     }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
+    }
+    // rota já enviada à VUUPT: dá pra fechar o pedido como entregue por
+    // aqui (Hugo, 08/10) -- mesmo endpoint do chip da Torre
+    if (PODE_EDITAR && rotaTravada) {
+      itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });

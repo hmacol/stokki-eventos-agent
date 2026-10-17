@@ -46,6 +46,7 @@ import dados_cliente as dados
 import envio_pedidos as envios
 from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
+import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
@@ -128,6 +129,7 @@ def _carregar_cliente():
         conn = auth.conectar()
         try:
             g.cliente = auth.sessao_valida(conn, cnpj, versao)
+            completar = bool(g.cliente) and cad_emb.precisa_completar(conn, g.cliente["cnpj"])
         finally:
             conn.close()
         if not g.cliente:
@@ -137,9 +139,15 @@ def _carregar_cliente():
             if request.path.startswith("/api/"):
                 return jsonify({"erro": "Antes de continuar, é preciso trocar o PIN."}), 403
             return redirect(url_for("trocar_pin"))
+        elif completar and request.endpoint not in _LIVRES_ANTES_DO_CADASTRO:
+            # Pre-cadastro automatico (10/10): tipo de carga e contatos antes de tudo.
+            if request.path.startswith("/api/"):
+                return jsonify({"erro": "Antes de continuar, complete o cadastro da empresa."}), 403
+            return redirect(url_for("completar_cadastro"))
 
 
 _LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
+_LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
 def requer_cliente(f):
@@ -434,6 +442,53 @@ def trocar_pin():
         finally:
             conn.close()
     return render_template("trocar_pin.html", erro=erro)
+
+
+def _avisar_cadastro_preenchido(nome: str, tipo: str) -> None:
+    try:
+        import notificar_whatsapp as nw
+        nw.despachar(_CONFIG, "embarcadores_stokki", "cadastro",
+                     f"{nome} completou o cadastro: {tipo}. Aguardando aprovação no /inicio do painel.")
+    except Exception as e:
+        logger.warning(f"Aviso de cadastro preenchido nao enviado: {e}")
+
+
+@app.route("/completar-cadastro", methods=["GET", "POST"])
+def completar_cadastro():
+    """Pre-cadastro automatico (10/10): tipo de carga, e-mails e WhatsApp antes
+    de abrir o portal. O tipo só vale no roteirizador depois da aprovação."""
+    if g.get("equipe"):
+        return redirect(url_for("inicio"))
+    if not g.cliente:
+        return redirect(url_for("login"))
+    cnpj = g.cliente["cnpj"]
+    conn = auth.conectar()
+    try:
+        if not cad_emb.precisa_completar(conn, cnpj):
+            return redirect(url_for("inicio"))
+        prefs = preferencias.ler(conn, cnpj)
+        valores = {"habilidade": "", "emails": "\n".join(prefs["emails"] or [(cad_emb.buscar(conn, cnpj) or {}).get("email_stokki") or ""]),
+                   "whatsapp": prefs["whatsapp"]}
+        erro = None
+        if request.method == "POST":
+            valores = {chave: (request.form.get(chave) or "") for chave in ("habilidade", "emails", "whatsapp")}
+            emails = valores["emails"].replace(";", "\n").replace(",", "\n").splitlines()
+            try:
+                tipo = cad_emb.normalizar_habilidade(valores["habilidade"])
+                if not any(e.strip() for e in emails):
+                    raise ValueError("Informe pelo menos um e-mail para os avisos.")
+                preferencias.salvar(conn, cnpj, emails, {}, "cliente", whatsapp=valores["whatsapp"])
+                cad_emb.salvar_preenchimento(conn, cnpj, tipo)
+            except ValueError as e:
+                erro = str(e)
+            else:
+                logger.info(f"cadastro preenchido cnpj={cnpj} tipo={tipo}")
+                _avisar_cadastro_preenchido(g.cliente["nome"], tipo)
+                return redirect(url_for("inicio"))
+        return render_template("completar_cadastro.html", valores=valores, erro=erro,
+                               habilidades=list(cad_emb.DESCRICOES_HABILIDADE.items()))
+    finally:
+        conn.close()
 
 
 # ── Telas ──────────────────────────────────────────────────────────────────────
