@@ -1,6 +1,23 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from freshhub.config import Configuracao, ConfiguracaoInvalida, carregar_config
+
+
+def test_subir_api_com_url_malformada_nao_vaza_senha_nem_traceback():
+    # Erro mais provavel na pratica: esquecer o +psycopg (revisao, 17/10)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FH_")}
+    env.update({"FH_AMBIENTE": "dev", "FH_DATABASE_URL": "postgres://freshhub:SENHA-XYZ@h/x"})
+    r = subprocess.run(
+        [sys.executable, "-m", "freshhub"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert r.returncode == 2
+    assert "FH_DATABASE_URL" in r.stderr
+    assert "SENHA-XYZ" not in r.stderr + r.stdout
+    assert "Traceback" not in r.stderr
 
 
 def test_le_variaveis_fh(monkeypatch):

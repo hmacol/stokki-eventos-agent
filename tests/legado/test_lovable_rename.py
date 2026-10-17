@@ -5,10 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 RAIZ = Path(__file__).resolve().parents[2]
 
 
 def test_nomes_publicos_do_lovable():
+    # O lovable importa playwright, que so existe no ambiente do legado (nao no CI do pacote novo)
+    pytest.importorskip("playwright")
     sys.path.insert(0, str(RAIZ))
     auth = importlib.import_module("lovable.auth")
     parados = importlib.import_module("lovable.pedidos_parados")

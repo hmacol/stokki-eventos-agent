@@ -22,10 +22,20 @@ def test_upgrade_head_cria_os_schemas(motor_teste):
     assert set(SCHEMAS) <= existentes
 
 
+def test_upgrade_de_base_registra_a_revisao_aplicada(motor_teste):
+    # Sem isso o teste de idempotencia abaixo passaria vazio (revisao, 17/10)
+    assert _alembic("downgrade", "base").returncode == 0
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stderr
+    assert "Running upgrade  -> 0001" in r.stderr + r.stdout
+
+
 def test_upgrade_duas_vezes_e_idempotente(motor_teste):
+    antes = _alembic("current").stdout
     r = _alembic("upgrade", "head")
     assert r.returncode == 0, r.stderr
     assert "Running upgrade" not in r.stderr + r.stdout
+    assert "0001" in antes and _alembic("current").stdout == antes
 
 
 def test_downgrade_base_apaga_os_schemas_e_upgrade_recria(motor_teste):

@@ -1,6 +1,7 @@
 """Ambiente do Alembic: a URL vem de FH_DATABASE_URL (nunca do ini)."""
 import sys
 from collections.abc import MutableMapping
+from logging.config import fileConfig
 from typing import Any
 
 from alembic import context
@@ -16,6 +17,8 @@ except ConfiguracaoInvalida as e:
     raise SystemExit(2) from e
 
 config = context.config
+if config.config_file_name:
+    fileConfig(config.config_file_name)  # loggers do alembic.ini: mostra "Running upgrade -> NNNN"
 config.set_main_option("sqlalchemy.url", _cfg.database_url_texto)
 target_metadata = Base.metadata
 

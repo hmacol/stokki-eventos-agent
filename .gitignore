@@ -13,6 +13,7 @@ config.yaml
 __pycache__/
 *.pyc
 py
+*.egg-info/
 .venv/
 venv/
 env/

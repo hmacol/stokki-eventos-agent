@@ -42,4 +42,5 @@ def carregar_config() -> Configuracao:
         return Configuracao()
     except ValidationError as e:
         faltando = [f"FH_{str(err['loc'][0]).upper()}: {err['msg']}" for err in e.errors()]
-        raise ConfiguracaoInvalida("Configuracao invalida -- " + "; ".join(faltando)) from e
+        # `from None`: o ValidationError carrega o valor digitado (com a senha) no traceback
+        raise ConfiguracaoInvalida("Configuracao invalida -- " + "; ".join(faltando)) from None
