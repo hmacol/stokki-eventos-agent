@@ -1,7 +1,7 @@
 # ADR-0005: Um SQLite (`dados/dados.db`), sem ORM, cada módulo dono das próprias tabelas
 
 ## Status
-Aceito (com pendência: Postgres/backup contínuo antes do piloto real do app)
+Aceito para o legado (`dados/dados.db`). O pacote novo `freshhub/` segue ADR-0010 (Postgres gerenciado) e ADR-0011 (ORM + Alembic).
 
 ## Data
 2026-07 (migração para a VPS); blindagem em 2026-09-15
