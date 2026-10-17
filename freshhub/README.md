@@ -21,5 +21,5 @@ Configuracao so por variaveis `FH_*` (nunca pelo arquivo de segredos do legado).
 
     py -3.11 -m ruff check freshhub tests
     py -3.11 -m mypy
-    py -3.11 -m lint_imports
+    lint-imports        # script do import-linter; no Windows fica em $(py -3.11 -c "import sysconfig;print(sysconfig.get_path('scripts'))")
     FH_TEST_DATABASE_URL=postgresql+psycopg://freshhub:...@127.0.0.1:5433/freshhub_test py -3.11 -m pytest

@@ -78,3 +78,4 @@ type = "forbidden"
 source_modules = ["freshhub.api", "freshhub.jobs"]
 forbidden_modules = ["freshhub.modelos", "freshhub.adaptadores"]
 ignore_imports = ["freshhub.api.saude -> freshhub.modelos.sessao"]
+unmatched_ignore_imports_alerting = "warn"
