@@ -1249,6 +1249,47 @@
   .modal-tipo-roteirizacao .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-tipo-roteirizacao .acoes button.cancelar:hover { background: var(--fundo); }
 
+  /* Carregando do Roteirizar (Hugo, 15/10): o criador de rotas leva de
+     segundos a mais de um minuto -- cobre a tela (e bloqueia cliques)
+     até a resposta e o reload. Classe fora de "modal-overlay-" de
+     propósito: não é diálogo, o foco não deve ser preso nele. */
+  .carregando-roteirizacao {
+    display: none;
+    position: fixed; inset: 0; z-index: 10002;
+    background: color-mix(in srgb, var(--fundo) 72%, transparent);
+    backdrop-filter: blur(2px);
+    align-items: center; justify-content: center; padding: 16px;
+  }
+  .carregando-roteirizacao.aberto { display: flex; }
+  .carregando-roteirizacao .caixa {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px;
+    padding: 24px 28px; width: min(380px, 100%); text-align: center;
+    box-shadow: 0 10px 32px rgba(0,0,0,0.3);
+  }
+  .carregando-roteirizacao .giro {
+    width: 42px; height: 42px; margin: 0 auto 14px; border-radius: 50%;
+    border: 4px solid var(--borda); border-top-color: var(--acento);
+    animation: giro-roteirizacao 0.9s linear infinite;
+  }
+  @keyframes giro-roteirizacao { to { transform: rotate(360deg); } }
+  .carregando-roteirizacao h2 { margin: 0 0 6px; font-size: 16px; color: var(--texto); }
+  .carregando-roteirizacao p { margin: 0; font-size: 12.5px; color: var(--texto-suave); line-height: 1.45; }
+  .carregando-roteirizacao .tempo { margin-top: 12px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--texto-suave); }
+  .carregando-roteirizacao .trilha { margin-top: 14px; height: 4px; border-radius: 100px; background: var(--borda); overflow: hidden; }
+  .carregando-roteirizacao .trilha span {
+    display: block; width: 30%; height: 100%; border-radius: 100px; background: var(--acento);
+    animation: progresso-indeterminado-planejamento 1.4s ease-in-out infinite;
+  }
+  /* rotas que o Roteirizar acabou de criar: destaque por alguns segundos depois do reload */
+  .card-rota.recem-roteirizada { animation: destaque-recem-roteirizada 1.2s ease-in-out 3; }
+  @keyframes destaque-recem-roteirizada {
+    0%,100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 3px var(--acento); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .carregando-roteirizacao .giro, .carregando-roteirizacao .trilha span { animation-duration: 3s; }
+    .card-rota.recem-roteirizada { animation: none; box-shadow: 0 0 0 3px var(--acento); }
+  }
   /* Modal "Disponibilidade de motoristas" (Hugo, 16/08): seleção de quem
      está disponível pra rota no dia -- "Alocar motoristas" sempre parte
      dessa seleção. Mesmo esqueleto visual do modal de tipo de roteirização. */
@@ -1877,6 +1918,16 @@
   <div class="acoes">
     <button type="button" class="botao" onclick="rodarRomaneiosComData()">Gerar romaneios</button>
     <button type="button" onclick="fecharPainelRomaneios()">Cancelar</button>
+  </div>
+</div>
+
+<div class="carregando-roteirizacao" id="carregando-roteirizacao" role="status" aria-live="polite">
+  <div class="caixa">
+    <div class="giro" aria-hidden="true"></div>
+    <h2 id="carregando-roteirizacao-titulo">Roteirizando...</h2>
+    <p id="carregando-roteirizacao-texto">Agrupando por região, otimizando a sequência e sugerindo motorista. Pode levar até um minuto.</p>
+    <div class="trilha" aria-hidden="true"><span></span></div>
+    <div class="tempo" id="carregando-roteirizacao-tempo">0 s</div>
   </div>
 </div>
 
@@ -4960,6 +5011,7 @@
     if (!ids.length) return;
     botao.disabled = true;
     botao.textContent = "Roteirizando...";
+    const pararCarregando = mostrarCarregandoRoteirizacao(ids.length);
     try {
       const resp = await postJSON("/api/planejamento/roteirizar-selecionados",
         { data_alvo: DATA_ALVO_ISO, service_ids: ids, modelo_forcado: modeloForcado || null,
@@ -4969,11 +5021,59 @@
           `${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão ` +
           `mais disponíveis na VUUPT).`);
       }
+      // depois do reload: abre direto nas rotas em rascunho (aba Rotas no
+      // celular) e destaca as novas -- as que não estão na lista de agora
+      try {
+        sessionStorage.setItem(CHAVE_POS_ROTEIRIZAR, JSON.stringify(RASCUNHOS.map(r => r.id)));
+        sessionStorage.setItem("planejamento.abaMobile", "rotas");
+        localStorage.setItem("planejamento.abaRotas", "rascunhos");
+      } catch (e) { /* storage bloqueado: recarrega sem o destaque */ }
+      document.getElementById("carregando-roteirizacao-titulo").textContent =
+        `${resp.rotas_criadas} rota(s) criada(s)`;
+      document.getElementById("carregando-roteirizacao-texto").textContent = "Carregando as rotas na tela...";
       location.reload();
     } catch (e) {
+      pararCarregando();
       alert(`Falha ao roteirizar: ${e.message}`);
       atualizarBarraSelecao();
     }
+  }
+
+  const CHAVE_POS_ROTEIRIZAR = "planejamento.posRoteirizar";
+
+  // Abre a camada "Roteirizando N pedidos" com contador de segundos;
+  // devolve a função que fecha (só usada no erro -- no sucesso a camada
+  // fica até o reload trocar a página).
+  function mostrarCarregandoRoteirizacao(qtdPedidos) {
+    const camada = document.getElementById("carregando-roteirizacao");
+    const tempo = document.getElementById("carregando-roteirizacao-tempo");
+    document.getElementById("carregando-roteirizacao-titulo").textContent = `Roteirizando ${qtdPedidos} pedido(s)...`;
+    document.getElementById("carregando-roteirizacao-texto").textContent =
+      "Agrupando por região, otimizando a sequência e sugerindo motorista. Pode levar até um minuto.";
+    const inicio = Date.now();
+    tempo.textContent = "0 s";
+    const relogio = setInterval(() => { tempo.textContent = `${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
+    camada.classList.add("aberto");
+    return () => { clearInterval(relogio); camada.classList.remove("aberto"); };
+  }
+
+  // Depois do reload do Roteirizar: rola até a primeira rota nova e pisca
+  // as criadas agora (ids que não existiam antes do clique).
+  function destacarRotasRecemRoteirizadas() {
+    let anteriores = null;
+    try {
+      anteriores = JSON.parse(sessionStorage.getItem(CHAVE_POS_ROTEIRIZAR) || "null");
+      sessionStorage.removeItem(CHAVE_POS_ROTEIRIZAR);
+    } catch (e) { return; }
+    if (!Array.isArray(anteriores)) return;
+    const jaExistiam = new Set(anteriores);
+    const cards = RASCUNHOS.filter(r => !jaExistiam.has(r.id))
+      .map(r => document.getElementById(`card-rota-${r.id}`))
+      .filter(Boolean);
+    if (!cards.length) return;
+    cards.forEach(card => card.classList.add("recem-roteirizada"));
+    cards[0].scrollIntoView({ block: "start", behavior: "smooth" });
+    setTimeout(() => cards.forEach(card => card.classList.remove("recem-roteirizada")), 4000);
   }
 
   async function incrementarSelecionados(botao) {
@@ -6944,6 +7044,7 @@
       }
       aplicarAba(abaAtiva);
     }
+    destacarRotasRecemRoteirizadas();
 
     // arrastar um pedido por cima de um card colapsado expande ele na
     // hora (senão a lista escondida não teria onde receber o drop) --
