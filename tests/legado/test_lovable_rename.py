@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Garante que o pacote do Lovable continua importavel com os mesmos
 nomes publicos depois da renomeacao freshhub/ -> lovable/ (Fase 0.1)."""
 import importlib
