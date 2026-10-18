@@ -837,6 +837,34 @@ class TestNumeroExiste(unittest.TestCase):
         self.assertIsNone(nw.integracao_openwa.numero_existe({}, TEL))
 
 
+class TestAvisarClienteCadastroTravaPropria(_ComBanco):
+    """Convite do pre-cadastro tem trava propria (Hugo, 17/10): liberar o
+    convite nao libera os outros avisos a clientes."""
+    def setUp(self):
+        super().setUp()
+        patch.object(nw.integracao_openwa, "numero_existe", return_value=True).start()
+        self.addCleanup(patch.stopall)
+        self.config = _config_clientes(clientes={"forcar_destino": "+55 11 98888-7777"})
+
+    def convidar(self):
+        return nw.avisar_cliente_cadastro("49874051000131", TEL, "convite", "cadastro:x:convite", self.config,
+                                          conn=self.conn, agora=AGORA, dormir=self.dormir)
+
+    def test_sem_chave_propria_vale_a_trava_dos_clientes(self):
+        self.assertEqual(self.convidar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
+
+    def test_chave_propria_vazia_libera_so_o_convite(self):
+        self.config["cadastro_embarcador"] = {"forcar_destino_whatsapp": ""}
+        self.assertEqual(self.convidar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], f"{TEL}@c.us")
+        self.assertEqual(self.enviar.call_args[0][2], "convite")
+        self.enviar.reset_mock()
+        nw.avisar_cliente_sem_resposta(31, 7, TEL, LINK_CLIENTE, self.config, conn=self.conn, agora=AGORA,
+                                       dormir=self.dormir)
+        self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
+
+
 class TestAvisarClienteSemResposta(_ComBanco):
     def setUp(self):
         super().setUp()

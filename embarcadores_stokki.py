@@ -15,8 +15,10 @@ Roda de hora em hora, 07h-19h (infra/stokki-embarcadores-novos.timer):
 4. convite sem PIN depois de 3 dias: reenvia uma vez.
 
 Envio ao cliente preso por padrao: WhatsApp em
-whatsapp_notificacoes.clientes.forcar_destino; e-mail em
-cadastro_embarcador.forcar_destino_email (ausente = hugo@).
+cadastro_embarcador.forcar_destino_whatsapp (ausente = vale
+whatsapp_notificacoes.clientes.forcar_destino); e-mail em
+cadastro_embarcador.forcar_destino_email (ausente = hugo@). Nos dois, ''
+explicito = envio real.
 
 Uso:
     python embarcadores_stokki.py [--modo-teste]
@@ -175,10 +177,11 @@ def pre_cadastrar(conn, cli: dict, contato: dict, ativo: bool, agora: datetime) 
     conn.execute(
         "INSERT INTO interno (cnpj_embarcador, stkkc_id, nome_remetente, apelido, email, fator_ponderado, habilidade, "
         "notificar_email, observacoes, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, 1.0, NULL, ?, ?, ?, ?)",
-        (cli["cnpj"], cli["stkkc_id"], cli["razao"], cli["apelido"], None,
+        (cli["cnpj"], cli["stkkc_id"], cli["razao"], cli["apelido"], contato["email"] or None,
          1 if ativo else 0, obs, momento, momento))
     # sem commit aqui: cad.registrar grava os dois INSERTs juntos. interno.email
-    # fica NULL ate a aprovacao (o e-mail da Stokki vive em cadastro_embarcador).
+    # nasce com o e-mail da Stokki (Hugo, 17/10) e vira o do cliente quando ele
+    # completa o cadastro (cad.salvar_preenchimento).
     cad.registrar(conn, cli["cnpj"], cli["stkkc_id"], cad.PENDENTE if ativo else cad.INATIVO,
                   celular=contato["celular"], email=contato["email"], agora=agora)
 

@@ -174,7 +174,7 @@ class TestDeteccao(_ComBanco):
         n = self.interno(NONNA["cnpj"])
         self.assertEqual((n["stkkc_id"], n["nome_remetente"], n["apelido"], n["email"], n["habilidade"],
                           n["notificar_email"], n["sender_id"], n["fator_ponderado"]),
-                         (100, NONNA["razao"], "FABENNE", None, None, 1, None, 1.0))
+                         (100, NONNA["razao"], "FABENNE", "mariana@fabenne.com", None, 1, None, 1.0))
         self.assertIn("Pré-cadastro automático 10/10/2026 (Stokki #stkkc-100)", n["observacoes"])
         a = self.interno(ANTIGO["cnpj"])
         self.assertEqual((a["notificar_email"], a["email"]), (0, None))

@@ -109,6 +109,15 @@ class TestPreenchimentoEAprovacao(_Base):
         cad.aprovar(self.conn, CNPJ, "hugo", agora=AGORA)
         self.assertEqual(self.email_interno(), "antigo@fabenne.com")
 
+    def test_preencher_troca_interno_email_pelo_do_cliente_sem_esperar_aprovacao(self):
+        import preferencias_notificacao as pn
+        self.conn.execute("UPDATE interno SET email = 'stokki@fabenne.com' WHERE cnpj_embarcador = ?", (CNPJ,))
+        self.conn.commit()
+        pn.salvar(self.conn, CNPJ, ["compras@fabenne.com", "log@fabenne.com"], {}, "cliente")
+        cad.salvar_preenchimento(self.conn, CNPJ, "Seco", agora=AGORA)
+        self.assertEqual(self.email_interno(), "compras@fabenne.com, log@fabenne.com")
+        self.assertIsNone(self.habilidade_interno())
+
     def test_aprovar_sem_preenchimento_da_409(self):
         with self.assertRaises(cad.CadastroInvalido) as ctx:
             cad.aprovar(self.conn, CNPJ, "hugo", agora=AGORA)
