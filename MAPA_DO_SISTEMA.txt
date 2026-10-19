@@ -746,6 +746,11 @@
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
+ grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
+                           da equipe, abertos a todos do Atendimento, só texto,
+                           não lidas + aviso sonoro (só com o painel aberto),
+                           "Enviar para grupo" no chamado. Tabelas equipe_grupos,
+                           equipe_grupos_mensagens, equipe_grupos_lidas (dados.db).
  contadores_menu.py        Badges do menu lateral.
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
