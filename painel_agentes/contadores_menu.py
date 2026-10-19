@@ -58,11 +58,11 @@ TTL_POR_CONTADOR = {"torre": 300}
 # correspondente em painel_agentes.py. Contador de tela que o usuário não
 # pode abrir não é calculado (nem vaza pra ele).
 NIVEIS_POR_CONTADOR = {
-    "torre": ("total", "operador", "leitura", "atendimento"),
-    "pedidos_parados": ("total", "operador", "leitura", "atendimento"),
-    "pedagios": ("total", "operador", "leitura"),
-    "canhotos": ("total", "operador", "leitura"),
-    "atendimento": ("total", "operador", "atendimento"),
+    "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
+    "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento"),
+    "pedagios": ("total", "operador", "logistica", "leitura"),
+    "canhotos": ("total", "operador", "logistica", "leitura"),
+    "atendimento": ("total", "operador", "logistica", "atendimento"),
     "motoristas": ("total",),   # auto-cadastros do app esperando aprovação (08/10)
 }
 

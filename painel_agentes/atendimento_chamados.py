@@ -30,7 +30,7 @@ import pedidos_dedicados  # noqa: E402  (raiz)
 
 logger = logging.getLogger("painel.atendimento")
 
-NIVEIS = ("total", "operador", "atendimento")
+NIVEIS = ("total", "operador", "logistica", "atendimento")
 
 # ── Liberacao de NFs bloqueadas por area nao atendida (Hugo, 23/09) ──────────
 # O chamado (area "envios") nasce no portal quando o cliente envia pedido pra

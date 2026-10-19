@@ -202,13 +202,17 @@
  Blocos do Caddy: arquivos Caddyfile-* nessas mesmas pastas.
 
  Autenticação:
-   painel    -> usuário/senha do config, 6 níveis: total, operador, leitura,
-                expedicao, galpao, atendimento. Decorador requer_auth(niveis=).
+   painel    -> usuário/senha do config, 7 níveis: total, operador, leitura,
+                expedicao, galpao, atendimento, logistica. Decorador requer_auth(niveis=).
                 Login nominal: painel_agentes.usuarios_extras no config.yaml
                 (lista de {usuario, senha, nivel}); a ação fica no nome dele.
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
+                logistica (19/10, só via usuarios_extras) = poderes do operador
+                só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
+                Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
+                Canhotos e Clientes AGENDA (+ Início). Sem Mapa/Vigia/Expedição/WMS.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
                 Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.

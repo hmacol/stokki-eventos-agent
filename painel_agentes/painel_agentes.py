@@ -184,7 +184,9 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     return None
 
 
-_NIVEIS_VALIDOS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento")
+# "logistica" (19/10, Hugo) so existe via usuarios_extras: poderes do operador,
+# mas so nas telas da logistica (as rotas com "logistica" no niveis=).
+_NIVEIS_VALIDOS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento", "logistica")
 
 
 def requer_auth(f=None, *, niveis=("total",)):
@@ -513,7 +515,7 @@ def historico():
 
 
 @app.route("/api/sidebar/contadores")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "galpao", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "expedicao", "galpao", "atendimento"))
 def api_sidebar_contadores():
     """Números dos badges do menu lateral (base.html). Chamado pelo JS
     depois do load de qualquer página e a cada poucos minutos -- nunca
@@ -523,7 +525,7 @@ def api_sidebar_contadores():
 
 
 @app.route("/inicio")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def inicio():
     """Página inicial do painel (29/09): o que espera ação de quem logou,
     números do dia e, só pro total, as rotinas. O HTML sobe sem número
@@ -533,7 +535,7 @@ def inicio():
 
 
 @app.route("/api/inicio/dados")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_inicio_dados():
     return jsonify(pagina_inicial.montar_dados(g.nivel_acesso, url_for))
 
@@ -676,7 +678,7 @@ def _parse_data_param(padrao_amanha: bool = False) -> date:
 
 
 @app.route("/planejamento")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def planejamento():
     data_alvo = _parse_data_param()
     try:
@@ -694,12 +696,12 @@ def planejamento():
         # some com toda a barra de ação/edição, independente do nível
         # de acesso (ver bloqueia_planejamento_passado pro reforço
         # equivalente no backend das rotas de mutação).
-        pode_editar=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+        pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
     )
 
 
 @app.route("/planejamento/mobile")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def planejamento_mobile():
     """Antiga versão mobile "lite" de /planejamento (17/08, só leitura +
     ações básicas, sem mapa). Desde 04/09 a própria tela /planejamento
@@ -726,7 +728,7 @@ AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS = tuple(
 
 
 @app.route("/api/planejamento/agentes/etapas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def api_planejamento_agentes_etapas():
     """Estado da barra de agentes do planejamento (leitura barata no
     SQLite) -- mesmo padrão de /api/torre/etapas, só que restrito aos
@@ -735,7 +737,7 @@ def api_planejamento_agentes_etapas():
 
 
 @app.route("/api/planejamento/agentes/rodar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar():
     """Dispara um agente da barra do planejamento. Importação aceita
@@ -796,7 +798,7 @@ def api_planejamento_agentes_rodar():
 
 
 @app.route("/api/planejamento/agentes/rodar-tudo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar_tudo():
     """Botão "Executar tudo" da barra do planejamento: os agentes em
@@ -835,7 +837,7 @@ def laboratorio_rotas():
 
 
 @app.route("/historico-tratativas")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def historico_tratativas():
     """Histórico de tratativas pesquisável por NF, PS, embarcador, cliente,
     motorista ou motivo -- pedido do Hugo, 14/08. 100% leitura (ver
@@ -1051,7 +1053,7 @@ def api_baixa_sem_app_status(lote: int):
 
 
 @app.route("/canhotos-pendentes")
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def canhotos_pendentes():
     """Pedidos entregues sem nenhum comprovante (Hugo, 09/10): sobe o
     canhoto e fica guardado conosco (servidor + bucket) e no batimento.
@@ -1075,7 +1077,7 @@ def canhotos_pendentes():
 
 
 @app.route("/api/canhotos-pendentes", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_canhotos_pendentes():
     from nucleo import banco as nucleo_banco, canhotos_manuais
@@ -1104,7 +1106,7 @@ def api_canhotos_pendentes():
 
 
 @app.route("/clientes-agenda")
-@requer_auth
+@requer_auth(niveis=("total", "logistica"))
 def clientes_agenda():
     """Fila de destinatários com data de agendamento informada esperando
     o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
@@ -1124,7 +1126,7 @@ def clientes_agenda():
 
 
 @app.route("/api/clientes-agenda/decidir", methods=["POST"])
-@requer_auth
+@requer_auth(niveis=("total", "logistica"))
 @exige_mesma_origem
 def api_clientes_agenda_decidir():
     import marcar_clientes_agenda
@@ -1144,7 +1146,7 @@ def api_clientes_agenda_decidir():
 
 
 @app.route("/pedidos-parados")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def pedidos_parados():
     """Triagem dos pedidos parados do Fresh Hub -- pedido do Hugo,
     24/08. Página sobe só com a casca; os dados chegam por
@@ -1152,11 +1154,11 @@ def pedidos_parados():
     levar alguns segundos, não deve travar o load -- mesmo padrão da
     Torre)."""
     return render_template("pedidos_parados_triagem.html",
-                           pode_editar=g.nivel_acesso in ("total", "operador", "atendimento"))
+                           pode_editar=g.nivel_acesso in ("total", "operador", "logistica", "atendimento"))
 
 
 @app.route("/api/pedidos-parados/dados")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_pedidos_parados_dados():
     try:
         return jsonify({"pedidos": pedidos_parados_triagem.listar_com_classificacao()})
@@ -1166,7 +1168,7 @@ def api_pedidos_parados_dados():
 
 
 @app.route("/api/pedidos-parados/classificar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_classificar():
     body = request.get_json(force=True)
@@ -1186,7 +1188,7 @@ def api_pedidos_parados_classificar():
 
 
 @app.route("/api/pedidos-parados/buscar-vuupt")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_pedidos_parados_buscar_vuupt():
     order_number = request.args.get("order_number", "")
     if not order_number:
@@ -1200,7 +1202,7 @@ def api_pedidos_parados_buscar_vuupt():
 
 
 @app.route("/api/pedidos-parados/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_duplicar():
     body = request.get_json(force=True)
@@ -1219,7 +1221,7 @@ def api_pedidos_parados_duplicar():
 
 
 @app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_encaminhar():
     body = request.get_json(force=True)
@@ -1238,7 +1240,7 @@ def api_pedidos_parados_encaminhar():
 
 
 @app.route("/api/pedidos-parados/notificar-cliente-retira", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_notificar_cliente_retira():
     body = request.get_json(force=True)
@@ -1257,7 +1259,7 @@ def api_pedidos_parados_notificar_cliente_retira():
 
 
 @app.route("/api/pedidos-parados/verificar-stokki", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_stokki():
     """Consulta status/transportadora de todos os pedidos em tela na
@@ -1280,7 +1282,7 @@ def api_pedidos_parados_verificar_stokki():
 
 
 @app.route("/api/pedidos-parados/verificar-vuupt", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_vuupt():
     """Consulta status/agendamento de todos os pedidos em tela na Vuupt
@@ -1302,7 +1304,7 @@ def api_pedidos_parados_verificar_vuupt():
 
 
 @app.route("/torre")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def torre():
     """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
     sobe só com a casca; os dados chegam por /api/torre/* via JS (a
@@ -1312,7 +1314,7 @@ def torre():
     abertas de qualquer dia (torre_controle._coletar_rotas_abertas);
     consulta de dia passado é o Histórico (/consulta)."""
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    pode_editar = g.nivel_acesso in ("total", "operador")
+    pode_editar = g.nivel_acesso in ("total", "operador", "logistica")
     return render_template(
         "torre_controle.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
@@ -1331,14 +1333,14 @@ def torre():
 
 
 @app.route("/torre/mobile")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def torre_mobile():
     """Versão mobile da Torre de Controle (Hugo, 17/08) -- mesmo template
     "casca vazia + JS" do desktop, só que consumindo os mesmos
     /api/torre/* endpoints com uma renderização em cards (em vez de
     tabela/grid) pensada pra tela estreita. Nenhum endpoint novo."""
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    pode_editar = g.nivel_acesso in ("total", "operador")
+    pode_editar = g.nivel_acesso in ("total", "operador", "logistica")
     return render_template(
         "torre_mobile.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
@@ -1350,7 +1352,7 @@ def torre_mobile():
 
 
 @app.route("/api/torre/dados")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_dados():
     try:
         return jsonify(torre_controle.buscar_dados_torre())
@@ -1360,7 +1362,7 @@ def api_torre_dados():
 
 
 @app.route("/api/torre/stokki")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_stokki():
     """Funil outbound da Stokki -- endpoint separado do resto porque tem
     cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
@@ -1369,7 +1371,7 @@ def api_torre_stokki():
 
 
 @app.route("/api/torre/excluir-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_excluir_pedido():
     """Tira 1 pedido de uma rota já criada na VUUPT -- "Excluir da Rota"
@@ -1401,7 +1403,7 @@ def api_torre_excluir_pedido():
 
 
 @app.route("/api/torre/marcar-entregue", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_marcar_entregue():
     """"Marcar como entregue" do menu de contexto do chip da Torre e da
@@ -1422,7 +1424,7 @@ def api_torre_marcar_entregue():
 
 
 @app.route("/api/torre/encerrar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_encerrar_rota():
     """Botão "Encerrar" de uma rota atrasada na torre acumulada (Hugo,
@@ -1441,7 +1443,7 @@ def api_torre_encerrar_rota():
 
 
 @app.route("/api/torre/etapas")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_etapas():
     """Só o estado das etapas do stepper (leitura barata no SQLite) --
     o front consulta com frequência maior pra dar feedback rápido
@@ -1450,7 +1452,7 @@ def api_torre_etapas():
 
 
 @app.route("/api/torre/rodar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_rodar():
     """Versão JSON do /rodar/<agente_id> pros botões da torre -- mesma
@@ -1475,7 +1477,7 @@ def api_torre_rodar():
 
 
 @app.route("/api/torre/tratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_tratar():
     """Marca uma exceção da fila como tratada (com motivo) -- ela sai
@@ -1494,7 +1496,7 @@ def api_torre_tratar():
 
 
 @app.route("/api/torre/tratar-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_tratar_lote():
     """Tratar por lote (30/09): varios itens da fila selecionados na
@@ -1512,7 +1514,7 @@ def api_torre_tratar_lote():
 
 
 @app.route("/api/torre/destratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_destratar():
     body = request.get_json(force=True)
@@ -1524,7 +1526,7 @@ def api_torre_destratar():
 
 
 @app.route("/api/torre/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_duplicar():
     """Botão 'Duplicar pedido' da fila de ação -- cria a reentrega no
@@ -1543,7 +1545,7 @@ def api_torre_duplicar():
 
 
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_notificar_ocorrencia():
     """Botão 'Notificar' da fila de ação -- dispara na hora a pergunta
@@ -1563,7 +1565,7 @@ def api_torre_notificar_ocorrencia():
 
 
 @app.route("/api/planejamento/pool")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def api_pool():
     """Busca ao vivo na VUUPT o pool de não alocados + resumo dos
     pedidos agendados (botão 'Atualizar' da tela) -- não mexe nos
@@ -1594,7 +1596,7 @@ def api_pool():
 
 
 @app.route("/api/planejamento/sem-rota-hoje")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def api_planejamento_sem_rota_hoje():
     """Número "Sem rota" de HOJE (mesmo cálculo da torre) pro chip do
     planejamento -- carregado async pelo template pra não segurar o
@@ -1607,7 +1609,7 @@ def api_planejamento_sem_rota_hoje():
 
 
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def api_romaneio(rascunho_id):
     """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
     o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
@@ -1634,7 +1636,7 @@ def api_romaneio(rascunho_id):
 
 
 @app.route("/api/planejamento/carregar-documentos", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_carregar_documentos():
     """Busca NF/boleto na hora (e-mail + Stokki) pros pedidos do
@@ -1662,7 +1664,7 @@ def _rascunho_ou_404(rascunho_id):
 
 
 @app.route("/api/planejamento/mover-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_mover_parada():
@@ -1682,7 +1684,7 @@ def api_mover_parada():
 
 
 @app.route("/api/planejamento/reordenar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reordenar():
@@ -1695,7 +1697,7 @@ def api_reordenar():
 
 
 @app.route("/api/planejamento/inverter-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_inverter_rota():
@@ -1710,7 +1712,7 @@ def api_inverter_rota():
 
 
 @app.route("/api/planejamento/mover-paradas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_mover_paradas():
@@ -1737,7 +1739,7 @@ def api_mover_paradas():
 
 
 @app.route("/api/planejamento/fundir-rotas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_fundir_rotas():
@@ -1753,7 +1755,7 @@ def api_fundir_rotas():
 
 
 @app.route("/api/planejamento/remover-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_remover_parada():
@@ -1770,7 +1772,7 @@ def api_remover_parada():
 
 
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_adicionar_parada():
@@ -1783,7 +1785,7 @@ def api_adicionar_parada():
 
 
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_trocar_motorista():
@@ -1798,7 +1800,7 @@ def api_trocar_motorista():
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_veiculo():
@@ -1814,7 +1816,7 @@ def api_lalamove_veiculo():
 
 
 @app.route("/api/planejamento/lalamove-horario", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_horario():
@@ -1831,7 +1833,7 @@ def api_lalamove_horario():
 
 
 @app.route("/api/planejamento/lalamove-lancar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_lancar():
@@ -1851,7 +1853,7 @@ def api_lalamove_lancar():
 
 
 @app.route("/api/planejamento/renomear-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_renomear_rota():
@@ -1864,7 +1866,7 @@ def api_renomear_rota():
 
 
 @app.route("/api/planejamento/alocar-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_alocar_motoristas():
@@ -1885,7 +1887,7 @@ def api_alocar_motoristas():
 
 
 @app.route("/api/planejamento/desalocar-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_desalocar_motoristas():
@@ -1905,7 +1907,7 @@ def api_desalocar_motoristas():
 
 
 @app.route("/api/planejamento/publicar-oferta", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_publicar_oferta():
@@ -1937,7 +1939,7 @@ def api_publicar_oferta():
 
 
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_publicar_ofertas_lote():
@@ -1970,7 +1972,7 @@ def api_publicar_ofertas_lote():
 
 
 @app.route("/api/planejamento/despublicar-oferta", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_despublicar_oferta():
@@ -1989,7 +1991,7 @@ def api_despublicar_oferta():
 
 
 @app.route("/api/planejamento/despublicar-ofertas-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_despublicar_ofertas_lote():
@@ -2007,7 +2009,7 @@ def api_despublicar_ofertas_lote():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_salvar_disponibilidade_motoristas():
     """Tela "Disponibilidade de motoristas" (Hugo, 16/08): grava o
@@ -2026,7 +2028,7 @@ def api_salvar_disponibilidade_motoristas():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas/periodo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_marcar_disponibilidade_periodo():
     """Mini-formulário "Marcar período" da tela de disponibilidade --
@@ -2048,7 +2050,7 @@ def api_marcar_disponibilidade_periodo():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas/limpar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_limpar_disponibilidade_motoristas():
     """Botão "Redefinir" de uma linha da tela de disponibilidade --
@@ -2067,7 +2069,7 @@ def api_limpar_disponibilidade_motoristas():
 
 
 @app.route("/motoristas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def motoristas():
     """Tela "Motoristas" (Hugo, 16/08): lista quem está em
     BD_MOTORISTAS.xlsx e, pra quem tem login total, o cadastro de
@@ -2079,7 +2081,7 @@ def motoristas():
         logging.getLogger(__name__).exception("Falha ao montar dados da tela de motoristas")
         dados = None
         erro = str(e)
-    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador"),
+    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador", "logistica"),
                            pode_aprovar=g.nivel_acesso == "total")
 
 
@@ -2192,7 +2194,7 @@ def api_cadastro_embarcador_aprovar(cnpj):
 # nucleo/operacao.py; aqui só HTTP.
 
 @app.route("/financeiro/pedagios")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def pedagios():
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     status = (request.args.get("status") or "PENDENTE").upper()
@@ -2235,11 +2237,11 @@ def pedagios():
         "aprovado": sum(float(p["valor_aprovado"] or 0) for p in itens if p["status"] == nucleo_banco.PEDAGIO_APROVADO),
     }
     return render_template("pedagios.html", itens=itens, status=status, contagem=contagem, motoristas=motoristas,
-                           filtros=filtros, resumo=resumo, pode_editar=g.nivel_acesso in ("total", "operador"))
+                           filtros=filtros, resumo=resumo, pode_editar=g.nivel_acesso in ("total", "operador", "logistica"))
 
 
 @app.route("/financeiro/pedagios/<int:pedagio_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def pedagio_foto(pedagio_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -2258,7 +2260,7 @@ def pedagio_foto(pedagio_id):
 
 
 @app.route("/api/financeiro/pedagios/<int:pedagio_id>/revisar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def revisar_pedagio(pedagio_id):
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     from nucleo.operacao import OperacaoInvalida
@@ -2291,7 +2293,7 @@ def revisar_pedagio(pedagio_id):
 # estiver desligada no config, a aba "Sem conferência" tem tudo.
 
 @app.route("/canhotos")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def canhotos():
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     filtro = (request.args.get("resultado") or "REPROVADO").upper()
@@ -2309,11 +2311,11 @@ def canhotos():
     finally:
         conn.close()
     return render_template("canhotos.html", itens=itens, resultado=filtro, contagem=contagem,
-                           pode_editar=g.nivel_acesso in ("total", "operador"))
+                           pode_editar=g.nivel_acesso in ("total", "operador", "logistica"))
 
 
 @app.route("/canhotos/<int:comprovante_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def canhoto_foto(comprovante_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -2332,7 +2334,7 @@ def canhoto_foto(comprovante_id):
 
 
 @app.route("/api/canhotos/<int:comprovante_id>/revisar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def revisar_canhoto(comprovante_id):
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     from nucleo.operacao import OperacaoInvalida
@@ -2371,7 +2373,7 @@ def _arg_data(chave: str) -> str | None:
 
 
 @app.route("/consulta")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta():
     from nucleo import banco as nucleo_banco, consulta as nucleo_consulta
     termo = (request.args.get("q") or "").strip()
@@ -2408,7 +2410,7 @@ def consulta():
 
 
 @app.route("/consulta/rota/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta_rota(rota_id):
     from nucleo import consulta as nucleo_consulta
     rota = nucleo_consulta.detalhar_rota(rota_id)
@@ -2418,7 +2420,7 @@ def consulta_rota(rota_id):
 
 
 @app.route("/consulta/pedido/<codigo>")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta_pedido(codigo):
     from nucleo import consulta as nucleo_consulta
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
@@ -2428,7 +2430,7 @@ def consulta_pedido(codigo):
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def api_motoristas_vuupt_disponiveis():
     """Dropdown "Motorista (VUUPT)" do formulário de cadastro -- agentes
     do VUUPT que ainda não têm linha na planilha."""
@@ -2441,7 +2443,7 @@ def api_motoristas_vuupt_disponiveis():
 
 
 @app.route("/api/motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_cadastrar_motorista():
     body = request.get_json(force=True)
@@ -2458,7 +2460,7 @@ def api_cadastrar_motorista():
 
 
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_nova_rota():
@@ -2478,7 +2480,7 @@ def api_nova_rota():
 
 
 @app.route("/api/planejamento/criar-rota-com-paradas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_criar_rota_com_paradas():
@@ -2505,7 +2507,7 @@ def api_criar_rota_com_paradas():
 
 
 @app.route("/api/planejamento/roteirizar-selecionados", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_roteirizar_selecionados():
@@ -2542,7 +2544,7 @@ def api_roteirizar_selecionados():
 
 
 @app.route("/api/planejamento/incrementar-selecionados", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_incrementar_selecionados():
@@ -2568,7 +2570,7 @@ def api_incrementar_selecionados():
 
 
 @app.route("/api/planejamento/otimizar-sequencia", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_otimizar_sequencia():
@@ -2581,7 +2583,7 @@ def api_otimizar_sequencia():
 
 
 @app.route("/api/planejamento/duplicar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_duplicar_rota():
@@ -2597,7 +2599,7 @@ def api_duplicar_rota():
 
 
 @app.route("/api/planejamento/descartar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_descartar_rota():
@@ -2618,7 +2620,7 @@ def api_descartar_rota():
 
 
 @app.route("/api/planejamento/confirmar-envio", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_confirmar_envio():
@@ -2638,7 +2640,7 @@ def api_confirmar_envio():
 
 
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_cancelar_rota():
@@ -2661,7 +2663,7 @@ def api_cancelar_rota():
 
 
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_cancelar_pedido():
@@ -2684,7 +2686,7 @@ def api_cancelar_pedido():
 
 
 @app.route("/api/planejamento/reagendar-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reagendar_pedido():
@@ -2707,7 +2709,7 @@ def api_reagendar_pedido():
 
 
 @app.route("/api/planejamento/reagendar-pedidos", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reagendar_pedidos():
@@ -2740,7 +2742,7 @@ def api_reagendar_pedidos():
 
 
 @app.route("/api/planejamento/checar-dia-fixo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_checar_dia_fixo():
     """Antes de reagendar (um ou lote): quais pedidos ficam fora do dia de
@@ -2762,7 +2764,7 @@ def api_checar_dia_fixo():
 
 
 @app.route("/api/planejamento/editar-endereco", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_endereco():
@@ -2785,7 +2787,7 @@ def api_editar_endereco():
 
 
 @app.route("/api/planejamento/editar-nivel-horario", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_nivel_horario():
@@ -2811,7 +2813,7 @@ def api_editar_nivel_horario():
 
 
 @app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_endereco_lote():
@@ -2846,7 +2848,7 @@ def api_editar_endereco_lote():
 
 
 @app.route("/api/planejamento/transportadoras-terceiros")
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def api_transportadoras_terceiros():
     """Opções do modal "Transportadora (redespacho)" da tela de
     planejamento: TERCEIROS da BD_TRANSPORTADORAS com endereço de galpão
@@ -2855,7 +2857,7 @@ def api_transportadoras_terceiros():
 
 
 @app.route("/api/planejamento/editar-transportadora", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_transportadora():
@@ -2886,7 +2888,7 @@ def api_editar_transportadora():
 
 
 @app.route("/api/planejamento/dedicado", methods=["POST", "DELETE"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_dedicado():
     """Marca (POST {itens, valor}) ou desmarca (DELETE {codigos}) pedidos
