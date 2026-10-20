@@ -514,6 +514,22 @@
     background: var(--rodando-bg);
     color: var(--rodando-texto);
   }
+  /* situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10):
+     mesmo âmbar do bloco "Em separação na Stokki" do pool */
+  .item-parada .badge-separacao {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
+  .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  .secao-pool-separacao .retrato-stokki { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
@@ -2568,9 +2584,21 @@
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Pra rotear hoje (<span id="contagem-secao-hoje">0</span>)</span>
-          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro nem fora de área">Selecionar</button>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro, fora de área nem pedido ainda em separação na Stokki">Selecionar</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
+      </div>
+      {# Em separação na Stokki (Hugo, 19/10): já está na Vuupt, mas o galpão
+         ainda não liberou (Em aberto / Em separação / Em conferência / Em
+         espera). Vem do retrato que o pipeline grava a cada rodada, não da
+         Stokki ao vivo -- por isso a hora no título. Continua arrastável. #}
+      <div class="secao-pool secao-pool-separacao" data-secao="separacao" id="secao-pool-separacao">
+        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Dá pra arrastar pra rota mesmo assim.">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Em separação na Stokki (<span id="contagem-secao-separacao">0</span>) <span class="retrato-stokki" id="retrato-stokki">{% if dados and dados.retrato_stokki_em %}· retrato de {{ dados.retrato_stokki_em }}{% endif %}</span></span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="separacao" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-separacao" data-list-id="pool"></ul>
       </div>
       <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
         <div class="cabecalho-secao-pool">
@@ -2849,6 +2877,7 @@
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
+    if (p.situacao_stokki) partes.push(badgeSeparacaoHtml(p));
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -2879,6 +2908,13 @@
       }
     }
     return partes.length ? `<br>${partes.join(" ")}` : "";
+  }
+
+  // situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10)
+  // -- separado de badgesPedidoHtml porque atualizarPool troca só esse
+  // badge num card que já existe, quando o retrato muda
+  function badgeSeparacaoHtml(p) {
+    return `<span class="badge-separacao" title="Situação na Stokki no último retrato do pipeline">📦 ${escaparHtml(p.situacao_stokki)}</span>`;
   }
 
   function itemParadaHtml(p, opts = {}) {
@@ -2927,6 +2963,7 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    li.dataset.situacaoStokki = p.situacao_stokki || "";  // "Em separação" etc. (Hugo, 19/10)
     li.dataset.dedicado = p.dedicado ? "1" : "";
     li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
@@ -4022,7 +4059,11 @@
     // pra essa tela é sinalizar que precisa de decisão manual antes de
     // qualquer coisa (cotação/redespacho), não quando ele "venceria".
     if (li.dataset.tipoArea) return document.getElementById("lista-pool-fora-area");
-    return document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+    if (li.dataset.urgencia === "futuro") return document.getElementById("lista-pool-futuro");
+    // ainda não pronto na Stokki (Hugo, 19/10): só tira do "hoje" -- agendado
+    // pra depois continua no bloco da data, fora de área continua vencendo
+    if (li.dataset.situacaoStokki) return document.getElementById("lista-pool-separacao");
+    return document.getElementById("lista-pool-hoje");
   }
 
   function reencaixarNaSecaoCorreta(li) {
@@ -4244,6 +4285,8 @@
     const elHoje = document.getElementById("contagem-secao-hoje");
     const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
+    const elSeparacao = document.getElementById("contagem-secao-separacao");
+    if (elSeparacao) elSeparacao.textContent = document.getElementById("lista-pool-separacao").children.length;
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
     if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
     if (elFuturo) elFuturo.textContent = document.getElementById("lista-pool-futuro").children.length;
@@ -4260,6 +4303,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.separacao === undefined) secoesPoolColapsadas.separacao = false;
   if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
 
@@ -6620,7 +6664,23 @@
       const listaPool = document.getElementById("lista-pool");
       let novos = 0;
       dados.pool.forEach(p => {
-        if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
+        const existente = POOL_BY_ID[p.service_id];
+        if (existente) {
+          // já estava no pool: só a situação Stokki pode ter mudado no
+          // retrato (galpão liberou → sai de "Em separação" pra "hoje")
+          if ((existente.situacao_stokki || "") !== (p.situacao_stokki || "")) {
+            existente.situacao_stokki = p.situacao_stokki;
+            const li = listaPool.querySelector(`.item-parada[data-service-id="${p.service_id}"]`);
+            if (li) {
+              li.dataset.situacaoStokki = p.situacao_stokki || "";
+              const badge = li.querySelector(".badge-separacao");
+              if (badge) badge.remove();
+              if (p.situacao_stokki) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml(p));
+              reencaixarNaSecaoCorreta(li);
+            }
+          }
+          return;
+        }
         POOL_BY_ID[p.service_id] = p;
         const li = criarLiParada(p);
         secaoDoItem(li).appendChild(li);
@@ -6649,6 +6709,8 @@
       atualizarBarraSelecao();
       atualizarContagensTotais();
       atualizarContagensSecoesPool();
+      const elRetrato = document.getElementById("retrato-stokki");
+      if (elRetrato) elRetrato.textContent = dados.retrato_stokki_em ? `· retrato de ${dados.retrato_stokki_em}` : "";
       if (dados.pool_retiradas !== undefined) renderizarRetiradas(dados.pool_retiradas);
 
       // resumo dos agendados (por dia/região) vem já renderizado
@@ -6831,11 +6893,13 @@
     const listaPoolHoje = document.getElementById("lista-pool-hoje");
     const listaPoolForaArea = document.getElementById("lista-pool-fora-area");
     const listaPoolFuturo = document.getElementById("lista-pool-futuro");
+    const listaPoolSeparacao = document.getElementById("lista-pool-separacao");
     POOL.forEach(p => {
       const li = criarLiParada({ ...p, remetente_nome: p.remetente_nome });
       secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(listaPoolSeparacao);
     iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();

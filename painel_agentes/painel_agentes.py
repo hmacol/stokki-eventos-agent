@@ -1590,6 +1590,7 @@ def api_pool():
     return jsonify({
         "pool": resultado["pool"],
         "pool_retiradas": resultado.get("pool_retiradas", []),
+        "retrato_stokki_em": resultado.get("retrato_stokki_em"),
         "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
         "aviso": aviso,
     })
