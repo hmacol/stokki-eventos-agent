@@ -233,6 +233,11 @@
 
  Horário                     Timer (stokki-*)                Script
  --------------------------  ------------------------------  -------------------------------------------
+ 23:30 (até 03:40)           coletar-xml-nfe                 documentos_pedido/coletar_xml_nfe.py (só LÊ a
+                                                             Stokki, conta provider pela trava sessao_uso;
+                                                             grava dados/xml_stokki/PS-<id>.xml + tabela
+                                                             xml_stokki_coleta; quem lê é o snapshot do
+                                                             freshhub, freshhub-copiar-legado 05:10)
  01:30                       exportar-vuupt                  nucleo/exportar_historico_vuupt.py
  03:00                       backup-gcs                      backup_dados_gcs.py
  xx:22 (toda hora)           backup-horario                  backup_dados_gcs.py --horario

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-coletar-xml-nfe.service todo dia as 23:30 (depois da sequencia das 22h)
+
+[Timer]
+OnCalendar=*-*-* 23:30:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

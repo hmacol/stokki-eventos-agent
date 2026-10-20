@@ -16,18 +16,44 @@ Estado por pedido na tabela xml_stokki_coleta (dados.db): OK nunca repete;
 ativo sem XML tenta toda noite; finalizado sem XML mais 2 vezes, uma por
 semana (pedido finalizado nao aceita anexo); erro ate 5 vezes.
 """
+import argparse
+import json
+import logging
 import os
 import re
 import sqlite3
+import sys
+import tempfile
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
-from regras.embarcadores import _normalizar
-from selecionar_pedidos import EMBARCADORES_SEM_NF
+_RAIZ = Path(__file__).resolve().parent.parent
+for _p in (_RAIZ, _RAIZ / "documentos_pedido"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-PASTA_DADOS = Path(__file__).resolve().parent.parent / "dados"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+import stokki_documentos as sd  # noqa: E402
+from regras.embarcadores import _normalizar  # noqa: E402
+from selecionar_pedidos import EMBARCADORES_SEM_NF  # noqa: E402
+from stokki import contas, sessao_uso  # noqa: E402
+
+logger = logging.getLogger("documentos_pedido.coletar_xml_nfe")
+
+PASTA_DADOS = _RAIZ / "dados"
 PASTA_XML = PASTA_DADOS / "xml_stokki"
+DB_PATH = PASTA_DADOS / "dados.db"
+DONO_TRAVA = "coletar-xml-nfe"  # stokki/sessao_uso.py
+DESDE = date(2026, 7, 15)       # historico do freshhub (spec 0.4)
+_ERROS_SEGUIDOS_MAX = 3
+_RENOVAR_A_CADA = 25
 
 _ATIVOS = ("ABERTO", "EM_ROTA")
 _FINALIZADO_MAX_TENTATIVAS = 3
@@ -128,3 +154,120 @@ def salvar_xml(conteudo: bytes, codigo: str, pasta: Path = PASTA_XML) -> Path:
         tmp.unlink(missing_ok=True)
         raise
     return final
+
+
+def coletar(conn: sqlite3.Connection, codigos: list[str], page: Any, ate: datetime, pausa_s: float = 2.0,
+            relogio: Callable[[], datetime] = datetime.now, pasta: Path = PASTA_XML,
+            gravar_estado: bool = True) -> dict[str, Any]:
+    """Um pedido por vez na pagina /provider/ ja logada. Para no horario `ate` (conferido antes de
+    cada pedido) ou depois de 3 erros seguidos (Stokki fora ou barrando robo: nao insiste)."""
+    contagens: dict[str, Any] = {str(s): 0 for s in Situacao}
+    contagens["parou_por"] = "fim"
+    seguidos = 0
+    for i, codigo in enumerate(codigos):
+        agora = relogio()
+        if agora >= ate:
+            contagens["parou_por"] = "horario"
+            break
+        if i and i % _RENOVAR_A_CADA == 0:
+            sessao_uso.renovar(DONO_TRAVA, ttl_segundos=600)
+        chave = erro = None
+        try:
+            page.goto(f"{sd.URL_PROVIDER_SHW}/{sd._extrair_id(codigo)}", wait_until="networkidle",
+                      timeout=30_000)
+            page.wait_for_timeout(400)
+            caminho = sd.baixar_xml_nfe(page, codigo)
+            if caminho:
+                caminho = Path(caminho)
+                chave = sd._chave_do_xml(caminho)
+                if chave:
+                    salvar_xml(caminho.read_bytes(), codigo, pasta)
+                caminho.unlink(missing_ok=True)  # copia temporaria do download
+                situacao = Situacao.OK if chave else Situacao.PLACEHOLDER
+            else:
+                href = sd.localizar_link_xml_nfe(page)
+                situacao = Situacao.PLACEHOLDER if href and sd.xml_placeholder(href) else Situacao.SEM_XML
+            seguidos = 0
+        except Exception as e:  # noqa: BLE001 - um pedido ruim nao derruba a noite; 3 seguidos sim
+            situacao, erro = Situacao.ERRO, f"{type(e).__name__}: {e}"
+            seguidos += 1
+        if gravar_estado:
+            registrar(conn, codigo, situacao, agora, chave=chave, erro=erro)
+        contagens[str(situacao)] += 1
+        logger.info(f"  {codigo}: {situacao}")
+        if seguidos >= _ERROS_SEGUIDOS_MAX:
+            contagens["parou_por"] = "erros"
+            logger.error(f"{seguidos} erros seguidos na Stokki -- parando a noite ({(erro or '')[:120]}).")
+            break
+        if pausa_s:
+            time.sleep(pausa_s)
+    return contagens
+
+
+def _carregar_config() -> dict:
+    import yaml
+    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+@contextmanager
+def _navegador(config: dict) -> Iterator[Any]:
+    """Chromium com o contexto disfarcado do legado e login provider (a trava ja e deste processo)."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = sd.nova_pagina(browser)
+            sd._login(page, config)
+            yield page
+        finally:
+            browser.close()
+
+
+def _limite_do_horario(hhmm: str, agora: datetime) -> datetime:
+    h, m = (int(x) for x in hhmm.split(":"))
+    ate = agora.replace(hour=h, minute=m, second=0, microsecond=0)
+    return ate if ate > agora else ate + timedelta(days=1)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="Busca na Stokki (so leitura) o XML da NF-e dos pedidos "
+                                            "sem nota no freshhub e grava em dados/xml_stokki/.")
+    p.add_argument("--limite", type=int, default=3500)
+    p.add_argument("--ate", default="03:40", help="HH:MM: para antes deste horario (padrao 03:40)")
+    p.add_argument("--somente", help="PS-1,PS-2: so estes pedidos (ignora a selecao e o estado)")
+    p.add_argument("--modo-teste", action="store_true",
+                   help="salva os XMLs numa pasta temporaria e nao grava estado")
+    args = p.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    agora = datetime.now()
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        garantir_tabela(conn)
+        codigos = ([c.strip().upper() for c in args.somente.split(",") if c.strip()] if args.somente
+                   else selecionar(conn, DESDE, agora, args.limite))
+        resultado: dict[str, Any] = {"pedidos": len(codigos), "parou_por": "nada a fazer"}
+        if codigos:
+            if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=600, esperar_segundos=1800,
+                                       conta=contas.PROVIDER):
+                logger.warning(f"Conta provider ocupada por '{sessao_uso.em_uso(conta=contas.PROVIDER)}' "
+                               "ha mais de 30 min -- sem login nesta noite.")
+                resultado["parou_por"] = "ocupada"
+            else:
+                pasta = Path(tempfile.mkdtemp(prefix="xml_stokki_teste_")) if args.modo_teste else PASTA_XML
+                try:
+                    with _navegador(_carregar_config()) as page:
+                        resultado.update(coletar(conn, codigos, page, _limite_do_horario(args.ate, agora),
+                                                 pasta=pasta, gravar_estado=not args.modo_teste))
+                finally:
+                    sessao_uso.liberar(DONO_TRAVA)
+                if args.modo_teste:
+                    resultado["pasta_teste"] = str(pasta)
+    finally:
+        conn.close()
+    print(json.dumps(resultado, ensure_ascii=False))  # noqa: T201
+    return 1 if resultado.get("parou_por") == "erros" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
