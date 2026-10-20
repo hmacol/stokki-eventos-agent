@@ -1029,6 +1029,9 @@
    pedidos_segurados, agendamentos_origem, avisos_fora_dia_fixo
                              roteirizacao/
    documentos_processados    documentos_pedido/ (coluna cobranca: 1 duplicata / 0 quadro vazio / -1 sem quadro)
+   xml_stokki_coleta         documentos_pedido/coletar_xml_nfe.py (1 linha por PS: OK/PLACEHOLDER/
+                             SEM_XML/ERRO, erros seguidos; os XMLs ficam em dados/xml_stokki/PS-<id>.xml,
+                             lidos pelo freshhub via snapshot -- nao apagar a pasta)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
