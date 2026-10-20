@@ -112,6 +112,8 @@
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+   Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
+                                             vigia_stokki_abertos (retrato do pipeline, não ao vivo)
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
