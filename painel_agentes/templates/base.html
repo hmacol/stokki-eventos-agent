@@ -339,6 +339,7 @@
     {% set nivel = session.get('nivel_acesso') %}
     {% include "_menu_lateral_nav.html" %}
     {% if nivel %}
+    {% if telas_liberadas is not none %}{% set nivel = 'personalizado' %}{% endif %}
     <div class="rodape">
       {% set ROTULOS_NIVEL = {'total': 'acesso total', 'operador': 'operação', 'leitura': 'somente leitura',
                               'expedicao': 'expedição', 'galpao': 'galpão', 'atendimento': 'atendimento', 'logistica': 'logística'} %}

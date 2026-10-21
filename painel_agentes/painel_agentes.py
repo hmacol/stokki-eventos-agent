@@ -91,6 +91,7 @@ import wms
 import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
+import acesso_telas
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -124,6 +125,13 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+@app.context_processor
+def _telas_liberadas_no_template():
+    """Lista de telas do acesso personalizado (None = segue o nivel), pro
+    menu lateral e os links entre telas."""
+    return {"telas_liberadas": g.get("telas_liberadas")}
 
 # Roda uma vez, assim que o painel sobe -- destrava qualquer execução
 # que ficou presa em RODANDO por causa de um encerramento à força do
@@ -227,9 +235,17 @@ def requer_auth(f=None, *, niveis=("total",)):
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
                 return redirect(url_for("login", proximo=request.script_root + request.full_path))
-            if nivel not in niveis:
+            # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
+            # telas, com poder de total dentro delas, no lugar do nivel.
+            telas = acesso_telas.telas_do_usuario(session.get("usuario"), cfg_painel)
+            if telas is not None:
+                if not acesso_telas.caminho_liberado(request.path, telas):
+                    abort(403, "Essa tela não está liberada pro seu usuário.")
+                nivel = "total"
+            elif nivel not in niveis:
                 abort(403, "Seu usuário não tem permissão pra essa ação.")
             g.nivel_acesso = nivel
+            g.telas_liberadas = telas
             return func(*args, **kwargs)
         return decorado
     return decorator
@@ -383,8 +399,11 @@ def login():
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
+        telas = acesso_telas.telas_do_usuario(usuario, cfg_painel) if nivel else None
         if nivel is None:
             erro = "Usuário ou senha incorretos."
+        elif telas == []:
+            erro = "Seu usuário não tem nenhuma tela liberada. Fale com o Hugo."
         else:
             session.clear()
             session.permanent = True
@@ -395,6 +414,8 @@ def login():
             # cair nele levaria direto a um 403 pós-login.
             pagina_padrao = {"expedicao": url_for("expedicao"),
                              "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
+            if telas:
+                pagina_padrao = url_for(telas[0])
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -521,7 +542,15 @@ def api_sidebar_contadores():
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
-    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
+    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())})
+
+
+def _niveis_por_contador() -> dict:
+    """Acesso personalizado: so os contadores das telas liberadas."""
+    telas = g.get("telas_liberadas")
+    if telas is None:
+        return contadores_menu.NIVEIS_POR_CONTADOR
+    return {c: (g.nivel_acesso,) if c in telas else () for c in contadores_menu.NIVEIS_POR_CONTADOR}
 
 
 @app.route("/inicio")
@@ -537,7 +566,10 @@ def inicio():
 @app.route("/api/inicio/dados")
 @requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_inicio_dados():
-    return jsonify(pagina_inicial.montar_dados(g.nivel_acesso, url_for))
+    niveis = _niveis_por_contador()
+    return jsonify(pagina_inicial.montar_dados(
+        g.nivel_acesso, url_for, niveis_por_contador=niveis,
+        contadores=lambda nivel: contadores_menu.contadores(nivel, niveis)))
 
 
 @app.route("/mapa-rotas")
@@ -589,7 +621,7 @@ def expedicao():
         # requer_auth). Esconde a opção em vez de deixar o usuário
         # tentar e levar 401/erro do servidor.
         # Nível "atendimento" (28/09) também só consulta e imprime aqui.
-        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") not in ("leitura", "atendimento"),
+        pode_excluir=data_alvo >= date.today() and g.nivel_acesso not in ("leitura", "atendimento"),
     )
 
 
@@ -1154,6 +1186,44 @@ def api_clientes_agenda_decidir():
         logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, "situacao": resultado["situacao"]})
+
+
+@app.route("/acessos")
+@requer_auth
+def acessos():
+    """Acesso personalizado por usuario (21/10, acesso_telas.py): o total
+    escolhe as telas de cada login nominal. So nivel total de verdade --
+    a tela nao esta no catalogo, entao nenhum personalizado chega aqui."""
+    cfg_painel = _carregar_config().get("painel_agentes", {})
+    conn = acesso_telas.conectar()
+    try:
+        usuarios = acesso_telas.listar(cfg_painel, conn)
+    finally:
+        conn.close()
+    grupos = {}
+    for chave, rotulo, grupo, _ in acesso_telas.TELAS:
+        grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
+    return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
+                           eu=session.get("usuario", ""))
+
+
+@app.route("/api/acessos", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos():
+    body = request.get_json(force=True, silent=True) or {}
+    telas = body.get("telas")
+    if telas is not None and not isinstance(telas, list):
+        return jsonify({"erro": "telas inválidas"}), 400
+    cfg_painel = _carregar_config().get("painel_agentes", {})
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.salvar(conn, str(body.get("usuario") or ""), telas, session.get("usuario", ""), cfg_painel)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/pedidos-parados")

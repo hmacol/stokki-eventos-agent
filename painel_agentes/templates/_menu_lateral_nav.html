@@ -15,6 +15,9 @@
   Torre/Planejamento/Expedição e não via o próprio Galpão). Ao criar
   ou mudar o acesso de uma tela, mexa nos dois lugares.
 
+  Acesso personalizado (21/10, acesso_telas.py): quem tem lista de telas
+  vê só os itens cuja `rota` está nela, ignorando `niveis`.
+
   `badge` liga o item ao contador de mesmo nome em contadores_menu.py
   (vem por JS depois do load, nunca na renderização).
 #}
@@ -75,13 +78,15 @@
      'icone': '<circle cx="10" cy="10.5" r="6.7"/><path d="M10 6.8V10.5l3 1.8"/><path d="M7.5 2.3h5"/>'},
     {'rota': 'clientes_agenda', 'rotulo': 'Clientes AGENDA', 'titulo': 'Clientes com agendamento (autorizar AGENDA na BD_CLIENTES)', 'niveis': ('total', 'logistica'), 'badge': none,
      'icone': '<rect x="3.5" y="4.5" width="13" height="12" rx="1.5"/><path d="M3.5 8.5h13M7 3v3M13 3v3"/><path d="M7.5 12.5l1.8 1.8 3.4-3.6"/>'},
+    {'rota': 'acessos', 'rotulo': 'Acessos', 'titulo': 'Telas liberadas pra cada login (acesso personalizado)', 'niveis': ('total',), 'badge': none,
+     'icone': '<circle cx="7.5" cy="7" r="2.6"/><path d="M2.8 16c.7-2.8 2.6-4.3 4.7-4.3s4 1.5 4.7 4.3"/><path d="M13 8.5l1.5 1.5 3-3.2"/>'},
   ]),
 ] %}
 {% set nivel = session.get('nivel_acesso') %}
 <nav aria-label="Telas do painel">
   {% for titulo_grupo, itens in GRUPOS_MENU %}
     {% set visiveis = [] %}
-    {% for item in itens %}{% if nivel in item.niveis %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
+    {% for item in itens %}{% if (telas_liberadas is not none and item.rota in telas_liberadas) or (telas_liberadas is none and nivel in item.niveis) %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
     {# Grupo que ficou sem nenhum item pro nível do usuário não
        desenha nem o cabeçalho (ex: "Sistema" fora do nível total). #}
     {% if visiveis %}

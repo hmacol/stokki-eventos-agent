@@ -196,9 +196,10 @@ def _contar_cadastros_motoristas() -> dict:
 
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
-def contadores(nivel_acesso: str) -> dict:
+def contadores(nivel_acesso: str, niveis_por_contador: dict | None = None) -> dict:
     """{"torre": {"qtd": 3, "criticas": 1}, ...} só com o que esse nível
-    pode abrir. Contador que falhou ou que ainda não tem leitura fica
+    pode abrir (niveis_por_contador troca a tabela padrão: acesso
+    personalizado). Contador que falhou ou que ainda não tem leitura fica
     de fora -- o menu simplesmente não desenha o badge."""
     fontes = {
         "torre": lambda: _caro("torre", _contar_torre, ja_fresco=_torre_ja_coletada),
@@ -210,7 +211,7 @@ def contadores(nivel_acesso: str) -> dict:
     }
     resultado = {}
     for chave, fonte in fontes.items():
-        if nivel_acesso not in NIVEIS_POR_CONTADOR[chave]:
+        if nivel_acesso not in (niveis_por_contador or NIVEIS_POR_CONTADOR).get(chave, ()):
             continue
         try:
             valor = fonte()

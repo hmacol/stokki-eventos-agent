@@ -95,6 +95,7 @@
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
+ Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -216,6 +217,12 @@
                 só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
                 Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
                 Canhotos, Clientes AGENDA e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
+                Acesso personalizado (21/10): tela /acessos (só total) escolhe
+                as telas de um login nominal; tabela painel_acesso_telas
+                (dados.db) vence o nivel do config, poder de total nas telas
+                liberadas, muda na hora. Catálogo tela -> caminhos em
+                painel_agentes/acesso_telas.py: ROTA NOVA PRECISA ENTRAR LÁ
+                (test_acesso_telas falha se não entrar).
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
                 Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.
@@ -791,6 +798,8 @@
                               pedidos por lá; lê clientes_portal/portal_envios;
                               recarrega a cada 2h; total/operador/leitura/
                               atendimento/logistica)
+   /acessos                   acessos.html + acesso_telas.py (só total: telas
+                              de cada login nominal, nível personalizado)
    /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
