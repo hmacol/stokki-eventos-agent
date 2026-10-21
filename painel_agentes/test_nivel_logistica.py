@@ -25,7 +25,7 @@ _spec.loader.exec_module(painel_agentes)
 
 MENU_ESPERADO = {
     "Início", "Torre de Controle", "Canhotos pendentes", "Pedidos Parados", "Tratativas", "Consulta",
-    "Planejamento", "Atendimento", "Motoristas", "Pedágios", "Canhotos", "Clientes AGENDA",
+    "Planejamento", "Atendimento", "Motoristas", "Pedágios", "Canhotos", "Clientes AGENDA", "Adesão ao portal",
 }
 
 
@@ -64,7 +64,7 @@ class TestNivelLogistica(unittest.TestCase):
 
     def test_telas_da_lista_abrem(self):
         for url in ("/canhotos-pendentes", "/historico-tratativas", "/consulta", "/clientes-agenda",
-                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/canhotos"):
+                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/canhotos", "/adesao-portal"):
             self.assertEqual(self.cliente.get(url).status_code, 200, url)
 
 

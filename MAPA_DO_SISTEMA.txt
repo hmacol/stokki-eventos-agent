@@ -215,7 +215,7 @@
                 logistica (19/10, só via usuarios_extras) = poderes do operador
                 só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
                 Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
-                Canhotos e Clientes AGENDA (+ Início). Sem Mapa/Vigia/Expedição/WMS.
+                Canhotos, Clientes AGENDA e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
                 Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.
@@ -789,7 +789,8 @@
    /adesao-portal             adesao_portal.html + adesao_portal.py (quem já
                               entrou no portal do cliente e quem importa
                               pedidos por lá; lê clientes_portal/portal_envios;
-                              recarrega a cada 2h; total/operador/leitura/atendimento)
+                              recarrega a cada 2h; total/operador/leitura/
+                              atendimento/logistica)
    /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html

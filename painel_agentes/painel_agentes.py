@@ -1126,7 +1126,7 @@ def clientes_agenda():
 
 
 @app.route("/adesao-portal")
-@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def adesao_portal():
     """Quem já entrou no portal do cliente e quem importa pedidos por lá
     (21/10). Lê o banco a cada abertura; a página se recarrega a cada 2h."""
