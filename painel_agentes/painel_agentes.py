@@ -1125,6 +1125,17 @@ def clientes_agenda():
     return render_template("clientes_agenda.html", pendentes=pendentes, decididos=decididos, erro=erro)
 
 
+@app.route("/adesao-portal")
+@requer_auth(niveis=("total", "operador", "leitura", "atendimento"))
+def adesao_portal():
+    """Quem já entrou no portal do cliente e quem importa pedidos por lá
+    (21/10). Lê o banco a cada abertura; a página se recarrega a cada 2h."""
+    import adesao_portal as _adesao
+    linhas = _adesao.listar()
+    return render_template("adesao_portal.html", linhas=linhas, resumo=_adesao.resumo(linhas),
+                           dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
+
+
 @app.route("/api/clientes-agenda/decidir", methods=["POST"])
 @requer_auth(niveis=("total", "logistica"))
 @exige_mesma_origem

@@ -94,6 +94,7 @@
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
+ Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -785,7 +786,11 @@
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
-   /pedidos-parados           pedidos_parados_triagem.html
+   /adesao-portal             adesao_portal.html + adesao_portal.py (quem já
+                              entrou no portal do cliente e quem importa
+                              pedidos por lá; lê clientes_portal/portal_envios;
+                              recarrega a cada 2h; total/operador/leitura/atendimento)
+   /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
