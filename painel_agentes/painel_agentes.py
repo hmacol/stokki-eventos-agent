@@ -400,9 +400,10 @@ def login():
         senha = request.form.get("senha", "")
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
         telas = acesso_telas.telas_do_usuario(usuario, cfg_painel) if nivel else None
+        paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
         if nivel is None:
             erro = "Usuário ou senha incorretos."
-        elif telas == []:
+        elif telas is not None and not paginas:
             erro = "Seu usuário não tem nenhuma tela liberada. Fale com o Hugo."
         else:
             session.clear()
@@ -414,8 +415,8 @@ def login():
             # cair nele levaria direto a um 403 pós-login.
             pagina_padrao = {"expedicao": url_for("expedicao"),
                              "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
-            if telas:
-                pagina_padrao = url_for(telas[0])
+            if paginas:
+                pagina_padrao = url_for(paginas[0])
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -567,9 +568,13 @@ def inicio():
 @requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_inicio_dados():
     niveis = _niveis_por_contador()
-    return jsonify(pagina_inicial.montar_dados(
+    dados = pagina_inicial.montar_dados(
         g.nivel_acesso, url_for, niveis_por_contador=niveis,
-        contadores=lambda nivel: contadores_menu.contadores(nivel, niveis)))
+        contadores=lambda nivel: contadores_menu.contadores(nivel, niveis))
+    telas = g.get("telas_liberadas")
+    if telas is not None and "aprovar_embarcadores" not in telas:
+        dados.pop("cadastros_embarcador", None)
+    return jsonify(dados)
 
 
 @app.route("/mapa-rotas")
@@ -1201,7 +1206,7 @@ def acessos():
     finally:
         conn.close()
     grupos = {}
-    for chave, rotulo, grupo, _ in acesso_telas.TELAS:
+    for chave, rotulo, grupo, _ in acesso_telas.TELAS + acesso_telas.PERMISSOES:
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
                            eu=session.get("usuario", ""))

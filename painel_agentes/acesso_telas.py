@@ -27,7 +27,7 @@ DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 
 # (chave = endpoint da pagina, rotulo, grupo do menu, caminhos)
 TELAS = [
-    ("inicio", "Início", "", [r"^/inicio$", r"^/api/inicio/", r"^/api/cadastro-embarcador/"]),
+    ("inicio", "Início", "", [r"^/inicio$", r"^/api/inicio/"]),
     ("torre", "Torre de Controle", "Acompanhar", [r"^/torre(/|$)", r"^/api/torre/"]),
     ("vigia_pedidos", "Vigia", "Acompanhar", [r"^/vigia$", r"^/api/batimento/"]),
     ("canhotos_pendentes", "Canhotos pendentes", "Acompanhar", [r"^/canhotos-pendentes$", r"^/api/canhotos-pendentes$"]),
@@ -55,8 +55,16 @@ TELAS = [
     ("historico", "Execuções", "Sistema", [r"^/historico$", r"^/execucao/"]),
     ("clientes_agenda", "Clientes AGENDA", "Sistema", [r"^/clientes-agenda$", r"^/api/clientes-agenda/"]),
 ]
-CHAVES = [t[0] for t in TELAS]
-_PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos in TELAS}
+PAGINAS = [t[0] for t in TELAS]
+
+# Acoes so do total que moram dentro de uma tela comum: liberar a tela nao
+# libera a acao (revisao de seguranca 21/10 -- liberar o Inicio dava
+# aprovar embarcador sem ninguem perceber). Sem pagina propria.
+PERMISSOES = [
+    ("aprovar_embarcadores", "Aprovar embarcadores", "Ações", [r"^/api/cadastro-embarcador/"]),
+]
+CHAVES = PAGINAS + [p[0] for p in PERMISSOES]
+_PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos in TELAS + PERMISSOES}
 
 # Usadas por qualquer tela (badges do menu).
 CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$")]

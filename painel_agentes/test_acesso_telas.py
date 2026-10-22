@@ -45,8 +45,12 @@ class TestCatalogo(unittest.TestCase):
 
     def test_chave_de_cada_tela_e_uma_pagina(self):
         with painel_agentes.app.test_request_context():
-            for chave in acesso_telas.CHAVES:
+            for chave in acesso_telas.PAGINAS:
                 painel_agentes.url_for(chave)
+
+    def test_inicio_nao_aprova_embarcador_sem_a_permissao(self):
+        self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
 
     def test_galpao_nao_abre_estoque_nem_expedicao_abre_consulta(self):
         self.assertFalse(acesso_telas.caminho_liberado("/wms/estoque", ["wms"]))
@@ -107,6 +111,20 @@ class TestAcessoPersonalizado(unittest.TestCase):
         self.assertEqual(cliente.get("/").status_code, 200)
         self._gravar("ana", None)                                 # volta ao nivel leitura do config
         self.assertEqual(cliente.get("/").status_code, 403)
+
+    def test_inicio_esconde_cadastros_sem_a_permissao(self):
+        dados = {"pendencias": [], "operacao": None, "cadastros_embarcador": [{"cnpj": "1"}]}
+        with mock.patch.object(painel_agentes.pagina_inicial, "montar_dados", side_effect=lambda *a, **k: dict(dados)):
+            self._gravar("ana", ["inicio"])
+            cliente, _ = self._logar("ana", "s_ana")
+            self.assertNotIn("cadastros_embarcador", cliente.get("/api/inicio/dados").get_json())
+            self._gravar("ana", ["inicio", "aprovar_embarcadores"])
+            self.assertIn("cadastros_embarcador", cliente.get("/api/inicio/dados").get_json())
+
+    def test_so_permissao_sem_tela_nao_entra(self):
+        self._gravar("ana", ["aprovar_embarcadores"])
+        _, r = self._logar("ana", "s_ana")
+        self.assertIn("nenhuma tela liberada", r.get_data(as_text=True))
 
     def test_lista_vazia_nao_entra(self):
         self._gravar("ana", [])
