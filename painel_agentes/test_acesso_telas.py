@@ -255,6 +255,7 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
 
     def test_desativar_derruba_sessao_e_reativar_devolve(self):
         ana, _ = self._logar("ana", "s_ana")
+        ana_parada, _ = self._logar("ana", "s_ana")                # sessao que so volta depois de reativar
         self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
         cliente, hdr = self._chefe()
         r = cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": False}, headers=hdr)
@@ -266,6 +267,7 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         self.assertEqual(cliente.post("/api/acessos/novo", json={"usuario": "ana", "nivel": "leitura", "senha": "123456"},
                                       headers=hdr).status_code, 400)
         cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": True}, headers=hdr)
+        self.assertTrue(ana_parada.get("/historico-tratativas").headers["Location"].startswith("/login"))
         _, r = self._logar("ana", "s_ana")
         self.assertEqual(r.status_code, 302)
         self.assertEqual(cliente.post("/api/acessos/ativo", json={"usuario": "chefe", "ativo": False},
@@ -283,6 +285,14 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         painel_agentes._login_falhas.clear()
         _, r = self._logar("ana", "s_ana")
         self.assertEqual(r.status_code, 302)
+
+    def test_login_bloqueia_depois_de_30_erros_de_ips_diferentes(self):
+        for i in range(30):
+            c = painel_agentes.app.test_client()
+            c.post("/login", data={"usuario": "ana", "senha": "errada"}, environ_base={"REMOTE_ADDR": f"10.0.0.{i}"})
+        c = painel_agentes.app.test_client()
+        r = c.post("/login", data={"usuario": "ana", "senha": "s_ana"}, environ_base={"REMOTE_ADDR": "10.0.1.1"})
+        self.assertEqual(r.status_code, 429)
 
     def test_tabela_antiga_ganha_versao_senha(self):
         conn = acesso_telas.conectar()

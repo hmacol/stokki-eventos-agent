@@ -244,10 +244,11 @@ def editar(conn, usuario: str, nome: str, nivel: str, por: str) -> None:
 
 def mudar_ativo(conn, usuario: str, ativo: bool, por: str) -> None:
     """Desativado nao entra e a sessao aberta cai no proximo clique
-    (requer_auth). Nao apaga: o login segue no historico e nao e reusado."""
+    (requer_auth). Nao apaga: o login segue no historico e nao e reusado.
+    Desativar sobe a versao_senha: reativar depois nao ressuscita sessao velha."""
     _exigir_outro(conn, usuario, por)
-    conn.execute("UPDATE painel_usuarios SET ativo = ?, atualizado_por = ?, atualizado_em = ? WHERE usuario = ?",
-                 (1 if ativo else 0, por, _agora(), usuario))
+    conn.execute("UPDATE painel_usuarios SET ativo = ?, versao_senha = versao_senha + ?, atualizado_por = ?, "
+                 "atualizado_em = ? WHERE usuario = ?", (1 if ativo else 0, 0 if ativo else 1, por, _agora(), usuario))
     conn.commit()
 
 

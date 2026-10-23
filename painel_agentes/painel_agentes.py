@@ -202,32 +202,44 @@ def _logins_fixos(cfg_painel: dict) -> set:
 # Limite de tentativas no /login (23/10): 5 senhas erradas do mesmo login
 # vindas do mesmo IP bloqueiam esse par por 15 min. Por login+IP, e nao so
 # por IP, pra um erro de digitacao no escritorio (IP unico) nao travar a
-# equipe toda. Em memoria: o painel roda num processo so (waitress); um
-# restart zera, o que e aceitavel.
+# equipe toda. Mais um teto de 30 erros por login vindo de qualquer IP (quem
+# espalha a tentativa por muitos IPs). O IP e o que o Caddy acrescenta
+# (ProxyFix x_for=1; waitress so escuta em 127.0.0.1). Em memoria: o painel
+# roda num processo so (waitress); um restart zera, o que e aceitavel.
 _LOGIN_MAX_FALHAS = 5
+_LOGIN_MAX_FALHAS_TODOS_IPS = 30
 _LOGIN_JANELA = timedelta(minutes=15)
 _login_falhas: dict = {}
 _login_falhas_lock = threading.Lock()
 
 
-def _login_bloqueado(chave) -> bool:
+def _chaves_login(ip, usuario: str):
+    usuario = usuario.strip().lower()
+    return ((ip, usuario), _LOGIN_MAX_FALHAS), (("*", usuario), _LOGIN_MAX_FALHAS_TODOS_IPS)
+
+
+def _login_bloqueado(chaves) -> bool:
     agora = datetime.now()
+    bloqueado = False
     with _login_falhas_lock:
-        recentes = [t for t in _login_falhas.get(chave, []) if agora - t < _LOGIN_JANELA]
-        if recentes:
-            _login_falhas[chave] = recentes
-        else:
-            _login_falhas.pop(chave, None)
-        return len(recentes) >= _LOGIN_MAX_FALHAS
+        for chave, maximo in chaves:
+            recentes = [t for t in _login_falhas.get(chave, []) if agora - t < _LOGIN_JANELA]
+            if recentes:
+                _login_falhas[chave] = recentes
+            else:
+                _login_falhas.pop(chave, None)
+            bloqueado = bloqueado or len(recentes) >= maximo
+    return bloqueado
 
 
-def _registrar_falha_login(chave) -> None:
+def _registrar_falha_login(chaves) -> None:
     agora = datetime.now()
     with _login_falhas_lock:
         if len(_login_falhas) > 5000:   # muitos logins chutados: limpa os vencidos
             for k in [k for k, ts in _login_falhas.items() if agora - ts[-1] >= _LOGIN_JANELA]:
                 del _login_falhas[k]
-        _login_falhas.setdefault(chave, []).append(agora)
+        for chave, _ in chaves:
+            _login_falhas.setdefault(chave, []).append(agora)
 
 
 def _sessao_na_versao(conta: dict) -> bool:
@@ -466,7 +478,7 @@ def login():
         cfg_painel = config.get("painel_agentes", {})
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
-        chave_limite = (request.remote_addr, usuario.strip().lower())
+        chave_limite = _chaves_login(request.remote_addr, usuario)
         if _login_bloqueado(chave_limite):
             return render_template("login.html", proximo=request.form.get("proximo", ""),
                                    erro="Muitas tentativas erradas. Espere 15 minutos e tente de novo."), 429
