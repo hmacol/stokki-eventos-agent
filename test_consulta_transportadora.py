@@ -134,3 +134,111 @@ class ConsultaTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AvisoTest(unittest.TestCase):
+    CNPJ = "11111111000191"
+
+    def setUp(self):
+        from unittest.mock import patch
+        self._dir = tempfile.TemporaryDirectory()
+        self.db = Path(self._dir.name) / "t.db"
+        self.conn = ct.conectar_consultas(self.db)
+        self.conn.execute("CREATE TABLE interno (stkkc_id INTEGER, cnpj_embarcador TEXT, email TEXT, "
+                          "notificar_email INTEGER, apelido TEXT, nome_remetente TEXT)")
+        self.conn.execute("INSERT INTO interno VALUES (5, ?, 'a@x.com; b@x.com', 1, 'Fruta', 'Fruta Fina')",
+                          (self.CNPJ,))
+        self.conn.commit()
+        self.config = {"consulta_transportadora": {"ativo": True, "forcar_destino_email": "",
+                                                   "forcar_destino_whatsapp": ""},
+                       "portal_cliente": {"secret_key": "s3", "url_base": "https://app.test/cliente/"},
+                       "email": {"remetente": "x@y"}}
+        self.email = patch.object(ct.email_utils, "enviar_email", return_value=True).start()
+        self.zap = patch.object(ct.notificar_whatsapp, "avisar_cliente_transportadora",
+                                return_value="enviado").start()
+        self.numero = patch.object(ct.preferencias_notificacao, "whatsapp_do_embarcador",
+                                   return_value="5511999990000").start()
+        self.addCleanup(patch.stopall)
+        self.addCleanup(self._dir.cleanup)
+        self.addCleanup(self.conn.close)
+        r = ct.registrar_desconhecida(self.conn, "ACME <LTDA>", "", "PS-1", self.CNPJ, 5,
+                                      resumo={"destinatario": "Maria", "cidade": "Embu", "uf": "SP"})
+        self.consulta = r["consulta"]
+
+    def test_resumo_volta_decodificado(self):
+        p = ct.pedidos_parados(self.conn, self.consulta["transportadora_id"])[0]
+        self.assertEqual(p["resumo"]["cidade"], "Embu")
+
+    def test_coluna_resumo_adicionada_em_banco_antigo(self):
+        db = Path(self._dir.name) / "velho.db"
+        c = ct.tc.conectar(db)
+        c.executescript("CREATE TABLE transportadora_pedidos_parados (pedido TEXT PRIMARY KEY, "
+                        "transportadora_id INTEGER, embarcador_cnpj TEXT, stkkc_id INTEGER, desde TEXT, liberado_em TEXT);")
+        c.close()
+        c = ct.conectar_consultas(db)
+        cols = [r[1] for r in c.execute("PRAGMA table_info(transportadora_pedidos_parados)")]
+        c.close()
+        self.assertIn("resumo", cols)
+
+    def test_texto_consulta_cabe_em_200(self):
+        from notificar_whatsapp import texto_consulta_transportadora, MAX_MENSAGEM
+        link = ct.link(self.config, 1)
+        for lemb in (False, True):
+            t = texto_consulta_transportadora("T" * 80, 12, link, lemb)
+            self.assertLessEqual(len(t), MAX_MENSAGEM)
+            self.assertIn(link, t)
+
+    def test_link(self):
+        l = ct.link(self.config, 7)
+        self.assertTrue(l.startswith("https://app.test/cliente/transportadora/"))
+        self.assertEqual(ct.ler_token("s3", l.rsplit("/", 1)[1], 30), 7)
+
+    def test_enviar_aviso_usa_email_do_interno(self):
+        r = ct.enviar_aviso(self.conn, self.consulta, self.config, False, False)
+        self.assertTrue(r["email"])
+        self.assertEqual(r["whatsapp"], "enviado")
+        self.assertFalse(r["sem_contato"])
+        args = self.email.call_args[0]
+        self.assertEqual(args[0], ["a@x.com", "b@x.com"])
+        self.assertIn("ACME", args[1])
+        self.assertIn("&lt;LTDA&gt;", args[2])
+        self.assertIn("Maria", args[2])
+        c = self.conn.execute("SELECT enviado_em FROM transportadora_consultas").fetchone()[0]
+        self.assertTrue(c)
+
+    def test_enviar_aviso_respeita_forcar_destino_email(self):
+        self.config["consulta_transportadora"]["forcar_destino_email"] = "hugo@x.com"
+        ct.enviar_aviso(self.conn, self.consulta, self.config, False, False)
+        self.assertEqual(self.email.call_args[0][0], ["hugo@x.com"])
+
+    def test_enviar_aviso_sem_contato(self):
+        self.conn.execute("UPDATE interno SET email=''")
+        self.numero.return_value = None
+        r = ct.enviar_aviso(self.conn, self.consulta, self.config, False, False)
+        self.assertTrue(r["sem_contato"])
+        self.email.assert_not_called()
+        self.zap.assert_not_called()
+        self.assertIsNone(self.conn.execute("SELECT enviado_em FROM transportadora_consultas").fetchone()[0])
+
+    def test_enviar_aviso_marca_lembrete(self):
+        ct.enviar_aviso(self.conn, self.consulta, self.config, True, False)
+        row = self.conn.execute("SELECT enviado_em, ultimo_lembrete_em FROM transportadora_consultas").fetchone()
+        self.assertIsNone(row[0])
+        self.assertTrue(row[1])
+
+    def test_desligado_nao_envia(self):
+        self.config["consulta_transportadora"]["ativo"] = False
+        ct.enviar_aviso(self.conn, self.consulta, self.config, False, False)
+        self.email.assert_not_called()
+        self.zap.assert_not_called()
+
+    def test_modo_teste_nao_envia_nem_marca(self):
+        ct.enviar_aviso(self.conn, self.consulta, self.config, False, True)
+        self.email.assert_not_called()
+        self.assertIsNone(self.conn.execute("SELECT enviado_em FROM transportadora_consultas").fetchone()[0])
+
+    def test_embarcador_stkkc_busca_por_id(self):
+        r = ct.registrar_desconhecida(self.conn, "Outra", "", "PS-9", "stkkc:5", 5)
+        ct.enviar_aviso(self.conn, r["consulta"], self.config, False, False)
+        self.assertEqual(self.email.call_args[0][0], ["a@x.com", "b@x.com"])
+        self.numero.assert_not_called()

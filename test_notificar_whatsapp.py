@@ -951,3 +951,24 @@ class TestAvisarClienteSemResposta(_ComBanco):
         self.assertTrue(nw.clientes_ligado(_config_clientes()))
         self.assertFalse(nw.clientes_ligado(_config()))
         self.assertFalse(nw.clientes_ligado({}))
+
+
+class TestAvisarClienteTransportadoraTravaPropria(_ComBanco):
+    def setUp(self):
+        super().setUp()
+        patch.object(nw.integracao_openwa, "numero_existe", return_value=True).start()
+        self.addCleanup(patch.stopall)
+        self.config = _config_clientes(clientes={"forcar_destino": "+55 11 98888-7777"})
+
+    def avisar(self):
+        return nw.avisar_cliente_transportadora("49874051000131", TEL, "texto", "consulta_transportadora:1:d",
+                                                self.config, conn=self.conn, agora=AGORA, dormir=self.dormir)
+
+    def test_sem_chave_propria_vale_a_trava_dos_clientes(self):
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
+
+    def test_chave_propria_vazia_envia_pro_numero_real(self):
+        self.config["consulta_transportadora"] = {"forcar_destino_whatsapp": ""}
+        self.assertEqual(self.avisar(), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], f"{TEL}@c.us")

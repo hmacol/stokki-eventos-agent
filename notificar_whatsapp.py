@@ -361,6 +361,21 @@ def texto_cliente_sem_resposta(chamado_id: int, link: str) -> str:
             f"Responda pelo portal: {link}")
 
 
+def texto_consulta_transportadora(transportadora: str, n_pedidos: int, link: str, lembrete: bool = False) -> str:
+    """Pro embarcador: pedidos parados ate informar como a transportadora
+    atende (consulta_transportadora.py). Cabe em MAX_MENSAGEM sem cortar o
+    link: o nome da transportadora encolhe primeiro."""
+    pedidos = "1 pedido seu segue parado" if n_pedidos == 1 else f"{n_pedidos} pedidos seus seguem parados"
+    inicio = "Lembrete Fresh Log: " if lembrete else "Fresh Log: "
+    fim = f"Responda aqui: {link}"
+    for limite in (40, 30, 20, 10, 0):
+        nome = _nome_simples(transportadora, limite) if limite else ""
+        texto = f"{inicio}{pedidos} aguardando a transportadora{' ' + nome if nome else ''}.\n{fim}"
+        if len(texto) <= MAX_MENSAGEM:
+            break
+    return texto
+
+
 def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None) -> str:
     """Pro embarcador, ate MAX_MENSAGEM. Encurta tirando primeiro a regiao e
     os dias, depois o valor -- codigo, data e "envio dedicado" ficam sempre."""
@@ -822,6 +837,41 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_CLIENTE, "cadastro", texto, assinatura, modo_teste=modo_teste,
                          grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatura: str, config: dict,
+                                  modo_teste: bool = False, **kw) -> str:
+    """Aviso ao embarcador de transportadora desconhecida
+    (consulta_transportadora.py): link pra informar como ela atende. Quem
+    chama garante uma tentativa por consulta/dia. Trava propria em
+    consulta_transportadora.forcar_destino_whatsapp (Hugo, 23/10: envio real
+    desde o inicio); chave presente vale mesmo vazia, ausente vale
+    clientes.forcar_destino."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not clientes_ligado(config) or not telefone:
+            return "desligado"
+        cfg_ct = (config or {}).get("consulta_transportadora") or {}
+        forcar = (cfg_ct["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_ct
+                  else _cfg_clientes(config).get("forcar_destino"))
+        destino = re.sub(r"\D", "", str(forcar or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (transportadora {cnpj}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado (transportadora {cnpj}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_CLIENTE, "consulta_transportadora", texto, assinatura,
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
