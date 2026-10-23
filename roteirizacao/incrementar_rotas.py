@@ -109,6 +109,7 @@ from notificar_execucao_agente import notificar_execucao
 from roteirizacao_dados import (
     obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
     macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
+    hora_saida_de_start_at,
 )
 from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
@@ -711,6 +712,9 @@ def main(modo_teste: bool = False):
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
                 "macro": macro_rota,
+                # Saída real da rota (rota da tarde sai ~14h, não 06h): a
+                # janela do pedido novo é avaliada a partir dela.
+                "hora_saida": hora_saida_de_start_at(r.get("start_at")),
             })
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
@@ -746,7 +750,7 @@ def main(modo_teste: bool = False):
             if not tem_janela(candidato):
                 return True
             try:
-                return janela_viavel(candidato, gmaps_key)
+                return janela_viavel(candidato, gmaps_key, hora_saida=rota_info.get("hora_saida"))
             except Exception as e:
                 logger.warning(f"  Falha ao checar janela na rota '{rota_info['nome']}' (não bloqueia): {e}")
                 return True

@@ -296,6 +296,23 @@ class RotaTardeTest(unittest.TestCase):
         self.assertEqual(len(manha[0]), 13)
 
 
+class IncrementoTardeTest(unittest.TestCase):
+    def setUp(self):
+        rd.definir_coords_base(*BASE)
+
+    def test_incremento_tardio_cabe_na_tarde(self):
+        # _cabe_na_janela (closure de main) so repassa hora_saida da rota a janela_viavel:
+        # testa-se por janela_viavel. Saida 14:15 = rota da tarde; None = 06:00 (manha).
+        outro = _jan("outro", -23.5780, -46.6440, "14:30", "18:00")
+        sub = [_wilian(), outro]
+        self.assertTrue(rd.janela_viavel(sub, coords_base=BASE, hora_saida=14.25))
+        self.assertFalse(rd.janela_viavel(sub, coords_base=BASE, hora_saida=None))
+
+    def test_rota_info_hora_saida_do_start_at(self):
+        # start_at da Vuupt vem em UTC sem fuso: 17:15 UTC = 14:15 BRT
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-23 17:15:00"), 14.25)
+
+
 class PlanejarSublotesTardeTest(unittest.TestCase):
     def setUp(self):
         rd.definir_coords_base(*BASE)
