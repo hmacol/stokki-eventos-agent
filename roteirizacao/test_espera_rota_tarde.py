@@ -12,6 +12,7 @@ Rodar (da raiz):
 """
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -77,6 +78,46 @@ class MesmoEnderecoSeguidoTest(unittest.TestCase):
         sem, a2 = {"code": "S"}, _p("A2", -23.5, -46.6)
         resolver = lambda s: (s["latitude"], s["longitude"]) if "latitude" in s else None
         self.assertEqual(rd._juntar_mesmo_endereco([a, b, sem, a2], resolver), [a, a2, sem, b])
+
+
+class PesoEsperaTest(unittest.TestCase):
+    def setUp(self):
+        rd.definir_coords_base(*BASE)
+
+    def test_peso_espera_nao_gera_ziguezague(self):
+        ordem = rd.ordenar_com_janelas(paradas_rota_13(), *BASE)
+        km, anterior = 0.0, BASE
+        for p in ordem:
+            c = (p["latitude"], p["longitude"])
+            km += rd._distancia_km(anterior[0], anterior[1], c[0], c[1]) * rd.FATOR_ESTRADA
+            anterior = c
+        self.assertLess(km, 50, km)
+
+    def test_espera_tardia_conta_so_janela_tardia(self):
+        perto = {"code": "A", "latitude": -23.4935, "longitude": -46.6645,
+                 "_janela_inicio": "08:00", "_janela_fim": "18:00", "_janela_fonte": "teste"}
+        tarde = {"code": "B", "latitude": -23.4940, "longitude": -46.6650,
+                 "_janela_inicio": "15:00", "_janela_fim": "23:59", "_janela_fonte": "teste"}
+        self.assertTrue(rd.eh_janela_tardia(tarde))
+        self.assertFalse(rd.eh_janela_tardia(perto))
+        sim = rd.simular_horarios([perto, tarde], coords_fn=lambda s: (s["latitude"], s["longitude"]),
+                                  coords_base=BASE, hora_saida=6.0)
+        self.assertGreater(sim["espera_tardia_h"], 0)
+        self.assertLess(sim["espera_tardia_h"], sim["espera_h"])
+        self.assertAlmostEqual(sim["espera_tardia_h"], 15.0 - sim["chegadas"][1], places=6)
+
+    def test_hora_saida_desloca_simulacao(self):
+        p = {"code": "A", "latitude": -23.4935, "longitude": -46.6645}
+        sim = rd.simular_horarios([p], coords_fn=lambda s: (s["latitude"], s["longitude"]),
+                                  coords_base=BASE, hora_saida=13.0)
+        self.assertGreater(sim["chegadas"][0], 13.0)
+
+    def test_start_at_ida_e_volta(self):
+        self.assertEqual(rd.start_at_na_hora(date(2026, 10, 23), 13.25), "2026-10-23T16:15:00Z")
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-23T16:15:00Z"), 13.25)
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-23T13:15:00-03:00"), 13.25)
+        self.assertIsNone(rd.hora_saida_de_start_at("lixo"))
+        self.assertEqual(rd.start_at_rota(date(2026, 10, 23)), "2026-10-23T09:00:00Z")
 
 
 if __name__ == "__main__":
