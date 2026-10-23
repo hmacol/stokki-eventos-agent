@@ -228,6 +228,35 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         self.assertEqual(cliente.post("/api/acessos/senha", json={"usuario": "chefe", "senha": "nova123"},
                                       headers=hdr).status_code, 400)
 
+    def test_sessao_aberta_antes_de_redefinir_cai_e_nao_escolhe_a_senha(self):
+        ana_velha, _ = self._logar("ana", "s_ana")
+        self.assertEqual(ana_velha.get("/historico-tratativas").status_code, 200)
+        cliente, hdr = self._chefe()
+        cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"}, headers=hdr)
+        r = ana_velha.post("/trocar-senha", data={"nova": "invasor1", "repetir": "invasor1"}, headers=hdr)
+        self.assertTrue(r.headers["Location"].endswith("/login"))
+        self.assertTrue(ana_velha.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        self.assertIsNone(painel_agentes._nivel_das_credenciais("ana", "invasor1", self.cfg_painel))
+        ana, _ = self._logar("ana", "nova123")
+        self.assertEqual(ana.post("/trocar-senha", data={"nova": "minha99", "repetir": "minha99"},
+                                  headers=hdr).status_code, 302)
+        self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
+
+    def test_tabela_antiga_ganha_versao_senha(self):
+        conn = acesso_telas.conectar()
+        conn.execute("DROP TABLE painel_usuarios")
+        conn.execute("CREATE TABLE painel_usuarios (usuario TEXT PRIMARY KEY, nome TEXT NOT NULL DEFAULT '', "
+                     "senha_hash TEXT NOT NULL, nivel TEXT NOT NULL, trocar_senha INTEGER NOT NULL DEFAULT 0, "
+                     "criado_por TEXT, criado_em TEXT NOT NULL, atualizado_por TEXT, atualizado_em TEXT)")
+        conn.commit()
+        conn.close()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+            self.assertEqual(acesso_telas.conta("ana", conn)["versao_senha"], 0)
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

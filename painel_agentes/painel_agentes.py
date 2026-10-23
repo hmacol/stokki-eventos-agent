@@ -199,6 +199,14 @@ def _logins_fixos(cfg_painel: dict) -> set:
     return {cfg_painel.get(c) for c in chaves if cfg_painel.get(c)}
 
 
+def _sessao_na_versao(conta: dict) -> bool:
+    """Senha redefinida ou trocada sobe a versao_senha da conta: sessao
+    aberta com a senha anterior deixa de valer (sem isso, uma sessao velha
+    escolheria a senha nova em /trocar-senha). Sessao de antes da coluna
+    existir conta como versao 0."""
+    return session.get("versao_senha", 0) == conta["versao_senha"]
+
+
 def _pagina_inicial(nivel: str, telas) -> str:
     # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
     # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
@@ -252,6 +260,11 @@ def requer_auth(f=None, *, niveis=("total",)):
             # provisoria trava tudo ate a pessoa trocar.
             conta = acesso_telas.conta(session.get("usuario"))
             if conta:
+                if not _sessao_na_versao(conta):
+                    session.clear()
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Sua senha mudou -- faça login de novo."}), 401
+                    return redirect(url_for("login"))
                 if conta["trocar_senha"]:
                     if request.path.startswith(f"{request.script_root}/api/"):
                         return jsonify({"erro": "Troque a senha provisória antes de continuar."}), 403
@@ -435,6 +448,8 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
+            if conta:
+                session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
                 return redirect(url_for("trocar_senha"))
             pagina_padrao = _pagina_inicial(nivel, telas)
@@ -454,7 +469,8 @@ def trocar_senha():
     /acessos cadastra ou redefine com senha provisoria e requer_auth manda
     pra ca ate a pessoa escolher a dela."""
     conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
-    if not conta:
+    if not conta or not _sessao_na_versao(conta):
+        session.clear()
         return redirect(url_for("login"))
     if not conta["trocar_senha"]:
         return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
@@ -469,7 +485,7 @@ def trocar_senha():
         else:
             conn = acesso_telas.conectar()
             try:
-                acesso_telas.trocar_senha(conn, conta["usuario"], nova)
+                session["versao_senha"] = acesso_telas.trocar_senha(conn, conta["usuario"], nova)
                 return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
             except ValueError as e:
                 erro = str(e)
