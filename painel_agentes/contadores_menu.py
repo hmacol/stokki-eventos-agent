@@ -61,7 +61,7 @@ NIVEIS_POR_CONTADOR = {
     "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
     "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento"),
     "pedagios": ("total", "operador", "logistica", "leitura"),
-    "canhotos": ("total", "operador", "logistica", "leitura"),
+    "canhotos": ("total", "operador", "logistica", "leitura", "atendimento"),
     "atendimento": ("total", "operador", "logistica", "atendimento"),
     "motoristas": ("total",),   # auto-cadastros do app esperando aprovação (08/10)
 }

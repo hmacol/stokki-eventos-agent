@@ -715,7 +715,7 @@ def _parse_data_param(padrao_amanha: bool = False) -> date:
 
 
 @app.route("/planejamento")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def planejamento():
     data_alvo = _parse_data_param()
     try:
@@ -738,7 +738,7 @@ def planejamento():
 
 
 @app.route("/planejamento/mobile")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def planejamento_mobile():
     """Antiga versão mobile "lite" de /planejamento (17/08, só leitura +
     ações básicas, sem mapa). Desde 04/09 a própria tela /planejamento
@@ -765,7 +765,7 @@ AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS = tuple(
 
 
 @app.route("/api/planejamento/agentes/etapas")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_planejamento_agentes_etapas():
     """Estado da barra de agentes do planejamento (leitura barata no
     SQLite) -- mesmo padrão de /api/torre/etapas, só que restrito aos
@@ -1143,7 +1143,7 @@ def api_canhotos_pendentes():
 
 
 @app.route("/clientes-agenda")
-@requer_auth(niveis=("total", "logistica"))
+@requer_auth(niveis=("total", "logistica", "atendimento"))
 def clientes_agenda():
     """Fila de destinatários com data de agendamento informada esperando
     o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
@@ -1159,7 +1159,9 @@ def clientes_agenda():
         linhas, erro = [], str(e)
     pendentes = [l for l in linhas if l["situacao"] == marcar_clientes_agenda.PENDENTE]
     decididos = [l for l in linhas if l["situacao"] != marcar_clientes_agenda.PENDENTE][:50]
-    return render_template("clientes_agenda.html", pendentes=pendentes, decididos=decididos, erro=erro)
+    # Atendimento (21/10, Hugo) so ve a fila: decidir continua total/logistica.
+    return render_template("clientes_agenda.html", pendentes=pendentes, decididos=decididos, erro=erro,
+                           pode_decidir=g.nivel_acesso in ("total", "logistica"))
 
 
 @app.route("/adesao-portal")
@@ -1651,7 +1653,7 @@ def api_torre_notificar_ocorrencia():
 
 
 @app.route("/api/planejamento/pool")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_pool():
     """Busca ao vivo na VUUPT o pool de não alocados + resumo dos
     pedidos agendados (botão 'Atualizar' da tela) -- não mexe nos
@@ -1683,7 +1685,7 @@ def api_pool():
 
 
 @app.route("/api/planejamento/sem-rota-hoje")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_planejamento_sem_rota_hoje():
     """Número "Sem rota" de HOJE (mesmo cálculo da torre) pro chip do
     planejamento -- carregado async pelo template pra não segurar o
@@ -1696,7 +1698,7 @@ def api_planejamento_sem_rota_hoje():
 
 
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_romaneio(rascunho_id):
     """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
     o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
@@ -2380,7 +2382,7 @@ def revisar_pedagio(pedagio_id):
 # estiver desligada no config, a aba "Sem conferência" tem tudo.
 
 @app.route("/canhotos")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def canhotos():
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     filtro = (request.args.get("resultado") or "REPROVADO").upper()

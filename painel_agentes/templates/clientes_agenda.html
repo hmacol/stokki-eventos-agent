@@ -55,8 +55,10 @@
         </td>
         <td class="mono">{{ c.tratado_em or '' }}</td>
         <td class="acoes">
+          {% if pode_decidir %}
           <button type="button" class="botao" data-acao="autorizar">Autorizar</button>
           <button type="button" class="botao secundario" data-acao="nao_marcar">Não marcar</button>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}

@@ -87,9 +87,20 @@ class TestTelaClientesAgenda(unittest.TestCase):
         self.assertIn('data-acao="autorizar"', html)
 
     def test_outros_niveis_nao_entram(self):
-        for nivel in ("operador", "leitura", "atendimento"):
+        for nivel in ("operador", "leitura"):
             self._logar(nivel)
             self.assertEqual(self.cliente.get("/clientes-agenda").status_code, 403, nivel)
+
+    def test_atendimento_ve_sem_poder_decidir(self):
+        self._logar("atendimento")
+        resp = self.cliente.get("/clientes-agenda")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("VERO PANE", html)
+        self.assertNotIn('data-acao="autorizar"', html)
+        resp = self.cliente.post("/api/clientes-agenda/decidir", json={"documento": "49749452000160", "acao": "autorizar"},
+                                 headers={"Origin": "http://localhost"})
+        self.assertEqual(resp.status_code, 403)
 
     def test_sem_login_vai_pro_login(self):
         resp = self.cliente.get("/clientes-agenda")
