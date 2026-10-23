@@ -359,7 +359,9 @@
      exclusão, só o botão de confirmar não é vermelho -- tratar não
      destrói nada. */
   .modal-excluir.modal-tratar .acoes button.confirmar { background: var(--primaria); }
-  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); }
+  /* white-space/max-height: lote grande sai um selecionado por linha,
+     com rolagem interna, senão o modal passa da tela e esconde os botões. */
+  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); white-space: pre-line; max-height: 40vh; overflow-y: auto; }
   .linha-rota .contagem { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--texto); }
   .linha-rota .contagem .pct { color: var(--texto-suave); margin-left: 3px; }
   .linha-rota .contagem .estado-rota { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
@@ -606,7 +608,7 @@
     </div>
 
     <div class="card">
-      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento"{% if session.get('nivel_acesso') == 'atendimento' %} hidden{% endif %}>abrir planejamento</a></h3>
+      <h3><span>Planejamento de amanhã</span><a href="#" id="link-planejamento"{% if (telas_liberadas is none and session.get('nivel_acesso') == 'atendimento') or (telas_liberadas is not none and 'planejamento' not in telas_liberadas) %} hidden{% endif %}>abrir planejamento</a></h3>
       <div id="amanha"><div class="carregando">Carregando…</div></div>
     </div>
   </div>
@@ -1578,7 +1580,7 @@ function tratarSelecionadas() {
   const rotulos = lote.map(x => x.codigo || x.descricao);
   tratarExcecao(null, {
     lote,
-    descricao: `${lote.length} selecionado(s): ${rotulos.join(" · ")}`,
+    descricao: `${lote.length} selecionado(s):\n${rotulos.join("\n")}`,
   });
 }
 

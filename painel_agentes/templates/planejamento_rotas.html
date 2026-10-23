@@ -429,6 +429,7 @@
      (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
      pode gerar várias rotas, confundir os dois seria fácil */
   #botao-roteirizar-selecao { border-color: var(--remetente); color: var(--remetente); font-weight: 700; }
+  #botao-cancelar-selecao:not(:disabled) { border-color: var(--erro); color: var(--erro); }
   /* laranja: complementa rascunhos JÁ existentes (não cria rota nenhuma),
      terceira ação da família Criar rota / Roteirizar / Incrementar */
   #botao-incrementar-selecao { border-color: var(--laranja-texto); color: var(--laranja-texto); font-weight: 700; }
@@ -514,6 +515,22 @@
     background: var(--rodando-bg);
     color: var(--rodando-texto);
   }
+  /* situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10):
+     mesmo âmbar do bloco "Em separação na Stokki" do pool */
+  .item-parada .badge-separacao {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
+  .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  .secao-pool-separacao .retrato-stokki { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
@@ -2038,7 +2055,7 @@
 <div class="modal-overlay-reagendar" id="modal-entregue">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
-    <p class="subtitulo">Pedido <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
     <div class="campo-reagendar">
       <label for="entregue-observacao">Como a entrega foi confirmada</label>
       <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
@@ -2540,7 +2557,7 @@
     <div class="ajuda-pool" id="ajuda-pool" hidden>
       <p><strong>Selecionar:</strong> clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto no mapa.</p>
       <p><strong>Blocos:</strong> "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro, badge cinza). Cada bloco colapsa e tem o próprio "Selecionar". Dá pra arrastar um agendado pra depois pra uma rota, pra adiantar a entrega.</p>
-      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão). "Selecionar área" laça vários de uma vez: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
+      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão); "Em separação" mostra os que ainda não estão prontos na Stokki (escondidos por padrão). "Selecionar área" laça só o que está aparecendo no mapa: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
     </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <div class="linha-busca-pool">
@@ -2559,6 +2576,7 @@
       <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-dedicado-selecao" disabled title="Marca os pedidos selecionados como envio dedicado e divide o valor da cotação entre eles (fora da rota automática; vai pro financeiro na quinzena)">Dedicado</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-cancelar-selecao" disabled title="Cancela na VUUPT todos os pedidos selecionados (igual ao × de cada card; não mexe na Stokki) -- não pode ser desfeito">Cancelar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
          no lugar do arrastar pool→rota, que não existe entre abas #}
       <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
@@ -2568,9 +2586,21 @@
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Pra rotear hoje (<span id="contagem-secao-hoje">0</span>)</span>
-          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro nem fora de área">Selecionar</button>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro, fora de área nem pedido ainda em separação na Stokki">Selecionar</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
+      </div>
+      {# Em separação na Stokki (Hugo, 19/10): já está na Vuupt, mas o galpão
+         ainda não liberou (Em aberto / Em separação / Em conferência / Em
+         espera). Vem do retrato que o pipeline grava a cada rodada, não da
+         Stokki ao vivo -- por isso a hora no título. Continua arrastável. #}
+      <div class="secao-pool secao-pool-separacao" data-secao="separacao" id="secao-pool-separacao">
+        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Dá pra arrastar pra rota mesmo assim.">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Em separação na Stokki (<span id="contagem-secao-separacao">0</span>) <span class="retrato-stokki" id="retrato-stokki">{% if dados and dados.retrato_stokki_em %}· retrato de {{ dados.retrato_stokki_em }}{% endif %}</span></span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="separacao" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-separacao" data-list-id="pool"></ul>
       </div>
       <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
         <div class="cabecalho-secao-pool">
@@ -2676,6 +2706,7 @@
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue (sem canhoto) os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Marcar entregue</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
@@ -2849,6 +2880,7 @@
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
+    if (p.situacao_stokki) partes.push(badgeSeparacaoHtml(p));
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -2879,6 +2911,13 @@
       }
     }
     return partes.length ? `<br>${partes.join(" ")}` : "";
+  }
+
+  // situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10)
+  // -- separado de badgesPedidoHtml porque atualizarPool troca só esse
+  // badge num card que já existe, quando o retrato muda
+  function badgeSeparacaoHtml(p) {
+    return `<span class="badge-separacao" title="Situação na Stokki no último retrato do pipeline">📦 ${escaparHtml(p.situacao_stokki)}</span>`;
   }
 
   function itemParadaHtml(p, opts = {}) {
@@ -2927,6 +2966,7 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    li.dataset.situacaoStokki = p.situacao_stokki || "";  // "Em separação" etc. (Hugo, 19/10)
     li.dataset.dedicado = p.dedicado ? "1" : "";
     li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
@@ -3613,6 +3653,13 @@
   let mostrarFuturosNoMapa = localStorage.getItem("planejamento.mostrarFuturosNoMapa") === "1";
   let botaoFuturosMapa = null;
 
+  // Toggle "em separação no mapa" (Hugo, 23/10) -- esconde do MAPA os
+  // pedidos que ainda não estão prontos na Stokki (bloco "Em separação",
+  // situacao_stokki preenchida); a lista continua igual. Default desligado,
+  // igual ao "Futuros" (Hugo, 23/10).
+  let mostrarSeparacaoNoMapa = localStorage.getItem("planejamento.mostrarSeparacaoNoMapa") === "1";
+  let botaoSeparacaoMapa = null;
+
   // Toggle "rotas enviadas no mapa" -- rota já enviada à VUUPT (motorista
   // a caminho) continua aparecendo no card, mas por padrão segue no mapa
   // junto dos rascunhos em edição (mesmo comportamento de sempre); este
@@ -3861,8 +3908,9 @@
       // "Futuros" da barra do mapa estiver ligado, ou se já estiver
       // selecionado (seleção explícita sempre aparece, mesmo filtrada)
       const ocultoPorFuturo = li.dataset.urgencia === "futuro" && !mostrarFuturosNoMapa;
+      const ocultoPorSeparacao = !!li.dataset.situacaoStokki && !mostrarSeparacaoNoMapa;
       const mostrar = !isNaN(lat) && !isNaN(lng) &&
-        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo));
+        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo && !ocultoPorSeparacao));
       const existente = marcadoresPreview[id];
       if (!mostrar) {
         if (existente) { existente.setMap(null); delete marcadoresPreview[id]; }
@@ -3955,6 +4003,9 @@
     document.getElementById("botao-transportadora-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-dedicado-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
+    const botaoCancelarSel = document.getElementById("botao-cancelar-selecao");
+    botaoCancelarSel.disabled = SELECIONADOS.size === 0;
+    botaoCancelarSel.textContent = SELECIONADOS.size ? `Cancelar (${SELECIONADOS.size})` : "Cancelar";
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
     // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
     // "Adicionar à rota…" com os rascunhos ainda editáveis
@@ -4022,7 +4073,11 @@
     // pra essa tela é sinalizar que precisa de decisão manual antes de
     // qualquer coisa (cotação/redespacho), não quando ele "venceria".
     if (li.dataset.tipoArea) return document.getElementById("lista-pool-fora-area");
-    return document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+    if (li.dataset.urgencia === "futuro") return document.getElementById("lista-pool-futuro");
+    // ainda não pronto na Stokki (Hugo, 19/10): só tira do "hoje" -- agendado
+    // pra depois continua no bloco da data, fora de área continua vencendo
+    if (li.dataset.situacaoStokki) return document.getElementById("lista-pool-separacao");
+    return document.getElementById("lista-pool-hoje");
   }
 
   function reencaixarNaSecaoCorreta(li) {
@@ -4244,6 +4299,8 @@
     const elHoje = document.getElementById("contagem-secao-hoje");
     const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
+    const elSeparacao = document.getElementById("contagem-secao-separacao");
+    if (elSeparacao) elSeparacao.textContent = document.getElementById("lista-pool-separacao").children.length;
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
     if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
     if (elFuturo) elFuturo.textContent = document.getElementById("lista-pool-futuro").children.length;
@@ -4260,6 +4317,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.separacao === undefined) secoesPoolColapsadas.separacao = false;
   if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
 
@@ -4333,6 +4391,16 @@
     if (botaoFuturosMapa) {
       botaoFuturosMapa.textContent = valor ? "● Futuros" : "○ Futuros";
       botaoFuturosMapa.classList.toggle("ativo", valor);
+    }
+    atualizarPreviewPool();
+  }
+
+  function definirMostrarSeparacaoNoMapa(valor) {
+    mostrarSeparacaoNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarSeparacaoNoMapa", valor ? "1" : "0");
+    if (botaoSeparacaoMapa) {
+      botaoSeparacaoMapa.textContent = valor ? "● Em separação" : "○ Em separação";
+      botaoSeparacaoMapa.classList.toggle("ativo", valor);
     }
     atualizarPreviewPool();
   }
@@ -4412,11 +4480,12 @@
     const vertices = verticesPoligono.map(v => ({ lat: v.lat(), lng: v.lng() }));
     pararDesenhoPoligono();
     if (vertices.length < 3) return;  // sem área fechada -- vale como cancelamento
-    // pega só quem está visível com os filtros atuais (busca/flag/CEP)
-    // -- selecionar item escondido criaria seleção "invisível"
+    // pega só quem tem ponto no mapa agora -- filtros da lista e toggles
+    // Futuros/Em separação inclusive (Hugo, 23/10); selecionar item
+    // escondido criaria seleção "invisível"
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
-      if (isNaN(lat) || isNaN(lng) || !liVisivelNoPool(li)) return;
+      if (isNaN(lat) || isNaN(lng) || !marcadoresPreview[Number(li.dataset.serviceId)]) return;
       if (!dentroDoPoligono(lat, lng, vertices)) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
@@ -4444,6 +4513,11 @@
     botaoFuturosMapa.title = "Mostrar/ocultar no mapa os pedidos do pool agendados pra depois da data em edição -- eles continuam na lista (badge cinza) e dá pra alocar em rota normalmente, só a exibição no mapa muda";
     botaoFuturosMapa.addEventListener("click", () => definirMostrarFuturosNoMapa(!mostrarFuturosNoMapa));
 
+    botaoSeparacaoMapa = document.createElement("button");
+    botaoSeparacaoMapa.type = "button";
+    botaoSeparacaoMapa.title = "Mostrar/ocultar no mapa os pedidos do pool que ainda estão em separação na Stokki (retrato do pipeline) -- eles continuam na lista, só a exibição no mapa muda";
+    botaoSeparacaoMapa.addEventListener("click", () => definirMostrarSeparacaoNoMapa(!mostrarSeparacaoNoMapa));
+
     botaoEnviadasMapa = document.createElement("button");
     botaoEnviadasMapa.type = "button";
     botaoEnviadasMapa.title = "Mostrar/ocultar no mapa os pontos e trajetos das rotas já ENVIADAS à VUUPT -- os cards continuam intactos, só a exibição no mapa muda";
@@ -4454,13 +4528,14 @@
     botaoPoligono.className = "controle-area";  // ação, não camada: destaque cheio quando ativo
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
 
-    // 4 toggles de camada | ação de seleção por área (separador visual)
+    // 5 toggles de camada | ação de seleção por área (separador visual)
     const separador = document.createElement("span");
     separador.className = "separador-controle";
 
     container.appendChild(botaoPoolMapa);
     container.appendChild(botaoAlocadosMapa);
     container.appendChild(botaoFuturosMapa);
+    container.appendChild(botaoSeparacaoMapa);
     container.appendChild(botaoEnviadasMapa);
     container.appendChild(separador);
     container.appendChild(botaoPoligono);
@@ -4469,6 +4544,7 @@
     definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
     definirMostrarAlocadosNoMapa(mostrarAlocadosNoMapa);  // idem pro toggle dos alocados
     definirMostrarFuturosNoMapa(mostrarFuturosNoMapa);  // idem pro toggle dos agendados futuros
+    definirMostrarSeparacaoNoMapa(mostrarSeparacaoNoMapa);  // idem pro toggle dos em separação
     definirMostrarEnviadasNoMapa(mostrarEnviadasNoMapa);  // idem pro toggle das rotas enviadas
     pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
 
@@ -5262,6 +5338,7 @@
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-transportadora-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    document.getElementById("botao-entregue-selecao-rotas").disabled = itensEntregaveisSelecionados().length === 0;
     atualizarFolhaMapa();
   }
 
@@ -5923,16 +6000,64 @@
     }
   }
 
+  // Cancelamento em lote do pool (Hugo, 23/10): mesmo endpoint do ×, um
+  // pedido por vez -- falha em um não impede os outros (padrão do
+  // cancelarRota). Só VUUPT, Stokki fica intocada.
+  async function cancelarSelecionados(botaoOrigem) {
+    const ids = Array.from(SELECIONADOS);
+    if (!ids.length) return;
+    const codigoDe = id => document.querySelector(`#lista-pool .item-parada[data-service-id="${id}"] .codigo`)?.textContent.trim() || `#${id}`;
+    const codigos = ids.map(codigoDe);
+    const lista = codigos.length > 30 ? codigos.slice(0, 30).join(", ") + ` e mais ${codigos.length - 30}` : codigos.join(", ");
+    if (!confirm(`Cancelar ${ids.length} pedido(s) na VUUPT? Essa ação não pode ser desfeita.\n\n${lista}`)) return;
+    botaoOrigem.disabled = true;
+    const falhas = [];
+    for (let i = 0; i < ids.length; i++) {
+      botaoOrigem.textContent = `Cancelando ${i + 1}/${ids.length}...`;
+      try {
+        await postJSON("/api/planejamento/cancelar-pedido", { service_id: ids[i], rascunho_id: null });
+      } catch (e) {
+        falhas.push(`• ${codigos[i]}: ${e.message}`);
+      }
+    }
+    if (falhas.length) {
+      alert(`${falhas.length} de ${ids.length} pedido(s) não puderam ser cancelados:\n${falhas.join("\n")}`);
+    }
+    location.reload();
+  }
+
   // "Marcar como entregue" do menu de contexto, só em rota já enviada
   // (Hugo, 08/10): fecha o serviço na VUUPT por API, mesmo endpoint do
   // chip da Torre. A observação é obrigatória e vira auditoria.
+  // Em massa (Hugo, 23/10): botão "Marcar entregue" da barra de seleção
+  // das rotas, ou o menu de contexto num card que está na seleção --
+  // mesma observação pra todos, um POST por pedido (o endpoint é
+  // unitário; assim dá pra mostrar o progresso e uma falha não para o lote).
   let entreguePendente = null;
+
+  // selecionados que estão em rota já ENVIADA (os de rascunho não têm
+  // serviço atribuído na VUUPT, ficam de fora)
+  function itensEntregaveisSelecionados() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      if (!li || !li.closest(".card-rota.enviada")) return null;
+      return { serviceId, codigo: li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}` };
+    }).filter(Boolean);
+  }
 
   function abrirModalEntregue(li, serviceId) {
     const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
-    document.getElementById("entregue-codigo").textContent = codigo;
+    abrirModalEntregueLote([{ serviceId, codigo }]);
+  }
+
+  function abrirModalEntregueLote(itens) {
+    if (!itens.length) return;
+    const lote = itens.length > 1;
+    document.getElementById("titulo-modal-entregue").textContent = lote ? `Marcar ${itens.length} pedidos como entregues` : "Marcar pedido como entregue";
+    document.getElementById("entregue-prefixo").textContent = lote ? `${itens.length} pedidos:` : "Pedido";
+    document.getElementById("entregue-codigo").textContent = itens.map(it => it.codigo).join(", ");
     document.getElementById("entregue-observacao").value = "";
-    entreguePendente = { serviceId, codigo };
+    entreguePendente = { itens };
     document.getElementById("modal-entregue").classList.add("aberto");
     document.getElementById("entregue-observacao").focus();
   }
@@ -5953,19 +6078,29 @@
     if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Fechando na VUUPT...";
+    const fechados = [], jaEstavam = [], falhas = [];
     try {
-      const dados = await postJSON("/api/torre/marcar-entregue", { service_id: pendente.serviceId, observacao });
-      fecharModalEntregue();
-      alert(dados.ja_estava
-        ? `${dados.codigo} já constava como entregue na VUUPT.`
-        : `${dados.codigo} marcado como entregue na VUUPT.`);
-    } catch (e) {
-      alert(`Falha ao marcar como entregue: ${e.message}`);
+      for (const [i, it] of pendente.itens.entries()) {
+        botao.textContent = pendente.itens.length > 1
+          ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
+        try {
+          const dados = await postJSON("/api/torre/marcar-entregue", { service_id: it.serviceId, observacao });
+          (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+        } catch (e) {
+          falhas.push(`${it.codigo}: ${e.message}`);
+        }
+      }
     } finally {
       botao.disabled = false;
       botao.textContent = original;
     }
+    fecharModalEntregue();
+    if (pendente.itens.length > 1 && !falhas.length) limparSelecaoRotas();
+    const linhas = [];
+    if (fechados.length) linhas.push(`Marcado(s) como entregue(s) na VUUPT: ${fechados.join(", ")}`);
+    if (jaEstavam.length) linhas.push(`Já constava(m) como entregue(s): ${jaEstavam.join(", ")}`);
+    if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
+    alert(linhas.join("\n\n"));
   }
 
   // pedido (ou lote de pedidos, ver abrirModalReagendarLote) sendo
@@ -6581,7 +6716,10 @@
     // rota já enviada à VUUPT: dá pra fechar o pedido como entregue por
     // aqui (Hugo, 08/10) -- mesmo endpoint do chip da Torre
     if (PODE_EDITAR && rotaTravada) {
-      itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
+      // card na seleção: vale pra todos os selecionados em rota enviada (23/10)
+      const loteEntregue = SELECIONADOS_ROTA.has(serviceId) ? itensEntregaveisSelecionados() : [];
+      if (loteEntregue.length > 1) itens.push({ rotulo: `Marcar como entregue (${loteEntregue.length} selecionados)`, acao: () => abrirModalEntregueLote(loteEntregue) });
+      else itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });
@@ -6620,7 +6758,23 @@
       const listaPool = document.getElementById("lista-pool");
       let novos = 0;
       dados.pool.forEach(p => {
-        if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
+        const existente = POOL_BY_ID[p.service_id];
+        if (existente) {
+          // já estava no pool: só a situação Stokki pode ter mudado no
+          // retrato (galpão liberou → sai de "Em separação" pra "hoje")
+          if ((existente.situacao_stokki || "") !== (p.situacao_stokki || "")) {
+            existente.situacao_stokki = p.situacao_stokki;
+            const li = listaPool.querySelector(`.item-parada[data-service-id="${p.service_id}"]`);
+            if (li) {
+              li.dataset.situacaoStokki = p.situacao_stokki || "";
+              const badge = li.querySelector(".badge-separacao");
+              if (badge) badge.remove();
+              if (p.situacao_stokki) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml(p));
+              reencaixarNaSecaoCorreta(li);
+            }
+          }
+          return;
+        }
         POOL_BY_ID[p.service_id] = p;
         const li = criarLiParada(p);
         secaoDoItem(li).appendChild(li);
@@ -6649,6 +6803,8 @@
       atualizarBarraSelecao();
       atualizarContagensTotais();
       atualizarContagensSecoesPool();
+      const elRetrato = document.getElementById("retrato-stokki");
+      if (elRetrato) elRetrato.textContent = dados.retrato_stokki_em ? `· retrato de ${dados.retrato_stokki_em}` : "";
       if (dados.pool_retiradas !== undefined) renderizarRetiradas(dados.pool_retiradas);
 
       // resumo dos agendados (por dia/região) vem já renderizado
@@ -6831,11 +6987,13 @@
     const listaPoolHoje = document.getElementById("lista-pool-hoje");
     const listaPoolForaArea = document.getElementById("lista-pool-fora-area");
     const listaPoolFuturo = document.getElementById("lista-pool-futuro");
+    const listaPoolSeparacao = document.getElementById("lista-pool-separacao");
     POOL.forEach(p => {
       const li = criarLiParada({ ...p, remetente_nome: p.remetente_nome });
       secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(listaPoolSeparacao);
     iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();
@@ -6906,6 +7064,7 @@
     document.getElementById("botao-reagendar-selecao").addEventListener("click", () => {
       abrirModalReagendarLote(itensDoPoolSelecionado());
     });
+    document.getElementById("botao-cancelar-selecao").addEventListener("click", (e) => cancelarSelecionados(e.target));
     document.getElementById("botao-cancelar-tipo-roteirizacao").addEventListener("click", () => {
       document.getElementById("modal-tipo-roteirizacao").classList.remove("aberto");
       botaoRoteirizarPendente = null;
@@ -7206,6 +7365,9 @@
     });
     document.getElementById("botao-reagendar-selecao-rotas").addEventListener("click", () => {
       abrirModalReagendarLote(itensDaRotaSelecionada());
+    });
+    document.getElementById("botao-entregue-selecao-rotas").addEventListener("click", () => {
+      abrirModalEntregueLote(itensEntregaveisSelecionados());
     });
     document.getElementById("select-destino-mover").addEventListener("change", (e) => {
       document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !e.target.value;

@@ -13,6 +13,7 @@ config.yaml
 __pycache__/
 *.pyc
 py
+*.egg-info/
 .venv/
 venv/
 env/
@@ -46,3 +47,5 @@ output/
 # Relatorios do verificador de botoes (gerados a cada rodada)
 verificador_botoes/relatorios/
 .superpowers/
+# Mocks e prints do redesign (impeccable), material de trabalho
+.impeccable/

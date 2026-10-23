@@ -42,7 +42,7 @@ from regras.endereco import resolver_endereco_entrega
 from regras.transportadoras import CatalogoTransportadoras
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
-from stokki.estacao_impressao import listar_pedidos_em_espera
+from stokki.estacao_impressao import imprimir_pedidos_pendentes, listar_pedidos_em_espera
 from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from geocodificacao import geocodificar
 from historico import registrar_execucao
@@ -873,11 +873,27 @@ def _renovar_trava(dono: str) -> None:
         logger.warning(f"Renovação da trava da Stokki falhou: {e}")
 
 
+def _estacao_impressao_horaria(modo_teste: bool) -> None:
+    """22/10 (Hugo): a Estação de Impressão também roda de hora em hora,
+    antes da importação -- pedido faturado esperava até a próxima sequência
+    (16h/18h/22h). O que ela move vira 'Aguardando Transportador' e entra
+    nesta mesma rodada. Falha aqui não para a importação: se o pedido ficar
+    parado, o vigia_fila_impressao.py avisa."""
+    try:
+        r = imprimir_pedidos_pendentes(_carregar_config(), dry_run=modo_teste)
+        logger.info(f"Estação de Impressão (horária): {r['processados']}/{r['pendentes']} processado(s)"
+                    + (f", falhas {r['falhas']}" if r["falhas"] else ""))
+    except Exception as e:
+        logger.error(f"Estação de Impressão (horária) falhou: {e}")
+
+
 def main_horario(modo_teste: bool = False) -> None:
     if not _obter_trava_horario():
         return
     from stokki import sessao_uso
     try:
+        _estacao_impressao_horaria(modo_teste)
+        _renovar_trava(DONO_TRAVA_HORARIO)
         main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO)
     finally:
         sessao_uso.liberar(DONO_TRAVA_HORARIO)

@@ -12,7 +12,8 @@ Uma linha por CNPJ. Quem escreve:
 - painel /inicio e gerenciar_clientes.py cadastro: aprovacao.
 
 interno.habilidade so muda em aprovar(): o tipo informado pelo cliente nao
-vale no roteirizador antes disso.
+vale no roteirizador antes disso. interno.email nao espera: nasce com o da
+Stokki e vira o do cliente em salvar_preenchimento() (Hugo, 17/10).
 """
 import re
 from datetime import datetime
@@ -130,6 +131,13 @@ def salvar_preenchimento(conn, cnpj, habilidade, agora: datetime | None = None) 
         raise CadastroInvalido("Cadastro não encontrado.", 404)
     if c["situacao"] == APROVADO:
         raise CadastroInvalido("Cadastro já aprovado.", 409)
+    # E-mails que o cliente informou valem ja, sem esperar a aprovacao (Hugo,
+    # 17/10); so o tipo de carga espera. Quem chama salvou as preferencias antes.
+    import preferencias_notificacao as pn
+    emails = pn.ler(conn, c["cnpj_embarcador"])["emails"]
+    if emails:
+        conn.execute("UPDATE interno SET email = ?, atualizado_em = ? WHERE cnpj_embarcador = ?",
+                     (", ".join(emails), _fmt(agora), c["cnpj_embarcador"]))
     return atualizar(conn, cnpj, agora, habilidade_informada=tipo, preenchido_em=_fmt(agora), situacao=PREENCHIDO)
 
 

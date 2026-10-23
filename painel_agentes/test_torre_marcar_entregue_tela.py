@@ -119,6 +119,9 @@ class TestTemplates(_Base):
         self.assertIn('rotulo: "Marcar como entregue"', fonte)
         self.assertIn('id="modal-entregue"', fonte)
         self.assertIn('"/api/torre/marcar-entregue"', fonte)
+        # em massa (23/10): botao na barra de selecao das rotas
+        self.assertIn('id="botao-entregue-selecao-rotas"', fonte)
+        self.assertIn("function abrirModalEntregueLote", fonte)
 
     def test_torre_renderiza_para_operador(self):
         self._logar("operador")

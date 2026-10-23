@@ -167,7 +167,7 @@
       texto: '<p>A busca acha por <b>código, NF, remetente, destinatário ou endereço</b>. O botão <b>Filtros</b>, ao lado, tem três filtros a mais: <b>só o que precisa sair no dia</b>, faixa de <b>CEP</b> e faixa de <b>caixas</b>.</p><p>Tudo que está filtrado é o que o <b>Selecionar visíveis</b> pega. Os filtros ficam lembrados enquanto a aba estiver aberta.</p>' },
 
     { alvo: '#secao-pool-hoje .cabecalho-secao-pool', capitulo: PL, aba: 'pool', titulo: 'Os blocos do pool',
-      texto: '<ul><li><b>Pra rotear hoje</b>: agendado pra este dia, atrasado, ou sem agendamento. É o que <b>tem</b> que sair.</li><li><b>Agendados pra depois</b>: começa fechado. Dá pra adiantar um, arrastando pra rota.</li><li><b>Fora da área de atendimento</b>: o roteirizador automático ignora; fica aqui pra você decidir.</li><li><b>A retirar no galpão</b>: o cliente vem buscar. Nunca entra em rota.</li></ul><p>Clique no título pra abrir ou fechar o bloco; <b>Selecionar</b> marca o bloco todo.</p>' },
+      texto: '<ul><li><b>Pra rotear hoje</b>: agendado pra este dia, atrasado, ou sem agendamento. É o que <b>tem</b> que sair.</li><li><b>Em separação na Stokki</b>: já está na Vuupt, mas o galpão ainda não liberou (em aberto, separação, conferência ou espera). A situação é a do último retrato do pipeline, não ao vivo.</li><li><b>Agendados pra depois</b>: começa fechado. Dá pra adiantar um, arrastando pra rota.</li><li><b>Fora da área de atendimento</b>: o roteirizador automático ignora; fica aqui pra você decidir.</li><li><b>A retirar no galpão</b>: o cliente vem buscar. Nunca entra em rota.</li></ul><p>Clique no título pra abrir ou fechar o bloco; <b>Selecionar</b> marca o bloco todo.</p>' },
 
     { alvo: primeiroVisivel('#coluna-pool .item-parada'), capitulo: PL, aba: 'pool', titulo: 'Um pedido',
       texto: function () {
@@ -281,7 +281,7 @@
       posicao: 'esquerda' },
 
     { alvo: '.controle-mapa', capitulo: MP, aba: 'mapa', titulo: 'O que o mapa mostra',
-      texto: '<p>Liga e desliga camadas: <b>Não alocados</b> (o pool), <b>Alocados</b>, <b>Futuros</b> (agendados pra depois) e <b>Enviadas</b>. Pra montar rota à mão, ligue <b>Não alocados</b>.</p><p><b>⬠ Selecionar área</b>: clique no mapa ponto a ponto contornando uma região e dê <b>duplo clique</b> pra fechar. Todos os pedidos do pool lá dentro ficam selecionados, prontos pra <b>Criar rota</b> ou <b>Roteirizar</b>. Esc cancela.</p>' },
+      texto: '<p>Liga e desliga camadas: <b>Não alocados</b> (o pool), <b>Alocados</b>, <b>Futuros</b> (agendados pra depois), <b>Em separação</b> (ainda não prontos na Stokki) e <b>Enviadas</b>. Pra montar rota à mão, ligue <b>Não alocados</b>.</p><p><b>⬠ Selecionar área</b>: clique no mapa ponto a ponto contornando uma região e dê <b>duplo clique</b> pra fechar. Os pedidos do pool que estão aparecendo no mapa lá dentro ficam selecionados, prontos pra <b>Criar rota</b> ou <b>Roteirizar</b>. Esc cancela.</p>' },
 
     { alvo: function () { return celular() ? $('tour-abrir-mobile') : $('tour-abrir'); }, capitulo: G, aba: 'mais', titulo: 'O caminho de um dia',
       texto: '<p><b>1.</b> Conferir a data. <b>2.</b> Importação e <b>Atualizar</b> o pool. <b>3.</b> Criar Rotas (ou Roteirizar a seleção). <b>4.</b> Revisar: avisos, ordem, pedidos que sobraram no pool. <b>5.</b> Disponibilidade e <b>Alocar motoristas</b>. <b>6.</b> <b>Confirmar e enviar</b>. <b>7.</b> Copiar a escala pro WhatsApp.</p><p>Este botão <b>Guia</b> reabre o passo a passo quando precisar.</p>',

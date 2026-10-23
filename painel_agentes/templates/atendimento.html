@@ -100,6 +100,19 @@
   .aviso-topo.mostrar { display: flex; }
   /* Chamado que veio do app do motorista (logística) */
   .tag-mot { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 100px; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; background: var(--rodando-bg); color: var(--rodando-texto); }
+  /* Grupos internos da equipe (19/10) */
+  .abas button.tem-nl em { background: var(--acento); color: #fff; border-radius: 100px; padding: 0 6px; font-weight: 700; }
+  .item .nl-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 100px; background: var(--acento); color: #fff; font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .novo-grupo { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--borda); }
+  .novo-grupo input { flex: 1; min-width: 0; border: 1px solid var(--borda); border-radius: 6px; padding: 6px 8px; font-size: 12.5px; background: var(--superficie); color: var(--texto); font-family: inherit; }
+  .msg .bolha a { color: inherit; font-weight: 700; }
+  .msg:not(.eu) .bolha a { color: var(--acento); }
+  .bolha .abre-chamado { margin-top: 6px; font-weight: 600; }
+  .dlg-grupo { border: 1px solid var(--borda); border-radius: 10px; padding: 16px; background: var(--superficie); color: var(--texto); width: min(420px, 92vw); }
+  .dlg-grupo::backdrop { background: rgba(10,12,20,0.4); }
+  .dlg-grupo form { display: flex; flex-direction: column; gap: 10px; }
+  .dlg-grupo h3 { margin: 0; font-size: 15px; }
+  .dlg-grupo select, .dlg-grupo textarea { border: 1px solid var(--borda); border-radius: 6px; padding: 7px 9px; font-size: 13px; background: var(--superficie); color: var(--texto); font-family: inherit; }
 </style>
 {% endblock %}
 
@@ -148,8 +161,34 @@
     </div>
   </section>
 
+  <section class="card oculto" id="grupo-conv">
+    <div class="conv-cab" id="grupo-cab"></div>
+    <div class="conv-corpo" id="grupo-corpo"></div>
+    <div class="conv-pe">
+      <div class="compor">
+        <textarea id="grupo-texto" rows="1" placeholder="Mensagem pro grupo…" maxlength="4000"></textarea>
+        <button type="button" class="botao-p" id="grupo-enviar">Enviar</button>
+      </div>
+      <div class="nota">Todos do Atendimento veem este grupo. Códigos de pedido (PS-…) viram link.</div>
+    </div>
+  </section>
+
   <aside class="lateral" id="lateral"><div class="vazio">Contexto do cliente aparece aqui.</div></aside>
 </div>
+
+<dialog class="dlg-grupo" id="dlg-grupo">
+  <form method="dialog" id="form-dlg-grupo">
+    <h3>Enviar chamado para um grupo</h3>
+    <label class="nota" for="dlg-grupo-sel">Grupo</label>
+    <select id="dlg-grupo-sel"></select>
+    <label class="nota" for="dlg-grupo-txt">Comentário (opcional)</label>
+    <textarea id="dlg-grupo-txt" rows="3" maxlength="1000" placeholder="Ex.: alguém consegue ver com o motorista?"></textarea>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button type="button" class="botao-linha" id="dlg-grupo-cancelar">Cancelar</button>
+      <button type="submit" class="botao-p" id="dlg-grupo-ok">Enviar</button>
+    </div>
+  </form>
+</dialog>
 <script>
 (function () {
   const BOOT = {{ boot | tojson }};
@@ -162,7 +201,8 @@
   // Volante: marca, na fila, o chamado que veio do app do motorista.
   const ICO_VOLANTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:13px;height:13px;flex:none;color:var(--rodando-texto)"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3"></circle><line x1="12" y1="3" x2="12" y2="9"></line><line x1="4.3" y1="16.5" x2="9.4" y2="13.5"></line><line x1="19.7" y1="16.5" x2="14.6" y2="13.5"></line></svg>';
   const st = { aba: 'fila', fila: [], contagens: BOOT.contagens, meuStatus: BOOT.status, nome: BOOT.nome, chamado: null, mensagens: [], contexto: null,
-               ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao };
+               ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao,
+               grupos: [], gruposNaoLidas: null, naoLidasFora: null, grupo: null, grupoMsgs: [], grupoUltimoId: 0, timerGrupos: null, timerGrupo: null, enviandoGrupo: false };
 
   async function api(caminho, opts) {
     const r = await fetch(BASE + caminho, Object.assign({ credentials: 'same-origin' }, opts || {}));
@@ -198,16 +238,18 @@
   // ── fila ──────────────────────────────────────────────────────────────────
   async function carregarFila() {
     try {
-      const j = await api(`/api/atendimento/fila?aba=${st.aba}`);
-      st.fila = j.chamados; st.contagens = j.contagens; st.situacao = j.situacao; st.meuStatus = j.meu_status; st.nome = j.nome || st.nome;
+      const j = await api(`/api/atendimento/fila?aba=${st.aba === 'grupos' ? 'fila' : st.aba}`);
+      if (st.aba !== 'grupos') st.fila = j.chamados;
+      st.contagens = j.contagens; st.situacao = j.situacao; st.meuStatus = j.meu_status; st.nome = j.nome || st.nome;
       renderFila(); renderTopo();
     } catch (e) {}
     clearTimeout(st.timerFila); st.timerFila = setTimeout(carregarFila, 8000);
   }
   function renderFila() {
     const c = st.contagens || {};
-    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos]];
-    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
+    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos], ['grupos', 'Grupos', st.gruposNaoLidas]];
+    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''} ${id === 'grupos' && n ? 'tem-nl' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
+    if (st.aba === 'grupos') return renderListaGrupos();
     const q = st.busca.trim().toLowerCase();
     let lista = st.fila;
     if (q) lista = lista.filter(x => [x.id, x.solicitante, x.assunto, x.pedido_ref, x.cnpj_embarcador].join(' ').toLowerCase().includes(q));
@@ -222,13 +264,17 @@
   function previa(x) { const quem = x.ultima_origem_msg === 'cliente' ? 'Cliente: ' : (x.ultima_origem_msg === 'equipe' ? 'Fresh Log: ' : ''); return quem + (x.ultima_texto || '').replace(/\s+/g, ' '); }
   $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; st.aba = b.dataset.aba; carregarFila(); });
   $('busca').addEventListener('input', e => { st.busca = e.target.value; renderFila(); });
-  $('fila').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
+  $('fila').addEventListener('click', e => {
+    const gr = e.target.closest('[data-grupo]'); if (gr) return abrirGrupo(Number(gr.dataset.grupo));
+    const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id));
+  });
 
   // ── conversa ──────────────────────────────────────────────────────────────
   async function abrir(id) {
     try {
       const j = await api(`/api/atendimento/chamados/${id}`);
       st.chamado = j.chamado; st.mensagens = j.mensagens; st.contexto = j.contexto; st.ultimoId = st.mensagens.length ? st.mensagens[st.mensagens.length - 1].id : 0;
+      fecharGrupo();
       history.replaceState(null, '', `${location.pathname}?chamado=${id}`);
       renderConversa(); renderLateral(); renderFila(); agendarConv(); renderBloqueio();
     } catch (e) { alert(e.message); }
@@ -308,6 +354,7 @@
       if (c.status === 'EM_ATENDIMENTO' && meu) acoes += `<button type="button" class="botao-linha" data-acao="transferir">Devolver pra fila</button>`;
       acoes += `<button type="button" class="botao-p" data-acao="resolver">✓ Resolver e enviar histórico</button>`;
     }
+    acoes = `<button type="button" class="botao-linha" data-acao="enviar-grupo" title="Mandar o resumo deste chamado pra um grupo da equipe">Enviar para grupo</button>` + acoes;
     $('conv-cab').innerHTML = `
       <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;"><span class="mono" style="font-size:12.5px;color:var(--texto-suave);font-weight:600">#${c.id}</span><h2>${esc(c.assunto || c.area_rotulo || 'Conversa com o assistente')}</h2><span class="pill ${c.status}"><i></i>${esc(c.status_rotulo)}</span></div>
       <div class="meta"><span>${c.de_motorista ? ICO_VOLANTE + ' ' : ''}<b style="color:var(--texto)">${esc(c.solicitante)}</b></span>${c.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(c.area_rotulo || '')}</span>${c.pedido_ref ? `<span>${c.de_motorista ? 'Parada' : 'Pedido'} <b class="mono" style="color:var(--texto)">${esc(c.pedido_ref)}</b></span>` : ''}<span>Aberto ${esc(c.quando)} pelo ${c.origem === 'chat' ? (c.de_motorista ? 'app' : 'chat') : (c.origem === 'email' ? 'e-mail' : 'portal')}</span>${c.atendente ? `<span>Com ${esc(c.atendente)}${c.assumido_em ? ' desde ' + c.assumido_em.slice(11, 16) : ''}</span>` : ''}<span class="acoes">${acoes}</span></div>`;
@@ -368,7 +415,7 @@
       if (tipo === 'resolver') $('nota-pe').textContent = j.historico_enviado ? 'Resolvido. Histórico enviado por e-mail pro cliente.' : 'Resolvido, mas o cliente não tem e-mail cadastrado pra receber o histórico.';
     } catch (e) { alert(e.message); }
   }
-  $('conv-cab').addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (b) acao(b.dataset.acao); });
+  $('conv-cab').addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (!b) return; if (b.dataset.acao === 'enviar-grupo') dialogoEnviarGrupo(); else acao(b.dataset.acao); });
   $('macros').addEventListener('click', e => { const b = e.target.closest('[data-macro]'); if (b) { const t = $('texto'); t.value = (t.value ? t.value + ' ' : '') + b.dataset.macro; t.focus(); } });
   $('enviar').addEventListener('click', enviar);
   $('texto').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar(); } });
@@ -437,8 +484,139 @@
   }
   $('lateral').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
 
+  // ── grupos internos da equipe (19/10) ─────────────────────────────────────
+  // Todo grupo é aberto pra quem usa o Atendimento. Lista e não lidas
+  // atualizam sozinhas; mensagem nova de outra pessoa toca um aviso sonoro.
+  let audioCtx = null;
+  document.addEventListener('click', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {} });
+  function bip() {
+    // O navegador só deixa tocar depois do primeiro clique na página.
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    const t = audioCtx.currentTime;
+    [[880, 0], [1320, 0.13]].forEach(([f, d]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = f; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.25, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.18);
+      o.connect(g).connect(audioCtx.destination); o.start(t + d); o.stop(t + d + 0.2);
+    });
+  }
+  function linkar(texto) {
+    return esc(texto)
+      .replace(/#?\b(PS-\d+(?:-R\d+)?)\b/gi, (m, cod) => `<a href="${BASE}/consulta/pedido/${encodeURIComponent(cod.toUpperCase())}" target="_blank" rel="noopener">${m}</a>`)
+      .replace(/\bChamado #(\d+)/g, (m, id) => `<a href="#" data-chamado="${id}">${m}</a>`);
+  }
+  async function carregarGrupos() {
+    try {
+      const j = await api('/api/atendimento/grupos');
+      // o grupo aberto toca pelo pollGrupo; aqui só os outros (senão toca 2x)
+      const foraDoAberto = j.grupos.filter(x => !st.grupo || x.id !== st.grupo.id).reduce((n, x) => n + x.nao_lidas, 0);
+      if (st.naoLidasFora != null && foraDoAberto > st.naoLidasFora) bip();
+      st.naoLidasFora = foraDoAberto;
+      st.grupos = j.grupos; st.gruposNaoLidas = j.nao_lidas;
+      document.title = (j.nao_lidas ? `(${j.nao_lidas}) ` : '') + 'Atendimento';
+      // não redesenha a lista enquanto a pessoa digita o nome de um grupo novo
+      if (document.activeElement && document.activeElement.id === 'novo-grupo-nome') return;
+      renderFila();
+    } catch (e) {}
+    finally { clearTimeout(st.timerGrupos); st.timerGrupos = setTimeout(carregarGrupos, 6000); }
+  }
+  function renderListaGrupos() {
+    const q = st.busca.trim().toLowerCase();
+    const lista = q ? st.grupos.filter(x => [x.nome, x.ultima_texto].join(' ').toLowerCase().includes(q)) : st.grupos;
+    $('fila').innerHTML = `<form class="novo-grupo" id="form-novo-grupo"><input id="novo-grupo-nome" placeholder="Nome do novo grupo" maxlength="60" aria-label="Nome do novo grupo"><button type="submit" class="botao-linha">+ Criar</button></form>` +
+      (lista.length ? lista.map(x => `
+      <div class="item ${st.grupo && st.grupo.id === x.id ? 'ativo' : ''} ${x.nao_lidas ? 'nl' : ''}" data-grupo="${x.id}"><span class="pt"></span><div class="c">
+        <div class="l1"><b>${esc(x.nome)}</b>${x.nao_lidas ? `<span class="nl-n">${x.nao_lidas}</span>` : ''}<span class="q">${esc(x.quando)}</span></div>
+        <div class="l3">${x.ultima_texto ? esc(x.ultima_autor + ': ' + x.ultima_texto.replace(/\s+/g, ' ')) : 'Sem mensagens ainda.'}</div>
+      </div></div>`).join('') : `<div class="vazio">${st.grupos.length ? 'Nenhum grupo com esse nome.' : 'Nenhum grupo ainda. Crie o primeiro acima.'}</div>`);
+  }
+  $('fila').addEventListener('submit', async e => {
+    if (e.target.id !== 'form-novo-grupo') return;
+    e.preventDefault();
+    const nome = $('novo-grupo-nome').value.trim(); if (!nome) return;
+    try {
+      const j = await api('/api/atendimento/grupos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome }) });
+      $('novo-grupo-nome').blur(); await carregarGrupos(); abrirGrupo(j.grupo.id);
+    } catch (err) { alert(err.message); }
+  });
+  async function abrirGrupo(id) {
+    try {
+      const j = await api(`/api/atendimento/grupos/${id}`);
+      st.grupo = j.grupo; st.grupoMsgs = j.mensagens; st.grupoUltimoId = j.mensagens.length ? j.mensagens[j.mensagens.length - 1].id : 0;
+      st.chamado = null; clearTimeout(st.timerConv);
+      history.replaceState(null, '', location.pathname);
+      $('conversa').classList.add('oculto'); $('grupo-conv').classList.remove('oculto');
+      $('lateral').innerHTML = `<div class="card"><span class="rot">Grupo</span><div style="font-size:14px;font-weight:700">${esc(st.grupo.nome)}</div>` +
+        `<div class="kv"><span>Criado por</span><span>${esc(st.grupo.criado_por || '—')}</span></div><div class="kv"><span>Em</span><span>${esc(st.grupo.criado_quando)}</span></div>` +
+        `<div class="nota">Grupo aberto: todos do Atendimento leem e escrevem. Pra trazer um chamado, abra o chamado e use "Enviar para grupo".</div></div>`;
+      renderGrupo(); carregarGrupos(); agendarGrupo(); $('grupo-texto').focus();
+    } catch (e) { alert(e.message); }
+  }
+  function fecharGrupo() {
+    st.grupo = null; clearTimeout(st.timerGrupo);
+    $('grupo-conv').classList.add('oculto'); $('conversa').classList.remove('oculto');
+  }
+  function renderGrupo() {
+    $('grupo-cab').innerHTML = `<div style="display:flex; align-items:center; gap:9px;"><h2>${esc(st.grupo.nome)}</h2><span class="sub">grupo da equipe</span></div>`;
+    $('grupo-corpo').innerHTML = st.grupoMsgs.length ? st.grupoMsgs.map(m => `
+      <div class="msg ${m.eu ? 'eu' : ''}"><div class="bolha">${linkar(m.texto)}${m.chamado_id ? `<br><a href="#" class="abre-chamado" data-chamado="${m.chamado_id}">→ Abrir chamado #${m.chamado_id}</a>` : ''}</div>
+      <div class="meta-msg">${esc(m.autor)} · ${esc(m.quando)}</div></div>`).join('') : '<div class="sistema">Nenhuma mensagem ainda.</div>';
+    $('grupo-corpo').scrollTop = $('grupo-corpo').scrollHeight;
+  }
+  async function pollGrupo() {
+    if (!st.grupo) return;
+    const id = st.grupo.id;
+    try {
+      const j = await api(`/api/atendimento/grupos/${id}?desde=${st.grupoUltimoId}`);
+      if (!st.grupo || st.grupo.id !== id) return;
+      if (j.mensagens.length) {
+        if (j.mensagens.some(m => !m.eu)) bip();
+        st.grupoMsgs = st.grupoMsgs.concat(j.mensagens); st.grupoUltimoId = st.grupoMsgs[st.grupoMsgs.length - 1].id; renderGrupo();
+      }
+    } catch (e) {}
+    agendarGrupo();
+  }
+  function agendarGrupo() { clearTimeout(st.timerGrupo); if (st.grupo) st.timerGrupo = setTimeout(pollGrupo, 3000); }
+  async function enviarGrupo() {
+    const texto = $('grupo-texto').value.trim();
+    if (!st.grupo || !texto || st.enviandoGrupo) return;
+    st.enviandoGrupo = true; $('grupo-enviar').disabled = true;
+    try {
+      await api(`/api/atendimento/grupos/${st.grupo.id}/mensagens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ texto }) });
+      $('grupo-texto').value = ''; $('grupo-texto').style.height = 'auto';
+      clearTimeout(st.timerGrupo); await pollGrupo(); carregarGrupos();
+    } catch (e) { alert(e.message); }
+    st.enviandoGrupo = false; $('grupo-enviar').disabled = false;
+  }
+  $('grupo-enviar').addEventListener('click', enviarGrupo);
+  $('grupo-texto').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarGrupo(); } });
+  $('grupo-texto').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'; });
+  // "Chamado #123" e "Abrir chamado" dentro do grupo abrem o chamado aqui mesmo.
+  $('grupo-corpo').addEventListener('click', e => { const a = e.target.closest('[data-chamado]'); if (a) { e.preventDefault(); abrir(Number(a.dataset.chamado)); } });
+
+  // Enviar o chamado aberto pra um grupo (o "encaminhar" do WhatsApp).
+  function dialogoEnviarGrupo() {
+    if (!st.chamado) return;
+    if (!st.grupos.length) { alert('Ainda não existe nenhum grupo. Crie um na aba Grupos.'); return; }
+    $('dlg-grupo-sel').innerHTML = st.grupos.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('');
+    $('dlg-grupo-txt').value = '';
+    $('dlg-grupo').showModal();
+  }
+  $('dlg-grupo-cancelar').addEventListener('click', () => $('dlg-grupo').close());
+  $('form-dlg-grupo').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!st.chamado) return;
+    const grupo_id = Number($('dlg-grupo-sel').value), nomeGrupo = $('dlg-grupo-sel').selectedOptions[0].textContent;
+    $('dlg-grupo-ok').disabled = true;
+    try {
+      await api(`/api/atendimento/chamados/${st.chamado.id}/enviar-grupo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grupo_id, comentario: $('dlg-grupo-txt').value }) });
+      $('dlg-grupo').close(); $('nota-pe').textContent = `Chamado enviado para o grupo ${nomeGrupo}.`; carregarGrupos();
+    } catch (err) { alert(err.message); }
+    $('dlg-grupo-ok').disabled = false;
+  });
+
   // ── início ────────────────────────────────────────────────────────────────
-  renderTopo(); carregarFila();
+  renderTopo(); carregarFila(); carregarGrupos();
   if (BOOT.chamado_inicial) abrir(BOOT.chamado_inicial);
   // heartbeat: mantém o "online" valendo enquanto a tela estiver aberta
   setInterval(() => { if (st.meuStatus !== 'OFFLINE') api('/api/atendimento/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st.meuStatus }) }).catch(() => {}); }, 60000);

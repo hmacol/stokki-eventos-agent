@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-freshhub/pedidos_parados.py
+lovable/pedidos_parados.py
 
 Leitura da tabela `stalled_orders` -- fonte real da tela "Pedidos
 Parados" do Fresh Hub (freshhub.com.br/pedidos-parados), por trás da
@@ -17,7 +17,7 @@ não do Fresh Hub.
 import logging
 import re
 
-from freshhub.auth import SUPABASE_URL, FreshHubSession
+from lovable.auth import SUPABASE_URL, FreshHubSession
 
 logger = logging.getLogger(__name__)
 

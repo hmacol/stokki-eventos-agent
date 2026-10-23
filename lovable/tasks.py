@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-freshhub/tasks.py
+lovable/tasks.py
 
 Escrita na tabela `tasks` -- fonte real do Kanban "Demandas" do Fresh
 Hub (freshhub.com.br/demandas). Usado pelo encaminhamento das
@@ -32,7 +32,7 @@ Título sempre "{categoria} — {client_name}", sem número do pedido.
 """
 import logging
 
-from freshhub.auth import SUPABASE_URL, FreshHubSession
+from lovable.auth import SUPABASE_URL, FreshHubSession
 
 logger = logging.getLogger(__name__)
 

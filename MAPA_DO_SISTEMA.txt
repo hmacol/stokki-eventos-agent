@@ -37,7 +37,7 @@
               (vuupt_client.py, roteirizacao/rotas_client.py).
    Lalamove = entregas avulsas (lalamove_client.py).
    Fresh Hub (freshhub.com.br) = SPA interno em Supabase, fonte dos
-              "pedidos parados" (pasta freshhub/). Não confundir com
+              "pedidos parados" (pasta lovable/). Não confundir com
               app.freshhub.com.br, que é o nosso guarda-chuva no Caddy.
 
  O que é nosso:
@@ -52,6 +52,9 @@
    - App Expo dos motoristas (app_motorista/)
    - "Núcleo": tabelas próprias (nucleo_*) que espelham a Vuupt e vão
      substituí-la aos poucos (ver DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md).
+   - SISTEMA NOVO (freshhub): plano mestre de 17/10/2026, sem Stokki,
+     Vuupt e Lovable. Vive em REPOSITÓRIO PRÓPRIO (C:\freshhub), nada
+     dele entra aqui (ADR-0010). Este repo vai sendo esvaziado por fase.
 
  Produção: VPS Ubuntu, repo em /opt/stokki-eventos, serviços systemd
  (waitress atrás do Caddy), rotinas em timers systemd (infra/*.timer).
@@ -91,6 +94,8 @@
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
+ Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
+ Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -109,6 +114,8 @@
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+   Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
+                                             vigia_stokki_abertos (retrato do pipeline, não ao vivo)
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
@@ -199,13 +206,23 @@
  Blocos do Caddy: arquivos Caddyfile-* nessas mesmas pastas.
 
  Autenticação:
-   painel    -> usuário/senha do config, 6 níveis: total, operador, leitura,
-                expedicao, galpao, atendimento. Decorador requer_auth(niveis=).
+   painel    -> usuário/senha do config, 7 níveis: total, operador, leitura,
+                expedicao, galpao, atendimento, logistica. Decorador requer_auth(niveis=).
                 Login nominal: painel_agentes.usuarios_extras no config.yaml
                 (lista de {usuario, senha, nivel}); a ação fica no nome dele.
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
+                logistica (19/10, só via usuarios_extras) = poderes do operador
+                só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
+                Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
+                Canhotos, Clientes AGENDA e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
+                Acesso personalizado (21/10): tela /acessos (só total) escolhe
+                as telas de um login nominal; tabela painel_acesso_telas
+                (dados.db) vence o nivel do config, poder de total nas telas
+                liberadas, muda na hora. Catálogo tela -> caminhos em
+                painel_agentes/acesso_telas.py: ROTA NOVA PRECISA ENTRAR LÁ
+                (test_acesso_telas falha se não entrar).
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
                 Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
                 print_agent usa header X-Token-Impressao.
@@ -226,6 +243,11 @@
 
  Horário                     Timer (stokki-*)                Script
  --------------------------  ------------------------------  -------------------------------------------
+ 23:30 (até 03:40)           coletar-xml-nfe                 documentos_pedido/coletar_xml_nfe.py (só LÊ a
+                                                             Stokki, conta provider pela trava sessao_uso;
+                                                             grava dados/xml_stokki/PS-<id>.xml + tabela
+                                                             xml_stokki_coleta; quem lê é o snapshot do
+                                                             freshhub, freshhub-copiar-legado 05:10)
  01:30                       exportar-vuupt                  nucleo/exportar_historico_vuupt.py
  03:00                       backup-gcs                      backup_dados_gcs.py
  xx:22 (toda hora)           backup-horario                  backup_dados_gcs.py --horario
@@ -248,7 +270,11 @@
  seg-sex 09,11,13,15,17:10   documentos-incremental          documentos_pedido/processar_documentos.py --incremental
  06-23h a cada 5 min         notificar-entregas              notificacao_entregas/notificar_entrega_concluida.py
  seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario (desiste se a Stokki
-                                                             estiver em uso -- ver stokki/sessao_uso.py)
+                                                             estiver em uso -- ver stokki/sessao_uso.py);
+                                                             desde 22/10 roda a Estação de Impressão antes
+ seg-sex 08:35-16:35 (1h)    vigia-fila-impressao            vigia_fila_impressao.py (só lê a Estação:
+   + 18:35 e 22:35 todo dia                                  faturado +2h / em espera +24h -> grupo
+                                                             ALERTAS FRESH + e-mail, 1x por pedido/dia)
  xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (só devolve ao pool pedido NÃO iniciado de
@@ -366,6 +392,12 @@
  email_utils.py                Envio de e-mail HTML padrão (use sempre este).
  notificar_execucao_agente.py  E-mail de resumo por rotina.
  notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
+ vigia_fila_impressao.py       Só lê a Estação de Impressão e avisa pedido parado
+                               (faturado +2h, em espera +24h; tabela
+                               vigia_impressao_alertas = 1 aviso por pedido/dia;
+                               ignorados = tabela vigia_impressao_ignorados
+                               (--ignorar/--designorar/--listar-ignorados)
+                               + config opcional vigia_impressao.ignorar_codigos).
  notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
  preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
@@ -465,6 +497,12 @@
                                VIGIA, VOLUMES_VUUPT.
  TRATATIVAS_PEDIDOS_PARADOS.md Contexto operacional da tela /pedidos-parados.
  PRODUCT.md                    Contexto de produto/design.
+ docs/adr/                     Registros de decisão (ADR): por que o sistema é
+                               assim (saída da Vuupt, Stokki sem API, rascunho
+                               confirmado à mão...). Decisão nova ou revertida =
+                               ADR novo; nunca reescrever um antigo. Ler os da
+                               área antes de propor refatoração.
+ docs/revisoes/                Relatórios de code review antes de deploy.
  docs/superpowers/             Specs e planos de setembro/2026.
  README.md                     Desatualizado (2 linhas).
  requirements.txt              Dependências Python.
@@ -496,7 +534,11 @@
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
-                      imprimir_pedidos_pendentes.
+                      imprimir_pedidos_pendentes. Fila = aba "Faturados
+                      para imprimir" via GET /printing/list?tab=billed
+                      (tela por abas desde 22/10); _conferir_fila levanta
+                      erro se JSON, contador e botões da aba não baterem
+                      (zero falso vira e-mail de erro, não "OK").
  sessao_uso.py        Trava POR CONTA com FILA por ordem de chegada
                       (tabelas stokki_sessao_uso + stokki_fila). adquirir
                       (esperar_segundos=None espera sem limite;
@@ -645,8 +687,9 @@
 
  Base
  banco.py                  Esquema idempotente e conexão.
- normalizacao.py           Código do pedido (sem "#", maiúsculo, sufixos -R/-C)
-                           e fuso. Use antes de comparar códigos.
+ normalizacao.py           Código do pedido (sem "#", maiúsculo) e fuso. NÃO tira
+                           sufixo -R/-C ("PS-1-R2" é outro pedido). Use antes
+                           de comparar códigos.
  pedidos.py                nucleo_pedidos (upsert, nunca apaga).
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
@@ -735,6 +778,11 @@
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
+ grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
+                           da equipe, abertos a todos do Atendimento, só texto,
+                           não lidas + aviso sonoro (só com o painel aberto),
+                           "Enviar para grupo" no chamado. Tabelas equipe_grupos,
+                           equipe_grupos_mensagens, equipe_grupos_lidas (dados.db).
  contadores_menu.py        Badges do menu lateral.
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
@@ -762,7 +810,14 @@
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
-   /pedidos-parados           pedidos_parados_triagem.html
+   /adesao-portal             adesao_portal.html + adesao_portal.py (quem já
+                              entrou no portal do cliente e quem importa
+                              pedidos por lá; lê clientes_portal/portal_envios;
+                              recarrega a cada 2h; total/operador/leitura/
+                              atendimento/logistica)
+   /acessos                   acessos.html + acesso_telas.py (só total: telas
+                              de cada login nominal, nível personalizado)
+   /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
@@ -937,8 +992,14 @@
                            marketplace. Banco próprio (confirmacoes.db), não
                            usa config.yaml. Deploy manual em outro diretório.
 
- freshhub/                 Cliente do Fresh Hub (Supabase): login, pedidos
-                           parados, tarefas do Kanban.
+ tests/legado/             Testes de convivência com o sistema novo (pytest):
+                           hoje só o da renomeação freshhub/ -> lovable/.
+                           Rodar: py -3.11 -m pytest tests/legado -q
+ lovable/                  Scraping do Fresh Hub do Lovable (Supabase): auth
+                           (Playwright CPF+PIN -> token), pedidos parados,
+                           tasks. Era freshhub/ ate 17/10/2026; o nome
+                           freshhub/ passou a ser o pacote do sistema novo.
+                           Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
@@ -1002,6 +1063,9 @@
    pedidos_segurados, agendamentos_origem, avisos_fora_dia_fixo
                              roteirizacao/
    documentos_processados    documentos_pedido/ (coluna cobranca: 1 duplicata / 0 quadro vazio / -1 sem quadro)
+   xml_stokki_coleta         documentos_pedido/coletar_xml_nfe.py (1 linha por PS: OK/PLACEHOLDER/
+                             SEM_XML/ERRO, erros seguidos; os XMLs ficam em dados/xml_stokki/PS-<id>.xml,
+                             lidos pelo freshhub via snapshot -- nao apagar a pasta)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
@@ -1031,7 +1095,8 @@
                      (NUNCA use a 8070, pode estar rodando de verdade)
    API motorista:    py -3.11 nucleo/api_motorista.py --porta 8073
    Testes:           py -3.11 -m unittest <modulo>   (ex. roteirizacao.test_polimento_rotas)
-                     Não há pytest.
+                     Sem pytest configurado (exceção: tests/legado/, ver seção 14).
+   Sistema novo:     repositório próprio C:\freshhub (CLAUDE.md e README de lá).
    Compilar:         py -3.11 -m py_compile <arquivos>
    Scripts de lote:  quase todos aceitam --modo-teste (não escreve na
                      Stokki/Vuupt; e-mail vai para forcar_destino). Use antes
@@ -1055,7 +1120,12 @@
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
-   comparar (normalizar_order_number / nucleo/normalizacao.py).
+   comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
+   fica em lovable/pedidos_parados.py e só 2 arquivos a usam).
+ - Renomeacao freshhub/ -> lovable/ (17/10/2026): no deploy, mover na VPS o
+   arquivo gitignored `freshhub/sessao_freshhub.json` para
+   `lovable/sessao_freshhub.json` (como www-data) ANTES de reiniciar
+   painel-agentes; sem isso o Lovable refaz login Playwright a cada chamada.
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
  - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada
    rodada sem filtro. Sem listagem completa em 30h, "sem serviço" e
@@ -1091,10 +1161,14 @@
    do Hugo e NÃO entra no chamado.
  - Pré-cadastro automático ESCREVE em `interno` (embarcadores_stokki.py). E-mail
    do convite vai pro Hugo enquanto cadastro_embarcador.forcar_destino_email não
-   for "" explícito; WhatsApp segue whatsapp_notificacoes.clientes.forcar_destino.
+   for "" explícito; WhatsApp do convite segue cadastro_embarcador.
+   forcar_destino_whatsapp ("" = envio real só do convite) e, sem essa chave,
+   whatsapp_notificacoes.clientes.forcar_destino.
  Pré-cadastro só fecha pela aprovação (/inicio ou gerenciar_clientes.py cadastro
  aprovar|habilidade); gravar interno.habilidade à mão deixa o cliente preso em
- /completar-cadastro. interno.email fica NULL até aprovar.
+ /completar-cadastro. interno.email nasce com o e-mail da Stokki e vira o do
+ cliente quando ele completa o cadastro (sem esperar aprovação): a partir daí
+ os e-mails do pipeline (redespacho, agendamento) já saem pra ele.
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.

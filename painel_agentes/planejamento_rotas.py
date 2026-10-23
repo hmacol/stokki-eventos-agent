@@ -797,6 +797,55 @@ def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
     return resumo
 
 
+# Situação na Stokki que ainda NÃO é "Aguardando Transportador" (Hugo,
+# 19/10): o pedido já existe na Vuupt (embarcador prioritário entra em
+# qualquer status; "Em espera" vem da Estação de Impressão), mas o galpão
+# ainda não terminou -- a tela separa num bloco próprio do pool. Chave =
+# status_stokki como o pipeline grava em vigia_stokki_abertos (código da
+# URL da Stokki; "Em espera" é literal da fonte estacao_impressao).
+SITUACAO_STOKKI_NAO_PRONTA = {
+    "Open": "Em aberto",
+    "Separating": "Em separação",
+    "Ready to Pack": "Em conferência",
+    "On hold": "Em espera",
+    "Em espera": "Em espera",
+}
+
+
+def carregar_retrato_stokki(db_path=None) -> tuple[dict[str, str], str | None]:
+    """Retrato do que está aberto na Stokki, gravado pelo pipeline no fim de
+    cada rodada (vigia/banco.py). Devolve ({codigo_base: status_stokki},
+    "dd/mm HH:MM" da última listagem) -- só leitura, não chama a Stokki.
+    Falha vira ({}, None): a tela segue sem a marcação."""
+    try:
+        from vigia import banco as vigia_banco
+        conn = vigia_banco.conectar(db_path)
+        try:
+            por_codigo = {r["codigo"]: r["status_stokki"]
+                          for r in conn.execute("SELECT codigo, status_stokki FROM vigia_stokki_abertos")}
+            ultima = conn.execute("SELECT concluida_em FROM vigia_listagens ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        quando = None
+        if ultima and ultima["concluida_em"]:
+            quando = datetime.strptime(ultima["concluida_em"], vigia_banco.FMT).strftime("%d/%m %H:%M")
+        return por_codigo, quando
+    except Exception as e:
+        logger.warning(f"Falha ao ler o retrato da Stokki pro pool (tela segue sem a marcação): {e}")
+        return {}, None
+
+
+def anotar_situacao_stokki(pool: list[dict], retrato: dict[str, str]) -> None:
+    """Põe `situacao_stokki` (rótulo de SITUACAO_STOKKI_NAO_PRONTA) em cada
+    item do pool que ainda não está pronto na Stokki; None quando está
+    "Aguardando Transportador" ou não aparece no retrato. Código combinado
+    ("#PS-1, #PS-2"): basta um ainda não pronto."""
+    for p in pool:
+        p["situacao_stokki"] = next(
+            (SITUACAO_STOKKI_NAO_PRONTA[retrato[c]] for c in _codigos_base_lista(p["codigo"])
+             if retrato.get(c) in SITUACAO_STOKKI_NAO_PRONTA), None)
+
+
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
     """
     Busca ao vivo na VUUPT os pedidos e separa em:
@@ -938,6 +987,9 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
             p["segurado"] = segurados_por_id.get(p["service_id"])
         pool.sort(key=lambda p: p["codigo"])
+    # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
+    retrato_stokki, retrato_stokki_em = carregar_retrato_stokki()
+    anotar_situacao_stokki(pool, retrato_stokki)
 
     agendamentos_por_service_id = {}
     for s in servicos_brutos:
@@ -981,6 +1033,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     return {
         "pool": pool,
         "pool_retiradas": pool_retiradas,
+        "retrato_stokki_em": retrato_stokki_em,
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
@@ -1106,6 +1159,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "rascunhos": rascunhos,
         "pool": pool_e_agendados["pool"],
         "pool_retiradas": pool_e_agendados["pool_retiradas"],
+        "retrato_stokki_em": pool_e_agendados["retrato_stokki_em"],
         "resumo_agendados": pool_e_agendados["resumo_agendados"],
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,

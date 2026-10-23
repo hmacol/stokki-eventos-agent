@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block titulo %}Adesão ao portal{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+  .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0 0 18px; }
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px 14px; }
+  .cartao .qtd { font-size: 24px; font-weight: 700; display: block; }
+  .cartao .rot { font-size: 12px; color: var(--texto-suave); }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; white-space: nowrap; color: var(--texto-suave); }
+  .num { text-align: right; white-space: nowrap; }
+  .nota { font-size: 11px; color: var(--texto-suave); }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.IMPORTANDO { background: var(--ok-bg, #e6f4ea); color: var(--ok, #1e7e34); }
+  .pilula.NUNCA_ENTROU { background: var(--erro-bg); color: var(--erro); }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Adesão ao portal</h1>
+<p class="sub">
+  Clientes com conta no portal (<strong>app.freshhub.com.br/cliente</strong>). <strong>Importando</strong> = enviou
+  pedido pela aba "Enviar pedidos" nos últimos {{ dias_ativo }} dias. Login de grupo soma os envios das empresas do grupo.
+  Atualizado às {{ gerado_em }}; a página se recarrega sozinha a cada 2 horas.
+</p>
+
+<div class="cartoes">
+  {% for r in resumo %}
+  <div class="cartao"><span class="qtd">{{ r.qtd }}</span><span class="rot">{{ r.rotulo }}</span></div>
+  {% endfor %}
+</div>
+
+<div class="tabela-wrap">
+  <table>
+    <thead><tr><th>Cliente</th><th>CNPJ de acesso</th><th>Situação</th><th>Último login</th>
+      <th class="num">Pedidos ({{ dias_ativo }}d)</th><th class="num">Pedidos (total)</th><th>Último envio</th></tr></thead>
+    <tbody>
+    {% for c in linhas %}
+      <tr>
+        <td>{{ c.nome }}</td>
+        <td class="mono">{{ c.cnpj }}</td>
+        <td><span class="pilula {{ c.situacao }}">{{ c.rotulo }}</span>
+          {% if c.pin_pendente and c.ultimo_login %}<div class="nota">entrou mas não trocou o PIN</div>{% endif %}</td>
+        <td class="mono">{{ c.ultimo_login or '—' }}</td>
+        <td class="num">{{ c.pedidos_recentes }}</td>
+        <td class="num">{{ c.pedidos_total }}</td>
+        <td class="mono">{{ c.ultimo_envio or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  setTimeout(function () { window.location.reload(); }, 2 * 60 * 60 * 1000);
+</script>
+{% endblock %}

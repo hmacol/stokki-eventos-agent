@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara stokki-vigia-fila-impressao.service 30 min depois de cada rodada da Estacao (seg-sex 08:35-16:35 de hora em hora; 18:35 e 22:35 todo dia)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08..16:35:00
+OnCalendar=*-*-* 18,22:35:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

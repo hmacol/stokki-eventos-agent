@@ -169,6 +169,7 @@ NOMES_DAS_TAREFAS = {
     "sincronizar-lalamove": "Atualização das corridas da Lalamove",
     "verificar-entregues-nao-expedidos": "Conferência diária das entregas",
     "vigia-documentos": "Vigia dos documentos dos pedidos",
+    "vigia-fila-impressao": "Vigia da fila de impressão",
     "vigia-pedidos": "Vigia dos pedidos em aberto",
     "wms-recebimentos": "Atualização dos recebimentos do estoque",
     "wms-reservar-pedidos": "Reserva de estoque para os pedidos",
@@ -795,13 +796,17 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
     """Convite do pre-cadastro automatico (embarcadores_stokki.py): link pra
     completar o cadastro no portal. Quem chama garante uma tentativa por
     convite (assinatura cadastro:<cnpj>:convite|reenvio). Com
-    clientes.forcar_destino a mensagem vai pra esse numero com o destino real
-    na primeira linha."""
+    forcar_destino a mensagem vai pra esse numero com o destino real na
+    primeira linha. Trava propria em cadastro_embarcador.forcar_destino_whatsapp
+    (Hugo, 17/10: liberar so o convite); ausente, vale clientes.forcar_destino."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
         if not clientes_ligado(config) or not telefone:
             return "desligado"
-        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        cfg_cad = (config or {}).get("cadastro_embarcador") or {}
+        forcar = (cfg_cad["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_cad
+                  else _cfg_clientes(config).get("forcar_destino"))
+        destino = re.sub(r"\D", "", str(forcar or ""))
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
         else:

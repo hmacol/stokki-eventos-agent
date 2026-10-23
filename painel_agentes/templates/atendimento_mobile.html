@@ -109,6 +109,18 @@
   .kv[data-id] span:first-child { flex: 1; min-width: 0; color: var(--texto); }
   .kv[data-id] span:last-child { flex: none; }
   html.tema-escuro .conv-info .botao:not(.secundario) { background: var(--acento); color: #0B0E14; }
+  /* Grupos internos da equipe (19/10) */
+  .abas button.tem-nl em { background: var(--acento); color: #fff; border-radius: 100px; padding: 0 6px; font-weight: 700; opacity: 1; }
+  .item .nl-n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 100px; background: var(--acento); color: #fff; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .novo-grupo { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--borda); }
+  .novo-grupo input { flex: 1; min-width: 0; font-size: 16px; }
+  .msg .bolha a { color: inherit; font-weight: 700; }
+  .msg:not(.eu) .bolha a { color: var(--acento); }
+  .dlg-grupo { border: 1px solid var(--borda); border-radius: 12px; padding: 16px; background: var(--superficie); color: var(--texto); width: min(420px, 92vw); }
+  .dlg-grupo::backdrop { background: rgba(10,12,20,0.4); }
+  .dlg-grupo form { display: flex; flex-direction: column; gap: 10px; }
+  .dlg-grupo h3 { margin: 0; font-size: 16px; }
+  .dlg-grupo select, .dlg-grupo textarea { border: 1px solid var(--borda); border-radius: 8px; padding: 9px 10px; font-size: 16px; background: var(--superficie); color: var(--texto); font-family: inherit; }
 </style>
 {% endblock %}
 
@@ -154,6 +166,34 @@
   </div>
 </section>
 
+<section class="tela oculto" id="tela-grupo" aria-label="Grupo da equipe">
+  <div class="tela-cab">
+    <button type="button" class="botao-icone" id="voltar-grupos" aria-label="Voltar pros grupos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="ident"><b id="grupo-titulo"></b><span>grupo da equipe · todos do Atendimento veem</span></div>
+  </div>
+  <div class="conv-corpo" id="grupo-corpo"></div>
+  <div class="conv-pe">
+    <div class="compor">
+      <textarea id="grupo-texto" rows="1" placeholder="Mensagem pro grupo…" maxlength="4000"></textarea>
+      <button type="button" class="ico enviar" id="grupo-enviar" aria-label="Enviar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+    </div>
+  </div>
+</section>
+
+<dialog class="dlg-grupo" id="dlg-grupo">
+  <form method="dialog" id="form-dlg-grupo">
+    <h3>Enviar chamado para um grupo</h3>
+    <select id="dlg-grupo-sel" aria-label="Grupo"></select>
+    <textarea id="dlg-grupo-txt" rows="3" maxlength="1000" placeholder="Comentário (opcional)" aria-label="Comentário"></textarea>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="botao secundario" id="dlg-grupo-cancelar" style="flex:1">Cancelar</button>
+      <button type="submit" class="botao" id="dlg-grupo-ok" style="flex:1">Enviar</button>
+    </div>
+  </form>
+</dialog>
+
 <section class="tela contexto oculto" id="tela-contexto" aria-label="Contexto do chamado">
   <div class="tela-cab">
     <button type="button" class="botao-icone" id="voltar-conversa" aria-label="Voltar pra conversa">
@@ -177,7 +217,8 @@
   // Volante: marca o chamado que veio do app do motorista.
   const ICO_VOLANTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:14px;height:14px;flex:none;color:var(--rodando-texto)"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3"></circle><line x1="12" y1="3" x2="12" y2="9"></line><line x1="4.3" y1="16.5" x2="9.4" y2="13.5"></line><line x1="19.7" y1="16.5" x2="14.6" y2="13.5"></line></svg>';
   const st = { aba: 'fila', fila: [], contagens: BOOT.contagens, meuStatus: BOOT.status, nome: BOOT.nome, chamado: null, mensagens: [], contexto: null,
-               ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao };
+               ultimoId: 0, busca: '', timerFila: null, timerConv: null, arquivos: [], enviando: false, situacao: BOOT.situacao,
+               grupos: [], gruposNaoLidas: null, naoLidasFora: null, grupo: null, grupoMsgs: [], grupoUltimoId: 0, timerGrupos: null, timerGrupo: null, enviandoGrupo: false };
 
   async function api(caminho, opts) {
     const r = await fetch(BASE + caminho, Object.assign({ credentials: 'same-origin' }, opts || {}));
@@ -191,10 +232,11 @@
   // Cada tela aberta empilha um estado no history; o popstate fecha a de
   // cima. Assim o botão voltar do Android não sai do painel.
   function mostrarTelas(nivel) {
-    $('tela-conversa').classList.toggle('oculto', nivel < 1);
+    $('tela-conversa').classList.toggle('oculto', nivel < 1 || !!st.grupo);
+    $('tela-grupo').classList.toggle('oculto', nivel < 1 || !st.grupo);
     $('tela-contexto').classList.toggle('oculto', nivel < 2);
     document.body.style.overflow = nivel ? 'hidden' : '';
-    if (nivel < 1) { st.chamado = null; clearTimeout(st.timerConv); renderFila(); }
+    if (nivel < 1) { st.chamado = null; clearTimeout(st.timerConv); st.grupo = null; clearTimeout(st.timerGrupo); renderFila(); }
   }
   window.addEventListener('popstate', e => mostrarTelas((e.state && e.state.nivel) || 0));
   $('voltar-fila').addEventListener('click', () => history.back());
@@ -227,16 +269,18 @@
   // ── fila ──────────────────────────────────────────────────────────────────
   async function carregarFila() {
     try {
-      const j = await api(`/api/atendimento/fila?aba=${st.aba}`);
-      st.fila = j.chamados; st.contagens = j.contagens; st.situacao = j.situacao; st.meuStatus = j.meu_status; st.nome = j.nome || st.nome;
+      const j = await api(`/api/atendimento/fila?aba=${st.aba === 'grupos' ? 'fila' : st.aba}`);
+      if (st.aba !== 'grupos') st.fila = j.chamados;
+      st.contagens = j.contagens; st.situacao = j.situacao; st.meuStatus = j.meu_status; st.nome = j.nome || st.nome;
       renderFila(); renderTopo();
     } catch (e) {}
     clearTimeout(st.timerFila); st.timerFila = setTimeout(carregarFila, 8000);
   }
   function renderFila() {
     const c = st.contagens || {};
-    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos]];
-    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
+    const abas = [['fila', 'Fila', c.fila], ['meus', 'Meus', c.meus], ['motoristas', 'Motoristas', c.motoristas], ['email', 'Por e-mail', c.email], ['assistente', 'Com o assistente', c.assistente], ['resolvidos', 'Resolvidos', c.resolvidos], ['grupos', 'Grupos', st.gruposNaoLidas]];
+    $('abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${st.aba === id ? 'ativa' : ''} ${id === 'grupos' && n ? 'tem-nl' : ''}" data-aba="${id}">${r} <em>${n || 0}</em></button>`).join('');
+    if (st.aba === 'grupos') return renderListaGrupos();
     const q = st.busca.trim().toLowerCase();
     let lista = st.fila;
     if (q) lista = lista.filter(x => [x.id, x.solicitante, x.assunto, x.pedido_ref, x.cnpj_embarcador].join(' ').toLowerCase().includes(q));
@@ -251,13 +295,17 @@
   function previa(x) { const quem = x.ultima_origem_msg === 'cliente' ? 'Cliente: ' : (x.ultima_origem_msg === 'equipe' ? 'Fresh Log: ' : ''); return quem + (x.ultima_texto || '').replace(/\s+/g, ' '); }
   $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; st.aba = b.dataset.aba; renderFila(); carregarFila(); });
   $('busca').addEventListener('input', e => { st.busca = e.target.value; renderFila(); });
-  $('fila').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
+  $('fila').addEventListener('click', e => {
+    const gr = e.target.closest('[data-grupo]'); if (gr) return abrirGrupo(Number(gr.dataset.grupo));
+    const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id));
+  });
 
   // ── conversa ──────────────────────────────────────────────────────────────
   async function abrir(id) {
     try {
       const j = await api(`/api/atendimento/chamados/${id}`);
-      const jaAberta = !!st.chamado;
+      const jaAberta = !!st.chamado || !!st.grupo;
+      st.grupo = null; clearTimeout(st.timerGrupo);
       st.chamado = j.chamado; st.mensagens = j.mensagens; st.contexto = j.contexto; st.ultimoId = st.mensagens.length ? st.mensagens[st.mensagens.length - 1].id : 0;
       st.arquivos = []; $('texto').value = ''; $('texto').style.height = 'auto';
       // Vindo de "outros chamados" no contexto: troca a conversa e volta
@@ -306,6 +354,7 @@
       if (c.status === 'EM_ATENDIMENTO' && meu) acoes += `<button type="button" class="botao secundario" data-acao="transferir">Devolver pra fila</button>`;
       acoes += `<button type="button" class="botao" data-acao="resolver">✓ Resolver</button>`;
     }
+    acoes += `<button type="button" class="botao secundario" data-acao="enviar-grupo" aria-label="Enviar para um grupo da equipe">→ Grupo</button>`;
     $('conv-info').innerHTML = `
       <div class="meta"><span class="pill ${c.status}"><i></i>${esc(c.status_rotulo)}</span>${c.de_motorista ? '<span class="tag-mot">Motorista</span>' : ''}<span>${esc(c.area_rotulo || '')}</span>${c.pedido_ref ? `<span>${c.de_motorista ? 'Parada' : 'Pedido'} <b class="mono" style="color:var(--texto)">${esc(c.pedido_ref)}</b></span>` : ''}<span>Aberto ${esc(c.quando)} pelo ${c.origem === 'chat' ? (c.de_motorista ? 'app' : 'chat') : (c.origem === 'email' ? 'e-mail' : 'portal')}</span>${c.atendente ? `<span>Com ${esc(c.atendente)}${c.assumido_em ? ' desde ' + c.assumido_em.slice(11, 16) : ''}</span>` : ''}</div>
       <div class="acoes">${acoes}</div>`;
@@ -366,7 +415,7 @@
       if (tipo === 'resolver') $('nota-pe').textContent = j.historico_enviado ? 'Resolvido. Histórico enviado por e-mail pro cliente.' : 'Resolvido, mas o cliente não tem e-mail cadastrado pra receber o histórico.';
     } catch (e) { alert(e.message); }
   }
-  $('conv-info').addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (b) acao(b.dataset.acao); });
+  $('conv-info').addEventListener('click', e => { const b = e.target.closest('[data-acao]'); if (!b) return; if (b.dataset.acao === 'enviar-grupo') dialogoEnviarGrupo(); else acao(b.dataset.acao); });
   $('macros').addEventListener('click', e => { const b = e.target.closest('[data-macro]'); if (b) { const t = $('texto'); t.value = (t.value ? t.value + ' ' : '') + b.dataset.macro; t.dispatchEvent(new Event('input')); t.focus(); } });
   // No celular o Enter quebra linha (como no WhatsApp); envia pelo botão.
   $('enviar').addEventListener('click', enviar);
@@ -434,9 +483,135 @@
   }
   $('lateral').addEventListener('click', e => { const it = e.target.closest('[data-id]'); if (it) abrir(Number(it.dataset.id)); });
 
+  // ── grupos internos da equipe (19/10) ─────────────────────────────────────
+  // Mesmo comportamento da tela desktop: grupo aberto pra todos do
+  // Atendimento, não lidas na aba e aviso sonoro de mensagem nova.
+  let audioCtx = null;
+  document.addEventListener('click', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {} });
+  function bip() {
+    // O navegador só deixa tocar depois do primeiro toque na página.
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    const t = audioCtx.currentTime;
+    [[880, 0], [1320, 0.13]].forEach(([f, d]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = f; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.25, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.18);
+      o.connect(g).connect(audioCtx.destination); o.start(t + d); o.stop(t + d + 0.2);
+    });
+  }
+  function linkar(texto) {
+    return esc(texto)
+      .replace(/#?\b(PS-\d+(?:-R\d+)?)\b/gi, (m, cod) => `<a href="${BASE}/consulta/pedido/${encodeURIComponent(cod.toUpperCase())}">${m}</a>`)
+      .replace(/\bChamado #(\d+)/g, (m, id) => `<a href="#" data-chamado="${id}">${m}</a>`);
+  }
+  async function carregarGrupos() {
+    try {
+      const j = await api('/api/atendimento/grupos');
+      // o grupo aberto toca pelo pollGrupo; aqui só os outros (senão toca 2x)
+      const foraDoAberto = j.grupos.filter(x => !st.grupo || x.id !== st.grupo.id).reduce((n, x) => n + x.nao_lidas, 0);
+      if (st.naoLidasFora != null && foraDoAberto > st.naoLidasFora) bip();
+      st.naoLidasFora = foraDoAberto;
+      st.grupos = j.grupos; st.gruposNaoLidas = j.nao_lidas;
+      document.title = (j.nao_lidas ? `(${j.nao_lidas}) ` : '') + 'Atendimento';
+      // não redesenha a lista enquanto a pessoa digita o nome de um grupo novo
+      if (document.activeElement && document.activeElement.id === 'novo-grupo-nome') return;
+      renderFila();
+    } catch (e) {}
+    finally { clearTimeout(st.timerGrupos); st.timerGrupos = setTimeout(carregarGrupos, 6000); }
+  }
+  function renderListaGrupos() {
+    const q = st.busca.trim().toLowerCase();
+    const lista = q ? st.grupos.filter(x => [x.nome, x.ultima_texto].join(' ').toLowerCase().includes(q)) : st.grupos;
+    $('fila').innerHTML = `<form class="novo-grupo" id="form-novo-grupo"><input type="text" id="novo-grupo-nome" placeholder="Nome do novo grupo" maxlength="60" aria-label="Nome do novo grupo" enterkeyhint="done"><button type="submit" class="botao secundario">+ Criar</button></form>` +
+      (lista.length ? lista.map(x => `
+      <div class="item ${x.nao_lidas ? 'nl' : ''}" data-grupo="${x.id}" role="button" tabindex="0"><span class="pt"></span><div class="c">
+        <div class="l1"><b>${esc(x.nome)}</b>${x.nao_lidas ? `<span class="nl-n">${x.nao_lidas}</span>` : ''}<span class="q">${esc(x.quando)}</span></div>
+        <div class="l3">${x.ultima_texto ? esc(x.ultima_autor + ': ' + x.ultima_texto.replace(/\s+/g, ' ')) : 'Sem mensagens ainda.'}</div>
+      </div></div>`).join('') : `<div class="vazio">${st.grupos.length ? 'Nenhum grupo com esse nome.' : 'Nenhum grupo ainda. Crie o primeiro acima.'}</div>`);
+  }
+  $('fila').addEventListener('submit', async e => {
+    if (e.target.id !== 'form-novo-grupo') return;
+    e.preventDefault();
+    const nome = $('novo-grupo-nome').value.trim(); if (!nome) return;
+    try {
+      const j = await api('/api/atendimento/grupos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome }) });
+      $('novo-grupo-nome').blur(); await carregarGrupos(); abrirGrupo(j.grupo.id);
+    } catch (err) { alert(err.message); }
+  });
+  async function abrirGrupo(id) {
+    try {
+      const j = await api(`/api/atendimento/grupos/${id}`);
+      const jaAberta = !!st.chamado || !!st.grupo;
+      st.chamado = null; clearTimeout(st.timerConv);
+      st.grupo = j.grupo; st.grupoMsgs = j.mensagens; st.grupoUltimoId = j.mensagens.length ? j.mensagens[j.mensagens.length - 1].id : 0;
+      if (!jaAberta) history.pushState({ nivel: 1 }, '');
+      mostrarTelas(1);
+      $('grupo-texto').value = ''; $('grupo-texto').style.height = 'auto';
+      renderGrupo(); carregarGrupos(); agendarGrupo();
+    } catch (e) { alert(e.message); }
+  }
+  function renderGrupo() {
+    $('grupo-titulo').textContent = st.grupo.nome;
+    $('grupo-corpo').innerHTML = st.grupoMsgs.length ? st.grupoMsgs.map(m => `
+      <div class="msg ${m.eu ? 'eu' : ''}"><div class="bolha">${linkar(m.texto)}${m.chamado_id ? `<br><a href="#" data-chamado="${m.chamado_id}">→ Abrir chamado #${m.chamado_id}</a>` : ''}</div>
+      <div class="meta-msg">${esc(m.autor)} · ${esc(m.quando)}</div></div>`).join('') : '<div class="sistema">Nenhuma mensagem ainda.</div>';
+    $('grupo-corpo').scrollTop = $('grupo-corpo').scrollHeight;
+  }
+  async function pollGrupo() {
+    if (!st.grupo) return;
+    const id = st.grupo.id;
+    try {
+      const j = await api(`/api/atendimento/grupos/${id}?desde=${st.grupoUltimoId}`);
+      if (!st.grupo || st.grupo.id !== id) return;
+      if (j.mensagens.length) {
+        if (j.mensagens.some(m => !m.eu)) bip();
+        st.grupoMsgs = st.grupoMsgs.concat(j.mensagens); st.grupoUltimoId = st.grupoMsgs[st.grupoMsgs.length - 1].id; renderGrupo();
+      }
+    } catch (e) {}
+    agendarGrupo();
+  }
+  function agendarGrupo() { clearTimeout(st.timerGrupo); if (st.grupo) st.timerGrupo = setTimeout(pollGrupo, 3000); }
+  async function enviarGrupo() {
+    const texto = $('grupo-texto').value.trim();
+    if (!st.grupo || !texto || st.enviandoGrupo) return;
+    st.enviandoGrupo = true; $('grupo-enviar').disabled = true;
+    try {
+      await api(`/api/atendimento/grupos/${st.grupo.id}/mensagens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ texto }) });
+      $('grupo-texto').value = ''; $('grupo-texto').style.height = 'auto';
+      clearTimeout(st.timerGrupo); await pollGrupo(); carregarGrupos();
+    } catch (e) { alert(e.message); }
+    st.enviandoGrupo = false; $('grupo-enviar').disabled = false;
+  }
+  // No celular o Enter quebra linha (como no WhatsApp); envia pelo botão.
+  $('grupo-enviar').addEventListener('click', enviarGrupo);
+  $('grupo-texto').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'; });
+  $('voltar-grupos').addEventListener('click', () => history.back());
+  $('grupo-corpo').addEventListener('click', e => { const a = e.target.closest('[data-chamado]'); if (a) { e.preventDefault(); abrir(Number(a.dataset.chamado)); } });
+
+  // Enviar o chamado aberto pra um grupo (o "encaminhar" do WhatsApp).
+  function dialogoEnviarGrupo() {
+    if (!st.chamado) return;
+    if (!st.grupos.length) { alert('Ainda não existe nenhum grupo. Crie um na aba Grupos.'); return; }
+    $('dlg-grupo-sel').innerHTML = st.grupos.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('');
+    $('dlg-grupo-txt').value = '';
+    $('dlg-grupo').showModal();
+  }
+  $('dlg-grupo-cancelar').addEventListener('click', () => $('dlg-grupo').close());
+  $('form-dlg-grupo').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!st.chamado) return;
+    const grupo_id = Number($('dlg-grupo-sel').value), nomeGrupo = $('dlg-grupo-sel').selectedOptions[0].textContent;
+    $('dlg-grupo-ok').disabled = true;
+    try {
+      await api(`/api/atendimento/chamados/${st.chamado.id}/enviar-grupo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grupo_id, comentario: $('dlg-grupo-txt').value }) });
+      $('dlg-grupo').close(); $('nota-pe').textContent = `Chamado enviado para o grupo ${nomeGrupo}.`; carregarGrupos();
+    } catch (err) { alert(err.message); }
+    $('dlg-grupo-ok').disabled = false;
+  });
+
   // ── início ────────────────────────────────────────────────────────────────
   history.replaceState({ nivel: 0 }, '');
-  renderTopo(); carregarFila();
+  renderTopo(); carregarFila(); carregarGrupos();
   if (BOOT.chamado_inicial) abrir(BOOT.chamado_inicial);
   // heartbeat: mantém o "online" valendo enquanto a tela estiver aberta
   setInterval(() => { if (st.meuStatus !== 'OFFLINE') api('/api/atendimento/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st.meuStatus }) }).catch(() => {}); }, 60000);

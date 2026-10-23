@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-freshhub/auth.py
+lovable/auth.py
 
 Gerenciamento de autenticação com o Fresh Hub (freshhub.com.br) --
 sistema interno da Freshlog (Pedidos Parados, Demandas etc.), separado
@@ -28,7 +28,7 @@ Fluxo:
      completo via Playwright se isso falhar.
 
 Uso:
-    from freshhub.auth import FreshHubSession, SUPABASE_URL
+    from lovable.auth import FreshHubSession, SUPABASE_URL
 
     sess = FreshHubSession(config)
     resp = sess.get(f"{SUPABASE_URL}/rest/v1/stalled_orders",
@@ -59,7 +59,7 @@ URL_LOGIN = "https://freshhub.com.br/login"
 LOCAL_STORAGE_KEY = "sb-qhujqhzkwvbfsauxgepf-auth-token"
 
 # Arquivo onde a sessão é persistida entre execuções -- ao lado deste
-# arquivo, dentro de freshhub/ (mesmo padrão de stokki/sessao_stokki.json).
+# arquivo, dentro de lovable/ (mesmo padrão de stokki/sessao_stokki.json).
 SESSAO_PATH = Path(__file__).parent / "sessao_freshhub.json"
 
 MAX_TENTATIVAS_RENOVACAO = 2

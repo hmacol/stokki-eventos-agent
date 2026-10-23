@@ -50,9 +50,9 @@ import yaml
 import email_utils
 import tratativas
 from vuupt_client import VuuptClient, VuuptAPIError
-from freshhub.auth import FreshHubSession
-from freshhub.pedidos_parados import listar_pedidos_parados, normalizar_order_number
-from freshhub.tasks import criar_demanda_para_tratativa
+from lovable.auth import FreshHubSession
+from lovable.pedidos_parados import listar_pedidos_parados, normalizar_order_number
+from lovable.tasks import criar_demanda_para_tratativa
 
 logger = logging.getLogger(__name__)
 
@@ -851,7 +851,7 @@ def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> 
     """
     Ação das tratativas que criam Demanda no Fresh Hub (Cancelados/
     Devolução Parcial/Descartar/Verificar com Cliente -- cada uma numa
-    área diferente, ver MOLDE_TRATATIVA em freshhub/tasks.py; nunca
+    área diferente, ver MOLDE_TRATATIVA em lovable/tasks.py; nunca
     duplica na Vuupt). Resolve o nome do cliente na Vuupt só pra usar no
     título/client_name do card -- se não conseguir, cria a Demanda com
     um título genérico em vez de travar a ação (é mais importante quem
