@@ -276,6 +276,10 @@
    + 18:35 e 22:35 todo dia                                  faturado +2h / em espera +24h -> grupo
                                                              ALERTAS FRESH + e-mail, 1x por pedido/dia)
  xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
+ a cada 1 min                galpao3d-coletar                python -m galpao3d.coletar (Galpão 3D: Stokki só se a
+                                                             trava estiver livre e sem fila, 40 shows/rodada max;
+                                                             Vuupt rotas de hoje; dia útil 03:50-18:30 todo min,
+                                                             fora disso e em fim de semana/feriado :00/15/30/45)
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (só devolve ao pool pedido NÃO iniciado de
                                                              rota de dia anterior; desde 05/10 NÃO cancela
@@ -812,6 +816,15 @@
                               pedidos por lá; lê clientes_portal/portal_envios;
                               recarrega a cada 2h; total/operador/leitura/
                               atendimento/logistica)
+   /galpao-3d                 galpao_3d.html + static/galpao_3d.js (módulo ES,
+                              three@0.160.0 por import map; cena do protótipo
+                              com bonecos de `pessoas`, filas nas esteiras até
+                              12 caixas + placa "fila N", rua da Vuupt, eventos
+                              novos encenados); só total; busca a cada 60 s o
+                              JSON de /api/galpao-3d/estado
+                              (galpao3d.estado.montar_estado);
+                              ?exemplo=1 roda com ESTADO_EXEMPLO do próprio JS;
+                              selo "sessão expirou" quando a API cai no login
    /acessos                   acessos.html + acesso_telas.py (só total: telas
                               de cada login nominal, nível personalizado)
    /pedidos-parados          pedidos_parados_triagem.html
@@ -983,6 +996,49 @@
                            não confirmado. A validação de fotos do app
                            próprio está em nucleo/validacao_fotos.py.
 
+ galpao3d/                 Galpão 3D (visão 3D do galpão com dados da Stokki/
+                           Vuupt; só nível total). Tela /galpao-3d no painel
+                           (seção 10), alimentada pelo timer galpao3d-coletar.
+   sondar.py                Sonda única SOMENTE LEITURA: lista 3 pedidos por
+                           state da API da Stokki, salva a página "show" do
+                           1º de cada e imprime contar_pedidos. Roda na VPS
+                           como www-data (pega a trava, dono galpao-3d-sonda).
+   turno.py                 Turnos (recebimento/expedição 4-14h, separação/
+                            conferência 8-18h, galpão 4-18h), minutos úteis
+                            (noite e fim de semana/feriado não contam), início
+                            do dia operacional (4h) e deve_coletar (janela).
+   historico_stokki.py      Lê a página "show" do pedido: linha do tempo,
+                            operador da tarefa, conferência, unidades/itens.
+   banco.py                 Tabelas galpao_* (seção 15); migração aditiva
+                            de colunas em garantir_esquema.
+   coletar.py               Coletor do timer galpao3d-coletar. Dono da trava:
+                            galpao-3d (timer) / galpao-3d-teste (--modo-teste,
+                            --forcar manual). Situação de todos vem da listagem;
+                            Open novo só é gravado; show só para sumidos,
+                            mudanças e novos fora de Open (40/rodada, ordem
+                            sumidos > Ready to Pack > Separating > resto);
+                            3 falhas seguidas ou 404 = desiste até nova
+                            mudança. Cedeu a vez antes de listar = "parcial"
+                            (não conta para a idade dos dados). Fora da janela sai 0.
+   indicadores.py           Conferência (média ponderada por unidades),
+                            produtividade da separação, esperas até a
+                            conferência começar.
+   remanejamento.py         SUGERE (nunca executa) mover gente entre etapas
+                            vizinhas (fila/espera/folga).
+   estado.py                montar_estado: o JSON da tela (placar, pessoas,
+                            filas, eventos, rua, indicadores, sugestões).
+                            Só lê galpao_*.
+   fixtures/show_*.html     Páginas "show" reais (separando, conferencia,
+                           aguardando) SEM dado de cliente (XXX/"Cliente").
+   Config (config.yaml, seção galpao_3d):
+     equipe: {nome exato do usuário na Stokki: separacao|conferencia|estoque|
+              recebimento_expedicao}  (quem não está aqui e aparece como
+              operador/conferente vira boneco "extra")
+     remanejamento: {fila_min: 10, espera_min: 60, folga_max: 3}  (opcional)
+   Limitação: a conferência em andamento só é vista quando o pedido sai de
+   "Em Conferência" (a show não é relida a cada minuto para não segurar a
+   Stokki); até lá o pedido conta como esperando a conferência.
+
  coleta_emporio_quatro_estrelas/  Lança a coleta diária na Vuupt.
 
  confirmacao_motoristas/   Página pública de confirmação de rota e
@@ -1075,7 +1131,11 @@
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
-   interno                   tipo de carga por embarcador (só leitura)
+   galpao_*                  galpao3d/banco.py (Galpão 3D): galpao_pedidos (último
+                             estado + falhas_show/show_pendente), galpao_eventos,
+                             galpao_conferencias; galpao_coletas, galpao_contagens,
+                             galpao_rua = 1 linha por minuto, guardadas 7 dias
+   interno                  tipo de carga por embarcador (só leitura)
    rotas, rotas_paradas      LEGADO vazio (não usar)
 
  Outros bancos: dados/atendimento.db (atendimento/),
