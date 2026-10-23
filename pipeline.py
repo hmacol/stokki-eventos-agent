@@ -27,6 +27,7 @@ import re
 import sqlite3
 import sys
 import time
+import unicodedata
 from datetime import date
 from pathlib import Path
 
@@ -54,6 +55,8 @@ from regras import feriados
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
 import redespacho_confirmacao
+import consulta_transportadora
+from consulta_transportadora import config_consulta
 from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
 
 # Seção 'retiradas' do config.yaml, preenchida em main() -- processar_pedido
@@ -413,6 +416,61 @@ def montar_payload_vuupt(
     return payload
 
 
+# ── Transportadora nova (cadastro automatico) ──────────────────────────────────
+
+def _deve_segurar_por_transportadora(detalhe: dict, res_end, servico_existente, catalogo):
+    """
+    Pedido cuja transportadora FORMAL (bloco Transportadora do detalhe) nao
+    esta no cadastro fica parado ate o embarcador dizer o que ela e
+    (retirada/redespacho/entrega). Devolve (nome, cnpj_so_digitos) ou None.
+
+    So segura antes de existir na Vuupt e quando o endereco veio do destino
+    (ou caiu em aguardando_redespacho): Local de Entrega e mensagem ja dizem
+    pra onde ir. "Desconhecida" e calculada pelo catalogo pro nome formal,
+    nao pelo res_end (que pode descrever outra transportadora da mensagem).
+    """
+    transp = detalhe.get("transportadora") or {}
+    nome = (transp.get("nome") or "").strip()
+    if not nome:
+        return None
+    sem_acento = "".join(c for c in unicodedata.normalize("NFD", nome) if unicodedata.category(c) != "Mn")
+    if sem_acento.strip().casefold() == "nao informado":
+        return None
+    if servico_existente is not None or res_end.fonte not in ("destino", "aguardando_redespacho"):
+        return None
+    cnpj = re.sub(r"\D", "", transp.get("documento") or "")
+    if not catalogo.resolver(nome, cnpj=cnpj).desconhecida:
+        return None
+    return nome, cnpj
+
+
+def _registrar_e_avisar_transportadora(codigo_ps, detalhe, nome, cnpj, stkkc_id, config_app):
+    """Grava a pendencia e avisa o embarcador (1x por dia). Nunca levanta:
+    falha aqui so e logada, o pedido continua segurado."""
+    try:
+        dados_banco = _buscar_dados_embarcador_banco(stkkc_id) if stkkc_id else {}
+        emb_cnpj = dados_banco.get("cnpj_embarcador") or f"stkkc:{stkkc_id}"
+        local = detalhe.get("local_entrega") or detalhe.get("destino") or {}
+        resumo = {"destinatario": (detalhe.get("destino") or {}).get("nome", ""),
+                  "cidade": local.get("cidade", ""), "uf": local.get("uf", "")}
+        conn = consulta_transportadora.conectar_consultas(DB_PATH)
+        try:
+            reg = consulta_transportadora.registrar_desconhecida(
+                conn, nome, cnpj, codigo_ps, emb_cnpj, stkkc_id, resumo)
+            if consulta_transportadora.deve_avisar_hoje(reg["consulta"], date.today()):
+                r = consulta_transportadora.enviar_aviso(conn, reg["consulta"], config_app,
+                                                         lembrete=False, modo_teste=False)
+                logger.info(f"  {codigo_ps}: aviso da transportadora {nome}: {r}")
+        except Exception as e:
+            logger.warning(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                           f"(pedido segue segurado): {e}")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                       f"(pedido segue segurado): {e}")
+
+
 # ── Processamento de um pedido ─────────────────────────────────────────────────
 
 def processar_pedido(
@@ -431,6 +489,7 @@ def processar_pedido(
     mapa_niveis: dict | None = None,
     conjunto_agendamento: set | None = None,
     config_email: dict | None = None,
+    config_app: dict | None = None,
 ) -> dict:
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
@@ -494,6 +553,27 @@ def processar_pedido(
         # 2. Resolução do endereço
         res_end = resolver_endereco_entrega(
             detalhe, catalogo, anthropic_api_key, google_maps_api_key)
+
+        # Transportadora formal fora do cadastro: segura o pedido e pergunta ao
+        # embarcador (retirada/redespacho/entrega). Antes da RETIRADA e do
+        # aguardando_redespacho. Desligado = comportamento de sempre.
+        if config_consulta(config_app or {})["ativo"]:
+            segurar = _deve_segurar_por_transportadora(detalhe, res_end, servico_existente, catalogo)
+            if segurar:
+                nome_transp, cnpj_transp = segurar
+                resultado["fonte_endereco"] = res_end.fonte
+                resultado["requer_revisao"] = True
+                resultado["observacao"] = (f"Transportadora {nome_transp} nova: aguardando resposta "
+                                           f"do embarcador (retirada/redespacho/entrega).")
+                resultado["acao"] = "aguardando_transportadora"
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: seguraria o pedido ate o embarcador responder "
+                                f"sobre a transportadora {nome_transp} (nada gravado/enviado).")
+                else:
+                    _registrar_e_avisar_transportadora(
+                        codigo_ps, detalhe, nome_transp, cnpj_transp,
+                        stkkc_id_emb or detalhe.get("stkkc_id"), config_app or {})
+                return resultado
 
         # Pedidos com transportadora RETIRADA (cliente retira / terceira
         # coleta no galpão): SERVIÇO AVULSO na VUUPT, título "[RETIRADA]",
@@ -1156,6 +1236,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             mapa_niveis=mapa_niveis,
             conjunto_agendamento=conjunto_agendamento,
             config_email=config.get("email", {}),
+            config_app=config,
         )
         res["fonte_coleta"] = (
             linha.get("_fonte", "manual") if isinstance(linha, dict) else "manual"
