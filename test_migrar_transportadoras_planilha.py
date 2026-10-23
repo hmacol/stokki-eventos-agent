@@ -62,6 +62,27 @@ class TestMigrar(unittest.TestCase):
         self.assertEqual(len(dif), 1)
         self.assertIn("LOGGI RETIRA", dif[0])
 
+    def _batimento(self, *textos):
+        self.conn.execute("CREATE TABLE batimento_pedidos (transportadora TEXT, visto_em TEXT)")
+        for t in textos:
+            self.conn.execute("INSERT INTO batimento_pedidos VALUES (?, datetime('now'))", (t,))
+        self.conn.commit()
+
+    def test_pre_cadastro_cria_pendentes_sem_consulta(self):
+        mig.importar(self.xlsx, self.conn)
+        self._batimento("TRANSFRIOS LTDA", "NOVA TRANSP 11222333000144", "Não informado", "NOVA TRANSP 11222333000144")
+        criadas = mig.pre_cadastrar(self.conn, self.db)
+        self.assertEqual(criadas, ["NOVA TRANSP"])
+        lin = self.conn.execute("SELECT * FROM transportadoras WHERE nome='NOVA TRANSP'").fetchone()
+        self.assertEqual((lin["situacao"], lin["origem"], lin["tipo"], lin["cnpj"], lin["atualizado_por"]),
+                         ("PENDENTE", "AUTOMATICO", None, "11222333000144", "pre-cadastro"))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transportadoras WHERE situacao='PENDENTE'").fetchone()[0], 1)
+        self.assertEqual(mig.pre_cadastrar(self.conn, self.db), [])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transportadoras WHERE situacao='PENDENTE'").fetchone()[0], 1)
+        tabelas = self.conn.execute("SELECT name FROM sqlite_master WHERE name IN "
+                                    "('transportadora_consultas','transportadora_pedidos_parados')").fetchall()
+        self.assertEqual(tabelas, [])
+
 
 if __name__ == "__main__":
     unittest.main()

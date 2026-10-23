@@ -10,17 +10,21 @@ Uso:
   py -3.11 migrar_transportadoras_planilha.py --modo-teste   (banco em memoria, so mostra)
   py -3.11 migrar_transportadoras_planilha.py                (importa; idempotente)
   py -3.11 migrar_transportadoras_planilha.py --comparar     (exit 1 se houver diferenca)
+  py -3.11 migrar_transportadoras_planilha.py --pre-cadastro (PENDENTE p/ desconhecidas dos ultimos 60 dias;
+                                                              com --modo-teste so lista)
 """
 import argparse
 import re
 import sqlite3
 import sys
+import unicodedata
 from pathlib import Path
 
 import openpyxl
 
 import transportadoras_cadastro as cad
 from batimento.medir import _RE_CNPJ
+from consulta_transportadora import _achar_pendente
 from regras.transportadoras import CatalogoTransportadoras
 
 PLANILHA = Path(__file__).parent / "dados" / "BD_TRANSPORTADORAS.xlsx"
@@ -124,15 +128,53 @@ def consultas_recentes(db: Path, dias: int = 60) -> list[tuple[str, str]]:
     return list(dict.fromkeys(saida))
 
 
+def _sem_nome_util(nome: str) -> bool:
+    """Vazio ou 'Nao informado' (sem acento, caixa ignorada): nada a cadastrar."""
+    sem_acento = "".join(c for c in unicodedata.normalize("NFD", nome or "") if unicodedata.category(c) != "Mn")
+    return sem_acento.strip().casefold() in ("", "nao informado")
+
+
+def pre_cadastrar(conn, db: Path, dias: int = 60, modo_teste: bool = False) -> list[str]:
+    """PENDENTE (origem AUTOMATICO, sem consulta e sem pedido parado) para cada
+    transportadora dos ultimos dias que o catalogo ATIVO nao conhece e que ainda
+    nao tem PENDENTE. Devolve os nomes criados (em modo_teste, os que seriam)."""
+    catalogo = CatalogoTransportadoras.carregar_do_banco(db)
+    criadas = []
+    for nome, cnpj in consultas_recentes(db, dias):
+        if _sem_nome_util(nome):
+            continue
+        cnpj = cad.normalizar_cnpj(cnpj)
+        if not catalogo.resolver(nome, cnpj=cnpj).desconhecida:
+            continue
+        if _achar_pendente(conn, nome, cnpj) is not None:
+            continue
+        if not modo_teste:
+            cad.criar(conn, {"nome": nome, "cnpj": cnpj, "situacao": "PENDENTE", "tipo": None},
+                      origem="AUTOMATICO", por="pre-cadastro")
+        criadas.append(nome)
+    return criadas
+
+
 def main():
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--modo-teste", action="store_true", help="importa em banco em memoria, nao escreve no --db")
     ap.add_argument("--comparar", action="store_true", help="compara planilha x banco; exit 1 se houver diferenca")
+    ap.add_argument("--pre-cadastro", action="store_true",
+                    help="cria PENDENTE p/ transportadoras dos ultimos 60 dias desconhecidas (com --modo-teste so lista)")
     ap.add_argument("--planilha", type=Path, default=PLANILHA)
     ap.add_argument("--db", type=Path, default=cad.DB_PATH)
     a = ap.parse_args()
+
+    if a.pre_cadastro:
+        conn = cad.conectar(a.db)
+        criadas = pre_cadastrar(conn, a.db, modo_teste=a.modo_teste)
+        conn.close()
+        print(f"{'[modo-teste] iriam ser criadas' if a.modo_teste else 'criadas'}: {len(criadas)}")
+        for n in criadas:
+            print(f"  {n}")
+        return
 
     if a.comparar:
         difs = comparar(a.planilha, a.db, consultas_recentes(a.db))
