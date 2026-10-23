@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-consulta-transportadora.service de segunda a sexta as 08:00
+
+[Timer]
+OnCalendar=Mon..Fri 08:00:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

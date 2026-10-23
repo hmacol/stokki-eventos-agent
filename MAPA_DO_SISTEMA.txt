@@ -278,7 +278,9 @@
  07-20h xx:10                comparar-pool                   nucleo/comparar_pool.py (sombra)
  seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
  dias 1 e 16 08:00           dedicados-financeiro            notificar_dedicados_financeiro.py
- 08:20 e 15:20               notificar-pedidos-em-espera     notificar_pedidos_em_espera.py
+ seg-sex 08:00               consulta-transportadora         lembrar_consultas_transportadora.py (lembrete diário ao
+                                                             embarcador; alerta à equipe após 2 dias úteis)
+ 08:20 e 15:20               notificar-pedidos-em-espera    notificar_pedidos_em_espera.py
  08-19h a cada 30 min        expedicao-frequente             expedir_pedidos.py
  08-17h xx:05/xx:35          acompanhar-retiradas            retiradas/acompanhar_retiradas.py
  08,10,...,20h               reconciliar-retirada            reconciliar_pedidos_retirada.py --cancelar
@@ -410,6 +412,8 @@
  redespacho_confirmacao.py     Segura pedido fora da área sem redespacho.
  consulta_transportadora.py  Transportadora desconhecida: cadastro PENDENTE, pedidos parados e consulta por
                                embarcador (tabelas transportadora_pedidos_parados e transportadora_consultas).
+ lembrar_consultas_transportadora.py  Seg-sex 08h (stokki-consulta-transportadora.timer): lembra o embarcador
+                               1x/dia e avisa a equipe (grupo Alertas, 1x) após 2 dias úteis ou sem contato.
  transportadoras_cadastro.py   Cadastro de transportadoras no dados.db (tabelas transportadoras e
                                _historico); catalogo lido por CatalogoTransportadoras.carregar_do_banco.
  migrar_transportadoras_planilha.py  Carga unica da planilha BD_TRANSPORTADORAS no banco (origem PLANILHA)

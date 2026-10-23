@@ -149,6 +149,7 @@ NOMES_DAS_TAREFAS = {
     "embarcadores-novos": "Pré-cadastro de embarcador novo da Stokki",
     "ensaio-restauracao": "Teste semanal da cópia de segurança",
     "expedicao-frequente": "Baixa das entregas na Stokki",
+    "consulta-transportadora": "Lembrete de transportadora sem resposta",
     "informativo-mensal": "Informativo mensal de dias de entrega",
     "exportar-vuupt": "Cópia do histórico da Vuupt",
     "lancar-lalamove": "Pedido de corridas na Lalamove",
@@ -371,6 +372,20 @@ def texto_consulta_transportadora(transportadora: str, n_pedidos: int, link: str
     for limite in (40, 30, 20, 10, 0):
         nome = _nome_simples(transportadora, limite) if limite else ""
         texto = f"{inicio}{pedidos} aguardando a transportadora{' ' + nome if nome else ''}.\n{fim}"
+        if len(texto) <= MAX_MENSAGEM:
+            break
+    return texto
+
+
+def texto_alerta_transportadora(transportadora: str, embarcador: str, n_pedidos: int, dias: int,
+                                link_tela: str) -> str:
+    """Pra equipe: consulta de transportadora sem resposta do embarcador.
+    Cabe em MAX_MENSAGEM sem cortar o link: os nomes encolhem primeiro."""
+    pedidos = "1 pedido parado" if n_pedidos == 1 else f"{n_pedidos} pedidos parados"
+    fim = f"Resolver: {link_tela}"
+    for limite in (40, 30, 20, 10):
+        texto = (f"Fresh Log: transportadora {_nome_simples(transportadora, limite)} sem resposta de "
+                 f"{_nome_simples(embarcador, limite)} ha {dias} dias ({pedidos}).\n{fim}")
         if len(texto) <= MAX_MENSAGEM:
             break
     return texto
@@ -872,6 +887,20 @@ def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatu
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_CLIENTE, "consulta_transportadora", texto, assinatura,
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_alerta_transportadora(transportadora: str, embarcador: str, n_pedidos: int, dias: int,
+                                 link_tela: str, config: dict, consulta_id: int | None = None,
+                                 modo_teste: bool = False, **kw) -> str:
+    """Pro grupo de alertas: consulta de transportadora sem resposta
+    (lembrar_consultas_transportadora.py). Quem chama garante 1 vez por consulta."""
+    try:
+        return despachar(config, "consulta_transportadora", "alerta_transportadora",
+                         texto_alerta_transportadora(transportadora, embarcador, n_pedidos, dias, link_tela),
+                         f"alerta_transportadora:{consulta_id}", modo_teste=modo_teste, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
