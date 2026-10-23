@@ -256,7 +256,7 @@
   /* Modal "Marcar como tratada" (Hugo, 16/09): mesma casca do de
      exclusão, botão de confirmar sem vermelho (tratar não destrói nada). */
   .modal-excluir.modal-tratar .acoes button.confirmar { background: var(--primaria); }
-  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); }
+  .modal-excluir.modal-tratar .descricao-excecao { font-size: 12.5px; margin: 0 0 12px; color: var(--texto); white-space: pre-line; max-height: 40vh; overflow-y: auto; }
   #card-rotas select#visao-rotas {
     font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--borda); border-radius: 5px;
     background: var(--fundo); color: var(--texto);
@@ -1014,7 +1014,7 @@ function tratarSelecionadas() {
   const lote = selecionadas();
   if (!lote.length) return;
   const rotulos = lote.map(x => x.codigo || x.descricao);
-  tratarExcecao(null, { lote, descricao: `${lote.length} selecionado(s): ${rotulos.join(" · ")}` });
+  tratarExcecao(null, { lote, descricao: `${lote.length} selecionado(s):\n${rotulos.join("\n")}` });
 }
 
 // Duplicar/Notificar em lote: uma confirmação só, depois as MESMAS rotas
