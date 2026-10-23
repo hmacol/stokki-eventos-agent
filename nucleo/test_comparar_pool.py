@@ -95,7 +95,8 @@ class TestComparar(unittest.TestCase):
 
     def test_janela_e_dia_fixo_entram_na_projecao(self):
         p = cp.projetar(_s())
-        self.assertEqual(p["janela"], ("11:00", "15:00"))
+        # scheduled 11:00-15:00 da Vuupt é UTC = 08:00-12:00 em Brasília (23/10)
+        self.assertEqual(p["janela"], ("08:00", "12:00"))
         self.assertEqual(p["agendado_para"], "2026-09-25")
         self.assertEqual(p["dia_fixo"], "Sorocaba")
 

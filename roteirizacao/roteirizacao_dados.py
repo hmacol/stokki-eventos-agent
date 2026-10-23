@@ -28,7 +28,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1028,15 +1028,24 @@ def _janela_util(inicio, fim) -> tuple[str, str] | None:
     return ini_txt, fim_txt
 
 
+_FUSO_BRASILIA = timezone(timedelta(hours=-3))
+
+
 def _hora_de_iso(texto) -> str | None:
-    """'2026-09-10T14:00:00-03:00' -> '14:00' (a hora local do próprio
-    campo, sem converter fuso); None se não parsear."""
+    """Hora de Brasília ('HH:MM') de um scheduled_* da Vuupt; None se não
+    parsear. A API devolve UTC SEM fuso ('2026-10-22 11:00:00' = 08:00
+    aqui); com offset ('-03:00', 'Z') o offset é respeitado. Até 23/10
+    lia o valor cru como hora local: o padrão 08-16 virava 11-19, escapava
+    de JANELAS_PADRAO_IGNORADAS e virava janela falsa (~36 pedidos/dia)."""
     if not texto:
         return None
     try:
-        return datetime.fromisoformat(str(texto)).strftime("%H:%M")
+        dt = datetime.fromisoformat(str(texto).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_FUSO_BRASILIA).strftime("%H:%M")
 
 
 def carregar_janelas_confirmadas(db_path) -> dict[str, tuple[str, str]]:
