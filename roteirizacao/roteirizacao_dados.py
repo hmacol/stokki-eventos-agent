@@ -963,22 +963,22 @@ def start_at_na_hora(data_alvo, hora_brt: float) -> str:
 
 def hora_saida_de_start_at(start_at: str | None) -> float | None:
     """Inverso de start_at_na_hora: hora decimal em Brasília de um
-    start_at "...Z" (UTC) ou "...-03:00". Sem fuso, assume que já é
-    Brasília. None se não parsear."""
+    start_at "...Z" (UTC) ou "...-03:00". Sem fuso é UTC (a Vuupt
+    devolve start_at/created_at em UTC sem offset). None se não parsear."""
     m = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$",
                  str(start_at or "").strip())
     if not m:
         return None
     hora = int(m.group(1)) + int(m.group(2)) / 60.0
     fuso = m.group(3)
-    if fuso is None:
-        return hora
-    if fuso == "Z":
+    if fuso is None or fuso == "Z":
         deslocamento_utc = 0.0
     else:
         digitos = fuso[1:].replace(":", "")
         deslocamento_utc = (-1 if fuso[0] == "-" else 1) * (int(digitos[:2]) + int(digitos[2:]) / 60.0)
     return (hora - deslocamento_utc - 3.0) % 24.0
+
+
 TOLERANCIA_JANELA_HORAS = 0.25
 # Objetivo do 2-opt com janelas, em "km equivalentes": 1h de atraso
 # (chegar depois da janela fechar) custa 60 km; 1h esperando o cliente

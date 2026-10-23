@@ -112,6 +112,10 @@ class PesoEsperaTest(unittest.TestCase):
                                   coords_base=BASE, hora_saida=13.0)
         self.assertGreater(sim["chegadas"][0], 13.0)
 
+    def test_start_at_sem_fuso_e_utc(self):
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-23 09:00:00"), 6.0)
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-23T16:15:00"), 13.25)
+
     def test_start_at_ida_e_volta(self):
         self.assertEqual(rd.start_at_na_hora(date(2026, 10, 23), 13.25), "2026-10-23T16:15:00Z")
         self.assertEqual(rd.hora_saida_de_start_at("2026-10-23T16:15:00Z"), 13.25)
