@@ -1217,6 +1217,48 @@ def janela_viavel(sublote: list[dict], api_key: str | None = None,
     return janela_respeitada(ordem, api_key, base, coords_fn)
 
 
+def _custo_janela_precalculado(servicos: list[dict], base: tuple[float, float], resolver):
+    """Funcao custo(rota de indices) do sequenciador com janela: km sem
+    volta + PESO_ATRASO x atraso + PESO_ESPERA x espera, com as MESMAS
+    contas e na mesma ordem de simular_horarios (resultado identico, ver
+    test_custo_janela_rapido). Coordenada, janela, tempo de parada e
+    pernas calculados UMA vez por rota (16/10): a busca local chama o
+    custo milhares de vezes e simular_horarios relia a janela por regex
+    e recalculava a distancia em toda chamada (213 de 229s do replay)."""
+    n = len(servicos)
+    coords = [resolver(s) for s in servicos]
+    janelas = [extrair_janela(s) for s in servicos]
+    paradas_h = [TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
+                 for s in servicos]
+    # km[a][b], com a == n representando a base; None = sem coordenada
+    pontos = coords + [base]
+    km = [[_distancia_km(pa[0], pa[1], pb[0], pb[1]) if (pa and pb) else None for pb in coords]
+          for pa in pontos]
+    perna_h = [[_tempo_perna_horas(d) if d is not None else None for d in linha] for linha in km]
+    hora_saida = HORA_SAIDA_BASE
+
+    def custo(rota: list[int]) -> float:
+        t = hora_saida
+        total_km = atraso = espera = 0.0
+        anterior = n
+        for k in rota:
+            if coords[k]:
+                total_km += km[anterior][k]
+                t += perna_h[anterior][k]
+                anterior = k
+            janela = janelas[k]
+            if janela:
+                if t < janela[0]:
+                    espera += janela[0] - t
+                    t = janela[0]
+                elif t > janela[1]:
+                    atraso += t - janela[1]
+            t += paradas_h[k]
+        return total_km + PESO_ATRASO_JANELA_KM * atraso + PESO_ESPERA_JANELA_KM * espera
+
+    return custo
+
+
 MAX_ITERACOES_2OPT = 100
 
 
@@ -1303,21 +1345,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
         return not (any(coords[rota[k]] is None for k in range(i, j + 1))
                     or any(coords[rota[k]] is None for k in vizinhos))
 
-    def _km_total(rota: list[int]) -> float:
-        total = 0.0
-        anterior = base
-        for k in rota:
-            c = coords[k]
-            if c is None:
-                continue
-            total += _distancia_km(anterior[0], anterior[1], c[0], c[1])
-            anterior = c
-        return total
-
-    def _custo(rota: list[int]) -> float:
-        sim = simular_horarios([ordem_inicial[k] for k in rota], api_key, base, coords_fn=resolver_cache)
-        return (_km_total(rota) + PESO_ATRASO_JANELA_KM * sim["atraso_h"]
-                + PESO_ESPERA_JANELA_KM * sim["espera_h"])
+    _custo = _custo_janela_precalculado(ordem_inicial, base, resolver_cache) if com_janela else None
 
     def _2opt_sem_janela(rota: list[int]) -> list[int]:
         melhorou, iteracoes = True, 0

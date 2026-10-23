@@ -75,6 +75,7 @@ from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_
 # demanda dentro de publicar_oferta_rascunho -- mesmo motivo do
 # ofertas_rota/resumo_oferta acima, ainda não deployado.
 from alocacao_motoristas import selecionar_motorista_equitativo
+from otimizacao_rotas import pedido_cabe_no_trajeto
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao, progresso_execucao
 
@@ -183,6 +184,8 @@ TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota (antes 16, desde 2
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -- acompanha criar_rotas_diarias.py (constantes separadas de propósito, sem import entre os dois módulos)
+KM_ACUMULADO_MAXIMO_ROTA_KM = 60     # acompanha criar_rotas_diarias.py (mesmo motivo acima) -- trava de trajeto do Incrementar, 16/10
+KM_ACUMULADO_MAXIMO_VIAGEM_KM = 300
 # Rota fraca (Hugo, 29/09): mesmo corte de roteirizacao/rotas_fracas.py
 # (constantes separadas de propósito, sem import entre os dois módulos).
 PARADAS_ROTA_FRACA = 7
@@ -1322,6 +1325,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
     mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
 
     from geocodificacao import geocodificar
+    coords_base = None
     try:
         coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
         if coords_base:
@@ -1398,8 +1402,17 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
         ]
         escolhida = None
         if coords_pedido:
+            # 16/10: rascunho comum também passa pelas travas de trajeto
+            # da montagem das 16h (distância até cada parada, km acumulado, 9h)
             no_raio = [info for info in candidatas if info["centroide"]
-                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM]
+                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                       and (info["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                           servico, info["servicos"], gmaps_key,
+                           distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                           km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                           km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                           eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                           base=coords_base))]
             if no_raio:
                 escolhida = min(no_raio, key=lambda info: _distancia_km(*coords_pedido, *info["centroide"]))
         elif not eh_viagem and candidatas:

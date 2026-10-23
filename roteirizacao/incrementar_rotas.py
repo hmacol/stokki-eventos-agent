@@ -110,13 +110,14 @@ from roteirizacao_dados import (
     obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
     macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
 )
-from otimizacao_rotas import ordenar_2opt
+from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
+    DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, KM_ACUMULADO_MAXIMO_ROTA_KM,
+    KM_ACUMULADO_MAXIMO_VIAGEM_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
 import rascunhos_rota  # painel_agentes/ -- criar_rotas_diarias já pôs no sys.path
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
@@ -845,9 +846,20 @@ def main(modo_teste: bool = False):
                     # km) -- só considera rota cujo centroide esteja a até
                     # DISTANCIA_MAXIMA_ROTA_KM do pedido; nenhuma dentro do
                     # raio -- vira órfão, igual pedido sem rota nenhuma perto.
+                    # 16/10: rota comum também passa pelas travas de trajeto
+                    # da montagem das 16h (distância até cada parada, km
+                    # acumulado, 9h) -- antes só o centroide era conferido.
                     candidatas_no_raio = [
                         r for r in candidatas_com_centroide
                         if _distancia_km(*coords_pedido, *r["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                        and (r["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                            pedido, _servicos_da_rota_info(r), gmaps_key,
+                            distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                            distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                            km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                            km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                            eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                            base=coords_base))
                     ]
                     if candidatas_no_raio:
                         rota_escolhida = min(

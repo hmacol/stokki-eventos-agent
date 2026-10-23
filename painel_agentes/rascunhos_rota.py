@@ -104,6 +104,19 @@ def _conectar() -> sqlite3.Connection:
             criado_em          TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
     """)
+    # Foto do plano (Hugo, 17/10): em qual rascunho cada pedido NASCEU.
+    # Só criar_lote_rascunhos grava; as edições da tela mexem em
+    # rascunhos_parada. Base de roteirizacao/aderencia_plano.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rascunhos_plano_original (
+            lote_id      TEXT NOT NULL,
+            rascunho_id  INTEGER NOT NULL,
+            service_id   INTEGER NOT NULL,
+            gravado_em   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_plano_original_rascunho "
+                 "ON rascunhos_plano_original(rascunho_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_lote ON rascunhos_rota(lote_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_data ON rascunhos_rota(data_alvo, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_parada_rascunho ON rascunhos_parada(rascunho_id)")
@@ -332,6 +345,8 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
             rascunho_id = cursor.lastrowid
             for ordem, servico in enumerate(r["sublote"]):
                 _inserir_parada(conn, rascunho_id, ordem, _parada_de_servico(servico, remetentes_por_id))
+                conn.execute("INSERT INTO rascunhos_plano_original (lote_id, rascunho_id, service_id) "
+                             "VALUES (?, ?, ?)", (lote_id, rascunho_id, servico["id"]))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
         return lote_id

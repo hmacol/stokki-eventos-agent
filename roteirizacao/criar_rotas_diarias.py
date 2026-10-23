@@ -193,8 +193,12 @@ PARTICAO_GERAL = "Geral"
 # (de 15s pra 30s o km melhora so ~1%). Desde a task anterior existe
 # UMA particao por dia (nao tres), entao o teto e pago uma unica vez
 # por execucao, e o job das 22h roda por timer sem restricao de tempo.
+# 16/10: 15s -> 120s. Replay de 05-16/10 sem teto: o polimento so
+# converge em 46-96s e o km cai mais 3-5% alem do que os 15s davam
+# (16/10: 595 -> 575 km; 08/10: 456 -> 431 km). O job das 16h leva ~50
+# min e ninguem espera por ele; o botao segue com o teto interativo.
 POLIMENTO_ATIVO = True
-POLIMENTO_TEMPO_MAXIMO_S = 15.0
+POLIMENTO_TEMPO_MAXIMO_S = 120.0
 # Teto pro caminho INTERATIVO (fix final, 20/09): o botao "Roteirizar" da
 # tela de Planejamento chama planejar_sublotes de forma SINCRONA, com uma
 # pessoa esperando a resposta -- os 15s calibrados pro job noturno (que

@@ -131,7 +131,26 @@ def _centroide(sublote: list[dict], api_key: str | None) -> tuple[float, float] 
 
 def _melhor_insercao(parada: dict, sublote: list[dict], base: tuple[float, float],
                      api_key: str | None) -> tuple[float, list[dict]]:
-    """(km, sublote_novo) inserindo `parada` na posicao de menor km."""
+    """(km, sublote_novo) inserindo `parada` na posicao de menor km.
+    Com todas as coordenadas, a posicao sai do ACRESCIMO de cada uma (3
+    pernas) em vez do km da rota inteira por posicao (16/10: era 85% do
+    tempo do polimento, que batia o teto de 15s sem chegar no
+    esvaziamento); sem alguma coordenada, o calculo completo de antes."""
+    c = obter_coordenadas(parada, api_key)
+    coords = [obter_coordenadas(s, api_key) for s in sublote]
+    if c and all(coords):
+        pontos = [base] + coords
+        melhor_pos, melhor_delta = 0, None
+        for pos in range(len(sublote) + 1):
+            anterior = pontos[pos]
+            delta = _distancia_km(*anterior, *c)
+            if pos < len(sublote):
+                seguinte = pontos[pos + 1]
+                delta += _distancia_km(*c, *seguinte) - _distancia_km(*anterior, *seguinte)
+            if melhor_delta is None or delta < melhor_delta:
+                melhor_pos, melhor_delta = pos, delta
+        candidato = sublote[:melhor_pos] + [parada] + sublote[melhor_pos:]
+        return _km(candidato, base, api_key), candidato
     melhor: tuple[float, list[dict]] | None = None
     for pos in range(len(sublote) + 1):
         candidato = sublote[:pos] + [parada] + sublote[pos:]
