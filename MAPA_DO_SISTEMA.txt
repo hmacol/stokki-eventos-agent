@@ -933,6 +933,8 @@
  cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado
                            (oculta do cliente por padrão).
  link_canhoto.py           /c/<token>: canhoto sem login.
+ consulta_transportadora_web.py  /transportadora/<token>: embarcador responde (retirada, redespacho,
+                           entrega) sobre transportadora nova, sem login; template consulta_transportadora.html.
  bloqueio_area.py          Bloqueio de área não atendida.
  gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
                            criar-pin-padrao (lote; pula cancelados e membros

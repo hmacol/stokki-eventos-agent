@@ -1,0 +1,102 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Transportadora do pedido{% endblock %}
+{% block conteudo %}
+{% if estado == 'ok' %}
+  <h1>Como esta transportadora retira?</h1>
+  <p>Seu pedido saiu com a transportadora <b>{{ transp.nome }}</b>{% if transp.cnpj %} (CNPJ {{ transp.cnpj }}){% endif %}, que ainda não temos cadastrada. Diga como devemos tratar:</p>
+  {% if pedidos %}
+  <ul class="lista">
+    {% for p in pedidos[:5] %}
+    <li><b>{{ p.pedido }}</b>{% if p.resumo.destinatario %} · {{ p.resumo.destinatario }}{% endif %}{% if p.resumo.cidade %} · {{ p.resumo.cidade }}{% if p.resumo.uf %}/{{ p.resumo.uf }}{% endif %}{% endif %}</li>
+    {% endfor %}
+    {% if pedidos|length > 5 %}<li class="suave">e mais {{ pedidos|length - 5 }} pedido(s)</li>{% endif %}
+  </ul>
+  {% endif %}
+  {% if erro %}<div class="erro" role="alert">{{ erro }}</div>{% endif %}
+  <form method="post" id="form-transp">
+    <label class="opcao"><input type="radio" name="opcao" value="retirada" {{ 'checked' if form.opcao == 'retirada' }} required>
+      <span>A transportadora vem retirar no galpão</span></label>
+    <label class="opcao"><input type="radio" name="opcao" value="redespacho" {{ 'checked' if form.opcao == 'redespacho' }}>
+      <span>Levar até a transportadora (redespacho)</span></label>
+    <label class="opcao"><input type="radio" name="opcao" value="entrega" {{ 'checked' if form.opcao == 'entrega' }}>
+      <span>Entregar no endereço do pedido</span></label>
+
+    <fieldset id="bloco-endereco" hidden>
+      <legend>Endereço da transportadora</legend>
+      <label for="cep">CEP</label>
+      <input type="text" id="cep" name="cep" inputmode="numeric" maxlength="9" autocomplete="off" value="{{ form.cep }}">
+      <label for="logradouro">Rua</label>
+      <input type="text" id="logradouro" name="logradouro" maxlength="120" value="{{ form.logradouro }}">
+      <label for="numero">Número</label>
+      <input type="text" id="numero" name="numero" maxlength="20" value="{{ form.numero }}">
+      <label for="complemento">Complemento (opcional)</label>
+      <input type="text" id="complemento" name="complemento" maxlength="60" value="{{ form.complemento }}">
+      <label for="bairro">Bairro</label>
+      <input type="text" id="bairro" name="bairro" maxlength="80" value="{{ form.bairro }}">
+      <label for="municipio">Cidade</label>
+      <input type="text" id="municipio" name="municipio" maxlength="80" value="{{ form.municipio }}">
+      <label for="uf">UF</label>
+      <input type="text" id="uf" name="uf" maxlength="2" style="text-transform:uppercase" value="{{ form.uf }}">
+      <label for="email_transportadora">E-mail da transportadora (opcional)</label>
+      <input type="text" id="email_transportadora" name="email_transportadora" inputmode="email" maxlength="120" value="{{ form.email_transportadora }}">
+    </fieldset>
+
+    <label for="nome">Seu nome (quem está respondendo)</label>
+    <input type="text" id="nome" name="nome" maxlength="120" required value="{{ form.nome }}">
+    <button type="submit" class="principal">Enviar resposta</button>
+  </form>
+  <p class="suave" style="margin-top:14px;">Sua resposta vale para os pedidos com esta transportadora e libera os que estavam aguardando.</p>
+{% elif estado == 'respondida_agora' %}
+  <h1>Resposta registrada</h1>
+  <p>Obrigado, <b>{{ nome }}</b>! Anotamos que a transportadora <b>{{ transp.nome }}</b> é tratada como <b>{{ tipo_rotulo }}</b>{% if endereco %}: {{ endereco }}{% endif %}.</p>
+  <p class="suave">Os pedidos que estavam aguardando seguem no próximo ciclo. Não precisa fazer mais nada.</p>
+{% elif estado == 'ja_respondida' %}
+  <h1>Esta transportadora já foi definida</h1>
+  <p>A transportadora <b>{{ transp.nome }}</b> já está cadastrada como <b>{{ tipo_rotulo }}</b>{% if endereco %}: {{ endereco }}{% endif %}. Não precisa fazer nada.</p>
+{% elif estado == 'expirado' %}
+  <h1>Link expirado</h1>
+  <p>Este link venceu. Responda ao e-mail que você recebeu ou fale com a equipe Fresh Log para enviarmos um novo.</p>
+{% else %}
+  <h1>Link inválido</h1>
+  <p>Este link não é válido. Abra o link mais recente que você recebeu por e-mail ou WhatsApp.</p>
+{% endif %}
+{% endblock %}
+{% block script_extra %}
+{% if estado == 'ok' %}
+<style>
+  label.opcao { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--borda); border-radius: 8px;
+                padding: 12px; margin-bottom: 10px; font-weight: 600; cursor: pointer; }
+  label.opcao input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+  fieldset { border: 1px solid var(--borda); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px 0; }
+  fieldset[hidden] { display: none; }
+  legend { font-size: 13px; font-weight: 700; color: var(--primaria); padding: 0 6px; }
+  input[type=text] { font-size: 16px; }
+</style>
+<script>
+(function () {
+  var bloco = document.getElementById('bloco-endereco');
+  function atualizar() {
+    var r = document.querySelector('input[name=opcao]:checked');
+    bloco.hidden = !(r && r.value === 'redespacho');
+  }
+  document.querySelectorAll('input[name=opcao]').forEach(function (r) { r.addEventListener('change', atualizar); });
+  atualizar();
+  var cep = document.getElementById('cep');
+  var modelo = "{{ url_for('consulta_transportadora_cep', token=request.view_args.token, cep='00000000') }}";
+  cep.addEventListener('blur', function () {
+    var d = cep.value.replace(/\D/g, '');
+    if (d.length !== 8) return;
+    fetch(modelo.replace('00000000', d))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) {
+        if (!a) return;
+        [['logradouro', 'logradouro'], ['bairro', 'bairro'], ['municipio', 'cidade'], ['uf', 'uf']].forEach(function (p) {
+          var el = document.getElementById(p[0]);
+          if (a[p[1]] && !el.value) el.value = a[p[1]];
+        });
+      }).catch(function () {});
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

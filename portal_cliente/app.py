@@ -1088,6 +1088,10 @@ import cotacao_web
 cotacao_web.registrar(app, requer_cliente=requer_cliente, exige_mesma_origem=exige_mesma_origem, config=_CONFIG,
                       secret=_SECRET, url_base=_URL_BASE)
 
+# ── Link público da consulta de transportadora (embarcador responde), 23/10 ──
+import consulta_transportadora_web
+consulta_transportadora_web.registrar(app, config=_CONFIG, secret=_SECRET)
+
 # ── Link público do canhoto (e-mail de resumo diário), 17/09 -- link_canhoto.py ──
 import link_canhoto
 link_canhoto.registrar(app, config=_CONFIG, secret=_SECRET)
