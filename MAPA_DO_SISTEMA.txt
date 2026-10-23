@@ -408,6 +408,8 @@
  ler_respostas_agendamento.py  Lê respostas por IMAP e extrai data com Claude.
  ler_planilha_entregas_nuu.py  Planilha ENTREGAS.xlsx da NUU -> agenda/endereço.
  redespacho_confirmacao.py     Segura pedido fora da área sem redespacho.
+ transportadoras_cadastro.py   Cadastro de transportadoras no dados.db (tabelas transportadoras e
+                               _historico); catalogo lido por CatalogoTransportadoras.carregar_do_banco.
  email_leitura_utils.py        Helpers de IMAP.
 
  --- Notificações e e-mails ---

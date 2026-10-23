@@ -6,7 +6,11 @@ Resolução de transportadoras: dado o nome de uma transportadora vindo
 do Stokki, determina seu Tipo (ENTREGA / RETIRADA / TERCEIROS) e, se
 for TERCEIROS, retorna o endereço fixo de redespacho.
 
-Fonte de verdade: BD_TRANSPORTADORAS.xlsx (colunas A-I, S, T).
+Fonte de verdade: tabela `transportadoras` do dados.db (carregar_do_banco;
+cadastro em transportadoras_cadastro.py). A planilha abaixo e o formato
+antigo (carregar), mantido como carga inicial.
+
+BD_TRANSPORTADORAS.xlsx (colunas A-I, S, T).
   A: TRANSPORTADORA (nome, pode ter variações de grafia)
   B: Tipo (ENTREGA | RETIRADA | TERCEIROS)
   C-I: Destinatário - UF, Municipio, Bairro, Endereço, Numero, Complemento, CEP
@@ -36,6 +40,7 @@ Uso:
 """
 import logging
 import re
+import sqlite3
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -304,6 +309,47 @@ class CatalogoTransportadoras:
 
         wb.close()
         logger.info(f"Catálogo carregado: {len(entradas)} entradas de {caminho.name}.")
+        return cls(entradas)
+
+    @classmethod
+    def carregar_do_banco(cls, db_path: Path) -> "CatalogoTransportadoras":
+        """Carrega o catálogo da tabela transportadoras (só situacao='ATIVA')."""
+        db_path = Path(db_path)
+        if not db_path.exists():
+            raise FileNotFoundError(f"Banco não encontrado: {db_path}")
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            linhas = conn.execute(
+                "SELECT * FROM transportadoras WHERE situacao='ATIVA' ORDER BY id").fetchall()
+        except sqlite3.OperationalError as e:
+            raise FileNotFoundError(f"Tabela transportadoras ausente em {db_path}: {e}")
+        finally:
+            conn.close()
+
+        entradas = []
+        for r in linhas:
+            tipo = (r["tipo"] or "").strip().upper()
+            if tipo not in ("ENTREGA", "RETIRADA", "TERCEIROS"):
+                continue
+            nome = (r["nome"] or "").strip()
+            endereco = None
+            if tipo == "TERCEIROS":
+                endereco = EnderecoRedespacho(
+                    uf=(r["uf"] or "").strip(), municipio=(r["municipio"] or "").strip(),
+                    bairro=(r["bairro"] or "").strip(), logradouro=(r["logradouro"] or "").strip(),
+                    numero=(r["numero"] or "").strip(), complemento=(r["complemento"] or "").strip(),
+                    cep=(r["cep"] or "").strip(),
+                )
+            entradas.append(_Entrada(
+                nome_original=nome,
+                nome_normalizado=_normalizar(nome),
+                cnpj=(r["cnpj"] or "").strip(),
+                tipo=tipo,
+                endereco=endereco,
+                email=(r["email"] or "").strip(),
+            ))
+        logger.info(f"Catálogo carregado: {len(entradas)} entradas do banco ({db_path.name}).")
         return cls(entradas)
 
     def resolver(self, nome_transportadora: str, cnpj: str = "") -> ResultadoResolucao:
