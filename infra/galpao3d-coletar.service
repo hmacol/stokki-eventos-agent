@@ -1,0 +1,10 @@
+[Unit]
+Description=Galpao 3D - coletor (Stokki com prioridade minima na sessao compartilhada + Vuupt; grava galpao_*)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=5min
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m galpao3d.coletar

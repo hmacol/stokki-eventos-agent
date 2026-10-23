@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block titulo %}Galpão 3D{% endblock %}
+{% block estilo_extra %}
+<style>
+  /* A cena usa a largura toda da area de conteudo (o main padrao para em 1100px). */
+  main { max-width: none; padding: 16px 18px 40px; }
+  .g3-topo { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .g3-topo h1 { font-size: 20px; margin: 0; }
+  .g3-topo .dica { color: var(--texto-suave); font-size: 13px; }
+  #galpao3d { position: relative; width: 100%; height: 78vh; min-height: 460px; border-radius: 12px;
+              overflow: hidden; background: #0e1620; }
+  #galpao3d canvas { display: block; width: 100%; height: 100%; }
+  .g3-sobre { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; flex-direction: column;
+              align-items: flex-start; gap: 8px; pointer-events: none; }
+  .g3-hud { align-self: stretch; display: flex; gap: 6px 14px; flex-wrap: wrap;
+            align-items: center; background: rgba(20,32,48,.88); color: #e8f1ff; font-weight: 600; font-size: 13px;
+            padding: 8px 12px; border-radius: 10px; pointer-events: none; }
+  .g3-hud .v { color: #ffd166; }
+  .g3-hud .voltando .v { color: #ff8fa3; }
+  .g3-selos { margin-left: auto; display: flex; gap: 6px; }
+  .g3-selo { padding: 2px 9px; border-radius: 100px; font-size: 12px; font-weight: 700; }
+  .g3-selo.ok { background: #1f6f4a; color: #e6fff1; }
+  .g3-selo.amarelo { background: #ffd166; color: #1b2a3d; }
+  .g3-selo.vermelho { background: #d62839; color: #fff; }
+  .g3-selo.cinza { background: #4a5868; color: #e8f1ff; }
+  .g3-selo[hidden] { display: none; }
+  .g3-log { width: 370px; max-width: calc(100% - 20px);
+            background: rgba(20,32,48,.85); color: #dbe7f5; font-size: 11px; border-radius: 10px; padding: 5px 10px;
+            line-height: 1.5; pointer-events: none; }
+  .g3-log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .g3-log b { color: #ffd166; }
+  .g3-log .vazio { color: #8fa3b8; }
+  .g3-legenda { color: var(--texto-suave); font-size: 12px; margin-left: auto; }
+  .g3-legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin: 0 4px 0 10px; }
+  .g3-paineis { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+  .g3-card { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px 16px; }
+  .g3-card h2 { font-size: 15px; margin: 0 0 10px; }
+  .g3-card .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 8px; }
+  .g3-tabela { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .g3-tabela th, .g3-tabela td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--borda); }
+  .g3-tabela th { color: var(--texto-suave); font-weight: 600; }
+  .g3-tabela td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .g3-ponto { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .g3-sugestoes { border-color: #e09f3e; }
+  .g3-sugestoes ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+  .g3-sugestoes[hidden] { display: none; }
+  @media (max-width: 1000px) {
+    .g3-paineis { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    #galpao3d { height: 70vh; }
+    .g3-hud { font-size: 11px; gap: 4px 10px; }
+    .g3-log { display: none; }
+  }
+</style>
+{% endblock %}
+{% block conteudo %}
+<div class="g3-topo">
+  <h1>Galpão 3D</h1>
+  <span class="dica">Arraste para girar, roda para zoom, botão direito para mover. Atualiza a cada 1 min.</span>
+  <span class="g3-legenda">
+    <i style="background:#c89b5a"></i>produto
+    <i style="background:#4c8dff"></i>pedido separado
+    <i style="background:#3ddc84"></i>pedido conferido
+    <i style="background:#3ddc84;border-radius:50%"></i>ok
+    <i style="background:#ffd166;border-radius:50%"></i>lento
+    <i style="background:#ff4d6d;border-radius:50%"></i>parado
+    <i style="background:#8a96a3;border-radius:50%"></i>fora do turno
+  </span>
+</div>
+<div id="galpao3d" data-api="{{ url_for('api_galpao_3d_estado') }}">
+  <div class="g3-sobre">
+  <div class="g3-hud">
+    <span>🕖 <span class="v" id="g3-relogio">—</span></span>
+    <span>📥 Recebendo <span class="v" id="g3-c-recebendo">—</span></span>
+    <span>❄ Estoque <span class="v" id="g3-c-estoque">—</span></span>
+    <span>🧺 Separação <span class="v" id="g3-c-separacao">—</span></span>
+    <span>🔎 Conferência <span class="v" id="g3-c-conferencia">—</span></span>
+    <span>📦 Expedição <span class="v" id="g3-c-expedicao">—</span></span>
+    <span>🚚 Na rua <span class="v" id="g3-c-na_rua">—</span></span>
+    <span>✅ Entregues <span class="v" id="g3-c-entregues">—</span></span>
+    <span class="voltando">↩ Voltando <span class="v" id="g3-c-voltando">—</span></span>
+    <span class="g3-selos">
+      <span class="g3-selo cinza" id="g3-idade">Stokki: —</span>
+      <span class="g3-selo vermelho" id="g3-conexao" hidden>sem conexão</span>
+    </span>
+  </div>
+  <div class="g3-log" id="g3-log"><span class="vazio">Carregando…</span></div>
+  </div>
+</div>
+<div class="g3-paineis">
+  <div class="g3-card">
+    <h2>Indicadores por pessoa (hoje)</h2>
+    <p class="sub" id="g3-conf-geral">—</p>
+    <table class="g3-tabela">
+      <thead><tr><th>Pessoa</th><th>Área</th><th>Agora</th>
+        <th class="num">Conferidos</th><th class="num">Média conf.</th>
+        <th class="num">Separados</th><th class="num">Unid./hora</th></tr></thead>
+      <tbody id="g3-indicadores"><tr><td colspan="7">—</td></tr></tbody>
+    </table>
+  </div>
+  <div>
+    <div class="g3-card g3-sugestoes" id="g3-sugestoes" hidden>
+      <h2>Sugestão de remanejamento</h2>
+      <ul id="g3-sugestoes-lista"></ul>
+    </div>
+  </div>
+</div>
+<script type="importmap">
+{"imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module" src="{{ url_for('static', filename='galpao_3d.js') }}"></script>
+{% endblock %}

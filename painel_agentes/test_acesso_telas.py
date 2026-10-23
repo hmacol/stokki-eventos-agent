@@ -26,7 +26,8 @@ import acesso_telas  # noqa: E402
 
 # Rotas sem login de painel (ou so do total de verdade) -- fora do catalogo de proposito.
 FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api_romaneio_pdf",
-                    "wms_manifest", "wms_service_worker", "acessos", "api_acessos"}
+                    "wms_manifest", "wms_service_worker", "acessos", "api_acessos",
+                    "galpao_3d", "api_galpao_3d_estado"}
 
 
 def _caminho_exemplo(regra: str) -> str:

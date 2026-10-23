@@ -92,6 +92,7 @@ import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
 import acesso_telas
+from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -1193,6 +1194,24 @@ def api_clientes_agenda_decidir():
         logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, "situacao": resultado["situacao"]})
+
+
+@app.route("/galpao-3d")
+@requer_auth
+def galpao_3d():
+    """Galpao 3D (so nivel total, fora do catalogo de acesso_telas): casca
+    da pagina; o JS estatico desenha o galpao com o JSON da API abaixo."""
+    return render_template("galpao_3d.html")
+
+
+@app.route("/api/galpao-3d/estado")
+@requer_auth
+def api_galpao_3d_estado():
+    conn = galpao3d_banco.conectar()
+    try:
+        return jsonify(galpao3d_estado.montar_estado(conn, _carregar_config()))
+    finally:
+        conn.close()
 
 
 @app.route("/acessos")
