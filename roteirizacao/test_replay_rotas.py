@@ -112,3 +112,26 @@ class DiasFixosV2TestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HorariosDoPlanoTestCase(unittest.TestCase):
+    """horarios_do_plano e resumo_tarde (metricas do replay, 23/10)."""
+
+    def test_resumo_tarde_media_e_maximo(self):
+        r = rr.resumo_tarde({date(2026, 10, 1): ["a", "b", "c"], date(2026, 10, 2): [], date(2026, 10, 5): ["d"]})
+        self.assertEqual((r["dias"], r["dias_com_tarde"], r["pedidos_total"], r["pedidos_max"]), (3, 2, 4, 3))
+        self.assertAlmostEqual(r["pedidos_media"], 4 / 3)
+
+    def test_resumo_tarde_vazio(self):
+        self.assertEqual(rr.resumo_tarde({})["pedidos_max"], 0)
+
+    def test_espera_conta_da_saida_da_propria_rota(self):
+        base = (-23.50, -46.60)
+        servico = {"latitude": base[0], "longitude": base[1], "_janela_inicio": "13:00", "_janela_fim": "17:00",
+                   "_janela_fonte": "agendamento"}
+        coords = lambda s: (s["latitude"], s["longitude"])
+        manha = rr.horarios_do_plano([([servico], None)], base, coords)
+        tarde = rr.horarios_do_plano([([servico], 13.0)], base, coords)
+        self.assertGreater(manha["espera_h"], 5.0)
+        self.assertAlmostEqual(tarde["espera_h"], 0.0)
+        self.assertAlmostEqual(tarde["atraso_evitavel_h"], 0.0)

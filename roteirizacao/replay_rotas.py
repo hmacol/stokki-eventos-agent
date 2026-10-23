@@ -21,6 +21,8 @@ COMO USAR (da raiz):
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-polimento --separar-carga
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-rotas-fracas
     py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --dias-fixos-v2
+    py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-rota-tarde --peso-espera 30   # espera de antes (23/10)
+    py -3.11 roteirizacao/replay_rotas.py --de ... --ate ... --sem-rota-tarde                    # so o peso novo
 Saida: tabela no terminal + roteirizacao/dados/replay_resultado.txt
 
 Limite: roteiriza o conjunto que FOI enviado no dia, nao o pool inteiro
@@ -176,6 +178,20 @@ def _caixas(sublotes: list[list[dict]]) -> list[int]:
     return [sum(rd.extrair_volume_caixas(s) for s in sub) for sub in sublotes]
 
 
+def horarios_do_plano(rotas: list[tuple[list[dict], float | None]], coords_base, coords_fn=_coords) -> dict:
+    """Espera total e atraso EVITAVEL (h) de um plano, cada rota simulada
+    com a propria saida (None = saida padrao da base; rota da tarde passa
+    a dela). Atraso evitavel = atraso_h menos o atraso intrinseco (pedido
+    que sozinho ja chega depois da janela), o mesmo criterio de
+    janela_respeitada."""
+    espera = atraso = 0.0
+    for sub, saida in rotas:
+        sim = rd.simular_horarios(sub, None, coords_base, coords_fn, saida)
+        espera += sim["espera_h"]
+        atraso += max(0.0, sim["atraso_h"] - rd._atraso_intrinseco(sub, None, coords_base, coords_fn, saida))
+    return {"espera_h": espera, "atraso_evitavel_h": atraso}
+
+
 def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_base: tuple[float, float],
               data_alvo: date, modelo_forcado: str | None = None) -> tuple[dict, dict]:
     """(metricas do enviado, metricas do plano novo) pro mesmo conjunto."""
@@ -187,16 +203,41 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
                                 caixas=_caixas(rotas_enviadas), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
                                 caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
                                 horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
-    planos = crd.planejar_sublotes([dict(s) for s in servicos], coords_base, None, data_alvo,
-                                   sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
-                                   registrar_historico=False)
-    sublotes = [sub for p in planos for sub in p["sublotes"]]
+    quebradas = {"manha_quebradas": 0, "manha_inteiras": 0}
+    separar_original = crd.separar_pedidos_tarde
+
+    def _separar_contando(sublotes_in, base, chave):
+        manha, tardios = separar_original(sublotes_in, base, chave)
+        ids = {s["id"] for s in tardios}
+        for sub in sublotes_in:
+            n = sum(1 for s in sub if s["id"] in ids)
+            if n == len(sub):
+                quebradas["manha_inteiras"] += 1
+            elif n:
+                quebradas["manha_quebradas"] += 1
+        return manha, tardios
+
+    crd.separar_pedidos_tarde = _separar_contando
+    try:
+        planos = crd.planejar_sublotes([dict(s) for s in servicos], coords_base, None, data_alvo,
+                                       sufixo_label=" (replay)", modelo_forcado=modelo_forcado,
+                                       registrar_historico=False)
+    finally:
+        crd.separar_pedidos_tarde = separar_original
+    manha = [sub for p in planos for sub in p["sublotes"]]
+    tarde = [(sub, saida) for p in planos for sub, saida in (p.get("tarde") or [])]
+    sublotes = manha + [sub for sub, _ in tarde]
     receptoras = {r for p in planos for r in (p.get("rotas_fracas") or {}).get("receptoras", set())}
     novo = mp.metricas_plano(mp.plano_de_sublotes(sublotes, _coords), coords_base,
                              horas=_horas(sublotes, receptoras), teto_horas=rd.ROTA_TEMPO_MAXIMO_HORAS,
                              caixas=_caixas(sublotes), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
                              caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
                              horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
+    novo.update(horarios_do_plano([(s, None) for s in manha] + tarde, coords_base))
+    enviado.update(horarios_do_plano([(s, None) for s in rotas_enviadas], coords_base))
+    novo.update(quebradas)
+    novo["tarde_rotas"] = len(tarde)
+    novo["tarde_pedidos"] = [s.get("code") or str(s.get("id")) for sub, _ in tarde for s in sub]
     return enviado, novo
 
 
@@ -208,6 +249,26 @@ def _somar(acumulado: dict, m: dict) -> None:
                   "rotas_acima_teto", "rotas_acima_teto_folga", "rotas_sem_coordenada", "rotas_fracas"):
         acumulado[chave] = acumulado.get(chave, 0) + m[chave]
     acumulado.setdefault("diametros", []).append(m["diametro_mediano_km"])
+
+
+CHAVES_HORARIO = ("espera_h", "atraso_evitavel_h", "manha_quebradas", "manha_inteiras", "tarde_rotas")
+
+
+def _somar_horarios(acumulado: dict, m: dict, dia: date) -> None:
+    """Soma o que e do replay (nao do metricas_plano): espera, atraso
+    evitavel, rotas da manha quebradas pela trava e rotas/pedidos da tarde."""
+    for chave in CHAVES_HORARIO:
+        acumulado[chave] = acumulado.get(chave, 0) + m.get(chave, 0)
+    acumulado.setdefault("tarde_dias", {})[dia] = list(m.get("tarde_pedidos", []))
+
+
+def resumo_tarde(tarde_dias: dict) -> dict:
+    """Pedidos da tarde por dia (media e maximo sobre os dias medidos)."""
+    pedidos = [len(v) for v in tarde_dias.values()]
+    n = len(pedidos) or 1
+    return {"dias": len(pedidos), "dias_com_tarde": sum(1 for x in pedidos if x),
+            "pedidos_total": sum(pedidos), "pedidos_media": sum(pedidos) / n,
+            "pedidos_max": max(pedidos, default=0)}
 
 
 def _fechar(acumulado: dict) -> dict:
@@ -232,6 +293,9 @@ def main(argv=None) -> int:
     parser.add_argument("--modelo", default=None, help="forca um esquema (nome como no historico)")
     parser.add_argument("--dias-fixos-v2", action="store_true",
                         help="move pro proximo dia de visita o pedido que so caiu no dia pela regra antiga")
+    parser.add_argument("--peso-espera", type=float, default=None, help="sobrescreve PESO_ESPERA_JANELA_KM")
+    parser.add_argument("--sem-rota-tarde", action="store_true",
+                        help="desliga a trava de espera tardia e a rota da tarde (ROTA_TARDE_ATIVA)")
     args = parser.parse_args(argv)
 
     import criar_rotas_diarias as crd
@@ -243,6 +307,10 @@ def main(argv=None) -> int:
         crd.SEPARAR_POR_TIPO_CARGA = True
     if args.sem_rotas_fracas:
         rotas_fracas.ROTAS_FRACAS_ATIVO = False
+    if args.peso_espera is not None:
+        rd.PESO_ESPERA_JANELA_KM = args.peso_espera
+    if args.sem_rota_tarde:
+        rd.ROTA_TARDE_ATIVA = False
     coords_base = tuple(float(x) for x in args.base.split(",")) if args.base else COORDS_BASE_PADRAO
 
     conn = sqlite3.connect(f"file:{args.banco}?mode=ro", uri=True)
@@ -254,10 +322,13 @@ def main(argv=None) -> int:
                  f"polimento={'off' if args.sem_polimento else 'on'} | separar_carga={'on' if args.separar_carga else 'off'}"
                  f" | rotas_fracas={'off' if args.sem_rotas_fracas else 'on'}"
                  f" | dias_fixos_v2={'on' if args.dias_fixos_v2 else 'off'}"
+                 f" | peso_espera={rd.PESO_ESPERA_JANELA_KM:g} | rota_tarde={'off' if args.sem_rota_tarde else 'on'}"
                  f"{' | modelo=' + args.modelo if args.modelo else ''}")
     linhas = [cabecalho, ""]
     total_env: dict = {}
     total_novo: dict = {}
+    horarios_env: dict = {}
+    horarios_novo: dict = {}
     dias = []
     dia = date.fromisoformat(args.de)
     fim = date.fromisoformat(args.ate)
@@ -282,11 +353,26 @@ def main(argv=None) -> int:
                 continue
             _somar(total_env, env)
             _somar(total_novo, novo)
+            _somar_horarios(horarios_env, env, dia)
+            _somar_horarios(horarios_novo, novo, dia)
+            if novo["tarde_pedidos"]:
+                linhas.append(f"{dia} tarde  : {novo['tarde_rotas']} rota(s), {len(novo['tarde_pedidos'])} pedido(s): "
+                              + ", ".join(novo["tarde_pedidos"]))
             linhas.append(mp.formatar_metricas(env, f"{dia} enviado"))
             linhas.append(mp.formatar_metricas(novo, f"{dia} novo   "))
     if total_env:
         linhas += ["", mp.formatar_metricas(_fechar(total_env), "TOTAL enviado"),
                    mp.formatar_metricas(_fechar(total_novo), "TOTAL novo   ")]
+        r = resumo_tarde(horarios_novo["tarde_dias"])
+        linhas += ["", f"HORARIOS enviado: espera {horarios_env['espera_h']:.1f} h | "
+                       f"atraso evitavel {horarios_env['atraso_evitavel_h']:.1f} h",
+                   f"HORARIOS novo   : espera {horarios_novo['espera_h']:.1f} h | "
+                   f"atraso evitavel {horarios_novo['atraso_evitavel_h']:.1f} h",
+                   f"TARDE: {horarios_novo['tarde_rotas']} rota(s), {r['pedidos_total']} pedido(s) em "
+                   f"{r['dias_com_tarde']}/{r['dias']} dias | pedidos/dia media {r['pedidos_media']:.2f}, "
+                   f"maximo {r['pedidos_max']}",
+                   f"MANHA quebrada pela trava: {horarios_novo['manha_quebradas']} rota(s) perderam pedido, "
+                   f"{horarios_novo['manha_inteiras']} rota(s) inteiras foram pra tarde"]
     texto = "\n".join(linhas)
     print(texto)
     ARQUIVO_RESULTADO.parent.mkdir(parents=True, exist_ok=True)
