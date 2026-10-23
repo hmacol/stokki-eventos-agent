@@ -2557,7 +2557,7 @@
     <div class="ajuda-pool" id="ajuda-pool" hidden>
       <p><strong>Selecionar:</strong> clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto no mapa.</p>
       <p><strong>Blocos:</strong> "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro, badge cinza). Cada bloco colapsa e tem o próprio "Selecionar". Dá pra arrastar um agendado pra depois pra uma rota, pra adiantar a entrega.</p>
-      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão). "Selecionar área" laça vários de uma vez: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
+      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão); "Em separação" mostra os que ainda não estão prontos na Stokki (escondidos por padrão). "Selecionar área" laça só o que está aparecendo no mapa: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
     </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <div class="linha-busca-pool">
@@ -3652,6 +3652,13 @@
   let mostrarFuturosNoMapa = localStorage.getItem("planejamento.mostrarFuturosNoMapa") === "1";
   let botaoFuturosMapa = null;
 
+  // Toggle "em separação no mapa" (Hugo, 23/10) -- esconde do MAPA os
+  // pedidos que ainda não estão prontos na Stokki (bloco "Em separação",
+  // situacao_stokki preenchida); a lista continua igual. Default desligado,
+  // igual ao "Futuros" (Hugo, 23/10).
+  let mostrarSeparacaoNoMapa = localStorage.getItem("planejamento.mostrarSeparacaoNoMapa") === "1";
+  let botaoSeparacaoMapa = null;
+
   // Toggle "rotas enviadas no mapa" -- rota já enviada à VUUPT (motorista
   // a caminho) continua aparecendo no card, mas por padrão segue no mapa
   // junto dos rascunhos em edição (mesmo comportamento de sempre); este
@@ -3900,8 +3907,9 @@
       // "Futuros" da barra do mapa estiver ligado, ou se já estiver
       // selecionado (seleção explícita sempre aparece, mesmo filtrada)
       const ocultoPorFuturo = li.dataset.urgencia === "futuro" && !mostrarFuturosNoMapa;
+      const ocultoPorSeparacao = !!li.dataset.situacaoStokki && !mostrarSeparacaoNoMapa;
       const mostrar = !isNaN(lat) && !isNaN(lng) &&
-        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo));
+        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo && !ocultoPorSeparacao));
       const existente = marcadoresPreview[id];
       if (!mostrar) {
         if (existente) { existente.setMap(null); delete marcadoresPreview[id]; }
@@ -4386,6 +4394,16 @@
     atualizarPreviewPool();
   }
 
+  function definirMostrarSeparacaoNoMapa(valor) {
+    mostrarSeparacaoNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarSeparacaoNoMapa", valor ? "1" : "0");
+    if (botaoSeparacaoMapa) {
+      botaoSeparacaoMapa.textContent = valor ? "● Em separação" : "○ Em separação";
+      botaoSeparacaoMapa.classList.toggle("ativo", valor);
+    }
+    atualizarPreviewPool();
+  }
+
   function definirMostrarEnviadasNoMapa(valor) {
     mostrarEnviadasNoMapa = valor;
     localStorage.setItem("planejamento.mostrarEnviadasNoMapa", valor ? "1" : "0");
@@ -4461,11 +4479,12 @@
     const vertices = verticesPoligono.map(v => ({ lat: v.lat(), lng: v.lng() }));
     pararDesenhoPoligono();
     if (vertices.length < 3) return;  // sem área fechada -- vale como cancelamento
-    // pega só quem está visível com os filtros atuais (busca/flag/CEP)
-    // -- selecionar item escondido criaria seleção "invisível"
+    // pega só quem tem ponto no mapa agora -- filtros da lista e toggles
+    // Futuros/Em separação inclusive (Hugo, 23/10); selecionar item
+    // escondido criaria seleção "invisível"
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
-      if (isNaN(lat) || isNaN(lng) || !liVisivelNoPool(li)) return;
+      if (isNaN(lat) || isNaN(lng) || !marcadoresPreview[Number(li.dataset.serviceId)]) return;
       if (!dentroDoPoligono(lat, lng, vertices)) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
@@ -4493,6 +4512,11 @@
     botaoFuturosMapa.title = "Mostrar/ocultar no mapa os pedidos do pool agendados pra depois da data em edição -- eles continuam na lista (badge cinza) e dá pra alocar em rota normalmente, só a exibição no mapa muda";
     botaoFuturosMapa.addEventListener("click", () => definirMostrarFuturosNoMapa(!mostrarFuturosNoMapa));
 
+    botaoSeparacaoMapa = document.createElement("button");
+    botaoSeparacaoMapa.type = "button";
+    botaoSeparacaoMapa.title = "Mostrar/ocultar no mapa os pedidos do pool que ainda estão em separação na Stokki (retrato do pipeline) -- eles continuam na lista, só a exibição no mapa muda";
+    botaoSeparacaoMapa.addEventListener("click", () => definirMostrarSeparacaoNoMapa(!mostrarSeparacaoNoMapa));
+
     botaoEnviadasMapa = document.createElement("button");
     botaoEnviadasMapa.type = "button";
     botaoEnviadasMapa.title = "Mostrar/ocultar no mapa os pontos e trajetos das rotas já ENVIADAS à VUUPT -- os cards continuam intactos, só a exibição no mapa muda";
@@ -4503,13 +4527,14 @@
     botaoPoligono.className = "controle-area";  // ação, não camada: destaque cheio quando ativo
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
 
-    // 4 toggles de camada | ação de seleção por área (separador visual)
+    // 5 toggles de camada | ação de seleção por área (separador visual)
     const separador = document.createElement("span");
     separador.className = "separador-controle";
 
     container.appendChild(botaoPoolMapa);
     container.appendChild(botaoAlocadosMapa);
     container.appendChild(botaoFuturosMapa);
+    container.appendChild(botaoSeparacaoMapa);
     container.appendChild(botaoEnviadasMapa);
     container.appendChild(separador);
     container.appendChild(botaoPoligono);
@@ -4518,6 +4543,7 @@
     definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
     definirMostrarAlocadosNoMapa(mostrarAlocadosNoMapa);  // idem pro toggle dos alocados
     definirMostrarFuturosNoMapa(mostrarFuturosNoMapa);  // idem pro toggle dos agendados futuros
+    definirMostrarSeparacaoNoMapa(mostrarSeparacaoNoMapa);  // idem pro toggle dos em separação
     definirMostrarEnviadasNoMapa(mostrarEnviadasNoMapa);  // idem pro toggle das rotas enviadas
     pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
 
