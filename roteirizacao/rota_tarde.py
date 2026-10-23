@@ -144,7 +144,8 @@ def montar_rotas_tarde(pedidos: list[dict], coords_base, api_key: str | None, *,
     = sem trava), dentro de ROTA_TEMPO_MAXIMO_HORAS e passando em
     janela_respeitada com a saida dela (hora_saida_tarde do pedaco) --
     a trava de espera tambem vale aqui (ex.: bar as 13h + cliente as
-    18h30 = duas rotas). Cada pedaco e resequenciado com a propria saida.
+    18h30 = duas rotas). Cada pedaco e resequenciado com a propria saida;
+    se a ordem nova reprova (9h ou janela), fica a ordem do `cabe`.
     Devolve [(sublote, hora_saida)], [] sem pedidos."""
     if not pedidos:
         return []
@@ -169,4 +170,15 @@ def montar_rotas_tarde(pedidos: list[dict], coords_base, api_key: str | None, *,
         atual.append(servico)
     if atual:
         pedacos.append(atual)
-    return [_sequenciar_tarde(p, base, api_key) for p in pedacos]
+
+    def resequenciar(pedaco: list[dict]) -> tuple[list[dict], float]:
+        # A ordem nova muda a 1a parada tardia e com ela a saida: se essa
+        # combinacao deixa de passar nas travas, fica a que passou no `cabe`.
+        ordem_nova, saida = _sequenciar_tarde(pedaco, base, api_key)
+        if (len(ordem_nova) <= 1
+                or (estimar_tempo_rota(ordem_nova, api_key, base) <= ROTA_TEMPO_MAXIMO_HORAS
+                    and janela_respeitada(ordem_nova, api_key, base, hora_saida=saida))):
+            return ordem_nova, saida
+        return pedaco, hora_saida_tarde(pedaco, base, api_key)
+
+    return [resequenciar(p) for p in pedacos]

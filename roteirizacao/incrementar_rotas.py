@@ -109,8 +109,9 @@ from notificar_execucao_agente import notificar_execucao
 from roteirizacao_dados import (
     obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
     macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
-    hora_saida_de_start_at,
+    hora_saida_de_start_at, ordenar_com_janelas,
 )
+import roteirizacao_dados
 from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
@@ -388,6 +389,25 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
         return caixas_cabe and enderecos_cabe
     return (rota["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA
             and rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA))
+
+
+def _hora_saida_da_rota(start_at: str | None) -> float | None:
+    """Saída da rota pro simulador de janelas: a hora do start_at só
+    quando é mais de 1 min depois de HORA_SAIDA_BASE (rota da tarde);
+    rota da manhã fica com None pra valer o hora_saida_base do config
+    (decisão R9, 23/10)."""
+    hora = hora_saida_de_start_at(start_at)
+    if hora is None or round((hora - roteirizacao_dados.HORA_SAIDA_BASE) * 60) <= 1:
+        return None
+    return hora
+
+
+def _ordenar_rota_incrementada(servicos: list[dict], coords_base, gmaps_key, hora_saida: float | None) -> list[dict]:
+    """Resequencia a rota que ganhou pedido. Rota da tarde (hora_saida)
+    é sequenciada a partir da saída dela; a da manhã segue ordenar_2opt."""
+    if hora_saida is not None:
+        return ordenar_com_janelas(servicos, coords_base[0], coords_base[1], gmaps_key, hora_saida=hora_saida)
+    return ordenar_2opt(servicos, coords_base[0], coords_base[1], gmaps_key)
 
 
 def main(modo_teste: bool = False):
@@ -714,7 +734,7 @@ def main(modo_teste: bool = False):
                 "macro": macro_rota,
                 # Saída real da rota (rota da tarde sai ~14h, não 06h): a
                 # janela do pedido novo é avaliada a partir dela.
-                "hora_saida": hora_saida_de_start_at(r.get("start_at")),
+                "hora_saida": _hora_saida_da_rota(r.get("start_at")),
             })
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
@@ -981,7 +1001,8 @@ def main(modo_teste: bool = False):
                         logger.warning(f"  Rota '{rota_info['nome']}': faltam dados de algum serviço pra "
                                       f"reordenar -- mantendo ordem atual.")
                         continue
-                    ordenados = ordenar_2opt(servicos_da_rota, coords_base[0], coords_base[1], gmaps_key)
+                    ordenados = _ordenar_rota_incrementada(servicos_da_rota, coords_base, gmaps_key,
+                                                           rota_info.get("hora_saida"))
                     ordem_ids = [s["id"] for s in ordenados]
                     if ordem_ids != rota_info["service_ids"]:
                         atualizar_rota(token, rota_info["id"], ordem_ids)
