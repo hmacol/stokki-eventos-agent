@@ -56,6 +56,7 @@ from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
 import redespacho_confirmacao
 import consulta_transportadora
+import transportadoras_cadastro
 from consulta_transportadora import config_consulta
 from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
 
@@ -438,7 +439,10 @@ def _deve_segurar_por_transportadora(detalhe: dict, res_end, servico_existente, 
         return None
     if servico_existente is not None or res_end.fonte not in ("destino", "aguardando_redespacho"):
         return None
-    cnpj = re.sub(r"\D", "", transp.get("documento") or "")
+    try:
+        cnpj = transportadoras_cadastro.normalizar_cnpj(transp.get("documento"))
+    except transportadoras_cadastro.ErroCadastro:
+        cnpj = ""  # documento sujo: resolve so pelo nome
     if not catalogo.resolver(nome, cnpj=cnpj).desconhecida:
         return None
     return nome, cnpj
@@ -457,7 +461,8 @@ def _registrar_e_avisar_transportadora(codigo_ps, detalhe, nome, cnpj, stkkc_id,
         try:
             reg = consulta_transportadora.registrar_desconhecida(
                 conn, nome, cnpj, codigo_ps, emb_cnpj, stkkc_id, resumo)
-            if consulta_transportadora.deve_avisar_hoje(reg["consulta"], date.today()):
+            # So o 1o aviso sai daqui; lembretes sao do job das 08h (dias uteis)
+            if not reg["consulta"].get("enviado_em"):
                 r = consulta_transportadora.enviar_aviso(conn, reg["consulta"], config_app,
                                                          lembrete=False, modo_teste=False)
                 logger.info(f"  {codigo_ps}: aviso da transportadora {nome}: {r}")

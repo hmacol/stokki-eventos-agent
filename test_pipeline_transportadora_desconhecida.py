@@ -60,20 +60,52 @@ class DeveSegurarPorTransportadoraTest(unittest.TestCase):
 
 
 class RegistrarEAvisarTest(unittest.TestCase):
+    def _rodar(self, db, aviso):
+        det = {"destino": {"nome": "Loja", "cidade": "Campinas", "uf": "SP"}}
+        with mock.patch.object(pipeline, "DB_PATH", db),                 mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={}),                 mock.patch.object(pipeline.consulta_transportadora, "enviar_aviso", aviso):
+            pipeline._registrar_e_avisar_transportadora("PS-1", det, "Rapido Novo", "", 7, {})
+
     def test_falha_no_envio_nao_levanta_e_pendencia_fica_gravada(self):
         with tempfile.TemporaryDirectory() as d:
             db = Path(d) / "t.db"
-            det = {"destino": {"nome": "Loja", "cidade": "Campinas", "uf": "SP"}}
-            with mock.patch.object(pipeline, "DB_PATH", db),                  mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={}),                  mock.patch.object(pipeline.consulta_transportadora, "enviar_aviso", side_effect=RuntimeError("smtp")):
-                pipeline._registrar_e_avisar_transportadora("PS-1", det, "Rapido Novo", "", 7, {})
+            self._rodar(db, mock.Mock(side_effect=RuntimeError("smtp")))
             conn = pipeline.consulta_transportadora.conectar_consultas(db)
             rows = conn.execute("SELECT pedido, embarcador_cnpj FROM transportadora_pedidos_parados").fetchall()
             conn.close()
             self.assertEqual([(r["pedido"], r["embarcador_cnpj"]) for r in rows], [("PS-1", "stkkc:7")])
 
+    def test_primeiro_aviso_sai_uma_vez(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "t.db"
+            aviso = mock.Mock(return_value={})
+            self._rodar(db, aviso)
+            self.assertEqual(aviso.call_count, 1)
+            self.assertFalse(aviso.call_args.kwargs["lembrete"])
+
+    def test_ja_avisado_ontem_nao_reenvia(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "t.db"
+            self._rodar(db, mock.Mock(return_value={}))
+            conn = pipeline.consulta_transportadora.conectar_consultas(db)
+            conn.execute("UPDATE transportadora_consultas SET enviado_em='2000-01-01T08:00:00'")
+            conn.commit()
+            conn.close()
+            aviso = mock.Mock(return_value={})
+            self._rodar(db, aviso)
+            aviso.assert_not_called()
+
     def test_falha_ao_abrir_banco_nao_levanta(self):
-        with mock.patch.object(pipeline.consulta_transportadora, "conectar_consultas", side_effect=OSError("x")),              mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={}):
+        with mock.patch.object(pipeline.consulta_transportadora, "conectar_consultas", side_effect=OSError("x")),                 mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={}):
             pipeline._registrar_e_avisar_transportadora("PS-2", {}, "X", "", 7, {})
+
+
+class CnpjDocumentoTest(unittest.TestCase):
+    def test_13_digitos_vira_14_e_lixo_cai_pra_nome(self):
+        cat = _catalogo()
+        det = {"transportadora": {"nome": "Nova", "documento": "2345678000190"}}
+        self.assertEqual(pipeline._deve_segurar_por_transportadora(det, _res(), None, cat), ("Nova", "02345678000190"))
+        det = {"transportadora": {"nome": "Nova", "documento": "123"}}
+        self.assertEqual(pipeline._deve_segurar_por_transportadora(det, _res(), None, cat), ("Nova", ""))
 
 
 if __name__ == "__main__":
