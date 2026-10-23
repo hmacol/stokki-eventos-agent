@@ -429,6 +429,7 @@
      (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
      pode gerar várias rotas, confundir os dois seria fácil */
   #botao-roteirizar-selecao { border-color: var(--remetente); color: var(--remetente); font-weight: 700; }
+  #botao-cancelar-selecao:not(:disabled) { border-color: var(--erro); color: var(--erro); }
   /* laranja: complementa rascunhos JÁ existentes (não cria rota nenhuma),
      terceira ação da família Criar rota / Roteirizar / Incrementar */
   #botao-incrementar-selecao { border-color: var(--laranja-texto); color: var(--laranja-texto); font-weight: 700; }
@@ -2575,6 +2576,7 @@
       <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-dedicado-selecao" disabled title="Marca os pedidos selecionados como envio dedicado e divide o valor da cotação entre eles (fora da rota automática; vai pro financeiro na quinzena)">Dedicado</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-cancelar-selecao" disabled title="Cancela na VUUPT todos os pedidos selecionados (igual ao × de cada card; não mexe na Stokki) -- não pode ser desfeito">Cancelar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
          no lugar do arrastar pool→rota, que não existe entre abas #}
       <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
@@ -3992,6 +3994,9 @@
     document.getElementById("botao-transportadora-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-dedicado-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
+    const botaoCancelarSel = document.getElementById("botao-cancelar-selecao");
+    botaoCancelarSel.disabled = SELECIONADOS.size === 0;
+    botaoCancelarSel.textContent = SELECIONADOS.size ? `Cancelar (${SELECIONADOS.size})` : "Cancelar";
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
     // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
     // "Adicionar à rota…" com os rascunhos ainda editáveis
@@ -5967,6 +5972,32 @@
     }
   }
 
+  // Cancelamento em lote do pool (Hugo, 23/10): mesmo endpoint do ×, um
+  // pedido por vez -- falha em um não impede os outros (padrão do
+  // cancelarRota). Só VUUPT, Stokki fica intocada.
+  async function cancelarSelecionados(botaoOrigem) {
+    const ids = Array.from(SELECIONADOS);
+    if (!ids.length) return;
+    const codigoDe = id => document.querySelector(`#lista-pool .item-parada[data-service-id="${id}"] .codigo`)?.textContent.trim() || `#${id}`;
+    const codigos = ids.map(codigoDe);
+    const lista = codigos.length > 30 ? codigos.slice(0, 30).join(", ") + ` e mais ${codigos.length - 30}` : codigos.join(", ");
+    if (!confirm(`Cancelar ${ids.length} pedido(s) na VUUPT? Essa ação não pode ser desfeita.\n\n${lista}`)) return;
+    botaoOrigem.disabled = true;
+    const falhas = [];
+    for (let i = 0; i < ids.length; i++) {
+      botaoOrigem.textContent = `Cancelando ${i + 1}/${ids.length}...`;
+      try {
+        await postJSON("/api/planejamento/cancelar-pedido", { service_id: ids[i], rascunho_id: null });
+      } catch (e) {
+        falhas.push(`• ${codigos[i]}: ${e.message}`);
+      }
+    }
+    if (falhas.length) {
+      alert(`${falhas.length} de ${ids.length} pedido(s) não puderam ser cancelados:\n${falhas.join("\n")}`);
+    }
+    location.reload();
+  }
+
   // "Marcar como entregue" do menu de contexto, só em rota já enviada
   // (Hugo, 08/10): fecha o serviço na VUUPT por API, mesmo endpoint do
   // chip da Torre. A observação é obrigatória e vira auditoria.
@@ -6970,6 +7001,7 @@
     document.getElementById("botao-reagendar-selecao").addEventListener("click", () => {
       abrirModalReagendarLote(itensDoPoolSelecionado());
     });
+    document.getElementById("botao-cancelar-selecao").addEventListener("click", (e) => cancelarSelecionados(e.target));
     document.getElementById("botao-cancelar-tipo-roteirizacao").addEventListener("click", () => {
       document.getElementById("modal-tipo-roteirizacao").classList.remove("aberto");
       botaoRoteirizarPendente = null;
