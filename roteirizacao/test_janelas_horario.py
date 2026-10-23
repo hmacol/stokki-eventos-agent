@@ -106,6 +106,33 @@ class ResolverJanelaTestCase(unittest.TestCase):
              "_horario_atendimento_inicio": "08:00", "_horario_atendimento_fim": "12:00"}
         self.assertEqual(rd.resolver_janela(s), ("15:00", "16:00", rd.FONTE_JANELA_AGENDAMENTO))
 
+    # Formato que a Vuupt devolve de verdade: UTC sem fuso (investigação
+    # 23/10: '11:00:00'-'19:00:00' era o padrão 08-16 virando janela falsa)
+    def test_vuupt_utc_padrao_08_16_sem_janela(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-22 11:00:00", "scheduled_end": "2026-10-22 19:00:00"}
+        self.assertEqual(rd.resolver_janela(s), (None, None, None))
+
+    def test_vuupt_utc_padrao_08_18_cai_no_atendimento(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-23 11:00:00", "scheduled_end": "2026-10-23 21:00:00",
+             "_horario_atendimento_inicio": "07:00", "_horario_atendimento_fim": "16:00"}
+        self.assertEqual(rd.resolver_janela(s), ("07:00", "16:00", rd.FONTE_JANELA_ATENDIMENTO))
+
+    def test_vuupt_utc_janela_real_convertida(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-22 12:00:00", "scheduled_end": "2026-10-22 17:00:00"}
+        self.assertEqual(rd.resolver_janela(s), ("09:00", "14:00", rd.FONTE_JANELA_AGENDAMENTO))
+
+    def test_vuupt_utc_08_08_vira_08_09(self):
+        # 08:00-08:00 é pedido com prioridade (Hugo, 23/10): continua janela
+        s = {"code": "PS-1", "scheduled_start": "2026-10-20 11:00:00", "scheduled_end": "2026-10-20 11:00:00"}
+        self.assertEqual(rd.resolver_janela(s), ("08:00", "09:00", rd.FONTE_JANELA_AGENDAMENTO))
+
+    def test_hora_de_iso_formatos(self):
+        self.assertEqual(rd._hora_de_iso("2026-10-22 11:00:00"), "08:00")
+        self.assertEqual(rd._hora_de_iso("2026-10-22T11:00:00Z"), "08:00")
+        self.assertEqual(rd._hora_de_iso("2026-10-22T08:00:00-03:00"), "08:00")
+        self.assertIsNone(rd._hora_de_iso(""))
+        self.assertIsNone(rd._hora_de_iso("amanha"))
+
     def test_operating_hour_do_customer_como_reserva(self):
         s = {"code": "PS-1", "customer": {"operating_hour_start": "13:00", "operating_hour_end": "17:00"}}
         self.assertEqual(rd.resolver_janela(s), ("13:00", "17:00", rd.FONTE_JANELA_ATENDIMENTO))
