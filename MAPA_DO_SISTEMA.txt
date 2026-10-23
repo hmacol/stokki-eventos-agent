@@ -410,6 +410,8 @@
  redespacho_confirmacao.py     Segura pedido fora da área sem redespacho.
  transportadoras_cadastro.py   Cadastro de transportadoras no dados.db (tabelas transportadoras e
                                _historico); catalogo lido por CatalogoTransportadoras.carregar_do_banco.
+ migrar_transportadoras_planilha.py  Carga unica da planilha BD_TRANSPORTADORAS no banco (origem PLANILHA)
+                               + --comparar (prova planilha x banco; --modo-teste usa banco em memoria).
  email_leitura_utils.py        Helpers de IMAP.
 
  --- Notificações e e-mails ---
