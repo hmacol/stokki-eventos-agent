@@ -562,6 +562,7 @@ function aplicarRua(rua) {
 const fmt = v => v == null ? '—' : Number(v).toLocaleString('pt-BR');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hhmm = iso => iso ? String(iso).slice(11, 16) : '—';
+const duracao = seg => seg >= 3600 ? `${Math.floor(seg / 3600)}h${String(Math.floor(seg % 3600 / 60)).padStart(2, "0")}` : mmss(seg);
 const mmss = seg => { if (seg == null) return "—"; const s = Math.round(seg); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const NOME_AREA = { separacao: 'Separação', conferencia: 'Conferência', estoque: 'Estoque', recebimento: 'Recebimento',
   expedicao: 'Expedição', recebimento_expedicao: 'Receb./Expedição' };
@@ -588,6 +589,13 @@ function pintarIndicadores(est) {
   $('g3-conf-geral').textContent = geral.pedidos
     ? `Conferência geral: ${fmt(geral.pedidos)} pedidos, média ${mmss(geral.media_s_ponderada)} por pedido (ponderada pelas unidades).`
     : 'Conferência geral: nenhum pedido conferido hoje.';
+  // conferencias acima de 30 min ficam fora da media (quase sempre esquecidas abertas)
+  const longas = ind.conferencias_longas || [], elLongas = $('g3-conf-longas');
+  elLongas.hidden = !longas.length;
+  elLongas.textContent = longas.length
+    ? `Fora da média (mais de 30 min): ` + longas.map(c =>
+      `${c.codigo} · ${c.usuario || '—'} · ${duracao(c.segundos)} · ${fmt(c.unidades)} un · ${hhmm(c.inicio)}`).join('; ') + '.'
+    : '';
   const conf = new Map((ind.conferencia_por_pessoa || []).map(c => [c.usuario, c]));
   const sep = new Map((ind.produtividade_separacao || []).map(s => [s.operador, s]));
   const linhas = (est.pessoas || []).map(p => ({ nome: p.nome, area: p.area, status: p.status }));
@@ -692,6 +700,9 @@ const ESTADO_EXEMPLO = {
   },
   indicadores: {
     conferencia_geral: { pedidos: 41, media_s_ponderada: 222 },
+    conferencias_longas: [
+      { id_stokki: 88301, codigo: 'PS-88301', usuario: 'Lucas', segundos: 3892, unidades: 276, inicio: '2026-10-23 12:18:00' },
+    ],
     conferencia_por_pessoa: [
       { usuario: 'Fernanda', pedidos: 14, unidades: 160, media_s_ponderada: 241 },
       { usuario: 'Lucas', pedidos: 15, unidades: 180, media_s_ponderada: 205 },

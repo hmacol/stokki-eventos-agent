@@ -143,6 +143,17 @@ class TestEstado(unittest.TestCase):
         beto = [x for x in e["pessoas"] if x["nome"] == "Beto"][0]
         self.assertEqual(beto["tarefa"], "PS-1 · separando")
 
+    def test_conferencias_longas_no_estado(self):
+        self.conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, situacao, unidades)"
+                          " VALUES (1,'PS-1','Aguardando Transportador',10)")
+        self.conn.execute("INSERT INTO galpao_conferencias (id_stokki, estacao, usuario, inicio, fim, segundos, problema)"
+                          " VALUES (1,'E1','Beto',?,?,8914,0)", (_t(AGORA - timedelta(hours=1)),) * 2)
+        e = estado.montar_estado(self.conn, CFG, AGORA)
+        longas = e["indicadores"]["conferencias_longas"]
+        self.assertEqual([(c["codigo"], c["usuario"], c["segundos"]) for c in longas], [("PS-1", "Beto", 8914)])
+        self.assertEqual(e["indicadores"]["conferencia_geral"]["pedidos"], 0)
+        json.dumps(e)
+
 
 if __name__ == "__main__":
     unittest.main()

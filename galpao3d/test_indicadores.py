@@ -54,6 +54,31 @@ class TestIndicadores(unittest.TestCase):
         r = indicadores.conferencia_por_pessoa(self.conn, self.desde)
         self.assertEqual(r[0]["media_s_ponderada"], 75)
 
+    def test_conferencia_longa_fica_fora_da_media(self):
+        # 23/10: uma conferencia esquecida aberta (2h28) puxava a media de 1min45 pra 29 min
+        _ped(self.conn, 1, 10)
+        _ped(self.conn, 2, 276)
+        _conf(self.conn, 1, "Felipe", "2026-10-22 09:00:00", 60)
+        _conf(self.conn, 2, "Felipe", "2026-10-22 12:18:00", 3892)
+        r = indicadores.conferencia_por_pessoa(self.conn, self.desde)
+        self.assertEqual(r[0]["pedidos"], 1)
+        self.assertEqual(r[0]["media_s_ponderada"], 60)
+        self.assertEqual(indicadores.conferencia_geral(self.conn, self.desde),
+                         {"pedidos": 1, "media_s_ponderada": 60})
+
+    def test_lista_de_conferencias_longas(self):
+        _ped(self.conn, 1, 10)
+        _ped(self.conn, 2, 276)
+        _ped(self.conn, 3, 5)
+        _conf(self.conn, 1, "Fael", "2026-10-22 15:33:00", 8914)
+        _conf(self.conn, 2, "Felipe", "2026-10-22 12:18:00", 3892)
+        _conf(self.conn, 3, "Caio", "2026-10-22 10:00:00", 30 * 60)  # no limite: ainda conta na media
+        longas = indicadores.conferencias_longas(self.conn, self.desde)
+        self.assertEqual([(c["codigo"], c["usuario"], c["segundos"], c["unidades"]) for c in longas],
+                         [("PS-1", "Fael", 8914, 10), ("PS-2", "Felipe", 3892, 276)])
+        self.assertEqual(longas[0]["inicio"], "2026-10-22 15:33:00")
+        self.assertEqual(indicadores.conferencia_geral(self.conn, self.desde)["pedidos"], 1)
+
     def test_conferencia_antes_do_dia_fica_fora(self):
         _ped(self.conn, 1, 5)
         _conf(self.conn, 1, "Ana", "2026-10-21 09:00:00", 100)

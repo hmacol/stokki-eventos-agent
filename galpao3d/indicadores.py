@@ -5,7 +5,8 @@ galpao3d/indicadores.py
 Indicadores do Galpao 3D lidos das tabelas galpao_* (funcoes puras sobre a conexao).
 
 - Conferencia: media de segundos ponderada pelas unidades do pedido (pedido grande
-  demora mais; pedido sem unidades pesa 1).
+  demora mais; pedido sem unidades pesa 1), sem as conferencias longas (> 30 min),
+  que saem numa lista a parte.
 - Separacao: unidades por hora do operador. O tempo por pedido nao serve (a Stokki
   separa em ondas), entao usa-se o intervalo entre o 1o e o ultimo pedido que o
   operador mandou pra conferencia, em minutos uteis, com minimo de 30 min.
@@ -18,6 +19,9 @@ from galpao3d.turno import minutos_uteis
 
 _TURNO = "separacao_conferencia"
 _MIN_HORAS = 0.5
+# Conferencia acima disso (quase sempre esquecida aberta) sai da media e vai pra lista
+# de conferencias longas (Hugo, 23/10: 2 conferencias levavam a media de 1min45 pra 29 min)
+CONFERENCIA_LONGA_S = 30 * 60
 
 
 def _txt(dt: datetime) -> str:
@@ -34,7 +38,8 @@ def conferencia_por_pessoa(conn, desde: datetime) -> list[dict]:
         FROM galpao_conferencias c
         LEFT JOIN galpao_pedidos p ON p.id_stokki = c.id_stokki
         WHERE c.inicio >= ? AND c.segundos IS NOT NULL AND c.usuario IS NOT NULL
-    """, (_txt(desde),)).fetchall()
+          AND c.segundos <= ?
+    """, (_txt(desde), CONFERENCIA_LONGA_S)).fetchall()
     acc: dict[str, list] = {}
     for r in linhas:
         a = acc.setdefault(r["usuario"], [0, 0, 0])  # pedidos, unidades, soma seg*peso
@@ -53,6 +58,19 @@ def conferencia_geral(conn, desde: datetime) -> dict:
         return {"pedidos": 0, "media_s_ponderada": 0}
     soma = sum(p["media_s_ponderada"] * p["unidades"] for p in por_pessoa)
     return {"pedidos": sum(p["pedidos"] for p in por_pessoa), "media_s_ponderada": soma / unidades}
+
+
+def conferencias_longas(conn, desde: datetime) -> list[dict]:
+    """Conferencias acima de CONFERENCIA_LONGA_S do dia, da mais longa pra mais curta."""
+    linhas = conn.execute("""
+        SELECT c.id_stokki, COALESCE(p.codigo, 'PS-' || c.id_stokki) AS codigo, c.usuario,
+               c.segundos, COALESCE(p.unidades, 0) AS unidades, c.inicio
+        FROM galpao_conferencias c
+        LEFT JOIN galpao_pedidos p ON p.id_stokki = c.id_stokki
+        WHERE c.inicio >= ? AND c.segundos > ?
+        ORDER BY c.segundos DESC
+    """, (_txt(desde), CONFERENCIA_LONGA_S)).fetchall()
+    return [dict(r) for r in linhas]
 
 
 def _chegadas_na_conferencia(conn, desde: datetime, agora: datetime):
