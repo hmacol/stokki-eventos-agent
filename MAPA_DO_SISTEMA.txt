@@ -220,6 +220,9 @@
                 na tela /acessos; a ação fica no login dele. Senha nova ou
                 redefinida é provisória: requer_auth manda pra /trocar-senha.
                 Nível/nome lidos do banco a cada request (muda sem novo login).
+                Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
+                /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
+                (em memória no processo do painel; restart zera).
                 usuarios_extras do config.yaml NÃO vale mais: foi copiado uma
                 vez por painel_agentes/migrar_usuarios_extras.py (idempotente).
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
@@ -861,6 +864,7 @@
                               selo "sessão expirou" quando a API cai no login
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
                               login nominal, muda nome/nível, redefine senha,
+                              desativa/reativa,
                               telas de cada um / nível personalizado)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
    /pedidos-parados          pedidos_parados_triagem.html

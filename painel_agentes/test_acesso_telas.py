@@ -27,7 +27,7 @@ import acesso_telas  # noqa: E402
 # Rotas sem login de painel (ou so do total de verdade) -- fora do catalogo de proposito.
 FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api_romaneio_pdf",
                     "wms_manifest", "wms_service_worker", "acessos", "api_acessos", "api_acessos_novo",
-                    "api_acessos_senha", "trocar_senha",
+                    "api_acessos_senha", "api_acessos_ativo", "trocar_senha",
                     "galpao_3d", "api_galpao_3d_estado"}
 
 
@@ -76,6 +76,7 @@ class TestAcessoPersonalizado(unittest.TestCase):
         for p in self._patches:
             p.start()
         painel_agentes.app.config["TESTING"] = True
+        painel_agentes._login_falhas.clear()
         conn = acesso_telas.conectar()
         try:
             acesso_telas.importar_do_config(conn, self.cfg_painel)
@@ -251,6 +252,37 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
             self.assertEqual(acesso_telas.trocar_senha(conn, "ana", "minha99", 1), 2)
         finally:
             conn.close()
+
+    def test_desativar_derruba_sessao_e_reativar_devolve(self):
+        ana, _ = self._logar("ana", "s_ana")
+        self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": False}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertTrue(ana.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        _, r = self._logar("ana", "s_ana")
+        self.assertIn("incorretos", r.get_data(as_text=True))
+        self.assertIn("desativado", cliente.get("/acessos").get_data(as_text=True))
+        self.assertEqual(cliente.post("/api/acessos/novo", json={"usuario": "ana", "nivel": "leitura", "senha": "123456"},
+                                      headers=hdr).status_code, 400)
+        cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": True}, headers=hdr)
+        _, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(cliente.post("/api/acessos/ativo", json={"usuario": "chefe", "ativo": False},
+                                      headers=hdr).status_code, 400)
+
+    def test_login_bloqueia_depois_de_5_erros_so_aquele_login(self):
+        for _ in range(5):
+            _, r = self._logar("ana", "errada")
+            self.assertEqual(r.status_code, 200)
+        _, r = self._logar("ana", "s_ana")                         # ate a senha certa espera
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("15 minutos", r.get_data(as_text=True))
+        _, r = self._logar("chefe", "s_chefe")                     # outro login do mesmo IP entra
+        self.assertEqual(r.status_code, 302)
+        painel_agentes._login_falhas.clear()
+        _, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.status_code, 302)
 
     def test_tabela_antiga_ganha_versao_senha(self):
         conn = acesso_telas.conectar()
