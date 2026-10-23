@@ -89,11 +89,12 @@ from roteirizacao_dados import (
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
     injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
-    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota, extrair_volume_caixas,
+    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota, extrair_volume_caixas, _horas_para_hhmm,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
 from polimento_rotas import polir_entre_rotas
+from rota_tarde import separar_pedidos_tarde, montar_rotas_tarde
 from rotas_client import criar_rota_removendo_conflitos
 from fingerprint_rotas import marcar_alocado
 from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
@@ -477,8 +478,10 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
     registrar_historico=False). Os servicos ja chegam classificados
     (_nivel_dificuldade, _tipo_carga, janelas) e a base, quando existe,
     ja foi registrada com definir_coords_base.
-    Devolve [{"label", "modelo", "sublotes", "rotas_fracas"}], uma
-    entrada por particao nao vazia, sublotes ja sequenciados."""
+    Devolve [{"label", "modelo", "sublotes", "rotas_fracas", "tarde"}], uma
+    entrada por particao nao vazia, sublotes ja sequenciados. "tarde"
+    (23/10): [(sublote, hora_saida)] das rotas da tarde (rota_tarde.py),
+    [] quando nao ha."""
     particoes = _particionar_carga_com_fusao(servicos, TAMANHO_MINIMO_ROTA, gmaps_key)
     planos: list[dict] = []
     for label, servicos_particao in particoes:
@@ -516,6 +519,14 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
         sublotes = _fundir_sublotes_entre_macrorregioes(sublotes, coords_base, gmaps_key, rotulo)
         sublotes = _polir_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
                                    polimento_tempo_maximo_s)
+        # Rota da tarde (spec 23/10, 5.4): sai ANTES da juncao/adiamento
+        # de rotas fracas, senao o pedido tardio seria segurado todo dia.
+        sublotes, tardios = separar_pedidos_tarde(sublotes, coords_base, gmaps_key)
+        tarde = montar_rotas_tarde(tardios, coords_base, gmaps_key, tamanho_maximo=tamanho_maximo,
+                                   volume_maximo=VOLUME_MAXIMO_ROTA)
+        if tarde:
+            logger.info(f"[{rotulo}] Rota da tarde: {len(tardios)} pedido(s) em {len(tarde)} rota(s), "
+                        f"saida(s) {[_horas_para_hhmm(h) for _, h in tarde]}.")
         sublotes, fracas = _absorver_fracas_particao(sublotes, coords_base, gmaps_key, rotulo, tamanho_maximo,
                                                      juncao_tempo_maximo_s)
         # Conferencia de cobertura POS fusao/polimento (fix final, 20/09):
@@ -529,14 +540,15 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
         # levantar excecao aqui derrubaria a criacao de rotas inteira
         # por causa de uma unica particao.
         ids_entrada = Counter(s["id"] for s in servicos_particao)
-        ids_saida = Counter(s["id"] for sub in sublotes for s in sub)
+        ids_saida = Counter(s["id"] for sub in sublotes + [sub for sub, _ in tarde] for s in sub)
         if ids_entrada != ids_saida:
             perdidos = sorted((ids_entrada - ids_saida).elements())
             duplicados = sorted((ids_saida - ids_entrada).elements())
             logger.error(f"[{rotulo}] [ALERTA_COBERTURA] Divergencia de cobertura apos fusao/polimento -- "
                         f"entrada {sum(ids_entrada.values())} pedido(s), saida {sum(ids_saida.values())} "
                         f"pedido(s). Perdido(s): {perdidos or 'nenhum'}. Duplicado(s): {duplicados or 'nenhum'}.")
-        planos.append({"label": label, "modelo": modelo, "sublotes": sublotes, "rotas_fracas": fracas})
+        planos.append({"label": label, "modelo": modelo, "sublotes": sublotes, "rotas_fracas": fracas,
+                       "tarde": tarde})
     return planos
 
 
