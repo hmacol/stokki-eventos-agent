@@ -36,6 +36,10 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(-1, 0, -1.5);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.47;
+// sem limite o zoom atravessava o chao ou passava da neblina (130) e o galpao sumia
+controls.minDistance = 10;
+controls.maxDistance = 85;
+controls.zoomToCursor = true;   // aproxima de onde o mouse aponta (o centro e chao vazio)
 
 scene.add(new THREE.HemisphereLight(0xdfefff, 0x334455, 1.0));
 const sol = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -213,7 +217,8 @@ function esteira(nome, a, b, cor) {
   // Todas as caixas da esteira num InstancedMesh (uma chamada de desenho); folga para as encenadas.
   const LIMITE = capacidade + 8, pos = new THREE.Matrix4();
   const malha = new THREE.InstancedMesh(new THREE.BoxGeometry(.5, .42, .5), mat(cor), LIMITE);
-  malha.count = 0; scene.add(malha);
+  // frustumCulled off: a esfera de corte e calculada uma vez so, com a esteira ainda vazia
+  malha.count = 0; malha.frustumCulled = false; scene.add(malha);
   const novaCaixa = s => ({ s });
   e.poe = () => { if (e.caixas.length < LIMITE) { e.caixas.push(novaCaixa(0)); e.posiciona(); } };
   e.posiciona = () => {
