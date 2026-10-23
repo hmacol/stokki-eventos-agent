@@ -796,7 +796,9 @@
                            e assinatura em dados/retornos/<id>/ (+GCS best-effort),
                            divergência, alerta no grupo "Alertas" (cria se faltar).
                            Tabelas retornos_descargas, retornos_recebidos,
-                           retornos_alertas_atraso. Confirmar: total/operador/logistica/
+                           retornos_alertas_atraso, retornos_config (inicio =
+                           dia do 1º uso: insucesso anterior não entra, já foi
+                           lançado no Lovable). Lalamove fica de fora. Confirmar: total/operador/logistica/
                            galpao/expedicao; atendimento e leitura só veem.
  contadores_menu.py        Badges do menu lateral.
  pagina_inicial.py         Dados da página inicial /inicio (pendências por

@@ -192,6 +192,23 @@ class Descarga(Base):
             r = self.enviar([self.item(self.p1, 5)])
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
 
+    def test_gcs_lento_nao_segura_a_resposta(self):
+        import threading
+        liberar = threading.Event()
+        chamadas = []
+
+        def gcs_lento(config, descarga_id):
+            chamadas.append(descarga_id)
+            liberar.wait(5)
+
+        self.logar("galpao")
+        with mock.patch.object(retornos, "enviar_gcs", gcs_lento):
+            r = self.enviar([self.item(self.p1, 5)])
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(liberar.is_set())  # respondeu antes do GCS terminar
+            liberar.set()
+        self.assertEqual(len(chamadas), 1)
+
     def test_historico(self):
         self.logar("galpao")
         self.enviar([self.item(self.p1, 5)])

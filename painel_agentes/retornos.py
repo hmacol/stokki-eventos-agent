@@ -92,8 +92,34 @@ def conectar(caminho=None) -> sqlite3.Connection:
             parada_id   INTEGER PRIMARY KEY,
             alertado_em TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS retornos_config (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL
+        );
     """)
+    # Dia de inicio = primeiro uso (o deploy). O que caiu antes ja foi
+    # recebido e lancado no Lovable: nem lista nem cobranca olham pra tras.
+    conn.execute("INSERT OR IGNORE INTO retornos_config (chave, valor) VALUES ('inicio', ?)",
+                 (date.today().isoformat(),))
+    conn.commit()
     return conn
+
+
+def inicio(conn) -> str:
+    return conn.execute("SELECT valor FROM retornos_config WHERE chave = 'inicio'").fetchone()[0]
+
+
+def definir_inicio(conn, dia: date) -> None:
+    conn.execute("INSERT INTO retornos_config (chave, valor) VALUES ('inicio', ?) "
+                 "ON CONFLICT (chave) DO UPDATE SET valor = excluded.valor", (dia.isoformat(),))
+    conn.commit()
+
+
+def agent_ids_lalamove(config: dict) -> set[int]:
+    """Agente virtual da Lalamove na Vuupt (lalamove.agent_id_vuupt): retorno
+    de Lalamove fica fora desta tela (spec, secao 3)."""
+    agente = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
+    return {agente} if agente else set()
 
 
 def _agora() -> str:
@@ -128,7 +154,7 @@ def eh_nao_coletado(failed_reason_id, motivo_id, motivo_texto, ids_nao_coletado:
 _SQL_RETORNOS = """
     SELECT p.id AS parada_id, p.rota_id, p.service_id, p.codigo, p.destinatario_nome, p.remetente_nome,
            p.volume_caixas, p.situacao, p.motivo_id, p.motivo_texto, p.failed_reason_id, p.completed_at,
-           r.motorista_nome, r.motorista_cpf, r.nome AS rota_nome,
+           r.motorista_nome, r.motorista_cpf, r.nome AS rota_nome, r.agent_id,
            COALESCE(substr(p.completed_at, 1, 10), r.data_rota) AS dia_insucesso
     FROM nucleo_paradas p
     JOIN nucleo_rotas r ON r.id = p.rota_id
@@ -163,18 +189,24 @@ def _agrupar(pedidos: list[dict], hoje: date) -> list[dict]:
     return sorted(grupos.values(), key=lambda g: (g["mais_antigo"], g["motorista_nome"]))
 
 
-def _retornos_pendentes(conn, hoje: date, dias: int, extra_sql: str = "") -> list[dict]:
+def _eh_lalamove(row, agent_ids_excluir) -> bool:
+    return (row["agent_id"] in agent_ids_excluir
+            or (row["motorista_nome"] or "").strip().upper().startswith("LALAMOVE"))
+
+
+def _retornos_pendentes(conn, hoje: date, dias: int, agent_ids_excluir=frozenset()) -> list[dict]:
     ids_nc = _ids_nao_coletado(conn)
-    inicio = (hoje - timedelta(days=dias)).isoformat()
-    rows = conn.execute(_SQL_RETORNOS + " AND rr.id IS NULL" + extra_sql, ()).fetchall()
+    desde = max((hoje - timedelta(days=dias)).isoformat(), inicio(conn))
+    rows = conn.execute(_SQL_RETORNOS + " AND rr.id IS NULL").fetchall()
     return [_pedido(r) for r in rows
-            if r["dia_insucesso"] and inicio <= r["dia_insucesso"] <= hoje.isoformat()
-            and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)]
+            if r["dia_insucesso"] and desde <= r["dia_insucesso"] <= hoje.isoformat()
+            and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)
+            and not _eh_lalamove(r, agent_ids_excluir)]
 
 
-def listar_pendentes(conn, hoje: date, dias: int = JANELA_DIAS) -> list[dict]:
+def listar_pendentes(conn, hoje: date, dias: int = JANELA_DIAS, agent_ids_excluir=frozenset()) -> list[dict]:
     """Retornos esperados ainda nao recebidos, agrupados por motorista."""
-    return _agrupar(_retornos_pendentes(conn, hoje, dias), hoje)
+    return _agrupar(_retornos_pendentes(conn, hoje, dias, agent_ids_excluir), hoje)
 
 
 def reservar_descarga(conn) -> int:
@@ -426,24 +458,47 @@ def detalhar_descarga(conn, descarga_id: int) -> dict | None:
                       for i in itens]}
 
 
-def pendentes_atrasados(conn, hoje: date, dias: int = JANELA_DIAS) -> list[dict]:
+def pendentes_atrasados(conn, hoje: date, dias: int = JANELA_DIAS, agent_ids_excluir=frozenset()) -> list[dict]:
     """Retornos de dias anteriores a hoje, nao recebidos e ainda nao
     cobrados no grupo (cada um e cobrado uma vez so)."""
     alertados = {r[0] for r in conn.execute("SELECT parada_id FROM retornos_alertas_atraso")}
-    pedidos = [p for p in _retornos_pendentes(conn, hoje, dias)
+    pedidos = [p for p in _retornos_pendentes(conn, hoje, dias, agent_ids_excluir)
                if p["dia_insucesso"] < hoje.isoformat() and p["parada_id"] not in alertados]
     return _agrupar(pedidos, hoje)
 
 
-def texto_alerta_atraso(grupos: list[dict]) -> str:
-    linhas = ["Retornos não recebidos até 07h"]
+TITULO_ATRASO = "Retornos não recebidos até 07h"
+
+
+def _blocos_atraso(grupos: list[dict]) -> list[list[str]]:
+    blocos = []
     for g in sorted(grupos, key=lambda g: g["motorista_nome"]):
-        linhas.append("")
-        linhas.append(g["motorista_nome"])
+        linhas = [g["motorista_nome"]]
         for p in g["pedidos"]:
             caixas = "parcial" if p["parcial"] else f"{p['caixas_esperadas'] or 0} cx"
             linhas.append(f"{p['codigo']} · {p['embarcador'] or 'sem embarcador'} · {caixas} · {p['motivo']}")
-    return "\n".join(linhas)
+        blocos.append(linhas)
+    return blocos
+
+
+def texto_alerta_atraso(grupos: list[dict]) -> str:
+    return "\n\n".join([TITULO_ATRASO] + ["\n".join(b) for b in _blocos_atraso(grupos)])
+
+
+def mensagens_alerta_atraso(grupos: list[dict], limite: int = grupos_equipe.TEXTO_MAX) -> list[str]:
+    """Mesma cobranca de texto_alerta_atraso, quebrada em mensagens que
+    cabem no grupo (nada e cortado: cada retorno sai em alguma mensagem)."""
+    msgs, atual = [], TITULO_ATRASO
+    for bloco in _blocos_atraso(grupos):
+        for i, linha in enumerate(bloco):
+            sep = "\n\n" if i == 0 else "\n"
+            if len(atual) + len(sep) + len(linha) > limite:
+                msgs.append(atual)
+                atual = f"{TITULO_ATRASO} (continuação)\n\n{bloco[0]}" + ("" if i == 0 else f"\n{linha}")
+                continue
+            atual += sep + linha
+    msgs.append(atual)
+    return msgs
 
 
 def marcar_alertados(conn, parada_ids: list[int]) -> None:

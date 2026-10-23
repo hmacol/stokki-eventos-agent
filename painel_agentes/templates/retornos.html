@@ -87,6 +87,7 @@
   const URL_HISTORICO = "{{ url_for('api_retornos_descargas') }}";
   const URL_DETALHE = "{{ url_for('retornos_descarga', descarga_id=0) }}".replace(/0$/, "");
   const URL_ARQUIVO = "{{ url_for('retornos_arquivo', descarga_id=0, nome='__N__') }}";
+  const URL_LOGIN = "{{ url_for('login', proximo=url_for('retornos_tela')) }}";
 
   const tela = document.getElementById("tela");
   const rodape = document.getElementById("rodape");
@@ -119,10 +120,25 @@
     });
   }
 
+  // Celular compartilhado do galpão fica com a tela aberta: sessão expirada
+  // ou rede caída precisa dizer o que fazer, não ficar em "Carregando…".
+  async function buscarJson(url) {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (r.status === 401) throw new Error("SESSAO");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  function falhaCarga(e) {
+    rodape.classList.add("oculto");
+    tela.innerHTML = e.message === "SESSAO"
+      ? `<div class="erro-msg">Sua sessão expirou. <a href="${URL_LOGIN}">Entrar de novo</a></div>`
+      : `<div class="erro-msg">Não foi possível carregar. Confira a internet e toque na aba de novo.</div>`;
+  }
+
   async function carregar() {
     tela.innerHTML = '<div class="vazio">Carregando…</div>';
-    const r = await fetch(URL_LISTA, { credentials: "same-origin" });
-    dados = await r.json();
+    try { dados = await buscarJson(URL_LISTA); } catch (e) { return falhaCarga(e); }
     desenharLista();
   }
 
@@ -257,12 +273,20 @@
 
   function mostrarErro(msg) {
     const el = document.getElementById("erro");
+    if (!el) return;  // a tela já mudou (ex.: sucesso de um toque anterior)
     el.innerHTML = `<div class="erro-msg">${esc(msg)}</div>`;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   btnConfirmar.onclick = async () => {
-    if (!conf) return;
+    if (!conf || btnConfirmar.disabled) return;
+    btnConfirmar.disabled = true;  // trava já no 1º toque: o 2º chegava antes do await abaixo
+    try { await confirmar(); } finally {
+      btnConfirmar.disabled = false; btnConfirmar.textContent = "Confirmar recebimento";
+    }
+  };
+
+  async function confirmar() {
     const recebedor = document.getElementById("recebedor").value.trim();
     const itens = [];
     for (const p of conf.grupo.pedidos) {
@@ -286,27 +310,31 @@
     const assinatura = await new Promise(r => conf.canvas.toBlob(r, "image/png"));
     fd.append("assinatura", assinatura, "assinatura.png");
 
-    btnConfirmar.disabled = true; btnConfirmar.textContent = "Enviando…";
+    btnConfirmar.textContent = "Enviando…";
     try {
       const r = await fetch(URL_DESCARGA, { method: "POST", body: fd, credentials: "same-origin" });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { mostrarErro(j.erro || "Não foi possível confirmar. Tente de novo."); return; }
+      if (r.status === 401) { mostrarErro("Sua sessão expirou. Entre de novo e refaça a conferência."); return; }
+      if (!r.ok) {
+        let msg = j.erro || "Não foi possível confirmar. Tente de novo.";
+        if (/recebido/.test(msg)) msg += " Confira na aba Recebidos se a descarga já entrou.";
+        mostrarErro(msg); return;
+      }
       tela.innerHTML = `<div class="cartao" style="text-align:center;padding:26px 14px">
         <div class="nome">Recebimento confirmado</div>
         <p class="nota">Descarga #${j.descarga_id}${j.divergencias ? ` · ${j.divergencias} divergência(s) avisada(s) no grupo Alertas` : ""}</p></div>`;
       rodape.classList.add("oculto");
       timerVolta = setTimeout(carregar, 2200);
     } catch (e) {
-      mostrarErro("Sem conexão. Confira a internet e toque de novo.");
-    } finally {
-      btnConfirmar.disabled = false; btnConfirmar.textContent = "Confirmar recebimento";
+      mostrarErro("Sem resposta do servidor. Antes de tocar de novo, confira na aba Recebidos se a descarga já entrou.");
     }
-  };
+  }
 
   async function carregarHistorico() {
     rodape.classList.add("oculto"); conf = null;
     tela.innerHTML = '<div class="vazio">Carregando…</div>';
-    const j = await (await fetch(URL_HISTORICO, { credentials: "same-origin" })).json();
+    let j;
+    try { j = await buscarJson(URL_HISTORICO); } catch (e) { return falhaCarga(e); }
     if (!j.descargas.length) { tela.innerHTML = '<div class="vazio">Nenhuma descarga recebida ainda.</div>'; return; }
     tela.innerHTML = j.descargas.map(d => `<button type="button" class="cartao" data-id="${d.id}">
       <div class="linha-topo"><span class="nome">${esc(d.motorista_nome)}</span><span class="num">${dataBr(d.recebido_em)}</span></div>
@@ -317,7 +345,8 @@
   }
 
   async function abrirDetalhe(id) {
-    const d = await (await fetch(URL_DETALHE + id, { credentials: "same-origin" })).json();
+    let d;
+    try { d = await buscarJson(URL_DETALHE + id); } catch (e) { return falhaCarga(e); }
     tela.innerHTML = `<button type="button" class="voltar" id="voltar">‹ Recebidos</button>
       <div class="cartao"><div class="nome">${esc(d.motorista_nome)}</div>
         <div class="nota">Descarga #${d.id} · ${dataBr(d.recebido_em)} · recebido por ${esc(d.recebedor)}</div>

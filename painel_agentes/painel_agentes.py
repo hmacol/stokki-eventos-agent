@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import sys
+import threading
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -1111,7 +1112,8 @@ def retornos_tela():
 def api_retornos():
     conn = retornos.conectar()
     try:
-        motoristas = retornos.listar_pendentes(conn, date.today())
+        motoristas = retornos.listar_pendentes(
+            conn, date.today(), agent_ids_excluir=retornos.agent_ids_lalamove(_carregar_config()))
     finally:
         conn.close()
     return jsonify({"motoristas": motoristas, "motivos": retornos.motivos_validos()})
@@ -1149,8 +1151,10 @@ def api_retornos_descarga():
         return jsonify({"erro": msg}), 400
     conn.close()
 
-    config = _carregar_config()
-    retornos.enviar_gcs(config, descarga_id)
+    # Cópia no GCS fora do request: no 4G do galpão, sete uploads em série
+    # (ou o GCS fora do ar) deixavam o celular em "Enviando…" e geravam toque
+    # repetido. O disco da VPS já tem tudo; o GCS é só cópia.
+    threading.Thread(target=retornos.enviar_gcs, args=(_carregar_config(), descarga_id), daemon=True).start()
     texto = retornos.texto_alerta_descarga(resultado, " ".join((dados.get("recebedor") or "").split()))
     if texto:
         try:

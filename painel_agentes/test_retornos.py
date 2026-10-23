@@ -36,6 +36,7 @@ class Base(unittest.TestCase):
                           "motivo_texto TEXT, categoria TEXT)")
         self.conn.execute("INSERT INTO motivos_ocorrencia VALUES (7, 5744, 'Não coletado', 'X')")
         self.conn.commit()
+        retornos.definir_inicio(self.conn, date(2026, 1, 1))
         self._rotas = {}
         self._service = 1000
 
@@ -228,6 +229,48 @@ class Alerta(Base):
         autores = [m["autor"] for m in cg.execute("SELECT autor FROM equipe_grupos_mensagens")]
         self.assertEqual(autores, ["Recebimento de retornos"] * 2)
         cg.close()
+
+
+class Revisao(Base):
+    def test_inicio_corta_legado(self):
+        # Primeiro uso grava o dia de inicio: o que caiu antes ja foi recebido no Lovable.
+        self.parada("João", "PS-1", dia=HOJE - timedelta(days=2))
+        self.parada("João", "PS-2", dia=HOJE)
+        retornos.definir_inicio(self.conn, HOJE - timedelta(days=1))
+        codigos = [p["codigo"] for g in retornos.listar_pendentes(self.conn, HOJE) for p in g["pedidos"]]
+        self.assertEqual(codigos, ["PS-2"])
+        self.assertEqual(retornos.pendentes_atrasados(self.conn, HOJE + timedelta(days=1))[0]["pedidos"][0]["codigo"],
+                         "PS-2")
+
+    def test_inicio_nasce_no_primeiro_uso(self):
+        tmp = Path(self._tmp.name) / "novo.db"
+        nucleo_banco.conectar(tmp).close()
+        c = retornos.conectar(tmp)
+        self.assertEqual(retornos.inicio(c), date.today().isoformat())
+        c.close()
+
+    def test_lista_exclui_lalamove(self):
+        self.parada("LALAMOVE", "PS-1")
+        self.conn.execute("UPDATE nucleo_rotas SET agent_id = 77")
+        self.parada("João", "PS-2")
+        self.conn.commit()
+        nomes = [g["motorista_nome"] for g in retornos.listar_pendentes(self.conn, HOJE)]
+        self.assertEqual(nomes, ["João"])
+        self.conn.execute("UPDATE nucleo_rotas SET motorista_nome = 'Agente X' WHERE agent_id = 77")
+        self.conn.commit()
+        nomes = [g["motorista_nome"] for g in retornos.listar_pendentes(self.conn, HOJE, agent_ids_excluir={77})]
+        self.assertEqual(nomes, ["João"])
+
+    def test_alerta_atraso_grande_vira_varias_mensagens_sem_perder_nada(self):
+        ontem = HOJE - timedelta(days=1)
+        for n in range(120):
+            self.parada(f"Motorista {n:03d}", f"PS-{n}", dia=ontem, embarcador="Embarcador de nome bem comprido Ltda")
+        msgs = retornos.mensagens_alerta_atraso(retornos.pendentes_atrasados(self.conn, HOJE))
+        self.assertGreater(len(msgs), 1)
+        self.assertTrue(all(len(m) <= ge.TEXTO_MAX for m in msgs))
+        juntas = "\n".join(msgs)
+        for n in range(120):
+            self.assertIn(f"PS-{n} ·", juntas)
 
 
 class Atraso(Base):

@@ -37,6 +37,16 @@ from regras.feriados import eh_dia_util  # noqa: E402
 logger = logging.getLogger("retornos_atrasados")
 
 
+def _config() -> dict:
+    """config.yaml so pro agente da Lalamove; sem o arquivo, segue sem ele."""
+    try:
+        import yaml
+        with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--modo-teste", action="store_true", help="so imprime; nao posta nem marca")
@@ -50,18 +60,21 @@ def main(argv=None) -> int:
 
     conn = retornos.conectar()
     try:
-        grupos = retornos.pendentes_atrasados(conn, hoje)
+        grupos = retornos.pendentes_atrasados(conn, hoje,
+                                              agent_ids_excluir=retornos.agent_ids_lalamove(_config()))
         if not grupos:
             logger.info("Nenhum retorno atrasado em %s.", hoje)
             return 0
-        texto = retornos.texto_alerta_atraso(grupos)
+        mensagens = retornos.mensagens_alerta_atraso(grupos)
         ids = [p["parada_id"] for g in grupos for p in g["pedidos"]]
         if args.modo_teste:
-            print(f"[MODO TESTE] {len(ids)} retorno(s) seriam cobrados no grupo {retornos.NOME_GRUPO}:\n{texto}")
+            print(f"[MODO TESTE] {len(ids)} retorno(s) seriam cobrados no grupo {retornos.NOME_GRUPO} "
+                  f"em {len(mensagens)} mensagem(ns):\n" + "\n---\n".join(mensagens))
             return 0
         cg = grupos_equipe.conectar()
         try:
-            retornos.postar_alerta(cg, texto)
+            for texto in mensagens:
+                retornos.postar_alerta(cg, texto)
         finally:
             cg.close()
         retornos.marcar_alertados(conn, ids)
