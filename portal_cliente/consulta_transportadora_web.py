@@ -28,6 +28,8 @@ _OPCOES = {"retirada": "RETIRADA", "redespacho": "TERCEIROS", "entrega": "ENTREG
 _ROTULOS = {"RETIRADA": "Retirada no galpão", "TERCEIROS": "Redespacho (levamos até a transportadora)",
             "ENTREGA": "Entrega no endereço do pedido"}
 _OBRIGATORIOS = (("cep", "CEP"), ("logradouro", "rua"), ("numero", "número"), ("municipio", "cidade"), ("uf", "UF"))
+_MAX_CAMPO = 200
+_MAX_NOME = 120
 _CAMPOS_ENDERECO = ("cep", "logradouro", "numero", "complemento", "bairro", "municipio", "uf")
 
 
@@ -92,13 +94,16 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
                 return _pagina("invalido")
             if transp["situacao"] == "ATIVA":
                 return _definida(transp)
+            if transp["situacao"] != "PENDENTE" or consulta["respondido_em"]:
+                return _pagina("indisponivel")
             emb = consulta["embarcador_cnpj"]
             ctx = dict(transp=transp, pedidos=ctr.pedidos_parados(conn, transp["id"], emb), form={})
             if request.method != "POST":
                 return _pagina("ok", erro=None, **ctx)
 
-            f = {k: (request.form.get(k) or "").strip()
+            f = {k: (request.form.get(k) or "").strip()[:_MAX_CAMPO]
                  for k in ("opcao", "nome", "email_transportadora") + _CAMPOS_ENDERECO}
+            f["nome"] = f["nome"][:_MAX_NOME]
             ctx["form"] = f
             if f["opcao"] not in _OPCOES:
                 return _pagina("ok", erro="Escolha uma das opções.", **ctx)
@@ -120,7 +125,9 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
             except tc.ErroCadastro as e:
                 if "ja respondida" in str(e):  # outra pessoa respondeu entre o GET e o POST
                     return _definida(tc.buscar(conn, transp["id"]))
-                return _pagina("ok", erro=str(e), **ctx)
+                # o texto pode citar outra transportadora (conflito): so vai pro log
+                logger.warning("consulta %s: resposta recusada: %s", cid, e)
+                return _pagina("ok", erro="Não foi possível registrar agora. Fale com a equipe Fresh Log.", **ctx)
             return _pagina("respondida_agora", transp=novo, tipo_rotulo=_ROTULOS[tipo], nome=f["nome"],
                            endereco=_endereco_texto(novo) if tipo == "TERCEIROS" else "")
         finally:

@@ -113,6 +113,14 @@ class ConsultaTest(unittest.TestCase):
         with self.assertRaises(tc.ErroCadastro):
             ct.responder(self.conn, tid, "ENTREGA", None, "", "x", "link")
 
+    def test_responder_inativa_recusado(self):
+        a, _ = self._tres()
+        tid = a["transportadora"]["id"]
+        tc.atualizar(self.conn, tid, {"situacao": "INATIVA"}, "t")
+        with self.assertRaises(tc.ErroCadastro):
+            ct.responder(self.conn, tid, "RETIRADA", None, "", "x", "link")
+        self.assertEqual(tc.buscar(self.conn, tid)["situacao"], "INATIVA")
+
     def test_consultas_abertas_traz_nome_e_contagem(self):
         self._tres()
         ab = ct.consultas_abertas(self.conn)

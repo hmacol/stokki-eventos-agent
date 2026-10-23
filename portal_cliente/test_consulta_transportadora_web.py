@@ -128,6 +128,53 @@ class TestPagina(Base):
         self.assertNotIn("<form", r.get_data(as_text=True))
         self.assertEqual(self.transp()["tipo"], "RETIRADA")
 
+    def _sql(self, sql, args=()):
+        conn = ctr.conectar_consultas(self.db)
+        conn.execute(sql, args)
+        conn.commit()
+        conn.close()
+
+    def test_inativa_nao_aceita_resposta(self):
+        self._sql("UPDATE transportadoras SET situacao='INATIVA' WHERE id=?", (self.tid,))
+        html = self.client.get(self.url(self.cid_a)).get_data(as_text=True)
+        self.assertNotIn("<form", html)
+        self.assertIn("equipe Fresh Log", html)
+        r = self.client.post(self.url(self.cid_a), data={"opcao": "retirada", "nome": "Maria"})
+        self.assertNotIn("<form", r.get_data(as_text=True))
+        t = self.transp()
+        self.assertEqual((t["situacao"], t["tipo"]), ("INATIVA", None))
+
+    def test_consulta_ja_respondida_nao_regrava(self):
+        self._sql("UPDATE transportadora_consultas SET respondido_em='2026-10-01T10:00:00', respondido_por='X' WHERE id=?",
+                  (self.cid_a,))
+        r = self.client.post(self.url(self.cid_a), data={"opcao": "retirada", "nome": "Maria"})
+        self.assertNotIn("<form", r.get_data(as_text=True))
+        self.assertEqual(self.transp()["situacao"], "PENDENTE")
+        self.assertEqual(self.consulta(self.cid_a)["respondido_por"], "X")
+
+    def test_conflito_nao_vaza_texto_do_erro(self):
+        conn = ctr.conectar_consultas(self.db)
+        import transportadoras_cadastro as tc
+        tc.criar(conn, {"nome": "OUTRA TRANSP SECRETA", "tipo": "ENTREGA", "situacao": "ATIVA", "cnpj": "99888777000166"},
+                 "TELA", "t")
+        conn.close()
+        r = self.client.post(self.url(self.cid_a), data={"opcao": "retirada", "nome": "Maria"})
+        html = r.get_data(as_text=True)
+        self.assertNotIn("SECRETA", html)
+        self.assertIn("Fale com a equipe Fresh Log", html)
+
+    def test_campos_longos_sao_truncados(self):
+        self.client.post(self.url(self.cid_a), data={"opcao": "retirada", "nome": "N" * 500})
+        self.assertLessEqual(len(self.consulta(self.cid_a)["respondido_por"]), 120 + len(" (LOJA A) pelo link"))
+
+    def test_html_no_nome_e_escapado(self):
+        r = self.client.post(self.url(self.cid_a), data={
+            "opcao": "redespacho", "nome": "<script>alert(1)</script>", "logradouro": "<script>x</script>"})
+        html = r.get_data(as_text=True)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertNotIn("<script>x</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
     def test_token_invalido(self):
         r = self.client.get("/transportadora/lixo")
         self.assertIn("Link inválido", r.get_data(as_text=True))

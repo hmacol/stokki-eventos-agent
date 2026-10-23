@@ -53,6 +53,9 @@
 {% elif estado == 'ja_respondida' %}
   <h1>Esta transportadora já foi definida</h1>
   <p>A transportadora <b>{{ transp.nome }}</b> já está cadastrada como <b>{{ tipo_rotulo }}</b>{% if endereco %}: {{ endereco }}{% endif %}. Não precisa fazer nada.</p>
+{% elif estado == 'indisponivel' %}
+  <h1>Não foi possível responder por aqui</h1>
+  <p>Esta consulta não está mais aberta para resposta pelo link. Fale com a equipe Fresh Log para tratarmos a transportadora.</p>
 {% elif estado == 'expirado' %}
   <h1>Link expirado</h1>
   <p>Este link venceu. Responda ao e-mail que você recebeu ou fale com a equipe Fresh Log para enviarmos um novo.</p>
@@ -67,7 +70,7 @@
   label.opcao { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--borda); border-radius: 8px;
                 padding: 12px; margin-bottom: 10px; font-weight: 600; cursor: pointer; }
   label.opcao input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
-  fieldset { border: 1px solid var(--borda); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px 0; }
+  fieldset { border: 1px solid var(--borda); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
   fieldset[hidden] { display: none; }
   legend { font-size: 13px; font-weight: 700; color: var(--primaria); padding: 0 6px; }
   input[type=text] { font-size: 16px; }

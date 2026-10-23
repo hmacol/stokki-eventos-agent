@@ -121,6 +121,8 @@ def responder(conn, transportadora_id: int, tipo: str, endereco: dict | None, em
         raise ErroCadastro(f"Transportadora {transportadora_id} nao existe.")
     if atual["situacao"] == "ATIVA":
         raise ErroCadastro("ja respondida")
+    if atual["situacao"] != "PENDENTE":
+        raise ErroCadastro(f"Transportadora {atual['situacao']}: so PENDENTE aceita resposta.")
     tipo = (tipo or "").strip().upper()
     if tipo not in tc.TIPOS:
         raise ErroCadastro(f"Tipo invalido: {tipo!r}.")
