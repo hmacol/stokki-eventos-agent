@@ -126,7 +126,7 @@ REGIOES: list[dict] = [
 ENDERECOS_DIA_FIXO: list[dict] = [
     # Rua Makita Brasil, 300 - Cooperativa, São Bernardo do Campo/SP
     # (galpão Centrosul/Friozem -- endereço confirmado no
-    # BD_TRANSPORTADORAS, mesmo da Andrea Belotto/Frezze/Gessy Lopes).
+    # cadastro de transportadoras, mesmo da Andrea Belotto/Frezze/Gessy Lopes).
     # São Bernardo é cidade da região ABCD (seg/qua/sex), mas esta regra
     # por endereço tem prioridade: no galpão, só quarta/sexta.
     {"nome": "Centrosul", "dias": [QUARTA, SEXTA], "cidade": "SAO BERNARDO DO CAMPO",

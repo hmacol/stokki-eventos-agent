@@ -88,13 +88,13 @@ class ClassificarAreaEnvio(unittest.TestCase):
 
 class TipoTransportadora(unittest.TestCase):
     def test_sem_transportadora_nem_abre_planilha(self):
-        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar") as carregar:
+        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar_do_banco") as carregar:
             self.assertIsNone(ep._tipo_transportadora("", ""))
         carregar.assert_not_called()
 
     def test_resolve_pelo_catalogo(self):
         resultado = mock.Mock(tipo="TERCEIROS", conflito=False)
-        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar") as carregar:
+        with mock.patch("regras.transportadoras.CatalogoTransportadoras.carregar_do_banco") as carregar:
             carregar.return_value.resolver.return_value = resultado
             self.assertEqual(ep._tipo_transportadora("ANDREA BELOTTO", "03639618000194"), "TERCEIROS")
         carregar.return_value.resolver.assert_called_once_with("ANDREA BELOTTO", cnpj="03639618000194")

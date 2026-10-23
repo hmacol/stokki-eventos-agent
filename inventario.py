@@ -35,7 +35,7 @@ logger = logging.getLogger("inventario")
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from pipeline import (
-    CONFIG_PATH, TRANSPORTADORAS, DB_PATH,
+    CONFIG_PATH, DB_PATH,
     STATUS_AGUARDANDO_TRANSPORTADOR, STATUSES_EM_ABERTO,
     EMBARCADORES_IMPORTAR_ABERTOS,
     _buscar_dados_embarcador_banco,
@@ -150,7 +150,7 @@ def coletar_pedidos(sess, filtro_cliente=""):
     logger.info(f"Total coletado: {len(todos)} pedido(s)")
 
     # Carrega catalogo de transportadoras para identificar tipo
-    catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
 
     # Cruza com fingerprint e catalogo
     ja_importados = _codigos_ja_importados()

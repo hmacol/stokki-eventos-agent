@@ -6,7 +6,7 @@ Solicitação de confirmação de redespacho por pedido — mesmo padrão de
 agendamento_confirmacao.py, mas para o caso descrito por regras/endereco.py
 (fonte="aguardando_redespacho"): o Local de Entrega do pedido está fora
 da área atendida pela Freshlog e a transportadora não tem redespacho
-conhecido em BD_TRANSPORTADORAS.xlsx (pedido do Hugo, 10/08, caso
+conhecido no cadastro de transportadoras (pedido do Hugo, 10/08, caso
 #PS-36198).
 
 Fluxo (ver integração em pipeline.py):
@@ -15,7 +15,7 @@ Fluxo (ver integração em pipeline.py):
   2. O pedido NÃO é importado no VUUPT nessa rodada -- fica "segurado"
      até o embarcador responder (não há leitura automática da resposta,
      é uma decisão manual: alguém confirma o nome da transportadora e o
-     endereço de redespacho, e atualiza BD_TRANSPORTADORAS.xlsx -- daí
+     endereço de redespacho, e atualiza o cadastro (tela /transportadoras) -- daí
      em diante o pedido resolve normalmente pela prioridade 3).
   3. enviar_solicitacao() manda o e-mail (no máximo 1x por dia por
      pedido, mesmo limitador do agendamento) e registra em

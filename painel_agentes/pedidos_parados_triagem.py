@@ -1100,11 +1100,11 @@ def _status_e_transportadora_stokki(sessao, id_stokki: str) -> dict | None:
 
 
 def _catalogo_transportadoras():
-    """Catálogo da BD_TRANSPORTADORAS (mesmo do pipeline) -- None se a
-    planilha não abrir (aí só vale o nome literal)."""
+    """Catálogo de transportadoras (mesmo do pipeline) -- None se o
+    cadastro não abrir (aí só vale o nome literal)."""
     try:
         from regras.transportadoras import CatalogoTransportadoras
-        return CatalogoTransportadoras.carregar(_RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx")
+        return CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     except Exception as e:
         logger.warning(f"[pedidos-parados] Sem catálogo de transportadoras ({e}); usando só o nome.")
         return None
@@ -1115,7 +1115,7 @@ def _tipo_retira(nome_transportadora: str, catalogo) -> str | None:
     "literal"  -> transportadora chama "CLIENTE RETIRA" na Stokki: o
                   cliente mesmo busca; vira "Cliente Retira" com o botão
                   "Notificar embarcador" disponível (manual, como sempre).
-    "catalogo" -> tipo RETIRADA na BD_TRANSPORTADORAS (transportadora
+    "catalogo" -> tipo RETIRADA no cadastro de transportadoras (transportadora
                   terceira que coleta no galpão, ex.: ACEVILLE): também
                   vira "Cliente Retira" (Hugo, 28/08), mas SEM notificação
                   ao cliente -- a tratativa já nasce concluída.
@@ -1236,7 +1236,7 @@ def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
                 # nasce concluída, a tela não oferece "Notificar embarcador".
                 _marcar_acao(
                     numero, "concluida",
-                    f"transportadora '{transportadora}' é de RETIRADA (BD_TRANSPORTADORAS) -- sem notificação ao cliente",
+                    f"transportadora '{transportadora}' é de RETIRADA (cadastro de transportadoras) -- sem notificação ao cliente",
                 )
                 resumo["retira_transportadora"].append(numero)
             else:

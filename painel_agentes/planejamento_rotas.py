@@ -2320,22 +2320,20 @@ def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:
 # existe campo de transportadora no serviço da VUUPT nem em
 # nucleo_pedidos: o que identifica o redespacho no resto do sistema
 # (canhoteira do romaneio, notificação de XML pra transportadora) é o
-# ENDEREÇO do serviço batendo com o galpão da planilha
+# ENDEREÇO do serviço batendo com o galpão do cadastro
 # (regras.transportadoras.resolver_por_endereco). Então "trocar a
 # transportadora" = trocar o endereço do pedido pelo endereço do galpão
 # da TERCEIROS escolhida, pelo mesmo caminho do "Editar endereço".
 
-CAMINHO_BD_TRANSPORTADORAS = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
-
 
 def _catalogo_transportadoras():
-    """Catálogo da BD_TRANSPORTADORAS (mesmo do pipeline) -- None se a
-    planilha não abrir. Recarrega a cada chamada de propósito: o Hugo
-    edita a planilha na mão e a tela tem que ver a linha nova sem
-    reiniciar o painel."""
+    """Catálogo de transportadoras (mesmo do pipeline, tabela do dados.db) --
+    None se o cadastro não abrir. Recarrega a cada chamada de propósito: a
+    tela /transportadoras edita o cadastro e esta tela tem que ver a linha
+    nova sem reiniciar o painel."""
     try:
         from regras.transportadoras import CatalogoTransportadoras
-        return CatalogoTransportadoras.carregar(CAMINHO_BD_TRANSPORTADORAS)
+        return CatalogoTransportadoras.carregar_do_banco(_DB_PATH)
     except Exception as e:
         logger.warning(f"[planejamento] Sem catálogo de transportadoras ({e}).")
         return None
@@ -2344,7 +2342,7 @@ def _catalogo_transportadoras():
 def listar_transportadoras_terceiros() -> list[dict]:
     """Opções do select "Transportadora (redespacho)": só as TERCEIROS
     com endereço de galpão, [{"nome", "endereco"}] em ordem alfabética.
-    Lista vazia se a planilha não abrir (a tela avisa)."""
+    Lista vazia se o cadastro não abrir (a tela avisa)."""
     catalogo = _catalogo_transportadoras()
     return catalogo.listar_terceiros() if catalogo else []
 
@@ -2354,7 +2352,7 @@ def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dic
     Troca o endereço dos pedidos de `itens` ({"service_id", "rascunho_id"})
     pelo endereço de redespacho da transportadora TERCEIROS escolhida --
     menu de contexto (1 pedido) e barras de seleção (lote) da tela de
-    planejamento. Só vale pra TERCEIROS da BD_TRANSPORTADORAS: ENTREGA,
+    planejamento. Só vale pra TERCEIROS do cadastro de transportadoras: ENTREGA,
     RETIRADA ou nome desconhecido são recusados antes de tocar na VUUPT.
 
     A gravação em si é a de editar_endereco_pedidos (VUUPT no nível raiz
@@ -2371,14 +2369,14 @@ def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dic
 
     catalogo = _catalogo_transportadoras()
     if catalogo is None:
-        return {"ok": False, "erro": "Não foi possível abrir a planilha BD_TRANSPORTADORAS.xlsx."}
+        return {"ok": False, "erro": "Não foi possível abrir o cadastro de transportadoras."}
 
     endereco = catalogo.endereco_terceiros(transportadora)
     if endereco is None:
         return {
             "ok": False,
             "erro": (f"Transportadora {transportadora!r} não é TERCEIROS com endereço "
-                     f"de redespacho na BD_TRANSPORTADORAS.xlsx."),
+                     f"de redespacho no cadastro de transportadoras."),
         }
 
     texto = str(endereco)

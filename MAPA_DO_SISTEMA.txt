@@ -586,8 +586,9 @@
  7. regras/ — regras de negócio (quase todas puras)
 ==============================================================================
 
- Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx,
- BD_TRANSPORTADORAS.xlsx) e tabela `interno`.
+ Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx), tabela
+ `interno` e, p/ transportadoras, a tabela `transportadoras` do dados.db
+ (tela /transportadoras; todo leitor usa carregar_do_banco).
 
  embarcadores.py            Identificação do embarcador.
  endereco.py                Endereço final: LLM > Local de Entrega >
@@ -1230,6 +1231,8 @@
    `lovable/sessao_freshhub.json` (como www-data) ANTES de reiniciar
    painel-agentes; sem isso o Lovable refaz login Playwright a cada chamada.
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
+ - BD_TRANSPORTADORAS.xlsx é histórico desde a migração, não editar (a fonte é
+   a tabela `transportadoras`; só migrar_transportadoras_planilha.py lê o xlsx).
  - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada
    rodada sem filtro. Sem listagem completa em 30h, "sem serviço" e
    insucessos saem do vigia (pra não acusar com dado velho).

@@ -78,7 +78,6 @@ logger = logging.getLogger("pipeline")
 
 # ── Constantes ─────────────────────────────────────────────────────────────────
 CONFIG_PATH      = _RAIZ / "config.yaml"
-TRANSPORTADORAS  = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
 DB_PATH          = _RAIZ / "dados" / "dados.db"
 PAUSA_ENTRE_PEDIDOS = 1.0  # segundos — ajustada 06/08: 0.3s (04/08) causou 429 em quase
 # TODO pedido em produção real (confirmado pelo Hugo, lote de 241 pedidos). Na época da
@@ -961,11 +960,11 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         raise SystemExit("Token do VUUPT não configurado em config.yaml (vuupt_api.token).")
 
     # Carrega catálogo de transportadoras
-    catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     conflitos = catalogo.listar_conflitos()
     if conflitos:
         logger.warning(
-            f"BD_TRANSPORTADORAS tem {len(conflitos)} conflito(s) a resolver: {conflitos}"
+            f"Cadastro de transportadoras tem {len(conflitos)} conflito(s) a resolver: {conflitos}"
         )
 
     # Resolve filtro de embarcador (stkkc_id ou parte do nome)

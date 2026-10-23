@@ -56,7 +56,6 @@ logger = logging.getLogger("batimento.medir")
 
 CONFIG_PATH = _RAIZ / "config.yaml"
 DB_PATH = _RAIZ / "dados" / "dados.db"
-TRANSPORTADORAS = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
 VUUPT_BASE = "https://api.vuupt.com/api/v1/services"
 
 DATA_CORTE_PADRAO = date(2026, 9, 28)   # Hugo, 04/10: "ultima semana"
@@ -406,9 +405,9 @@ def ler_banco(conn: sqlite3.Connection, bases: set[str], agent_lalamove: int) ->
 def carregar_catalogo():
     try:
         from regras.transportadoras import CatalogoTransportadoras
-        return CatalogoTransportadoras.carregar(TRANSPORTADORAS)
-    except Exception as e:  # noqa: BLE001 -- sem planilha a medicao segue, sem tipo
-        logger.warning(f"BD_TRANSPORTADORAS indisponivel ({e}); tipo da transportadora fica vazio.")
+        return CatalogoTransportadoras.carregar_do_banco(DB_PATH)
+    except Exception as e:  # noqa: BLE001 -- sem cadastro a medicao segue, sem tipo
+        logger.warning(f"Cadastro de transportadoras indisponivel ({e}); tipo da transportadora fica vazio.")
         return None
 
 

@@ -9,14 +9,14 @@ hierarquia de prioridade definida:
      alternativo ou transportadora diferente, prevalece sobre tudo.
   2. Local de Entrega — campo formal preenchido no pedido.
   3. Redespacho por Transportadora — se a transportadora for TERCEIROS,
-     o endereço é substituído pelo endereço fixo da planilha.
+     o endereço é substituído pelo endereço fixo do cadastro.
   4. Destino — endereço do destinatário final (fallback padrão).
 
 Uso:
     from regras.endereco import resolver_endereco_entrega
     from regras.transportadoras import CatalogoTransportadoras
 
-    catalogo = CatalogoTransportadoras.carregar(Path("dados/BD_TRANSPORTADORAS.xlsx"))
+    catalogo = CatalogoTransportadoras.carregar_do_banco(Path("dados/dados.db"))
     resultado = resolver_endereco_entrega(detalhe_pedido, catalogo, anthropic_api_key)
 
     print(resultado.endereco)   # dict com campos de endereço
@@ -177,7 +177,7 @@ def resolver_endereco_entrega(
     Resolve o endereço de entrega final aplicando a hierarquia de prioridade.
 
     detalhe: dict retornado por stokki.pedidos.obter_detalhe()
-    catalogo: CatalogoTransportadoras carregado de BD_TRANSPORTADORAS.xlsx
+    catalogo: CatalogoTransportadoras carregado do banco (tabela transportadoras)
     anthropic_api_key: chave da API Anthropic (deixar vazio para pular LLM)
     google_maps_api_key: chave do Google Maps (deixar vazio para pular a
         checagem de área atendida do Local de Entrega — nesse caso o

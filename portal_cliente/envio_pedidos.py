@@ -1108,12 +1108,12 @@ def _identificar_area(servicos: list[dict], api_key: str | None):
 
 def _tipo_transportadora(nome: str, cnpj: str) -> str | None:
     """Tipo (ENTREGA/RETIRADA/TERCEIROS) da transportadora do XML na
-    BD_TRANSPORTADORAS; None se não há transportadora, é desconhecida ou
-    está em conflito na planilha."""
+    cadastro de transportadoras; None se não há transportadora, é desconhecida ou
+    está em conflito no cadastro."""
     if not nome and not cnpj:
         return None
     from regras.transportadoras import CatalogoTransportadoras
-    catalogo = CatalogoTransportadoras.carregar(_RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx")
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     resultado = catalogo.resolver(nome, cnpj=cnpj)
     return None if resultado.conflito else resultado.tipo
 
@@ -1134,7 +1134,7 @@ def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
         if _tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "") in ("TERCEIROS", "RETIRADA"):
             return None
     except Exception as e:
-        logger.warning(f"consulta a BD_TRANSPORTADORAS falhou ({e}); seguindo com a checagem de área da NF {nfe.get('numero_nf')}")
+        logger.warning(f"consulta ao cadastro de transportadoras falhou ({e}); seguindo com a checagem de área da NF {nfe.get('numero_nf')}")
     cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
     endereco = ", ".join(p for p in (nfe.get("destinatario_endereco"), cidade_uf, nfe.get("destinatario_cep")) if p)
     api_key = ((config or {}).get("google_maps", {}) or {}).get("api_key") or ""

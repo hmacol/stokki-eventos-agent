@@ -2,8 +2,8 @@
 """
 notificacao_transportadoras/notificar_transportadoras.py
 
-Notifica cada transportadora de redespacho (tipo TERCEIROS em
-BD_TRANSPORTADORAS.xlsx) sobre os pedidos do dia que serão entregues pra
+Notifica cada transportadora de redespacho (tipo TERCEIROS no
+cadastro de transportadoras) sobre os pedidos do dia que serão entregues pra
 ela, anexando o XML da NF-e de cada um, com cópia pro(s) embarcador(es)
 (remetente da NF) -- pedido do Hugo, 13/08. Ver doc de origem
 DOC_EXECUCAO_CLAUDE_NOTIFICACAO_TRANSPORTADORAS.md.
@@ -92,7 +92,6 @@ from stokki.auth import StokkiSession
 
 from fingerprint_notificacao_transportadora import pedidos_ja_notificados_hoje, registrar_notificacao
 
-TRANSPORTADORAS = _RAIZ_PROJETO / "dados" / "BD_TRANSPORTADORAS.xlsx"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 EMAIL_TESTE = "hugo@freshlogbr.com"
 DONO_TRAVA = "notificar-transportadoras"  # stokki/sessao_uso.py
@@ -283,7 +282,7 @@ def main(modo_teste: bool, data_str: str) -> int:
     token = config.get("vuupt_api", {}).get("token", "")
     config_email = config.get("email", {})
 
-    catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
 
     data_alvo = _parse_data(data_str)
     data_br = data_alvo.strftime("%d/%m/%Y")

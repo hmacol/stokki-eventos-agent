@@ -33,7 +33,7 @@ os documentos):
      embarcador, destinatário final, volumes) com bloco de recebimento
      (nome, documento, data/hora, assinatura e carimbo). O pedido é
      "via transportadora" quando o ENDEREÇO do serviço na VUUPT bate
-     com um ponto de redespacho TERCEIROS da BD_TRANSPORTADORAS
+     com um ponto de redespacho TERCEIROS do cadastro de transportadoras
      (regras/transportadoras.py::resolver_por_endereco -- o mesmo
      critério da notificação de transportadoras).
 
@@ -103,8 +103,6 @@ from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
 PASTA_ROMANEIOS = _RAIZ_LOCAL / "dados" / "romaneios"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 LOGO_PATH = _RAIZ_PROJETO / "assets" / "logo_freshlog.png"
-# Mesma planilha do pipeline e da notificação de transportadoras.
-TRANSPORTADORAS_PATH = _RAIZ_PROJETO / "dados" / "BD_TRANSPORTADORAS.xlsx"
 
 # Embarcadores cujas entregas geram folha de CANHOTEIRA no fim do
 # romaneio (pedido do Hugo, 11/08). sender_id do VUUPT (tabela interno).
@@ -262,14 +260,14 @@ def carregar_embarcadores() -> tuple[dict[int, str], dict[int, float]]:
 
 
 def carregar_catalogo_transportadoras() -> CatalogoTransportadoras | None:
-    """Catálogo da BD_TRANSPORTADORAS pra identificar pedido "via
+    """Catálogo de transportadoras (tabela do dados.db) pra identificar pedido "via
     transportadora" pelo endereço (canhoteira de transportadora). None
-    quando a planilha não existe/não abre -- o romaneio sai sem essa
+    quando o cadastro não existe/não abre -- o romaneio sai sem essa
     folha, nunca deixa de sair por causa dela."""
     try:
-        return CatalogoTransportadoras.carregar(TRANSPORTADORAS_PATH)
+        return CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     except Exception as e:
-        logger.warning(f"BD_TRANSPORTADORAS indisponível ({e}) -- romaneio sai sem canhoteira "
+        logger.warning(f"Cadastro de transportadoras indisponível ({e}) -- romaneio sai sem canhoteira "
                        f"de transportadora.")
         return None
 
@@ -1013,7 +1011,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
                     embarcadores: dict[int, str], fatores: dict[int, float],
                     nome_motorista: str, data_alvo: date, caminho_saida: Path,
                     catalogo_transportadoras: CatalogoTransportadoras | None = None) -> dict:
-    """catalogo_transportadoras: BD_TRANSPORTADORAS já carregada (job das
+    """catalogo_transportadoras: cadastro já carregado (job das
     04h carrega uma vez pra todas as rotas). Omitido -> carrega aqui
     (botão "Imprimir rota", expedição, documentação automática)."""
     if catalogo_transportadoras is None:

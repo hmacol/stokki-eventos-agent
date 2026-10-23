@@ -61,7 +61,7 @@ def _endereco(servico: dict) -> str:
     return f"{endereco} · {complemento}" if complemento else endereco
 
 
-# Rotulos da planilha BD_TRANSPORTADORAS (tipo RETIRADA) que nao sao uma
+# Rotulos do cadastro de transportadoras (tipo RETIRADA) que nao sao uma
 # empresa de verdade, mais o fallback "cliente" de montar_payload_retirada.
 # Pra esses o e-mail nao diz "retirado por X": nao sabemos quem foi.
 _QUEM_RETIRA_GENERICO = re.compile(

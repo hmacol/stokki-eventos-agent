@@ -3254,7 +3254,7 @@ def api_editar_endereco_lote():
 @requer_auth(niveis=("total", "operador", "logistica"))
 def api_transportadoras_terceiros():
     """Opções do modal "Transportadora (redespacho)" da tela de
-    planejamento: TERCEIROS da BD_TRANSPORTADORAS com endereço de galpão
+    planejamento: TERCEIROS do cadastro de transportadoras com endereço de galpão
     (ver planejamento_rotas.listar_transportadoras_terceiros)."""
     return jsonify({"transportadoras": listar_transportadoras_terceiros()})
 
