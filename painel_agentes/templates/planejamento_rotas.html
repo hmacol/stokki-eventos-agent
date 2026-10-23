@@ -6433,7 +6433,7 @@
     try {
       const lista = await carregarTransportadorasTerceiros();
       if (!lista.length) {
-        select.innerHTML = `<option value="">Nenhuma TERCEIROS com endereço na BD_TRANSPORTADORAS</option>`;
+        select.innerHTML = `<option value="">Nenhuma TERCEIROS com endereço no cadastro de transportadoras</option>`;
         return;
       }
       select.innerHTML = `<option value="">Escolha a transportadora…</option>` +
