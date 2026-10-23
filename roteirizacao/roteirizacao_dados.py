@@ -1281,6 +1281,32 @@ def _ordem_vizinho_mais_proximo(servicos: list[dict], base: tuple[float, float],
     return ordem + sem
 
 
+def _juntar_mesmo_endereco(ordem: list[dict], resolver) -> list[dict]:
+    """
+    Paradas com a MESMA coordenada (lat e lng arredondadas em 5 casas)
+    saem seguidas: vao pra logo depois da primeira ocorrencia, na ordem
+    original entre si (Hugo, 23/10 -- na #13 o PS-42216-R1 e o PS-42216
+    eram o mesmo endereco, separados por 5 paradas). Parada sem
+    coordenada fica no indice em que estava.
+    """
+    def _chave(s):
+        c = resolver(s)
+        return (round(c[0], 5), round(c[1], 5)) if c else None
+
+    grupos: dict = {}
+    sem_coord: list[tuple[int, dict]] = []
+    for i, s in enumerate(ordem):
+        k = _chave(s)
+        if k is None:
+            sem_coord.append((i, s))
+        else:
+            grupos.setdefault(k, []).append(s)
+    juntas = [s for g in grupos.values() for s in g]
+    for i, s in sem_coord:
+        juntas.insert(i, s)
+    return juntas
+
+
 def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
                         api_key: str | None = None, coords_fn=None) -> list[dict]:
     """
@@ -1317,7 +1343,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
     n = len(ordem_inicial)
     com_janela = tem_janela(ordem_inicial)
     if n <= 1 or (n <= 2 and not com_janela):
-        return ordem_inicial
+        return _juntar_mesmo_endereco(ordem_inicial, resolver)
 
     coords = [resolver(s) for s in ordem_inicial]
     coords_por_objeto = {id(s): c for s, c in zip(ordem_inicial, coords)}
@@ -1390,7 +1416,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
 
     rota = list(range(n))
     rota = _busca_local_com_janela(rota) if com_janela else _2opt_sem_janela(rota)
-    return [ordem_inicial[k] for k in rota]
+    return _juntar_mesmo_endereco([ordem_inicial[k] for k in rota], resolver_cache)
 
 
 def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
