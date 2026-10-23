@@ -247,19 +247,21 @@ def redefinir_senha(conn, usuario: str, senha: str, por: str) -> None:
     conn.commit()
 
 
-def trocar_senha(conn, usuario: str, nova: str) -> int:
+def trocar_senha(conn, usuario: str, nova: str, versao_sessao: int):
     """A propria pessoa troca a provisoria pela dela. Devolve a versao_senha
-    nova, que a sessao de quem trocou passa a carregar."""
+    nova, que a sessao de quem trocou passa a carregar, ou None quando a
+    senha foi redefinida de novo nesse meio tempo (a sessao nao vale mais)."""
     c = conta(usuario, conn)
     if c is None:
         raise ValueError("Login nominal não encontrado.")
     _validar_senha(nova)
     if check_password_hash(c["senha_hash"], nova):
         raise ValueError("A senha nova precisa ser diferente da provisória.")
-    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 0, versao_senha = versao_senha + 1 "
-                 "WHERE usuario = ?", (generate_password_hash(nova), usuario))
+    cur = conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 0, versao_senha = versao_senha + 1 "
+                       "WHERE usuario = ? AND versao_senha = ? AND trocar_senha = 1",
+                       (generate_password_hash(nova), usuario, versao_sessao))
     conn.commit()
-    return c["versao_senha"] + 1
+    return versao_sessao + 1 if cur.rowcount else None
 
 
 def importar_do_config(conn, cfg_painel: dict) -> list[str]:
