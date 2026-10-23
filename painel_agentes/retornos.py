@@ -424,3 +424,30 @@ def detalhar_descarga(conn, descarga_id: int) -> dict | None:
                        "avaria": bool(i["avaria"]), "parcial": bool(i["parcial"]),
                        "divergente": bool(i["divergente"]), "motivo_corrigido": bool(i["motivo_corrigido"])}
                       for i in itens]}
+
+
+def pendentes_atrasados(conn, hoje: date, dias: int = JANELA_DIAS) -> list[dict]:
+    """Retornos de dias anteriores a hoje, nao recebidos e ainda nao
+    cobrados no grupo (cada um e cobrado uma vez so)."""
+    alertados = {r[0] for r in conn.execute("SELECT parada_id FROM retornos_alertas_atraso")}
+    pedidos = [p for p in _retornos_pendentes(conn, hoje, dias)
+               if p["dia_insucesso"] < hoje.isoformat() and p["parada_id"] not in alertados]
+    return _agrupar(pedidos, hoje)
+
+
+def texto_alerta_atraso(grupos: list[dict]) -> str:
+    linhas = ["Retornos não recebidos até 07h"]
+    for g in sorted(grupos, key=lambda g: g["motorista_nome"]):
+        linhas.append("")
+        linhas.append(g["motorista_nome"])
+        for p in g["pedidos"]:
+            caixas = "parcial" if p["parcial"] else f"{p['caixas_esperadas'] or 0} cx"
+            linhas.append(f"{p['codigo']} · {p['embarcador'] or 'sem embarcador'} · {caixas} · {p['motivo']}")
+    return "\n".join(linhas)
+
+
+def marcar_alertados(conn, parada_ids: list[int]) -> None:
+    agora = _agora()
+    conn.executemany("INSERT OR IGNORE INTO retornos_alertas_atraso (parada_id, alertado_em) VALUES (?, ?)",
+                     [(pid, agora) for pid in parada_ids])
+    conn.commit()

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 _AQUI = Path(__file__).parent
 _RAIZ = _AQUI.parent
@@ -227,6 +228,58 @@ class Alerta(Base):
         autores = [m["autor"] for m in cg.execute("SELECT autor FROM equipe_grupos_mensagens")]
         self.assertEqual(autores, ["Recebimento de retornos"] * 2)
         cg.close()
+
+
+class Atraso(Base):
+    def test_atraso_pega_so_dias_anteriores(self):
+        self.parada("João", "PS-1", dia=HOJE)
+        self.parada("João", "PS-2", dia=HOJE - timedelta(days=1))
+        codigos = [p["codigo"] for g in retornos.pendentes_atrasados(self.conn, HOJE) for p in g["pedidos"]]
+        self.assertEqual(codigos, ["PS-2"])
+
+    def test_atraso_uma_vez_so(self):
+        p = self.parada("João", "PS-1", dia=HOJE - timedelta(days=1))
+        retornos.marcar_alertados(self.conn, [p])
+        self.assertEqual(retornos.pendentes_atrasados(self.conn, HOJE), [])
+
+    def test_atraso_ignora_recebido(self):
+        p = self.parada("João", "PS-1", dia=HOJE - timedelta(days=1))
+        self.receber([self.item(p)])
+        self.assertEqual(retornos.pendentes_atrasados(self.conn, HOJE), [])
+
+    def test_texto_atraso_agrupa_motorista(self):
+        ontem = HOJE - timedelta(days=1)
+        self.parada("Maria", "PS-1", dia=ontem, caixas=4)
+        self.parada("João", "PS-2", dia=ontem, situacao="PARCIAL", failed_reason_id=None)
+        texto = retornos.texto_alerta_atraso(retornos.pendentes_atrasados(self.conn, HOJE))
+        self.assertTrue(texto.startswith("Retornos não recebidos até 07h"))
+        self.assertLess(texto.index("João"), texto.index("Maria"))
+        self.assertIn("PS-1 · Maria Dolores · 4 cx · Cliente ausente", texto)
+        self.assertIn("PS-2 · Maria Dolores · parcial", texto)
+
+    def test_atraso_fim_de_semana_e_feriado(self):
+        import alertar_retornos_atrasados as job
+        postados = []
+        self.parada("João", "PS-1", dia=date(2026, 10, 23))  # sexta
+        self.parada("João", "PS-2", dia=date(2026, 10, 30))  # sexta antes de Finados (seg 02/11)
+        with mock.patch.object(retornos, "DB_PATH", self.db), mock.patch.object(ge, "DB_PATH", self.db), \
+                mock.patch.object(retornos, "postar_alerta", lambda conn, texto: postados.append(texto)):
+            self.assertEqual(job.main(["--data", "2026-10-24"]), 0)  # sabado
+            self.assertEqual(job.main(["--data", "2026-10-25"]), 0)  # domingo
+            self.assertEqual(postados, [])
+            self.assertEqual(job.main(["--data", "2026-10-26", "--modo-teste"]), 0)  # segunda, teste
+            self.assertEqual(postados, [])
+            self.assertEqual(job.main(["--data", "2026-10-26"]), 0)  # segunda
+            self.assertEqual(len(postados), 1)
+            self.assertIn("PS-1", postados[0])
+            self.assertNotIn("PS-2", postados[0])
+            self.assertEqual(job.main(["--data", "2026-10-27"]), 0)  # nada novo
+            self.assertEqual(len(postados), 1)
+            self.assertEqual(job.main(["--data", "2026-11-02"]), 0)  # Finados
+            self.assertEqual(len(postados), 1)
+            self.assertEqual(job.main(["--data", "2026-11-03"]), 0)
+            self.assertEqual(len(postados), 2)
+            self.assertIn("PS-2", postados[1])
 
 
 if __name__ == "__main__":
