@@ -2,6 +2,7 @@
 """Testes da leitura e conferência da fila da Estação de Impressão (tela por abas, 22/10)."""
 import json
 import unittest
+from datetime import datetime
 
 from stokki.estacao_impressao import _conferir_fila, _extrair_pagina_lista
 
@@ -53,6 +54,27 @@ class TestExtrairPaginaLista(unittest.TestCase):
         self.assertEqual(p["referencia"], "7719")
         self.assertEqual(p["cliente"], "ITAUEIRA CAMAROES LTDA")
         self.assertEqual(p["codigo_cli"], "#stkkc-67")
+
+    def test_desde_e_o_faturado_em(self):
+        pedidos, _ = _extrair_pagina_lista(_resposta(_LINHA, 1), "billed")
+        self.assertEqual(pedidos[0]["desde"], datetime(2026, 10, 22, 16, 3))
+        self.assertEqual(pedidos[0]["transportadora"], "FRESHLOG")
+
+    def test_aguardando_faturamento_sem_botao_e_sem_solicitado_em(self):
+        linha = ("<tr><td><span>#PS-35908</span><span>36343649808</span></td>"
+                 "<td>04/08/2026 <span>20:40</span></td>"
+                 "<td><span>PADRAO PURO LTDA</span><span>#stkkc-23</span></td>"
+                 "<td>—</td><td>—</td><td>—</td><td><span>79 dias</span></td></tr>"
+                 "<tr><td><span>#PS-42390</span><span>7721</span></td>"
+                 "<td>22/10/2026 <span>13:20</span></td>"
+                 "<td><span>ITAUEIRA CAMAROES LTDA.</span><span>#stkkc-101</span></td>"
+                 "<td><span>ACACIA</span></td><td><span>Felipe Gabriel</span></td>"
+                 "<td>22/10/2026 <span>16:09</span></td><td><span>hoje</span></td></tr>")
+        pedidos, _ = _extrair_pagina_lista(_resposta(linha, 2, tab="awaiting_billing"), "awaiting_billing")
+        self.assertEqual([p["codigo_ps"] for p in pedidos], ["#PS-35908", "#PS-42390"])
+        self.assertIsNone(pedidos[0]["id_stokki"])
+        self.assertEqual(pedidos[0]["desde"], datetime(2026, 8, 4, 20, 40))   # data do pedido
+        self.assertEqual(pedidos[1]["desde"], datetime(2026, 10, 22, 16, 9))  # solicitado em
 
     def test_fila_vazia(self):
         pedidos, paginacao = _extrair_pagina_lista(_resposta("", 0), "billed")

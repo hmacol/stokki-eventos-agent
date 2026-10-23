@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Vigia da fila da Estacao de Impressao (so leitura: faturado ha +2h ou em espera ha +24h -> grupo ALERTAS FRESH + e-mail)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/vigia_fila_impressao.py

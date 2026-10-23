@@ -169,6 +169,7 @@ NOMES_DAS_TAREFAS = {
     "sincronizar-lalamove": "Atualização das corridas da Lalamove",
     "verificar-entregues-nao-expedidos": "Conferência diária das entregas",
     "vigia-documentos": "Vigia dos documentos dos pedidos",
+    "vigia-fila-impressao": "Vigia da fila de impressão",
     "vigia-pedidos": "Vigia dos pedidos em aberto",
     "wms-recebimentos": "Atualização dos recebimentos do estoque",
     "wms-reservar-pedidos": "Reserva de estoque para os pedidos",

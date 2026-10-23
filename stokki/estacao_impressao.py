@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -45,6 +46,9 @@ _SEL_BOTAO_ABA = f"#printing_tabs button[data-tab='{_ABA_FILA}']"
 _SEL_CONTADOR_ABA = f"#printing_tabs_count_{_ABA_FILA}"
 _SEL_BOTAO_FILA = f"#printing_tabs_tbody_{_ABA_FILA} button.btn_finish"
 _POR_PAGINA_LISTA = 100
+# Coluna (0-based) com a data em que o pedido entrou em cada aba:
+# 'Solicitado em' / 'Faturado em' / 'Impresso em'.
+_COLUNA_DESDE = {"awaiting_billing": 5, "billed": 4, "printed": 4}
 
 _RAIZ_DADOS = Path(__file__).resolve().parent.parent / "dados"
 
@@ -162,7 +166,8 @@ def _extrair_pagina_lista(texto: str, aba: str) -> tuple[list, dict]:
             f"Estação de Impressão: resposta de /printing/list?tab={aba} fora do "
             f"formato esperado: {texto[:200]!r}"
         )
-    return _parsear_tabela_impressao(conteudo.get("data") or ""), conteudo["pagination"]
+    return (_parsear_tabela_impressao(conteudo.get("data") or "", _COLUNA_DESDE.get(aba)),
+            conteudo["pagination"])
 
 
 def _ler_aba(context, aba: str) -> tuple[list, int]:
@@ -212,6 +217,32 @@ def _conferir_fila(total_stokki: int, ids_lidos: list, contador_tela: str | None
 
 
 @na_vez_da_provider
+def ler_filas(config: dict, abas: tuple = ("awaiting_billing", "billed")) -> dict:
+    """Só leitura: {aba: lista de pedidos} das abas da Estação (cada pedido
+    com "desde"). Levanta RuntimeError se a Stokki não responder no
+    formato esperado. Usado por vigia_fila_impressao.py."""
+    usuario, senha = _credenciais_provider(config)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = _novo_contexto_disfarcado(browser)
+            page    = context.new_page()
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            _preencher_form_login(page, usuario, senha)
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            filas = {}
+            for aba in abas:
+                pedidos, total = _ler_aba(context, aba)
+                if len(pedidos) != total:
+                    raise RuntimeError(f"Estação de Impressão: aba {aba} informa {total} pedido(s) "
+                                       f"mas foram lidos {len(pedidos)}")
+                filas[aba] = pedidos
+            return filas
+        finally:
+            browser.close()
+
+
+@na_vez_da_provider
 def buscar_pedido_por_nf(config: dict, numero_nf: str):
     """
     Busca um pedido especifico pelo numero da NF ou PO.
@@ -250,8 +281,18 @@ def buscar_pedido_por_nf(config: dict, numero_nf: str):
     return dados
 
 
-def _parsear_tabela_impressao(html: str) -> list:
-    """Parseia as linhas (<tr>) devolvidas em content.data por /printing/list."""
+def _data_hora(texto: str) -> datetime | None:
+    m = re.search(r"(\d{2}/\d{2}/\d{4})\D+(\d{2}:\d{2})", texto or "")
+    return datetime.strptime(f"{m.group(1)} {m.group(2)}", "%d/%m/%Y %H:%M") if m else None
+
+
+def _parsear_tabela_impressao(html: str, coluna_desde: int | None = None) -> list:
+    """Parseia as linhas (<tr>) devolvidas em content.data por /printing/list.
+
+    coluna_desde: coluna com a data em que o pedido entrou na aba (ver
+    _COLUNA_DESDE); vira o campo "desde" (datetime), com a data do pedido
+    como reserva quando a célula vem "—". Linha sem botão (aba Aguardando
+    Faturamento) entra com id_stokki None."""
     soup    = BeautifulSoup(html, "html.parser")
     pedidos = []
 
@@ -284,7 +325,10 @@ def _parsear_tabela_impressao(html: str) -> list:
                 if m:
                     id_stokki = int(m.group(1))
 
-        if id_stokki:
+        if id_stokki or codigo_ps.startswith("#PS-"):
+            desde = None
+            if coluna_desde is not None and len(tds) > coluna_desde:
+                desde = _data_hora(tds[coluna_desde].get_text(" ", strip=True))
             pedidos.append({
                 "id_stokki":  id_stokki,
                 "codigo_ps":  codigo_ps,
@@ -293,6 +337,8 @@ def _parsear_tabela_impressao(html: str) -> list:
                 "hora":       hora,
                 "cliente":    cliente,
                 "codigo_cli": codigo_cli,
+                "transportadora": tds[3].find("span").get_text(strip=True) if tds[3].find("span") else "",
+                "desde":      desde or _data_hora(f"{data} {hora}"),
             })
 
     return pedidos
@@ -603,7 +649,7 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
             # bater, levanta -- e-mail sai como erro em vez de "0, OK"
             # (achado 22/10: a Stokki trocou a tela e o robô via 0 sempre).
             fila, total = _ler_aba(context, _ABA_FILA)
-            ids_fila = [str(p["id_stokki"]) for p in fila]
+            ids_fila = [str(p["id_stokki"]) for p in fila if p["id_stokki"]]
             contador_tela, botoes_visiveis = _abrir_aba_fila(page)
             _conferir_fila(total, ids_fila, contador_tela, botoes_visiveis)
             resultado["pendentes"] = len(ids_fila)
