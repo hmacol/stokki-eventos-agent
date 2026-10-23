@@ -485,7 +485,11 @@ def trocar_senha():
         else:
             conn = acesso_telas.conectar()
             try:
-                session["versao_senha"] = acesso_telas.trocar_senha(conn, conta["usuario"], nova)
+                versao = acesso_telas.trocar_senha(conn, conta["usuario"], nova, session.get("versao_senha", 0))
+                if versao is None:
+                    session.clear()
+                    return redirect(url_for("login"))
+                session["versao_senha"] = versao
                 return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
             except ValueError as e:
                 erro = str(e)

@@ -242,6 +242,16 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
                                   headers=hdr).status_code, 302)
         self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
 
+    def test_troca_com_versao_velha_nao_grava(self):
+        cliente, hdr = self._chefe()
+        cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"}, headers=hdr)
+        conn = acesso_telas.conectar()
+        try:
+            self.assertIsNone(acesso_telas.trocar_senha(conn, "ana", "invasor1", 0))
+            self.assertEqual(acesso_telas.trocar_senha(conn, "ana", "minha99", 1), 2)
+        finally:
+            conn.close()
+
     def test_tabela_antiga_ganha_versao_senha(self):
         conn = acesso_telas.conectar()
         conn.execute("DROP TABLE painel_usuarios")
