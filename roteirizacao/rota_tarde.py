@@ -29,8 +29,8 @@ import math
 import roteirizacao_dados
 from roteirizacao_dados import (
     ESPERA_MAXIMA_ROTA_HORAS, MACRO_GRANDE_SP, NIVEL_ROTA_EXCLUSIVA, ROTA_TEMPO_MAXIMO_HORAS,
-    _distancia_km, _orcamento_inviavel_por_distancia, _tempo_perna_horas, eh_janela_tardia,
-    estimar_tempo_rota, exige_orcamento_horas, extrair_janela, extrair_nivel_dificuldade,
+    _cabe_na_distancia_par, _distancia_km, _orcamento_inviavel_por_distancia, _tempo_perna_horas,
+    eh_janela_tardia, estimar_tempo_rota, exige_orcamento_horas, extrair_janela, extrair_nivel_dificuldade,
     extrair_volume_caixas, janela_respeitada, macro_regiao_do_servico, obter_coordenadas,
     ordenar_com_janelas, simular_horarios,
 )
@@ -132,13 +132,16 @@ def _sequenciar_tarde(sublote: list[dict], base, api_key: str | None) -> tuple[l
 
 
 def montar_rotas_tarde(pedidos: list[dict], coords_base, api_key: str | None, *,
-                       tamanho_maximo: int, volume_maximo: int) -> list[tuple[list[dict], float]]:
+                       tamanho_maximo: int, volume_maximo: int,
+                       distancia_maxima_km: float | None = None) -> list[tuple[list[dict], float]]:
     """Rotas da tarde dos pedidos separados por separar_pedidos_tarde.
 
     Sequencia todos juntos (ordenar_com_janelas com a saida da tarde) e
     quebra guloso nessa ordem: o pedido seguinte entra na rota atual se
     ela continua com no maximo `tamanho_maximo` paradas e `volume_maximo`
-    caixas, dentro de ROTA_TEMPO_MAXIMO_HORAS e passando em
+    caixas, a no maximo `distancia_maxima_km` de cada parada dela (a
+    trava par a par da manha na Grande SP, _cabe_na_distancia_par; None
+    = sem trava), dentro de ROTA_TEMPO_MAXIMO_HORAS e passando em
     janela_respeitada com a saida dela (hora_saida_tarde do pedaco) --
     a trava de espera tambem vale aqui (ex.: bar as 13h + cliente as
     18h30 = duas rotas). Cada pedaco e resequenciado com a propria saida.
@@ -149,8 +152,10 @@ def montar_rotas_tarde(pedidos: list[dict], coords_base, api_key: str | None, *,
     em_ordem = sorted(pedidos, key=lambda s: (extrair_janela(s) or (24.0,))[0])
     ordem, _ = _sequenciar_tarde(em_ordem, base, api_key)
 
-    def cabe(rota: list[dict]) -> bool:
+    def cabe(rota: list[dict], servico: dict) -> bool:
+        rota = rota + [servico]
         return (len(rota) <= tamanho_maximo
+                and _cabe_na_distancia_par(servico, rota[:-1], distancia_maxima_km, api_key)
                 and sum(extrair_volume_caixas(s) for s in rota) <= volume_maximo
                 and estimar_tempo_rota(rota, api_key, base) <= ROTA_TEMPO_MAXIMO_HORAS
                 and janela_respeitada(rota, api_key, base, hora_saida=hora_saida_tarde(rota, base, api_key)))
@@ -158,7 +163,7 @@ def montar_rotas_tarde(pedidos: list[dict], coords_base, api_key: str | None, *,
     pedacos: list[list[dict]] = []
     atual: list[dict] = []
     for servico in ordem:
-        if atual and not cabe(atual + [servico]):
+        if atual and not cabe(atual, servico):
             pedacos.append(atual)
             atual = []
         atual.append(servico)

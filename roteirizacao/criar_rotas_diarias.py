@@ -523,7 +523,8 @@ def planejar_sublotes(servicos: list[dict], coords_base, gmaps_key: str | None, 
         # de rotas fracas, senao o pedido tardio seria segurado todo dia.
         sublotes, tardios = separar_pedidos_tarde(sublotes, coords_base, gmaps_key)
         tarde = montar_rotas_tarde(tardios, coords_base, gmaps_key, tamanho_maximo=tamanho_maximo,
-                                   volume_maximo=VOLUME_MAXIMO_ROTA)
+                                   volume_maximo=VOLUME_MAXIMO_ROTA,
+                                   distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM)
         if tarde:
             logger.info(f"[{rotulo}] Rota da tarde: {len(tardios)} pedido(s) em {len(tarde)} rota(s), "
                         f"saida(s) {[_horas_para_hhmm(h) for _, h in tarde]}.")

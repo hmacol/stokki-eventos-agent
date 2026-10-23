@@ -252,6 +252,17 @@ class RotaTardeTest(unittest.TestCase):
         self.assertTrue(all(sum(s["dimension_3"] for s in sub) <= 100 for sub, _ in rotas))
         self.assertEqual(sum(len(sub) for sub, _ in rotas), 4)
 
+    def test_tarde_distancia_quebra(self):
+        a = _jan("A", -23.5489, -46.6388, "13:00", "18:00")
+        longe = _jan("B", -23.5489 - 0.36, -46.6388, "13:00", "18:00")  # ~40 km
+        perto = _jan("C", -23.5489 - 0.009, -46.6388, "13:00", "18:00")  # ~1 km
+        rotas = rt.montar_rotas_tarde([a, longe], BASE, None, tamanho_maximo=15, volume_maximo=100,
+                                      distancia_maxima_km=15)
+        self.assertEqual(len(rotas), 2)
+        rotas = rt.montar_rotas_tarde([a, perto], BASE, None, tamanho_maximo=15, volume_maximo=100,
+                                      distancia_maxima_km=15)
+        self.assertEqual(len(rotas), 1)
+
     def test_tardio_sem_coordenada_fica(self):
         manha_a = _jan("A", -23.4935, -46.6645, "08:00", "18:00")
         sem = {"code": "S", "_nivel_dificuldade": 1, "_janela_inicio": "15:00",
