@@ -110,17 +110,21 @@ class DiasFixosV2TestCase(unittest.TestCase):
         self.assertEqual(ids(date(2026, 10, 5)), [7])  # ABCD sexta -> segunda
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class HorariosDoPlanoTestCase(unittest.TestCase):
     """horarios_do_plano e resumo_tarde (metricas do replay, 23/10)."""
 
     def test_resumo_tarde_media_e_maximo(self):
-        r = rr.resumo_tarde({date(2026, 10, 1): ["a", "b", "c"], date(2026, 10, 2): [], date(2026, 10, 5): ["d"]})
+        r = rr.resumo_tarde({date(2026, 10, 1): (2, ["a", "b", "c"]), date(2026, 10, 2): (0, []),
+                             date(2026, 10, 5): (1, ["d"])})
         self.assertEqual((r["dias"], r["dias_com_tarde"], r["pedidos_total"], r["pedidos_max"]), (3, 2, 4, 3))
         self.assertAlmostEqual(r["pedidos_media"], 4 / 3)
+        self.assertEqual((r["rotas_total"], r["rotas_max"]), (3, 2))
+        self.assertAlmostEqual(r["rotas_media"], 1.0)
+
+    def test_histograma_paradas(self):
+        self.assertEqual(rr.histograma_paradas([1, 1, 2, 5, 12, 40]),
+                         "1: 2 | 2: 1 | 3: 0 | 4-6: 1 | 7-10: 0 | 11-15: 1 | 16+: 1")
 
     def test_resumo_tarde_vazio(self):
         self.assertEqual(rr.resumo_tarde({})["pedidos_max"], 0)
@@ -135,3 +139,7 @@ class HorariosDoPlanoTestCase(unittest.TestCase):
         self.assertGreater(manha["espera_h"], 5.0)
         self.assertAlmostEqual(tarde["espera_h"], 0.0)
         self.assertAlmostEqual(tarde["atraso_evitavel_h"], 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

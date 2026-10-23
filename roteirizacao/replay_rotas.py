@@ -203,7 +203,9 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
                                 caixas=_caixas(rotas_enviadas), paradas_fraca=rotas_fracas.PARADAS_ROTA_FRACA,
                                 caixas_fraca=rotas_fracas.CAIXAS_ROTA_FRACA,
                                 horas_fraca=rotas_fracas.HORAS_ROTA_FRACA)
-    quebradas = {"manha_quebradas": 0, "manha_inteiras": 0}
+    # So conta o que separar_pedidos_tarde tirou; a trava de espera tambem age dentro de
+    # janela_respeitada (formacao, reparo, polimento), efeito que so a comparacao (b) x (c) mostra.
+    quebradas = {"tirados_manha_quebradas": 0, "tirados_rotas_inteiras": 0, "tirados_pedidos": 0}
     separar_original = crd.separar_pedidos_tarde
 
     def _separar_contando(sublotes_in, base, chave):
@@ -211,10 +213,11 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
         ids = {s["id"] for s in tardios}
         for sub in sublotes_in:
             n = sum(1 for s in sub if s["id"] in ids)
+            quebradas["tirados_pedidos"] += n
             if n == len(sub):
-                quebradas["manha_inteiras"] += 1
+                quebradas["tirados_rotas_inteiras"] += 1
             elif n:
-                quebradas["manha_quebradas"] += 1
+                quebradas["tirados_manha_quebradas"] += 1
         return manha, tardios
 
     crd.separar_pedidos_tarde = _separar_contando
@@ -236,6 +239,8 @@ def rodar_dia(servicos: list[dict], rotas_enviadas: list[list[dict]], coords_bas
     novo.update(horarios_do_plano([(s, None) for s in manha] + tarde, coords_base))
     enviado.update(horarios_do_plano([(s, None) for s in rotas_enviadas], coords_base))
     novo.update(quebradas)
+    novo["paradas_por_rota"] = [len(s) for s in sublotes]
+    enviado["paradas_por_rota"] = [len(s) for s in rotas_enviadas]
     novo["tarde_rotas"] = len(tarde)
     novo["tarde_pedidos"] = [s.get("code") or str(s.get("id")) for sub, _ in tarde for s in sub]
     return enviado, novo
@@ -251,7 +256,18 @@ def _somar(acumulado: dict, m: dict) -> None:
     acumulado.setdefault("diametros", []).append(m["diametro_mediano_km"])
 
 
-CHAVES_HORARIO = ("espera_h", "atraso_evitavel_h", "manha_quebradas", "manha_inteiras", "tarde_rotas")
+CHAVES_HORARIO = ("espera_h", "atraso_evitavel_h", "tirados_manha_quebradas", "tirados_rotas_inteiras",
+                  "tirados_pedidos", "tarde_rotas")
+FAIXAS_PARADAS = ((1, 1), (2, 2), (3, 3), (4, 6), (7, 10), (11, 15), (16, 999))
+
+
+def histograma_paradas(paradas_por_rota: list[int]) -> str:
+    """Quantas rotas em cada faixa de paradas, numa linha."""
+    partes = []
+    for ini, fim in FAIXAS_PARADAS:
+        nome = f"{ini}" if ini == fim else (f"{ini}+" if fim == 999 else f"{ini}-{fim}")
+        partes.append(f"{nome}: {sum(1 for n in paradas_por_rota if ini <= n <= fim)}")
+    return " | ".join(partes)
 
 
 def _somar_horarios(acumulado: dict, m: dict, dia: date) -> None:
@@ -259,14 +275,18 @@ def _somar_horarios(acumulado: dict, m: dict, dia: date) -> None:
     evitavel, rotas da manha quebradas pela trava e rotas/pedidos da tarde."""
     for chave in CHAVES_HORARIO:
         acumulado[chave] = acumulado.get(chave, 0) + m.get(chave, 0)
-    acumulado.setdefault("tarde_dias", {})[dia] = list(m.get("tarde_pedidos", []))
+    acumulado.setdefault("tarde_dias", {})[dia] = (m.get("tarde_rotas", 0), list(m.get("tarde_pedidos", [])))
+    acumulado.setdefault("paradas_por_rota", []).extend(m.get("paradas_por_rota", []))
 
 
 def resumo_tarde(tarde_dias: dict) -> dict:
-    """Pedidos da tarde por dia (media e maximo sobre os dias medidos)."""
-    pedidos = [len(v) for v in tarde_dias.values()]
+    """Rotas e pedidos da tarde por dia (media e maximo sobre os dias
+    medidos). tarde_dias: {dia: (n_rotas, [codigos dos pedidos])}."""
+    rotas = [r for r, _ in tarde_dias.values()]
+    pedidos = [len(p) for _, p in tarde_dias.values()]
     n = len(pedidos) or 1
     return {"dias": len(pedidos), "dias_com_tarde": sum(1 for x in pedidos if x),
+            "rotas_total": sum(rotas), "rotas_media": sum(rotas) / n, "rotas_max": max(rotas, default=0),
             "pedidos_total": sum(pedidos), "pedidos_media": sum(pedidos) / n,
             "pedidos_max": max(pedidos, default=0)}
 
@@ -368,11 +388,16 @@ def main(argv=None) -> int:
                        f"atraso evitavel {horarios_env['atraso_evitavel_h']:.1f} h",
                    f"HORARIOS novo   : espera {horarios_novo['espera_h']:.1f} h | "
                    f"atraso evitavel {horarios_novo['atraso_evitavel_h']:.1f} h",
-                   f"TARDE: {horarios_novo['tarde_rotas']} rota(s), {r['pedidos_total']} pedido(s) em "
-                   f"{r['dias_com_tarde']}/{r['dias']} dias | pedidos/dia media {r['pedidos_media']:.2f}, "
+                   f"TARDE: {r['rotas_total']} rota(s), {r['pedidos_total']} pedido(s) em "
+                   f"{r['dias_com_tarde']}/{r['dias']} dias | rotas/dia media {r['rotas_media']:.2f}, "
+                   f"maximo {r['rotas_max']} | pedidos/dia media {r['pedidos_media']:.2f}, "
                    f"maximo {r['pedidos_max']}",
-                   f"MANHA quebrada pela trava: {horarios_novo['manha_quebradas']} rota(s) perderam pedido, "
-                   f"{horarios_novo['manha_inteiras']} rota(s) inteiras foram pra tarde"]
+                   f"TIRADOS por separar_pedidos_tarde: {horarios_novo['tirados_pedidos']} pedido(s) "
+                   f"({horarios_novo['tirados_manha_quebradas']} rota(s) da manha com 2+ paradas perderam pedido, "
+                   f"{horarios_novo['tirados_rotas_inteiras']} rota(s) inteiras). NAO inclui o efeito da trava em "
+                   f"janela_respeitada na formacao/reparo/polimento: compare (b) x (c).",
+                   f"PARADAS POR ROTA enviado: {histograma_paradas(horarios_env['paradas_por_rota'])}",
+                   f"PARADAS POR ROTA novo   : {histograma_paradas(horarios_novo['paradas_por_rota'])}"]
     texto = "\n".join(linhas)
     print(texto)
     ARQUIVO_RESULTADO.parent.mkdir(parents=True, exist_ok=True)
