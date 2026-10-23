@@ -96,6 +96,7 @@
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
  Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
+ Logins nominais (cadastro, nível, nome) .. painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -214,12 +215,17 @@
  Autenticação:
    painel    -> usuário/senha do config, 7 níveis: total, operador, leitura,
                 expedicao, galpao, atendimento, logistica. Decorador requer_auth(niveis=).
-                Login nominal: painel_agentes.usuarios_extras no config.yaml
-                (lista de {usuario, senha, nivel}); a ação fica no nome dele.
+                Login nominal (23/10): tabela painel_usuarios (dados.db: login,
+                nome, hash da senha, nível, trocar_senha), cadastrado e editado
+                na tela /acessos; a ação fica no login dele. Senha nova ou
+                redefinida é provisória: requer_auth manda pra /trocar-senha.
+                Nível/nome lidos do banco a cada request (muda sem novo login).
+                usuarios_extras do config.yaml NÃO vale mais: foi copiado uma
+                vez por painel_agentes/migrar_usuarios_extras.py (idempotente).
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
                 Parados, Tratativas, Consulta e Expedição; trata ocorrência,
                 não roda agente, não encerra rota, não exclui pedido.
-                logistica (19/10, só via usuarios_extras) = poderes do operador
+                logistica (19/10, só login nominal) = poderes do operador
                 só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
                 Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
                 Canhotos, Clientes AGENDA e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
@@ -845,8 +851,10 @@
                               (galpao3d.estado.montar_estado);
                               ?exemplo=1 roda com ESTADO_EXEMPLO do próprio JS;
                               selo "sessão expirou" quando a API cai no login
-   /acessos                   acessos.html + acesso_telas.py (só total: telas
-                              de cada login nominal, nível personalizado)
+   /acessos                   acessos.html + acesso_telas.py (só total: cadastra
+                              login nominal, muda nome/nível, redefine senha,
+                              telas de cada um / nível personalizado)
+   /trocar-senha              login.html (trocar=True): troca da senha provisória
    /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html

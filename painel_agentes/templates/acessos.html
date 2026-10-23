@@ -5,20 +5,26 @@
 <style>
   main { max-width: 1100px; }
   h1 { font-size: 20px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
   .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
   .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
   .cabeca { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .cabeca .nome { font-weight: 700; font-size: 15px; }
+  .cabeca .login { color: var(--texto-suave); font-size: 13px; }
   .cabeca .quando { color: var(--texto-suave); font-size: 12px; margin-left: auto; }
   .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
             letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .campos { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; align-items: flex-end; }
+  .campos label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--texto-suave); }
+  .campos input, .campos select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--borda);
+                                  border-radius: 6px; background: var(--superficie); color: inherit; min-width: 180px; }
   .modo { display: flex; gap: 16px; margin: 12px 0 4px; font-size: 13px; flex-wrap: wrap; }
   .modo label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 18px; margin-top: 12px; }
   .grade[hidden] { display: none; }
   .grupo-telas h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); margin: 0 0 6px; }
   .grupo-telas label { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 2px 0; cursor: pointer; }
-  .rodape-cartao { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .rodape-cartao { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
   .msg-salvar { font-size: 13px; color: var(--texto-suave); }
   .msg-salvar.erro { color: var(--erro); }
   .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
@@ -26,25 +32,56 @@
 {% endblock %}
 
 {% block conteudo %}
+{% set ROTULOS = {'total': 'acesso total', 'operador': 'operação', 'leitura': 'somente leitura', 'expedicao': 'expedição',
+                  'galpao': 'galpão', 'atendimento': 'atendimento', 'logistica': 'logística'} %}
 <h1>Acessos</h1>
 <p class="sub">
-  Escolha as telas de cada login nominal. Tela marcada vale <strong>completa</strong>: ver e todos os botões,
-  como no acesso total. Muda na hora, sem a pessoa sair e entrar. <strong>Nível do config</strong> volta ao
-  nível escrito no config.yaml. Login novo e senha continuam no config.yaml (usuarios_extras).
+  Cadastre logins, ajuste nome e nível e escolha as telas de cada um. Tela marcada no modo
+  <strong>Personalizado</strong> vale <strong>completa</strong>: ver e todos os botões, como no acesso total.
+  Muda na hora, sem a pessoa sair e entrar. Login novo e senha redefinida são <strong>provisórios</strong>:
+  a pessoa escolhe a senha dela no primeiro acesso.
 </p>
+
+<div class="cartao" id="novo">
+  <h2>Novo login</h2>
+  <div class="campos">
+    <label>Login <input type="text" name="usuario" placeholder="ex.: maria.souza" autocomplete="off"></label>
+    <label>Nome <input type="text" name="nome" placeholder="ex.: Maria Souza" autocomplete="off"></label>
+    <label>Nível
+      <select name="nivel">
+        {% for n in niveis %}<option value="{{ n }}" {{ 'selected' if n == 'leitura' }}>{{ ROTULOS.get(n, n) }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Senha provisória <input type="text" name="senha" minlength="{{ senha_minima }}" autocomplete="off"></label>
+  </div>
+  <div class="rodape-cartao">
+    <button type="button" class="botao" data-acao="criar">Cadastrar</button>
+    <span class="msg-salvar"></span>
+  </div>
+</div>
 
 {% for u in usuarios %}
 <div class="cartao" data-usuario="{{ u.usuario }}">
   <div class="cabeca">
-    <span class="nome">{{ u.usuario }}</span>
-    <span class="pilula">{{ 'personalizado' if u.telas is not none else 'nível ' ~ u.nivel_config }}</span>
+    <span class="nome">{{ u.nome or u.usuario }}</span>
+    {% if u.nome %}<span class="login">{{ u.usuario }}</span>{% endif %}
+    <span class="pilula">{{ 'personalizado' if u.telas is not none else ROTULOS.get(u.nivel, u.nivel) }}</span>
+    {% if u.trocar_senha %}<span class="pilula">senha provisória</span>{% endif %}
     {% if u.atualizado_em %}<span class="quando">mudado por {{ u.atualizado_por }} em {{ u.atualizado_em }}</span>{% endif %}
   </div>
   {% if u.usuario == eu %}
   <p class="aviso">É o seu login: só outro usuário total pode mudar.</p>
   {% else %}
+  <div class="campos">
+    <label>Nome <input type="text" name="nome" value="{{ u.nome }}" placeholder="{{ u.usuario }}" autocomplete="off"></label>
+    <label>Nível
+      <select name="nivel">
+        {% for n in niveis %}<option value="{{ n }}" {{ 'selected' if n == u.nivel }}>{{ ROTULOS.get(n, n) }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
   <div class="modo">
-    <label><input type="radio" name="modo-{{ loop.index }}" value="config" {{ 'checked' if u.telas is none }}> Nível do config ({{ u.nivel_config }})</label>
+    <label><input type="radio" name="modo-{{ loop.index }}" value="nivel" {{ 'checked' if u.telas is none }}> Pelo nível</label>
     <label><input type="radio" name="modo-{{ loop.index }}" value="personalizado" {{ 'checked' if u.telas is not none }}> Personalizado</label>
   </div>
   <div class="grade" {{ 'hidden' if u.telas is none }}>
@@ -59,47 +96,79 @@
   </div>
   <div class="rodape-cartao">
     <button type="button" class="botao" data-acao="salvar">Salvar</button>
+    <button type="button" class="botao secundario" data-acao="senha">Redefinir senha</button>
     <span class="msg-salvar"></span>
   </div>
   {% endif %}
 </div>
 {% else %}
-<div class="cartao vazio">Nenhum login nominal em usuarios_extras no config.yaml.</div>
+<div class="cartao vazio">Nenhum login nominal cadastrado.</div>
 {% endfor %}
 
 <script>
 (function () {
+  async function enviar(caminho, corpo, botao, aviso) {
+    botao.disabled = true;
+    aviso.className = "msg-salvar";
+    aviso.textContent = "Salvando...";
+    try {
+      const resp = await fetch(BASE_PATH + caminho, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(corpo),
+      });
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || "Falha ao salvar.");
+      return dados;
+    } catch (e) {
+      aviso.className = "msg-salvar erro";
+      aviso.textContent = e.message;
+      botao.disabled = false;
+      return null;
+    }
+  }
+
+  const novo = document.getElementById("novo");
+  novo.querySelector("button[data-acao=criar]").addEventListener("click", async (ev) => {
+    const campo = (n) => novo.querySelector(`[name=${n}]`).value;
+    const dados = await enviar("/api/acessos/novo",
+      { usuario: campo("usuario"), nome: campo("nome"), nivel: campo("nivel"), senha: campo("senha") },
+      ev.currentTarget, novo.querySelector(".msg-salvar"));
+    if (dados) {
+      window.alert(`Login ${dados.usuario} criado. Passe pra pessoa o login e a senha provisória: ela troca no primeiro acesso.`);
+      window.location.reload();
+    }
+  });
+
   document.querySelectorAll(".cartao[data-usuario]").forEach((cartao) => {
     const grade = cartao.querySelector(".grade");
     const botao = cartao.querySelector("button[data-acao=salvar]");
     if (!botao) return;
     const aviso = cartao.querySelector(".msg-salvar");
+    const usuario = cartao.dataset.usuario;
     const modo = () => cartao.querySelector(".modo input:checked").value;
     cartao.querySelectorAll(".modo input").forEach((r) => r.addEventListener("change", () => {
       grade.hidden = modo() !== "personalizado";
     }));
     botao.addEventListener("click", async () => {
-      const usuario = cartao.dataset.usuario;
       const telas = modo() === "personalizado"
         ? [...grade.querySelectorAll("input:checked")].map((c) => c.value)
         : null;
       if (telas && !telas.length && !window.confirm(`${usuario} fica sem nenhuma tela e não consegue entrar. Salvar assim?`)) return;
-      botao.disabled = true;
-      aviso.className = "msg-salvar";
-      aviso.textContent = "Salvando...";
-      try {
-        const resp = await fetch(BASE_PATH + "/api/acessos", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ usuario, telas }),
-        });
-        const dados = await resp.json();
-        if (!resp.ok) throw new Error(dados.erro || "Falha ao salvar.");
-        window.location.reload();
-      } catch (e) {
-        aviso.className = "msg-salvar erro";
-        aviso.textContent = e.message;
-        botao.disabled = false;
+      const corpo = {
+        usuario, telas,
+        nome: cartao.querySelector("[name=nome]").value,
+        nivel: cartao.querySelector("[name=nivel]").value,
+      };
+      if (await enviar("/api/acessos", corpo, botao, aviso)) window.location.reload();
+    });
+    cartao.querySelector("button[data-acao=senha]").addEventListener("click", async (ev) => {
+      const senha = window.prompt(`Senha provisória pra ${usuario} (mínimo {{ senha_minima }} caracteres). Ela troca no próximo acesso.`);
+      if (!senha) return;
+      if (await enviar("/api/acessos/senha", { usuario, senha }, ev.currentTarget, aviso)) {
+        aviso.className = "msg-salvar";
+        aviso.textContent = "Senha provisória gravada.";
+        ev.currentTarget.disabled = false;
       }
     });
   });

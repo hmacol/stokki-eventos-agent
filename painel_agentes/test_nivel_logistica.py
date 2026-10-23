@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Nivel "logistica" do painel (19/10, Hugo): so as telas da logistica, com
-os mesmos poderes do operador nelas. Login so por usuarios_extras.
+os mesmos poderes do operador nelas. Login so nominal (painel_usuarios).
 
     py -3.11 -m unittest test_nivel_logistica   (de dentro de painel_agentes/)
 """
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -22,6 +23,7 @@ _spec = importlib.util.spec_from_file_location("painel_agentes_app", _AQUI / "pa
 painel_agentes = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = painel_agentes
 _spec.loader.exec_module(painel_agentes)
+import acesso_telas  # noqa: E402
 
 MENU_ESPERADO = {
     "Início", "Torre de Controle", "Canhotos pendentes", "Pedidos Parados", "Tratativas", "Consulta",
@@ -33,18 +35,23 @@ MENU_ESPERADO = {
 class TestNivelLogistica(unittest.TestCase):
 
     def setUp(self):
-        base = painel_agentes._carregar_config()
-        cfg = {**base, "painel_agentes": {**base["painel_agentes"], "usuarios_extras": [
-            {"usuario": "quecia", "senha": "s_q", "nivel": "logistica"}]}}
-        self._patch = mock.patch.object(painel_agentes, "_carregar_config", return_value=cfg)
-        self._patch.start()
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patch_db = mock.patch.object(acesso_telas, "DB_PATH", Path(self._tmp.name) / "t.db")
+        self._patch_db.start()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, {"usuarios_extras": [
+                {"usuario": "quecia", "senha": "s_q", "nivel": "logistica"}]})
+        finally:
+            conn.close()
         painel_agentes.app.config["TESTING"] = True
         self.cliente = painel_agentes.app.test_client()
         r = self.cliente.post("/login", data={"usuario": "quecia", "senha": "s_q"})
         self.assertEqual(r.status_code, 302)
 
     def tearDown(self):
-        self._patch.stop()
+        self._patch_db.stop()
+        self._tmp.cleanup()
 
     def test_menu_mostra_so_as_telas_da_logistica(self):
         r = self.cliente.get("/inicio")

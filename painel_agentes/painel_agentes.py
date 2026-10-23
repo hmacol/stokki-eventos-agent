@@ -184,20 +184,29 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
     if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
             and hmac.compare_digest(senha, senha_atendimento):
         return "atendimento"
-    # Logins nominais (02/10, Hugo): lista usuarios_extras no config.yaml,
-    # cada item {usuario, senha, nivel}, pra pessoa ter login proprio em
-    # vez de dividir o par do nivel -- a acao fica registrada no nome dela.
-    for extra in cfg_painel.get("usuarios_extras") or []:
-        u, s, n = extra.get("usuario"), extra.get("senha"), extra.get("nivel")
-        if u and s and n in _NIVEIS_VALIDOS and hmac.compare_digest(usuario, u) \
-                and hmac.compare_digest(senha, s):
-            return n
+    # Logins nominais (02/10, Hugo): pra pessoa ter login proprio em vez de
+    # dividir o par do nivel -- a acao fica registrada no nome dela. Desde
+    # 23/10 moram no banco (acesso_telas.painel_usuarios), editados na /acessos.
+    conta = acesso_telas.conferir_senha(usuario, senha)
+    if conta and conta["nivel"] in acesso_telas.NIVEIS:
+        return conta["nivel"]
     return None
 
 
-# "logistica" (19/10, Hugo) so existe via usuarios_extras: poderes do operador,
-# mas so nas telas da logistica (as rotas com "logistica" no niveis=).
-_NIVEIS_VALIDOS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento", "logistica")
+def _logins_fixos(cfg_painel: dict) -> set:
+    chaves = ("usuario", "usuario_operador", "usuario_leitura", "usuario_expedicao", "usuario_galpao",
+              "usuario_atendimento")
+    return {cfg_painel.get(c) for c in chaves if cfg_painel.get(c)}
+
+
+def _pagina_inicial(nivel: str, telas) -> str:
+    # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
+    # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
+    # cair nele levaria direto a um 403 pós-login.
+    paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
+    if paginas:
+        return url_for(paginas[0])
+    return {"expedicao": url_for("expedicao"), "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
 
 
 def requer_auth(f=None, *, niveis=("total",)):
@@ -238,9 +247,21 @@ def requer_auth(f=None, *, niveis=("total",)):
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
                 return redirect(url_for("login", proximo=request.script_root + request.full_path))
+            # Login nominal (23/10): nivel e nome vem do banco a cada request,
+            # entao mudanca feita na /acessos vale sem novo login. Senha
+            # provisoria trava tudo ate a pessoa trocar.
+            conta = acesso_telas.conta(session.get("usuario"))
+            if conta:
+                if conta["trocar_senha"]:
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Troque a senha provisória antes de continuar."}), 403
+                    return redirect(url_for("trocar_senha"))
+                if conta["nivel"] != nivel:
+                    session["nivel_acesso"] = nivel = conta["nivel"]
+            g.nome_usuario = (conta or {}).get("nome") or ""
             # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
             # telas, com poder de total dentro delas, no lugar do nivel.
-            telas = acesso_telas.telas_do_usuario(session.get("usuario"), cfg_painel)
+            telas = conta["telas"] if conta else None
             if telas is not None:
                 if not acesso_telas.caminho_liberado(request.path, telas):
                     abort(403, "Essa tela não está liberada pro seu usuário.")
@@ -402,7 +423,8 @@ def login():
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
-        telas = acesso_telas.telas_do_usuario(usuario, cfg_painel) if nivel else None
+        conta = acesso_telas.conta(usuario) if nivel else None
+        telas = conta["telas"] if conta else None
         paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
         if nivel is None:
             erro = "Usuário ou senha incorretos."
@@ -413,13 +435,9 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
-            # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
-            # cair nele levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"),
-                             "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
-            if paginas:
-                pagina_padrao = url_for(paginas[0])
+            if conta and conta["trocar_senha"]:
+                return redirect(url_for("trocar_senha"))
+            pagina_padrao = _pagina_inicial(nivel, telas)
             proximo = request.form.get("proximo") or pagina_padrao
             # Só aceita redirecionar pra caminho relativo deste próprio
             # painel -- nunca pra outro domínio (open redirect).
@@ -428,6 +446,36 @@ def login():
                 proximo = pagina_padrao
             return redirect(proximo)
     return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
+
+
+@app.route("/trocar-senha", methods=["GET", "POST"])
+def trocar_senha():
+    """Troca obrigatoria da senha provisoria do login nominal (23/10): a
+    /acessos cadastra ou redefine com senha provisoria e requer_auth manda
+    pra ca ate a pessoa escolher a dela."""
+    conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
+    if not conta:
+        return redirect(url_for("login"))
+    if not conta["trocar_senha"]:
+        return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
+    erro = None
+    if request.method == "POST":
+        origem = request.headers.get("Origin") or request.headers.get("Referer")
+        if not origem or urlparse(origem).netloc != request.host:
+            abort(403, "Origem da requisição não confere (proteção CSRF).")
+        nova = request.form.get("nova", "")
+        if nova != request.form.get("repetir", ""):
+            erro = "As duas senhas não conferem."
+        else:
+            conn = acesso_telas.conectar()
+            try:
+                acesso_telas.trocar_senha(conn, conta["usuario"], nova)
+                return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
+            except ValueError as e:
+                erro = str(e)
+            finally:
+                conn.close()
+    return render_template("login.html", erro=erro, trocar=True, usuario=conta["usuario"])
 
 
 @app.route("/logout", methods=["POST"])
@@ -1330,16 +1378,16 @@ def acessos():
     """Acesso personalizado por usuario (21/10, acesso_telas.py): o total
     escolhe as telas de cada login nominal. So nivel total de verdade --
     a tela nao esta no catalogo, entao nenhum personalizado chega aqui."""
-    cfg_painel = _carregar_config().get("painel_agentes", {})
     conn = acesso_telas.conectar()
     try:
-        usuarios = acesso_telas.listar(cfg_painel, conn)
+        usuarios = acesso_telas.listar(conn)
     finally:
         conn.close()
     grupos = {}
     for chave, rotulo, grupo, _ in acesso_telas.TELAS + acesso_telas.PERMISSOES:
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
+                           niveis=acesso_telas.NIVEIS, senha_minima=acesso_telas.SENHA_MINIMA,
                            eu=session.get("usuario", ""))
 
 
@@ -1347,14 +1395,56 @@ def acessos():
 @requer_auth
 @exige_mesma_origem
 def api_acessos():
+    """Salva um login nominal: telas e, quando vierem, nome e nivel (23/10)."""
     body = request.get_json(force=True, silent=True) or {}
     telas = body.get("telas")
     if telas is not None and not isinstance(telas, list):
         return jsonify({"erro": "telas inválidas"}), 400
+    if "nivel" in body and body.get("nivel") not in acesso_telas.NIVEIS:
+        return jsonify({"erro": "nível inválido"}), 400
+    usuario = str(body.get("usuario") or "")
+    por = session.get("usuario", "")
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.salvar(conn, usuario, telas, por)
+        if "nivel" in body:
+            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/acessos/novo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_novo():
+    """Cadastra login nominal com senha provisoria (troca no 1o acesso)."""
+    body = request.get_json(force=True, silent=True) or {}
     cfg_painel = _carregar_config().get("painel_agentes", {})
     conn = acesso_telas.conectar()
     try:
-        acesso_telas.salvar(conn, str(body.get("usuario") or ""), telas, session.get("usuario", ""), cfg_painel)
+        usuario = acesso_telas.criar(conn, str(body.get("usuario") or ""), str(body.get("nome") or ""),
+                                     str(body.get("nivel") or ""), str(body.get("senha") or ""),
+                                     session.get("usuario", ""), _logins_fixos(cfg_painel))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "usuario": usuario})
+
+
+@app.route("/api/acessos/senha", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_senha():
+    """Redefine a senha de outro login nominal (provisoria, troca no proximo acesso)."""
+    body = request.get_json(force=True, silent=True) or {}
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.redefinir_senha(conn, str(body.get("usuario") or ""), str(body.get("senha") or ""),
+                                     session.get("usuario", ""))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
