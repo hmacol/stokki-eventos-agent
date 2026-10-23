@@ -4,8 +4,8 @@ import sqlite3
 import unittest
 from datetime import datetime
 
-from vigia_fila_impressao import (EM_ESPERA, FATURADO, atrasados, corpo_email, marcar_avisados,
-                                  separar_novos, texto_whatsapp)
+from vigia_fila_impressao import (EM_ESPERA, FATURADO, atrasados, corpo_email, designorar, ignorados,
+                                  ignorar, marcar_avisados, separar_novos, texto_whatsapp)
 
 AGORA = datetime(2026, 10, 22, 18, 35)
 
@@ -44,6 +44,19 @@ class TestUmAvisoPorDia(unittest.TestCase):
                          ["#PS-42384"])
         self.assertEqual(len(separar_novos(conn, "2026-10-22", EM_ESPERA, pedidos)), 2)
         self.assertEqual(len(separar_novos(conn, "2026-10-23", FATURADO, pedidos)), 2)
+
+
+class TestIgnorados(unittest.TestCase):
+    def test_ignorar_normaliza_atualiza_motivo_e_designorar(self):
+        conn = sqlite3.connect(":memory:")
+        ignorar(conn, ["#ps-35908", "35937"], "abandonado", AGORA)
+        ignorar(conn, ["PS-35908"], "cancelar na Stokki", AGORA)
+        self.assertEqual(ignorados(conn), {"PS-35908": "cancelar na Stokki", "PS-35937": "abandonado"})
+        designorar(conn, ["#PS-35937"])
+        self.assertEqual(list(ignorados(conn)), ["PS-35908"])
+
+    def test_tabela_vazia(self):
+        self.assertEqual(ignorados(sqlite3.connect(":memory:")), {})
 
 
 class TestTextos(unittest.TestCase):

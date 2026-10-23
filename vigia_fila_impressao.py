@@ -25,6 +25,12 @@ config.yaml (opcional, tudo com padrão):
       horas_em_espera: 24
       ignorar_codigos: ["PS-35908"]   # pedido sabidamente abandonado
 
+Pedidos ignorados também ficam na tabela vigia_impressao_ignorados (sem
+mexer no config; vale a união das duas listas):
+  venv/bin/python vigia_fila_impressao.py --ignorar PS-35908 PS-35937 --motivo "abandonado"
+  venv/bin/python vigia_fila_impressao.py --designorar PS-35908
+  venv/bin/python vigia_fila_impressao.py --listar-ignorados
+
 Agendamento (VPS): stokki-vigia-fila-impressao.timer -- seg-sex 08h35-16h35
 de hora em hora + 18h35 e 22h35 todo dia (logo depois de cada rodada da
 Estação).
@@ -67,6 +73,12 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS vigia_impressao_alertas (
     PRIMARY KEY (dia, tipo, codigo)
 )"""
 
+_SCHEMA_IGNORADOS = """CREATE TABLE IF NOT EXISTS vigia_impressao_ignorados (
+    codigo     TEXT PRIMARY KEY,
+    motivo     TEXT,
+    criado_em  TEXT NOT NULL
+)"""
+
 
 def _config() -> dict:
     with open(RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -75,6 +87,34 @@ def _config() -> dict:
 
 def _codigo(pedido: dict) -> str:
     return (pedido.get("codigo_ps") or "").lstrip("#")
+
+
+def _normalizar(codigo: str) -> str:
+    """'#ps-35908' / '35908' -> 'PS-35908'."""
+    c = str(codigo).strip().lstrip("#").upper()
+    return c if c.startswith("PS-") else f"PS-{c}"
+
+
+def ignorados(conn) -> dict:
+    """{codigo: motivo} da tabela."""
+    conn.execute(_SCHEMA_IGNORADOS)
+    return dict(conn.execute("SELECT codigo, motivo FROM vigia_impressao_ignorados ORDER BY codigo"))
+
+
+def ignorar(conn, codigos: list, motivo: str, agora: datetime) -> None:
+    conn.execute(_SCHEMA_IGNORADOS)
+    conn.executemany(
+        "INSERT INTO vigia_impressao_ignorados (codigo, motivo, criado_em) VALUES (?, ?, ?) "
+        "ON CONFLICT(codigo) DO UPDATE SET motivo = excluded.motivo",
+        [(_normalizar(c), motivo, agora.isoformat(timespec="seconds")) for c in codigos])
+    conn.commit()
+
+
+def designorar(conn, codigos: list) -> None:
+    conn.execute(_SCHEMA_IGNORADOS)
+    conn.executemany("DELETE FROM vigia_impressao_ignorados WHERE codigo = ?",
+                     [(_normalizar(c),) for c in codigos])
+    conn.commit()
 
 
 def atrasados(pedidos: list, agora: datetime, horas: float, ignorar: set) -> list:
@@ -176,7 +216,14 @@ def main(modo_teste: bool = False, agora: datetime | None = None) -> int:
         return 0
     horas_faturado = float(cfg.get("horas_faturado", HORAS_FATURADO_PADRAO))
     horas_em_espera = float(cfg.get("horas_em_espera", HORAS_EM_ESPERA_PADRAO))
-    ignorar = {str(c).lstrip("#") for c in (cfg.get("ignorar_codigos") or [])}
+    lista_ignorar = {_normalizar(c) for c in (cfg.get("ignorar_codigos") or [])}
+    conn_ign = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        lista_ignorar |= set(ignorados(conn_ign))
+    finally:
+        conn_ign.close()
+    if lista_ignorar:
+        logger.info(f"Ignorados de propósito: {sorted(lista_ignorar)}")
 
     from stokki.estacao_impressao import ler_filas
     filas = ler_filas(config)  # falha aqui = job falha = alerta-falha do systemd
@@ -186,8 +233,8 @@ def main(modo_teste: bool = False, agora: datetime | None = None) -> int:
                 f"{len(filas['awaiting_billing'])} aguardando faturamento.")
 
     parados = {
-        FATURADO: atrasados(filas[_ABA_DO_TIPO[FATURADO]], agora, horas_faturado, ignorar),
-        EM_ESPERA: atrasados(filas[_ABA_DO_TIPO[EM_ESPERA]], agora, horas_em_espera, ignorar),
+        FATURADO: atrasados(filas[_ABA_DO_TIPO[FATURADO]], agora, horas_faturado, lista_ignorar),
+        EM_ESPERA: atrasados(filas[_ABA_DO_TIPO[EM_ESPERA]], agora, horas_em_espera, lista_ignorar),
     }
     for tipo, itens in parados.items():
         logger.info(f"Parados ({tipo}): {[_codigo(p) for p in itens]}")
@@ -226,5 +273,18 @@ def main(modo_teste: bool = False, agora: datetime | None = None) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Vigia da fila da Estação de Impressão (só leitura)")
     parser.add_argument("--modo-teste", action="store_true", help="lê a Stokki mas não avisa nem marca")
+    parser.add_argument("--ignorar", nargs="+", metavar="PS-X", help="não avisar mais estes pedidos")
+    parser.add_argument("--motivo", default="", help="por que ignorar (vai pra tabela)")
+    parser.add_argument("--designorar", nargs="+", metavar="PS-X", help="voltar a avisar estes pedidos")
+    parser.add_argument("--listar-ignorados", action="store_true")
     args = parser.parse_args()
+    if args.ignorar or args.designorar or args.listar_ignorados:
+        with sqlite3.connect(DB_PATH, timeout=30) as conn:
+            if args.ignorar:
+                ignorar(conn, args.ignorar, args.motivo, datetime.now())
+            if args.designorar:
+                designorar(conn, args.designorar)
+            for codigo, motivo in ignorados(conn).items():
+                print(f"{codigo}\t{motivo or ''}")
+        sys.exit(0)
     sys.exit(main(modo_teste=args.modo_teste))

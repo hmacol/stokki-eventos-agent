@@ -395,7 +395,9 @@
  vigia_fila_impressao.py       Só lê a Estação de Impressão e avisa pedido parado
                                (faturado +2h, em espera +24h; tabela
                                vigia_impressao_alertas = 1 aviso por pedido/dia;
-                               config opcional vigia_impressao.ignorar_codigos).
+                               ignorados = tabela vigia_impressao_ignorados
+                               (--ignorar/--designorar/--listar-ignorados)
+                               + config opcional vigia_impressao.ignorar_codigos).
  notificar_nfs_em_rota.py      07h: NFs que saem hoje, por embarcador.
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
  preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
