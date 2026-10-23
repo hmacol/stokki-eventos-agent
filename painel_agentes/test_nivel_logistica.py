@@ -26,6 +26,7 @@ _spec.loader.exec_module(painel_agentes)
 MENU_ESPERADO = {
     "Início", "Torre de Controle", "Canhotos pendentes", "Pedidos Parados", "Tratativas", "Consulta",
     "Planejamento", "Atendimento", "Motoristas", "Pedágios", "Canhotos", "Clientes AGENDA", "Adesão ao portal",
+    "Retornos",
 }
 
 

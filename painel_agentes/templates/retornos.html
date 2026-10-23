@@ -1,0 +1,374 @@
+{% extends "base_mobile.html" %}
+{% block titulo %}Retornos{% endblock %}
+{% block titulo_barra %}Recebimento de retornos{% endblock %}
+{% block estilo_extra %}
+<style>
+  /* Recebimento de retornos (Hugo, 23/10): o recebedor confere no galpão,
+     em pé, ao lado do pallet. Uma coluna, botões grandes, tudo no polegar. */
+  .barra-inferior { display: none; }
+  main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+  .oculto { display: none !important; }
+  .nota { font-size: 12.5px; color: var(--texto-suave); }
+  .seg { display: flex; background: var(--fundo); border: 1px solid var(--borda); border-radius: 10px; padding: 3px; gap: 2px; margin-bottom: 14px; }
+  .seg button { flex: 1; font-size: 14px; font-weight: 600; min-height: 42px; border-radius: 8px; border: none; background: transparent; color: var(--texto-suave); font-family: inherit; }
+  .seg button.ativo { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,.08); }
+
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+  button.cartao { display: block; width: 100%; text-align: left; font-family: inherit; color: var(--texto); cursor: pointer; }
+  button.cartao:active { background: var(--superficie-hover); }
+  .linha-topo { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .nome { font-size: 16px; font-weight: 700; }
+  .num { font-size: 13px; color: var(--texto-suave); white-space: nowrap; }
+  .selo { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 100px; margin-top: 6px; }
+  .selo.atraso { background: var(--erro-bg); color: var(--erro-texto); }
+  .selo.parcial { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .selo.ok { background: var(--sucesso-bg); color: var(--sucesso); }
+  .selo.div { background: var(--erro-bg); color: var(--erro-texto); }
+
+  .voltar { background: none; border: none; color: var(--acento); font-weight: 700; font-size: 15px; padding: 8px 0 12px; font-family: inherit; cursor: pointer; }
+  .pedido { border-left: 4px solid var(--acento); }
+  .pedido.fora { opacity: .55; border-left-color: var(--borda); }
+  .pedido .cod { font-family: 'Cascadia Code', Consolas, monospace; font-weight: 700; font-size: 15px; }
+  .veio { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; min-height: 40px; }
+  .veio input { width: 22px; height: 22px; }
+  .campos { display: grid; gap: 10px; margin-top: 10px; }
+  .campos label, .bloco label.rot { font-size: 12px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; letter-spacing: .03em; display: block; margin-bottom: 4px; }
+  .contador { display: grid; grid-template-columns: 52px 1fr 52px; gap: 6px; }
+  .contador button { min-height: 48px; font-size: 22px; font-weight: 700; border-radius: 10px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-family: inherit; }
+  input[type=number], input[type=text], select, textarea {
+    width: 100%; min-height: 48px; font-size: 16px; border-radius: 10px; border: 1px solid var(--borda);
+    background: var(--fundo); color: var(--texto); padding: 10px 12px; font-family: inherit;
+  }
+  .contador input { text-align: center; font-size: 20px; font-weight: 700; }
+  textarea { min-height: 70px; resize: vertical; }
+  .sim-nao { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .sim-nao button { min-height: 46px; border-radius: 10px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-size: 15px; font-weight: 600; font-family: inherit; }
+  .sim-nao button.on { background: var(--texto); color: var(--fundo); border-color: var(--texto); }
+  .sim-nao button.on.perigo { background: var(--erro); border-color: var(--erro); color: #fff; }
+
+  .fotos { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .fotos img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--borda); }
+  .btn-foto { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 48px; padding: 0 14px; border-radius: 10px; border: 1px dashed var(--acento); color: var(--acento); font-weight: 700; font-size: 14.5px; background: none; font-family: inherit; cursor: pointer; }
+  .btn-foto input { display: none; }
+
+  .bloco { margin-top: 18px; }
+  .assinatura { position: relative; background: #fff; border: 1px solid var(--borda); border-radius: 12px; touch-action: none; }
+  .assinatura canvas { display: block; width: 100%; height: 180px; border-radius: 12px; }
+  .assinatura .dica { position: absolute; left: 0; right: 0; bottom: 34px; text-align: center; color: #9a9ab0; font-size: 13px; pointer-events: none; border-top: 1px dashed #c8c8d8; margin: 0 24px; padding-top: 4px; }
+  .limpar { background: none; border: none; color: var(--acento); font-weight: 700; font-size: 14px; padding: 8px 0; font-family: inherit; cursor: pointer; }
+
+  .rodape-acao { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: var(--superficie); border-top: 1px solid var(--borda); }
+  .rodape-acao button { width: 100%; max-width: 612px; display: block; margin: 0 auto; min-height: 54px; border-radius: 12px; border: none; background: var(--acento); color: #fff; font-size: 17px; font-weight: 700; font-family: inherit; }
+  .rodape-acao button:disabled { opacity: .5; }
+  .erro-msg { background: var(--erro-bg); color: var(--erro-texto); border-radius: 10px; padding: 10px 12px; font-size: 14px; font-weight: 600; margin: 12px 0; }
+  .vazio { text-align: center; color: var(--texto-suave); padding: 30px 10px; font-size: 14px; }
+  .det-item { border-top: 1px solid var(--borda); padding: 10px 0; font-size: 14px; }
+  .det-item:first-of-type { border-top: none; }
+  .assinatura-img { background: #fff; border-radius: 10px; border: 1px solid var(--borda); max-width: 100%; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="seg" role="tablist">
+  <button type="button" class="ativo" data-aba="receber">A receber</button>
+  <button type="button" data-aba="recebidos">Recebidos</button>
+</div>
+<div id="tela"></div>
+<div class="rodape-acao oculto" id="rodape">
+  <button type="button" id="btn-confirmar">Confirmar recebimento</button>
+</div>
+{% endblock %}
+
+{% block script_extra %}
+<script>
+  const PODE_CONFIRMAR = {{ 'true' if pode_confirmar else 'false' }};
+  const URL_LISTA = "{{ url_for('api_retornos') }}";
+  const URL_DESCARGA = "{{ url_for('api_retornos_descarga') }}";
+  const URL_HISTORICO = "{{ url_for('api_retornos_descargas') }}";
+  const URL_DETALHE = "{{ url_for('retornos_descarga', descarga_id=0) }}".replace(/0$/, "");
+  const URL_ARQUIVO = "{{ url_for('retornos_arquivo', descarga_id=0, nome='__N__') }}";
+  const URL_LOGIN = "{{ url_for('login', proximo=url_for('retornos_tela')) }}";
+
+  const tela = document.getElementById("tela");
+  const rodape = document.getElementById("rodape");
+  const btnConfirmar = document.getElementById("btn-confirmar");
+  let dados = { motoristas: [], motivos: [] };
+  let conf = null;  // conferência aberta: {grupo, itens: {parada_id: {...}}, fotosCarga: [Blob]}
+  let timerVolta = null;  // volta pra lista depois de confirmar; trocar de aba cancela
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function dataBr(iso) { if (!iso) return ""; const [d, h] = iso.split(" "); const p = d.split("-"); return `${p[2]}/${p[1]}` + (h ? " " + h.slice(0, 5) : ""); }
+  function arquivo(id, nome) { return URL_ARQUIVO.replace("/0/", "/" + id + "/").replace("__N__", encodeURIComponent(nome)); }
+  function lerNome() { try { return localStorage.getItem("retornos_recebedor") || ""; } catch (e) { return ""; } }
+  function guardarNome(v) { try { localStorage.setItem("retornos_recebedor", v); } catch (e) {} }
+
+  // Foto do celular pesa 3-8 MB; reduz pra 1600 px JPEG antes de subir no 4G do galpão.
+  function reduzir(arquivo) {
+    return new Promise(resolve => {
+      const img = new Image();
+      const url = URL.createObjectURL(arquivo);
+      img.onload = () => {
+        const escala = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * escala); c.height = Math.round(img.height * escala);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(b => resolve(b || arquivo), "image/jpeg", 0.8);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(arquivo); };
+      img.src = url;
+    });
+  }
+
+  // Celular compartilhado do galpão fica com a tela aberta: sessão expirada
+  // ou rede caída precisa dizer o que fazer, não ficar em "Carregando…".
+  async function buscarJson(url) {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (r.status === 401) throw new Error("SESSAO");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  function falhaCarga(e) {
+    rodape.classList.add("oculto");
+    tela.innerHTML = e.message === "SESSAO"
+      ? `<div class="erro-msg">Sua sessão expirou. <a href="${URL_LOGIN}">Entrar de novo</a></div>`
+      : `<div class="erro-msg">Não foi possível carregar. Confira a internet e toque na aba de novo.</div>`;
+  }
+
+  async function carregar() {
+    tela.innerHTML = '<div class="vazio">Carregando…</div>';
+    try { dados = await buscarJson(URL_LISTA); } catch (e) { return falhaCarga(e); }
+    desenharLista();
+  }
+
+  function desenharLista() {
+    conf = null; rodape.classList.add("oculto");
+    if (!dados.motoristas.length) { tela.innerHTML = '<div class="vazio">Nenhum retorno esperando recebimento.</div>'; return; }
+    tela.innerHTML = '<p class="nota">Toque no motorista que está descarregando.</p>' + dados.motoristas.map((g, i) => {
+      const parciais = g.pedidos.filter(p => p.parcial).length;
+      return `<button type="button" class="cartao" data-i="${i}">
+        <div class="linha-topo"><span class="nome">${esc(g.motorista_nome)}</span>
+          <span class="num">${g.pedidos.length} pedido${g.pedidos.length > 1 ? "s" : ""}${g.total_caixas ? " · " + g.total_caixas + " cx" : ""}</span></div>
+        <div class="nota">${esc([...new Set(g.pedidos.map(p => p.rota_nome))].join(", "))}</div>
+        ${g.desde_ontem ? `<span class="selo atraso">desde ${dataBr(g.mais_antigo)}</span> ` : ""}
+        ${parciais ? `<span class="selo parcial">${parciais} parcial</span>` : ""}
+      </button>`;
+    }).join("");
+    tela.querySelectorAll("button.cartao").forEach(b => b.onclick = () => abrirConferencia(dados.motoristas[+b.dataset.i]));
+  }
+
+  function abrirConferencia(grupo) {
+    conf = { grupo, fotosCarga: [], itens: {} };
+    grupo.pedidos.forEach(p => conf.itens[p.parada_id] = {
+      veio: true, caixas: p.parcial ? "" : p.caixas_esperadas, avaria: false, fotos: [], motivo: p.motivo, obs: "" });
+    const motivos = dados.motivos;
+    tela.innerHTML = `<button type="button" class="voltar" id="voltar">‹ Motoristas</button>
+      <div class="nome" style="margin-bottom:4px">${esc(grupo.motorista_nome)}</div>
+      <p class="nota" style="margin-top:0">Desmarque o que não veio nesta descarga: continua pendente.</p>
+      ${grupo.pedidos.map(p => `
+        <div class="cartao pedido" id="ped-${p.parada_id}">
+          <div class="linha-topo"><span class="cod">${esc(p.codigo)}</span>
+            <span class="num">${p.parcial ? "Parcial" : p.caixas_esperadas + " cx"}</span></div>
+          <div style="font-size:14px">${esc(p.destinatario)}</div>
+          <div class="nota">${esc(p.embarcador)} · baixa ${dataBr(p.baixa_em)}</div>
+          ${p.parcial ? '<span class="selo parcial">Parcial: conte as caixas que voltaram</span>' : ""}
+          <label class="veio"><input type="checkbox" data-veio="${p.parada_id}" checked ${PODE_CONFIRMAR ? "" : "disabled"}> Veio nesta descarga</label>
+          <div class="campos" data-campos="${p.parada_id}">
+            <div><label>Caixas recebidas</label>
+              <div class="contador"><button type="button" data-menos="${p.parada_id}">−</button>
+                <input type="number" inputmode="numeric" min="0" data-caixas="${p.parada_id}" value="${p.parcial ? "" : p.caixas_esperadas}" placeholder="${p.parcial ? "quantas?" : ""}">
+                <button type="button" data-mais="${p.parada_id}">+</button></div></div>
+            <div><label>Avaria</label>
+              <div class="sim-nao"><button type="button" class="on" data-avaria="${p.parada_id}" data-v="0">Não</button>
+                <button type="button" class="perigo" data-avaria="${p.parada_id}" data-v="1">Sim</button></div>
+              <div class="fotos oculto" data-fotos-avaria="${p.parada_id}" style="margin-top:8px">
+                <label class="btn-foto">📷 Foto da avaria<input type="file" accept="image/*" capture="environment" data-arq-avaria="${p.parada_id}"></label></div></div>
+            <div><label>Motivo do retorno</label>
+              <select data-motivo="${p.parada_id}">
+                ${motivos.includes(p.motivo) ? "" : `<option value="${esc(p.motivo)}">${esc(p.motivo)} (motorista)</option>`}
+                ${motivos.map(m => `<option value="${esc(m)}" ${m === p.motivo ? "selected" : ""}>${esc(m)}${m === p.motivo ? " (motorista)" : ""}</option>`).join("")}
+              </select></div>
+            <div><label>Observação</label><textarea data-obs="${p.parada_id}" placeholder="Opcional"></textarea></div>
+          </div>
+        </div>`).join("")}
+      <div class="bloco cartao"><label class="rot">Foto da carga (pallet)</label>
+        <div class="fotos" id="fotos-carga"><label class="btn-foto">📷 Fotografar<input type="file" accept="image/*" capture="environment" id="arq-carga"></label></div></div>
+      <div class="bloco cartao"><label class="rot">Quem recebeu</label>
+        <input type="text" id="recebedor" autocomplete="name" placeholder="Seu nome" value="${esc(lerNome())}"></div>
+      <div class="bloco cartao"><label class="rot">Assinatura do motorista</label>
+        <div class="assinatura"><canvas id="canvas-ass"></canvas><div class="dica">assine aqui com o dedo</div></div>
+        <button type="button" class="limpar" id="limpar-ass">Limpar assinatura</button></div>
+      <div id="erro"></div>`;
+    document.getElementById("voltar").onclick = desenharLista;
+    if (!PODE_CONFIRMAR) {
+      tela.querySelectorAll("input,select,textarea,.contador button,.sim-nao button").forEach(el => el.disabled = true);
+      tela.querySelectorAll(".bloco").forEach(el => el.classList.add("oculto"));
+      return;
+    }
+    ligarCampos();
+    ligarAssinatura();
+    rodape.classList.remove("oculto");
+    window.scrollTo(0, 0);
+  }
+
+  function miniatura(container, blob, antesDe) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(blob);
+    container.insertBefore(img, antesDe);
+  }
+
+  function ligarCampos() {
+    const item = id => conf.itens[id];
+    tela.querySelectorAll("[data-veio]").forEach(el => el.onchange = () => {
+      const id = el.dataset.veio; item(id).veio = el.checked;
+      document.getElementById("ped-" + id).classList.toggle("fora", !el.checked);
+      tela.querySelector(`[data-campos="${id}"]`).classList.toggle("oculto", !el.checked);
+    });
+    tela.querySelectorAll("[data-caixas]").forEach(el => el.oninput = () => item(el.dataset.caixas).caixas = el.value);
+    const passo = (id, d) => {
+      const inp = tela.querySelector(`[data-caixas="${id}"]`);
+      inp.value = Math.max(0, (parseInt(inp.value, 10) || 0) + d); item(id).caixas = inp.value;
+    };
+    tela.querySelectorAll("[data-menos]").forEach(el => el.onclick = () => passo(el.dataset.menos, -1));
+    tela.querySelectorAll("[data-mais]").forEach(el => el.onclick = () => passo(el.dataset.mais, 1));
+    tela.querySelectorAll("[data-avaria]").forEach(el => el.onclick = () => {
+      const id = el.dataset.avaria, sim = el.dataset.v === "1";
+      item(id).avaria = sim;
+      tela.querySelectorAll(`[data-avaria="${id}"]`).forEach(b => b.classList.toggle("on", b === el));
+      tela.querySelector(`[data-fotos-avaria="${id}"]`).classList.toggle("oculto", !sim);
+    });
+    tela.querySelectorAll("[data-arq-avaria]").forEach(el => el.onchange = async () => {
+      const id = el.dataset.arqAvaria;
+      for (const f of el.files) { const b = await reduzir(f); item(id).fotos.push(b); miniatura(el.closest(".fotos"), b, el.closest("label")); }
+      el.value = "";
+    });
+    tela.querySelectorAll("[data-motivo]").forEach(el => el.onchange = () => item(el.dataset.motivo).motivo = el.value);
+    tela.querySelectorAll("[data-obs]").forEach(el => el.oninput = () => item(el.dataset.obs).obs = el.value);
+    const arqCarga = document.getElementById("arq-carga");
+    arqCarga.onchange = async () => {
+      for (const f of arqCarga.files) { const b = await reduzir(f); conf.fotosCarga.push(b); miniatura(document.getElementById("fotos-carga"), b, arqCarga.closest("label")); }
+      arqCarga.value = "";
+    };
+  }
+
+  function ligarAssinatura() {
+    const canvas = document.getElementById("canvas-ass");
+    const ctx = canvas.getContext("2d");
+    const ajustar = () => {
+      const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+      ctx.scale(dpr, dpr); ctx.lineWidth = 2.4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#14142b";
+      conf.assinou = false;
+    };
+    ajustar();
+    let desenhando = false;
+    const ponto = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.onpointerdown = e => { desenhando = true; canvas.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(...ponto(e)); };
+    canvas.onpointermove = e => { if (!desenhando) return; ctx.lineTo(...ponto(e)); ctx.stroke(); conf.assinou = true; };
+    canvas.onpointerup = canvas.onpointercancel = () => { desenhando = false; };
+    document.getElementById("limpar-ass").onclick = ajustar;
+    conf.canvas = canvas;
+  }
+
+  function mostrarErro(msg) {
+    const el = document.getElementById("erro");
+    if (!el) return;  // a tela já mudou (ex.: sucesso de um toque anterior)
+    el.innerHTML = `<div class="erro-msg">${esc(msg)}</div>`;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  btnConfirmar.onclick = async () => {
+    if (!conf || btnConfirmar.disabled) return;
+    btnConfirmar.disabled = true;  // trava já no 1º toque: o 2º chegava antes do await abaixo
+    try { await confirmar(); } finally {
+      btnConfirmar.disabled = false; btnConfirmar.textContent = "Confirmar recebimento";
+    }
+  };
+
+  async function confirmar() {
+    const recebedor = document.getElementById("recebedor").value.trim();
+    const itens = [];
+    for (const p of conf.grupo.pedidos) {
+      const it = conf.itens[p.parada_id];
+      if (!it.veio) continue;
+      if (it.caixas === "" || it.caixas == null) return mostrarErro(`Informe quantas caixas de ${p.codigo} voltaram.`);
+      if (it.avaria && !it.fotos.length) return mostrarErro(`Tire a foto da avaria de ${p.codigo}.`);
+      itens.push({ parada_id: p.parada_id, caixas_recebidas: parseInt(it.caixas, 10), avaria: it.avaria,
+                   motivo: it.motivo, observacao: it.obs });
+    }
+    if (!itens.length) return mostrarErro("Marque pelo menos um pedido que veio nesta descarga.");
+    if (!conf.fotosCarga.length) return mostrarErro("Tire pelo menos uma foto da carga.");
+    if (!recebedor) return mostrarErro("Informe o nome de quem recebeu.");
+    if (!conf.assinou) return mostrarErro("Falta a assinatura do motorista.");
+    guardarNome(recebedor);
+
+    const fd = new FormData();
+    fd.append("dados", JSON.stringify({ recebedor, itens }));
+    conf.fotosCarga.forEach((b, i) => fd.append("foto_carga", b, `carga${i}.jpg`));
+    for (const it of itens) conf.itens[it.parada_id].fotos.forEach((b, i) => fd.append(`foto_avaria_${it.parada_id}`, b, `avaria${i}.jpg`));
+    const assinatura = await new Promise(r => conf.canvas.toBlob(r, "image/png"));
+    fd.append("assinatura", assinatura, "assinatura.png");
+
+    btnConfirmar.textContent = "Enviando…";
+    try {
+      const r = await fetch(URL_DESCARGA, { method: "POST", body: fd, credentials: "same-origin" });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) { mostrarErro("Sua sessão expirou. Entre de novo e refaça a conferência."); return; }
+      if (!r.ok) {
+        let msg = j.erro || "Não foi possível confirmar. Tente de novo.";
+        if (/recebido/.test(msg)) msg += " Confira na aba Recebidos se a descarga já entrou.";
+        mostrarErro(msg); return;
+      }
+      tela.innerHTML = `<div class="cartao" style="text-align:center;padding:26px 14px">
+        <div class="nome">Recebimento confirmado</div>
+        <p class="nota">Descarga #${j.descarga_id}${j.divergencias ? ` · ${j.divergencias} divergência(s) avisada(s) no grupo Alertas` : ""}</p></div>`;
+      rodape.classList.add("oculto");
+      timerVolta = setTimeout(carregar, 2200);
+    } catch (e) {
+      mostrarErro("Sem resposta do servidor. Antes de tocar de novo, confira na aba Recebidos se a descarga já entrou.");
+    }
+  }
+
+  async function carregarHistorico() {
+    rodape.classList.add("oculto"); conf = null;
+    tela.innerHTML = '<div class="vazio">Carregando…</div>';
+    let j;
+    try { j = await buscarJson(URL_HISTORICO); } catch (e) { return falhaCarga(e); }
+    if (!j.descargas.length) { tela.innerHTML = '<div class="vazio">Nenhuma descarga recebida ainda.</div>'; return; }
+    tela.innerHTML = j.descargas.map(d => `<button type="button" class="cartao" data-id="${d.id}">
+      <div class="linha-topo"><span class="nome">${esc(d.motorista_nome)}</span><span class="num">${dataBr(d.recebido_em)}</span></div>
+      <div class="nota">#${d.id} · ${d.pedidos} pedido(s) · recebido por ${esc(d.recebedor)}</div>
+      <span class="selo ${d.tem_divergencia ? "div" : "ok"}">${d.tem_divergencia ? "divergência" : "conferido"}</span>
+      ${d.parciais ? `<span class="selo parcial">${d.parciais} parcial</span>` : ""}</button>`).join("");
+    tela.querySelectorAll("button.cartao").forEach(b => b.onclick = () => abrirDetalhe(b.dataset.id));
+  }
+
+  async function abrirDetalhe(id) {
+    let d;
+    try { d = await buscarJson(URL_DETALHE + id); } catch (e) { return falhaCarga(e); }
+    tela.innerHTML = `<button type="button" class="voltar" id="voltar">‹ Recebidos</button>
+      <div class="cartao"><div class="nome">${esc(d.motorista_nome)}</div>
+        <div class="nota">Descarga #${d.id} · ${dataBr(d.recebido_em)} · recebido por ${esc(d.recebedor)}</div>
+        ${d.itens.map(i => `<div class="det-item"><span class="cod" style="font-family:monospace;font-weight:700">${esc(i.codigo)}</span>
+          ${i.divergente ? '<span class="selo div">divergência</span>' : ""} ${i.parcial ? '<span class="selo parcial">parcial</span>' : ""}
+          <div class="nota">${esc(i.embarcador || "")} · ${i.caixas_recebidas}${i.caixas_esperadas != null ? " de " + i.caixas_esperadas : ""} cx
+            ${i.avaria ? " · avaria" : ""} · ${i.motivo_corrigido ? esc(i.motivo_original) + " → " : ""}${esc(i.motivo_confirmado)}</div>
+          ${i.observacao ? `<div class="nota">Obs: ${esc(i.observacao)}</div>` : ""}
+          ${i.fotos_avaria.length ? `<div class="fotos" style="margin-top:6px">${i.fotos_avaria.map(f => `<a href="${arquivo(d.id, f)}" target="_blank"><img src="${arquivo(d.id, f)}" alt="avaria"></a>`).join("")}</div>` : ""}
+        </div>`).join("")}</div>
+      <div class="cartao"><label class="rot nota">Foto da carga</label>
+        <div class="fotos">${d.fotos_carga.map(f => `<a href="${arquivo(d.id, f)}" target="_blank"><img src="${arquivo(d.id, f)}" alt="carga"></a>`).join("")}</div></div>
+      <div class="cartao"><label class="rot nota">Assinatura do motorista</label>
+        <img class="assinatura-img" src="${arquivo(d.id, d.assinatura)}" alt="assinatura"></div>`;
+    document.getElementById("voltar").onclick = carregarHistorico;
+  }
+
+  document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+    clearTimeout(timerVolta);
+    document.querySelectorAll(".seg button").forEach(x => x.classList.toggle("ativo", x === b));
+    b.dataset.aba === "recebidos" ? carregarHistorico() : carregar();
+  });
+  carregar();
+</script>
+{% endblock %}

@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import sys
+import threading
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -93,6 +94,7 @@ import wms_etiqueta_produto
 import wms_faltas_recebimento
 import acesso_telas
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
+import retornos
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -1088,6 +1090,114 @@ def api_baixa_sem_app_status(lote: int):
     finally:
         conn.close()
     return (jsonify(d), 200) if d else (jsonify({"erro": "lote não encontrado"}), 404)
+
+
+# Recebimento de retornos (Hugo, 23/10): insucessos e parciais que voltam
+# ao galpão, conferidos pelo celular (retornos.py). Confirmar é de quem está
+# no galpão ou opera; Atendimento e leitura só acompanham.
+NIVEIS_RETORNOS_CONFIRMAR = ("total", "operador", "logistica", "galpao", "expedicao")
+NIVEIS_RETORNOS_VER = NIVEIS_RETORNOS_CONFIRMAR + ("atendimento", "leitura")
+
+
+@app.route("/retornos")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_tela():
+    # Tela única (mobile first, serve no desktop também): o "versão completa"
+    # do base_mobile aponta pra ela mesma.
+    return render_template("retornos.html", pode_confirmar=g.nivel_acesso in NIVEIS_RETORNOS_CONFIRMAR,
+                           endpoint_desktop="retornos_tela")
+
+
+@app.route("/api/retornos")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def api_retornos():
+    conn = retornos.conectar()
+    try:
+        motoristas = retornos.listar_pendentes(
+            conn, date.today(), agent_ids_excluir=retornos.agent_ids_lalamove(_carregar_config()))
+    finally:
+        conn.close()
+    return jsonify({"motoristas": motoristas, "motivos": retornos.motivos_validos()})
+
+
+@app.route("/api/retornos/descarga", methods=["POST"])
+@requer_auth(niveis=NIVEIS_RETORNOS_CONFIRMAR)
+@exige_mesma_origem
+def api_retornos_descarga():
+    """Confirma uma descarga: fotos e assinatura vão pra
+    dados/retornos/<id>/ antes de gravar; erro desfaz tudo (linha e pasta)."""
+    try:
+        dados = json.loads(request.form.get("dados") or "{}")
+        itens = list(dados.get("itens") or [])
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"erro": "Dados da descarga inválidos."}), 400
+    conn = retornos.conectar()
+    descarga_id = retornos.reservar_descarga(conn)
+    try:
+        fotos_carga = [retornos.salvar_arquivo(descarga_id, "carga", f.read())
+                       for f in request.files.getlist("foto_carga")]
+        assinatura = request.files.get("assinatura")
+        nome_assinatura = retornos.salvar_arquivo(descarga_id, "assinatura", assinatura.read()) if assinatura else ""
+        for item in itens:
+            pid = item.get("parada_id")
+            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{int(pid)}", f.read())
+                                    for f in request.files.getlist(f"foto_avaria_{pid}")]
+        resultado = retornos.registrar_descarga(
+            conn, descarga_id=descarga_id, itens=itens, recebedor=dados.get("recebedor") or "",
+            usuario=session.get("usuario") or g.nivel_acesso, fotos_carga=fotos_carga, assinatura=nome_assinatura)
+    except (retornos.ErroRetorno, ValueError, TypeError) as e:
+        retornos.descartar_descarga(conn, descarga_id)
+        conn.close()
+        msg = str(e) if isinstance(e, retornos.ErroRetorno) else "Dados da descarga inválidos."
+        return jsonify({"erro": msg}), 400
+    conn.close()
+
+    # Cópia no GCS fora do request: no 4G do galpão, sete uploads em série
+    # (ou o GCS fora do ar) deixavam o celular em "Enviando…" e geravam toque
+    # repetido. O disco da VPS já tem tudo; o GCS é só cópia.
+    threading.Thread(target=retornos.enviar_gcs, args=(_carregar_config(), descarga_id), daemon=True).start()
+    texto = retornos.texto_alerta_descarga(resultado, " ".join((dados.get("recebedor") or "").split()))
+    if texto:
+        try:
+            import grupos_equipe
+            cg = grupos_equipe.conectar()
+            try:
+                retornos.postar_alerta(cg, texto)
+            finally:
+                cg.close()
+        except Exception:
+            logging.getLogger(__name__).exception("Retornos: descarga %s gravada, mas o alerta falhou", descarga_id)
+    return jsonify({"ok": True, "descarga_id": descarga_id, "divergencias": len(resultado["divergentes"])})
+
+
+@app.route("/api/retornos/descargas")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def api_retornos_descargas():
+    conn = retornos.conectar()
+    try:
+        return jsonify({"descargas": retornos.listar_descargas(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/retornos/descarga/<int:descarga_id>")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_descarga(descarga_id: int):
+    conn = retornos.conectar()
+    try:
+        d = retornos.detalhar_descarga(conn, descarga_id)
+    finally:
+        conn.close()
+    return jsonify(d) if d else (jsonify({"erro": "descarga não encontrada"}), 404)
+
+
+@app.route("/retornos/arquivo/<int:descarga_id>/<nome>")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_arquivo(descarga_id: int, nome: str):
+    caminho = retornos.caminho_arquivo(descarga_id, nome)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, max_age=3600)
 
 
 @app.route("/canhotos-pendentes")
@@ -2534,7 +2644,17 @@ def consulta_pedido(codigo):
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
     if not detalhe:
         abort(404)
-    return render_template("consulta_pedido.html", d=detalhe)
+    # Retorno conferido no galpão (tela /retornos); leitura nunca derruba a consulta.
+    try:
+        conn_r = retornos.conectar()
+        try:
+            no_galpao = retornos.status_por_codigo(conn_r, detalhe["codigo"])
+        finally:
+            conn_r.close()
+    except Exception:
+        logging.getLogger(__name__).exception("Consulta: falha ao ler retornos de %s", codigo)
+        no_galpao = []
+    return render_template("consulta_pedido.html", d=detalhe, no_galpao=no_galpao)
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")
