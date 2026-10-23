@@ -14,7 +14,6 @@ endereco) ou se o pedido segue pro endereco dele mesmo (ENTREGA).
 Registrado em app.py por `registrar(app, ...)`, mesmo padrao de cotacao_web.py.
 """
 import logging
-import sqlite3
 
 from flask import jsonify, render_template, request
 
@@ -31,18 +30,6 @@ _OBRIGATORIOS = (("cep", "CEP"), ("logradouro", "rua"), ("numero", "número"), (
 _MAX_CAMPO = 200
 _MAX_NOME = 120
 _CAMPOS_ENDERECO = ("cep", "logradouro", "numero", "complemento", "bairro", "municipio", "uf")
-
-
-def _apelido(conn, embarcador_cnpj: str) -> str:
-    chave = str(embarcador_cnpj or "")
-    por_id = chave.startswith("stkkc:")
-    try:
-        row = conn.execute(
-            "SELECT COALESCE(NULLIF(apelido,''), NULLIF(nome_remetente,'')) FROM interno WHERE "
-            + ("stkkc_id=?" if por_id else "cnpj_embarcador=?"), (chave[6:] if por_id else chave,)).fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    return row[0] if row and row[0] else chave
 
 
 def _endereco_texto(t: dict) -> str:
@@ -118,7 +105,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
                 endereco = {k: f[k] for k in _CAMPOS_ENDERECO}
                 endereco["uf"] = endereco["uf"].upper()
                 endereco["cep"] = ct.formatar_cep(endereco["cep"])
-            por = f"{f['nome']} ({_apelido(conn, emb)}) pelo link"
+            por = f"{f['nome']} ({ctr.nome_embarcador(conn, emb)}) pelo link"
             try:
                 novo = ctr.responder(conn, transp["id"], tipo, endereco,
                                      f["email_transportadora"] if tipo == "TERCEIROS" else "", por, "link")

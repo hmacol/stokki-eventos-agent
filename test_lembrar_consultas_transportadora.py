@@ -6,6 +6,8 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
+import notificar_whatsapp as nw
+
 import consulta_transportadora as ct
 import lembrar_consultas_transportadora as lc
 
@@ -108,6 +110,20 @@ class LembrarTest(unittest.TestCase):
             r = lc.rodar(self.conn, CFG, SEGUNDA, False)
         self.assertEqual(len(chamadas), 2)
         self.assertEqual(r["lembretes"], 1)
+
+    def test_alerta_leva_nome_do_embarcador_e_dias_uteis(self):
+        self.conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, stkkc_id INTEGER, apelido TEXT, nome_remetente TEXT)")
+        self.conn.execute("INSERT INTO interno VALUES ('e1', NULL, 'Loja Bela', NULL)")
+        self.conn.commit()
+        self._rodar(TERCA)
+        args, _ = self.alertas[0]
+        self.assertEqual(args[:4], ("ACME LTDA", "Loja Bela", 1, 2))
+
+    def test_texto_alerta_cabe_e_mantem_o_link(self):
+        link = "https://app.freshhub.com.br/painel/transportadoras?aba=pendentes"
+        t = nw.texto_alerta_transportadora("T" * 150, "E" * 150, 12, 3, link)
+        self.assertLessEqual(len(t), nw.MAX_MENSAGEM)
+        self.assertTrue(t.endswith(link))
 
     def test_modo_teste_nao_marca_alerta(self):
         self._rodar(TERCA, modo_teste=True)

@@ -13,7 +13,7 @@ ficou sem ele.
 import argparse
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).resolve().parent
@@ -41,6 +41,14 @@ def link_tela(config: dict) -> str:
     return base.rstrip("/") + "/transportadoras?aba=pendentes"
 
 
+def _dias_uteis(de: date, ate: date) -> int:
+    n, d = 0, de
+    while d < ate:
+        d += timedelta(days=1)
+        n += eh_dia_util(d)
+    return n
+
+
 def _processar(conn, consulta: dict, config: dict, hoje: date, modo_teste: bool, res: dict):
     cid = consulta["id"]
     sem_contato = False
@@ -56,8 +64,8 @@ def _processar(conn, consulta: dict, config: dict, hoje: date, modo_teste: bool,
     if not (sem_contato or somar_dias_uteis(criado, DIAS_UTEIS_ATE_ALERTA) <= hoje):
         return
     situacao = notificar_whatsapp.avisar_alerta_transportadora(
-        consulta["transportadora_nome"], consulta["embarcador_cnpj"], consulta["pedidos_parados"],
-        (hoje - criado).days, link_tela(config), config, consulta_id=cid, modo_teste=modo_teste)
+        consulta["transportadora_nome"], ct.nome_embarcador(conn, consulta["embarcador_cnpj"]),
+        consulta["pedidos_parados"], _dias_uteis(criado, hoje), link_tela(config), config, consulta_id=cid, modo_teste=modo_teste)
     if situacao == "enviado" and not modo_teste:
         conn.execute("UPDATE transportadora_consultas SET alerta_equipe_em=? WHERE id=?", (ct._agora(), cid))
         conn.commit()

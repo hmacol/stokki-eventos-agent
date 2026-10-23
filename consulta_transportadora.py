@@ -213,6 +213,20 @@ def _embarcador(conn, embarcador_cnpj: str) -> dict:
     return {"emails": emails, "whatsapp": zap}
 
 
+def nome_embarcador(conn, embarcador_cnpj: str) -> str:
+    """Apelido (ou nome do remetente) do embarcador na tabela interno; sem
+    cadastro, devolve a propria chave."""
+    chave = str(embarcador_cnpj or "")
+    por_id = chave.startswith("stkkc:")
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(NULLIF(apelido,''), NULLIF(nome_remetente,'')) FROM interno WHERE "
+            + ("stkkc_id=?" if por_id else "cnpj_embarcador=?"), (chave[6:] if por_id else chave,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    return row[0] if row and row[0] else chave
+
+
 def _corpo_email(transp: dict, pedidos: list[dict], url: str, lembrete: bool) -> str:
     e = html.escape
     borda = f"padding:6px 10px;border-bottom:1px solid {email_utils.COR_BORDA};font-size:13px;"
