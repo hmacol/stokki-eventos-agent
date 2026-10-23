@@ -2055,7 +2055,7 @@
 <div class="modal-overlay-reagendar" id="modal-entregue">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
-    <p class="subtitulo">Pedido <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
     <div class="campo-reagendar">
       <label for="entregue-observacao">Como a entrega foi confirmada</label>
       <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
@@ -2706,6 +2706,7 @@
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue (sem canhoto) os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Marcar entregue</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
@@ -5337,6 +5338,7 @@
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-transportadora-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    document.getElementById("botao-entregue-selecao-rotas").disabled = itensEntregaveisSelecionados().length === 0;
     atualizarFolhaMapa();
   }
 
@@ -6027,13 +6029,35 @@
   // "Marcar como entregue" do menu de contexto, só em rota já enviada
   // (Hugo, 08/10): fecha o serviço na VUUPT por API, mesmo endpoint do
   // chip da Torre. A observação é obrigatória e vira auditoria.
+  // Em massa (Hugo, 23/10): botão "Marcar entregue" da barra de seleção
+  // das rotas, ou o menu de contexto num card que está na seleção --
+  // mesma observação pra todos, um POST por pedido (o endpoint é
+  // unitário; assim dá pra mostrar o progresso e uma falha não para o lote).
   let entreguePendente = null;
+
+  // selecionados que estão em rota já ENVIADA (os de rascunho não têm
+  // serviço atribuído na VUUPT, ficam de fora)
+  function itensEntregaveisSelecionados() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      if (!li || !li.closest(".card-rota.enviada")) return null;
+      return { serviceId, codigo: li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}` };
+    }).filter(Boolean);
+  }
 
   function abrirModalEntregue(li, serviceId) {
     const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
-    document.getElementById("entregue-codigo").textContent = codigo;
+    abrirModalEntregueLote([{ serviceId, codigo }]);
+  }
+
+  function abrirModalEntregueLote(itens) {
+    if (!itens.length) return;
+    const lote = itens.length > 1;
+    document.getElementById("titulo-modal-entregue").textContent = lote ? `Marcar ${itens.length} pedidos como entregues` : "Marcar pedido como entregue";
+    document.getElementById("entregue-prefixo").textContent = lote ? `${itens.length} pedidos:` : "Pedido";
+    document.getElementById("entregue-codigo").textContent = itens.map(it => it.codigo).join(", ");
     document.getElementById("entregue-observacao").value = "";
-    entreguePendente = { serviceId, codigo };
+    entreguePendente = { itens };
     document.getElementById("modal-entregue").classList.add("aberto");
     document.getElementById("entregue-observacao").focus();
   }
@@ -6054,19 +6078,29 @@
     if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Fechando na VUUPT...";
+    const fechados = [], jaEstavam = [], falhas = [];
     try {
-      const dados = await postJSON("/api/torre/marcar-entregue", { service_id: pendente.serviceId, observacao });
-      fecharModalEntregue();
-      alert(dados.ja_estava
-        ? `${dados.codigo} já constava como entregue na VUUPT.`
-        : `${dados.codigo} marcado como entregue na VUUPT.`);
-    } catch (e) {
-      alert(`Falha ao marcar como entregue: ${e.message}`);
+      for (const [i, it] of pendente.itens.entries()) {
+        botao.textContent = pendente.itens.length > 1
+          ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
+        try {
+          const dados = await postJSON("/api/torre/marcar-entregue", { service_id: it.serviceId, observacao });
+          (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+        } catch (e) {
+          falhas.push(`${it.codigo}: ${e.message}`);
+        }
+      }
     } finally {
       botao.disabled = false;
       botao.textContent = original;
     }
+    fecharModalEntregue();
+    if (pendente.itens.length > 1 && !falhas.length) limparSelecaoRotas();
+    const linhas = [];
+    if (fechados.length) linhas.push(`Marcado(s) como entregue(s) na VUUPT: ${fechados.join(", ")}`);
+    if (jaEstavam.length) linhas.push(`Já constava(m) como entregue(s): ${jaEstavam.join(", ")}`);
+    if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
+    alert(linhas.join("\n\n"));
   }
 
   // pedido (ou lote de pedidos, ver abrirModalReagendarLote) sendo
@@ -6682,7 +6716,10 @@
     // rota já enviada à VUUPT: dá pra fechar o pedido como entregue por
     // aqui (Hugo, 08/10) -- mesmo endpoint do chip da Torre
     if (PODE_EDITAR && rotaTravada) {
-      itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
+      // card na seleção: vale pra todos os selecionados em rota enviada (23/10)
+      const loteEntregue = SELECIONADOS_ROTA.has(serviceId) ? itensEntregaveisSelecionados() : [];
+      if (loteEntregue.length > 1) itens.push({ rotulo: `Marcar como entregue (${loteEntregue.length} selecionados)`, acao: () => abrirModalEntregueLote(loteEntregue) });
+      else itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });
@@ -7328,6 +7365,9 @@
     });
     document.getElementById("botao-reagendar-selecao-rotas").addEventListener("click", () => {
       abrirModalReagendarLote(itensDaRotaSelecionada());
+    });
+    document.getElementById("botao-entregue-selecao-rotas").addEventListener("click", () => {
+      abrirModalEntregueLote(itensEntregaveisSelecionados());
     });
     document.getElementById("select-destino-mover").addEventListener("change", (e) => {
       document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !e.target.value;
