@@ -112,8 +112,13 @@ def conectar(caminho=None) -> sqlite3.Connection:
             criado_por     TEXT,
             criado_em      TEXT NOT NULL,
             atualizado_por TEXT,
-            atualizado_em  TEXT
+            atualizado_em  TEXT,
+            versao_senha   INTEGER NOT NULL DEFAULT 0
         )""")
+    # Tabela criada antes da versao_senha (deploy de 23/10 14h).
+    colunas = {r["name"] for r in conn.execute("PRAGMA table_info(painel_usuarios)")}
+    if "versao_senha" not in colunas:
+        conn.execute("ALTER TABLE painel_usuarios ADD COLUMN versao_senha INTEGER NOT NULL DEFAULT 0")
     return conn
 
 
@@ -134,7 +139,8 @@ def conta(usuario: str, conn=None):
     conn = conn or conectar()
     try:
         r = conn.execute(
-            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, t.telas FROM painel_usuarios u "
+            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, u.versao_senha, t.telas "
+            "FROM painel_usuarios u "
             "LEFT JOIN painel_acesso_telas t ON t.usuario = u.usuario WHERE u.usuario = ?", (usuario,)).fetchone()
     finally:
         if proprio:
@@ -142,13 +148,18 @@ def conta(usuario: str, conn=None):
     if r is None:
         return None
     return {"usuario": r["usuario"], "nome": r["nome"], "nivel": r["nivel"], "trocar_senha": bool(r["trocar_senha"]),
-            "senha_hash": r["senha_hash"], "telas": _telas_da_linha(r)}
+            "senha_hash": r["senha_hash"], "versao_senha": r["versao_senha"], "telas": _telas_da_linha(r)}
+
+
+# Login inexistente confere contra este hash, pra responder no mesmo tempo
+# que senha errada (nao entrega quais logins existem).
+_HASH_FICTICIO = generate_password_hash("login-inexistente")
 
 
 def conferir_senha(usuario: str, senha: str, conn=None):
     """Conta do login nominal se a senha bate, senao None."""
     c = conta(usuario, conn)
-    if c is None or not senha or not check_password_hash(c["senha_hash"], senha):
+    if not check_password_hash(c["senha_hash"] if c else _HASH_FICTICIO, senha or "") or c is None:
         return None
     return c
 
@@ -226,25 +237,29 @@ def editar(conn, usuario: str, nome: str, nivel: str, por: str) -> None:
 
 
 def redefinir_senha(conn, usuario: str, senha: str, por: str) -> None:
-    """Senha provisoria dada por outro total: troca obrigatoria no proximo acesso."""
+    """Senha provisoria dada por outro total: troca obrigatoria no proximo
+    acesso. Sobe a versao_senha: sessao aberta antes cai pro login."""
     _exigir_outro(conn, usuario, por)
     _validar_senha(senha)
-    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 1, atualizado_por = ?, atualizado_em = ? "
-                 "WHERE usuario = ?", (generate_password_hash(senha), por, _agora(), usuario))
+    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 1, versao_senha = versao_senha + 1, "
+                 "atualizado_por = ?, atualizado_em = ? WHERE usuario = ?",
+                 (generate_password_hash(senha), por, _agora(), usuario))
     conn.commit()
 
 
-def trocar_senha(conn, usuario: str, nova: str) -> None:
-    """A propria pessoa troca a provisoria pela dela."""
+def trocar_senha(conn, usuario: str, nova: str) -> int:
+    """A propria pessoa troca a provisoria pela dela. Devolve a versao_senha
+    nova, que a sessao de quem trocou passa a carregar."""
     c = conta(usuario, conn)
     if c is None:
         raise ValueError("Login nominal não encontrado.")
     _validar_senha(nova)
     if check_password_hash(c["senha_hash"], nova):
         raise ValueError("A senha nova precisa ser diferente da provisória.")
-    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 0 WHERE usuario = ?",
-                 (generate_password_hash(nova), usuario))
+    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 0, versao_senha = versao_senha + 1 "
+                 "WHERE usuario = ?", (generate_password_hash(nova), usuario))
     conn.commit()
+    return c["versao_senha"] + 1
 
 
 def importar_do_config(conn, cfg_painel: dict) -> list[str]:
