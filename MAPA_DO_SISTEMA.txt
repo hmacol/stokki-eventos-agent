@@ -524,7 +524,11 @@
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
-                      imprimir_pedidos_pendentes.
+                      imprimir_pedidos_pendentes. Fila = aba "Faturados
+                      para imprimir" via GET /printing/list?tab=billed
+                      (tela por abas desde 22/10); _conferir_fila levanta
+                      erro se JSON, contador e botões da aba não baterem
+                      (zero falso vira e-mail de erro, não "OK").
  sessao_uso.py        Trava POR CONTA com FILA por ordem de chegada
                       (tabelas stokki_sessao_uso + stokki_fila). adquirir
                       (esperar_segundos=None espera sem limite;
