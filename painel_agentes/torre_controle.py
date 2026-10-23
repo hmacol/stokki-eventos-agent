@@ -1688,7 +1688,8 @@ def _resumo_amanha(data_alvo: date, token: str) -> dict:
         "data_rotulo": dia_seguinte.strftime("%d/%m"),
         "qtd_rotas": len(rascunhos),
         "qtd_paradas": sum(len(r["paradas"]) for r in rascunhos),
-        "sem_motorista": sum(1 for r in rascunhos if not r.get("agent_id")),
+        # rota da tarde nasce sem motorista de propósito (spec 23/10): não conta
+        "sem_motorista": sum(1 for r in rascunhos if not r.get("agent_id") and r.get("turno") != "TARDE"),
         "qtd_travas": qtd_travas,
         "rotas_vuupt": rotas_vuupt,
     }

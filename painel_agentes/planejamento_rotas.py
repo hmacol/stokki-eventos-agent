@@ -369,6 +369,21 @@ def _horas_para_hhmm_teto(horas: float) -> str:
     return f"{inteiras}h{minutos:02d}" if minutos else f"{inteiras}h"
 
 
+def _hora_saida_tarde(rascunho: dict) -> float | None:
+    """Saída (decimal, BRT) do rascunho da tarde (rascunhos_rota.turno,
+    Hugo 23/10), lida do start_at; None pra rota normal (sai às 06h)."""
+    if rascunho.get("turno") != "TARDE":
+        return None
+    return hora_saida_de_start_at(rascunho.get("start_at"))
+
+
+def _selo_tarde(rascunho: dict) -> str | None:
+    """Selo "Tarde · sai HH:MM" do card. Não é aviso de trava: fica fora
+    de _badges_trava pra não contar em "Com aviso ativo" nem na Torre."""
+    hora_saida = _hora_saida_tarde(rascunho)
+    return f"Tarde · sai {_horas_para_hhmm(hora_saida)}" if hora_saida is not None else None
+
+
 def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
@@ -395,10 +410,9 @@ def _badges_trava(rascunho: dict) -> list[str]:
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
     # Rota da tarde (rascunhos_rota.turno, Hugo 23/10): sai perto da janela
     # tardia, não às 06h -- a linha do tempo parte da saída da própria rota.
+    # O selo "Tarde · sai HH:MM" é _selo_tarde (não é trava).
     tarde = rascunho.get("turno") == "TARDE"
-    hora_saida = hora_saida_de_start_at(rascunho.get("start_at")) if tarde else None
-    if tarde and hora_saida is not None:
-        badges.append(f"Tarde · sai {_horas_para_hhmm(hora_saida)}")
+    hora_saida = _hora_saida_tarde(rascunho)
 
     def _tempo_estimado() -> float:
         # MESMO estimador que formou a rota (roteirizacao_dados.
@@ -1073,6 +1087,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     confirmacoes_dia = listar_confirmacoes_do_dia(data_alvo)
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
+        r["selo_tarde"] = _selo_tarde(r)
         # confirmação do motorista (página pública na VPS, ver
         # confirmacao_motoristas/) só existe pra rota já enviada à
         # VUUPT -- rascunho ainda pode trocar de motorista até lá.
@@ -1128,7 +1143,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # só pra rota com alguma janela (é quando a hora importa)
         sim = _simular_rascunho(
             r["paradas"],
-            hora_saida=hora_saida_de_start_at(r.get("start_at")) if r.get("turno") == "TARDE" else None)
+            hora_saida=_hora_saida_tarde(r))
         for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
@@ -1414,6 +1429,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
             "macro": Counter(macros).most_common(1)[0][0] if macros else None,
             "agent_id": r.get("agent_id"),
             "servicos": servicos_rota,
+            # Rascunho da tarde: janela julgada a partir da saída dele
+            "hora_saida": _hora_saida_tarde(r),
         })
 
     def _cabe_na_janela(info: dict, servico: dict) -> bool:
@@ -1421,7 +1438,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
         if not tem_janela(candidato):
             return True
         try:
-            return janela_viavel(candidato, gmaps_key)
+            return janela_viavel(candidato, gmaps_key, hora_saida=info["hora_saida"])
         except Exception as e:
             logger.warning(f"  Falha ao checar janela no rascunho '{info['nome']}' (não bloqueia): {e}")
             return True

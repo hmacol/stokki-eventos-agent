@@ -608,9 +608,19 @@ def otimizar_sequencia(rascunho_id: int):
              "_janela_inicio": p["janela_inicio"], "_janela_fim": p["janela_fim"]}
             for p in paradas
         ]
-        from roteirizacao_dados import definir_coords_base
-        definir_coords_base(*base)
-        nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
+        import roteirizacao_dados
+        roteirizacao_dados.definir_coords_base(*base)
+        # Rota da tarde (turno TARDE, 23/10): sequencia a partir da saída
+        # dela (start_at), não das 06h -- a da manhã segue o 2-opt de sempre
+        rascunho = conn.execute("SELECT turno, start_at FROM rascunhos_rota WHERE id = ?",
+                                (rascunho_id,)).fetchone()
+        hora_saida = (roteirizacao_dados.hora_saida_de_start_at(rascunho["start_at"])
+                      if rascunho and rascunho["turno"] == "TARDE" else None)
+        if hora_saida is not None:
+            nova_ordem = roteirizacao_dados.ordenar_com_janelas(servicos_fake, base[0], base[1], api_key,
+                                                                hora_saida=hora_saida)
+        else:
+            nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
         for ordem, s in enumerate(nova_ordem):
             conn.execute(
                 "UPDATE rascunhos_parada SET ordem = ? WHERE rascunho_id = ? AND service_id = ?",
@@ -1099,13 +1109,14 @@ def duplicar_rascunho(rascunho_id: int) -> int:
                 data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                 agent_id, vehicle_id, motorista_nome,
                 start_location_base_id, end_location_base_id,
-                start_at, km_estimado, horas_estimadas, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_at, km_estimado, horas_estimadas, turno, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
             origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
-            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), STATUS_RASCUNHO,
+            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), origem.get("turno"),
+            STATUS_RASCUNHO,
         ))
         novo_id = cursor.lastrowid
         for p in origem["paradas"]:

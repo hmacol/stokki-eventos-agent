@@ -657,6 +657,17 @@
     color: var(--texto);
     margin-bottom: 6px;
   }
+  /* Rota da tarde (turno TARDE): selo neutro, não é aviso de trava */
+  .selo-tarde {
+    display: inline-block;
+    background: var(--fundo);
+    border: 1px solid var(--borda);
+    color: var(--texto-suave);
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-left: 6px;
+  }
   .badge-trava {
     display: inline-block;
     background: rgba(255,92,80,0.18);
@@ -3263,6 +3274,7 @@
           <span class="nome">${escaparHtml(rascunho.nome)}</span>
           ${(bloqueada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
           ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
+          ${rascunho.selo_tarde ? `<span class="selo-tarde" title="Rota da tarde: sai da base neste horário, perto da janela tardia">${escaparHtml(rascunho.selo_tarde)}</span>` : ""}
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
       </div>
