@@ -24,6 +24,8 @@ Fonte dos retornos: nucleo_paradas + nucleo_rotas (espelho da Vuupt a cada
 (nucleo_paradas.id), nunca so o codigo: reentrega reaproveita codigo.
 """
 import json
+import logging
+import shutil
 import sqlite3
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -33,7 +35,11 @@ import grupos_equipe
 from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
 from nucleo.normalizacao import normalizar_codigo
 
+logger = logging.getLogger("painel.retornos")
+
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
+PASTA_ARQUIVOS = Path(__file__).parent.parent / "dados" / "retornos"  # dados/retornos/<descarga_id>/
+MAX_FOTO_BYTES = 10 * 1024 * 1024
 NOME_GRUPO = "Alertas"
 AUTOR_ALERTA = "Recebimento de retornos"
 JANELA_DIAS = 7
@@ -179,9 +185,59 @@ def reservar_descarga(conn) -> int:
 
 
 def descartar_descarga(conn, descarga_id: int) -> None:
-    """Apaga uma descarga reservada que nao chegou a ser confirmada."""
+    """Apaga uma descarga reservada que nao chegou a ser confirmada, com os
+    arquivos que ja tinham sido salvos."""
     conn.execute("DELETE FROM retornos_descargas WHERE id = ? AND recebido_em IS NULL", (descarga_id,))
     conn.commit()
+    shutil.rmtree(PASTA_ARQUIVOS / str(descarga_id), ignore_errors=True)
+
+
+def _extensao_imagem(conteudo: bytes) -> str | None:
+    if conteudo.startswith(b"\xff\xd8"):
+        return "jpg"
+    if conteudo.startswith(b"\x89PNG"):
+        return "png"
+    if conteudo[:4] == b"RIFF" and conteudo[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def salvar_arquivo(descarga_id: int, prefixo: str, conteudo: bytes) -> str:
+    """Grava uma foto/assinatura em dados/retornos/<descarga_id>/ e devolve o
+    nome do arquivo. So imagem (o celular manda JPEG; assinatura e PNG)."""
+    if len(conteudo) > MAX_FOTO_BYTES:
+        raise ErroRetorno("Foto muito grande (máximo 10 MB).")
+    ext = _extensao_imagem(conteudo)
+    if not ext:
+        raise ErroRetorno("Arquivo não é uma foto.")
+    pasta = PASTA_ARQUIVOS / str(descarga_id)
+    pasta.mkdir(parents=True, exist_ok=True)
+    n = sum(1 for x in pasta.iterdir() if x.name.startswith(prefixo + "_")) + 1
+    nome = f"{prefixo}_{n}.{ext}"
+    (pasta / nome).write_bytes(conteudo)
+    return nome
+
+
+def caminho_arquivo(descarga_id: int, nome: str) -> Path | None:
+    """Caminho do arquivo da descarga, ou None se nao existir / sair da pasta."""
+    pasta = (PASTA_ARQUIVOS / str(descarga_id)).resolve()
+    alvo = (pasta / nome).resolve()
+    if alvo.parent != pasta or not alvo.is_file():
+        return None
+    return alvo
+
+
+def enviar_gcs(config: dict, descarga_id: int) -> None:
+    """Copia os arquivos da descarga pro GCS (best-effort: falha so loga, o
+    disco da VPS continua sendo a copia que a tela mostra)."""
+    if not config.get("gcs"):
+        return
+    try:
+        from documentos_pedido.storage_gcs import enviar_documento
+        for arq in sorted((PASTA_ARQUIVOS / str(descarga_id)).iterdir()):
+            enviar_documento(config, arq, f"RETORNO-{descarga_id}", "Retorno")
+    except Exception as e:
+        logger.warning("descarga %s: arquivos salvos em disco, mas nao subiram pro GCS: %s", descarga_id, e)
 
 
 def _paradas_por_id(conn, ids: list[int]) -> dict[int, sqlite3.Row]:
