@@ -79,6 +79,12 @@
     transition: opacity 0.15s;
   }
   button.entrar:hover { opacity: 0.9; }
+  .aviso {
+    font-size: 14px;
+    color: var(--primaria);
+    line-height: 1.5;
+    margin: 0 0 18px;
+  }
   .erro {
     background: #FDEBEA;
     color: var(--erro);
@@ -96,6 +102,16 @@
     <div class="subtitulo">Agente Stokki Freshlog</div>
   </div>
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if trocar %}
+  <p class="aviso">Olá, {{ usuario }}. Sua senha é provisória: escolha uma senha sua pra continuar.</p>
+  <form method="post" autocomplete="off">
+    <label for="nova">Nova senha</label>
+    <input type="password" id="nova" name="nova" required minlength="6" autofocus autocomplete="new-password">
+    <label for="repetir">Repita a nova senha</label>
+    <input type="password" id="repetir" name="repetir" required minlength="6" autocomplete="new-password">
+    <button type="submit" class="entrar">Salvar e entrar</button>
+  </form>
+  {% else %}
   <form method="post" autocomplete="off">
     <input type="hidden" name="proximo" value="{{ proximo }}">
     <label for="usuario">Usuário</label>
@@ -104,6 +120,7 @@
     <input type="password" id="senha" name="senha" required>
     <button type="submit" class="entrar">Entrar</button>
   </form>
+  {% endif %}
 </div>
 </body>
 </html>

@@ -26,7 +26,8 @@ import acesso_telas  # noqa: E402
 
 # Rotas sem login de painel (ou so do total de verdade) -- fora do catalogo de proposito.
 FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api_romaneio_pdf",
-                    "wms_manifest", "wms_service_worker", "acessos", "api_acessos",
+                    "wms_manifest", "wms_service_worker", "acessos", "api_acessos", "api_acessos_novo",
+                    "api_acessos_senha", "trocar_senha",
                     "galpao_3d", "api_galpao_3d_estado"}
 
 
@@ -75,6 +76,11 @@ class TestAcessoPersonalizado(unittest.TestCase):
         for p in self._patches:
             p.start()
         painel_agentes.app.config["TESTING"] = True
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+        finally:
+            conn.close()
 
     def tearDown(self):
         for p in self._patches:
@@ -84,7 +90,7 @@ class TestAcessoPersonalizado(unittest.TestCase):
     def _gravar(self, usuario, telas):
         conn = acesso_telas.conectar()
         try:
-            acesso_telas.salvar(conn, usuario, telas, "u_total", self.cfg_painel)
+            acesso_telas.salvar(conn, usuario, telas, "u_total")
         finally:
             conn.close()
 
@@ -134,11 +140,11 @@ class TestAcessoPersonalizado(unittest.TestCase):
         self.assertIn("nenhuma tela liberada", r.get_data(as_text=True))
 
     def test_par_fixo_nunca_e_personalizado(self):
-        self.assertIsNone(acesso_telas.telas_do_usuario("u_total", self.cfg_painel))
+        self.assertIsNone(acesso_telas.telas_do_usuario("u_total"))
         conn = acesso_telas.conectar()
         try:
             with self.assertRaises(ValueError):
-                acesso_telas.salvar(conn, "u_total", ["index"], "chefe", self.cfg_painel)
+                acesso_telas.salvar(conn, "u_total", ["index"], "chefe")
         finally:
             conn.close()
 
@@ -147,7 +153,7 @@ class TestAcessoPersonalizado(unittest.TestCase):
         hdr = {"Origin": "http://localhost"}
         r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["torre", "consulta"]}, headers=hdr)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
-        self.assertEqual(acesso_telas.telas_do_usuario("ana", self.cfg_painel), ["torre", "consulta"])
+        self.assertEqual(acesso_telas.telas_do_usuario("ana"), ["torre", "consulta"])
         r = cliente.post("/api/acessos", json={"usuario": "chefe", "telas": ["torre"]}, headers=hdr)
         self.assertEqual(r.status_code, 400)
         r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["nao_existe"]}, headers=hdr)
@@ -160,6 +166,67 @@ class TestAcessoPersonalizado(unittest.TestCase):
         self.assertEqual(cliente.get("/acessos").status_code, 403)
         r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None}, headers={"Origin": "http://localhost"})
         self.assertEqual(r.status_code, 403)
+        r = cliente.post("/api/acessos/novo", json={"usuario": "zé", "nivel": "total", "senha": "123456"},
+                         headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 403)
+
+
+class TestCadastroPelaTela(TestAcessoPersonalizado):
+    """Cadastro, nome, nivel e senha pela /acessos (23/10)."""
+
+    def _chefe(self):
+        cliente, _ = self._logar("chefe", "s_chefe")
+        return cliente, {"Origin": "http://localhost"}
+
+    def test_cadastro_com_senha_provisoria_obriga_troca(self):
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/novo", json={"usuario": " Maria.Souza ", "nome": "Maria Souza",
+                                                     "nivel": "operador", "senha": "prov123"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["usuario"], "maria.souza")
+        maria, r = self._logar("maria.souza", "prov123")
+        self.assertTrue(r.headers["Location"].endswith("/trocar-senha"))
+        self.assertTrue(maria.get("/torre").headers["Location"].endswith("/trocar-senha"))
+        self.assertEqual(maria.get("/api/torre/dados").status_code, 403)
+        r = maria.post("/trocar-senha", data={"nova": "prov123", "repetir": "prov123"}, headers=hdr)
+        self.assertIn("diferente", r.get_data(as_text=True))
+        r = maria.post("/trocar-senha", data={"nova": "minha99", "repetir": "minha99"}, headers=hdr)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("Maria Souza", maria.get("/torre").get_data(as_text=True))
+        self.assertIsNone(painel_agentes._nivel_das_credenciais("maria.souza", "prov123", self.cfg_painel))
+        self.assertEqual(painel_agentes._nivel_das_credenciais("maria.souza", "minha99", self.cfg_painel), "operador")
+
+    def test_cadastro_recusa_repetido_par_fixo_e_senha_curta(self):
+        cliente, hdr = self._chefe()
+        for corpo in ({"usuario": "ana", "nivel": "leitura", "senha": "123456"},
+                      {"usuario": "u_total", "nivel": "leitura", "senha": "123456"},
+                      {"usuario": "novo", "nivel": "leitura", "senha": "123"},
+                      {"usuario": "novo", "nivel": "admin", "senha": "123456"},
+                      {"usuario": "com espaco", "nivel": "leitura", "senha": "123456"}):
+            self.assertEqual(cliente.post("/api/acessos/novo", json=corpo, headers=hdr).status_code, 400, corpo)
+
+    def test_mudar_nivel_e_nome_vale_sem_novo_login(self):
+        ana, _ = self._logar("ana", "s_ana")
+        self.assertEqual(ana.get("/").status_code, 403)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana Lima", "nivel": "total"},
+                         headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        r = ana.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Ana Lima", r.get_data(as_text=True))
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "", "nivel": "admin"},
+                         headers=hdr)
+        self.assertEqual(r.status_code, 400)
+
+    def test_redefinir_senha_de_outro_e_nao_a_propria(self):
+        cliente, hdr = self._chefe()
+        self.assertEqual(cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"},
+                                      headers=hdr).status_code, 200)
+        _, r = self._logar("ana", "nova123")
+        self.assertTrue(r.headers["Location"].endswith("/trocar-senha"))
+        self.assertEqual(cliente.post("/api/acessos/senha", json={"usuario": "chefe", "senha": "nova123"},
+                                      headers=hdr).status_code, 400)
 
 
 if __name__ == "__main__":

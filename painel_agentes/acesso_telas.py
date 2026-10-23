@@ -1,15 +1,22 @@
 # -*- coding: utf-8 -*-
 """
 Acesso personalizado por usuario (21/10, Hugo): em vez de um dos niveis
-fixos, um login nominal (usuarios_extras do config.yaml) pode ter uma
-lista de telas escolhida na tela /acessos. Tela liberada vale completa:
-ver e todos os botoes, com o poder do nivel total dentro dela.
+fixos, um login nominal pode ter uma lista de telas escolhida na tela
+/acessos. Tela liberada vale completa: ver e todos os botoes, com o poder
+do nivel total dentro dela.
+
+Logins nominais (23/10, Hugo): moram na tabela painel_usuarios (login,
+nome de exibicao, hash da senha, nivel). A tela /acessos cadastra, muda
+nome e nivel e redefine senha (provisoria: a pessoa troca no 1o acesso).
+Os usuarios_extras do config.yaml foram copiados uma vez pra tabela por
+migrar_usuarios_extras.py e deixaram de valer. Os pares fixos (usuario,
+usuario_operador...) continuam so no config.
 
 Como funciona:
 - A lista mora na tabela painel_acesso_telas (dados/dados.db). Usuario sem
-  linha segue o nivel do config, como sempre. Apagar a linha devolve o nivel.
-- requer_auth (painel_agentes.py) le a lista a cada request (muda na hora,
-  sem novo login) e libera a rota se o caminho cair numa das telas.
+  linha segue o nivel dele, como sempre. Apagar a linha devolve o nivel.
+- requer_auth (painel_agentes.py) le nivel e lista a cada request (muda na
+  hora, sem novo login) e libera a rota se o caminho cair numa das telas.
 - Cada tela abaixo lista os caminhos (regex sobre request.path, sem o
   prefixo /painel) da pagina e das APIs que ela chama. Rota nova no painel
   precisa entrar numa tela daqui, senao o usuario personalizado leva 403:
@@ -23,7 +30,15 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from werkzeug.security import check_password_hash, generate_password_hash
+
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
+
+# "logistica" (19/10, Hugo) so existe pra login nominal: poderes do operador,
+# mas so nas telas da logistica (as rotas com "logistica" no niveis=).
+NIVEIS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento", "logistica")
+_PADRAO_LOGIN = re.compile(r"^[a-z0-9._-]{2,40}$")
+SENHA_MINIMA = 6
 
 # (chave = endpoint da pagina, rotulo, grupo do menu, caminhos)
 TELAS = [
@@ -87,57 +102,171 @@ def conectar(caminho=None) -> sqlite3.Connection:
             atualizado_por TEXT,
             atualizado_em  TEXT NOT NULL
         )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS painel_usuarios (
+            usuario        TEXT PRIMARY KEY,
+            nome           TEXT NOT NULL DEFAULT '',
+            senha_hash     TEXT NOT NULL,
+            nivel          TEXT NOT NULL,
+            trocar_senha   INTEGER NOT NULL DEFAULT 0,
+            criado_por     TEXT,
+            criado_em      TEXT NOT NULL,
+            atualizado_por TEXT,
+            atualizado_em  TEXT
+        )""")
     return conn
 
 
-def nomes_extras(cfg_painel: dict) -> list[str]:
-    return [e.get("usuario") for e in cfg_painel.get("usuarios_extras") or [] if e.get("usuario")]
+def _agora() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def telas_do_usuario(usuario: str, cfg_painel: dict, conn=None):
-    """Lista de telas do usuario, ou None quando ele segue o nivel do
-    config. So login nominal (usuarios_extras) pode ser personalizado:
-    os pares fixos (total, operador...) nunca."""
-    if not usuario or usuario not in nomes_extras(cfg_painel):
+def _telas_da_linha(r):
+    return [c for c in json.loads(r["telas"]) if c in CHAVES] if r["telas"] is not None else None
+
+
+def conta(usuario: str, conn=None):
+    """Login nominal com nivel, nome, trocar_senha e telas (None = segue o
+    nivel), ou None quando nao e login nominal (par fixo do config)."""
+    if not usuario:
         return None
     proprio = conn is None
     conn = conn or conectar()
     try:
-        linha = conn.execute("SELECT telas FROM painel_acesso_telas WHERE usuario = ?", (usuario,)).fetchone()
+        r = conn.execute(
+            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, t.telas FROM painel_usuarios u "
+            "LEFT JOIN painel_acesso_telas t ON t.usuario = u.usuario WHERE u.usuario = ?", (usuario,)).fetchone()
     finally:
         if proprio:
             conn.close()
-    if linha is None:
+    if r is None:
         return None
-    return [c for c in json.loads(linha["telas"]) if c in CHAVES]
+    return {"usuario": r["usuario"], "nome": r["nome"], "nivel": r["nivel"], "trocar_senha": bool(r["trocar_senha"]),
+            "senha_hash": r["senha_hash"], "telas": _telas_da_linha(r)}
 
 
-def listar(cfg_painel: dict, conn) -> list[dict]:
-    """Um item por login nominal, na ordem do config."""
-    linhas = {r["usuario"]: r for r in conn.execute("SELECT * FROM painel_acesso_telas")}
+def conferir_senha(usuario: str, senha: str, conn=None):
+    """Conta do login nominal se a senha bate, senao None."""
+    c = conta(usuario, conn)
+    if c is None or not senha or not check_password_hash(c["senha_hash"], senha):
+        return None
+    return c
+
+
+def telas_do_usuario(usuario: str, conn=None):
+    """Lista de telas do usuario, ou None quando ele segue o nivel. So
+    login nominal pode ser personalizado: os pares fixos (total,
+    operador...) nunca."""
+    c = conta(usuario, conn)
+    return c["telas"] if c else None
+
+
+def listar(conn) -> list[dict]:
+    """Um item por login nominal, em ordem de nome."""
     resultado = []
-    for extra in cfg_painel.get("usuarios_extras") or []:
-        u = extra.get("usuario")
-        if not u:
-            continue
-        r = linhas.get(u)
+    for r in conn.execute(
+            "SELECT u.*, t.telas, t.atualizado_por AS telas_por, t.atualizado_em AS telas_em FROM painel_usuarios u "
+            "LEFT JOIN painel_acesso_telas t ON t.usuario = u.usuario "
+            "ORDER BY lower(COALESCE(NULLIF(u.nome, ''), u.usuario))"):
+        ultimo = max((r["atualizado_em"] or "", r["atualizado_por"] or ""), (r["telas_em"] or "", r["telas_por"] or ""))
         resultado.append({
-            "usuario": u,
-            "nivel_config": extra.get("nivel") or "",
-            "telas": [c for c in json.loads(r["telas"]) if c in CHAVES] if r else None,
-            "atualizado_por": r["atualizado_por"] if r else None,
-            "atualizado_em": r["atualizado_em"] if r else None,
+            "usuario": r["usuario"],
+            "nome": r["nome"],
+            "nivel": r["nivel"],
+            "trocar_senha": bool(r["trocar_senha"]),
+            "telas": _telas_da_linha(r),
+            "atualizado_por": ultimo[1] or None,
+            "atualizado_em": ultimo[0] or None,
         })
     return resultado
 
 
-def salvar(conn, usuario: str, telas, por: str, cfg_painel: dict) -> None:
-    """telas=None apaga a linha (volta ao nivel do config). Lista vazia
-    vale: o usuario fica sem tela nenhuma (nao consegue entrar)."""
-    if usuario not in nomes_extras(cfg_painel):
-        raise ValueError("Só login nominal (usuarios_extras do config) pode ter acesso personalizado.")
+def _validar_senha(senha: str) -> None:
+    if len(senha or "") < SENHA_MINIMA:
+        raise ValueError(f"A senha precisa ter pelo menos {SENHA_MINIMA} caracteres.")
+
+
+def _validar_nivel(nivel: str) -> None:
+    if nivel not in NIVEIS:
+        raise ValueError(f"Nível desconhecido: {nivel}")
+
+
+def criar(conn, usuario: str, nome: str, nivel: str, senha: str, por: str, logins_fixos) -> str:
+    """Login novo com senha provisoria: a pessoa troca no 1o acesso.
+    logins_fixos = os pares do config (usuario, usuario_operador...), que
+    nao podem ser repetidos. Devolve o login normalizado."""
+    usuario = (usuario or "").strip().lower()
+    if not _PADRAO_LOGIN.match(usuario):
+        raise ValueError("Login inválido: use de 2 a 40 letras minúsculas, números, ponto, hífen ou _.")
+    if usuario in logins_fixos or conta(usuario, conn):
+        raise ValueError(f"Já existe o login {usuario}.")
+    _validar_nivel(nivel)
+    _validar_senha(senha)
+    conn.execute(
+        "INSERT INTO painel_usuarios (usuario, nome, senha_hash, nivel, trocar_senha, criado_por, criado_em) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?)",
+        (usuario, (nome or "").strip(), generate_password_hash(senha), nivel, por, _agora()))
+    conn.commit()
+    return usuario
+
+
+def _exigir_outro(conn, usuario: str, por: str) -> None:
+    if not conta(usuario, conn):
+        raise ValueError("Login nominal não encontrado.")
     if usuario == por:
         raise ValueError("Você não pode mudar o seu próprio acesso.")
+
+
+def editar(conn, usuario: str, nome: str, nivel: str, por: str) -> None:
+    _exigir_outro(conn, usuario, por)
+    _validar_nivel(nivel)
+    conn.execute("UPDATE painel_usuarios SET nome = ?, nivel = ?, atualizado_por = ?, atualizado_em = ? WHERE usuario = ?",
+                 ((nome or "").strip(), nivel, por, _agora(), usuario))
+    conn.commit()
+
+
+def redefinir_senha(conn, usuario: str, senha: str, por: str) -> None:
+    """Senha provisoria dada por outro total: troca obrigatoria no proximo acesso."""
+    _exigir_outro(conn, usuario, por)
+    _validar_senha(senha)
+    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 1, atualizado_por = ?, atualizado_em = ? "
+                 "WHERE usuario = ?", (generate_password_hash(senha), por, _agora(), usuario))
+    conn.commit()
+
+
+def trocar_senha(conn, usuario: str, nova: str) -> None:
+    """A propria pessoa troca a provisoria pela dela."""
+    c = conta(usuario, conn)
+    if c is None:
+        raise ValueError("Login nominal não encontrado.")
+    _validar_senha(nova)
+    if check_password_hash(c["senha_hash"], nova):
+        raise ValueError("A senha nova precisa ser diferente da provisória.")
+    conn.execute("UPDATE painel_usuarios SET senha_hash = ?, trocar_senha = 0 WHERE usuario = ?",
+                 (generate_password_hash(nova), usuario))
+    conn.commit()
+
+
+def importar_do_config(conn, cfg_painel: dict) -> list[str]:
+    """Copia os usuarios_extras do config pra tabela, com a mesma senha
+    (sem troca obrigatoria). Quem ja existe na tabela fica como esta."""
+    importados = []
+    for extra in cfg_painel.get("usuarios_extras") or []:
+        u, s, n = extra.get("usuario"), extra.get("senha"), extra.get("nivel")
+        if not (u and s and n in NIVEIS) or conta(u, conn):
+            continue
+        conn.execute(
+            "INSERT INTO painel_usuarios (usuario, nome, senha_hash, nivel, trocar_senha, criado_por, criado_em) "
+            "VALUES (?, '', ?, ?, 0, 'config.yaml', ?)", (u, generate_password_hash(str(s)), n, _agora()))
+        importados.append(u)
+    conn.commit()
+    return importados
+
+
+def salvar(conn, usuario: str, telas, por: str) -> None:
+    """telas=None apaga a linha (volta ao nivel). Lista vazia vale: o
+    usuario fica sem tela nenhuma (nao consegue entrar)."""
+    _exigir_outro(conn, usuario, por)
     if telas is None:
         conn.execute("DELETE FROM painel_acesso_telas WHERE usuario = ?", (usuario,))
     else:
@@ -149,5 +278,5 @@ def salvar(conn, usuario: str, telas, por: str, cfg_painel: dict) -> None:
             "INSERT INTO painel_acesso_telas (usuario, telas, atualizado_por, atualizado_em) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(usuario) DO UPDATE SET telas = excluded.telas, atualizado_por = excluded.atualizado_por, "
             "atualizado_em = excluded.atualizado_em",
-            (usuario, json.dumps(ordenadas), por, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            (usuario, json.dumps(ordenadas), por, _agora()))
     conn.commit()
