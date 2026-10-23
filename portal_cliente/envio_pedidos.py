@@ -111,8 +111,9 @@ REGRAS_XML = {
     "nenhuma": "XML como veio",
     "emporio_quatro_estrelas": "Consolida os itens num único produto (Quatro Estrelas)",
     "muai": "Converte itens em KG pra caixas (Muai)",
+    "maiz": "Tira a barra do código do produto, 1/014 vira 1014 (Maíz Food)",
 }
-REGRAS_PADRAO_POR_STKKC = {98: "emporio_quatro_estrelas", 99: "muai"}
+REGRAS_PADRAO_POR_STKKC = {98: "emporio_quatro_estrelas", 99: "muai", 93: "maiz"}
 
 
 class ErroEnvio(Exception):
