@@ -144,6 +144,17 @@ def _ids_nao_coletado(conn) -> set[int]:
         return set()  # tabela do app proprio ausente
 
 
+def _nomes_agentes(conn) -> dict[int, str]:
+    """Nome do agente pelo cadastro de usuarios da Vuupt. O nucleo so tira o
+    nome da planilha BD_MOTORISTAS: agente que saiu dela fica sem nome e sem
+    CPF na rota, e todos caiam num card "Sem motorista" so."""
+    try:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT id, nome FROM nucleo_cadastros_vuupt WHERE tipo = 'usuario' AND nome IS NOT NULL")}
+    except sqlite3.OperationalError:
+        return {}  # cadastro nasce no relatorio financeiro
+
+
 def eh_nao_coletado(failed_reason_id, motivo_id, motivo_texto, ids_nao_coletado: set[int]) -> bool:
     return (failed_reason_id == NAO_COLETADO_VUUPT
             or (motivo_id is not None and motivo_id in ids_nao_coletado)
@@ -163,21 +174,29 @@ _SQL_RETORNOS = """
 """
 
 
-def _pedido(row) -> dict:
+def _pedido(row, nomes_agentes: dict[int, str]) -> dict:
     parcial = row["situacao"] == "PARCIAL"
+    agente = row["agent_id"]
+    nome = (row["motorista_nome"] or nomes_agentes.get(agente)
+            or (f"Agente {agente}" if agente else "Sem motorista"))
     return {"parada_id": row["parada_id"], "rota_id": row["rota_id"], "service_id": row["service_id"],
             "codigo": row["codigo"], "destinatario": row["destinatario_nome"] or "",
             "embarcador": row["remetente_nome"] or "", "parcial": parcial,
             "caixas_esperadas": None if parcial else row["volume_caixas"],
             "motivo": row["motivo_texto"] or "", "baixa_em": row["completed_at"] or "",
             "dia_insucesso": row["dia_insucesso"], "rota_nome": row["rota_nome"] or "",
-            "motorista_nome": row["motorista_nome"] or "Sem motorista", "motorista_cpf": row["motorista_cpf"] or ""}
+            "motorista_nome": nome, "motorista_cpf": row["motorista_cpf"] or "", "agent_id": agente}
+
+
+def _chave_motorista(p: dict) -> str:
+    # Rota da Vuupt nao traz CPF: o agente separa motoristas de mesmo nome.
+    return p["motorista_cpf"] or (f"agente-{p['agent_id']}" if p["agent_id"] else p["motorista_nome"])
 
 
 def _agrupar(pedidos: list[dict], hoje: date) -> list[dict]:
     grupos: dict[str, dict] = {}
     for p in pedidos:
-        chave = p["motorista_cpf"] or p["motorista_nome"]
+        chave = _chave_motorista(p)
         g = grupos.setdefault(chave, {"chave": chave, "motorista_nome": p["motorista_nome"],
                                       "motorista_cpf": p["motorista_cpf"], "pedidos": []})
         g["pedidos"].append(p)
@@ -196,9 +215,10 @@ def _eh_lalamove(row, agent_ids_excluir) -> bool:
 
 def _retornos_pendentes(conn, hoje: date, dias: int, agent_ids_excluir=frozenset()) -> list[dict]:
     ids_nc = _ids_nao_coletado(conn)
+    nomes = _nomes_agentes(conn)
     desde = max((hoje - timedelta(days=dias)).isoformat(), inicio(conn))
     rows = conn.execute(_SQL_RETORNOS + " AND rr.id IS NULL").fetchall()
-    return [_pedido(r) for r in rows
+    return [_pedido(r, nomes) for r in rows
             if r["dia_insucesso"] and desde <= r["dia_insucesso"] <= hoje.isoformat()
             and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)
             and not _eh_lalamove(r, agent_ids_excluir)]
@@ -300,16 +320,17 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
         raise ErroRetorno("Pedido repetido na descarga.")
     paradas = _paradas_por_id(conn, ids)
     ids_nc = _ids_nao_coletado(conn)
+    nomes = _nomes_agentes(conn)
     validos = set(motivos_validos())
     linhas, motoristas = [], set()
     for item in itens:
         row = paradas.get(int(item["parada_id"]))
         if row is None or eh_nao_coletado(row["failed_reason_id"], row["motivo_id"], row["motivo_texto"], ids_nc):
             raise ErroRetorno("Pedido não está na lista de retornos.")
-        p = _pedido(row)
+        p = _pedido(row, nomes)
         if row["recebido_id"] is not None:
             raise ErroRetorno(f"{p['codigo']} já foi recebido.")
-        motoristas.add(p["motorista_cpf"] or p["motorista_nome"])
+        motoristas.add(_chave_motorista(p))
         caixas = item.get("caixas_recebidas")
         if caixas is None or caixas == "":
             raise ErroRetorno(f"Informe quantas caixas de {p['codigo']} voltaram.")

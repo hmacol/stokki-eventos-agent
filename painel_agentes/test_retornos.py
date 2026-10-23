@@ -261,6 +261,32 @@ class Revisao(Base):
         nomes = [g["motorista_nome"] for g in retornos.listar_pendentes(self.conn, HOJE, agent_ids_excluir={77})]
         self.assertEqual(nomes, ["João"])
 
+    def _rota_vuupt_sem_nome(self, agent_id, codigo):
+        """Rota da Vuupt cujo agente saiu da planilha BD_MOTORISTAS: o
+        sincronizador grava motorista_nome e motorista_cpf nulos."""
+        self.parada(f"tmp-{agent_id}", codigo)
+        self.conn.execute("UPDATE nucleo_rotas SET agent_id = ?, motorista_nome = NULL, motorista_cpf = NULL "
+                          "WHERE nome = ?", (agent_id, f"Rota tmp-{agent_id}"))
+        self.conn.commit()
+
+    def test_rota_vuupt_sem_nome_usa_cadastro_e_nao_junta_motoristas(self):
+        self.conn.execute("CREATE TABLE nucleo_cadastros_vuupt (tipo TEXT, id INTEGER, nome TEXT, dados_json TEXT, "
+                          "atualizado_em TEXT, PRIMARY KEY (tipo, id))")
+        self.conn.execute("INSERT INTO nucleo_cadastros_vuupt VALUES ('usuario', 48907, 'Renato Forte', '{}', '')")
+        self.conn.commit()
+        self._rota_vuupt_sem_nome(48907, "PS-1")
+        self._rota_vuupt_sem_nome(45594, "PS-2")
+        grupos = {g["motorista_nome"]: [p["codigo"] for p in g["pedidos"]]
+                  for g in retornos.listar_pendentes(self.conn, HOJE)}
+        self.assertEqual(grupos, {"Renato Forte": ["PS-1"], "Agente 45594": ["PS-2"]})
+
+    def test_descarga_nao_mistura_agentes_sem_nome(self):
+        self._rota_vuupt_sem_nome(48907, "PS-1")
+        self._rota_vuupt_sem_nome(45594, "PS-2")
+        ids = [p["parada_id"] for g in retornos.listar_pendentes(self.conn, HOJE) for p in g["pedidos"]]
+        with self.assertRaises(retornos.ErroRetorno):
+            self.receber([self.item(i) for i in ids])
+
     def test_alerta_atraso_grande_vira_varias_mensagens_sem_perder_nada(self):
         ontem = HOJE - timedelta(days=1)
         for n in range(120):
