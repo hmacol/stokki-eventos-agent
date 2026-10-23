@@ -89,7 +89,7 @@ from roteirizacao_dados import (
     fundir_sublotes_pequenos, macro_regiao_predominante_do_sublote, MACRO_GRANDE_SP,
     definir_coords_base, reparar_sublotes_por_horas, ROTA_TEMPO_MAXIMO_HORAS,
     injetar_janelas, carregar_janelas_confirmadas, definir_hora_saida_base,
-    start_at_rota, HORA_INICIO_ROTA, estimar_tempo_rota, extrair_volume_caixas, _horas_para_hhmm,
+    start_at_rota, start_at_na_hora, HORA_INICIO_ROTA, estimar_tempo_rota, extrair_volume_caixas, _horas_para_hhmm,
 )
 from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
@@ -658,6 +658,41 @@ def _frase_rotas_fracas(resumo: dict) -> str:
     return f" Rotas fracas: {', '.join(partes)}." if partes else ""
 
 
+def _rascunho_tarde(nome_rota: str, sublote: list[dict], hora_saida: float, data_alvo: date,
+                    gmaps_key: str | None, coords_base) -> dict:
+    """Rascunho da rota da tarde (Hugo, 23/10): sai na `hora_saida` (BRT decimal),
+    sem motorista sugerido e marcada com turno 'TARDE'. Não passa por rota fraca
+    nem entra na contagem de alocações."""
+    eh_viagem = classificar_rota_viagem(sublote, gmaps_key)
+    zona = None if eh_viagem else classificar_rota_zona(sublote, gmaps_key)
+    tipo_veiculo = classificar_tipo_veiculo_com_folga(*caixas_e_enderecos(sublote))
+    return {
+        "nome": nome_rota,
+        "particao": rotulo_carga(sublote),
+        "tipo_rota": "VIAGEM" if eh_viagem else "GRANDE_SP",
+        "zona": zona,
+        "tipo_veiculo": tipo_veiculo.codigo if tipo_veiculo else None,
+        "agent_id": None,
+        "vehicle_id": None,
+        "motorista_nome": None,
+        "start_location_base_id": BASE_LOCATION_ID,
+        "end_location_base_id": BASE_LOCATION_ID,
+        "start_at": start_at_na_hora(data_alvo, hora_saida),
+        "km_estimado": (calcular_km_estimado(sublote, coords_base[0], coords_base[1], gmaps_key)
+                        if coords_base else None),
+        "horas_estimadas": round(estimar_tempo_rota(sublote, gmaps_key, coords_base), 2),
+        "rota_fraca_motivo": None,
+        "recebeu_rota_fraca": False,
+        "turno": "TARDE",
+        "sublote": sublote,
+    }
+
+
+def _log_tarde(nome_rota: str, hora_saida: float, sublote: list[dict]) -> None:
+    logger.info(f"[TARDE] '{nome_rota}' sai {_horas_para_hhmm(hora_saida)} com {len(sublote)} pedido(s): "
+                f"{[s.get('code') for s in sublote]}")
+
+
 def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dict | None = None,
                               indice_inicial: int = 1,
                               contagem_alocacoes_dia: dict[int, int] | None = None,
@@ -789,6 +824,12 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
                        f"com {len(sublote)} pedido(s) -- motorista sugerido: "
                        f"{motorista.nome if motorista else 'SEM MOTORISTA [ALERTA_ALOCACAO]'}: "
                        f"{[s.get('code') for s in sublote]}")
+        # rota da tarde: depois das da manha desta particao, sem motorista
+        for sublote, hora_saida in plano.get("tarde") or []:
+            nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice}"
+            indice += 1
+            rascunhos.append(_rascunho_tarde(nome_rota, sublote, hora_saida, data_alvo, gmaps_key, coords_base))
+            _log_tarde(nome_rota, hora_saida, sublote)
     return rascunhos
 
 
@@ -981,6 +1022,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         rotas_criadas = 0
         pedidos_alocados = 0
         indice_global = 1
+        rotas_tarde = pedidos_tarde = 0
         modelos_vencedores: dict[str, str] = {}
         rascunhos_acumulados: list[dict] = []
         historico = carregar_historico_justica(data_alvo, config)
@@ -1119,6 +1161,42 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                 except Exception as e:
                     logger.error(f"Falha ao criar rota '{nome_rota}': {e}")
 
+        def _rotear_tarde(tarde: list[tuple[list[dict], float]]):
+            """Rotas da tarde (Hugo, 23/10): sem motorista, fora da contagem de
+            alocações e de rotas_sem_motorista, depois das da manhã."""
+            nonlocal rotas_criadas, pedidos_alocados, indice_global, rotas_tarde, pedidos_tarde
+            for sublote, hora_saida in tarde:
+                nome_rota = f"{PREFIXO_NOME_ROTA} - {data_alvo_br} - #{indice_global}"
+                indice_global += 1
+                _log_tarde(nome_rota, hora_saida, sublote)
+                if gerar_rascunho:
+                    rascunhos_acumulados.append(
+                        _rascunho_tarde(nome_rota, sublote, hora_saida, data_alvo, gmaps_key, coords_base))
+                elif modo_teste:
+                    logger.info(f"[TESTE] Criaria rota da tarde '{nome_rota}' sem motorista.")
+                else:
+                    try:
+                        rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
+                            token, nome_rota, start_at_na_hora(data_alvo, hora_saida), sublote,
+                            start_location_base_id=BASE_LOCATION_ID, end_location_base_id=BASE_LOCATION_ID,
+                            agent_id=None, vehicle_id=None,
+                        )
+                        if rota is None:
+                            logger.error(f"'{nome_rota}': sobrou 0 pedido(s) depois de remover conflitos "
+                                        f"({codigos_removidos}) -- nenhuma rota da tarde criada.")
+                            continue
+                        for s in sublote_criado:
+                            marcar_alocado(s["id"], rota["id"])
+                        agendar_documentacao(rota["id"], data_alvo, motivo=f"rota criada ({nome_rota})")
+                        sublote = sublote_criado
+                    except Exception as e:
+                        logger.error(f"Falha ao criar rota da tarde '{nome_rota}': {e}")
+                        continue
+                rotas_criadas += 1
+                pedidos_alocados += len(sublote)
+                rotas_tarde += 1
+                pedidos_tarde += len(sublote)
+
         planos = planejar_sublotes(servicos, coords_base, gmaps_key, data_alvo)
         resumo_fracas = _aplicar_segurar(planos, data_alvo, gmaps_key, modo_teste)
         try:
@@ -1132,6 +1210,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             modelos_vencedores[plano["label"]] = plano["modelo"]
             _rotear_particao(plano["label"], plano["sublotes"], plano["rotas_fracas"]["motivos"],
                              plano["rotas_fracas"]["receptoras"])
+            _rotear_tarde(plano.get("tarde") or [])
 
         if gerar_rascunho and rascunhos_acumulados:
             lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)
@@ -1148,6 +1227,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             "status": "ok",
             "detalhe": detalhe_criacao
                       + _frase_rotas_fracas(resumo_fracas)
+                      + (f" Rota(s) da tarde: {rotas_tarde} ({pedidos_tarde} pedido(s))." if rotas_tarde else "")
                       + (" Modelo do dia: " + "; ".join(f"{l}: {m}" for l, m in modelos_vencedores.items()) + "."
                          if modelos_vencedores else "")
                       + (f" [ALERTA_NIVEL] {len(cnpjs_pendentes_nivel)} CNPJ(s) de destinatário sem "

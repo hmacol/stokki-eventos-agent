@@ -197,6 +197,12 @@ def _conectar() -> sqlite3.Connection:
     if "recebeu_rota_fraca" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN recebeu_rota_fraca INTEGER NOT NULL DEFAULT 0")
 
+    # Migração 23/10: 'TARDE' marca a rota da tarde (pedido de janela tardia
+    # que não cabe na manhã; sem motorista sugerido), NULL = rota normal.
+    # O nome da rota não muda -- ver roteirizacao/rota_tarde.py.
+    if "turno" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN turno TEXT")
+
     conn.commit()
     return conn
 
@@ -309,7 +315,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     tipo_rota, zona, tipo_veiculo, agent_id, vehicle_id, motorista_nome,
     start_location_base_id, end_location_base_id, start_at,
     km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca
-    (bool; ausente = não recebeu), sublote (lista de serviços brutos da
+    (bool; ausente = não recebeu), turno ('TARDE'; ausente = rota normal), sublote (lista de serviços brutos da
     VUUPT).
 
     `lote_id` explícito ACRESCENTA os rascunhos a um lote já existente
@@ -333,14 +339,14 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                     data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                     agent_id, vehicle_id, motorista_nome,
                     start_location_base_id, end_location_base_id,
-                    start_at, km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_at, km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca, turno, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data_alvo.isoformat(), lote_id, r["nome"], r.get("particao"),
                 r.get("tipo_rota"), r.get("zona"), r.get("tipo_veiculo"), r.get("agent_id"), r.get("vehicle_id"),
                 r.get("motorista_nome"), r["start_location_base_id"], r.get("end_location_base_id"),
                 r["start_at"], r.get("km_estimado"), r.get("horas_estimadas"), r.get("rota_fraca_motivo"),
-                1 if r.get("recebeu_rota_fraca") else 0, STATUS_RASCUNHO,
+                1 if r.get("recebeu_rota_fraca") else 0, r.get("turno"), STATUS_RASCUNHO,
             ))
             rascunho_id = cursor.lastrowid
             for ordem, servico in enumerate(r["sublote"]):

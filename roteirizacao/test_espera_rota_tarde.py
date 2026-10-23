@@ -314,5 +314,45 @@ class PlanejarSublotesTardeTest(unittest.TestCase):
             self.assertTrue(rd.janela_respeitada(sub, coords_base=BASE), [s["code"] for s in sub])
 
 
+class EmissaoTardeTest(unittest.TestCase):
+    """roteirizar_para_rascunhos (botao Roteirizar) grava a rota da tarde sem motorista."""
+
+    def test_roteirizar_para_rascunhos_emite_tarde(self):
+        wilian = _wilian()
+        manha = [dict(p, id=i) for i, p in enumerate(paradas_rota_13()) if p["code"] != "#PS-42147-R1"]
+        plano = {"label": "Geral", "modelo": "X", "sublotes": [manha],
+                 "tarde": [([wilian], 13.25)],
+                 "rotas_fracas": {"juntadas": 0, "motivos": {}, "receptoras": set()}}
+        historico = mock.Mock()
+        historico.parametros_alocacao.return_value = {}
+        selecionar = mock.Mock(return_value=None)
+        patches = dict(
+            CatalogoMotoristas=mock.Mock(**{"carregar.return_value": mock.Mock(motoristas=[])}),
+            carregar_ajustes_dia=mock.Mock(return_value={}), carregar_niveis=mock.Mock(return_value={}),
+            carregar_horarios=mock.Mock(return_value={}), carregar_ajustes_manuais=mock.Mock(return_value={}),
+            carregar_tipos_carga_por_sender=mock.Mock(return_value={}), _preparar_janelas=mock.Mock(),
+            geocodificar=mock.Mock(return_value=None), planejar_sublotes=mock.Mock(return_value=[plano]),
+            carregar_historico_justica=mock.Mock(return_value=historico),
+            classificar_rota_viagem=mock.Mock(return_value=False), classificar_rota_zona=mock.Mock(return_value=None),
+            estimar_tempo_rota=mock.Mock(return_value=1.0), selecionar_motorista_equitativo=selecionar,
+        )
+        contagem = {}
+        with mock.patch.multiple(crd, **patches):
+            rascunhos = crd.roteirizar_para_rascunhos(manha + [wilian], date(2026, 10, 23),
+                                                      config={"google_maps": {}},
+                                                      contagem_alocacoes_dia=contagem)
+        self.assertEqual(len(rascunhos), 2)
+        self.assertIsNone(rascunhos[0].get("turno"))
+        tarde = rascunhos[1]
+        self.assertEqual(tarde["turno"], "TARDE")
+        self.assertEqual(tarde["start_at"], "2026-10-23T16:15:00Z")
+        self.assertIsNone(tarde["agent_id"])
+        self.assertIsNone(tarde["vehicle_id"])
+        self.assertIsNone(tarde["rota_fraca_motivo"])
+        self.assertEqual(tarde["nome"], "Planejamento - 23/10/2026 - #2")
+        self.assertEqual(tarde["sublote"], [wilian])
+        self.assertEqual(selecionar.call_count, 1)  # so a rota da manha
+
+
 if __name__ == "__main__":
     unittest.main()
