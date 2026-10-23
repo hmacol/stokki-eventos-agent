@@ -129,6 +129,13 @@ class PesoEsperaTest(unittest.TestCase):
         self.assertIsNone(rd.hora_saida_de_start_at("lixo"))
         self.assertEqual(rd.start_at_rota(date(2026, 10, 23)), "2026-10-23T09:00:00Z")
 
+    def test_start_at_depois_das_21_vira_o_dia(self):
+        # 21:30 BRT = 00:30 UTC do dia seguinte (antes saia "T24:30:00Z")
+        self.assertEqual(rd.start_at_na_hora(date(2026, 10, 23), 21.5), "2026-10-24T00:30:00Z")
+        self.assertEqual(rd.hora_saida_de_start_at("2026-10-24T00:30:00Z"), 21.5)
+        self.assertIsNone(rd.hora_saida_de_start_at("2026-10-23T25:00:00Z"))
+        self.assertIsNone(rd.hora_saida_de_start_at("2026-10-23T10:60:00Z"))
+
 
 
 def _jan(code, lat, lng, ini, fim):
@@ -263,6 +270,27 @@ class RotaTardeTest(unittest.TestCase):
                                       distancia_maxima_km=15)
         self.assertEqual(len(rotas), 1)
 
+    def test_tarde_resequenciar_nao_quebra_janela(self):
+        # A (13:00) e B (13:45) cabem juntos na ordem A, B saindo 12:15. Se o
+        # resequenciamento final poe B primeiro (1a parada tardia nao e a de
+        # janela mais cedo), a saida vira 12:00 e a espera antes de B reprova:
+        # fica a ordem e a saida que passaram no `cabe`.
+        a = _jan("A", -23.5489, -46.6388, "13:00", "18:00")
+        b = _jan("B", -23.5800, -46.6388, "13:45", "18:00")
+        chamadas = []
+
+        def ordenar_falso(sub, *args, **kwargs):
+            chamadas.append(1)
+            return list(sub) if len(chamadas) == 1 else list(reversed(sub))
+
+        with mock.patch.object(rt, "ordenar_com_janelas", side_effect=ordenar_falso):
+            rotas = rt.montar_rotas_tarde([a, b], BASE, None, tamanho_maximo=15, volume_maximo=100)
+        self.assertEqual(len(rotas), 1)
+        sub, saida = rotas[0]
+        self.assertEqual([s["code"] for s in sub], ["A", "B"])
+        self.assertEqual(saida, rt.hora_saida_tarde([a, b], BASE, None))
+        self.assertTrue(rd.janela_respeitada(sub, coords_base=BASE, hora_saida=saida))
+
     def test_tardio_sem_coordenada_fica(self):
         manha_a = _jan("A", -23.4935, -46.6645, "08:00", "18:00")
         sem = {"code": "S", "_nivel_dificuldade": 1, "_janela_inicio": "15:00",
@@ -311,6 +339,29 @@ class IncrementoTardeTest(unittest.TestCase):
     def test_rota_info_hora_saida_do_start_at(self):
         # start_at da Vuupt vem em UTC sem fuso: 17:15 UTC = 14:15 BRT
         self.assertEqual(rd.hora_saida_de_start_at("2026-10-23 17:15:00"), 14.25)
+
+    def test_rota_info_hora_saida_so_da_tarde(self):
+        # R9: rota da manha (start_at = HORA_SAIDA_BASE, ou ate 1 min depois)
+        # fica com None, pra valer um hora_saida_base configurado.
+        import incrementar_rotas as inc
+        self.assertEqual(inc._hora_saida_da_rota("2026-10-23 17:15:00"), 14.25)
+        self.assertIsNone(inc._hora_saida_da_rota("2026-10-23 09:00:00"))
+        self.assertIsNone(inc._hora_saida_da_rota("2026-10-23T09:01:00Z"))
+        self.assertIsNone(inc._hora_saida_da_rota(None))
+        with mock.patch.object(rd, "HORA_SAIDA_BASE", 10.0):
+            self.assertIsNone(inc._hora_saida_da_rota("2026-10-23 09:00:00"))
+            self.assertEqual(inc._hora_saida_da_rota("2026-10-23 13:30:00"), 10.5)
+
+    def test_resequenciar_incremento_usa_saida_da_tarde(self):
+        import incrementar_rotas as inc
+        sub = [_wilian(), _jan("outro", -23.5780, -46.6440, "14:30", "18:00")]
+        with mock.patch.object(inc, "ordenar_com_janelas", return_value=sub) as ocj, \
+                mock.patch.object(inc, "ordenar_2opt", return_value=sub) as o2:
+            inc._ordenar_rota_incrementada(sub, BASE, None, 14.25)
+            ocj.assert_called_once_with(sub, BASE[0], BASE[1], None, hora_saida=14.25)
+            o2.assert_not_called()
+            inc._ordenar_rota_incrementada(sub, BASE, None, None)
+            o2.assert_called_once_with(sub, BASE[0], BASE[1], None)
 
 
 class PlanejarSublotesTardeTest(unittest.TestCase):

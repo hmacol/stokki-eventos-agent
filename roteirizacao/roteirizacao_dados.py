@@ -28,7 +28,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -957,8 +957,9 @@ def start_at_na_hora(data_alvo, hora_brt: float) -> str:
     """start_at em UTC ("YYYY-MM-DDTHH:MM:SSZ") pra `hora_brt` (horas
     decimais em Brasília, UTC-3): 13.25 -> "T16:15:00Z". Mesma conta de
     start_at_rota, que chama esta com HORA_INICIO_ROTA."""
-    total = int(round((hora_brt + 3.0) * 60))
-    return f"{data_alvo.strftime('%Y-%m-%d')}T{total // 60:02d}:{total % 60:02d}:00Z"
+    minutos = int(round((hora_brt + 3.0) * 60))
+    utc = datetime.combine(data_alvo, time()) + timedelta(minutes=minutos)
+    return utc.strftime("%Y-%m-%dT%H:%M:00Z")
 
 
 def hora_saida_de_start_at(start_at: str | None) -> float | None:
@@ -968,6 +969,8 @@ def hora_saida_de_start_at(start_at: str | None) -> float | None:
     m = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$",
                  str(start_at or "").strip())
     if not m:
+        return None
+    if int(m.group(1)) > 23 or int(m.group(2)) > 59:
         return None
     hora = int(m.group(1)) + int(m.group(2)) / 60.0
     fuso = m.group(3)
@@ -1253,7 +1256,7 @@ def janela_respeitada(sublote: list[dict], api_key: str | None = None,
     # Espera antes de janela tardia (abre >= HORA_CORTE_TARDE): a rota
     # deveria sair mais tarde em vez de esperar parada (spec 23/10, 5.3).
     if (ROTA_TARDE_ATIVA
-            and sim["espera_tardia_h"] > ESPERA_MAXIMA_ROTA_HORAS
+            and sim.get("espera_tardia_h", 0.0) > ESPERA_MAXIMA_ROTA_HORAS
             and exige_orcamento_horas(sublote, api_key, coords_base)):
         return False
     return True
