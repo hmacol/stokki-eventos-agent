@@ -137,7 +137,9 @@ def criar(conn, dados: dict, origem: str, por: str) -> dict:
     return buscar(conn, cur.lastrowid)
 
 
-def atualizar(conn, tid: int, mudancas: dict, por: str) -> dict:
+def atualizar(conn, tid: int, mudancas: dict, por: str, commit: bool = True) -> dict:
+    """commit=False: quem chama fecha a transacao (consulta_transportadora
+    grava a mudanca e o encerramento da pendencia juntos)."""
     atual = buscar(conn, tid)
     if atual is None:
         raise ErroCadastro(f"Transportadora {tid} nao existe.")
@@ -158,7 +160,8 @@ def atualizar(conn, tid: int, mudancas: dict, por: str) -> dict:
         conn.execute(
             "INSERT INTO transportadoras_historico (transportadora_id, quando, quem, campo, antes, depois) "
             "VALUES (?,?,?,?,?,?)", (tid, agora, por, c, atual[c], v))
-    conn.commit()
+    if commit:
+        conn.commit()
     return buscar(conn, tid)
 
 

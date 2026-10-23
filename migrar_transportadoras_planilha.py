@@ -157,7 +157,8 @@ def pre_cadastrar(conn, db: Path, dias: int = 60, modo_teste: bool = False) -> l
 
 def main():
     for s in (sys.stdout, sys.stderr):
-        s.reconfigure(encoding="utf-8")
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--modo-teste", action="store_true", help="importa em banco em memoria, nao escreve no --db")
     ap.add_argument("--comparar", action="store_true", help="compara planilha x banco; exit 1 se houver diferenca")
@@ -168,9 +169,18 @@ def main():
     a = ap.parse_args()
 
     if a.pre_cadastro:
-        conn = cad.conectar(a.db)
-        criadas = pre_cadastrar(conn, a.db, modo_teste=a.modo_teste)
-        conn.close()
+        if a.modo_teste:  # so leitura: nao cria schema nem linha no --db
+            conn = sqlite3.connect(f"file:{a.db.as_posix()}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+        else:
+            conn = cad.conectar(a.db)
+        try:
+            criadas = pre_cadastrar(conn, a.db, modo_teste=a.modo_teste)
+        except (FileNotFoundError, sqlite3.OperationalError) as e:
+            print(f"pre-cadastro abortado: {e} (rodar antes migrar_transportadoras_planilha.py)")
+            sys.exit(1)
+        finally:
+            conn.close()
         print(f"{'[modo-teste] iriam ser criadas' if a.modo_teste else 'criadas'}: {len(criadas)}")
         for n in criadas:
             print(f"  {n}")

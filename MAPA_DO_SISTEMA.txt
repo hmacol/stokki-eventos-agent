@@ -412,6 +412,8 @@
  redespacho_confirmacao.py     Segura pedido fora da área sem redespacho.
  consulta_transportadora.py  Transportadora desconhecida: cadastro PENDENTE, pedidos parados e consulta por
                                embarcador (tabelas transportadora_pedidos_parados e transportadora_consultas).
+                               Toda saida de PENDENTE (link, botoes ou Situacao na ficha) passa por
+                               encerrar_pendencia; pipeline libera o parado que a rodada nao segurou mais.
  lembrar_consultas_transportadora.py  Seg-sex 08h (stokki-consulta-transportadora.timer): lembra o embarcador
                                1x/dia e avisa a equipe (grupo Alertas, 1x) após 2 dias úteis ou sem contato.
  transportadoras_cadastro.py   Cadastro de transportadoras no dados.db (tabelas transportadoras e
@@ -596,7 +598,8 @@
 
  Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx), tabela
  `interno` e, p/ transportadoras, a tabela `transportadoras` do dados.db
- (tela /transportadoras; todo leitor usa carregar_do_banco).
+ (tela /transportadoras; todo leitor usa carregar_do_banco). Tabela sem
+ nenhuma ATIVA = FileNotFoundError (pipeline para, como sem planilha).
 
  embarcadores.py            Identificação do embarcador.
  endereco.py                Endereço final: LLM > Local de Entrega >

@@ -301,9 +301,17 @@
 - [ ] **Step 5: Commit** `Transportadoras: pre-cadastro das transportadoras desconhecidas dos ultimos 60 dias`.
 
 **Roteiro de virada (só quando o Hugo pedir deploy; seguir a skill deploy-vps):**
-1. Conferir na VPS: `sqlite3` read-only — existe `transportadoras` antiga? `grep -rn "transportadoras" /opt/agente-importacao-stokki /opt/confirmacao-motoristas` e coletor do freshhub — alguém lê a tabela pelo nome? Se ler, parar e avisar o Hugo.
-2. Deploy com `consulta_transportadora.ativo: false`; `sudo -u www-data venv/bin/python migrar_transportadoras_planilha.py` e depois `--comparar` → zero diferenças (senão parar).
-3. Reiniciar `painel-agentes` e `portal-cliente`; copiar o timer, `daemon-reload`, `enable --now stokki-consulta-transportadora.timer`.
-4. `pipeline.py --modo-teste` antes e depois: mesmas ações por pedido.
-5. `--pre-cadastro`; Hugo/equipe classificam a aba Pendentes.
-6. Hugo autoriza → `ativo: true` no config da VPS. Conferir a primeira consulta real (e-mail, WhatsApp, resposta, pedido liberado na rodada seguinte) com a skill conferir-rodada.
+
+Os leitores (pipeline, painel, portal, romaneio...) passam a ler a tabela no `git pull`, não num flag. Por isso a prova de equivalência e a carga rodam **antes** do pull, a partir de uma cópia temporária do código, e só depois o código novo entra em `/opt/stokki-eventos`. Sem a carga, `carregar_do_banco` levanta `FileNotFoundError` ("cadastro de transportadoras vazio") e o pipeline para com alerta, igual a planilha ausente: nunca roteiriza com catálogo vazio.
+
+1. **Antes do pull**, conferir na VPS: `sqlite3` read-only — existe `transportadoras` antiga (schema de jun/26, coluna `classificacao`)? `grep -rn "transportadoras" /opt/agente-importacao-stokki /opt/confirmacao-motoristas` e coletor do freshhub — alguém lê a tabela pelo nome? Se ler, parar e avisar o Hugo. (A carga do passo 3 já renomeia a antiga para `transportadoras_antiga_jun26`, e depois do pull qualquer página do painel faria o mesmo: o selo do menu chama `transportadoras_cadastro.conectar`.)
+2. **Prova antes do deploy, numa cópia do banco** (nada muda em produção):
+   - `git -C /opt/stokki-eventos fetch` e `git -C /opt/stokki-eventos archive <commit do ramo> | tar -x -C /tmp/transp-virada` (pasta nova; `chown -R www-data:www-data /tmp/transp-virada`).
+   - `sqlite3 /opt/stokki-eventos/dados/dados.db ".backup /tmp/transp-virada/dados-copia.db"`.
+   - De `/opt/stokki-eventos`, como www-data, com o venv de produção: `venv/bin/python /tmp/transp-virada/migrar_transportadoras_planilha.py --db /tmp/transp-virada/dados-copia.db --planilha /opt/stokki-eventos/dados/BD_TRANSPORTADORAS.xlsx`, depois o mesmo com `--comparar` → **zero diferenças** (senão parar e avisar o Hugo). Opcional: `--pre-cadastro --modo-teste` na cópia, pra ver a lista que vai nascer PENDENTE.
+3. **Carga em produção, ainda antes do pull:** o mesmo script da pasta temporária com `--db /opt/stokki-eventos/dados/dados.db` (como www-data) e de novo `--comparar` no banco de produção → zero diferenças. O código antigo não lê a tabela nova, então criar a tabela agora não muda nada no ar.
+4. `pipeline.py --modo-teste` com o código antigo (guardar o log: ação por pedido).
+5. Deploy com `consulta_transportadora.ativo: false`: `git pull --no-rebase`, `chown`, reiniciar `painel-agentes` e `portal-cliente`; copiar o timer, `daemon-reload`, `enable --now stokki-consulta-transportadora.timer`.
+6. `pipeline.py --modo-teste` de novo com o código novo: mesmas ações por pedido que no passo 4.
+7. `--pre-cadastro` (só depois da carga); Hugo/equipe classificam a aba Pendentes. Apagar `/tmp/transp-virada`.
+8. Hugo autoriza → `ativo: true` no config da VPS. Conferir a primeira consulta real (e-mail, WhatsApp, resposta, pedido liberado na rodada seguinte) com a skill conferir-rodada.

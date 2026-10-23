@@ -1481,12 +1481,15 @@ def api_transportadora_criar():
 @requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
 @exige_mesma_origem
 def api_transportadora_atualizar(tid):
+    """Edicao pela ficha. Tirar de PENDENTE (ATIVA/INATIVA) por aqui tambem
+    fecha a consulta e libera os parados (canal 'tela')."""
+    import consulta_transportadora as ct
     import transportadoras_cadastro as tc
     import transportadoras_tela as tt
     conn = tt.conectar()
     try:
-        return jsonify(tc.atualizar(conn, tid, tt.so_campos(_corpo_dict()),
-                                    _autor_transportadoras()))
+        return jsonify(ct.atualizar_cadastro(conn, tid, tt.so_campos(_corpo_dict()),
+                                             _autor_transportadoras(), "tela"))
     except tc.ErroCadastro as e:
         return jsonify({"erro": str(e)}), 400
     finally:

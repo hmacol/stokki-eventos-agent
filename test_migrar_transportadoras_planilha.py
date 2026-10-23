@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
+import io
+import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import openpyxl
 
@@ -82,6 +86,38 @@ class TestMigrar(unittest.TestCase):
         tabelas = self.conn.execute("SELECT name FROM sqlite_master WHERE name IN "
                                     "('transportadora_consultas','transportadora_pedidos_parados')").fetchall()
         self.assertEqual(tabelas, [])
+
+    def _main(self, *args):
+        saida = io.StringIO()
+        with mock.patch("sys.argv", ["migrar", *args]), redirect_stdout(saida):
+            try:
+                mig.main()
+                codigo = 0
+            except SystemExit as e:
+                codigo = e.code
+        return codigo, saida.getvalue()
+
+    def test_pre_cadastro_modo_teste_nao_cria_tabela_no_db(self):
+        db = self.pasta / "sem_tabela.db"
+        c = sqlite3.connect(db)
+        c.execute("CREATE TABLE batimento_pedidos (transportadora TEXT, visto_em TEXT)")
+        c.commit()
+        c.close()
+        codigo, saida = self._main("--pre-cadastro", "--modo-teste", "--db", str(db))
+        self.assertEqual(codigo, 1)
+        self.assertIn("migrar_transportadoras_planilha.py", saida)
+        c = sqlite3.connect(db)
+        tabelas = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        c.close()
+        self.assertEqual(tabelas, ["batimento_pedidos"])
+
+    def test_pre_cadastro_modo_teste_so_lista(self):
+        mig.importar(self.xlsx, self.conn)
+        self._batimento("NOVA TRANSP 11222333000144")
+        codigo, saida = self._main("--pre-cadastro", "--modo-teste", "--db", str(self.db))
+        self.assertEqual(codigo, 0)
+        self.assertIn("NOVA TRANSP", saida)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transportadoras WHERE situacao='PENDENTE'").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

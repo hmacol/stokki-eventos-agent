@@ -59,6 +59,7 @@ class CadastroTest(unittest.TestCase):
     def test_pendente_e_inativa_fora_do_catalogo(self):
         tc.criar(self.conn, {"nome": "Pendente Express", "situacao": "PENDENTE"}, "AUTO", "teste")
         tc.criar(self.conn, {"nome": "Inativa Cargas", "tipo": "ENTREGA", "situacao": "INATIVA"}, "MANUAL", "teste")
+        tc.criar(self.conn, {"nome": "Ativa Log", "tipo": "ENTREGA", "situacao": "ATIVA"}, "MANUAL", "teste")
         cat = CatalogoTransportadoras.carregar_do_banco(self.db)
         self.assertTrue(cat.resolver("Pendente Express").desconhecida)
         self.assertTrue(cat.resolver("Inativa Cargas").desconhecida)
@@ -70,6 +71,24 @@ class CadastroTest(unittest.TestCase):
             CatalogoTransportadoras.carregar_do_banco(vazio)
         with self.assertRaises(FileNotFoundError):
             CatalogoTransportadoras.carregar_do_banco(Path(self._dir.name) / "naoexiste.db")
+
+    def test_sem_nenhuma_ativa_levanta_filenotfound(self):
+        # Tabela criada (conectar) mas sem a carga da planilha: catalogo vazio
+        # mudaria a roteirizacao (RETIRADA/TERCEIROS viram desconhecidas).
+        with self.assertRaises(FileNotFoundError) as cm:
+            CatalogoTransportadoras.carregar_do_banco(self.db)
+        self.assertIn("migrar_transportadoras_planilha.py", str(cm.exception))
+        tc.criar(self.conn, {"nome": "So Pendente", "situacao": "PENDENTE"}, "AUTO", "teste")
+        with self.assertRaises(FileNotFoundError):
+            CatalogoTransportadoras.carregar_do_banco(self.db)
+
+    def test_atualizar_sem_commit_desfaz_no_rollback(self):
+        row = tc.criar(self.conn, {"nome": "Beta", "tipo": "ENTREGA", "situacao": "ATIVA"}, "MANUAL", "ana")
+        tc.atualizar(self.conn, row["id"], {"email": "x@y.com"}, "bia", commit=False)
+        self.assertTrue(self.conn.in_transaction)
+        self.conn.rollback()
+        self.assertEqual(tc.buscar(self.conn, row["id"])["email"], "")
+        self.assertEqual(tc.historico(self.conn, row["id"]), [])
 
     def test_terceiros_sem_endereco_recusado(self):
         with self.assertRaises(tc.ErroCadastro):

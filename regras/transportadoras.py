@@ -313,7 +313,8 @@ class CatalogoTransportadoras:
 
     @classmethod
     def carregar_do_banco(cls, db_path: Path) -> "CatalogoTransportadoras":
-        """Carrega o catálogo da tabela transportadoras (só situacao='ATIVA')."""
+        """Carrega o catálogo da tabela transportadoras (só situacao='ATIVA').
+        FileNotFoundError se o banco, a tabela ou as linhas ATIVA faltarem."""
         db_path = Path(db_path)
         if not db_path.exists():
             raise FileNotFoundError(f"Banco não encontrado: {db_path}")
@@ -326,6 +327,13 @@ class CatalogoTransportadoras:
             raise FileNotFoundError(f"Tabela transportadoras ausente em {db_path}: {e}")
         finally:
             conn.close()
+        if not linhas:
+            # Tabela criada sem a carga da planilha: catalogo vazio faria toda
+            # transportadora virar desconhecida (RETIRADA importada como entrega,
+            # TERCEIROS no endereco do destinatario). Mesmo erro de "sem planilha".
+            raise FileNotFoundError(
+                f"cadastro de transportadoras vazio (0 ATIVA) em {db_path} -- "
+                f"rodar migrar_transportadoras_planilha.py")
 
         entradas = []
         for r in linhas:

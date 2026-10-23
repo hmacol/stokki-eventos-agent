@@ -467,13 +467,33 @@ def _registrar_e_avisar_transportadora(codigo_ps, detalhe, nome, cnpj, stkkc_id,
                                                          lembrete=False, modo_teste=False)
                 logger.info(f"  {codigo_ps}: aviso da transportadora {nome}: {r}")
         except Exception as e:
-            logger.warning(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
-                           f"(pedido segue segurado): {e}")
+            logger.error(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                         f"(pedido segue segurado): {e}")
         finally:
             conn.close()
     except Exception as e:
-        logger.warning(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
-                       f"(pedido segue segurado): {e}")
+        logger.error(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                     f"(pedido segue segurado): {e}")
+
+
+def _liberar_parado_transportadora(res: dict, config_app: dict | None, modo_teste: bool):
+    """Pedido processado sem erro e NAO segurado nesta rodada (transportadora
+    agora conhecida, ja na Vuupt...): se estava em transportadora_pedidos_parados,
+    libera, senao o embarcador seguiria lembrado dele. Desligado ou modo teste:
+    nada. Nunca levanta."""
+    if modo_teste or res.get("erro") or res.get("acao") == "aguardando_transportadora":
+        return
+    if not config_consulta(config_app or {})["ativo"]:
+        return
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            if consulta_transportadora.liberar_pedido(conn, res["codigo_ps"]):
+                logger.info(f"  {res['codigo_ps']}: saiu da lista de parados por transportadora nova.")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"  {res.get('codigo_ps')}: falha ao liberar parado de transportadora: {e}")
 
 
 # ── Processamento de um pedido ─────────────────────────────────────────────────
@@ -1246,6 +1266,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         res["fonte_coleta"] = (
             linha.get("_fonte", "manual") if isinstance(linha, dict) else "manual"
         )
+        _liberar_parado_transportadora(res, config, modo_teste)
         resultados.append(res)
 
         if dono_trava and i % 20 == 0:

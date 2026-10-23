@@ -96,6 +96,13 @@ class LembrarTest(unittest.TestCase):
         self.assertEqual(self._rodar(TERCA), {"lembretes": 0, "alertas": 0})
         self.assertEqual(self.avisos, [])
 
+    def test_transportadora_que_saiu_de_pendente_nao_lembra_nem_alerta(self):
+        # Situacao mudada por fora, consulta e parado ainda abertos: nada sai.
+        self.conn.execute("UPDATE transportadoras SET situacao='ATIVA', tipo='ENTREGA'")
+        self.conn.commit()
+        self.assertEqual(self._rodar(TERCA), {"lembretes": 0, "alertas": 0})
+        self.assertEqual((self.avisos, self.alertas), ([], []))
+
     def test_falha_numa_consulta_nao_derruba_as_outras(self):
         ct.registrar_desconhecida(self.conn, "BETA", "", "PS-9", "e2", 2)
         chamadas = []

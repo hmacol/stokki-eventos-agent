@@ -160,6 +160,28 @@ class TestTelaTransportadoras(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("ja respondida", r.get_json()["erro"])
 
+    def test_ficha_tira_de_pendente_e_encerra_a_consulta(self):
+        # Mudar a Situacao pela ficha (sem os botoes de resposta) tambem libera
+        # os parados e fecha a consulta: senao o embarcador seguiria recebendo lembrete.
+        self._logar("operador")
+        for corpo in ({"situacao": "ATIVA", "tipo": "ENTREGA"}, {"situacao": "INATIVA"}):
+            conn = ct.conectar_consultas(tc.DB_PATH)
+            r = ct.registrar_desconhecida(conn, "DELTA " + corpo["situacao"], "", "PS-" + corpo["situacao"],
+                                          "12345678000199", None)
+            conn.close()
+            tid = r["transportadora"]["id"]
+            resp = self.cliente.post(f"/api/transportadoras/{tid}", json=corpo, headers=ORIGEM)
+            self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+            self.assertEqual(resp.get_json()["situacao"], corpo["situacao"])
+            conn = ct.conectar_consultas(tc.DB_PATH)
+            try:
+                self.assertEqual(ct.pedidos_parados(conn, tid), [])
+                c = conn.execute("SELECT respondido_por, canal_resposta FROM transportadora_consultas "
+                                 "WHERE transportadora_id=?", (tid,)).fetchone()
+                self.assertEqual((c[0], c[1]), ("teste", "tela"))
+            finally:
+                conn.close()
+
     def test_aba_pendentes_mostra_resumo(self):
         self._logar("total")
         html = self.cliente.get("/transportadoras?aba=pendentes").get_data(as_text=True)

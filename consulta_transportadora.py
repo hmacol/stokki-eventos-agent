@@ -5,7 +5,8 @@ consulta_transportadora.py
 Fluxo automatico para transportadora desconhecida: cria o cadastro PENDENTE,
 guarda os pedidos parados e uma consulta por (transportadora, embarcador).
 Quando a transportadora (ou a equipe) responde, o cadastro vira ATIVA e todos
-os pedidos parados dela sao liberados. Tabelas:
+os pedidos parados dela sao liberados. Toda saida de PENDENTE (responder,
+ficha do painel) passa por encerrar_pendencia, na mesma transacao. Tabelas:
   transportadora_pedidos_parados   1 linha por pedido segurado (liberado_em ao responder)
   transportadora_consultas         1 linha por par transportadora x embarcador
 """
@@ -14,6 +15,7 @@ import json
 import logging
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import date, datetime
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -114,26 +116,21 @@ def pedidos_parados(conn, transportadora_id: int, embarcador_cnpj: str | None = 
     return out
 
 
-def responder(conn, transportadora_id: int, tipo: str, endereco: dict | None, email: str,
-              por: str, canal: str) -> dict:
-    atual = tc.buscar(conn, transportadora_id)
-    if atual is None:
-        raise ErroCadastro(f"Transportadora {transportadora_id} nao existe.")
-    if atual["situacao"] == "ATIVA":
-        raise ErroCadastro("ja respondida")
-    if atual["situacao"] != "PENDENTE":
-        raise ErroCadastro(f"Transportadora {atual['situacao']}: so PENDENTE aceita resposta.")
-    tipo = (tipo or "").strip().upper()
-    if tipo not in tc.TIPOS:
-        raise ErroCadastro(f"Tipo invalido: {tipo!r}.")
-    mud = {"tipo": tipo, "situacao": "ATIVA"}
-    if email:
-        mud["email"] = email
-    if tipo == "TERCEIROS":
-        for c in ("uf", "municipio", "bairro", "logradouro", "numero", "complemento", "cep"):
-            mud[c] = (endereco or {}).get(c, "")
-    # Validacao/conflito acontece aqui; se falhar, nada abaixo roda.
-    novo = tc.atualizar(conn, transportadora_id, mud, por)
+@contextmanager
+def _transacao(conn):
+    """BEGIN IMMEDIATE ... COMMIT; qualquer erro desfaz tudo."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
+
+def encerrar_pendencia(conn, transportadora_id: int, por: str, canal: str):
+    """Fecha as consultas abertas e libera os pedidos parados da transportadora.
+    Nao faz commit: roda dentro da transacao de quem tirou a linha de PENDENTE."""
     agora = _agora()
     conn.execute(
         "UPDATE transportadora_consultas SET respondido_em=?, respondido_por=?, canal_resposta=? "
@@ -141,8 +138,60 @@ def responder(conn, transportadora_id: int, tipo: str, endereco: dict | None, em
     conn.execute(
         "UPDATE transportadora_pedidos_parados SET liberado_em=? "
         "WHERE transportadora_id=? AND liberado_em IS NULL", (agora, transportadora_id))
-    conn.commit()
+
+
+def responder(conn, transportadora_id: int, tipo: str, endereco: dict | None, email: str,
+              por: str, canal: str) -> dict:
+    with _transacao(conn):
+        atual = tc.buscar(conn, transportadora_id)
+        if atual is None:
+            raise ErroCadastro(f"Transportadora {transportadora_id} nao existe.")
+        if atual["situacao"] == "ATIVA":
+            raise ErroCadastro("ja respondida")
+        if atual["situacao"] != "PENDENTE":
+            raise ErroCadastro(f"Transportadora {atual['situacao']}: so PENDENTE aceita resposta.")
+        tipo = (tipo or "").strip().upper()
+        if tipo not in tc.TIPOS:
+            raise ErroCadastro(f"Tipo invalido: {tipo!r}.")
+        mud = {"tipo": tipo, "situacao": "ATIVA"}
+        if email:
+            mud["email"] = email
+        if tipo == "TERCEIROS":
+            for c in ("uf", "municipio", "bairro", "logradouro", "numero", "complemento", "cep"):
+                mud[c] = (endereco or {}).get(c, "")
+        # Validacao/conflito acontece aqui; se falhar (ou o encerramento), nada fica gravado.
+        novo = tc.atualizar(conn, transportadora_id, mud, por, commit=False)
+        encerrar_pendencia(conn, transportadora_id, por, canal)
     return novo
+
+
+def atualizar_cadastro(conn, transportadora_id: int, mudancas: dict, por: str, canal: str) -> dict:
+    """tc.atualizar da ficha do painel; se a linha sair de PENDENTE (ATIVA ou
+    INATIVA), encerra a pendencia junto, senao o embarcador seguiria lembrado."""
+    with _transacao(conn):
+        antes = tc.buscar(conn, transportadora_id)
+        novo = tc.atualizar(conn, transportadora_id, mudancas, por, commit=False)
+        if antes and antes["situacao"] == "PENDENTE" and novo["situacao"] != "PENDENTE":
+            encerrar_pendencia(conn, transportadora_id, por, canal)
+    return novo
+
+
+def liberar_pedido(conn, pedido: str) -> bool:
+    """Libera o parado de um pedido que a rodada nao segurou mais. So escreve
+    (e trava o banco) se houver linha aberta; sem tabela, False."""
+    try:
+        aberto = conn.execute("SELECT 1 FROM transportadora_pedidos_parados WHERE pedido=? AND liberado_em IS NULL",
+                              (pedido,)).fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return False
+        raise
+    if not aberto:
+        return False
+    conn.execute("UPDATE transportadora_pedidos_parados SET liberado_em=? WHERE pedido=? AND liberado_em IS NULL",
+                 (_agora(), pedido))
+    conn.commit()
+    return True
 
 
 def deve_avisar_hoje(consulta: dict, hoje: date) -> bool:
@@ -169,12 +218,14 @@ def ler_token(secret: str, token: str, validade_dias: int) -> int | None:
 
 
 def consultas_abertas(conn) -> list[dict]:
+    """Consultas sem resposta de transportadora ainda PENDENTE (as demais ja
+    foram resolvidas por algum caminho; nao lembrar ninguem delas)."""
     rows = conn.execute(
         "SELECT c.*, t.nome AS transportadora_nome, "
         "(SELECT COUNT(*) FROM transportadora_pedidos_parados p WHERE p.transportadora_id=c.transportadora_id "
         " AND p.embarcador_cnpj=c.embarcador_cnpj AND p.liberado_em IS NULL) AS pedidos_parados "
         "FROM transportadora_consultas c JOIN transportadoras t ON t.id=c.transportadora_id "
-        "WHERE c.respondido_em IS NULL ORDER BY c.id")
+        "WHERE c.respondido_em IS NULL AND t.situacao='PENDENTE' ORDER BY c.id")
     return [dict(r) for r in rows]
 
 

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """py -3.11 -m unittest test_consulta_transportadora -v"""
+import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import consulta_transportadora as ct
 import transportadoras_cadastro as tc
@@ -140,9 +142,6 @@ class ConsultaTest(unittest.TestCase):
         self.assertEqual(ct.ler_token("segredo", t, 0), -1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class AvisoTest(unittest.TestCase):
     CNPJ = "11111111000191"
@@ -250,3 +249,87 @@ class AvisoTest(unittest.TestCase):
         ct.enviar_aviso(self.conn, r["consulta"], self.config, False, False)
         self.assertEqual(self.email.call_args[0][0], ["a@x.com", "b@x.com"])
         self.numero.assert_not_called()
+
+
+class EncerrarPendenciaTest(unittest.TestCase):
+    """Toda saida de PENDENTE fecha consultas e libera os parados (sem lembrete orfao)."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.db = Path(self._dir.name) / "t.db"
+        self.conn = ct.conectar_consultas(self.db)
+        a = ct.registrar_desconhecida(self.conn, "ACME LTDA", "", "PS-1", "e1", 1)
+        ct.registrar_desconhecida(self.conn, "ACME LTDA", "", "PS-2", "e2", 2)
+        self.tid = a["transportadora"]["id"]
+        self.outra = ct.registrar_desconhecida(self.conn, "OUTRA", "", "PS-9", "e1", 1)["transportadora"]["id"]
+
+    def tearDown(self):
+        self.conn.close()
+        self._dir.cleanup()
+
+    def _abertas(self, tid):
+        return self.conn.execute("SELECT COUNT(*) FROM transportadora_consultas WHERE transportadora_id=? "
+                                 "AND respondido_em IS NULL", (tid,)).fetchone()[0]
+
+    def test_responder_atomico_falha_no_meio_nao_muda_nada(self):
+        with mock.patch.object(ct, "encerrar_pendencia", side_effect=sqlite3.OperationalError("database is locked")):
+            with self.assertRaises(sqlite3.OperationalError):
+                ct.responder(self.conn, self.tid, "RETIRADA", None, "", "x", "link")
+        self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(tc.buscar(self.conn, self.tid)["situacao"], "PENDENTE")
+        self.assertEqual(tc.historico(self.conn, self.tid), [])
+        self.assertEqual(self._abertas(self.tid), 2)
+        self.assertEqual(len(ct.pedidos_parados(self.conn, self.tid)), 2)
+
+    def test_responder_fecha_so_a_transportadora_respondida(self):
+        ct.responder(self.conn, self.tid, "RETIRADA", None, "", "x", "link")
+        self.assertEqual(self._abertas(self.tid), 0)
+        self.assertEqual(ct.pedidos_parados(self.conn, self.tid), [])
+        self.assertEqual(self._abertas(self.outra), 1)
+        self.assertEqual(len(ct.pedidos_parados(self.conn, self.outra)), 1)
+
+    def test_atualizar_cadastro_pendente_para_ativa_ou_inativa_encerra(self):
+        for tid, mud in ((self.tid, {"situacao": "ATIVA", "tipo": "ENTREGA"}), (self.outra, {"situacao": "INATIVA"})):
+            novo = ct.atualizar_cadastro(self.conn, tid, mud, "bia", "tela")
+            self.assertEqual(novo["situacao"], mud["situacao"])
+            self.assertEqual(self._abertas(tid), 0)
+            self.assertEqual(ct.pedidos_parados(self.conn, tid), [])
+            c = self.conn.execute("SELECT respondido_por, canal_resposta FROM transportadora_consultas "
+                                  "WHERE transportadora_id=?", (tid,)).fetchone()
+            self.assertEqual(tuple(c), ("bia", "tela"))
+
+    def test_atualizar_cadastro_sem_sair_de_pendente_nao_encerra(self):
+        ct.atualizar_cadastro(self.conn, self.tid, {"email": "a@b.com"}, "bia", "tela")
+        self.assertEqual(self._abertas(self.tid), 2)
+        self.assertEqual(len(ct.pedidos_parados(self.conn, self.tid)), 2)
+
+    def test_atualizar_cadastro_com_erro_nao_muda_nada(self):
+        with self.assertRaises(tc.ErroCadastro):
+            ct.atualizar_cadastro(self.conn, self.tid, {"situacao": "ATIVA"}, "bia", "tela")  # sem tipo
+        self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(tc.buscar(self.conn, self.tid)["situacao"], "PENDENTE")
+        self.assertEqual(self._abertas(self.tid), 2)
+
+    def test_consultas_abertas_ignora_transportadora_que_saiu_de_pendente(self):
+        # Rede de seguranca: alguem mudou a situacao por fora (sem encerrar_pendencia).
+        tc.atualizar(self.conn, self.tid, {"situacao": "INATIVA"}, "t")
+        self.assertEqual({c["transportadora_id"] for c in ct.consultas_abertas(self.conn)}, {self.outra})
+
+    def test_liberar_pedido(self):
+        self.assertTrue(ct.liberar_pedido(self.conn, "PS-1"))
+        self.assertEqual([p["pedido"] for p in ct.pedidos_parados(self.conn, self.tid)], ["PS-2"])
+        self.assertFalse(ct.liberar_pedido(self.conn, "PS-1"))  # ja liberado
+        self.assertFalse(ct.liberar_pedido(self.conn, "PS-404"))
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_liberar_pedido_sem_tabela(self):
+        db = Path(self._dir.name) / "vazio.db"
+        c = sqlite3.connect(db)
+        try:
+            self.assertFalse(ct.liberar_pedido(c, "PS-1"))
+        finally:
+            c.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
