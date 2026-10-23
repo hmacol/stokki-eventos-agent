@@ -9,6 +9,7 @@
 // - ?exemplo=1 usa ESTADO_EXEMPLO e gera eventos sinteticos para mostrar a encenacao.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const raiz = document.getElementById('galpao3d');
 const API = raiz.dataset.api;
@@ -19,10 +20,10 @@ const MAX_CAMINHOES = 8;
 const $ = id => document.getElementById(id);
 
 // ---------- cena ----------
+// Desempenho: sem sombras, resolucao no maximo 1,5x, 30 fps e pecas fixas juntadas
+// numa geometria so com cor por vertice (cada objeto separado custa uma chamada de desenho).
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 raiz.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -39,9 +40,6 @@ controls.maxPolarAngle = Math.PI * 0.47;
 scene.add(new THREE.HemisphereLight(0xdfefff, 0x334455, 1.0));
 const sol = new THREE.DirectionalLight(0xffffff, 1.6);
 sol.position.set(18, 40, 22);
-sol.castShadow = true;
-sol.shadow.mapSize.set(2048, 2048);
-Object.assign(sol.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, far: 120 });
 scene.add(sol);
 
 function redimensionar() {
@@ -53,9 +51,33 @@ new ResizeObserver(redimensionar).observe(raiz);
 redimensionar();
 
 const mat = (c, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: .75 }, extra));
+// Cor por vertice (a geometria leva a cor; o material fica branco e pode ser compartilhado).
+function pintar(geo, c) {
+  const cor = new THREE.Color(c), n = geo.attributes.position.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) cor.toArray(a, i * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(a, 3)); return geo;
+}
+// Junta geometrias ja pintadas num mesh so; guarda as cores originais (aplicarStatus usa).
+function juntar(pecas, material) {
+  const geo = mergeGeometries(pecas); pecas.forEach(p => p.dispose());
+  geo.userData.cor = geo.attributes.color.array.slice();
+  return new THREE.Mesh(geo, material);
+}
+// Cenario fixo: acumula por tipo de material e vira um mesh por tipo em fecharCenario().
+const CENARIO = new Map();
+function guardar(geo, c, extra = {}) {
+  const { color, ...resto } = extra, k = JSON.stringify(resto);
+  if (!CENARIO.has(k)) CENARIO.set(k, { resto, pecas: [] });
+  CENARIO.get(k).pecas.push(pintar(geo, color ?? c));
+}
+function fecharCenario() {
+  for (const { resto, pecas } of CENARIO.values()) {
+    scene.add(juntar(pecas, new THREE.MeshStandardMaterial(Object.assign({ vertexColors: true, roughness: .75 }, resto))));
+  }
+  CENARIO.clear();
+}
 function bloco(w, h, d, c, x, y, z, extra) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c, extra));
-  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; scene.add(m); return m;
+  guardar(new THREE.BoxGeometry(w, h, d).translate(x, y, z), c, extra);
 }
 // Rotulo de uma linha que cresce com o texto (prototipo).
 function textura(txt, { w = 512, h = 128, fundo = null, cor = '#fff', borda = null, fonte = 64 } = {}) {
@@ -106,8 +128,9 @@ function descartar(obj) {
 const KRAFT = 0xc89b5a, PEDIDO = 0x4c8dff, CONFERIDO = 0x3ddc84;
 
 // ---------- chao e areas (layout do prototipo) ----------
-const chao = new THREE.Mesh(new THREE.PlaneGeometry(53, 34), mat(0x3a4452));
-chao.rotation.x = -Math.PI / 2; chao.position.set(-4, 0, 0); chao.receiveShadow = true; scene.add(chao);
+// plano deitado no chao, centrado em (x, y, z)
+const piso = (w, d, x, y, z) => new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2).translate(x, y, z);
+guardar(piso(53, 34, -4, 0, 0), 0x3a4452);
 
 const zonas = [
   ['Recebimento', 13, -16, 9, 11, 0x8a7350],
@@ -117,19 +140,16 @@ const zonas = [
   ['Expedição · Doca', 13, -5, 9, 21, 0x6b6355],
 ];
 for (const [nome, x, z, w, d, c] of zonas) {
-  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat(c));
-  p.rotation.x = -Math.PI / 2; p.position.set(x + w / 2, 0.02, z + d / 2); p.receiveShadow = true; scene.add(p);
+  guardar(piso(w, d, x + w / 2, 0.02, z + d / 2), c);
   const tz = textura(nome, { fundo: 'rgba(0,0,0,.45)' }), alt = Math.min(1.6, (w - 1) / (tz.image.width / tz.image.height));
   const r = new THREE.Mesh(new THREE.PlaneGeometry(alt * tz.image.width / tz.image.height, alt), new THREE.MeshBasicMaterial({ map: tz, transparent: true }));
   r.rotation.x = -Math.PI / 2; r.position.set(x + w / 2, 0.04, z + d - .9); scene.add(r);
 }
 // rua
-const rua = new THREE.Mesh(new THREE.PlaneGeometry(6, 120), mat(0x22272e));
-rua.rotation.x = -Math.PI / 2; rua.position.set(25, 0.01, 0); rua.receiveShadow = true; scene.add(rua);
-for (let z = -58; z < 60; z += 4) {
-  const f = new THREE.Mesh(new THREE.PlaneGeometry(.25, 2), new THREE.MeshBasicMaterial({ color: 0xe0c341 }));
-  f.rotation.x = -Math.PI / 2; f.position.set(25, 0.03, z); scene.add(f);
-}
+guardar(piso(6, 120, 25, 0.01, 0), 0x22272e);
+const faixas = [];
+for (let z = -58; z < 60; z += 4) faixas.push(pintar(piso(.25, 2, 25, 0.03, z), 0xe0c341));
+scene.add(juntar(faixas, new THREE.MeshBasicMaterial({ vertexColors: true })));
 bloco(53, 1.2, .3, 0x5d6b7c, -4, .6, -17);
 bloco(.3, 1.2, 34, 0x5d6b7c, -30.5, .6, 0);
 
@@ -140,7 +160,8 @@ for (const [x, z] of [[17, -13], [14.8, -13], [17, -8]]) {
 }
 
 // ---------- estoque: camaras frias com prateleiras ----------
-const vidro = { color: 0x9ec9ef, transparent: true, opacity: .3 };
+// depthWrite off: as paredes viram um mesh so, sem ordenacao entre elas
+const vidro = { color: 0x9ec9ef, transparent: true, opacity: .3, depthWrite: false };
 bloco(18, 3.4, .2, 0x9ec9ef, -9, 1.7, -16, vidro);
 bloco(.2, 3.4, 13, 0x9ec9ef, -18, 1.7, -9.5, vidro);
 bloco(.2, 3.4, 4.5, 0x9ec9ef, 0, 1.7, -13.75, vidro);
@@ -148,7 +169,7 @@ bloco(.2, 3.4, 6.5, 0x9ec9ef, 0, 1.7, -6.25, vidro);
 bloco(1, 3.4, .2, 0x9ec9ef, -17.5, 1.7, -3, vidro);
 bloco(15, 3.4, .2, 0x9ec9ef, -7.5, 1.7, -3, vidro);
 bloco(.2, 3.4, 8, 0x9ec9ef, -9, 1.7, -12, vidro);
-bloco(18, .15, 13, 0xcfe6fa, -9, 3.45, -9.5, { transparent: true, opacity: .18 });
+bloco(18, .15, 13, 0xcfe6fa, -9, 3.45, -9.5, { transparent: true, opacity: .18, depthWrite: false });
 placa('❄ Câmara 1', '#1d4e89', -13.5, 4.4, -12);
 placa('❄ Câmara 2', '#1d4e89', -4.5, 4.4, -12);
 const coresProd = [0xc89b5a, 0xb98a4c, 0xd9b27c, 0xe9c46a, 0xa47148];
@@ -177,28 +198,32 @@ function esteira(nome, a, b, cor) {
   const g = new THREE.Group(); g.position.set(a[0], 0, a[1]); g.rotation.y = ang; scene.add(g);
   const tex = faixa.clone(); tex.needsUpdate = true; tex.repeat.set(1, len);
   const lona = new THREE.Mesh(new THREE.BoxGeometry(.9, .08, len), new THREE.MeshStandardMaterial({ map: tex, roughness: .9 }));
-  lona.position.set(0, ALT - .05, len / 2); lona.receiveShadow = true; g.add(lona);
-  for (const lado of [-.5, .5]) {
-    const borda = new THREE.Mesh(new THREE.BoxGeometry(.1, .2, len), mat(0xf4a261)); borda.position.set(lado, ALT, len / 2); borda.castShadow = true; g.add(borda);
-  }
+  lona.position.set(0, ALT - .05, len / 2); g.add(lona);
+  g.updateMatrixWorld();
+  const noChao = (geo, x, y, z) => geo.translate(x, y, z).applyMatrix4(g.matrixWorld);
+  for (const lado of [-.5, .5]) guardar(noChao(new THREE.BoxGeometry(.1, .2, len), lado, ALT, len / 2), 0xf4a261);
   for (let s = .3; s < len; s += 1.6) for (const lado of [-.42, .42]) {
-    const perna = new THREE.Mesh(new THREE.BoxGeometry(.08, ALT - .1, .08), mat(0x555b63)); perna.position.set(lado, (ALT - .1) / 2, s); g.add(perna);
+    guardar(noChao(new THREE.BoxGeometry(.08, ALT - .1, .08), lado, (ALT - .1) / 2, s), 0x555b63);
   }
   const rot = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, transparent: true }));
   const sPlaca = len - Math.min(2.5, len / 2);
   rot.position.set(a[0] + dx / len * sPlaca, 2.4, a[1] + dz / len * sPlaca); rot.renderOrder = 6; rot.visible = false; scene.add(rot);
   const capacidade = Math.min(MAX_CAIXAS, Math.floor((len - .3) / PASSO_CAIXA) + 1);
   const e = { nome, a, b, len, ux: dx / len, uz: dz / len, tex, cor, caixas: [], vel: 1.3, rot, capacidade, alvo: 0, fila: undefined };
-  const novaCaixa = s => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(.5, .42, .5), mat(e.cor)); m.castShadow = true; scene.add(m);
-    const c = { m, s }; return c;
+  // Todas as caixas da esteira num InstancedMesh (uma chamada de desenho); folga para as encenadas.
+  const LIMITE = capacidade + 8, pos = new THREE.Matrix4();
+  const malha = new THREE.InstancedMesh(new THREE.BoxGeometry(.5, .42, .5), mat(cor), LIMITE);
+  malha.count = 0; scene.add(malha);
+  const novaCaixa = s => ({ s });
+  e.poe = () => { if (e.caixas.length < LIMITE) { e.caixas.push(novaCaixa(0)); e.posiciona(); } };
+  e.posiciona = () => {
+    e.caixas.forEach((c, i) => malha.setMatrixAt(i, pos.makeTranslation(e.a[0] + e.ux * c.s, ALT + .23, e.a[1] + e.uz * c.s)));
+    malha.count = e.caixas.length; malha.instanceMatrix.needsUpdate = true;
   };
-  e.poe = () => { e.caixas.push(novaCaixa(0)); e.posiciona(); };
-  e.posiciona = () => e.caixas.forEach(c => c.m.position.set(e.a[0] + e.ux * c.s, ALT + .23, e.a[1] + e.uz * c.s));
   // Ajusta as caixas paradas ao numero real; sem animar (chega/sai na hora).
   e.defineFila = n => {
     e.alvo = n == null ? 0 : Math.min(n, e.capacidade);
-    while (e.caixas.length > e.alvo) descartar(e.caixas.pop().m);
+    e.caixas.length = Math.min(e.caixas.length, e.alvo);
     while (e.caixas.length < e.alvo) e.caixas.push(novaCaixa(e.len - e.caixas.length * PASSO_CAIXA));
     e.posiciona();
     if (n === e.fila) return;
@@ -213,7 +238,7 @@ function esteira(nome, a, b, cor) {
     let limite = e.len;
     for (const c of e.caixas) { c.s = Math.min(c.s + e.vel * dt, limite); c.parada = c.s >= limite - 1e-6; limite = c.s - PASSO_CAIXA; }
     // caixa encenada que passa da fila real some ao encostar no fim da fila
-    while (e.caixas.length > e.alvo && e.caixas[e.caixas.length - 1].parada) descartar(e.caixas.pop().m);
+    while (e.caixas.length > e.alvo && e.caixas[e.caixas.length - 1].parada) e.caixas.pop();
     e.posiciona();
     tex.offset.y -= e.vel * dt;
   };
@@ -239,6 +264,7 @@ function mesa(x, z, w, cor, monitor) {
 }
 for (const z of [3.5, 6.8, 10.1]) mesa(-23, z, 3, 0x9fb8a8);
 mesa(6, 3, 2.2, 0xa8a3c9, true); mesa(9.2, 3, 2.2, 0xa8a3c9, true); mesa(7.6, 10.4, 2.2, 0xa8a3c9, true);
+fecharCenario();
 
 // ---------- vagas por area ----------
 // pos: onde o boneco fica; face: para onde olha; poe: onde larga a caixa na esteira.
@@ -283,28 +309,28 @@ const STATUS = { ok: 0x3ddc84, lento: 0xffd166, parado: 0xff4d6d, fora: 0x8a96a3
 const hex = n => '#' + n.toString(16).padStart(6, '0');
 function criarBoneco(camisa, calca = 0x2b3a67) {
   const g = new THREE.Group();
+  // 5 meshes (corpo, 2 pernas, 2 bracos) com cor por vertice e um material so.
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .45 });
   const partes = [];
-  const parte = (geo, c, x, y, z, pai = g) => {
-    const m = new THREE.Mesh(geo, mat(c, { roughness: .45 })); m.position.set(x, y, z); m.castShadow = true;
-    m.userData.cor = c; pai.add(m); partes.push(m); return m;
+  const parte = (pecas, x, y, z) => {
+    const m = juntar(pecas, material); m.position.set(x, y, z); g.add(m); partes.push(m); return m;
   };
-  const pernas = [-.19, .19].map(x => { const p = new THREE.Group(); p.position.set(x, .75, 0); g.add(p); parte(new THREE.BoxGeometry(.34, .72, .42), calca, 0, -.38, 0, p); return p; });
-  parte(new THREE.BoxGeometry(.76, .16, .44), calca, 0, .82, 0);
-  const tronco = parte(new THREE.CylinderGeometry(.36, .5, .75, 4), camisa, 0, 1.27, 0);
-  tronco.rotation.y = Math.PI / 4; tronco.scale.z = .62;
-  const bracos = [-.5, .5].map(x => {
-    const b = new THREE.Group(); b.position.set(x, 1.55, 0); g.add(b);
-    parte(new THREE.BoxGeometry(.2, .55, .26), camisa, 0, -.27, 0, b);
-    parte(new THREE.CylinderGeometry(.1, .1, .14, 10), AMARELO, 0, -.62, 0, b);
-    return b;
-  });
-  parte(new THREE.CylinderGeometry(.08, .08, .1, 10), AMARELO, 0, 1.69, 0);
-  parte(new THREE.CylinderGeometry(.26, .26, .44, 20), AMARELO, 0, 1.94, 0);
-  parte(new THREE.CylinderGeometry(.13, .13, .12, 14), AMARELO, 0, 2.22, 0);
-  for (const x of [-.09, .09]) parte(new THREE.SphereGeometry(.035, 8, 8), 0x111111, x, 1.99, .25);
-  const sorriso = new THREE.Mesh(new THREE.TorusGeometry(.08, .015, 6, 12, Math.PI), mat(0x111111));
-  sorriso.position.set(0, 1.9, .255); sorriso.rotation.z = Math.PI; g.add(sorriso);
-  const caixa = new THREE.Mesh(new THREE.BoxGeometry(.55, .45, .5), mat(KRAFT)); caixa.position.set(0, 1.15, .55); caixa.castShadow = true; caixa.visible = false; g.add(caixa);
+  const peca = (geo, c, x, y, z) => pintar(geo.translate(x, y, z), c);
+  const pernas = [-.19, .19].map(x => parte([peca(new THREE.BoxGeometry(.34, .72, .42), calca, 0, -.38, 0)], x, .75, 0));
+  parte([
+    peca(new THREE.BoxGeometry(.76, .16, .44), calca, 0, .82, 0),
+    peca(new THREE.CylinderGeometry(.36, .5, .75, 4).scale(1, 1, .62).rotateY(Math.PI / 4), camisa, 0, 1.27, 0),
+    peca(new THREE.CylinderGeometry(.08, .08, .1, 10), AMARELO, 0, 1.69, 0),
+    peca(new THREE.CylinderGeometry(.26, .26, .44, 20), AMARELO, 0, 1.94, 0),
+    peca(new THREE.CylinderGeometry(.13, .13, .12, 14), AMARELO, 0, 2.22, 0),
+    ...[-.09, .09].map(x => peca(new THREE.SphereGeometry(.035, 8, 8), 0x111111, x, 1.99, .25)),
+    peca(new THREE.TorusGeometry(.08, .015, 6, 12, Math.PI).rotateZ(Math.PI), 0x111111, 0, 1.9, .255),
+  ], 0, 0, 0);
+  const bracos = [-.5, .5].map(x => parte([
+    peca(new THREE.BoxGeometry(.2, .55, .26), camisa, 0, -.27, 0),
+    peca(new THREE.CylinderGeometry(.1, .1, .14, 10), AMARELO, 0, -.62, 0),
+  ], x, 1.55, 0));
+  const caixa = new THREE.Mesh(new THREE.BoxGeometry(.55, .45, .5), mat(KRAFT)); caixa.position.set(0, 1.15, .55); caixa.visible = false; g.add(caixa);
   const banco = new THREE.Mesh(new THREE.BoxGeometry(.6, .5, .5), mat(0x6b5a45)); banco.position.set(0, .5, -.05); banco.visible = false; g.add(banco);
   const diamante = new THREE.Mesh(new THREE.OctahedronGeometry(.2), new THREE.MeshStandardMaterial({ color: STATUS.ok, emissive: STATUS.ok, emissiveIntensity: .6 }));
   diamante.scale.y = 1.8; diamante.position.y = 2.95; g.add(diamante);
@@ -315,13 +341,14 @@ function criarBoneco(camisa, calca = 0x2b3a67) {
 }
 function criarCaminhao(cor) {
   const g = new THREE.Group();
-  const p = (w, h, d, c, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c)); m.position.set(x, y, z); m.castShadow = true; g.add(m); return m; };
-  p(3.6, 2.1, 1.9, 0xeef1f4, -0.6, 1.55, 0);
-  p(1.3, 1.6, 1.9, cor, 1.85, 1.3, 0);
-  p(.05, .7, 1.6, 0x9ad0ff, 2.5, 1.65, 0);
-  for (const [x, z] of [[-1.6, .95], [-1.6, -.95], [1.8, .95], [1.8, -.95]]) {
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .3, 16), mat(0x111111)); r.rotation.x = Math.PI / 2; r.position.set(x, .42, z); g.add(r);
-  }
+  const p = (w, h, d, c, x, y, z) => pintar(new THREE.BoxGeometry(w, h, d).translate(x, y, z), c);
+  g.add(juntar([
+    p(3.6, 2.1, 1.9, 0xeef1f4, -0.6, 1.55, 0),
+    p(1.3, 1.6, 1.9, cor, 1.85, 1.3, 0),
+    p(.05, .7, 1.6, 0x9ad0ff, 2.5, 1.65, 0),
+    ...[[-1.6, .95], [-1.6, -.95], [1.8, .95], [1.8, -.95]].map(([x, z]) =>
+      pintar(new THREE.CylinderGeometry(.42, .42, .3, 16).rotateX(Math.PI / 2).translate(x, .42, z), 0x111111)),
+  ], new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .75 })));
   const rot = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false }));
   rot.position.y = 3.6; rot.renderOrder = 10; g.add(rot);
   scene.add(g);
@@ -349,9 +376,11 @@ function aplicarStatus(b) {
   if (!fora) { b.diamante.material.color.setHex(STATUS[st] ?? STATUS.ok); b.diamante.material.emissive.setHex(STATUS[st] ?? STATUS.ok); }
   if (fora !== b.fora) {
     b.fora = fora;
+    const cinza = CINZA.toArray();
     for (const m of b.partes) {
-      m.material.color.setHex(m.userData.cor);
-      if (fora) m.material.color.lerp(CINZA, .75);
+      const cor = m.geometry.attributes.color, orig = m.geometry.userData.cor;
+      for (let i = 0; i < orig.length; i++) cor.array[i] = fora ? orig[i] + (cinza[i % 3] - orig[i]) * .75 : orig[i];
+      cor.needsUpdate = true;
     }
   }
   if (!b.acao) rotuloDoEstado(b);
@@ -699,8 +728,13 @@ if (EXEMPLO) iniciarExemplo();
 else { buscar(); setInterval(buscar, INTERVALO_MS); }
 
 const relogio = new THREE.Clock();
+let acumulado = 0;
 renderer.setAnimationLoop(() => {
-  const dtReal = Math.min(relogio.getDelta(), .05);
+  // 30 fps bastam para a encenacao; folga de 4 ms para um monitor de 60 Hz pular 1 quadro em 2
+  acumulado += relogio.getDelta();
+  if (acumulado < 1 / 30 - .004) return;
+  const dtReal = Math.min(acumulado, .05);
+  acumulado = 0;
   despachar();
   const dt = dtReal * (filaAnim.length > 10 ? 3 : 1);
   Object.values(ESTEIRAS).forEach(e => e.anda(dt));
