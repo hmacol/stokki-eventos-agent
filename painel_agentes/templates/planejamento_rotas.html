@@ -2109,12 +2109,12 @@
 </div>
 
 {# Transportadora de redespacho (Hugo, 16/09): mesmo esqueleto visual do
-   modal de endereço. Só TERCEIROS da BD_TRANSPORTADORAS entram no select;
+   modal de endereço. Só TERCEIROS do cadastro de transportadoras entram no select;
    escolher uma troca o endereço do pedido pelo galpão dela. #}
 <div class="modal-overlay-editar-endereco" id="modal-transportadora">
   <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-transportadora">
     <h2 id="titulo-modal-transportadora">Transportadora (redespacho)</h2>
-    <p class="subtitulo"><span id="transportadora-prefixo">Pedido</span> <strong id="transportadora-codigo"></strong> — o endereço de entrega passa a ser o galpão da transportadora escolhida (gravado direto na VUUPT). Só transportadoras TERCEIROS da planilha BD_TRANSPORTADORAS.</p>
+    <p class="subtitulo"><span id="transportadora-prefixo">Pedido</span> <strong id="transportadora-codigo"></strong> — o endereço de entrega passa a ser o galpão da transportadora escolhida (gravado direto na VUUPT). Só transportadoras TERCEIROS do cadastro de transportadoras (tela Transportadoras).</p>
     <div class="campo-reagendar">
       <label for="transportadora-select">Transportadora</label>
       <select id="transportadora-select"><option value="">Carregando…</option></select>
@@ -2584,7 +2584,7 @@
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco e Refrigerado/Congelado podem ir juntos, frota toda tem baú térmico), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
       <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — até 15 pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
-      <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
+      <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (cadastro de transportadoras, tela Transportadoras)">Transportadora</button>
       <button type="button" id="botao-dedicado-selecao" disabled title="Marca os pedidos selecionados como envio dedicado e divide o valor da cotação entre eles (fora da rota automática; vai pro financeiro na quinzena)">Dedicado</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       <button type="button" id="botao-cancelar-selecao" disabled title="Cancela na VUUPT todos os pedidos selecionados (igual ao × de cada card; não mexe na Stokki) -- não pode ser desfeito">Cancelar</button>
@@ -2715,7 +2715,7 @@
       <select id="select-destino-mover"><option value="">Mover pra...</option></select>
       <button type="button" id="botao-mover-selecionados" disabled>Mover</button>
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
-      <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
+      <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (cadastro de transportadoras, tela Transportadoras)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
       <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue (sem canhoto) os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Marcar entregue</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>

@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block titulo %}Transportadoras{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1200px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
+  .barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }
+  .abas { display: flex; gap: 6px; margin-right: auto; }
+  .abas a { padding: 7px 14px; border: 1px solid var(--borda); border-radius: 7px; font-size: 13px; font-weight: 600;
+            color: var(--texto); text-decoration: none; background: var(--superficie); }
+  .abas a.ativa { background: var(--primaria); color: #fff; border-color: var(--primaria); }
+  .filtros { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+  input, select, textarea { font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid var(--borda);
+                            border-radius: 7px; background: var(--superficie); color: var(--texto); min-width: 0; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr.clicavel { cursor: pointer; }
+  tr.clicavel:hover td { background: var(--primaria-clara, rgba(0,0,0,.03)); }
+  .mono { font-size: 12px; white-space: nowrap; color: var(--texto-suave); }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.INATIVA { background: var(--erro-bg); color: var(--erro); }
+  .dias-alto { color: var(--erro); font-weight: 700; }
+  .respostas { display: flex; flex-direction: column; gap: 6px; min-width: 240px; }
+  button.botao.secundario { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
+  dialog { border: 1px solid var(--borda); border-radius: 12px; background: var(--superficie); color: var(--texto);
+           padding: 18px; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h2 { font-size: 16px; margin: 0 0 12px; }
+  .grade { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .grade label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--texto-suave); }
+  .grade label.larga { grid-column: 1 / -1; }
+  .grade [hidden] { display: none; }
+  .cep-linha { display: flex; gap: 6px; }
+  .cep-linha input { flex: 1; }
+  .msg-erro { color: var(--erro); font-size: 13px; min-height: 18px; margin: 10px 0 0; }
+  .rodape { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  .lista-mini { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--texto-suave); }
+  details { margin-top: 14px; font-size: 13px; }
+  @media (max-width: 640px) {
+    .grade { grid-template-columns: 1fr; }
+    .abas { width: 100%; }
+    .filtros input, .filtros select { flex: 1 1 140px; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Transportadoras</h1>
+<p class="sub">
+  Cadastro usado pela roteirização, pelo portal e pelas notificações. Transportadora <strong>desconhecida</strong> entra
+  como <strong>pendente</strong> e segura os pedidos dela até alguém dizer como ela atende: o embarcador pelo link, ou a
+  equipe aqui, pelo cliente.
+</p>
+
+<div class="barra">
+  <div class="abas">
+    <a id="aba-pendentes" href="{{ url_for('transportadoras', aba='pendentes') }}" class="{{ 'ativa' if aba == 'pendentes' }}">Pendentes ({{ n_pendentes }})</a>
+    <a id="aba-todas" href="{{ url_for('transportadoras', aba='todas') }}" class="{{ 'ativa' if aba == 'todas' }}">Todas</a>
+  </div>
+  {% if pode_editar %}<button type="button" class="botao" id="botao-nova">Nova transportadora</button>{% endif %}
+</div>
+
+<form class="filtros" method="get" action="{{ url_for('transportadoras') }}">
+  <input type="hidden" name="aba" value="{{ aba }}">
+  <input type="search" name="busca" value="{{ busca }}" placeholder="Nome ou CNPJ" aria-label="Buscar por nome ou CNPJ">
+  {% if aba == 'todas' %}
+  <select name="tipo" aria-label="Tipo">
+    <option value="">Todos os tipos</option>
+    {% for t in ('ENTREGA', 'RETIRADA', 'TERCEIROS') %}<option value="{{ t }}" {{ 'selected' if tipo == t }}>{{ t }}</option>{% endfor %}
+  </select>
+  <select name="situacao" aria-label="Situação">
+    <option value="">Todas as situações</option>
+    {% for s in ('ATIVA', 'PENDENTE', 'INATIVA') %}<option value="{{ s }}" {{ 'selected' if situacao == s }}>{{ s }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button type="submit" class="botao secundario">Filtrar</button>
+</form>
+
+<div class="tabela-wrap">
+{% if not linhas %}
+  <div class="vazio">{{ 'Nenhuma transportadora esperando resposta.' if aba == 'pendentes' else 'Nenhuma transportadora encontrada.' }}</div>
+{% elif aba == 'pendentes' %}
+  <table>
+    <thead><tr><th>Transportadora</th><th>CNPJ</th><th>Dias parado</th><th>Embarcadores consultados</th><th>Pedidos parados</th>{% if pode_editar %}<th>Responder pelo cliente</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for t in linhas %}
+      <tr data-id="{{ t.id }}">
+        <td><strong>{{ t.nome }}</strong></td>
+        <td class="mono">{{ t.cnpj or '—' }}</td>
+        <td class="{{ 'dias-alto' if t.dias_parado >= 2 }}">{{ t.dias_parado }}</td>
+        <td>{{ t.embarcadores | join(', ') or '—' }}</td>
+        <td>{{ t.n_parados }}</td>
+        {% if pode_editar %}
+        <td><div class="respostas">
+          {% for tipo_resp, rotulo in respostas %}
+          <button type="button" class="botao secundario" data-responder="{{ tipo_resp }}">{{ rotulo }}</button>
+          {% endfor %}
+        </div></td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <table>
+    <thead><tr><th>Transportadora</th><th>CNPJ</th><th>Tipo</th><th>Situação</th><th>Cidade/UF</th><th>Atualizado</th></tr></thead>
+    <tbody>
+    {% for t in linhas %}
+      <tr data-id="{{ t.id }}" {% if pode_editar %}class="clicavel" tabindex="0"{% endif %}>
+        <td><strong>{{ t.nome }}</strong></td>
+        <td class="mono">{{ t.cnpj or '—' }}</td>
+        <td>{{ t.tipo or '—' }}</td>
+        <td><span class="pilula {{ t.situacao }}">{{ t.situacao }}</span></td>
+        <td>{{ t.municipio or '' }}{{ ' / ' ~ t.uf if t.uf }}</td>
+        <td class="mono">{{ (t.atualizado_em or '')[:10] }}{{ ' · ' ~ t.atualizado_por if t.atualizado_por }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+</div>
+<p class="msg-erro" id="aviso" role="alert"></p>
+
+{% if pode_editar %}
+<dialog id="dlg">
+  <form id="form" autocomplete="off">
+    <h2 id="dlg-titulo">Transportadora</h2>
+    <div class="grade">
+      <label class="larga" data-grupo="cadastro">Nome<input name="nome"></label>
+      <label data-grupo="cadastro">CNPJ<input name="cnpj" inputmode="numeric"></label>
+      <label data-grupo="cadastro">E-mail<input name="email" type="email"></label>
+      <label data-grupo="cadastro">Tipo
+        <select name="tipo"><option value="">(sem tipo)</option><option>ENTREGA</option><option>RETIRADA</option><option>TERCEIROS</option></select></label>
+      <label data-grupo="cadastro">Situação
+        <select name="situacao"><option>ATIVA</option><option>PENDENTE</option><option>INATIVA</option></select></label>
+      <label class="larga" data-grupo="resposta" hidden>E-mail da transportadora (opcional)<input name="email_resposta" type="email"></label>
+      <label class="larga" data-grupo="endereco">CEP
+        <span class="cep-linha"><input name="cep" inputmode="numeric" maxlength="9" placeholder="00000-000">
+        <button type="button" class="botao secundario" id="botao-cep">Buscar CEP</button></span></label>
+      <label class="larga" data-grupo="endereco">Logradouro<input name="logradouro"></label>
+      <label data-grupo="endereco">Número<input name="numero"></label>
+      <label data-grupo="endereco">Complemento<input name="complemento"></label>
+      <label data-grupo="endereco">Bairro<input name="bairro"></label>
+      <label data-grupo="endereco">Município<input name="municipio"></label>
+      <label data-grupo="endereco">UF<input name="uf" maxlength="2"></label>
+      <label class="larga" data-grupo="cadastro">Cidades atendidas<input name="cidades_atendidas"></label>
+      <label class="larga" data-grupo="cadastro">UFs atendidas<input name="ufs_atendidas"></label>
+    </div>
+    <p class="msg-erro" id="dlg-erro" role="alert"></p>
+    <div id="dlg-extra"></div>
+    <div class="rodape">
+      <button type="button" class="botao secundario" id="botao-fechar">Fechar</button>
+      <button type="submit" class="botao" id="botao-salvar">Salvar</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
+<script>
+(function () {
+  const aviso = document.getElementById("aviso");
+  const dlg = document.getElementById("dlg");
+  if (!dlg) return;
+  const form = document.getElementById("form");
+  const erro = document.getElementById("dlg-erro");
+  const extra = document.getElementById("dlg-extra");
+  const CAMPOS = ["nome", "cnpj", "email", "tipo", "situacao", "cep", "logradouro", "numero", "complemento",
+                  "bairro", "municipio", "uf", "cidades_atendidas", "ufs_atendidas"];
+  const ENDERECO = ["cep", "logradouro", "numero", "complemento", "bairro", "municipio", "uf"];
+  let modo = null;   // {tipo: "nova"|"editar"|"responder", id}
+
+  async function api(caminho, corpo) {
+    const resp = await fetch(BASE_PATH + caminho, corpo === undefined ? {} : {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+    const dados = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(dados.erro || "Falha na operação.");
+    return dados;
+  }
+  function grupos(visiveis) {
+    form.querySelectorAll("[data-grupo]").forEach((el) => { el.hidden = !visiveis.includes(el.dataset.grupo); });
+  }
+  function preencher(t) {
+    CAMPOS.forEach((c) => { form.elements[c].value = (t && t[c]) || ""; });
+    form.elements.situacao.value = (t && t.situacao) || "ATIVA";
+    form.elements.email_resposta.value = "";
+  }
+  function lista(titulo, itens) {
+    const d = document.createElement("details");
+    const s = document.createElement("summary");
+    s.textContent = `${titulo} (${itens.length})`;
+    const ul = document.createElement("ul");
+    ul.className = "lista-mini";
+    itens.forEach((txt) => { const li = document.createElement("li"); li.textContent = txt; ul.appendChild(li); });
+    d.append(s, ul);
+    extra.appendChild(d);
+  }
+  function abrir(titulo, salvar) {
+    document.getElementById("dlg-titulo").textContent = titulo;
+    document.getElementById("botao-salvar").textContent = salvar;
+    erro.textContent = "";
+    dlg.showModal();
+  }
+
+  const botaoNova = document.getElementById("botao-nova");
+  if (botaoNova) botaoNova.addEventListener("click", () => {
+    modo = { tipo: "nova" }; preencher(null); extra.replaceChildren();
+    grupos(["cadastro", "endereco"]);
+    abrir("Nova transportadora", "Criar");
+  });
+  document.getElementById("botao-fechar").addEventListener("click", () => dlg.close());
+
+  async function abrirFicha(id) {
+    aviso.textContent = "";
+    try {
+      const t = await api(`/api/transportadoras/${id}`);
+      modo = { tipo: "editar", id }; preencher(t); extra.replaceChildren();
+      grupos(["cadastro", "endereco"]);
+      lista("Pedidos parados", t.parados.map((p) => `${p.pedido} · ${p.embarcador} · ${p.destinatario} ${p.cidade}`.trim()));
+      lista("Histórico de alterações", t.historico.map((h) => `${(h.quando || "").replace("T", " ")} · ${h.quem} · ${h.campo}: ${h.antes || "—"} → ${h.depois || "—"}`));
+      abrir(t.nome, "Salvar");
+    } catch (e) { aviso.textContent = e.message; }
+  }
+  document.querySelectorAll("tr.clicavel").forEach((tr) => {
+    tr.addEventListener("click", () => abrirFicha(tr.dataset.id));
+    tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter") abrirFicha(tr.dataset.id); });
+  });
+
+  async function responder(id, tipo, corpo, botoes) {
+    botoes.forEach((b) => { b.disabled = true; });
+    try {
+      await api(`/api/transportadoras/${id}/responder`, { tipo, ...corpo });
+      window.location.reload();
+    } catch (e) {
+      (dlg.open ? erro : aviso).textContent = e.message;
+      botoes.forEach((b) => { b.disabled = false; });
+    }
+  }
+  document.querySelectorAll("button[data-responder]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const tr = b.closest("tr");
+      const id = tr.dataset.id, tipo = b.dataset.responder, nome = tr.querySelector("strong").textContent;
+      if (tipo === "TERCEIROS") {
+        modo = { tipo: "responder", id }; preencher(null); extra.replaceChildren();
+        grupos(["resposta", "endereco"]);
+        abrir(`Redespacho: ${nome}`, "Confirmar resposta");
+        return;
+      }
+      if (!window.confirm(`Responder pelo cliente: ${b.textContent}?\n${nome} fica ativa e os pedidos parados dela são liberados.`)) return;
+      responder(id, tipo, {}, tr.querySelectorAll("button"));
+    });
+  });
+
+  document.getElementById("botao-cep").addEventListener("click", async () => {
+    erro.textContent = "";
+    const cep = form.elements.cep.value.replace(/\D/g, "");
+    if (cep.length !== 8) { erro.textContent = "CEP precisa ter 8 dígitos."; return; }
+    try {
+      const r = await api(`/api/transportadoras/cep/${cep}`);
+      form.elements.cep.value = r.cep || cep;
+      form.elements.logradouro.value = r.logradouro || "";
+      form.elements.bairro.value = r.bairro || "";
+      form.elements.municipio.value = r.cidade || "";
+      form.elements.uf.value = r.uf || "";
+      form.elements.numero.focus();
+    } catch (e) { erro.textContent = e.message; }
+  });
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    erro.textContent = "";
+    const botao = document.getElementById("botao-salvar");
+    botao.disabled = true;
+    try {
+      if (modo.tipo === "responder") {
+        const endereco = {}; ENDERECO.forEach((c) => { endereco[c] = form.elements[c].value; });
+        await responder(modo.id, "TERCEIROS", { endereco, email: form.elements.email_resposta.value }, [botao]);
+        return;
+      }
+      const corpo = {}; CAMPOS.forEach((c) => { corpo[c] = form.elements[c].value; });
+      await api(modo.tipo === "nova" ? "/api/transportadoras" : `/api/transportadoras/${modo.id}`, corpo);
+      window.location.reload();
+    } catch (e) { erro.textContent = e.message; }
+    botao.disabled = false;
+  });
+})();
+</script>
+{% endblock %}

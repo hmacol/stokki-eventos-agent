@@ -1,0 +1,25 @@
+{# Roteiro do "Guia da tela" de Transportadoras (23/10). Só o conteúdo; o
+   motor está em _tour.html e este arquivo entra sozinho pelo base.html. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var G = 'Geral', P = 'Pendentes', T = 'Todas';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Transportadoras: cadastro e pendências',
+      texto: '<p>Aqui fica o <b>cadastro de transportadoras</b> que a roteirização, o portal e as notificações usam. Quando chega um pedido de transportadora que ninguém conhece, ela entra como <b>pendente</b> e os pedidos dela ficam <b>parados</b> até alguém dizer como ela atende.</p><p>O embarcador recebe o link pra responder. Se ele demorar, a equipe responde <b>por ele</b> nesta tela.</p>' },
+    { alvo: '#aba-pendentes', capitulo: P, titulo: 'Aba Pendentes',
+      texto: '<p>O número é quantas transportadoras esperam resposta (o mesmo do menu lateral). Cada linha mostra <b>há quantos dias</b> está parada (vermelho com 2 ou mais), <b>quais embarcadores</b> foram consultados e <b>quantos pedidos</b> estão segurados.</p>',
+      posicao: 'direita' },
+    { alvo: function () { return document.querySelector('.respostas'); }, capitulo: P, titulo: 'Responder pelo cliente',
+      texto: '<p><b>Vem retirar no galpão</b> e <b>Entregar no endereço do pedido</b> respondem na hora. <b>Redespacho</b> pede o endereço da transportadora (digite o CEP e use Buscar CEP).</p><p>Ao responder, a transportadora fica <b>ativa</b> e todos os pedidos parados dela são liberados. Só dá pra responder uma vez.</p>',
+      posicao: 'esquerda' },
+    { alvo: '#aba-todas', capitulo: T, titulo: 'Aba Todas',
+      texto: '<p>Todo o cadastro, com filtro por <b>nome ou CNPJ</b>, <b>tipo</b> e <b>situação</b>. Clique numa linha pra abrir a ficha: editar dados, <b>desativar</b> (situação Inativa) e ver o <b>histórico</b> de quem mudou o quê.</p>',
+      posicao: 'direita' },
+    { alvo: '#botao-nova', capitulo: T, titulo: 'Nova transportadora',
+      texto: '<p>Cadastra uma transportadora na mão. <b>TERCEIROS</b> ativa precisa de endereço completo; transportadora ativa não pode repetir nome ou CNPJ de outra com tipo diferente.</p>',
+      posicao: 'esquerda' }
+  ];
+  window.Tour.registrar('transportadoras', passos, { auto: true, titulo: 'Transportadoras' });
+})();
+</script>

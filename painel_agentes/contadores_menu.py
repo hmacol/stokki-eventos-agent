@@ -64,6 +64,7 @@ NIVEIS_POR_CONTADOR = {
     "canhotos": ("total", "operador", "logistica", "leitura", "atendimento"),
     "atendimento": ("total", "operador", "logistica", "atendimento"),
     "motoristas": ("total",),   # auto-cadastros do app esperando aprovação (08/10)
+    "transportadoras": ("total", "operador", "logistica"),   # cadastros PENDENTE esperando resposta (23/10)
 }
 
 _snapshots: dict[str, dict] = {}   # chave -> {"quando": monotonic, "valor": dict|None}
@@ -194,6 +195,13 @@ def _contar_cadastros_motoristas() -> dict:
     return {"qtd": qtd, "criticas": 0}
 
 
+def _contar_transportadoras() -> dict:
+    """Transportadoras PENDENTE (desconhecidas) esperando resposta.
+    Barato: COUNT no SQLite. Sem "crítico"."""
+    import transportadoras_tela
+    return {"qtd": transportadoras_tela.contar_pendentes(), "criticas": 0}
+
+
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
 def contadores(nivel_acesso: str, niveis_por_contador: dict | None = None) -> dict:
@@ -208,6 +216,7 @@ def contadores(nivel_acesso: str, niveis_por_contador: dict | None = None) -> di
         "canhotos": _contar_canhotos,
         "atendimento": _contar_atendimento,
         "motoristas": _contar_cadastros_motoristas,
+        "transportadoras": _contar_transportadoras,
     }
     resultado = {}
     for chave, fonte in fontes.items():

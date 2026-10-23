@@ -1402,6 +1402,110 @@ def adesao_portal():
                            dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
 
 
+_NIVEIS_EDITA_TRANSPORTADORAS = ("total", "operador", "logistica")
+
+
+@app.route("/transportadoras")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def transportadoras():
+    """Cadastro de transportadoras (23/10): aba Pendentes (desconhecidas que
+    seguraram pedidos, a equipe responde pelo cliente) e aba Todas. Quem
+    grava e valida e transportadoras_cadastro; aqui so se mostra."""
+    import transportadoras_tela as tt
+    aba = "todas" if request.args.get("aba") == "todas" else "pendentes"
+    conn = tt.conectar()
+    try:
+        linhas = tt.montar_lista(conn, aba, request.args.get("busca", ""), request.args.get("tipo", ""),
+                                 request.args.get("situacao", ""))
+        n_pendentes = conn.execute("SELECT COUNT(*) FROM transportadoras WHERE situacao='PENDENTE'").fetchone()[0]
+    finally:
+        conn.close()
+    return render_template("transportadoras.html", linhas=linhas, aba=aba, n_pendentes=n_pendentes,
+                           busca=request.args.get("busca", ""), tipo=request.args.get("tipo", ""),
+                           situacao=request.args.get("situacao", ""), respostas=tt.RESPOSTAS,
+                           pode_editar=g.nivel_acesso in _NIVEIS_EDITA_TRANSPORTADORAS)
+
+
+def _autor_transportadoras() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/api/transportadoras/<int:tid>")
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+def api_transportadora_ficha(tid):
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        f = tt.ficha(conn, tid)
+    finally:
+        conn.close()
+    if f is None:
+        return jsonify({"erro": "Transportadora não encontrada."}), 404
+    return jsonify(f)
+
+
+@app.route("/api/transportadoras/cep/<cep>")
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+def api_transportadoras_cep(cep):
+    from portal_cliente import cotacao
+    achado = cotacao.consultar_cep(cep)
+    if not achado:
+        return jsonify({"erro": "CEP não encontrado."}), 404
+    return jsonify(achado)
+
+
+@app.route("/api/transportadoras", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_criar():
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        return jsonify(tc.criar(conn, tt.so_campos(request.get_json(force=True) or {}), "TELA",
+                                _autor_transportadoras()))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/transportadoras/<int:tid>", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_atualizar(tid):
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        return jsonify(tc.atualizar(conn, tid, tt.so_campos(request.get_json(force=True) or {}),
+                                    _autor_transportadoras()))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/transportadoras/<int:tid>/responder", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_responder(tid):
+    """A equipe responde pelo embarcador (canal 'tela'): vira ATIVA e libera
+    os pedidos parados dela."""
+    import consulta_transportadora as ct
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    body = request.get_json(force=True) or {}
+    conn = tt.conectar()
+    try:
+        return jsonify(ct.responder(conn, tid, body.get("tipo"), body.get("endereco") or {},
+                                    (body.get("email") or "").strip(), _autor_transportadoras(), "tela"))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
 @app.route("/api/clientes-agenda/decidir", methods=["POST"])
 @requer_auth(niveis=("total", "logistica"))
 @exige_mesma_origem

@@ -231,7 +231,7 @@
                 logistica (19/10, só login nominal) = poderes do operador
                 só em Torre, Canhotos pendentes, Pedidos Parados, Tratativas,
                 Consulta, Planejamento, Atendimento, Motoristas, Pedágios,
-                Canhotos, Clientes AGENDA e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
+                Canhotos, Clientes AGENDA, Transportadoras e Adesão ao portal (+ Início). Sem Mapa/Vigia/Expedição/WMS.
                 Acesso personalizado (21/10): tela /acessos (só total) escolhe
                 as telas de um login nominal; tabela painel_acesso_telas
                 (dados.db) vence o nivel do config, poder de total nas telas
@@ -859,6 +859,11 @@
    /clientes-agenda           clientes_agenda.html (só nível total: autoriza
                               AGENDA na BD_CLIENTES; alimentada por
                               marcar_clientes_agenda.py)
+   /transportadoras           transportadoras.html + transportadoras_tela.py + _tour_transportadoras.html
+                              (aba Pendentes: equipe responde pelo embarcador, canal 'tela'; aba Todas:
+                              criar/editar/desativar + histórico; CEP via portal_cliente.cotacao;
+                              ver só total/operador/logistica/leitura/atendimento, API só os 3 primeiros;
+                              badge do menu = contadores_menu 'transportadoras')
    /adesao-portal             adesao_portal.html + adesao_portal.py (quem já
                               entrou no portal do cliente e quem importa
                               pedidos por lá; lê clientes_portal/portal_envios;

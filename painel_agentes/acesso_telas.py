@@ -70,6 +70,7 @@ TELAS = [
                                      r"^/encerrar-tudo$"]),
     ("historico", "Execuções", "Sistema", [r"^/historico$", r"^/execucao/"]),
     ("clientes_agenda", "Clientes AGENDA", "Sistema", [r"^/clientes-agenda$", r"^/api/clientes-agenda/"]),
+    ("transportadoras", "Transportadoras", "Sistema", [r"^/transportadoras$", r"^/api/transportadoras(/|$)"]),
 ]
 PAGINAS = [t[0] for t in TELAS]
 
