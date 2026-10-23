@@ -85,7 +85,7 @@ class TestEtiqueta(unittest.TestCase):
     MOTIVO = "vizinha mais próxima a 27 km"
 
     def setUp(self):
-        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas, hora_saida=None: None),
                         mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -124,7 +124,7 @@ class TestTetoDaReceptora(unittest.TestCase):
     de limite usa o mesmo teto nela, e só nela."""
 
     def setUp(self):
-        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas, hora_saida=None: None),
                         mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None),
                         mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: 1.0)):
             patcher.start()
@@ -169,7 +169,7 @@ class TestCaixasETempoDaReceptora(unittest.TestCase):
 
     def setUp(self):
         self.horas = 1.0
-        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas: None),
+        for patcher in (mock.patch.object(planejamento_rotas, "_simular_rascunho", lambda paradas, hora_saida=None: None),
                         mock.patch.object(planejamento_rotas, "_garantir_coords_base", lambda: None),
                         mock.patch.object(planejamento_rotas, "estimar_tempo_rota", lambda *a, **k: self.horas)):
             patcher.start()

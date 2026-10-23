@@ -40,7 +40,7 @@ from roteirizacao_dados import (
     extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
     ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
     resolver_janela, carregar_janelas_confirmadas, simular_horarios, tem_janela, _horas_para_hhmm,
-    macro_regiao_do_servico, obter_coordenadas, janela_viavel,
+    macro_regiao_do_servico, obter_coordenadas, janela_viavel, hora_saida_de_start_at,
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
@@ -318,11 +318,12 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
         _TRAVA_SINCRONIZACAO.release()
 
 
-def _simular_rascunho(paradas: list[dict]) -> dict | None:
+def _simular_rascunho(paradas: list[dict], hora_saida: float | None = None) -> dict | None:
     """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
     de um rascunho, na ordem em que estão. None quando nenhuma parada
     tem janela (não há o que avisar nem prever) ou quando a simulação
-    falhar (a tela nunca cai por causa disso)."""
+    falhar (a tela nunca cai por causa disso). `hora_saida` (decimal, BRT) é
+    a saída da própria rota (rota da tarde sai ~13h, não às 06h)."""
     if not paradas:
         return None
     pseudo = [
@@ -337,6 +338,7 @@ def _simular_rascunho(paradas: list[dict]) -> dict | None:
         return simular_horarios(
             pseudo, coords_base=_garantir_coords_base(),
             coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+            hora_saida=hora_saida,
         )
     except Exception as e:
         logger.warning(f"Falha ao simular horários do rascunho (tela segue sem previsão): {e}")
@@ -391,6 +393,12 @@ def _badges_trava(rascunho: dict) -> list[str]:
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
+    # Rota da tarde (rascunhos_rota.turno, Hugo 23/10): sai perto da janela
+    # tardia, não às 06h -- a linha do tempo parte da saída da própria rota.
+    tarde = rascunho.get("turno") == "TARDE"
+    hora_saida = hora_saida_de_start_at(rascunho.get("start_at")) if tarde else None
+    if tarde and hora_saida is not None:
+        badges.append(f"Tarde · sai {_horas_para_hhmm(hora_saida)}")
 
     def _tempo_estimado() -> float:
         # MESMO estimador que formou a rota (roteirizacao_dados.
@@ -412,7 +420,7 @@ def _badges_trava(rascunho: dict) -> list[str]:
     # simulador que sequencia/forma as rotas (roteirizacao_dados.
     # simular_horarios); atraso intrínseco (janela que já fechou antes
     # da saída da base) também aparece -- aqui é aviso, não trava.
-    sim = _simular_rascunho(paradas)
+    sim = _simular_rascunho(paradas, hora_saida=hora_saida)
     if sim and sim["fora_janela"]:
         fora = ", ".join(
             f"{paradas[i]['codigo']} chega ~{_horas_para_hhmm(sim['chegadas'][i])} "
@@ -492,7 +500,7 @@ def _badges_trava(rascunho: dict) -> list[str]:
     # de um dos três cortes (pedidos, caixas, menos de 5h -- 03/10), o
     # aviso some sozinho.
     motivo_fraca = rascunho.get("rota_fraca_motivo")
-    if (motivo_fraca and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
+    if (motivo_fraca and not tarde and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
             and _tempo_estimado() < HORAS_ROTA_FRACA):
         badges.append(f"rota fraca: {len(paradas)} pedido(s), {caixas} caixa(s). {motivo_fraca}")
 
@@ -1118,7 +1126,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     for r in rascunhos:
         # previsão de chegada por parada na ordem atual (Hugo, 09/09) --
         # só pra rota com alguma janela (é quando a hora importa)
-        sim = _simular_rascunho(r["paradas"])
+        sim = _simular_rascunho(
+            r["paradas"],
+            hora_saida=hora_saida_de_start_at(r.get("start_at")) if r.get("turno") == "TARDE" else None)
         for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
