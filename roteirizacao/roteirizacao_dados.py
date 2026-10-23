@@ -996,6 +996,9 @@ HORA_CORTE_TARDE = "12:00"
 # Espera total aceita numa rota antes de ela virar candidata a sair mais
 # tarde (Claude, 23/10).
 ESPERA_MAXIMA_ROTA_HORAS = 0.75
+# Chave da trava de espera e da rota da tarde (Hugo/Claude, 23/10). False
+# desliga as duas; o replay usa pra comparar com o comportamento antigo.
+ROTA_TARDE_ATIVA = True
 # Pares (inicio, fim) que NÃO significam "o cliente pediu essa janela":
 # são os padrões que pipeline.py (08:00-16:00), agendamento_confirmacao/
 # atualizar_agendamentos_confirmados (08:00-18:00) e regioes_dia_fixo
@@ -1246,6 +1249,12 @@ def janela_respeitada(sublote: list[dict], api_key: str | None = None,
         return False
     if (sim["duracao_h"] > tempo_maximo_horas
             and not _orcamento_inviavel_por_distancia(sublote, api_key, coords_base)):
+        return False
+    # Espera antes de janela tardia (abre >= HORA_CORTE_TARDE): a rota
+    # deveria sair mais tarde em vez de esperar parada (spec 23/10, 5.3).
+    if (ROTA_TARDE_ATIVA
+            and sim["espera_tardia_h"] > ESPERA_MAXIMA_ROTA_HORAS
+            and exige_orcamento_horas(sublote, api_key, coords_base)):
         return False
     return True
 

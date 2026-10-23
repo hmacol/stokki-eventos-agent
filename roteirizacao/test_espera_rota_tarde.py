@@ -124,5 +124,48 @@ class PesoEsperaTest(unittest.TestCase):
         self.assertEqual(rd.start_at_rota(date(2026, 10, 23)), "2026-10-23T09:00:00Z")
 
 
+
+def _jan(code, lat, lng, ini, fim):
+    return {"code": code, "latitude": lat, "longitude": lng, "_nivel_dificuldade": 1,
+            "_janela_inicio": ini, "_janela_fim": fim, "_janela_fonte": "teste"}
+
+
+class TravaEsperaTest(unittest.TestCase):
+    def setUp(self):
+        rd.definir_coords_base(*BASE)
+
+    def test_trava_reprova_espera_tardia(self):
+        # tempo_maximo_horas=24 isola a trava da espera (a #13 tambem estoura o orcamento de 9h)
+        self.assertFalse(rd.janela_respeitada(paradas_rota_13(), coords_base=BASE, hora_saida=6.0,
+                                           tempo_maximo_horas=24))
+
+    def test_trava_aceita_um_pedido(self):
+        wilian = [p for p in paradas_rota_13() if p["code"] == "#PS-42147-R1"]
+        self.assertTrue(rd.janela_respeitada(wilian, coords_base=BASE, hora_saida=6.0))
+
+    def test_trava_ignora_espera_da_manha(self):
+        a = _jan("A", -23.4935, -46.6645, "08:00", "18:00")
+        b = _jan("B", -23.4940, -46.6650, "09:00", "17:00")
+        sim = rd.simular_horarios([a, b], coords_base=BASE, hora_saida=6.0)
+        self.assertGreater(sim["espera_h"], rd.ESPERA_MAXIMA_ROTA_HORAS)
+        self.assertEqual(sim["espera_tardia_h"], 0)
+        self.assertTrue(rd.janela_respeitada([a, b], coords_base=BASE, hora_saida=6.0))
+
+    def test_trava_respeita_hora_saida(self):
+        bar = _jan("bar", -23.5489, -46.6388, "13:00", "18:00")
+        outro = _jan("outro", -23.5579, -46.6388, "13:30", "18:00")
+        self.assertTrue(rd.janela_respeitada([bar, outro], coords_base=BASE, hora_saida=12.5))
+        self.assertFalse(rd.janela_respeitada([bar, outro], coords_base=BASE))
+
+    def test_trava_desligada_pela_chave(self):
+        anterior = rd.ROTA_TARDE_ATIVA
+        rd.ROTA_TARDE_ATIVA = False
+        try:
+            self.assertTrue(rd.janela_respeitada(paradas_rota_13(), coords_base=BASE, hora_saida=6.0,
+                                           tempo_maximo_horas=24))
+        finally:
+            rd.ROTA_TARDE_ATIVA = anterior
+
+
 if __name__ == "__main__":
     unittest.main()
