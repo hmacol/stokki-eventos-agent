@@ -81,6 +81,43 @@ class TestTelaTransportadoras(unittest.TestCase):
         r = self.cliente.post(f"/api/transportadoras/{self.ativa['id']}", json={"nome": "Z"}, headers=ORIGEM)
         self.assertEqual(r.status_code, 403)
 
+    def test_leitura_e_atendimento_abrem_ficha_mas_nao_escrevem(self):
+        for nivel in ("leitura", "atendimento"):
+            self._logar(nivel)
+            tid = self.pendente["id"]
+            r = self.cliente.get(f"/api/transportadoras/{tid}")
+            self.assertEqual(r.status_code, 200, nivel)
+            self.assertEqual(len(r.get_json()["parados"]), 1)
+            html = self.cliente.get("/transportadoras").get_data(as_text=True)
+            self.assertNotIn('data-responder="', html)
+            self.assertNotIn('id="botao-nova"', html)
+            for url in ("/api/transportadoras", f"/api/transportadoras/{tid}", f"/api/transportadoras/{tid}/responder"):
+                self.assertEqual(self.cliente.post(url, json={"nome": "Z", "tipo": "RETIRADA"}, headers=ORIGEM).status_code,
+                                 403, (nivel, url))
+            self.assertEqual(self.cliente.get("/api/transportadoras/cep/01001000").status_code, 403)
+
+    def test_corpo_que_nao_e_objeto_devolve_400(self):
+        self._logar("operador")
+        tid = self.pendente["id"]
+        for url in ("/api/transportadoras", f"/api/transportadoras/{tid}", f"/api/transportadoras/{tid}/responder"):
+            for corpo in ([1, 2], "x", 5):
+                self.assertEqual(self.cliente.post(url, json=corpo, headers=ORIGEM).status_code, 400, (url, corpo))
+        r = self.cliente.post(f"/api/transportadoras/{tid}/responder", json={"tipo": "RETIRADA", "email": 5}, headers=ORIGEM)
+        self.assertEqual(r.status_code, 200)
+
+    def test_dias_uteis_e_rotulo_do_embarcador(self):
+        import transportadoras_tela as tt
+        from datetime import date
+        # sexta 16/10/2026 -> segunda 19/10: 1 dia util
+        self.assertEqual(tt._dias("2026-10-16T09:00:00", date(2026, 10, 19)), 1)
+        self.assertEqual(tt._dias("2026-10-16T09:00:00", date(2026, 10, 20)), 2)
+        conn = ct.conectar_consultas(tc.DB_PATH)
+        try:
+            self.assertEqual(tt.rotulo_embarcador(conn, "12345678000199"), "12.345.678/0001-99")
+            self.assertEqual(tt.rotulo_embarcador(conn, "stkkc:77"), "embarcador sem cadastro (stkkc 77)")
+        finally:
+            conn.close()
+
     def test_criar_conflito_devolve_400(self):
         self._logar("operador")
         r = self.cliente.post("/api/transportadoras", json={"nome": "ALFA", "tipo": "RETIRADA", "situacao": "ATIVA"},

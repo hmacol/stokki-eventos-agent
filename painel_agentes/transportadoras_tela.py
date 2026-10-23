@@ -6,10 +6,12 @@ Dados da tela /transportadoras (23/10): lista, aba de pendencias e ficha.
 Quem grava e valida e transportadoras_cadastro / consulta_transportadora;
 aqui so se monta o que a tela mostra.
 """
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta
 
 import consulta_transportadora as ct
 import transportadoras_cadastro as tc
+from regras.feriados import eh_dia_util
 
 # Rotulos e tipo gravado de cada botao de resposta (os mesmos do portal).
 RESPOSTAS = (
@@ -33,10 +35,29 @@ def contar_pendentes() -> int:
 
 
 def _dias(iso: str | None, hoje: date) -> int:
+    """Dias UTEIS desde `iso` (mesma conta do alerta da equipe, 2 dias uteis)."""
     try:
-        return max(0, (hoje - datetime.fromisoformat(iso).date()).days)
+        d = datetime.fromisoformat(iso).date()
     except (TypeError, ValueError):
         return 0
+    n = 0
+    while d < hoje:
+        d += timedelta(days=1)
+        n += eh_dia_util(d)
+    return n
+
+
+def rotulo_embarcador(conn, chave: str) -> str:
+    """Nome do embarcador; sem cadastro, CNPJ formatado ou 'sem cadastro (stkkc N)'."""
+    nome = ct.nome_embarcador(conn, chave)
+    if nome != str(chave or ""):
+        return nome
+    if nome.startswith("stkkc:"):
+        return f"embarcador sem cadastro (stkkc {nome[6:]})"
+    d = re.sub(r"\D", "", nome)
+    if len(d) == 14:
+        return f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
+    return nome
 
 
 def _resumo_pendente(conn, t: dict, hoje: date) -> dict:
@@ -46,7 +67,7 @@ def _resumo_pendente(conn, t: dict, hoje: date) -> dict:
     return {
         "dias_parado": _dias(desde, hoje),
         "n_parados": len(parados),
-        "embarcadores": [ct.nome_embarcador(conn, c["embarcador_cnpj"]) for c in consultas],
+        "embarcadores": [rotulo_embarcador(conn, c["embarcador_cnpj"]) for c in consultas],
     }
 
 
@@ -71,7 +92,7 @@ def ficha(conn, tid: int) -> dict | None:
         return None
     t["historico"] = tc.historico(conn, tid)
     t["parados"] = [{"pedido": p["pedido"], "desde": p["desde"],
-                     "embarcador": ct.nome_embarcador(conn, p["embarcador_cnpj"]),
+                     "embarcador": rotulo_embarcador(conn, p["embarcador_cnpj"]),
                      "destinatario": (p["resumo"] or {}).get("destinatario") or "",
                      "cidade": (p["resumo"] or {}).get("cidade") or ""}
                     for p in ct.pedidos_parados(conn, tid)]

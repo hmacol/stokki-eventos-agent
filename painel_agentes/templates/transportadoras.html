@@ -36,7 +36,7 @@
   .grade { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .grade label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--texto-suave); }
   .grade label.larga { grid-column: 1 / -1; }
-  .grade [hidden] { display: none; }
+  .grade [hidden], dialog button[hidden] { display: none; }
   .cep-linha { display: flex; gap: 6px; }
   .cep-linha input { flex: 1; }
   .msg-erro { color: var(--erro); font-size: 13px; min-height: 18px; margin: 10px 0 0; }
@@ -88,10 +88,10 @@
   <div class="vazio">{{ 'Nenhuma transportadora esperando resposta.' if aba == 'pendentes' else 'Nenhuma transportadora encontrada.' }}</div>
 {% elif aba == 'pendentes' %}
   <table>
-    <thead><tr><th>Transportadora</th><th>CNPJ</th><th>Dias parado</th><th>Embarcadores consultados</th><th>Pedidos parados</th>{% if pode_editar %}<th>Responder pelo cliente</th>{% endif %}</tr></thead>
+    <thead><tr><th>Transportadora</th><th>CNPJ</th><th>Dias úteis parado</th><th>Embarcadores consultados</th><th>Pedidos parados</th>{% if pode_editar %}<th>Responder pelo cliente</th>{% endif %}</tr></thead>
     <tbody>
     {% for t in linhas %}
-      <tr data-id="{{ t.id }}">
+      <tr data-id="{{ t.id }}" class="clicavel" tabindex="0">
         <td><strong>{{ t.nome }}</strong></td>
         <td class="mono">{{ t.cnpj or '—' }}</td>
         <td class="{{ 'dias-alto' if t.dias_parado >= 2 }}">{{ t.dias_parado }}</td>
@@ -113,7 +113,7 @@
     <thead><tr><th>Transportadora</th><th>CNPJ</th><th>Tipo</th><th>Situação</th><th>Cidade/UF</th><th>Atualizado</th></tr></thead>
     <tbody>
     {% for t in linhas %}
-      <tr data-id="{{ t.id }}" {% if pode_editar %}class="clicavel" tabindex="0"{% endif %}>
+      <tr data-id="{{ t.id }}" class="clicavel" tabindex="0">
         <td><strong>{{ t.nome }}</strong></td>
         <td class="mono">{{ t.cnpj or '—' }}</td>
         <td>{{ t.tipo or '—' }}</td>
@@ -128,7 +128,6 @@
 </div>
 <p class="msg-erro" id="aviso" role="alert"></p>
 
-{% if pode_editar %}
 <dialog id="dlg">
   <form id="form" autocomplete="off">
     <h2 id="dlg-titulo">Transportadora</h2>
@@ -161,13 +160,12 @@
     </div>
   </form>
 </dialog>
-{% endif %}
 
 <script>
 (function () {
   const aviso = document.getElementById("aviso");
   const dlg = document.getElementById("dlg");
-  if (!dlg) return;
+  const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
   const form = document.getElementById("form");
   const erro = document.getElementById("dlg-erro");
   const extra = document.getElementById("dlg-extra");
@@ -201,6 +199,11 @@
     d.append(s, ul);
     extra.appendChild(d);
   }
+  function somenteLeitura(ro) {
+    form.querySelectorAll("input, select").forEach((el) => { el.disabled = ro; });
+    document.getElementById("botao-salvar").hidden = ro;
+    document.getElementById("botao-cep").hidden = ro;
+  }
   function abrir(titulo, salvar) {
     document.getElementById("dlg-titulo").textContent = titulo;
     document.getElementById("botao-salvar").textContent = salvar;
@@ -210,7 +213,7 @@
 
   const botaoNova = document.getElementById("botao-nova");
   if (botaoNova) botaoNova.addEventListener("click", () => {
-    modo = { tipo: "nova" }; preencher(null); extra.replaceChildren();
+    modo = { tipo: "nova" }; preencher(null); extra.replaceChildren(); somenteLeitura(false);
     grupos(["cadastro", "endereco"]);
     abrir("Nova transportadora", "Criar");
   });
@@ -222,14 +225,15 @@
       const t = await api(`/api/transportadoras/${id}`);
       modo = { tipo: "editar", id }; preencher(t); extra.replaceChildren();
       grupos(["cadastro", "endereco"]);
+      somenteLeitura(!PODE_EDITAR);
       lista("Pedidos parados", t.parados.map((p) => `${p.pedido} · ${p.embarcador} · ${p.destinatario} ${p.cidade}`.trim()));
       lista("Histórico de alterações", t.historico.map((h) => `${(h.quando || "").replace("T", " ")} · ${h.quem} · ${h.campo}: ${h.antes || "—"} → ${h.depois || "—"}`));
       abrir(t.nome, "Salvar");
     } catch (e) { aviso.textContent = e.message; }
   }
   document.querySelectorAll("tr.clicavel").forEach((tr) => {
-    tr.addEventListener("click", () => abrirFicha(tr.dataset.id));
-    tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter") abrirFicha(tr.dataset.id); });
+    tr.addEventListener("click", (ev) => { if (!ev.target.closest(".respostas")) abrirFicha(tr.dataset.id); });
+    tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target === tr) abrirFicha(tr.dataset.id); });
   });
 
   async function responder(id, tipo, corpo, botoes) {
@@ -247,7 +251,7 @@
       const tr = b.closest("tr");
       const id = tr.dataset.id, tipo = b.dataset.responder, nome = tr.querySelector("strong").textContent;
       if (tipo === "TERCEIROS") {
-        modo = { tipo: "responder", id }; preencher(null); extra.replaceChildren();
+        modo = { tipo: "responder", id }; preencher(null); extra.replaceChildren(); somenteLeitura(false);
         grupos(["resposta", "endereco"]);
         abrir(`Redespacho: ${nome}`, "Confirmar resposta");
         return;
