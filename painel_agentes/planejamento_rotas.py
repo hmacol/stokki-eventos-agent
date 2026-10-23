@@ -40,7 +40,7 @@ from roteirizacao_dados import (
     extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
     ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
     resolver_janela, carregar_janelas_confirmadas, simular_horarios, tem_janela, _horas_para_hhmm,
-    macro_regiao_do_servico, obter_coordenadas, janela_viavel,
+    macro_regiao_do_servico, obter_coordenadas, janela_viavel, hora_saida_de_start_at,
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
@@ -75,6 +75,7 @@ from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_
 # demanda dentro de publicar_oferta_rascunho -- mesmo motivo do
 # ofertas_rota/resumo_oferta acima, ainda não deployado.
 from alocacao_motoristas import selecionar_motorista_equitativo
+from otimizacao_rotas import pedido_cabe_no_trajeto
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao, progresso_execucao
 
@@ -183,6 +184,8 @@ TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota (antes 16, desde 2
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -- acompanha criar_rotas_diarias.py (constantes separadas de propósito, sem import entre os dois módulos)
+KM_ACUMULADO_MAXIMO_ROTA_KM = 60     # acompanha criar_rotas_diarias.py (mesmo motivo acima) -- trava de trajeto do Incrementar, 16/10
+KM_ACUMULADO_MAXIMO_VIAGEM_KM = 300
 # Rota fraca (Hugo, 29/09): mesmo corte de roteirizacao/rotas_fracas.py
 # (constantes separadas de propósito, sem import entre os dois módulos).
 PARADAS_ROTA_FRACA = 7
@@ -315,11 +318,12 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
         _TRAVA_SINCRONIZACAO.release()
 
 
-def _simular_rascunho(paradas: list[dict]) -> dict | None:
+def _simular_rascunho(paradas: list[dict], hora_saida: float | None = None) -> dict | None:
     """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
     de um rascunho, na ordem em que estão. None quando nenhuma parada
     tem janela (não há o que avisar nem prever) ou quando a simulação
-    falhar (a tela nunca cai por causa disso)."""
+    falhar (a tela nunca cai por causa disso). `hora_saida` (decimal, BRT) é
+    a saída da própria rota (rota da tarde sai ~13h, não às 06h)."""
     if not paradas:
         return None
     pseudo = [
@@ -334,6 +338,7 @@ def _simular_rascunho(paradas: list[dict]) -> dict | None:
         return simular_horarios(
             pseudo, coords_base=_garantir_coords_base(),
             coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+            hora_saida=hora_saida,
         )
     except Exception as e:
         logger.warning(f"Falha ao simular horários do rascunho (tela segue sem previsão): {e}")
@@ -364,6 +369,21 @@ def _horas_para_hhmm_teto(horas: float) -> str:
     return f"{inteiras}h{minutos:02d}" if minutos else f"{inteiras}h"
 
 
+def _hora_saida_tarde(rascunho: dict) -> float | None:
+    """Saída (decimal, BRT) do rascunho da tarde (rascunhos_rota.turno,
+    Hugo 23/10), lida do start_at; None pra rota normal (sai às 06h)."""
+    if rascunho.get("turno") != "TARDE":
+        return None
+    return hora_saida_de_start_at(rascunho.get("start_at"))
+
+
+def _selo_tarde(rascunho: dict) -> str | None:
+    """Selo "Tarde · sai HH:MM" do card. Não é aviso de trava: fica fora
+    de _badges_trava pra não contar em "Com aviso ativo" nem na Torre."""
+    hora_saida = _hora_saida_tarde(rascunho)
+    return f"Tarde · sai {_horas_para_hhmm(hora_saida)}" if hora_saida is not None else None
+
+
 def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
@@ -388,6 +408,11 @@ def _badges_trava(rascunho: dict) -> list[str]:
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
+    # Rota da tarde (rascunhos_rota.turno, Hugo 23/10): sai perto da janela
+    # tardia, não às 06h -- a linha do tempo parte da saída da própria rota.
+    # O selo "Tarde · sai HH:MM" é _selo_tarde (não é trava).
+    tarde = rascunho.get("turno") == "TARDE"
+    hora_saida = _hora_saida_tarde(rascunho)
 
     def _tempo_estimado() -> float:
         # MESMO estimador que formou a rota (roteirizacao_dados.
@@ -409,7 +434,7 @@ def _badges_trava(rascunho: dict) -> list[str]:
     # simulador que sequencia/forma as rotas (roteirizacao_dados.
     # simular_horarios); atraso intrínseco (janela que já fechou antes
     # da saída da base) também aparece -- aqui é aviso, não trava.
-    sim = _simular_rascunho(paradas)
+    sim = _simular_rascunho(paradas, hora_saida=hora_saida)
     if sim and sim["fora_janela"]:
         fora = ", ".join(
             f"{paradas[i]['codigo']} chega ~{_horas_para_hhmm(sim['chegadas'][i])} "
@@ -489,7 +514,7 @@ def _badges_trava(rascunho: dict) -> list[str]:
     # de um dos três cortes (pedidos, caixas, menos de 5h -- 03/10), o
     # aviso some sozinho.
     motivo_fraca = rascunho.get("rota_fraca_motivo")
-    if (motivo_fraca and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
+    if (motivo_fraca and not tarde and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
             and _tempo_estimado() < HORAS_ROTA_FRACA):
         badges.append(f"rota fraca: {len(paradas)} pedido(s), {caixas} caixa(s). {motivo_fraca}")
 
@@ -1062,6 +1087,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     confirmacoes_dia = listar_confirmacoes_do_dia(data_alvo)
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
+        r["selo_tarde"] = _selo_tarde(r)
         # confirmação do motorista (página pública na VPS, ver
         # confirmacao_motoristas/) só existe pra rota já enviada à
         # VUUPT -- rascunho ainda pode trocar de motorista até lá.
@@ -1115,7 +1141,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     for r in rascunhos:
         # previsão de chegada por parada na ordem atual (Hugo, 09/09) --
         # só pra rota com alguma janela (é quando a hora importa)
-        sim = _simular_rascunho(r["paradas"])
+        sim = _simular_rascunho(
+            r["paradas"],
+            hora_saida=_hora_saida_tarde(r))
         for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
@@ -1376,6 +1404,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
     mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
 
     from geocodificacao import geocodificar
+    coords_base = None
     try:
         coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
         if coords_base:
@@ -1400,6 +1429,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
             "macro": Counter(macros).most_common(1)[0][0] if macros else None,
             "agent_id": r.get("agent_id"),
             "servicos": servicos_rota,
+            # Rascunho da tarde: janela julgada a partir da saída dele
+            "hora_saida": _hora_saida_tarde(r),
         })
 
     def _cabe_na_janela(info: dict, servico: dict) -> bool:
@@ -1407,7 +1438,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
         if not tem_janela(candidato):
             return True
         try:
-            return janela_viavel(candidato, gmaps_key)
+            return janela_viavel(candidato, gmaps_key, hora_saida=info["hora_saida"])
         except Exception as e:
             logger.warning(f"  Falha ao checar janela no rascunho '{info['nome']}' (não bloqueia): {e}")
             return True
@@ -1452,8 +1483,17 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
         ]
         escolhida = None
         if coords_pedido:
+            # 16/10: rascunho comum também passa pelas travas de trajeto
+            # da montagem das 16h (distância até cada parada, km acumulado, 9h)
             no_raio = [info for info in candidatas if info["centroide"]
-                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM]
+                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                       and (info["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                           servico, info["servicos"], gmaps_key,
+                           distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                           km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                           km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                           eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                           base=coords_base))]
             if no_raio:
                 escolhida = min(no_raio, key=lambda info: _distancia_km(*coords_pedido, *info["centroide"]))
         elif not eh_viagem and candidatas:

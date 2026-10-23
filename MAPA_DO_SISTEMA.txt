@@ -622,6 +622,11 @@
  otimizacao_rotas.py       Modelos: Sweep Polar, Clarke-Wright, 2-Opt, CEP, K-means.
  selecao_modelo.py         Roda os 5 e escolhe o melhor.
  polimento_rotas.py        Move/troca paradas entre rotas se o km cai.
+ rota_tarde.py            Rota da tarde (23/10): pedido de janela tardia que faria
+                           a rota da manha esperar mais de 45 min sai dela e vai
+                           pra rota propria que sai mais tarde (rascunhos_rota.turno
+                           = 'TARDE', sem motorista). Chave ROTA_TARDE_ATIVA em
+                           roteirizacao_dados.py desliga tambem a trava de espera.
  metricas_plano.py         Métricas geométricas de um plano.
  km_rodoviario.py          Km pela Google Routes (haversine de reserva).
  replay_rotas.py           Replay de dias passados para calibrar.
@@ -669,7 +674,10 @@
                            sobra, nos rascunhos abertos (corte 22h). 18h e
                            22h desde 05/10 (+ botão do painel). Até 15
                            pedidos por rota comum (07/10; mesmo
-                           TAMANHO_MAXIMO_ROTA do rascunho).
+                           TAMANHO_MAXIMO_ROTA do rascunho). Desde 16/10
+                           rota comum também confere distância até cada
+                           parada, km acumulado e 9h
+                           (otimizacao_rotas.pedido_cabe_no_trajeto).
  cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
@@ -1126,7 +1134,7 @@
    nucleo_*                  nucleo/ (pedidos, rotas, paradas, eventos,
                              comprovantes, pedágios, reconciliações...)
    motoristas, tarifas_motorista  nucleo/banco.py
-   rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py
+   rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
    clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)

@@ -104,6 +104,19 @@ def _conectar() -> sqlite3.Connection:
             criado_em          TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
     """)
+    # Foto do plano (Hugo, 17/10): em qual rascunho cada pedido NASCEU.
+    # Só criar_lote_rascunhos grava; as edições da tela mexem em
+    # rascunhos_parada. Base de roteirizacao/aderencia_plano.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rascunhos_plano_original (
+            lote_id      TEXT NOT NULL,
+            rascunho_id  INTEGER NOT NULL,
+            service_id   INTEGER NOT NULL,
+            gravado_em   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_plano_original_rascunho "
+                 "ON rascunhos_plano_original(rascunho_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_lote ON rascunhos_rota(lote_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_data ON rascunhos_rota(data_alvo, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_parada_rascunho ON rascunhos_parada(rascunho_id)")
@@ -183,6 +196,12 @@ def _conectar() -> sqlite3.Connection:
     # teto nela, senão a receptora sairia com "17 paradas (máx 16)".
     if "recebeu_rota_fraca" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN recebeu_rota_fraca INTEGER NOT NULL DEFAULT 0")
+
+    # Migração 23/10: 'TARDE' marca a rota da tarde (pedido de janela tardia
+    # que não cabe na manhã; sem motorista sugerido), NULL = rota normal.
+    # O nome da rota não muda -- ver roteirizacao/rota_tarde.py.
+    if "turno" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN turno TEXT")
 
     conn.commit()
     return conn
@@ -296,7 +315,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     tipo_rota, zona, tipo_veiculo, agent_id, vehicle_id, motorista_nome,
     start_location_base_id, end_location_base_id, start_at,
     km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca
-    (bool; ausente = não recebeu), sublote (lista de serviços brutos da
+    (bool; ausente = não recebeu), turno ('TARDE'; ausente = rota normal), sublote (lista de serviços brutos da
     VUUPT).
 
     `lote_id` explícito ACRESCENTA os rascunhos a um lote já existente
@@ -320,18 +339,20 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                     data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                     agent_id, vehicle_id, motorista_nome,
                     start_location_base_id, end_location_base_id,
-                    start_at, km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_at, km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca, turno, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data_alvo.isoformat(), lote_id, r["nome"], r.get("particao"),
                 r.get("tipo_rota"), r.get("zona"), r.get("tipo_veiculo"), r.get("agent_id"), r.get("vehicle_id"),
                 r.get("motorista_nome"), r["start_location_base_id"], r.get("end_location_base_id"),
                 r["start_at"], r.get("km_estimado"), r.get("horas_estimadas"), r.get("rota_fraca_motivo"),
-                1 if r.get("recebeu_rota_fraca") else 0, STATUS_RASCUNHO,
+                1 if r.get("recebeu_rota_fraca") else 0, r.get("turno"), STATUS_RASCUNHO,
             ))
             rascunho_id = cursor.lastrowid
             for ordem, servico in enumerate(r["sublote"]):
                 _inserir_parada(conn, rascunho_id, ordem, _parada_de_servico(servico, remetentes_por_id))
+                conn.execute("INSERT INTO rascunhos_plano_original (lote_id, rascunho_id, service_id) "
+                             "VALUES (?, ?, ?)", (lote_id, rascunho_id, servico["id"]))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
         return lote_id
@@ -587,9 +608,19 @@ def otimizar_sequencia(rascunho_id: int):
              "_janela_inicio": p["janela_inicio"], "_janela_fim": p["janela_fim"]}
             for p in paradas
         ]
-        from roteirizacao_dados import definir_coords_base
-        definir_coords_base(*base)
-        nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
+        import roteirizacao_dados
+        roteirizacao_dados.definir_coords_base(*base)
+        # Rota da tarde (turno TARDE, 23/10): sequencia a partir da saída
+        # dela (start_at), não das 06h -- a da manhã segue o 2-opt de sempre
+        rascunho = conn.execute("SELECT turno, start_at FROM rascunhos_rota WHERE id = ?",
+                                (rascunho_id,)).fetchone()
+        hora_saida = (roteirizacao_dados.hora_saida_de_start_at(rascunho["start_at"])
+                      if rascunho and rascunho["turno"] == "TARDE" else None)
+        if hora_saida is not None:
+            nova_ordem = roteirizacao_dados.ordenar_com_janelas(servicos_fake, base[0], base[1], api_key,
+                                                                hora_saida=hora_saida)
+        else:
+            nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
         for ordem, s in enumerate(nova_ordem):
             conn.execute(
                 "UPDATE rascunhos_parada SET ordem = ? WHERE rascunho_id = ? AND service_id = ?",
@@ -1078,13 +1109,14 @@ def duplicar_rascunho(rascunho_id: int) -> int:
                 data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                 agent_id, vehicle_id, motorista_nome,
                 start_location_base_id, end_location_base_id,
-                start_at, km_estimado, horas_estimadas, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_at, km_estimado, horas_estimadas, turno, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
             origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
-            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), STATUS_RASCUNHO,
+            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), origem.get("turno"),
+            STATUS_RASCUNHO,
         ))
         novo_id = cursor.lastrowid
         for p in origem["paradas"]:

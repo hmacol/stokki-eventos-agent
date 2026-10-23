@@ -109,14 +109,17 @@ from notificar_execucao_agente import notificar_execucao
 from roteirizacao_dados import (
     obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
     macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
+    hora_saida_de_start_at, ordenar_com_janelas,
 )
-from otimizacao_rotas import ordenar_2opt
+import roteirizacao_dados
+from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
+    DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, KM_ACUMULADO_MAXIMO_ROTA_KM,
+    KM_ACUMULADO_MAXIMO_VIAGEM_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
 import rascunhos_rota  # painel_agentes/ -- criar_rotas_diarias já pôs no sys.path
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
@@ -386,6 +389,25 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
         return caixas_cabe and enderecos_cabe
     return (rota["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA
             and rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA))
+
+
+def _hora_saida_da_rota(start_at: str | None) -> float | None:
+    """Saída da rota pro simulador de janelas: a hora do start_at só
+    quando é mais de 1 min depois de HORA_SAIDA_BASE (rota da tarde);
+    rota da manhã fica com None pra valer o hora_saida_base do config
+    (decisão R9, 23/10)."""
+    hora = hora_saida_de_start_at(start_at)
+    if hora is None or round((hora - roteirizacao_dados.HORA_SAIDA_BASE) * 60) <= 1:
+        return None
+    return hora
+
+
+def _ordenar_rota_incrementada(servicos: list[dict], coords_base, gmaps_key, hora_saida: float | None) -> list[dict]:
+    """Resequencia a rota que ganhou pedido. Rota da tarde (hora_saida)
+    é sequenciada a partir da saída dela; a da manhã segue ordenar_2opt."""
+    if hora_saida is not None:
+        return ordenar_com_janelas(servicos, coords_base[0], coords_base[1], gmaps_key, hora_saida=hora_saida)
+    return ordenar_2opt(servicos, coords_base[0], coords_base[1], gmaps_key)
 
 
 def main(modo_teste: bool = False):
@@ -710,6 +732,9 @@ def main(modo_teste: bool = False):
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
                 "macro": macro_rota,
+                # Saída real da rota (rota da tarde sai ~14h, não 06h): a
+                # janela do pedido novo é avaliada a partir dela.
+                "hora_saida": _hora_saida_da_rota(r.get("start_at")),
             })
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
@@ -745,7 +770,7 @@ def main(modo_teste: bool = False):
             if not tem_janela(candidato):
                 return True
             try:
-                return janela_viavel(candidato, gmaps_key)
+                return janela_viavel(candidato, gmaps_key, hora_saida=rota_info.get("hora_saida"))
             except Exception as e:
                 logger.warning(f"  Falha ao checar janela na rota '{rota_info['nome']}' (não bloqueia): {e}")
                 return True
@@ -845,9 +870,20 @@ def main(modo_teste: bool = False):
                     # km) -- só considera rota cujo centroide esteja a até
                     # DISTANCIA_MAXIMA_ROTA_KM do pedido; nenhuma dentro do
                     # raio -- vira órfão, igual pedido sem rota nenhuma perto.
+                    # 16/10: rota comum também passa pelas travas de trajeto
+                    # da montagem das 16h (distância até cada parada, km
+                    # acumulado, 9h) -- antes só o centroide era conferido.
                     candidatas_no_raio = [
                         r for r in candidatas_com_centroide
                         if _distancia_km(*coords_pedido, *r["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                        and (r["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                            pedido, _servicos_da_rota_info(r), gmaps_key,
+                            distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                            distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                            km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                            km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                            eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                            base=coords_base))
                     ]
                     if candidatas_no_raio:
                         rota_escolhida = min(
@@ -965,7 +1001,8 @@ def main(modo_teste: bool = False):
                         logger.warning(f"  Rota '{rota_info['nome']}': faltam dados de algum serviço pra "
                                       f"reordenar -- mantendo ordem atual.")
                         continue
-                    ordenados = ordenar_2opt(servicos_da_rota, coords_base[0], coords_base[1], gmaps_key)
+                    ordenados = _ordenar_rota_incrementada(servicos_da_rota, coords_base, gmaps_key,
+                                                           rota_info.get("hora_saida"))
                     ordem_ids = [s["id"] for s in ordenados]
                     if ordem_ids != rota_info["service_ids"]:
                         atualizar_rota(token, rota_info["id"], ordem_ids)

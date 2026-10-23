@@ -202,7 +202,7 @@ class TetoDeTempoDaJanelaTestCase(unittest.TestCase):
     (Hugo, 03/10)."""
 
     def setUp(self):
-        self.sim = {"atraso_h": 0.0, "duracao_h": 10.0}
+        self.sim = {"atraso_h": 0.0, "duracao_h": 10.0, "espera_tardia_h": 0.0}
         for p in (mock.patch.object(rd, "simular_horarios", lambda *a, **k: self.sim),
                   mock.patch.object(rd, "_atraso_intrinseco", lambda *a, **k: 0.0),
                   mock.patch.object(rd, "_orcamento_inviavel_por_distancia", lambda *a, **k: False)):

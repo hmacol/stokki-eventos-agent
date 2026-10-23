@@ -60,7 +60,7 @@ from roteirizacao_dados import (
     extrair_volume_caixas, extrair_nivel_dificuldade,
     calcular_km_estimado, separar_pedidos_exclusivos, caixas_e_enderecos,
     estimar_tempo_rota, ROTA_TEMPO_MAXIMO_HORAS, _orcamento_inviavel_por_distancia,
-    janela_viavel, ordenar_com_janelas, coords_do_servico, MAX_ITERACOES_2OPT,
+    janela_viavel, ordenar_com_janelas, coords_do_servico, MAX_ITERACOES_2OPT, _km_acumulado_sequencial,
 )
 from regras.tipo_veiculo import classificar_tipo_veiculo
 
@@ -115,6 +115,30 @@ def _cabe_na_distancia(servico: dict, sublote_atual: list[dict], distancia_maxim
         if coords_outro and _distancia_km(*coords_novo, *coords_outro) > limite:
             return False
     return True
+
+
+def pedido_cabe_no_trajeto(servico: dict, sublote_atual: list[dict], api_key: str | None, *,
+                           distancia_maxima_km: float | None, distancia_maxima_viagem_km: float | None = None,
+                           km_acumulado_maximo: float | None = None,
+                           km_acumulado_maximo_viagem: float | None = None,
+                           eh_viagem_fn=None, base: tuple[float, float] | None = None) -> bool:
+    """Travas de TRAJETO pra pedido novo entrando em rota que ja existe
+    (incremento das 18h/22h e botao Incrementar, 16/10): distancia ate
+    cada parada, km acumulado e jornada de ROTA_TEMPO_MAXIMO_HORAS, as
+    mesmas da montagem das 16h. Caixas, pedidos e janela ficam com quem
+    chama. Sem base: so a distancia (nao da pra sequenciar). So pra rota
+    comum -- veiculo grande segue as travas do proprio tipo."""
+    if not _cabe_na_distancia(servico, sublote_atual, distancia_maxima_km, api_key,
+                              distancia_maxima_viagem_km, eh_viagem_fn):
+        return False
+    if base is None:
+        return True
+    seq = ordenar_2opt(sublote_atual + [servico], base[0], base[1], api_key)
+    limite_acumulado = _limite_distancia(seq, km_acumulado_maximo, km_acumulado_maximo_viagem, eh_viagem_fn)
+    if limite_acumulado is not None and _km_acumulado_sequencial(seq, api_key) > limite_acumulado:
+        return False
+    return (estimar_tempo_rota(seq, api_key, base) <= ROTA_TEMPO_MAXIMO_HORAS
+            or _orcamento_inviavel_por_distancia(seq, api_key, base))
 
 
 def _empacotar_ganancioso(ordenados: list[dict], tamanho_maximo: int, volume_maximo: int,
