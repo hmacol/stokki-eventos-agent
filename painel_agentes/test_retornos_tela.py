@@ -201,5 +201,34 @@ class Descarga(Base):
         self.assertEqual(lista[0]["recebedor"], "Carlos")
 
 
+class NoGalpao(Base):
+    def test_torre_badge_no_galpao(self):
+        self.logar("galpao")
+        self.enviar([self.item(self.p1, 3), self.item(self.p2, 2)])
+        ins = [{"service_id": 501}, {"service_id": 502}, {"service_id": 999}]
+        painel_agentes.torre_controle._badges_insucessos(ins)
+        textos = [[b["texto"] for b in i["badges"]] for i in ins]
+        self.assertTrue(any(t.startswith("No galpão") and "divergência" in t for t in textos[0]), textos[0])
+        self.assertTrue(any(t.startswith("No galpão") and "divergência" not in t for t in textos[1]), textos[1])
+        self.assertEqual(textos[2], [])
+
+    def test_torre_sem_tabela_de_retornos_nao_quebra(self):
+        ins = [{"service_id": 501}]
+        with mock.patch.object(retornos, "conectar", side_effect=RuntimeError("sem banco")):
+            painel_agentes.torre_controle._badges_insucessos(ins)
+        self.assertFalse(any(b["texto"].startswith("No galpão") for b in ins[0]["badges"]))
+
+    def test_consulta_mostra_no_galpao(self):
+        self.logar("galpao")
+        self.enviar([self.item(self.p1, 3)])
+        self.logar("operador")
+        detalhe = {"codigo": "PS-1", "pedido": None, "paradas": [], "eventos": [], "comprovantes": {}}
+        with mock.patch("nucleo.consulta.detalhar_pedido", return_value=detalhe):
+            html = self.cliente.get("/consulta/pedido/PS-1").get_data(as_text=True)
+        self.assertIn("No galpão", html)
+        self.assertIn("Carlos", html)
+        self.assertIn("3 de 5", html)
+
+
 if __name__ == "__main__":
     unittest.main()

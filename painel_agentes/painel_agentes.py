@@ -2619,7 +2619,17 @@ def consulta_pedido(codigo):
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
     if not detalhe:
         abort(404)
-    return render_template("consulta_pedido.html", d=detalhe)
+    # Retorno conferido no galpão (tela /retornos); leitura nunca derruba a consulta.
+    try:
+        conn_r = retornos.conectar()
+        try:
+            no_galpao = retornos.status_por_codigo(conn_r, detalhe["codigo"])
+        finally:
+            conn_r.close()
+    except Exception:
+        logging.getLogger(__name__).exception("Consulta: falha ao ler retornos de %s", codigo)
+        no_galpao = []
+    return render_template("consulta_pedido.html", d=detalhe, no_galpao=no_galpao)
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")

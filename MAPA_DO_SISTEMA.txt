@@ -116,6 +116,12 @@
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
    Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
                                              vigia_stokki_abertos (retrato do pipeline, não ao vivo)
+ Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,
+                                             mobile; link no app do galpão /wms): insucesso/parcial (menos
+                                             Não coletado) de nucleo_paradas; foto da carga, avaria com foto,
+                                             motivo, assinatura; divergência/parcial -> grupo "Alertas" do
+                                             /atendimento; 07h dia útil alertar_retornos_atrasados.py.
+                                             Selo "No galpão" na Torre e na Consulta. Não segura reentrega.
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
@@ -275,6 +281,9 @@
  seg-sex 08:35-16:35 (1h)    vigia-fila-impressao            vigia_fila_impressao.py (só lê a Estação:
    + 18:35 e 22:35 todo dia                                  faturado +2h / em espera +24h -> grupo
                                                              ALERTAS FRESH + e-mail, 1x por pedido/dia)
+ seg-sex 07:00               retornos-atrasados              alertar_retornos_atrasados.py (retorno sem descarga
+                                                             confirmada até 07h do próximo dia útil -> grupo
+                                                             Alertas do /atendimento, 1x por retorno; feriado pula)
  xx:10/25/40/55              vigia-pedidos                   python -m vigia.vigiar (só lê o banco)
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
                                                              (só devolve ao pool pedido NÃO iniciado de
@@ -392,6 +401,8 @@
  email_utils.py                Envio de e-mail HTML padrão (use sempre este).
  notificar_execucao_agente.py  E-mail de resumo por rotina.
  notificar_pedidos_em_espera.py  Cobra XML / manda faturados para impressão.
+ alertar_retornos_atrasados.py  Cobra no grupo Alertas do /atendimento os retornos
+                               não recebidos até 07h do próximo dia útil (--modo-teste).
  vigia_fila_impressao.py       Só lê a Estação de Impressão e avisa pedido parado
                                (faturado +2h, em espera +24h; tabela
                                vigia_impressao_alertas = 1 aviso por pedido/dia;
@@ -780,6 +791,13 @@
                            não lidas + aviso sonoro (só com o painel aberto),
                            "Enviar para grupo" no chamado. Tabelas equipe_grupos,
                            equipe_grupos_mensagens, equipe_grupos_lidas (dados.db).
+ retornos.py               Recebimento de retornos (23/10): lista dos insucessos/parciais
+                           a receber (nucleo_paradas, chave = parada), descarga com fotos
+                           e assinatura em dados/retornos/<id>/ (+GCS best-effort),
+                           divergência, alerta no grupo "Alertas" (cria se faltar).
+                           Tabelas retornos_descargas, retornos_recebidos,
+                           retornos_alertas_atraso. Confirmar: total/operador/logistica/
+                           galpao/expedicao; atendimento e leitura só veem.
  contadores_menu.py        Badges do menu lateral.
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
@@ -1063,6 +1081,8 @@
    xml_stokki_coleta         documentos_pedido/coletar_xml_nfe.py (1 linha por PS: OK/PLACEHOLDER/
                              SEM_XML/ERRO, erros seguidos; os XMLs ficam em dados/xml_stokki/PS-<id>.xml,
                              lidos pelo freshhub via snapshot -- nao apagar a pasta)
+   retornos_descargas, retornos_recebidos, retornos_alertas_atraso
+                             painel_agentes/retornos.py (tela /retornos)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;

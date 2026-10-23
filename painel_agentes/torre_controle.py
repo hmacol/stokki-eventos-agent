@@ -542,6 +542,18 @@ def _badges_insucessos(insucessos: list[dict]) -> None:
         except (ValueError, TypeError):
             return iso or ""
 
+    # Retorno já conferido no galpão (tela /retornos, 23/10).
+    no_galpao = {}
+    try:
+        import retornos
+        conn_r = retornos.conectar()
+        try:
+            no_galpao = retornos.status_por_service_ids(conn_r, ids)
+        finally:
+            conn_r.close()
+    except Exception as e:
+        logger.warning(f"[torre] Falha ao ler retornos recebidos: {e}")
+
     for i in insucessos:
         sid = i.get("service_id")
         dup, ag, ar = duplicados.get(sid), agendadas.get(sid), aguardando.get(sid)
@@ -571,6 +583,15 @@ def _badges_insucessos(insucessos: list[dict]) -> None:
             badges.append({"tipo": "aguardando", "texto": "Aguardando resposta do remetente"})
         elif ar and ar["status"] == "RESPONDIDO" and not badges:
             badges.append({"tipo": "respondido", "texto": "Respondido por e-mail"})
+
+        rec = no_galpao.get(sid)
+        if rec:
+            try:
+                quando = " " + datetime.strptime(rec["recebido_em"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+            except (TypeError, ValueError):
+                quando = ""
+            texto = f"No galpão{quando}" + (" · divergência" if rec["divergente"] else "")
+            badges.append({"tipo": "falha" if rec["divergente"] else "respondido", "texto": texto})
 
         i["badges"] = badges
 
