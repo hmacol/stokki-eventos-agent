@@ -28,6 +28,8 @@
   .msg-salvar { font-size: 13px; color: var(--texto-suave); }
   .msg-salvar.erro { color: var(--erro); }
   .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
+  .cartao.inativo { opacity: 0.6; }
+  .pilula.desativado { background: var(--erro); color: #fff; }
 </style>
 {% endblock %}
 
@@ -39,7 +41,8 @@
   Cadastre logins, ajuste nome e nível e escolha as telas de cada um. Tela marcada no modo
   <strong>Personalizado</strong> vale <strong>completa</strong>: ver e todos os botões, como no acesso total.
   Muda na hora, sem a pessoa sair e entrar. Login novo e senha redefinida são <strong>provisórios</strong>:
-  a pessoa escolhe a senha dela no primeiro acesso.
+  a pessoa escolhe a senha dela no primeiro acesso. <strong>Desativar</strong> tira o acesso na hora sem apagar
+  o login do histórico.
 </p>
 
 <div class="cartao" id="novo">
@@ -61,12 +64,13 @@
 </div>
 
 {% for u in usuarios %}
-<div class="cartao" data-usuario="{{ u.usuario }}">
+<div class="cartao{{ ' inativo' if not u.ativo }}" data-usuario="{{ u.usuario }}" data-ativo="{{ 1 if u.ativo else 0 }}">
   <div class="cabeca">
     <span class="nome">{{ u.nome or u.usuario }}</span>
     {% if u.nome %}<span class="login">{{ u.usuario }}</span>{% endif %}
     <span class="pilula">{{ 'personalizado' if u.telas is not none else ROTULOS.get(u.nivel, u.nivel) }}</span>
     {% if u.trocar_senha %}<span class="pilula">senha provisória</span>{% endif %}
+    {% if not u.ativo %}<span class="pilula desativado">desativado</span>{% endif %}
     {% if u.atualizado_em %}<span class="quando">mudado por {{ u.atualizado_por }} em {{ u.atualizado_em }}</span>{% endif %}
   </div>
   {% if u.usuario == eu %}
@@ -97,6 +101,7 @@
   <div class="rodape-cartao">
     <button type="button" class="botao" data-acao="salvar">Salvar</button>
     <button type="button" class="botao secundario" data-acao="senha">Redefinir senha</button>
+    <button type="button" class="botao secundario" data-acao="ativo">{{ 'Desativar' if u.ativo else 'Reativar' }}</button>
     <span class="msg-salvar"></span>
   </div>
   {% endif %}
@@ -161,6 +166,11 @@
         nivel: cartao.querySelector("[name=nivel]").value,
       };
       if (await enviar("/api/acessos", corpo, botao, aviso)) window.location.reload();
+    });
+    cartao.querySelector("button[data-acao=ativo]").addEventListener("click", async (ev) => {
+      const ativo = cartao.dataset.ativo !== "1";
+      if (!ativo && !window.confirm(`Desativar ${usuario}? Não entra mais e a sessão aberta cai na hora.`)) return;
+      if (await enviar("/api/acessos/ativo", { usuario, ativo }, ev.currentTarget, aviso)) window.location.reload();
     });
     cartao.querySelector("button[data-acao=senha]").addEventListener("click", async (ev) => {
       const senha = window.prompt(`Senha provisória pra ${usuario} (mínimo {{ senha_minima }} caracteres). Ela troca no próximo acesso.`);

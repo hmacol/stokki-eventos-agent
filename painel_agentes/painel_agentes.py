@@ -199,6 +199,37 @@ def _logins_fixos(cfg_painel: dict) -> set:
     return {cfg_painel.get(c) for c in chaves if cfg_painel.get(c)}
 
 
+# Limite de tentativas no /login (23/10): 5 senhas erradas do mesmo login
+# vindas do mesmo IP bloqueiam esse par por 15 min. Por login+IP, e nao so
+# por IP, pra um erro de digitacao no escritorio (IP unico) nao travar a
+# equipe toda. Em memoria: o painel roda num processo so (waitress); um
+# restart zera, o que e aceitavel.
+_LOGIN_MAX_FALHAS = 5
+_LOGIN_JANELA = timedelta(minutes=15)
+_login_falhas: dict = {}
+_login_falhas_lock = threading.Lock()
+
+
+def _login_bloqueado(chave) -> bool:
+    agora = datetime.now()
+    with _login_falhas_lock:
+        recentes = [t for t in _login_falhas.get(chave, []) if agora - t < _LOGIN_JANELA]
+        if recentes:
+            _login_falhas[chave] = recentes
+        else:
+            _login_falhas.pop(chave, None)
+        return len(recentes) >= _LOGIN_MAX_FALHAS
+
+
+def _registrar_falha_login(chave) -> None:
+    agora = datetime.now()
+    with _login_falhas_lock:
+        if len(_login_falhas) > 5000:   # muitos logins chutados: limpa os vencidos
+            for k in [k for k, ts in _login_falhas.items() if agora - ts[-1] >= _LOGIN_JANELA]:
+                del _login_falhas[k]
+        _login_falhas.setdefault(chave, []).append(agora)
+
+
 def _sessao_na_versao(conta: dict) -> bool:
     """Senha redefinida ou trocada sobe a versao_senha da conta: sessao
     aberta com a senha anterior deixa de valer (sem isso, uma sessao velha
@@ -260,10 +291,10 @@ def requer_auth(f=None, *, niveis=("total",)):
             # provisoria trava tudo ate a pessoa trocar.
             conta = acesso_telas.conta(session.get("usuario"))
             if conta:
-                if not _sessao_na_versao(conta):
+                if not conta["ativo"] or not _sessao_na_versao(conta):
                     session.clear()
                     if request.path.startswith(f"{request.script_root}/api/"):
-                        return jsonify({"erro": "Sua senha mudou -- faça login de novo."}), 401
+                        return jsonify({"erro": "Seu acesso mudou -- faça login de novo."}), 401
                     return redirect(url_for("login"))
                 if conta["trocar_senha"]:
                     if request.path.startswith(f"{request.script_root}/api/"):
@@ -435,11 +466,16 @@ def login():
         cfg_painel = config.get("painel_agentes", {})
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
+        chave_limite = (request.remote_addr, usuario.strip().lower())
+        if _login_bloqueado(chave_limite):
+            return render_template("login.html", proximo=request.form.get("proximo", ""),
+                                   erro="Muitas tentativas erradas. Espere 15 minutos e tente de novo."), 429
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
         conta = acesso_telas.conta(usuario) if nivel else None
         telas = conta["telas"] if conta else None
         paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
         if nivel is None:
+            _registrar_falha_login(chave_limite)
             erro = "Usuário ou senha incorretos."
         elif telas is not None and not paginas:
             erro = "Seu usuário não tem nenhuma tela liberada. Fale com o Hugo."
@@ -469,7 +505,7 @@ def trocar_senha():
     /acessos cadastra ou redefine com senha provisoria e requer_auth manda
     pra ca ate a pessoa escolher a dela."""
     conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
-    if not conta or not _sessao_na_versao(conta):
+    if not conta or not conta["ativo"] or not _sessao_na_versao(conta):
         session.clear()
         return redirect(url_for("login"))
     if not conta["trocar_senha"]:
@@ -1453,6 +1489,23 @@ def api_acessos_novo():
     finally:
         conn.close()
     return jsonify({"ok": True, "usuario": usuario})
+
+
+@app.route("/api/acessos/ativo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_ativo():
+    """Desativa (nao entra, sessao aberta cai) ou reativa um login nominal."""
+    body = request.get_json(force=True, silent=True) or {}
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.mudar_ativo(conn, str(body.get("usuario") or ""), bool(body.get("ativo")),
+                                 session.get("usuario", ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/acessos/senha", methods=["POST"])
