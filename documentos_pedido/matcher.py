@@ -298,7 +298,7 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
                 break
             if not servicos_ref:
                 continue
-            codigos = {s.get("code", "").lstrip("#") for s in servicos_ref}
+            codigos = {(s.get("code") or "").lstrip("#") for s in servicos_ref}  # VUUPT manda "code": null
             codigos.discard("")
             if len(codigos) != 1:
                 break       # achou mas ambíguo -- termo mais frouxo só pioraria
@@ -372,7 +372,10 @@ def casar_documento_com_pedido(nome_arquivo: str, assunto_email: str | None,
                 "motivo_falha": f"Cliente do CNPJ {cnpj} encontrado, mas falha ao buscar serviços dele: {e}"}
 
     if len(servicos) == 1:
-        codigo_encontrado = servicos[0].get("code", "").lstrip("#")
+        codigo_encontrado = (servicos[0].get("code") or "").lstrip("#")
+        if not codigo_encontrado:
+            return {"codigo_pedido": None, "metodo": None,
+                    "motivo_falha": f"CNPJ {cnpj} casou com um cliente que tem 1 serviço, mas o serviço está sem código no VUUPT."}
         return {"codigo_pedido": codigo_encontrado, "metodo": "cnpj_pdf", "motivo_falha": None}
     if len(servicos) == 0:
         return {"codigo_pedido": None, "metodo": None,
