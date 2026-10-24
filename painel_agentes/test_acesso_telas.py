@@ -27,7 +27,7 @@ import acesso_telas  # noqa: E402
 # Rotas sem login de painel (ou so do total de verdade) -- fora do catalogo de proposito.
 FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api_romaneio_pdf",
                     "wms_manifest", "wms_service_worker", "acessos", "api_acessos", "api_acessos_novo",
-                    "api_acessos_senha", "api_acessos_ativo", "trocar_senha",
+                    "api_acessos_senha", "api_acessos_ativo", "api_acessos_derrubar_sessoes", "trocar_senha",
                     "galpao_3d", "api_galpao_3d_estado"}
 
 
@@ -293,6 +293,26 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         c = painel_agentes.app.test_client()
         r = c.post("/login", data={"usuario": "ana", "senha": "s_ana"}, environ_base={"REMOTE_ADDR": "10.0.1.1"})
         self.assertEqual(r.status_code, 429)
+
+    def test_derrubar_todas_as_sessoes(self):
+        ana, _ = self._logar("ana", "s_ana")
+        galpao = painel_agentes.app.test_client()
+        with galpao.session_transaction() as s:
+            s["nivel_acesso"] = "galpao"                         # aparelho compartilhado, sessao de antes
+        self.assertEqual(galpao.get("/api/sessao/estado").status_code, 200)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/derrubar-sessoes", headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(cliente.get("/acessos").status_code, 302)                 # quem clicou tambem cai
+        self.assertTrue(ana.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        self.assertEqual(galpao.get("/api/sessao/estado").status_code, 401)
+        cliente, _ = self._chefe()                                                 # login novo entra
+        self.assertIn("Última vez: chefe", cliente.get("/acessos").get_data(as_text=True))
+
+    def test_personalizado_nao_derruba_sessoes(self):
+        self._gravar("chefe", ["index"])
+        cliente, hdr = self._chefe()
+        self.assertEqual(cliente.post("/api/acessos/derrubar-sessoes", headers=hdr).status_code, 403)
 
     def test_tabela_antiga_ganha_versao_senha(self):
         conn = acesso_telas.conectar()

@@ -122,6 +122,13 @@ def conectar(caminho=None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN versao_senha INTEGER NOT NULL DEFAULT 0")
     if "ativo" not in colunas:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN ativo INTEGER NOT NULL DEFAULT 1")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS painel_sessoes_rodada (
+            id     INTEGER PRIMARY KEY CHECK (id = 1),
+            rodada INTEGER NOT NULL,
+            por    TEXT,
+            em     TEXT NOT NULL
+        )""")
     return conn
 
 
@@ -278,6 +285,31 @@ def trocar_senha(conn, usuario: str, nova: str, versao_sessao: int):
                        (generate_password_hash(nova), usuario, versao_sessao))
     conn.commit()
     return versao_sessao + 1 if cur.rowcount else None
+
+
+def rodada_sessoes(conn=None) -> dict:
+    """Rodada atual das sessoes do painel (24/10): cada sessao nasce com a
+    rodada do login e cai quando ela muda. Sem linha = rodada 0, que e
+    tambem o que vale pra sessao sem o numero."""
+    proprio = conn is None
+    conn = conn or conectar()
+    try:
+        r = conn.execute("SELECT rodada, por, em FROM painel_sessoes_rodada WHERE id = 1").fetchone()
+    finally:
+        if proprio:
+            conn.close()
+    return dict(r) if r else {"rodada": 0, "por": None, "em": None}
+
+
+def derrubar_sessoes(conn, por: str) -> int:
+    """Derruba todas as sessoes abertas do painel, de qualquer login (pares
+    fixos, nominais, galpao e expedicao): todo mundo loga de novo."""
+    conn.execute(
+        "INSERT INTO painel_sessoes_rodada (id, rodada, por, em) VALUES (1, 1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET rodada = rodada + 1, por = excluded.por, em = excluded.em",
+        (por, _agora()))
+    conn.commit()
+    return rodada_sessoes(conn)["rodada"]
 
 
 def importar_do_config(conn, cfg_painel: dict) -> list[str]:
