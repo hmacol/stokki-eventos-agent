@@ -242,6 +242,26 @@ def _registrar_falha_login(chaves) -> None:
             _login_falhas.setdefault(chave, []).append(agora)
 
 
+# Deslogar por inatividade (24/10, Hugo): 30 min sem a pessoa mexer na tela
+# derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
+# que o _sessao_inativa_script.html manda ao clicar, digitar, tocar ou rolar.
+# As consultas automaticas das telas (Torre, contadores do menu, status da
+# execucao a cada 2 s) NAO contam, senao ninguem cairia nunca. Galpao e
+# expedicao (logins fixos de aparelho compartilhado) ficam de fora.
+_INATIVIDADE_MAX = timedelta(minutes=30)
+_NIVEIS_SEM_EXPIRAR = ("galpao", "expedicao")
+
+
+def _uso_de_verdade() -> bool:
+    if request.endpoint == "api_sessao_atividade":
+        return True
+    # Sec-Fetch-Mode=navigate so vem quando a pessoa abre a pagina; fetch()
+    # manda "cors"/"same-origin". Navegador antigo sem o cabecalho: GET de
+    # pagina conta como uso.
+    return request.method == "GET" and not request.path.startswith(f"{request.script_root}/api/") \
+        and request.headers.get("Sec-Fetch-Mode", "navigate") == "navigate"
+
+
 def _sessao_na_versao(conta: dict) -> bool:
     """Senha redefinida ou trocada sobe a versao_senha da conta: sessao
     aberta com a senha anterior deixa de valer (sem isso, uma sessao velha
@@ -297,7 +317,14 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
-                return redirect(url_for("login", proximo=request.script_root + request.full_path))
+                return redirect(url_for("login"))
+            # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
+            # anterior cai, de qualquer login.
+            if session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
+                session.clear()
+                if request.path.startswith(f"{request.script_root}/api/"):
+                    return jsonify({"erro": "Sessão encerrada -- faça login de novo."}), 401
+                return redirect(url_for("login"))
             # Login nominal (23/10): nivel e nome vem do banco a cada request,
             # entao mudanca feita na /acessos vale sem novo login. Senha
             # provisoria trava tudo ate a pessoa trocar.
@@ -315,6 +342,17 @@ def requer_auth(f=None, *, niveis=("total",)):
                 if conta["nivel"] != nivel:
                     session["nivel_acesso"] = nivel = conta["nivel"]
             g.nome_usuario = (conta or {}).get("nome") or ""
+            # Sessao parada (24/10, Hugo): 30 min sem uso de verdade -> login.
+            if nivel not in _NIVEIS_SEM_EXPIRAR:
+                agora = datetime.now().timestamp()
+                ultimo = session.get("ultimo_uso")
+                if ultimo and agora - ultimo > _INATIVIDADE_MAX.total_seconds():
+                    session.clear()
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Sessão encerrada por 30 min sem uso -- faça login de novo."}), 401
+                    return redirect(url_for("login"))
+                if ultimo is None or _uso_de_verdade():
+                    session["ultimo_uso"] = agora
             # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
             # telas, com poder de total dentro delas, no lugar do nivel.
             telas = conta["telas"] if conta else None
@@ -480,7 +518,7 @@ def login():
         senha = request.form.get("senha", "")
         chave_limite = _chaves_login(request.remote_addr, usuario)
         if _login_bloqueado(chave_limite):
-            return render_template("login.html", proximo=request.form.get("proximo", ""),
+            return render_template("login.html",
                                    erro="Muitas tentativas erradas. Espere 15 minutos e tente de novo."), 429
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
         conta = acesso_telas.conta(usuario) if nivel else None
@@ -496,19 +534,17 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
+            session["ultimo_uso"] = datetime.now().timestamp()
+            session["rodada_sessoes"] = acesso_telas.rodada_sessoes()["rodada"]
             if conta:
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
                 return redirect(url_for("trocar_senha"))
-            pagina_padrao = _pagina_inicial(nivel, telas)
-            proximo = request.form.get("proximo") or pagina_padrao
-            # Só aceita redirecionar pra caminho relativo deste próprio
-            # painel -- nunca pra outro domínio (open redirect).
-            raiz = request.script_root or ""
-            if not (proximo == raiz or proximo.startswith(raiz + "/")):
-                proximo = pagina_padrao
-            return redirect(proximo)
-    return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
+            # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
+            # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
+            # vao pra tela deles (_pagina_inicial).
+            return redirect(_pagina_inicial(nivel, telas))
+    return render_template("login.html", erro=erro)
 
 
 @app.route("/trocar-senha", methods=["GET", "POST"])
@@ -517,7 +553,8 @@ def trocar_senha():
     /acessos cadastra ou redefine com senha provisoria e requer_auth manda
     pra ca ate a pessoa escolher a dela."""
     conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
-    if not conta or not conta["ativo"] or not _sessao_na_versao(conta):
+    if not conta or not conta["ativo"] or not _sessao_na_versao(conta) \
+            or session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
         session.clear()
         return redirect(url_for("login"))
     if not conta["trocar_senha"]:
@@ -544,6 +581,29 @@ def trocar_senha():
             finally:
                 conn.close()
     return render_template("login.html", erro=erro, trocar=True, usuario=conta["usuario"])
+
+
+def _segundos_restantes():
+    """Quanto falta pra sessao cair por inatividade; None pra quem nao expira."""
+    if g.nivel_acesso in _NIVEIS_SEM_EXPIRAR or session.get("nivel_acesso") in _NIVEIS_SEM_EXPIRAR:
+        return None
+    restante = _INATIVIDADE_MAX.total_seconds() - (datetime.now().timestamp() - session.get("ultimo_uso", 0))
+    return max(0, int(restante))
+
+
+@app.route("/api/sessao/atividade", methods=["POST"])
+@requer_auth(niveis=acesso_telas.NIVEIS)
+@exige_mesma_origem
+def api_sessao_atividade():
+    """A pessoa mexeu na tela (_sessao_inativa_script.html): requer_auth ja renovou o ultimo_uso."""
+    return jsonify({"restante": _segundos_restantes()})
+
+
+@app.route("/api/sessao/estado")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def api_sessao_estado():
+    """Consulta sem renovar: 401 se a sessao ja caiu, senao quanto falta."""
+    return jsonify({"restante": _segundos_restantes()})
 
 
 @app.route("/logout", methods=["POST"])
@@ -1564,6 +1624,7 @@ def acessos():
     conn = acesso_telas.conectar()
     try:
         usuarios = acesso_telas.listar(conn)
+        rodada = acesso_telas.rodada_sessoes(conn)
     finally:
         conn.close()
     grupos = {}
@@ -1571,7 +1632,7 @@ def acessos():
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
                            niveis=acesso_telas.NIVEIS, senha_minima=acesso_telas.SENHA_MINIMA,
-                           eu=session.get("usuario", ""))
+                           eu=session.get("usuario", ""), rodada=rodada)
 
 
 @app.route("/api/acessos", methods=["POST"])
@@ -1616,6 +1677,20 @@ def api_acessos_novo():
     finally:
         conn.close()
     return jsonify({"ok": True, "usuario": usuario})
+
+
+@app.route("/api/acessos/derrubar-sessoes", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_derrubar_sessoes():
+    """Derruba todas as sessoes abertas do painel, inclusive a de quem clicou."""
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.derrubar_sessoes(conn, session.get("usuario", ""))
+    finally:
+        conn.close()
+    session.clear()
+    return jsonify({"ok": True, "login": url_for("login")})
 
 
 @app.route("/api/acessos/ativo", methods=["POST"])

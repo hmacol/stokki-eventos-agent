@@ -45,6 +45,19 @@
   o login do histórico.
 </p>
 
+<div class="cartao" id="sessoes">
+  <h2>Sessões abertas</h2>
+  <p class="sub" style="margin:0">
+    Derruba as sessões de <strong>todo mundo</strong>, inclusive a sua e as dos aparelhos do galpão e da expedição:
+    cada um precisa entrar de novo com login e senha.
+    {% if rodada.em %}Última vez: {{ rodada.por }} em {{ rodada.em }}.{% endif %}
+  </p>
+  <div class="rodape-cartao">
+    <button type="button" class="botao" data-acao="derrubar">Derrubar todas as sessões</button>
+    <span class="msg-salvar"></span>
+  </div>
+</div>
+
 <div class="cartao" id="novo">
   <h2>Novo login</h2>
   <div class="campos">
@@ -132,6 +145,13 @@
       return null;
     }
   }
+
+  const sessoes = document.getElementById("sessoes");
+  sessoes.querySelector("button[data-acao=derrubar]").addEventListener("click", async (ev) => {
+    if (!window.confirm("Derrubar a sessão de todo mundo, inclusive a sua? Todos vão precisar entrar de novo.")) return;
+    const dados = await enviar("/api/acessos/derrubar-sessoes", {}, ev.currentTarget, sessoes.querySelector(".msg-salvar"));
+    if (dados) window.location.href = dados.login;
+  });
 
   const novo = document.getElementById("novo");
   novo.querySelector("button[data-acao=criar]").addEventListener("click", async (ev) => {

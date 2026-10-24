@@ -1,0 +1,51 @@
+{#
+  Deslogar por inatividade (24/10, Hugo; regra em painel_agentes.py,
+  _INATIVIDADE_MAX). Clique, tecla, toque ou rolagem avisam o servidor (no
+  maximo 1 vez por minuto) que a pessoa esta usando a tela. Quando o tempo
+  acaba, pergunta ao servidor (sem renovar) se a sessao caiu: outra aba pode
+  ter sido usada nesse meio tempo. Caiu -> volta pro login. Galpao e
+  expedicao recebem restante=null e o script para.
+#}
+<script>
+(function () {
+  if (typeof BASE_PATH === "undefined") return;
+  var ultimoAviso = Date.now();
+  var timer = null;
+
+  function irProLogin() {
+    window.location.href = BASE_PATH + "/login";
+  }
+
+  function agendar(restante) {
+    clearTimeout(timer);
+    if (restante === null || restante === undefined) return;
+    timer = setTimeout(conferir, (restante + 5) * 1000);
+  }
+
+  function tratar(resp) {
+    if (resp.status === 401) { irProLogin(); return null; }
+    return resp.ok ? resp.json() : null;
+  }
+
+  function conferir() {
+    fetch(BASE_PATH + "/api/sessao/estado", { credentials: "same-origin" })
+      .then(tratar)
+      .then(function (d) { if (d) agendar(d.restante); })
+      .catch(function () { agendar(60); });
+  }
+
+  function usou() {
+    if (Date.now() - ultimoAviso < 60000) return;
+    ultimoAviso = Date.now();
+    fetch(BASE_PATH + "/api/sessao/atividade", { method: "POST", credentials: "same-origin" })
+      .then(tratar)
+      .then(function (d) { if (d) agendar(d.restante); })
+      .catch(function () {});
+  }
+
+  ["click", "keydown", "touchstart", "scroll", "wheel"].forEach(function (ev) {
+    window.addEventListener(ev, usou, { passive: true, capture: true });
+  });
+  conferir();
+})();
+</script>

@@ -223,6 +223,14 @@
                 Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
                 /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
                 (em memória no processo do painel; restart zera).
+                Inatividade (24/10): 30 min sem uso -> sessão cai (requer_auth,
+                _INATIVIDADE_MAX). Uso = navegar pra página (Sec-Fetch-Mode
+                navigate) ou POST /api/sessao/atividade que o
+                _sessao_inativa_script.html (base, base_mobile, wms) manda ao
+                clicar/digitar/tocar/rolar. Consulta automática NÃO renova.
+                galpao e expedicao não expiram.
+                Derrubar todas as sessões (24/10, botão na /acessos): tabela
+                painel_sessoes_rodada; sessão de rodada anterior cai, de qualquer login.
                 usuarios_extras do config.yaml NÃO vale mais: foi copiado uma
                 vez por painel_agentes/migrar_usuarios_extras.py (idempotente).
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
@@ -239,7 +247,9 @@
                 painel_agentes/acesso_telas.py: ROTA NOVA PRECISA ENTRAR LÁ
                 (test_acesso_telas falha se não entrar).
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
-                Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
+                Depois do login: SEMPRE /inicio (24/10, ignora a tela que tentava
+                abrir; expedicao -> /expedicao, galpao -> /wms, personalizado sem
+                Início -> 1a tela liberada).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
                 /equipe com login do painel.
