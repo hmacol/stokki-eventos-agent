@@ -318,6 +318,13 @@ def requer_auth(f=None, *, niveis=("total",)):
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
                 return redirect(url_for("login", proximo=request.script_root + request.full_path))
+            # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
+            # anterior cai, de qualquer login.
+            if session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
+                session.clear()
+                if request.path.startswith(f"{request.script_root}/api/"):
+                    return jsonify({"erro": "Sessão encerrada -- faça login de novo."}), 401
+                return redirect(url_for("login", proximo=request.script_root + request.full_path))
             # Login nominal (23/10): nivel e nome vem do banco a cada request,
             # entao mudanca feita na /acessos vale sem novo login. Senha
             # provisoria trava tudo ate a pessoa trocar.
@@ -528,6 +535,7 @@ def login():
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
             session["ultimo_uso"] = datetime.now().timestamp()
+            session["rodada_sessoes"] = acesso_telas.rodada_sessoes()["rodada"]
             if conta:
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
@@ -549,7 +557,8 @@ def trocar_senha():
     /acessos cadastra ou redefine com senha provisoria e requer_auth manda
     pra ca ate a pessoa escolher a dela."""
     conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
-    if not conta or not conta["ativo"] or not _sessao_na_versao(conta):
+    if not conta or not conta["ativo"] or not _sessao_na_versao(conta) \
+            or session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
         session.clear()
         return redirect(url_for("login"))
     if not conta["trocar_senha"]:
@@ -1504,6 +1513,7 @@ def acessos():
     conn = acesso_telas.conectar()
     try:
         usuarios = acesso_telas.listar(conn)
+        rodada = acesso_telas.rodada_sessoes(conn)
     finally:
         conn.close()
     grupos = {}
@@ -1511,7 +1521,7 @@ def acessos():
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
                            niveis=acesso_telas.NIVEIS, senha_minima=acesso_telas.SENHA_MINIMA,
-                           eu=session.get("usuario", ""))
+                           eu=session.get("usuario", ""), rodada=rodada)
 
 
 @app.route("/api/acessos", methods=["POST"])
@@ -1556,6 +1566,20 @@ def api_acessos_novo():
     finally:
         conn.close()
     return jsonify({"ok": True, "usuario": usuario})
+
+
+@app.route("/api/acessos/derrubar-sessoes", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_derrubar_sessoes():
+    """Derruba todas as sessoes abertas do painel, inclusive a de quem clicou."""
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.derrubar_sessoes(conn, session.get("usuario", ""))
+    finally:
+        conn.close()
+    session.clear()
+    return jsonify({"ok": True, "login": url_for("login")})
 
 
 @app.route("/api/acessos/ativo", methods=["POST"])

@@ -229,6 +229,8 @@
                 _sessao_inativa_script.html (base, base_mobile, wms) manda ao
                 clicar/digitar/tocar/rolar. Consulta automática NÃO renova.
                 galpao e expedicao não expiram.
+                Derrubar todas as sessões (24/10, botão na /acessos): tabela
+                painel_sessoes_rodada; sessão de rodada anterior cai, de qualquer login.
                 usuarios_extras do config.yaml NÃO vale mais: foi copiado uma
                 vez por painel_agentes/migrar_usuarios_extras.py (idempotente).
                 atendimento (ampliado 28/09) = Atendimento + Torre, Pedidos
