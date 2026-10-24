@@ -1014,7 +1014,9 @@
    sair da Vuupt), fingerprint_notificacao_entrega.py, test_*.py.
 
  notificacao_transportadoras/  04h10: pedidos do dia + XML para transportadoras
-                           de redespacho.
+                           de redespacho. Envio real exige a chave-mestra E
+                           notificacao_transportadoras.ativo: true (ausente =
+                           desligado, 23/10).
 
  insucesso_entrega/        Insucesso vira pergunta ao embarcador; reentrega só
                            se ele confirmar.
