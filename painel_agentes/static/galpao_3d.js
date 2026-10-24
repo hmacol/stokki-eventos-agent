@@ -37,7 +37,8 @@ controls.target.set(-1, 0, -1.5);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.47;
 // sem limite o zoom atravessava o chao ou passava da neblina (130) e o galpao sumia
-controls.minDistance = 10;
+controls.minDistance = 4;
+controls.zoomSpeed = .5;   // cada giro da roda aproxima metade do padrao
 controls.maxDistance = 85;
 controls.zoomToCursor = true;   // aproxima de onde o mouse aponta (o centro e chao vazio)
 
