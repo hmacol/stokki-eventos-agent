@@ -119,9 +119,9 @@ class TestDestinoDoLogin(_Base):
         self.assertTrue(self._destino("u_ex", "s_ex").endswith("/expedicao"))
         self.assertTrue(self._destino("u_ga", "s_ga").endswith("/wms"))
 
-    def test_proximo_continua_vencendo(self):
+    def test_tela_que_tentava_abrir_nao_vence_o_inicio(self):
         r = self.cliente.post("/login", data={"usuario": "u_op", "senha": "s_op", "proximo": "/planejamento"})
-        self.assertTrue(r.headers["Location"].endswith("/planejamento"))
+        self.assertTrue(r.headers["Location"].endswith("/inicio"))
 
 
 if __name__ == "__main__":

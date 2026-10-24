@@ -317,14 +317,14 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
-                return redirect(url_for("login", proximo=request.script_root + request.full_path))
+                return redirect(url_for("login"))
             # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
             # anterior cai, de qualquer login.
             if session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
                 session.clear()
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão encerrada -- faça login de novo."}), 401
-                return redirect(url_for("login", proximo=request.script_root + request.full_path))
+                return redirect(url_for("login"))
             # Login nominal (23/10): nivel e nome vem do banco a cada request,
             # entao mudanca feita na /acessos vale sem novo login. Senha
             # provisoria trava tudo ate a pessoa trocar.
@@ -350,7 +350,7 @@ def requer_auth(f=None, *, niveis=("total",)):
                     session.clear()
                     if request.path.startswith(f"{request.script_root}/api/"):
                         return jsonify({"erro": "Sessão encerrada por 30 min sem uso -- faça login de novo."}), 401
-                    return redirect(url_for("login", proximo=request.script_root + request.full_path))
+                    return redirect(url_for("login"))
                 if ultimo is None or _uso_de_verdade():
                     session["ultimo_uso"] = agora
             # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
@@ -518,7 +518,7 @@ def login():
         senha = request.form.get("senha", "")
         chave_limite = _chaves_login(request.remote_addr, usuario)
         if _login_bloqueado(chave_limite):
-            return render_template("login.html", proximo=request.form.get("proximo", ""),
+            return render_template("login.html",
                                    erro="Muitas tentativas erradas. Espere 15 minutos e tente de novo."), 429
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
         conta = acesso_telas.conta(usuario) if nivel else None
@@ -540,15 +540,11 @@ def login():
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
                 return redirect(url_for("trocar_senha"))
-            pagina_padrao = _pagina_inicial(nivel, telas)
-            proximo = request.form.get("proximo") or pagina_padrao
-            # Só aceita redirecionar pra caminho relativo deste próprio
-            # painel -- nunca pra outro domínio (open redirect).
-            raiz = request.script_root or ""
-            if not (proximo == raiz or proximo.startswith(raiz + "/")):
-                proximo = pagina_padrao
-            return redirect(proximo)
-    return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
+            # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
+            # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
+            # vao pra tela deles (_pagina_inicial).
+            return redirect(_pagina_inicial(nivel, telas))
+    return render_template("login.html", erro=erro)
 
 
 @app.route("/trocar-senha", methods=["GET", "POST"])

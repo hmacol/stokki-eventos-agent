@@ -247,7 +247,9 @@
                 painel_agentes/acesso_telas.py: ROTA NOVA PRECISA ENTRAR LÁ
                 (test_acesso_telas falha se não entrar).
                 Rota sem niveis = só total. POST de ação usa exige_mesma_origem.
-                Depois do login: /inicio (expedicao -> /expedicao, galpao -> /wms).
+                Depois do login: SEMPRE /inicio (24/10, ignora a tela que tentava
+                abrir; expedicao -> /expedicao, galpao -> /wms, personalizado sem
+                Início -> 1a tela liberada).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
                 /equipe com login do painel.
