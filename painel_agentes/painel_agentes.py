@@ -242,6 +242,26 @@ def _registrar_falha_login(chaves) -> None:
             _login_falhas.setdefault(chave, []).append(agora)
 
 
+# Deslogar por inatividade (24/10, Hugo): 30 min sem a pessoa mexer na tela
+# derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
+# que o _sessao_inativa_script.html manda ao clicar, digitar, tocar ou rolar.
+# As consultas automaticas das telas (Torre, contadores do menu, status da
+# execucao a cada 2 s) NAO contam, senao ninguem cairia nunca. Galpao e
+# expedicao (logins fixos de aparelho compartilhado) ficam de fora.
+_INATIVIDADE_MAX = timedelta(minutes=30)
+_NIVEIS_SEM_EXPIRAR = ("galpao", "expedicao")
+
+
+def _uso_de_verdade() -> bool:
+    if request.endpoint == "api_sessao_atividade":
+        return True
+    # Sec-Fetch-Mode=navigate so vem quando a pessoa abre a pagina; fetch()
+    # manda "cors"/"same-origin". Navegador antigo sem o cabecalho: GET de
+    # pagina conta como uso.
+    return request.method == "GET" and not request.path.startswith(f"{request.script_root}/api/") \
+        and request.headers.get("Sec-Fetch-Mode", "navigate") == "navigate"
+
+
 def _sessao_na_versao(conta: dict) -> bool:
     """Senha redefinida ou trocada sobe a versao_senha da conta: sessao
     aberta com a senha anterior deixa de valer (sem isso, uma sessao velha
@@ -315,6 +335,17 @@ def requer_auth(f=None, *, niveis=("total",)):
                 if conta["nivel"] != nivel:
                     session["nivel_acesso"] = nivel = conta["nivel"]
             g.nome_usuario = (conta or {}).get("nome") or ""
+            # Sessao parada (24/10, Hugo): 30 min sem uso de verdade -> login.
+            if nivel not in _NIVEIS_SEM_EXPIRAR:
+                agora = datetime.now().timestamp()
+                ultimo = session.get("ultimo_uso")
+                if ultimo and agora - ultimo > _INATIVIDADE_MAX.total_seconds():
+                    session.clear()
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Sessão encerrada por 30 min sem uso -- faça login de novo."}), 401
+                    return redirect(url_for("login", proximo=request.script_root + request.full_path))
+                if ultimo is None or _uso_de_verdade():
+                    session["ultimo_uso"] = agora
             # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
             # telas, com poder de total dentro delas, no lugar do nivel.
             telas = conta["telas"] if conta else None
@@ -496,6 +527,7 @@ def login():
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
+            session["ultimo_uso"] = datetime.now().timestamp()
             if conta:
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
@@ -544,6 +576,29 @@ def trocar_senha():
             finally:
                 conn.close()
     return render_template("login.html", erro=erro, trocar=True, usuario=conta["usuario"])
+
+
+def _segundos_restantes():
+    """Quanto falta pra sessao cair por inatividade; None pra quem nao expira."""
+    if g.nivel_acesso in _NIVEIS_SEM_EXPIRAR or session.get("nivel_acesso") in _NIVEIS_SEM_EXPIRAR:
+        return None
+    restante = _INATIVIDADE_MAX.total_seconds() - (datetime.now().timestamp() - session.get("ultimo_uso", 0))
+    return max(0, int(restante))
+
+
+@app.route("/api/sessao/atividade", methods=["POST"])
+@requer_auth(niveis=acesso_telas.NIVEIS)
+@exige_mesma_origem
+def api_sessao_atividade():
+    """A pessoa mexeu na tela (_sessao_inativa_script.html): requer_auth ja renovou o ultimo_uso."""
+    return jsonify({"restante": _segundos_restantes()})
+
+
+@app.route("/api/sessao/estado")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def api_sessao_estado():
+    """Consulta sem renovar: 401 se a sessao ja caiu, senao quanto falta."""
+    return jsonify({"restante": _segundos_restantes()})
 
 
 @app.route("/logout", methods=["POST"])
