@@ -33,7 +33,7 @@ class TravaTransportadorasTestCase(unittest.TestCase):
     def _rodar_main(self, config, modo_teste=False):
         grupos = {"transp": ["PS-1"]}
         with mock.patch.object(nt, "_carregar_config", return_value=config), \
-             mock.patch.object(nt.CatalogoTransportadoras, "carregar", return_value=mock.Mock()), \
+             mock.patch.object(nt.CatalogoTransportadoras, "carregar_do_banco", return_value=mock.Mock()), \
              mock.patch.object(nt, "buscar_rotas_do_dia", return_value=[]), \
              mock.patch.object(nt, "identificar_pedidos_transportadora", return_value=(grupos, {}, {})), \
              mock.patch.object(nt, "_carregar_embarcadores_por_sender_id",
