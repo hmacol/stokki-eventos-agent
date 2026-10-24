@@ -39,6 +39,10 @@ Fluxo:
 IGNORA a chave-mestra notificacoes_automaticas.ativo (só bloqueia envio
 real) -- senão não dá pra ensaiar com a chave desligada.
 
+Envio real exige a chave-mestra E a trava própria
+notificacao_transportadoras.ativo: true (ausente = desligado; Hugo, 23/10:
+ligar os e-mails aos embarcadores não liga as transportadoras).
+
 COMO USAR:
     py -3.11 notificacao_transportadoras/notificar_transportadoras.py --modo-teste --data hoje
     py -3.11 notificacao_transportadoras/notificar_transportadoras.py --data hoje
@@ -83,7 +87,8 @@ import yaml
 
 from avisar_motoristas_rotas import _extrair_servicos_da_rota, _parse_data, buscar_rotas_do_dia
 from email_utils import (
-    COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacoes_automaticas_ativas,
+    COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacao_transportadoras_ativa,
+    notificacoes_automaticas_ativas,
 )
 from notificar_execucao_agente import notificar_execucao
 from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
@@ -301,12 +306,13 @@ def main(modo_teste: bool, data_str: str) -> int:
                  "sem_email": 0, "sem_xml": 0, "falhas": 0, "nao_enviar": 0}
     divergencias: list[str] = []
 
-    if not modo_teste and not notificacoes_automaticas_ativas(config):
+    if not modo_teste and not (notificacoes_automaticas_ativas(config) and notificacao_transportadoras_ativa(config)):
         resumo_etapas["Resumo geral"] = {
             "status": "ok",
-            "detalhe": "Notificação automática desativada (config.yaml: notificacoes_automaticas.ativo=false).",
+            "detalhe": "Notificação de transportadoras desativada (config.yaml: notificacoes_automaticas.ativo "
+                       "e notificacao_transportadoras.ativo precisam estar true).",
         }
-        logger.info("Notificações automáticas desativadas -- pulando notificação de transportadoras.")
+        logger.info("Notificação de transportadoras desativada -- pulando.")
     elif not grupos:
         resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": "Nenhuma entrega para transportadora hoje."}
         logger.info("Nenhuma entrega para transportadora hoje -- nada a notificar.")

@@ -178,6 +178,7 @@ def montar_estado(conn, config: dict, agora: datetime | None = None) -> dict:
         "indicadores": {
             "conferencia_geral": indicadores.conferencia_geral(conn, desde),
             "conferencia_por_pessoa": indicadores.conferencia_por_pessoa(conn, desde),
+            "conferencias_longas": indicadores.conferencias_longas(conn, desde),
             "produtividade_separacao": indicadores.produtividade_separacao(conn, desde, agora),
         },
         "sugestoes": sugestoes,

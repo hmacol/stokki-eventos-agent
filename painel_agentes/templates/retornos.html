@@ -161,7 +161,7 @@
   function abrirConferencia(grupo) {
     conf = { grupo, fotosCarga: [], itens: {} };
     grupo.pedidos.forEach(p => conf.itens[p.parada_id] = {
-      veio: true, caixas: p.parcial ? "" : p.caixas_esperadas, avaria: false, fotos: [], motivo: p.motivo, obs: "" });
+      veio: true, caixas: p.parcial ? "" : p.caixas_esperadas ?? "", avaria: false, fotos: [], motivo: p.motivo, obs: "" });
     const motivos = dados.motivos;
     tela.innerHTML = `<button type="button" class="voltar" id="voltar">‹ Motoristas</button>
       <div class="nome" style="margin-bottom:4px">${esc(grupo.motorista_nome)}</div>
@@ -169,7 +169,7 @@
       ${grupo.pedidos.map(p => `
         <div class="cartao pedido" id="ped-${p.parada_id}">
           <div class="linha-topo"><span class="cod">${esc(p.codigo)}</span>
-            <span class="num">${p.parcial ? "Parcial" : p.caixas_esperadas + " cx"}</span></div>
+            <span class="num">${p.parcial ? "Parcial" : (p.caixas_esperadas ?? "?") + " cx"}</span></div>
           <div style="font-size:14px">${esc(p.destinatario)}</div>
           <div class="nota">${esc(p.embarcador)} · baixa ${dataBr(p.baixa_em)}</div>
           ${p.parcial ? '<span class="selo parcial">Parcial: conte as caixas que voltaram</span>' : ""}
@@ -177,7 +177,7 @@
           <div class="campos" data-campos="${p.parada_id}">
             <div><label>Caixas recebidas</label>
               <div class="contador"><button type="button" data-menos="${p.parada_id}">−</button>
-                <input type="number" inputmode="numeric" min="0" data-caixas="${p.parada_id}" value="${p.parcial ? "" : p.caixas_esperadas}" placeholder="${p.parcial ? "quantas?" : ""}">
+                <input type="number" inputmode="numeric" min="0" data-caixas="${p.parada_id}" value="${p.parcial ? "" : p.caixas_esperadas ?? ""}" placeholder="quantas?">
                 <button type="button" data-mais="${p.parada_id}">+</button></div></div>
             <div><label>Avaria</label>
               <div class="sim-nao"><button type="button" class="on" data-avaria="${p.parada_id}" data-v="0">Não</button>
