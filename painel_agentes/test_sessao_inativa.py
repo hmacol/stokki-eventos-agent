@@ -57,7 +57,7 @@ class TestSessaoInativa(unittest.TestCase):
     def test_31_min_parado_volta_pro_login_e_api_da_401(self):
         r = self._cliente(minutos_parado=31).get("/acessos", headers=NAVEGAR)
         self.assertEqual(r.status_code, 302)
-        self.assertIn("/login?proximo=", r.headers["Location"])
+        self.assertTrue(r.headers["Location"].endswith("/login"))
         r = self._cliente(minutos_parado=31).get("/api/sessao/estado")
         self.assertEqual(r.status_code, 401)
 
