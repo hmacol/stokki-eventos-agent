@@ -99,6 +99,26 @@ class TestFonteFreshhub(unittest.TestCase):
         self.assertIn("núcleo", cp.resumir(r))
 
 
+class TestForaDoEscopo(unittest.TestCase):
+    """Sombra 25/10 (Hugo): 'COLETA QUATRO ESTRELAS' e uma coleta que a Fresh faz sem lancamento na Stokki.
+    Servico da Vuupt cujo code nao e codigo de pedido (sem numero) nunca vai existir no espelho: fica fora
+    do placar como classe propria, mas continua no relatorio."""
+
+    def test_servico_sem_codigo_de_pedido_so_na_vuupt_nao_conta_no_placar(self):
+        coleta = _s(code="COLETA QUATRO ESTRELAS", id=5)
+        r = cp.comparar([_s(), coleta], [_s()])
+        self.assertEqual(r["fora_do_escopo"], ["COLETA QUATRO ESTRELAS"])
+        self.assertEqual(r["so_na_vuupt"], [])
+        self.assertEqual((r["divergencias_proprias"], r["total_divergencias"]), (0, 1))
+        self.assertIn("fora do escopo", cp.resumir(r))
+
+    def test_codigo_de_pedido_so_na_vuupt_continua_divergencia(self):
+        r = cp.comparar([_s(), _s(code="#PS-41897", id=6)], [_s()])
+        self.assertEqual(r.get("fora_do_escopo", []), [])
+        self.assertEqual(r["so_na_vuupt"], ["PS-41897"])
+        self.assertEqual(r["divergencias_proprias"], 1)
+
+
 class TestAtraso(unittest.TestCase):
     """Revisao (25/10, I5) / plano Focus 4: o pool do novo e do snapshot da ultima carga (ate 30 min atras).
     O que so difere por esse atraso e classe propria 'atraso', fora do placar dos 3 dias (como duplicados)."""

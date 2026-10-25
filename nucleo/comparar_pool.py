@@ -31,6 +31,7 @@ Saída 0 = pools iguais; 2 = houve divergência.
 import argparse
 import json
 import logging
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -138,6 +139,10 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict], dados_de=None, bus
         if campos:
             diferentes.append({"code": codigo, "campos": campos})
     so_v, so_n = sorted(set(v) - set(n)), sorted(set(n) - set(v))
+    # Sombra 25/10 (Hugo): servico da Vuupt sem codigo de pedido (ex. "COLETA QUATRO ESTRELAS", coleta que a
+    # Fresh faz sem lancamento na Stokki) nunca vai existir no espelho: fica fora do placar, mas no relatorio.
+    fora_do_escopo = [c for c in so_v if not re.search(r"\d", c)]
+    so_v = [c for c in so_v if c not in fora_do_escopo]
     atraso = []
     limite = _utc(dados_de)
     if limite is not None:
@@ -163,8 +168,8 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict], dados_de=None, bus
     proprias = len(so_v) + len(so_n) + len(diferentes)
     return {"total_vuupt": len(v), "total_vuupt_bruto": len(pool_vuupt), "total_nucleo": len(n),
             "so_na_vuupt": so_v, "so_no_nucleo": so_n, "diferentes": diferentes, "duplicados_na_vuupt": duplicados,
-            "atraso": atraso, "divergencias_proprias": proprias,
-            "total_divergencias": proprias + len(duplicados) + len(atraso)}
+            "atraso": atraso, "fora_do_escopo": fora_do_escopo, "divergencias_proprias": proprias,
+            "total_divergencias": proprias + len(duplicados) + len(atraso) + len(fora_do_escopo)}
 
 
 def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
@@ -175,6 +180,9 @@ def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
     if r.get("duplicados_na_vuupt"):
         linhas.append(f"  código duplicado na Vuupt ({len(r['duplicados_na_vuupt'])}): "
                       f"{', '.join(r['duplicados_na_vuupt'][:exemplos])}")
+    if r.get("fora_do_escopo"):
+        linhas.append(f"  fora do escopo, sem codigo de pedido ({len(r['fora_do_escopo'])}, fora do placar): "
+                      f"{', '.join(r['fora_do_escopo'][:exemplos])}")
     if r.get("atraso"):
         linhas.append(f"  atraso do pool do {nome} ({len(r['atraso'])}, fora do placar): "
                       f"{', '.join(r['atraso'][:exemplos])}")
@@ -242,7 +250,7 @@ def salvar(r: dict, conn: sqlite3.Connection, rodado_em: str | None = None, font
                  (rodado_em or banco.agora(), r["total_vuupt"], r["total_nucleo"], r["total_divergencias"],
                   r["divergencias_proprias"], len(r["duplicados_na_vuupt"]),
                   json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt",
-                                                    "atraso")},
+                                                    "atraso", "fora_do_escopo")},
                              ensure_ascii=False, default=str), fonte))
     conn.commit()
 
