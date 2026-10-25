@@ -318,8 +318,21 @@ def _garantir_disparos(conn: sqlite3.Connection) -> None:
         "iniciado_em TEXT, terminado_em TEXT, codigo_saida INTEGER, saida TEXT)")
 
 
-def ultimos_disparos(conn: sqlite3.Connection, tipo: str, limite: int = 5) -> list[dict]:
+def _fechar_orfaos(conn: sqlite3.Connection) -> None:
+    """Disparo sem terminado_em iniciado ha mais de 30 min perdeu a thread (o
+    painel reiniciou): fecha com codigo -3 pra tela nao ficar presa em "rodando"."""
     _garantir_disparos(conn)
+    if conn.in_transaction:
+        conn.commit()
+    limite = (datetime.now() - timedelta(minutes=_DISPARO_TRAVA_MIN)).isoformat(timespec="seconds")
+    conn.execute("UPDATE notificacoes_disparos SET terminado_em = ?, codigo_saida = -3, saida = ? "
+                 "WHERE terminado_em IS NULL AND iniciado_em <= ?",
+                 (cn._agora(), "interrompido (painel reiniciou ou passou de 30 min)", limite))
+    conn.commit()
+
+
+def ultimos_disparos(conn: sqlite3.Connection, tipo: str, limite: int = 5) -> list[dict]:
+    _fechar_orfaos(conn)
     rows = conn.execute(
         "SELECT id, alvo, destino, por, iniciado_em, terminado_em, codigo_saida, saida "
         "FROM notificacoes_disparos WHERE tipo = ? ORDER BY id DESC LIMIT ?", (tipo, limite)).fetchall()
@@ -370,9 +383,7 @@ def iniciar_disparo(conn: sqlite3.Connection, tipo: str, alvo: str, sender_id: i
         destino = f"{nome} (sender {int(sender_id)})" if nome else f"sender {int(sender_id)}"
         if reenviar:
             destino += " · reenviar"
-    _garantir_disparos(conn)
-    if conn.in_transaction:
-        conn.commit()
+    _fechar_orfaos(conn)
     conn.execute("BEGIN IMMEDIATE")     # checar e gravar sem outro disparo passar no meio
     try:
         limite = (datetime.now() - timedelta(minutes=_DISPARO_TRAVA_MIN)).isoformat(timespec="seconds")
@@ -386,8 +397,14 @@ def iniciar_disparo(conn: sqlite3.Connection, tipo: str, alvo: str, sender_id: i
     except BaseException:
         conn.rollback()
         raise
-    threading.Thread(target=_executar_disparo, args=(_db_path(conn), disparo_id, cmd), daemon=True,
-                     name=f"disparo-{disparo_id}").start()
+    try:
+        threading.Thread(target=_executar_disparo, args=(_db_path(conn), disparo_id, cmd), daemon=True,
+                         name=f"disparo-{disparo_id}").start()
+    except BaseException as e:      # sem thread nao ha quem feche a linha: fecha aqui
+        conn.execute("UPDATE notificacoes_disparos SET terminado_em = ?, codigo_saida = -2, saida = ? WHERE id = ?",
+                     (cn._agora(), f"Falha ao iniciar a rotina: {e}", disparo_id))
+        conn.commit()
+        raise
     return disparo_id
 
 

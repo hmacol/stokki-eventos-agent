@@ -623,6 +623,41 @@ class TestDisparo(_Base):
             conn.close()
         self._esperar(disparo_id)
 
+    def test_orfao_antigo_e_fechado_com_menos_3(self):
+        conn = self._controle()
+        try:
+            nt._garantir_disparos(conn)
+            antigo = (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")
+            recente = (datetime.now() - timedelta(minutes=5)).isoformat(timespec="seconds")
+            conn.execute("INSERT INTO notificacoes_disparos (tipo, alvo, por, iniciado_em) VALUES (?,?,?,?)",
+                         ("nfs_em_rota", "teste", "x", antigo))
+            conn.execute("INSERT INTO notificacoes_disparos (tipo, alvo, por, iniciado_em) VALUES (?,?,?,?)",
+                         ("pedidos_em_espera", "teste", "x", recente))
+            conn.commit()
+            ult = nt.ultimos_disparos(conn, "nfs_em_rota")[0]
+            self.assertIsNotNone(ult["terminado_em"])
+            self.assertEqual(ult["codigo_saida"], -3)
+            self.assertIn("interrompido", ult["saida"])
+            # o de 5 min ainda conta como rodando
+            self.assertIsNone(nt.ultimos_disparos(conn, "pedidos_em_espera")[0]["terminado_em"])
+        finally:
+            conn.close()
+
+    def test_thread_que_nao_inicia_nao_deixa_linha_aberta(self):
+        with mock.patch.object(nt.threading.Thread, "start", side_effect=RuntimeError("sem threads")):
+            conn = self._controle()
+            try:
+                with self.assertRaises(RuntimeError):
+                    nt.iniciar_disparo(conn, "nfs_em_rota", "teste", None, False, "teste")
+                row = conn.execute("SELECT terminado_em, codigo_saida FROM notificacoes_disparos").fetchone()
+                self.assertIsNotNone(row[0])
+                self.assertEqual(row[1], -2)
+                # e o tipo nao ficou travado
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM notificacoes_disparos "
+                                              "WHERE terminado_em IS NULL").fetchone()[0], 0)
+            finally:
+                conn.close()
+
     def test_api_valida_pedido(self):
         self._logar("total")
         for corpo in ({"tipo": "insucesso", "alvo": "teste"}, {"tipo": "nfs_em_rota", "alvo": "ninguem"},
