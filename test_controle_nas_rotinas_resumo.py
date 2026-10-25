@@ -208,9 +208,9 @@ class TestPedidosEmEspera(_ComControle):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _main(self, ativo=True, modo_teste=False):
+    def _main(self, ativo=True, modo_teste=False, stkkc_id=9001):
         pedido = {"codigo_ps": "#PS-1", "id_stokki": 1, "data": "18/09/2026", "destino": "Cliente",
-                  "marker": "Aguardando faturamento", "stkkc_id": 9001}
+                  "marker": "Aguardando faturamento", "stkkc_id": stkkc_id}
         execucao = mock.MagicMock()
         with mock.patch.object(em_espera, "_carregar_config", return_value={"email": {}}), \
              mock.patch.object(em_espera, "StokkiSession"), \
@@ -242,6 +242,15 @@ class TestPedidosEmEspera(_ComControle):
         self._controle(cn.definir_excecao, "pedidos_em_espera", CNPJ_A, "BLOQUEADO")
         self._main()
         self.assertEqual(self.enviados, [])
+
+    def test_espera_so_pedido_sem_embarcador_nao_diz_desativada(self):
+        # sem nenhum grupo, all([]) era True: saia cedo com "desativada" e perdia o
+        # "N sem embarcador cadastrado"
+        self._controle(cn.definir_estado, "pedidos_em_espera", "LIGADO")
+        resultado = self._main(stkkc_id=777777)
+        self.assertEqual(self.enviados, [])
+        self.assertNotIn("desativada", resultado["detalhe"])
+        self.assertIn("1 sem embarcador cadastrado", resultado["detalhe"])
 
     def test_espera_modo_teste_ignora_tela(self):
         conn = cn.conectar(self.db)

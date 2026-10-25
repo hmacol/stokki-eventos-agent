@@ -289,9 +289,9 @@ def main(modo_teste=False):
         decisoes = {} if modo_teste else {
             sid: decidir("pedidos_em_espera", embarcadores[sid]["cnpj"], fallback_acao=fallback,
                          db_path=preferencias_notificacao.DB_PATH) for sid in grupos}
-        if not modo_teste and all(d.acao == "NAO" for d in decisoes.values()):
-            primeira = next(iter(decisoes.values()), None)
-            if primeira is None or primeira.origem == "config":
+        if not modo_teste and grupos and all(d.acao == "NAO" for d in decisoes.values()):
+            primeira = next(iter(decisoes.values()))
+            if primeira.origem == "config":
                 motivo = "config.yaml: notificacao_pedidos_em_espera.ativo=false"
             else:
                 motivo = f"tela de Notificacoes: {primeira.motivo}"
