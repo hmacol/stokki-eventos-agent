@@ -34,6 +34,7 @@ _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
 from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_ERRO, COR_TEXTO, COR_BORDA, COR_FUNDO
+import limite_piloto
 import preferencias_notificacao
 from controle_notificacoes import acao_do_config, decidir
 
@@ -204,6 +205,13 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                 desligados += 1
                 continue
         piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia (nada e registrado, o pedido segue pendente)
+            pedidos = [p for p in pedidos
+                       if not limite_piloto.ja_enviado_hoje("piloto_agendamento", _codigo_pedido(p), db_path)]
+            if not pedidos:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         assunto = f"[URGENTE] Confirmação de agendamento necessária — {len(pedidos)} pedido(s)"
         conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""))
@@ -220,6 +228,8 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
             if piloto:
+                for p in pedidos:
+                    limite_piloto.registrar_enviado("piloto_agendamento", _codigo_pedido(p), db_path)
                 logger.info(f"  {emb['nome']}: cópia de piloto -> {destinos[0]} (original: {emb['emails']}); "
                             f"solicitação NÃO registrada.")
             elif not modo_teste:

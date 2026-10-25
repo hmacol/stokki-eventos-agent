@@ -122,6 +122,21 @@ class TestInsucesso(_ComControle):
         marcar.assert_not_called()
         registrar.assert_not_called()
 
+    def test_insucesso_piloto_manda_uma_copia_por_pedido_por_dia(self):
+        self._estado("insucesso", "PILOTO")
+        self._piloto()
+        _, enviar, _, _ = self._rodar()
+        self.assertEqual(enviar.call_count, 1)
+        resultado, enviar, marcar, _ = self._rodar()   # mesma rodada de novo, mesmo dia
+        self.assertEqual(resultado["enviados"], 0)
+        enviar.assert_not_called()
+        marcar.assert_not_called()
+        # o envio real (ENVIAR) nao e afetado pelo limite do piloto
+        self._estado("insucesso", "LIGADO")
+        resultado, enviar, _, _ = self._rodar()
+        self.assertEqual(resultado["enviados"], 1)
+        self.assertEqual(enviar.call_args.args[0], ["avisos@alfa.com"])
+
     def test_insucesso_modo_teste_ignora_a_tela(self):
         self._estado("insucesso", "DESLIGADO")
         resultado, enviar, marcar, _ = self._rodar(modo_teste=True)
@@ -169,6 +184,25 @@ class TestAgendamentoPendente(_ComControle):
         self.assertEqual(resultado["enviados"], 0)
         enviar.assert_not_called()
 
+    def test_agendamento_pendente_piloto_manda_uma_copia_por_pedido_por_dia(self):
+        self._estado("agendamento", "PILOTO")
+        self._piloto()
+        self._rodar()
+        resultado, enviar, _ = self._rodar()
+        self.assertEqual(resultado["enviados"], 0)
+        enviar.assert_not_called()
+
+    def test_agendamento_pendente_piloto_manda_uma_copia_por_pedido_por_dia_outro_dia(self):
+        self._estado("agendamento", "PILOTO")
+        self._piloto()
+        self._rodar()
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE notificacoes_enviadas SET chave = 'PS-1|2000-01-01'")
+        conn.commit()
+        conn.close()
+        resultado, enviar, _ = self._rodar()   # a copia de ontem nao vale hoje
+        self.assertEqual(resultado["enviados"], 1)
+
     def test_agendamento_pendente_piloto_manda_pro_piloto_sem_registrar(self):
         self._estado("agendamento", "PILOTO")
         self._piloto()
@@ -196,6 +230,14 @@ class TestAgendamentoDiaFixo(_ComControle):
         self.assertEqual(resultado["enviados"], 1)
         self.assertEqual(enviar.call_args.args[0], ["piloto@freshlogbr.com"])
         self.assertIn("Piloto: iria para avisos@alfa.com", enviar.call_args.args[2])
+
+    def test_dia_fixo_piloto_manda_uma_copia_por_pedido_por_dia(self):
+        self._estado("agendamento", "PILOTO")
+        self._piloto()
+        self._rodar()
+        resultado, enviar = self._rodar()
+        self.assertEqual(resultado["enviados"], 0)
+        enviar.assert_not_called()
 
     def test_dia_fixo_desligado_nao_envia(self):
         self._estado("agendamento", "DESLIGADO")
@@ -285,6 +327,21 @@ class TestSolicitacoes(_ComControle):
         self.assertIn("tela", motivo)
         enviar.assert_not_called()
         registrar.assert_not_called()
+
+    def test_redespacho_piloto_manda_uma_copia_por_pedido_por_dia(self):
+        self._estado("redespacho", "PILOTO")
+        self._piloto()
+        self._redespacho()
+        _, enviar, _ = self._redespacho()
+        enviar.assert_not_called()
+
+    def test_solicitacao_agendamento_piloto_manda_uma_copia_por_pedido_por_dia(self):
+        self._estado("agendamento", "PILOTO")
+        self._piloto()
+        self._agendamento()
+        (enviado, motivo), enviar, _ = self._agendamento()
+        self.assertFalse(enviado)
+        enviar.assert_not_called()
 
     def test_redespacho_piloto_vai_pro_piloto_sem_registrar(self):
         self._estado("redespacho", "PILOTO")

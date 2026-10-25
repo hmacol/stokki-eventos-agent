@@ -27,6 +27,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import limite_piloto
 from controle_notificacoes import decidir
 from email_utils import enviar_email, envelope_html, COR_PRIMARIA, COR_PRIMARIA_CLARA, COR_TEXTO, COR_TEXTO_SUAVE, COR_BORDA, COR_DESTAQUE
 
@@ -123,6 +124,8 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     if decisao.acao == "NAO":
         return False, f"bloqueado pela tela de Notificações ({decisao.motivo})"
     piloto = decisao.acao == "PILOTO"
+    if piloto and limite_piloto.ja_enviado_hoje("piloto_redespacho", pedido, db_path):
+        return False, "piloto: cópia de hoje já enviada"
     faixa_piloto = (
         f'<p style="margin:0 0 16px 0;padding:8px 12px;background-color:{COR_PRIMARIA_CLARA};'
         f'border:1px dashed {COR_BORDA};font-size:12px;color:{COR_TEXTO};">'
@@ -199,6 +202,7 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     destinos = [decisao.destino_piloto] if piloto else [email_emb]
     enviado = enviar_email(destinos, assunto, corpo, config_email)
     if enviado and piloto:
+        limite_piloto.registrar_enviado("piloto_redespacho", pedido, db_path)
         return False, f"piloto: cópia enviada para {destinos[0]}, embarcador não avisado"
     if enviado:
         _registrar_solicitacao(pedido, cidade, uf, nome_transportadora, email_emb)

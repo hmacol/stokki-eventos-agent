@@ -41,6 +41,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ACENTO,
 )
 from regioes_dia_fixo import descricao_dias
+import limite_piloto
 import preferencias_notificacao
 from controle_notificacoes import acao_do_config, decidir
 
@@ -170,6 +171,14 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
                 desligados += 1
                 continue
         piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia
+            itens = [i for i in itens
+                     if not limite_piloto.ja_enviado_hoje("piloto_agendamento_dia_fixo",
+                                                          i["servico"].get("code"), db_path)]
+            if not itens:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         assunto = f"[Freshlog] Entrega agendada para o dia da região — {len(itens)} pedido(s)"
         conteudo = _montar_conteudo(emb["nome"], itens)
@@ -184,6 +193,9 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            if piloto:
+                for i in itens:
+                    limite_piloto.registrar_enviado("piloto_agendamento_dia_fixo", i["servico"].get("code"), db_path)
         else:
             falhas += 1
 

@@ -62,6 +62,7 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
     COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
 )
+import limite_piloto
 import preferencias_notificacao
 import tratativas
 from controle_notificacoes import acao_do_config, decidir
@@ -323,6 +324,13 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
                 desligados += 1
                 continue
         piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia (nada e marcado, o pedido segue pendente)
+            pedidos = [p for p in pedidos
+                       if not limite_piloto.ja_enviado_hoje("piloto_insucesso", p.get("code") or p.get("id"), db_path)]
+            if not pedidos:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         motivo_texto = texto_do_motivo(failed_reason_id)
         textos = _textos_do_grupo(motivo_texto, pedidos, failed_reason_id)
@@ -353,6 +361,8 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
             if piloto:
+                for p in pedidos:
+                    limite_piloto.registrar_enviado("piloto_insucesso", p.get("code") or p.get("id"), db_path)
                 logger.info(f"  {emb['nome']} ({motivo_texto}): cópia de piloto -> {destinos[0]} "
                             f"(original: {emb['emails']}); pedidos NÃO marcados como notificados.")
             elif not modo_teste:
