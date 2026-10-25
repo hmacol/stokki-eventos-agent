@@ -200,7 +200,9 @@ FORCAR_EMAIL_PADRAO = "hugo@freshlogbr.com"
 # retornos de convidar() que nao marcam o convite (segue pendente)
 SEM_MARCAR = ("adiado", "bloqueado", "piloto")
 _DESFECHOS = {"whatsapp": "Convite por WhatsApp.", "email": "Sem WhatsApp válido, convite por e-mail.",
-              "nenhum": "Sem contato na Stokki, cadastrar à mão."}
+              "nenhum": "Sem contato na Stokki, cadastrar à mão.",
+              "bloqueado": "Convite segurado pela tela de Notificações; sai quando ela liberar.",
+              "piloto": "Convite em piloto (cópia só pro Hugo); o embarcador ainda não foi convidado."}
 
 
 def link_convite(conn, config: dict, cnpj: str) -> str:
@@ -356,7 +358,8 @@ def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = 
             return "adiado"
         elif situacao == "desligado":
             logger.info(f"WhatsApp de clientes desligado: convite de {nome} vai por e-mail.")
-    if canal is None and ((email and email_barrado) or (not email and wpp_barrado)):
+    # sem telefone e sem e-mail nunca e "bloqueado": segue pra SEM_CONTATO (cadastrar a mao)
+    if canal is None and ((email and email_barrado) or (not email and numero and wpp_barrado)):
         logger.info(f"Convite de {nome} barrado pela tela de Notificacoes; segue pendente.")
         return "bloqueado"
     if canal is None and email:
@@ -487,10 +490,13 @@ def executar(config: dict, conn, clientes: list[dict], ler_contato, vuupt, agora
                 if situacao == cad.INATIVO:
                     cad.atualizar(conn, cnpj, agora, situacao=cad.PENDENTE)
             canal = convidar(conn, config, cnpj, agora, modo_teste, enviar_email, **kw)
-            if canal in SEM_MARCAR:
+            if canal == "adiado":
                 continue
             resumo["convites"][cnpj] = canal
-            avisar_grupo(conn, config, texto_grupo_novo(nome, emb[1] or "", canal), f"novo:{cnpj}", modo_teste, **kw)
+            # o aviso interno (grupo ALERTAS) nao passa pela tela; convite segurado/piloto
+            # avisa com assinatura propria pra o aviso do convite de verdade ainda sair depois
+            assinatura_aviso = f"novo:{cnpj}" if canal not in SEM_MARCAR else f"novo_{canal}:{cnpj}"
+            avisar_grupo(conn, config, texto_grupo_novo(nome, emb[1] or "", canal), assinatura_aviso, modo_teste, **kw)
         except Exception as exc:
             logger.warning(f"Pre-cadastro de {cnpj} falhou nesta rodada ({exc}): tenta na proxima.")
             continue

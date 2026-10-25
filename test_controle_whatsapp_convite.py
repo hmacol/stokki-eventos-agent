@@ -8,6 +8,7 @@ Rodar: py -3.11 -m unittest test_controle_whatsapp_convite -v
 import sqlite3
 import sys
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -89,6 +90,17 @@ class TestSemResposta(base_sr._ComBanco):
         self._chamado_em_silencio()
         r = self._rodar(base_sr._config(ativo=False))
         self.assertEqual(r["enviados"], 1)
+
+    def test_piloto_tem_teto_proprio_e_nao_consome_o_dos_clientes(self):
+        _controle(base_sr.ch.DB_PATH, "whatsapp_sem_resposta", "PILOTO")
+        self._chamado_em_silencio()
+        self._chamado_em_silencio()
+        r = self._rodar(base_sr._config(teto_piloto=1))
+        self.assertEqual((r["copias_piloto"], r["pulados"], r["enviados"]), (1, 1, 0))
+        self.assertEqual(self.enviar.call_count, 1)
+        # a mensagem pulada pelo teto nao foi gravada: sai amanha
+        self.assertEqual(len(self.conn.execute("SELECT 1 FROM notificacoes_whatsapp").fetchall()), 1)
+        self.assertEqual(nw.saldo_clientes(self.conn, base_sr._config(), base_sr.QUARTA_10H), 30)
 
     def test_sem_linha_na_tela_config_desligado_nao_consome(self):
         self._chamado_em_silencio()
@@ -211,6 +223,52 @@ class TestConvite(_ConviteComControle):
         self.assertEqual(self.convidar(base_emb.NONNA, modo_teste=True), "whatsapp")
 
 
+class TestConviteAvisoInterno(_ConviteComControle):
+    """O aviso ao grupo da equipe e o SEM_CONTATO nao passam pela tela."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(cn, "DB_PATH", self.ctl)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def rodar(self, clientes, agora=base_emb.AGORA):
+        return emb.executar(base_emb._config(), self.conn, clientes, lambda cid: base_emb.CONTATOS.get(cid, ""),
+                            mock.MagicMock(), agora=agora, enviar_email=self.email, dormir=self.dormir)
+
+    def test_convite_bloqueado_ainda_avisa_a_equipe_uma_vez(self):
+        _controle(self.ctl, "convite_embarcador", "DESLIGADO")
+        self.pedido("PS-1", "49.874.051/0001-31", 23084712, 1)
+        r = self.rodar([base_emb.NONNA])
+        self.assertEqual(r["convites"], {base_emb.NONNA["cnpj"]: "bloqueado"})
+        self.assertEqual(self.situacao(base_emb.NONNA), "PENDENTE")
+        avisos = [t for t in self.grupo() if "FABENNE" in t]
+        self.assertEqual(len(avisos), 1)
+        self.assertIn("Notificações", avisos[0])
+        # o convite ao embarcador nao saiu
+        self.assertNotIn("5511988887777@c.us", [c.args[1] for c in self.enviar.call_args_list])
+        self.rodar([base_emb.NONNA], agora=base_emb.AGORA + timedelta(hours=1))
+        self.assertEqual(len([t for t in self.grupo() if "FABENNE" in t]), 1)
+        # ao liberar, o convite sai e a equipe recebe o aviso do convite de verdade
+        _controle(self.ctl, "convite_embarcador", "LIGADO")
+        r = self.rodar([base_emb.NONNA], agora=base_emb.AGORA + timedelta(hours=2))
+        self.assertEqual(r["convites"], {base_emb.NONNA["cnpj"]: "whatsapp"})
+        self.assertEqual(len([t for t in self.grupo() if "FABENNE" in t]), 2)
+
+    def test_sem_contato_vira_sem_contato_mesmo_com_a_tela_desligada(self):
+        _controle(self.ctl, "convite_embarcador", "DESLIGADO")
+        self.preparar(base_emb.ANTIGO)
+        self.assertEqual(self.convidar(base_emb.ANTIGO), "nenhum")
+        self.assertEqual(self.situacao(base_emb.ANTIGO), "SEM_CONTATO")
+
+    def test_sem_contato_na_rodada_avisa_a_equipe_com_a_tela_desligada(self):
+        _controle(self.ctl, "convite_embarcador", "DESLIGADO")
+        self.pedido("PS-9", "33.333.333/0001-33", 22999999, 0)
+        r = self.rodar([base_emb.ANTIGO])
+        self.assertEqual(r["convites"], {base_emb.ANTIGO["cnpj"]: "nenhum"})
+        self.assertTrue(any("cadastrar à mão" in t for t in self.grupo()))
+
+
 class TestConsultaTransportadora(base_ct.AvisoTest):
     def _ctl(self, estado):
         _controle(self.db, "consulta_transportadora", estado)
@@ -294,7 +352,6 @@ class TestFuncoesDoWhatsapp(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def _chamar(self, fn, **kw):
-        from datetime import datetime
         base = dict(conn=self.conn, agora=datetime(2026, 10, 6, 18, 0), dormir=lambda s: None)
         if fn is nw.avisar_cliente_sem_resposta:
             return fn(1, 2, "5511988887777", "http://l", self.CONFIG, **base, **kw)
@@ -315,6 +372,50 @@ class TestFuncoesDoWhatsapp(unittest.TestCase):
                 self.assertEqual(self._chamar(fn, destino_forcado=""), "enviado")
                 self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
                 self.assertFalse(self.enviar.call_args[0][2].startswith("[teste"))
+
+    def test_copias_de_piloto_nao_consomem_o_teto_interno_nem_o_dos_clientes(self):
+        cfg = {"whatsapp_notificacoes": {**self.CONFIG["whatsapp_notificacoes"], "teto_diario": 2}}
+        agora = datetime(2026, 10, 6, 18, 0)
+        for i in range(5):
+            self.assertEqual(nw.avisar_cliente_sem_resposta(i, i, "5511988887777", "http://l", cfg, conn=self.conn,
+                                                            agora=agora, dormir=lambda s: None,
+                                                            destino_forcado="5511977776666"), "enviado")
+        self.assertEqual(nw.avisar_cliente_cadastro("1", "5511988887777", "t", "c:1", cfg, conn=self.conn, agora=agora,
+                                                    dormir=lambda s: None, destino_forcado="5511977776666"), "enviado")
+        self.assertEqual(nw.avisar_cliente_transportadora("1", "5511988887777", "t", "t:1", cfg, conn=self.conn,
+                                                          agora=agora, dormir=lambda s: None,
+                                                          destino_forcado="5511977776666"), "enviado")
+        origens = {r[0] for r in self.conn.execute("SELECT DISTINCT origem FROM notificacoes_whatsapp")}
+        self.assertEqual(origens, set(nw.ORIGENS_PILOTO))
+        self.assertEqual(nw.saldo_clientes(self.conn, cfg, agora), 30)
+        # teto interno (2) intacto: 7 copias de piloto nao entraram na conta
+        self.assertEqual(nw.despachar(cfg, "alertas", "falha", "x", conn=self.conn, agora=agora,
+                                      dormir=lambda s: None), "enviado")
+        self.assertEqual(nw.despachar(cfg, "alertas", "falha", "y", conn=self.conn, agora=agora,
+                                      dormir=lambda s: None), "enviado")
+        self.assertEqual(nw.despachar(cfg, "alertas", "falha", "z", conn=self.conn, agora=agora,
+                                      dormir=lambda s: None), "nao_enviado")   # o teto interno ainda funciona
+
+    def test_teto_do_piloto_vale_e_e_compartilhado_entre_as_tres(self):
+        cfg = {"whatsapp_notificacoes": {**self.CONFIG["whatsapp_notificacoes"]}}
+        cfg["whatsapp_notificacoes"]["clientes"] = {**cfg["whatsapp_notificacoes"]["clientes"], "teto_piloto": 2}
+        agora = datetime(2026, 10, 6, 18, 0)
+        kw = dict(conn=self.conn, agora=agora, dormir=lambda s: None, destino_forcado="5511977776666")
+        self.assertEqual(nw.avisar_cliente_sem_resposta(1, 1, "5511988887777", "http://l", cfg, **kw), "enviado")
+        self.assertEqual(nw.avisar_cliente_cadastro("1", "5511988887777", "t", "c:1", cfg, **kw), "enviado")
+        self.assertEqual(nw.avisar_cliente_transportadora("1", "5511988887777", "t", "t:1", cfg, **kw), "nao_enviado")
+        self.assertEqual(nw.saldo_piloto(self.conn, cfg, agora), 0)
+
+    def test_teto_do_piloto_padrao_e_20(self):
+        self.assertEqual(nw.saldo_piloto(self.conn, self.CONFIG, datetime(2026, 10, 6, 18, 0)), 20)
+
+    def test_fora_dia_fixo_tela_vale_por_cima_de_clientes_ativo(self):
+        cfg = {"whatsapp_notificacoes": {**self.CONFIG["whatsapp_notificacoes"], "clientes": {"ativo": False}}}
+        kw = dict(conn=self.conn, agora=datetime(2026, 10, 6, 18, 0), dormir=lambda s: None)
+        self.assertEqual(nw.avisar_cliente_fora_dia_fixo("PS-1", "5511988887777", "texto", cfg, **kw), "desligado")
+        self.assertEqual(nw.avisar_cliente_fora_dia_fixo("PS-1", "5511988887777", "texto", cfg,
+                                                         destino_forcado="", **kw), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "5511988887777@c.us")
 
     def test_none_vale_o_config(self):
         esperados = {nw.avisar_cliente_sem_resposta: "5511900001111", nw.avisar_cliente_cadastro: "5511900002222",

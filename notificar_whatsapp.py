@@ -82,8 +82,13 @@ MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 MAX_INSUCESSOS = 10
 ORIGEM_CLIENTE = "cliente_sem_resposta"
-# copia de piloto da tela de Notificacoes: nao conta como recebido pelo cliente nem no teto dele
+# copias de piloto da tela de Notificacoes: nao contam como recebido pelo cliente, nem no teto dos
+# clientes, nem no teto interno (alertas de falha); tem teto proprio (clientes.teto_piloto)
 ORIGEM_CLIENTE_PILOTO = "cliente_sem_resposta_piloto"
+ORIGEM_CADASTRO_PILOTO = "cliente_cadastro_piloto"
+ORIGEM_TRANSPORTADORA_PILOTO = "cliente_transportadora_piloto"
+ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO)
+TETO_PILOTO_PADRAO = 20
 TETO_CLIENTES_PADRAO = 30
 
 _SCHEMA = """
@@ -479,19 +484,29 @@ def _registrar(conn, agora, origem, tipo, assinatura, situacao, motivo=None, id_
     conn.commit()
 
 
-def _enviados_hoje(conn, agora: datetime, origem_cliente: bool) -> int:
-    """Teto interno e teto dos clientes nao se misturam: aviso de cliente
-    nao consome a cota dos alertas de falha, nem o contrario."""
+def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
+    """Teto interno, teto dos clientes e teto das copias de piloto nao se
+    misturam: aviso de cliente nao consome a cota dos alertas de falha, nem
+    o contrario, e a copia de piloto da tela de Notificacoes nao consome
+    nenhuma das duas."""
     inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
-    comparador = "=" if origem_cliente else "!="
+    marcas = ",".join("?" * len(ORIGENS_PILOTO))
+    if origem == ORIGEM_CLIENTE:
+        filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
+    elif origem in ORIGENS_PILOTO:
+        filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
+    else:
+        filtro, args = f"origem != ? AND origem NOT IN ({marcas})", (ORIGEM_CLIENTE, *ORIGENS_PILOTO)
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
-        f"AND origem {comparador} ?", (inicio_do_dia, ORIGEM_CLIENTE)).fetchone()[0]
+        f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
 
 
 def _teto(cfg: dict, origem: str) -> int:
     if origem == ORIGEM_CLIENTE:
         return _inteiro(cfg.get("clientes") or {}, "teto_diario", TETO_CLIENTES_PADRAO)
+    if origem in ORIGENS_PILOTO:
+        return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
 
 
@@ -515,7 +530,7 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
         pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
         if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
             return "canal em pausa"
-    if _enviados_hoje(conn, agora, origem == ORIGEM_CLIENTE) >= _teto(cfg, origem):
+    if _enviados_hoje(conn, agora, origem) >= _teto(cfg, origem):
         return "teto diario atingido"
     return None
 
@@ -526,7 +541,14 @@ def saldo_clientes(conn, config: dict, agora: datetime | None = None) -> int:
     contaria como a unica tentativa daquela mensagem)."""
     agora = agora or datetime.now()
     conn.execute(_SCHEMA)
-    return max(0, _teto(_cfg(config), ORIGEM_CLIENTE) - _enviados_hoje(conn, agora, True))
+    return max(0, _teto(_cfg(config), ORIGEM_CLIENTE) - _enviados_hoje(conn, agora, ORIGEM_CLIENTE))
+
+
+def saldo_piloto(conn, config: dict, agora: datetime | None = None) -> int:
+    """Quantas copias de piloto (tela de Notificacoes) ainda cabem hoje."""
+    agora = agora or datetime.now()
+    conn.execute(_SCHEMA)
+    return max(0, _teto(_cfg(config), ORIGEM_CLIENTE_PILOTO) - _enviados_hoje(conn, agora, ORIGEM_CLIENTE_PILOTO))
 
 
 def _esperar_intervalo(conn, cfg: dict, agora: datetime, dormir) -> datetime:
@@ -847,7 +869,7 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
     "" = envio real; None = vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
-        if not clientes_ligado(config) or not telefone:
+        if not _canal_clientes_ok(config, destino_forcado) or not telefone:
             return "desligado"
         forcar = _cfg_clientes(config).get("forcar_destino") if destino_forcado is None else destino_forcado
         destino = re.sub(r"\D", "", str(forcar or ""))
@@ -891,8 +913,11 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
             forcar = (cfg_cad["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_cad
                       else _cfg_clientes(config).get("forcar_destino"))
         destino = re.sub(r"\D", "", str(forcar or ""))
+        origem = ORIGEM_CLIENTE
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
+            if destino_forcado:
+                origem = ORIGEM_CADASTRO_PILOTO
         else:
             destino = telefone
         if not modo_teste:
@@ -903,7 +928,7 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
             if not existe:
                 logger.info(f"WhatsApp nao enviado (cadastro {cnpj}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
-        return despachar(config, ORIGEM_CLIENTE, "cadastro", texto, assinatura, modo_teste=modo_teste,
+        return despachar(config, origem, "cadastro", texto, assinatura, modo_teste=modo_teste,
                          grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
@@ -931,8 +956,11 @@ def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatu
             forcar = (cfg_ct["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_ct
                       else _cfg_clientes(config).get("forcar_destino"))
         destino = re.sub(r"\D", "", str(forcar or ""))
+        origem = ORIGEM_CLIENTE
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
+            if destino_forcado:
+                origem = ORIGEM_TRANSPORTADORA_PILOTO
         else:
             destino = telefone
         if not modo_teste:
@@ -943,7 +971,7 @@ def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatu
             if not existe:
                 logger.info(f"WhatsApp nao enviado (transportadora {cnpj}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
-        return despachar(config, ORIGEM_CLIENTE, "consulta_transportadora", texto, assinatura,
+        return despachar(config, origem, "consulta_transportadora", texto, assinatura,
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")

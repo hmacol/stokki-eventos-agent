@@ -148,6 +148,7 @@ def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste:
         candidatos = selecionar(conn, config, momento)
         resumo["avaliados"] = len(candidatos)
         saldo = nw.saldo_clientes(conn, config, momento)
+        saldo_piloto = nw.saldo_piloto(conn, config, momento)
         for c in candidatos:
             destino_forcado = None   # vale o whatsapp_notificacoes.clientes.forcar_destino do config
             piloto = False
@@ -166,9 +167,10 @@ def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste:
                     destino_forcado = d.destino_piloto if piloto else ""
                     if piloto and nw.copia_piloto_sem_resposta_enviada(conn, c["msg_id"]):
                         continue   # a copia desta mensagem ja saiu
-            if saldo <= 0 and not piloto:
+            if (saldo_piloto if piloto else saldo) <= 0:
                 resumo["pulados"] += 1
-                logger.info(f"Chamado #{c['chamado_id']}: teto diario dos clientes atingido, fica pra depois.")
+                logger.info(f"Chamado #{c['chamado_id']}: teto diario "
+                            f"{'das copias de piloto' if piloto else 'dos clientes'} atingido, fica pra depois.")
                 continue
             link = f"{ch.url_base(config)}/?chamado={c['chamado_id']}"
             situacao = nw.avisar_cliente_sem_resposta(c["chamado_id"], c["msg_id"], c["telefone"], link, config,
@@ -177,6 +179,7 @@ def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste:
             resumo["situacoes"].append((c["chamado_id"], situacao))
             if situacao == "enviado" and piloto:
                 resumo["copias_piloto"] += 1   # nao conta como aviso ao cliente nem no teto dele
+                saldo_piloto -= 1
             elif situacao == "enviado":
                 resumo["enviados"] += 1
                 saldo -= 1
