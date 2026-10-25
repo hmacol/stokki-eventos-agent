@@ -14,6 +14,7 @@ plano). Fonte que falha ou ainda sem valor: o aviso dela some, os outros
 continuam.
 """
 import logging
+import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -279,3 +280,50 @@ def montar(nivel: str, contadores: dict, telas_liberadas: set | None,
         avisos.append({"chave": chave, "texto": _texto(chave, item["texto"], qtd), "qtd": qtd,
                        "destino": item["destino"], "vermelho": item["vermelho"]})
     return avisos
+
+
+# ── Ignorar por pessoa ────────────────────────────────────────────────────────
+
+DB_PATH = _RAIZ / "dados" / "dados.db"
+_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def conectar(caminho=None) -> sqlite3.Connection:
+    conn = sqlite3.connect(caminho or DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS painel_avisos_ignorados (
+            pessoa TEXT NOT NULL,
+            chave  TEXT NOT NULL,
+            ate    TEXT NOT NULL,
+            qtd    INTEGER NOT NULL,
+            PRIMARY KEY (pessoa, chave)
+        )""")
+    conn.commit()
+    return conn
+
+
+def ignorar(conn, pessoa: str, chave: str, qtd: int, agora: datetime) -> None:
+    """Esconde o aviso `chave` pra `pessoa` por IGNORAR_MINUTOS (renova se ja existe)."""
+    ate = (agora + timedelta(minutes=IGNORAR_MINUTOS)).strftime(_FMT)
+    conn.execute(
+        "INSERT INTO painel_avisos_ignorados (pessoa, chave, ate, qtd) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(pessoa, chave) DO UPDATE SET ate = excluded.ate, qtd = excluded.qtd",
+        (pessoa, chave, ate, int(qtd)))
+    conn.commit()
+
+
+def filtrar_ignorados(conn, pessoa: str, avisos: list[dict], agora: datetime) -> list[dict]:
+    """Tira os avisos ignorados ainda validos. Vermelho volta na hora se a
+    quantidade atual passou da guardada; laranja espera o `ate`."""
+    linhas = conn.execute("SELECT chave, ate, qtd FROM painel_avisos_ignorados WHERE pessoa = ?",
+                          (pessoa,)).fetchall()
+    ignorados = {r["chave"]: (r["ate"], r["qtd"]) for r in linhas}
+    agora_s = agora.strftime(_FMT)
+    saida = []
+    for a in avisos:
+        reg = ignorados.get(a["chave"])
+        if reg and reg[0] > agora_s and not (a["vermelho"] and a["qtd"] > reg[1]):
+            continue
+        saida.append(a)
+    return saida

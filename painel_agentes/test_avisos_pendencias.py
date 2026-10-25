@@ -2,6 +2,7 @@
 """Testes do catalogo e das contagens do aviso de pendencias no topo."""
 import sqlite3
 import unittest
+from datetime import datetime
 from unittest import mock
 
 import avisos_pendencias as ap
@@ -139,6 +140,49 @@ class TestContagens(unittest.TestCase):
     def test_chave_desconhecida_levanta(self):
         with self.assertRaises(KeyError):
             ap.contar("pedagios")   # vem do contadores_menu, nao daqui
+
+
+class TestIgnorar(unittest.TestCase):
+    def setUp(self):
+        self.conn = ap.conectar(":memory:")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _av(self, chave, qtd, vermelho):
+        return {"chave": chave, "texto": "t", "qtd": qtd, "destino": "/x", "vermelho": vermelho}
+
+    def test_ignorado_some_por_30_min(self):
+        ap.ignorar(self.conn, "login:a", "pedagios", 3, datetime(2026, 10, 24, 10, 0, 0))
+        av = [self._av("pedagios", 3, False)]
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, datetime(2026, 10, 24, 10, 29, 59)), [])
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, datetime(2026, 10, 24, 10, 30, 0)), av)
+
+    def test_vermelha_volta_se_subir(self):
+        ap.ignorar(self.conn, "login:a", "chamados", 3, datetime(2026, 10, 24, 10, 0, 0))
+        t1 = datetime(2026, 10, 24, 10, 5, 0)
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", [self._av("chamados", 3, True)], t1), [])
+        av = [self._av("chamados", 5, True)]
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, t1), av)
+
+    def test_laranja_espera_30_min(self):
+        ap.ignorar(self.conn, "login:a", "pedagios", 3, datetime(2026, 10, 24, 10, 0, 0))
+        av = [self._av("pedagios", 8, False)]
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, datetime(2026, 10, 24, 10, 10)), [])
+
+    def test_pessoas_diferentes_nao_compartilham(self):
+        t0 = datetime(2026, 10, 24, 10, 0, 0)
+        ap.ignorar(self.conn, "login:a", "pedagios", 3, t0)
+        av = [self._av("pedagios", 3, False)]
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:b", av, t0), av)
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "aparelho:u1", av, t0), av)
+
+    def test_ignorar_de_novo_renova(self):
+        ap.ignorar(self.conn, "login:a", "pedagios", 3, datetime(2026, 10, 24, 10, 0))
+        ap.ignorar(self.conn, "login:a", "pedagios", 4, datetime(2026, 10, 24, 10, 20))
+        av = [self._av("pedagios", 4, False)]
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, datetime(2026, 10, 24, 10, 40)), [])
+        self.assertEqual(ap.filtrar_ignorados(self.conn, "login:a", av, datetime(2026, 10, 24, 10, 50)), av)
 
 
 if __name__ == "__main__":
