@@ -249,6 +249,10 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
                         continue  # tenta de novo na próxima rodada
                     if ja_piloto[id(item)] and not canais:
                         continue  # a copia de piloto deste pedido ja saiu antes
+                    if not canais and "tela" in (d_email.origem, d_wpp.origem) and "NAO" in (d_email.acao, d_wpp.acao):
+                        # um canal barrado pela tela (ex.: piloto sem WhatsApp) e nada saiu: nao consome,
+                        # o canal barrado ainda pode sair quando a tela liberar (so os DOIS barrados consomem)
+                        continue
                     registro_dia_fixo.registrar_aviso(conn_reg, item["servico"], item["data"], canais)
                     resultado["registrados"] += 1
                 except Exception as e:

@@ -141,6 +141,23 @@ class TestControleForaDiaFixo(Base):
         self.assertEqual(self.email.call_args[0][0], ["hugo@freshlogbr.com"])
         self.assertEqual(self._canais(), "piloto")
 
+    def test_fora_dia_fixo_piloto_sem_whatsapp_e_sem_email_nao_consome_e_liga_envia_whatsapp(self):
+        self._estado("PILOTO")
+        self._piloto(whatsapp="")
+        embs = {7: {**EMBS[7], "emails": []}}
+        r = nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores=embs)
+        self.email.assert_not_called()
+        self.wpp.assert_not_called()
+        self.assertEqual(r["registrados"], 0)
+        self.assertIsNone(self._canais())
+        self.assertFalse(self._avisado())
+        self._estado("LIGADO")
+        r = nfdf.avisar([_item()], CONFIG, db_path=self.db, embarcadores=embs)
+        self.email.assert_not_called()
+        self.assertEqual(self.wpp.call_args.kwargs["destino_forcado"], "")
+        self.assertEqual(self._canais(), "whatsapp")
+        self.assertTrue(self._avisado())
+
     def test_fora_dia_fixo_piloto_nao_repete_a_copia_na_rodada_seguinte(self):
         self._estado("PILOTO")
         self._piloto(whatsapp=PILOTO_WPP)
