@@ -957,6 +957,11 @@
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
+ solicitacoes_execucao.py  Executar/Recusar solicitação PENDENTE do portal (tela
+                           /solicitacoes-portal): cancelar (Vuupt -> Stokki),
+                           em_espera (tira da rota na Vuupt -> Pausar na Stokki),
+                           reagendar (PUT serviço Vuupt). Só conclui se tudo deu
+                           certo; trava sessao_uso (60 s) em cancelar/em_espera.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.
