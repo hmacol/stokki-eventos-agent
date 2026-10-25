@@ -72,6 +72,10 @@ TIPOS = {
                         "canais": ("email",), "quando": "timer 04h10"},
     "convite_embarcador": {"rotulo": "Convite ao embarcador novo", "destino": "embarcador",
                            "canais": ("email", "whatsapp"), "quando": "timer 07h10"},
+    "redespacho": {"rotulo": "Redespacho", "destino": "embarcador",
+                   "canais": ("email",), "quando": "dentro do pipeline"},
+    "consulta_transportadora": {"rotulo": "Consulta à transportadora", "destino": "embarcador",
+                                "canais": ("email", "whatsapp"), "quando": "dentro do pipeline e lembrete"},
 }
 
 
