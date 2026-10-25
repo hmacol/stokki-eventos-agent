@@ -5,6 +5,10 @@ confirmacao do cliente (nao 1 por NF), mensagem de sistema no chat, e-mail
 pro cliente e e-mail interno. Tudo redirecionado por
 portal_cliente.envios.forcar_destino (default hugo@) ate o Hugo liberar
 (forcar_destino: "" no config = envio real).
+
+Tela de Notificacoes (controle_notificacoes.py, tipo "area_nao_atendida"):
+vale POR CIMA do config SO no e-mail ao cliente. O e-mail interno (atendimento)
+e o aviso de "sem chamado" seguem o forcar_destino de sempre.
 """
 import html
 import logging
@@ -17,6 +21,7 @@ for _p in (_RAIZ, _AQUI):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 from email_utils import enviar_email, envelope_html  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -81,7 +86,7 @@ def avisar_cancelamento(envio: dict, por: str) -> bool:
         return False
 
 
-def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> int | None:
+def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict, db_path=None) -> int | None:
     """`conn` e a conexao de envio_pedidos (portal_envios). `cliente` =
     {cnpj, sender_id, nome}. Devolve o id do chamado ou None."""
     bloqueados = [c for c in criados if c.get("status") == STATUS_BLOQUEADO]
@@ -128,9 +133,14 @@ def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> in
     forcar = forcar_destino(config)
     nome = html.escape(cliente.get("nome") or "")
     corpo_html = "<p>" + html.escape(texto).replace("\n", "</p><p>") + "</p>"
+    decisao = decidir("area_nao_atendida", cliente.get("cnpj") or None,
+                      fallback_acao=acao_do_config(True, forcar), fallback_piloto=forcar, db_path=db_path)
+    piloto = decisao.destino_piloto if decisao.acao == "PILOTO" else ""
     aviso = (f"<p style='background:#FFF4D6;padding:8px;border-radius:6px'>Redirecionado (piloto). Destino real: "
-             f"{html.escape(', '.join(emails_cliente) or '(cliente sem e-mail)')}</p>" if forcar else "")
-    destinos_cliente = [forcar] if forcar else emails_cliente
+             f"{html.escape(', '.join(emails_cliente) or '(cliente sem e-mail)')}</p>" if piloto else "")
+    destinos_cliente = [piloto] if piloto else (emails_cliente if decisao.acao == "ENVIAR" else [])
+    if decisao.acao == "NAO":
+        logger.info(f"bloqueio: e-mail ao cliente nao enviado pela tela ({decisao.motivo})")
     if destinos_cliente:
         enviar_email(destinos_cliente, f"[Fresh Log] Envio aguardando liberação · NF {nfs}",
                      envelope_html(f"<p>Olá, <b>{nome}</b>.</p>{corpo_html}<p><a href='{URL_PORTAL}'>Abrir o portal</a></p>{aviso}",

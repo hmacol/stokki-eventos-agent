@@ -21,6 +21,10 @@ mandam e-mail pro embarcador neste projeto:
     cliente. A chave aqui e o `stkkc_id` (#stkkc-<id> do embarcador na
     Stokki, que o proprio recebimento carrega), nao o sender_id da Vuupt.
   - notificacoes_automaticas.ativo (chave-mestra) vale pro envio real.
+  - Tela de Notificacoes (controle_notificacoes.py, tipo "faltas_recebimento"):
+    vale POR CIMA do config -- geral desligado, tipo desligado/piloto/ligado e
+    excecao por embarcador. Sem linha na tela vale o config. Modo teste
+    ignora a tela.
   - notificacoes_enviadas (tipo + chave): encerrar duas vezes, ou uma
     retentativa depois de resposta perdida, nao manda dois e-mails.
 
@@ -68,6 +72,7 @@ if str(Path(__file__).parent) not in sys.path:
 
 import email_utils  # noqa: E402
 import preferencias_notificacao  # noqa: E402
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 import wms_pedidos  # noqa: E402
 
 logger = logging.getLogger("wms_faltas_recebimento")
@@ -130,7 +135,8 @@ def stkkc_id_do_recebimento(rec: dict, config: dict) -> str:
 def embarcador_do_recebimento(conn, rec: dict, config: dict) -> dict:
     """
     {"nome", "emails", "notificar"} do embarcador dono do recebimento, do
-    jeito que o cliente configurou no botao Notificacoes do portal.
+    jeito que o cliente configurou no botao Notificacoes do portal, mais o
+    "cnpj" (a tela de Notificacoes identifica o embarcador por ele).
 
     Devolve {} quando o #stkkc-<id> do recebimento nao existe no cadastro
     (interno.stkkc_id) -- e melhor nao mandar nada do que mandar falta de
@@ -142,7 +148,8 @@ def embarcador_do_recebimento(conn, rec: dict, config: dict) -> dict:
     for chave, emb in embs.items():
         if str(chave).strip() == alvo:
             return {"nome": emb["nome"] or rec.get("embarcador") or f"Embarcador {alvo}",
-                    "emails": emb["emails"], "notificar": not emb["desligado"]}
+                    "emails": emb["emails"], "notificar": not emb["desligado"],
+                    "cnpj": emb.get("cnpj") or ""}
     return {}
 
 
@@ -332,8 +339,8 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
     forcar_destino do config.
 
     `motivo` explica o que impediu o envio, quando nao houve:
-      sem_faltas | nao_encerrado | desativado | sem_embarcador |
-      desligado_pelo_cliente | sem_email | ja_enviado | falha_no_envio
+      sem_faltas | nao_encerrado | desativado | bloqueado_pela_tela |
+      sem_embarcador | desligado_pelo_cliente | sem_email | ja_enviado | falha_no_envio
     """
     enviar = enviar or email_utils.enviar_email
     r = {"enviado": False, "destinos": [], "redirecionado": False, "motivo": "", "faltas": 0}
@@ -354,19 +361,28 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
         return r
 
     forcar = forcar_destino_do_config(config)
-    if not modo_teste:
-        if not rotina_ativa(config):
-            r["motivo"] = "desativado"
-        elif not forcar and not email_utils.notificacoes_automaticas_ativas(config):
-            r["motivo"] = "desativado"
-        if r["motivo"]:
-            return r
+    # o que o config decidiria hoje; a tela (decidir) vale por cima
+    desativado_no_config = (not rotina_ativa(config)
+                            or (not forcar and not email_utils.notificacoes_automaticas_ativas(config)))
+    fallback = acao_do_config(not desativado_no_config, forcar)
 
     try:
         emb = embarcador_do_recebimento(conn, rec, config)
     except (sqlite3.Error, FileNotFoundError, ValueError) as e:
         logger.warning("Recebimento %s: nao consegui resolver o embarcador -- %s", rec.get("codigo"), e)
         emb = {}
+
+    decisao = None
+    if not modo_teste:
+        decisao = decidir(TIPO_NOTIFICACAO, emb.get("cnpj") or None, fallback_acao=fallback,
+                          fallback_piloto=forcar, db_path=_caminho_do_banco(conn))
+        if decisao.acao == "NAO":
+            if decisao.origem == "config":
+                r["motivo"] = "desativado"
+            else:
+                r["motivo"] = "bloqueado_pela_tela"
+                logger.info("Recebimento %s: nao enviado pela tela (%s)", rec.get("codigo"), decisao.motivo)
+            return r
     if not emb:
         r["motivo"] = "sem_embarcador"
         return r
@@ -377,7 +393,8 @@ def notificar_faltas(conn, recebimento_id: int, config: dict, enviar=None,
         r["motivo"] = "sem_email"
         return r
 
-    destinos, redirecionado = resolver_destinos(emb["emails"], modo_teste, forcar)
+    piloto = decisao.destino_piloto if decisao is not None and decisao.acao == "PILOTO" else ""
+    destinos, redirecionado = resolver_destinos(emb["emails"], modo_teste, piloto)
     r["destinos"], r["redirecionado"] = destinos, redirecionado
     chave = _chave(rec.get("id_stokki"), redirecionado)
     if not modo_teste and not forcar_reenvio and ja_enviado(conn, chave):

@@ -301,6 +301,15 @@ class LinhaEAcao(unittest.TestCase):
 
 
 class AbrirBloqueio(unittest.TestCase):
+    def setUp(self):
+        # a tela de Notificacoes (controle_notificacoes) nunca le o dados.db real aqui
+        import controle_notificacoes as cn
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        p = mock.patch.object(cn, "DB_PATH", Path(self._tmp.name) / "controle.db")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _conn(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
