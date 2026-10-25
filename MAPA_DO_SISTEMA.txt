@@ -897,6 +897,11 @@
                               login nominal, muda nome/nível, redefine senha,
                               desativa/reativa,
                               telas de cada um / nível personalizado)
+   /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
+                              pilota ou desliga os envios a embarcador/transportadora;
+                              geral, tipo, exceção, piloto, histórico, e-mails do
+                              embarcador; grava em controle_notificacoes, tabelas
+                              notificacoes_controle*)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
    /pedidos-parados          pedidos_parados_triagem.html
    /historico-tratativas      historico_tratativas.html
