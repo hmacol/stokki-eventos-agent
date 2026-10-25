@@ -70,9 +70,10 @@ sendo o arquivo de segredos e nunca é escrito pelo painel.
   tela `/transportadoras`, `CatalogoTransportadoras.carregar_do_banco`,
   commit bf6a667). "NÃO ENVIAR" vale **por ponto de redespacho** (linha),
   não pela transportadora inteira (e4c13f7). **Decisão minha:** a camada
-  "por transportadora" da tela de notificações **é o mesmo dado** — bloquear
-  ali grava o mesmo "NÃO ENVIAR" do cadastro, por ponto; não existe segunda
-  trava nem "liberado" que fure o NÃO ENVIAR. A exceção "liberado" (que fura
+  "por transportadora" da tela de notificações **é o mesmo dado** — a tela
+  mostra o "NÃO ENVIAR" do cadastro (por ponto) e leva ao `/transportadoras`
+  para mudá-lo (ajuste do plano, 24/10: um só lugar que grava); não existe
+  segunda trava nem "liberado" que fure o NÃO ENVIAR. A exceção "liberado" (que fura
   o Piloto) vale para pontos sem NÃO ENVIAR.
 
 ### Envios cobertos e de onde cada um decide hoje
