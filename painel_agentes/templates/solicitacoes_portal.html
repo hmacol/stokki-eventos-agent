@@ -61,12 +61,15 @@
     msg.textContent = j.mensagem;
     msg.className = 'msg ' + (j.ok ? 'ok' : 'erro');
   }
-  function remover(tr) {
-    setTimeout(function () {
-      var tbody = tr.parentNode;
-      tr.remove();
-      if (!tbody.children.length) aviso('Nenhum pedido do portal esperando a operação.');
-    }, 4000);
+  function concluir(tr, rotulo) {
+    tr.classList.add('concluida');
+    var st = el('div', 'suave', rotulo);
+    tr.querySelector('.acoes').insertBefore(st, tr.querySelector('.msg'));
+  }
+  function cnpj(v) {
+    var d = String(v || '').replace(/\D/g, '');
+    if (d.length === 14) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    return v || '';
   }
 
   function linha(s) {
@@ -77,7 +80,7 @@
     c.appendChild(el('div', 'suave', s.numero_nf ? 'NF ' + s.numero_nf : ''));
     tr.appendChild(c);
     c = el('td');
-    c.appendChild(el('div', null, s.embarcador || '—'));
+    c.appendChild(el('div', null, cnpj(s.embarcador) || '—'));
     c.appendChild(el('div', 'suave', s.destinatario || ''));
     tr.appendChild(c);
     tr.appendChild(el('td', null, s.rotulo));
@@ -105,7 +108,7 @@
       var j;
       try { j = await enviar(s.id, 'executar'); } catch (e) { j = {ok: false, mensagem: 'Sem resposta do servidor.'}; }
       mostrar(msg, j);
-      if (j.ok) remover(tr); else travar(false);
+      if (j.ok) { bRec.style.display = 'none'; concluir(tr, 'Concluída'); } else travar(false);
     });
     bRec.addEventListener('click', function () { form.classList.add('aberta'); inp.focus(); });
     bCan.addEventListener('click', function () { form.classList.remove('aberta'); });
@@ -116,7 +119,7 @@
       var j;
       try { j = await enviar(s.id, 'recusar', {resposta: texto}); } catch (e) { j = {ok: false, mensagem: 'Sem resposta do servidor.'}; }
       mostrar(msg, j);
-      if (j.ok) { form.classList.remove('aberta'); remover(tr); } else travar(false);
+      if (j.ok) { form.classList.remove('aberta'); bExec.style.display = 'none'; bRec.style.display = 'none'; concluir(tr, 'Recusada'); } else travar(false);
     });
     return tr;
   }

@@ -84,7 +84,8 @@ class TestAvisosNoContadores(_Base):
         self._logar()
         sem_rota = {**AVISO, "chave": "solicitacoes_portal"}
         item = next(i for i in avisos_pendencias.CATALOGO if i["chave"] == "solicitacoes_portal")
-        with mock.patch.dict(item, {"endpoint_destino": "tela_que_nao_existe"}),                 mock.patch.object(avisos_pendencias, "montar", return_value=[sem_rota, dict(AVISO)]):
+        with mock.patch.dict(item, {"endpoint_destino": "tela_que_nao_existe"}), \
+                mock.patch.object(avisos_pendencias, "montar", return_value=[sem_rota, dict(AVISO)]):
             r = self.cliente.get("/api/sidebar/contadores")
         self.assertEqual(r.status_code, 200)
         self.assertEqual([a["chave"] for a in r.get_json()["avisos"]], ["torre"])
