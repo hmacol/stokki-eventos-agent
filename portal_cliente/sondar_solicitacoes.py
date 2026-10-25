@@ -37,12 +37,12 @@ def _trechos(html: str) -> None:
     """Imprime so ids de form, action, metodo, NOMES de campo e caminhos de
     endpoint -- nunca texto em volta (podia ter dado do destinatario)."""
     print("== formularios (id / method / action / nomes dos campos) ==")
-    for f in re.finditer(r"<form([^>]*)>(.*?)</form>", html, re.S | re.I):
+    for f in re.finditer(r"<form\b([^>]*)>(.*?)</form>", html, re.S | re.I):
         attrs, corpo = f.group(1), f.group(2)
-        fid = re.search(r'id="([^"]*)"', attrs)
-        met = re.search(r'method="([^"]*)"', attrs)
-        act = re.search(r'action="([^"]*)"', attrs)
-        campos = re.findall(r"<(?:input|textarea|select)[^>]*name=\"([^\"]+)\"", corpo)
+        fid = re.search(r'\bid="([^"]*)"', attrs)
+        met = re.search(r'\bmethod="([^"]*)"', attrs)
+        act = re.search(r'\baction="([^"]*)"', attrs)
+        campos = re.findall(r"<(?:input|textarea|select)\b[^>]*name=\"([^\"]+)\"", corpo)
         print(fid.group(1) if fid else "?", "|", met.group(1) if met else "?", "|",
               _caminho(act.group(1)) if act else "(sem action)", "| campos:", campos)
 
@@ -51,7 +51,7 @@ def _trechos(html: str) -> None:
         print(_caminho(r))
 
     print("== endpoints chamados em scripts de pausa ==")
-    for sc in re.finditer(r"<script[^>]*>(.*?)</script>", html, re.S | re.I):
+    for sc in re.finditer(r"<script\b[^>]*>(.*?)</script>", html, re.S | re.I):
         corpo = sc.group(1)
         for m in re.finditer(r"\$\('#(form_\w+)'\)\.submit", corpo):
             if CHAVES.search(m.group(1)):
