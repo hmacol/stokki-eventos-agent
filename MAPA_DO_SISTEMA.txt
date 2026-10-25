@@ -122,6 +122,14 @@
                                              e-mail 1x/h. Sombra: comparar_pool.py --fonte freshhub (coluna fonte
                                              em nucleo_reconciliacoes_pool, chave rodado_em+fonte); portão da 1.2 =
                                              3 dias úteis em 0 na fonte freshhub, aí fonte_pool: freshhub (Hugo).
+   Prontidão na Stokki (plano 1.2) ......... nucleo/prontidao_stokki.py (retrato vigia_stokki_abertos; era de
+                                             planejamento_rotas): rascunhos_rota.enviar_rascunho tira da rota a
+                                             parada ainda em separação/conferência/espera (volta ao pool) e
+                                             incrementar_rotas (22h) não encaixa pedido nessa situação.
+   Eventos pro freshhub (plano 1.2) ........ nucleo/eventos_freshhub.py: roteirizado (lote de rascunho gravado,
+                                             pedido posto em rota no incremento), nao_aprontou, rota_enviada;
+                                             sombra: falha da API guarda em dados/eventos_freshhub_pendentes.jsonl
+                                             e reenvia na próxima; --modo-teste não manda.
    Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
                                              vigia_stokki_abertos (retrato do pipeline, não ao vivo)
  Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,

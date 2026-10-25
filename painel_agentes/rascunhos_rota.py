@@ -37,6 +37,8 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 
+from nucleo import eventos_freshhub, prontidao_stokki  # noqa: E402  (plano 1.2 do sistema novo)
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
@@ -332,6 +334,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     remetentes_por_id = carregar_remetentes_por_sender_id()
 
     conn = _conectar()
+    gravados: list[tuple[int, str, list[dict]]] = []  # (rascunho_id, nome, paradas) pros eventos roteirizado
     try:
         for r in rascunhos:
             cursor = conn.execute("""
@@ -349,18 +352,27 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                 1 if r.get("recebeu_rota_fraca") else 0, r.get("turno"), STATUS_RASCUNHO,
             ))
             rascunho_id = cursor.lastrowid
+            paradas_gravadas: list[dict] = []
             for ordem, servico in enumerate(r["sublote"]):
-                _inserir_parada(conn, rascunho_id, ordem, _parada_de_servico(servico, remetentes_por_id))
+                parada = _parada_de_servico(servico, remetentes_por_id)
+                _inserir_parada(conn, rascunho_id, ordem, parada)
                 conn.execute("INSERT INTO rascunhos_plano_original (lote_id, rascunho_id, service_id) "
                              "VALUES (?, ?, ?)", (lote_id, rascunho_id, servico["id"]))
+                paradas_gravadas.append(parada)
+            gravados.append((rascunho_id, r["nome"], paradas_gravadas))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
-        return lote_id
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+    # plano 1.2 do sistema novo: cada parada do rascunho vira evento `roteirizado` no freshhub (sombra)
+    config = _carregar_config()
+    for rascunho_id, nome, paradas in gravados:
+        _avisar_freshhub(f"roteirizado, rascunho {rascunho_id}", lambda: eventos_freshhub.roteirizados(
+            config, paradas, rascunho_id=rascunho_id, rota_nome=nome, data_alvo=data_alvo.isoformat()))
+    return lote_id
 
 
 def _lote_ativo_id(conn: sqlite3.Connection, data_alvo: date) -> str | None:
@@ -429,11 +441,25 @@ def _tocar(conn: sqlite3.Connection, rascunho_id: int):
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"  # mesma base de mapa_rotas.py/criar_rotas_diarias.py
 
 
-def _gmaps_key() -> str:
+def _carregar_config() -> dict:
     import yaml
-    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-    return config.get("google_maps", {}).get("api_key", "")
+    try:
+        with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except OSError:
+        return {}
+
+
+def _gmaps_key() -> str:
+    return _carregar_config().get("google_maps", {}).get("api_key", "")
+
+
+def _avisar_freshhub(descricao: str, enviar) -> None:
+    """Eventos pro sistema novo sao sombra (plano 1.2): falha nunca derruba a operacao do rascunho."""
+    try:
+        enviar()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"eventos pro freshhub ({descricao}) nao enviados: {e}")
 
 
 def _recalcular_km_silencioso(conn: sqlite3.Connection, rascunho_id: int):
@@ -1323,7 +1349,29 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_erro_envio(rascunho_id, "Rascunho sem paradas -- nada pra enviar.")
         return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas."}
 
-    sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in rascunho["paradas"]]
+    # A rota so sai com pedido liberado pela Stokki (plano 1.2 do sistema novo, spec 5.4): parada cujo
+    # pedido o retrato do pipeline ainda mostra em separacao/conferencia/espera sai do rascunho (volta ao
+    # pool; o servico continua not_assigned na Vuupt) e vira evento `nao_aprontou` no freshhub.
+    config = _carregar_config()
+    retrato, _ = prontidao_stokki.carregar_retrato_stokki()
+    paradas, nao_prontas = prontidao_stokki.separar_prontos(rascunho["paradas"], retrato)
+    codigos_nao_prontos = [p["codigo"] for p in nao_prontas]
+    if nao_prontas:
+        for p in nao_prontas:
+            remover_parada(rascunho_id, p["service_id"])
+        logger.info(f"Rascunho {rascunho_id}: {len(nao_prontas)} parada(s) ainda nao pronta(s) na Stokki "
+                    f"voltaram ao pool: " + ", ".join(f"{p['codigo']} ({p['situacao_stokki']})" for p in nao_prontas))
+        _avisar_freshhub("nao_aprontou", lambda: eventos_freshhub.nao_aprontaram(
+            config, nao_prontas, contexto={"rascunho_id": rascunho_id, "rota_nome": rascunho["nome"],
+                                           "origem": "envio"}))
+    if not paradas:
+        mensagem = (f"Nenhuma parada liberada pela Stokki ainda ({len(nao_prontas)} em separacao/conferencia/"
+                    f"espera) -- nada enviado; os pedidos voltaram ao pool.")
+        marcar_erro_envio(rascunho_id, mensagem)
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem,
+                "codigos_nao_prontos": codigos_nao_prontos}
+
+    sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in paradas]
 
     try:
         rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
@@ -1371,7 +1419,13 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     # VUUPT e nada daqui pode desfazer isso.
     from documentacao_rota import agendar as _agendar_documentacao
     _agendar_documentacao(rota["id"], rascunho["data_alvo"], motivo=f"rota enviada ({rascunho['nome']})")
-    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+    # plano 1.2: o que saiu na rota vira `rota_enviada` no freshhub (sombra)
+    ids_enviados = {s["id"] for s in sublote_criado}
+    _avisar_freshhub("rota_enviada", lambda: eventos_freshhub.rota_enviada(
+        config, [p for p in paradas if p["service_id"] in ids_enviados], vuupt_route_id=rota["id"],
+        rascunho_id=rascunho_id, rota_nome=rascunho["nome"]))
+    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"],
+            "codigos_removidos": codigos_removidos, "codigos_nao_prontos": codigos_nao_prontos}
 
 
 def lancar_lalamove(rascunho_id: int, token: str) -> dict:

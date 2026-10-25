@@ -116,6 +116,7 @@ from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
+from nucleo import eventos_freshhub, prontidao_stokki  # plano 1.2 do sistema novo
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, KM_ACUMULADO_MAXIMO_ROTA_KM,
@@ -410,6 +411,18 @@ def _ordenar_rota_incrementada(servicos: list[dict], coords_base, gmaps_key, hor
     return ordenar_2opt(servicos, coords_base[0], coords_base[1], gmaps_key)
 
 
+def _registrar_roteirizado_incremento(config: dict, pedido: dict, rota: dict, data_alvo_iso: str, *,
+                                      modo_teste: bool) -> None:
+    """Pedido posto numa rota existente no incremento vira `roteirizado` no freshhub (plano 1.2, sombra)."""
+    try:
+        eventos_freshhub.registrar(config, [eventos_freshhub.evento(
+            pedido.get("code") or "", "roteirizado",
+            {"vuupt_route_id": rota.get("id"), "rota_nome": rota.get("nome"), "data": data_alvo_iso,
+             "service_id": pedido.get("id"), "origem": "incremento"})], modo_teste=modo_teste)
+    except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
+        logger.warning(f"evento roteirizado de {pedido.get('code')} nao enviado ao freshhub: {e}")
+
+
 def main(modo_teste: bool = False):
     inicio = time.time()
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Incremento de rotas iniciado.")
@@ -445,6 +458,22 @@ def main(modo_teste: bool = False):
         # planejamento.fonte_pool -- ver nucleo/pool.py. include=customer
         # continua vindo (CNPJ do destinatário resolve nível e horário).
         servicos = listar_pool_not_assigned(config, vuupt)
+
+        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki ainda mostra
+        # em separacao/conferencia/espera nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
+        # e volta ao pool da proxima rodada sozinho (continua not_assigned na Vuupt).
+        retrato_stokki, _ = prontidao_stokki.carregar_retrato_stokki()
+        servicos, nao_prontos = prontidao_stokki.separar_prontos(servicos, retrato_stokki, chave="code")
+        if nao_prontos:
+            logger.info(f"{len(nao_prontos)} pedido(s) ainda em separacao na Stokki ficam fora do incremento: "
+                        + ", ".join(f"{p.get('code')} ({p['situacao_stokki']})" for p in nao_prontos))
+            try:
+                eventos_freshhub.nao_aprontaram(
+                    config, [{"codigo": p.get("code"), "service_id": p.get("id"),
+                              "situacao_stokki": p["situacao_stokki"]} for p in nao_prontos],
+                    contexto={"origem": "incremento", "data": data_alvo.isoformat()}, modo_teste=modo_teste)
+            except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
+                logger.warning(f"eventos nao_aprontou nao enviados ao freshhub: {e}")
 
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
@@ -922,6 +951,8 @@ def main(modo_teste: bool = False):
                     # distância da base depois de qualquer pedido novo.
                     adicionar_atividades(token, rota_escolhida["id"], [pedido["id"]], position="end")
                     alocado_em_existente = True
+                    _registrar_roteirizado_incremento(config, pedido, rota_escolhida, data_alvo.isoformat(),
+                                                      modo_teste=modo_teste)
                     break
                 except Exception as e:
                     if PADRAO_ROTA_INVALIDA.search(str(e)):
@@ -1022,6 +1053,8 @@ def main(modo_teste: bool = False):
             "status": "ok",
             "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente, "
                       f"{alocados_rascunho} em rascunho"
+                      + (f", {len(nao_prontos)} ainda em separação na Stokki (fora do incremento, voltam ao pool)"
+                         if nao_prontos else "")
                       + (f", {len(orfaos)} pedido(s) sem rota com espaço/compatibilidade hoje "
                          f"(ficam pro rascunho do dia seguinte)." if orfaos else "."),
         }
