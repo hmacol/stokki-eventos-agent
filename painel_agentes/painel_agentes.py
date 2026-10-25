@@ -1747,6 +1747,8 @@ def notificacoes():
                                embarcadores=nt.lista_embarcadores(conn),
                                disparaveis={t: list(i["alvos"]) for t, i in nt.DISPARAVEIS.items()},
                                sem_disparo=nt.SEM_DISPARO,
+                               so_pelo_timer=nt.SO_PELO_TIMER,
+                               nota_teste=nt.NOTA_TESTE,
                                tipos={t: {"rotulo": i["rotulo"], "destino": i["destino"], "canais": list(i["canais"]),
                                           "quando": i["quando"]} for t, i in cn.TIPOS.items()})
     finally:

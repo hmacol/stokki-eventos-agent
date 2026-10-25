@@ -212,6 +212,8 @@
   const TIPOS = {{ tipos|tojson }};
   const DISPARAVEIS = {{ disparaveis|tojson }};
   const SEM_DISPARO = {{ sem_disparo|tojson }};
+  const SO_PELO_TIMER = {{ so_pelo_timer|tojson }};
+  const NOTA_TESTE = {{ nota_teste|tojson }};
   const ROTULO_ALVO = { teste: "Só para mim (teste)", todos: "Todos os liberados", um: "Um embarcador" };
   const EMBARCADORES = {{ embarcadores|tojson }};
   const ROTULO_ESTADO = { LIGADO: "Ligado", PILOTO: "Piloto (só Hugo)", DESLIGADO: "Desligado", config: "segue o config" };
@@ -493,7 +495,7 @@
 
   // ------------------------------------------------------- disparar agora
   function notaDoAlvo(d, alvo) {
-    if (alvo === "teste") return "Vai só para o Hugo (destino de teste), qualquer que seja o estado do tipo.";
+    if (alvo === "teste") return NOTA_TESTE[d.tipo] || "Vai só para o Hugo (destino de teste), qualquer que seja o estado do tipo.";
     const quem = d.destino === "transportadora" ? "as transportadoras" : "os clientes";
     if (d.estado === "LIGADO") return "O tipo está Ligado: " + quem + " recebem de verdade.";
     if (d.estado === "PILOTO") return "O tipo está em Piloto: a cópia vai só para o destino de piloto.";
@@ -584,6 +586,7 @@
     const resultado = el("div", { class: "resultado-disparo", "aria-live": "polite" });
     const botao = el("button", { type: "button", class: "botao pequeno", text: "Disparar agora",
       onclick: () => abrirJanelaDisparo(d, atualizarResultado) });
+    if (SO_PELO_TIMER[d.tipo]) bloco.append(el("p", { class: "nota-painel", text: SO_PELO_TIMER[d.tipo] }));
     bloco.append(botao, resultado);
 
     async function atualizarResultado() {

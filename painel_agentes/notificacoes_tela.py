@@ -238,14 +238,27 @@ def _texto_contato(pref: dict) -> str:
 # manda so pro Hugo); "todos" = a rotina do jeito que o timer roda (quem recebe
 # de verdade ainda e decidido pelo estado do tipo); "um" = um embarcador (so as
 # rotinas que aceitam --sender-id). consulta_transportadora e os tipos que saem
-# dentro de outra rotina ou no evento nao entram.
+# dentro de outra rotina ou no evento nao entram. Os de timer frequente
+# (SO_PELO_TIMER) so tem "teste": "todos" correria junto com o timer e mandaria
+# em dobro aos clientes.
 DISPARAVEIS = {
     "nfs_em_rota": {"script": "notificar_nfs_em_rota.py", "alvos": ("teste", "todos", "um")},
     "resumo_diario": {"script": "resumo_diario_embarcador.py", "alvos": ("teste", "todos", "um")},
-    "entrega_concluida": {"script": "notificacao_entregas/notificar_entrega_concluida.py", "alvos": ("teste", "todos")},
+    "entrega_concluida": {"script": "notificacao_entregas/notificar_entrega_concluida.py", "alvos": ("teste",)},
     "pedidos_em_espera": {"script": "notificar_pedidos_em_espera.py", "alvos": ("teste", "todos")},
     "transportadoras": {"script": "notificacao_transportadoras/notificar_transportadoras.py", "alvos": ("teste", "todos")},
-    "whatsapp_sem_resposta": {"script": "avisar_cliente_sem_resposta.py", "alvos": ("teste", "todos")},
+    "whatsapp_sem_resposta": {"script": "avisar_cliente_sem_resposta.py", "alvos": ("teste",)},
+}
+
+# Nota do painel dos tipos que o timer ja roda o tempo todo (infra/*.timer).
+SO_PELO_TIMER = {
+    "entrega_concluida": "Sai sozinho a cada 5 min pelo timer (06h às 23h); aqui só o teste.",
+    "whatsapp_sem_resposta": "Sai sozinho a cada 2 min pelo timer (no horário de atendimento); aqui só a simulação.",
+}
+
+# Texto do alvo "teste" quando o --modo-teste do tipo NAO manda pro Hugo.
+NOTA_TESTE = {
+    "whatsapp_sem_resposta": "Só simula (mostra o que enviaria, não manda nada).",
 }
 
 # Texto do painel dos tipos sem botao.

@@ -728,6 +728,37 @@ class TestDisparo(_Base):
         r = self.cliente.get("/api/notificacoes/disparo/insucesso")
         self.assertEqual(r.status_code, 404)
 
+    def test_tipos_de_timer_frequente_so_tem_teste(self):
+        # entrega_concluida (5 min) e whatsapp_sem_resposta (2 min) correriam junto com o
+        # timer e mandariam em dobro aos clientes: so o teste fica no botao
+        self._logar("total")
+        for tipo in ("entrega_concluida", "whatsapp_sem_resposta"):
+            with self.subTest(tipo=tipo):
+                self.assertEqual(nt.DISPARAVEIS[tipo]["alvos"], ("teste",))
+                self.assertIn("pelo timer", nt.SO_PELO_TIMER[tipo])
+                with self.assertRaises(ValueError):
+                    nt.montar_comando(tipo, "todos", None, False)
+                r = self.cliente.post("/api/notificacoes/disparo", json={"tipo": tipo, "alvo": "todos"},
+                                      headers=ORIGEM)
+                self.assertEqual(r.status_code, 400)
+                self.assertEqual(self.cliente.get(f"/api/notificacoes/disparo/{tipo}").get_json()["alvos"],
+                                 ["teste"])
+        self.assertIn("a cada 5 min pelo timer", nt.SO_PELO_TIMER["entrega_concluida"])
+        self.assertIn("a cada 2 min pelo timer", nt.SO_PELO_TIMER["whatsapp_sem_resposta"])
+        self.assertEqual(self.chamadas, [])
+
+    def test_nota_do_teste_por_tipo(self):
+        # o --modo-teste do WhatsApp sem resposta so simula; os outros mandam pro Hugo
+        self.assertEqual(nt.NOTA_TESTE["whatsapp_sem_resposta"],
+                         "Só simula (mostra o que enviaria, não manda nada).")
+        self.assertNotIn("nfs_em_rota", nt.NOTA_TESTE)
+        self._logar("total")
+        pagina = self.cliente.get("/notificacoes").get_data(as_text=True)
+        self.assertIn("const NOTA_TESTE", pagina)
+        self.assertIn("mostra o que enviaria", pagina)
+        self.assertIn("const SO_PELO_TIMER", pagina)
+        self.assertIn("a cada 2 min pelo timer", pagina)
+
     def test_api_um_embarcador_e_dados_da_janela(self):
         hoje = date.today().isoformat()
         conn = self._controle()
@@ -746,7 +777,7 @@ class TestDisparo(_Base):
         self.assertEqual({e["sender_id"]: e["nome"] for e in dados["embarcadores"]},
                          {101: "Cliente A", 102: "Cliente B Ltda", 103: "Cliente C"})
         self.assertEqual(dados["ultimos"], [])
-        self.assertEqual(self.cliente.get("/api/notificacoes/disparo/entrega_concluida").get_json()["alvos"],
+        self.assertEqual(self.cliente.get("/api/notificacoes/disparo/pedidos_em_espera").get_json()["alvos"],
                          ["teste", "todos"])
         r = self.cliente.post("/api/notificacoes/disparo",
                               json={"tipo": "nfs_em_rota", "alvo": "um", "sender_id": 101, "reenviar": True},
