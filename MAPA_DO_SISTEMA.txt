@@ -304,7 +304,7 @@
  08,10,...,20h               reconciliar-retirada            reconciliar_pedidos_retirada.py --cancelar
  seg-sex 09,11,13,15,17:10   documentos-incremental          documentos_pedido/processar_documentos.py --incremental
  06-23h a cada 5 min         notificar-entregas              notificacao_entregas/notificar_entrega_concluida.py
- seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario (desiste se a Stokki
+ seg-sex 08:05-16:05 (1h)    pipeline-horario                pipeline.py --horario --fila-freshhub (desiste se a Stokki
                                                              estiver em uso -- ver stokki/sessao_uso.py);
                                                              desde 22/10 roda a Estação de Impressão antes
  seg-sex 08:35-16:35 (1h)    vigia-fila-impressao            vigia_fila_impressao.py (só lê a Estação:
@@ -373,7 +373,10 @@
                          Impressão 3) pipeline 4) retiradas; e-mail de resumo.
                          Flags: --modo-teste --sem-impressao --sem-agendamento.
  pipeline.py             Importação Stokki -> Vuupt (ver seção 2). Flags:
-                         --modo-teste --pedido PS-X --embarcador --status.
+                         --modo-teste --pedido PS-X --embarcador --status
+                         --fila-freshhub (plano 1.2 do novo: atende a fila de réplica
+                         destino vuupt pelo nucleo/freshhub_client, mesmo processar_pedido,
+                         devolve vuupt_service_id + espelho; --modo-teste não devolve).
  historico.py            Auditoria das execuções do pipeline; regenera
                          STATUS_IMPORTACAO.md (gerado, não editar à mão).
  somente_impressao.py    Só a Estação de Impressão.

@@ -536,6 +536,10 @@ def processar_pedido(
         "observacao":     "",
         "referencia":     referencia,
         "erro":           None,
+        # servico na Vuupt como ficou (criado, atualizado ou ja existente): a fila do freshhub
+        # (--fila-freshhub, plano 1.2) devolve o id e o espelho ao sistema novo
+        "vuupt_service_id": None,
+        "servico_vuupt":  None,
     }
 
     try:
@@ -570,6 +574,8 @@ def processar_pedido(
             marcar_atribuido(codigo_ps, status=status_vuupt)
             resultado["acao"] = "pulado_atribuido"
             resultado["observacao"] = f"Status no VUUPT: {status_vuupt} (não é mais not_assigned)."
+            resultado["vuupt_service_id"] = servico_existente.get("id")
+            resultado["servico_vuupt"] = servico_existente
             return resultado
 
         # 1. Detalhe completo do pedido
@@ -899,6 +905,11 @@ def processar_pedido(
         else:
             resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
+            # POST/PUT /services devolve {"service": {...}} ou o objeto direto (nucleo.pedidos faz igual)
+            servico = resposta_vuupt.get("service", resposta_vuupt) if isinstance(resposta_vuupt, dict) else {}
+            if isinstance(servico, dict):
+                resultado["vuupt_service_id"] = servico.get("id")
+                resultado["servico_vuupt"] = servico
             logger.info(
                 f"  {codigo_ps}: {acao} no VUUPT (endereço via {res_end.fonte})"
             )
@@ -916,6 +927,78 @@ def processar_pedido(
         logger.error(f"  {codigo_ps}: erro — {e}")
 
     return resultado
+
+
+# ── Fila de replica do sistema novo (plano 1.2 do freshhub, Task 6) ───────────
+
+_CHAVES_ESPELHO = ("title", "address", "address_complement", "latitude", "longitude", "dimension_3", "note",
+                   "customer_id", "scheduled_start", "scheduled_end", "created_at", "updated_at",
+                   "recreated_order_origin_id")
+
+
+def _espelho_para_freshhub(servico: dict | None) -> dict | None:
+    """Servico da Vuupt no formato que o freshhub guarda em tentativa.servico_vuupt (a mesma forma que a
+    carga de la monta do nucleo): cliente achatado, datas como a Vuupt devolve."""
+    if not servico:
+        return None
+    customer = servico.get("customer") or {}
+    espelho = {chave: servico.get(chave) for chave in _CHAVES_ESPELHO}
+    espelho.update({
+        "phone_number": customer.get("phone_number") or servico.get("phone_number"),
+        "customer_name": customer.get("name"),
+        "customer_code": customer.get("code"),
+        "operating_hour_start": customer.get("operating_hour_start"),
+        "operating_hour_end": customer.get("operating_hour_end"),
+    })
+    return espelho
+
+
+def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50) -> list[dict]:
+    """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
+    processar_pedido do pipeline (`processar(id_stokki, codigo)`: payload, geocodificacao,
+    criar_ou_atualizar_servico idempotente por code, registrar_importacao) e devolve o id do servico e o
+    espelho; erro de um item vira resultado com erro e o lote segue. Em modo teste simula e NAO devolve
+    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer."""
+    if cliente is None:
+        return []
+    try:
+        itens = cliente.pendentes("vuupt", limite=limite)
+    except Exception as e:  # noqa: BLE001 - API nova fora nao derruba a rodada do pipeline
+        logger.error(f"fila do freshhub indisponivel, nada atendido nesta rodada: {e}")
+        return []
+    saida: list[dict] = []
+    for item in itens:
+        dados = item.get("dados") or {}
+        codigo = str(dados.get("codigo") or item.get("codigo") or "").lstrip("#").upper()
+        id_stokki = dados.get("id_stokki")
+        ident = item.get("id")
+        if not id_stokki:
+            logger.warning(f"  fila freshhub {ident} ({codigo}): sem id_stokki nos dados, devolvido com erro")
+            if not modo_teste:
+                cliente.resultado(ident, False, erro="sem id_stokki nos dados da replica")
+            saida.append({"id": ident, "codigo": codigo, "ok": False, "vuupt_service_id": None, "acao": None})
+            continue
+        try:
+            res = processar(int(id_stokki), codigo)
+        except Exception as e:  # noqa: BLE001 - o item falha sozinho
+            res = {"acao": None, "erro": str(e), "vuupt_service_id": None, "servico_vuupt": None, "observacao": ""}
+        sid = res.get("vuupt_service_id")
+        ok = not res.get("erro") and sid is not None
+        if modo_teste:
+            logger.info(f"  [TESTE] fila freshhub {ident} ({codigo}): {res.get('acao')} (nada devolvido)")
+        elif ok:
+            cliente.resultado(ident, True, resultado={"vuupt_service_id": sid, "acao": res.get("acao"),
+                                                      "servico": _espelho_para_freshhub(res.get("servico_vuupt"))})
+        else:
+            erro = res.get("erro") or f"sem servico na Vuupt: {res.get('acao')} {res.get('observacao') or ''}".strip()
+            cliente.resultado(ident, False, erro=erro)
+        saida.append({"id": ident, "codigo": codigo, "ok": bool(ok) and not modo_teste,
+                      "vuupt_service_id": sid, "acao": res.get("acao")})
+    if itens:
+        feitos = sum(1 for s in saida if s["ok"])
+        logger.info(f"Fila do freshhub: {len(itens)} item(ns), {feitos} com servico devolvido"
+                    + (" [MODO TESTE: nada devolvido]" if modo_teste else ""))
+    return saida
 
 
 # ── Orquestrador principal ─────────────────────────────────────────────────────
@@ -991,20 +1074,21 @@ def _estacao_impressao_horaria(modo_teste: bool) -> None:
         logger.error(f"Estação de Impressão (horária) falhou: {e}")
 
 
-def main_horario(modo_teste: bool = False) -> None:
+def main_horario(modo_teste: bool = False, fila_freshhub: bool = False) -> None:
     if not _obter_trava_horario():
         return
     from stokki import sessao_uso
     try:
         _estacao_impressao_horaria(modo_teste)
         _renovar_trava(DONO_TRAVA_HORARIO)
-        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO)
+        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub)
     finally:
         sessao_uso.liberar(DONO_TRAVA_HORARIO)
 
 
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
-         filtro_statuses: list[str] | None = None, dono_trava: str | None = None):
+         filtro_statuses: list[str] | None = None, dono_trava: str | None = None,
+         fila_freshhub: bool = False):
     # Rodada completa fora do --horario (sequências, painel): entra na fila
     # da Stokki e espera a vez até 2h (Hugo, 05/10). Sem a vez, desiste
     # SEM logar por cima de ninguém -- o erro vai pro resumo da sequência
@@ -1018,7 +1102,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                                f"derrubar quem está usando.")
         try:
             return main(modo_teste=modo_teste, filtro_statuses=filtro_statuses,
-                        dono_trava=DONO_TRAVA_SEQUENCIA)
+                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub)
         finally:
             sessao_uso.liberar(DONO_TRAVA_SEQUENCIA)
 
@@ -1099,6 +1183,26 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # Inicia sessoes
     sess_stokki = StokkiSession(config)
     vuupt = VuuptClient(vuupt_token)
+
+    # Fila de replica do sistema novo (plano 1.2): mesmo processar_pedido, mesma sessao da Stokki e mesma
+    # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
+    # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
+    def _atender_fila():
+        if not fila_freshhub:
+            return
+        from nucleo import freshhub_client
+        cliente = freshhub_client.de_config(config)
+        if cliente is None:
+            logger.info("--fila-freshhub sem freshhub_api.url/token no config.yaml: nada a atender.")
+            return
+        atender_fila_freshhub(
+            cliente,
+            lambda id_stokki, codigo: processar_pedido(
+                id_stokki=id_stokki, codigo_ps=codigo, sess_stokki=sess_stokki, catalogo=catalogo, vuupt=vuupt,
+                anthropic_api_key=anthropic_key, modo_teste=modo_teste, google_maps_api_key=gmaps_key,
+                indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
+                config_email=config.get("email", {}), config_app=config),
+            modo_teste=modo_teste)
 
     # Lista pedidos
     # ── Coleta pedidos das fontes relevantes ──────────────────────────────────
@@ -1214,6 +1318,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             resultados=[],
             duracao_seg=time.monotonic() - inicio_execucao,
         )
+        _atender_fila()
         return
 
     # Processa
@@ -1334,6 +1439,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     if not (filtro_pedido or filtro_embarcador or modo_teste):
         _registrar_retrato_vigia(linhas, resultados, listagem_completa)
 
+    _atender_fila()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agente Stokki Eventos — Pipeline principal")
@@ -1351,10 +1458,15 @@ if __name__ == "__main__":
     parser.add_argument("--horario", action="store_true",
                         help="Rodada horária do timer: espera a vez na sessão da Stokki e desiste "
                              "se continuar ocupada (a próxima é em 1h).")
+    parser.add_argument("--fila-freshhub", action="store_true",
+                        help="Depois dos pedidos da Stokki, atende a fila de replica do sistema novo "
+                             "(destino vuupt): cria o serviço na Vuupt pelo id da Stokki e devolve o id. "
+                             "Precisa de freshhub_api.url/token no config.yaml.")
     args = parser.parse_args()
 
     if args.horario:
-        main_horario(modo_teste=args.modo_teste)
+        main_horario(modo_teste=args.modo_teste, fila_freshhub=args.fila_freshhub)
     else:
         main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
-             filtro_embarcador=args.embarcador or "", filtro_statuses=args.status)
+             filtro_embarcador=args.embarcador or "", filtro_statuses=args.status,
+             fila_freshhub=args.fila_freshhub)
