@@ -89,15 +89,18 @@ class TravaTransportadorasTestCase(unittest.TestCase):
              mock.patch.object(nt, "pedidos_ja_notificados_hoje", return_value=set()), \
              mock.patch.object(nt, "conferir_na_stokki", return_value=({}, "")), \
              mock.patch.object(nt, "_extrair_nnf", return_value="123"), \
-             mock.patch.object(nt, "StokkiSession"), \
+             mock.patch.object(nt, "StokkiSession") as stokki_session, \
              mock.patch.object(nt, "registrar_notificacao") as registrar, \
              mock.patch.object(nt, "enviar_email", return_value=True) as enviar, \
              mock.patch.object(nt, "notificar_execucao") as notificar, \
-             mock.patch.object(sessao_uso, "adquirir", return_value=True), \
+             mock.patch.object(sessao_uso, "adquirir", return_value=True) as adquirir, \
              mock.patch.object(sessao_uso, "renovar"), \
              mock.patch.object(sessao_uso, "liberar"), \
              mock.patch.dict(sys.modules, mods):
             nt.main(modo_teste=modo_teste, data_str="hoje", db_path=self.db)
+        # o que so pode acontecer se algum ponto for realmente enviar
+        self.recursos = {"adquirir": adquirir, "StokkiSession": stokki_session,
+                         "sync_playwright": fake_pw.sync_playwright}
         return enviar, registrar, notificar
 
     def _tela(self, estado=None, geral=None, liberado=None):
@@ -145,6 +148,19 @@ class TravaTransportadorasTestCase(unittest.TestCase):
         enviar, registrar, _ = self._rodar_fluxo(self.CONFIG_LIGADO)
         enviar.assert_not_called()
         registrar.assert_called_once_with("PS-1", "transp x")
+
+    def test_tela_desligado_nem_pega_a_trava_da_stokki(self):
+        self._tela(estado="DESLIGADO")
+        _, registrar, _ = self._rodar_fluxo(self.CONFIG_LIGADO)
+        registrar.assert_called_once_with("PS-1", "transp x")
+        for nome, recurso in self.recursos.items():
+            recurso.assert_not_called(), nome
+
+    def test_tela_ligado_pega_a_trava_e_abre_a_stokki(self):
+        self._tela(estado="LIGADO")
+        self._rodar_fluxo({})
+        for nome, recurso in self.recursos.items():
+            self.assertTrue(recurso.called, nome)
 
     def test_geral_desligado_na_tela_retorna_cedo(self):
         self._tela(geral=False, estado="LIGADO")

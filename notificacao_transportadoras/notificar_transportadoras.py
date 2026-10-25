@@ -283,6 +283,17 @@ def _montar_conteudo(nome_transportadora: str, data_br: str, itens: list[dict]) 
 """
 
 
+def _detalhe_resumo(contadores: dict) -> str:
+    return (f"{contadores['transportadoras_notificadas']} transportadora(s) notificada(s), "
+            f"{contadores['pedidos_enviados']} pedido(s) enviado(s), "
+            f"{contadores['sem_email']} transportadora(s) sem e-mail, "
+            f"{contadores['sem_xml']} pedido(s) sem XML, "
+            f"{contadores['nao_enviar']} pedido(s) de transportadora marcada NÃO ENVIAR, "
+            f"{contadores['barrados_tela']} pedido(s) barrado(s) pela tela, "
+            f"{contadores['copias_piloto']} cópia(s) de piloto, "
+            f"{contadores['falhas']} falha(s) de envio.")
+
+
 def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
     """db_path: banco da tela de Notificações (controle_notificacoes); os
     testes injetam um temporário."""
@@ -319,7 +330,49 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
     # retorna cedo so se o geral estiver desligado na tela ou sem linha na
     # tela e o config barrar; tipo DESLIGADO na tela segue pro laco por ponto
     # (la o pedido e consumido).
-    if geral is not None and geral.acao == "NAO" and (geral.origem == "config" or geral.motivo == "geral desligado"):
+    gate_cedo = (geral is not None and geral.acao == "NAO"
+                 and (geral.origem == "config" or geral.motivo == "geral desligado"))
+
+    # Triagem por ponto (NÃO ENVIAR, fingerprint, tela) ANTES de pegar a trava
+    # da Stokki / abrir StokkiSession / Chromium: tipo desligado na tela não pode
+    # entrar na fila da Stokki nem falhar a rodada por Stokki ocupada, e o que a
+    # tela barra é consumido aqui mesmo.
+    candidatos: list[tuple[PontoRedespacho, list[str], str]] = []
+    if not gate_cedo:
+        for chave_ponto, codigos in grupos.items():
+            ponto = pontos[chave_ponto]
+            nome_exibicao = ponto.nome
+            if ponto.nao_enviar:
+                # Coluna T = "NÃO ENVIAR": transportadora que não pede XML
+                # (Hugo, 10/09). Não conta como "sem e-mail" nem gera teste.
+                logger.info(f"  {nome_exibicao}: marcada como NÃO ENVIAR na planilha -- "
+                            f"{len(codigos)} pedido(s) ignorado(s) de propósito.")
+                contadores["nao_enviar"] += len(codigos)
+                continue
+            ja_notificados = pedidos_ja_notificados_hoje(ponto.nome_normalizado)
+            codigos_novos = [c for c in codigos if c not in ja_notificados]
+            if not codigos_novos:
+                logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
+                continue
+            piloto = ""
+            if not modo_teste:
+                # a tela nao tem bloqueio por transportadora (isso e o
+                # NAO ENVIAR do cadastro, acima); aqui so liga/desliga/piloto
+                d = decidir("transportadoras", ponto.nome_normalizado, fallback_acao=fallback, db_path=db_path)
+                if d.acao == "NAO":
+                    logger.info(f"  {nome_exibicao}: {len(codigos_novos)} pedido(s) -- nao enviado "
+                                f"({d.origem}: {d.motivo}).")
+                    if d.origem == "tela":
+                        # descartado pela tela = consumido: nao sai depois quando ligar
+                        for codigo in codigos_novos:
+                            registrar_notificacao(codigo, ponto.nome_normalizado)
+                    contadores["barrados_tela"] += len(codigos_novos)
+                    continue
+                if d.acao == "PILOTO":
+                    piloto = d.destino_piloto
+            candidatos.append((ponto, codigos_novos, piloto))
+
+    if gate_cedo:
         if geral.origem == "config":
             detalhe = ("Notificação de transportadoras desativada (config.yaml: notificacoes_automaticas.ativo "
                        "e notificacao_transportadoras.ativo precisam estar true).")
@@ -330,6 +383,10 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
     elif not grupos:
         resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": "Nenhuma entrega para transportadora hoje."}
         logger.info("Nenhuma entrega para transportadora hoje -- nada a notificar.")
+    elif not candidatos:
+        resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": _detalhe_resumo(contadores)}
+        logger.info("Nenhum ponto para enviar (NÃO ENVIAR, já notificados ou barrados pela tela) -- "
+                    "sem trava da Stokki.")
     else:
         embarcadores = _carregar_embarcadores_por_sender_id()
 
@@ -364,7 +421,7 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
 
         try:
             # 1ª passada, SEM Playwright (só requests via StokkiSession):
-            # NÃO ENVIAR, fingerprint e conferência na Stokki. Tem que vir
+            # conferência na Stokki (NÃO ENVIAR, fingerprint e tela já foram na triagem). Tem que vir
             # ANTES do login do Playwright abaixo -- esse login derruba a
             # sessão de requests do mesmo usuário, e a renovação automática
             # da StokkiSession (que também abre Playwright) não funciona
@@ -372,37 +429,8 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
             # "Playwright Sync API inside the asyncio loop" nos 3 pedidos).
             sess_stokki = StokkiSession(config)
             pendentes: list[tuple[PontoRedespacho, list[str], dict[str, str], list[str], str]] = []
-            for chave_ponto, codigos in grupos.items():
-                ponto = pontos[chave_ponto]
+            for ponto, codigos_novos, piloto in candidatos:
                 nome_exibicao = ponto.nome
-                if ponto.nao_enviar:
-                    # Coluna T = "NÃO ENVIAR": transportadora que não pede XML
-                    # (Hugo, 10/09). Não conta como "sem e-mail" nem gera teste.
-                    logger.info(f"  {nome_exibicao}: marcada como NÃO ENVIAR na planilha -- "
-                                f"{len(codigos)} pedido(s) ignorado(s) de propósito.")
-                    contadores["nao_enviar"] += len(codigos)
-                    continue
-                ja_notificados = pedidos_ja_notificados_hoje(ponto.nome_normalizado)
-                codigos_novos = [c for c in codigos if c not in ja_notificados]
-                if not codigos_novos:
-                    logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
-                    continue
-                piloto = ""
-                if not modo_teste:
-                    # a tela nao tem bloqueio por transportadora (isso e o
-                    # NAO ENVIAR do cadastro, acima); aqui so liga/desliga/piloto
-                    d = decidir("transportadoras", ponto.nome_normalizado, fallback_acao=fallback, db_path=db_path)
-                    if d.acao == "NAO":
-                        logger.info(f"  {nome_exibicao}: {len(codigos_novos)} pedido(s) -- nao enviado "
-                                    f"({d.origem}: {d.motivo}).")
-                        if d.origem == "tela":
-                            # descartado pela tela = consumido: nao sai depois quando ligar
-                            for codigo in codigos_novos:
-                                registrar_notificacao(codigo, ponto.nome_normalizado)
-                        contadores["barrados_tela"] += len(codigos_novos)
-                        continue
-                    if d.acao == "PILOTO":
-                        piloto = d.destino_piloto
                 observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
                 for codigo, obs in observacoes.items():
                     if obs:
@@ -496,14 +524,7 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
 
         resumo_etapas["Resumo geral"] = {
             "status": "erro" if contadores["falhas"] else "ok",
-            "detalhe": f"{contadores['transportadoras_notificadas']} transportadora(s) notificada(s), "
-                      f"{contadores['pedidos_enviados']} pedido(s) enviado(s), "
-                      f"{contadores['sem_email']} transportadora(s) sem e-mail, "
-                      f"{contadores['sem_xml']} pedido(s) sem XML, "
-                      f"{contadores['nao_enviar']} pedido(s) de transportadora marcada NÃO ENVIAR, "
-                      f"{contadores['barrados_tela']} pedido(s) barrado(s) pela tela, "
-                      f"{contadores['copias_piloto']} cópia(s) de piloto, "
-                      f"{contadores['falhas']} falha(s) de envio.",
+            "detalhe": _detalhe_resumo(contadores),
         }
         if divergencias:
             resumo_etapas["Transportadora na Stokki diverge do endereço"] = {
