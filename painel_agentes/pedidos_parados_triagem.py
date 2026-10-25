@@ -2,12 +2,19 @@
 """
 pedidos_parados_triagem.py
 
-Tela de triagem dos "pedidos parados" do Fresh Hub
-(freshhub.com.br/pedidos-parados) -- pedido do Hugo, 24/08: toda vez
+Tela de triagem dos "pedidos parados" -- pedido do Hugo, 24/08: toda vez
 que aparecerem esses pedidos, verificar se já foram tratados, duplicar
 o que for necessário (Reenvio), e direcionar pra operação (Cancelados/
 Devolução Parcial) os que tiverem necessidade -- sem duplicar nesses
 casos.
+
+Origem dos registros (24/10/2026): a aba Registrar desta mesma tela,
+tabela local `pedidos_parados_registros` (funções `registrar`,
+`apagar_registro`, `registros_hoje` abaixo). Até 23/10 vinham do Fresh
+Hub do Lovable (freshhub.com.br/pedidos-parados, tabela stalled_orders);
+o histórico de lá NÃO foi importado (decisão do Hugo). O Lovable só
+continua referenciado pelo encaminhamento às Demandas, que está PAUSADO
+(ENCAMINHAMENTO_DEMANDAS_ATIVO).
 
 Ver TRATATIVAS_PEDIDOS_PARADOS.md (raiz do projeto) pro contexto de
 negócio completo -- classificações, regra de prioridade (>2 dias),
@@ -33,11 +40,12 @@ import html
 import importlib.util
 import logging
 import re
+import shutil
 import sqlite3
 import sys
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,29 +57,31 @@ import yaml
 
 import email_utils
 import tratativas
+from retornos import MAX_FOTO_BYTES, _extensao_imagem  # mesma validação de foto dos retornos
 from vuupt_client import VuuptClient, VuuptAPIError
-from lovable.auth import FreshHubSession
-from lovable.pedidos_parados import listar_pedidos_parados, normalizar_order_number
+from lovable.pedidos_parados import normalizar_order_number
 from lovable.tasks import criar_demanda_para_tratativa
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
+# Fotos da aba Registrar (24/10): dados/pedidos_parados/<registro_id>/foto.<ext>
+PASTA_FOTOS = _RAIZ / "dados" / "pedidos_parados"
+# Quem registrou pode apagar o próprio registro por este prazo (Hugo, 24/10);
+# depois fica como histórico.
+PRAZO_APAGAR_MIN = 15
 
 CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue")
 CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
+# Hugo, 24/10: encaminhamento às Demandas do Fresh Hub (Lovable) PAUSADO
+# junto com a saída do Lovable. Enquanto False, encaminhar_operacao recusa
+# e a tela conta a classificação como tratada (sem botão Encaminhar).
+# Religar = True; nada mais muda.
+ENCAMINHAMENTO_DEMANDAS_ATIVO = False
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
 
 FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")  # mesmo fuso da Torre de Controle
-
-# Quantos registros brutos buscar no Fresh Hub pra ter histórico
-# suficiente de "há quantos dias esse pedido aparece" -- o mesmo pedido
-# é re-registrado todo dia enquanto continua parado (achado 24/08), então
-# 200 (o default de listar_pedidos_parados) só cobre uns 3 dias de
-# histórico; usamos uma janela maior aqui especificamente pra não
-# subestimar `dias_parado` de pedidos parados há muito tempo.
-LIMITE_HISTORICO_PEDIDOS_PARADOS = 2000
 
 # Janela de busca de serviços concluídos na Vuupt pra saber quem já foi
 # entregue (pedido do Hugo, 24/08) -- só precisa cobrir "recente" (o
@@ -209,6 +219,23 @@ def _conectar():
             consultado_em   TEXT
         )
     """)
+    # Registros de pedido parado feitos na aba Registrar do painel (24/10,
+    # substitui a tabela stalled_orders do Lovable). Uma linha por registro:
+    # o mesmo pedido é registrado de novo a cada dia que continua parado, e
+    # é isso que alimenta "dias parado" e "Nx registrado" na triagem.
+    # criado_em é hora LOCAL (America/Sao_Paulo), sem fuso.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pedidos_parados_registros (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_number       TEXT NOT NULL,
+            order_number_bruto TEXT,
+            volumes            INTEGER NOT NULL,
+            foto               TEXT,
+            registrado_por     TEXT NOT NULL,
+            criado_em          TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_pp_registros_num ON pedidos_parados_registros (order_number, criado_em)")
     conn.commit()
     _migrar_chaves_com_prefixo_ps(conn)
     return conn
@@ -253,7 +280,9 @@ def _migrar_chaves_com_prefixo_ps(conn) -> None:
     conn.commit()
 
 
-def _sessao_freshhub() -> FreshHubSession:
+def _sessao_freshhub():
+    """Sessão do Fresh Hub do Lovable -- hoje só pras Demandas (pausadas)."""
+    from lovable.auth import FreshHubSession
     return FreshHubSession(_carregar_config())
 
 
@@ -527,14 +556,180 @@ def _marcar_acao(order_number: str, status: str, detalhe: str) -> None:
     conn.close()
 
 
-def _data_local(iso_utc: str) -> date:
-    """Converte um created_at do Fresh Hub (ISO em UTC) pra data local
-    (America/Sao_Paulo) -- usado pra saber em que DIA o registro
-    aconteceu de verdade (perto da meia-noite, UTC e local podem cair
-    em dias diferentes)."""
-    dt = datetime.fromisoformat(iso_utc)
+# ── Registro (aba Registrar, 24/10) ────────────────────────────────────────────
+
+class ErroRegistro(ValueError):
+    """Entrada inválida ou ação não permitida no registro de pedido parado
+    (a rota devolve a mensagem ao usuário)."""
+
+
+def _agora_local() -> str:
+    return datetime.now(FUSO_LOCAL).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _hoje_local() -> date:
+    return datetime.now(FUSO_LOCAL).date()
+
+
+def _volumes_validos(volumes) -> int:
+    texto = str(volumes).strip() if volumes is not None and not isinstance(volumes, bool) else ""
+    if not texto.isdigit() or int(texto) < 1:
+        raise ErroRegistro("Volumes precisa ser um número inteiro maior que zero.")
+    return int(texto)
+
+
+def _gravar_foto(registro_id: int, conteudo: bytes) -> str:
+    if len(conteudo) > MAX_FOTO_BYTES:
+        raise ErroRegistro("Foto muito grande (máximo 10 MB).")
+    ext = _extensao_imagem(conteudo)
+    if not ext:
+        raise ErroRegistro("Arquivo não é uma foto (use JPG, PNG ou WEBP).")
+    pasta = PASTA_FOTOS / str(registro_id)
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = f"foto.{ext}"
+    (pasta / nome).write_bytes(conteudo)
+    return nome
+
+
+def registrar(order_number_bruto: str, volumes, usuario: str, foto: bytes | None = None) -> dict:
+    """Grava um registro de pedido parado. Devolve {"id", "order_number",
+    "ja_hoje"} -- ja_hoje = quantos registros do mesmo pedido já existiam
+    hoje antes deste (a tela avisa, mas não bloqueia: registrar de novo é
+    o fluxo normal enquanto o pedido continua parado)."""
+    bruto = str(order_number_bruto or "").strip()
+    numero = normalizar_order_number(bruto)
+    # "PS 40.525" / "40.525" / "ps-40 525": tirando prefixo, pontos e espaços
+    # sobra só número -> é esse o pedido (a tela promete essa limpeza).
+    compacto = re.sub(r"[.\s]", "", re.sub(r"(?i)^\s*#?\s*PS[\s.\-_]*", "", numero))
+    if compacto.isdigit():
+        numero = compacto
+    # vazio, ou só o prefixo ("PS-", "#PS") sem número, não é pedido
+    if not re.sub(r"[^0-9A-Za-z]", "", numero) or re.fullmatch(r"(?i)\W*PS\W*", numero):
+        raise ErroRegistro("Informe o número do pedido.")
+    # Formato estrito: o número vai parar em onclick="duplicar('...')" na
+    # triagem e nos links da Stokki/Vuupt -- sem aspas, <, >, &, barra, crase.
+    if not re.fullmatch(r"[0-9A-Za-z._ -]{1,40}", numero):
+        raise ErroRegistro("Número de pedido inválido: use só letras, números, ponto e traço (até 40 caracteres).")
+    qtd = _volumes_validos(volumes)
+    if foto is not None:
+        # valida antes de gravar a linha, pra não sobrar registro sem foto
+        if len(foto) > MAX_FOTO_BYTES:
+            raise ErroRegistro("Foto muito grande (máximo 10 MB).")
+        if not _extensao_imagem(foto):
+            raise ErroRegistro("Arquivo não é uma foto (use JPG, PNG ou WEBP).")
+
+    conn = _conectar()
+    try:
+        ja_hoje = conn.execute(
+            "SELECT COUNT(*) FROM pedidos_parados_registros WHERE order_number = ? AND substr(criado_em, 1, 10) = ?",
+            (numero, _hoje_local().isoformat()),
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO pedidos_parados_registros (order_number, order_number_bruto, volumes, registrado_por, criado_em) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (numero, bruto, qtd, usuario, _agora_local()),
+        )
+        registro_id = cur.lastrowid
+        if foto is not None:
+            try:
+                nome = _gravar_foto(registro_id, foto)
+            except Exception:
+                conn.rollback()
+                raise
+            conn.execute("UPDATE pedidos_parados_registros SET foto = ? WHERE id = ?", (nome, registro_id))
+        conn.commit()
+    finally:
+        conn.close()
+    _cache_base["quando"] = 0.0  # a triagem mostra a linha nova na hora
+    return {"id": registro_id, "order_number": numero, "ja_hoje": ja_hoje}
+
+
+def apagar_registro(registro_id: int, usuario: str) -> None:
+    """Só quem registrou, e só por PRAZO_APAGAR_MIN (erro de digitação).
+    Depois disso o registro fica como histórico."""
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT registrado_por, criado_em FROM pedidos_parados_registros WHERE id = ?",
+                           (registro_id,)).fetchone()
+        if row is None:
+            raise ErroRegistro("Registro não encontrado.")
+        if row["registrado_por"] != usuario:
+            raise ErroRegistro("Só quem registrou pode apagar.")
+        criado = datetime.strptime(row["criado_em"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=FUSO_LOCAL)
+        if datetime.now(FUSO_LOCAL) - criado > timedelta(minutes=PRAZO_APAGAR_MIN):
+            raise ErroRegistro(f"Passaram mais de {PRAZO_APAGAR_MIN} minutos; o registro fica como histórico.")
+        conn.execute("DELETE FROM pedidos_parados_registros WHERE id = ?", (registro_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    shutil.rmtree(PASTA_FOTOS / str(registro_id), ignore_errors=True)
+    _cache_base["quando"] = 0.0
+
+
+def caminho_foto(registro_id: int) -> Path | None:
+    """Caminho da foto do registro, ou None se não existir / sair da pasta."""
+    pasta = (PASTA_FOTOS / str(registro_id)).resolve()
+    if not pasta.is_dir():
+        return None
+    for alvo in pasta.iterdir():
+        if alvo.is_file() and alvo.name.startswith("foto.") and alvo.resolve().parent == pasta:
+            return alvo
+    return None
+
+
+def registros_hoje(usuario: str) -> dict:
+    """Listas da aba Registrar: `hoje` (registros de hoje, mais recentes
+    primeiro) e `ontem_sem_hoje` (último registro de ontem de cada pedido
+    que ainda não foi registrado hoje -- candidatos ao botão "Ainda
+    parado"). dias_parado conta desde o primeiro registro do pedido."""
+    hoje = _hoje_local()
+    ontem = hoje - timedelta(days=1)
+    agora = datetime.now(FUSO_LOCAL)
+    conn = _conectar()
+    try:
+        primeira = {r[0]: r[1] for r in conn.execute(
+            "SELECT order_number, MIN(criado_em) FROM pedidos_parados_registros GROUP BY order_number")}
+        classes = {r["order_number"]: dict(r) for r in conn.execute(
+            "SELECT order_number, classificacao, acao_status FROM pedidos_parados_classificacao")}
+        de_hoje = [dict(r) for r in conn.execute(
+            "SELECT * FROM pedidos_parados_registros WHERE substr(criado_em, 1, 10) = ? ORDER BY criado_em DESC, id DESC",
+            (hoje.isoformat(),))]
+        numeros_hoje = {r["order_number"] for r in de_hoje}
+        de_ontem = [dict(r) for r in conn.execute(
+            "SELECT * FROM pedidos_parados_registros WHERE substr(criado_em, 1, 10) = ? ORDER BY criado_em DESC, id DESC",
+            (ontem.isoformat(),))]
+    finally:
+        conn.close()
+
+    def item(r: dict) -> dict:
+        criado = datetime.strptime(r["criado_em"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=FUSO_LOCAL)
+        cls = classes.get(r["order_number"], {})
+        return {
+            "id": r["id"], "order_number": r["order_number"], "volumes": r["volumes"],
+            "foto": bool(r.get("foto")), "registrado_por": r["registrado_por"], "criado_em": r["criado_em"],
+            "classificacao": cls.get("classificacao"), "acao_status": cls.get("acao_status"),
+            "dias_parado": (hoje - date.fromisoformat(primeira[r["order_number"]][:10])).days + 1,
+            "pode_apagar": r["registrado_por"] == usuario and agora - criado <= timedelta(minutes=PRAZO_APAGAR_MIN),
+        }
+
+    vistos: set[str] = set()
+    ontem_sem_hoje = []
+    for r in de_ontem:
+        if r["order_number"] in numeros_hoje or r["order_number"] in vistos:
+            continue
+        vistos.add(r["order_number"])
+        ontem_sem_hoje.append(item(r))
+    return {"hoje": [item(r) for r in de_hoje], "ontem_sem_hoje": ontem_sem_hoje}
+
+
+def _data_local(texto: str) -> date:
+    """Data local (America/Sao_Paulo) de um carimbo ISO. Sem fuso = já é
+    hora local (criado_em de pedidos_parados_registros, desde 24/10); com
+    fuso (ex.: UTC do Supabase, até 23/10) converte -- perto da meia-noite
+    UTC e local caem em dias diferentes."""
+    dt = datetime.fromisoformat(texto)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        return dt.date()
     return dt.astimezone(FUSO_LOCAL).date()
 
 
@@ -589,25 +784,43 @@ def _entregues_com_cache(vuupt: VuuptClient) -> set[str]:
 
 
 def _montar_base_externa() -> dict:
-    """Tudo da listagem que vem de fora (Fresh Hub + Vuupt) -- separado
-    da classificação local de propósito, pra poder cachear só isto."""
-    sessao = _sessao_freshhub()
-    brutos = listar_pedidos_parados(sessao, limit=LIMITE_HISTORICO_PEDIDOS_PARADOS)
+    """Registros da aba Registrar + o que vem de fora (Vuupt: entregues e
+    ids Stokki) -- separado da classificação local de propósito, pra
+    poder cachear só isto. Cada item de `brutos` tem o formato que o
+    resto da função sempre esperou (id, order_number, volumes,
+    recebedor_name, created_at) mais `foto`; created_at é hora local sem
+    fuso ("YYYY-MM-DDTHH:MM:SS")."""
+    conn = _conectar()
+    try:
+        brutos = [
+            {"id": r["id"], "order_number": r["order_number"], "volumes": r["volumes"],
+             "recebedor_name": r["registrado_por"], "created_at": r["criado_em"].replace(" ", "T"),
+             "foto": bool(r["foto"])}
+            for r in conn.execute(
+                "SELECT id, order_number, volumes, registrado_por, criado_em, foto "
+                "FROM pedidos_parados_registros ORDER BY criado_em, id")
+        ]
+    finally:
+        conn.close()
     if not brutos:
         return {"pedidos_do_dia": {}, "primeira_vez": {}, "contagem": {},
-                "dia_mais_recente": None, "ids_stokki": {}}
+                "dia_mais_recente": None, "ids_stokki": {}, "fotos": {}}
 
     primeira_vez: dict[str, str] = {}
     ultima_vez: dict[str, dict] = {}
     contagem: dict[str, int] = {}
+    fotos: dict[str, int] = {}  # order_number -> id do registro mais recente COM foto
     for p in brutos:
         numero = p["order_number"]
         contagem[numero] = contagem.get(numero, 0) + 1
         if numero not in primeira_vez or p["created_at"] < primeira_vez[numero]:
             primeira_vez[numero] = p["created_at"]
         atual = ultima_vez.get(numero)
-        if atual is None or p["created_at"] > atual["created_at"]:
+        # >= : dois registros no mesmo segundo -> vale o de id maior (brutos vem por criado_em, id)
+        if atual is None or p["created_at"] >= atual["created_at"]:
             ultima_vez[numero] = p
+        if p["foto"]:
+            fotos[numero] = p["id"]  # brutos vem em ordem de criado_em
 
     dia_mais_recente = max(_data_local(p["created_at"]) for p in brutos)
     pedidos_do_dia = {
@@ -624,7 +837,7 @@ def _montar_base_externa() -> dict:
     ids_stokki = _resolver_ids_stokki(vuupt, list(pedidos_do_dia.keys()))
 
     return {"pedidos_do_dia": pedidos_do_dia, "primeira_vez": primeira_vez, "contagem": contagem,
-            "dia_mais_recente": dia_mais_recente, "ids_stokki": ids_stokki}
+            "dia_mais_recente": dia_mais_recente, "ids_stokki": ids_stokki, "fotos": fotos}
 
 
 def _base_externa_com_cache() -> dict:
@@ -646,7 +859,8 @@ def _base_externa_com_cache() -> dict:
 
 def listar_com_classificacao() -> list[dict]:
     """
-    Une os pedidos parados do Fresh Hub com a classificação local.
+    Une os registros de pedido parado (aba Registrar, tabela
+    pedidos_parados_registros) com a classificação local.
 
     Regras combinadas com o Hugo, 24/08:
     - Só mostra pedidos registrados no dia mais recente presente nos
@@ -672,6 +886,7 @@ def listar_com_classificacao() -> list[dict]:
     contagem = base["contagem"]
     dia_mais_recente = base["dia_mais_recente"]
     ids_stokki = base["ids_stokki"]
+    fotos = base.get("fotos") or {}
 
     conn = _conectar()
     try:
@@ -697,16 +912,16 @@ def listar_com_classificacao() -> list[dict]:
         # Pedido do Hugo, 28/08: um pedido classificado como "Entregue"
         # que foi registrado como parado DE NOVO depois da classificação
         # precisa de revisão urgente (ou não foi entregue de verdade, ou
-        # o Fresh Hub está recebendo registro de algo já entregue).
-        # Compara o registro mais recente (created_at, UTC) com o momento
-        # da classificação (hora local) -- os dois no fuso local.
+        # o galpão registrou algo já entregue). Compara o registro mais
+        # recente com o momento da classificação -- os dois em hora local
+        # sem fuso (desde 24/10 o registro é nosso).
         revisao_urgente = False
         if local.get("classificacao") == "Entregue" and local.get("classificado_em"):
             try:
                 registrado = datetime.fromisoformat(p["created_at"])
-                if registrado.tzinfo is None:
-                    registrado = registrado.replace(tzinfo=timezone.utc)
-                classificado = datetime.strptime(local["classificado_em"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=FUSO_LOCAL)
+                if registrado.tzinfo is not None:
+                    registrado = registrado.astimezone(FUSO_LOCAL).replace(tzinfo=None)
+                classificado = datetime.strptime(local["classificado_em"], "%Y-%m-%d %H:%M:%S")
                 revisao_urgente = registrado > classificado
             except (ValueError, TypeError):
                 revisao_urgente = False
@@ -720,10 +935,14 @@ def listar_com_classificacao() -> list[dict]:
             "stokki_transportadora": stk.get("transportadora"),
             "stokki_consultado_em": stk.get("consultado_em"),
             "order_number": numero,
-            "freshhub_id": p["id"],
+            "freshhub_id": str(p["id"]),  # id do registro local (nome mantido pelas rotas/JS)
             "embarcador": embarcadores.get(numero),
             "volumes": p["volumes"],
             "recebedor_name": p["recebedor_name"],
+            "registrado_por": p["recebedor_name"],
+            # foto do registro mais recente que tem foto ("Ainda parado" re-registra sem foto)
+            "foto": numero in fotos,
+            "foto_id": fotos.get(numero),
             "created_at": p["created_at"],
             "vezes_registrado": contagem[numero],
             "stokki_url": f"{URL_PEDIDO_STOKKI}/{ids_stokki.get(numero, numero)}",
@@ -857,6 +1076,8 @@ def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> 
     um título genérico em vez de travar a ação (é mais importante quem
     for tratar ver o card do que travar por causa de um nome que não
     resolveu)."""
+    if not ENCAMINHAMENTO_DEMANDAS_ATIVO:
+        raise ValueError("Encaminhamento às Demandas pausado (Hugo, 24/10).")
     if classificacao not in CLASSIFICACOES_QUE_CRIAM_DEMANDA:
         raise ValueError(f"Classificação {classificacao!r} não cria Demanda.")
 
