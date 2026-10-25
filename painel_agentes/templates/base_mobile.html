@@ -134,7 +134,7 @@
   html.tour-ativo .tour-balao { z-index: 10012; }
 </style>
 </head>
-<body>
+<body data-mobile="1">
 <script>
   const BASE_PATH = "{{ request.script_root }}";
 </script>
@@ -168,6 +168,7 @@
 </div>
 
 <main>
+{% include "_aviso_pendencias.html" %}
 {% block conteudo %}{% endblock %}
 </main>
 

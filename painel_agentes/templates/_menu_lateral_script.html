@@ -82,7 +82,10 @@
       if (document.hidden) return;  // aba em segundo plano não martela o servidor
       fetch(BASE_PATH + "/api/sidebar/contadores", { credentials: "same-origin" })
         .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(d) { if (d && d.contadores) pintar(d.contadores); })
+        .then(function(d) { if (d && d.contadores) {
+          pintar(d.contadores);
+          document.dispatchEvent(new CustomEvent("contadores-atualizados", {detail: d}));
+        } })
         .catch(function() { /* menu sem badge é degradação aceitável */ });
     }
 
