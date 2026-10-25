@@ -361,7 +361,7 @@
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
    roteirizacao/incrementar_rotas.py
  infra/sequencia_noite.sh (22h, continua mesmo com erro):
-   somente_impressao.py -> pipeline.py ->
+   somente_impressao.py -> pipeline.py --fila-freshhub ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
    roteirizacao/incrementar_rotas.py -> expedir_pedidos.py ->
    documentos_pedido/processar_documentos.py ->
@@ -378,7 +378,8 @@
  --- Orquestração ---
  executar_tudo.py        Orquestrador combinado: 1) respostas de agendamento
                          (IMAP+Claude) 1a) planilha NUU 2) Estação de
-                         Impressão 3) pipeline 4) retiradas; e-mail de resumo.
+                         Impressão 3) pipeline (com fila_freshhub=True, plano 1.2)
+                         4) retiradas; e-mail de resumo.
                          Flags: --modo-teste --sem-impressao --sem-agendamento.
  pipeline.py             Importação Stokki -> Vuupt (ver seção 2). Flags:
                          --modo-teste --pedido PS-X --embarcador --status

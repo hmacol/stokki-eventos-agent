@@ -108,5 +108,72 @@ class TestRegistrar(unittest.TestCase):
                                                                    "rota_nome": "R", "service_id": 11}))
 
 
+class TestRevisaoLegado(unittest.TestCase):
+    """Revisao independente (25/10): a fila de pendentes nao pode se envenenar nem travar o canal."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.pendentes = Path(self._tmp.name) / "pendentes.jsonl"
+        mock.patch.object(ev, "PENDENTES", self.pendentes).start()
+        self.cliente = mock.Mock()
+        self.cliente.eventos.return_value = {"aceitos": 1, "repetidos": 0, "desconhecidos": []}
+        mock.patch.object(ev.freshhub_client, "de_config", return_value=self.cliente).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def _guardar(self, n, prefixo="PS-"):
+        with self.pendentes.open("a", encoding="utf-8") as f:
+            for i in range(n):
+                f.write(json.dumps(ev.evento(f"{prefixo}{i}", "roteirizado", {})) + "\n")
+
+    def test_pendentes_vao_em_fatias_de_ate_500(self):
+        self._guardar(501)
+        novo = [ev.evento("PS-N", "rota_enviada", {})]
+        self.assertEqual(ev.registrar(CONFIG, novo)["aceitos"], 1)
+        tamanhos = [len(c.args[0]) for c in self.cliente.eventos.call_args_list]
+        self.assertEqual(tamanhos, [500, 1, 1])
+        self.assertFalse(self.pendentes.exists())
+
+    def test_lote_recusado_pela_api_e_descartado_com_log_nao_guardado(self):
+        # 4xx nao melhora repetindo (422 de validacao, 401 de token): guardar travaria tudo que vem depois
+        self._guardar(2)
+        self.cliente.eventos.side_effect = [ErroFreshhub("POST /api/eventos: HTTP 422 ...", status=422),
+                                            {"aceitos": 1, "repetidos": 0, "desconhecidos": []}]
+        with self.assertLogs("nucleo.eventos_freshhub", level="ERROR") as logs:
+            r = ev.registrar(CONFIG, [ev.evento("PS-N", "rota_enviada", {})])
+        self.assertEqual(r["aceitos"], 1)
+        self.assertIn("descartado", logs.output[0])
+        self.assertFalse(self.pendentes.exists())
+        # o lote NOVO recusado com 4xx tambem nao e guardado
+        self.cliente.eventos.side_effect = ErroFreshhub("POST: HTTP 401", status=401)
+        with self.assertLogs("nucleo.eventos_freshhub", level="ERROR"):
+            self.assertIsNone(ev.registrar(CONFIG, [ev.evento("PS-X", "rota_enviada", {})]))
+        self.assertFalse(self.pendentes.exists())
+        # 5xx e rede continuam guardando
+        self.cliente.eventos.side_effect = ErroFreshhub("POST: HTTP 503", status=503)
+        with self.assertLogs("nucleo.eventos_freshhub", level="ERROR"):
+            ev.registrar(CONFIG, [ev.evento("PS-Y", "rota_enviada", {})])
+        self.assertEqual(len(self.pendentes.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_linha_corrompida_e_pulada_e_as_validas_vao(self):
+        self._guardar(1)
+        with self.pendentes.open("a", encoding="utf-8") as f:
+            f.write("isso nao e json\n")
+        self._guardar(1, prefixo="PS-B")
+        ev.registrar(CONFIG, [ev.evento("PS-N", "rota_enviada", {})])
+        primeiro = self.cliente.eventos.call_args_list[0].args[0]
+        self.assertEqual([e["codigo"] for e in primeiro], ["PS-0", "PS-B0"])
+        self.assertFalse(self.pendentes.exists())
+
+    def test_codigo_combinado_vira_um_evento_por_pedido(self):
+        paradas = [{"codigo": "#PS-1, #PS-2", "service_id": 11}, {"codigo": "#PS-3-R1", "service_id": 12}]
+        ev.roteirizados(CONFIG, paradas, rascunho_id=5, rota_nome="R", data_alvo="2026-10-27")
+        enviados = self.cliente.eventos.call_args.args[0]
+        self.assertEqual([e["codigo"] for e in enviados], ["PS-1", "PS-2", "PS-3-R1"])
+        self.assertEqual([e["dados"]["service_id"] for e in enviados], [11, 11, 12])
+        self.assertEqual(enviados[0]["dados"]["codigo_vuupt"], "PS-1, PS-2")
+        self.assertNotIn("codigo_vuupt", enviados[2]["dados"])
+
+
 if __name__ == "__main__":
     unittest.main()

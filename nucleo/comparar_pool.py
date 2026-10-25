@@ -33,6 +33,7 @@ import json
 import logging
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _RAIZ = Path(__file__).resolve().parent.parent
@@ -89,10 +90,28 @@ def projetar(s: dict) -> dict:
     }
 
 
-def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict]) -> dict:
-    """Puro (é o que os testes exercitam)."""
+def _utc(texto) -> datetime | None:
+    """'AAAA-MM-DD HH:MM:SS' (Vuupt, UTC sem fuso) ou ISO com fuso/Z (dados_de da API nova) -> datetime UTC."""
+    t = str(texto or "").strip()
+    if not t:
+        return None
+    if t.endswith(("Z", "z")):
+        t = t[:-1] + "+00:00"
+    try:
+        d = datetime.fromisoformat(t.replace(" ", "T", 1))
+    except ValueError:
+        return None
+    return (d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d).astimezone(timezone.utc)
+
+
+def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict], dados_de=None, buscar_servico=None) -> dict:
+    """Puro (é o que os testes exercitam). `dados_de` (snapshot da carga que gerou o pool do freshhub) e
+    `buscar_servico(id)` (serviço atual na Vuupt) ligam a classe 'atraso' (plano 1.2, Focus 4): o que só
+    difere porque o pool do novo é da carga de ate 30 min atras fica fora do placar dos 3 dias, como os
+    duplicados -- serviço criado na Vuupt depois de `dados_de`, ou serviço que a Vuupt já atribuiu/apagou
+    e o novo ainda mostra no pool. Sem os dois, nada muda (fonte núcleo)."""
     def por_codigo(itens):
-        mapa, repetidos = {}, []
+        mapa, brutos, repetidos = {}, {}, []
         for s in itens:
             codigo = normalizar_codigo(s.get("code"))
             if not codigo:
@@ -100,15 +119,16 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict]) -> dict:
             if codigo in mapa:
                 repetidos.append(codigo)
             mapa[codigo] = projetar(s)
-        return mapa, sorted(set(repetidos))
+            brutos[codigo] = s
+        return mapa, brutos, sorted(set(repetidos))
 
     # Achado 24/09 (PS-39958): a Vuupt pode ter DOIS serviços not_assigned
     # com o mesmo código (duplicado que verificar_pedidos_duplicados_vuupt.py
     # cancela às 18h). O núcleo é chaveado por código e mescla os dois numa
     # linha -- a tela mostraria 2 cards pela Vuupt e 1 pelo núcleo. Conta
     # como divergência, com nome próprio pra explicar o placar.
-    v, duplicados = por_codigo(pool_vuupt)
-    n, _ = por_codigo(pool_nucleo)
+    v, v_bruto, duplicados = por_codigo(pool_vuupt)
+    n, n_bruto, _ = por_codigo(pool_nucleo)
     diferentes = []
     # Código duplicado fica fora da comparação de campos: com duas cópias
     # (uma agendada, outra não) não há "valor certo" pro núcleo ter -- a
@@ -118,12 +138,33 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict]) -> dict:
         if campos:
             diferentes.append({"code": codigo, "campos": campos})
     so_v, so_n = sorted(set(v) - set(n)), sorted(set(n) - set(v))
+    atraso = []
+    limite = _utc(dados_de)
+    if limite is not None:
+        for codigo in list(so_v):
+            criado = _utc(v_bruto[codigo].get("created_at"))
+            if criado is not None and criado > limite:
+                atraso.append(codigo)
+                so_v.remove(codigo)
+    if buscar_servico is not None:
+        for codigo in list(so_n):
+            sid = n_bruto[codigo].get("id")
+            try:
+                atual = buscar_servico(sid) if sid is not None else None
+            except Exception as e:  # noqa: BLE001 - sem resposta, a divergência fica
+                logger.warning(f"atraso: nao consegui conferir o servico {sid} ({codigo}) na Vuupt: {e}")
+                continue
+            if atual is None or (atual.get("status") or "") != "not_assigned":
+                atraso.append(codigo)
+                so_n.remove(codigo)
+    atraso = sorted(atraso)
     # "próprias" = o que é do espelho; o duplicado é da Vuupt (Hugo, 24/09:
     # não some sozinho, entra no relatório mas não no placar dos 3 dias).
     proprias = len(so_v) + len(so_n) + len(diferentes)
     return {"total_vuupt": len(v), "total_vuupt_bruto": len(pool_vuupt), "total_nucleo": len(n),
             "so_na_vuupt": so_v, "so_no_nucleo": so_n, "diferentes": diferentes, "duplicados_na_vuupt": duplicados,
-            "divergencias_proprias": proprias, "total_divergencias": proprias + len(duplicados)}
+            "atraso": atraso, "divergencias_proprias": proprias,
+            "total_divergencias": proprias + len(duplicados) + len(atraso)}
 
 
 def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
@@ -134,6 +175,9 @@ def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
     if r.get("duplicados_na_vuupt"):
         linhas.append(f"  código duplicado na Vuupt ({len(r['duplicados_na_vuupt'])}): "
                       f"{', '.join(r['duplicados_na_vuupt'][:exemplos])}")
+    if r.get("atraso"):
+        linhas.append(f"  atraso do pool do {nome} ({len(r['atraso'])}, fora do placar): "
+                      f"{', '.join(r['atraso'][:exemplos])}")
     if r["so_na_vuupt"]:
         linhas.append(f"  só na Vuupt   ({len(r['so_na_vuupt'])}): {', '.join(r['so_na_vuupt'][:exemplos])}")
     if r["so_no_nucleo"]:
@@ -197,7 +241,8 @@ def salvar(r: dict, conn: sqlite3.Connection, rodado_em: str | None = None, font
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                  (rodado_em or banco.agora(), r["total_vuupt"], r["total_nucleo"], r["total_divergencias"],
                   r["divergencias_proprias"], len(r["duplicados_na_vuupt"]),
-                  json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt")},
+                  json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt",
+                                                    "atraso")},
                              ensure_ascii=False, default=str), fonte))
     conn.commit()
 
@@ -305,9 +350,12 @@ def main(argv=None) -> int:
             logger.info("pool do freshhub: %d item(ns), dados de %s", len(corpo.get("itens") or []),
                         corpo.get("dados_de"))
             pool_fonte = list(corpo.get("itens") or [])
+            # o pool do novo e do snapshot da ultima carga: o que so difere por isso e 'atraso', nao divergencia
+            r = comparar(pool_vuupt, pool_fonte, dados_de=corpo.get("dados_de"),
+                         buscar_servico=vuupt.buscar_servico_por_id)
         else:
             pool_fonte = pool.listar_pool(conn)
-        r = comparar(pool_vuupt, pool_fonte)
+            r = comparar(pool_vuupt, pool_fonte)
         if args.salvar:
             salvar(r, conn, fonte=args.fonte)
         # E-mail e saída 2 só por divergência PRÓPRIA: um duplicado na Vuupt

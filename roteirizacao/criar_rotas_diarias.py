@@ -1213,7 +1213,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
             _rotear_tarde(plano.get("tarde") or [])
 
         if gerar_rascunho and rascunhos_acumulados:
-            lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados)
+            lote_id = criar_lote_rascunhos(data_alvo, rascunhos_acumulados, modo_teste=modo_teste)
             logger.info(f"Lote de rascunhos gravado: '{lote_id}' ({len(rascunhos_acumulados)} rascunho(s)) "
                        f"-- aguardando revisão no painel de planejamento.")
 

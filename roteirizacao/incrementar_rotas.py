@@ -459,22 +459,6 @@ def main(modo_teste: bool = False):
         # continua vindo (CNPJ do destinatário resolve nível e horário).
         servicos = listar_pool_not_assigned(config, vuupt)
 
-        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki ainda mostra
-        # em separacao/conferencia/espera nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
-        # e volta ao pool da proxima rodada sozinho (continua not_assigned na Vuupt).
-        retrato_stokki, _ = prontidao_stokki.carregar_retrato_stokki()
-        servicos, nao_prontos = prontidao_stokki.separar_prontos(servicos, retrato_stokki, chave="code")
-        if nao_prontos:
-            logger.info(f"{len(nao_prontos)} pedido(s) ainda em separacao na Stokki ficam fora do incremento: "
-                        + ", ".join(f"{p.get('code')} ({p['situacao_stokki']})" for p in nao_prontos))
-            try:
-                eventos_freshhub.nao_aprontaram(
-                    config, [{"codigo": p.get("code"), "service_id": p.get("id"),
-                              "situacao_stokki": p["situacao_stokki"]} for p in nao_prontos],
-                    contexto={"origem": "incremento", "data": data_alvo.isoformat()}, modo_teste=modo_teste)
-            except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
-                logger.warning(f"eventos nao_aprontou nao enviados ao freshhub: {e}")
-
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
         # já finalizadas, sem necessidade nenhuma de olhar pra elas). O
@@ -643,6 +627,24 @@ def main(modo_teste: bool = False):
             logger.info(f"{len(ja_em_rascunho)} pedido(s) já estão em rascunho de {data_alvo_br} e ficam onde estão.")
         novos = [s for s in novos if s["id"] not in ids_em_rascunho]
 
+        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki ainda mostra
+        # em separacao/conferencia/espera nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
+        # e volta ao pool da proxima rodada sozinho (continua not_assigned na Vuupt). So entre os NOVOS:
+        # pedido que ja esta em rascunho continua not_assigned, mas o veredito dele e do envio do rascunho
+        # (revisao 25/10: emitir aqui derrubaria o 'roteirizado' do novo todo dia).
+        retrato_stokki, _ = prontidao_stokki.carregar_retrato_stokki()
+        novos, nao_prontos = prontidao_stokki.separar_prontos(novos, retrato_stokki, chave="code")
+        if nao_prontos:
+            logger.info(f"{len(nao_prontos)} pedido(s) ainda em separacao na Stokki ficam fora do incremento: "
+                        + ", ".join(f"{p.get('code')} ({p['situacao_stokki']})" for p in nao_prontos))
+            try:
+                eventos_freshhub.nao_aprontaram(
+                    config, [{"codigo": p.get("code"), "service_id": p.get("id"),
+                              "situacao_stokki": p["situacao_stokki"]} for p in nao_prontos],
+                    contexto={"origem": "incremento", "data": data_alvo.isoformat()}, modo_teste=modo_teste)
+            except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
+                logger.warning(f"eventos nao_aprontou nao enviados ao freshhub: {e}")
+
         # Detalhamento completo do que aconteceu com CADA pedido not_assigned
         # (pedido do Hugo, 06/08: "só 36 de 76 foram roteirizados, quero
         # entender o motivo") -- antes só logava o total elegível, sem
@@ -665,7 +667,10 @@ def main(modo_teste: bool = False):
                    f"{len(ids_ja_em_rota_deste_lote)} já em alguma rota).")
 
         if not novos:
-            resumo_etapas["Incremento de rotas"] = {"status": "ok", "detalhe": "Nenhum pedido novo pra alocar."}
+            detalhe = "Nenhum pedido novo pra alocar."
+            if nao_prontos:
+                detalhe += f" {len(nao_prontos)} ainda em separação na Stokki (fora do incremento, voltam ao pool)."
+            resumo_etapas["Incremento de rotas"] = {"status": "ok", "detalhe": detalhe}
             return
 
         prefixo_hoje = f"{PREFIXO_NOME_ROTA} - {data_alvo_br}"

@@ -95,5 +95,21 @@ class TestDeConfig(unittest.TestCase):
         self.assertEqual(c.url, "http://127.0.0.1:8100")
 
 
+class TestStatusDoErro(unittest.TestCase):
+    def test_erro_http_carrega_o_status_e_erro_de_rede_nao(self):
+        c = fc.FreshhubClient("http://127.0.0.1:8100", "fhs_x")
+        with mock.patch.object(c.sessao, "get", return_value=_resp(422, texto="x")):
+            with self.assertRaises(fc.ErroFreshhub) as ctx:
+                c.listar_pool()
+        self.assertEqual(ctx.exception.status, 422)
+        self.assertTrue(ctx.exception.permanente)
+        with mock.patch.object(c.sessao, "get", side_effect=requests.ConnectionError("x")):
+            with self.assertRaises(fc.ErroFreshhub) as ctx:
+                c.listar_pool()
+        self.assertIsNone(ctx.exception.status)
+        self.assertFalse(ctx.exception.permanente)
+        self.assertFalse(fc.ErroFreshhub("x", status=503).permanente)
+
+
 if __name__ == "__main__":
     unittest.main()

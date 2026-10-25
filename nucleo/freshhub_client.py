@@ -29,7 +29,17 @@ ERRO_MAX = 2000  # POST /api/replicacao/{id}/resultado aceita ate 2000 caractere
 
 
 class ErroFreshhub(RuntimeError):
-    """API nova fora do ar, recusando o token ou devolvendo erro."""
+    """API nova fora do ar, recusando o token ou devolvendo erro. `status` e o HTTP (None em falha de rede);
+    `permanente` = 4xx: repetir a mesma chamada nao vai melhorar (validacao, token), entao quem guarda pra
+    tentar depois deve descartar."""
+
+    def __init__(self, mensagem: str, status: int | None = None):
+        super().__init__(mensagem)
+        self.status = status
+
+    @property
+    def permanente(self) -> bool:
+        return self.status is not None and 400 <= self.status < 500
 
 
 class FreshhubClient:
@@ -49,7 +59,8 @@ class FreshhubClient:
         except requests.RequestException as e:
             raise ErroFreshhub(f"{metodo.upper()} {caminho}: {type(e).__name__}: {e}") from e
         if resp.status_code >= 400:
-            raise ErroFreshhub(f"{metodo.upper()} {caminho}: HTTP {resp.status_code} {(resp.text or '')[:200]}")
+            raise ErroFreshhub(f"{metodo.upper()} {caminho}: HTTP {resp.status_code} {(resp.text or '')[:200]}",
+                               status=resp.status_code)
         return resp
 
     def obter_pool(self) -> dict:

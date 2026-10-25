@@ -309,7 +309,8 @@ def _inserir_parada(conn: sqlite3.Connection, rascunho_id: int, ordem: int, para
     ))
 
 
-def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None) -> str:
+def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None,
+                         modo_teste: bool = False) -> str:
     """
     Grava um lote novo de rascunhos numa única transação.
 
@@ -326,7 +327,8 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     novo a cada roteirização da seleção esconderia os rascunhos que já
     estavam em edição.
 
-    Retorna o lote_id usado (gerado ou repassado).
+    Retorna o lote_id usado (gerado ou repassado). `modo_teste` (criar_rotas_diarias --modo-teste
+    --gerar-rascunho): o rascunho e gravado como antes, mas os eventos `roteirizado` pro freshhub nao saem.
     """
     from mapa_util import carregar_remetentes_por_sender_id
 
@@ -371,7 +373,8 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     config = _carregar_config()
     for rascunho_id, nome, paradas in gravados:
         _avisar_freshhub(f"roteirizado, rascunho {rascunho_id}", lambda: eventos_freshhub.roteirizados(
-            config, paradas, rascunho_id=rascunho_id, rota_nome=nome, data_alvo=data_alvo.isoformat()))
+            config, paradas, rascunho_id=rascunho_id, rota_nome=nome, data_alvo=data_alvo.isoformat(),
+            modo_teste=modo_teste))
     return lote_id
 
 
@@ -1342,20 +1345,23 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
 
     rascunho = buscar_rascunho(rascunho_id)
     if not rascunho:
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado.", "codigos_nao_prontos": []}
     if rascunho["status"] not in (STATUS_RASCUNHO, STATUS_ERRO_ENVIO):
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": f"Rascunho não está pendente de envio (status={rascunho['status']})."}
+        return {"rascunho_id": rascunho_id, "ok": False, "codigos_nao_prontos": [],
+                "erro": f"Rascunho não está pendente de envio (status={rascunho['status']})."}
     if not rascunho["paradas"]:
         marcar_erro_envio(rascunho_id, "Rascunho sem paradas -- nada pra enviar.")
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas."}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas.", "codigos_nao_prontos": []}
 
     # A rota so sai com pedido liberado pela Stokki (plano 1.2 do sistema novo, spec 5.4): parada cujo
     # pedido o retrato do pipeline ainda mostra em separacao/conferencia/espera sai do rascunho (volta ao
-    # pool; o servico continua not_assigned na Vuupt) e vira evento `nao_aprontou` no freshhub.
+    # pool; o servico continua not_assigned na Vuupt) e vira evento `nao_aprontou` no freshhub. Todo retorno
+    # daqui em diante leva `codigos_nao_prontos` e a hora do retrato: a tela avisa quem saiu (revisao 25/10).
     config = _carregar_config()
-    retrato, _ = prontidao_stokki.carregar_retrato_stokki()
+    retrato, retrato_em = prontidao_stokki.carregar_retrato_stokki()
     paradas, nao_prontas = prontidao_stokki.separar_prontos(rascunho["paradas"], retrato)
     codigos_nao_prontos = [p["codigo"] for p in nao_prontas]
+    saiu = {"codigos_nao_prontos": codigos_nao_prontos, "retrato_stokki_em": retrato_em}
     if nao_prontas:
         for p in nao_prontas:
             remover_parada(rascunho_id, p["service_id"])
@@ -1368,8 +1374,7 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         mensagem = (f"Nenhuma parada liberada pela Stokki ainda ({len(nao_prontas)} em separacao/conferencia/"
                     f"espera) -- nada enviado; os pedidos voltaram ao pool.")
         marcar_erro_envio(rascunho_id, mensagem)
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem,
-                "codigos_nao_prontos": codigos_nao_prontos}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in paradas]
 
@@ -1382,12 +1387,12 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         )
     except Exception as e:
         marcar_erro_envio(rascunho_id, str(e))
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e), **saiu}
 
     if rota is None:
         mensagem = f"Todos os {len(sublote)} pedido(s) já estavam em outra rota -- nenhum enviado."
         marcar_erro_envio(rascunho_id, mensagem)
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     for codigo in codigos_removidos:
         parada = next((p for p in rascunho["paradas"] if p["codigo"] == codigo), None)
@@ -1425,7 +1430,7 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         config, [p for p in paradas if p["service_id"] in ids_enviados], vuupt_route_id=rota["id"],
         rascunho_id=rascunho_id, rota_nome=rascunho["nome"]))
     return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"],
-            "codigos_removidos": codigos_removidos, "codigos_nao_prontos": codigos_nao_prontos}
+            "codigos_removidos": codigos_removidos, **saiu}
 
 
 def lancar_lalamove(rascunho_id: int, token: str) -> dict:

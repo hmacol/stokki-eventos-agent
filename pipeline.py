@@ -905,9 +905,11 @@ def processar_pedido(
         else:
             resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
-            # POST/PUT /services devolve {"service": {...}} ou o objeto direto (nucleo.pedidos faz igual)
-            servico = resposta_vuupt.get("service", resposta_vuupt) if isinstance(resposta_vuupt, dict) else {}
-            if isinstance(servico, dict):
+            # POST/PUT /services devolve {"service": {...}} ou o objeto direto; "pulado_sem_alteracao" devolve
+            # None e o servico e o que ja existia (revisao 25/10: a fila do freshhub precisa do id nos dois casos)
+            from nucleo.pedidos import servico_da_resposta
+            servico = servico_da_resposta(resposta_vuupt) or servico_existente or {}
+            if isinstance(servico, dict) and servico.get("id") is not None:
                 resultado["vuupt_service_id"] = servico.get("id")
                 resultado["servico_vuupt"] = servico
             logger.info(
@@ -953,11 +955,14 @@ def _espelho_para_freshhub(servico: dict | None) -> dict | None:
     return espelho
 
 
-def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50) -> list[dict]:
+def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50,
+                          buscar_servico=None) -> list[dict]:
     """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
     processar_pedido do pipeline (`processar(id_stokki, codigo)`: payload, geocodificacao,
     criar_ou_atualizar_servico idempotente por code, registrar_importacao) e devolve o id do servico e o
-    espelho; erro de um item vira resultado com erro e o lote segue. Em modo teste simula e NAO devolve
+    espelho; erro de um item vira resultado com erro e o lote segue. Servico que ja existia sem alteracao
+    (pipeline normal chegou antes) volta sem id do processar: `buscar_servico(codigo)` (vuupt.
+    buscar_servico_por_code) acha o existente e a fila devolve ok. Em modo teste simula e NAO devolve
     (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer."""
     if cliente is None:
         return []
@@ -972,10 +977,20 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
         codigo = str(dados.get("codigo") or item.get("codigo") or "").lstrip("#").upper()
         id_stokki = dados.get("id_stokki")
         ident = item.get("id")
+        def _devolver(*args, **kw) -> bool:
+            # a API nova fora no POST do resultado nao derruba o lote: o item fica 'enviado' e volta a
+            # pendente em 1 h (reprocesso da fila), quando o servico ja existente e devolvido pela busca
+            try:
+                cliente.resultado(*args, **kw)
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"  fila freshhub {ident} ({codigo}): resultado nao devolvido a API nova ({e})")
+                return False
+
         if not id_stokki:
             logger.warning(f"  fila freshhub {ident} ({codigo}): sem id_stokki nos dados, devolvido com erro")
             if not modo_teste:
-                cliente.resultado(ident, False, erro="sem id_stokki nos dados da replica")
+                _devolver(ident, False, erro="sem id_stokki nos dados da replica")
             saida.append({"id": ident, "codigo": codigo, "ok": False, "vuupt_service_id": None, "acao": None})
             continue
         try:
@@ -983,16 +998,27 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
         except Exception as e:  # noqa: BLE001 - o item falha sozinho
             res = {"acao": None, "erro": str(e), "vuupt_service_id": None, "servico_vuupt": None, "observacao": ""}
         sid = res.get("vuupt_service_id")
+        servico = res.get("servico_vuupt")
+        if sid is None and not res.get("erro") and buscar_servico is not None:
+            # pulado_sem_alteracao / pulado pelo fingerprint: o servico existe, so nao foi tocado agora
+            try:
+                existente = buscar_servico(codigo)
+            except Exception as e:  # noqa: BLE001
+                existente = None
+                logger.warning(f"  fila freshhub {ident} ({codigo}): busca do servico existente falhou ({e})")
+            if existente and existente.get("id") is not None:
+                sid, servico = existente.get("id"), existente
         ok = not res.get("erro") and sid is not None
+        devolvido = False
         if modo_teste:
             logger.info(f"  [TESTE] fila freshhub {ident} ({codigo}): {res.get('acao')} (nada devolvido)")
         elif ok:
-            cliente.resultado(ident, True, resultado={"vuupt_service_id": sid, "acao": res.get("acao"),
-                                                      "servico": _espelho_para_freshhub(res.get("servico_vuupt"))})
+            devolvido = _devolver(ident, True, resultado={"vuupt_service_id": sid, "acao": res.get("acao"),
+                                                         "servico": _espelho_para_freshhub(servico)})
         else:
             erro = res.get("erro") or f"sem servico na Vuupt: {res.get('acao')} {res.get('observacao') or ''}".strip()
-            cliente.resultado(ident, False, erro=erro)
-        saida.append({"id": ident, "codigo": codigo, "ok": bool(ok) and not modo_teste,
+            _devolver(ident, False, erro=erro)
+        saida.append({"id": ident, "codigo": codigo, "ok": bool(ok) and devolvido,
                       "vuupt_service_id": sid, "acao": res.get("acao")})
     if itens:
         feitos = sum(1 for s in saida if s["ok"])
@@ -1202,7 +1228,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 anthropic_api_key=anthropic_key, modo_teste=modo_teste, google_maps_api_key=gmaps_key,
                 indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
                 config_email=config.get("email", {}), config_app=config),
-            modo_teste=modo_teste)
+            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
 
     # Lista pedidos
     # ── Coleta pedidos das fontes relevantes ──────────────────────────────────

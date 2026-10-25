@@ -128,5 +128,39 @@ class EnviarRascunhoProntidaoTestCase(unittest.TestCase):
         self.assertIsInstance(e["dados"]["rascunho_id"], int)
 
 
+class RevisaoTestCase(EnviarRascunhoProntidaoTestCase):
+    """Revisao (25/10): a tela precisa saber das paradas que sairam mesmo quando a Vuupt falha (I4); lote de
+    rascunho em --modo-teste nao manda evento de verdade."""
+
+    def test_falha_da_vuupt_depois_de_tirar_paradas_devolve_quem_saiu_e_a_hora_do_retrato(self):
+        self.criar_rota.side_effect = RuntimeError("Vuupt 500")
+        rid = _inserir_rascunho()
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertEqual(resultado["codigos_nao_prontos"], ["#PS-2"])
+        self.assertEqual(resultado["retrato_stokki_em"], "25/10 10:00")
+        self.assertEqual(_paradas(rid), ["#PS-1", "#PS-3"])
+
+    def test_retornos_cedo_tambem_trazem_a_chave(self):
+        self.assertEqual(rascunhos_rota.enviar_rascunho(999, "token")["codigos_nao_prontos"], [])
+
+    def test_envio_ok_traz_a_hora_do_retrato(self):
+        rid = _inserir_rascunho()
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["retrato_stokki_em"], "25/10 10:00")
+
+    def test_lote_em_modo_teste_repassa_a_flag_pros_eventos(self):
+        servico = {"id": 201, "code": "#PS-9", "title": "t", "address": "Rua A, 1", "latitude": -23.5,
+                   "longitude": -46.6, "sender_id": 11, "dimension_3": 2,
+                   "customer": {"name": "D", "code": "1", "operating_hour_start": "08:00", "operating_hour_end": "17:00"}}
+        rascunho = {"nome": "Planejamento - 27/10/2026 - #1", "start_location_base_id": 6950,
+                    "end_location_base_id": 6950, "start_at": "2026-10-27T09:00:00Z", "sublote": [servico]}
+        with mock.patch("mapa_util.carregar_remetentes_por_sender_id", return_value={}):
+            rascunhos_rota.criar_lote_rascunhos(date(2026, 10, 27), [rascunho], modo_teste=True)
+        self.assertTrue(self.registrar.call_args_list)
+        self.assertTrue(all(c.kwargs.get("modo_teste") is True for c in self.registrar.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,5 +70,26 @@ class TestEventoDoIncremento(unittest.TestCase):
         self.assertTrue(registrar.call_args.kwargs["modo_teste"] is False)
 
 
+class TestProntidaoSoDoQueOIncrementoAlocaria(TestMainComRascunho):
+    """Revisao (25/10, C2): pedido em rascunho continua not_assigned na Vuupt; ele NAO e do incremento, o
+    veredito dele e do envio do rascunho. Emitir nao_aprontou aqui derrubaria 'roteirizado' no novo."""
+
+    def setUp(self):
+        self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})
+        for p in (mock.patch.object(inc.eventos_freshhub, "registrar", self.registrar),
+                  mock.patch.object(inc.prontidao_stokki, "carregar_retrato_stokki",
+                                    side_effect=lambda *a, **k: ({"PS-2": "Ready to Pack"}, "25/10 21:40"))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_pedido_em_rascunho_nao_pronto_nao_vira_nao_aprontou(self):
+        resumo = self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": [{"service_id": 2}]}])
+        self.assertEqual(resumo["status"], "ok")
+        self.assertEqual([p["service_id"] for p in self.inc_rascunho.call_args[0][1]], [1])
+        eventos = [e for c in self.registrar.call_args_list for e in c.args[1] if e["tipo"] == "nao_aprontou"]
+        self.assertEqual(eventos, [])
+        self.assertNotIn("em separação na Stokki", resumo["detalhe"])
+
+
 if __name__ == "__main__":
     unittest.main()

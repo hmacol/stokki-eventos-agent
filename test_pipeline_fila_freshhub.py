@@ -143,5 +143,39 @@ class ProcessarPedidoDevolveServicoTest(unittest.TestCase):
         self.assertIsNone(res["vuupt_service_id"])
 
 
+class RevisaoFilaTest(unittest.TestCase):
+    """Revisao independente (25/10): I1 servico ja existente sem alteracao, I2 falha no POST do resultado."""
+
+    def test_pulado_sem_alteracao_busca_o_servico_existente_e_devolve_ok(self):
+        # criar_ou_atualizar_servico devolve (None, "pulado_sem_alteracao") quando o pipeline normal acabou de criar
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="pulado_sem_alteracao", sid=None, servico=None))
+        buscar = mock.Mock(return_value={**SERVICO, "id": 500})
+        saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=buscar)
+        buscar.assert_called_once_with("PS-41679")
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", True))
+        self.assertEqual(kwargs["resultado"]["vuupt_service_id"], 500)
+        self.assertEqual(kwargs["resultado"]["servico"]["title"], SERVICO["title"])
+        self.assertEqual(saida[0]["vuupt_service_id"], 500)
+        # sem servico na Vuupt mesmo buscando: erro de verdade
+        buscar.return_value = None
+        cliente.resultado.reset_mock()
+        pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=buscar)
+        self.assertEqual(cliente.resultado.call_args.args, ("r1", False))
+
+    def test_falha_ao_devolver_o_resultado_nao_derruba_o_lote(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item("r1"), _item("r2", 2, "PS-2")]
+        cliente.resultado.side_effect = [ErroFreshhub("POST: HTTP 503", status=503), None]
+        processar = mock.Mock(return_value=_res())
+        with self.assertLogs(pipeline.logger, level="ERROR") as logs:
+            saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False)
+        self.assertEqual(cliente.resultado.call_count, 2)
+        self.assertEqual([s["ok"] for s in saida], [False, True])
+        self.assertIn("r1", logs.output[0])
+
+
 if __name__ == "__main__":
     unittest.main()
