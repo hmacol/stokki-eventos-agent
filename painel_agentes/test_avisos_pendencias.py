@@ -92,6 +92,34 @@ class TestMontar(unittest.TestCase):
             self.assertTrue(i["destino"].startswith("/"))
         self.assertEqual(ap.IGNORAR_MINUTOS, 30)
 
+    # Niveis do requer_auth de cada rota de destino, conferidos a mao em
+    # painel_agentes.py / atendimento_chamados.py (o decorador nao expoe os niveis).
+    NIVEIS_DA_ROTA = {
+        "atendimento": ("total", "operador", "logistica", "atendimento"),
+        "solicitacoes_portal": ("total", "operador", "logistica"),
+        "retornos_tela": ("total", "operador", "logistica", "galpao", "expedicao", "atendimento", "leitura"),
+        "inicio": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "motoristas": ("total", "operador", "logistica", "leitura"),
+        "pedagios": ("total", "operador", "logistica", "leitura"),
+        "canhotos": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "canhotos_pendentes": ("total", "operador", "logistica"),
+        "transportadoras": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "clientes_agenda": ("total", "logistica", "atendimento"),
+        "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "planejamento": ("total", "operador", "logistica", "leitura", "atendimento"),
+        "vigia_pedidos": ("total", "operador", "leitura"),
+        "historico": ("total",),
+        "wms_estoque": ("total", "operador", "leitura"),
+        "wms": ("total", "operador", "galpao"),
+    }
+
+    def test_nivel_cobrado_acessa_a_rota_de_destino(self):
+        for i in ap.CATALOGO:
+            rota = self.NIVEIS_DA_ROTA[i["endpoint_destino"]]
+            for nivel in i["niveis"]:
+                self.assertIn(nivel, rota, f"{i['chave']}: nivel {nivel} nao acessa {i['endpoint_destino']}")
+
 
 class TestContagens(unittest.TestCase):
     def setUp(self):
@@ -109,9 +137,12 @@ class TestContagens(unittest.TestCase):
         self.assertEqual(ap.contar("clientes_agenda"), 2)
 
     def test_conta_solicitacoes_portal_pendentes(self):
-        self.conn.execute("CREATE TABLE portal_solicitacoes (id INTEGER, status TEXT)")
-        self.conn.executemany("INSERT INTO portal_solicitacoes VALUES (?,?)",
-                              [(1, "PENDENTE"), (2, "CONCLUIDA"), (3, "PENDENTE"), (4, "PENDENTE")])
+        self.conn.execute("CREATE TABLE portal_solicitacoes (id INTEGER, envio_id INTEGER, status TEXT)")
+        self.conn.execute("CREATE TABLE portal_envios (id INTEGER, status TEXT)")
+        self.conn.executemany("INSERT INTO portal_envios VALUES (?,?)", [(1, "CRIADO"), (2, "CANCELANDO")])
+        self.conn.executemany("INSERT INTO portal_solicitacoes VALUES (?,?,?)",
+                              [(1, 1, "PENDENTE"), (2, 1, "CONCLUIDA"), (3, 1, "PENDENTE"), (4, 1, "PENDENTE"),
+                               (5, 2, "PENDENTE")])  # 5: envio em CANCELANDO nao conta
         self.assertEqual(ap.contar("solicitacoes_portal"), 3)
 
     def test_conta_rascunhos_com_erro(self):

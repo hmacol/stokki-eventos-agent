@@ -71,7 +71,7 @@ CATALOGO = [
     _item("rotinas_falhas", "{n} rotinas falharam nas últimas 24 h",
           ("total",), "/historico", "historico"),
     _item("wms_pendencias", "{n} itens do WMS com pendência ou falta",
-          ("total", "galpao", "operador"), "/wms/estoque", "wms_estoque"),
+          ("total", "operador"), "/wms/estoque", "wms_estoque"),
     _item("wms_divergencias", "{n} recebimentos com divergência sem aviso",
           ("total", "galpao"), "/wms", "wms"),
 ]
@@ -120,7 +120,9 @@ def _contar_sql(sql: str) -> int:
 
 
 def _contar_solicitacoes_portal() -> int:
-    return _contar_sql("SELECT COUNT(*) FROM portal_solicitacoes WHERE status = 'PENDENTE'")
+    # Envio em CANCELANDO ainda esta na fila do worker: a tela so responde "espere" (nao e acionavel)
+    return _contar_sql("SELECT COUNT(*) FROM portal_solicitacoes s JOIN portal_envios e ON e.id = s.envio_id "
+                       "WHERE s.status = 'PENDENTE' AND e.status != 'CANCELANDO'")
 
 
 def _contar_clientes_agenda() -> int:

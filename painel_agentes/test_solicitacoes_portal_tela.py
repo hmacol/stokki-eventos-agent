@@ -26,7 +26,7 @@ from portal_cliente import envio_pedidos, solicitacoes_execucao  # noqa: E402
 CONFIG_PAINEL = {"usuario": "u_total", "senha": "s_total"}
 ORIGEM = {"Origin": "http://localhost"}
 SOLIC = {"id": 7, "tipo": "cancelar", "cnpj_embarcador": "123", "criado_em": "2026-10-24T09:05:00",
-         "motivo": "cliente desistiu", "detalhe": None, "numero_nf": "55", "referencia": "R1",
+         "detalhes": "cliente desistiu", "numero_nf": "55", "referencia": "R1",
          "origem": "xml", "destinatario_nome": "Loja X", "codigo_pedido": "PS-100", "status_envio": "ENVIADO"}
 
 
@@ -64,6 +64,12 @@ class TestSolicitacoesPortal(_Base):
         self.assertEqual(i["criado_em"], "24/10 09:05")
         self.assertEqual(i["detalhe"], "cliente desistiu")
         self.assertEqual(self.cliente.get("/solicitacoes-portal").status_code, 200)
+
+    def test_envio_cancelando_fica_fora_da_lista(self):
+        cancelando = dict(SOLIC, id=8, status_envio="CANCELANDO")
+        with mock.patch.object(envio_pedidos, "listar_solicitacoes_pendentes", return_value=[dict(SOLIC), cancelando]):
+            itens = self.cliente.get("/api/solicitacoes-portal").get_json()["solicitacoes"]
+        self.assertEqual([i["id"] for i in itens], [7])
 
     def test_executar_chama_executor(self):
         deps = object()

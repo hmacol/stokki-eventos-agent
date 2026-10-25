@@ -840,6 +840,8 @@ def api_solicitacoes_portal():
         linhas = envio_pedidos.listar_solicitacoes_pendentes(conn)
     finally:
         conn.close()
+    # envio em CANCELANDO ainda esta na fila do worker (nao e acionavel aqui)
+    linhas = [s for s in linhas if s.get("status_envio") != "CANCELANDO"]
     itens = [{
         "id": s["id"],
         "tipo": s["tipo"],
@@ -849,7 +851,7 @@ def api_solicitacoes_portal():
         "numero_nf": s.get("numero_nf") or "",
         "destinatario": s.get("destinatario_nome") or "",
         "criado_em": _criado_em_curto(s.get("criado_em")),
-        "detalhe": s.get("motivo") or s.get("detalhe") or "",
+        "detalhe": s.get("detalhes") or "",
     } for s in linhas]
     return jsonify({"solicitacoes": itens})
 
