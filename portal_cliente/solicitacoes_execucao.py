@@ -25,9 +25,14 @@ não foi -- nada é concluído.
              não implementado) e fica por último. Repetir depois de falha
              parcial é seguro: serviço sem rota não é mexido de novo e
              pedido já em espera não é pausado de novo.
-  reagendar  PUT /services/{id} com a data/janela gravada no envio
-             (planejamento_rotas.reagendar_pedido) e marca
-             agendamento_aplicado_em, como o worker. Não usa a Stokki.
+  reagendar  serviço em rota sai da rota primeiro (mesma etapa do
+             em_espera; data nova em serviço roteirizado não muda nada),
+             depois PUT /services/{id} com a data/janela gravada no envio
+             e registra a data em agendamentos_pedido como DO CLIENTE
+             (envio_pedidos.registrar_agendamento_pedido, caminho normal
+             do portal). Não usa planejamento_rotas.reagendar_pedido: ele
+             grava origem EQUIPE e a regra de dia fixo deixaria de virar
+             dedicado. Não usa a Stokki.
 
 Tudo que fala com fora vem em `Dependencias` (injetável nos testes);
 `dependencias_reais(config)` monta as de produção. A trava da Stokki
@@ -77,6 +82,11 @@ class Dependencias:
 
 class _Falha(Exception):
     pass
+
+
+AVISO_REROTEIRIZACAO = ("Atenção: a roteirização automática ainda pode colocar este pedido numa rota nova "
+                        "— confira no Planejamento.")
+_AVISOS_OPERADOR = {"em_espera": AVISO_REROTEIRIZACAO}
 
 
 def _agora() -> str:
@@ -133,6 +143,20 @@ def _etapa(resultado: dict, rotulo: str) -> None:
         raise _Falha(f"{rotulo}: {(resultado or {}).get('erro') or 'falhou sem detalhe'}")
 
 
+def _tirar_da_rota(deps: Dependencias, s: dict, feito: list[str]) -> None:
+    """Etapa comum do em_espera e do reagendar. tirar_da_rota_vuupt devolve
+    rota_id quando tirou de uma rota e rota_cancelada quando era a última
+    parada (a rota sumiu)."""
+    r = deps.tirar_da_rota_vuupt(s["vuupt_service_id"])
+    _etapa(r, f"Vuupt ({s['codigo']})")
+    if r.get("rota_id"):
+        txt = (f"serviço {s['vuupt_service_id']} ({s['codigo']}) tirado da rota {r['rota_id']} na Vuupt "
+               f"(está fora da rota, não cancelado)")
+        if r.get("rota_cancelada"):
+            txt += f"; a rota {r['rota_id']} ficou vazia e foi cancelada"
+        feito.append(txt)
+
+
 # ── Executores por tipo: devolvem a resposta pro cliente; falha = _Falha ────
 
 def _cancelar(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]) -> str:
@@ -152,8 +176,7 @@ def _em_espera(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str
         raise _Falha(f"Envio está {envio['status']}: só pedido criado na Stokki vai pra espera.")
     codigo, id_stokki = _codigo_e_id(envio)
     for s in _servicos_vivos(conn, codigo, deps):
-        _etapa(deps.tirar_da_rota_vuupt(s["vuupt_service_id"]), f"Vuupt ({s['codigo']})")
-        feito.append(f"serviço {s['vuupt_service_id']} ({s['codigo']}) está fora da rota na Vuupt (não cancelado)")
+        _tirar_da_rota(deps, s, feito)
     _etapa(deps.pausar_stokki(id_stokki, sol.get("detalhes") or ""), "Stokki")
     feito.append(f"{codigo} em espera na Stokki")
     return "Pedido retirado da rota e colocado em espera pela Fresh Log."
@@ -170,17 +193,22 @@ def _reagendar(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str
         raise _Falha(f"Data de agendamento inválida no envio: {dia!r}.")
     if quando < date.today():
         raise _Falha(f"A data pedida ({quando.strftime('%d/%m/%Y')}) já passou -- recuse e peça outra ao cliente.")
-    vivos = _servicos_vivos(conn, codigo, deps, checar_lalamove=False)
+    vivos = _servicos_vivos(conn, codigo, deps)
     for s in vivos:
+        _tirar_da_rota(deps, s, feito)
         _etapa(deps.reagendar_vuupt(s["vuupt_service_id"], dia, ini, fim), f"Vuupt ({s['codigo']})")
-        feito.append(f"serviço {s['vuupt_service_id']} ({s['codigo']}) reagendado na Vuupt")
+        feito.append(f"serviço {s['vuupt_service_id']} ({s['codigo']}) com a data nova na Vuupt")
+    # Data do CLIENTE em agendamentos_pedido (também marca
+    # portal_envios.agendamento_aplicado_em). Sem serviço na Vuupt ainda,
+    # atualizar_agendamentos_confirmados aplica quando ele nascer; com
+    # serviço, a data já foi aplicada acima e a linha sai marcada.
+    if not ep.registrar_agendamento_pedido(conn, envio, "painel"):
+        raise _Falha("Agendamento do cliente não pôde ser registrado (agendamentos_pedido).")
     if vivos:
-        conn.execute("UPDATE portal_envios SET agendamento_aplicado_em = ?, atualizado_em = ? WHERE id = ?",
-                     (_agora(), _agora(), envio["id"]))
-    elif not ep.registrar_agendamento_pedido(conn, envio, "painel"):
-        # sem serviço na Vuupt ainda: entra no fluxo normal de agendamento
-        # (atualizar_agendamentos_confirmados aplica quando o serviço nascer)
-        raise _Falha("Pedido ainda sem serviço na Vuupt e o agendamento não pôde ser registrado.")
+        conn.execute("UPDATE agendamentos_pedido SET aplicado_vuupt_em = ? WHERE pedido = ?",
+                     (_agora(), envio["codigo_pedido"]))
+        conn.commit()
+    feito.append("data registrada como do cliente")
     return f"Entrega reagendada para {quando.strftime('%d/%m/%Y')}, entre {ini} e {fim}."
 
 
@@ -206,8 +234,15 @@ def executar(conn: sqlite3.Connection, solicitacao_id: int, deps: Dependencias) 
         return {"ok": False, "mensagem": f"Solicitação do tipo '{tipo}' não se executa por aqui."}
 
     usa_stokki = tipo in _USAM_STOKKI
-    if usa_stokki and not deps.abrir_stokki():
-        return {"ok": False, "mensagem": STOKKI_OCUPADA}
+    if usa_stokki:
+        try:
+            livre = deps.abrir_stokki()
+        except Exception as e:  # noqa: BLE001 -- banco da trava travado etc.: mensagem, nunca 500
+            logger.error(f"solicitação {solicitacao_id}: trava da Stokki falhou: {e}", exc_info=True)
+            return {"ok": False,
+                    "mensagem": f"Não foi possível pegar a vez na Stokki ({type(e).__name__}: {e}). Nada foi alterado."}
+        if not livre:
+            return {"ok": False, "mensagem": STOKKI_OCUPADA}
     feito: list[str] = []
     erro = resposta = ""
     try:
@@ -226,9 +261,16 @@ def executar(conn: sqlite3.Connection, solicitacao_id: int, deps: Dependencias) 
     if erro:
         logger.warning(f"solicitação {solicitacao_id} ({tipo}) não concluída: {erro} | feito: {feito}")
         return {"ok": False, "mensagem": _mensagem_falha(erro, feito)}
+    try:
+        _solicitacao_pendente(conn, solicitacao_id)  # alguém fechou durante a execução?
+    except _Falha as e:
+        return {"ok": False, "mensagem": _mensagem_falha(f"{e} Fechada por outra pessoa durante a execução", feito)}
     ep.concluir_solicitacao(conn, solicitacao_id, resposta)
     logger.info(f"solicitação {solicitacao_id} ({tipo}) executada: {'; '.join(feito) or resposta}")
-    return {"ok": True, "mensagem": f"{resposta} ({'; '.join(feito)})" if feito else resposta}
+    mensagem = f"{resposta} ({'; '.join(feito)})" if feito else resposta
+    if tipo in _AVISOS_OPERADOR:
+        mensagem += " " + _AVISOS_OPERADOR[tipo]
+    return {"ok": True, "mensagem": mensagem}
 
 
 def recusar(conn: sqlite3.Connection, solicitacao_id: int, resposta: str) -> None:
@@ -254,10 +296,27 @@ def _caminhos_painel() -> None:
 _EM_ANDAMENTO = ("on_route", "arrived", "done")
 
 
+def _data_da_rota(token: str, route_id: int) -> date:
+    """Dia da rota (start_at da Vuupt vem em UTC -> hora local). Rota de dia
+    passado ainda aberta usa hoje, como a Torre (excluir_pedido_da_rota
+    recusa data passada)."""
+    from rotas_client import buscar_rota
+    from expedicao import _rota_do_corpo
+    from nucleo.normalizacao import vuupt_para_local
+    local = vuupt_para_local(_rota_do_corpo(buscar_rota(token, route_id)).get("start_at"))
+    try:
+        dia = date.fromisoformat(str(local)[:10])
+    except ValueError:
+        dia = date.today()
+    return max(dia, date.today())
+
+
 def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuario: str) -> dict:
     """Tira 1 serviço da rota na Vuupt sem cancelar: rota enviada pelo
     expedicao.excluir_pedido_da_rota (só rota que ainda não saiu; a rota
-    some se era a última parada) e rascunho local pelo remover_parada."""
+    some se era a última parada) e rascunho local pelo remover_parada.
+    Devolve {"ok", "erro", "rota_id", "rota_cancelada"} (rota_id só quando
+    tirou de uma rota)."""
     _caminhos_painel()
     from vuupt_client import VuuptClient
     s = VuuptClient(token).buscar_servico_por_id(service_id)
@@ -272,16 +331,23 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
         return {"ok": False, "erro": f"serviço {service_id} está com a Lalamove: resolva na Lalamove à mão"}
     from roteirizacao.cancelar_servico import rascunho_do_servico
     rascunho_id, _ = rascunho_do_servico(service_id)
+    rota_id, rota_cancelada = None, False
     if s.get("route_id"):
+        rota_id = int(s["route_id"])
+        try:
+            dia = _data_da_rota(token, rota_id)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "erro": f"Falha ao consultar a rota #{rota_id} na Vuupt: {e}"}
         from expedicao import excluir_pedido_da_rota
-        r = excluir_pedido_da_rota(date.today(), int(s["route_id"]), service_id, "Outros",
-                                   "Portal: cliente pediu o pedido em espera", usuario or "painel-solicitacoes")
+        r = excluir_pedido_da_rota(dia, rota_id, service_id, "Outros",
+                                   "Portal: solicitação do cliente (em espera/reagendar)", usuario or "painel-solicitacoes")
         if not r.get("ok"):
             return {"ok": False, "erro": r.get("erro") or "Vuupt não tirou o pedido da rota"}
+        rota_cancelada = bool(r.get("rota_cancelada"))
     if rascunho_id:
         import rascunhos_rota
         rascunhos_rota.remover_parada(rascunho_id, service_id)
-    return {"ok": True, "erro": ""}
+    return {"ok": True, "erro": "", "rota_id": rota_id, "rota_cancelada": rota_cancelada}
 
 
 def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
@@ -333,9 +399,25 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
         return _tirar_da_rota_real(token, service_id, agent_lalamove, usuario)
 
     def reagendar_vuupt(service_id, dia, ini, fim):
+        # PUT direto, como atualizar_agendamentos_confirmados (data do
+        # cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
         _caminhos_painel()
-        from planejamento_rotas import reagendar_pedido
-        return reagendar_pedido(service_id, dia, ini, fim)
+        from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
+        inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
+        termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
+        if not inicio or not termino:
+            return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
+        vuupt = VuuptClient(token)
+        try:
+            vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
+        except VuuptAPIError as e:
+            return {"ok": False, "erro": str(e)}
+        try:
+            from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+            ressincronizar_ids(vuupt, [service_id])
+        except Exception as e:  # noqa: BLE001 -- a escrita na Vuupt já aconteceu; o timer de 15 min alcança
+            logger.warning(f"ressincronização do serviço {service_id} falhou: {e}")
+        return {"ok": True, "erro": ""}
 
     return Dependencias(buscar_servico=buscar_servico, cancelar_vuupt=cancelar_vuupt, cancelar_stokki=cancelar_stokki,
                         pausar_stokki=pausar_stokki, tirar_da_rota_vuupt=tirar_da_rota_vuupt,
