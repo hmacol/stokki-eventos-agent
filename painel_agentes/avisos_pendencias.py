@@ -259,7 +259,10 @@ def montar(nivel: str, contadores: dict, telas_liberadas: set | None,
         chave = item["chave"]
         if chave == "cadastros_embarcador":
             # total sempre; os demais (exceto leitura) so com a permissao aprovar_embarcadores
-            permitido = nivel == "total" or pode_aprovar_embarcador
+            if telas_liberadas is not None:   # login personalizado vira "total": vale so a permissao
+                permitido = pode_aprovar_embarcador
+            else:
+                permitido = nivel == "total"
         else:
             permitido = nivel in item["niveis"]
         if not permitido:

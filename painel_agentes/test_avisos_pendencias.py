@@ -58,7 +58,9 @@ class TestMontar(unittest.TestCase):
     def test_embarcador_so_com_permissao(self):
         novos = {"cadastros_embarcador": 2}
         self.assertEqual(_montar("operador", None, novos, aprova=False), [])
-        r = _montar("operador", None, novos, aprova=True)
+        # login personalizado (nivel vira total): vale so a permissao
+        self.assertEqual(_montar("total", None, novos, telas={"inicio"}, aprova=False), [])
+        r = _montar("total", None, novos, telas={"inicio", "aprovar_embarcadores"}, aprova=True)
         self.assertEqual([a["chave"] for a in r], ["cadastros_embarcador"])
         r = _montar("total", None, novos, aprova=False)
         self.assertEqual([a["chave"] for a in r], ["cadastros_embarcador"])

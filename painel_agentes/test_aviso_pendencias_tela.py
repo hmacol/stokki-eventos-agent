@@ -25,7 +25,8 @@ _spec.loader.exec_module(painel_agentes)
 import acesso_telas  # noqa: E402
 import avisos_pendencias  # noqa: E402
 
-CONFIG_PAINEL = {"usuario": "u_total", "senha": "s_total"}
+_MONTAR_REAL = avisos_pendencias.montar
+CONFIG_PAINEL ={"usuario": "u_total", "senha": "s_total"}
 AVISO = {"chave": "torre", "texto": "2 ocorrências na fila da Torre", "qtd": 2,
          "destino": "/torre", "vermelho": False}
 CONTA = {"usuario": "maria", "nome": "Maria", "nivel": "total", "ativo": True, "versao_senha": 0,
@@ -121,6 +122,24 @@ class TestAvisosNoContadores(_Base):
         args = m.call_args.args
         self.assertEqual(set(args[2]), {"torre", "aprovar_embarcadores"})
         self.assertTrue(args[3])
+
+
+class TestCadastroEmbarcadorPersonalizado(unittest.TestCase):
+    """montar real (nao mockado): login personalizado vira nivel total, entao
+    so a permissao aprovar_embarcadores decide o aviso."""
+
+    def _chaves(self, telas, pode):
+        with mock.patch.object(avisos_pendencias, "contar", return_value=3):
+            return [a["chave"] for a in _MONTAR_REAL("total", {}, telas, pode)]
+
+    def test_sem_permissao_nao_avisa(self):
+        self.assertNotIn("cadastros_embarcador", self._chaves({"inicio"}, False))
+
+    def test_com_permissao_avisa(self):
+        self.assertIn("cadastros_embarcador", self._chaves({"inicio", "aprovar_embarcadores"}, True))
+
+    def test_total_sem_personalizacao_avisa(self):
+        self.assertIn("cadastros_embarcador", self._chaves(None, False))
 
 
 class TestIgnorar(_Base):

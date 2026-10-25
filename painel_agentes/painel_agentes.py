@@ -726,8 +726,7 @@ def api_sidebar_contadores():
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
     contadores = contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())
-    pessoa = _pessoa_do_aviso()
-    resp = jsonify({"contadores": contadores, "avisos": _avisos_da_pessoa(pessoa, contadores)})
+    resp = jsonify({"contadores": contadores, "avisos": _avisos_da_pessoa(contadores)})
     return _com_cookie_aparelho(resp)
 
 
@@ -759,10 +758,11 @@ def _com_cookie_aparelho(resp):
     return resp
 
 
-def _avisos_da_pessoa(pessoa: str, contadores: dict) -> list:
+def _avisos_da_pessoa(contadores: dict) -> list:
     """Avisos do perfil, sem os ignorados, com `destino` ja resolvido pelo
     url_for (prefixo do Caddy). Nunca derruba o poll do menu."""
     try:
+        pessoa = _pessoa_do_aviso()
         telas = g.get("telas_liberadas")
         brutos = avisos_pendencias.montar(
             g.nivel_acesso, contadores, None if telas is None else set(telas),
