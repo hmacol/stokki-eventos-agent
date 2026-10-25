@@ -301,8 +301,10 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
     faz nada; se já há uma rodada em andamento, não espera. Exceção da
     Vuupt sobe pra quem chama."""
     config = config or _carregar_config()
-    if fonte_pool(config) != "nucleo":
-        return {"pulado": True}
+    fonte = fonte_pool(config)
+    if fonte != "nucleo":
+        # fonte freshhub (plano 1.2 do sistema novo): o pool vem da API nova, nao ha nucleo a ressincronizar
+        return {"pulado": True, "motivo": "fonte freshhub"} if fonte == "freshhub" else {"pulado": True}
     if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):
         return {"pulado": "em_andamento"}
     try:

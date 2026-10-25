@@ -13,12 +13,19 @@ caixas, remetente, CNPJ do destinatário, data agendada, janela resolvida
 (roteirizacao_dados.resolver_janela) e regra de dia fixo. Nível, área e NF
 derivam desses campos, então não precisam entrar.
 
+`--fonte freshhub` (plano 1.2 do sistema novo): compara a Vuupt com GET
+/api/pool da API nova (nucleo/freshhub_client), em sombra; as rodadas ficam
+na mesma tabela com a coluna `fonte` e o placar é por fonte. Portão da 1.2:
+3 dias úteis seguidos com 0 divergências próprias na fonte freshhub, antes
+de `planejamento.fonte_pool: freshhub`.
+
 Nunca escreve na Vuupt. Grava no banco só com --salvar/--email.
 
 COMO USAR (VPS, como www-data):
     venv/bin/python nucleo/comparar_pool.py                  # imprime as diferenças
     venv/bin/python nucleo/comparar_pool.py --salvar --email # o que o timer horário roda
-    venv/bin/python nucleo/comparar_pool.py --historico 10   # placar por dia (não vai na Vuupt)
+    venv/bin/python nucleo/comparar_pool.py --salvar --email --fonte freshhub   # idem, Vuupt x API nova
+    venv/bin/python nucleo/comparar_pool.py --historico 10 [--fonte freshhub]   # placar por dia
 Saída 0 = pools iguais; 2 = houve divergência.
 """
 import argparse
@@ -35,7 +42,7 @@ sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from nucleo import banco, pool
+from nucleo import banco, freshhub_client, pool
 from nucleo.normalizacao import normalizar_codigo
 from regioes_dia_fixo import regra_dia_fixo_do_servico
 from roteirizacao_dados import resolver_janela
@@ -119,9 +126,10 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict]) -> dict:
             "divergencias_proprias": proprias, "total_divergencias": proprias + len(duplicados)}
 
 
-def resumir(r: dict, exemplos: int = 5) -> str:
+def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
+    nome = _nome_fonte(fonte)
     linhas = [f"Pool: Vuupt {r['total_vuupt']} código(s) em {r.get('total_vuupt_bruto', r['total_vuupt'])} "
-              f"serviço(s) × núcleo {r['total_nucleo']} -- {r['divergencias_proprias']} divergência(s) própria(s), "
+              f"serviço(s) × {nome} {r['total_nucleo']} -- {r['divergencias_proprias']} divergência(s) própria(s), "
               f"{len(r['duplicados_na_vuupt'])} duplicado(s) na Vuupt"]
     if r.get("duplicados_na_vuupt"):
         linhas.append(f"  código duplicado na Vuupt ({len(r['duplicados_na_vuupt'])}): "
@@ -129,7 +137,7 @@ def resumir(r: dict, exemplos: int = 5) -> str:
     if r["so_na_vuupt"]:
         linhas.append(f"  só na Vuupt   ({len(r['so_na_vuupt'])}): {', '.join(r['so_na_vuupt'][:exemplos])}")
     if r["so_no_nucleo"]:
-        linhas.append(f"  só no núcleo  ({len(r['so_no_nucleo'])}): {', '.join(r['so_no_nucleo'][:exemplos])}")
+        linhas.append(f"  só no {nome:<8}({len(r['so_no_nucleo'])}): {', '.join(r['so_no_nucleo'][:exemplos])}")
     for d in r["diferentes"][:exemplos]:
         linhas.append(f"  {d['code']}: " + "; ".join(f"{c}: {a!r} × {b!r}" for c, (a, b) in d["campos"].items()))
     if len(r["diferentes"]) > exemplos:
@@ -139,50 +147,78 @@ def resumir(r: dict, exemplos: int = 5) -> str:
 
 # ── Placar ────────────────────────────────────────────────────────────────────
 
+FONTE_NUCLEO = pool.FONTE_NUCLEO
+FONTE_FRESHHUB = pool.FONTE_FRESHHUB
+FONTES = (FONTE_NUCLEO, FONTE_FRESHHUB)
+_DDL = """CREATE TABLE {nome} (
+              rodado_em             TEXT NOT NULL,
+              total_vuupt           INTEGER NOT NULL DEFAULT 0,
+              total_nucleo          INTEGER NOT NULL DEFAULT 0,
+              total_divergencias    INTEGER NOT NULL DEFAULT 0,
+              divergencias_proprias INTEGER NOT NULL DEFAULT 0,
+              duplicados            INTEGER NOT NULL DEFAULT 0,
+              detalhes_json         TEXT,
+              fonte                 TEXT NOT NULL DEFAULT 'nucleo',
+              PRIMARY KEY (rodado_em, fonte))"""
+
+
 def _garantir_tabela(conn: sqlite3.Connection):
-    conn.execute("""CREATE TABLE IF NOT EXISTS nucleo_reconciliacoes_pool (
-                        rodado_em             TEXT PRIMARY KEY,
-                        total_vuupt           INTEGER NOT NULL DEFAULT 0,
-                        total_nucleo          INTEGER NOT NULL DEFAULT 0,
-                        total_divergencias    INTEGER NOT NULL DEFAULT 0,
-                        divergencias_proprias INTEGER NOT NULL DEFAULT 0,
-                        duplicados            INTEGER NOT NULL DEFAULT 0,
-                        detalhes_json         TEXT)""")
     existentes = {row[1] for row in conn.execute("PRAGMA table_info(nucleo_reconciliacoes_pool)")}
+    if not existentes:
+        conn.execute(_DDL.format(nome="nucleo_reconciliacoes_pool"))
+        conn.commit()
+        return
     for coluna in ("divergencias_proprias", "duplicados"):
         if coluna not in existentes:
             conn.execute(f"ALTER TABLE nucleo_reconciliacoes_pool ADD COLUMN {coluna} INTEGER NOT NULL DEFAULT 0")
-
-
-def salvar(r: dict, conn: sqlite3.Connection, rodado_em: str | None = None):
-    _garantir_tabela(conn)
-    conn.execute("""INSERT OR REPLACE INTO nucleo_reconciliacoes_pool
-                    (rodado_em, total_vuupt, total_nucleo, total_divergencias, divergencias_proprias, duplicados,
-                     detalhes_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                 (rodado_em or banco.agora(), r["total_vuupt"], r["total_nucleo"], r["total_divergencias"],
-                  r["divergencias_proprias"], len(r["duplicados_na_vuupt"]),
-                  json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt")},
-                             ensure_ascii=False, default=str)))
+    if "fonte" not in existentes:
+        # 1.2 (25/10): duas fontes (núcleo e freshhub) na mesma rodada -> a chave passa a (rodado_em, fonte);
+        # as rodadas antigas são todas do núcleo. O freshhub lê esta tabela pelo snapshot (nome mantido).
+        conn.executescript(
+            "BEGIN;"
+            "ALTER TABLE nucleo_reconciliacoes_pool RENAME TO nucleo_reconciliacoes_pool_antiga;"
+            + _DDL.format(nome="nucleo_reconciliacoes_pool") + ";"
+            "INSERT INTO nucleo_reconciliacoes_pool (rodado_em, total_vuupt, total_nucleo, total_divergencias,"
+            " divergencias_proprias, duplicados, detalhes_json, fonte)"
+            " SELECT rodado_em, total_vuupt, total_nucleo, total_divergencias, divergencias_proprias, duplicados,"
+            " detalhes_json, 'nucleo' FROM nucleo_reconciliacoes_pool_antiga;"
+            "DROP TABLE nucleo_reconciliacoes_pool_antiga;"
+            "COMMIT;")
     conn.commit()
 
 
-def historico(conn: sqlite3.Connection, limite: int = 20) -> list[dict]:
-    """Uma linha por DIA: pior rodada do dia (máximo de divergências
+def salvar(r: dict, conn: sqlite3.Connection, rodado_em: str | None = None, fonte: str = FONTE_NUCLEO):
+    if fonte not in FONTES:
+        raise ValueError(f"fonte desconhecida: {fonte}")
+    _garantir_tabela(conn)
+    conn.execute("""INSERT OR REPLACE INTO nucleo_reconciliacoes_pool
+                    (rodado_em, total_vuupt, total_nucleo, total_divergencias, divergencias_proprias, duplicados,
+                     detalhes_json, fonte)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                 (rodado_em or banco.agora(), r["total_vuupt"], r["total_nucleo"], r["total_divergencias"],
+                  r["divergencias_proprias"], len(r["duplicados_na_vuupt"]),
+                  json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt")},
+                             ensure_ascii=False, default=str), fonte))
+    conn.commit()
+
+
+def historico(conn: sqlite3.Connection, limite: int = 20, fonte: str = FONTE_NUCLEO) -> list[dict]:
+    """Uma linha por DIA da fonte: pior rodada do dia (máximo de divergências
     PRÓPRIAS); `duplicados` é o máximo de códigos duplicados na Vuupt visto
     no dia, só pra explicar."""
     _garantir_tabela(conn)
     return [dict(r) for r in conn.execute(
         """SELECT substr(rodado_em, 1, 10) AS dia, COUNT(*) AS rodadas, MAX(total_vuupt) AS total_vuupt,
                   MAX(divergencias_proprias) AS pior, SUM(divergencias_proprias) AS soma, MAX(duplicados) AS duplicados
-           FROM nucleo_reconciliacoes_pool GROUP BY dia ORDER BY dia DESC LIMIT ?""", (limite,))]
+           FROM nucleo_reconciliacoes_pool WHERE fonte = ? GROUP BY dia ORDER BY dia DESC LIMIT ?""",
+        (fonte, limite))]
 
 
-def dias_limpos_seguidos(conn: sqlite3.Connection) -> int:
-    """Dias COM pool, do mais recente pra trás, em que NENHUMA rodada achou
-    divergência. Dia sem pool (fim de semana vazio) nem conta nem quebra."""
+def dias_limpos_seguidos(conn: sqlite3.Connection, fonte: str = FONTE_NUCLEO) -> int:
+    """Dias COM pool, do mais recente pra trás, em que NENHUMA rodada da fonte
+    achou divergência. Dia sem pool (fim de semana vazio) nem conta nem quebra."""
     seguidos = 0
-    for linha in historico(conn, limite=60):
+    for linha in historico(conn, limite=60, fonte=fonte):
         if not linha["total_vuupt"]:
             continue
         if linha["pior"]:
@@ -191,17 +227,32 @@ def dias_limpos_seguidos(conn: sqlite3.Connection) -> int:
     return seguidos
 
 
-def _enviar_email(r: dict, conn: sqlite3.Connection, config: dict, exemplos: int):
+def _enviar_email(r: dict, conn: sqlite3.Connection, config: dict, exemplos: int, fonte: str = FONTE_NUCLEO):
     from email_utils import COR_ERRO, envelope_html, enviar_email
-    limpos = dias_limpos_seguidos(conn)
+    limpos = dias_limpos_seguidos(conn, fonte=fonte)
     destino = (config.get("notificacao_execucao", {}) or {}).get("destinatario") or "hugo@freshlogbr.com"
-    titulo = (f"Pool Vuupt × núcleo: {r['divergencias_proprias']} divergência(s)"
+    nome = _nome_fonte(fonte)
+    titulo = (f"Pool Vuupt × {nome}: {r['divergencias_proprias']} divergência(s)"
               + (f" (+{len(r['duplicados_na_vuupt'])} duplicado(s) na Vuupt)" if r["duplicados_na_vuupt"] else ""))
+    criterio = ("Portão da 1.2 (freshhub): 3 dias úteis seguidos sem divergência própria" if fonte == FONTE_FRESHHUB
+                else "Critério da Entrega 1: 3 dias úteis seguidos sem divergência")
     corpo = [f"<h2 style='margin:0 0 12px'>{titulo}</h2>",
-             f"<p>Critério da Entrega 1: 3 dias úteis seguidos sem divergência. Hoje: <b>{limpos}</b>.</p>",
+             f"<p>{criterio}. Hoje: <b>{limpos}</b>.</p>",
              "<pre style='white-space:pre-wrap;font-size:12px;background:#F3F4F6;padding:12px;border-radius:6px'>",
-             resumir(r, exemplos), "</pre>"]
+             resumir(r, exemplos, fonte=fonte), "</pre>"]
     enviar_email([destino], titulo, envelope_html("".join(corpo), cor_acento=COR_ERRO), config.get("email", {}))
+
+
+def _nome_fonte(fonte: str) -> str:
+    return "freshhub" if fonte == FONTE_FRESHHUB else "núcleo"
+
+
+def _carregar_config() -> dict | None:
+    import yaml
+    caminho_config = next((c for c in (_RAIZ / "config.yaml", Path.cwd() / "config.yaml") if c.exists()), None)
+    if caminho_config is None:
+        return None
+    return yaml.safe_load(caminho_config.read_text(encoding="utf-8")) or {}
 
 
 def main(argv=None) -> int:
@@ -212,6 +263,8 @@ def main(argv=None) -> int:
     parser.add_argument("--salvar", action="store_true", help="grava a rodada em nucleo_reconciliacoes_pool")
     parser.add_argument("--email", action="store_true", help="manda e-mail SÓ quando há divergência")
     parser.add_argument("--historico", type=int, metavar="N", help="placar dos últimos N dias (não vai na Vuupt)")
+    parser.add_argument("--fonte", choices=FONTES, default=FONTE_NUCLEO,
+                        help="o que comparar com a Vuupt: nucleo (padrão) ou freshhub (API nova, plano 1.2)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -219,40 +272,53 @@ def main(argv=None) -> int:
     conn = banco.conectar(caminho)
     try:
         if args.historico:
-            for linha in historico(conn, args.historico):
+            for linha in historico(conn, args.historico, fonte=args.fonte):
                 marca = "OK " if not linha["pior"] else "!! "
                 print(f"{marca}{linha['dia']}  rodadas={linha['rodadas']:2d} pool={linha['total_vuupt']:3d} "
                       f"pior={linha['pior']:3d} soma={linha['soma']:4d} duplicados_vuupt={linha['duplicados']:2d}")
-            print(f"\nDias com pool, seguidos, sem divergência: {dias_limpos_seguidos(conn)} (critério: 3 úteis)")
+            print(f"\nDias com pool, seguidos, sem divergência ({_nome_fonte(args.fonte)}): "
+                  f"{dias_limpos_seguidos(conn, fonte=args.fonte)} (critério: 3 úteis)")
             return 0
 
-        import yaml
-        caminho_config = next((c for c in (_RAIZ / "config.yaml", Path.cwd() / "config.yaml") if c.exists()), None)
-        if caminho_config is None:
+        config = _carregar_config()
+        if config is None:
             logger.error("config.yaml não encontrado.")
             return 1
-        config = yaml.safe_load(caminho_config.read_text(encoding="utf-8")) or {}
         token = (config.get("vuupt_api") or {}).get("token", "")
         if not token:
             logger.error("vuupt_api.token ausente no config.yaml.")
             return 1
+        cliente = None
+        if args.fonte == FONTE_FRESHHUB:
+            cliente = freshhub_client.de_config(config)
+            if cliente is None:
+                # a sombra só liga quando o Hugo põe freshhub_api.url/token no config da VPS
+                logger.warning("fonte freshhub sem freshhub_api.url/token no config.yaml: sombra desligada, nada a comparar")
+                return 0
 
         from vuupt_client import VuuptClient
         vuupt = VuuptClient(token)
         pool_vuupt = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}],
                                            per_page=100, include=["customer"])
-        pool_nucleo = pool.listar_pool(conn)
-        r = comparar(pool_vuupt, pool_nucleo)
+        if cliente is not None:
+            corpo = cliente.obter_pool()
+            logger.info("pool do freshhub: %d item(ns), dados de %s", len(corpo.get("itens") or []),
+                        corpo.get("dados_de"))
+            pool_fonte = list(corpo.get("itens") or [])
+        else:
+            pool_fonte = pool.listar_pool(conn)
+        r = comparar(pool_vuupt, pool_fonte)
         if args.salvar:
-            salvar(r, conn)
+            salvar(r, conn, fonte=args.fonte)
         # E-mail e saída 2 só por divergência PRÓPRIA: um duplicado na Vuupt
         # (que fica dias até alguém cancelar) não pode mandar 14 e-mails/dia.
         if args.email and r["divergencias_proprias"]:
-            _enviar_email(r, conn, config, args.exemplos)
+            _enviar_email(r, conn, config, args.exemplos, fonte=args.fonte)
     finally:
         conn.close()
 
-    print(json.dumps(r, ensure_ascii=False, indent=1, default=str) if args.json else resumir(r, args.exemplos))
+    print(json.dumps(r, ensure_ascii=False, indent=1, default=str) if args.json
+          else resumir(r, args.exemplos, fonte=args.fonte))
     return 2 if r["divergencias_proprias"] else 0
 
 

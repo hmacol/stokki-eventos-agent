@@ -114,7 +114,14 @@
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
- Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool)
+ Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
+   fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
+                                             freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token
+                                             de serviço criado por `freshhub.jobs.usuarios criar-token`, só loopback).
+                                             API fora -> cai pra Vuupt na rodada, log pool.freshhub_indisponivel,
+                                             e-mail 1x/h. Sombra: comparar_pool.py --fonte freshhub (coluna fonte
+                                             em nucleo_reconciliacoes_pool, chave rodado_em+fonte); portão da 1.2 =
+                                             3 dias úteis em 0 na fonte freshhub, aí fonte_pool: freshhub (Hugo).
    Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
                                              vigia_stokki_abertos (retrato do pipeline, não ao vivo)
  Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,
@@ -285,7 +292,8 @@
  07:25                       batimento-pedidos               python -m batimento.bater (lê Stokki/Vuupt,
                                                              grava batimento_*; trava sessao_uso)
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
- 07-20h xx:10                comparar-pool                   nucleo/comparar_pool.py (sombra)
+ 07-20h xx:25                comparar-pool                   nucleo/comparar_pool.py (sombra Vuupt x núcleo e, desde
+                                                             25/10, Vuupt x freshhub com --fonte freshhub)
  seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
  dias 1 e 16 08:00           dedicados-financeiro            notificar_dedicados_financeiro.py
  seg-sex 08:00               consulta-transportadora         lembrar_consultas_transportadora.py (lembrete diário ao
