@@ -62,6 +62,16 @@
   .nota-painel a { color: inherit; }
   .busca { width: 100%; font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
            background: var(--superficie); color: inherit; margin-bottom: 8px; }
+  .rotulo-busca { display: block; font-size: 12px; color: var(--texto-suave); margin-bottom: 6px; }
+  #cartao-busca-emb .busca { margin-bottom: 0; }
+  #resultado-embarcador li:empty { display: none; }
+  #resultado-embarcador .achado { width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 7px 4px;
+                                  background: none; border: 0; color: inherit; cursor: pointer; }
+  #resultado-embarcador .achado:hover { background: var(--superficie-hover); }
+  #resultado-embarcador .achado .chave { color: var(--texto-suave); font-size: 11px; margin-left: 6px; }
+  table.situacao { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.situacao th { text-align: left; color: var(--texto-suave); font-weight: 600; font-size: 11px; padding: 4px 6px 4px 0; }
+  table.situacao td { padding: 6px 6px 6px 0; border-top: 1px solid var(--borda); vertical-align: top; }
   ul.destinos { list-style: none; margin: 0; padding: 0; }
   ul.destinos li { border-top: 1px solid var(--borda); padding: 8px 0; }
   .destino-topo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -100,6 +110,12 @@
   não passa por aqui. Quem desligou o tipo no portal continua sem receber, e o que não saiu enquanto estava
   desligado não sai depois.
 </p>
+
+<div class="cartao" id="cartao-busca-emb">
+  <label class="rotulo-busca" for="busca-embarcador">Embarcador: e-mails de notificação e situação em cada tipo</label>
+  <input type="search" id="busca-embarcador" class="busca" placeholder="Buscar embarcador por nome ou CNPJ" autocomplete="off">
+  <ul class="destinos" id="resultado-embarcador"></ul>
+</div>
 
 <div class="geral{{ ' desligado' if geral == 'DESLIGADO' }}" id="geral" data-geral="{{ geral or 'config' }}">
   <span class="titulo">Geral</span>
@@ -174,9 +190,11 @@
     historico: "{{ url_for('api_notificacoes_historico') }}",
     tipo: "{{ url_for('api_notificacoes_tipo', tipo='__T__') }}",
     embarcador: "{{ url_for('api_notificacoes_embarcador', cnpj='__C__') }}",
+    situacao: "{{ url_for('api_notificacoes_embarcador_situacao', cnpj='__C__') }}",
     transportadoras: "{{ url_for('transportadoras') }}",
   };
   const TIPOS = {{ tipos|tojson }};
+  const EMBARCADORES = {{ embarcadores|tojson }};
   const ROTULO_ESTADO = { LIGADO: "Ligado", PILOTO: "Piloto (só Hugo)", DESLIGADO: "Desligado", config: "segue o config" };
   const ROTULO_CANAL = { email: "e-mail", whatsapp: "WhatsApp" };
   let HISTORICO = {{ historico|tojson }};
@@ -217,9 +235,23 @@
     return el("span", { class: "pilula " + estado, text: ROTULO_ESTADO[estado] || estado });
   }
 
-  function recarregar(tipo) {
-    if (tipo) window.location.hash = "t=" + tipo; else history.replaceState(null, "", window.location.pathname);
+  // hash: "t=<tipo>" ou "e=<cnpj>" reabre o painel depois do reload; null fecha tudo.
+  function recarregar(hash) {
+    if (hash) window.location.hash = hash; else history.replaceState(null, "", window.location.pathname);
     window.location.reload();
+  }
+
+  // Texto do confirm de ligar, igual para o seletor de estado e para o Desfazer
+  // que religa (dados = corpo do 409 com a contagem).
+  function textoConfirmarLigar(dados) {
+    if (dados.geral) {
+      const n = dados.tipos_ligados;
+      return "Ligar o geral libera os envios de cada tipo conforme o estado dele"
+        + (n ? " (" + n + " tipo(s) estão em Ligado e passam a enviar aos clientes de verdade)" : "") + ". Confirma?";
+    }
+    const unidade = TIPOS[dados.tipo].destino === "transportadora" ? "ponto(s) de transportadora" : "destinatário(s)";
+    return "Ligar \"" + TIPOS[dados.tipo].rotulo + "\": " + dados.destinatarios + " " + unidade
+      + " vão receber de verdade (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?";
   }
 
   // ---------------------------------------------------------------- geral
@@ -229,11 +261,7 @@
     msgGeral.className = "msg"; msgGeral.textContent = "Salvando...";
     let r = await chamar(URLS.geral, { ligado: ligar });
     if (r.status === 409) {
-      const n = r.dados.tipos_ligados;
-      if (!window.confirm("Ligar o geral libera os envios de cada tipo conforme o estado dele"
-          + (n ? " (" + n + " tipo(s) estão em Ligado e passam a enviar aos clientes de verdade)" : "") + ". Confirma?")) {
-        msgGeral.textContent = ""; return;
-      }
+      if (!window.confirm(textoConfirmarLigar(r.dados))) { msgGeral.textContent = ""; return; }
       r = await chamar(URLS.geral, { ligado: true, confirmado: true });
     }
     if (!r.ok) { msgGeral.className = "msg erro"; msgGeral.textContent = r.dados.erro || "Falha ao salvar."; return; }
@@ -255,6 +283,7 @@
 
   // ------------------------------------------------------------ histórico
   function fmtValor(h, v) {
+    if (h.alvo === "_emails") return v == null ? "—" : v;
     if (v == null) return h.alvo === "_piloto" ? "padrão" : (h.destino ? "sem exceção" : "segue o config");
     return h.destino == null && ROTULO_ESTADO[v] ? ROTULO_ESTADO[v] : v;
   }
@@ -266,12 +295,18 @@
     HISTORICO.forEach((h) => {
       let o = h.alvo_rotulo;
       if (h.destino) o += " · " + (h.destino_nome || fmtChave(h.destino));
-      const botao = el("button", { type: "button", class: "botao secundario pequeno", text: "Desfazer" });
-      botao.addEventListener("click", async () => {
+      // Edição de e-mails/WhatsApp fica só no registro: sem Desfazer.
+      const botao = h.desfazivel === false ? null
+        : el("button", { type: "button", class: "botao secundario pequeno", text: "Desfazer" });
+      if (botao) botao.addEventListener("click", async () => {
         if (!window.confirm("Desfazer: " + o + " volta para " + fmtValor(h, h.de) + "?")) return;
         const aviso = document.getElementById("msg-historico");
         aviso.className = "msg"; aviso.textContent = "Salvando...";
-        const r = await chamar(URLS.desfazer, { id: h.id });
+        let r = await chamar(URLS.desfazer, { id: h.id });
+        if (r.status === 409) {
+          if (!window.confirm(textoConfirmarLigar(r.dados))) { aviso.textContent = ""; return; }
+          r = await chamar(URLS.desfazer, { id: h.id, confirmado: true });
+        }
         if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao desfazer."; return; }
         recarregar(painelAberto);
       });
@@ -317,16 +352,11 @@
     aviso.className = "msg"; aviso.textContent = "Salvando...";
     let r = await chamar(URLS.estado, { tipo, estado });
     if (r.status === 409) {
-      const n = r.dados.destinatarios;
-      const unidade = TIPOS[tipo].destino === "transportadora" ? "ponto(s) de transportadora" : "destinatário(s)";
-      if (!window.confirm("Ligar \"" + TIPOS[tipo].rotulo + "\": " + n + " " + unidade
-          + " vão receber de verdade (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?")) {
-        aviso.textContent = ""; return;
-      }
+      if (!window.confirm(textoConfirmarLigar(r.dados))) { aviso.textContent = ""; return; }
       r = await chamar(URLS.estado, { tipo, estado, confirmado: true });
     }
     if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao salvar."; return; }
-    recarregar(tipo);
+    recarregar("t=" + tipo);
   }
 
   async function mudarExcecao(d, destino, regra, aviso) {
@@ -343,12 +373,14 @@
     atualizarHistorico();
   }
 
-  function editorEmails(d, destino, caixa) {
+  function editorEmails(destino, caixa) {
     const campoEmails = el("textarea", { name: "emails", placeholder: "um e-mail por linha" });
     const campoZap = el("input", { type: "text", name: "whatsapp", inputmode: "tel", autocomplete: "off" });
     const aviso = el("span", { class: "msg", role: "status" });
     const dicaCadastro = el("span", { class: "msg" });
-    const salvar = el("button", { type: "button", class: "botao pequeno", text: "Salvar" });
+    // Salvar so liga depois que a leitura deu certo: senao um clique cedo (ou depois
+    // de uma falha) mandaria campos vazios e apagaria a lista do cliente.
+    const salvar = el("button", { type: "button", class: "botao pequeno", text: "Salvar", disabled: true });
     caixa.replaceChildren(
       el("label", {}, "E-mails de notificação (a mesma lista do portal; vazio usa o e-mail do cadastro)", campoEmails),
       dicaCadastro,
@@ -362,8 +394,10 @@
       dicaCadastro.textContent = r.dados.emails.length ? "" : "Sem e-mail próprio: usa o do cadastro ("
         + (r.dados.emails_cadastro.join(", ") || "nenhum") + ").";
       aviso.textContent = "";
+      salvar.disabled = false;
     });
     salvar.addEventListener("click", async () => {
+      if (salvar.disabled) return;
       aviso.className = "msg"; aviso.textContent = "Salvando...";
       const r = await chamar(URLS.embarcador.replace("__C__", destino.chave),
         { emails: campoEmails.value, whatsapp: campoZap.value });
@@ -406,8 +440,12 @@
       acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "E-mails",
         onclick: () => {
           caixa.hidden = !caixa.hidden;
-          if (!caixa.hidden) editorEmails(d, destino, caixa);
+          if (!caixa.hidden) editorEmails(destino, caixa);
         } }));
+    }
+    if (!ehTransp && /^\d{14}$/.test(destino.chave)) {
+      acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "Detalhe",
+        title: "Situação deste embarcador em cada tipo", onclick: () => abrirEmbarcador(destino.chave) }));
     }
     acoes.append(aviso);
     return el("li", { "data-nome": (destino.nome + " " + destino.chave).toLowerCase() }, topo, acoes, caixa);
@@ -466,14 +504,65 @@
     renderLista(d);
   }
 
+  // Detalhe do embarcador: e-mails/WhatsApp (editor) + uma linha por tipo, so leitura
+  // (a excecao se muda no painel do tipo).
+  async function abrirEmbarcador(chave) {
+    painelAberto = "e=" + chave;
+    document.querySelectorAll("tr.linha.aberta").forEach((l) => l.classList.remove("aberta"));
+    window.location.hash = painelAberto;
+    painel.hidden = false; fundo.hidden = false;
+    painel.replaceChildren(el("p", { class: "msg", text: "Carregando..." }));
+    const r = await chamar(URLS.situacao.replace("__C__", chave));
+    if (painelAberto !== "e=" + chave) return;
+    if (!r.ok) { painel.replaceChildren(el("p", { class: "msg erro", text: r.dados.erro || "Falha ao carregar." })); return; }
+    const caixa = el("div", { class: "editor" });
+    const corpo = el("tbody", {});
+    r.dados.situacao.forEach((l) => {
+      corpo.append(el("tr", {},
+        el("td", { text: l.rotulo }),
+        el("td", {}, pilula(l.estado)),
+        el("td", { text: l.excecao === "LIBERADO" ? "liberado" : (l.excecao === "BLOQUEADO" ? "bloqueado" : "—") }),
+        el("td", { text: l.preferencia_cliente == null ? "—" : (l.preferencia_cliente ? "ligado" : "desligou") })));
+    });
+    painel.replaceChildren(
+      el("div", { class: "topo" },
+        el("h2", { text: r.dados.nome }),
+        el("button", { type: "button", class: "botao secundario pequeno", text: "Fechar", onclick: fechar })),
+      el("p", { class: "meta", text: fmtChave(r.dados.cnpj) }),
+      el("div", { class: "bloco" }, el("h3", { text: "E-mails e WhatsApp de notificação" }), caixa),
+      el("div", { class: "bloco" }, el("h3", { text: "Situação em cada tipo" }),
+        el("table", { class: "situacao" },
+          el("thead", {}, el("tr", {}, el("th", { text: "Tipo" }), el("th", { text: "Estado" }),
+            el("th", { text: "Exceção" }), el("th", { text: "No portal" }))),
+          corpo),
+        el("p", { class: "nota-painel", text: "Só leitura. Liberar ou bloquear este embarcador se faz no painel de cada tipo." })));
+    editorEmails({ chave: r.dados.cnpj }, caixa);
+  }
+
+  const campoBusca = document.getElementById("busca-embarcador");
+  const resultadoBusca = document.getElementById("resultado-embarcador");
+  campoBusca.addEventListener("input", () => {
+    const termo = campoBusca.value.trim().toLowerCase();
+    const digitos = termo.replace(/\D/g, "");
+    resultadoBusca.replaceChildren();
+    if (!termo) return;
+    EMBARCADORES.filter((e) => e.nome.toLowerCase().includes(termo) || (digitos && e.chave.includes(digitos)))
+      .slice(0, 8).forEach((e) => {
+        resultadoBusca.append(el("li", {}, el("button", { type: "button", class: "achado",
+          onclick: () => abrirEmbarcador(e.chave) },
+          e.nome, el("span", { class: "chave", text: fmtChave(e.chave) }))));
+      });
+    if (!resultadoBusca.children.length) resultadoBusca.append(el("li", { class: "vazio", text: "Nenhum embarcador encontrado." }));
+  });
+
   async function abrir(tipo) {
-    painelAberto = tipo;
+    painelAberto = "t=" + tipo;
     document.querySelectorAll("tr.linha").forEach((l) => l.classList.toggle("aberta", l.dataset.tipo === tipo));
-    window.location.hash = "t=" + tipo;
+    window.location.hash = painelAberto;
     painel.hidden = false; fundo.hidden = false;
     painel.replaceChildren(el("p", { class: "msg", text: "Carregando..." }));
     const r = await chamar(URLS.tipo.replace("__T__", tipo));
-    if (painelAberto !== tipo) return;
+    if (painelAberto !== "t=" + tipo) return;
     if (!r.ok) { painel.replaceChildren(el("p", { class: "msg erro", text: r.dados.erro || "Falha ao carregar." })); return; }
     renderPainel(r.dados);
   }
@@ -486,8 +575,9 @@
   });
 
   renderHistorico();
-  const aberto = /^#t=(\w+)$/.exec(window.location.hash);
-  if (aberto && TIPOS[aberto[1]]) abrir(aberto[1]);
+  const aberto = /^#([te])=(\w+)$/.exec(window.location.hash);
+  if (aberto && aberto[1] === "t" && TIPOS[aberto[2]]) abrir(aberto[2]);
+  if (aberto && aberto[1] === "e") abrirEmbarcador(aberto[2]);
 })();
 </script>
 {% endblock %}

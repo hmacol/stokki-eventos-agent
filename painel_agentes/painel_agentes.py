@@ -1735,12 +1735,6 @@ def _autor_notificacoes() -> str:
     return session.get("usuario") or g.nivel_acesso
 
 
-def _separar_emails(valor) -> list[str]:
-    if isinstance(valor, str):
-        valor = re.split(r"[\n,;]+", valor)
-    return [str(e).strip() for e in (valor or []) if str(e).strip()]
-
-
 @app.route("/notificacoes")
 @requer_auth
 def notificacoes():
@@ -1750,6 +1744,7 @@ def notificacoes():
     try:
         return render_template("notificacoes.html", geral=cn.estado_geral(conn), lista=nt.montar_lista(conn),
                                piloto=cn.piloto(conn), historico=nt.historico_legivel(conn),
+                               embarcadores=nt.lista_embarcadores(conn),
                                tipos={t: {"rotulo": i["rotulo"], "destino": i["destino"], "canais": list(i["canais"]),
                                           "quando": i["quando"]} for t, i in cn.TIPOS.items()})
     finally:
@@ -1794,7 +1789,8 @@ def api_notificacoes_geral():
     try:
         if ligado and corpo.get("confirmado") is not True and cn.estado_geral(conn) != "LIGADO":
             ligados = sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")
-            return jsonify({"erro": "Confirme para ligar o geral.", "confirmar": True, "tipos_ligados": ligados}), 409
+            return jsonify({"erro": "Confirme para ligar o geral.", "confirmar": True, "geral": True,
+                            "tipos_ligados": ligados}), 409
         cn.definir_geral(conn, ligado, _autor_notificacoes())
     finally:
         conn.close()
@@ -1816,7 +1812,7 @@ def api_notificacoes_estado():
     conn = cn.conectar()
     try:
         if estado == "LIGADO" and corpo.get("confirmado") is not True and cn.estado_tipo(conn, tipo) != "LIGADO":
-            return jsonify({"erro": "Confirme para ligar.", "confirmar": True,
+            return jsonify({"erro": "Confirme para ligar.", "confirmar": True, "tipo": tipo,
                             "destinatarios": nt.contar_destinatarios(conn, tipo)}), 409
         cn.definir_estado(conn, tipo, estado, _autor_notificacoes())
     except ValueError as e:
@@ -1864,11 +1860,18 @@ def api_notificacoes_piloto():
 @requer_auth
 @exige_mesma_origem
 def api_notificacoes_desfazer():
+    """Volta ao valor anterior. Se isso religa um tipo (ou o geral), pede a mesma
+    confirmacao de ligar (409 com a contagem ate vir `confirmado: true`)."""
     import controle_notificacoes as cn
+    import notificacoes_tela as nt
     corpo = _corpo_dict()
     conn = cn.conectar()
     try:
-        cn.desfazer(conn, int(corpo.get("id")), _autor_notificacoes())
+        hid = int(corpo.get("id"))
+        pendente = nt.confirmacao_do_desfazer(conn, hid)   # tambem recusa item sem desfazer
+        if pendente and corpo.get("confirmado") is not True:
+            return jsonify(dict(pendente, erro="Confirme para ligar.", confirmar=True)), 409
+        cn.desfazer(conn, hid, _autor_notificacoes())
     except (ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1896,18 +1899,27 @@ def api_notificacoes_embarcador(cnpj):
 @requer_auth
 @exige_mesma_origem
 def api_notificacoes_embarcador_salvar(cnpj):
-    """Grava e-mails e/ou WhatsApp (chave ausente = nao mexe) como `painel:<usuario>`."""
+    """Grava e-mails e/ou WhatsApp (chave ausente = nao mexe) como `painel:<usuario>`
+    e registra no historico do controle (so registro, sem desfazer)."""
     import notificacoes_tela as nt
-    import preferencias_notificacao as pn
     corpo = _corpo_dict()
-    conn = nt.conectar_preferencias()
     try:
-        emails = _separar_emails(corpo["emails"]) if "emails" in corpo else pn.ler(conn, cnpj)["emails"]
-        pn.salvar(conn, cnpj, emails, {}, "painel:" + _autor_notificacoes(),
-                  whatsapp=str(corpo["whatsapp"] or "") if "whatsapp" in corpo else None)
-        return jsonify(pn.ler(conn, cnpj))
+        return jsonify(nt.salvar_contato(cnpj, corpo, "painel:" + _autor_notificacoes()))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>/situacao")
+@requer_auth
+def api_notificacoes_embarcador_situacao(cnpj):
+    """Detalhe do embarcador: estado de cada tipo, a excecao dele e a preferencia no portal (so leitura)."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.situacao_embarcador(conn, cnpj))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 404
     finally:
         conn.close()
 

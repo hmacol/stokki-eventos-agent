@@ -87,7 +87,7 @@ class _Base(unittest.TestCase):
 class TestRotas(_Base):
     def test_so_total_abre(self):
         urls_get = ["/notificacoes", "/api/notificacoes/tipo/nfs_em_rota", f"/api/notificacoes/embarcador/{CNPJ_A}",
-                    "/api/notificacoes/historico"]
+                    "/api/notificacoes/historico", f"/api/notificacoes/embarcador/{CNPJ_A}/situacao"]
         corpos = {"/api/notificacoes/geral": {"ligado": False},
                   "/api/notificacoes/estado": {"tipo": "nfs_em_rota", "estado": "PILOTO"},
                   "/api/notificacoes/excecao": {"tipo": "nfs_em_rota", "destino": CNPJ_A, "regra": "BLOQUEADO"},
@@ -258,6 +258,125 @@ class TestRotas(_Base):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.cliente.get(f"/api/notificacoes/embarcador/{CNPJ_A}").get_json()["emails"],
                          ["novo@a.com", "outro@a.com"])
+
+    def test_desfazer_que_liga_pede_confirmacao_com_contagem(self):
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/estado", {"tipo": "nfs_em_rota", "estado": "LIGADO", "confirmado": True})
+        post("/api/notificacoes/estado", {"tipo": "nfs_em_rota", "estado": "DESLIGADO"})
+        ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        self.assertEqual((ultimo["de"], ultimo["para"]), ("LIGADO", "DESLIGADO"))
+        r = post("/api/notificacoes/desfazer", {"id": ultimo["id"]})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual((r.get_json()["tipo"], r.get_json()["destinatarios"]), ("nfs_em_rota", 2))
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.estado_tipo(conn, "nfs_em_rota"), "DESLIGADO")
+        finally:
+            conn.close()
+        r = post("/api/notificacoes/desfazer", {"id": ultimo["id"], "confirmado": True})
+        self.assertEqual(r.status_code, 200)
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.estado_tipo(conn, "nfs_em_rota"), "LIGADO")
+        finally:
+            conn.close()
+
+    def test_desfazer_que_liga_o_geral_pede_confirmacao(self):
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/geral", {"ligado": True, "confirmado": True})
+        post("/api/notificacoes/geral", {"ligado": False})
+        ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        r = post("/api/notificacoes/desfazer", {"id": ultimo["id"]})
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.get_json()["geral"])
+        self.assertIn("tipos_ligados", r.get_json())
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.estado_geral(conn), "DESLIGADO")
+        finally:
+            conn.close()
+        self.assertEqual(post("/api/notificacoes/desfazer", {"id": ultimo["id"], "confirmado": True}).status_code, 200)
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.estado_geral(conn), "LIGADO")
+        finally:
+            conn.close()
+
+    def test_desfazer_que_nao_liga_nao_pede_confirmacao(self):
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/estado", {"tipo": "resumo_diario", "estado": "PILOTO"})
+        ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        self.assertEqual(post("/api/notificacoes/desfazer", {"id": ultimo["id"]}).status_code, 200)
+        conn = self._controle()
+        try:
+            self.assertIsNone(cn.estado_tipo(conn, "resumo_diario"))
+        finally:
+            conn.close()
+
+    def test_edicao_de_emails_vai_pro_historico_e_nao_tem_desfazer(self):
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        r = post(f"/api/notificacoes/embarcador/{CNPJ_A}", {"emails": ["novo@a.com"], "whatsapp": "(11) 99999-0000"})
+        self.assertEqual(r.status_code, 200)
+        hist = self.cliente.get("/api/notificacoes/historico").get_json()
+        linha = hist[0]
+        self.assertEqual((linha["alvo"], linha["destino"]), ("_emails", CNPJ_A))
+        self.assertIn("novo@a.com", linha["para"])
+        self.assertIn("5511999990000", linha["para"])
+        self.assertEqual(linha["destino_nome"], "Cliente A")
+        self.assertIs(linha["desfazivel"], False)
+        # salvar igual nao gera linha nova
+        post(f"/api/notificacoes/embarcador/{CNPJ_A}", {"emails": ["novo@a.com"]})
+        self.assertEqual(len(self.cliente.get("/api/notificacoes/historico").get_json()), len(hist))
+        # e-mail invalido nao grava nem registra
+        self.assertEqual(post(f"/api/notificacoes/embarcador/{CNPJ_A}", {"emails": ["x"]}).status_code, 400)
+        self.assertEqual(len(self.cliente.get("/api/notificacoes/historico").get_json()), len(hist))
+        # nao desfaz: 400 e nada muda (nem vira excecao "_emails")
+        self.assertEqual(post("/api/notificacoes/desfazer", {"id": linha["id"]}).status_code, 400)
+        self.assertEqual(self.cliente.get(f"/api/notificacoes/embarcador/{CNPJ_A}").get_json()["emails"], ["novo@a.com"])
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.excecoes(conn, "_emails"), {})
+        finally:
+            conn.close()
+
+    def test_situacao_do_embarcador_por_tipo(self):
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/estado", {"tipo": "entrega_concluida", "estado": "PILOTO"})
+        post("/api/notificacoes/excecao", {"tipo": "entrega_concluida", "destino": CNPJ_B, "regra": "LIBERADO"})
+        conn = sqlite3.connect(self.db)
+        try:
+            pn.salvar(conn, CNPJ_B, [], {"resumo_diario": True, "chamado_sem_resposta": False}, "t")
+        finally:
+            conn.close()
+        r = self.cliente.get(f"/api/notificacoes/embarcador/{CNPJ_B}/situacao")
+        self.assertEqual(r.status_code, 200)
+        dados = r.get_json()
+        self.assertEqual((dados["cnpj"], dados["nome"]), (CNPJ_B, "Cliente B Ltda"))
+        linhas = {l["tipo"]: l for l in dados["situacao"]}
+        esperados = [t for t, i in cn.TIPOS.items() if i["destino"] == "embarcador"]
+        self.assertEqual([l["tipo"] for l in dados["situacao"]], esperados)
+        self.assertNotIn("transportadoras", linhas)
+        self.assertEqual(linhas["entrega_concluida"]["estado"], "PILOTO")
+        self.assertEqual(linhas["entrega_concluida"]["excecao"], "LIBERADO")
+        self.assertEqual(linhas["nfs_em_rota"]["estado"], "config")
+        self.assertIsNone(linhas["nfs_em_rota"]["excecao"])
+        self.assertIs(linhas["resumo_diario"]["preferencia_cliente"], True)
+        self.assertIs(linhas["whatsapp_sem_resposta"]["preferencia_cliente"], False)
+        self.assertIsNone(linhas["chamados"]["preferencia_cliente"])
+        self.assertEqual(linhas["chamados"]["rotulo"], cn.TIPOS["chamados"]["rotulo"])
+        self.assertEqual(self.cliente.get("/api/notificacoes/embarcador/99999999000199/situacao").status_code, 404)
+
+    def test_pagina_traz_a_lista_pra_busca_de_embarcador(self):
+        self._logar("total")
+        html = self.cliente.get("/notificacoes").get_data(as_text=True)
+        self.assertIn('id="busca-embarcador"', html)
+        self.assertIn("Cliente B Ltda", html)
+
 
     def test_pagina_renderiza_lista_e_geral(self):
         self._logar("total")

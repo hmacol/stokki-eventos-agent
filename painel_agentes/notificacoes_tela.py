@@ -6,6 +6,7 @@ Dados da tela /notificacoes (24/10): lista de tipos, painel de um tipo e
 contagem de quem receberia. Quem decide e grava e controle_notificacoes;
 a preferencia do cliente vem de preferencias_notificacao. Sem Flask.
 """
+import re
 import sqlite3
 from pathlib import Path
 
@@ -18,7 +19,8 @@ from regras.transportadoras import CatalogoTransportadoras
 _COLUNA_PREF = {t: t for t in cn.TIPOS if t in pn.TIPOS}
 _COLUNA_PREF["whatsapp_sem_resposta"] = "chamado_sem_resposta"
 
-_ROTULO_ALVO = {"_geral": "Geral", "_piloto": "Destino do piloto"}
+_ALVO_EMAILS = "_emails"   # linha de historico da edicao de e-mail/WhatsApp (so registro, sem desfazer)
+_ROTULO_ALVO = {"_geral": "Geral", "_piloto": "Destino do piloto", _ALVO_EMAILS: "E-mails do embarcador"}
 
 
 def _db_path(conn: sqlite3.Connection) -> Path:
@@ -151,5 +153,87 @@ def historico_legivel(conn: sqlite3.Connection, limite: int = 50) -> list[dict]:
     for h in cn.historico(conn, limite):
         h["alvo_rotulo"] = _ROTULO_ALVO.get(h["alvo"]) or cn.TIPOS.get(h["alvo"], {}).get("rotulo", h["alvo"])
         h["destino_nome"] = nomes.get(h["destino"]) if h["destino"] else None
+        h["desfazivel"] = h["alvo"] != _ALVO_EMAILS
         saida.append(h)
     return saida
+
+
+def lista_embarcadores(conn: sqlite3.Connection) -> list[dict]:
+    """Pra caixa de busca do topo da tela: [{chave (CNPJ), nome}]."""
+    return [{"chave": e["chave"], "nome": e["nome"]} for e in _embarcadores(conn, "nfs_em_rota")]
+
+
+def situacao_embarcador(conn: sqlite3.Connection, cnpj) -> dict:
+    """Uma linha por tipo de destino embarcador: estado do tipo, a excecao
+    DESTE embarcador e a preferencia dele no portal (None = tipo sem escolha
+    no portal). Somente leitura. ValueError se o CNPJ nao esta no cadastro."""
+    chave = re.sub(r"\D", "", str(cnpj or ""))
+    emb = next((e for e in _embarcadores(conn, "nfs_em_rota") if e["chave"] == chave), None)
+    if emb is None:
+        raise ValueError("Embarcador não encontrado no cadastro.")
+    prefs = pn.ler(conn, chave)["tipos"]
+    linhas = []
+    for tipo, info in cn.TIPOS.items():
+        if info["destino"] != "embarcador":
+            continue
+        coluna = _COLUNA_PREF.get(tipo)
+        linhas.append({"tipo": tipo, "rotulo": info["rotulo"], "estado": cn.estado_tipo(conn, tipo) or "config",
+                       "excecao": cn.excecoes(conn, tipo).get(chave),
+                       "preferencia_cliente": bool(prefs[coluna]) if coluna else None})
+    return {"cnpj": chave, "nome": emb["nome"], "situacao": linhas}
+
+
+def confirmacao_do_desfazer(conn: sqlite3.Connection, historico_id: int) -> dict | None:
+    """Desfazer que RELIGA (volta um tipo ou o geral para LIGADO) pede a mesma
+    confirmacao de ligar: devolve o corpo do 409 (com a contagem) ou None se
+    pode ir direto. ValueError se o item nao existe ou nao tem desfazer."""
+    row = conn.execute("SELECT alvo, destino, de FROM notificacoes_controle_historico WHERE id = ?",
+                       (historico_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Item de histórico inexistente: {historico_id}")
+    alvo, destino, de = row
+    if alvo == _ALVO_EMAILS:
+        raise ValueError("Edição de e-mails fica só no registro: não tem desfazer.")
+    if destino is not None or de != "LIGADO":
+        return None
+    if alvo == "_geral":
+        if cn.estado_geral(conn) == "LIGADO":
+            return None
+        return {"geral": True, "tipos_ligados": sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")}
+    if alvo in cn.TIPOS and cn.estado_tipo(conn, alvo) != "LIGADO":
+        return {"tipo": alvo, "destinatarios": contar_destinatarios(conn, alvo)}
+    return None
+
+
+def separar_emails(valor) -> list[str]:
+    if isinstance(valor, str):
+        valor = re.split(r"[\n,;]+", valor)
+    return [str(e).strip() for e in (valor or []) if str(e).strip()]
+
+
+def _texto_contato(pref: dict) -> str:
+    return f"e-mails: {', '.join(pref['emails']) or '—'}; WhatsApp: {pref['whatsapp'] or '—'}"
+
+
+def salvar_contato(cnpj, corpo: dict, por: str) -> dict:
+    """Grava e-mails e/ou WhatsApp do embarcador na lista do portal (chave
+    ausente no corpo = nao mexe) e registra a edicao no historico do controle
+    (alvo _emails, de/para = valores antigo e novo; so registro). ValueError
+    com mensagem pronta pra tela; com erro nada e gravado nem registrado."""
+    conn = conectar_preferencias()
+    try:
+        antes = pn.ler(conn, cnpj)
+        emails = separar_emails(corpo["emails"]) if "emails" in corpo else antes["emails"]
+        depois = pn.salvar(conn, cnpj, emails, {}, por,
+                           whatsapp=str(corpo["whatsapp"] or "") if "whatsapp" in corpo else None)
+    finally:
+        conn.close()
+    de, para = _texto_contato(antes), _texto_contato(depois)
+    if de != para:
+        ctrl = cn.conectar()
+        try:
+            cn._registrar(ctrl, por, _ALVO_EMAILS, depois["cnpj"], de, para)
+            ctrl.commit()
+        finally:
+            ctrl.close()
+    return depois
