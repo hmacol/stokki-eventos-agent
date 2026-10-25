@@ -831,7 +831,15 @@
                            corrida (PICKED_UP = saiu, COMPLETED = entregue).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
  motoristas.py             Tela de motoristas.
- pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
+ pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
+                           painel, sem Lovable). Aba Registrar grava em
+                           pedidos_parados_registros (foto em dados/pedidos_parados/<id>/;
+                           apagar só o autor em 15 min); aba Triagem lê daí
+                           (só o dia mais recente; dias parado desde o 1º
+                           registro). Encaminhar às Demandas do Lovable PAUSADO
+                           (ENCAMINHAMENTO_DEMANDAS_ATIVO=False: classificar
+                           Cancelados/Devolução/Descartar/Verificar já conta
+                           como tratado). Testes: test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
                            da equipe, abertos a todos do Atendimento, só texto,
@@ -898,7 +906,11 @@
                               desativa/reativa,
                               telas de cada um / nível personalizado)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
-   /pedidos-parados          pedidos_parados_triagem.html
+   /pedidos-parados          pedidos_parados_triagem.html (abas Registrar | Triagem;
+                              #registrar/#triagem na URL; galpao/expedicao entram na
+                              Registrar e veem a Triagem só leitura). APIs:
+                              /api/pedidos-parados/registrar (POST multipart),
+                              /registros-hoje, /registro/apagar, /pedidos-parados/foto/<id>
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
@@ -1127,7 +1139,10 @@
                            (Playwright CPF+PIN -> token), pedidos parados,
                            tasks. Era freshhub/ ate 17/10/2026; o nome
                            freshhub/ passou a ser o pacote do sistema novo.
-                           Sai de uso na Fase 1 do plano mestre.
+                           Desde 24/10 o painel NÃO lê mais pedidos_parados.py
+                           (registro é na aba Registrar do painel); só sobram
+                           normalizar_order_number e tasks.py (Demandas,
+                           pausado). Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
@@ -1260,6 +1275,8 @@
    arquivo gitignored `freshhub/sessao_freshhub.json` para
    `lovable/sessao_freshhub.json` (como www-data) ANTES de reiniciar
    painel-agentes; sem isso o Lovable refaz login Playwright a cada chamada.
+   Desde 24/10 só importa se religar as Demandas (pedidos parados já não
+   consultam o Lovable).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
  - BD_TRANSPORTADORAS.xlsx é histórico desde a migração, não editar (a fonte é
    a tabela `transportadoras`; só migrar_transportadoras_planilha.py lê o xlsx).
