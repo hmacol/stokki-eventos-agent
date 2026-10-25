@@ -141,6 +141,22 @@ class TestControleForaDiaFixo(Base):
         self.assertEqual(self.email.call_args[0][0], ["hugo@freshlogbr.com"])
         self.assertEqual(self._canais(), "piloto")
 
+    def test_fora_dia_fixo_piloto_sem_destino_nos_dois_canais_nao_consome(self):
+        # piloto sem e-mail e sem WhatsApp (os dois NAO "piloto sem destino"): fica pendente
+        self._estado("PILOTO")
+        conn = cn.conectar(self.db)
+        try:
+            conn.execute("INSERT INTO notificacoes_controle_param (chave, valor) VALUES ('piloto_email', '')")
+            conn.commit()
+        finally:
+            conn.close()
+        r = self._avisar()
+        self.email.assert_not_called()
+        self.wpp.assert_not_called()
+        self.assertEqual((r["bloqueados"], r["registrados"]), (0, 0))
+        self.assertIsNone(self._canais())
+        self.assertFalse(self._avisado())
+
     def test_fora_dia_fixo_piloto_sem_whatsapp_e_sem_email_nao_consome_e_liga_envia_whatsapp(self):
         self._estado("PILOTO")
         self._piloto(whatsapp="")

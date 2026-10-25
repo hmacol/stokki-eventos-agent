@@ -18,6 +18,10 @@ envia de verdade (ENVIAR), manda so pro piloto (PILOTO, o Hugo) ou nao envia
      (NAO se o piloto nao tem destino no canal).
   Erro de banco -> vale o config e loga aviso (nunca derruba a rotina).
 
+Decisao.consome: o NAO tira o evento da fila (geral desligado, tipo DESLIGADO,
+destinatario BLOQUEADO). Piloto sem destino e NAO do config nao consomem: o
+evento fica pendente e sai quando a tela/config liberar.
+
 A preferencia do cliente no portal (preferencias_notificacao) continua sendo
 checada pela rotina: a tela e uma trava POR CIMA, nunca a forca.
 
@@ -42,6 +46,7 @@ CANAIS = ("email", "whatsapp")
 _GERAL = "_geral"
 _PILOTO = "_piloto"
 _PILOTO_EMAIL_PADRAO = "hugo@freshlogbr.com"
+MOTIVO_GERAL_DESLIGADO = "geral desligado"
 
 # Ordem = ordem das linhas na tela. destino: quem recebe (define como a chave
 # da excecao e normalizada). quando: texto livre exibido na tela.
@@ -85,6 +90,7 @@ class Decisao:
     destino_piloto: str  # e-mail/numero do piloto (so quando acao == PILOTO)
     origem: str          # "tela" | "config"
     motivo: str
+    consome: bool = False  # NAO que tira o evento da fila (ver docstring do modulo)
 
 
 def _agora() -> str:
@@ -301,7 +307,7 @@ def decidir(tipo: str, destino: str | None, *, fallback_acao: str, fallback_pilo
         conn = conectar(db_path)
         try:
             if estado_geral(conn) == "DESLIGADO":
-                return Decisao("NAO", "", "tela", "geral desligado")
+                return Decisao("NAO", "", "tela", MOTIVO_GERAL_DESLIGADO, consome=True)
             estado = estado_tipo(conn, tipo)
             if estado is None:
                 return do_config("sem linha na tela")
@@ -309,9 +315,9 @@ def decidir(tipo: str, destino: str | None, *, fallback_acao: str, fallback_pilo
             if destino is not None:
                 regra = excecoes(conn, tipo).get(_normalizar_destino(tipo, destino))
             if regra == "BLOQUEADO":
-                return Decisao("NAO", "", "tela", "destinatário bloqueado")
+                return Decisao("NAO", "", "tela", "destinatário bloqueado", consome=True)
             if estado == "DESLIGADO":
-                return Decisao("NAO", "", "tela", "tipo desligado")
+                return Decisao("NAO", "", "tela", "tipo desligado", consome=True)
             if estado == "LIGADO":
                 return Decisao("ENVIAR", "", "tela", "tipo ligado")
             if regra == "LIBERADO":

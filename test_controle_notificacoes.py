@@ -92,6 +92,50 @@ class TestDecidir(BaseTeste):
             cn.decidir("inexistente", "1", fallback_acao="NAO", db_path=self.db)
 
 
+class TestConsome(BaseTeste):
+    """`consome`: o NAO tira o evento da fila (geral desligado, tipo DESLIGADO,
+    BLOQUEADO). Piloto sem destino e NAO do config nao consomem."""
+
+    def test_geral_desligado_consome(self):
+        cn.definir_geral(self.conn, False, "hugo")
+        d = cn.decidir("nfs_em_rota", "123", fallback_acao="ENVIAR", db_path=self.db)
+        self.assertTrue(d.consome)
+        self.assertEqual(d.motivo, cn.MOTIVO_GERAL_DESLIGADO)
+
+    def test_tipo_desligado_consome(self):
+        cn.definir_estado(self.conn, "nfs_em_rota", "DESLIGADO", "hugo")
+        d = cn.decidir("nfs_em_rota", "123", fallback_acao="ENVIAR", db_path=self.db)
+        self.assertEqual(d.acao, "NAO")
+        self.assertTrue(d.consome)
+
+    def test_bloqueado_consome(self):
+        cn.definir_estado(self.conn, "nfs_em_rota", "LIGADO", "hugo")
+        cn.definir_excecao(self.conn, "nfs_em_rota", "123", "BLOQUEADO", "hugo")
+        d = cn.decidir("nfs_em_rota", "123", fallback_acao="ENVIAR", db_path=self.db)
+        self.assertEqual(d.acao, "NAO")
+        self.assertTrue(d.consome)
+
+    def test_piloto_sem_destino_nao_consome(self):
+        cn.definir_estado(self.conn, "whatsapp_sem_resposta", "PILOTO", "hugo")
+        d = cn.decidir("whatsapp_sem_resposta", "123", fallback_acao="ENVIAR", canal="whatsapp",
+                       db_path=self.db)
+        self.assertEqual((d.acao, d.origem), ("NAO", "tela"))
+        self.assertFalse(d.consome)
+
+    def test_config_nao_consome(self):
+        d = cn.decidir("nfs_em_rota", "123", fallback_acao="NAO", db_path=self.db)
+        self.assertEqual((d.acao, d.origem), ("NAO", "config"))
+        self.assertFalse(d.consome)
+        d2 = cn.decidir("nfs_em_rota", "123", fallback_acao="NAO", db_path=self._tmp.name)
+        self.assertFalse(d2.consome)
+
+    def test_enviar_e_piloto_nao_consomem(self):
+        for estado in ("LIGADO", "PILOTO"):
+            cn.definir_estado(self.conn, "nfs_em_rota", estado, "hugo")
+            d = cn.decidir("nfs_em_rota", "123", fallback_acao="NAO", db_path=self.db)
+            self.assertFalse(d.consome, estado)
+
+
 class TestConfig(unittest.TestCase):
     def test_acao_do_config(self):
         self.assertEqual(cn.acao_do_config(False, ""), "NAO")

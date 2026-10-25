@@ -134,7 +134,8 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
     Tela de Notificações (controle_notificacoes.py, tipo "fora_dia_fixo"): e-mail
     e WhatsApp são decididos separadamente e a tela vale por cima do config
     (que fica de fallback). Os dois canais NAO pela tela -> o evento é consumido
-    (linha "bloqueado"). PILOTO manda a cópia só ao piloto, grava a linha
+    (linha "bloqueado"), menos "piloto sem destino" (Decisao.consome), que deixa
+    o aviso pendente. PILOTO manda a cópia só ao piloto, grava a linha
     "piloto" (que não conta como aviso ao cliente: quando a tela ligar, o aviso
     sai de verdade) e não repete a cópia nas rodadas seguintes."""
     resultado = {"emails": 0, "falhas": 0, "whatsapp": 0, "registrados": 0, "desligado": 0, "bloqueados": 0}
@@ -167,7 +168,7 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
                               canal="email", db_path=db)
             d_wpp = decidir("fora_dia_fixo", cnpj, fallback_acao=fallback, canal="whatsapp", db_path=db)
             if d_email.acao == "NAO" and d_wpp.acao == "NAO":
-                if d_email.origem == "tela" and d_wpp.origem == "tela":
+                if d_email.consome and d_wpp.consome:
                     logger.info(f"{len(grupo)} aviso(s) de data fora do dia fixo do embarcador {sender_id} "
                                 f"barrados pela tela de Notificações ({d_email.motivo}); evento consumido.")
                     for item in grupo:
@@ -180,8 +181,8 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
                             logger.warning(f"aviso de {item['servico'].get('code')} sem registro ({e}); "
                                            f"tenta de novo na proxima rodada")
                 else:
-                    logger.info(f"{len(grupo)} aviso(s) de data fora do dia fixo não enviados: "
-                                f"notificações automáticas desligadas.")
+                    logger.info(f"{len(grupo)} aviso(s) de data fora do dia fixo não enviados "
+                                f"({d_email.motivo}); ficam pendentes.")
                     resultado["desligado"] += len(grupo)
                 continue
             email_piloto = d_email.origem == "tela" and d_email.acao == "PILOTO"

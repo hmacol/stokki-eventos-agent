@@ -78,6 +78,29 @@ class TestSemResposta(base_sr._ComBanco):
         self._rodar()
         self.assertEqual(self.enviar.call_count, 1)
 
+    def test_sem_resposta_piloto_sem_whatsapp_do_piloto_nao_consome(self):
+        # PILOTO com o WhatsApp do piloto vazio (padrao): nada sai e a mensagem
+        # fica pendente -- quando ligar, o cliente recebe
+        _controle(base_sr.ch.DB_PATH, "whatsapp_sem_resposta", "PILOTO", piloto=False)
+        msg = self._chamado_em_silencio()
+        r = self._rodar()
+        self.assertEqual((r["avaliados"], r["enviados"], r["bloqueados"]), (1, 0, 0))
+        self.enviar.assert_not_called()
+        self.assertEqual(self.registros(), [])
+        _controle(base_sr.ch.DB_PATH, "whatsapp_sem_resposta", "LIGADO", piloto=False)
+        r = self._rodar()
+        self.assertEqual(r["enviados"], 1)
+        self.assertEqual(self.enviar.call_args[0][1], f"{base_sr.TEL}@c.us")
+        self.assertEqual([(a, s) for a, s, _ in self.registros()], [(f"msg:{msg}", "enviado")])
+
+    def test_sem_resposta_geral_desligado_consome_msg(self):
+        _controle(base_sr.ch.DB_PATH, geral=False)
+        msg = self._chamado_em_silencio()
+        r = self._rodar()
+        self.assertEqual(r["bloqueados"], 1)
+        self.enviar.assert_not_called()
+        self.assertEqual([(a, s) for a, s, _ in self.registros()], [(f"msg:{msg}", "bloqueado")])
+
     def test_sem_resposta_tela_ligado_envia_real_mesmo_com_forcar_no_config(self):
         _controle(base_sr.ch.DB_PATH, "whatsapp_sem_resposta", "LIGADO")
         self._chamado_em_silencio()
@@ -293,6 +316,21 @@ class TestConsultaTransportadora(base_ct.AvisoTest):
         enviado_em, lembrete = self._marcas()
         self.assertIsNone(enviado_em)
         self.assertTrue(lembrete)
+
+    def test_piloto_sem_destino_nos_dois_canais_nao_consome(self):
+        # piloto sem e-mail e sem WhatsApp: os dois NAO "piloto sem destino" -> aviso continua devido
+        _controle(self.db, "consulta_transportadora", "PILOTO", piloto=False)
+        conn = cn.conectar(self.db)
+        try:
+            conn.execute("INSERT INTO notificacoes_controle_param (chave, valor) VALUES ('piloto_email', '')")
+            conn.commit()
+        finally:
+            conn.close()
+        r = base_ct.ct.enviar_aviso(self.conn, self.consulta, self.config, False, False, db_path=self.db)
+        self.email.assert_not_called()
+        self.zap.assert_not_called()
+        self.assertNotEqual(r["whatsapp"], "bloqueado")
+        self.assertEqual(self._marcas(), (None, None))
 
     def test_piloto_manda_copia_ao_piloto_e_nao_marca(self):
         self._ctl("PILOTO")

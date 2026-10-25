@@ -86,7 +86,7 @@ logger = logging.getLogger("notificar_transportadoras")
 import yaml
 
 from avisar_motoristas_rotas import _extrair_servicos_da_rota, _parse_data, buscar_rotas_do_dia
-from controle_notificacoes import acao_do_config, decidir
+from controle_notificacoes import MOTIVO_GERAL_DESLIGADO, acao_do_config, decidir
 from email_utils import (
     COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacao_transportadoras_ativa,
     notificacoes_automaticas_ativas,
@@ -331,7 +331,7 @@ def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
     # tela e o config barrar; tipo DESLIGADO na tela segue pro laco por ponto
     # (la o pedido e consumido).
     gate_cedo = (geral is not None and geral.acao == "NAO"
-                 and (geral.origem == "config" or geral.motivo == "geral desligado"))
+                 and (geral.origem == "config" or geral.motivo == MOTIVO_GERAL_DESLIGADO))
 
     # Triagem por ponto (NÃO ENVIAR, fingerprint, tela) ANTES de pegar a trava
     # da Stokki / abrir StokkiSession / Chromium: tipo desligado na tela não pode

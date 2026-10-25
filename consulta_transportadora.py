@@ -335,7 +335,8 @@ def enviar_aviso(conn, consulta: dict, config: dict, lembrete: bool, modo_teste:
     Tela de Notificacoes (controle_notificacoes.py, tipo "consulta_transportadora",
     e-mail e WhatsApp decididos separadamente, identidade = cnpj do embarcador):
     vale por cima do config (que fica de fallback). Os dois canais NAO pela tela
-    -> aviso consumido (marca enviado_em/ultimo_lembrete_em sem enviar). PILOTO
+    -> aviso consumido (marca enviado_em/ultimo_lembrete_em sem enviar), menos
+    "piloto sem destino" (Decisao.consome), que deixa o aviso devido. PILOTO
     manda a copia so ao piloto, uma por consulta por dia, e nao marca (o aviso ao
     embarcador continua devido). `db_path`: banco do controle (so nos testes)."""
     res = {"email": False, "whatsapp": "desligado", "sem_contato": False}
@@ -356,7 +357,8 @@ def enviar_aviso(conn, consulta: dict, config: dict, lembrete: bool, modo_teste:
     tela_wpp = d_wpp is not None and d_wpp.origem == "tela"
     if not cfg["ativo"] and not (tela_email or tela_wpp):
         return res
-    if tela_email and tela_wpp and d_email.acao == "NAO" and d_wpp.acao == "NAO":
+    # consome = NAO da tela que tira o aviso da fila (piloto sem destino nao consome)
+    if tela_email and tela_wpp and d_email.consome and d_wpp.consome:
         logger.info(f"consulta {consulta['id']}: aviso barrado pela tela de Notificacoes "
                     f"({d_email.motivo}); consumido.")
         _marcar_aviso(conn, consulta, lembrete)

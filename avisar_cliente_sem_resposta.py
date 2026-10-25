@@ -154,6 +154,13 @@ def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste:
             piloto = False
             if not modo_teste:
                 d = decidir(TIPO_TELA, c["cnpj"], fallback_acao=fallback, canal="whatsapp", db_path=db_path)
+                if d.acao == "NAO" and d.origem == "tela" and not d.consome:
+                    # piloto sem WhatsApp de destino: nada sai e a mensagem fica pendente
+                    # (sai pro cliente quando a tela ligar)
+                    resumo["pulados"] += 1
+                    logger.info(f"Chamado #{c['chamado_id']} (msg {c['msg_id']}): nao enviado pela tela "
+                                f"de Notificacoes ({d.motivo}); fica pendente.")
+                    continue
                 if d.acao == "NAO" and d.origem == "tela":
                     nw.registrar_bloqueado_sem_resposta(conn, momento, c["msg_id"],
                                                         f"tela de Notificacoes: {d.motivo}")
