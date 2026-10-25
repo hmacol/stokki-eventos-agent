@@ -459,7 +459,11 @@
                                config + warning. Tabelas notificacoes_controle,
                                _excecao, _param (piloto), _historico. TIPOS = os 15
                                tipos da tela. Evento barrado (NAO) é consumido: não
-                               sai depois ao ligar. --modo-teste ignora a tela
+                               sai depois ao ligar. Exceções: insucesso,
+                               agendamento, redespacho, convite e faltas ficam
+                               pendentes (pendência de estado), e "piloto sem
+                               destino" não consome (Decisao.consome=False:
+                               sai quando ligar). --modo-teste ignora a tela
                                (ensaio só pro Hugo; whatsapp_sem_resposta só
                                simula). E-mail à equipe, motorista e financeiro
                                nunca passa pela tela.
@@ -919,7 +923,9 @@
                               embarcador; grava em controle_notificacoes, tabelas
                               notificacoes_controle*; "Disparar agora" roda a rotina
                               do tipo em subprocesso e registra em
-                              notificacoes_disparos; POST só mesma origem; fora do
+                              notificacoes_disparos (entrega concluída e WhatsApp
+                              sem resposta: só o teste, o timer já roda a cada
+                              5/2 min); POST só mesma origem; fora do
                               catálogo de telas por nível = só total)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
    /pedidos-parados          pedidos_parados_triagem.html
