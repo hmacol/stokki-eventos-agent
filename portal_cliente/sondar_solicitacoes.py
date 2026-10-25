@@ -6,11 +6,10 @@ Roda na VPS como www-data, dentro da trava da sessao Stokki:
   cd /opt/stokki-eventos && sudo -u www-data venv/bin/python sondar_solicitacoes.py [id_stokki]
 
 Faz um unico GET na pagina do pedido (em 'Waiting for Carrier' se nao
-informar id), salva o HTML em /tmp, imprime so os trechos do Pausar
-(formularios, rotas e scripts que mencionam pausa) com _token e valores
-mascarados, e apaga o /tmp. Nenhum POST, nenhuma escrita.
+informar id), mantem o HTML so em memoria e imprime apenas ids de form,
+action, metodo, nomes de campo e caminhos de endpoint. Nenhum POST, nenhuma
+escrita, nada em disco. Trava ocupada -> exit 2.
 """
-import os
 import re
 import sqlite3
 import sys
@@ -19,14 +18,6 @@ sys.path.insert(0, "/opt/stokki-eventos")
 sys.path.insert(0, "/opt/stokki-eventos/portal_cliente")
 
 CHAVES = re.compile(r"paus|pause|hold|espera|resume|retom", re.I)
-
-
-def _mascarar(txt: str) -> str:
-    txt = re.sub(r'(name="_token"[^>]*value=")[^"]+', r"\1<REDIGIDO>", txt)
-    txt = re.sub(r'(value=")[^"]{25,}(")', r"\1<REDIGIDO>\2", txt)
-    txt = re.sub(r"(_token['\"]?\s*[:=]\s*['\"])[^'\"]+", r"\1<REDIGIDO>", txt)
-    txt = re.sub(r"(csrf[-_]token['\"]?\s*(?:content)?=?\s*['\"])[^'\"]+", r"\1<REDIGIDO>", txt, flags=re.I)
-    return txt
 
 
 def _escolher_pedido() -> tuple[int, str]:
@@ -43,36 +34,37 @@ def _escolher_pedido() -> tuple[int, str]:
 
 
 def _trechos(html: str) -> None:
-    print("== situacao ==")
-    m = re.search(r"Situa[çc][ãa]o:\s*</th>\s*<td>(.*?)</td>", html, re.S)
-    print(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip() if m else "?")
-
-    print("== formularios (action/method/campos) ==")
-    for f in re.finditer(r"<form\b([^>]*)>(.*?)</form>", html, re.S | re.I):
+    """Imprime so ids de form, action, metodo, NOMES de campo e caminhos de
+    endpoint -- nunca texto em volta (podia ter dado do destinatario)."""
+    print("== formularios (id / method / action / nomes dos campos) ==")
+    for f in re.finditer(r"<form([^>]*)>(.*?)</form>", html, re.S | re.I):
         attrs, corpo = f.group(1), f.group(2)
-        campos = re.findall(r"<(?:input|textarea|select)\b[^>]*name=\"([^\"]+)\"", corpo)
-        print(_mascarar(re.sub(r"\s+", " ", attrs))[:250], "| campos:", campos)
-
-    print("== elementos com pausa (botao/modal) ==")
-    for m in re.finditer(r"<(?:button|a|div|h\d)\b[^>]*>(?:(?!</).){0,120}", html, re.S | re.I):
-        s = m.group(0)
-        if CHAVES.search(s):
-            print(_mascarar(re.sub(r"\s+", " ", s))[:300])
+        fid = re.search(r'id="([^"]*)"', attrs)
+        met = re.search(r'method="([^"]*)"', attrs)
+        act = re.search(r'action="([^"]*)"', attrs)
+        campos = re.findall(r"<(?:input|textarea|select)[^>]*name=\"([^\"]+)\"", corpo)
+        print(fid.group(1) if fid else "?", "|", met.group(1) if met else "?", "|",
+              _caminho(act.group(1)) if act else "(sem action)", "| campos:", campos)
 
     print("== rotas outbound/ no HTML ==")
-    rotas = sorted(set(re.findall(r"[\w/.:-]*administrator/inventory/outbound/[\w/{}.-]*", html)))
-    for r in rotas:
-        print(re.sub(r"/\d+", "/<ID>", r))
+    for r in sorted(set(re.findall(r"administrator/inventory/outbound/[\w/{}.-]*", html))):
+        print(_caminho(r))
 
-    print("== scripts com pausa (linhas) ==")
-    for sc in re.finditer(r"<script\b[^>]*>(.*?)</script>", html, re.S | re.I):
-        linhas = sc.group(1).splitlines()
-        for i, ln in enumerate(linhas):
-            if CHAVES.search(ln):
-                ini, fim = max(0, i - 6), min(len(linhas), i + 14)
-                print("---")
-                for x in linhas[ini:fim]:
-                    print(_mascarar(x.strip())[:240])
+    print("== endpoints chamados em scripts de pausa ==")
+    for sc in re.finditer(r"<script[^>]*>(.*?)</script>", html, re.S | re.I):
+        corpo = sc.group(1)
+        for m in re.finditer(r"\$\('#(form_\w+)'\)\.submit", corpo):
+            if CHAVES.search(m.group(1)):
+                trecho = corpo[m.end(): m.end() + 1500]
+                u = re.search(r"url:\s*['\"][^'\"]*?(administrator/[\w/.-]*)", trecho)
+                t = re.search(r"type:\s*['\"](\w+)['\"]", trecho)
+                print(m.group(1), "->", t.group(1) if t else "?", _caminho(u.group(1)) if u else "?")
+
+
+def _caminho(url: str) -> str:
+    """So o caminho, com ids numericos trocados por <ID>."""
+    url = re.sub(r"^https?://[^/]+", "", url)
+    return re.sub(r"/\d+", "/<ID>", url)
 
 
 def main() -> int:
@@ -90,19 +82,14 @@ def main() -> int:
     conta = sessao_uso.adquirir("aviso-sonda", ttl_segundos=300, esperar_segundos=300, alternativa=False)
     if not conta:
         print("trava ocupada:", sessao_uso.em_uso())
-        return 0
-    tmp = f"/tmp/sonda_pausar_{os.getpid()}.html"
+        return 2
     try:
         s = StokkiSession(config, conta=conta)
         resp = s.get(URL_SHOW.format(id=id_stokki))
         resp.raise_for_status()
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(resp.text)
         _trechos(resp.text)
     finally:
         sessao_uso.liberar("aviso-sonda")
-        if os.path.exists(tmp):
-            os.remove(tmp)
     return 0
 
 
