@@ -182,7 +182,8 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
     def test_cadastro_com_senha_provisoria_obriga_troca(self):
         cliente, hdr = self._chefe()
         r = cliente.post("/api/acessos/novo", json={"usuario": " Maria.Souza ", "nome": "Maria Souza",
-                                                     "nivel": "operador", "senha": "prov123"}, headers=hdr)
+                                                     "nivel": "operador", "senha": "prov123", "equipe": "Logística"},
+                         headers=hdr)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(r.get_json()["usuario"], "maria.souza")
         maria, r = self._logar("maria.souza", "prov123")
@@ -204,20 +205,72 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
                       {"usuario": "novo", "nivel": "leitura", "senha": "123"},
                       {"usuario": "novo", "nivel": "admin", "senha": "123456"},
                       {"usuario": "com espaco", "nivel": "leitura", "senha": "123456"}):
-            self.assertEqual(cliente.post("/api/acessos/novo", json=corpo, headers=hdr).status_code, 400, corpo)
+            self.assertEqual(cliente.post("/api/acessos/novo", json={**corpo, "equipe": "Estoque"}, headers=hdr).status_code,
+                             400, corpo)
+
+    def test_cadastro_exige_equipe_da_lista(self):
+        # Hugo, 25/10: campo Equipe obrigatorio; galpao dividido em Estoque/Separacao/Conferencia
+        cliente, hdr = self._chefe()
+        base = {"usuario": "werlly", "nome": "Werlly", "nivel": "galpao", "senha": "prov123"}
+        self.assertEqual(cliente.post("/api/acessos/novo", json=base, headers=hdr).status_code, 400)
+        self.assertEqual(cliente.post("/api/acessos/novo", json={**base, "equipe": "Galpão"}, headers=hdr).status_code, 400)
+        r = cliente.post("/api/acessos/novo", json={**base, "equipe": "Separação"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            self.assertEqual(acesso_telas.conta("werlly", conn)["equipe"], "Separação")
+            self.assertEqual([u["equipe"] for u in acesso_telas.listar(conn) if u["usuario"] == "werlly"], ["Separação"])
+        finally:
+            conn.close()
+        self.assertEqual(acesso_telas.EQUIPES[:3], ("Estoque", "Separação", "Conferência"))
+        html = cliente.get("/acessos").get_data(as_text=True)
+        self.assertIn('name="equipe"', html)
+        self.assertIn("Conferência", html)
+
+    def test_editar_grava_equipe_e_exige_quando_muda_nivel(self):
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana", "nivel": "leitura",
+                                               "equipe": "Conferência"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            self.assertEqual(acesso_telas.conta("ana", conn)["equipe"], "Conferência")
+        finally:
+            conn.close()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana", "nivel": "leitura"},
+                         headers=hdr)
+        self.assertEqual(r.status_code, 400)
+        # so telas (sem nivel) continua valendo sem equipe
+        self.assertEqual(cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["index"]}, headers=hdr).status_code, 200)
+
+    def test_tabela_antiga_ganha_equipe(self):
+        conn = acesso_telas.conectar()
+        conn.execute("DROP TABLE painel_usuarios")
+        conn.execute("CREATE TABLE painel_usuarios (usuario TEXT PRIMARY KEY, nome TEXT NOT NULL DEFAULT '', "
+                     "senha_hash TEXT NOT NULL, nivel TEXT NOT NULL, trocar_senha INTEGER NOT NULL DEFAULT 0, "
+                     "criado_por TEXT, criado_em TEXT NOT NULL, atualizado_por TEXT, atualizado_em TEXT, "
+                     "versao_senha INTEGER NOT NULL DEFAULT 0, ativo INTEGER NOT NULL DEFAULT 1)")
+        conn.commit()
+        conn.close()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+            self.assertEqual(acesso_telas.conta("ana", conn)["equipe"], "")
+        finally:
+            conn.close()
 
     def test_mudar_nivel_e_nome_vale_sem_novo_login(self):
         ana, _ = self._logar("ana", "s_ana")
         self.assertEqual(ana.get("/").status_code, 403)
         cliente, hdr = self._chefe()
-        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana Lima", "nivel": "total"},
-                         headers=hdr)
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana Lima", "nivel": "total",
+                                               "equipe": "Diretoria"}, headers=hdr)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         r = ana.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertIn("Ana Lima", r.get_data(as_text=True))
-        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "", "nivel": "admin"},
-                         headers=hdr)
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "", "nivel": "admin",
+                                               "equipe": "Diretoria"}, headers=hdr)
         self.assertEqual(r.status_code, 400)
 
     def test_redefinir_senha_de_outro_e_nao_a_propria(self):

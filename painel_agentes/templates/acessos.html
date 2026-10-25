@@ -68,6 +68,12 @@
         {% for n in niveis %}<option value="{{ n }}" {{ 'selected' if n == 'leitura' }}>{{ ROTULOS.get(n, n) }}</option>{% endfor %}
       </select>
     </label>
+    <label>Equipe
+      <select name="equipe">
+        <option value="">-- escolher --</option>
+        {% for e in equipes %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+      </select>
+    </label>
     <label>Senha provisória <input type="text" name="senha" minlength="{{ senha_minima }}" autocomplete="off"></label>
   </div>
   <div class="rodape-cartao">
@@ -82,6 +88,7 @@
     <span class="nome">{{ u.nome or u.usuario }}</span>
     {% if u.nome %}<span class="login">{{ u.usuario }}</span>{% endif %}
     <span class="pilula">{{ 'personalizado' if u.telas is not none else ROTULOS.get(u.nivel, u.nivel) }}</span>
+    {% if u.equipe %}<span class="pilula">{{ u.equipe }}</span>{% else %}<span class="pilula desativado" title="Escolha a equipe e salve">sem equipe</span>{% endif %}
     {% if u.trocar_senha %}<span class="pilula">senha provisória</span>{% endif %}
     {% if not u.ativo %}<span class="pilula desativado">desativado</span>{% endif %}
     {% if u.atualizado_em %}<span class="quando">mudado por {{ u.atualizado_por }} em {{ u.atualizado_em }}</span>{% endif %}
@@ -94,6 +101,12 @@
     <label>Nível
       <select name="nivel">
         {% for n in niveis %}<option value="{{ n }}" {{ 'selected' if n == u.nivel }}>{{ ROTULOS.get(n, n) }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Equipe
+      <select name="equipe">
+        <option value="" {{ 'selected' if not u.equipe }}>-- escolher --</option>
+        {% for e in equipes %}<option value="{{ e }}" {{ 'selected' if e == u.equipe }}>{{ e }}</option>{% endfor %}
       </select>
     </label>
   </div>
@@ -157,7 +170,7 @@
   novo.querySelector("button[data-acao=criar]").addEventListener("click", async (ev) => {
     const campo = (n) => novo.querySelector(`[name=${n}]`).value;
     const dados = await enviar("/api/acessos/novo",
-      { usuario: campo("usuario"), nome: campo("nome"), nivel: campo("nivel"), senha: campo("senha") },
+      { usuario: campo("usuario"), nome: campo("nome"), nivel: campo("nivel"), equipe: campo("equipe"), senha: campo("senha") },
       ev.currentTarget, novo.querySelector(".msg-salvar"));
     if (dados) {
       window.alert(`Login ${dados.usuario} criado. Passe pra pessoa o login e a senha provisória: ela troca no primeiro acesso.`);
@@ -184,6 +197,7 @@
         usuario, telas,
         nome: cartao.querySelector("[name=nome]").value,
         nivel: cartao.querySelector("[name=nivel]").value,
+        equipe: cartao.querySelector("[name=equipe]").value,
       };
       if (await enviar("/api/acessos", corpo, botao, aviso)) window.location.reload();
     });
