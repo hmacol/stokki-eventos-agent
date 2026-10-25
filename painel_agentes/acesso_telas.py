@@ -86,7 +86,7 @@ _PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos i
 
 # Usadas por qualquer tela (badges do menu, deslogar por inatividade).
 CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/avisos/ignorar$"),
-re.compile(r"^/api/sessao/(atividade|estado)$")]
+                    re.compile(r"^/api/sessao/(atividade|estado)$")]
 
 
 def caminho_liberado(caminho: str, telas) -> bool:

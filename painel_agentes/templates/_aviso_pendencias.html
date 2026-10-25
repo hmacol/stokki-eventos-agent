@@ -70,8 +70,14 @@
     var f = el("div", "ap-faixa" + (a.vermelho ? " vermelha" : ""));
     f.dataset.chave = a.chave;
     var t = el("span", "ap-texto");
-    t.appendChild(el("b", null, "⚠ " + a.qtd));
-    t.appendChild(document.createTextNode(" " + a.texto));
+    // a.texto ja comeca com o numero ("12 chamados ..."): so o numero vai em negrito
+    var m = /^(\d+)\s+(.*)$/.exec(a.texto || "");
+    if (m) {
+      t.appendChild(el("b", null, "⚠ " + m[1]));
+      t.appendChild(document.createTextNode(" " + m[2]));
+    } else {
+      t.appendChild(document.createTextNode("⚠ " + (a.texto || "")));
+    }
     f.appendChild(t);
     var ac = el("div", "ap-acoes");
     var ver = el("button", "ap-btn ver", "Verificar");
