@@ -96,7 +96,8 @@
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
  Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
- Logins nominais (cadastro, nível, nome) .. painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos)
+ Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
+                                            equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
@@ -902,7 +903,7 @@
                               ?exemplo=1 roda com ESTADO_EXEMPLO do próprio JS;
                               selo "sessão expirou" quando a API cai no login
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
-                              login nominal, muda nome/nível, redefine senha,
+                              login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
                               telas de cada um / nível personalizado)
    /trocar-senha              login.html (trocar=True): troca da senha provisória

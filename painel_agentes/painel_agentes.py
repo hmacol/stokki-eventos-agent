@@ -1631,7 +1631,8 @@ def acessos():
     for chave, rotulo, grupo, _ in acesso_telas.TELAS + acesso_telas.PERMISSOES:
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
-                           niveis=acesso_telas.NIVEIS, senha_minima=acesso_telas.SENHA_MINIMA,
+                           niveis=acesso_telas.NIVEIS, equipes=acesso_telas.EQUIPES,
+                           senha_minima=acesso_telas.SENHA_MINIMA,
                            eu=session.get("usuario", ""), rodada=rodada)
 
 
@@ -1652,7 +1653,8 @@ def api_acessos():
     try:
         acesso_telas.salvar(conn, usuario, telas, por)
         if "nivel" in body:
-            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por)
+            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por,
+                                str(body.get("equipe") or ""))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1671,7 +1673,8 @@ def api_acessos_novo():
     try:
         usuario = acesso_telas.criar(conn, str(body.get("usuario") or ""), str(body.get("nome") or ""),
                                      str(body.get("nivel") or ""), str(body.get("senha") or ""),
-                                     session.get("usuario", ""), _logins_fixos(cfg_painel))
+                                     session.get("usuario", ""), _logins_fixos(cfg_painel),
+                                     str(body.get("equipe") or ""))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
