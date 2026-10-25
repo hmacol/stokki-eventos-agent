@@ -1745,6 +1745,8 @@ def notificacoes():
         return render_template("notificacoes.html", geral=cn.estado_geral(conn), lista=nt.montar_lista(conn),
                                piloto=cn.piloto(conn), historico=nt.historico_legivel(conn),
                                embarcadores=nt.lista_embarcadores(conn),
+                               disparaveis={t: list(i["alvos"]) for t, i in nt.DISPARAVEIS.items()},
+                               sem_disparo=nt.SEM_DISPARO,
                                tipos={t: {"rotulo": i["rotulo"], "destino": i["destino"], "canais": list(i["canais"]),
                                           "quando": i["quando"]} for t, i in cn.TIPOS.items()})
     finally:
@@ -1922,6 +1924,52 @@ def api_notificacoes_embarcador_situacao(cnpj):
         return jsonify({"erro": str(e)}), 404
     finally:
         conn.close()
+
+
+@app.route("/api/notificacoes/disparo/<tipo>")
+@requer_auth
+def api_notificacoes_disparo_dados(tipo):
+    """Dados da janela Disparar agora: alvos do tipo, quem ja recebeu hoje
+    (so notas em rota e resumo), lista pro alvo "um" e os ultimos disparos."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    if tipo not in nt.DISPARAVEIS:
+        return jsonify({"erro": "Este tipo não tem disparo manual."}), 404
+    alvos = nt.DISPARAVEIS[tipo]["alvos"]
+    conn = cn.conectar()
+    try:
+        return jsonify({"alvos": list(alvos), "ja_recebeu_hoje": nt.ja_recebeu_hoje(conn, tipo),
+                        "embarcadores": nt.embarcadores_disparo(conn) if "um" in alvos else [],
+                        "ultimos": nt.ultimos_disparos(conn, tipo)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/disparo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_disparo():
+    """Roda a rotina do tipo em segundo plano (teste, todos ou um embarcador).
+    409 se ja ha disparo do mesmo tipo rodando."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    sender = corpo.get("sender_id")
+    try:
+        sender = int(sender) if sender not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Embarcador inválido."}), 400
+    conn = cn.conectar()
+    try:
+        disparo_id = nt.iniciar_disparo(conn, str(corpo.get("tipo") or ""), str(corpo.get("alvo") or ""), sender,
+                                        corpo.get("reenviar") is True, _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"erro": str(e)}), 409
+    finally:
+        conn.close()
+    return jsonify({"id": disparo_id})
 
 
 @app.route("/pedidos-parados")

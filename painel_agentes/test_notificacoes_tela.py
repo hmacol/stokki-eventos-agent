@@ -10,7 +10,10 @@ import io
 import sqlite3
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -475,6 +478,208 @@ class TestMontagem(_Base):
             self.assertEqual(nt.contar_destinatarios(conn, "transportadoras"), 0)
         finally:
             conn.close()
+
+
+class TestDisparo(_Base):
+    """Disparar agora: o subprocesso NUNCA roda de verdade (subprocess.run mockado)."""
+
+    def setUp(self):
+        super().setUp()
+        self.solta = threading.Event()
+        self.chamadas = []
+
+        def falso_run(cmd, **kw):
+            self.chamadas.append((cmd, kw))
+            self.solta.wait(5)
+            return mock.Mock(returncode=0, stdout="\n".join(f"linha {i}" for i in range(50)), stderr="")
+
+        p = mock.patch.object(nt.subprocess, "run", side_effect=falso_run)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self.solta.set)
+
+    def _esperar(self, disparo_id, segundos=5):
+        fim = time.time() + segundos
+        while time.time() < fim:
+            conn = self._controle()
+            try:
+                row = conn.execute("SELECT terminado_em, codigo_saida, saida FROM notificacoes_disparos WHERE id = ?",
+                                   (disparo_id,)).fetchone()
+            finally:
+                conn.close()
+            if row and row[0]:
+                return row
+            time.sleep(0.02)
+        self.fail("disparo nao terminou")
+
+    def test_montar_comando(self):
+        cmd = nt.montar_comando("nfs_em_rota", "teste", None, False)
+        self.assertEqual(cmd[0], sys.executable)
+        self.assertTrue(cmd[1].endswith("notificar_nfs_em_rota.py"))
+        self.assertEqual(cmd[2:], ["--modo-teste"])
+        cmd = nt.montar_comando("nfs_em_rota", "um", 42, True)
+        self.assertEqual(cmd[2:], ["--sender-id", "42", "--reenviar"])
+        self.assertEqual(nt.montar_comando("resumo_diario", "um", 42, False)[2:], ["--sender-id", "42"])
+        self.assertEqual(nt.montar_comando("transportadoras", "todos", None, False)[2:], [])
+        with self.assertRaises(ValueError):
+            nt.montar_comando("insucesso", "teste", None, False)
+        with self.assertRaises(ValueError):
+            nt.montar_comando("consulta_transportadora", "teste", None, False)
+        with self.assertRaises(ValueError):
+            nt.montar_comando("entrega_concluida", "um", 42, False)   # so nfs e resumo aceitam "um"
+        with self.assertRaises(ValueError):
+            nt.montar_comando("nfs_em_rota", "um", None, False)       # "um" pede o sender_id
+
+    def test_ja_recebeu_hoje_ignora_piloto(self):
+        hoje = date.today().isoformat()
+        conn = self._controle()
+        try:
+            conn.execute("CREATE TABLE notificacoes_enviadas (tipo TEXT NOT NULL, chave TEXT NOT NULL, "
+                         "enviado_em TEXT NOT NULL, PRIMARY KEY (tipo, chave))")
+            conn.executemany("INSERT INTO notificacoes_enviadas VALUES (?,?,?)", [
+                ("nfs_em_rota", f"42|{hoje}", f"{hoje} 07:02:10"),
+                ("nfs_em_rota", f"43|{hoje}|redirecionado", f"{hoje} 07:03:00"),
+                ("nfs_em_rota", "44|2020-01-01", "2020-01-01 07:00:00"),
+                ("resumo_diario", f"45|{hoje}", f"{hoje} 20:05:00"),
+            ])
+            conn.commit()
+            self.assertEqual(nt.ja_recebeu_hoje(conn, "nfs_em_rota"), {42: "07:02"})
+            self.assertEqual(nt.ja_recebeu_hoje(conn, "resumo_diario"), {45: "20:05"})
+            self.assertEqual(nt.ja_recebeu_hoje(conn, "transportadoras"), {})
+        finally:
+            conn.close()
+
+    def test_ja_recebeu_hoje_sem_tabela(self):
+        conn = self._controle()
+        try:
+            self.assertEqual(nt.ja_recebeu_hoje(conn, "nfs_em_rota"), {})
+        finally:
+            conn.close()
+
+    def test_disparo_grava_resultado(self):
+        conn = self._controle()
+        try:
+            disparo_id = nt.iniciar_disparo(conn, "nfs_em_rota", "teste", None, False, "teste")
+        finally:
+            conn.close()
+        self.solta.set()
+        _terminado, codigo, saida = self._esperar(disparo_id)
+        self.assertEqual(codigo, 0)
+        linhas = saida.splitlines()
+        self.assertEqual((len(linhas), linhas[0], linhas[-1]), (40, "linha 10", "linha 49"))   # so as ultimas 40
+        cmd, kw = self.chamadas[0]
+        self.assertEqual(cmd[2:], ["--modo-teste"])
+        self.assertEqual(kw["cwd"], nt._RAIZ)
+        self.assertEqual(kw["timeout"], 1800)
+        self.assertTrue(kw["capture_output"])
+
+    def test_disparo_com_timeout(self):
+        self.solta.set()
+        with mock.patch.object(nt.subprocess, "run", side_effect=nt.subprocess.TimeoutExpired("x", 1800)):
+            conn = self._controle()
+            try:
+                disparo_id = nt.iniciar_disparo(conn, "pedidos_em_espera", "teste", None, False, "teste")
+            finally:
+                conn.close()
+            _t, codigo, saida = self._esperar(disparo_id)
+        self.assertNotEqual(codigo, 0)
+        self.assertIn("tempo", saida.lower())
+
+    def test_disparo_em_andamento_recusa_segundo(self):
+        conn = self._controle()
+        try:
+            primeiro = nt.iniciar_disparo(conn, "nfs_em_rota", "teste", None, False, "teste")
+            with self.assertRaises(RuntimeError):
+                nt.iniciar_disparo(conn, "nfs_em_rota", "todos", None, False, "teste")
+            # outro tipo nao e bloqueado
+            outro = nt.iniciar_disparo(conn, "pedidos_em_espera", "teste", None, False, "teste")
+        finally:
+            conn.close()
+        self._logar("total")
+        r = self.cliente.post("/api/notificacoes/disparo", json={"tipo": "nfs_em_rota", "alvo": "teste"},
+                              headers=ORIGEM)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("erro", r.get_json())
+        self.solta.set()
+        self._esperar(primeiro)
+        self._esperar(outro)
+        # terminou: libera
+        r = self.cliente.post("/api/notificacoes/disparo", json={"tipo": "nfs_em_rota", "alvo": "teste"},
+                              headers=ORIGEM)
+        self.assertEqual(r.status_code, 200)
+        self._esperar(r.get_json()["id"])
+
+    def test_disparo_antigo_sem_termino_nao_bloqueia(self):
+        conn = self._controle()
+        try:
+            nt._garantir_disparos(conn)
+            antigo = (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")
+            conn.execute("INSERT INTO notificacoes_disparos (tipo, alvo, por, iniciado_em) VALUES (?,?,?,?)",
+                         ("nfs_em_rota", "teste", "x", antigo))
+            conn.commit()
+            self.solta.set()
+            disparo_id = nt.iniciar_disparo(conn, "nfs_em_rota", "teste", None, False, "teste")
+        finally:
+            conn.close()
+        self._esperar(disparo_id)
+
+    def test_api_valida_pedido(self):
+        self._logar("total")
+        for corpo in ({"tipo": "insucesso", "alvo": "teste"}, {"tipo": "nfs_em_rota", "alvo": "ninguem"},
+                      {"tipo": "nfs_em_rota", "alvo": "um"}, {"tipo": "entrega_concluida", "alvo": "um", "sender_id": 1},
+                      {"tipo": "nfs_em_rota", "alvo": "um", "sender_id": "abc"}, {}):
+            r = self.cliente.post("/api/notificacoes/disparo", json=corpo, headers=ORIGEM)
+            self.assertEqual(r.status_code, 400, corpo)
+        self.assertEqual(self.chamadas, [])
+        r = self.cliente.get("/api/notificacoes/disparo/insucesso")
+        self.assertEqual(r.status_code, 404)
+
+    def test_api_um_embarcador_e_dados_da_janela(self):
+        hoje = date.today().isoformat()
+        conn = self._controle()
+        try:
+            conn.execute("CREATE TABLE notificacoes_enviadas (tipo TEXT NOT NULL, chave TEXT NOT NULL, "
+                         "enviado_em TEXT NOT NULL, PRIMARY KEY (tipo, chave))")
+            conn.execute("INSERT INTO notificacoes_enviadas VALUES ('nfs_em_rota', ?, ?)",
+                         (f"101|{hoje}", f"{hoje} 07:02:10"))
+            conn.commit()
+        finally:
+            conn.close()
+        self._logar("total")
+        dados = self.cliente.get("/api/notificacoes/disparo/nfs_em_rota").get_json()
+        self.assertEqual(dados["alvos"], ["teste", "todos", "um"])
+        self.assertEqual(dados["ja_recebeu_hoje"], {"101": "07:02"})
+        self.assertEqual({e["sender_id"]: e["nome"] for e in dados["embarcadores"]},
+                         {101: "Cliente A", 102: "Cliente B Ltda", 103: "Cliente C"})
+        self.assertEqual(dados["ultimos"], [])
+        self.assertEqual(self.cliente.get("/api/notificacoes/disparo/entrega_concluida").get_json()["alvos"],
+                         ["teste", "todos"])
+        r = self.cliente.post("/api/notificacoes/disparo",
+                              json={"tipo": "nfs_em_rota", "alvo": "um", "sender_id": 101, "reenviar": True},
+                              headers=ORIGEM)
+        self.assertEqual(r.status_code, 200)
+        self.solta.set()
+        self._esperar(r.get_json()["id"])
+        self.assertEqual(self.chamadas[0][0][2:], ["--sender-id", "101", "--reenviar"])
+        ultimo = self.cliente.get("/api/notificacoes/disparo/nfs_em_rota").get_json()["ultimos"][0]
+        self.assertEqual((ultimo["alvo"], ultimo["por"], ultimo["codigo_saida"]), ("um", "teste", 0))
+        self.assertIn("Cliente A", ultimo["destino"])
+
+    def test_disparo_so_total(self):
+        for nivel in ("operador", "leitura", "logistica", "atendimento"):
+            self._logar(nivel)
+            r = self.cliente.get("/api/notificacoes/disparo/nfs_em_rota")
+            self.assertIn(r.status_code, (302, 403), nivel)
+            r = self.cliente.post("/api/notificacoes/disparo", json={"tipo": "nfs_em_rota", "alvo": "teste"},
+                                  headers=ORIGEM)
+            self.assertIn(r.status_code, (302, 403), nivel)
+        self.assertEqual(self.chamadas, [])
+        self._logar("total")
+        # sem Origin: recusado, e nada roda
+        self.assertEqual(self.cliente.post("/api/notificacoes/disparo",
+                                           json={"tipo": "nfs_em_rota", "alvo": "teste"}).status_code, 403)
+        self.assertEqual(self.chamadas, [])
+        self.assertEqual(self.cliente.get("/api/notificacoes/disparo/nfs_em_rota").status_code, 200)
 
 
 if __name__ == "__main__":

@@ -6,13 +6,23 @@ Dados da tela /notificacoes (24/10): lista de tipos, painel de um tipo e
 contagem de quem receberia. Quem decide e grava e controle_notificacoes;
 a preferencia do cliente vem de preferencias_notificacao. Sem Flask.
 """
+import logging
+import os
 import re
 import sqlite3
+import subprocess
+import sys
+import threading
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import controle_notificacoes as cn
 import preferencias_notificacao as pn
 from regras.transportadoras import CatalogoTransportadoras
+
+logger = logging.getLogger(__name__)
+
+_RAIZ = Path(__file__).resolve().parent.parent
 
 # Coluna de preferencias_notificacao de cada tipo da tela (a do portal): o
 # mesmo nome, menos o chamado sem resposta, que la se chama diferente.
@@ -213,6 +223,172 @@ def separar_emails(valor) -> list[str]:
 
 def _texto_contato(pref: dict) -> str:
     return f"e-mails: {', '.join(pref['emails']) or '—'}; WhatsApp: {pref['whatsapp'] or '—'}"
+
+
+# ----------------------------------------------------------- disparar agora
+# Tipos que tem rotina propria de lote. "teste" = --modo-teste (ignora a tela e
+# manda so pro Hugo); "todos" = a rotina do jeito que o timer roda (quem recebe
+# de verdade ainda e decidido pelo estado do tipo); "um" = um embarcador (so as
+# rotinas que aceitam --sender-id). consulta_transportadora e os tipos que saem
+# dentro de outra rotina ou no evento nao entram.
+DISPARAVEIS = {
+    "nfs_em_rota": {"script": "notificar_nfs_em_rota.py", "alvos": ("teste", "todos", "um")},
+    "resumo_diario": {"script": "resumo_diario_embarcador.py", "alvos": ("teste", "todos", "um")},
+    "entrega_concluida": {"script": "notificacao_entregas/notificar_entrega_concluida.py", "alvos": ("teste", "todos")},
+    "pedidos_em_espera": {"script": "notificar_pedidos_em_espera.py", "alvos": ("teste", "todos")},
+    "transportadoras": {"script": "notificacao_transportadoras/notificar_transportadoras.py", "alvos": ("teste", "todos")},
+    "whatsapp_sem_resposta": {"script": "avisar_cliente_sem_resposta.py", "alvos": ("teste", "todos")},
+}
+
+# Texto do painel dos tipos sem botao.
+SEM_DISPARO = {
+    "insucesso": "Sem disparo manual aqui: use o botão Notificar da Torre.",
+    "agendamento": "Sai dentro das sequências da roteirização (notificar_agendamento_pendente e notificar_agendamento_dia_fixo).",
+    "redespacho": "Sai dentro do pipeline (redespacho_confirmacao).",
+    "fora_dia_fixo": "Sai dentro das sequências da roteirização (notificar_fora_dia_fixo).",
+    "faltas_recebimento": "Sai ao encerrar o recebimento no WMS (wms_faltas_recebimento).",
+    "chamados": "Sai na hora do evento, dentro dos chamados do portal.",
+    "area_nao_atendida": "Sai na hora do envio do XML, dentro do portal do cliente.",
+    "convite_embarcador": "Sai dentro do timer de convites das 07h10 (embarcadores_stokki).",
+    "consulta_transportadora": "Sai dentro do pipeline e do lembrete (consulta_transportadora); não tem disparo manual.",
+}
+
+_TIPOS_COM_JA_RECEBEU = ("nfs_em_rota", "resumo_diario")   # chave "<sender_id>|<data>" em notificacoes_enviadas
+_DISPARO_TIMEOUT_S = 1800
+_DISPARO_TRAVA_MIN = 30
+_DISPARO_LINHAS = 40
+
+
+def montar_comando(tipo: str, alvo: str, sender_id: int | None, reenviar: bool) -> list[str]:
+    """[python, script, flags...]. ValueError se o tipo nao e disparavel, o alvo
+    nao vale pro tipo, ou "um" vem sem sender_id."""
+    info = DISPARAVEIS.get(tipo)
+    if not info:
+        raise ValueError(f"Este tipo não tem disparo manual: {tipo}")
+    if alvo not in info["alvos"]:
+        raise ValueError(f"Alvo inválido para {cn.TIPOS[tipo]['rotulo']}: {alvo}")
+    cmd = [sys.executable, str(_RAIZ / info["script"])]
+    if alvo == "teste":
+        cmd.append("--modo-teste")
+    elif alvo == "um":
+        if not sender_id:
+            raise ValueError("Escolha o embarcador.")
+        cmd += ["--sender-id", str(int(sender_id))]
+        if reenviar:
+            cmd.append("--reenviar")
+    return cmd
+
+
+def ja_recebeu_hoje(conn: sqlite3.Connection, tipo: str) -> dict[int, str]:
+    """sender_id -> "HH:MM" de quem recebeu de verdade hoje. A copia de piloto
+    (chave com |redirecionado) nao conta."""
+    if tipo not in _TIPOS_COM_JA_RECEBEU:
+        return {}
+    hoje = date.today().isoformat()
+    try:
+        rows = conn.execute("SELECT chave, enviado_em FROM notificacoes_enviadas WHERE tipo = ? AND chave LIKE ?",
+                            (tipo, f"%|{hoje}")).fetchall()
+    except sqlite3.OperationalError:    # a tabela so nasce quando a primeira rotina envia
+        return {}
+    saida = {}
+    for chave, enviado_em in rows:
+        sender, _, data = chave.partition("|")
+        if data != hoje or not sender.isdigit():
+            continue
+        saida[int(sender)] = (enviado_em or "")[11:16]
+    return saida
+
+
+def embarcadores_disparo(conn: sqlite3.Connection) -> list[dict]:
+    """[{sender_id, nome}] pro alvo "um" (o sender_id da Stokki e o que as rotinas recebem)."""
+    todos = pn.carregar_embarcadores("nfs_em_rota", db_path=_db_path(conn))
+    itens = []
+    for sender, emb in todos.items():
+        try:
+            itens.append({"sender_id": int(sender), "nome": emb["nome"] or emb["cnpj"] or str(sender)})
+        except (TypeError, ValueError):
+            continue
+    return sorted(itens, key=lambda e: e["nome"].lower())
+
+
+def _garantir_disparos(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS notificacoes_disparos ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT, alvo TEXT, destino TEXT, por TEXT, "
+        "iniciado_em TEXT, terminado_em TEXT, codigo_saida INTEGER, saida TEXT)")
+
+
+def ultimos_disparos(conn: sqlite3.Connection, tipo: str, limite: int = 5) -> list[dict]:
+    _garantir_disparos(conn)
+    rows = conn.execute(
+        "SELECT id, alvo, destino, por, iniciado_em, terminado_em, codigo_saida, saida "
+        "FROM notificacoes_disparos WHERE tipo = ? ORDER BY id DESC LIMIT ?", (tipo, limite)).fetchall()
+    return [dict(zip(("id", "alvo", "destino", "por", "iniciado_em", "terminado_em", "codigo_saida", "saida"), r))
+            for r in rows]
+
+
+def _texto(valor) -> str:
+    if isinstance(valor, bytes):
+        valor = valor.decode("utf-8", errors="replace")
+    return valor or ""
+
+
+def _executar_disparo(db_path: Path, disparo_id: int, cmd: list[str]) -> None:
+    """Roda o subprocesso (thread de fundo) e grava o resultado. Nunca levanta."""
+    try:
+        r = subprocess.run(cmd, cwd=_RAIZ, timeout=_DISPARO_TIMEOUT_S, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        codigo = r.returncode
+        texto = _texto(r.stdout) + ("\n" if r.stdout and r.stderr else "") + _texto(r.stderr)
+    except subprocess.TimeoutExpired:
+        codigo, texto = -1, f"Tempo esgotado ({_DISPARO_TIMEOUT_S // 60} min): a rotina foi interrompida."
+    except Exception as e:     # nao conseguiu nem iniciar: o resultado fica na tela
+        logger.exception("Disparo %s falhou ao iniciar", disparo_id)
+        codigo, texto = -2, f"Falha ao iniciar a rotina: {e}"
+    saida = "\n".join(texto.strip().splitlines()[-_DISPARO_LINHAS:])
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            conn.execute("UPDATE notificacoes_disparos SET terminado_em = ?, codigo_saida = ?, saida = ? WHERE id = ?",
+                         (cn._agora(), codigo, saida, disparo_id))
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.exception("Disparo %s: nao gravou o resultado", disparo_id)
+
+
+def iniciar_disparo(conn: sqlite3.Connection, tipo: str, alvo: str, sender_id: int | None,
+                    reenviar: bool, por: str) -> int:
+    """Grava a linha e roda a rotina numa thread. RuntimeError se ja ha disparo
+    do mesmo tipo rodando (iniciado ha menos de 30 min e sem terminado_em);
+    ValueError se o pedido nao vale."""
+    cmd = montar_comando(tipo, alvo, sender_id, reenviar)
+    destino = None
+    if alvo == "um":
+        nome = next((e["nome"] for e in embarcadores_disparo(conn) if e["sender_id"] == int(sender_id)), None)
+        destino = f"{nome} (sender {int(sender_id)})" if nome else f"sender {int(sender_id)}"
+        if reenviar:
+            destino += " · reenviar"
+    _garantir_disparos(conn)
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")     # checar e gravar sem outro disparo passar no meio
+    try:
+        limite = (datetime.now() - timedelta(minutes=_DISPARO_TRAVA_MIN)).isoformat(timespec="seconds")
+        if conn.execute("SELECT 1 FROM notificacoes_disparos WHERE tipo = ? AND terminado_em IS NULL "
+                        "AND iniciado_em > ?", (tipo, limite)).fetchone():
+            raise RuntimeError(f"Já existe um disparo de \"{cn.TIPOS[tipo]['rotulo']}\" em andamento.")
+        disparo_id = conn.execute(
+            "INSERT INTO notificacoes_disparos (tipo, alvo, destino, por, iniciado_em) VALUES (?,?,?,?,?)",
+            (tipo, alvo, destino, por, cn._agora())).lastrowid
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    threading.Thread(target=_executar_disparo, args=(_db_path(conn), disparo_id, cmd), daemon=True,
+                     name=f"disparo-{disparo_id}").start()
+    return disparo_id
 
 
 def salvar_contato(cnpj, corpo: dict, por: str) -> dict:

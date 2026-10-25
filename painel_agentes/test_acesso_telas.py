@@ -32,7 +32,8 @@ FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api
                     "api_notificacoes_historico", "api_notificacoes_geral", "api_notificacoes_estado",
                     "api_notificacoes_excecao", "api_notificacoes_piloto", "api_notificacoes_desfazer",
                     "api_notificacoes_embarcador", "api_notificacoes_embarcador_salvar",
-                    "api_notificacoes_embarcador_situacao"}
+                    "api_notificacoes_embarcador_situacao", "api_notificacoes_disparo_dados",
+                    "api_notificacoes_disparo"}
 
 
 def _caminho_exemplo(regra: str) -> str:

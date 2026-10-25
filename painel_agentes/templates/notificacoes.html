@@ -93,6 +93,20 @@
   table.hist td { padding: 7px 8px; border-bottom: 1px solid var(--borda); vertical-align: top; overflow-wrap: anywhere; }
   .vazio { color: var(--texto-suave); font-size: 13px; padding: 6px 0; }
 
+  /* Disparar agora */
+  .resultado-disparo { margin-top: 8px; font-size: 12.5px; }
+  .resultado-disparo pre, dialog.janela pre { margin: 6px 0 0; padding: 8px; max-height: 240px; overflow: auto;
+                                              white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px;
+                                              background: var(--superficie-hover); border: 1px solid var(--borda); border-radius: 6px; }
+  dialog.janela { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 16px;
+                  border: 1px solid var(--borda); border-radius: 10px; background: var(--superficie); color: var(--texto); }
+  dialog.janela::backdrop { background: rgba(0,0,0,0.45); }
+  dialog.janela h2 { margin: 0 0 10px; }
+  dialog.janela fieldset { border: 0; padding: 0; margin: 0 0 10px; }
+  dialog.janela fieldset label { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; }
+  dialog.janela .busca, dialog.janela select { width: 100%; font: inherit; font-size: 13px; margin-bottom: 8px; }
+  dialog.janela .linha-acoes { margin-top: 12px; justify-content: flex-end; }
+
   @media (max-width: 700px) {
     .oculta-mobile { display: none; }
     table.hist .oculta-mobile { display: none; }
@@ -192,8 +206,13 @@
     embarcador: "{{ url_for('api_notificacoes_embarcador', cnpj='__C__') }}",
     situacao: "{{ url_for('api_notificacoes_embarcador_situacao', cnpj='__C__') }}",
     transportadoras: "{{ url_for('transportadoras') }}",
+    disparo: "{{ url_for('api_notificacoes_disparo_dados', tipo='__T__') }}",
+    disparar: "{{ url_for('api_notificacoes_disparo') }}",
   };
   const TIPOS = {{ tipos|tojson }};
+  const DISPARAVEIS = {{ disparaveis|tojson }};
+  const SEM_DISPARO = {{ sem_disparo|tojson }};
+  const ROTULO_ALVO = { teste: "Só para mim (teste)", todos: "Todos os liberados", um: "Um embarcador" };
   const EMBARCADORES = {{ embarcadores|tojson }};
   const ROTULO_ESTADO = { LIGADO: "Ligado", PILOTO: "Piloto (só Hugo)", DESLIGADO: "Desligado", config: "segue o config" };
   const ROTULO_CANAL = { email: "e-mail", whatsapp: "WhatsApp" };
@@ -465,6 +484,122 @@
     if (!d.destinos.length) ul.append(el("li", { class: "vazio", text: "Nenhum destinatário no cadastro." }));
   }
 
+  // ------------------------------------------------------- disparar agora
+  function notaDoAlvo(d, alvo) {
+    if (alvo === "teste") return "Vai só para o Hugo (destino de teste), qualquer que seja o estado do tipo.";
+    const quem = d.destino === "transportadora" ? "as transportadoras" : "os clientes";
+    if (d.estado === "LIGADO") return "O tipo está Ligado: " + quem + " recebem de verdade.";
+    if (d.estado === "PILOTO") return "O tipo está em Piloto: a cópia vai só para o destino de piloto.";
+    if (d.estado === "DESLIGADO") return "O tipo está Desligado: a rotina roda, mas nada sai para " + quem + ".";
+    return "O tipo segue o config de hoje: " + quem + " recebem só se o config estiver ligado.";
+  }
+
+  async function abrirJanelaDisparo(d, depois) {
+    const r = await chamar(URLS.disparo.replace("__T__", d.tipo));
+    if (!r.ok) { window.alert(r.dados.erro || "Falha ao carregar o disparo."); return; }
+    const dados = r.dados;
+    const recebeu = dados.ja_recebeu_hoje || {};
+    const dlg = el("dialog", { class: "janela", "aria-label": "Disparar " + d.rotulo });
+    const nota = el("p", { class: "nota-painel" });
+    const aviso = el("span", { class: "msg", role: "status" });
+    const confirmar = el("button", { type: "button", class: "botao pequeno", text: "Disparar" });
+    const cancelar = el("button", { type: "button", class: "botao secundario pequeno", text: "Cancelar",
+      onclick: () => dlg.close() });
+    const grupoUm = el("div", { hidden: true });
+    const busca = el("input", { type: "search", class: "busca", placeholder: "Buscar embarcador", "aria-label": "Buscar embarcador" });
+    const lista = el("select", { size: "6", "aria-label": "Embarcador" });
+    const infoRecebeu = el("p", { class: "nota-painel" });
+    const reenviar = el("input", { type: "checkbox" });
+    const caixaReenviar = el("label", { hidden: true }, reenviar, " Reenviar mesmo assim");
+    let alvo = dados.alvos[0];
+
+    function opcoes() {
+      const termo = busca.value.trim().toLowerCase();
+      lista.replaceChildren();
+      dados.embarcadores.filter((e) => !termo || e.nome.toLowerCase().includes(termo)).forEach((e) => {
+        lista.append(el("option", { value: String(e.sender_id), text: e.nome + (recebeu[e.sender_id] ? " (enviado hoje)" : "") }));
+      });
+    }
+    function atualizar() {
+      nota.textContent = notaDoAlvo(d, alvo);
+      grupoUm.hidden = alvo !== "um";
+      const sender = lista.value;
+      const hora = alvo === "um" && sender ? recebeu[sender] : null;
+      infoRecebeu.textContent = hora ? "Enviado hoje às " + hora + ". Por padrão não é enviado de novo." : "";
+      caixaReenviar.hidden = !hora;
+      if (!hora) reenviar.checked = false;
+      confirmar.disabled = alvo === "um" && (!sender || (!!hora && !reenviar.checked));
+    }
+    busca.addEventListener("input", () => { opcoes(); atualizar(); });
+    lista.addEventListener("change", atualizar);
+    reenviar.addEventListener("change", atualizar);
+    grupoUm.append(busca, lista, infoRecebeu, caixaReenviar);
+
+    const radios = el("fieldset", {}, dados.alvos.map((a) => {
+      const radio = el("input", { type: "radio", name: "alvo", value: a });
+      radio.checked = a === alvo;
+      radio.addEventListener("change", () => { alvo = a; atualizar(); });
+      return el("label", {}, radio, ROTULO_ALVO[a]);
+    }));
+
+    confirmar.addEventListener("click", async () => {
+      if (alvo !== "teste") {
+        const quem = alvo === "um" ? "para \"" + lista.selectedOptions[0].textContent.replace(" (enviado hoje)", "") + "\"" : "para todos os liberados";
+        if (!window.confirm("Disparar \"" + d.rotulo + "\" " + quem + " agora? " + notaDoAlvo(d, alvo))) return;
+      }
+      confirmar.disabled = true;
+      aviso.className = "msg"; aviso.textContent = "Iniciando...";
+      const corpo = { tipo: d.tipo, alvo };
+      if (alvo === "um") { corpo.sender_id = Number(lista.value); corpo.reenviar = reenviar.checked; }
+      const resp = await chamar(URLS.disparar, corpo);
+      if (!resp.ok) { aviso.className = "msg erro"; aviso.textContent = resp.dados.erro || "Falha ao disparar."; atualizar(); return; }
+      dlg.close();
+      depois();
+    });
+
+    dlg.addEventListener("close", () => dlg.remove());
+    // Esc fecha só a janela (o painel atrás continua aberto).
+    dlg.addEventListener("keydown", (ev) => ev.stopPropagation());
+    dlg.append(el("h2", { text: "Disparar: " + d.rotulo }), el("h3", { class: "msg", text: "Para quem?" }), radios,
+      grupoUm, nota, el("div", { class: "linha-acoes" }, cancelar, confirmar, aviso));
+    opcoes();
+    atualizar();
+    document.body.append(dlg);
+    dlg.showModal();
+  }
+
+  function blocoDisparo(d) {
+    const bloco = el("div", { class: "bloco", id: "slot-disparar", "data-tipo": d.tipo }, el("h3", { text: "Disparar agora" }));
+    if (!DISPARAVEIS[d.tipo]) {
+      bloco.append(el("p", { class: "nota-painel", text: SEM_DISPARO[d.tipo] || "Sai dentro de outra rotina." }));
+      return bloco;
+    }
+    const resultado = el("div", { class: "resultado-disparo", "aria-live": "polite" });
+    const botao = el("button", { type: "button", class: "botao pequeno", text: "Disparar agora",
+      onclick: () => abrirJanelaDisparo(d, atualizarResultado) });
+    bloco.append(botao, resultado);
+
+    async function atualizarResultado() {
+      const r = await chamar(URLS.disparo.replace("__T__", d.tipo));
+      if (!bloco.isConnected) return;     // painel trocado/fechado: para de consultar
+      if (!r.ok) { resultado.replaceChildren(el("span", { class: "msg erro", text: r.dados.erro || "Falha ao consultar." })); return; }
+      const u = r.dados.ultimos[0];
+      if (!u) { resultado.replaceChildren(); botao.disabled = false; return; }
+      const rodando = !u.terminado_em;
+      botao.disabled = rodando;
+      const alvo = ROTULO_ALVO[u.alvo] + (u.destino ? ": " + u.destino : "");
+      const cab = rodando
+        ? "Rodando agora (" + alvo + "), iniciado " + u.iniciado_em.replace("T", " ") + " por " + u.por + "..."
+        : "Último disparo (" + alvo + "), " + u.terminado_em.replace("T", " ") + " por " + u.por + ": "
+          + (u.codigo_saida === 0 ? "terminou sem erro (código 0)" : "terminou com erro (código " + u.codigo_saida + ")");
+      resultado.replaceChildren(el("span", { class: "msg" + (!rodando && u.codigo_saida !== 0 ? " erro" : ""), text: cab }),
+        !rodando && u.saida ? el("pre", { text: u.saida }) : null);
+      if (rodando) setTimeout(atualizarResultado, 3000);
+    }
+    atualizarResultado();
+    return bloco;
+  }
+
   function renderPainel(d) {
     const info = TIPOS[d.tipo];
     const aviso = el("span", { class: "msg", role: "status" });
@@ -496,8 +631,7 @@
       el("p", { class: "meta", text: "Quando: " + info.quando + " · Canal: " + info.canais.map((c) => ROTULO_CANAL[c]).join(" e ")
         + " · Para: " + (info.destino === "transportadora" ? "transportadoras" : "embarcadores") }),
       el("div", { class: "bloco" }, el("h3", { text: "Estado" }), seletor, aviso, notas),
-      // Task 9 liga aqui o botao "Disparar agora" deste tipo.
-      el("div", { class: "bloco", id: "slot-disparar", "data-tipo": d.tipo }),
+      blocoDisparo(d),
       el("div", { class: "bloco" },
         el("h3", { text: info.destino === "transportadora" ? "Pontos de transportadora" : "Embarcadores" }),
         busca, el("ul", { class: "destinos" })));
