@@ -208,7 +208,7 @@ class TestPedidosEmEspera(_ComControle):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _main(self, ativo=True):
+    def _main(self, ativo=True, modo_teste=False):
         pedido = {"codigo_ps": "#PS-1", "id_stokki": 1, "data": "18/09/2026", "destino": "Cliente",
                   "marker": "Aguardando faturamento", "stkkc_id": 9001}
         execucao = mock.MagicMock()
@@ -218,7 +218,7 @@ class TestPedidosEmEspera(_ComControle):
              mock.patch.object(em_espera, "notificacao_pedidos_em_espera_ativa", return_value=ativo), \
              mock.patch.object(em_espera, "notificar_execucao", execucao), \
              mock.patch.object(em_espera, "enviar_email", side_effect=self._enviar):
-            em_espera.main(modo_teste=False)
+            em_espera.main(modo_teste=modo_teste)
         return execucao.call_args.args[0]["Notificador de Faturamento"]
 
     def test_espera_piloto_vai_pro_piloto(self):
@@ -242,6 +242,13 @@ class TestPedidosEmEspera(_ComControle):
         self._controle(cn.definir_excecao, "pedidos_em_espera", CNPJ_A, "BLOQUEADO")
         self._main()
         self.assertEqual(self.enviados, [])
+
+    def test_espera_modo_teste_ignora_tela(self):
+        conn = cn.conectar(self.db)
+        cn.definir_geral(conn, False, "teste")
+        conn.close()
+        self._main(modo_teste=True)
+        self.assertEqual([e[0] for e in self.enviados], [[HUGO]])
 
 
 if __name__ == "__main__":

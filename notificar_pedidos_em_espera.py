@@ -282,12 +282,14 @@ def main(modo_teste=False):
                 sem_stkkc.append(p)
 
         # O flag do config e o que valeria hoje; a tela (decidir) vale por cima.
-        # Retorna cedo so se NENHUM embarcador puder receber.
+        # Retorna cedo so se NENHUM embarcador puder receber. --modo-teste ignora
+        # a tela (e o flag): so ensaia o envio pro EMAIL_TESTE.
         config_ativo = notificacao_pedidos_em_espera_ativa(config)
         fallback = acao_do_config(config_ativo, "")
-        decisoes = {sid: decidir("pedidos_em_espera", embarcadores[sid]["cnpj"], fallback_acao=fallback,
-                                 db_path=preferencias_notificacao.DB_PATH) for sid in grupos}
-        if all(d.acao == "NAO" for d in decisoes.values()):
+        decisoes = {} if modo_teste else {
+            sid: decidir("pedidos_em_espera", embarcadores[sid]["cnpj"], fallback_acao=fallback,
+                         db_path=preferencias_notificacao.DB_PATH) for sid in grupos}
+        if not modo_teste and all(d.acao == "NAO" for d in decisoes.values()):
             primeira = next(iter(decisoes.values()), None)
             if primeira is None or primeira.origem == "config":
                 motivo = "config.yaml: notificacao_pedidos_em_espera.ativo=false"
@@ -312,9 +314,9 @@ def main(modo_teste=False):
             nome   = emb["nome"]
             emails = emb["emails"]
             qtd    = len(pedidos)
-            decisao = decisoes[stkkc_id]
+            decisao = decisoes.get(stkkc_id)
 
-            if decisao.acao == "NAO":
+            if decisao is not None and decisao.acao == "NAO":
                 logger.info(f"  {nome}: {qtd} pedido(s) -- nao enviado pela tela ({decisao.motivo}).")
                 bloqueados += 1
                 continue
@@ -331,7 +333,7 @@ def main(modo_teste=False):
                 continue
 
             assunto = f"[Freshlog] {qtd} pedido(s) aguardando envio do XML"
-            piloto  = decisao.acao == "PILOTO"
+            piloto  = decisao is not None and decisao.acao == "PILOTO"
             corpo   = _montar_corpo(nome, pedidos, destino_original=emails if piloto and not modo_teste else None)
 
             if modo_teste:
