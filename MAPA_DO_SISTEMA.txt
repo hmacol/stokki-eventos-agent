@@ -582,6 +582,9 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+ pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
+                      outbound/pause com _token/page do form_pause; relê a
+                      Situação). Sondado só leitura 25/10; escrita real não provada.
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
