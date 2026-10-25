@@ -8,6 +8,7 @@ pendências, Task 6). Tudo que fala com Stokki/Vuupt é falso (Dependencias).
 import sqlite3
 import sys
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -172,6 +173,19 @@ class Executar(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertFalse({"cancelar_vuupt", "cancelar_stokki"} & set(f.nomes()))
 
+    def test_em_espera_desligado_nao_toca_em_nada_e_nao_conclui(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "em_espera")
+        f = Fakes()
+        self.assertFalse(se.EM_ESPERA_HABILITADO)
+        r = se.executar(conn, sid, f.deps())
+        self.assertFalse(r["ok"])
+        self.assertIn("Em espera ainda não pode", r["mensagem"])
+        self.assertEqual(f.nomes(), [])
+        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_em_espera_tira_da_rota_e_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -188,6 +202,7 @@ class Executar(unittest.TestCase):
         self.assertIn(se.AVISO_REROTEIRIZACAO, r["mensagem"])
         self.assertNotIn("roteirização", solicitacao(conn, sid)["resposta"])  # aviso é só pro operador
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_em_espera_ultima_parada_avisa_rota_cancelada(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -197,6 +212,7 @@ class Executar(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertIn("a rota 9001 ficou vazia e foi cancelada", r["mensagem"])
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_abrir_stokki_com_excecao_vira_ok_false(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -208,6 +224,7 @@ class Executar(unittest.TestCase):
         self.assertEqual(f.nomes(), ["abrir_stokki"])
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_em_espera_falha_no_pausar_nao_conclui(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -220,6 +237,7 @@ class Executar(unittest.TestCase):
         self.assertEqual(f.nomes()[-1], "fechar_stokki")
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_em_espera_vuupt_recusa_nao_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -231,6 +249,7 @@ class Executar(unittest.TestCase):
         self.assertNotIn("pausar_stokki", f.nomes())
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_em_espera_sem_servico_na_vuupt_so_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -241,6 +260,7 @@ class Executar(unittest.TestCase):
         self.assertNotIn("tirar_da_rota_vuupt", f.nomes())
         self.assertIn("pausar_stokki", f.nomes())
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_excecao_numa_etapa_nao_conclui_e_libera_a_stokki(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -351,6 +371,7 @@ class Executar(unittest.TestCase):
         self.assertNotIn("reagendar_vuupt", f.nomes())
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
+    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_stokki_ocupada_nao_conclui(self):
         for tipo in ("cancelar", "em_espera"):
             conn = conn_portal()

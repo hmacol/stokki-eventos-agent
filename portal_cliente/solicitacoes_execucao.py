@@ -64,6 +64,15 @@ logger = logging.getLogger("portal_solicitacoes_execucao")
 STOKKI_OCUPADA = "Stokki ocupada, tente em instantes."
 _USAM_STOKKI = ("cancelar", "em_espera")
 
+# "Em espera" fica DESLIGADO ate o Hugo decidir: na Stokki "Em espera" e a fila
+# de entrada da Fresh Log -- a Estacao de Impressao (todo pipeline horario)
+# move pedido "Em espera" faturado pra Aguardando Transportador,
+# notificar_pedidos_em_espera.py cobra o embarcador e o vigia da fila alerta
+# >24 h. Um pedido pausado por aqui seria despausado/roteado em ~1 h.
+EM_ESPERA_HABILITADO = False
+MSG_EM_ESPERA_DESLIGADO = ("Em espera ainda não pode ser executado por aqui (a Stokki trata 'Em espera' como "
+                           "fila de entrada). Recuse com uma resposta ao cliente ou trate à mão.")
+
 
 @dataclass
 class Dependencias:
@@ -232,6 +241,9 @@ def executar(conn: sqlite3.Connection, solicitacao_id: int, deps: Dependencias) 
     executor = _EXECUTORES.get(tipo)
     if not executor:
         return {"ok": False, "mensagem": f"Solicitação do tipo '{tipo}' não se executa por aqui."}
+
+    if tipo == "em_espera" and not EM_ESPERA_HABILITADO:
+        return {"ok": False, "mensagem": MSG_EM_ESPERA_DESLIGADO}
 
     usa_stokki = tipo in _USAM_STOKKI
     if usa_stokki:
