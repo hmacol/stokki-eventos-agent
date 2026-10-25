@@ -311,13 +311,72 @@ class TestRotas(_Base):
         self._logar("total")
         post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
         post("/api/notificacoes/estado", {"tipo": "resumo_diario", "estado": "PILOTO"})
+        post("/api/notificacoes/estado", {"tipo": "resumo_diario", "estado": "DESLIGADO"})
         ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        self.assertEqual((ultimo["de"], ultimo["para"]), ("PILOTO", "DESLIGADO"))
         self.assertEqual(post("/api/notificacoes/desfazer", {"id": ultimo["id"]}).status_code, 200)
         conn = self._controle()
         try:
-            self.assertIsNone(cn.estado_tipo(conn, "resumo_diario"))
+            self.assertEqual(cn.estado_tipo(conn, "resumo_diario"), "PILOTO")
         finally:
             conn.close()
+
+    def test_desfazer_do_desligar_geral_sem_linha_antes_pede_confirmacao(self):
+        # historico None -> DESLIGADO: desfazer apaga a linha do geral = tudo volta a enviar
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/geral", {"ligado": False})
+        ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        self.assertEqual((ultimo["de"], ultimo["para"]), (None, "DESLIGADO"))
+        r = post("/api/notificacoes/desfazer", {"id": ultimo["id"]})
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.get_json()["geral"])
+        self.assertTrue(r.get_json()["volta_ao_config"])
+        conn = self._controle()
+        try:
+            self.assertEqual(cn.estado_geral(conn), "DESLIGADO")
+        finally:
+            conn.close()
+        self.assertEqual(post("/api/notificacoes/desfazer", {"id": ultimo["id"], "confirmado": True}).status_code, 200)
+        conn = self._controle()
+        try:
+            self.assertIsNone(cn.estado_geral(conn))
+        finally:
+            conn.close()
+
+    def test_desfazer_que_volta_o_tipo_ao_config_pede_confirmacao(self):
+        # None -> DESLIGADO ou None -> PILOTO: desfazer volta a seguir o config (pode enviar de verdade)
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        for estado in ("DESLIGADO", "PILOTO"):
+            with self.subTest(estado=estado):
+                post("/api/notificacoes/estado", {"tipo": "nfs_em_rota", "estado": estado})
+                ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+                self.assertEqual((ultimo["de"], ultimo["para"]), (None, estado))
+                r = post("/api/notificacoes/desfazer", {"id": ultimo["id"]})
+                self.assertEqual(r.status_code, 409)
+                self.assertEqual((r.get_json()["tipo"], r.get_json()["destinatarios"]), ("nfs_em_rota", 2))
+                self.assertTrue(r.get_json()["volta_ao_config"])
+                conn = self._controle()
+                try:
+                    self.assertEqual(cn.estado_tipo(conn, "nfs_em_rota"), estado)
+                finally:
+                    conn.close()
+                r = post("/api/notificacoes/desfazer", {"id": ultimo["id"], "confirmado": True})
+                self.assertEqual(r.status_code, 200)
+                conn = self._controle()
+                try:
+                    self.assertIsNone(cn.estado_tipo(conn, "nfs_em_rota"))
+                finally:
+                    conn.close()
+
+    def test_desfazer_ligar_sem_linha_antes_nao_pede_confirmacao(self):
+        # None -> LIGADO desfeito volta ao config: nao religa nada que estava calado
+        self._logar("total")
+        post = lambda url, corpo: self.cliente.post(url, json=corpo, headers=ORIGEM)
+        post("/api/notificacoes/estado", {"tipo": "nfs_em_rota", "estado": "LIGADO", "confirmado": True})
+        ultimo = self.cliente.get("/api/notificacoes/historico").get_json()[0]
+        self.assertEqual(post("/api/notificacoes/desfazer", {"id": ultimo["id"]}).status_code, 200)
 
     def test_edicao_de_emails_vai_pro_historico_e_nao_tem_desfazer(self):
         self._logar("total")

@@ -194,9 +194,12 @@ def situacao_embarcador(conn: sqlite3.Connection, cnpj) -> dict:
 
 
 def confirmacao_do_desfazer(conn: sqlite3.Connection, historico_id: int) -> dict | None:
-    """Desfazer que RELIGA (volta um tipo ou o geral para LIGADO) pede a mesma
-    confirmacao de ligar: devolve o corpo do 409 (com a contagem) ou None se
-    pode ir direto. ValueError se o item nao existe ou nao tem desfazer."""
+    """Desfazer que RELIGA pede a mesma confirmacao de ligar: devolve o corpo do
+    409 (com a contagem) ou None se pode ir direto. Religa = volta para LIGADO,
+    ou volta para "sem linha" (de None) saindo de um estado que cala: o geral
+    sai de DESLIGADO (tudo volta a enviar) e o tipo sai de DESLIGADO/PILOTO
+    (volta a seguir o config, que pode enviar de verdade; `volta_ao_config`).
+    ValueError se o item nao existe ou nao tem desfazer."""
     row = conn.execute("SELECT alvo, destino, de FROM notificacoes_controle_historico WHERE id = ?",
                        (historico_id,)).fetchone()
     if not row:
@@ -204,14 +207,19 @@ def confirmacao_do_desfazer(conn: sqlite3.Connection, historico_id: int) -> dict
     alvo, destino, de = row
     if alvo == _ALVO_EMAILS:
         raise ValueError("Edição de e-mails fica só no registro: não tem desfazer.")
-    if destino is not None or de != "LIGADO":
+    if destino is not None or de not in ("LIGADO", None):
         return None
     if alvo == "_geral":
-        if cn.estado_geral(conn) == "LIGADO":
+        atual = cn.estado_geral(conn)
+        if atual == "LIGADO" or (de is None and atual != "DESLIGADO"):
             return None
-        return {"geral": True, "tipos_ligados": sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")}
-    if alvo in cn.TIPOS and cn.estado_tipo(conn, alvo) != "LIGADO":
-        return {"tipo": alvo, "destinatarios": contar_destinatarios(conn, alvo)}
+        return {"geral": True, "volta_ao_config": de is None,
+                "tipos_ligados": sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")}
+    if alvo not in cn.TIPOS:
+        return None
+    atual = cn.estado_tipo(conn, alvo)
+    if de == "LIGADO" and atual != "LIGADO" or de is None and atual in ("DESLIGADO", "PILOTO"):
+        return {"tipo": alvo, "volta_ao_config": de is None, "destinatarios": contar_destinatarios(conn, alvo)}
     return None
 
 

@@ -263,12 +263,19 @@
   // Texto do confirm de ligar, igual para o seletor de estado e para o Desfazer
   // que religa (dados = corpo do 409 com a contagem).
   function textoConfirmarLigar(dados) {
+    // volta_ao_config: Desfazer que apaga a linha (volta a seguir o config, que pode enviar de verdade)
     if (dados.geral) {
       const n = dados.tipos_ligados;
       return "Ligar o geral libera os envios de cada tipo conforme o estado dele"
-        + (n ? " (" + n + " tipo(s) estão em Ligado e passam a enviar aos clientes de verdade)" : "") + ". Confirma?";
+        + (n ? " (" + n + " tipo(s) estão em Ligado e passam a enviar aos clientes de verdade)" : "")
+        + (dados.volta_ao_config ? "; os tipos sem estado na tela voltam a seguir o config (podem enviar de verdade)" : "")
+        + ". Confirma?";
     }
     const unidade = TIPOS[dados.tipo].destino === "transportadora" ? "ponto(s) de transportadora" : "destinatário(s)";
+    if (dados.volta_ao_config) {
+      return "Desfazer \"" + TIPOS[dados.tipo].rotulo + "\": volta a seguir o config (pode enviar de verdade). Se o config enviar de verdade, até "
+        + dados.destinatarios + " " + unidade + " recebem (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?";
+    }
     return "Ligar \"" + TIPOS[dados.tipo].rotulo + "\": " + dados.destinatarios + " " + unidade
       + " vão receber de verdade (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?";
   }
