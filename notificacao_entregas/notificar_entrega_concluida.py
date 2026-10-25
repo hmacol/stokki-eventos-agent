@@ -15,6 +15,11 @@ Travas (config.yaml -> notificacao_entregas, defaults seguros):
   - forcar_destino: hugo@ -> todo e-mail vai só pra ele, com faixa "iria para X"
 Envio real ao embarcador = ativo: true E forcar_destino: "".
 
+A tela de Notificacoes (controle_notificacoes.py, tipo "entrega_concluida")
+vale POR CIMA dessas travas quando tem linha: LIGADO envia de verdade,
+PILOTO manda so pro piloto (estado PILOTO, final), DESLIGADO consome o evento
+como IGNORADO ("tela: ..."). Sem linha ou com erro de leitura, vale o config.
+
 --modo-teste ignora a flag `ativo`, manda no máximo --limite e-mails pra
 hugo@ e NÃO grava nada no banco.
 
@@ -43,6 +48,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+import controle_notificacoes  # noqa: E402
 from notificacao_entregas import fingerprint_notificacao_entrega as fp  # noqa: E402
 from notificacao_entregas import regras_entrega as regras  # noqa: E402
 from notificacao_entregas.montar_email_entrega import dados_do_servico, montar_assunto, montar_html  # noqa: E402
@@ -120,6 +126,7 @@ def aplicar_preferencias(embs: dict[int, dict], db_path: Path) -> dict[int, dict
         if pref:
             emb["emails"] = pref.get("emails") or emb["emails"]
             emb["desligado"] = bool(pref.get("desligado"))
+            emb["cnpj"] = pref.get("cnpj")
             # Com as preferencias no ar, interno.notificar_email = 0 nao e veto:
             # so faz a chave nascer desmarcada (ja embutido em "desligado"). Sem
             # o modulo, a coluna segue bloqueando -- nao ha como o cliente optar.
@@ -155,7 +162,7 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
               agora: datetime, conn: sqlite3.Connection, enviar, baixar_canhoto, buscar_nf,
               portal_url: str, promete_email_reenvio: bool, modo_teste: bool = False,
               max_envios: int = MAX_ENVIOS_POR_RODADA, forcar_pedido: bool = False,
-              dormir=time.sleep) -> dict:
+              dormir=time.sleep, db_path=None) -> dict:
     """
     Decide e envia. Dependências injetadas (testável sem rede):
       enviar(destinatarios, assunto, corpo_html, cc=, anexos=, cabecalhos_extra=) -> bool
@@ -163,11 +170,12 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
       buscar_nf(codigo) -> str
     forcar_pedido (só com modo_teste, --pedido): ignora a idade da entrega
     e a espera do canhoto.
+    db_path: banco do controle da tela de Notificacoes (None = dados.db).
     """
     c = {"vistos": len(servicos), "enviados": 0, "com_canhoto": 0, "sem_canhoto": 0, "falhas_de_entrega": 0,
          "retiradas": 0,
          "aguardando_canhoto": 0, "ignorados": 0, "sem_destinatario": 0, "falhas_envio": 0, "adiados": 0,
-         "erros_definitivos": []}
+         "pilotos": 0, "erros_definitivos": []}
 
     if modo_teste:
         cfg = replace(cfg, ativo=True, forcar_destino=EMAIL_TESTE, embarcadores_piloto=[])
@@ -188,7 +196,22 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
         codigo = regras.codigo_limpo(servico.get("code"))
         estado_atual = estados_atuais.get(sid)
         embarcador = embarcadores.get(servico.get("sender_id"))
-        d = regras.decidir(servico, embarcador, cfg, agora, estado_atual)
+        # Tela de Notificacoes: so quando ha linha dela (origem "tela"); o modo
+        # teste a ignora. Sem linha/erro de leitura vale o config, como sempre.
+        cfg_item, bloqueio_tela, piloto_tela = cfg, None, False
+        if not modo_teste and estado_atual not in regras.ESTADOS_FINAIS:
+            tela = controle_notificacoes.decidir(
+                "entrega_concluida", (embarcador or {}).get("cnpj"), db_path=db_path,
+                fallback_acao=controle_notificacoes.acao_do_config(cfg.ativo, cfg.forcar_destino),
+                fallback_piloto=cfg.forcar_destino)
+            if tela.origem == "tela":
+                if tela.acao == "NAO":
+                    bloqueio_tela = tela.motivo
+                else:
+                    piloto_tela = tela.acao == "PILOTO"
+                    cfg_item = replace(cfg, ativo=True, embarcadores_piloto=[],
+                                       forcar_destino=tela.destino_piloto if piloto_tela else "")
+        d = regras.decidir(servico, embarcador, cfg_item, agora, estado_atual, bloqueio_tela=bloqueio_tela)
 
         if d.acao == regras.NADA:
             continue
@@ -202,7 +225,7 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
             _registrar(servico, regras.ESTADO_SEM_DESTINATARIO, motivo=d.motivo)
             continue
 
-        if d.acao == regras.ENVIAR and c["enviados"] + c["falhas_envio"] >= max_envios:
+        if d.acao == regras.ENVIAR and c["enviados"] + c["pilotos"] + c["falhas_envio"] >= max_envios:
             c["adiados"] += 1
             continue
 
@@ -211,7 +234,7 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
             pdf = baixar_canhoto(regras.checklist_id_com_foto(servico), codigo)
             if pdf is None:
                 # Download falhou: vale como "sem canhoto" -- espera o prazo.
-                d = regras.decidir({**servico, "checklistAnswers": None}, embarcador, cfg, agora, estado_atual)
+                d = regras.decidir({**servico, "checklistAnswers": None}, embarcador, cfg_item, agora, estado_atual)
             elif pdf.stat().st_size > MAX_BYTES_ANEXO:
                 logger.warning(f"  {codigo}: canhoto com {pdf.stat().st_size} bytes, grande demais pra anexar.")
                 d = regras.Decisao(regras.ENVIAR, "canhoto grande demais", com_canhoto=False)
@@ -228,20 +251,27 @@ def processar(servicos: list[dict], *, embarcadores: dict[int, dict], cfg: regra
         com_canhoto = bool(anexos)
         dados = dados_do_servico(servico, embarcador, buscar_nf(codigo), com_canhoto)
         originais = list(embarcador.get("emails") or [])
-        destinos, cc = regras.destinos_finais(embarcador, cfg)
+        destinos, cc = regras.destinos_finais(embarcador, cfg_item)
         assunto = montar_assunto(dados)
         aviso = ""
         if modo_teste:
             assunto = f"[TESTE] {assunto}"
             aviso = f"MODO TESTE: este e-mail iria para {', '.join(originais)}."
-        elif cfg.forcar_destino:
+        elif cfg_item.forcar_destino:
             aviso = f"PILOTO (forcar_destino): este e-mail iria para {', '.join(originais)}."
         corpo = montar_html(dados, portal_url, promete_email_reenvio=promete_email_reenvio, aviso_topo=aviso)
 
-        if c["enviados"] + c["falhas_envio"] > 0:
+        if c["enviados"] + c["pilotos"] + c["falhas_envio"] > 0:
             dormir(PAUSA_ENTRE_ENVIOS_SEG)
         ok = enviar(destinos, assunto, corpo, cc=cc, anexos=anexos, cabecalhos_extra={"Reply-To": REPLY_TO})
-        if ok:
+        if ok and piloto_tela:
+            # Copia so do piloto: nao conta como recebido pelo cliente e fecha o
+            # evento (estado final), pra nao sair ao cliente quando a tela ligar.
+            c["pilotos"] += 1
+            logger.info(f"  {codigo}: PILOTO (tela) -> {destinos}")
+            _registrar(servico, regras.ESTADO_PILOTO, motivo=d.motivo, com_canhoto=com_canhoto,
+                       destinatarios=", ".join(destinos))
+        elif ok:
             c["enviados"] += 1
             if dados["tipo"] == "retirada":
                 c["retiradas"] += 1
@@ -270,7 +300,7 @@ def resumo_texto(c: dict) -> str:
             f"{c['retiradas']} de retirada); "
             f"{c['aguardando_canhoto']} aguardando canhoto; {c['ignorados']} ignorado(s); "
             f"{c['sem_destinatario']} sem destinatario; {c['falhas_envio']} falha(s) de envio; "
-            f"{c['adiados']} adiado(s) pra proxima rodada.")
+            f"{c['adiados']} adiado(s) pra proxima rodada; {c['pilotos']} so de piloto (tela).")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -310,7 +340,7 @@ def main(modo_teste: bool, limite: int, pedido: str | None) -> int:
             # O e-mail de insucesso com botoes obedece a chave-mestra; so
             # prometemos "voce vai receber" quando ele esta ligado.
             promete_email_reenvio=notificacoes_automaticas_ativas(config),
-            modo_teste=modo_teste, forcar_pedido=bool(pedido),
+            modo_teste=modo_teste, forcar_pedido=bool(pedido), db_path=fp.DB_PATH,
             max_envios=limite if modo_teste else MAX_ENVIOS_POR_RODADA,
         )
     finally:
