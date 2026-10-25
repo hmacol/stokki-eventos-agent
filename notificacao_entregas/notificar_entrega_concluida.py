@@ -94,13 +94,16 @@ def carregar_embarcadores(conn: sqlite3.Connection) -> dict[int, dict]:
     linha com notificar_email=0 pra ninguém daquele sender receber."""
     embs: dict[int, dict] = {}
     for row in conn.execute(
-            "SELECT sender_id, nome_remetente, apelido, email, notificar_email, fator_ponderado "
+            "SELECT sender_id, cnpj_embarcador, nome_remetente, apelido, email, notificar_email, fator_ponderado "
             "FROM interno WHERE sender_id IS NOT NULL ORDER BY cnpj_embarcador"):
         emails = [e.strip() for e in re.split(r"[,;\t]+", row["email"] or "") if e.strip() and "@" in e]
         notificar = 1 if row["notificar_email"] is None else int(row["notificar_email"])
         atual = embs.setdefault(int(row["sender_id"]), {
             "nome": "", "emails": [], "notificar_email": 1, "fator_ponderado": row["fator_ponderado"]})
         atual["nome"] = atual["nome"] or row["apelido"] or row["nome_remetente"] or ""
+        # cnpj vem do cadastro (nao so das preferencias): a excecao BLOQUEADO da
+        # tela precisa dele mesmo se o modulo de preferencias falhar.
+        atual["cnpj"] = re.sub(r"\D", "", row["cnpj_embarcador"] or "")
         atual["emails"] += [e for e in emails if e not in atual["emails"]]
         atual["notificar_email"] = min(atual["notificar_email"], notificar)
     return embs
@@ -126,7 +129,7 @@ def aplicar_preferencias(embs: dict[int, dict], db_path: Path) -> dict[int, dict
         if pref:
             emb["emails"] = pref.get("emails") or emb["emails"]
             emb["desligado"] = bool(pref.get("desligado"))
-            emb["cnpj"] = pref.get("cnpj")
+            emb["cnpj"] = pref.get("cnpj") or emb.get("cnpj")
             # Com as preferencias no ar, interno.notificar_email = 0 nao e veto:
             # so faz a chave nascer desmarcada (ja embutido em "desligado"). Sem
             # o modulo, a coluna segue bloqueando -- nao ha como o cliente optar.

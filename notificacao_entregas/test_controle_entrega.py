@@ -100,14 +100,37 @@ class TestControleEntrega(Base):
         self.assertEqual(self.enviados[0]["to"], ["hugo@freshlogbr.com"])
 
 
-@unittest.skipUnless(preferencias_notificacao, "preferencias_notificacao.py ausente")
 class TestCnpjDoEmbarcador(Base):
-    def test_aplicar_preferencias_traz_o_cnpj_pra_tela(self):
+    def _criar_interno(self):
         self.conn.execute("""CREATE TABLE interno (cnpj_embarcador TEXT PRIMARY KEY, nome_remetente TEXT,
                              apelido TEXT, email TEXT, notificar_email INTEGER, sender_id INTEGER,
                              fator_ponderado REAL, stkkc_id INTEGER)""")
         self.conn.execute("INSERT INTO interno VALUES ('11.222.333/0001-44','FRUTA BOA',NULL,'a@x.com',1,900,1.0,1)")
         self.conn.commit()
+
+    def test_bloqueado_vale_mesmo_sem_o_modulo_de_preferencias(self):
+        self._criar_interno()
+        embs = n.carregar_embarcadores(self.conn)
+        self.assertEqual(embs[900]["cnpj"], CNPJ)
+        # modulo de preferencias falhando (banco inexistente): o except devolve embs como veio
+        embs = n.aplicar_preferencias(embs, self.pasta / "nao_existe.db")
+        self.assertEqual(embs[900]["cnpj"], CNPJ)
+        c = cn.conectar(self._db())
+        try:
+            cn.definir_estado(c, "entrega_concluida", "LIGADO", "teste")
+            cn.definir_excecao(c, "entrega_concluida", CNPJ, "BLOQUEADO", "teste")
+        finally:
+            c.close()
+        self._rodar([_servico(9)], embarcadores=embs)
+        self.assertEqual(self.enviados, [])
+        self.assertEqual(self._estado(9), "IGNORADO")
+
+    def _db(self):
+        return self.pasta / "t.db"
+
+    @unittest.skipUnless(preferencias_notificacao, "preferencias_notificacao.py ausente")
+    def test_aplicar_preferencias_traz_o_cnpj_pra_tela(self):
+        self._criar_interno()
         embs = n.aplicar_preferencias(n.carregar_embarcadores(self.conn), self._db_t())
         self.assertEqual(embs[900]["cnpj"], CNPJ)
 
