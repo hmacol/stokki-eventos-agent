@@ -20,6 +20,7 @@ import logging
 import re
 import sys
 import threading
+import uuid
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -52,6 +53,7 @@ from flask import (
     jsonify, send_file, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import BuildError
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas, montar_args_parametros
 from executor import (
@@ -93,6 +95,7 @@ import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
 import acesso_telas
+import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 
@@ -722,7 +725,91 @@ def api_sidebar_contadores():
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
-    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())})
+    contadores = contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())
+    pessoa = _pessoa_do_aviso()
+    resp = jsonify({"contadores": contadores, "avisos": _avisos_da_pessoa(pessoa, contadores)})
+    return _com_cookie_aparelho(resp)
+
+
+# Aviso de pendencias (spec 2026-10-24-aviso-pendencias-painel): a faixa no
+# topo das telas vem junto do poll do menu; "ignorar" e por pessoa.
+_NIVEIS_AVISO = ("total", "operador", "logistica", "leitura", "expedicao", "galpao", "atendimento")
+_COOKIE_APARELHO = "aviso_aparelho"
+
+
+def _pessoa_do_aviso() -> str:
+    """Login nominal -> 'login:<usuario>'. Login de nivel (compartilhado) ->
+    'aparelho:<uuid>' do cookie aviso_aparelho; sem cookie valido, gera um
+    (o cookie vai na resposta, ver _com_cookie_aparelho)."""
+    if acesso_telas.conta(session.get("usuario")):
+        return f"login:{session.get('usuario')}"
+    try:
+        uid = str(uuid.UUID(request.cookies.get(_COOKIE_APARELHO, "")))
+    except ValueError:
+        uid = str(uuid.uuid4())
+        g.aviso_aparelho_novo = uid
+    return f"aparelho:{uid}"
+
+
+def _com_cookie_aparelho(resp):
+    uid = g.get("aviso_aparelho_novo")
+    if uid:
+        resp.set_cookie(_COOKIE_APARELHO, uid, max_age=365 * 24 * 3600, httponly=True, samesite="Lax",
+                        secure=app.config["SESSION_COOKIE_SECURE"])
+    return resp
+
+
+def _avisos_da_pessoa(pessoa: str, contadores: dict) -> list:
+    """Avisos do perfil, sem os ignorados, com `destino` ja resolvido pelo
+    url_for (prefixo do Caddy). Nunca derruba o poll do menu."""
+    try:
+        telas = g.get("telas_liberadas")
+        brutos = avisos_pendencias.montar(
+            g.nivel_acesso, contadores, None if telas is None else set(telas),
+            telas is not None and "aprovar_embarcadores" in telas)
+        conn = avisos_pendencias.conectar()
+        try:
+            brutos = avisos_pendencias.filtrar_ignorados(conn, pessoa, brutos, datetime.now())
+        finally:
+            conn.close()
+        itens = {i["chave"]: i for i in avisos_pendencias.CATALOGO}
+        avisos = []
+        for a in brutos:
+            item = itens[a["chave"]]
+            try:
+                destino = url_for(item["endpoint_destino"])
+            except BuildError:
+                logging.getLogger(__name__).debug(f"[avisos] Tela '{item['endpoint_destino']}' ainda nao existe; aviso '{a['chave']}' omitido")
+                continue
+            if "?" in item["destino"]:
+                destino += "?" + item["destino"].split("?", 1)[1]
+            avisos.append({"chave": a["chave"], "texto": a["texto"], "qtd": a["qtd"],
+                           "destino": destino, "vermelho": a["vermelho"]})
+        return avisos
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[avisos] Falha ao montar os avisos: {e}")
+        return []
+
+
+@app.route("/api/avisos/ignorar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_AVISO)
+@exige_mesma_origem
+def api_avisos_ignorar():
+    """Esconde um aviso pra essa pessoa por IGNORAR_MINUTOS."""
+    corpo = request.get_json(silent=True) or {}
+    chave, qtd = corpo.get("chave"), corpo.get("qtd")
+    if chave not in {i["chave"] for i in avisos_pendencias.CATALOGO}:
+        return jsonify({"erro": "Aviso desconhecido."}), 400
+    if not isinstance(qtd, int) or isinstance(qtd, bool) or qtd < 0:
+        return jsonify({"erro": "qtd precisa ser um inteiro >= 0."}), 400
+    agora = datetime.now()
+    conn = avisos_pendencias.conectar()
+    try:
+        avisos_pendencias.ignorar(conn, _pessoa_do_aviso(), chave, qtd, agora)
+    finally:
+        conn.close()
+    ate = agora + timedelta(minutes=avisos_pendencias.IGNORAR_MINUTOS)
+    return _com_cookie_aparelho(jsonify({"ok": True, "ate": ate.isoformat(timespec="seconds")}))
 
 
 def _niveis_por_contador() -> dict:
