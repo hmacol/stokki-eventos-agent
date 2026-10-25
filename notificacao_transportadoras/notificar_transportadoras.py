@@ -86,6 +86,7 @@ logger = logging.getLogger("notificar_transportadoras")
 import yaml
 
 from avisar_motoristas_rotas import _extrair_servicos_da_rota, _parse_data, buscar_rotas_do_dia
+from controle_notificacoes import acao_do_config, decidir
 from email_utils import (
     COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO, envelope_html, enviar_email, notificacao_transportadoras_ativa,
     notificacoes_automaticas_ativas,
@@ -229,16 +230,17 @@ def conferir_na_stokki(sess_stokki: StokkiSession, catalogo: CatalogoTransportad
 
 
 def _bloco_teste(ponto: PontoRedespacho, destinos: list[str], cc: list[str],
-                 itens: list[dict], observacoes: dict[str, str]) -> str:
-    """Cabeçalho só do --modo-teste: mostra pra quem o e-mail iria e o que
-    a conferência na Stokki achou, pra avaliar o batimento por endereço."""
+                 itens: list[dict], observacoes: dict[str, str], titulo: str = "MODO TESTE") -> str:
+    """Cabeçalho do --modo-teste (e da cópia de piloto da tela): mostra pra
+    quem o e-mail iria e o que a conferência na Stokki achou, pra avaliar o
+    batimento por endereço."""
     obs = "".join(
         f"<li>{html.escape(i['codigo'])}: {html.escape(observacoes.get(i['codigo']) or 'Stokki confere')}</li>"
         for i in itens)
     return f"""
 <div style="margin:0 0 20px 0;padding:12px 14px;border:2px dashed #b45309;border-radius:8px;
             background:#fffbeb;font-size:12px;color:#78350f;line-height:1.6;">
-  <strong>MODO TESTE</strong> — este e-mail iria para <strong>{html.escape(', '.join(destinos) or '(sem e-mail cadastrado)')}</strong>
+  <strong>{html.escape(titulo)}</strong> — este e-mail iria para <strong>{html.escape(', '.join(destinos) or '(sem e-mail cadastrado)')}</strong>
   com cópia para {html.escape(', '.join(cc) or '(ninguém)')}.<br>
   Ponto de redespacho: {html.escape(str(ponto.endereco))}<br>
   Grafias na planilha: {html.escape(' / '.join(ponto.nomes))}<br>
@@ -281,7 +283,9 @@ def _montar_conteudo(nome_transportadora: str, data_br: str, itens: list[dict]) 
 """
 
 
-def main(modo_teste: bool, data_str: str) -> int:
+def main(modo_teste: bool, data_str: str, db_path=DB_PATH) -> int:
+    """db_path: banco da tela de Notificações (controle_notificacoes); os
+    testes injetam um temporário."""
     inicio = time.time()
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -303,15 +307,25 @@ def main(modo_teste: bool, data_str: str) -> int:
 
     resumo_etapas: dict = {}
     contadores = {"transportadoras_notificadas": 0, "pedidos_enviados": 0,
-                 "sem_email": 0, "sem_xml": 0, "falhas": 0, "nao_enviar": 0}
+                 "sem_email": 0, "sem_xml": 0, "falhas": 0, "nao_enviar": 0,
+                 "barrados_tela": 0, "copias_piloto": 0}
     divergencias: list[str] = []
 
-    if not modo_teste and not (notificacoes_automaticas_ativas(config) and notificacao_transportadoras_ativa(config)):
-        resumo_etapas["Resumo geral"] = {
-            "status": "ok",
-            "detalhe": "Notificação de transportadoras desativada (config.yaml: notificacoes_automaticas.ativo "
-                       "e notificacao_transportadoras.ativo precisam estar true).",
-        }
+    # o que o config decidiria hoje; a tela (decidir) vale por cima. O modo
+    # teste ignora a tela (vai sempre pro EMAIL_TESTE).
+    fallback = acao_do_config(notificacoes_automaticas_ativas(config) and notificacao_transportadoras_ativa(config), "")
+    geral = None if modo_teste else decidir("transportadoras", None, fallback_acao=fallback, db_path=db_path)
+
+    # retorna cedo so se o geral estiver desligado na tela ou sem linha na
+    # tela e o config barrar; tipo DESLIGADO na tela segue pro laco por ponto
+    # (la o pedido e consumido).
+    if geral is not None and geral.acao == "NAO" and (geral.origem == "config" or geral.motivo == "geral desligado"):
+        if geral.origem == "config":
+            detalhe = ("Notificação de transportadoras desativada (config.yaml: notificacoes_automaticas.ativo "
+                       "e notificacao_transportadoras.ativo precisam estar true).")
+        else:
+            detalhe = "Notificação de transportadoras desativada pela tela de Notificações (geral desligado)."
+        resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": detalhe}
         logger.info("Notificação de transportadoras desativada -- pulando.")
     elif not grupos:
         resumo_etapas["Resumo geral"] = {"status": "ok", "detalhe": "Nenhuma entrega para transportadora hoje."}
@@ -357,7 +371,7 @@ def main(modo_teste: bool, data_str: str) -> int:
             # dentro de um sync_playwright() já aberto (teste de 10/09 19:16:
             # "Playwright Sync API inside the asyncio loop" nos 3 pedidos).
             sess_stokki = StokkiSession(config)
-            pendentes: list[tuple[PontoRedespacho, list[str], dict[str, str], list[str]]] = []
+            pendentes: list[tuple[PontoRedespacho, list[str], dict[str, str], list[str], str]] = []
             for chave_ponto, codigos in grupos.items():
                 ponto = pontos[chave_ponto]
                 nome_exibicao = ponto.nome
@@ -373,13 +387,29 @@ def main(modo_teste: bool, data_str: str) -> int:
                 if not codigos_novos:
                     logger.info(f"  {nome_exibicao}: {len(codigos)} pedido(s), todos já notificados hoje.")
                     continue
+                piloto = ""
+                if not modo_teste:
+                    # a tela nao tem bloqueio por transportadora (isso e o
+                    # NAO ENVIAR do cadastro, acima); aqui so liga/desliga/piloto
+                    d = decidir("transportadoras", ponto.nome_normalizado, fallback_acao=fallback, db_path=db_path)
+                    if d.acao == "NAO":
+                        logger.info(f"  {nome_exibicao}: {len(codigos_novos)} pedido(s) -- nao enviado "
+                                    f"({d.origem}: {d.motivo}).")
+                        if d.origem == "tela":
+                            # descartado pela tela = consumido: nao sai depois quando ligar
+                            for codigo in codigos_novos:
+                                registrar_notificacao(codigo, ponto.nome_normalizado)
+                        contadores["barrados_tela"] += len(codigos_novos)
+                        continue
+                    if d.acao == "PILOTO":
+                        piloto = d.destino_piloto
                 observacoes, email_stokki = conferir_na_stokki(sess_stokki, catalogo, codigos_novos, ponto)
                 for codigo, obs in observacoes.items():
                     if obs:
                         logger.info(f"  {codigo}: entregue em {nome_exibicao} pelo endereço; {obs}.")
                         divergencias.append(f"{codigo} ({nome_exibicao}): {obs}")
                 emails_transp = list(ponto.emails) or ([email_stokki] if email_stokki else [])
-                pendentes.append((ponto, codigos_novos, observacoes, emails_transp))
+                pendentes.append((ponto, codigos_novos, observacoes, emails_transp, piloto))
 
             # 2ª passada, Playwright: baixa os XMLs e envia.
             with sync_playwright() as pw:
@@ -388,7 +418,7 @@ def main(modo_teste: bool, data_str: str) -> int:
                 if pendentes:
                     _login(page, config)
 
-                for ponto, codigos_novos, observacoes, emails_transp in pendentes:
+                for ponto, codigos_novos, observacoes, emails_transp, piloto in pendentes:
                     sessao_uso.renovar(DONO_TRAVA, ttl_segundos=600)
                     chave_transp = ponto.nome_normalizado  # chave do fingerprint
                     nome_exibicao = ponto.nome
@@ -418,7 +448,7 @@ def main(modo_teste: bool, data_str: str) -> int:
 
                     cc = sorted({e for i in itens for e in i["emails_embarcador"]})
 
-                    if not emails_transp and not modo_teste:
+                    if not emails_transp and not modo_teste and not piloto:
                         logger.warning(f"  {nome_exibicao}: sem e-mail cadastrado (planilha nem Stokki) -- "
                                        f"{len(itens)} pedido(s) não notificado(s).")
                         contadores["sem_email"] += 1
@@ -431,11 +461,15 @@ def main(modo_teste: bool, data_str: str) -> int:
                         conteudo = _bloco_teste(ponto, emails_transp, cc, itens, observacoes) + conteudo
                         if not emails_transp:
                             contadores["sem_email"] += 1
+                    elif piloto:
+                        assunto = f"[PILOTO] {assunto} — {nome_exibicao}"
+                        conteudo = _bloco_teste(ponto, emails_transp, cc, itens, observacoes,
+                                                titulo="PILOTO (tela de Notificações)") + conteudo
                     corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
                     anexos = [(i["caminho_xml"], f"{i['codigo']}_NFe.xml") for i in itens]
 
-                    destinos = [EMAIL_TESTE] if modo_teste else emails_transp
-                    cc_final = [] if modo_teste else cc
+                    destinos = [EMAIL_TESTE] if modo_teste else ([piloto] if piloto else emails_transp)
+                    cc_final = [] if (modo_teste or piloto) else cc
 
                     if modo_teste:
                         logger.info(f"  [TESTE] {nome_exibicao} -> {EMAIL_TESTE} "
@@ -443,6 +477,11 @@ def main(modo_teste: bool, data_str: str) -> int:
                                    f"{len(itens)} pedido(s): {[i['codigo'] for i in itens]}")
 
                     if enviar_email(destinos, assunto, corpo, config_email, cc=cc_final, anexos=anexos):
+                        if piloto:
+                            # cópia de piloto: não conta como recebido pela
+                            # transportadora, não marca fingerprint
+                            contadores["copias_piloto"] += 1
+                            continue
                         contadores["transportadoras_notificadas"] += 1
                         contadores["pedidos_enviados"] += len(itens)
                         if not modo_teste:
@@ -462,6 +501,8 @@ def main(modo_teste: bool, data_str: str) -> int:
                       f"{contadores['sem_email']} transportadora(s) sem e-mail, "
                       f"{contadores['sem_xml']} pedido(s) sem XML, "
                       f"{contadores['nao_enviar']} pedido(s) de transportadora marcada NÃO ENVIAR, "
+                      f"{contadores['barrados_tela']} pedido(s) barrado(s) pela tela, "
+                      f"{contadores['copias_piloto']} cópia(s) de piloto, "
                       f"{contadores['falhas']} falha(s) de envio.",
         }
         if divergencias:
