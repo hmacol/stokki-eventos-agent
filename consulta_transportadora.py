@@ -21,9 +21,11 @@ from datetime import date, datetime
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 import email_utils
+import limite_piloto
 import notificar_whatsapp
 import preferencias_notificacao
 import transportadoras_cadastro as tc
+from controle_notificacoes import acao_do_config, decidir
 from regras.transportadoras import _normalizar
 from transportadoras_cadastro import DB_PATH, ErroCadastro
 
@@ -319,21 +321,68 @@ def _corpo_email(transp: dict, pedidos: list[dict], url: str, lembrete: bool) ->
     return email_utils.envelope_html(conteudo, cor_acento=email_utils.COR_DESTAQUE)
 
 
-def enviar_aviso(conn, consulta: dict, config: dict, lembrete: bool, modo_teste: bool) -> dict:
+def _marcar_aviso(conn, consulta: dict, lembrete: bool) -> None:
+    campo = "ultimo_lembrete_em" if lembrete else "enviado_em"
+    conn.execute(f"UPDATE transportadora_consultas SET {campo}=? WHERE id=?", (_agora(), consulta["id"]))
+    conn.commit()
+
+
+def enviar_aviso(conn, consulta: dict, config: dict, lembrete: bool, modo_teste: bool, db_path=None) -> dict:
     """Avisa o embarcador (e-mail + WhatsApp) com o link de resposta.
     Marca enviado_em (1o aviso) ou ultimo_lembrete_em; modo_teste monta tudo
-    mas nao envia nem marca."""
+    mas nao envia nem marca (e ignora a tela de Notificacoes).
+
+    Tela de Notificacoes (controle_notificacoes.py, tipo "consulta_transportadora",
+    e-mail e WhatsApp decididos separadamente, identidade = cnpj do embarcador):
+    vale por cima do config (que fica de fallback). Os dois canais NAO pela tela
+    -> aviso consumido (marca enviado_em/ultimo_lembrete_em sem enviar). PILOTO
+    manda a copia so ao piloto, uma por consulta por dia, e nao marca (o aviso ao
+    embarcador continua devido). `db_path`: banco do controle (so nos testes)."""
     res = {"email": False, "whatsapp": "desligado", "sem_contato": False}
     cfg = config_consulta(config)
-    if not cfg["ativo"]:
+    cnpj = consulta["embarcador_cnpj"]
+    forcar_email = (cfg["forcar_destino_email"] or "").strip()
+    d_email = d_wpp = None
+    if not modo_teste:
+        # o que o config decidiria hoje; WhatsApp: chave propria, ausente vale clientes.forcar_destino
+        forcar_wpp = cfg["forcar_destino_whatsapp"]
+        if forcar_wpp is None:
+            forcar_wpp = (((config or {}).get("whatsapp_notificacoes") or {}).get("clientes", {}) or {}).get("forcar_destino")
+        d_email = decidir("consulta_transportadora", cnpj, canal="email", db_path=db_path,
+                          fallback_acao=acao_do_config(cfg["ativo"], forcar_email), fallback_piloto=forcar_email)
+        d_wpp = decidir("consulta_transportadora", cnpj, canal="whatsapp", db_path=db_path,
+                        fallback_acao=acao_do_config(cfg["ativo"], str(forcar_wpp or "").strip()))
+    tela_email = d_email is not None and d_email.origem == "tela"
+    tela_wpp = d_wpp is not None and d_wpp.origem == "tela"
+    if not cfg["ativo"] and not (tela_email or tela_wpp):
         return res
+    if tela_email and tela_wpp and d_email.acao == "NAO" and d_wpp.acao == "NAO":
+        logger.info(f"consulta {consulta['id']}: aviso barrado pela tela de Notificacoes "
+                    f"({d_email.motivo}); consumido.")
+        _marcar_aviso(conn, consulta, lembrete)
+        res["whatsapp"] = "bloqueado"
+        return res
+    email_piloto = tela_email and d_email.acao == "PILOTO"
+    wpp_piloto = tela_wpp and d_wpp.acao == "PILOTO"
+    email_nao = tela_email and d_email.acao == "NAO"
+    wpp_nao = tela_wpp and d_wpp.acao == "NAO"
+    if email_piloto and limite_piloto.ja_enviado_hoje("piloto_consulta_email", consulta["id"], db_path):
+        email_nao = True   # a copia de hoje ja saiu
+    if wpp_piloto and limite_piloto.ja_enviado_hoje("piloto_consulta_whatsapp", consulta["id"], db_path):
+        wpp_nao = True
     transp = tc.buscar(conn, consulta["transportadora_id"]) or {}
-    pedidos = pedidos_parados(conn, consulta["transportadora_id"], consulta["embarcador_cnpj"])
-    emb = _embarcador(conn, consulta["embarcador_cnpj"])
-    forcar = (cfg["forcar_destino_email"] or "").strip()
-    destinos = [forcar] if forcar else emb["emails"]
-    if not destinos and not emb["whatsapp"]:
-        res["sem_contato"] = True
+    pedidos = pedidos_parados(conn, consulta["transportadora_id"], cnpj)
+    emb = _embarcador(conn, cnpj)
+    if tela_email:
+        destinos = ([d_email.destino_piloto] if email_piloto else emb["emails"]) if emb["emails"] else []
+    else:
+        destinos = [forcar_email] if forcar_email else emb["emails"]
+    if email_nao:
+        destinos = []
+    whatsapp = None if wpp_nao else emb["whatsapp"]
+    if not destinos and not whatsapp:
+        # sem contato de verdade (nada barrado pela tela por falta de contato)
+        res["sem_contato"] = not (email_nao or wpp_nao)
         return res
     url = link(config, consulta["id"])
     nome = transp.get("nome") or ""
@@ -345,14 +394,23 @@ def enviar_aviso(conn, consulta: dict, config: dict, lembrete: bool, modo_teste:
         if modo_teste:
             logger.info(f"[modo-teste] e-mail da consulta {consulta['id']} iria para {destinos}")
         else:
-            res["email"] = bool(email_utils.enviar_email(destinos, assunto, corpo, (config or {}).get("email") or {}))
-    if emb["whatsapp"]:
+            enviado = bool(email_utils.enviar_email(destinos, assunto, corpo, (config or {}).get("email") or {}))
+            if enviado and email_piloto:
+                limite_piloto.registrar_enviado("piloto_consulta_email", consulta["id"], db_path)
+            else:
+                res["email"] = enviado
+    if whatsapp:
         texto = notificar_whatsapp.texto_consulta_transportadora(nome, len(pedidos), url, lembrete)
         assinatura = f"consulta_transportadora:{consulta['id']}:{date.today().isoformat()}"
-        res["whatsapp"] = notificar_whatsapp.avisar_cliente_transportadora(
-            consulta["embarcador_cnpj"], emb["whatsapp"], texto, assinatura, config, modo_teste=modo_teste)
+        kw = {}
+        if tela_wpp:   # troca o forcar_destino_whatsapp do config so nesta chamada
+            kw["destino_forcado"] = d_wpp.destino_piloto if wpp_piloto else ""
+        situacao = notificar_whatsapp.avisar_cliente_transportadora(
+            cnpj, whatsapp, texto, assinatura, config, modo_teste=modo_teste, **kw)
+        if situacao == "enviado" and wpp_piloto:
+            limite_piloto.registrar_enviado("piloto_consulta_whatsapp", consulta["id"], db_path)
+            situacao = "piloto"   # copia ao piloto: o aviso ao embarcador segue devido
+        res["whatsapp"] = situacao
     if not modo_teste and (res["email"] or res["whatsapp"] == "enviado"):
-        campo = "ultimo_lembrete_em" if lembrete else "enviado_em"
-        conn.execute(f"UPDATE transportadora_consultas SET {campo}=? WHERE id=?", (_agora(), consulta["id"]))
-        conn.commit()
+        _marcar_aviso(conn, consulta, lembrete)
     return res

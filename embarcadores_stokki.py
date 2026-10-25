@@ -14,6 +14,12 @@ Roda de hora em hora, 07h-19h (infra/stokki-embarcadores-novos.timer):
    Stokki, senao e-mail, senao so aviso no grupo;
 4. convite sem PIN depois de 3 dias: reenvia uma vez.
 
+Tela de Notificacoes (controle_notificacoes.py, tipo "convite_embarcador",
+e-mail e WhatsApp decididos separadamente): vale por cima do config. Convite e
+ESTADO, nao evento: NAO pela tela (ou PILOTO) nao marca CONVIDADO, o
+pre-cadastro segue pendente e o convite sai quando a tela ligar. PILOTO manda
+a copia so ao piloto, uma por dia por canal.
+
 Envio ao cliente preso por padrao: WhatsApp em
 cadastro_embarcador.forcar_destino_whatsapp (ausente = vale
 whatsapp_notificacoes.clientes.forcar_destino); e-mail em
@@ -38,7 +44,9 @@ sys.path.insert(0, str(_RAIZ / "portal_cliente"))
 import auth_cliente as auth  # noqa: E402  (portal_cliente/auth_cliente.py)
 import cadastro_embarcador as cad  # noqa: E402
 import notificar_whatsapp as nw  # noqa: E402
+import limite_piloto  # noqa: E402
 import preferencias_notificacao as pn  # noqa: E402
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 
 logger = logging.getLogger("embarcadores_stokki")
 
@@ -189,6 +197,8 @@ def pre_cadastrar(conn, cli: dict, contato: dict, ativo: bool, agora: datetime) 
 DIAS_REENVIO = 3
 ORIGEM_GRUPO = "embarcadores_stokki"
 FORCAR_EMAIL_PADRAO = "hugo@freshlogbr.com"
+# retornos de convidar() que nao marcam o convite (segue pendente)
+SEM_MARCAR = ("adiado", "bloqueado", "piloto")
 _DESFECHOS = {"whatsapp": "Convite por WhatsApp.", "email": "Sem WhatsApp válido, convite por e-mail.",
               "nenhum": "Sem contato na Stokki, cadastrar à mão."}
 
@@ -226,17 +236,33 @@ def texto_inativos(n: int) -> str:
     return f"{n} embarcador(es) da Stokki sem pedido nos últimos {DIAS_ATIVO} dias entraram como inativos (sem convite)."
 
 
-def destino_email(config: dict, email: str) -> tuple[list[str], bool]:
-    """Ausente = Hugo; envio real so com forcar_destino_email: '' explicito."""
-    forcar = str((config.get("cadastro_embarcador") or {}).get("forcar_destino_email", FORCAR_EMAIL_PADRAO) or "").strip()
+def _forcar_email(config: dict) -> str:
+    """forcar_destino_email do config: ausente = Hugo; '' explicito = envio real."""
+    return str((config.get("cadastro_embarcador") or {}).get("forcar_destino_email", FORCAR_EMAIL_PADRAO) or "").strip()
+
+
+def _forcar_whatsapp(config: dict) -> str:
+    """forcar_destino_whatsapp do config; ausente vale whatsapp_notificacoes.clientes.forcar_destino."""
+    cfg_cad = config.get("cadastro_embarcador") or {}
+    if "forcar_destino_whatsapp" in cfg_cad:
+        return str(cfg_cad["forcar_destino_whatsapp"] or "").strip()
+    return str(nw._cfg_clientes(config).get("forcar_destino") or "").strip()
+
+
+def destino_email(config: dict, email: str, destino_forcado: str | None = None) -> tuple[list[str], bool]:
+    """Ausente = Hugo; envio real so com forcar_destino_email: '' explicito.
+    `destino_forcado` (tela de Notificacoes) troca isso so nesta chamada:
+    e-mail = copia de piloto, '' = envio real; None = vale o config."""
+    forcar = _forcar_email(config) if destino_forcado is None else str(destino_forcado or "").strip()
     return ([forcar], True) if forcar else ([email], False)
 
 
-def enviar_convite_email(config: dict, nome: str, cnpj: str, email: str, link: str, enviar=None) -> bool:
+def enviar_convite_email(config: dict, nome: str, cnpj: str, email: str, link: str, enviar=None,
+                         destino_forcado: str | None = None) -> bool:
     from email_utils import envelope_html
     if enviar is None:
         from email_utils import enviar_email as enviar
-    destinos, teste = destino_email(config, email)
+    destinos, teste = destino_email(config, email, destino_forcado)
     nome_html, cnpj_fmt = html_lib.escape(nome), auth.formatar_cnpj(cnpj)
     aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
              f"<b>Convite pra repassar.</b> Pré-cadastro automático de <b>{nome_html}</b> (CNPJ {cnpj_fmt}). "
@@ -269,10 +295,22 @@ def avisar_grupo(conn, config: dict, texto: str, assinatura: str, modo_teste: bo
                         modo_teste=modo_teste, conn=conn, **kw)
 
 
+def _destino_forcado(d) -> tuple[str | None, bool]:
+    """(destino_forcado, piloto) da decisao da tela. Decisao do config (ou
+    modo teste, d None): None, vale o forcar_destino do config."""
+    if d is None or d.origem != "tela":
+        return None, False
+    piloto = d.acao == "PILOTO"
+    return (d.destino_piloto if piloto else ""), piloto
+
+
 def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = False, enviar_email=None,
-             reenvio: bool = False, **kw) -> str:
-    """Convite pelo melhor canal: whatsapp | email | nenhum | adiado. Adiado
-    (teto, gateway ou SMTP fora) nao grava nada: tenta na proxima rodada."""
+             reenvio: bool = False, db_path=None, **kw) -> str:
+    """Convite pelo melhor canal: whatsapp | email | nenhum | adiado | bloqueado
+    | piloto. Adiado (teto, gateway ou SMTP fora) nao grava nada: tenta na
+    proxima rodada. Bloqueado (tela de Notificacoes barrou os canais) e piloto
+    (so a copia ao piloto saiu) tambem nao gravam: o convite segue pendente.
+    `db_path`: banco do controle da tela de Notificacoes (so nos testes)."""
     c = cad.buscar(conn, cnpj)
     emb = conn.execute("SELECT apelido, nome_remetente, email FROM interno WHERE cnpj_embarcador = ?",
                        (c["cnpj_embarcador"],)).fetchone()
@@ -280,11 +318,30 @@ def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = 
     email = (c["email_stokki"] or emb[2] or "").split(",")[0].strip()
     link = link_convite(conn, config, c["cnpj_embarcador"])
     numero = celular_whatsapp(c["celular_stokki"])
+    cnpj_emb = c["cnpj_embarcador"]
+    d_wpp = d_email = None   # modo teste ignora a tela
+    if not modo_teste:
+        d_wpp = decidir("convite_embarcador", cnpj_emb, canal="whatsapp", db_path=db_path,
+                        fallback_acao=acao_do_config(nw.clientes_ligado(config), _forcar_whatsapp(config)))
+        forcar_email = _forcar_email(config)
+        d_email = decidir("convite_embarcador", cnpj_emb, canal="email", db_path=db_path,
+                          fallback_acao=acao_do_config(True, forcar_email), fallback_piloto=forcar_email)
+    wpp_barrado = d_wpp is not None and d_wpp.origem == "tela" and d_wpp.acao == "NAO"
+    email_barrado = d_email is not None and d_email.origem == "tela" and d_email.acao == "NAO"
+    forcado_wpp, wpp_piloto = _destino_forcado(d_wpp)
+    forcado_email, email_piloto = _destino_forcado(d_email)
     canal = None
-    if numero:
+    if numero and not wpp_barrado:
+        if wpp_piloto and limite_piloto.ja_enviado_hoje("piloto_convite_whatsapp", cnpj_emb, db_path):
+            return "piloto"   # a copia de hoje ja saiu (e o convite iria por aqui)
         assinatura = f"cadastro:{c['cnpj_embarcador']}:{'reenvio' if reenvio else 'convite'}"
         situacao = nw.avisar_cliente_cadastro(c["cnpj_embarcador"], numero, texto_convite(link), assinatura, config,
-                                              modo_teste=modo_teste, conn=conn, agora=agora, **kw)
+                                              modo_teste=modo_teste, conn=conn, agora=agora,
+                                              destino_forcado=forcado_wpp, **kw)
+        if situacao == "enviado" and wpp_piloto:
+            limite_piloto.registrar_enviado("piloto_convite_whatsapp", cnpj_emb, db_path)
+            logger.info(f"Convite de {nome}: copia de piloto -> {forcado_wpp}; embarcador nao convidado.")
+            return "piloto"
         if situacao in ("enviado", "modo_teste"):
             canal = "whatsapp"
             if situacao == "enviado":
@@ -299,15 +356,25 @@ def convidar(conn, config: dict, cnpj: str, agora: datetime, modo_teste: bool = 
             return "adiado"
         elif situacao == "desligado":
             logger.info(f"WhatsApp de clientes desligado: convite de {nome} vai por e-mail.")
+    if canal is None and ((email and email_barrado) or (not email and wpp_barrado)):
+        logger.info(f"Convite de {nome} barrado pela tela de Notificacoes; segue pendente.")
+        return "bloqueado"
     if canal is None and email:
         if modo_teste:
             logger.info(f"[MODO TESTE] convite por e-mail pra {destino_email(config, email)[0]} ({nome}).")
             canal = "email"
-        elif enviar_convite_email(config, nome, c["cnpj_embarcador"], email, link, enviar_email):
-            canal = "email"
         else:
-            logger.info(f"Convite de {nome} adiado (e-mail falhou).")
-            return "adiado"
+            if email_piloto and limite_piloto.ja_enviado_hoje("piloto_convite_email", cnpj_emb, db_path):
+                return "piloto"
+            if not enviar_convite_email(config, nome, c["cnpj_embarcador"], email, link, enviar_email,
+                                        destino_forcado=forcado_email):
+                logger.info(f"Convite de {nome} adiado (e-mail falhou).")
+                return "adiado"
+            if email_piloto:
+                limite_piloto.registrar_enviado("piloto_convite_email", cnpj_emb, db_path)
+                logger.info(f"Convite de {nome}: copia de piloto -> {forcado_email}; embarcador nao convidado.")
+                return "piloto"
+            canal = "email"
     canal = canal or "nenhum"
     if not modo_teste:
         if reenvio:
@@ -335,7 +402,7 @@ def reenviar_vencidos(conn, config: dict, agora: datetime, modo_teste: bool = Fa
         except Exception as exc:
             logger.warning(f"Reenvio de {nome} falhou (segue pro proximo): {exc}")
             continue
-        if canal in ("adiado", "nenhum"):
+        if canal in SEM_MARCAR or canal == "nenhum":
             continue
         enviados += 1
         avisar_grupo(conn, config, texto_reenvio(nome), f"reenvio:{cnpj}", modo_teste, **kw)
@@ -420,7 +487,7 @@ def executar(config: dict, conn, clientes: list[dict], ler_contato, vuupt, agora
                 if situacao == cad.INATIVO:
                     cad.atualizar(conn, cnpj, agora, situacao=cad.PENDENTE)
             canal = convidar(conn, config, cnpj, agora, modo_teste, enviar_email, **kw)
-            if canal == "adiado":
+            if canal in SEM_MARCAR:
                 continue
             resumo["convites"][cnpj] = canal
             avisar_grupo(conn, config, texto_grupo_novo(nome, emb[1] or "", canal), f"novo:{cnpj}", modo_teste, **kw)

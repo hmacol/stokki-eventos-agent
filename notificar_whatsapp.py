@@ -82,6 +82,8 @@ MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 MAX_INSUCESSOS = 10
 ORIGEM_CLIENTE = "cliente_sem_resposta"
+# copia de piloto da tela de Notificacoes: nao conta como recebido pelo cliente nem no teto dele
+ORIGEM_CLIENTE_PILOTO = "cliente_sem_resposta_piloto"
 TETO_CLIENTES_PADRAO = 30
 
 _SCHEMA = """
@@ -742,37 +744,80 @@ def clientes_ligado(config: dict) -> bool:
     return bool(cfg.get("ativo") and _cfg_clientes(config).get("ativo") and integracao_openwa.configurado(cfg))
 
 
-def _registrar_sem_whatsapp(conn, agora, assinatura: str) -> None:
+def gateway_clientes_ok(config: dict) -> bool:
+    """Canal de WhatsApp ligado e gateway configurado, sem olhar a chave
+    clientes.ativo (quem decide por tipo, com a tela de Notificacoes, nao
+    depende dela)."""
+    cfg = _cfg(config)
+    return bool(cfg.get("ativo") and integracao_openwa.configurado(cfg))
+
+
+def _canal_clientes_ok(config: dict, destino_forcado: str | None) -> bool:
+    """Sem `destino_forcado` vale o config (clientes.ativo). Com ele a decisao
+    veio da tela de Notificacoes, que vale por cima de clientes.ativo."""
+    return clientes_ligado(config) if destino_forcado is None else gateway_clientes_ok(config)
+
+
+def _registrar_sem_whatsapp(conn, agora, assinatura: str, origem: str = ORIGEM_CLIENTE) -> None:
     fechar = conn is None
     if fechar:
         conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
         conn.execute(_SCHEMA)
-        _registrar(conn, agora or datetime.now(), ORIGEM_CLIENTE, "chamado", assinatura,
+        _registrar(conn, agora or datetime.now(), origem, "chamado", assinatura,
                    "nao_enviado", "numero sem whatsapp")
     finally:
         if fechar:
             conn.close()
 
 
+def registrar_bloqueado_sem_resposta(conn, agora, msg_id: int, motivo: str) -> None:
+    """Aviso de chamado sem resposta barrado pela tela de Notificacoes: grava
+    msg:<id> como consumido (a rotina nunca mais seleciona essa mensagem)."""
+    fechar = conn is None
+    if fechar:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute(_SCHEMA)
+        _registrar(conn, agora or datetime.now(), ORIGEM_CLIENTE, "chamado", f"msg:{msg_id}",
+                   "bloqueado", motivo)
+    finally:
+        if fechar:
+            conn.close()
+
+
+def copia_piloto_sem_resposta_enviada(conn, msg_id: int) -> bool:
+    """Ja saiu a copia de piloto desta mensagem da equipe? (uma por mensagem)"""
+    conn.execute(_SCHEMA)
+    return conn.execute("SELECT 1 FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? LIMIT 1",
+                        (ORIGEM_CLIENTE_PILOTO, f"msg:{msg_id}")).fetchone() is not None
+
+
 def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, link: str, config: dict,
-                                modo_teste: bool = False, **kw) -> str:
+                                modo_teste: bool = False, destino_forcado: str | None = None, **kw) -> str:
     """Aviso direto ao embarcador (avisar_cliente_sem_resposta.py). `msg_id`
     e a mensagem da equipe sem resposta: vira a assinatura `msg:<id>`, que
     a rotina usa pra nunca repetir. Situacoes: desligado | modo_teste |
     numero_sem_whatsapp | indeterminado | nao_enviado | enviado | falhou.
     `indeterminado` = o gateway nao soube dizer se o numero existe: nada e
     gravado, a rotina tenta na proxima rodada. Com clientes.forcar_destino
-    a mensagem vai pra esse numero com o destino real na primeira linha."""
+    a mensagem vai pra esse numero com o destino real na primeira linha.
+    `destino_forcado` (tela de Notificacoes) troca o clientes.forcar_destino
+    so nesta chamada: numero = copia de piloto (gravada com origem propria,
+    nao conta como recebido), "" = envio real; None = vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
-        if not clientes_ligado(config) or not telefone:
+        if not _canal_clientes_ok(config, destino_forcado) or not telefone:
             return "desligado"
         texto = texto_cliente_sem_resposta(chamado_id, link)
         assinatura = f"msg:{msg_id}"
-        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        forcar = _cfg_clientes(config).get("forcar_destino") if destino_forcado is None else destino_forcado
+        destino = re.sub(r"\D", "", str(forcar or ""))
+        origem = ORIGEM_CLIENTE
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
+            if destino_forcado:
+                origem = ORIGEM_CLIENTE_PILOTO
         else:
             destino = telefone
         if not modo_teste:
@@ -781,10 +826,10 @@ def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, lin
                 logger.warning(f"WhatsApp nao enviado (chamado #{chamado_id}): gateway nao confirmou o numero.")
                 return "indeterminado"
             if not existe:
-                _registrar_sem_whatsapp(kw.get("conn"), kw.get("agora"), assinatura)
+                _registrar_sem_whatsapp(kw.get("conn"), kw.get("agora"), assinatura, origem)
                 logger.info(f"WhatsApp nao enviado (chamado #{chamado_id}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
-        return despachar(config, ORIGEM_CLIENTE, "chamado", texto, assinatura, modo_teste=modo_teste,
+        return despachar(config, origem, "chamado", texto, assinatura, modo_teste=modo_teste,
                          grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
@@ -826,20 +871,25 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
 
 
 def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: str, config: dict,
-                            modo_teste: bool = False, **kw) -> str:
+                            modo_teste: bool = False, destino_forcado: str | None = None, **kw) -> str:
     """Convite do pre-cadastro automatico (embarcadores_stokki.py): link pra
     completar o cadastro no portal. Quem chama garante uma tentativa por
     convite (assinatura cadastro:<cnpj>:convite|reenvio). Com
     forcar_destino a mensagem vai pra esse numero com o destino real na
     primeira linha. Trava propria em cadastro_embarcador.forcar_destino_whatsapp
-    (Hugo, 17/10: liberar so o convite); ausente, vale clientes.forcar_destino."""
+    (Hugo, 17/10: liberar so o convite); ausente, vale clientes.forcar_destino.
+    `destino_forcado` (tela de Notificacoes) troca isso so nesta chamada:
+    numero = copia de piloto, "" = envio real; None = vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
-        if not clientes_ligado(config) or not telefone:
+        if not _canal_clientes_ok(config, destino_forcado) or not telefone:
             return "desligado"
         cfg_cad = (config or {}).get("cadastro_embarcador") or {}
-        forcar = (cfg_cad["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_cad
-                  else _cfg_clientes(config).get("forcar_destino"))
+        if destino_forcado is not None:
+            forcar = destino_forcado
+        else:
+            forcar = (cfg_cad["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_cad
+                      else _cfg_clientes(config).get("forcar_destino"))
         destino = re.sub(r"\D", "", str(forcar or ""))
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
@@ -861,20 +911,25 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
 
 
 def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatura: str, config: dict,
-                                  modo_teste: bool = False, **kw) -> str:
+                                  modo_teste: bool = False, destino_forcado: str | None = None, **kw) -> str:
     """Aviso ao embarcador de transportadora desconhecida
     (consulta_transportadora.py): link pra informar como ela atende. Quem
     chama garante uma tentativa por consulta/dia. Trava propria em
     consulta_transportadora.forcar_destino_whatsapp (Hugo, 23/10: envio real
     desde o inicio); chave presente vale mesmo vazia, ausente vale
-    clientes.forcar_destino."""
+    clientes.forcar_destino. `destino_forcado` (tela de Notificacoes) troca
+    isso so nesta chamada: numero = copia de piloto, "" = envio real; None =
+    vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
-        if not clientes_ligado(config) or not telefone:
+        if not _canal_clientes_ok(config, destino_forcado) or not telefone:
             return "desligado"
         cfg_ct = (config or {}).get("consulta_transportadora") or {}
-        forcar = (cfg_ct["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_ct
-                  else _cfg_clientes(config).get("forcar_destino"))
+        if destino_forcado is not None:
+            forcar = destino_forcado
+        else:
+            forcar = (cfg_ct["forcar_destino_whatsapp"] if "forcar_destino_whatsapp" in cfg_ct
+                      else _cfg_clientes(config).get("forcar_destino"))
         destino = re.sub(r"\D", "", str(forcar or ""))
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
