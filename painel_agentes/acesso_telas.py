@@ -51,6 +51,7 @@ TELAS = [
     ("consulta", "Consulta", "Acompanhar", [r"^/consulta(/|$)", r"^/canhotos/\d+/foto$",
                                             r"^/financeiro/pedagios/\d+/foto$"]),
     ("baixa_sem_app", "Baixa sem app", "Acompanhar", [r"^/baixa-sem-app$", r"^/api/baixa-sem-app(/|$)"]),
+    ("solicitacoes_portal", "Pedidos do portal", "Acompanhar", [r"^/solicitacoes-portal$", r"^/api/solicitacoes-portal"]),
     ("retornos_tela", "Retornos", "Operar", [r"^/retornos(/|$)", r"^/api/retornos(/|$)"]),
     ("planejamento", "Planejamento", "Planejar", [r"^/planejamento(/|$)", r"^/api/planejamento/",
                                                   r"^/api/torre/marcar-entregue$"]),

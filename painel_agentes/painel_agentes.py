@@ -812,6 +812,87 @@ def api_avisos_ignorar():
     return _com_cookie_aparelho(jsonify({"ok": True, "ate": ate.isoformat(timespec="seconds")}))
 
 
+# ── Pedidos do portal: executar ou recusar a solicitação do cliente ──────────
+
+_NIVEIS_SOLICITACAO = ("total", "operador", "logistica")
+
+
+def _criado_em_curto(valor) -> str:
+    """'2026-10-24T09:05:00' -> '24/10 09:05' (devolve o texto cru se não casar)."""
+    v = str(valor or "").replace("T", " ")
+    if len(v) >= 16 and v[4] == "-" and v[7] == "-":
+        return f"{v[8:10]}/{v[5:7]} {v[11:16]}"
+    return v
+
+
+@app.route("/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def solicitacoes_portal():
+    return render_template("solicitacoes_portal.html")
+
+
+@app.route("/api/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def api_solicitacoes_portal():
+    from portal_cliente import envio_pedidos
+    conn = envio_pedidos.conectar()
+    try:
+        linhas = envio_pedidos.listar_solicitacoes_pendentes(conn)
+    finally:
+        conn.close()
+    itens = [{
+        "id": s["id"],
+        "tipo": s["tipo"],
+        "rotulo": envio_pedidos.ROTULOS_SOLICITACAO.get(s["tipo"], s["tipo"]),
+        "embarcador": s.get("cnpj_embarcador") or "",
+        "codigo_pedido": s.get("codigo_pedido") or "",
+        "numero_nf": s.get("numero_nf") or "",
+        "destinatario": s.get("destinatario_nome") or "",
+        "criado_em": _criado_em_curto(s.get("criado_em")),
+        "detalhe": s.get("motivo") or s.get("detalhe") or "",
+    } for s in linhas]
+    return jsonify({"solicitacoes": itens})
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/executar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_executar(solicitacao_id):
+    """Síncrono (ação pontual de um operador; a trava da Stokki espera até 60 s)."""
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    try:
+        deps = solicitacoes_execucao.dependencias_reais(_carregar_config(), usuario=session.get("usuario") or "")
+        conn = envio_pedidos.conectar()
+        try:
+            resultado = solicitacoes_execucao.executar(conn, solicitacao_id, deps)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception(f"[solicitacoes-portal] Falha ao executar {solicitacao_id}")
+        return jsonify({"ok": False, "mensagem": "Erro inesperado ao executar. Veja o log do painel."}), 500
+    return jsonify(resultado)
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/recusar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_recusar(solicitacao_id):
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    corpo = request.get_json(silent=True) or {}
+    resposta = corpo.get("resposta")
+    resposta = resposta.strip() if isinstance(resposta, str) else ""
+    if not resposta or len(resposta) > 500:
+        return jsonify({"ok": False, "mensagem": "Informe a resposta ao cliente (até 500 caracteres)."}), 400
+    conn = envio_pedidos.conectar()
+    try:
+        solicitacoes_execucao.recusar(conn, solicitacao_id, resposta)
+    except ValueError as e:
+        return jsonify({"ok": False, "mensagem": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "mensagem": "Solicitação recusada."})
+
+
 def _niveis_por_contador() -> dict:
     """Acesso personalizado: so os contadores das telas liberadas."""
     telas = g.get("telas_liberadas")

@@ -135,6 +135,11 @@
  Canhotos pendentes ......................... /canhotos-pendentes (canhotos_pendentes.html, total/operador):
                                              entregues sem nenhum comprovante (padrão 60 dias); o canhoto
                                              fica guardado conosco (canhotos_manuais), NÃO vai pra Stokki
+ Pedidos do portal (solicitações do cliente)  /solicitacoes-portal (solicitacoes_portal.html, total/operador/logistica,
+                                             grupo Acompanhar; destino do aviso "solicitacoes_portal"). API:
+                                             GET /api/solicitacoes-portal, POST /api/solicitacoes-portal/<id>/executar
+                                             (síncrono; portal_cliente/solicitacoes_execucao.executar) e /recusar
+                                             {"resposta"}. Testes: painel_agentes/test_solicitacoes_portal_tela.py.
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
