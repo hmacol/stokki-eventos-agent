@@ -423,10 +423,13 @@ class TestFuncoesDoWhatsapp(unittest.TestCase):
         self.assertEqual(nw.avisar_cliente_transportadora("1", "5511988887777", "t", "t:1", cfg, conn=self.conn,
                                                           agora=agora, dormir=lambda s: None,
                                                           destino_forcado="5511977776666"), "enviado")
+        self.assertEqual(nw.avisar_cliente_fora_dia_fixo("PS-1", "5511988887777", "t", cfg, conn=self.conn,
+                                                         agora=agora, dormir=lambda s: None,
+                                                         destino_forcado="5511977776666"), "enviado")
         origens = {r[0] for r in self.conn.execute("SELECT DISTINCT origem FROM notificacoes_whatsapp")}
         self.assertEqual(origens, set(nw.ORIGENS_PILOTO))
         self.assertEqual(nw.saldo_clientes(self.conn, cfg, agora), 30)
-        # teto interno (2) intacto: 7 copias de piloto nao entraram na conta
+        # teto interno (2) intacto: 8 copias de piloto nao entraram na conta
         self.assertEqual(nw.despachar(cfg, "alertas", "falha", "x", conn=self.conn, agora=agora,
                                       dormir=lambda s: None), "enviado")
         self.assertEqual(nw.despachar(cfg, "alertas", "falha", "y", conn=self.conn, agora=agora,

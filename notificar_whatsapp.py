@@ -87,7 +87,9 @@ ORIGEM_CLIENTE = "cliente_sem_resposta"
 ORIGEM_CLIENTE_PILOTO = "cliente_sem_resposta_piloto"
 ORIGEM_CADASTRO_PILOTO = "cliente_cadastro_piloto"
 ORIGEM_TRANSPORTADORA_PILOTO = "cliente_transportadora_piloto"
-ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO)
+ORIGEM_FORA_DIA_FIXO_PILOTO = "cliente_fora_dia_fixo_piloto"
+ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO,
+                  ORIGEM_FORA_DIA_FIXO_PILOTO)
 TETO_PILOTO_PADRAO = 20
 TETO_CLIENTES_PADRAO = 30
 
@@ -865,16 +867,19 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
     repeticao (origem de cliente): quem chama garante um aviso por pedido.
     Com clientes.forcar_destino a mensagem vai pra esse numero com o destino
     real na primeira linha. `destino_forcado` (tela de Notificacoes) troca o
-    clientes.forcar_destino so nesta chamada: numero = copia de piloto,
-    "" = envio real; None = vale o config."""
+    clientes.forcar_destino so nesta chamada: numero = copia de piloto
+    (origem propria, teto do piloto), "" = envio real; None = vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
         if not _canal_clientes_ok(config, destino_forcado) or not telefone:
             return "desligado"
         forcar = _cfg_clientes(config).get("forcar_destino") if destino_forcado is None else destino_forcado
         destino = re.sub(r"\D", "", str(forcar or ""))
+        origem = ORIGEM_CLIENTE
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
+            if destino_forcado:
+                origem = ORIGEM_FORA_DIA_FIXO_PILOTO
         else:
             destino = telefone
         if not modo_teste:
@@ -885,7 +890,7 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
             if not existe:
                 logger.info(f"WhatsApp nao enviado (fora do dia fixo {codigo}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
-        return despachar(config, ORIGEM_CLIENTE, "fora_dia_fixo", texto, f"fora_dia_fixo:{codigo}",
+        return despachar(config, origem, "fora_dia_fixo", texto, f"fora_dia_fixo:{codigo}",
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")

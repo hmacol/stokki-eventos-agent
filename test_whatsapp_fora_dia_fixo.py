@@ -81,6 +81,14 @@ class TestEnvio(unittest.TestCase):
         self.assertEqual(destino, "5511977776666@c.us")
         self.assertTrue(texto.startswith("[teste → +5511988887777]"))
 
+    def test_copia_de_piloto_tem_origem_propria_e_nao_come_o_teto_dos_clientes(self):
+        self.assertIn(nw.ORIGEM_FORA_DIA_FIXO_PILOTO, nw.ORIGENS_PILOTO)
+        self.assertEqual(self._avisar(destino_forcado="5511977776666"), "enviado")
+        origem = self.conn.execute("SELECT origem FROM notificacoes_whatsapp").fetchone()[0]
+        self.assertEqual(origem, "cliente_fora_dia_fixo_piloto")
+        self.assertEqual(nw.saldo_clientes(self.conn, CONFIG, datetime(2026, 10, 6, 18, 0)), 30)
+        self.assertEqual(nw.saldo_piloto(self.conn, CONFIG, datetime(2026, 10, 6, 18, 0)), nw.TETO_PILOTO_PADRAO - 1)
+
     def test_destino_forcado_vazio_envia_de_verdade_mesmo_com_forcar_destino_no_config(self):
         cfg = {"whatsapp_notificacoes": {**CONFIG["whatsapp_notificacoes"],
                                          "clientes": {"ativo": True, "forcar_destino": "5511999990000"}}}
