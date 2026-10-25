@@ -113,7 +113,8 @@ def _codigo_pedido(servico: dict) -> str:
     return (servico.get("code", "") or "").lstrip("#")
 
 
-def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "") -> str:
+def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "",
+                     marcadores: bool = True) -> str:
     linhas = "".join(f"""
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + _codigo_pedido(p))}</td>
@@ -123,13 +124,14 @@ def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "
     # Marcadores ocultos (09/09): mesmo formato do e-mail de solicitação
     # por pedido (agendamento_confirmacao.py) -- ler_respostas_agendamento
     # .py acha a thread pelo(s) pedido(s) e aplica a resposta. Sem isso a
-    # resposta a ESTE e-mail era ignorada.
+    # resposta a ESTE e-mail era ignorada. A copia de piloto vai sem eles
+    # (marcadores=False): a resposta do piloto nao vale como do embarcador.
     marcador = (
         '<div style="display:none">'
         + (f"[[AGENTE_AGENDAMENTO_EMBARCADOR:{cnpj_emb}]]" if cnpj_emb else "")
         + "".join(f"[[PEDIDO:{_codigo_pedido(p)}]]" for p in pedidos)
         + "</div>"
-    )
+    ) if marcadores else ""
 
     return f"""{marcador}
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">URGENTE</p>
@@ -214,7 +216,7 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                 continue
 
         assunto = f"[URGENTE] Confirmação de agendamento necessária — {len(pedidos)} pedido(s)"
-        conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""))
+        conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""), marcadores=not piloto)
         if piloto:
             conteudo = _faixa_piloto(emb["emails"]) + conteudo
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",

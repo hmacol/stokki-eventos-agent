@@ -344,12 +344,15 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
 
         assunto = (f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s) com "
                    f"insucesso na entrega, aguardando retorno")
+        # a copia de piloto vai sem os botoes: eles aplicam reenviar/nao reenviar no
+        # grupo real da Vuupt
         conteudo = _montar_conteudo(emb["nome"], motivo_texto, pedidos, textos,
-                                    url_resposta=url_resposta)
+                                    url_resposta="" if piloto else url_resposta)
         if piloto:
             conteudo = (f'<p style="margin:0 0 16px 0;padding:8px 12px;background:{COR_FUNDO};'
                         f'border:1px dashed {COR_BORDA};font-size:12px;color:{COR_TEXTO};">'
-                        f'Piloto: iria para {html.escape(", ".join(emb["emails"]))}</p>') + conteudo
+                        f'Piloto: iria para {html.escape(", ".join(emb["emails"]))} '
+                        f'(cópia sem os botões de resposta)</p>') + conteudo
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
         destinos = [EMAIL_TESTE] if modo_teste else [decisao.destino_piloto] if piloto else emb["emails"]
 

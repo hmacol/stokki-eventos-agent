@@ -122,6 +122,18 @@ class TestInsucesso(_ComControle):
         marcar.assert_not_called()
         registrar.assert_not_called()
 
+    def test_insucesso_piloto_sem_botoes_de_resposta(self):
+        # os botoes assinados aplicam reenviar/nao reenviar no grupo real da Vuupt:
+        # a copia de piloto nao pode leva-los
+        self._estado("insucesso", "PILOTO")
+        self._piloto()
+        _, enviar, _, _ = self._rodar()
+        self.assertNotIn(CONFIG_RESPOSTA["url_base"], enviar.call_args.args[2])
+        # o envio real continua com os botoes
+        self._estado("insucesso", "LIGADO")
+        _, enviar, _, _ = self._rodar()
+        self.assertIn(CONFIG_RESPOSTA["url_base"], enviar.call_args.args[2])
+
     def test_insucesso_piloto_manda_uma_copia_por_pedido_por_dia(self):
         self._estado("insucesso", "PILOTO")
         self._piloto()
@@ -202,6 +214,20 @@ class TestAgendamentoPendente(_ComControle):
         conn.close()
         resultado, enviar, _ = self._rodar()   # a copia de ontem nao vale hoje
         self.assertEqual(resultado["enviados"], 1)
+
+    def test_agendamento_pendente_piloto_sem_marcadores_de_resposta(self):
+        # sem [[AGENTE_AGENDAMENTO_EMBARCADOR]] e [[PEDIDO:..]]: uma resposta do piloto
+        # nao pode ser aplicada por ler_respostas_agendamento como se fosse do embarcador
+        self._estado("agendamento", "PILOTO")
+        self._piloto()
+        _, enviar, _ = self._rodar()
+        self.assertNotIn("[[AGENTE_AGENDAMENTO_EMBARCADOR", enviar.call_args.args[2])
+        self.assertNotIn("[[PEDIDO:", enviar.call_args.args[2])
+        # o envio real continua com os marcadores
+        self._estado("agendamento", "LIGADO")
+        _, enviar, _ = self._rodar()
+        self.assertIn(f"[[AGENTE_AGENDAMENTO_EMBARCADOR:{CNPJ_A}]]", enviar.call_args.args[2])
+        self.assertIn("[[PEDIDO:PS-1]]", enviar.call_args.args[2])
 
     def test_agendamento_pendente_piloto_manda_pro_piloto_sem_registrar(self):
         self._estado("agendamento", "PILOTO")
