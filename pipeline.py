@@ -664,6 +664,7 @@ def processar_pedido(
                     nome_transportadora=res_end.transportadora.get("nome", ""),
                     email_emb=dados_banco.get("email", ""),
                     config_email=config_email or {},
+                    cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
                 )
                 if enviado:
                     logger.info(f"  {codigo_ps}: solicitação de confirmação de redespacho enviada.")
@@ -1304,7 +1305,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # avisa os remetentes no mesmo e-mail do agendamento por dia fixo
     # (1 e-mail por remetente, com data original e data ajustada).
     ajustes_dia_fixo = [r["ajuste_dia_fixo"] for r in resultados if r.get("ajuste_dia_fixo")]
-    if ajustes_dia_fixo and notificacoes_automaticas_ativas(config):
+    if ajustes_dia_fixo:
         try:
             from roteirizacao.notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
             itens = [{
@@ -1314,8 +1315,10 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 "data":   date.fromisoformat(a["data"]),
                 "data_original": date.fromisoformat(a["data_original"]),
             } for a in ajustes_dia_fixo]
+            # a chave-mestra é só o fallback; a tela de Notificações vale por cima
             resultado_aviso = notificar_agendamentos_dia_fixo(
-                itens, config.get("email", {}), modo_teste=modo_teste)
+                itens, config.get("email", {}), modo_teste=modo_teste,
+                mestra=notificacoes_automaticas_ativas(config))
             logger.info(f"Notificação de ajuste por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.warning(f"Falha ao notificar ajustes de dia fixo (não afeta a importação): {e}")

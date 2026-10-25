@@ -792,17 +792,20 @@ def avisar_cliente_sem_resposta(chamado_id: int, msg_id: int, telefone: str, lin
 
 
 def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config: dict,
-                                 modo_teste: bool = False, **kw) -> str:
+                                 modo_teste: bool = False, destino_forcado: str | None = None, **kw) -> str:
     """Aviso direto ao embarcador (roteirizacao/notificar_fora_dia_fixo.py):
     data escolhida fora do dia de visita virou envio dedicado. Sem janela de
     repeticao (origem de cliente): quem chama garante um aviso por pedido.
     Com clientes.forcar_destino a mensagem vai pra esse numero com o destino
-    real na primeira linha."""
+    real na primeira linha. `destino_forcado` (tela de Notificacoes) troca o
+    clientes.forcar_destino so nesta chamada: numero = copia de piloto,
+    "" = envio real; None = vale o config."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
         if not clientes_ligado(config) or not telefone:
             return "desligado"
-        destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+        forcar = _cfg_clientes(config).get("forcar_destino") if destino_forcado is None else destino_forcado
+        destino = re.sub(r"\D", "", str(forcar or ""))
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
         else:

@@ -73,6 +73,20 @@ class TestEnvio(unittest.TestCase):
         self.assertEqual(destino, "5511999990000@c.us")
         self.assertTrue(texto.startswith("[teste → +5511988887777]"))
 
+    def test_destino_forcado_troca_o_forcar_destino_do_config_so_na_chamada(self):
+        cfg = {"whatsapp_notificacoes": {**CONFIG["whatsapp_notificacoes"],
+                                         "clientes": {"ativo": True, "forcar_destino": "5511999990000"}}}
+        self.assertEqual(self._avisar(cfg, destino_forcado="5511977776666"), "enviado")
+        destino, texto = self.enviar.call_args[0][1:]
+        self.assertEqual(destino, "5511977776666@c.us")
+        self.assertTrue(texto.startswith("[teste → +5511988887777]"))
+
+    def test_destino_forcado_vazio_envia_de_verdade_mesmo_com_forcar_destino_no_config(self):
+        cfg = {"whatsapp_notificacoes": {**CONFIG["whatsapp_notificacoes"],
+                                         "clientes": {"ativo": True, "forcar_destino": "5511999990000"}}}
+        self.assertEqual(self._avisar(cfg, destino_forcado=""), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1:], ("5511988887777@c.us", "texto"))
+
     def test_teto_diario_dos_clientes(self):
         cfg = {"whatsapp_notificacoes": {**CONFIG["whatsapp_notificacoes"],
                                          "clientes": {"ativo": True, "teto_diario": 0, "forcar_destino": ""}}}

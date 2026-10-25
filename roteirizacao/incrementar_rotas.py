@@ -508,10 +508,11 @@ def main(modo_teste: bool = False):
                 ressincronizar_ids(vuupt, [a["servico"]["id"] for a in agendados_dia_fixo])
                 logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
                 # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
-                if notificacoes_automaticas_ativas(config):
-                    resultado_aviso = notificar_agendamentos_dia_fixo(
-                        agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste)
-                    logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
+                # (a chave-mestra é só o fallback; a tela de Notificações vale por cima)
+                resultado_aviso = notificar_agendamentos_dia_fixo(
+                    agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste,
+                    mestra=notificacoes_automaticas_ativas(config))
+                logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta o incremento): {e}")
 
