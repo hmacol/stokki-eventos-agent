@@ -32,6 +32,7 @@ class _Base(unittest.TestCase):
         self.raiz = raiz
         self._patches = [mock.patch.object(ep, "DB_PATH", raiz / "d.db"), mock.patch.object(ep, "_RAIZ", raiz),
                          mock.patch.object(tq.sessao_uso, "adquirir", return_value="principal"),
+                         mock.patch.object(tq.sessao_uso, "em_uso", return_value="outro-processo"),
                          mock.patch.object(tq.sessao_uso, "liberar")]
         for p in self._patches:
             p.start()
