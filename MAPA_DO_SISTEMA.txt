@@ -862,7 +862,7 @@
                            Serviço com [LALAMOVE <id>] no título: consulta a
                            corrida (PICKED_UP = saiu, COMPLETED = entregue).
  Demandas (tarefas pro time) .............. painel_agentes/demandas.py + tela /demandas (25/10):
-                                             equipes com membros nominais/líder/login fixo vinculado,
+                                             equipes = campo Equipe do login (lista fixa), líder e login fixo vinculado,
                                              visibilidade por pessoa/equipe, badge + som em toda tela.
                                              Substitui as Demandas do Lovable (lovable/tasks.py).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
@@ -896,7 +896,8 @@
                            equipes e o que criou (total vê tudo; login fixo vê as
                            equipes vinculadas ao nível e informa o nome pra agir).
                            Fluxo ABERTA -> EM_ANDAMENTO -> CONCLUIDA (+ CANCELADA, reabre).
-                           Tabelas demandas_equipes, demandas_equipe_membros,
+                           Equipes = acesso_telas.EQUIPES (membro = login com essa Equipe).
+                           Tabelas demandas_equipes, demandas_equipe_lideres,
                            demandas_equipe_niveis, demandas, demandas_eventos (linha do
                            tempo + ponteiro do aviso sonoro). Aviso no grupo do
                            /atendimento ("Demandas" ou o da equipe) só com número e

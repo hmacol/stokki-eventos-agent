@@ -55,20 +55,24 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         c = acesso_telas.conectar()
-        for login, nome, nivel in (("ana", "Ana", "operador"), ("bia", "Bia", "operador"),
-                                   ("caio", "Caio", "atendimento"), ("davi", "Davi", "operador")):
-            acesso_telas.criar(c, login, nome, nivel, "senha123", "teste", (), equipe="Estoque")
+        for login, nome, nivel, equipe in (("ana", "Ana", "operador", "Estoque"), ("bia", "Bia", "operador", "Estoque"),
+                                           ("caio", "Caio", "atendimento", "Atendimento"),
+                                           ("davi", "Davi", "operador", "Financeiro")):
+            acesso_telas.criar(c, login, nome, nivel, "senha123", "teste", (), equipe=equipe)
         c.execute("UPDATE painel_usuarios SET trocar_senha = 0")
         c.commit()
         c.close()
         self.conn = dm.conectar()
         self.addCleanup(self.conn.close)
         self.admin = self.ident("u", "total")
-        # Galpao: ana lider, bia membro; vinculada ao login fixo galpao. Atendimento: caio lider.
-        self.galpao = dm.salvar_equipe(self.conn, self.admin, None, {
-            "nome": "Galpão", "membros": [{"usuario": "ana", "lider": True}, {"usuario": "bia"}], "niveis": ["galpao"]})
-        self.atend = dm.salvar_equipe(self.conn, self.admin, None, {
-            "nome": "Atendimento", "membros": [{"usuario": "caio", "lider": True}]})
+        # Equipes = lista do login. Estoque: ana lider, bia membro, vinculada ao login
+        # fixo galpao. Atendimento: caio lider. Davi esta no Financeiro (sem demandas).
+        self.galpao = dm.salvar_equipe(self.conn, self.admin, self.equipe_id("Estoque"),
+                                       {"lideres": ["ana"], "niveis": ["galpao"]})
+        self.atend = dm.salvar_equipe(self.conn, self.admin, self.equipe_id("Atendimento"), {"lideres": ["caio"]})
+
+    def equipe_id(self, nome):
+        return next(e["id"] for e in dm.listar_equipes(self.conn) if e["nome"] == nome)
 
     def ident(self, usuario, nivel, telas=None, nome=None):
         return dm.identidade(self.conn, usuario, nivel, telas, nome)
@@ -98,7 +102,7 @@ class TestDados(Base):
         self.assertEqual(ids("bia", "operador"), {d_galpao["id"]})
         self.assertEqual(ids("galpao", "galpao"), {d_galpao["id"]})          # login fixo vinculado
         self.assertEqual(ids("expedicao", "expedicao"), set())               # login fixo sem vinculo
-        self.assertEqual(ids("davi", "operador"), set())                     # sem equipe
+        self.assertEqual(ids("davi", "operador"), set())                     # outra equipe
         self.assertEqual(ids("u", "total", "todas"), {d_galpao["id"], d_atend["id"]})
         # quem criou acompanha mesmo sem ser da equipe
         d_cruzada = self.criar(self.ident("caio", "atendimento"), titulo="Separar devolução")
@@ -118,8 +122,7 @@ class TestDados(Base):
 
     def test_equipe_desativada_nao_recebe(self):
         d = self.criar()
-        dm.salvar_equipe(self.conn, self.admin, self.galpao["id"],
-                         {"nome": "Galpão", "ativo": False, "membros": [{"usuario": "ana", "lider": True}]})
+        dm.salvar_equipe(self.conn, self.admin, self.galpao["id"], {"ativo": False, "lideres": ["ana"]})
         with self.assertRaises(dm.ErroDemanda):
             self.criar()
         self.assertTrue(dm.detalhar(self.conn, self.ident("ana", "operador"), d["id"]))   # antiga continua visivel
@@ -212,7 +215,7 @@ class TestDados(Base):
         finally:
             cg.close()
         self.assertEqual(len(textos), 1)
-        self.assertIn("[URGENTE] para Galpão", textos[0])
+        self.assertIn("[URGENTE] para Estoque", textos[0])
         self.assertNotIn("sigiloso", textos[0])
 
     def test_falha_no_grupo_nao_derruba_a_criacao(self):
@@ -220,15 +223,28 @@ class TestDados(Base):
             d = self.criar()
         self.assertEqual(d["status"], "ABERTA")
 
-    def test_equipes_so_admin_e_membros_validos(self):
+    def test_equipes_so_admin_e_lider_precisa_ser_membro(self):
         with self.assertRaises(dm.SemPermissao):
-            dm.salvar_equipe(self.conn, self.ident("ana", "operador"), None, {"nome": "X"})
+            dm.salvar_equipe(self.conn, self.ident("ana", "operador"), self.galpao["id"], {})
         with self.assertRaises(dm.ErroDemanda):
-            dm.salvar_equipe(self.conn, self.admin, None, {"nome": "X", "membros": [{"usuario": "ninguem"}]})
+            dm.salvar_equipe(self.conn, self.admin, self.galpao["id"], {"lideres": ["caio"]})   # caio e do Atendimento
         with self.assertRaises(dm.ErroDemanda):
-            dm.salvar_equipe(self.conn, self.admin, None, {"nome": "galpão"})   # nome repetido
-        with self.assertRaises(dm.ErroDemanda):
-            dm.salvar_equipe(self.conn, self.admin, None, {"nome": "Y", "niveis": ["total"]})
+            dm.salvar_equipe(self.conn, self.admin, self.galpao["id"], {"niveis": ["total"]})
+
+    def test_equipes_sao_as_do_login(self):
+        self.assertEqual([e["nome"] for e in dm.listar_equipes(self.conn)], list(acesso_telas.EQUIPES))
+        self.assertEqual({m["usuario"] for m in self.galpao["membros"]}, {"ana", "bia"})
+        dm.conectar().close()   # conectar de novo nao duplica
+        self.assertEqual(len(dm.listar_equipes(self.conn)), len(acesso_telas.EQUIPES))
+
+    def test_lider_que_muda_de_equipe_deixa_de_liderar(self):
+        self.assertTrue(self.ident("ana", "operador")["pode_criar"])
+        c = acesso_telas.conectar()
+        acesso_telas.editar(c, "ana", "Ana", "operador", "u", equipe="Financeiro")
+        c.close()
+        ana = self.ident("ana", "operador")
+        self.assertFalse(ana["pode_criar"])
+        self.assertNotIn(self.galpao["id"], ana["equipes"])
 
 
 class TestRotas(Base):

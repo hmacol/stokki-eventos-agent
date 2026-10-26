@@ -20,7 +20,7 @@
       texto: '<p>Clique numa linha pra abrir. Os botões mudam conforme a situação e quem você é: <b>Iniciar</b>, <b>Concluir</b>, <b>Assumir</b> (virar o responsável), <b>Editar</b>, <b>Cancelar</b> (pede o motivo) e <b>Reabrir</b>.</p><p>Embaixo ficam os <b>comentários</b> e o <b>histórico</b> de quem mudou o quê.</p>',
       posicao: 'cima' },
     { alvo: function () { return document.querySelector('[data-aba="equipes"]'); }, capitulo: E, titulo: 'Equipes',
-      texto: '<p>Cadastro das equipes: membros (dos logins nominais), quem é <b>líder</b>, quais <b>logins fixos</b> (galpão, expedição...) veem as demandas da equipe e em qual grupo do Atendimento sai o aviso.</p><p>Equipe desativada não recebe demandas novas, mas as antigas continuam aparecendo.</p>',
+      texto: '<p>As equipes são as do campo <b>Equipe</b> de cada login, na tela Acessos: quem está numa equipe é membro dela. Aqui você marca quem é <b>líder</b>, quais <b>logins fixos</b> (galpão, expedição...) veem as demandas da equipe e em qual grupo do Atendimento sai o aviso.</p><p>Equipe desativada não recebe demandas novas, mas as antigas continuam aparecendo.</p>',
       posicao: 'baixo' }
   ];
   window.Tour.registrar('demandas', passos, { auto: true, titulo: 'Demandas' });

@@ -7,9 +7,10 @@ EQUIPE e, se quiser, a uma pessoa. Substitui as Demandas do Fresh Hub
 antigo (Lovable). Plano: ~/.claude/plans/vamos-desenvolver-juntos-a-calm-sedgewick.md
 
 Regras combinadas com o Hugo:
-- equipes cadastradas aqui (aba Equipes, so o total), com membros entre os
-  logins nominais (painel_usuarios) e marca de lider; a equipe pode ter
-  niveis de login fixo vinculados (ex.: Galpao <- galpao);
+- equipes = a lista fixa acesso_telas.EQUIPES (Hugo, 25/10: a mesma do campo
+  Equipe de cada login nominal na /acessos); membro = login nominal ativo com
+  aquela equipe. Na aba Equipes (so o total) marca lideres, niveis de login
+  fixo vinculados (ex.: Estoque <- galpao), grupo do aviso e se esta ativa;
 - cria demanda: total e lideres (pra qualquer equipe ativa);
 - cada um ve o que e dele, das equipes dele e o que criou; total ve tudo;
   login fixo ve as equipes vinculadas ao nivel e, pra agir, informa o nome;
@@ -50,7 +51,6 @@ NOME_GRUPO = "Demandas"
 AUTOR_AVISO = "Demandas"
 TITULO_MIN, TITULO_MAX = 3, 120
 TEXTO_MAX = 4000
-NOME_EQUIPE_MIN, NOME_EQUIPE_MAX = 2, 60
 _PREFIXO_PS = re.compile(r"^PS\s*[.\-_ ]*\s*(\d+)$")
 
 
@@ -82,15 +82,13 @@ def conectar(caminho=None) -> sqlite3.Connection:
             atualizado_em  TEXT
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_demandas_equipes_nome ON demandas_equipes (lower(nome));
-        CREATE TABLE IF NOT EXISTS demandas_equipe_membros (
-            equipe_id      INTEGER NOT NULL,
-            usuario        TEXT NOT NULL,
-            lider          INTEGER NOT NULL DEFAULT 0,
-            adicionado_por TEXT,
-            adicionado_em  TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS demandas_equipe_lideres (
+            equipe_id   INTEGER NOT NULL,
+            usuario     TEXT NOT NULL,
+            marcado_por TEXT,
+            marcado_em  TEXT NOT NULL,
             PRIMARY KEY (equipe_id, usuario)
         );
-        CREATE INDEX IF NOT EXISTS idx_demandas_membros_usuario ON demandas_equipe_membros (usuario);
         CREATE TABLE IF NOT EXISTS demandas_equipe_niveis (
             equipe_id INTEGER NOT NULL,
             nivel     TEXT NOT NULL,
@@ -138,6 +136,14 @@ def conectar(caminho=None) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_demandas_eventos ON demandas_eventos (demanda_id, id);
     """)
+    # Equipes = lista fixa do login (acesso_telas.EQUIPES): cria a que faltar.
+    # painel_usuarios mora no mesmo banco e e de onde saem os membros.
+    acesso_telas.conectar(caminho or DB_PATH).close()
+    for nome in acesso_telas.EQUIPES:
+        if not conn.execute("SELECT 1 FROM demandas_equipes WHERE lower(nome) = lower(?)", (nome,)).fetchone():
+            conn.execute("INSERT INTO demandas_equipes (nome, criado_por, criado_em) VALUES (?, 'sistema', ?)",
+                         (nome, _agora()))
+    conn.commit()
     return conn
 
 
@@ -197,18 +203,20 @@ def identidade(conn, usuario: str, nivel: str, telas, nome_informado: str | None
     conta = acesso_telas.conta(usuario) if usuario else None
     nominal = conta is not None
     admin = nivel == "total" and telas is None
-    membro = {r["equipe_id"]: bool(r["lider"]) for r in conn.execute(
-        "SELECT equipe_id, lider FROM demandas_equipe_membros WHERE usuario = ?", (usuario,))} if nominal else {}
+    membro_de = set()
+    if nominal and conta.get("ativo") and conta.get("equipe"):
+        membro_de = {r["id"] for r in conn.execute("SELECT id FROM demandas_equipes WHERE nome = ?", (conta["equipe"],))}
+    lider_de = {r["equipe_id"] for r in conn.execute(
+        "SELECT equipe_id FROM demandas_equipe_lideres WHERE usuario = ?", (usuario,))} & membro_de
     vinculadas = set() if nominal else {r["equipe_id"] for r in conn.execute(
         "SELECT equipe_id FROM demandas_equipe_niveis WHERE nivel = ?", (nivel,))}
     if nominal:
         autor = conta["nome"] or usuario
     else:
         autor = (nome_informado or "").strip() or (usuario if admin else None)
-    lider_de = {e for e, lider in membro.items() if lider}
     return {"usuario": usuario, "nominal": nominal, "admin": admin, "nivel": nivel,
-            "membro_de": set(membro), "lider_de": lider_de, "vinculadas": vinculadas,
-            "equipes": set(membro) | vinculadas, "autor": autor, "pode_criar": admin or bool(lider_de)}
+            "membro_de": membro_de, "lider_de": lider_de, "vinculadas": vinculadas,
+            "equipes": membro_de | vinculadas, "autor": autor, "pode_criar": admin or bool(lider_de)}
 
 
 def _filtro_visivel(ident: dict) -> tuple[str, list]:
@@ -256,70 +264,66 @@ def _autor(ident: dict) -> str:
 
 # ── Equipes ───────────────────────────────────────────────────────────────────
 
+_SQL_MEMBROS = ("SELECT u.usuario, COALESCE(NULLIF(u.nome, ''), u.usuario) AS nome FROM painel_usuarios u "
+                "JOIN demandas_equipes q ON q.nome = u.equipe WHERE q.id = ? AND u.ativo = 1 "
+                "ORDER BY lower(COALESCE(NULLIF(u.nome, ''), u.usuario))")
+
+
+def _eh_membro(conn, equipe_id: int, usuario: str) -> bool:
+    return any(r["usuario"] == usuario for r in conn.execute(_SQL_MEMBROS, (equipe_id,)))
+
+
 def listar_equipes(conn, so_ativas: bool = False) -> list[dict]:
-    nomes = {u["usuario"]: (u["nome"] or u["usuario"]) for u in acesso_telas.listar(acesso_telas.conectar())}
+    ordem = {nome: i for i, nome in enumerate(acesso_telas.EQUIPES)}
     equipes = []
-    for e in conn.execute("SELECT * FROM demandas_equipes" + (" WHERE ativo = 1" if so_ativas else "")
-                          + " ORDER BY ativo DESC, lower(nome)"):
-        membros = [{"usuario": m["usuario"], "nome": nomes.get(m["usuario"], m["usuario"]), "lider": bool(m["lider"])}
-                   for m in conn.execute("SELECT usuario, lider FROM demandas_equipe_membros WHERE equipe_id = ? "
-                                         "ORDER BY lider DESC, usuario", (e["id"],))]
+    for e in conn.execute("SELECT * FROM demandas_equipes" + (" WHERE ativo = 1" if so_ativas else "")):
+        lideres = {r["usuario"] for r in conn.execute(
+            "SELECT usuario FROM demandas_equipe_lideres WHERE equipe_id = ?", (e["id"],))}
+        membros = [{"usuario": m["usuario"], "nome": m["nome"], "lider": m["usuario"] in lideres}
+                   for m in conn.execute(_SQL_MEMBROS, (e["id"],))]
         niveis = [r["nivel"] for r in conn.execute("SELECT nivel FROM demandas_equipe_niveis WHERE equipe_id = ? "
                                                     "ORDER BY nivel", (e["id"],))]
         equipes.append({"id": e["id"], "nome": e["nome"], "descricao": e["descricao"], "ativo": bool(e["ativo"]),
                         "grupo_id": e["grupo_id"], "membros": membros, "niveis": niveis})
+    # Ordem da lista do login; equipe que saiu da lista vai pro fim.
+    equipes.sort(key=lambda x: (not x["ativo"], ordem.get(x["nome"], 99), x["nome"].lower()))
     return equipes
 
 
-def salvar_equipe(conn, ident: dict, equipe_id: int | None, dados: dict) -> dict:
-    """Cria (equipe_id None) ou regrava a equipe inteira: nome, descricao,
-    ativa, grupo, membros [{usuario, lider}] e niveis vinculados."""
+def salvar_equipe(conn, ident: dict, equipe_id: int, dados: dict) -> dict:
+    """Regrava o que a aba Equipes controla: descricao, ativa, grupo do
+    aviso, lideres (precisam ser membros) e niveis de login fixo. Nome e
+    membros vem da /acessos (campo Equipe de cada login)."""
     if not ident["admin"]:
-        raise SemPermissao("Só o acesso total cadastra equipes.")
-    nome = _texto(dados.get("nome"), "O nome da equipe", NOME_EQUIPE_MIN, NOME_EQUIPE_MAX, uma_linha=True)
+        raise SemPermissao("Só o acesso total mexe nas equipes.")
+    e = conn.execute("SELECT * FROM demandas_equipes WHERE id = ?", (equipe_id,)).fetchone()
+    if not e:
+        raise ErroDemanda("Equipe não encontrada.")
     descricao = _texto(dados.get("descricao"), "A descrição", 0, 500)
     ativo = 1 if dados.get("ativo", True) else 0
     grupo_id = int(dados["grupo_id"]) if dados.get("grupo_id") else None
     if grupo_id and not grupos_equipe.buscar_grupo(conn, grupo_id):
         raise ErroDemanda("Grupo do /atendimento não encontrado.")
-    ativos = {u["usuario"] for u in acesso_telas.listar(acesso_telas.conectar()) if u["ativo"]}
-    membros = {}
-    for m in dados.get("membros") or []:
-        usuario = str((m or {}).get("usuario") or "").strip()
-        if usuario not in ativos:
-            raise ErroDemanda(f"{usuario or 'Membro'} não é um login nominal ativo.")
-        membros[usuario] = 1 if m.get("lider") else 0
+    membros = {r["usuario"] for r in conn.execute(_SQL_MEMBROS, (equipe_id,))}
+    lideres = sorted({str(u or "").strip() for u in (dados.get("lideres") or [])} - {""})
+    fora = [u for u in lideres if u not in membros]
+    if fora:
+        raise ErroDemanda(f"{', '.join(fora)} não é da equipe {e['nome']} (a equipe de cada login é a da tela Acessos).")
     niveis = sorted(set(dados.get("niveis") or []))
     if any(n not in NIVEIS_FIXOS for n in niveis):
         raise ErroDemanda("Nível de login fixo inválido.")
-    repetida = conn.execute("SELECT id FROM demandas_equipes WHERE lower(nome) = lower(?) AND id IS NOT ?",
-                            (nome, equipe_id)).fetchone()
-    if repetida:
-        raise ErroDemanda(f"Já existe uma equipe chamada {nome}.")
     agora, por = _agora(), ident["usuario"]
-    if equipe_id is None:
-        cur = conn.execute("INSERT INTO demandas_equipes (nome, descricao, ativo, grupo_id, criado_por, criado_em, "
-                           "atualizado_por, atualizado_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                           (nome, descricao, ativo, grupo_id, por, agora, por, agora))
-        equipe_id = cur.lastrowid
-    else:
-        cur = conn.execute("UPDATE demandas_equipes SET nome = ?, descricao = ?, ativo = ?, grupo_id = ?, "
-                           "atualizado_por = ?, atualizado_em = ? WHERE id = ?",
-                           (nome, descricao, ativo, grupo_id, por, agora, equipe_id))
-        if not cur.rowcount:
-            raise ErroDemanda("Equipe não encontrada.")
-    antigos = {r["usuario"]: r["adicionado_em"] for r in conn.execute(
-        "SELECT usuario, adicionado_em FROM demandas_equipe_membros WHERE equipe_id = ?", (equipe_id,))}
-    conn.execute("DELETE FROM demandas_equipe_membros WHERE equipe_id = ?", (equipe_id,))
-    conn.executemany("INSERT INTO demandas_equipe_membros (equipe_id, usuario, lider, adicionado_por, adicionado_em) "
-                     "VALUES (?, ?, ?, ?, ?)",
-                     [(equipe_id, u, lider, por, antigos.get(u, agora)) for u, lider in membros.items()])
+    conn.execute("UPDATE demandas_equipes SET descricao = ?, ativo = ?, grupo_id = ?, atualizado_por = ?, "
+                 "atualizado_em = ? WHERE id = ?", (descricao, ativo, grupo_id, por, agora, equipe_id))
+    conn.execute("DELETE FROM demandas_equipe_lideres WHERE equipe_id = ?", (equipe_id,))
+    conn.executemany("INSERT INTO demandas_equipe_lideres (equipe_id, usuario, marcado_por, marcado_em) "
+                     "VALUES (?, ?, ?, ?)", [(equipe_id, u, por, agora) for u in lideres])
     conn.execute("DELETE FROM demandas_equipe_niveis WHERE equipe_id = ?", (equipe_id,))
     conn.executemany("INSERT INTO demandas_equipe_niveis (equipe_id, nivel) VALUES (?, ?)",
                      [(equipe_id, n) for n in niveis])
     conn.commit()
-    logger.info("equipe %s '%s' salva por %s (%d membros)", equipe_id, nome, por, len(membros))
-    return next(e for e in listar_equipes(conn) if e["id"] == equipe_id)
+    logger.info("equipe %s '%s' salva por %s (lideres: %s)", equipe_id, e["nome"], por, ", ".join(lideres) or "-")
+    return next(x for x in listar_equipes(conn) if x["id"] == equipe_id)
 
 
 def _equipe(conn, equipe_id, exigir_ativa: bool = True):
@@ -333,8 +337,7 @@ def _equipe(conn, equipe_id, exigir_ativa: bool = True):
 
 def _validar_responsavel(conn, equipe_id: int, responsavel) -> str | None:
     responsavel = str(responsavel or "").strip() or None
-    if responsavel and not conn.execute("SELECT 1 FROM demandas_equipe_membros WHERE equipe_id = ? AND usuario = ?",
-                                        (equipe_id, responsavel)).fetchone():
+    if responsavel and not _eh_membro(conn, equipe_id, responsavel):
         raise ErroDemanda("O responsável precisa ser membro da equipe.")
     return responsavel
 
@@ -463,9 +466,7 @@ def editar(conn, ident: dict, demanda_id: int, dados: dict) -> dict:
     responsavel = d["responsavel"]
     if "responsavel" in dados:
         responsavel = _validar_responsavel(conn, equipe_id, dados.get("responsavel"))
-    elif responsavel and equipe_id != d["equipe_id"] and not conn.execute(
-            "SELECT 1 FROM demandas_equipe_membros WHERE equipe_id = ? AND usuario = ?",
-            (equipe_id, responsavel)).fetchone():
+    elif responsavel and equipe_id != d["equipe_id"] and not _eh_membro(conn, equipe_id, responsavel):
         responsavel = None   # trocou de equipe: responsavel que nao e membro da nova sai
     if responsavel != d["responsavel"]:
         novo["responsavel"] = responsavel
@@ -848,24 +849,17 @@ def registrar(app, *, requer_auth, exige_mesma_origem):
     @requer_auth(niveis=niveis)
     def api_demandas_equipes():
         def _dados(conn, ident):
-            usuarios = [{"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "nivel": u["nivel"]}
-                        for u in acesso_telas.listar(acesso_telas.conectar()) if u["ativo"]]
             conn_g = grupos_equipe.conectar(DB_PATH)
             try:
                 grupos = [{"id": r["id"], "nome": r["nome"]}
                           for r in conn_g.execute("SELECT id, nome FROM equipe_grupos ORDER BY lower(nome)")]
             finally:
                 conn_g.close()
-            return {"equipes": listar_equipes(conn), "usuarios": usuarios, "grupos": grupos,
-                    "niveis_fixos": list(NIVEIS_FIXOS)}
+            sem_equipe = [{"usuario": u["usuario"], "nome": u["nome"] or u["usuario"]}
+                          for u in acesso_telas.listar(acesso_telas.conectar()) if u["ativo"] and not u.get("equipe")]
+            return {"equipes": listar_equipes(conn), "grupos": grupos, "niveis_fixos": list(NIVEIS_FIXOS),
+                    "sem_equipe": sem_equipe}
         return _executar(_so_admin(_dados))
-
-    @app.route("/api/demandas/equipes", methods=["POST"])
-    @requer_auth(niveis=niveis)
-    @exige_mesma_origem
-    def api_demandas_equipe_criar():
-        corpo = _corpo()
-        return _executar(lambda conn, ident: {"equipe": salvar_equipe(conn, ident, None, corpo)})
 
     @app.route("/api/demandas/equipes/<int:equipe_id>", methods=["POST"])
     @requer_auth(niveis=niveis)

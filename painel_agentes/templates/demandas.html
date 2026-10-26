@@ -117,9 +117,10 @@
 
 {% if ident.admin %}
 <div id="painel-equipes" hidden>
-  <div class="barra"><span class="sub" style="margin:0">Membros vêm dos logins nominais (tela Acessos). Líder cria demandas.
-    Nível de login fixo vinculado: quem entra por aquele login vê as demandas da equipe.</span>
-    <button type="button" class="botao" id="botao-nova-equipe">Nova equipe</button></div>
+  <p class="sub">As equipes são as do campo <strong>Equipe</strong> de cada login (tela Acessos): quem está numa equipe
+    é membro dela. Aqui você marca os <strong>líderes</strong> (que criam demandas), os logins fixos que veem as demandas
+    da equipe e onde sai o aviso.</p>
+  <p class="faixa" id="sem-equipe" hidden></p>
   <div class="tabela-wrap" id="lista-equipes"><div class="vazio">Carregando…</div></div>
 </div>
 {% endif %}
@@ -192,10 +193,9 @@
   <form id="form-equipe" autocomplete="off">
     <h2 id="equipe-titulo">Equipe</h2>
     <div class="grade">
-      <label>Nome<input name="nome" maxlength="60" required></label>
       <label>Situação<select name="ativo"><option value="1">Ativa</option><option value="0">Desativada (não recebe novas)</option></select></label>
       <label class="larga">Descrição<input name="descricao" maxlength="500"></label>
-      <label class="larga">Membros (marque quem é líder)<div class="membros" id="equipe-membros"></div></label>
+      <label class="larga">Membros (vêm da tela Acessos; marque quem é líder)<div class="membros" id="equipe-membros"></div></label>
       <label class="larga">Logins fixos que veem as demandas da equipe<div class="niveis" id="equipe-niveis"></div></label>
       <label class="larga">Grupo do Atendimento pra avisar (opcional)<select name="grupo_id"><option value="">Grupo "Demandas" (padrão)</option></select></label>
     </div>
@@ -452,52 +452,45 @@
   async function carregarEquipes() {
     try { dadosEquipes = await api('/api/demandas/equipes'); }
     catch (e) { $('aviso').textContent = e.message; return; }
-    const lista = dadosEquipes.equipes;
-    $('lista-equipes').innerHTML = !lista.length ? '<div class="vazio">Nenhuma equipe cadastrada ainda.</div>' :
-      `<table><thead><tr><th>Equipe</th><th>Líderes</th><th>Membros</th><th>Logins fixos</th><th>Situação</th></tr></thead><tbody>` +
-      lista.map(e => `<tr class="clicavel" data-equipe="${e.id}" tabindex="0"><td><strong>${esc(e.nome)}</strong>${e.descricao ? `<div class="mini">${esc(e.descricao)}</div>` : ''}</td>
+    const sem = dadosEquipes.sem_equipe || [];
+    $('sem-equipe').hidden = !sem.length;
+    $('sem-equipe').textContent = sem.length ? 'Sem equipe na tela Acessos (não recebem demandas): ' + sem.map(u => u.nome).join(', ') : '';
+    $('lista-equipes').innerHTML = `<table><thead><tr><th>Equipe</th><th>Líderes</th><th>Membros</th><th>Logins fixos</th><th>Situação</th></tr></thead><tbody>` +
+      dadosEquipes.equipes.map(e => `<tr class="clicavel" data-equipe="${e.id}" tabindex="0"><td><strong>${esc(e.nome)}</strong>${e.descricao ? `<div class="mini">${esc(e.descricao)}</div>` : ''}</td>
         <td>${esc(e.membros.filter(m => m.lider).map(m => m.nome).join(', ') || '—')}</td>
-        <td>${e.membros.length}</td><td>${esc(e.niveis.map(n => NIVEIS_ROTULO[n] || n).join(', ') || '—')}</td>
+        <td>${e.membros.length ? esc(e.membros.map(m => m.nome).join(', ')) : '<span class="mini">ninguém</span>'}</td>
+        <td>${esc(e.niveis.map(n => NIVEIS_ROTULO[n] || n).join(', ') || '—')}</td>
         <td><span class="pilula ${e.ativo ? '' : 'CANCELADA'}">${e.ativo ? 'Ativa' : 'Desativada'}</span></td></tr>`).join('') + '</tbody></table>';
   }
   if ($('lista-equipes')) $('lista-equipes').addEventListener('click', (ev) => {
     const tr = ev.target.closest('tr[data-equipe]');
     if (tr) abrirEquipe(dadosEquipes.equipes.find(e => e.id === Number(tr.dataset.equipe)));
   });
-  if ($('botao-nova-equipe')) $('botao-nova-equipe').addEventListener('click', () => abrirEquipe(null));
   function abrirEquipe(e) {
     equipeAtual = e;
     const f = $('form-equipe');
     f.reset();
     $('equipe-erro').textContent = '';
-    $('equipe-titulo').textContent = e ? 'Equipe ' + e.nome : 'Nova equipe';
-    f.nome.value = e ? e.nome : '';
-    f.descricao.value = e ? e.descricao : '';
-    f.ativo.value = e && !e.ativo ? '0' : '1';
+    $('equipe-titulo').textContent = 'Equipe ' + e.nome;
+    f.descricao.value = e.descricao || '';
+    f.ativo.value = e.ativo ? '1' : '0';
     f.grupo_id.innerHTML = '<option value="">Grupo "Demandas" (padrão)</option>' + dadosEquipes.grupos.map(g => `<option value="${g.id}">${esc(g.nome)}</option>`).join('');
-    f.grupo_id.value = e && e.grupo_id ? e.grupo_id : '';
-    const membros = new Map((e ? e.membros : []).map(m => [m.usuario, m.lider]));
-    $('equipe-membros').innerHTML = dadosEquipes.usuarios.length ? dadosEquipes.usuarios.map(u => `<div class="membro">
-      <label><input type="checkbox" data-membro="${esc(u.usuario)}" ${membros.has(u.usuario) ? 'checked' : ''}> ${esc(u.nome)} <span class="mini">(${esc(u.usuario)})</span></label>
-      <label><input type="checkbox" data-lider="${esc(u.usuario)}" ${membros.get(u.usuario) ? 'checked' : ''}> líder</label></div>`).join('')
-      : '<span class="mini">Nenhum login nominal ativo. Cadastre na tela Acessos.</span>';
-    $('equipe-niveis').innerHTML = dadosEquipes.niveis_fixos.map(n => `<label><input type="checkbox" data-nivel="${n}" ${e && e.niveis.includes(n) ? 'checked' : ''}> ${NIVEIS_ROTULO[n] || n}</label>`).join('');
+    f.grupo_id.value = e.grupo_id || '';
+    $('equipe-membros').innerHTML = e.membros.length ? e.membros.map(m => `<div class="membro">
+      <span>${esc(m.nome)} <span class="mini">(${esc(m.usuario)})</span></span>
+      <label><input type="checkbox" data-lider="${esc(m.usuario)}" ${m.lider ? 'checked' : ''}> líder</label></div>`).join('')
+      : '<span class="mini">Ninguém com essa equipe na tela Acessos.</span>';
+    $('equipe-niveis').innerHTML = dadosEquipes.niveis_fixos.map(n => `<label><input type="checkbox" data-nivel="${n}" ${e.niveis.includes(n) ? 'checked' : ''}> ${NIVEIS_ROTULO[n] || n}</label>`).join('');
     $('dlg-equipe').showModal();
   }
-  if ($('equipe-membros')) $('equipe-membros').addEventListener('change', (ev) => {
-    const lider = ev.target.dataset.lider, membro = ev.target.dataset.membro;
-    if (lider && ev.target.checked) document.querySelector(`[data-membro="${CSS.escape(lider)}"]`).checked = true;
-    if (membro && !ev.target.checked) document.querySelector(`[data-lider="${CSS.escape(membro)}"]`).checked = false;
-  });
   if ($('form-equipe')) $('form-equipe').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const f = ev.target;
-    const membros = [...document.querySelectorAll('[data-membro]:checked')].map(c => ({
-      usuario: c.dataset.membro, lider: document.querySelector(`[data-lider="${CSS.escape(c.dataset.membro)}"]`).checked }));
-    const corpo = { nome: f.nome.value, descricao: f.descricao.value, ativo: f.ativo.value === '1', grupo_id: f.grupo_id.value || null,
-                    membros, niveis: [...document.querySelectorAll('[data-nivel]:checked')].map(c => c.dataset.nivel) };
+    const corpo = { descricao: f.descricao.value, ativo: f.ativo.value === '1', grupo_id: f.grupo_id.value || null,
+                    lideres: [...document.querySelectorAll('[data-lider]:checked')].map(c => c.dataset.lider),
+                    niveis: [...document.querySelectorAll('[data-nivel]:checked')].map(c => c.dataset.nivel) };
     try {
-      await api(equipeAtual ? '/api/demandas/equipes/' + equipeAtual.id : '/api/demandas/equipes', corpo);
+      await api('/api/demandas/equipes/' + equipeAtual.id, corpo);
       $('dlg-equipe').close();
       await carregarEquipes();
       await carregarOpcoes();
