@@ -263,13 +263,14 @@ caminho>`, o formato que `documentos_pedido/stokki_documentos.py` decodifica) e 
 `<det>`: a troca só é FEITA se o XML do pedido tem a mesma chave e o mesmo número de
 itens do original. Chamador segura a trava `sessao_uso`.
 
-**Pendente de sonda (só leitura, antes de codar):** confirmar que o download do XML por
-`/pt-br/xml/nfe/<base64>` funciona na sessão admin por HTTP, e que a página admin
-`/show/{id}` traz `_token`. A sonda de 24/10 cobriu só a listagem, e a tentativa de
-25/10 foi bloqueada pela permissão de leitura em produção. Se o download não funcionar,
-o critério de sucesso cai pra "POST respondeu 200 sem `errors` e o `data-url` da linha
-mudou", e a contagem de itens fica pro fluxo de documentos (que já baixa esse XML pela
-área provider). Não precisa de segunda conta nem de Playwright em nenhum dos casos.
+**Sonda pendente (vai pro piloto):** a leitura em produção que confirmaria o download
+do XML por `/pt-br/xml/nfe/<base64>` na sessão admin foi negada em 25/10. Por isso
+`stokki/trocar_nf.py` decide em tempo de execução: se o XML baixa, confere chave e a
+lista de códigos dos itens (`cProd`), o que também evita confundir o XML convertido de
+um item só com o original de um item só; se não baixa, confere que o `data-url` da
+linha mudou depois do POST. O resultado diz qual conferência foi usada. O `_token` vem
+do formulário da listagem, com o CSRF guardado no login como reserva. Não precisa de
+segunda conta nem de Playwright em nenhum dos casos.
 
 Risco a provar na primeira rodada real: a Stokki aceitar a troca quando a chave do XML
 novo é a **mesma** do XML que já está no pedido (é o caso aqui: o convertido mantém a
