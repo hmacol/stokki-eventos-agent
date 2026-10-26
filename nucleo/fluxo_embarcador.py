@@ -74,9 +74,11 @@ def _chave_apelido(apelido: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
 
-def resolver_codigo_xd(conn: sqlite3.Connection, stkkc: int, apelido: str) -> tuple[str | None, str | None]:
+def resolver_codigo_xd(conn: sqlite3.Connection, stkkc: int, *nomes: str) -> tuple[str | None, str | None]:
     """(codigo, erro). Um XD ativo no catalogo do embarcador = ele; varios =
-    o que for "XD" + apelido; sem casamento ou nenhum = erro."""
+    o que for "XD" + um dos nomes (apelido ou nome_remetente: em producao a
+    razao social e o nome curto aparecem nos dois campos); sem casamento ou
+    nenhum = erro."""
     try:
         skus = sorted({(r[0] or "").strip() for r in conn.execute(
             "SELECT sku FROM wms_produtos WHERE embarcador_id = ? AND ativo = 1 AND UPPER(sku) LIKE 'XD%'",
@@ -87,8 +89,8 @@ def resolver_codigo_xd(conn: sqlite3.Connection, stkkc: int, apelido: str) -> tu
         return skus[0], None
     if not skus:
         return None, "nenhum produto XD no catálogo do embarcador"
-    esperado = "XD" + _chave_apelido(apelido)
-    casados = [s for s in skus if s.upper() == esperado]
+    esperados = {"XD" + _chave_apelido(n) for n in nomes if n}
+    casados = [s for s in skus if s.upper() in esperados]
     if len(casados) == 1:
         return casados[0], None
     return None, f"mais de um produto XD no catálogo: {', '.join(skus)}"
@@ -110,15 +112,17 @@ def fluxos_do_embarcador(conn: sqlite3.Connection, cnpj: str | None = None, stkk
     if not row:
         raise ValueError(f"Embarcador {cnpj or stkkc} nao esta na tabela interno.")
     apelido = row[1] or row[2] or row[0]
+    # nome curto pro item XD: o menor dos dois campos (ver resolver_codigo_xd)
+    curto = min([n.strip() for n in (row[1], row[2]) if n and n.strip()] or [row[0]], key=len)
     fluxos = normalizar_fluxos(row[4] if coluna else None)
     codigo = erro = None
     if "cross" in fluxos:
         if row[3] is None:
             erro = "embarcador sem id da Stokki (stkkc) no cadastro"
         else:
-            codigo, erro = resolver_codigo_xd(conn, row[3], apelido)
+            codigo, erro = resolver_codigo_xd(conn, row[3], row[1] or "", row[2] or "")
     return {"cnpj": row[0], "stkkc": row[3], "apelido": apelido, "fluxos": fluxos,
-            "codigo_xd": codigo, "nome_item": nome_item_xd(apelido), "erro_xd": erro}
+            "codigo_xd": codigo, "nome_item": nome_item_xd(curto), "erro_xd": erro}
 
 
 def _fluxo_do_texto_livre(texto: str) -> str | None:

@@ -75,6 +75,26 @@ class ResolverXd(unittest.TestCase):
                          (None, "nenhum produto XD no catálogo do embarcador"))
 
 
+class NomesTrocados(unittest.TestCase):
+    """Em produção o "apelido" muitas vezes é a razão social e o nome curto
+    está em nome_remetente (ex. Dourado, stkkc 18)."""
+    def _banco(self):
+        conn = _banco()
+        conn.execute("UPDATE interno SET apelido = 'LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA', "
+                     "nome_remetente = 'DOURADO' WHERE stkkc_id = 18")
+        return conn
+
+    def test_varios_xd_casa_pelo_nome_curto(self):
+        conn = self._banco()
+        conn.executemany("INSERT INTO wms_produtos VALUES (?,?,?)", [("XDDOURADO", 18, 1), ("XDOUTRO", 18, 1)])
+        fe.definir_fluxos(conn, "66259821000155", ["cross"])
+        self.assertEqual(fe.fluxos_do_embarcador(conn, stkkc=18)["codigo_xd"], "XDDOURADO")
+
+    def test_nome_item_usa_o_nome_mais_curto(self):
+        conn = self._banco()
+        self.assertEqual(fe.fluxos_do_embarcador(conn, stkkc=18)["nome_item"], "Mercadoria DOURADO")
+
+
 class FluxosDoEmbarcador(unittest.TestCase):
     def test_fluxos_do_embarcador_por_stkkc_sem_cross_nao_resolve_xd(self):
         conn = _banco()
