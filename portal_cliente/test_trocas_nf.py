@@ -100,8 +100,6 @@ class Processar(_Base):
         self.assertEqual(r, {"feitas": 0, "pendentes": 0, "erros": 0, "adiados": 0})
 
     def test_feita_grava_concluido_e_espelha_no_envio(self):
-        for col in ("id_stokki INTEGER", "troca_nf_status TEXT", "troca_nf_em TEXT", "troca_nf_erro TEXT"):
-            self.conn.execute(f"ALTER TABLE portal_envios ADD COLUMN {col}")
         self.conn.execute("INSERT INTO portal_envios (cnpj_embarcador, chave_nfe, xml_path, status, criado_em, atualizado_em) "
                           "VALUES ('66259821000155', ?, 'x', 'CRIADO', 'a', 'a')", (CHAVE,))
         envio_id = self.conn.execute("SELECT id FROM portal_envios").fetchone()[0]
