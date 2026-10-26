@@ -183,7 +183,7 @@
               <div class="sim-nao"><button type="button" class="on" data-avaria="${p.parada_id}" data-v="0">Não</button>
                 <button type="button" class="perigo" data-avaria="${p.parada_id}" data-v="1">Sim</button></div>
               <div class="fotos oculto" data-fotos-avaria="${p.parada_id}" style="margin-top:8px">
-                <label class="btn-foto">📷 Foto da avaria<input type="file" accept="image/*" capture="environment" data-arq-avaria="${p.parada_id}"></label></div></div>
+                <label class="btn-foto">📷 Foto da avaria<input type="file" accept="image/*" data-arq-avaria="${p.parada_id}"></label></div></div>
             <div><label>Motivo do retorno</label>
               <select data-motivo="${p.parada_id}">
                 ${motivos.includes(p.motivo) ? "" : `<option value="${esc(p.motivo)}">${esc(p.motivo)} (motorista)</option>`}
@@ -193,7 +193,7 @@
           </div>
         </div>`).join("")}
       <div class="bloco cartao"><label class="rot">Foto da carga (pallet)</label>
-        <div class="fotos" id="fotos-carga"><label class="btn-foto">📷 Fotografar<input type="file" accept="image/*" capture="environment" id="arq-carga"></label></div></div>
+        <div class="fotos" id="fotos-carga"><label class="btn-foto">📷 Fotografar<input type="file" accept="image/*" id="arq-carga"></label></div></div>
       <div class="bloco cartao"><label class="rot">Quem recebeu</label>
         <input type="text" id="recebedor" autocomplete="name" placeholder="Seu nome" value="${esc(lerNome())}"></div>
       <div class="bloco cartao"><label class="rot">Assinatura do motorista</label>
