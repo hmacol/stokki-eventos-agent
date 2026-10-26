@@ -57,7 +57,7 @@ def _devolver(cliente, resumo: dict, id_: str, ok: bool, resultado: dict | None 
 
 def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
             classificar_area: Callable[[dict], str | None], criar_na_stokki: CriarNaStokki,
-            limite: int = LIMITE) -> dict:
+            limite: int = LIMITE, registrar_agendamento: Callable[[dict], object] | None = None) -> dict:
     """Um ciclo da fila. Funcoes injetadas: ler_nfe (envio_pedidos.ler_nfe), classificar_area
     (envio_pedidos.classificar_area_envio com o config) e criar_na_stokki (wizard com a trava)."""
     resumo = {"itens": 0, "criados": 0, "bloqueados": 0, "erros": 0, "nao_devolvidos": 0}
@@ -81,6 +81,14 @@ def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
             resumo["erros"] += 1
             _devolver(cliente, resumo, item["id"], False, erro=f"XML da réplica ilegível: {e}"[:2000])
             continue
+        empresa = "".join(ch for ch in str(dados.get("cnpj_empresa") or "") if ch.isdigit())
+        emitente = "".join(ch for ch in str(nfe.get("emitente_cnpj") or "") if ch.isdigit())
+        if empresa and emitente != empresa:
+            # revisao 26/10 (seguranca): o XML guardado tem que ser da empresa que o portal autenticou
+            resumo["erros"] += 1
+            _devolver(cliente, resumo, item["id"], False,
+                      erro=f"emitente do XML ({emitente}) não é a empresa do pedido ({empresa})")
+            continue
         if not dados.get("liberado"):
             motivo = classificar_area(nfe)
             if motivo:
@@ -88,7 +96,7 @@ def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
                 _devolver(cliente, resumo, item["id"], False, resultado={"bloqueio": motivo},
                           erro=f"fora da área atendida ({motivo})")
                 continue
-        grupos.setdefault(str(nfe.get("emitente_cnpj") or ""), []).append((item, nfe, conteudo))
+        grupos.setdefault(empresa or emitente, []).append((item, nfe, conteudo))
 
     for cnpj, lote in grupos.items():
         if simular:
@@ -108,12 +116,14 @@ def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
                 _devolver(cliente, resumo, item["id"], False, erro=f"Falha ao enviar à Stokki: {e}"[:2000])
             continue
         for item, nfe, _c in lote:
-            _resultado_do_item(cliente, resumo, item, nfe, por_chave.get(nfe["chave_nfe"]), codigos)
+            _resultado_do_item(cliente, resumo, item, nfe, por_chave.get(nfe["chave_nfe"]), codigos,
+                               registrar_agendamento)
     logger.info(f"fila freshhub: {resumo}")
     return resumo
 
 
-def _resultado_do_item(cliente, resumo: dict, item: dict, nfe: dict, r: dict | None, codigos: dict) -> None:
+def _resultado_do_item(cliente, resumo: dict, item: dict, nfe: dict, r: dict | None, codigos: dict,
+                       registrar_agendamento: Callable[[dict], object] | None = None) -> None:
     numero = str(nfe.get("numero_nf") or "")
     if r is None:
         resumo["erros"] += 1
@@ -135,8 +145,24 @@ def _resultado_do_item(cliente, resumo: dict, item: dict, nfe: dict, r: dict | N
                   erro=f"criado na Stokki, mas o PS da NF {numero} não apareceu na listagem: informe o PS")
         return
     resultado = {"ps": ps, "numero_nf": numero}
-    if (item.get("dados") or {}).get("dedicado"):
-        resultado["dedicado"] = item["dados"]["dedicado"]
+    dados = item.get("dados") or {}
+    if dados.get("dedicado"):
+        resultado["dedicado"] = dados["dedicado"]
+    if dados.get("agendamento") and registrar_agendamento is not None:
+        # revisao 26/10 (Important 2): como o portal antigo, a data vai pra agendamentos_pedido e o
+        # atualizar_agendamentos_confirmados aplica na Vuupt
+        horario = dados.get("horario") or [None, None]
+        try:
+            registrar_agendamento({
+                "codigo_pedido": ps, "agendamento_data": dados["agendamento"],
+                "agendamento_hora_inicio": horario[0], "agendamento_hora_fim": horario[1],
+                "destinatario_doc": nfe.get("destinatario_doc"), "destinatario_nome": nfe.get("destinatario_nome"),
+                "cnpj_embarcador": dados.get("cnpj_empresa") or nfe.get("emitente_cnpj"), "numero_nf": numero,
+                "id": None})
+            resultado["agendamento_registrado"] = True
+        except Exception as e:  # noqa: BLE001 - o pedido foi criado; o agendamento a equipe refaz
+            logger.error(f"fila freshhub: agendamento de {ps} nao registrado: {e}")
+            resultado["agendamento_registrado"] = False
     resumo["criados"] += 1
     _devolver(cliente, resumo, item["id"], True, resultado=resultado)
 
@@ -193,7 +219,9 @@ def rodar(config: dict, *, simular: bool, headless: bool = True) -> dict | None:
     try:
         return atender(cliente, simular=simular, ler_nfe=lambda conteudo: ep.ler_nfe(conteudo),
                        classificar_area=lambda nfe: ep.classificar_area_envio(nfe, config),
-                       criar_na_stokki=criar_na_stokki_real(conn, config, headless=headless))
+                       criar_na_stokki=criar_na_stokki_real(conn, config, headless=headless),
+                       registrar_agendamento=lambda envio: ep.registrar_agendamento_pedido(
+                           conn, envio, por="portal novo"))
     finally:
         conn.close()
 

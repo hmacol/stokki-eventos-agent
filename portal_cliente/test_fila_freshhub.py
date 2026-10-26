@@ -56,11 +56,12 @@ class Falso:
         self.devolvidos.append((id_, ok, resultado, erro))
 
 
-def _atender(cliente, nfes, wizard=None, area=None, simular=False):
+def _atender(cliente, nfes, wizard=None, area=None, simular=False, agendar=None):
     return ff.atender(
         cliente, simular=simular, ler_nfe=lambda conteudo: dict(nfes[conteudo]),
         classificar_area=area or (lambda nfe: None),
         criar_na_stokki=wizard or (lambda cnpj, arquivos: ({}, {})),
+        registrar_agendamento=agendar,
     )
 
 
@@ -187,6 +188,38 @@ class TestFilaStokki(unittest.TestCase):
         self.assertEqual(_atender(c, {})["itens"], 0)
         c.pendentes = mock.Mock(side_effect=ErroFreshhub("HTTP 503", status=503))
         self.assertEqual(_atender(c, {})["itens"], 0)
+
+
+class TestRevisao26(unittest.TestCase):
+    """Revisao final de 26/10: agendamento chega ao legado; emitente tem que ser a empresa da replica."""
+
+    def test_agendamento_e_registrado_com_o_ps(self):
+        c = Falso([_item("r1", agendamento="2026-10-30", horario=["08:00", "12:00"], cnpj_empresa=EMB)],
+                  {"r1": b"A"})
+        agendados = []
+        _atender(c, {b"A": {**_nfe(), "destinatario_doc": "98765432000110"}},
+                 lambda cnpj, arq: ({CH[1]: {"criado": True, "erro": ""}}, {"1234": "PS-77"}),
+                 agendar=agendados.append)
+        self.assertEqual(agendados, [{"codigo_pedido": "PS-77", "agendamento_data": "2026-10-30",
+                                      "agendamento_hora_inicio": "08:00", "agendamento_hora_fim": "12:00",
+                                      "destinatario_doc": "98765432000110", "destinatario_nome": "D",
+                                      "cnpj_embarcador": EMB, "numero_nf": "1234", "id": None}])
+        self.assertEqual(c.devolvidos[0][2]["agendamento_registrado"], True)
+
+    def test_emitente_diferente_da_empresa_da_replica_e_recusado_sem_wizard(self):
+        c = Falso([_item("r1", cnpj_empresa="22222222000122")], {"r1": b"A"})
+        wizard = mock.Mock()
+        _atender(c, {b"A": _nfe()}, wizard)
+        wizard.assert_not_called()
+        self.assertEqual(c.devolvidos[0][:2], ("r1", False))
+        self.assertIn("emitente", c.devolvidos[0][3])
+
+    def test_agrupa_pela_empresa_da_replica(self):
+        c = Falso([_item("r1", cnpj_empresa=EMB)], {"r1": b"A"})
+        grupos = []
+        _atender(c, {b"A": _nfe()}, lambda cnpj, arq: (grupos.append(cnpj) or {CH[1]: {"criado": True, "erro": ""}},
+                                                        {"1234": "PS-1"}))
+        self.assertEqual(grupos, [EMB])
 
 
 if __name__ == "__main__":
