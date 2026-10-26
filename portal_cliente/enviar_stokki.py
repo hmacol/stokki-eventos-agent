@@ -110,7 +110,15 @@ def carregar_importador(config: dict):
     return wiz, px
 
 
-def transformar_xml(regra: str, origem: Path, destino: Path, px) -> None:
+def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "armazenagem", xd: dict | None = None) -> None:
+    """Cross (25/10): um item só, o XD do embarcador (regra "cross" do
+    importador), e a regra própria do embarcador não se aplica. Outros
+    fluxos: a regra do embarcador, como antes."""
+    if fluxo == "cross":
+        if not (xd or {}).get("codigo_xd"):
+            raise ValueError(f"XD não encontrado: {(xd or {}).get('erro_xd') or 'sem produto XD no catálogo'}")
+        px.TRANSFORMACOES["cross"](origem, destino, codigo_xd=xd["codigo_xd"], nome_item=xd["nome_item"])
+        return
     if regra in (None, "", "nenhuma"):
         shutil.copyfile(origem, destino)
         return
@@ -464,6 +472,21 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
 
 # ── Processamento de um lote (um embarcador) ───────────────────────────────────
 
+def _id_do_codigo(codigo: str | None) -> int | None:
+    """"PS-42584" -> 42584. Reentrega ("PS-36327-R1") não é o pedido novo."""
+    m = re.fullmatch(r"PS-(\d+)", (codigo or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _enfileirar_troca(conn, cfg: dict, envio: dict, codigo: str | None) -> None:
+    """Pedido Cross existe na Stokki (criado agora ou duplicado): a NF dele
+    ainda é a do XML convertido -- fila de troca (trocas_nf.py)."""
+    tq.enfileirar(conn, cnpj_embarcador=cfg["cnpj"], client_id=cfg["client_id"], numero_nf=envio["numero_nf"],
+                  chave_nfe=envio["chave_nfe"], caminho_xml_original=envio["xml_path"], origem="portal",
+                  envio_id=envio["id"], id_stokki=_id_do_codigo(codigo), codigo_pedido=codigo)
+    _marcar(conn, envio["id"], troca_nf_status=tq.STATUS_PENDENTE)
+
+
 def _e_duplicado(erro: str) -> bool:
     e = (erro or "").lower()
     return "já utilizada" in e or "ja utilizada" in e
@@ -537,6 +560,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
         wiz = px = None
         if not simular:
             wiz, px = carregar_importador(config)
+        xd = None
+        if any(e.get("fluxo") == "cross" for e in envios):
+            from nucleo.fluxo_embarcador import fluxos_do_embarcador
+            xd = fluxos_do_embarcador(conn, cnpj=cnpj)
         for e in envios:
             planilha = (e.get("origem") or ep.ORIGEM_XML) == ep.ORIGEM_PLANILHA
             try:
@@ -553,7 +580,8 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     if simular:
                         shutil.copyfile(ep.caminho_xml(e), destino)
                     else:
-                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px)
+                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
+                                        fluxo=e.get("fluxo") or "armazenagem", xd=xd)
                     arquivos.append(destino)
                     prontos_xml.append(e)
                 prontos.append(e)
@@ -621,10 +649,14 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resumo["criados"] += 1
                 if codigo and e.get("agendamento_data") and not e.get("agendamento_pendente"):
                     ep.registrar_agendamento_pedido(conn, {**e, "codigo_pedido": codigo})
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, codigo)
             elif _e_duplicado(r["erro"]):
                 _marcar(conn, e["id"], status=ep.STATUS_DUPLICADO, erro=r["erro"][:900], resposta_stokki=resposta_txt,
                         criado_stokki_em=ep._agora())
                 resumo["duplicados"] += 1
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, None)
             else:
                 _marcar(conn, e["id"], status=ep.STATUS_ERRO, erro=(r["erro"] or "recusado pela Stokki")[:900],
                         resposta_stokki=resposta_txt, tentativas=int(e.get("tentativas") or 0) + 1)
