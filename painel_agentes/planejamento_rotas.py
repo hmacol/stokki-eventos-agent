@@ -301,8 +301,10 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
     faz nada; se já há uma rodada em andamento, não espera. Exceção da
     Vuupt sobe pra quem chama."""
     config = config or _carregar_config()
-    if fonte_pool(config) != "nucleo":
-        return {"pulado": True}
+    fonte = fonte_pool(config)
+    if fonte != "nucleo":
+        # fonte freshhub (plano 1.2 do sistema novo): o pool vem da API nova, nao ha nucleo a ressincronizar
+        return {"pulado": True, "motivo": "fonte freshhub"} if fonte == "freshhub" else {"pulado": True}
     if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):
         return {"pulado": "em_andamento"}
     try:
@@ -825,47 +827,13 @@ def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
 # ainda não terminou -- a tela separa num bloco próprio do pool. Chave =
 # status_stokki como o pipeline grava em vigia_stokki_abertos (código da
 # URL da Stokki; "Em espera" é literal da fonte estacao_impressao).
-SITUACAO_STOKKI_NAO_PRONTA = {
-    "Open": "Em aberto",
-    "Separating": "Em separação",
-    "Ready to Pack": "Em conferência",
-    "On hold": "Em espera",
-    "Em espera": "Em espera",
-}
-
-
-def carregar_retrato_stokki(db_path=None) -> tuple[dict[str, str], str | None]:
-    """Retrato do que está aberto na Stokki, gravado pelo pipeline no fim de
-    cada rodada (vigia/banco.py). Devolve ({codigo_base: status_stokki},
-    "dd/mm HH:MM" da última listagem) -- só leitura, não chama a Stokki.
-    Falha vira ({}, None): a tela segue sem a marcação."""
-    try:
-        from vigia import banco as vigia_banco
-        conn = vigia_banco.conectar(db_path)
-        try:
-            por_codigo = {r["codigo"]: r["status_stokki"]
-                          for r in conn.execute("SELECT codigo, status_stokki FROM vigia_stokki_abertos")}
-            ultima = conn.execute("SELECT concluida_em FROM vigia_listagens ORDER BY id DESC LIMIT 1").fetchone()
-        finally:
-            conn.close()
-        quando = None
-        if ultima and ultima["concluida_em"]:
-            quando = datetime.strptime(ultima["concluida_em"], vigia_banco.FMT).strftime("%d/%m %H:%M")
-        return por_codigo, quando
-    except Exception as e:
-        logger.warning(f"Falha ao ler o retrato da Stokki pro pool (tela segue sem a marcação): {e}")
-        return {}, None
-
-
-def anotar_situacao_stokki(pool: list[dict], retrato: dict[str, str]) -> None:
-    """Põe `situacao_stokki` (rótulo de SITUACAO_STOKKI_NAO_PRONTA) em cada
-    item do pool que ainda não está pronto na Stokki; None quando está
-    "Aguardando Transportador" ou não aparece no retrato. Código combinado
-    ("#PS-1, #PS-2"): basta um ainda não pronto."""
-    for p in pool:
-        p["situacao_stokki"] = next(
-            (SITUACAO_STOKKI_NAO_PRONTA[retrato[c]] for c in _codigos_base_lista(p["codigo"])
-             if retrato.get(c) in SITUACAO_STOKKI_NAO_PRONTA), None)
+# Desde o plano 1.2 do sistema novo a regra vive em nucleo/prontidao_stokki.py, porque o envio do rascunho
+# e o incremento das 22h passaram a usar a mesma prontidao; os nomes continuam exportados daqui pra tela.
+from nucleo.prontidao_stokki import (  # noqa: E402
+    SITUACAO_STOKKI_NAO_PRONTA,
+    anotar_situacao_stokki,
+    carregar_retrato_stokki,
+)
 
 
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:

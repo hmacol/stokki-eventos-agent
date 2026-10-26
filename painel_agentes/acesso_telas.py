@@ -56,6 +56,7 @@ TELAS = [
     ("consulta", "Consulta", "Acompanhar", [r"^/consulta(/|$)", r"^/canhotos/\d+/foto$",
                                             r"^/financeiro/pedagios/\d+/foto$"]),
     ("baixa_sem_app", "Baixa sem app", "Acompanhar", [r"^/baixa-sem-app$", r"^/api/baixa-sem-app(/|$)"]),
+    ("solicitacoes_portal", "Pedidos do portal", "Acompanhar", [r"^/solicitacoes-portal$", r"^/api/solicitacoes-portal"]),
     ("retornos_tela", "Retornos", "Operar", [r"^/retornos(/|$)", r"^/api/retornos(/|$)"]),
     ("planejamento", "Planejamento", "Planejar", [r"^/planejamento(/|$)", r"^/api/planejamento/",
                                                   r"^/api/torre/marcar-entregue$"]),
@@ -89,7 +90,8 @@ CHAVES = PAGINAS + [p[0] for p in PERMISSOES]
 _PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos in TELAS + PERMISSOES}
 
 # Usadas por qualquer tela (badges do menu, deslogar por inatividade).
-CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/sessao/(atividade|estado)$")]
+CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/avisos/ignorar$"),
+                    re.compile(r"^/api/sessao/(atividade|estado)$")]
 
 
 def caminho_liberado(caminho: str, telas) -> bool:

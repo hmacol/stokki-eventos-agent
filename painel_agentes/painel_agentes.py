@@ -20,6 +20,7 @@ import logging
 import re
 import sys
 import threading
+import uuid
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -52,6 +53,7 @@ from flask import (
     jsonify, send_file, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import BuildError
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas, montar_args_parametros
 from executor import (
@@ -93,6 +95,7 @@ import wms_pedidos
 import wms_etiqueta_produto
 import wms_faltas_recebimento
 import acesso_telas
+import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 
@@ -722,7 +725,174 @@ def api_sidebar_contadores():
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
-    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())})
+    contadores = contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())
+    resp = jsonify({"contadores": contadores, "avisos": _avisos_da_pessoa(contadores)})
+    return _com_cookie_aparelho(resp)
+
+
+# Aviso de pendencias (spec 2026-10-24-aviso-pendencias-painel): a faixa no
+# topo das telas vem junto do poll do menu; "ignorar" e por pessoa.
+_NIVEIS_AVISO = ("total", "operador", "logistica", "leitura", "expedicao", "galpao", "atendimento")
+_COOKIE_APARELHO = "aviso_aparelho"
+
+
+def _pessoa_do_aviso() -> str:
+    """Login nominal -> 'login:<usuario>'. Login de nivel (compartilhado) ->
+    'aparelho:<uuid>' do cookie aviso_aparelho; sem cookie valido, gera um
+    (o cookie vai na resposta, ver _com_cookie_aparelho)."""
+    if acesso_telas.conta(session.get("usuario")):
+        return f"login:{session.get('usuario')}"
+    try:
+        uid = str(uuid.UUID(request.cookies.get(_COOKIE_APARELHO, "")))
+    except ValueError:
+        uid = str(uuid.uuid4())
+        g.aviso_aparelho_novo = uid
+    return f"aparelho:{uid}"
+
+
+def _com_cookie_aparelho(resp):
+    uid = g.get("aviso_aparelho_novo")
+    if uid:
+        resp.set_cookie(_COOKIE_APARELHO, uid, max_age=365 * 24 * 3600, httponly=True, samesite="Lax",
+                        secure=app.config["SESSION_COOKIE_SECURE"])
+    return resp
+
+
+def _avisos_da_pessoa(contadores: dict) -> list:
+    """Avisos do perfil, sem os ignorados, com `destino` ja resolvido pelo
+    url_for (prefixo do Caddy). Nunca derruba o poll do menu."""
+    try:
+        pessoa = _pessoa_do_aviso()
+        telas = g.get("telas_liberadas")
+        brutos = avisos_pendencias.montar(
+            g.nivel_acesso, contadores, None if telas is None else set(telas),
+            telas is not None and "aprovar_embarcadores" in telas)
+        conn = avisos_pendencias.conectar()
+        try:
+            brutos = avisos_pendencias.filtrar_ignorados(conn, pessoa, brutos, datetime.now())
+        finally:
+            conn.close()
+        itens = {i["chave"]: i for i in avisos_pendencias.CATALOGO}
+        avisos = []
+        for a in brutos:
+            item = itens[a["chave"]]
+            try:
+                destino = url_for(item["endpoint_destino"])
+            except BuildError:
+                logging.getLogger(__name__).debug(f"[avisos] Tela '{item['endpoint_destino']}' ainda nao existe; aviso '{a['chave']}' omitido")
+                continue
+            if "?" in item["destino"]:
+                destino += "?" + item["destino"].split("?", 1)[1]
+            avisos.append({"chave": a["chave"], "texto": a["texto"], "qtd": a["qtd"],
+                           "destino": destino, "vermelho": a["vermelho"]})
+        return avisos
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[avisos] Falha ao montar os avisos: {e}")
+        return []
+
+
+@app.route("/api/avisos/ignorar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_AVISO)
+@exige_mesma_origem
+def api_avisos_ignorar():
+    """Esconde um aviso pra essa pessoa por IGNORAR_MINUTOS."""
+    corpo = request.get_json(silent=True) or {}
+    chave, qtd = corpo.get("chave"), corpo.get("qtd")
+    if chave not in {i["chave"] for i in avisos_pendencias.CATALOGO}:
+        return jsonify({"erro": "Aviso desconhecido."}), 400
+    if not isinstance(qtd, int) or isinstance(qtd, bool) or qtd < 0:
+        return jsonify({"erro": "qtd precisa ser um inteiro >= 0."}), 400
+    agora = datetime.now()
+    conn = avisos_pendencias.conectar()
+    try:
+        avisos_pendencias.ignorar(conn, _pessoa_do_aviso(), chave, qtd, agora)
+    finally:
+        conn.close()
+    ate = agora + timedelta(minutes=avisos_pendencias.IGNORAR_MINUTOS)
+    return _com_cookie_aparelho(jsonify({"ok": True, "ate": ate.isoformat(timespec="seconds")}))
+
+
+# ── Pedidos do portal: executar ou recusar a solicitação do cliente ──────────
+
+_NIVEIS_SOLICITACAO = ("total", "operador", "logistica")
+
+
+def _criado_em_curto(valor) -> str:
+    """'2026-10-24T09:05:00' -> '24/10 09:05' (devolve o texto cru se não casar)."""
+    v = str(valor or "").replace("T", " ")
+    if len(v) >= 16 and v[4] == "-" and v[7] == "-":
+        return f"{v[8:10]}/{v[5:7]} {v[11:16]}"
+    return v
+
+
+@app.route("/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def solicitacoes_portal():
+    return render_template("solicitacoes_portal.html")
+
+
+@app.route("/api/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def api_solicitacoes_portal():
+    from portal_cliente import envio_pedidos
+    conn = envio_pedidos.conectar()
+    try:
+        linhas = envio_pedidos.listar_solicitacoes_pendentes(conn)
+    finally:
+        conn.close()
+    # envio em CANCELANDO ainda esta na fila do worker (nao e acionavel aqui)
+    linhas = [s for s in linhas if s.get("status_envio") != "CANCELANDO"]
+    itens = [{
+        "id": s["id"],
+        "tipo": s["tipo"],
+        "rotulo": envio_pedidos.ROTULOS_SOLICITACAO.get(s["tipo"], s["tipo"]),
+        "embarcador": s.get("cnpj_embarcador") or "",
+        "codigo_pedido": s.get("codigo_pedido") or "",
+        "numero_nf": s.get("numero_nf") or "",
+        "destinatario": s.get("destinatario_nome") or "",
+        "criado_em": _criado_em_curto(s.get("criado_em")),
+        "detalhe": s.get("detalhes") or "",
+    } for s in linhas]
+    return jsonify({"solicitacoes": itens})
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/executar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_executar(solicitacao_id):
+    """Síncrono (ação pontual de um operador; a trava da Stokki espera até 60 s)."""
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    try:
+        deps = solicitacoes_execucao.dependencias_reais(_carregar_config(), usuario=session.get("usuario") or "")
+        conn = envio_pedidos.conectar()
+        try:
+            resultado = solicitacoes_execucao.executar(conn, solicitacao_id, deps)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception(f"[solicitacoes-portal] Falha ao executar {solicitacao_id}")
+        return jsonify({"ok": False, "mensagem": "Erro inesperado ao executar. Veja o log do painel."}), 500
+    return jsonify(resultado)
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/recusar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_recusar(solicitacao_id):
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    corpo = request.get_json(silent=True) or {}
+    resposta = corpo.get("resposta")
+    resposta = resposta.strip() if isinstance(resposta, str) else ""
+    if not resposta or len(resposta) > 500:
+        return jsonify({"ok": False, "mensagem": "Informe a resposta ao cliente (até 500 caracteres)."}), 400
+    conn = envio_pedidos.conectar()
+    try:
+        solicitacoes_execucao.recusar(conn, solicitacao_id, resposta)
+    except ValueError as e:
+        return jsonify({"ok": False, "mensagem": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "mensagem": "Solicitação recusada."})
 
 
 def _niveis_por_contador() -> dict:
