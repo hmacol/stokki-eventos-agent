@@ -849,6 +849,10 @@
                            leitura): deveria estar no galpão? Não grava nada.
                            Serviço com [LALAMOVE <id>] no título: consulta a
                            corrida (PICKED_UP = saiu, COMPLETED = entregue).
+ Demandas (tarefas pro time) .............. painel_agentes/demandas.py + tela /demandas (25/10):
+                                             equipes com membros nominais/líder/login fixo vinculado,
+                                             visibilidade por pessoa/equipe, badge + som em toda tela.
+                                             Substitui as Demandas do Lovable (lovable/tasks.py).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
@@ -867,7 +871,17 @@
                            dia do 1º uso: insucesso anterior não entra, já foi
                            lançado no Lovable). Lalamove fica de fora. Confirmar: total/operador/logistica/
                            galpao/expedicao; atendimento e leitura só veem.
- contadores_menu.py        Badges do menu lateral.
+ demandas.py               Demandas (25/10): tarefas pra uma equipe e, opcional, uma
+                           pessoa. Cria: total e líderes. Vê: o que é seu, das suas
+                           equipes e o que criou (total vê tudo; login fixo vê as
+                           equipes vinculadas ao nível e informa o nome pra agir).
+                           Fluxo ABERTA -> EM_ANDAMENTO -> CONCLUIDA (+ CANCELADA, reabre).
+                           Tabelas demandas_equipes, demandas_equipe_membros,
+                           demandas_equipe_niveis, demandas, demandas_eventos (linha do
+                           tempo + ponteiro do aviso sonoro). Aviso no grupo do
+                           /atendimento ("Demandas" ou o da equipe) só com número e
+                           equipe. /api/demandas/avisos é caminho comum (acesso_telas).
+ contadores_menu.py        Badges do menu lateral ('demandas' é por usuário).
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
                            rotinas do painel). Nunca chama fonte cara.
@@ -899,6 +913,11 @@
                               criar/editar/desativar + histórico; CEP via portal_cliente.cotacao;
                               ver só total/operador/logistica/leitura/atendimento, API só os 3 primeiros;
                               badge do menu = contadores_menu 'transportadoras')
+   /demandas                  demandas.html + demandas.py + _tour_demandas.html (abas Das minhas
+                              equipes / Comigo / Criadas por mim / Todas e Equipes só pro total;
+                              todos os 7 níveis; badge 'demandas'). _demandas_aviso_script.html:
+                              bip + caixinha em qualquer tela (via _menu_lateral_script.html) e
+                              no wms.html, que não tem menu.
    /adesao-portal             adesao_portal.html + adesao_portal.py (quem já
                               entrou no portal do cliente e quem importa
                               pedidos por lá; lê clientes_portal/portal_envios;
@@ -1147,7 +1166,9 @@
                            (Playwright CPF+PIN -> token), pedidos parados,
                            tasks. Era freshhub/ ate 17/10/2026; o nome
                            freshhub/ passou a ser o pacote do sistema novo.
-                           Sai de uso na Fase 1 do plano mestre.
+                           Sai de uso na Fase 1 do plano mestre. As Demandas
+                           (tasks.py) foram substituídas pela tela /demandas
+                           do painel (25/10).
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /

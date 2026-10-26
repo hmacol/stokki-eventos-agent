@@ -722,7 +722,24 @@ def api_sidebar_contadores():
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
-    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador())})
+    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador(),
+                                                             _identidade_demandas())})
+
+
+def _identidade_demandas():
+    """Quem esta logado, pro badge das Demandas (por usuario). Falha aqui
+    so tira o badge, nunca derruba os outros contadores."""
+    try:
+        conn = demandas.conectar()
+        try:
+            return demandas.identidade(conn, session.get("usuario") or g.nivel_acesso, session.get("nivel_acesso"),
+                                       g.get("telas_liberadas"),
+                                       session.get("demandas_nome") or session.get("atendente_nome"))
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[contadores] Identidade das demandas falhou: {e}")
+        return None
 
 
 def _niveis_por_contador() -> dict:
@@ -4209,6 +4226,10 @@ def wms_etiquetas_pdf():
 # pacote atendimento/ da raiz, o WhatsApp+e-mail).
 import atendimento_chamados as _atendimento_web
 _atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem, carregar_config=_carregar_config)
+
+# ── Demandas (tarefas pro time, por equipe e pessoa), 25/10 ───────────────────
+import demandas
+demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,28 @@
+{# Roteiro do "Guia da tela" de Demandas (25/10). Só o conteúdo; o motor
+   está em _tour.html e este arquivo entra sozinho pelo base.html. #}
+<script>
+(function () {
+  if (!window.Tour) return;
+  var G = 'Geral', L = 'Lista', F = 'Ficha', E = 'Equipes';
+  var passos = [
+    { alvo: null, capitulo: G, titulo: 'Demandas: tarefas pro time',
+      texto: '<p>Cada demanda vai pra uma <b>equipe</b> e, se quiser, pra uma <b>pessoa</b> dela. Você vê só as demandas suas, das suas equipes e as que criou.</p><p>Quando chega uma nova pra você, o número ao lado de <b>Demandas</b> no menu sobe e toca um <b>aviso</b> em qualquer tela do painel (depois do primeiro clique na página, que é quando o navegador libera o som).</p>' },
+    { alvo: '.abas', capitulo: L, titulo: 'Abas',
+      texto: '<p><b>Das minhas equipes</b>: tudo das equipes em que você está. <b>Comigo</b>: só onde você é o responsável. <b>Criadas por mim</b>: pra quem cria acompanhar o que mandou. O acesso total vê ainda <b>Todas</b> e cadastra as <b>Equipes</b>.</p>',
+      posicao: 'baixo' },
+    { alvo: '.filtros', capitulo: L, titulo: 'Filtros',
+      texto: '<p>Por padrão aparecem as <b>abertas e em andamento</b>. Dá pra filtrar por prioridade, equipe, buscar por título, pedido, embarcador ou <b>#número</b>, e ver só as <b>atrasadas</b> (prazo vencido, em vermelho).</p><p>Linha com a marca na esquerda teve novidade desde a sua última visita.</p>',
+      posicao: 'baixo' },
+    { alvo: '#botao-nova', capitulo: L, titulo: 'Nova demanda',
+      texto: '<p>Só o acesso total e os <b>líderes de equipe</b> criam. Escolha a equipe; o responsável é opcional e precisa ser membro dela. Prazo, prioridade, pedido e embarcador ajudam quem vai tratar.</p>',
+      posicao: 'esquerda' },
+    { alvo: '#lista', capitulo: F, titulo: 'Ficha da demanda',
+      texto: '<p>Clique numa linha pra abrir. Os botões mudam conforme a situação e quem você é: <b>Iniciar</b>, <b>Concluir</b>, <b>Assumir</b> (virar o responsável), <b>Editar</b>, <b>Cancelar</b> (pede o motivo) e <b>Reabrir</b>.</p><p>Embaixo ficam os <b>comentários</b> e o <b>histórico</b> de quem mudou o quê.</p>',
+      posicao: 'cima' },
+    { alvo: function () { return document.querySelector('[data-aba="equipes"]'); }, capitulo: E, titulo: 'Equipes',
+      texto: '<p>Cadastro das equipes: membros (dos logins nominais), quem é <b>líder</b>, quais <b>logins fixos</b> (galpão, expedição...) veem as demandas da equipe e em qual grupo do Atendimento sai o aviso.</p><p>Equipe desativada não recebe demandas novas, mas as antigas continuam aparecendo.</p>',
+      posicao: 'baixo' }
+  ];
+  window.Tour.registrar('demandas', passos, { auto: true, titulo: 'Demandas' });
+})();
+</script>

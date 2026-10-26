@@ -28,7 +28,7 @@ import acesso_telas  # noqa: E402
 MENU_ESPERADO = {
     "Início", "Torre de Controle", "Canhotos pendentes", "Pedidos Parados", "Tratativas", "Consulta",
     "Planejamento", "Atendimento", "Motoristas", "Pedágios", "Canhotos", "Clientes AGENDA", "Transportadoras", "Adesão ao portal",
-    "Retornos",
+    "Retornos", "Demandas",
 }
 
 
