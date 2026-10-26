@@ -742,6 +742,27 @@ def _json_erro_envio(e: Exception, status: int = 400):
     return jsonify({"erro": str(e)}), status
 
 
+def _avisar_xd_ausente(nome: str, erro: str) -> None:
+    """Fluxo Cross sem produto XD no catálogo (Hugo, 25/10): o cliente vê na
+    prévia e o atendimento recebe e-mail pra cadastrar/conferir o XD."""
+    try:
+        from html import escape as html_escape
+        from bloqueio_area import forcar_destino
+        email_cfg = _CONFIG.get("email", {}) or {}
+        destino = forcar_destino(_CONFIG) or email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
+        if not destino:
+            return
+        corpo = envelope_html(
+            f"<p><b>{html_escape(nome)}</b> tentou enviar pedidos no fluxo Cross, mas o produto XD dele não foi "
+            f"encontrado no catálogo da Stokki ({html_escape(erro or '')}).</p>"
+            f"<p>Os pedidos Cross ficaram recusados na tela do cliente. Cadastre ou reative o produto XD do "
+            f"embarcador na Stokki (código começando com XD); depois da próxima sincronização de produtos "
+            f"o envio volta a funcionar.</p>")
+        enviar_email([destino], f"[Portal] Produto XD não encontrado · {nome}", corpo, email_cfg)
+    except Exception:
+        logger.exception("aviso de XD ausente falhou")
+
+
 @app.route("/api/envios")
 @requer_cliente
 def api_envios_listar():
@@ -780,6 +801,7 @@ def api_envios_analisar():
     conn = envios.conectar()
     try:
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
+        fluxos_disp, xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -842,10 +864,17 @@ def api_envios_analisar():
         return _json_erro_envio(e)
     finally:
         conn.close()
+    if xd["erro"]:
+        _avisar_xd_ausente(_empresa_envio()["nome"] or _empresa_envio()["cnpj"], xd["erro"])
+        if not fluxos_disp:  # só Cross e o XD falta: nada pode ir
+            rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
+                               "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE} for it in itens)
+            itens = []
     logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
-                    "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat()})
+                    "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(),
+                    "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
 
 
 @app.route("/api/envios/modelo-planilha")
@@ -877,7 +906,9 @@ def api_envios_confirmar():
         if fora:
             return jsonify({"erro": "Há pedidos com data fora do dia de visita da região.", "fora_dia_fixo": fora}), 409
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
-        criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"])
+        fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
+        criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
+                                          fluxos_disponiveis=fluxos_disp)
         # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a
         # linha fica AGUARDANDO_LIBERACAO até a equipe liberar no painel.
         bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
