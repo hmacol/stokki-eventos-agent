@@ -1,0 +1,511 @@
+{% extends "base.html" %}
+{% block titulo %}Demandas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1200px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
+  .barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }
+  .abas { display: flex; flex-wrap: wrap; gap: 6px; margin-right: auto; }
+  .abas button { padding: 7px 14px; border: 1px solid var(--borda); border-radius: 7px; font: inherit; font-size: 13px;
+                 font-weight: 600; color: var(--texto); background: var(--superficie); cursor: pointer; }
+  .abas button.ativa { background: var(--primaria); color: #fff; border-color: var(--primaria); }
+  .voce { font-size: 13px; color: var(--texto-suave); }
+  .voce button { font: inherit; font-size: 12px; background: none; border: none; color: var(--primaria); cursor: pointer; text-decoration: underline; }
+  .filtros { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; align-items: center; }
+  .filtros label.marca { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  input, select, textarea { font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid var(--borda);
+                            border-radius: 7px; background: var(--superficie); color: var(--texto); min-width: 0; }
+  textarea { resize: vertical; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  tr.clicavel { cursor: pointer; }
+  tr.clicavel:hover td { background: rgba(127,127,127,.08); }
+  tr.novo td:first-child { box-shadow: inset 4px 0 0 var(--primaria); }
+  tr.novo td { font-weight: 600; }
+  .mono { font-size: 12px; white-space: nowrap; color: var(--texto-suave); }
+  .mini { font-size: 12px; color: var(--texto-suave); font-weight: 400; }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.URGENTE { background: var(--erro); color: #fff; }
+  .pilula.ALTA { background: var(--erro-bg); color: var(--erro); }
+  .pilula.BAIXA { opacity: .7; }
+  .pilula.CONCLUIDA { background: var(--sucesso-bg, #e3f4ea); color: var(--sucesso, #1e6b3a); }
+  .pilula.CANCELADA { opacity: .6; }
+  .atrasada { color: var(--erro); font-weight: 700; }
+  .faixa { background: var(--teste-bg); color: var(--teste-texto); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin: 0 0 12px; }
+  .faixa[hidden] { display: none; }
+  button.botao.secundario { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  button.botao.perigo { background: var(--erro); }
+  .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
+  dialog { border: 1px solid var(--borda); border-radius: 12px; background: var(--superficie); color: var(--texto);
+           padding: 18px; width: min(720px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h2 { font-size: 16px; margin: 0 0 12px; }
+  .grade { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .grade label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--texto-suave); }
+  .grade label.larga { grid-column: 1 / -1; }
+  [hidden] { display: none !important; }
+  .msg-erro { color: var(--erro); font-size: 13px; min-height: 18px; margin: 10px 0 0; }
+  .msg-ok { color: var(--sucesso, #1e6b3a); font-size: 13px; min-height: 18px; margin: 10px 0 0; }
+  .rodape { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  .ficha-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 14px; font-size: 13px; margin: 0 0 12px; }
+  .ficha-meta .rot { display: block; font-size: 11px; color: var(--texto-suave); text-transform: uppercase; letter-spacing: .3px; }
+  .descricao { white-space: pre-wrap; font-size: 14px; line-height: 1.45; margin: 0 0 12px; }
+  .tempo { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--borda); }
+  .tempo li { padding: 8px 0; border-bottom: 1px solid var(--borda); font-size: 13px; }
+  .tempo li .quando { color: var(--texto-suave); font-size: 12px; margin-left: 6px; }
+  .tempo li .texto { white-space: pre-wrap; margin-top: 3px; }
+  .tempo li.comentario { background: rgba(127,127,127,.08); padding-left: 8px; border-radius: 6px; }
+  .membros { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; border: 1px solid var(--borda);
+             border-radius: 7px; padding: 8px; }
+  .membro { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 13px; color: var(--texto); }
+  .membro label { display: flex; gap: 6px; align-items: center; flex-direction: row; color: inherit; font-size: 13px; }
+  .niveis { display: flex; flex-wrap: wrap; gap: 10px; }
+  .niveis label { flex-direction: row; align-items: center; gap: 5px; color: var(--texto); font-size: 13px; }
+  @media (max-width: 640px) {
+    .grade { grid-template-columns: 1fr; }
+    .filtros input, .filtros select { flex: 1 1 140px; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Demandas</h1>
+<p class="sub">
+  Tarefas pra equipe e pra pessoa certa. Quem recebe vê aqui, no número ao lado de "Demandas" no menu e ouve um aviso
+  em qualquer tela do painel. Só o acesso total e os líderes de equipe criam demandas.
+</p>
+
+<div class="barra">
+  <div class="abas" role="tablist">
+    <button type="button" data-aba="equipe">Das minhas equipes</button>
+    {% if ident.nominal %}<button type="button" data-aba="minhas">Comigo</button>{% endif %}
+    {% if ident.pode_criar %}<button type="button" data-aba="criadas">Criadas por mim</button>{% endif %}
+    {% if ident.admin %}<button type="button" data-aba="todas">Todas</button>
+    <button type="button" data-aba="equipes">Equipes</button>{% endif %}
+  </div>
+  {% if not ident.nominal and not ident.admin %}
+  <span class="voce" id="voce">Você: <strong id="voce-nome">{{ ident.autor or '(informe seu nome)' }}</strong>
+    <button type="button" id="trocar-nome">trocar</button></span>
+  {% endif %}
+  {% if ident.pode_criar %}<button type="button" class="botao" id="botao-nova">Nova demanda</button>{% endif %}
+</div>
+
+<div id="painel-demandas">
+  <div class="filtros">
+    <select id="f-status" aria-label="Situação">
+      <option value="ABERTA,EM_ANDAMENTO">Abertas e em andamento</option>
+      <option value="ABERTA">Abertas</option>
+      <option value="EM_ANDAMENTO">Em andamento</option>
+      <option value="CONCLUIDA">Concluídas</option>
+      <option value="CANCELADA">Canceladas</option>
+      <option value="ABERTA,EM_ANDAMENTO,CONCLUIDA,CANCELADA">Todas</option>
+    </select>
+    <select id="f-prioridade" aria-label="Prioridade"><option value="">Qualquer prioridade</option></select>
+    <select id="f-equipe" aria-label="Equipe"><option value="">Todas as equipes</option></select>
+    <input type="search" id="f-busca" placeholder="Título, pedido, embarcador ou #número" aria-label="Buscar">
+    <label class="marca"><input type="checkbox" id="f-atrasadas"> Só atrasadas</label>
+  </div>
+  <p class="faixa" id="faixa-novas" hidden></p>
+  <div class="tabela-wrap" id="lista"><div class="vazio">Carregando…</div></div>
+</div>
+
+{% if ident.admin %}
+<div id="painel-equipes" hidden>
+  <p class="sub">As equipes são as do campo <strong>Equipe</strong> de cada login (tela Acessos): quem está numa equipe
+    é membro dela. Aqui você marca os <strong>líderes</strong> (que criam demandas), os logins fixos que veem as demandas
+    da equipe e onde sai o aviso.</p>
+  <p class="faixa" id="sem-equipe" hidden></p>
+  <div class="tabela-wrap" id="lista-equipes"><div class="vazio">Carregando…</div></div>
+</div>
+{% endif %}
+<p class="msg-erro" id="aviso" role="alert"></p>
+
+<dialog id="dlg-form">
+  <form id="form" autocomplete="off">
+    <h2 id="form-titulo">Nova demanda</h2>
+    <div class="grade">
+      <label class="larga">Título<input name="titulo" maxlength="120" required></label>
+      <label class="larga">Descrição<textarea name="descricao" rows="4" maxlength="4000"></textarea></label>
+      <label>Equipe<select name="equipe_id" required></select></label>
+      <label>Responsável (opcional)<select name="responsavel"><option value="">— a equipe toda —</option></select></label>
+      <label>Prioridade<select name="prioridade"></select></label>
+      <label>Prazo<input name="prazo" type="date"></label>
+      <label>Pedido (opcional)<input name="pedido_codigo" placeholder="PS-12345"></label>
+      <label>Embarcador (opcional)<input name="embarcador_busca" list="lista-embarcadores" placeholder="Digite o nome">
+        <input type="hidden" name="embarcador_cnpj"></label>
+      <datalist id="lista-embarcadores"></datalist>
+    </div>
+    <p class="msg-erro" id="form-erro" role="alert"></p>
+    <div class="rodape">
+      <button type="button" class="botao secundario" data-fechar>Cancelar</button>
+      <button type="submit" class="botao" id="form-salvar">Criar demanda</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-ficha">
+  <h2 id="ficha-titulo"></h2>
+  <div class="ficha-meta" id="ficha-meta"></div>
+  <p class="descricao" id="ficha-descricao"></p>
+  <div class="rodape" id="ficha-acoes" style="justify-content:flex-start"></div>
+  <form id="form-comentario" autocomplete="off" style="margin-top:12px">
+    <textarea name="texto" rows="2" maxlength="4000" placeholder="Escreva um comentário" style="width:100%;box-sizing:border-box"></textarea>
+    <div class="rodape" style="margin-top:6px"><button type="submit" class="botao secundario">Comentar</button></div>
+  </form>
+  <p class="msg-erro" id="ficha-erro" role="alert"></p>
+  <ul class="tempo" id="ficha-tempo"></ul>
+  <div class="rodape"><button type="button" class="botao secundario" data-fechar>Fechar</button></div>
+</dialog>
+
+<dialog id="dlg-motivo">
+  <form id="form-motivo" autocomplete="off">
+    <h2 id="motivo-titulo">Cancelar demanda</h2>
+    <textarea name="comentario" rows="3" maxlength="4000" style="width:100%;box-sizing:border-box" placeholder="Por quê?"></textarea>
+    <p class="msg-erro" id="motivo-erro" role="alert"></p>
+    <div class="rodape">
+      <button type="button" class="botao secundario" data-fechar>Voltar</button>
+      <button type="submit" class="botao" id="motivo-ok">Confirmar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-nome">
+  <form id="form-nome" autocomplete="off">
+    <h2>Quem está usando?</h2>
+    <p class="sub">Este login é compartilhado. Seu nome fica registrado no que você fizer nas demandas.</p>
+    <input name="nome" maxlength="60" required style="width:100%;box-sizing:border-box" placeholder="Seu nome">
+    <p class="msg-erro" id="nome-erro" role="alert"></p>
+    <div class="rodape">
+      <button type="button" class="botao secundario" data-fechar>Cancelar</button>
+      <button type="submit" class="botao">Continuar</button>
+    </div>
+  </form>
+</dialog>
+
+{% if ident.admin %}
+<dialog id="dlg-equipe">
+  <form id="form-equipe" autocomplete="off">
+    <h2 id="equipe-titulo">Equipe</h2>
+    <div class="grade">
+      <label>Situação<select name="ativo"><option value="1">Ativa</option><option value="0">Desativada (não recebe novas)</option></select></label>
+      <label class="larga">Descrição<input name="descricao" maxlength="500"></label>
+      <label class="larga">Membros (vêm da tela Acessos; marque quem é líder)<div class="membros" id="equipe-membros"></div></label>
+      <label class="larga">Logins fixos que veem as demandas da equipe<div class="niveis" id="equipe-niveis"></div></label>
+      <label class="larga">Grupo do Atendimento pra avisar (opcional)<select name="grupo_id"><option value="">Grupo "Demandas" (padrão)</option></select></label>
+    </div>
+    <p class="msg-erro" id="equipe-erro" role="alert"></p>
+    <div class="rodape">
+      <button type="button" class="botao secundario" data-fechar>Cancelar</button>
+      <button type="submit" class="botao">Salvar equipe</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
+<script>
+(function () {
+  const IDENT = {{ {'admin': ident.admin, 'nominal': ident.nominal, 'pode_criar': ident.pode_criar,
+                    'autor': ident.autor, 'usuario': ident.usuario, 'tem_equipe': ident.equipes|length > 0} | tojson }};
+  const ABRIR = {{ abrir | tojson }};
+  const $ = (id) => document.getElementById(id);
+  const CHAVE_VISTO = 'demandas_tela_visto:' + IDENT.usuario;
+  const NIVEIS_ROTULO = { operador: 'Operador', leitura: 'Leitura', expedicao: 'Expedição', galpao: 'Galpão', atendimento: 'Atendimento' };
+  let opcoes = null, aba = IDENT.admin && !IDENT.tem_equipe ? 'todas' : 'equipe', atual = null, pendente = null;
+  let vistoAoAbrir = null;
+  try { vistoAoAbrir = parseInt(localStorage.getItem(CHAVE_VISTO) || '0', 10); } catch (e) { vistoAoAbrir = 0; }
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function dataBr(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—'; }
+
+  async function api(caminho, corpo) {
+    const op = { credentials: 'same-origin', headers: {} };
+    if (corpo !== undefined) { op.method = 'POST'; op.headers['Content-Type'] = 'application/json'; op.body = JSON.stringify(corpo); }
+    const r = await fetch(BASE_PATH + caminho, op);
+    if (r.status === 401) { location.href = BASE_PATH + '/login?proximo=' + encodeURIComponent(location.pathname + location.search); throw new Error('Sessão expirada'); }
+    const quem = r.headers.get('X-Demandas-Usuario');
+    if (quem && quem !== IDENT.usuario) {
+      // Outro login entrou neste navegador (as abas dividem a sessão).
+      $('aviso').textContent = 'Este navegador agora está logado como ' + quem + '. Recarregando a tela…';
+      setTimeout(() => location.reload(), 1500);
+      throw new Error('Este navegador agora está logado como ' + quem + '. A tela vai recarregar.');
+    }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.erro || 'Não deu certo (' + r.status + ').'); e.precisaNome = !!j.precisa_nome; throw e; }
+    return j;
+  }
+
+  // Login fixo sem nome: pede o nome e repete a ação inteira (chamada à
+  // API + o que vem depois, pra tela se redesenhar também na repetição).
+  async function comNome(acao, erroEl) {
+    try { await acao(); }
+    catch (e) {
+      if (e.precisaNome) { pendente = () => comNome(acao, erroEl); $('dlg-nome').showModal(); return; }
+      if (erroEl) erroEl.textContent = e.message;
+    }
+  }
+  $('form-nome').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      const j = await api('/api/demandas/nome', { nome: ev.target.nome.value });
+      IDENT.autor = j.nome;
+      if ($('voce-nome')) $('voce-nome').textContent = j.nome;
+      $('dlg-nome').close();
+      if (pendente) { const p = pendente; pendente = null; await p(); }
+    } catch (e) { $('nome-erro').textContent = e.message; }
+  });
+  if ($('trocar-nome')) $('trocar-nome').addEventListener('click', () => { pendente = null; $('dlg-nome').showModal(); });
+
+  document.querySelectorAll('dialog [data-fechar]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+
+  // ── opções e filtros ────────────────────────────────────────────────────
+  async function carregarOpcoes() {
+    opcoes = await api('/api/demandas/opcoes');
+    $('f-prioridade').innerHTML = '<option value="">Qualquer prioridade</option>' + opcoes.prioridades.map(p => `<option value="${p.valor}">${p.rotulo}</option>`).join('');
+    $('f-equipe').innerHTML = '<option value="">Todas as equipes</option>' + opcoes.equipes.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+    const form = $('form');
+    form.prioridade.innerHTML = opcoes.prioridades.map(p => `<option value="${p.valor}" ${p.valor === 'NORMAL' ? 'selected' : ''}>${p.rotulo}</option>`).join('');
+    form.equipe_id.innerHTML = '<option value="">Escolha…</option>' + opcoes.equipes.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+  }
+  function preencherResponsaveis(equipeId, selecionado) {
+    const e = (opcoes.equipes || []).find(x => String(x.id) === String(equipeId));
+    $('form').responsavel.innerHTML = '<option value="">— a equipe toda —</option>' +
+      (e ? e.membros.map(m => `<option value="${esc(m.usuario)}" ${m.usuario === selecionado ? 'selected' : ''}>${esc(m.nome)}</option>`).join('') : '');
+  }
+  $('form').equipe_id.addEventListener('change', (ev) => preencherResponsaveis(ev.target.value, ''));
+
+  ['f-status', 'f-prioridade', 'f-equipe', 'f-atrasadas'].forEach(id => $(id).addEventListener('change', carregarLista));
+  let tBusca = null;
+  $('f-busca').addEventListener('input', () => { clearTimeout(tBusca); tBusca = setTimeout(carregarLista, 300); });
+
+  document.querySelectorAll('.abas button').forEach(b => b.addEventListener('click', () => trocarAba(b.dataset.aba)));
+  function trocarAba(nova) {
+    aba = nova;
+    document.querySelectorAll('.abas button').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
+    const eq = aba === 'equipes';
+    $('painel-demandas').hidden = eq;
+    if ($('painel-equipes')) $('painel-equipes').hidden = !eq;
+    $('aviso').textContent = '';
+    eq ? carregarEquipes() : carregarLista();
+  }
+
+  // ── lista ───────────────────────────────────────────────────────────────
+  async function carregarLista() {
+    if (aba === 'equipes') return;
+    const q = new URLSearchParams({ aba, status: $('f-status').value, prioridade: $('f-prioridade').value,
+                                    equipe_id: $('f-equipe').value, busca: $('f-busca').value.trim() });
+    if ($('f-atrasadas').checked) q.set('atrasadas', '1');
+    try {
+      const j = await api('/api/demandas?' + q.toString());
+      desenharLista(j.demandas);
+    } catch (e) { $('aviso').textContent = e.message; }
+  }
+  function desenharLista(itens) {
+    if (!itens.length) {
+      const msg = aba === 'equipe' && !IDENT.tem_equipe ? 'Você ainda não está em nenhuma equipe.' : 'Nenhuma demanda por aqui.';
+      $('lista').innerHTML = `<div class="vazio">${msg}</div>`;
+      $('faixa-novas').hidden = true;
+      return;
+    }
+    const novas = itens.filter(d => vistoAoAbrir && d.ultimo_evento > vistoAoAbrir).length;
+    $('faixa-novas').hidden = !novas;
+    $('faixa-novas').textContent = novas === 1 ? '1 demanda com novidade desde sua última visita.' : novas + ' demandas com novidade desde sua última visita.';
+    const maior = Math.max(...itens.map(d => d.ultimo_evento || 0));
+    try { if (maior > parseInt(localStorage.getItem(CHAVE_VISTO) || '0', 10)) localStorage.setItem(CHAVE_VISTO, String(maior)); } catch (e) {}
+    $('lista').innerHTML = `<table><thead><tr><th>#</th><th>Prioridade</th><th>Demanda</th><th>Equipe</th><th>Responsável</th><th>Prazo</th><th>Situação</th><th>Atualizada</th></tr></thead><tbody>` +
+      itens.map(d => `<tr class="clicavel ${vistoAoAbrir && d.ultimo_evento > vistoAoAbrir ? 'novo' : ''}" data-id="${d.id}" tabindex="0">
+        <td class="mono">#${d.id}</td>
+        <td><span class="pilula ${d.prioridade}">${esc(d.prioridade_rotulo)}</span></td>
+        <td><strong>${esc(d.titulo)}</strong>${d.pedido_codigo || d.embarcador_nome ? `<div class="mini">${esc([d.pedido_codigo, d.embarcador_nome].filter(Boolean).join(' · '))}</div>` : ''}</td>
+        <td>${esc(d.equipe)}</td>
+        <td>${esc(d.responsavel_nome || '—')}</td>
+        <td class="${d.atrasada ? 'atrasada' : 'mono'}">${dataBr(d.prazo)}</td>
+        <td><span class="pilula ${d.status}">${esc(d.status_rotulo)}</span></td>
+        <td class="mono">${esc(d.atualizado_quando)}</td></tr>`).join('') + '</tbody></table>';
+  }
+  $('lista').addEventListener('click', (ev) => { const tr = ev.target.closest('tr[data-id]'); if (tr) abrirFicha(Number(tr.dataset.id)); });
+  $('lista').addEventListener('keydown', (ev) => { const tr = ev.target.closest('tr[data-id]'); if (tr && ev.key === 'Enter') abrirFicha(Number(tr.dataset.id)); });
+
+  // ── criar / editar ──────────────────────────────────────────────────────
+  if ($('botao-nova')) $('botao-nova').addEventListener('click', () => abrirForm(null));
+  function abrirForm(d) {
+    atual = d;
+    const f = $('form');
+    f.reset();
+    $('form-erro').textContent = '';
+    $('form-titulo').textContent = d ? 'Editar demanda #' + d.id : 'Nova demanda';
+    $('form-salvar').textContent = d ? 'Salvar' : 'Criar demanda';
+    f.titulo.value = d ? d.titulo : '';
+    f.descricao.value = d ? d.descricao : '';
+    f.equipe_id.value = d ? d.equipe_id : '';
+    preencherResponsaveis(f.equipe_id.value, d ? d.responsavel : '');
+    f.prioridade.value = d ? d.prioridade : 'NORMAL';
+    f.prazo.value = d && d.prazo ? d.prazo : '';
+    f.pedido_codigo.value = d && d.pedido_codigo ? d.pedido_codigo : '';
+    f.embarcador_busca.value = d && d.embarcador_nome ? d.embarcador_nome : '';
+    f.embarcador_cnpj.value = d && d.embarcador_cnpj ? d.embarcador_cnpj : '';
+    $('dlg-form').showModal();
+  }
+  let embarcadores = [], tEmb = null;
+  $('form').embarcador_busca.addEventListener('input', (ev) => {
+    const v = ev.target.value.trim();
+    const achado = embarcadores.find(e => e.nome === v);
+    $('form').embarcador_cnpj.value = achado ? achado.cnpj : '';
+    clearTimeout(tEmb);
+    if (achado || v.length < 2) return;
+    tEmb = setTimeout(async () => {
+      try {
+        embarcadores = (await api('/api/demandas/embarcadores?q=' + encodeURIComponent(v))).embarcadores;
+        $('lista-embarcadores').innerHTML = embarcadores.map(e => `<option value="${esc(e.nome)}">`).join('');
+      } catch (e) { /* sem sugestão */ }
+    }, 250);
+  });
+  $('form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    if (f.embarcador_busca.value.trim() && !f.embarcador_cnpj.value) { $('form-erro').textContent = 'Escolha o embarcador na lista (ou deixe em branco).'; return; }
+    const corpo = { titulo: f.titulo.value, descricao: f.descricao.value, equipe_id: f.equipe_id.value, responsavel: f.responsavel.value,
+                    prioridade: f.prioridade.value, prazo: f.prazo.value, pedido_codigo: f.pedido_codigo.value,
+                    embarcador_cnpj: f.embarcador_cnpj.value, embarcador_nome: f.embarcador_busca.value.trim() };
+    const editando = atual;
+    await comNome(async () => {
+      await api(editando ? '/api/demandas/' + editando.id : '/api/demandas', corpo);
+      $('dlg-form').close();
+      await carregarLista();
+      if (editando) abrirFicha(editando.id);
+    }, $('form-erro'));
+  });
+
+  // ── ficha ───────────────────────────────────────────────────────────────
+  const BOTOES = { iniciar: ['Iniciar', 'EM_ANDAMENTO', 'botao'], concluir: ['Concluir', 'CONCLUIDA', 'botao'],
+                   assumir: ['Assumir', null, 'botao secundario'], editar: ['Editar', null, 'botao secundario'],
+                   reabrir: ['Reabrir', 'ABERTA', 'botao secundario'], cancelar: ['Cancelar demanda', 'CANCELADA', 'botao perigo'] };
+  async function abrirFicha(id) {
+    $('ficha-erro').textContent = '';
+    try { desenharFicha((await api('/api/demandas/' + id)).demanda); }
+    catch (e) { $('aviso').textContent = e.message; return; }
+    if (!$('dlg-ficha').open) $('dlg-ficha').showModal();
+  }
+  function desenharFicha(d) {
+    atual = d;
+    $('ficha-titulo').innerHTML = `<span class="mono">#${d.id}</span> ${esc(d.titulo)}`;
+    const pedido = d.pedido_codigo ? `<a href="${BASE_PATH}/consulta/pedido/${encodeURIComponent(d.pedido_codigo)}" target="_blank" rel="noopener">${esc(d.pedido_codigo)}</a>` : '—';
+    $('ficha-meta').innerHTML = [
+      ['Situação', `<span class="pilula ${d.status}">${esc(d.status_rotulo)}</span>`],
+      ['Prioridade', `<span class="pilula ${d.prioridade}">${esc(d.prioridade_rotulo)}</span>`],
+      ['Equipe', esc(d.equipe)], ['Responsável', esc(d.responsavel_nome || 'a equipe toda')],
+      ['Prazo', `<span class="${d.atrasada ? 'atrasada' : ''}">${dataBr(d.prazo)}</span>`],
+      ['Pedido', pedido], ['Embarcador', esc(d.embarcador_nome || '—')],
+      ['Criada', esc((d.criado_por_nome || d.criado_por) + ' · ' + d.criado_quando)],
+    ].map(([r, v]) => `<div><span class="rot">${r}</span>${v}</div>`).join('');
+    $('ficha-descricao').textContent = d.descricao || '';
+    $('ficha-descricao').hidden = !d.descricao;
+    $('ficha-acoes').innerHTML = Object.keys(BOTOES).filter(a => d.acoes.includes(a))
+      .map(a => `<button type="button" class="${BOTOES[a][2]}" data-acao="${a}">${BOTOES[a][0]}</button>`).join('');
+    $('form-comentario').hidden = !d.acoes.includes('comentar');
+    $('ficha-tempo').innerHTML = d.eventos.slice().reverse().map(e =>
+      `<li class="${e.tipo === 'comentario' ? 'comentario' : ''}"><strong>${esc(e.autor)}</strong> ${esc(e.resumo)}<span class="quando">${esc(e.quando)}</span>${e.texto ? `<div class="texto">${esc(e.texto)}</div>` : ''}</li>`).join('');
+  }
+  $('ficha-acoes').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[data-acao]');
+    if (!b || !atual) return;
+    const acao = b.dataset.acao, d = atual;
+    $('ficha-erro').textContent = '';
+    if (acao === 'editar') { $('dlg-ficha').close(); abrirForm(d); return; }
+    if (acao === 'cancelar') { $('form-motivo').reset(); $('motivo-erro').textContent = ''; $('dlg-motivo').showModal(); return; }
+    const caminho = acao === 'assumir' ? '/api/demandas/' + d.id + '/assumir' : '/api/demandas/' + d.id + '/status';
+    const corpo = acao === 'assumir' ? {} : { status: BOTOES[acao][1] };
+    await comNome(async () => {
+      await api(caminho, corpo);
+      await abrirFicha(d.id);
+      carregarLista();
+    }, $('ficha-erro'));
+  });
+  $('form-motivo').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const d = atual, comentario = ev.target.comentario.value;
+    await comNome(async () => {
+      await api('/api/demandas/' + d.id + '/status', { status: 'CANCELADA', comentario });
+      $('dlg-motivo').close();
+      await abrirFicha(d.id);
+      carregarLista();
+    }, $('motivo-erro'));
+  });
+  $('form-comentario').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const d = atual, texto = ev.target.texto.value, form = ev.target;
+    await comNome(async () => {
+      const j = await api('/api/demandas/' + d.id + '/comentarios', { texto });
+      form.reset();
+      desenharFicha(j.demanda);
+      carregarLista();
+    }, $('ficha-erro'));
+  });
+
+  // ── equipes (só total) ──────────────────────────────────────────────────
+  let dadosEquipes = null, equipeAtual = null;
+  async function carregarEquipes() {
+    try { dadosEquipes = await api('/api/demandas/equipes'); }
+    catch (e) { $('aviso').textContent = e.message; return; }
+    const sem = dadosEquipes.sem_equipe || [];
+    $('sem-equipe').hidden = !sem.length;
+    $('sem-equipe').textContent = sem.length ? 'Sem equipe na tela Acessos (não recebem demandas): ' + sem.map(u => u.nome).join(', ') : '';
+    $('lista-equipes').innerHTML = `<table><thead><tr><th>Equipe</th><th>Líderes</th><th>Membros</th><th>Logins fixos</th><th>Situação</th></tr></thead><tbody>` +
+      dadosEquipes.equipes.map(e => `<tr class="clicavel" data-equipe="${e.id}" tabindex="0"><td><strong>${esc(e.nome)}</strong>${e.descricao ? `<div class="mini">${esc(e.descricao)}</div>` : ''}</td>
+        <td>${esc(e.membros.filter(m => m.lider).map(m => m.nome).join(', ') || '—')}</td>
+        <td>${e.membros.length ? esc(e.membros.map(m => m.nome).join(', ')) : '<span class="mini">ninguém</span>'}</td>
+        <td>${esc(e.niveis.map(n => NIVEIS_ROTULO[n] || n).join(', ') || '—')}</td>
+        <td><span class="pilula ${e.ativo ? '' : 'CANCELADA'}">${e.ativo ? 'Ativa' : 'Desativada'}</span></td></tr>`).join('') + '</tbody></table>';
+  }
+  if ($('lista-equipes')) $('lista-equipes').addEventListener('click', (ev) => {
+    const tr = ev.target.closest('tr[data-equipe]');
+    if (tr) abrirEquipe(dadosEquipes.equipes.find(e => e.id === Number(tr.dataset.equipe)));
+  });
+  function abrirEquipe(e) {
+    equipeAtual = e;
+    const f = $('form-equipe');
+    f.reset();
+    $('equipe-erro').textContent = '';
+    $('equipe-titulo').textContent = 'Equipe ' + e.nome;
+    f.descricao.value = e.descricao || '';
+    f.ativo.value = e.ativo ? '1' : '0';
+    f.grupo_id.innerHTML = '<option value="">Grupo "Demandas" (padrão)</option>' + dadosEquipes.grupos.map(g => `<option value="${g.id}">${esc(g.nome)}</option>`).join('');
+    f.grupo_id.value = e.grupo_id || '';
+    $('equipe-membros').innerHTML = e.membros.length ? e.membros.map(m => `<div class="membro">
+      <span>${esc(m.nome)} <span class="mini">(${esc(m.usuario)})</span></span>
+      <label><input type="checkbox" data-lider="${esc(m.usuario)}" ${m.lider ? 'checked' : ''}> líder</label></div>`).join('')
+      : '<span class="mini">Ninguém com essa equipe na tela Acessos.</span>';
+    $('equipe-niveis').innerHTML = dadosEquipes.niveis_fixos.map(n => `<label><input type="checkbox" data-nivel="${n}" ${e.niveis.includes(n) ? 'checked' : ''}> ${NIVEIS_ROTULO[n] || n}</label>`).join('');
+    $('dlg-equipe').showModal();
+  }
+  if ($('form-equipe')) $('form-equipe').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const corpo = { descricao: f.descricao.value, ativo: f.ativo.value === '1', grupo_id: f.grupo_id.value || null,
+                    lideres: [...document.querySelectorAll('[data-lider]:checked')].map(c => c.dataset.lider),
+                    niveis: [...document.querySelectorAll('[data-nivel]:checked')].map(c => c.dataset.nivel) };
+    try {
+      await api('/api/demandas/equipes/' + equipeAtual.id, corpo);
+      $('dlg-equipe').close();
+      await carregarEquipes();
+      await carregarOpcoes();
+    } catch (e) { $('equipe-erro').textContent = e.message; }
+  });
+
+  // ── início ──────────────────────────────────────────────────────────────
+  window.addEventListener('demandas:novidade', () => { if (aba !== 'equipes') carregarLista(); });
+  // Voltou pra esta aba: confere se o login do navegador ainda é o mesmo.
+  window.addEventListener('focus', () => { api('/api/demandas/opcoes').catch(() => {}); });
+  setInterval(() => { if (!document.hidden && aba !== 'equipes' && !document.querySelector('dialog[open]')) carregarLista(); }, 60000);
+  carregarOpcoes().then(() => {
+    trocarAba(aba);
+    if (ABRIR) abrirFicha(ABRIR);
+  }).catch(e => { $('aviso').textContent = e.message; });
+})();
+</script>
+{% endblock %}

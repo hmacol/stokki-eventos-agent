@@ -58,6 +58,7 @@ TELAS = [
     ("baixa_sem_app", "Baixa sem app", "Acompanhar", [r"^/baixa-sem-app$", r"^/api/baixa-sem-app(/|$)"]),
     ("solicitacoes_portal", "Pedidos do portal", "Acompanhar", [r"^/solicitacoes-portal$", r"^/api/solicitacoes-portal"]),
     ("retornos_tela", "Retornos", "Operar", [r"^/retornos(/|$)", r"^/api/retornos(/|$)"]),
+    ("demandas", "Demandas", "Operar", [r"^/demandas$", r"^/api/demandas(/|$)"]),
     ("planejamento", "Planejamento", "Planejar", [r"^/planejamento(/|$)", r"^/api/planejamento/",
                                                   r"^/api/torre/marcar-entregue$"]),
     ("mapa_rotas", "Mapa", "Planejar", [r"^/mapa-rotas$"]),
@@ -89,9 +90,10 @@ PERMISSOES = [
 CHAVES = PAGINAS + [p[0] for p in PERMISSOES]
 _PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos in TELAS + PERMISSOES}
 
-# Usadas por qualquer tela (badges do menu, deslogar por inatividade).
+# Usadas por qualquer tela (badges do menu, deslogar por inatividade, aviso
+# sonoro de demanda nova -- 25/10).
 CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/avisos/ignorar$"),
-                    re.compile(r"^/api/sessao/(atividade|estado)$")]
+                    re.compile(r"^/api/sessao/(atividade|estado)$"), re.compile(r"^/api/demandas/avisos$")]
 
 
 def caminho_liberado(caminho: str, telas) -> bool:
