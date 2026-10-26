@@ -57,7 +57,7 @@ class Base(unittest.TestCase):
         c = acesso_telas.conectar()
         for login, nome, nivel in (("ana", "Ana", "operador"), ("bia", "Bia", "operador"),
                                    ("caio", "Caio", "atendimento"), ("davi", "Davi", "operador")):
-            acesso_telas.criar(c, login, nome, nivel, "senha123", "teste", ())
+            acesso_telas.criar(c, login, nome, nivel, "senha123", "teste", (), equipe="Estoque")
         c.execute("UPDATE painel_usuarios SET trocar_senha = 0")
         c.commit()
         c.close()
