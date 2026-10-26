@@ -5828,14 +5828,22 @@
 
   function aplicarResultadoEnvio(resultado) {
     const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
+    // Pedido ainda em separação/conferência/espera na Stokki sai da rota antes do envio e volta pro pool
+    // (plano 1.2 do sistema novo); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
+    // (revisão 25/10 -- mesma lição do 19/08: pedido nunca some sem aviso).
+    const naoProntos = resultado.codigos_nao_prontos || [];
+    const avisoNaoProntos = naoProntos.length
+      ? ` -- ${naoProntos.length} pedido(s) ainda em separação na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
+      : "";
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
       if (resultado.codigos_removidos && resultado.codigos_removidos.length) {
         msg += ` -- ${resultado.codigos_removidos.length} pedido(s) já estavam em outra rota e voltaram pro pool: ${resultado.codigos_removidos.join(", ")}`;
       }
+      msg += avisoNaoProntos;
       if (statusEl) statusEl.innerHTML = `<div class="status-envio ok">${escaparHtml(msg)}</div>`;
     } else if (statusEl) {
-      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro)}</div>`;
+      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro + avisoNaoProntos)}</div>`;
     }
   }
 
@@ -5901,6 +5909,16 @@
           return `• ${nome}: ${r.codigos_removidos.join(", ")}`;
         });
         alert(`Atenção: a VUUPT recusou ${comRemovidos.reduce((n, r) => n + r.codigos_removidos.length, 0)} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
+      // idem pros pedidos ainda em separação na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
+      const comNaoProntos = resp.resultados.filter(r => r.codigos_nao_prontos && r.codigos_nao_prontos.length);
+      if (comNaoProntos.length) {
+        const linhas = comNaoProntos.map(r => {
+          const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
+          return `• ${nome}: ${r.codigos_nao_prontos.join(", ")}`;
+        });
+        const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
+        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) ainda em separação/conferência/espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();

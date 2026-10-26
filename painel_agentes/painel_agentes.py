@@ -1801,7 +1801,8 @@ def acessos():
     for chave, rotulo, grupo, _ in acesso_telas.TELAS + acesso_telas.PERMISSOES:
         grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
     return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
-                           niveis=acesso_telas.NIVEIS, senha_minima=acesso_telas.SENHA_MINIMA,
+                           niveis=acesso_telas.NIVEIS, equipes=acesso_telas.EQUIPES,
+                           senha_minima=acesso_telas.SENHA_MINIMA,
                            eu=session.get("usuario", ""), rodada=rodada)
 
 
@@ -1822,7 +1823,8 @@ def api_acessos():
     try:
         acesso_telas.salvar(conn, usuario, telas, por)
         if "nivel" in body:
-            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por)
+            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por,
+                                str(body.get("equipe") or ""))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1841,7 +1843,8 @@ def api_acessos_novo():
     try:
         usuario = acesso_telas.criar(conn, str(body.get("usuario") or ""), str(body.get("nome") or ""),
                                      str(body.get("nivel") or ""), str(body.get("senha") or ""),
-                                     session.get("usuario", ""), _logins_fixos(cfg_painel))
+                                     session.get("usuario", ""), _logins_fixos(cfg_painel),
+                                     str(body.get("equipe") or ""))
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1897,20 +1900,77 @@ def api_acessos_senha():
     return jsonify({"ok": True})
 
 
+# Pedidos parados (24/10): galpao e expedicao entram pra REGISTRAR (aba
+# Registrar, no lugar do Fresh Hub do Lovable) e veem a triagem so leitura.
+NIVEIS_PP_VER = ("total", "operador", "logistica", "leitura", "atendimento", "galpao", "expedicao")
+NIVEIS_PP_REGISTRAR = ("total", "operador", "logistica", "galpao", "expedicao")
+
+
 @app.route("/pedidos-parados")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def pedidos_parados():
-    """Triagem dos pedidos parados do Fresh Hub -- pedido do Hugo,
-    24/08. Página sobe só com a casca; os dados chegam por
-    /api/pedidos-parados/dados via JS (login no Fresh Hub + Vuupt pode
-    levar alguns segundos, não deve travar o load -- mesmo padrão da
-    Torre)."""
-    return render_template("pedidos_parados_triagem.html",
-                           pode_editar=g.nivel_acesso in ("total", "operador", "logistica", "atendimento"))
+    """Pedidos parados -- pedido do Hugo, 24/08. Aba Registrar (24/10:
+    o galpao registra aqui, tabela pedidos_parados_registros) e aba
+    Triagem. Página sobe só com a casca; os dados chegam por
+    /api/pedidos-parados/* via JS (a Vuupt pode levar alguns segundos,
+    não deve travar o load -- mesmo padrão da Torre)."""
+    return render_template(
+        "pedidos_parados_triagem.html",
+        pode_editar=g.nivel_acesso in ("total", "operador", "logistica", "atendimento"),
+        pode_registrar=g.nivel_acesso in NIVEIS_PP_REGISTRAR,
+        aba_inicial="registrar" if g.nivel_acesso in ("galpao", "expedicao") else "triagem",
+        encaminhamento_ativo=pedidos_parados_triagem.ENCAMINHAMENTO_DEMANDAS_ATIVO,
+    )
+
+
+@app.route("/api/pedidos-parados/registros-hoje")
+@requer_auth(niveis=NIVEIS_PP_VER)
+def api_pedidos_parados_registros_hoje():
+    return jsonify(pedidos_parados_triagem.registros_hoje(session.get("usuario") or g.nivel_acesso))
+
+
+@app.route("/api/pedidos-parados/registrar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PP_REGISTRAR)
+@exige_mesma_origem
+def api_pedidos_parados_registrar():
+    """Registra um pedido parado (multipart: order_number, volumes, foto
+    opcional). Registrar de novo o mesmo pedido no dia e permitido (e o
+    fluxo normal enquanto continua parado); a tela so avisa."""
+    foto = request.files.get("foto")
+    try:
+        resultado = pedidos_parados_triagem.registrar(
+            request.form.get("order_number", ""), request.form.get("volumes", ""),
+            session.get("usuario") or g.nivel_acesso, foto.read() if foto else None,
+        )
+    except pedidos_parados_triagem.ErroRegistro as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/pedidos-parados/registro/apagar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PP_REGISTRAR)
+@exige_mesma_origem
+def api_pedidos_parados_registro_apagar():
+    """So quem registrou, ate 15 min depois (erro de digitacao)."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        pedidos_parados_triagem.apagar_registro(int(body.get("id") or 0), session.get("usuario") or g.nivel_acesso)
+    except pedidos_parados_triagem.ErroRegistro as e:
+        return jsonify({"erro": str(e)}), (404 if "não encontrado" in str(e) else 403)
+    return jsonify({"ok": True})
+
+
+@app.route("/pedidos-parados/foto/<int:registro_id>")
+@requer_auth(niveis=NIVEIS_PP_VER)
+def pedidos_parados_foto(registro_id: int):
+    caminho = pedidos_parados_triagem.caminho_foto(registro_id)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, max_age=3600)
 
 
 @app.route("/api/pedidos-parados/dados")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def api_pedidos_parados_dados():
     try:
         return jsonify({"pedidos": pedidos_parados_triagem.listar_com_classificacao()})
@@ -1940,7 +2000,7 @@ def api_pedidos_parados_classificar():
 
 
 @app.route("/api/pedidos-parados/buscar-vuupt")
-@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def api_pedidos_parados_buscar_vuupt():
     order_number = request.args.get("order_number", "")
     if not order_number:
@@ -1976,6 +2036,8 @@ def api_pedidos_parados_duplicar():
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_encaminhar():
+    if not pedidos_parados_triagem.ENCAMINHAMENTO_DEMANDAS_ATIVO:
+        return jsonify({"erro": "Encaminhamento às Demandas pausado (Hugo, 24/10)."}), 409
     body = request.get_json(force=True)
     try:
         resultado = pedidos_parados_triagem.encaminhar_operacao(

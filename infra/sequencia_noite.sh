@@ -27,7 +27,8 @@ RAIZ="/opt/stokki-eventos"
 PY="$RAIZ/venv/bin/python"
 
 cd "$RAIZ" && "$PY" somente_impressao.py
-cd "$RAIZ" && "$PY" pipeline.py
+# 25/10 (plano 1.2 do sistema novo): --fila-freshhub atende a fila de replica do freshhub no fim do pipeline.
+cd "$RAIZ" && "$PY" pipeline.py --fila-freshhub
 # 28/09: aplica na VUUPT a data de agendamento informada depois das 18h.
 cd "$RAIZ" && "$PY" atualizar_agendamentos_confirmados.py
 # 29/09: quem teve data de agendamento informada vira AGENDA na BD_CLIENTES.

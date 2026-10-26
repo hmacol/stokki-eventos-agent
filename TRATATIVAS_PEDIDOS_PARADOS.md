@@ -1,5 +1,24 @@
 # Tratativas de Pedidos Parados
 
+> **24/10/2026 — a origem mudou.** O galpão passou a registrar pedido
+> parado na aba **Registrar** da própria tela `/pedidos-parados` do painel
+> (pedido, volumes, foto opcional; quem registrou vem do login). Os
+> registros vão pra tabela local `pedidos_parados_registros` (foto em
+> `dados/pedidos_parados/<id>/`), e a aba **Triagem** lê de lá. O Fresh
+> Hub do Lovable (`stalled_orders`) deixou de ser consultado e o histórico
+> de lá **não foi importado** (decisão do Hugo): "dias parado" e "Nx
+> registrado" contam a partir do primeiro registro na tabela nova. Regra
+> mantida: o mesmo pedido é registrado de novo a cada dia que continua
+> parado (botão "Ainda parado" na lista "Ontem e ainda não registrados
+> hoje"); a triagem mostra só o dia mais recente. Quem registrou pode
+> apagar o próprio registro em até 15 min. O **encaminhamento às Demandas
+> está PAUSADO** (`ENCAMINHAMENTO_DEMANDAS_ATIVO = False` em
+> `painel_agentes/pedidos_parados_triagem.py`): Cancelados / Devolução
+> Parcial / Descartar / Verificar com Cliente só classificam, aparecem como
+> "✓ classificado · encaminhamento pausado" e contam como tratados no
+> filtro "só não tratados". Religar é trocar a flag pra `True`. Tudo abaixo
+> que fala em Fresh Hub como origem do registro vale até 23/10.
+
 Criado em 24/08/2026 a pedido do Hugo: documentar as tratativas dos
 "pedidos parados" (https://freshhub.com.br/pedidos-parados) pra que, toda
 vez que a lista for revisada, dê pra saber o que já foi tratado, o que
