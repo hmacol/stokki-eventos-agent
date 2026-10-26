@@ -113,6 +113,11 @@
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Fluxo Cross (item XD + troca de NF) ....... nucleo/fluxo_embarcador.py (interno.fluxos, XD achado em
+                                             wms_produtos) -> regra "cross" do importador -> fila
+                                             portal_cliente/trocas_nf.py -> stokki/trocar_nf.py; virada:
+                                             portal_cliente/enfileirar_trocas_virada.py; CLI:
+                                             gerenciar_clientes.py fluxos (spec 2026-10-24-importacao-fluxo-cross)
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
@@ -608,6 +613,11 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+ trocar_nf.py         Troca o XML da NF de um pedido ("Informar Nota Fiscal":
+                      POST outbound/nfe/store com order_id_nfe, action=invoice,
+                      nfe=chave, file_nfe). Idempotente: confere chave + cProd do
+                      XML do pedido (data-url do btn_danfe na listagem). Fluxo
+                      Cross, 25/10; sondado só leitura, POST real ainda não provado.
  pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
                       outbound/pause com _token/page do form_pause; relê a
                       Situação). Sondado só leitura 25/10; escrita real não provada.
@@ -777,6 +787,9 @@
  normalizacao.py           Código do pedido (sem "#", maiúsculo) e fuso. NÃO tira
                            sufixo -R/-C ("PS-1-R2" é outro pedido). Use antes
                            de comparar códigos.
+ fluxo_embarcador.py       Fluxo por embarcador (interno.fluxos: armazenagem,
+                           full_cross, cross; vazio = armazenagem) e o produto XD
+                           do Cross achado em wms_produtos (SKU começando com XD).
  pedidos.py                nucleo_pedidos (upsert, nunca apaga).
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
@@ -991,6 +1004,12 @@
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
+                           Fluxo Cross: converte pro item XD e enfileira a troca de NF.
+ trocas_nf.py              Fila trocas_nf_pendentes (portal, importador por e-mail,
+                           virada); o worker troca 3x com 10 min entre tentativas,
+                           depois ERRO + e-mail só pra equipe.
+ enfileirar_trocas_virada.py  Virada do Cross: pedidos já abertos na Stokki vão pra
+                           fila (--modo-teste | --executar). SÓ NA VPS: lê a Stokki.
  cancelamento.py           Cancelamento pedido pelo cliente (06/10): regra sozinho x
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
@@ -1011,7 +1030,8 @@
  bloqueio_area.py          Bloqueio de área não atendida.
  gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
                            criar-pin-padrao (lote; pula cancelados e membros
-                           de grupo; só grava com --confirmar).
+                           de grupo; só grava com --confirmar); fluxos (lista,
+                           --definir, --carga do JSON da página de marcação).
  templates/                acompanhamento.html é a tela principal.
  test_*.py                 Testes.
 
@@ -1264,7 +1284,11 @@
                              estado + falhas_show/show_pendente), galpao_eventos,
                              galpao_conferencias; galpao_coletas, galpao_contagens,
                              galpao_rua = 1 linha por minuto, guardadas 7 dias
-   interno                  tipo de carga por embarcador (só leitura)
+   interno                  tipo de carga por embarcador (só leitura); coluna fluxos
+                             (nucleo/fluxo_embarcador.py, grava via gerenciar_clientes.py fluxos)
+   trocas_nf_pendentes      portal_cliente/trocas_nf.py (fluxo Cross; espelho em
+                             portal_envios.troca_nf_status/_em/_erro, id_stokki, fluxo)
+   avisos_xd_ausente        portal_cliente/envio_pedidos.py (1 e-mail por embarcador por dia)
    rotas, rotas_paradas      LEGADO vazio (não usar)
 
  Outros bancos: dados/atendimento.db (atendimento/),
