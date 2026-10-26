@@ -57,23 +57,111 @@
     text-transform: none; letter-spacing: normal; border: 1px solid var(--borda); border-radius: 5px;
     background: var(--fundo, var(--superficie)); color: var(--texto);
   }
+  .foto-mini { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; }
+
+  /* Abas Registrar | Triagem (24/10) -- mesmo componente .seg de retornos.html */
+  .seg { display: flex; background: var(--fundo); border: 1px solid var(--borda); border-radius: 10px; padding: 3px; gap: 2px; margin: 0 0 16px; max-width: 520px; }
+  .seg button { flex: 1; font-size: 14px; font-weight: 600; min-height: 42px; border-radius: 8px; border: none; background: transparent; color: var(--texto-suave); font-family: inherit; cursor: pointer; }
+  .seg button.ativo { background: var(--superficie); color: var(--texto); box-shadow: 0 1px 2px rgba(20,20,40,.08); }
+  .oculto { display: none !important; }
+
+  /* Aba Registrar: celular do galpão */
+  #tela-registrar { max-width: 520px; display: grid; gap: 14px; }
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px; display: grid; gap: 12px; }
+  .cartao h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); margin: 0; }
+  .campo label { display: block; font-size: 12px; font-weight: 700; color: var(--texto-suave); margin-bottom: 4px; }
+  .campo input[type=text] { width: 100%; box-sizing: border-box; min-height: 46px; border: 1.5px solid var(--borda); border-radius: 10px; padding: 10px 12px; font-size: 16px; font-family: inherit; background: var(--fundo); color: var(--texto); }
+  .campo input[type=text]:focus { outline: none; border-color: var(--acento, var(--primaria)); }
+  .campo .ajuda { font-size: 12px; color: var(--texto-suave); margin-top: 4px; }
+  .linha-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .passo { display: flex; gap: 8px; align-items: center; }
+  .passo button { width: 46px; height: 46px; border-radius: 10px; border: 1.5px solid var(--borda); background: var(--superficie); font-size: 22px; font-weight: 700; color: var(--texto); cursor: pointer; font-family: inherit; }
+  .passo input { flex: 1; min-width: 0; text-align: center; font-size: 22px; font-weight: 700; border: none; background: transparent; color: var(--texto); font-family: inherit; font-variant-numeric: tabular-nums; }
+  .foto-botao { display: flex; align-items: center; justify-content: center; min-height: 46px; border: 1.5px dashed var(--borda); border-radius: 10px; color: var(--texto-suave); font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; padding: 6px; }
+  .foto-botao input { display: none; }
+  .previa { display: flex; gap: 8px; align-items: center; }
+  .previa img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--borda); }
+  .previa button { border: 1px solid var(--borda); background: var(--superficie); border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-family: inherit; color: var(--texto); }
+  .aviso { background: #FDF3E1; color: #B4790C; border: 1px solid #F0D9A8; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .aviso b { display: block; }
+  .erro-msg { background: var(--erro-bg, #FDEBEA); color: var(--erro-texto, #A82F25); border-radius: 10px; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+  .botao-cta { width: 100%; min-height: 50px; border: none; border-radius: 12px; background: var(--acento, var(--primaria)); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .botao-cta:disabled { opacity: .5; cursor: default; }
+  .item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 0; border-top: 1px solid var(--borda); font-size: 13px; }
+  .item:first-of-type { border-top: none; }
+  .item .q { color: var(--texto-suave); font-size: 12px; }
+  .item .pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 100px; background: var(--fundo); color: var(--texto-suave); white-space: nowrap; }
+  .item .pill.ok { background: rgba(14,165,117,.14); color: #0A6E53; }
+  .item .pill.acao { border: 1px solid var(--borda); color: var(--texto); background: var(--superficie); cursor: pointer; font-family: inherit; }
+  .item .acoes { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .item .foto-link { color: var(--texto-suave); text-decoration: none; }
+  .vazio { color: var(--texto-suave); font-size: 13px; padding: 6px 0; }
 </style>
 {% endblock %}
 
 {% block conteudo %}
 <h1>Pedidos parados</h1>
+
+<div class="seg" role="tablist">
+  <button type="button" id="aba-registrar" data-aba="registrar">Registrar</button>
+  <button type="button" id="aba-triagem" data-aba="triagem">Triagem</button>
+</div>
+
+<div id="tela-registrar" class="oculto">
+  {% if pode_registrar %}
+  <form class="cartao" id="form-registrar" autocomplete="off">
+    <div class="campo">
+      <label for="reg-pedido">Pedido</label>
+      <input type="text" id="reg-pedido" inputmode="text" placeholder="PS-40525 ou NF" required>
+      <div class="ajuda">PS da Stokki ou NF do cliente. "PS-", "#" e pontos são limpos sozinhos.</div>
+    </div>
+    <div class="linha-2">
+      <div class="campo">
+        <label for="reg-volumes">Volumes</label>
+        <div class="passo">
+          <button type="button" id="reg-menos" aria-label="Menos um volume">−</button>
+          <input type="text" id="reg-volumes" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="Volumes">
+          <button type="button" id="reg-mais" aria-label="Mais um volume">+</button>
+        </div>
+      </div>
+      <div class="campo">
+        <label>Foto <span style="font-weight:400">(opcional)</span></label>
+        <label class="foto-botao" for="reg-foto">📷 Tirar foto<input type="file" id="reg-foto" accept="image/*" capture="environment"></label>
+      </div>
+    </div>
+    <div class="previa oculto" id="reg-previa"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="Prévia da foto"><button type="button" id="reg-tirar-foto">Tirar foto de novo</button></div>
+    <div class="aviso oculto" id="reg-aviso"></div>
+    <div class="erro-msg oculto" id="reg-erro"></div>
+    <button type="submit" class="botao-cta" id="reg-enviar">Registrar pedido parado</button>
+  </form>
+  {% else %}
+  <div class="cartao"><div class="vazio">Seu usuário só visualiza. Quem registra pedido parado é o galpão, a expedição, a logística e o operador.</div></div>
+  {% endif %}
+  <div class="cartao">
+    <h3 id="reg-hoje-titulo">Registrados hoje</h3>
+    <div id="reg-hoje"><div class="vazio">Carregando…</div></div>
+  </div>
+  <div class="cartao">
+    <h3 id="reg-ontem-titulo">Ontem e ainda não registrados hoje</h3>
+    <div id="reg-ontem"><div class="vazio">Carregando…</div></div>
+  </div>
+</div>
+
+<div id="tela-triagem" class="oculto">
 <p class="subtitulo">
-  Origem: freshhub.com.br/pedidos-parados. Mostra só quem foi registrado de
-  novo hoje (pedido entregue por fora da triagem some da lista sozinho).
-  Classifique cada pedido e dispare a tratativa correspondente -- ver
+  Registrado pelo galpão na aba Registrar desta tela (o Fresh Hub do Lovable
+  saiu em 24/10). Mostra só quem foi registrado de novo no dia mais recente
+  (pedido entregue por fora da triagem some da lista sozinho). Classifique
+  cada pedido e dispare a tratativa correspondente -- ver
   TRATATIVAS_PEDIDOS_PARADOS.md pro critério de cada classificação. "Dias
-  parado" conta desde a primeira vez que o pedido apareceu como parado
-  (não só hoje); 2+ dias fica marcado como prioridade.
+  parado" conta desde a primeira vez que o pedido foi registrado como
+  parado (não só hoje); 2+ dias fica marcado como prioridade.
 </p>
 
 <div class="barra-utilidade">
   <label><input type="checkbox" id="so-pendentes"> Mostrar só não tratados</label>
   <button class="botao-copiar" id="botao-copiar-tabela" onclick="copiarTabela()">Copiar tabela (Pedido - Volumes - Classificação)</button>
+  <button class="botao-copiar" id="botao-exportar-csv" onclick="exportarCsv()">Exportar CSV</button>
   {% if pode_editar %}
   <button class="botao-copiar" id="botao-verificar-stokki" onclick="verificarStokki()" title="Consulta status e transportadora de todos os pedidos em tela na Stokki; Cancelado vira 'Cancelados'; CLIENTE RETIRA ou transportadora de RETIRADA (BD) vira 'Cliente Retira' automaticamente (a de RETIRADA sem notificação ao cliente)">Consultar Stokki (cancelados / cliente retira)</button>
   <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; atribuído/aceito/em deslocamento/chegou ao cliente ou não atribuído sem agendamento/agendado pra hoje vira 'Em Rota', agendado pra depois de hoje vira 'Agendado', concluído com sucesso vira 'Entregue'">Consultar Vuupt (em rota / agendado / entregue)</button>
@@ -89,6 +177,8 @@
       <th>Embarcador</th>
       <th>Volumes</th>
       <th>Registrado em</th>
+      <th>Registrado por</th>
+      <th>Foto</th>
       <th>Dias parado</th>
       <th>Classificação</th>
       <th>Tratativa</th>
@@ -102,6 +192,14 @@
       </th>
       <th class="col-filtro"><input type="text" id="filtro-volumes" placeholder="Filtrar…" oninput="atualizarFiltro('volumes', this.value)"></th>
       <th class="col-filtro"><input type="text" id="filtro-registrado" placeholder="Filtrar…" oninput="atualizarFiltro('registrado', this.value)"></th>
+      <th class="col-filtro"><input type="text" id="filtro-por" placeholder="Filtrar…" oninput="atualizarFiltro('por', this.value)"></th>
+      <th class="col-filtro">
+        <select id="filtro-foto" onchange="atualizarFiltro('foto', this.value)">
+          <option value="">-- todas --</option>
+          <option value="sim">Com foto</option>
+          <option value="nao">Sem foto</option>
+        </select>
+      </th>
       <th class="col-filtro"><input type="text" id="filtro-dias" placeholder="Filtrar…" oninput="atualizarFiltro('dias', this.value)"></th>
       <th class="col-filtro">
         <select id="filtro-classificacao" onchange="atualizarFiltro('classificacao', this.value)">
@@ -120,13 +218,18 @@
     </tr>
   </thead>
   <tbody id="corpo-tabela">
-    <tr><td colspan="7" class="carregando">Carregando pedidos parados…</td></tr>
+    <tr><td colspan="9" class="carregando">Carregando pedidos parados…</td></tr>
   </tbody>
 </table>
+</div>
 </div>
 
 <script>
 const PODE_EDITAR = {{ 'true' if pode_editar else 'false' }};
+const PODE_REGISTRAR = {{ 'true' if pode_registrar else 'false' }};
+const ABA_INICIAL = "{{ aba_inicial }}";
+// Espelha ENCAMINHAMENTO_DEMANDAS_ATIVO em pedidos_parados_triagem.py (Hugo, 24/10).
+const ENCAMINHAMENTO_ATIVO = {{ 'true' if encaminhamento_ativo else 'false' }};
 const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue"];
 // Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
 const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota", "Entregue": "já foi entregue" };
@@ -151,7 +254,11 @@ const AREA_POR_CLASSIFICACAO = {
 let pedidosAtuais = [];
 let ultimoOk = null;
 let houveErro = false;
-const filtros = { pedido: "", embarcador: "", volumes: "", registrado: "", dias: "", classificacao: "", tratativa: "" };
+const filtros = { pedido: "", embarcador: "", volumes: "", registrado: "", por: "", foto: "", dias: "", classificacao: "", tratativa: "" };
+const URL_REGISTRAR = "{{ url_for('api_pedidos_parados_registrar') }}";
+const URL_REGISTROS_HOJE = "{{ url_for('api_pedidos_parados_registros_hoje') }}";
+const URL_APAGAR = "{{ url_for('api_pedidos_parados_registro_apagar') }}";
+const URL_FOTO = "{{ url_for('pedidos_parados_foto', registro_id=0) }}".replace(/0$/, "");
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -196,6 +303,8 @@ function linhaPassaFiltros(p) {
   }
   if (filtros.volumes && !contem(p.volumes, filtros.volumes)) return false;
   if (filtros.registrado && !contem(p.created_at.replace('T', ' ').slice(0, 16), filtros.registrado)) return false;
+  if (filtros.por && !contem(p.registrado_por, filtros.por)) return false;
+  if (filtros.foto && (filtros.foto === "sim") !== !!p.foto) return false;
   if (filtros.dias && !contem(p.dias_parado, filtros.dias)) return false;
   if (filtros.classificacao) {
     if (filtros.classificacao === "__vazio__") {
@@ -215,7 +324,10 @@ function linhaPassaFiltros(p) {
 // tabela já dá precedência a ela sobre o "✓ revisado".
 function estaTratado(p) {
   if (p.revisao_urgente) return false;
-  return p.acao_status === "concluida" || CONTAM_COMO_TRATADAS.includes(p.classificacao);
+  if (p.acao_status === "concluida" || CONTAM_COMO_TRATADAS.includes(p.classificacao)) return true;
+  // Encaminhamento às Demandas pausado (Hugo, 24/10): classificar já encerra
+  // o caso, senão a linha ficaria "não tratada" pra sempre.
+  return !ENCAMINHAMENTO_ATIVO && CRIAM_DEMANDA.includes(p.classificacao);
 }
 
 function linhasFiltradas() {
@@ -230,7 +342,7 @@ function renderTabela() {
   const linhas = linhasFiltradas();
 
   if (!linhas.length) {
-    alvo.innerHTML = `<tr><td colspan="7" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
+    alvo.innerHTML = `<tr><td colspan="9" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
     return;
   }
 
@@ -239,7 +351,7 @@ function renderTabela() {
       CLASSIFICACOES.map(c => `<option value="${c}" ${p.classificacao === c ? "selected" : ""}>${c}</option>`).join("");
 
     const selectHtml = PODE_EDITAR
-      ? `<select class="classificacao" onchange="classificar('${p.order_number}', '${p.freshhub_id}', this.value)">${opcoes}</select>`
+      ? `<select class="classificacao" onchange="classificar(${esc(JSON.stringify(p.order_number))}, ${esc(JSON.stringify(p.freshhub_id))}, this.value)">${opcoes}</select>`
       : (p.classificacao || `<span class="sem-dado">Pendente</span>`);
 
     let acaoHtml = `<span class="sem-dado">—</span>`;
@@ -251,16 +363,18 @@ function renderTabela() {
       // então sem este botão ela some da lista e ninguém reenvia.
       // notificarClienteRetira() já pede confirmação antes de disparar.
       const retentar = PODE_EDITAR && p.classificacao === "Cliente Retira"
-        ? ` <button class="botao-acao botao-notificar" onclick="notificarClienteRetira('${p.order_number}')">Tentar de novo</button>`
+        ? ` <button class="botao-acao botao-notificar" onclick="notificarClienteRetira(${esc(JSON.stringify(p.order_number))})">Tentar de novo</button>`
         : "";
       acaoHtml = `<span class="status-erro">✗ ${esc(p.acao_detalhe || "falhou")}</span>${retentar}`;
     } else if (PODE_EDITAR && p.classificacao === "Reenvio") {
-      acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar('${p.order_number}')">Duplicar</button>`;
+      acaoHtml = `<button class="botao-acao botao-duplicar" onclick="duplicar(${esc(JSON.stringify(p.order_number))})">Duplicar</button>`;
     } else if (PODE_EDITAR && p.classificacao === "Cliente Retira") {
-      acaoHtml = `<button class="botao-acao botao-notificar" onclick="notificarClienteRetira('${p.order_number}')">Notificar embarcador</button>`;
+      acaoHtml = `<button class="botao-acao botao-notificar" onclick="notificarClienteRetira(${esc(JSON.stringify(p.order_number))})">Notificar embarcador</button>`;
+    } else if (CRIAM_DEMANDA.includes(p.classificacao) && !ENCAMINHAMENTO_ATIVO) {
+      acaoHtml = `<span class="status-ok" title="Encaminhamento às Demandas do Fresh Hub pausado (Hugo, 24/10)">✓ classificado · encaminhamento pausado</span>`;
     } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
       const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
-      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar('${p.order_number}', '${p.classificacao}')">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
+      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar(${esc(JSON.stringify(p.order_number))}, ${esc(JSON.stringify(p.classificacao))})">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
     } else if (p.revisao_urgente) {
       acaoHtml = `<span class="badge badge-urgente" title="Classificado como Entregue, mas voltou a ser registrado como parado depois disso">NECESSITA REVISÃO URGENTE</span>`;
     } else if (p.classificacao in SO_REVISA) {
@@ -281,7 +395,7 @@ function renderTabela() {
         <td class="mono">
           <div class="celula-pedido">
             <a class="link-stokki" href="${esc(p.stokki_url)}" target="_blank" rel="noopener" title="Abrir pedido na Stokki">${esc(p.order_number)}</a>
-            <button class="botao-vuupt" onclick="buscarVuupt('${p.order_number}', this)" title="Buscar pedido com sucesso na Vuupt">Vuupt 🔍</button>
+            <button class="botao-vuupt" onclick="buscarVuupt(${esc(JSON.stringify(p.order_number))}, this)" title="Buscar pedido com sucesso na Vuupt">Vuupt 🔍</button>
             ${repetido}
           </div>
           ${stokkiInfo}${vuuptInfo}
@@ -289,6 +403,8 @@ function renderTabela() {
         <td>${p.embarcador ? esc(p.embarcador) : `<span class="sem-dado">—</span>`}</td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
+        <td>${p.registrado_por ? esc(p.registrado_por) : `<span class="sem-dado">—</span>`}</td>
+        <td>${p.foto ? `<a href="${URL_FOTO}${esc(p.foto_id)}" target="_blank" rel="noopener" title="Abrir foto"><img class="foto-mini" src="${URL_FOTO}${esc(p.foto_id)}" alt="Foto do pedido ${esc(p.order_number)}" loading="lazy"></a>` : `<span class="sem-dado">—</span>`}</td>
         <td>${p.prioridade ? `<span class="badge badge-prioridade">${p.dias_parado}d</span>` : p.dias_parado + 'd'}</td>
         <td>${selectHtml}</td>
         <td>${acaoHtml}</td>
@@ -465,6 +581,187 @@ async function copiarTabela() {
   }
 }
 
+function exportarCsv() {
+  const linhas = linhasFiltradas();
+  if (!linhas.length) { alert("Nenhum pedido para exportar com o filtro atual."); return; }
+  const tratativa = p => p.acao_status === "concluida" ? `concluída: ${p.acao_detalhe || ""}`
+    : p.acao_status === "erro" ? `erro: ${p.acao_detalhe || ""}` : (estaTratado(p) ? "revisado" : "pendente");
+  const campo = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const cab = ["Pedido", "Embarcador", "Volumes", "Registrado em", "Registrado por", "Dias parado", "Classificação", "Tratativa"];
+  const corpo = linhas.map(p => [p.order_number, p.embarcador || "", p.volumes, p.created_at.replace('T', ' ').slice(0, 16),
+    p.registrado_por || "", p.dias_parado, p.classificacao || "", tratativa(p)].map(campo).join(";"));
+  const blob = new Blob(["﻿" + [cab.join(";"), ...corpo].join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `pedidos-parados-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ── Abas ──────────────────────────────────────────────────────────────────────
+let triagemCarregada = false;
+function mostrarAba(nome) {
+  const registrar = nome === "registrar";
+  document.getElementById("tela-registrar").classList.toggle("oculto", !registrar);
+  document.getElementById("tela-triagem").classList.toggle("oculto", registrar);
+  document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("ativo", b.dataset.aba === nome));
+  history.replaceState(null, "", "#" + nome);
+  if (registrar) carregarRegistros();
+  else if (!triagemCarregada) { triagemCarregada = true; carregarDados(); }
+}
+document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => mostrarAba(b.dataset.aba)));
+
+// ── Aba Registrar (24/10) ─────────────────────────────────────────────────────
+const RE_PS = /^\s*#?\s*PS\s*[.\-_ ]*\s*(\d+)\s*$/i;  // mesma regra de normalizar_order_number
+function normalizarPedido(texto) { const m = RE_PS.exec(texto || ""); return m ? m[1] : String(texto || "").trim(); }
+function horaBr(s) { return (s || "").slice(11, 16); }
+let registrosHoje = { hoje: [], ontem_sem_hoje: [] };
+
+function itemRegistro(r, ontem) {
+  const pill = ontem
+    ? `<button type="button" class="pill acao" onclick="aindaParado(${r.id}, this)">Ainda parado</button>`
+    : (r.classificacao
+        ? `<span class="pill ${r.acao_status === "concluida" ? "ok" : ""}">${esc(r.classificacao)}${r.acao_status === "concluida" ? " ✓" : ""}</span>`
+        : `<span class="pill">sem triagem</span>`);
+  const apagar = !ontem && r.pode_apagar
+    ? `<button type="button" class="pill acao" onclick="apagarRegistro(${r.id}, this)" title="Só quem registrou, até 15 min depois">Apagar</button>` : "";
+  const foto = r.foto ? ` <a class="foto-link" href="${URL_FOTO}${r.id}" target="_blank" rel="noopener" title="Abrir foto">📷</a>` : "";
+  const quando = ontem ? `ontem ${horaBr(r.criado_em)}` : horaBr(r.criado_em);
+  return `<div class="item"><div><b class="mono">${esc(r.order_number)}</b> · ${esc(r.volumes)} vol${foto}
+    <div class="q">${quando} · ${esc(r.registrado_por)} · parado há ${r.dias_parado} dia${r.dias_parado > 1 ? "s" : ""}</div></div>
+    <div class="acoes">${pill}${apagar}</div></div>`;
+}
+
+function renderRegistros() {
+  const h = registrosHoje.hoje, o = registrosHoje.ontem_sem_hoje;
+  document.getElementById("reg-hoje-titulo").textContent = `Registrados hoje · ${h.length}`;
+  document.getElementById("reg-ontem-titulo").textContent = `Ontem e ainda não registrados hoje · ${o.length}`;
+  document.getElementById("reg-hoje").innerHTML = h.length ? h.map(r => itemRegistro(r, false)).join("") : `<div class="vazio">Nenhum pedido registrado hoje ainda.</div>`;
+  document.getElementById("reg-ontem").innerHTML = o.length ? o.map(r => itemRegistro(r, true)).join("") : `<div class="vazio">Tudo que estava parado ontem já foi registrado hoje (ou saiu).</div>`;
+  avisarJaHoje();
+}
+
+async function carregarRegistros() {
+  try {
+    const resp = await fetch(URL_REGISTROS_HOJE);
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.erro || resp.statusText);
+    registrosHoje = d;
+    renderRegistros();
+  } catch (e) {
+    document.getElementById("reg-hoje").innerHTML = `<div class="erro-msg">Não foi possível carregar: ${esc(e.message || e)}</div>`;
+  }
+}
+
+function mostrarErroRegistro(msg) {
+  const el = document.getElementById("reg-erro");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("oculto", !msg);
+}
+
+function avisarJaHoje() {
+  const campo = document.getElementById("reg-pedido");
+  const aviso = document.getElementById("reg-aviso");
+  if (!campo || !aviso) return;
+  const numero = normalizarPedido(campo.value);
+  const iguais = numero ? registrosHoje.hoje.filter(r => r.order_number === numero) : [];
+  if (!iguais.length) { aviso.classList.add("oculto"); return; }
+  const r = iguais[0];
+  aviso.innerHTML = `<b>Já registrado hoje às ${horaBr(r.criado_em)} por ${esc(r.registrado_por)}</b>Pode registrar de novo (vira "${iguais.length + 1}x registrado" na triagem) ou corrigir o número.`;
+  aviso.classList.remove("oculto");
+}
+
+// Mesmo reduzir() de retornos.html: foto de celular (5-15 MB) vira JPEG de
+// no máximo 1600 px antes de subir pelo 4G do galpão (o servidor recusa > 10 MB).
+function reduzir(arquivo) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(arquivo);
+    img.onload = () => {
+      const escala = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * escala); c.height = Math.round(img.height * escala);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(b => resolve(b || arquivo), "image/jpeg", 0.8);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(arquivo); };
+    img.src = url;
+  });
+}
+
+async function enviarRegistro(formData, botao, rotulo) {
+  const original = botao ? botao.textContent : "";
+  if (botao) { botao.disabled = true; botao.textContent = "Enviando…"; }
+  try {
+    const resp = await fetch(URL_REGISTRAR, { method: "POST", body: formData });
+    const j = await resp.json();
+    if (!resp.ok) throw new Error(j.erro || "Falha ao registrar.");
+    await carregarRegistros();
+    if (triagemCarregada) carregarDados();
+    return j;
+  } finally {
+    if (botao) { botao.disabled = false; botao.textContent = rotulo || original; }
+  }
+}
+
+async function aindaParado(id, botao) {
+  const r = registrosHoje.ontem_sem_hoje.find(x => x.id === id);
+  if (!r) return;
+  const fd = new FormData();
+  fd.append("order_number", r.order_number);
+  fd.append("volumes", r.volumes);
+  try { await enviarRegistro(fd, botao, "Ainda parado"); }
+  catch (e) { alert(e.message || e); }
+}
+
+async function apagarRegistro(id, botao) {
+  if (!confirm("Apagar este registro? Use só se o número ou os volumes saíram errados.")) return;
+  botao.disabled = true;
+  try {
+    const resp = await fetch(URL_APAGAR, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    const j = await resp.json();
+    if (!resp.ok) throw new Error(j.erro || "Falha ao apagar.");
+    await carregarRegistros();
+    if (triagemCarregada) carregarDados();
+  } catch (e) { alert(e.message || e); botao.disabled = false; }
+}
+
+(function ligarFormulario() {
+  const form = document.getElementById("form-registrar");
+  if (!form) return;
+  const pedido = document.getElementById("reg-pedido");
+  const volumes = document.getElementById("reg-volumes");
+  const foto = document.getElementById("reg-foto");
+  const previa = document.getElementById("reg-previa");
+  const ajustar = delta => { const v = parseInt(volumes.value, 10) || 1; volumes.value = Math.max(1, v + delta); };
+  document.getElementById("reg-menos").onclick = () => ajustar(-1);
+  document.getElementById("reg-mais").onclick = () => ajustar(1);
+  volumes.addEventListener("blur", () => ajustar(0));
+  pedido.addEventListener("input", avisarJaHoje);
+  foto.addEventListener("change", () => {
+    const f = foto.files[0];
+    previa.classList.toggle("oculto", !f);
+    if (f) previa.querySelector("img").src = URL.createObjectURL(f);
+  });
+  document.getElementById("reg-tirar-foto").onclick = () => { foto.value = ""; previa.classList.add("oculto"); foto.click(); };
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    mostrarErroRegistro("");
+    const fd = new FormData();
+    fd.append("order_number", pedido.value);
+    fd.append("volumes", volumes.value);
+    if (foto.files[0]) fd.append("foto", await reduzir(foto.files[0]), "foto.jpg");
+    try {
+      await enviarRegistro(fd, document.getElementById("reg-enviar"), "Registrar pedido parado");
+      pedido.value = ""; volumes.value = "1"; foto.value = ""; previa.classList.add("oculto");
+      document.getElementById("reg-aviso").classList.add("oculto");
+      pedido.focus();
+    } catch (e) { mostrarErroRegistro(e.message || String(e)); }
+  });
+})();
+
 function atualizarCarimbo() {
   const el = document.getElementById("carimbo");
   if (!ultimoOk) {
@@ -498,8 +795,15 @@ async function carregarDados() {
 
 document.getElementById("so-pendentes").addEventListener("change", renderTabela);
 
-carregarDados();
-setInterval(carregarDados, 60000);
+const abaDaUrl = () => (location.hash === "#registrar" || location.hash === "#triagem") ? location.hash.slice(1) : null;
+mostrarAba(abaDaUrl() || ABA_INICIAL);
+window.addEventListener("hashchange", () => { const a = abaDaUrl(); if (a) mostrarAba(a); });
+// A cada minuto: triagem (se já aberta) e, com a aba Registrar visível, as
+// listas de hoje -- dois celulares no galpão veem o registro um do outro.
+setInterval(() => {
+  if (triagemCarregada) carregarDados();
+  if (!document.getElementById("tela-registrar").classList.contains("oculto")) carregarRegistros();
+}, 60000);
 setInterval(atualizarCarimbo, 1000);
 </script>
 {% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block titulo %}Pedidos do portal{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1200px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 860px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; white-space: nowrap; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .acoes button { margin-right: 6px; }
+  button.botao.sec { background: transparent; color: var(--texto); border: 1px solid var(--borda); }
+  .recusa { display: none; margin-top: 8px; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .recusa.aberta { display: flex; }
+  .recusa input { padding: 6px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; min-width: 260px; }
+  .msg { margin-top: 8px; font-size: 13px; font-weight: 600; white-space: pre-wrap; }
+  .msg.ok { color: var(--sucesso, #16a34a); }
+  .msg.erro { color: var(--erro); }
+  .vazio { padding: 18px 12px; color: var(--texto-suave); font-size: 13px; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<h1>Pedidos do portal</h1>
+<p class="sub">Solicitações que o cliente fez no portal (cancelar, tirar da rota, reagendar) e esperam a operação.
+  <strong>Executar</strong> altera a Vuupt e a Stokki; <strong>Recusar</strong> só responde ao cliente.</p>
+
+<div class="tabela-wrap" id="lista" data-api="{{ url_for('api_solicitacoes_portal') }}">
+  <div class="vazio">Carregando…</div>
+</div>
+
+<script>
+(function () {
+  var wrap = document.getElementById('lista');
+  var base = wrap.dataset.api;
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+  function aviso(texto, cls) {
+    wrap.textContent = '';
+    wrap.appendChild(el('div', 'vazio' + (cls ? ' ' + cls : ''), texto));
+  }
+  async function enviar(id, acao, corpo) {
+    var r = await fetch(base + '/' + id + '/' + acao, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(corpo || {})
+    });
+    var j = {};
+    try { j = await r.json(); } catch (e) {}
+    if (j.ok === undefined) j.ok = r.ok;
+    if (!j.mensagem) j.mensagem = j.erro || (r.ok ? 'Feito.' : 'Falhou (HTTP ' + r.status + ').');
+    return j;
+  }
+  function mostrar(msg, j) {
+    msg.textContent = j.mensagem;
+    msg.className = 'msg ' + (j.ok ? 'ok' : 'erro');
+  }
+  function concluir(tr, rotulo) {
+    tr.classList.add('concluida');
+    var st = el('div', 'suave', rotulo);
+    tr.querySelector('.acoes').insertBefore(st, tr.querySelector('.msg'));
+  }
+  function cnpj(v) {
+    var d = String(v || '').replace(/\D/g, '');
+    if (d.length === 14) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    return v || '';
+  }
+
+  function linha(s) {
+    var tr = el('tr');
+    tr.dataset.id = s.id;
+    var c = el('td');
+    c.appendChild(el('div', 'mono', s.codigo_pedido || '—'));
+    c.appendChild(el('div', 'suave', s.numero_nf ? 'NF ' + s.numero_nf : ''));
+    tr.appendChild(c);
+    c = el('td');
+    c.appendChild(el('div', null, cnpj(s.embarcador) || '—'));
+    c.appendChild(el('div', 'suave', s.destinatario || ''));
+    tr.appendChild(c);
+    tr.appendChild(el('td', null, s.rotulo));
+    tr.appendChild(el('td', 'mono', s.criado_em));
+    tr.appendChild(el('td', null, s.detalhe || '—'));
+    var ac = el('td', 'acoes');
+    var bExec = el('button', 'botao', 'Executar'); bExec.type = 'button';
+    var bRec = el('button', 'botao sec', 'Recusar'); bRec.type = 'button';
+    var form = el('div', 'recusa');
+    var inp = el('input'); inp.type = 'text'; inp.maxLength = 500;
+    inp.placeholder = 'Resposta ao cliente'; inp.setAttribute('aria-label', 'Resposta ao cliente');
+    var bOk = el('button', 'botao', 'Enviar recusa'); bOk.type = 'button';
+    var bCan = el('button', 'botao sec', 'Cancelar'); bCan.type = 'button';
+    form.appendChild(inp); form.appendChild(bOk); form.appendChild(bCan);
+    var msg = el('div', 'msg');
+    // "Em espera" ainda nao e executavel por aqui (a Stokki trata como fila de entrada)
+    var soRecusar = s.tipo === 'em_espera';
+    if (soRecusar) ac.appendChild(el('div', 'suave', 'Só recusar ou tratar à mão por enquanto'));
+    else ac.appendChild(bExec);
+    ac.appendChild(bRec); ac.appendChild(form); ac.appendChild(msg);
+    tr.appendChild(ac);
+
+    function travar(v) { bExec.disabled = v; bRec.disabled = v; bOk.disabled = v; }
+
+    bExec.addEventListener('click', async function () {
+      if (!confirm('Executar ' + s.rotulo + ' do pedido ' + (s.codigo_pedido || '') + '? Isso altera a Vuupt e a Stokki.')) return;
+      travar(true);
+      msg.textContent = 'Executando…'; msg.className = 'msg suave';
+      var j;
+      try { j = await enviar(s.id, 'executar'); } catch (e) { j = {ok: false, mensagem: 'Sem resposta do servidor.'}; }
+      mostrar(msg, j);
+      if (j.ok) { bRec.style.display = 'none'; concluir(tr, 'Concluída'); } else travar(false);
+    });
+    bRec.addEventListener('click', function () { form.classList.add('aberta'); inp.focus(); });
+    bCan.addEventListener('click', function () { form.classList.remove('aberta'); });
+    bOk.addEventListener('click', async function () {
+      var texto = inp.value.trim();
+      if (!texto) { mostrar(msg, {ok: false, mensagem: 'Escreva a resposta ao cliente.'}); return; }
+      travar(true);
+      var j;
+      try { j = await enviar(s.id, 'recusar', {resposta: texto}); } catch (e) { j = {ok: false, mensagem: 'Sem resposta do servidor.'}; }
+      mostrar(msg, j);
+      if (j.ok) { form.classList.remove('aberta'); bExec.style.display = 'none'; bRec.style.display = 'none'; concluir(tr, 'Recusada'); } else travar(false);
+    });
+    return tr;
+  }
+
+  async function carregar() {
+    var r = await fetch(base);
+    if (!r.ok) { aviso('Não foi possível carregar a lista.', 'msg erro'); return; }
+    var itens = (await r.json()).solicitacoes || [];
+    if (!itens.length) { aviso('Nenhum pedido do portal esperando a operação.'); return; }
+    var t = el('table'), th = el('thead'), hr = el('tr');
+    ['Pedido', 'Embarcador / destinatário', 'Tipo', 'Pedido em', 'Detalhe / motivo', 'Ação'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    th.appendChild(hr); t.appendChild(th);
+    var tb = el('tbody');
+    itens.forEach(function (s) { tb.appendChild(linha(s)); });
+    t.appendChild(tb);
+    wrap.textContent = ''; wrap.appendChild(t);
+  }
+  carregar().catch(function () { aviso('Não foi possível carregar a lista.', 'msg erro'); });
+})();
+</script>
+{% endblock %}

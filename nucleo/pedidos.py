@@ -31,6 +31,9 @@ def _servico_da_resposta(resposta) -> dict:
     return servico if isinstance(servico, dict) else {}
 
 
+servico_da_resposta = _servico_da_resposta  # publico: pipeline.processar_pedido usa (fila do freshhub, 1.2)
+
+
 def _campos_do_payload(payload: dict) -> dict:
     customer = payload.get("customer") or {}
     sender = payload.get("sender") or {}

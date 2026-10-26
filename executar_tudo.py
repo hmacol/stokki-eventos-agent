@@ -227,7 +227,9 @@ def main(modo_teste: bool = False,
     logger.info("\n>>> ETAPA 3: Pipeline de importacao Stokki -> VUUPT")
     logger.info("-" * 60)
     try:
-        pipeline_mod.main(modo_teste=modo_teste)
+        # fila_freshhub (plano 1.2 do sistema novo): atende a fila de replica do freshhub depois dos pedidos da
+        # Stokki, nas sequencias das 16h/18h/22h tambem (so age com freshhub_api no config)
+        pipeline_mod.main(modo_teste=modo_teste, fila_freshhub=True)
         ultimo = historico.ultima_execucao()
         if ultimo:
             contagem = ultimo.get("contagem", {})
