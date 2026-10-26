@@ -144,5 +144,20 @@ class FluxosParaEnvio(unittest.TestCase):
         self.assertEqual(ep.fluxos_para_envio(self.conn, "11111111000111"), (["armazenagem"], {"codigo": None, "erro": None}))
 
 
+class AvisoXdUmPorDia(unittest.TestCase):
+    def test_primeiro_aviso_do_dia_por_embarcador(self):
+        import sqlite3
+        from datetime import date
+        conn = sqlite3.connect(":memory:")
+        try:
+            d1, d2 = date(2026, 10, 27), date(2026, 10, 28)
+            self.assertTrue(ep.primeiro_aviso_xd_do_dia(conn, "66259821000155", d1))
+            self.assertFalse(ep.primeiro_aviso_xd_do_dia(conn, "66259821000155", d1))
+            self.assertTrue(ep.primeiro_aviso_xd_do_dia(conn, "23155000000166", d1))
+            self.assertTrue(ep.primeiro_aviso_xd_do_dia(conn, "66259821000155", d2))
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()

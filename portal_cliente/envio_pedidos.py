@@ -1224,6 +1224,18 @@ def fluxos_para_envio(conn: sqlite3.Connection, cnpj_embarcador: str) -> tuple[l
     return disp, {"codigo": f["codigo_xd"], "erro": f["erro_xd"]}
 
 
+def primeiro_aviso_xd_do_dia(conn: sqlite3.Connection, cnpj_embarcador: str, hoje: date | None = None) -> bool:
+    """True só na primeira vez do dia por embarcador: cada prévia do portal
+    detecta o XD ausente, mas o atendimento recebe um e-mail por dia (sem
+    isso, reenvios em série virariam e-mails em série). Faz commit."""
+    conn.execute("CREATE TABLE IF NOT EXISTS avisos_xd_ausente (cnpj TEXT NOT NULL, dia TEXT NOT NULL, "
+                 "PRIMARY KEY (cnpj, dia))")
+    cur = conn.execute("INSERT OR IGNORE INTO avisos_xd_ausente (cnpj, dia) VALUES (?, ?)",
+                       (_so_digitos(cnpj_embarcador), (hoje or date.today()).isoformat()))
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def escolher_fluxo(item: dict, disponiveis: list[str], origem: str, rotulo: str = "") -> str:
     """Fluxo do pedido (Hugo, 24/10: com mais de um fluxo, o embarcador
     informa). Um fluxo só: é ele, sem perguntar. Pedido de planilha não tem

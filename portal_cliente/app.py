@@ -860,12 +860,16 @@ def api_envios_analisar():
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
         destinatarios = envios.info_destinatarios(conn, _empresa_envio()['cnpj'], itens, _CONFIG)
+        # XD ausente: o cliente vê na prévia; o atendimento recebe 1 e-mail por
+        # embarcador por dia, e só quando o lote tem pedido que iria em Cross.
+        avisar_xd = bool(xd["erro"] and itens) and envios.primeiro_aviso_xd_do_dia(conn, _empresa_envio()['cnpj'])
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
-    if xd["erro"]:
+    if avisar_xd:
         _avisar_xd_ausente(_empresa_envio()["nome"] or _empresa_envio()["cnpj"], xd["erro"])
+    if xd["erro"]:
         if not fluxos_disp:  # só Cross e o XD falta: nada pode ir
             rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
                                "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE} for it in itens)
