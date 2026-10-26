@@ -220,3 +220,59 @@ class TestIgnorar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSoUltimas24h(unittest.TestCase):
+    """Hugo, 25/10: batimento, vigia e WMS tinham centenas de itens antigos e
+    viravam faixa permanente; o aviso conta so o que surgiu nas ultimas 24 h."""
+
+    AGORA = datetime(2026, 10, 25, 21, 0, 0)
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE batimento_pedidos (codigo TEXT, caixa TEXT, desde TEXT, div_desde TEXT, tratado_em TEXT);
+            CREATE TABLE vigia_pedidos (codigo TEXT, vence_em TEXT, vencido INTEGER);
+            CREATE TABLE wms_pedidos (id INTEGER PRIMARY KEY, estado_reserva TEXT, lido_em TEXT);
+            CREATE TABLE wms_pedido_itens (pedido_id INTEGER, motivo_pendencia TEXT, falta_un REAL, removido_em TEXT);
+        """)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_batimento_so_divergencias_das_ultimas_24h_sem_tratar(self):
+        self.conn.executemany("INSERT INTO batimento_pedidos VALUES (?,?,?,?,?)", [
+            ("A", "DIVERGENCIA", "2026-10-25 10:00:00", None, None),           # nova
+            ("B", "DIVERGENCIA", "2026-10-20 10:00:00", "2026-10-25 08:00:00", None),  # virou divergencia hoje
+            ("C", "DIVERGENCIA", "2026-10-20 10:00:00", None, None),           # antiga
+            ("D", "DIVERGENCIA", "2026-10-25 10:00:00", None, "2026-10-25 11:00:00"),  # tratada
+            ("E", "DESTINO", "2026-10-25 10:00:00", None, None),
+        ])
+        self.assertEqual(ap.contar_batimento_recentes(self.conn, self.AGORA), 2)
+
+    def test_vigia_so_vencidos_nas_ultimas_24h(self):
+        self.conn.executemany("INSERT INTO vigia_pedidos VALUES (?,?,?)", [
+            ("A", "2026-10-25 09:00:00", 1),
+            ("B", "2026-10-24 21:00:00", 1),   # exatamente 24 h: entra
+            ("C", "2026-10-23 09:00:00", 1),   # antigo
+            ("D", "2026-10-25 09:00:00", 0),
+        ])
+        self.assertEqual(ap.contar_vigia_vencidos_recentes(self.conn, self.AGORA), 2)
+
+    def test_wms_so_pedidos_lidos_nas_ultimas_24h(self):
+        self.conn.executemany("INSERT INTO wms_pedidos VALUES (?,?,?)", [
+            (1, "PARCIAL", "2026-10-25 08:00:00"),
+            (2, "PARCIAL", "2026-10-10 08:00:00"),
+            (3, "CANCELADO", "2026-10-25 08:00:00"),
+        ])
+        self.conn.executemany("INSERT INTO wms_pedido_itens VALUES (?,?,?,?)", [
+            (1, "sem cadastro", 0, ""), (1, "", 2, ""), (1, "", 0, ""), (1, "", 3, "2026-10-25 09:00:00"),
+            (2, "sem cadastro", 0, ""), (3, "", 5, ""),
+        ])
+        self.assertEqual(ap.contar_wms_pendencias_recentes(self.conn, self.AGORA), 2)
+
+    def test_textos_dizem_24h(self):
+        itens = {i["chave"]: i for i in ap.CATALOGO}
+        for chave in ("batimento", "vigia_vencidos", "wms_pendencias"):
+            self.assertIn("24 h", itens[chave]["texto"])
+            self.assertIn("24 h", ap._SINGULAR[chave])
