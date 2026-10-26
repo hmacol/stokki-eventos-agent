@@ -37,6 +37,11 @@ Pré-cadastro automático da Stokki (10/10) -- embarcadores_stokki.py:
     py -3 portal_cliente/gerenciar_clientes.py cadastro aprovar 49874051000131           # grava o tipo que o cliente informou
     py -3 portal_cliente/gerenciar_clientes.py cadastro habilidade 49874051000131 Seco   # aprova com outro tipo
 
+Fluxo operacional por embarcador (25/10) -- nucleo/fluxo_embarcador.py:
+    py -3 portal_cliente/gerenciar_clientes.py fluxos                                    # quem não é só armazenagem (com o XD achado)
+    py -3 portal_cliente/gerenciar_clientes.py fluxos --cnpj 66259821000155 --definir cross
+    py -3 portal_cliente/gerenciar_clientes.py fluxos --carga fluxos.json                # JSON da página "Fluxo por embarcador"
+
 Quem pode ter conta é quem está em `interno` com sender_id -- pra liberar
 um embarcador novo, primeiro cadastre CNPJ/sender_id/e-mail lá (é a
 mesma tabela usada pelas notificações de insucesso).
@@ -222,6 +227,61 @@ def _imprimir_grupo(empresas: list[dict]) -> None:
         print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
 
 
+def _linha_fluxo(conn, cnpj: str) -> str:
+    from nucleo import fluxo_embarcador as fe
+    f = fe.fluxos_do_embarcador(conn, cnpj=cnpj)
+    rotulos = ", ".join(fe.ROTULOS[x] for x in f["fluxos"])
+    xd = ""
+    if "cross" in f["fluxos"]:
+        xd = f"  XD {f['codigo_xd']}" if f["codigo_xd"] else f"  XD NÃO ENCONTRADO ({f['erro_xd']})"
+    return f"{auth.formatar_cnpj(f['cnpj'])}  [{f['stkkc'] or '-'}]  {f['apelido']}: {rotulos}{xd}"
+
+
+def _comando_fluxos(conn, args) -> int:
+    import json
+    from nucleo import fluxo_embarcador as fe
+    fe.garantir_coluna(conn)
+    if args.carga:
+        docs = json.loads(Path(args.carga).read_text(encoding="utf-8"))
+        if isinstance(docs, dict):  # aceita {"documents": [...]} ou {"docs": [...]}
+            docs = docs.get("documents") or docs.get("docs") or []
+        docs = [d.get("data", d) for d in docs]  # linha da página vem como {"id", "data": {...}}
+        mapa = fe.carga_de_marcacoes(docs)
+        faltando = []
+        for cnpj, fluxos in sorted(mapa.items()):
+            try:
+                fe.definir_fluxos(conn, cnpj, fluxos)
+            except ValueError as e:
+                faltando.append(f"{cnpj}: {e}")
+                continue
+            print(_linha_fluxo(conn, cnpj))
+        print(f"{len(mapa) - len(faltando)} embarcador(es) gravado(s).")
+        for f in faltando:
+            print(f"  NÃO gravado -- {f}")
+        return 1 if faltando else 0
+    if args.definir is not None:
+        if not args.cnpj:
+            print("--definir exige --cnpj.")
+            return 2
+        try:
+            fe.definir_fluxos(conn, args.cnpj, [x.strip() for x in args.definir.split(",") if x.strip()])
+        except ValueError as e:
+            print(f"Nada gravado: {e}")
+            return 2
+        print(_linha_fluxo(conn, args.cnpj))
+        return 0
+    if args.cnpj:
+        print(_linha_fluxo(conn, args.cnpj))
+        return 0
+    n = 0
+    for (cnpj,) in conn.execute("SELECT cnpj_embarcador FROM interno WHERE COALESCE(fluxos, '') NOT IN ('', 'armazenagem') "
+                                "ORDER BY stkkc_id"):
+        print(_linha_fluxo(conn, cnpj))
+        n += 1
+    print(f"{n} embarcador(es) com fluxo além de Armazenagem.")
+    return 0
+
+
 def _comando_cadastro(conn, args) -> int:
     import cadastro_embarcador as cad_emb
     if not args.acao:
@@ -296,6 +356,10 @@ def main(argv=None) -> int:
     ce.add_argument("acao", nargs="?", choices=["aprovar", "habilidade"])
     ce.add_argument("cnpj", nargs="?")
     ce.add_argument("tipo", nargs="?", help="Seco | Refrigerado | Congelado (só com 'habilidade')")
+    fl = sub.add_parser("fluxos", help="fluxo operacional por embarcador: armazenagem, full_cross, cross")
+    fl.add_argument("--cnpj")
+    fl.add_argument("--definir", help='ex.: "cross,armazenagem" (exige --cnpj)')
+    fl.add_argument("--carga", help="JSON exportado da página Fluxo por embarcador")
     args = p.parse_args(argv)
 
     cfg = _config()
@@ -305,6 +369,8 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "cadastro":
             return _comando_cadastro(conn, args)
+        if args.cmd == "fluxos":
+            return _comando_fluxos(conn, args)
         if args.cmd == "listar":
             for e in auth.listar_embarcadores(conn):
                 estado = "sem conta" if e["ativo"] is None else ("ATIVA" if e["ativo"] else "desativada")
