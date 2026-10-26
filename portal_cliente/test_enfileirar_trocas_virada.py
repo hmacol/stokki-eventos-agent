@@ -96,6 +96,25 @@ class Rodar(unittest.TestCase):
         self.assertEqual(originais["100"][0], _chave(100))
         self.assertEqual(originais["200"], (_chave(200), self.extraidos / f"{_chave(200)}.xml"))  # emitente de outro nao conta
 
+    def test_xml_do_importador_exige_emitente_e_chave_do_embarcador(self):
+        # emitente com CPF e o CNPJ do embarcador so no destinatario: nao e dele
+        falso = (f'<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe"><NFe><infNFe Id="NFe{_chave(400)}"><ide><nNF>400</nNF></ide>'
+                 f'<emit><CPF>12345678901</CPF></emit><dest><CNPJ>{CNPJ}</CNPJ></dest></infNFe></NFe></nfeProc>')
+        (self.extraidos / "falso.xml").write_text(falso, encoding="utf-8")
+        # emitente certo mas chave de outro CNPJ (posicoes 7-20): descartado
+        outra = "35261099999999000199550010000004011000000010"
+        (self.extraidos / "chave_outra.xml").write_text(_nfe(outra, "401"), encoding="utf-8")
+        originais = virada.originais_do_embarcador(self.conn, CNPJ, [self.raiz / "importador" / "clientes"])
+        self.assertNotIn("400", originais)
+        self.assertNotIn("401", originais)
+
+    def test_mesma_nf_com_chaves_diferentes_vira_troca_manual(self):
+        (self.extraidos / "serie2.xml").write_text(_nfe(_chave(202).replace("0010000", "0020000", 1), "200"), encoding="utf-8")
+        originais = virada.originais_do_embarcador(self.conn, CNPJ, [self.raiz / "importador" / "clientes"])
+        self.assertIsNone(originais["200"])
+        fila, manuais = virada.planejar([{"id_stokki": 20, "codigo": "PS-20", "numero_nf": "200"}], originais)
+        self.assertEqual((fila, [m["codigo"] for m in manuais]), ([], ["PS-20"]))
+
     def test_so_embarcador_cross_e_listado(self):
         self._rodar(executar=False)
         self.assertEqual(self.listados, [18])

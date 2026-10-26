@@ -20,9 +20,9 @@ VPS, como www-data, nunca local (login novo derruba a sessao de producao):
     sudo -u www-data venv/bin/python portal_cliente/enfileirar_trocas_virada.py --executar [--cnpj 66259821000155]
 """
 import argparse
-import re
 import sqlite3
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -37,9 +37,7 @@ from nucleo.fluxo_embarcador import normalizar_fluxos  # noqa: E402
 
 STATUS_ABERTOS = ("Open", "Waiting for Carrier", "Separating")
 DONO_TRAVA = "virada-trocas-nf"
-_RE_CHAVE = re.compile(r'Id="NFe(\d{44})"')
-_RE_NNF = re.compile(r"<(?:\w+:)?nNF>\s*(\d+)\s*</")
-_RE_EMIT = re.compile(r"<(?:\w+:)?emit>.*?<(?:\w+:)?CNPJ>(\d{14})</", re.S)
+_NS = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
 
 
 def listar_abertos(sessao, stkkc: int) -> list[dict]:
@@ -64,20 +62,46 @@ def listar_abertos(sessao, stkkc: int) -> list[dict]:
     return saida
 
 
-def originais_do_embarcador(conn: sqlite3.Connection, cnpj: str, pastas_importador: list[Path]) -> dict[str, tuple[str, Path]]:
-    """{numero_nf: (chave, caminho do XML original)} -- portal primeiro, depois importador."""
-    achados: dict[str, tuple[str, Path]] = {}
-    for base in pastas_importador:
-        for xml in Path(base).glob("*/dados/xmls_extraidos/*.xml"):
-            texto = xml.read_text(encoding="utf-8", errors="ignore")
-            emit, nnf, chave = _RE_EMIT.search(texto), _RE_NNF.search(texto), _RE_CHAVE.search(texto)
-            if emit and nnf and chave and emit.group(1) == cnpj:
-                achados[nnf.group(1)] = (chave.group(1), xml)
+def _nfe_do_embarcador(xml: Path, cnpj: str) -> tuple[str, str] | None:
+    """(chave, nNF) se o XML e NF-e EMITIDA pelo embarcador: emit/CNPJ lido
+    pelo parser e o CNPJ embutido na chave (posicoes 7 a 20) iguais ao dele."""
+    try:
+        inf = ET.parse(xml).getroot().find(".//nfe:infNFe", _NS)
+    except (ET.ParseError, OSError):
+        return None
+    if inf is None:
+        return None
+    chave = (inf.get("Id") or "")[3:]
+    nnf = (inf.findtext("nfe:ide/nfe:nNF", default="", namespaces=_NS) or "").strip()
+    emit = (inf.findtext("nfe:emit/nfe:CNPJ", default="", namespaces=_NS) or "").strip()
+    if len(chave) != 44 or not chave.isdigit() or chave[6:20] != cnpj or emit != cnpj or not nnf:
+        return None
+    return chave, nnf
+
+
+def _registrar(achados: dict, nf: str, chave: str, caminho: Path) -> None:
+    """Mesma NF com chaves diferentes (outra serie) e ambigua: None = troca manual."""
+    if nf not in achados:
+        achados[nf] = (chave, caminho)
+    elif achados[nf] is not None and achados[nf][0] != chave:
+        achados[nf] = None
+
+
+def originais_do_embarcador(conn: sqlite3.Connection, cnpj: str,
+                            pastas_importador: list[Path]) -> dict[str, tuple[str, Path] | None]:
+    """{numero_nf: (chave, caminho do XML original) ou None se ambiguo}."""
+    achados: dict[str, tuple[str, Path] | None] = {}
     for r in conn.execute("SELECT numero_nf, chave_nfe, xml_path FROM portal_envios WHERE cnpj_embarcador = ? "
                           "AND COALESCE(origem, 'xml') = 'xml' AND numero_nf IS NOT NULL AND xml_path IS NOT NULL", (cnpj,)):
         caminho = ep._RAIZ / r[2]
-        if caminho.is_file():
-            achados[str(r[0])] = (r[1], caminho)
+        lido = _nfe_do_embarcador(caminho, cnpj) if caminho.is_file() else None
+        if lido and lido[0] == r[1]:
+            _registrar(achados, str(r[0]), r[1], caminho)
+    for base in pastas_importador:
+        for xml in Path(base).glob("*/dados/xmls_extraidos/*.xml"):
+            lido = _nfe_do_embarcador(xml, cnpj)
+            if lido:
+                _registrar(achados, lido[1], lido[0], xml)
     return achados
 
 
