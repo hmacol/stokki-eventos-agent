@@ -61,6 +61,7 @@ import yaml
 import cancelamento as cm
 import envio_pedidos as ep
 import pedidos_dedicados
+import trocas_nf as tq
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
 from stokki.auth import StokkiSession
@@ -842,6 +843,12 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
                 total["lotes"] += 1
                 for k in ("criados", "duplicados", "erros", "adiados"):
                     total[k] += resumo.get(k, 0)
+        # Fluxo Cross (25/10): troca da NF dos pedidos criados com o item XD.
+        # Depois dos lotes, pra o pedido criado neste ciclo já entrar.
+        try:
+            total["trocas_nf"] = tq.processar_pendentes(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- troca de NF não derruba a fila de envios
+            logger.error(f"trocas de NF falharam: {e}\n{traceback.format_exc()}")
         try:
             total["conciliados"] = reconciliar_codigos(conn)
         except Exception as e:
@@ -867,7 +874,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"] or any((r.get("cancelamentos") or {}).values()):
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")
