@@ -64,13 +64,13 @@ CATALOGO = [
           ("total", "operador", "logistica", "atendimento"), "/torre", "torre"),
     _item("rascunhos_erro", "{n} rascunhos de rota com erro de envio",
           ("total", "operador", "logistica"), "/planejamento", "planejamento"),
-    _item("batimento", "{n} divergências do batimento sem tratar",
+    _item("batimento", "{n} divergências novas do batimento sem tratar (últimas 24 h)",
           ("total", "operador"), "/vigia?aba=fechamento", "vigia_pedidos"),
-    _item("vigia_vencidos", "{n} pedidos com prazo vencido",
+    _item("vigia_vencidos", "{n} pedidos venceram o prazo nas últimas 24 h",
           ("total", "operador"), "/vigia", "vigia_pedidos"),
     _item("rotinas_falhas", "{n} rotinas falharam nas últimas 24 h",
           ("total",), "/historico", "historico"),
-    _item("wms_pendencias", "{n} itens do WMS com pendência ou falta",
+    _item("wms_pendencias", "{n} itens do WMS com pendência ou falta (pedidos das últimas 24 h)",
           ("total", "operador"), "/wms/estoque", "wms_estoque"),
     _item("wms_divergencias", "{n} recebimentos com divergência sem aviso",
           ("total", "galpao"), "/wms", "wms"),
@@ -90,10 +90,10 @@ _SINGULAR = {
     "pedidos_parados": "{n} pedido parado sem classificação",
     "torre": "{n} ocorrência na fila da Torre",
     "rascunhos_erro": "{n} rascunho de rota com erro de envio",
-    "batimento": "{n} divergência do batimento sem tratar",
-    "vigia_vencidos": "{n} pedido com prazo vencido",
+    "batimento": "{n} divergência nova do batimento sem tratar (últimas 24 h)",
+    "vigia_vencidos": "{n} pedido venceu o prazo nas últimas 24 h",
     "rotinas_falhas": "{n} rotina falhou nas últimas 24 h",
-    "wms_pendencias": "{n} item do WMS com pendência ou falta",
+    "wms_pendencias": "{n} item do WMS com pendência ou falta (pedidos das últimas 24 h)",
     "wms_divergencias": "{n} recebimento com divergência sem aviso",
 }
 
@@ -163,14 +163,57 @@ def _calc_retornos() -> dict:
     return {"qtd": sum(len(g["pedidos"]) for g in grupos)}
 
 
+# Batimento, vigia e WMS (Hugo, 25/10): com centenas de itens antigos a faixa
+# nunca sumia e virava ruido. O aviso conta so o que surgiu nas ultimas 24 h;
+# o estoque antigo continua nas telas de cada um.
+JANELA_RECENTES = timedelta(hours=24)
+
+
+def _corte(agora: datetime) -> str:
+    return (agora - JANELA_RECENTES).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def contar_batimento_recentes(conn, agora: datetime) -> int:
+    """Divergencias sem tratar que entraram na caixa nas ultimas 24 h (mesmo
+    "desde" da tela de fechamento: div_desde, senao desde)."""
+    return int(conn.execute(
+        "SELECT COUNT(*) FROM batimento_pedidos WHERE caixa = 'DIVERGENCIA' "
+        "AND COALESCE(tratado_em, '') = '' AND COALESCE(div_desde, desde) >= ?",
+        (_corte(agora),)).fetchone()[0])
+
+
+def contar_vigia_vencidos_recentes(conn, agora: datetime) -> int:
+    """Pedidos cujo prazo venceu nas ultimas 24 h."""
+    return int(conn.execute(
+        "SELECT COUNT(*) FROM vigia_pedidos WHERE vencido = 1 AND vence_em >= ? AND vence_em <= ?",
+        (_corte(agora), agora.strftime("%Y-%m-%d %H:%M:%S"))).fetchone()[0])
+
+
+def contar_wms_pendencias_recentes(conn, agora: datetime) -> int:
+    """Itens com pendencia (mesmo filtro de wms_pedidos.pendencias) de pedidos
+    lidos nas ultimas 24 h."""
+    return int(conn.execute("""
+        SELECT COUNT(*) FROM wms_pedido_itens i JOIN wms_pedidos p ON p.id = i.pedido_id
+         WHERE (i.motivo_pendencia <> '' OR i.falta_un > 0)
+           AND i.removido_em = ''
+           AND p.estado_reserva NOT IN ('CANCELADO', 'BAIXADO')
+           AND p.lido_em >= ?""", (_corte(agora),)).fetchone()[0])
+
+
+def _recentes(contar_fn) -> dict:
+    conn = _conectar()
+    try:
+        return {"qtd": contar_fn(conn, datetime.now())}
+    finally:
+        conn.close()
+
+
 def _calc_batimento() -> dict:
-    from batimento import consulta
-    return {"qtd": int(consulta.fechamento()["total_abertas"])}
+    return _recentes(contar_batimento_recentes)
 
 
 def _calc_vigia_vencidos() -> dict:
-    from vigia import consulta
-    return {"qtd": int(consulta.listar()["vencidos"])}
+    return _recentes(contar_vigia_vencidos_recentes)
 
 
 def _contar_rotinas_falhas(execucoes: list[dict], agora: datetime | None = None) -> int:
@@ -198,12 +241,7 @@ def _calc_rotinas_falhas() -> dict:
 
 
 def _calc_wms_pendencias() -> dict:
-    import wms_pedidos
-    conn = _conectar()
-    try:
-        return {"qtd": len(wms_pedidos.pendencias(conn, limite=100000))}
-    finally:
-        conn.close()
+    return _recentes(contar_wms_pendencias_recentes)
 
 
 def _contar_wms_divergencias() -> int:
