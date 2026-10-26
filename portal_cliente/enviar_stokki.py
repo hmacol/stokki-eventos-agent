@@ -61,6 +61,7 @@ import yaml
 import cancelamento as cm
 import envio_pedidos as ep
 import pedidos_dedicados
+import trocas_nf as tq
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
 from stokki.auth import StokkiSession
@@ -109,7 +110,15 @@ def carregar_importador(config: dict):
     return wiz, px
 
 
-def transformar_xml(regra: str, origem: Path, destino: Path, px) -> None:
+def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "armazenagem", xd: dict | None = None) -> None:
+    """Cross (25/10): um item só, o XD do embarcador (regra "cross" do
+    importador), e a regra própria do embarcador não se aplica. Outros
+    fluxos: a regra do embarcador, como antes."""
+    if fluxo == "cross":
+        if not (xd or {}).get("codigo_xd"):
+            raise ValueError(f"XD não encontrado: {(xd or {}).get('erro_xd') or 'sem produto XD no catálogo'}")
+        px.TRANSFORMACOES["cross"](origem, destino, codigo_xd=xd["codigo_xd"], nome_item=xd["nome_item"])
+        return
     if regra in (None, "", "nenhuma"):
         shutil.copyfile(origem, destino)
         return
@@ -463,6 +472,24 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
 
 # ── Processamento de um lote (um embarcador) ───────────────────────────────────
 
+def _id_do_codigo(codigo: str | None) -> int | None:
+    """"PS-42584" -> 42584. Reentrega ("PS-36327-R1") não é o pedido novo."""
+    m = re.fullmatch(r"PS-(\d+)", (codigo or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _enfileirar_troca(conn, cfg: dict, envio: dict, codigo: str | None) -> None:
+    """Pedido Cross existe na Stokki (criado agora ou duplicado): a NF dele
+    ainda é a do XML convertido -- fila de troca (trocas_nf.py)."""
+    linha_id = tq.enfileirar(conn, cnpj_embarcador=cfg["cnpj"], client_id=cfg["client_id"], numero_nf=envio["numero_nf"],
+                             chave_nfe=envio["chave_nfe"], caminho_xml_original=envio["xml_path"], origem="portal",
+                             envio_id=envio["id"], id_stokki=_id_do_codigo(codigo), codigo_pedido=codigo)
+    # A linha é única por chave: pode já existir (importador por e-mail, outro
+    # envio) e até estar FEITA. O envio mostra o estado real dela.
+    linha = dict(conn.execute("SELECT * FROM trocas_nf_pendentes WHERE id = ?", (linha_id,)).fetchone())
+    tq.espelhar_em_portal_envios(conn, {**linha, "envio_id": envio["id"]})
+
+
 def _e_duplicado(erro: str) -> bool:
     e = (erro or "").lower()
     return "já utilizada" in e or "ja utilizada" in e
@@ -536,6 +563,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
         wiz = px = None
         if not simular:
             wiz, px = carregar_importador(config)
+        xd = None
+        if any(e.get("fluxo") == "cross" for e in envios):
+            from nucleo.fluxo_embarcador import fluxos_do_embarcador
+            xd = fluxos_do_embarcador(conn, cnpj=cnpj)
         for e in envios:
             planilha = (e.get("origem") or ep.ORIGEM_XML) == ep.ORIGEM_PLANILHA
             try:
@@ -552,7 +583,8 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     if simular:
                         shutil.copyfile(ep.caminho_xml(e), destino)
                     else:
-                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px)
+                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
+                                        fluxo=e.get("fluxo") or "armazenagem", xd=xd)
                     arquivos.append(destino)
                     prontos_xml.append(e)
                 prontos.append(e)
@@ -620,10 +652,14 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resumo["criados"] += 1
                 if codigo and e.get("agendamento_data") and not e.get("agendamento_pendente"):
                     ep.registrar_agendamento_pedido(conn, {**e, "codigo_pedido": codigo})
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, codigo)
             elif _e_duplicado(r["erro"]):
                 _marcar(conn, e["id"], status=ep.STATUS_DUPLICADO, erro=r["erro"][:900], resposta_stokki=resposta_txt,
                         criado_stokki_em=ep._agora())
                 resumo["duplicados"] += 1
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, None)
             else:
                 _marcar(conn, e["id"], status=ep.STATUS_ERRO, erro=(r["erro"] or "recusado pela Stokki")[:900],
                         resposta_stokki=resposta_txt, tentativas=int(e.get("tentativas") or 0) + 1)
@@ -842,6 +878,12 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
                 total["lotes"] += 1
                 for k in ("criados", "duplicados", "erros", "adiados"):
                     total[k] += resumo.get(k, 0)
+        # Fluxo Cross (25/10): troca da NF dos pedidos criados com o item XD.
+        # Depois dos lotes, pra o pedido criado neste ciclo já entrar.
+        try:
+            total["trocas_nf"] = tq.processar_pendentes(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- troca de NF não derruba a fila de envios
+            logger.error(f"trocas de NF falharam: {e}\n{traceback.format_exc()}")
         try:
             total["conciliados"] = reconciliar_codigos(conn)
         except Exception as e:
@@ -867,7 +909,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"] or any((r.get("cancelamentos") or {}).values()):
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")

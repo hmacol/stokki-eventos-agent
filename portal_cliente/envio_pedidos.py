@@ -59,6 +59,8 @@ _RAIZ = Path(__file__).parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
+from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
@@ -218,6 +220,13 @@ def conectar() -> sqlite3.Connection:
         # bloqueio por área não atendida (23/09)
         "bloqueio_motivo": "TEXT",
         "bloqueio_chamado_id": "INTEGER",
+        # fluxo Cross (25/10): fluxo do pedido e acompanhamento da troca de NF
+        # (espelho de trocas_nf_pendentes, ver trocas_nf.py)
+        "fluxo": "TEXT",
+        "id_stokki": "INTEGER",
+        "troca_nf_status": "TEXT",
+        "troca_nf_em": "TEXT",
+        "troca_nf_erro": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -1196,13 +1205,64 @@ def avisos_fora_dia_fixo(itens: list[dict]) -> list[dict]:
     return avisos
 
 
+MSG_XD_AUSENTE = "Produto XD não encontrado no cadastro do embarcador na Stokki. A Fresh Log foi avisada."
+
+
+def fluxos_para_envio(conn: sqlite3.Connection, cnpj_embarcador: str) -> tuple[list[str], dict]:
+    """(fluxos que o embarcador pode usar agora, {"codigo", "erro"} do XD).
+    Cross sai da lista quando o XD não está no catálogo (Hugo, 25/10:
+    avisa cliente e atendimento em vez de mandar o pedido sem XD). Lista
+    vazia = o embarcador só tem Cross e o XD falta: nada pode ser enviado."""
+    from nucleo import fluxo_embarcador as fe
+    try:
+        f = fe.fluxos_do_embarcador(conn, cnpj=cnpj_embarcador)
+    except ValueError:
+        return ["armazenagem"], {"codigo": None, "erro": None}
+    disp = list(f["fluxos"])
+    if "cross" in disp and not f["codigo_xd"]:
+        disp.remove("cross")
+    return disp, {"codigo": f["codigo_xd"], "erro": f["erro_xd"]}
+
+
+def primeiro_aviso_xd_do_dia(conn: sqlite3.Connection, cnpj_embarcador: str, hoje: date | None = None) -> bool:
+    """True só na primeira vez do dia por embarcador: cada prévia do portal
+    detecta o XD ausente, mas o atendimento recebe um e-mail por dia (sem
+    isso, reenvios em série virariam e-mails em série). Faz commit."""
+    conn.execute("CREATE TABLE IF NOT EXISTS avisos_xd_ausente (cnpj TEXT NOT NULL, dia TEXT NOT NULL, "
+                 "PRIMARY KEY (cnpj, dia))")
+    cur = conn.execute("INSERT OR IGNORE INTO avisos_xd_ausente (cnpj, dia) VALUES (?, ?)",
+                       (_so_digitos(cnpj_embarcador), (hoje or date.today()).isoformat()))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def escolher_fluxo(item: dict, disponiveis: list[str], origem: str, rotulo: str = "") -> str:
+    """Fluxo do pedido (Hugo, 24/10: com mais de um fluxo, o embarcador
+    informa). Um fluxo só: é ele, sem perguntar. Pedido de planilha não tem
+    NF-e, então não pode ir em Cross (o Cross troca a NF depois)."""
+    disp = [f for f in FLUXOS if f in (disponiveis or [])] or ["armazenagem"]
+    if origem == ORIGEM_PLANILHA:
+        if str(item.get("fluxo") or "").strip() == "cross" or disp == ["cross"]:
+            raise ErroEnvio(f"{rotulo}: pedido de planilha não pode ir em Cross; envie o XML da NF-e.")
+        disp = [f for f in disp if f != "cross"]
+    if len(disp) == 1:
+        return disp[0]
+    fluxo = str(item.get("fluxo") or "").strip()
+    if fluxo not in disp:
+        nomes = [FLUXO_ROTULOS[f] for f in disp]
+        raise ErroEnvio(f"{rotulo}: informe o fluxo ({', '.join(nomes[:-1])} ou {nomes[-1]}).")
+    return fluxo
+
+
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
-                     config: dict | None, regra_xml: str) -> list[dict]:
+                     config: dict | None, regra_xml: str, fluxos_disponiveis: list[str] | None = None) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
     agendamento_hora_inicio?, agendamento_hora_fim?, agendamento_pendente?,
     observacoes?}. Relê o XML temporário (nunca confia no que o navegador
     mandou), revalida, grava o definitivo e cria a linha NA_FILA."""
     emb = _so_digitos(cnpj_embarcador)
+    if fluxos_disponiveis is not None and not fluxos_disponiveis:
+        raise ErroEnvio(MSG_XD_AUSENTE)  # só Cross e o XD falta (fluxos_para_envio)
     criados = []
     lidos = []
     for item in itens:
@@ -1221,6 +1281,8 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         v = validar_item(conn, nfe, emb)
         if not v["ok"]:
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
+        nfe["_fluxo"] = escolher_fluxo(item, fluxos_disponiveis or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
+                                       rotulo_envio(nfe))
         # Área não atendida (Hugo, 23/09): classifica AQUI, antes de qualquer
         # escrita -- a geocodificação grava cache por outra conexão e travaria
         # ~5 s por NF se já houvesse transação de escrita aberta nesta.
@@ -1296,7 +1358,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "erro": None, "resposta_stokki": None, "codigo_pedido": None, "horario_inicio": ini, "horario_fim": fim,
             "requer_agendamento": int(requer), "agendamento_data": ag_data, "agendamento_hora_inicio": ag_ini,
             "agendamento_hora_fim": ag_fim, "agendamento_pendente": pendente, "agendamento_aplicado_em": None,
-            "observacoes": obs, "enviado_por": enviado_por,
+            "observacoes": obs, "enviado_por": enviado_por, "fluxo": nfe["_fluxo"],
             "criado_em": agora, "atualizado_em": agora, "enviado_stokki_em": None, "criado_stokki_em": None,
             "origem": ORIGEM_PLANILHA if planilha else ORIGEM_XML,
             "referencia": nfe.get("referencia") if planilha else None,
