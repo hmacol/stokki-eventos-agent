@@ -96,11 +96,15 @@
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
  Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
- Logins nominais (cadastro, nível, nome) .. painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos)
+ Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
+                                            equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
+ Aviso de pendências no topo (faixas) ...... painel_agentes/templates/_aviso_pendencias.html (incluído no <main> de base.html/base_mobile.html;
+                                              ouve o evento do _menu_lateral_script), API /api/sidebar/contadores + /api/avisos/ignorar,
+                                              tabela painel_avisos_ignorados, módulo painel_agentes/avisos_pendencias.py
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
  Portal do cliente ......................... portal_cliente/app.py
@@ -147,6 +151,11 @@
  Canhotos pendentes ......................... /canhotos-pendentes (canhotos_pendentes.html, total/operador):
                                              entregues sem nenhum comprovante (padrão 60 dias); o canhoto
                                              fica guardado conosco (canhotos_manuais), NÃO vai pra Stokki
+ Pedidos do portal (solicitações do cliente)  /solicitacoes-portal (solicitacoes_portal.html, total/operador/logistica,
+                                             grupo Acompanhar; destino do aviso "solicitacoes_portal"). API:
+                                             GET /api/solicitacoes-portal, POST /api/solicitacoes-portal/<id>/executar
+                                             (síncrono; portal_cliente/solicitacoes_execucao.executar) e /recusar
+                                             {"resposta"}. Testes: painel_agentes/test_solicitacoes_portal_tela.py.
  E-mail comum (visual Freshlog) ............ email_utils.py
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
@@ -599,6 +608,9 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+ pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
+                      outbound/pause com _token/page do form_pause; relê a
+                      Situação). Sondado só leitura 25/10; escrita real não provada.
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
@@ -855,7 +867,15 @@
                                              Substitui as Demandas do Lovable (lovable/tasks.py).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
  motoristas.py             Tela de motoristas.
- pedidos_parados_triagem.py  Triagem dos pedidos parados do Fresh Hub.
+ pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
+                           painel, sem Lovable). Aba Registrar grava em
+                           pedidos_parados_registros (foto em dados/pedidos_parados/<id>/;
+                           apagar só o autor em 15 min); aba Triagem lê daí
+                           (só o dia mais recente; dias parado desde o 1º
+                           registro). Encaminhar às Demandas do Lovable PAUSADO
+                           (ENCAMINHAMENTO_DEMANDAS_ATIVO=False: classificar
+                           Cancelados/Devolução/Descartar/Verificar já conta
+                           como tratado). Testes: test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
                            da equipe, abertos a todos do Atendimento, só texto,
@@ -933,11 +953,15 @@
                               ?exemplo=1 roda com ESTADO_EXEMPLO do próprio JS;
                               selo "sessão expirou" quando a API cai no login
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
-                              login nominal, muda nome/nível, redefine senha,
+                              login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
                               telas de cada um / nível personalizado)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
-   /pedidos-parados          pedidos_parados_triagem.html
+   /pedidos-parados          pedidos_parados_triagem.html (abas Registrar | Triagem;
+                              #registrar/#triagem na URL; galpao/expedicao entram na
+                              Registrar e veem a Triagem só leitura). APIs:
+                              /api/pedidos-parados/registrar (POST multipart),
+                              /registros-hoje, /registro/apagar, /pedidos-parados/foto/<id>
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
@@ -990,6 +1014,11 @@
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
+ solicitacoes_execucao.py  Executar/Recusar solicitação PENDENTE do portal (tela
+                           /solicitacoes-portal): cancelar (Vuupt -> Stokki),
+                           em_espera (tira da rota na Vuupt -> Pausar na Stokki),
+                           reagendar (PUT serviço Vuupt). Só conclui se tudo deu
+                           certo; trava sessao_uso (60 s) em cancelar/em_espera.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.
@@ -1166,9 +1195,11 @@
                            (Playwright CPF+PIN -> token), pedidos parados,
                            tasks. Era freshhub/ ate 17/10/2026; o nome
                            freshhub/ passou a ser o pacote do sistema novo.
-                           Sai de uso na Fase 1 do plano mestre. As Demandas
-                           (tasks.py) foram substituídas pela tela /demandas
-                           do painel (25/10).
+                           Desde 24/10 o painel NÃO lê mais pedidos_parados.py
+                           (registro é na aba Registrar do painel); só sobram
+                           normalizar_order_number e tasks.py (Demandas,
+                           substituídas pela tela /demandas do painel em 25/10).
+                           Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
    regras.py   classifica o retrato de um pedido em DESTINO / EM_ANDAMENTO /
@@ -1301,6 +1332,8 @@
    arquivo gitignored `freshhub/sessao_freshhub.json` para
    `lovable/sessao_freshhub.json` (como www-data) ANTES de reiniciar
    painel-agentes; sem isso o Lovable refaz login Playwright a cada chamada.
+   Desde 24/10 só importa se religar as Demandas (pedidos parados já não
+   consultam o Lovable).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
  - BD_TRANSPORTADORAS.xlsx é histórico desde a migração, não editar (a fonte é
    a tabela `transportadoras`; só migrar_transportadoras_planilha.py lê o xlsx).

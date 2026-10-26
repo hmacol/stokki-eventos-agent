@@ -30,6 +30,22 @@
       }
     });
     veu.addEventListener("click", function() { fechar(true); });
+    // X no topo da gaveta e arrastar pra esquerda (25/10): o veu e
+    // estreito no celular e o ☰ fica atras da gaveta aberta.
+    var fechaBotao = document.getElementById("fecha-menu");
+    if (fechaBotao) fechaBotao.addEventListener("click", function() { fechar(true); });
+    var toqueX = null, toqueY = null;
+    menu.addEventListener("touchstart", function(e) {
+      if (e.touches.length !== 1) return;
+      toqueX = e.touches[0].clientX; toqueY = e.touches[0].clientY;
+    }, { passive: true });
+    menu.addEventListener("touchend", function(e) {
+      if (toqueX === null) return;
+      var dx = e.changedTouches[0].clientX - toqueX;
+      var dy = e.changedTouches[0].clientY - toqueY;
+      toqueX = toqueY = null;
+      if (dx < -60 && Math.abs(dy) < Math.abs(dx)) fechar(false);
+    }, { passive: true });
     document.addEventListener("keydown", function(e) {
       if (e.key === "Escape") fechar(true);
     });
@@ -83,7 +99,10 @@
       if (document.hidden) return;  // aba em segundo plano não martela o servidor
       fetch(BASE_PATH + "/api/sidebar/contadores", { credentials: "same-origin" })
         .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(d) { if (d && d.contadores) pintar(d.contadores); })
+        .then(function(d) { if (d && d.contadores) {
+          pintar(d.contadores);
+          document.dispatchEvent(new CustomEvent("contadores-atualizados", {detail: d}));
+        } })
         .catch(function() { /* menu sem badge é degradação aceitável */ });
     }
 

@@ -935,7 +935,7 @@ def processar_pedido(
 
 _CHAVES_ESPELHO = ("title", "address", "address_complement", "latitude", "longitude", "dimension_3", "note",
                    "customer_id", "scheduled_start", "scheduled_end", "created_at", "updated_at",
-                   "recreated_order_origin_id")
+                   "recreated_order_origin_id", "sender_id")
 
 
 def _espelho_para_freshhub(servico: dict | None) -> dict | None:

@@ -333,6 +333,9 @@
       <span class="subtitulo">Agente Stokki Freshlog</span>
       <span class="marca-mini">P</span>
     </div>
+    <button type="button" class="fecha-menu" id="fecha-menu" aria-label="Fechar menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
     <button type="button" class="alterna-sidebar" id="alterna-sidebar" title="Recolher menu" aria-label="Recolher menu">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 5l-5 5 5 5"/></svg>
     </button>
@@ -374,6 +377,7 @@
       <span>Menu</span>
     </button>
     <main>
+    {% include "_aviso_pendencias.html" %}
     {% block conteudo %}{% endblock %}
     </main>
   </div>

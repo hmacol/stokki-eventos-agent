@@ -12,6 +12,7 @@ import pipeline
 from nucleo.freshhub_client import ErroFreshhub
 
 SERVICO = {"id": 777, "code": "#PS-41679", "title": "#PS-41679 - 1 / EMB / DEST", "status": "not_assigned",
+           "sender_id": 4321,
            "address": "RUA A 1, CENTRO, Sao Paulo - SP, 01001-000, Brasil", "address_complement": None,
            "latitude": -23.5, "longitude": -46.6, "dimension_3": 2, "note": None, "customer_id": 99,
            "scheduled_start": "2026-10-27 12:00:00", "scheduled_end": None,
@@ -116,7 +117,7 @@ class EspelhoTest(unittest.TestCase):
             "operating_hour_start": "08:00", "operating_hour_end": "17:00",
             "scheduled_start": "2026-10-27 12:00:00", "scheduled_end": None,
             "created_at": "2026-10-25 09:00:00", "updated_at": "2026-10-25 09:00:00",
-            "recreated_order_origin_id": None,
+            "recreated_order_origin_id": None, "sender_id": 4321,
         })
         self.assertIsNone(pipeline._espelho_para_freshhub(None))
         self.assertIsNone(pipeline._espelho_para_freshhub({}))

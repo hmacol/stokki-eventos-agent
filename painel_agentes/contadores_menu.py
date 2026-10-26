@@ -59,7 +59,7 @@ TTL_POR_CONTADOR = {"torre": 300}
 # pode abrir não é calculado (nem vaza pra ele).
 NIVEIS_POR_CONTADOR = {
     "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
-    "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento"),
+    "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento", "galpao", "expedicao"),
     "pedagios": ("total", "operador", "logistica", "leitura"),
     "canhotos": ("total", "operador", "logistica", "leitura", "atendimento"),
     "atendimento": ("total", "operador", "logistica", "atendimento"),

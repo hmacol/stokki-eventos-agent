@@ -37,6 +37,11 @@ DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 # "logistica" (19/10, Hugo) so existe pra login nominal: poderes do operador,
 # mas so nas telas da logistica (as rotas com "logistica" no niveis=).
 NIVEIS = ("total", "operador", "leitura", "expedicao", "galpao", "atendimento", "logistica")
+# Equipe de cada login nominal (Hugo, 25/10): lista fixa, obrigatoria no
+# cadastro/edicao pela /acessos. Galpao dividido em Estoque, Separacao e
+# Conferencia. Por enquanto so informativo (nada le alem da tela).
+EQUIPES = ("Estoque", "Separação", "Conferência", "Expedição", "Logística",
+           "Atendimento", "Comercial", "Financeiro", "Diretoria")
 _PADRAO_LOGIN = re.compile(r"^[a-z0-9._-]{2,40}$")
 SENHA_MINIMA = 6
 
@@ -46,11 +51,12 @@ TELAS = [
     ("torre", "Torre de Controle", "Acompanhar", [r"^/torre(/|$)", r"^/api/torre/"]),
     ("vigia_pedidos", "Vigia", "Acompanhar", [r"^/vigia$", r"^/api/batimento/"]),
     ("canhotos_pendentes", "Canhotos pendentes", "Acompanhar", [r"^/canhotos-pendentes$", r"^/api/canhotos-pendentes$"]),
-    ("pedidos_parados", "Pedidos Parados", "Acompanhar", [r"^/pedidos-parados$", r"^/api/pedidos-parados/"]),
+    ("pedidos_parados", "Pedidos Parados", "Acompanhar", [r"^/pedidos-parados$", r"^/pedidos-parados/foto/", r"^/api/pedidos-parados/"]),
     ("historico_tratativas", "Tratativas", "Acompanhar", [r"^/historico-tratativas$"]),
     ("consulta", "Consulta", "Acompanhar", [r"^/consulta(/|$)", r"^/canhotos/\d+/foto$",
                                             r"^/financeiro/pedagios/\d+/foto$"]),
     ("baixa_sem_app", "Baixa sem app", "Acompanhar", [r"^/baixa-sem-app$", r"^/api/baixa-sem-app(/|$)"]),
+    ("solicitacoes_portal", "Pedidos do portal", "Acompanhar", [r"^/solicitacoes-portal$", r"^/api/solicitacoes-portal"]),
     ("retornos_tela", "Retornos", "Operar", [r"^/retornos(/|$)", r"^/api/retornos(/|$)"]),
     ("demandas", "Demandas", "Operar", [r"^/demandas$", r"^/api/demandas(/|$)"]),
     ("planejamento", "Planejamento", "Planejar", [r"^/planejamento(/|$)", r"^/api/planejamento/",
@@ -86,8 +92,8 @@ _PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos i
 
 # Usadas por qualquer tela (badges do menu, deslogar por inatividade, aviso
 # sonoro de demanda nova -- 25/10).
-CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/sessao/(atividade|estado)$"),
-                   re.compile(r"^/api/demandas/avisos$")]
+CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/avisos/ignorar$"),
+                    re.compile(r"^/api/sessao/(atividade|estado)$"), re.compile(r"^/api/demandas/avisos$")]
 
 
 def caminho_liberado(caminho: str, telas) -> bool:
@@ -118,14 +124,17 @@ def conectar(caminho=None) -> sqlite3.Connection:
             atualizado_por TEXT,
             atualizado_em  TEXT,
             versao_senha   INTEGER NOT NULL DEFAULT 0,
-            ativo          INTEGER NOT NULL DEFAULT 1
+            ativo          INTEGER NOT NULL DEFAULT 1,
+            equipe         TEXT NOT NULL DEFAULT ''
         )""")
-    # Tabela criada antes dessas colunas (deploys de 23/10).
+    # Tabela criada antes dessas colunas (deploys de 23/10 e 25/10).
     colunas = {r["name"] for r in conn.execute("PRAGMA table_info(painel_usuarios)")}
     if "versao_senha" not in colunas:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN versao_senha INTEGER NOT NULL DEFAULT 0")
     if "ativo" not in colunas:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN ativo INTEGER NOT NULL DEFAULT 1")
+    if "equipe" not in colunas:
+        conn.execute("ALTER TABLE painel_usuarios ADD COLUMN equipe TEXT NOT NULL DEFAULT ''")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS painel_sessoes_rodada (
             id     INTEGER PRIMARY KEY CHECK (id = 1),
@@ -153,7 +162,7 @@ def conta(usuario: str, conn=None):
     conn = conn or conectar()
     try:
         r = conn.execute(
-            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, u.versao_senha, u.ativo, t.telas "
+            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, u.versao_senha, u.ativo, u.equipe, t.telas "
             "FROM painel_usuarios u "
             "LEFT JOIN painel_acesso_telas t ON t.usuario = u.usuario WHERE u.usuario = ?", (usuario,)).fetchone()
     finally:
@@ -163,7 +172,7 @@ def conta(usuario: str, conn=None):
         return None
     return {"usuario": r["usuario"], "nome": r["nome"], "nivel": r["nivel"], "trocar_senha": bool(r["trocar_senha"]),
             "senha_hash": r["senha_hash"], "versao_senha": r["versao_senha"], "ativo": bool(r["ativo"]),
-            "telas": _telas_da_linha(r)}
+            "equipe": r["equipe"] or "", "telas": _telas_da_linha(r)}
 
 
 # Login inexistente confere contra este hash, pra responder no mesmo tempo
@@ -200,6 +209,7 @@ def listar(conn) -> list[dict]:
             "usuario": r["usuario"],
             "nome": r["nome"],
             "nivel": r["nivel"],
+            "equipe": r["equipe"] or "",
             "trocar_senha": bool(r["trocar_senha"]),
             "ativo": bool(r["ativo"]),
             "telas": _telas_da_linha(r),
@@ -219,7 +229,17 @@ def _validar_nivel(nivel: str) -> None:
         raise ValueError(f"Nível desconhecido: {nivel}")
 
 
-def criar(conn, usuario: str, nome: str, nivel: str, senha: str, por: str, logins_fixos) -> str:
+def _validar_equipe(equipe: str) -> str:
+    """Obrigatoria e da lista EQUIPES (Hugo, 25/10)."""
+    equipe = (equipe or "").strip()
+    if not equipe:
+        raise ValueError("Escolha a equipe.")
+    if equipe not in EQUIPES:
+        raise ValueError(f"Equipe desconhecida: {equipe} (válidas: {', '.join(EQUIPES)}).")
+    return equipe
+
+
+def criar(conn, usuario: str, nome: str, nivel: str, senha: str, por: str, logins_fixos, equipe: str = "") -> str:
     """Login novo com senha provisoria: a pessoa troca no 1o acesso.
     logins_fixos = os pares do config (usuario, usuario_operador...), que
     nao podem ser repetidos. Devolve o login normalizado."""
@@ -229,11 +249,12 @@ def criar(conn, usuario: str, nome: str, nivel: str, senha: str, por: str, login
     if usuario in logins_fixos or conta(usuario, conn):
         raise ValueError(f"Já existe o login {usuario}.")
     _validar_nivel(nivel)
+    equipe = _validar_equipe(equipe)
     _validar_senha(senha)
     conn.execute(
-        "INSERT INTO painel_usuarios (usuario, nome, senha_hash, nivel, trocar_senha, criado_por, criado_em) "
-        "VALUES (?, ?, ?, ?, 1, ?, ?)",
-        (usuario, (nome or "").strip(), generate_password_hash(senha), nivel, por, _agora()))
+        "INSERT INTO painel_usuarios (usuario, nome, senha_hash, nivel, trocar_senha, criado_por, criado_em, equipe) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+        (usuario, (nome or "").strip(), generate_password_hash(senha), nivel, por, _agora(), equipe))
     conn.commit()
     return usuario
 
@@ -245,11 +266,12 @@ def _exigir_outro(conn, usuario: str, por: str) -> None:
         raise ValueError("Você não pode mudar o seu próprio acesso.")
 
 
-def editar(conn, usuario: str, nome: str, nivel: str, por: str) -> None:
+def editar(conn, usuario: str, nome: str, nivel: str, por: str, equipe: str = "") -> None:
     _exigir_outro(conn, usuario, por)
     _validar_nivel(nivel)
-    conn.execute("UPDATE painel_usuarios SET nome = ?, nivel = ?, atualizado_por = ?, atualizado_em = ? WHERE usuario = ?",
-                 ((nome or "").strip(), nivel, por, _agora(), usuario))
+    equipe = _validar_equipe(equipe)
+    conn.execute("UPDATE painel_usuarios SET nome = ?, nivel = ?, equipe = ?, atualizado_por = ?, atualizado_em = ? "
+                 "WHERE usuario = ?", ((nome or "").strip(), nivel, equipe, por, _agora(), usuario))
     conn.commit()
 
 

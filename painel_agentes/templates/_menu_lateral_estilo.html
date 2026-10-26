@@ -129,7 +129,27 @@
 /* texto escuro no badge critico: branco sobre o vermelho dava 3,0:1 (escuro) e 4,0:1 (claro) */
 .sidebar nav a .badge.critico { background: var(--erro); color: #1A0705; }
 .sidebar nav a .badge[hidden] { display: none; }
+/* Botao X da gaveta (25/10): no celular o veu fica estreito (gaveta de
+   264px numa tela de 360) e o ☰ some atras da gaveta, entao nao havia
+   jeito obvio de fechar sem escolher uma tela. So aparece como gaveta. */
+.fecha-menu { display: none; }
 {% if not gaveta_sempre %}@media (max-width: 760px) { {% endif %}
+  .fecha-menu {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 14px; right: 12px;
+    width: 40px; height: 40px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    cursor: pointer;
+  }
+  .fecha-menu:hover, .fecha-menu:focus-visible { background: rgba(255,255,255,0.18); }
+  .fecha-menu svg { width: 18px; height: 18px; }
+  .sidebar .marca { padding-right: 60px; }
   .sidebar {
     position: fixed;
     top: 0; left: 0; bottom: 0;
