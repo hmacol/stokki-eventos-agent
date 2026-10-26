@@ -110,14 +110,19 @@ def caminho_nf_do_pedido(sessao, id_stokki: int, numero_nf: str, client_id: str)
 def baixar_xml_por_caminho(sessao, caminho: str | None) -> bytes | None:
     if not caminho:
         return None
-    url = URL_XML.format(b64=base64.b64encode(caminho.encode("utf-8")).decode())
-    try:
-        resp = sessao.get(url, headers=_HEADERS_HTML)
-    except Exception as e:  # noqa: BLE001 -- sem download, confere pelo caminho
-        logger.info(f"trocar_nf: download do XML falhou ({e})")
-        return None
-    conteudo = getattr(resp, "content", b"") or b""
-    return conteudo if getattr(resp, "status_code", 0) == 200 and b"infNFe" in conteudo else None
+    com_padding = base64.b64encode(caminho.encode("utf-8")).decode()
+    # Os links da Stokki parecem vir sem "=" (documentos_pedido repoe o
+    # padding ao decodificar); tenta sem e, se nao vier XML, com.
+    for token in dict.fromkeys((com_padding.rstrip("="), com_padding)):
+        try:
+            resp = sessao.get(URL_XML.format(b64=token), headers=_HEADERS_HTML)
+        except Exception as e:  # noqa: BLE001 -- sem download, confere pelo caminho
+            logger.info(f"trocar_nf: download do XML falhou ({e})")
+            continue
+        conteudo = getattr(resp, "content", b"") or b""
+        if getattr(resp, "status_code", 0) == 200 and b"infNFe" in conteudo:
+            return conteudo
+    return None
 
 
 def _erros_da_resposta(resp) -> str:

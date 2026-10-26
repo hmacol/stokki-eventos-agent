@@ -38,6 +38,7 @@ STATUS_FEITA = "FEITA"
 STATUS_ERRO = "ERRO"
 MAX_TENTATIVAS = 3
 INTERVALO_MINIMO_MINUTOS = 10
+MAX_POR_PASSADA = 15   # ~5 requisicoes por troca: a passada nao segura a Stokki por muitos minutos
 DONO_TRAVA = "portal-trocas-nf"
 _FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -150,6 +151,19 @@ def avisar_equipe(config: dict, linha: dict, nome: str = "") -> None:
                  envelope_html(corpo), email_cfg)
 
 
+def _erros_de_stokki_fora() -> tuple:
+    """Sessao expirada sem conseguir relogar, rede fora ou timeout: nao e
+    defeito da linha, e a Stokki indisponivel."""
+    import requests
+    erros = [requests.exceptions.ConnectionError, requests.exceptions.Timeout]
+    try:
+        from stokki.auth import SessaoExpiradaError
+        erros.append(SessaoExpiradaError)
+    except Exception:  # noqa: BLE001
+        pass
+    return tuple(erros)
+
+
 def _caminho(texto: str) -> Path:
     p = Path(texto)
     return p if p.is_absolute() else ep._RAIZ / p
@@ -185,7 +199,10 @@ def processar_pendentes(conn: sqlite3.Connection, config: dict, simular: bool = 
             resumo["adiados"] = len(linhas)
             return resumo
         quando = _agora(agora)
-        for l in linhas:
+        fora = _erros_de_stokki_fora()
+        lote = linhas[:MAX_POR_PASSADA]
+        resumo["adiados"] += len(linhas) - len(lote)
+        for idx, l in enumerate(lote):
             erro = ""
             try:
                 if not l["id_stokki"]:
@@ -195,12 +212,18 @@ def processar_pendentes(conn: sqlite3.Connection, config: dict, simular: bool = 
                     l["id_stokki"], l["codigo_pedido"] = achado["id_stokki"], achado.get("codigo")
                     conn.execute("UPDATE trocas_nf_pendentes SET id_stokki = ?, codigo_pedido = ? WHERE id = ?",
                                  (l["id_stokki"], l["codigo_pedido"], l["id"]))
+                    conn.commit()  # nunca segurar a escrita do dados.db durante as chamadas a Stokki
                 caminho = _caminho(l["caminho_xml_original"])
                 if not caminho.is_file():
                     raise FileNotFoundError(f"XML original não encontrado: {l['caminho_xml_original']}")
                 r = trocar(sessao, int(l["id_stokki"]), caminho, l["numero_nf"], l["client_id"])
                 if not r.get("ok"):
                     erro = r.get("erro") or "troca recusada"
+            except fora as e:  # Stokki caiu: para a passada sem gastar tentativa de ninguem
+                logger.warning(f"trocas de NF: Stokki indisponivel no meio da passada ({type(e).__name__}: {e}) -- "
+                               f"{len(lote) - idx} adiada(s).")
+                resumo["adiados"] += len(lote) - idx
+                break
             except Exception as e:  # noqa: BLE001 -- uma linha ruim nao para a fila
                 erro = str(e) if isinstance(e, (LookupError, FileNotFoundError)) else f"{type(e).__name__}: {e}"
             if not erro:

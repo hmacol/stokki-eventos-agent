@@ -481,10 +481,13 @@ def _id_do_codigo(codigo: str | None) -> int | None:
 def _enfileirar_troca(conn, cfg: dict, envio: dict, codigo: str | None) -> None:
     """Pedido Cross existe na Stokki (criado agora ou duplicado): a NF dele
     ainda é a do XML convertido -- fila de troca (trocas_nf.py)."""
-    tq.enfileirar(conn, cnpj_embarcador=cfg["cnpj"], client_id=cfg["client_id"], numero_nf=envio["numero_nf"],
-                  chave_nfe=envio["chave_nfe"], caminho_xml_original=envio["xml_path"], origem="portal",
-                  envio_id=envio["id"], id_stokki=_id_do_codigo(codigo), codigo_pedido=codigo)
-    _marcar(conn, envio["id"], troca_nf_status=tq.STATUS_PENDENTE)
+    linha_id = tq.enfileirar(conn, cnpj_embarcador=cfg["cnpj"], client_id=cfg["client_id"], numero_nf=envio["numero_nf"],
+                             chave_nfe=envio["chave_nfe"], caminho_xml_original=envio["xml_path"], origem="portal",
+                             envio_id=envio["id"], id_stokki=_id_do_codigo(codigo), codigo_pedido=codigo)
+    # A linha é única por chave: pode já existir (importador por e-mail, outro
+    # envio) e até estar FEITA. O envio mostra o estado real dela.
+    linha = dict(conn.execute("SELECT * FROM trocas_nf_pendentes WHERE id = ?", (linha_id,)).fetchone())
+    tq.espelhar_em_portal_envios(conn, {**linha, "envio_id": envio["id"]})
 
 
 def _e_duplicado(erro: str) -> bool:

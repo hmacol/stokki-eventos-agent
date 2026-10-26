@@ -142,6 +142,18 @@ class ProcessarLote(unittest.TestCase):
         st = self.conn.execute("SELECT status FROM portal_envios WHERE id = ?", (e["id"],)).fetchone()[0]
         self.assertEqual(st, "DUPLICADO")
 
+    def test_duplicado_de_nf_ja_trocada_mostra_feita(self):
+        e = self._envio(6, "cross")
+        es.tq.enfileirar(self.conn, cnpj_embarcador=CNPJ, client_id="18", numero_nf="6", chave_nfe=e["chave_nfe"],
+                         caminho_xml_original="x.xml", origem="email", id_stokki=42700)
+        self.conn.execute("UPDATE trocas_nf_pendentes SET status = 'FEITA', concluido_em = '2026-10-26 16:21:00'")
+        self.conn.commit()
+        self._wizard_devolve([{"arquivo": f"{e['chave_nfe']}.xml", "criado": False,
+                               "erro": "Chave da NFe já utilizada no sistema"}])
+        es.processar_lote(self.conn, CNPJ, [e], {})
+        env = dict(self.conn.execute("SELECT troca_nf_status, id_stokki FROM portal_envios WHERE id = ?", (e["id"],)).fetchone())
+        self.assertEqual((env["troca_nf_status"], env["id_stokki"]), ("FEITA", 42700))
+
     def test_envio_armazenagem_nao_enfileira(self):
         e = self._envio(3, "armazenagem")
         self._wizard_devolve([{"arquivo": f"{e['chave_nfe']}.xml", "criado": True, "erro": ""}], {"3": "PS-42590"})

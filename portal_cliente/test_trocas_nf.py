@@ -169,6 +169,45 @@ class Processar(_Base):
         self.assertEqual(r["adiados"], 1)
         self.assertEqual(self._linha()["tentativas"], 0)
 
+    def test_commit_antes_das_chamadas_http(self):
+        self._enfileirar()
+        em_transacao = []
+
+        def trocar(sessao, id_stokki, caminho, numero_nf, client_id):
+            em_transacao.append(self.conn.in_transaction)
+            return OK
+        localizar = mock.Mock(return_value={"id_stokki": 42600, "codigo": "PS-42600", "caminho_nf": "users/x.xml"})
+        tq.processar_pendentes(self.conn, CONFIG, fabrica_sessao=lambda: object(), trocar=trocar, localizar=localizar, agora=AGORA)
+        self.assertEqual(em_transacao, [False])
+
+    def _varias(self, n):
+        for i in range(n):
+            chave = f"35{i:02d}" + "3" * 40
+            xml = self.raiz / "dados" / f"{chave}.xml"
+            xml.write_bytes(b"<nfeProc/>")
+            tq.enfileirar(self.conn, cnpj_embarcador="66259821000155", client_id="18", numero_nf=str(1000 + i), chave_nfe=chave,
+                          caminho_xml_original=str(xml), origem="email", id_stokki=50000 + i)
+
+    def test_teto_por_passada(self):
+        self._varias(tq.MAX_POR_PASSADA + 5)
+        r = self._processar(OK)
+        self.assertEqual((r["feitas"], r["adiados"]), (tq.MAX_POR_PASSADA, 5))
+        restantes = self.conn.execute("SELECT COUNT(*) FROM trocas_nf_pendentes WHERE status = 'PENDENTE' AND tentativas = 0").fetchone()[0]
+        self.assertEqual(restantes, 5)
+
+    def test_sessao_caiu_interrompe_sem_gastar_tentativas(self):
+        from stokki.auth import SessaoExpiradaError
+        self._varias(3)
+        chamadas = []
+
+        def trocar(*a):
+            chamadas.append(a)
+            raise SessaoExpiradaError("caiu")
+        r = tq.processar_pendentes(self.conn, CONFIG, fabrica_sessao=lambda: object(), trocar=trocar, agora=AGORA)
+        self.assertEqual(len(chamadas), 1)
+        self.assertEqual(r["adiados"], 3)
+        self.assertEqual(self.conn.execute("SELECT MAX(tentativas) FROM trocas_nf_pendentes").fetchone()[0], 0)
+
     def test_simular_nao_toca(self):
         self._enfileirar(id_stokki=42542)
         r = self._processar(OK, simular=True)

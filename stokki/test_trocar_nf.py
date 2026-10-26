@@ -80,6 +80,19 @@ class _Sessao:
         return self.post_resp
 
 
+class _SessaoSemPadding(_Sessao):
+    """Rota que so aceita o base64 SEM '=' (o formato que documentos_pedido decodifica)."""
+    def get(self, url, params=None, headers=None, **kw):
+        if "/xml/nfe/" in url:
+            self.gets.append((url, params))
+            token = url.rsplit("/", 1)[-1]
+            if "=" in token:
+                return _Resp(404, "nao achou")
+            caminho = base64.b64decode(token + "=" * (-len(token) % 4)).decode()
+            return _Resp(200, conteudo=self.arquivos[caminho]) if caminho in self.arquivos else _Resp(404, "")
+        return super().get(url, params=params, headers=headers, **kw)
+
+
 class _ComArquivo(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -157,6 +170,13 @@ class Trocar(_ComArquivo):
         r = self._trocar(s)
         self.assertFalse(r["ok"])
         self.assertTrue(r["erro"].startswith("Stokki aceitou mas"), r["erro"])
+
+    def test_download_sem_padding_tambem_serve(self):
+        caminho = "users/inv/xy.xml"   # 16 bytes: o base64 tem "=="
+        s = _SessaoSemPadding([[_linha(42542, caminho)]], {caminho: ORIGINAL})
+        self.assertEqual(tn.baixar_xml_por_caminho(s, caminho), ORIGINAL)
+        r = self._trocar(s)
+        self.assertEqual((r["ok"], r["ja_estava"]), (True, True))
 
     def test_sem_download_confere_por_caminho(self):
         s = _Sessao([[_linha(42542, "users/inv/x.xml")], [_linha(42542, "users/inv/y.xml")]], {},
