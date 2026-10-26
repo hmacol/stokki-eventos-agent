@@ -80,6 +80,10 @@ class FreshhubClient:
         corpo = {"ok": ok, "resultado": resultado, "erro": erro[:ERRO_MAX] if erro else None}
         self._chamar("post", f"/api/replicacao/{id}/resultado", json=corpo)
 
+    def arquivo(self, id: str) -> bytes:
+        """O arquivo que a replica manda usar (plano 1.3: o XML original da NF-e que o portal novo guardou)."""
+        return self._chamar("get", f"/api/replicacao/{id}/arquivo").content
+
     def eventos(self, lista: list[dict]) -> dict:
         """[{codigo, tipo, ocorrido_em (ISO com fuso), dados}] -> {aceitos, repetidos, desconhecidos}."""
         return self._chamar("post", "/api/eventos", json={"eventos": lista}).json()

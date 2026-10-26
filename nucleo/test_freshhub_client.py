@@ -82,6 +82,17 @@ class TestCliente(unittest.TestCase):
         self.assertEqual(self.get.call_count, 2)
 
 
+class TestArquivo(unittest.TestCase):
+    def test_arquivo_da_replica_devolve_os_bytes(self):
+        # plano 1.3, Task 7: o worker baixa o XML original que o portal novo guardou no Storage
+        c = fc.FreshhubClient("http://127.0.0.1:8100", "fhs_x")
+        r = _resp(200)
+        r.content = b"<nfe/>"
+        with mock.patch.object(c.sessao, "get", return_value=r) as get:
+            self.assertEqual(c.arquivo("abc"), b"<nfe/>")
+        get.assert_called_with("http://127.0.0.1:8100/api/replicacao/abc/arquivo", timeout=15)
+
+
 class TestDeConfig(unittest.TestCase):
     def test_sem_chaves_e_none(self):
         self.assertIsNone(fc.de_config({}))

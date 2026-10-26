@@ -1011,6 +1011,11 @@
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
+ fila_freshhub.py          (plano 1.3 do sistema novo) atende a fila `stokki` do
+                           freshhub: baixa o XML pela API, confere a área, cria pelo
+                           MESMO wizard do enviar_stokki (trava de sessão) e devolve o
+                           PS. Sem NF e retirada ainda manuais (prova na Stokki pendente).
+                           Manual: --uma-vez [--simular]; sem timer/serviço ainda.
  cancelamento.py           Cancelamento pedido pelo cliente (06/10): regra sozinho x
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
