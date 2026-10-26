@@ -618,6 +618,8 @@
                       nfe=chave, file_nfe). Idempotente: confere chave + cProd do
                       XML do pedido (data-url do btn_danfe na listagem). Fluxo
                       Cross, 25/10; sondado só leitura, POST real ainda não provado.
+ sondar_trocar_nf.py  Sonda SÓ LEITURA (cookies salvos, sem login) do _token e do
+                      download do XML que a troca usa. Passo 0 do piloto do Cross.
  pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
                       outbound/pause com _token/page do form_pause; relê a
                       Situação). Sondado só leitura 25/10; escrita real não provada.

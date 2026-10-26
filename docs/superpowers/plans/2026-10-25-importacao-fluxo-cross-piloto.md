@@ -8,7 +8,7 @@ Nada aqui roda sem o Hugo pedir. Cada passo tem a prova que o fecha; não siga p
 
 - **Repo principal** (ramo `fluxo-cross`): `nucleo/fluxo_embarcador.py`, `stokki/trocar_nf.py`, `portal_cliente/trocas_nf.py`, `portal_cliente/enfileirar_trocas_virada.py`, mudanças em `portal_cliente/envio_pedidos.py`, `app.py`, `enviar_stokki.py`, `gerenciar_clientes.py`, `templates/_envios.html`.
 - **Importador** (ramo `fluxo-cross` do `agente_importacao_stokki`): `etapa2_processamento_xml/processar_xml.py`, `main.py`, `relatorio_email.py`, `avisos_cliente.py`.
-- **Banco de produção** ganha sozinho, na primeira conexão: coluna `interno.fluxos`; colunas `fluxo`, `id_stokki`, `troca_nf_status`, `troca_nf_em`, `troca_nf_erro` em `portal_envios`; tabelas `trocas_nf_pendentes` e `avisos_xd_ausente`.
+- **Banco de produção** ganha sozinho, na primeira conexão do portal: colunas `fluxo`, `id_stokki`, `troca_nf_status`, `troca_nf_em`, `troca_nf_erro` em `portal_envios`; tabelas `trocas_nf_pendentes` e `avisos_xd_ausente`. A coluna `interno.fluxos` **não** nasce sozinha: só a carga do Passo 3 a cria, e até lá todo embarcador continua em Armazenagem.
 
 ## Mudanças que a operação sente
 
@@ -17,16 +17,15 @@ Nada aqui roda sem o Hugo pedir. Cada passo tem a prova que o fecha; não siga p
 - **Muai, Maíz, Vidaveg, Khappy** (Full cross) e os de Armazenagem: nada muda.
 - Pedido Cross aparece na lista do portal com os selos "Cross" e "NF a trocar", depois "NF trocada".
 
-## Passo 0 — Sonda que ficou pendente (precisa de autorização de leitura em produção)
+## Passo 0 — Sonda que ficou pendente (depois do Passo 2; precisa de autorização de leitura em produção)
 
 A troca de NF confere o resultado baixando o XML do pedido. Não foi possível provar esse download por HTTP na área admin (leitura em produção negada em 25/10). Sem ele, a conferência cai para "o caminho da NF mudou", mais fraca.
 
 ```bash
-scp -i ~/.ssh/atendimento_vps <scratchpad>/sondar_show_xml.py root@187.127.52.197:/tmp/sonda_trocar_nf/
-ssh -i ~/.ssh/atendimento_vps root@187.127.52.197 "chmod a+r /tmp/sonda_trocar_nf/sondar_show_xml.py && cd /opt/stokki-eventos && sudo -u www-data venv/bin/python /tmp/sonda_trocar_nf/sondar_show_xml.py"
+ssh -i ~/.ssh/atendimento_vps root@187.127.52.197 "cd /opt/stokki-eventos && sudo -u www-data venv/bin/python stokki/sondar_trocar_nf.py"
 ```
 
-O script está no scratchpad da sessão de 24-26/10 e é só leitura, com a sessão existente. Esperado: `GET /xml/nfe/<b64> -> HTTP 200 ... det=N, chave=True`. Se der 404/302 em todas as variantes, a troca funciona do mesmo jeito, mas registre que a conferência será por caminho.
+A sonda vem com o deploy do Passo 2 (rode depois dele), é só leitura e usa a sessão já salva, sem login. Esperado: `_token ... True` e `download OK, N item(ns), chave ok`, terminando em "Conclusao: conferencia por itens". Se terminar em "caminho", a troca funciona do mesmo jeito, mas a idempotência (não repostar em pedido já trocado) depende do download: registre e avise o Hugo antes da virada.
 
 ## Passo 1 — Conferir o saldo do XD (equipe)
 
