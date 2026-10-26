@@ -31,7 +31,7 @@
 
 ---
 
-### Tarefa 1: Sonda só leitura do download do XML e do `_token` (pré-requisito, com o Hugo)
+### Task 1: Sonda só leitura do download do XML e do `_token` (pré-requisito, com o Hugo)
 
 **Files:**
 - Create (scratchpad, não versionado): `sondar_show_xml.py` — já existe em `C:\Users\HUGOMA~1\AppData\Local\Temp\claude\c--agente-stokki-eventos\8a1b03af-f367-45a3-905b-b66e1e10f2a7\scratchpad\sondar_show_xml.py`
@@ -54,7 +54,7 @@ Esperado: linhas `show HTTP 200`, `tem _token: True`, e uma das linhas `GET /xml
 
 ---
 
-### Tarefa 2: Importador — regra de XML `cross` parametrizada
+### Task 2: Importador — regra de XML `cross` parametrizada
 
 **Files:**
 - Modify: `c:\agente_importacao_stokki\etapa2_processamento_xml\processar_xml.py` (seções "Transformação: Empório Quatro Estrelas" e "Registro de transformações", linhas 118-181 e 262-270; `processar_xml()` em 302-324)
@@ -106,7 +106,7 @@ git commit -m "Etapa 2: regra cross parametrizada (item XD, quantidade = volumes
 
 ---
 
-### Tarefa 3: Cadastro — coluna `fluxos`, leitura única e descoberta do XD
+### Task 3: Cadastro — coluna `fluxos`, leitura única e descoberta do XD
 
 **Files:**
 - Create: `nucleo/fluxo_embarcador.py`
@@ -161,7 +161,7 @@ git commit -m "Cadastro: fluxos por embarcador (armazenagem/full_cross/cross) e 
 
 ---
 
-### Tarefa 4: `stokki/trocar_nf.py` — troca de NF por HTTP
+### Task 4: `stokki/trocar_nf.py` — troca de NF por HTTP
 
 **Files:**
 - Create: `stokki/trocar_nf.py`
@@ -219,7 +219,7 @@ git commit -m "Stokki: troca de NF do pedido por HTTP (Informar Nota Fiscal), co
 
 ---
 
-### Tarefa 5: Fila `trocas_nf_pendentes` e processamento no worker
+### Task 5: Fila `trocas_nf_pendentes` e processamento no worker
 
 **Files:**
 - Create: `portal_cliente/trocas_nf.py`
@@ -272,7 +272,7 @@ git commit -m "Portal: fila de trocas de NF (trocas_nf_pendentes) processada pel
 
 ---
 
-### Tarefa 6: Portal — fluxo por pedido na prévia, confirmação e lista
+### Task 6: Portal — fluxo por pedido na prévia, confirmação e lista
 
 **Files:**
 - Modify: `portal_cliente/envio_pedidos.py` (`conectar()` 212-221: colunas; `confirmar_envios()` 1199-1300; constantes perto de `REGRAS_XML` 110-116)
@@ -328,7 +328,7 @@ git commit -m "Portal: embarcador escolhe o fluxo por pedido (Armazenagem/Full c
 
 ---
 
-### Tarefa 7: Worker do portal — conversão por fluxo e troca depois da criação
+### Task 7: Worker do portal — conversão por fluxo e troca depois da criação
 
 **Files:**
 - Modify: `portal_cliente/enviar_stokki.py` (`transformar_xml` 112-120; `processar_lote` 508-648)
@@ -374,7 +374,7 @@ git commit -m "Portal: worker converte por fluxo (XD no Cross) e enfileira a tro
 
 ---
 
-### Tarefa 8: Importador por e-mail — fluxo do cadastro, XD ausente e fila de trocas
+### Task 8: Importador por e-mail — fluxo do cadastro, XD ausente e fila de trocas
 
 **Files:**
 - Modify: `c:\agente_importacao_stokki\main.py` (`_trava_stokki` 154-176 -> extrair `_repo_principal`; `executar_pipeline` 378-500)
@@ -423,7 +423,7 @@ git commit -m "Importador: fluxo vem do cadastro (Cross usa XD do catalogo), XD 
 
 ---
 
-### Tarefa 9: Virada — carga dos fluxos, backfill dos pedidos abertos, mapa
+### Task 9: Virada — carga dos fluxos, backfill dos pedidos abertos, mapa
 
 **Files:**
 - Create: `portal_cliente/enfileirar_trocas_virada.py`
@@ -451,7 +451,7 @@ git commit -m "Portal: script da virada enfileira troca de NF dos pedidos Cross 
 
 ---
 
-### Tarefa 10: Prova integrada local, revisão e roteiro de piloto (sem deploy)
+### Task 10: Prova integrada local, revisão e roteiro de piloto (sem deploy)
 
 **Files:**
 - Create: `docs/superpowers/plans/2026-10-25-importacao-fluxo-cross-piloto.md` (roteiro operacional)
