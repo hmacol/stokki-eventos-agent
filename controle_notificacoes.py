@@ -81,6 +81,8 @@ TIPOS = {
                    "canais": ("email",), "quando": "dentro do pipeline"},
     "consulta_transportadora": {"rotulo": "Consulta à transportadora", "destino": "embarcador",
                                 "canais": ("email", "whatsapp"), "quando": "dentro do pipeline e lembrete"},
+    "rota_cancelada": {"rotulo": "Rota cancelada", "destino": "embarcador",
+                       "canais": ("email",), "quando": "botão Cancelar e notificar do Planejamento"},
 }
 
 

@@ -256,7 +256,7 @@
                 Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
                 /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
                 (em memória no processo do painel; restart zera).
-                Inatividade (24/10): 30 min sem uso -> sessão cai (requer_auth,
+                Inatividade (24/10; 6 h desde 27/10): 6 h sem uso -> sessão cai (requer_auth,
                 _INATIVIDADE_MAX). Uso = navegar pra página (Sec-Fetch-Mode
                 navigate) ou POST /api/sessao/atividade que o
                 _sessao_inativa_script.html (base, base_mobile, wms) manda ao
@@ -901,6 +901,14 @@
                            /api/planejamento/checar-dia-fixo, valor da
                            calculadora).
  rascunhos_rota.py         Tabelas dos rascunhos de rota.
+ aviso_rota_cancelada.py   Botão "Cancelar e notificar" do card (27/10, POST
+                           /api/planejamento/cancelar-e-notificar): cancela igual
+                           ao "Cancelar rota" e, se cancelou, posta no grupo
+                           "Rotas canceladas" do /atendimento (cria se faltar) e
+                           abre conversa no chat do portal pra cada embarcador
+                           (Aguardando Fresh Log). Tela Notificações, tipo
+                           rota_cancelada: sem linha + forcar_destino = piloto
+                           (chat do cliente teste).
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.
@@ -1079,6 +1087,11 @@
                            depois ERRO + e-mail só pra equipe.
  enfileirar_trocas_virada.py  Virada do Cross: pedidos já abertos na Stokki vão pra
                            fila (--modo-teste | --executar). SÓ NA VPS: lê a Stokki.
+ fila_freshhub.py          (plano 1.3 do sistema novo) atende a fila `stokki` do
+                           freshhub: baixa o XML pela API, confere a área, cria pelo
+                           MESMO wizard do enviar_stokki (trava de sessão) e devolve o
+                           PS. Sem NF e retirada ainda manuais (prova na Stokki pendente).
+                           Manual: --uma-vez [--simular]; sem timer/serviço ainda.
  cancelamento.py           Cancelamento pedido pelo cliente (06/10): regra sozinho x
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt

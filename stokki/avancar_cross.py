@@ -50,6 +50,57 @@ ETAPAS = ("iniciar_separacao", "separation", "confirm_separation")
 URL_PICKING = f"{ei.BASE_URL}/pt-br/provider/operation/picking/list"
 
 
+OPERADOR_PADRAO = "Recebimentofrio01"   # Hugo, 27/10: separação do cross fica em nome dele
+confirmar_global: dict = {}              # preenchido pelo main: abrir_operador, confirmar, operador
+
+
+def _mostrar_modal(modal, titulo: str) -> None:
+    soup = BeautifulSoup(modal.inner_html(), "html.parser")
+    print(f"== modal {titulo}:", " ".join(soup.get_text(" ", strip=True).split())[:300])
+    for i in soup.find_all(["input", "select", "textarea"]):
+        if i.get("type") == "hidden" or i.get("name") == "_token":
+            continue
+        opcoes = [" ".join(o.get_text(" ", strip=True).split())[:25] for o in i.find_all("option")][:12]
+        print(f"   campo name={i.get('name')} id={i.get('id')} tipo={i.get('type') or i.name} opcoes={opcoes}")
+    for b in soup.find_all("button"):
+        print("   botao:", " ".join(b.get_text(" ", strip=True).split())[:40] or "(sem texto)",
+              {k: v for k, v in b.attrs.items() if k in ("id", "type") or k.startswith("data-")})
+
+
+def _confirmar_operador(page, pid: int, modal) -> int:
+    """Escolhe o operador pelo NOME EXATO e clica no botão de confirmar do
+    próprio modal. Para se não achar o operador ou o botão."""
+    nome = confirmar_global.get("operador") or OPERADOR_PADRAO
+    escolhido = False
+    for sel in modal.locator("select").all():
+        rotulos = [o.strip() for o in sel.locator("option").all_inner_texts()]
+        if nome in rotulos:
+            sel.select_option(label=nome)
+            escolhido = True
+            break
+    if not escolhido:
+        alvo = modal.get_by_text(nome, exact=True)
+        if alvo.count() == 1:
+            alvo.first.click()
+            escolhido = True
+    if not escolhido:
+        print(f"PARADO: operador '{nome}' não encontrado no modal.")
+        return 1
+    botao = modal.locator("button:visible", has_text=re.compile("Iniciar|Confirmar|Separar|Salvar", re.I)).first
+    if not botao.count() or not botao.is_enabled():
+        print("PARADO: botão de confirmar do modal ausente ou desabilitado.")
+        print("print:", _print(page, f"{pid}_operador_botao"))
+        return 1
+    print("   confirmando com:", " ".join(botao.inner_text().split()), "| operador:", nome)
+    botao.click()
+    page.wait_for_timeout(5000)
+    print("== mensagem da Stokki:", page.locator(".toast-message, .swal2-html-container, .alert").all_inner_texts()[:4])
+    print("print:", _print(page, f"{pid}_separacao_iniciada"))
+    depois = situacao_do_pedido(page, pid)
+    print(f"== PS-{pid}: situacao depois = {depois}")
+    return 0 if "separa" in depois.lower() else 1
+
+
 def _sondar_iniciar_separacao(page, pid: int) -> int:
     """Seleção de Pedidos por Lista: abre o modal 'Filtrar por pedido único'
     e mostra os campos, e lê a lista de operadores. Não envia nada."""
@@ -87,6 +138,38 @@ def _sondar_iniciar_separacao(page, pid: int) -> int:
             page.wait_for_timeout(2000)
         else:
             print(f"   {seletor} nao visivel")
+    # modal "Filtrar por pedido único": preenche o pedido e filtra (filtrar não altera o pedido)
+    modal = page.locator(".modal.show").last
+    if modal.count():
+        _mostrar_modal(modal, "filtro pedido unico")
+        campo = modal.locator("input:visible:not([type=hidden]):not([type=checkbox])").first
+        if campo.count():
+            campo.fill(str(pid))
+            botao = modal.locator("button:visible", has_text=re.compile("Filtrar|Buscar|Pesquisar|Confirmar|Aplicar|Iniciar", re.I)).first
+            if botao.count():
+                print("   clicando no filtro:", " ".join(botao.inner_text().split()))
+                botao.click()
+            else:
+                campo.press("Enter")
+            page.wait_for_timeout(4000)
+    soup = BeautifulSoup(page.content(), "html.parser")
+    linhas = [" | ".join(" ".join(td.get_text(" ", strip=True).split())[:25] for td in tr.find_all("td"))
+              for tr in soup.find_all("tr") if tr.find("td")]
+    print(f"== lista apos filtro: {len(linhas)} linha(s)")
+    for ln in linhas[:6]:
+        print("   ", ln)
+    prox = page.locator("#btn_next_operator")
+    print("   btn_next_operator visivel:", prox.count() and prox.first.is_visible(), "habilitado:", prox.count() and prox.first.is_enabled())
+    print("print:", _print(page, f"{pid}_filtrado"))
+    if confirmar_global.get("abrir_operador") and prox.count() and prox.first.is_visible():
+        prox.first.click()
+        page.wait_for_timeout(2500)
+        modal_op = page.locator(".modal.show").last
+        if modal_op.count():
+            _mostrar_modal(modal_op, "escolha do operador")
+            print("print:", _print(page, f"{pid}_operador"))
+        if confirmar_global.get("confirmar"):
+            return _confirmar_operador(page, pid, modal_op)
     soup = BeautifulSoup(page.content(), "html.parser")
     form = soup.find("form", id="form_order")
     if form is not None:
@@ -258,7 +341,11 @@ def main() -> int:
     ap.add_argument("--pedido", required=True, help="PS-12345")
     ap.add_argument("--etapa", required=True, choices=ETAPAS)
     ap.add_argument("--confirmar", action="store_true", help="envia o modal (sem isso, so mostra)")
+    ap.add_argument("--abrir-operador", action="store_true",
+                    help="iniciar_separacao: abre o modal de escolha do operador (sem --confirmar nao escolhe)")
+    ap.add_argument("--operador", default=OPERADOR_PADRAO, help="nome exato do operador na Stokki")
     a = ap.parse_args()
+    confirmar_global.update(abrir_operador=a.abrir_operador or a.confirmar, confirmar=a.confirmar, operador=a.operador)
     return executar(a.pedido, a.etapa, a.confirmar)
 
 

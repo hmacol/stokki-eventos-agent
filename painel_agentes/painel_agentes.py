@@ -245,13 +245,13 @@ def _registrar_falha_login(chaves) -> None:
             _login_falhas.setdefault(chave, []).append(agora)
 
 
-# Deslogar por inatividade (24/10, Hugo): 30 min sem a pessoa mexer na tela
-# derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
+# Deslogar por inatividade (24/10, Hugo; 27/10 subiu de 30 min pra 6 h): 6 h
+# sem a pessoa mexer na tela derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
 # que o _sessao_inativa_script.html manda ao clicar, digitar, tocar ou rolar.
 # As consultas automaticas das telas (Torre, contadores do menu, status da
 # execucao a cada 2 s) NAO contam, senao ninguem cairia nunca. Galpao e
 # expedicao (logins fixos de aparelho compartilhado) ficam de fora.
-_INATIVIDADE_MAX = timedelta(minutes=30)
+_INATIVIDADE_MAX = timedelta(hours=6)
 _NIVEIS_SEM_EXPIRAR = ("galpao", "expedicao")
 
 
@@ -3762,6 +3762,34 @@ def api_cancelar_rota():
     token = _carregar_config().get("vuupt_api", {}).get("token", "")
     resultados = [rascunhos_rota.cancelar_rota_enviada(rid, token) for rid in rascunho_ids]
     return jsonify({"ok": True, "resultados": resultados})
+
+
+@app.route("/api/planejamento/cancelar-e-notificar", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_cancelar_e_notificar():
+    """Botão "Cancelar e notificar" do card (Hugo, 27/10): cancela igual ao
+    "Cancelar rota" e, só se cancelou, avisa o grupo "Rotas canceladas" do
+    /atendimento e os embarcadores pelo chat do portal (aviso_rota_cancelada)."""
+    import aviso_rota_cancelada
+    body = request.get_json(force=True)
+    motivo = " ".join(str(body.get("motivo") or "").split())[:300]
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(body["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not motivo:
+        return jsonify({"erro": "Informe o motivo do cancelamento."}), 400
+    if not rascunho:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+
+    config = _carregar_config()
+    resultado = rascunhos_rota.cancelar_rota_enviada(rascunho["id"], config.get("vuupt_api", {}).get("token", ""))
+    if not resultado["ok"]:
+        return jsonify({"ok": False, "erro": resultado["erro"]})
+    aviso = aviso_rota_cancelada.avisar(rascunho, motivo, session.get("usuario") or g.nivel_acesso, config)
+    return jsonify({"ok": True, "aviso": aviso})
 
 
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
