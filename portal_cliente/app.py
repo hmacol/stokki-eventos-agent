@@ -44,6 +44,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
+import cotacao
+import endereco_entrega
 from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
@@ -798,6 +800,7 @@ def api_envios_analisar():
         return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e (ou ZIP com XMLs) ou planilha .xlsx no modelo Fresh Log."}), 400
     itens, rejeitados, vistos = [], [], set()
     n_planilhas = 0
+    entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
@@ -859,6 +862,8 @@ def api_envios_analisar():
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
+        if entrega_ativa:
+            _casos_de_entrega(conn, itens)
         destinatarios = envios.info_destinatarios(conn, _empresa_envio()['cnpj'], itens, _CONFIG)
         # XD ausente: o cliente vê na prévia; o atendimento recebe 1 e-mail por
         # embarcador por dia, e só quando o lote tem pedido que iria em Cross.
@@ -877,8 +882,36 @@ def api_envios_analisar():
     logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
-                    "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(),
+                    "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
+
+
+def _casos_de_entrega(conn, itens: list[dict]) -> None:
+    """Caso do endereço de entrega de cada XML da prévia (27/10, item["entrega"]):
+    memória pela empresa do envio (login de grupo: a do seletor). Mesmo
+    destinatário/endereço no lote calcula uma vez só."""
+    emp = _empresa_envio()
+    casos: dict[tuple, dict] = {}
+    for it in itens:
+        if it.get("origem") != envios.ORIGEM_XML:
+            continue
+        chave = tuple(it.get(k) or "" for k in ("destinatario_doc", "destinatario_cep", "destinatario_endereco",
+                                                "endereco_fiscal", "transportadora_nome", "transportadora_cnpj"))
+        if chave not in casos:
+            casos[chave] = endereco_entrega.classificar_entrega(conn, it, emp["cnpj"], emp.get("sender_id"))
+        it["entrega"] = casos[chave]
+
+
+@app.route("/api/envios/cep/<cep>")
+@requer_cliente
+def api_envios_cep(cep):
+    """CEP do formulário de endereço de entrega da prévia (27/10). O confirmar
+    consulta de novo: isto só preenche a tela."""
+    _exige_pode_enviar()
+    achado = cotacao.consultar_cep(cotacao.normalizar_cep(cep))
+    if not achado:
+        return jsonify({"erro": "CEP não encontrado"}), 404
+    return jsonify({k: achado.get(k) or "" for k in ("cep", "logradouro", "bairro", "cidade", "uf")})
 
 
 @app.route("/api/envios/modelo-planilha")
@@ -906,13 +939,13 @@ def api_envios_confirmar():
         # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
         # gravar; o embarcador troca a data ou confirma assim mesmo
         # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
-        fora = envios.avisos_fora_dia_fixo(itens)
+        fora = envios.avisos_fora_dia_fixo(itens, _CONFIG)
         if fora:
             return jsonify({"erro": "Há pedidos com data fora do dia de visita da região.", "fora_dia_fixo": fora}), 409
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
         fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
         criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
-                                          fluxos_disponiveis=fluxos_disp)
+                                          fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
         # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a
         # linha fica AGUARDANDO_LIBERACAO até a equipe liberar no painel.
         bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
