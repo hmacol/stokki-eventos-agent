@@ -82,10 +82,17 @@ def _abrir_lista_filtrada(page, pid: int) -> None:
         page.wait_for_load_state("networkidle", timeout=30_000)
     except Exception:
         pass
-    busca = page.locator("div.dataTables_filter input, input[type=search]").first
-    busca.fill(str(pid))
-    busca.press("Enter")
-    page.wait_for_timeout(3500)
+    for seletor in ("#input_search", "input[name=input_search]", "input[placeholder*='esquis']",
+                    "input[placeholder*='usca']", "div.dataTables_filter input", "input[type=search]"):
+        busca = page.locator(seletor)
+        if busca.count() and busca.first.is_visible():
+            busca.first.fill(str(pid))
+            busca.first.press("Enter")
+            page.wait_for_timeout(4000)
+            return
+    campos = page.evaluate("""() => [...document.querySelectorAll('input,select')].filter(e => e.offsetParent)
+        .map(e => `${e.tagName.toLowerCase()} id=${e.id} name=${e.name} ph=${e.placeholder || ''}`)""")
+    raise RuntimeError("campo de busca da Lista de Pedidos nao encontrado; campos visiveis: " + "; ".join(campos[:30]))
 
 
 def _modal_resumo(page) -> dict:
