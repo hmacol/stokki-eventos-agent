@@ -64,15 +64,29 @@ def _sondar_iniciar_separacao(page, pid: int) -> int:
         try:
             dados = r.json()
             print("== operadores (/picking/list/operator):", json_resumo(dados))
+            itens = dados if isinstance(dados, list) else next((v for v in dados.values() if isinstance(v, list)), [])
+            for it in itens[:10]:
+                if isinstance(it, dict):
+                    nome = next((str(v) for k, v in it.items() if "name" in k.lower() or "nome" in k.lower()), "")
+                    if not nome:
+                        for v in it.values():
+                            if isinstance(v, dict):
+                                nome = next((str(x) for k, x in v.items() if "name" in k.lower()), "")
+                                if nome:
+                                    break
+                    print(f"   operador id={it.get('id')} user_id={it.get('user_id')} nome={nome} chaves={sorted(it.keys())}")
         except Exception:
             nomes = re.findall(r"<option[^>]*value=\"?([^\" >]*)\"?[^>]*>([^<]+)</option>", corpo)
             print("== operadores (/picking/list/operator):", [(v, " ".join(t.split())) for v, t in nomes][:60] or corpo[:300])
     except Exception as e:
         print("operadores: falha ao ler", type(e).__name__)
-    btn = page.locator("#btn_order")
-    if btn.count():
-        btn.first.click()
-        page.wait_for_timeout(2000)
+    for seletor in ("#btn_option_order", "#btn_order"):
+        btn = page.locator(seletor)
+        if btn.count() and btn.first.is_visible():
+            btn.first.click()
+            page.wait_for_timeout(2000)
+        else:
+            print(f"   {seletor} nao visivel")
     soup = BeautifulSoup(page.content(), "html.parser")
     form = soup.find("form", id="form_order")
     if form is not None:
