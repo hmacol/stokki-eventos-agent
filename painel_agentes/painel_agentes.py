@@ -2295,6 +2295,19 @@ def api_pedidos_parados_duplicar():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/equipes-demanda")
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
+def api_pedidos_parados_equipes_demanda():
+    """Equipes ativas das Demandas pro botao Encaminhar escolher (26/10), com
+    a equipe ja sugerida por classificacao (Verificar com Cliente -> Atendimento)."""
+    conn = demandas.conectar()
+    try:
+        equipes = demandas.equipes_ativas(conn)
+    finally:
+        conn.close()
+    return jsonify({"equipes": equipes, "padrao": pedidos_parados_triagem.EQUIPE_PADRAO_POR_CLASSIFICACAO})
+
+
 @app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
@@ -2305,6 +2318,7 @@ def api_pedidos_parados_encaminhar():
     try:
         resultado = pedidos_parados_triagem.encaminhar_operacao(
             body["order_number"], body["classificacao"], session.get("usuario", "desconhecido"),
+            equipe_id=body.get("equipe_id"), autor=g.get("nome_usuario") or session.get("atendente_nome"),
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
@@ -4707,7 +4721,8 @@ _atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exig
 
 # ── Demandas (tarefas pro time, por equipe e pessoa), 25/10 ───────────────────
 import demandas
-demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem)
+demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem,
+                   carregar_config=_carregar_config)
 
 
 if __name__ == "__main__":

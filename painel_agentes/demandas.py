@@ -18,7 +18,10 @@ Regras combinadas com o Hugo:
 - todo evento (criacao, comentario, cada campo mudado) fica em
   demandas_eventos: e a linha do tempo e o ponteiro do aviso sonoro;
 - aviso no grupo interno do /atendimento so com numero e equipe (os
-  grupos sao abertos a todo o Atendimento; o titulo fica na tela).
+  grupos sao abertos a todo o Atendimento; o titulo fica na tela);
+- Fase 2 (26/10): anexos (foto ou PDF, ate 10 MB, quem comenta anexa,
+  ninguem apaga) em dados/demandas/<id>/ + copia no GCS; Pedidos Parados
+  cria demanda daqui pelo botao Encaminhar (criar_de_sistema).
 
 Tabelas em dados/dados.db. Rotas por `registrar(app, ...)`, chamado no
 fim de painel_agentes.py.
@@ -27,10 +30,11 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
-from flask import Response, abort, g, jsonify, render_template, request, session
+from flask import Response, abort, g, jsonify, render_template, request, send_file, session
 
 import acesso_telas
 import grupos_equipe
@@ -38,6 +42,9 @@ import grupos_equipe
 logger = logging.getLogger("painel.demandas")
 
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
+PASTA_ANEXOS = Path(__file__).parent.parent / "dados" / "demandas"   # dados/demandas/<demanda_id>/
+MAX_ANEXO_BYTES = 10 * 1024 * 1024
+ORIGENS = {"pedidos_parados": "Veio de Pedidos Parados"}   # texto da linha do tempo de demanda criada por outra tela
 
 STATUS = {"ABERTA": "Aberta", "EM_ANDAMENTO": "Em andamento", "CONCLUIDA": "Concluída", "CANCELADA": "Cancelada"}
 ABERTOS = ("ABERTA", "EM_ANDAMENTO")
@@ -135,6 +142,19 @@ def conectar(caminho=None) -> sqlite3.Connection:
             criado_em  TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_demandas_eventos ON demandas_eventos (demanda_id, id);
+        CREATE TABLE IF NOT EXISTS demandas_anexos (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            demanda_id    INTEGER NOT NULL,
+            evento_id     INTEGER NOT NULL,
+            nome_original TEXT NOT NULL,
+            arquivo       TEXT NOT NULL,
+            tipo          TEXT NOT NULL,
+            tamanho       INTEGER NOT NULL,
+            usuario       TEXT NOT NULL,
+            autor         TEXT NOT NULL,
+            criado_em     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_demandas_anexos ON demandas_anexos (demanda_id);
     """)
     # Equipes = lista fixa do login (acesso_telas.EQUIPES): cria a que faltar.
     # painel_usuarios mora no mesmo banco e e de onde saem os membros.
@@ -430,6 +450,113 @@ def criar(conn, ident: dict, dados: dict) -> dict:
     return _formatar(d, ident, _nomes())
 
 
+def equipes_ativas(conn) -> list[dict]:
+    return [{"id": e["id"], "nome": e["nome"]} for e in listar_equipes(conn, so_ativas=True)]
+
+
+def criar_de_sistema(conn, *, titulo: str, equipe_id: int, origem: str, origem_ref: str, usuario: str,
+                     autor: str, descricao: str = "", prioridade: str = "NORMAL",
+                     pedido_codigo: str | None = None) -> dict:
+    """Demanda criada por outra tela (Pedidos Parados, 26/10): quem
+    encaminha nao precisa ser lider. Idempotente por (origem, origem_ref):
+    encaminhar de novo devolve a que ja existe."""
+    existente = conn.execute("SELECT d.id, q.nome FROM demandas d JOIN demandas_equipes q ON q.id = d.equipe_id "
+                             "WHERE d.origem = ? AND d.origem_ref = ?", (origem, origem_ref)).fetchone()
+    if existente:
+        return {"id": existente["id"], "equipe": existente["nome"], "ja_existia": True}
+    ident = {"usuario": usuario, "autor": autor or usuario}
+    titulo = _texto(titulo, "O título", TITULO_MIN, TITULO_MAX, uma_linha=True)
+    equipe = _equipe(conn, equipe_id)
+    if prioridade not in PRIORIDADES:
+        raise ErroDemanda("Prioridade inválida.")
+    agora = _agora()
+    cur = conn.execute(
+        "INSERT INTO demandas (titulo, descricao, equipe_id, prioridade, pedido_codigo, origem, origem_ref, "
+        "criado_por, criado_por_nome, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (titulo, _texto(descricao, "A descrição", 0, TEXTO_MAX), equipe["id"], prioridade,
+         normalizar_pedido(pedido_codigo), origem, origem_ref, usuario, ident["autor"], agora, agora))
+    demanda_id = cur.lastrowid
+    _evento(conn, demanda_id, "criada", ident, para=equipe["id"], texto=ORIGENS.get(origem, f"Veio de {origem}"))
+    conn.commit()
+    logger.info("demanda %s criada via %s (%s) por %s pra equipe %s", demanda_id, origem, origem_ref, usuario,
+                equipe["nome"])
+    _avisar_grupo(conn, _linha(conn, demanda_id), "criada")
+    return {"id": demanda_id, "equipe": equipe["nome"], "ja_existia": False}
+
+
+# ── Anexos ────────────────────────────────────────────────────────────────────
+
+def _tipo_anexo(conteudo: bytes) -> tuple[str, str] | None:
+    """(extensao, mimetype) pela assinatura do arquivo -- nunca pelo nome."""
+    if conteudo.startswith(b"\xff\xd8"):
+        return "jpg", "image/jpeg"
+    if conteudo.startswith(b"\x89PNG"):
+        return "png", "image/png"
+    if conteudo[:4] == b"RIFF" and conteudo[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    if conteudo.startswith(b"%PDF"):
+        return "pdf", "application/pdf"
+    return None
+
+
+def anexar(conn, ident: dict, demanda_id: int, nome_original: str, conteudo: bytes) -> dict:
+    """Foto ou PDF ate MAX_ANEXO_BYTES, de quem pode comentar. Vira evento
+    'anexo' na linha do tempo; o arquivo fica em PASTA_ANEXOS/<id>/."""
+    _carregar(conn, ident, demanda_id, "comentar")
+    autor = _autor(ident)
+    if not conteudo:
+        raise ErroDemanda("Escolha um arquivo.")
+    if len(conteudo) > MAX_ANEXO_BYTES:
+        raise ErroDemanda("Arquivo muito grande (máximo 10 MB).")
+    tipo = _tipo_anexo(conteudo)
+    if not tipo:
+        raise ErroDemanda("Só dá pra anexar foto (JPG, PNG, WEBP) ou PDF.")
+    nome_original = (Path(str(nome_original or "")).name or f"anexo.{tipo[0]}")[:120]
+    evento_id = _evento(conn, demanda_id, "anexo", ident, texto=nome_original)
+    arquivo = f"{evento_id}.{tipo[0]}"
+    pasta = PASTA_ANEXOS / str(demanda_id)
+    try:
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / arquivo).write_bytes(conteudo)
+    except OSError:
+        conn.rollback()
+        raise
+    conn.execute("INSERT INTO demandas_anexos (demanda_id, evento_id, nome_original, arquivo, tipo, tamanho, usuario, "
+                 "autor, criado_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (demanda_id, evento_id, nome_original, arquivo, tipo[1], len(conteudo), ident["usuario"], autor,
+                  _agora()))
+    conn.execute("UPDATE demandas SET atualizado_em = ? WHERE id = ?", (_agora(), demanda_id))
+    conn.commit()
+    logger.info("demanda %s: anexo %s (%s, %d bytes) por %s", demanda_id, arquivo, tipo[1], len(conteudo), autor)
+    return detalhar(conn, ident, demanda_id)
+
+
+def arquivo_anexo(conn, ident: dict, anexo_id: int) -> tuple[Path, str, str]:
+    """(caminho, nome original, mimetype) de um anexo que essa pessoa pode ver."""
+    a = conn.execute("SELECT * FROM demandas_anexos WHERE id = ?", (anexo_id,)).fetchone()
+    if not a:
+        raise ErroDemanda("Anexo não encontrado.")
+    _carregar(conn, ident, a["demanda_id"])
+    pasta = (PASTA_ANEXOS / str(a["demanda_id"])).resolve()
+    caminho = (pasta / a["arquivo"]).resolve()
+    if caminho.parent != pasta or not caminho.is_file():
+        raise ErroDemanda("Arquivo do anexo não encontrado.")
+    return caminho, a["nome_original"], a["tipo"]
+
+
+def enviar_gcs(carregar_config, caminho: Path, demanda_id: int) -> None:
+    """Copia o anexo pro GCS em segundo plano (best-effort: falha -- ate de
+    ler o config -- so loga; o disco da VPS e a copia que a tela mostra)."""
+    try:
+        config = carregar_config() or {}
+        if not config.get("gcs"):
+            return
+        from documentos_pedido.storage_gcs import enviar_documento
+        enviar_documento(config, caminho, f"DEMANDA-{demanda_id}", "Demanda")
+    except Exception as e:
+        logger.warning("demanda %s: anexo salvo em disco, mas nao subiu pro GCS: %s", demanda_id, e)
+
+
 def _carregar(conn, ident: dict, demanda_id: int, acao: str | None = None):
     d = _linha(conn, demanda_id)
     if not d or not _pode_ver(ident, d):
@@ -542,7 +669,7 @@ def comentar(conn, ident: dict, demanda_id: int, texto: str) -> dict:
     return detalhar(conn, ident, demanda_id)
 
 
-_ROTULO_EVENTO = {"criada": "criou a demanda", "comentario": "comentou", "reaberta": "reabriu",
+_ROTULO_EVENTO = {"criada": "criou a demanda", "comentario": "comentou", "reaberta": "reabriu", "anexo": "anexou",
                   "responsavel": "mudou o responsável", "equipe": "mudou a equipe", "prioridade": "mudou a prioridade",
                   "prazo": "mudou o prazo", "edicao": "editou", "status": "mudou o status"}
 _ROTULO_CAMPO = {"titulo": "título", "descricao": "descrição", "pedido_codigo": "pedido", "embarcador_cnpj": "embarcador"}
@@ -566,6 +693,8 @@ def detalhar(conn, ident: dict, demanda_id: int) -> dict:
             return PRIORIDADES.get(v, v)
         return v
 
+    anexos = {a["evento_id"]: {"id": a["id"], "nome": a["nome_original"], "tipo": a["tipo"]}
+              for a in conn.execute("SELECT * FROM demandas_anexos WHERE demanda_id = ?", (demanda_id,))}
     linha_do_tempo = []
     for e in conn.execute("SELECT * FROM demandas_eventos WHERE demanda_id = ? ORDER BY id", (demanda_id,)):
         resumo = _ROTULO_EVENTO.get(e["tipo"], e["tipo"])
@@ -579,8 +708,10 @@ def detalhar(conn, ident: dict, demanda_id: int) -> dict:
             resumo = f"{e['tipo']}: {_valor(e['campo'], e['de'])} → {_valor(e['campo'], e['para'])}"
         elif e["tipo"] == "edicao":
             resumo = f"editou {_ROTULO_CAMPO.get(e['campo'], e['campo'])}"
+        anexo = anexos.get(e["id"])
         linha_do_tempo.append({"id": e["id"], "tipo": e["tipo"], "autor": e["autor"], "resumo": resumo,
-                               "texto": e["texto"], "quando": _quando(e["criado_em"])})
+                               "texto": None if anexo else e["texto"], "anexo": anexo,
+                               "quando": _quando(e["criado_em"])})
     return {**_formatar(d, ident, nomes), "eventos": linha_do_tempo}
 
 
@@ -720,7 +851,7 @@ def _avisar_grupo(conn, d, tipo: str) -> None:
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
-def registrar(app, *, requer_auth, exige_mesma_origem):
+def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config=None):
     niveis = NIVEIS_TELA
 
     def _ident(conn) -> dict:
@@ -811,6 +942,38 @@ def registrar(app, *, requer_auth, exige_mesma_origem):
     def api_demanda_comentar(demanda_id):
         corpo = _corpo()
         return _executar(lambda conn, ident: {"demanda": comentar(conn, ident, demanda_id, corpo.get("texto"))})
+
+    @app.route("/api/demandas/<int:demanda_id>/anexos", methods=["POST"])
+    @requer_auth(niveis=niveis)
+    @exige_mesma_origem
+    def api_demanda_anexar(demanda_id):
+        arquivo = request.files.get("arquivo")
+        if arquivo is None:
+            return jsonify({"erro": "Escolha um arquivo."}), 400
+        conteudo = arquivo.read(MAX_ANEXO_BYTES + 1)
+
+        def _anexar(conn, ident):
+            ficha = anexar(conn, ident, demanda_id, arquivo.filename, conteudo)
+            if carregar_config:
+                ultimo = conn.execute("SELECT MAX(id) FROM demandas_anexos WHERE demanda_id = ?",
+                                      (demanda_id,)).fetchone()[0]
+                caminho, _, _ = arquivo_anexo(conn, ident, ultimo)
+                threading.Thread(target=enviar_gcs, args=(carregar_config, caminho, demanda_id),
+                                 daemon=True).start()
+            return {"demanda": ficha}
+        return _executar(_anexar)
+
+    @app.route("/api/demandas/anexos/<int:anexo_id>")
+    @requer_auth(niveis=niveis)
+    def api_demanda_anexo(anexo_id):
+        conn = conectar()
+        try:
+            caminho, nome, tipo = arquivo_anexo(conn, _ident(conn), anexo_id)
+        except ErroDemanda:
+            abort(404)
+        finally:
+            conn.close()
+        return send_file(caminho, mimetype=tipo, download_name=nome, as_attachment=False)
 
     @app.route("/api/demandas/nome", methods=["POST"])
     @requer_auth(niveis=niveis)

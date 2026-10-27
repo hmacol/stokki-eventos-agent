@@ -54,6 +54,9 @@ class Base(unittest.TestCase):
             p = mock.patch.object(alvo, "DB_PATH", self.banco)
             p.start()
             self.addCleanup(p.stop)
+        p = mock.patch.object(dm, "PASTA_ANEXOS", Path(self._tmp.name) / "anexos")
+        p.start()
+        self.addCleanup(p.stop)
         c = acesso_telas.conectar()
         for login, nome, nivel, equipe in (("ana", "Ana", "operador", "Estoque"), ("bia", "Bia", "operador", "Estoque"),
                                            ("caio", "Caio", "atendimento", "Atendimento"),
@@ -247,6 +250,52 @@ class TestDados(Base):
         self.assertNotIn(self.galpao["id"], ana["equipes"])
 
 
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 100
+PDF = b"%PDF-1.4\n" + b"0" * 100
+
+
+class TestFase2(Base):
+    def test_anexo_foto_e_pdf_na_linha_do_tempo(self):
+        d = self.criar()
+        bia = self.ident("bia", "operador")
+        dm.anexar(self.conn, bia, d["id"], "avaria.jpg", JPEG)
+        ficha = dm.anexar(self.conn, bia, d["id"], "../../nota.pdf", PDF)
+        anexos = [e["anexo"] for e in ficha["eventos"] if e["anexo"]]
+        self.assertEqual([(a["nome"], a["tipo"]) for a in anexos],
+                         [("avaria.jpg", "image/jpeg"), ("nota.pdf", "application/pdf")])
+        caminho, nome, tipo = dm.arquivo_anexo(self.conn, bia, anexos[0]["id"])
+        self.assertEqual((caminho.read_bytes(), nome, tipo), (JPEG, "avaria.jpg", "image/jpeg"))
+        self.assertEqual(caminho.parent.name, str(d["id"]))
+
+    def test_anexo_recusa_tipo_tamanho_e_quem_nao_ve(self):
+        d = self.criar()
+        with self.assertRaises(dm.ErroDemanda):
+            dm.anexar(self.conn, self.admin, d["id"], "virus.jpg", b"MZ\x90\x00executavel")   # nome mente
+        with self.assertRaises(dm.ErroDemanda):
+            dm.anexar(self.conn, self.admin, d["id"], "grande.pdf", b"%PDF" + b"0" * dm.MAX_ANEXO_BYTES)
+        with self.assertRaises(dm.ErroDemanda):
+            dm.anexar(self.conn, self.ident("davi", "operador"), d["id"], "x.jpg", JPEG)   # outra equipe
+        a = dm.anexar(self.conn, self.admin, d["id"], "x.jpg", JPEG)
+        anexo_id = next(e["anexo"]["id"] for e in a["eventos"] if e["anexo"])
+        with self.assertRaises(dm.ErroDemanda):
+            dm.arquivo_anexo(self.conn, self.ident("davi", "operador"), anexo_id)
+        with self.assertRaises(dm.PrecisaNome):
+            dm.anexar(self.conn, self.ident("galpao", "galpao"), d["id"], "x.jpg", JPEG)
+
+    def test_criar_de_sistema_sem_lider_e_sem_duplicar(self):
+        r = dm.criar_de_sistema(self.conn, titulo="Devolução Parcial — Mercado X", equipe_id=self.galpao["id"],
+                                origem="pedidos_parados", origem_ref="77:Devolução Parcial", usuario="davi",
+                                autor="Davi", prioridade="ALTA", pedido_codigo="77")
+        de_novo = dm.criar_de_sistema(self.conn, titulo="outra", equipe_id=self.atend["id"],
+                                      origem="pedidos_parados", origem_ref="77:Devolução Parcial", usuario="davi",
+                                      autor="Davi")
+        self.assertEqual((de_novo["id"], de_novo["ja_existia"], r["ja_existia"]), (r["id"], True, False))
+        d = dm.detalhar(self.conn, self.ident("davi", "operador"), r["id"])   # quem encaminhou acompanha
+        self.assertEqual((d["pedido_codigo"], d["prioridade"], d["equipe"]), ("PS-77", "ALTA", "Estoque"))
+        bia = self.ident("bia", "operador")
+        self.assertEqual([i["demanda_id"] for i in dm.avisos(self.conn, bia, 0)["itens"]], [r["id"]])
+
+
 class TestRotas(Base):
     def setUp(self):
         super().setUp()
@@ -320,6 +369,23 @@ class TestRotas(Base):
         c.close()
         self.logar("davi", "operador")
         self.assertEqual(self.cliente.get("/api/demandas/avisos").status_code, 200)
+
+    def test_anexo_pela_api(self):
+        import io
+        d = self.criar()
+        self.logar("bia", "operador")
+        r = self.cliente.post(f"/api/demandas/{d['id']}/anexos", headers=ORIGEM,
+                              data={"arquivo": (io.BytesIO(JPEG), "foto.jpg")}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        anexo = next(e["anexo"] for e in r.get_json()["demanda"]["eventos"] if e["anexo"])
+        r = self.cliente.get(f"/api/demandas/anexos/{anexo['id']}")
+        self.assertEqual((r.status_code, r.mimetype, r.data), (200, "image/jpeg", JPEG))
+        r.close()
+        self.logar("davi", "operador")
+        self.assertEqual(self.cliente.get(f"/api/demandas/anexos/{anexo['id']}").status_code, 404)
+        self.assertEqual(self.cliente.post(f"/api/demandas/{d['id']}/anexos", headers=ORIGEM,
+                                           data={"arquivo": (io.BytesIO(JPEG), "foto.jpg")},
+                                           content_type="multipart/form-data").status_code, 400)
 
     def test_tela_e_aviso_no_wms(self):
         self.logar("u", "total")

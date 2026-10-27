@@ -241,15 +241,8 @@ const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em r
 // Cliente Retira entra mesmo sem a notificação ter sido enviada.
 const CONTAM_COMO_TRATADAS = ["Cliente Retira", "Em Rota", "Agendado", "Entregue"];
 const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
-// Área de destino de cada classificação que cria Demanda -- só pra
-// mostrar no botão/confirmação; a fonte de verdade é MOLDE_TRATATIVA em
-// freshhub/tasks.py (manter os dois em sincronia se adicionar uma nova).
-const AREA_POR_CLASSIFICACAO = {
-  "Cancelados": "Operações",
-  "Devolução Parcial": "Operações",
-  "Descartar": "Operações",
-  "Verificar com Cliente": "Atendimento",
-};
+// Encaminhar (26/10): cria a demanda na tela Demandas do painel, pra equipe
+// escolhida na hora (a sugerida vem de EQUIPE_PADRAO_POR_CLASSIFICACAO).
 
 let pedidosAtuais = [];
 let ultimoOk = null;
@@ -373,8 +366,7 @@ function renderTabela() {
     } else if (CRIAM_DEMANDA.includes(p.classificacao) && !ENCAMINHAMENTO_ATIVO) {
       acaoHtml = `<span class="status-ok" title="Encaminhamento às Demandas do Fresh Hub pausado (Hugo, 24/10)">✓ classificado · encaminhamento pausado</span>`;
     } else if (PODE_EDITAR && CRIAM_DEMANDA.includes(p.classificacao)) {
-      const area = AREA_POR_CLASSIFICACAO[p.classificacao] || "";
-      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar(${esc(JSON.stringify(p.order_number))}, ${esc(JSON.stringify(p.classificacao))})">Encaminhar${area ? " (" + area + ")" : ""}</button>`;
+      acaoHtml = `<button class="botao-acao botao-encaminhar" onclick="encaminhar(${esc(JSON.stringify(p.order_number))}, ${esc(JSON.stringify(p.classificacao))})">Encaminhar</button>`;
     } else if (p.revisao_urgente) {
       acaoHtml = `<span class="badge badge-urgente" title="Classificado como Entregue, mas voltou a ser registrado como parado depois disso">NECESSITA REVISÃO URGENTE</span>`;
     } else if (p.classificacao in SO_REVISA) {
@@ -460,17 +452,50 @@ async function duplicar(orderNumber) {
   } catch (e) { alert("Falha ao duplicar: " + e); }
 }
 
+// Janela de escolha da equipe do Encaminhar (criada uma vez, sob demanda).
+function escolherEquipe(orderNumber, classificacao, equipes, sugerida) {
+  let dlg = document.getElementById("dlg-encaminhar");
+  if (!dlg) {
+    dlg = document.createElement("dialog");
+    dlg.id = "dlg-encaminhar";
+    dlg.style.cssText = "border:1px solid var(--borda);border-radius:12px;background:var(--superficie);color:var(--texto);padding:18px;width:min(440px,calc(100vw - 24px))";
+    dlg.innerHTML = `<form method="dialog"><h3 style="margin:0 0 8px;font-size:16px">Encaminhar pra Demandas</h3>
+      <p id="dlg-encaminhar-texto" style="font-size:13px;color:var(--texto-suave);margin:0 0 12px"></p>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--texto-suave)">Equipe que vai tratar
+        <select id="dlg-encaminhar-equipe" required style="font:inherit;font-size:14px;padding:8px;border:1px solid var(--borda);border-radius:7px"></select></label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button value="cancelar" class="botao-acao" style="background:#6b7280">Cancelar</button>
+        <button value="ok" class="botao-acao botao-encaminhar">Criar demanda</button></div></form>`;
+    document.body.appendChild(dlg);
+  }
+  document.getElementById("dlg-encaminhar-texto").textContent =
+    `Pedido ${orderNumber} · ${classificacao}. A demanda aparece pra equipe escolhida e toca o aviso pra ela.`;
+  const sel = document.getElementById("dlg-encaminhar-equipe");
+  sel.innerHTML = '<option value="">Escolha…</option>' + equipes.map(e =>
+    `<option value="${e.id}" ${e.nome === sugerida ? "selected" : ""}>${esc(e.nome)}</option>`).join("");
+  return new Promise(resolve => {
+    dlg.onclose = () => resolve(dlg.returnValue === "ok" && sel.value ? Number(sel.value) : null);
+    dlg.returnValue = "";
+    dlg.showModal();
+  });
+}
+
 async function encaminhar(orderNumber, classificacao) {
-  const area = AREA_POR_CLASSIFICACAO[classificacao] || "?";
-  if (!confirm(`Criar uma Demanda de "${classificacao}" pro pedido ${orderNumber} no Fresh Hub?\n\nAparece de verdade pra área "${area}".`)) return;
   try {
+    const r = await fetch(`${BASE_PATH}/api/pedidos-parados/equipes-demanda`, { credentials: "same-origin" });
+    const opcoes = await r.json();
+    if (!r.ok) { alert(opcoes.erro || "Falha ao carregar as equipes."); return; }
+    if (!opcoes.equipes.length) { alert("Nenhuma equipe ativa nas Demandas."); return; }
+    const equipeId = await escolherEquipe(orderNumber, classificacao, opcoes.equipes, opcoes.padrao[classificacao]);
+    if (!equipeId) return;
     const resp = await fetch(`${BASE_PATH}/api/pedidos-parados/encaminhar`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order_number: orderNumber, classificacao }),
+      body: JSON.stringify({ order_number: orderNumber, classificacao, equipe_id: equipeId }),
     });
     const j = await resp.json();
     if (!resp.ok) { alert(j.erro || "Falha ao encaminhar."); return; }
-    alert(`Demanda criada no Fresh Hub (cliente: ${j.client_name}).`);
+    alert(j.ja_existia ? `Esse pedido já tinha a demanda #${j.demanda_id} (${j.equipe}).`
+                       : `Demanda #${j.demanda_id} criada pra ${j.equipe}.`);
     carregarDados();
   } catch (e) { alert("Falha ao encaminhar: " + e); }
 }
