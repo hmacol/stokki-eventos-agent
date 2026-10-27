@@ -175,9 +175,14 @@ class Rota(unittest.TestCase):
 
     def setUp(self):
         from datetime import date
+        import acesso_telas
         self.painel = _carregar_painel()
         rascunho = {**RASCUNHO, "data_alvo": date.today().isoformat()}
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
         for alvo, attr, kw in (
+            # banco de acessos proprio: na VPS a "rodada de sessoes" do banco real derruba a sessao do teste
+            (acesso_telas, "DB_PATH", {"new": Path(tmp.name) / "dados.db"}),
             (self.painel, "_carregar_config", {"return_value": {"vuupt_api": {"token": "tk"},
                                                                 "painel_agentes": {"usuario": "u", "senha": "s"}}}),
             (self.painel.rascunhos_rota, "buscar_rascunho", {"return_value": rascunho}),
