@@ -265,7 +265,8 @@ def _http_json(url: str, timeout: float = 8) -> dict | None:
 
 
 def consultar_cep(cep: str) -> dict | None:
-    """{cep, logradouro, bairro, cidade, uf} ou None. ViaCEP, BrasilAPI de reserva."""
+    """{cep, logradouro, bairro, cidade, uf, ibge} ou None. ViaCEP, BrasilAPI de reserva
+    (a BrasilAPI não traz o código IBGE: ibge vazio)."""
     d = normalizar_cep(cep)
     if not d:
         return None
@@ -275,12 +276,12 @@ def consultar_cep(cep: str) -> dict | None:
     v = _http_json(f"https://viacep.com.br/ws/{d}/json/")
     if v and not v.get("erro"):
         resultado = {"cep": formatar_cep(d), "logradouro": v.get("logradouro") or "", "bairro": v.get("bairro") or "",
-                     "cidade": v.get("localidade") or "", "uf": v.get("uf") or ""}
+                     "cidade": v.get("localidade") or "", "uf": v.get("uf") or "", "ibge": v.get("ibge") or ""}
     else:
         b = _http_json(f"https://brasilapi.com.br/api/cep/v1/{d}")
         if b and b.get("city"):
             resultado = {"cep": formatar_cep(d), "logradouro": b.get("street") or "", "bairro": b.get("neighborhood") or "",
-                         "cidade": b.get("city") or "", "uf": b.get("state") or ""}
+                         "cidade": b.get("city") or "", "uf": b.get("state") or "", "ibge": ""}
     if resultado is not None or v is not None:
         # só cacheia resposta definitiva (achou, ou o ViaCEP disse que não existe)
         _CACHE_CEP[d] = resultado

@@ -56,9 +56,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
-if str(_RAIZ) not in sys.path:
-    sys.path.insert(0, str(_RAIZ))
+for _p in (_RAIZ, Path(__file__).parent):  # painel importa como portal_cliente.envio_pedidos
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
+import endereco_entrega  # noqa: E402
 from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -348,8 +350,9 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
     endereco_fiscal = ""
     entrega = inf.find("nfe:entrega", NS)
     if entrega is not None and _texto(entrega, "nfe:xLgr"):
-        cep_fiscal = f"CEP {cep[:5]}-{cep[5:]}" if len(cep) == 8 else cep
-        endereco_fiscal = ", ".join(p for p in (endereco, bairro, f"{municipio}/{uf}".strip("/"), cep_fiscal) if p)
+        endereco_fiscal = endereco_entrega.linha_fiscal({
+            "destinatario_endereco": endereco, "destinatario_bairro": bairro, "destinatario_municipio": municipio,
+            "destinatario_uf": uf, "destinatario_cep": cep})
         endereco = _endereco_linha(entrega)
         bairro, municipio, uf = _texto(entrega, "nfe:xBairro"), _texto(entrega, "nfe:xMun"), _texto(entrega, "nfe:UF")
         cep = _so_digitos(_texto(entrega, "nfe:CEP"))
