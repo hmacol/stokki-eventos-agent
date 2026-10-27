@@ -12,8 +12,12 @@ Desligado por padrão: portal_cliente.envios.endereco_entrega_ativo.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from xml.sax.saxutils import escape
+
+logger = logging.getLogger(__name__)
 
 # NF-e: xNome, xLgr, nro, xCpl e xBairro têm no máximo 60 caracteres
 _MAX_TEXTO = 60
@@ -137,3 +141,133 @@ def numero_de_texto(texto: str) -> str:
     """Número do imóvel: 2ª parte do endereço da Vuupt, se for um número."""
     partes = [p.strip() for p in (texto or "").split(",")]
     return partes[1] if len(partes) > 1 and _NUMERO.match(partes[1]) else ""
+
+
+# ── "Última entrega" do destinatário (spec, seção 3) ──────────────────────────
+
+_ORIGENS_ESCOLHIDAS = ("cliente", "ultima_entrega", "nota")
+
+
+def _codigo_base(codigo) -> str:
+    """'#PS-1-R2' -> 'PS-1': a reentrega é tentativa do mesmo pedido."""
+    return re.sub(r"-R\d+$", "", str(codigo or "").replace("#", "").strip().upper())
+
+
+def _numero_da_linha(linha: str) -> str:
+    """Número de 'Rua X, 10 - Compl' (formato de destinatario_endereco)."""
+    partes = (linha or "").split(",", 1)
+    return partes[1].split(" - ")[0].strip() if len(partes) > 1 else ""
+
+
+def _norm_numero(numero: str) -> str:
+    return re.sub(r"[^0-9A-Z]", "", str(numero or "").upper())
+
+
+def _catalogo_padrao():
+    import envio_pedidos
+    from regras.transportadoras import CatalogoTransportadoras
+    return CatalogoTransportadoras.carregar_do_banco(envio_pedidos.DB_PATH)
+
+
+def _entregas_vuupt(conn, sender_id: int, doc: str) -> list:
+    try:
+        return conn.execute("""
+            SELECT r.data_rota, p.endereco, p.codigo
+              FROM nucleo_paradas p
+              JOIN nucleo_rotas r ON r.id = p.rota_id
+              JOIN nucleo_pedidos ped ON ped.codigo = REPLACE(p.codigo, '#', '')
+             WHERE p.situacao IN ('ENTREGUE', 'PARCIAL', 'INSUCESSO')
+               AND COALESCE(ped.sender_id, p.sender_id) = ?
+               AND REPLACE(REPLACE(REPLACE(ped.destinatario_codigo, '.', ''), '/', ''), '-', '') = ?
+             ORDER BY r.data_rota DESC, p.completed_at DESC
+        """, (sender_id, doc)).fetchall()
+    except Exception as e:  # banco sem o núcleo: só a memória do portal
+        logger.warning(f"ultima_entrega: leitura do nucleo falhou ({e})")
+        return []
+
+
+def ultima_entrega(conn, cnpj_embarcador: str, sender_id: int | None, destinatario_doc: str, catalogo=None) -> dict | None:
+    """Endereço que valeu na última entrega do par (embarcador, destinatário):
+    tentativa concluída na Vuupt (onde aparece a correção da equipe) ou, pra
+    pedido ainda sem tentativa, o que o cliente escolheu no portal. Mais
+    recente ganha; no empate, a Vuupt. Nunca atravessa embarcadores."""
+    doc = _so_digitos(destinatario_doc)
+    candidatos = []
+    concluidos = set()
+    if sender_id is not None:
+        linhas = _entregas_vuupt(conn, sender_id, doc)
+        concluidos = {_codigo_base(r[2]) for r in linhas}
+        if linhas and catalogo is None:
+            try:
+                catalogo = _catalogo_padrao()
+            except Exception as e:
+                logger.warning(f"ultima_entrega: catalogo de transportadoras indisponivel ({e})")
+        for data, texto, _codigo in linhas:
+            cep = cep_de_texto(texto)
+            if not cep or (catalogo is not None and catalogo.resolver_por_endereco(texto)):
+                continue  # sem CEP não dá pra comparar; galpão de redespacho não é o destinatário
+            candidatos.append({"data": data, "texto": texto, "cep": cep, "numero": numero_de_texto(texto),
+                               "campos": None, "fonte": "vuupt"})
+            break
+    for r in conn.execute("""
+            SELECT criado_em, codigo_pedido, endereco_entrega_origem, endereco_entrega_json, destinatario_endereco,
+                   destinatario_bairro, destinatario_municipio, destinatario_uf, destinatario_cep
+              FROM portal_envios
+             WHERE cnpj_embarcador = ? AND destinatario_doc = ? AND status NOT IN ('CANCELADO', 'CANCELANDO')
+               AND endereco_entrega_origem IN (?, ?, ?)
+             ORDER BY criado_em DESC""", (_so_digitos(cnpj_embarcador), doc, *_ORIGENS_ESCOLHIDAS)):
+        if r[1] and _codigo_base(r[1]) in concluidos:
+            continue  # já teve tentativa: o que valeu está na Vuupt
+        if r[2] == "nota":
+            linha = r[4] or ""
+            campos = {"cep": _so_digitos(r[8]), "numero": _numero_da_linha(linha),
+                      "logradouro": linha.split(",")[0].strip(), "bairro": r[5] or ""}
+            nfe = {"destinatario_endereco": linha, "destinatario_bairro": r[5], "destinatario_municipio": r[6],
+                   "destinatario_uf": r[7], "destinatario_cep": r[8]}
+        else:
+            campos = json.loads(r[3] or "{}")
+            campos = {k: campos.get(k, "") for k in ("cep", "logradouro", "numero", "complemento", "bairro",
+                                                      "municipio", "uf", "cmun")}
+            nfe = {"destinatario_endereco": linha_endereco(campos), "destinatario_bairro": campos["bairro"],
+                   "destinatario_municipio": campos["municipio"], "destinatario_uf": campos["uf"],
+                   "destinatario_cep": campos["cep"]}
+        candidatos.append({"data": str(r[0])[:10], "texto": linha_fiscal(nfe), "cep": _so_digitos(campos["cep"]),
+                           "numero": campos["numero"], "campos": campos, "fonte": "portal"})
+        break
+    if not candidatos:
+        return None
+    ult = max(candidatos, key=lambda c: (c["data"], c["fonte"] == "vuupt"))
+    a, m, d = ult["data"].split("-")
+    return {**ult, "data_br": f"{d}/{m}"}
+
+
+def mesmo_endereco(ult: dict, nfe: dict) -> bool:
+    """Vuupt: só o CEP (o texto não separa o número com segurança). Portal:
+    CEP e número."""
+    if ult["cep"] != _so_digitos(nfe.get("destinatario_cep")):
+        return False
+    if ult["fonte"] == "vuupt":
+        return True
+    return _norm_numero(ult["numero"]) == _norm_numero(_numero_da_linha(nfe.get("destinatario_endereco") or ""))
+
+
+def classificar_entrega(conn, nfe: dict, cnpj_embarcador: str, sender_id: int | None, catalogo=None) -> dict:
+    """Caso da NF na prévia: nota (já tem <entrega>), terceiros/retirada
+    (sem troca), sugestao (última entrega foi em outro endereço) ou livre."""
+    caso = {"modo": "livre", "transportadora": "", "sugestao": None}
+    if nfe.get("endereco_fiscal"):
+        return {**caso, "modo": "nota"}
+    import envio_pedidos
+    nome = nfe.get("transportadora_nome") or ""
+    try:
+        tipo = envio_pedidos._tipo_transportadora(nome, nfe.get("transportadora_cnpj") or "")
+    except Exception as e:
+        logger.warning(f"classificar_entrega: cadastro de transportadoras falhou ({e}); NF {nfe.get('numero_nf')}")
+        tipo = None
+    if tipo in ("TERCEIROS", "RETIRADA"):
+        return {**caso, "modo": "terceiros" if tipo == "TERCEIROS" else "retirada", "transportadora": nome}
+    ult = ultima_entrega(conn, cnpj_embarcador, sender_id, nfe.get("destinatario_doc") or "", catalogo=catalogo)
+    if ult and not mesmo_endereco(ult, nfe):
+        campos = ult["campos"] or {"cep": ult["cep"], "numero": ult["numero"]}
+        return {**caso, "modo": "sugestao", "sugestao": {"data_br": ult["data_br"], "texto": ult["texto"], "campos": campos}}
+    return caso
