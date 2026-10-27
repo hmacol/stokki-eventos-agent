@@ -57,7 +57,8 @@ def _devolver(cliente, resumo: dict, id_: str, ok: bool, resultado: dict | None 
 
 def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
             classificar_area: Callable[[dict], str | None], criar_na_stokki: CriarNaStokki,
-            limite: int = LIMITE, registrar_agendamento: Callable[[dict], object] | None = None) -> dict:
+            limite: int = LIMITE, registrar_agendamento: Callable[[dict], object] | None = None,
+            recusar_embarcador: Callable[[str], str | None] | None = None) -> dict:
     """Um ciclo da fila. Funcoes injetadas: ler_nfe (envio_pedidos.ler_nfe), classificar_area
     (envio_pedidos.classificar_area_envio com o config) e criar_na_stokki (wizard com a trava)."""
     resumo = {"itens": 0, "criados": 0, "bloqueados": 0, "erros": 0, "nao_devolvidos": 0}
@@ -99,6 +100,12 @@ def atender(cliente, *, simular: bool, ler_nfe: Callable[[bytes], dict],
         grupos.setdefault(empresa or emitente, []).append((item, nfe, conteudo))
 
     for cnpj, lote in grupos.items():
+        motivo_recusa = recusar_embarcador(cnpj) if recusar_embarcador is not None else None
+        if motivo_recusa:
+            for item, _n, _c in lote:
+                resumo["erros"] += 1
+                _devolver(cliente, resumo, item["id"], False, erro=f"{motivo_recusa}: {MANUAL}")
+            continue
         if simular:
             for item, nfe, _c in lote:
                 resumo["criados"] += 1
@@ -207,6 +214,18 @@ def criar_na_stokki_real(conn, config: dict, headless: bool = True) -> CriarNaSt
     return _criar
 
 
+def _recusa_cross(conn, cnpj: str) -> str | None:
+    """Embarcador com fluxo Cross (25/10: item XD + troca de NF no portal antigo): o worker novo ainda nao
+    faz essa conversao, entao o pedido vai pra equipe em vez de nascer como armazenagem."""
+    from nucleo import fluxo_embarcador as fe
+
+    try:
+        fluxos = fe.fluxos_do_embarcador(conn, cnpj=cnpj)["fluxos"]
+    except ValueError:
+        return None
+    return "embarcador usa o fluxo Cross" if "cross" in fluxos else None
+
+
 def rodar(config: dict, *, simular: bool, headless: bool = True) -> dict | None:
     """Um ciclo com as pecas de producao. Sem freshhub_api no config: nada (sombra desligada)."""
     import envio_pedidos as ep
@@ -221,7 +240,8 @@ def rodar(config: dict, *, simular: bool, headless: bool = True) -> dict | None:
                        classificar_area=lambda nfe: ep.classificar_area_envio(nfe, config),
                        criar_na_stokki=criar_na_stokki_real(conn, config, headless=headless),
                        registrar_agendamento=lambda envio: ep.registrar_agendamento_pedido(
-                           conn, envio, por="portal novo"))
+                           conn, envio, por="portal novo"),
+                       recusar_embarcador=lambda cnpj: _recusa_cross(conn, cnpj))
     finally:
         conn.close()
 

@@ -222,5 +222,20 @@ class TestRevisao26(unittest.TestCase):
         self.assertEqual(grupos, [EMB])
 
 
+class TestCross(unittest.TestCase):
+    """Merge de 27/10: o portal antigo ganhou o fluxo Cross (item XD + troca de NF); o worker novo ainda nao
+    sabe fazer isso, entao embarcador Cross vai pra equipe em vez de nascer pelo caminho de armazenagem."""
+
+    def test_embarcador_cross_volta_pra_equipe_sem_wizard(self):
+        c = Falso([_item("r1", cnpj_empresa=EMB)], {"r1": b"A"})
+        wizard = mock.Mock()
+        ff.atender(c, simular=False, ler_nfe=lambda conteudo: _nfe(), classificar_area=lambda nfe: None,
+                   criar_na_stokki=wizard, recusar_embarcador=lambda cnpj: "embarcador usa o fluxo Cross")
+        wizard.assert_not_called()
+        self.assertEqual(c.devolvidos[0][:2], ("r1", False))
+        self.assertIn("fluxo Cross", c.devolvidos[0][3])
+        self.assertIn("informe o PS", c.devolvidos[0][3])
+
+
 if __name__ == "__main__":
     unittest.main()
