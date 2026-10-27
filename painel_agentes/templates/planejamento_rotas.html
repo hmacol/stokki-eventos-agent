@@ -3298,6 +3298,7 @@
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
+        ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-notificar perigo" data-rascunho-id="${rascunho.id}" title="Cancela a rota na VUUPT (mesma regra do Cancelar rota) e avisa o grupo Rotas canceladas do Atendimento e os embarcadores dos pedidos, pelo chat do portal">Cancelar e notificar</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
@@ -6012,6 +6013,29 @@
     }
   }
 
+  // "Cancelar e notificar" (Hugo, 27/10): mesmo cancelamento do botão
+  // acima + aviso no grupo Rotas canceladas e no chat de cada embarcador.
+  async function cancelarENotificar(rascunhoId, botaoOrigem) {
+    const motivo = (prompt("Motivo do cancelamento (vai para o grupo Rotas canceladas e para os embarcadores dos pedidos):\nEx.: motorista não conseguiu realizar a coleta") || "").trim();
+    if (!motivo) return;
+    const textoOriginal = botaoOrigem.textContent;
+    botaoOrigem.disabled = true; botaoOrigem.textContent = "Cancelando...";
+    try {
+      const resp = await postJSON("/api/planejamento/cancelar-e-notificar", { rascunho_id: rascunhoId, motivo });
+      if (!resp.ok) {
+        alert(`A rota não foi cancelada e ninguém foi avisado:\n${resp.erro}`);
+        botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+        return;
+      }
+      const linhas = resp.aviso.embarcadores.map(e => `• ${e.nome} (${e.codigos.length}): ${e.aviso}`);
+      alert(`Rota cancelada.\n${resp.aviso.grupo ? "Aviso postado no grupo Rotas canceladas." : "FALHOU o aviso no grupo Rotas canceladas -- avise o Atendimento."}\n\nEmbarcadores:\n${linhas.join("\n") || "(rota sem pedidos)"}`);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao cancelar: ${e.message}`);
+      botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+    }
+  }
+
   async function cancelarPedido(serviceId, rascunhoId, botaoOrigem) {
     // rascunhoId é null pro pool; pra parada em rota (rascunho ainda
     // não enviado OU rota já enviada -- ver planejamento_rotas.
@@ -7294,6 +7318,8 @@
         duplicarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-cancelar-rota")) {
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-cancelar-notificar")) {
+        cancelarENotificar(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lancar-lalamove")) {
         lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lalamove-horario-limpar")) {

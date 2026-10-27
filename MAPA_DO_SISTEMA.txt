@@ -891,6 +891,14 @@
                            /api/planejamento/checar-dia-fixo, valor da
                            calculadora).
  rascunhos_rota.py         Tabelas dos rascunhos de rota.
+ aviso_rota_cancelada.py   Botão "Cancelar e notificar" do card (27/10, POST
+                           /api/planejamento/cancelar-e-notificar): cancela igual
+                           ao "Cancelar rota" e, se cancelou, posta no grupo
+                           "Rotas canceladas" do /atendimento (cria se faltar) e
+                           abre conversa no chat do portal pra cada embarcador
+                           (Aguardando Fresh Log). Tela Notificações, tipo
+                           rota_cancelada: sem linha + forcar_destino = piloto
+                           (chat do cliente teste).
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.

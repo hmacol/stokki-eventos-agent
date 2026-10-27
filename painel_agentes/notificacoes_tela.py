@@ -272,6 +272,7 @@ SEM_DISPARO = {
     "area_nao_atendida": "Sai na hora do envio do XML, dentro do portal do cliente.",
     "convite_embarcador": "Sai dentro do timer de convites das 07h10 (embarcadores_stokki).",
     "consulta_transportadora": "Sai dentro do pipeline e do lembrete (consulta_transportadora); não tem disparo manual.",
+    "rota_cancelada": "Sai no botão Cancelar e notificar do card da rota no Planejamento (mensagem no chat do portal).",
 }
 
 _TIPOS_COM_JA_RECEBEU = ("nfs_em_rota", "resumo_diario")   # chave "<sender_id>|<data>" em notificacoes_enviadas

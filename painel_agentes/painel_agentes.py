@@ -3764,6 +3764,34 @@ def api_cancelar_rota():
     return jsonify({"ok": True, "resultados": resultados})
 
 
+@app.route("/api/planejamento/cancelar-e-notificar", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_cancelar_e_notificar():
+    """Botão "Cancelar e notificar" do card (Hugo, 27/10): cancela igual ao
+    "Cancelar rota" e, só se cancelou, avisa o grupo "Rotas canceladas" do
+    /atendimento e os embarcadores pelo chat do portal (aviso_rota_cancelada)."""
+    import aviso_rota_cancelada
+    body = request.get_json(force=True)
+    motivo = " ".join(str(body.get("motivo") or "").split())[:300]
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(body["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not motivo:
+        return jsonify({"erro": "Informe o motivo do cancelamento."}), 400
+    if not rascunho:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+
+    config = _carregar_config()
+    resultado = rascunhos_rota.cancelar_rota_enviada(rascunho["id"], config.get("vuupt_api", {}).get("token", ""))
+    if not resultado["ok"]:
+        return jsonify({"ok": False, "erro": resultado["erro"]})
+    aviso = aviso_rota_cancelada.avisar(rascunho, motivo, session.get("usuario") or g.nivel_acesso, config)
+    return jsonify({"ok": True, "aviso": aviso})
+
+
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
