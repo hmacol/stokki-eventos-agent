@@ -31,7 +31,8 @@ ESTADO_SEM_DESTINATARIO = "SEM_DESTINATARIO"
 ESTADO_AGUARDANDO_CANHOTO = "AGUARDANDO_CANHOTO"
 ESTADO_FALHA_ENVIO = "FALHA_ENVIO"     # SMTP falhou, tenta de novo
 ESTADO_ERRO_ENVIO = "ERRO_ENVIO"       # desistiu depois de MAX_TENTATIVAS_ENVIO
-ESTADOS_FINAIS = {ESTADO_ENVIADO, ESTADO_IGNORADO, ESTADO_SEM_DESTINATARIO, ESTADO_ERRO_ENVIO}
+ESTADO_PILOTO = "PILOTO"               # tela em PILOTO: so a copia do Hugo saiu; o cliente nao recebeu
+ESTADOS_FINAIS = {ESTADO_ENVIADO, ESTADO_IGNORADO, ESTADO_SEM_DESTINATARIO, ESTADO_ERRO_ENVIO, ESTADO_PILOTO}
 
 MAX_TENTATIVAS_ENVIO = 3
 
@@ -145,9 +146,11 @@ def destinos_finais(embarcador: dict, cfg: ConfigEntregas) -> tuple[list[str], l
 # ── Decisão ────────────────────────────────────────────────────────────────────
 
 def decidir(servico: dict, embarcador: dict | None, cfg: ConfigEntregas, agora: datetime,
-            estado_atual: str | None = None) -> Decisao:
+            estado_atual: str | None = None, bloqueio_tela: str | None = None) -> Decisao:
     """agora: datetime com fuso (UTC). embarcador: linha de `interno`
-    ({"nome","emails","notificar_email","fator_ponderado"}) ou None."""
+    ({"nome","emails","notificar_email","fator_ponderado"}) ou None.
+    bloqueio_tela: motivo quando a tela de Notificacoes mandou NAO enviar --
+    vale no lugar de cfg.ativo (o evento e consumido como IGNORAR)."""
     if estado_atual in ESTADOS_FINAIS:
         return Decisao(NADA)
 
@@ -165,6 +168,8 @@ def decidir(servico: dict, embarcador: dict | None, cfg: ConfigEntregas, agora: 
     if concluido is None:
         return Decisao(IGNORAR, "sem completed_at")
 
+    if bloqueio_tela:
+        return Decisao(IGNORAR, f"tela: {bloqueio_tela}")
     if not cfg.ativo:
         return Decisao(IGNORAR, "desligado")
     if agora - concluido > timedelta(hours=cfg.max_atraso_horas):

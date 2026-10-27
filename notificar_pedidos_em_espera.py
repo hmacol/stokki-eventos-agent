@@ -13,7 +13,10 @@ Fluxo:
 Agendamento (VPS): timer proprio stokki-notificar-pedidos-em-espera.timer,
 2x ao dia (08:20 e 15:20), um e-mail por embarcador. Liga/desliga pelo flag
 proprio config.yaml: notificacao_pedidos_em_espera.ativo (independente da
-chave-mestra notificacoes_automaticas).
+chave-mestra notificacoes_automaticas). A tela de Notificacoes
+(controle_notificacoes.py, tipo "pedidos_em_espera") vale por cima do flag:
+geral/tipo desligado, piloto (so o Hugo recebe) ou ligado, mais a excecao por
+embarcador; sem linha na tela vale o flag.
 
 Execute:
   py -3.11 notificar_pedidos_em_espera.py
@@ -37,6 +40,7 @@ sys.path.insert(0, str(_RAIZ))
 
 from email_utils import enviar_email, notificacao_pedidos_em_espera_ativa
 import preferencias_notificacao
+from controle_notificacoes import acao_do_config, decidir
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
 from stokki.estacao_impressao import imprimir_pedidos_pendentes
@@ -164,7 +168,12 @@ def _envelope_html(conteudo, rodape="Esta e uma mensagem automatica da Freshlog.
 </body></html>"""
 
 
-def _montar_corpo(nome_emb, pedidos):
+def _montar_corpo(nome_emb, pedidos, destino_original=None):
+    aviso = ""
+    if destino_original is not None:
+        aviso = (f"<p style='margin:0 0 20px;padding:10px 14px;font-size:12px;color:{COR_TEXTO};"
+                 f"background-color:#FEF3C7;border-radius:6px;'><strong>Redirecionado (piloto).</strong> "
+                 f"Destino real: {html.escape(', '.join(destino_original) or 'sem e-mail cadastrado')}</p>")
     linhas = ""
     for p in pedidos:
         linhas += (
@@ -178,6 +187,7 @@ def _montar_corpo(nome_emb, pedidos):
             f"</tr>"
         )
     conteudo = f"""
+    {aviso}
     <h2 style="margin:0 0 4px;font-size:20px;color:{COR_TEXTO};">Pedidos aguardando envio do XML</h2>
     <p style="margin:0 0 24px;font-size:14px;color:{COR_TEXTO_SUAVE};">
       Ola, <strong>{html.escape(str(nome_emb))}</strong>!<br><br>
@@ -262,14 +272,6 @@ def main(modo_teste=False):
             )
             return
 
-        if not notificacao_pedidos_em_espera_ativa(config):
-            logger.info("Cobrança de XML desativada -- pulando e-mail aos embarcadores.")
-            resultado["detalhe"] = (
-                (detalhe_impressao + "; " if detalhe_impressao else "")
-                + "Cobrança de XML desativada (config.yaml: notificacao_pedidos_em_espera.ativo=false)."
-            )
-            return
-
         # Agrupa por stkkc_id
         grupos = defaultdict(list)
         sem_stkkc = []
@@ -279,18 +281,45 @@ def main(modo_teste=False):
             else:
                 sem_stkkc.append(p)
 
+        # O flag do config e o que valeria hoje; a tela (decidir) vale por cima.
+        # Retorna cedo so se NENHUM embarcador puder receber. --modo-teste ignora
+        # a tela (e o flag): so ensaia o envio pro EMAIL_TESTE.
+        config_ativo = notificacao_pedidos_em_espera_ativa(config)
+        fallback = acao_do_config(config_ativo, "")
+        decisoes = {} if modo_teste else {
+            sid: decidir("pedidos_em_espera", embarcadores[sid]["cnpj"], fallback_acao=fallback,
+                         db_path=preferencias_notificacao.DB_PATH) for sid in grupos}
+        if not modo_teste and grupos and all(d.acao == "NAO" for d in decisoes.values()):
+            primeira = next(iter(decisoes.values()))
+            if primeira.origem == "config":
+                motivo = "config.yaml: notificacao_pedidos_em_espera.ativo=false"
+            else:
+                motivo = f"tela de Notificacoes: {primeira.motivo}"
+            logger.info(f"Cobrança de XML desativada ({motivo}) -- pulando e-mail aos embarcadores.")
+            resultado["detalhe"] = (
+                (detalhe_impressao + "; " if detalhe_impressao else "")
+                + f"Cobrança de XML desativada ({motivo})."
+            )
+            return
+
         if sem_stkkc:
             logger.info(f"{len(sem_stkkc)} pedido(s) sem embarcador no banco:")
             for p in sem_stkkc:
                 logger.info(f"  {p['codigo_ps']}")
 
-        enviados = falhas = sem_email = desligados = 0
+        enviados = falhas = sem_email = desligados = bloqueados = 0
 
         for stkkc_id, pedidos in grupos.items():
             emb    = embarcadores[stkkc_id]
             nome   = emb["nome"]
             emails = emb["emails"]
             qtd    = len(pedidos)
+            decisao = decisoes.get(stkkc_id)
+
+            if decisao is not None and decisao.acao == "NAO":
+                logger.info(f"  {nome}: {qtd} pedido(s) -- nao enviado pela tela ({decisao.motivo}).")
+                bloqueados += 1
+                continue
 
             if not emails:
                 logger.warning(f"  {nome}: {qtd} pedido(s) -- sem e-mail cadastrado.")
@@ -304,9 +333,15 @@ def main(modo_teste=False):
                 continue
 
             assunto = f"[Freshlog] {qtd} pedido(s) aguardando envio do XML"
-            corpo   = _montar_corpo(nome, pedidos)
+            piloto  = decisao is not None and decisao.acao == "PILOTO"
+            corpo   = _montar_corpo(nome, pedidos, destino_original=emails if piloto and not modo_teste else None)
 
-            destinos = [EMAIL_TESTE] if modo_teste else emails
+            if modo_teste:
+                destinos = [EMAIL_TESTE]
+            elif piloto:
+                destinos = [decisao.destino_piloto]
+            else:
+                destinos = emails
 
             if modo_teste:
                 logger.info(
@@ -316,7 +351,8 @@ def main(modo_teste=False):
 
             if enviar_email(destinos, assunto, corpo, config_email):
                 if not modo_teste:
-                    logger.info(f"  OK: {nome} -> {', '.join(emails)}")
+                    logger.info(f"  OK: {nome} -> {', '.join(destinos)}"
+                                f"{' (original: ' + ', '.join(emails) + ')' if piloto else ''}")
                 else:
                     logger.info(f"    OK: e-mail de teste enviado para {EMAIL_TESTE}")
                 enviados += 1
@@ -334,6 +370,8 @@ def main(modo_teste=False):
         partes.append(f"{enviados} enviado(s), {falhas} falha(s), {sem_email} sem e-mail")
         if desligados:
             partes.append(f"{desligados} desligado(s) pelo cliente")
+        if bloqueados:
+            partes.append(f"{bloqueados} nao enviado(s) pela tela de Notificacoes")
         if sem_stkkc:
             partes.append(f"{len(sem_stkkc)} sem embarcador cadastrado")
         resultado["detalhe"] = "; ".join(partes)

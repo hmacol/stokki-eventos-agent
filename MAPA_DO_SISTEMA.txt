@@ -113,6 +113,11 @@
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Fluxo Cross (item XD + troca de NF) ....... nucleo/fluxo_embarcador.py (interno.fluxos, XD achado em
+                                             wms_produtos) -> regra "cross" do importador -> fila
+                                             portal_cliente/trocas_nf.py -> stokki/trocar_nf.py; virada:
+                                             portal_cliente/enfileirar_trocas_virada.py; CLI:
+                                             gerenciar_clientes.py fluxos (spec 2026-10-24-importacao-fluxo-cross)
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
@@ -479,6 +484,26 @@
  resumo_diario_embarcador.py   20h: status das notas do dia (opt-in no portal).
  preferencias_notificacao.py   Preferências de e-mail por embarcador + número de
                                WhatsApp (coluna whatsapp) e chave chamado_sem_resposta.
+ controle_notificacoes.py      Controle central dos envios EXTERNOS (embarcador,
+                               transportadora): decidir(tipo, destino, fallback...)
+                               devolve ENVIAR / PILOTO / NAO. Regra: geral -> tipo
+                               -> exceção do destinatário -> preferência do portal
+                               (a tela só trava por cima, nunca força); tipo sem
+                               linha na tela = vale o config. Erro de banco = vale o
+                               config + warning. Tabelas notificacoes_controle,
+                               _excecao, _param (piloto), _historico. TIPOS = os 15
+                               tipos da tela. Evento barrado (NAO) é consumido: não
+                               sai depois ao ligar. Exceções: insucesso,
+                               agendamento, redespacho, convite e faltas ficam
+                               pendentes (pendência de estado), e "piloto sem
+                               destino" não consome (Decisao.consome=False:
+                               sai quando ligar). --modo-teste ignora a tela
+                               (ensaio só pro Hugo; whatsapp_sem_resposta só
+                               simula). E-mail à equipe, motorista e financeiro
+                               nunca passa pela tela.
+ limite_piloto.py              Cópia de piloto limitada a 1 por pedido por dia
+                               (insucesso, agendamento, redespacho); grava
+                               notificacoes_enviadas tipo piloto_<tipo>.
  avisar_cliente_sem_resposta.py  Timer 2 min: embarcador que ficou 10 min sem
                                responder a equipe num chamado recebe WhatsApp com o
                                link do portal. Só no horário de atendimento, uma
@@ -608,9 +633,22 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+ trocar_nf.py         Troca o XML da NF de um pedido ("Informar Nota Fiscal":
+                      POST outbound/nfe/store com order_id_nfe, action=invoice,
+                      nfe=chave, file_nfe). Idempotente: confere chave + cProd do
+                      XML do pedido (data-url do btn_danfe na listagem). Fluxo
+                      Cross, 25/10; sondado só leitura, POST real ainda não provado.
+ sondar_trocar_nf.py  Sonda SÓ LEITURA (cookies salvos, sem login) do _token e do
+                      download do XML que a troca usa. Passo 0 do piloto do Cross.
  pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
                       outbound/pause com _token/page do form_pause; relê a
                       Situação). Sondado só leitura 25/10; escrita real não provada.
+ ajuste_estoque.py    Ajuste Manual de estoque (CLI, --modo-teste só mostra):
+                      saldo, zerar (produtos ou --todos), contagem (disponível
+                      = alvo de um arquivo product_id;alvo) e transferir
+                      (saída num endereço + entrada no outro). Cria e confirma
+                      até "Regularized stock". Virtual (reserva de pedido) não
+                      baixa por ajuste. Skill local ajustar-estoque-stokki.
  recebimentos.py      Recebimentos: listar_recebimentos, ler_itens.
  produtos.py          Catálogo: listar_produtos, ler_perfil.
  estacao_impressao.py Área /provider/: pedidos em espera, buscar por NF,
@@ -777,6 +815,9 @@
  normalizacao.py           Código do pedido (sem "#", maiúsculo) e fuso. NÃO tira
                            sufixo -R/-C ("PS-1-R2" é outro pedido). Use antes
                            de comparar códigos.
+ fluxo_embarcador.py       Fluxo por embarcador (interno.fluxos: armazenagem,
+                           full_cross, cross; vazio = armazenagem) e o produto XD
+                           do Cross achado em wms_produtos (SKU começando com XD).
  pedidos.py                nucleo_pedidos (upsert, nunca apaga).
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
@@ -856,6 +897,14 @@
                            /api/planejamento/checar-dia-fixo, valor da
                            calculadora).
  rascunhos_rota.py         Tabelas dos rascunhos de rota.
+ aviso_rota_cancelada.py   Botão "Cancelar e notificar" do card (27/10, POST
+                           /api/planejamento/cancelar-e-notificar): cancela igual
+                           ao "Cancelar rota" e, se cancelou, posta no grupo
+                           "Rotas canceladas" do /atendimento (cria se faltar) e
+                           abre conversa no chat do portal pra cada embarcador
+                           (Aguardando Fresh Log). Tela Notificações, tipo
+                           rota_cancelada: sem linha + forcar_destino = piloto
+                           (chat do cliente teste).
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.
@@ -872,10 +921,11 @@
                            pedidos_parados_registros (foto em dados/pedidos_parados/<id>/;
                            apagar só o autor em 15 min); aba Triagem lê daí
                            (só o dia mais recente; dias parado desde o 1º
-                           registro). Encaminhar às Demandas do Lovable PAUSADO
-                           (ENCAMINHAMENTO_DEMANDAS_ATIVO=False: classificar
-                           Cancelados/Devolução/Descartar/Verificar já conta
-                           como tratado). Testes: test_pedidos_parados_registro.py.
+                           registro). Encaminhar (Cancelados/Devolução/Descartar/
+                           Verificar) cria demanda na tela /demandas pra equipe
+                           escolhida na hora (26/10; Verificar sugere Atendimento;
+                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
+                           test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
                            da equipe, abertos a todos do Atendimento, só texto,
@@ -902,6 +952,9 @@
                            tempo + ponteiro do aviso sonoro). Aviso no grupo do
                            /atendimento ("Demandas" ou o da equipe) só com número e
                            equipe. /api/demandas/avisos é caminho comum (acesso_telas).
+                           Fase 2 (26/10): anexos foto/PDF até 10 MB em dados/demandas/<id>/
+                           (+GCS best-effort), tabela demandas_anexos; criar_de_sistema pro
+                           Encaminhar de Pedidos Parados (origem pedidos_parados, não duplica).
  contadores_menu.py        Badges do menu lateral ('demandas' é por usuário).
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
@@ -957,6 +1010,16 @@
                               login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
                               telas de cada um / nível personalizado)
+   /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
+                              pilota ou desliga os envios a embarcador/transportadora;
+                              geral, tipo, exceção, piloto, histórico, e-mails do
+                              embarcador; grava em controle_notificacoes, tabelas
+                              notificacoes_controle*; "Disparar agora" roda a rotina
+                              do tipo em subprocesso e registra em
+                              notificacoes_disparos (entrega concluída e WhatsApp
+                              sem resposta: só o teste, o timer já roda a cada
+                              5/2 min); POST só mesma origem; fora do
+                              catálogo de telas por nível = só total)
    /trocar-senha              login.html (trocar=True): troca da senha provisória
    /pedidos-parados          pedidos_parados_triagem.html (abas Registrar | Triagem;
                               #registrar/#triagem na URL; galpao/expedicao entram na
@@ -1011,6 +1074,12 @@
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
+                           Fluxo Cross: converte pro item XD e enfileira a troca de NF.
+ trocas_nf.py              Fila trocas_nf_pendentes (portal, importador por e-mail,
+                           virada); o worker troca 3x com 10 min entre tentativas,
+                           depois ERRO + e-mail só pra equipe.
+ enfileirar_trocas_virada.py  Virada do Cross: pedidos já abertos na Stokki vão pra
+                           fila (--modo-teste | --executar). SÓ NA VPS: lê a Stokki.
  fila_freshhub.py          (plano 1.3 do sistema novo) atende a fila `stokki` do
                            freshhub: baixa o XML pela API, confere a área, cria pelo
                            MESMO wizard do enviar_stokki (trava de sessão) e devolve o
@@ -1036,7 +1105,8 @@
  bloqueio_area.py          Bloqueio de área não atendida.
  gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
                            criar-pin-padrao (lote; pula cancelados e membros
-                           de grupo; só grava com --confirmar).
+                           de grupo; só grava com --confirmar); fluxos (lista,
+                           --definir, --carga do JSON da página de marcação).
  templates/                acompanhamento.html é a tela principal.
  test_*.py                 Testes.
 
@@ -1204,7 +1274,9 @@
                            Desde 24/10 o painel NÃO lê mais pedidos_parados.py
                            (registro é na aba Registrar do painel); só sobram
                            normalizar_order_number e tasks.py (Demandas,
-                           substituídas pela tela /demandas do painel em 25/10).
+                           substituídas pela tela /demandas do painel em 25/10;
+                           desde 26/10 o Encaminhar de Pedidos Parados cria a
+                           demanda lá e tasks.py não é mais chamado).
                            Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
@@ -1276,6 +1348,15 @@
                              painel_agentes/retornos.py (tela /retornos)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
+   notificacoes_controle, notificacoes_controle_excecao, notificacoes_controle_param,
+   notificacoes_controle_historico
+                             controle_notificacoes.py (tela /notificacoes: estado
+                             geral/tipo, exceção por cnpj ou transportadora, piloto,
+                             histórico com desfazer)
+   notificacoes_disparos     painel_agentes/notificacoes_tela.py ("Disparar agora":
+                             quem, quando, saída; disparo órfão é fechado)
+   notificacoes_enviadas     (tipo piloto_<tipo>) cópias de piloto de limite_piloto.py;
+                             não contam como "recebido pelo cliente"
    notificacoes_whatsapp     notificar_whatsapp.py (teto diário, repetição, falhas;
                              origem cliente_sem_resposta = aviso direto ao embarcador)
    agendamentos_pedido, redespacho_pendente   raiz (agendamento/redespacho)
@@ -1290,7 +1371,11 @@
                              estado + falhas_show/show_pendente), galpao_eventos,
                              galpao_conferencias; galpao_coletas, galpao_contagens,
                              galpao_rua = 1 linha por minuto, guardadas 7 dias
-   interno                  tipo de carga por embarcador (só leitura)
+   interno                  tipo de carga por embarcador (só leitura); coluna fluxos
+                             (nucleo/fluxo_embarcador.py, grava via gerenciar_clientes.py fluxos)
+   trocas_nf_pendentes      portal_cliente/trocas_nf.py (fluxo Cross; espelho em
+                             portal_envios.troca_nf_status/_em/_erro, id_stokki, fluxo)
+   avisos_xd_ausente        portal_cliente/envio_pedidos.py (1 e-mail por embarcador por dia)
    rotas, rotas_paradas      LEGADO vazio (não usar)
 
  Outros bancos: dados/atendimento.db (atendimento/),
@@ -1352,8 +1437,21 @@
    cria o serviço avulso de retirada.
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
- - Envio real para clientes/motoristas é desligado por padrão
-   (notificacoes_automaticas.ativo, forcar_destino). Ligar é decisão do Hugo.
+ - Envio real para clientes/motoristas é desligado por padrão; ligar pela tela
+   /notificacoes (o config vale enquanto o tipo não tem linha na tela). Ligar é
+   decisão do Hugo.
+ - Tela /notificacoes (controle_notificacoes.py), ordem da decisão: geral -> tipo
+   -> exceção -> preferência do portal; sem linha na tela = vale o config
+   (notificacoes_automaticas.ativo, forcar_destino). --modo-teste SEMPRE ignora a
+   tela (ensaio só pro Hugo; em whatsapp_sem_resposta só simula).
+ - consulta_transportadora: LIGADO na tela só vale com
+   consulta_transportadora.ativo ligado (é feature flag que segura pedidos no
+   pipeline, não só aviso).
+ - Bloqueio de transportadora continua sendo o NÃO ENVIAR do cadastro (editado em
+   /transportadoras); a tela de Notificações não mexe nele.
+ - E-mail interno (equipe, motorista, financeiro) nunca passa pela tela. Fora dela
+   também: cotação, erro de envio à Stokki, confirmação de reentrega, convites
+   de PIN, informativo mensal e financeiro dos dedicados.
  - Data só vira dedicado quando é do cliente: reagendar pelo Planejamento
    grava EQUIPE em agendamentos_origem e fica protegido; data trocada
    direto na tela da Vuupt não passa pelo sistema, conta como do cliente e

@@ -1432,14 +1432,16 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             # "no caso do cliente responder, prevalece o que ele
             # solicitar" -- sem resposta, sem ação.
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
-            if pendentes_resposta and notificacoes_automaticas_ativas(config):
+            # A chave-mestra virou fallback: a tela de Notificações (tipo
+            # "insucesso") vale por cima e pode ligar a pergunta mesmo com ela
+            # desligada; sem linha na tela, mestra desligada = não envia
+            # (fica pro disparo manual na Fila de Ação).
+            if pendentes_resposta:
                 resultado_espera = notificar_insucesso_aguardando_resposta(
-                    pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste
+                    pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste,
+                    mestra=notificacoes_automaticas_ativas(config)
                 )
                 logger.info(f"Pergunta de reenvio aos remetentes: {resultado_espera}")
-            elif pendentes_resposta:
-                logger.info(f"Notificações automáticas desativadas -- {len(pendentes_resposta)} pedido(s) "
-                           f"aguardando pergunta de reenvio, disponível pra disparo manual na Fila de Ação.")
 
             novos_avisados = notificar_insucesso_entrega(insucessos, config_email, modo_teste)
             if novos_avisados:

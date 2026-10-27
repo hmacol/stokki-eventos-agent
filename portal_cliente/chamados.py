@@ -52,6 +52,7 @@ sys.path.insert(0, str(_AQUI))
 import yaml
 
 from email_leitura_utils import decodificar_header, extrair_texto_corpo, fetch_em_lote, remover_texto_citado
+from controle_notificacoes import acao_do_config, decidir
 from email_utils import enviar_email, envelope_html
 from regras import feriados
 
@@ -979,12 +980,34 @@ def _anexos_email(chamado_id: int, msg: dict) -> list[tuple[Path, str]]:
     return saida
 
 
+def _controle_cliente(chamado: dict) -> dict:
+    """Parâmetros da trava da tela de Notificações pros e-mails ao CLIENTE do
+    chamado. O motorista não passa pela tela (não é destinatário externo)."""
+    if chamado.get("tipo") == TIPO_MOTORISTA:
+        return {}
+    return {"tipo_controle": "chamados", "cnpj": chamado.get("cnpj_embarcador")}
+
+
 def _mandar(conn, chamado: dict, msg: dict | None, destinatarios: list[str], assunto: str, html_corpo: str,
-            config: dict, anexos=None) -> bool:
+            config: dict, anexos=None, tipo_controle: str | None = None, cnpj: str | None = None,
+            db_path=None) -> bool:
+    """`tipo_controle` preenchido = e-mail ao cliente: a tela de Notificações
+    (controle_notificacoes) vale por cima do forcar_destino do config. Sem ele
+    (equipe, motorista) o envio segue como sempre."""
     if not destinatarios:
         logger.warning("chamado %s: sem destinatário de e-mail", chamado["id"])
         return False
     forcar = cfg_chamados(config).get("forcar_destino")
+    if tipo_controle:
+        piloto = forcar if isinstance(forcar, str) else (list(forcar)[0] if forcar else "")
+        decisao = decidir(tipo_controle, cnpj or None, fallback_acao=acao_do_config(True, forcar or ""),
+                          fallback_piloto=piloto, db_path=db_path)
+        if decisao.acao == "NAO":
+            logger.info("chamado %s: e-mail ao cliente não enviado pela tela (%s)", chamado["id"], decisao.motivo)
+            return False
+        if decisao.origem == "tela":
+            # a tela manda: PILOTO vai só pro piloto, ENVIAR vai pro cliente de verdade
+            forcar = decisao.destino_piloto if decisao.acao == "PILOTO" else ""
     if forcar:
         # piloto/teste: TODO e-mail dos chamados vai só pra este endereço
         # (mesmo padrão do forcar_destino das notificações de área)
@@ -1049,7 +1072,7 @@ def email_confirmacao_cliente(conn, chamado: dict, msg: dict, emails: list[str],
         f"Pra complementar, é só <b>responder este e-mail</b>.</p>"
         + _botao_ver(chamado, config),
         rodape=_rodape(chamado, config))
-    return _mandar(conn, chamado, None, emails, _assunto_email(chamado), corpo, config)
+    return _mandar(conn, chamado, None, emails, _assunto_email(chamado), corpo, config, **_controle_cliente(chamado))
 
 
 def email_resposta_cliente(conn, chamado: dict, msg: dict, emails: list[str], config: dict) -> bool:
@@ -1062,7 +1085,7 @@ def email_resposta_cliente(conn, chamado: dict, msg: dict, emails: list[str], co
         + f"<p style='margin:12px 0 0;font-size:12.5px;color:#6B7280'>Quando o assunto estiver resolvido, marque o chamado como resolvido. Uma nova mensagem reabre o chamado.</p>",
         rodape=_rodape(chamado, config))
     return _mandar(conn, chamado, msg, emails, _assunto_email(chamado, "Re: "), corpo, config,
-                   anexos=_anexos_email(chamado["id"], msg))
+                   anexos=_anexos_email(chamado["id"], msg), **_controle_cliente(chamado))
 
 
 def email_historico(conn, chamado: dict, emails: list[str], config: dict) -> bool:
@@ -1102,7 +1125,7 @@ def email_historico(conn, chamado: dict, emails: list[str], config: dict) -> boo
         + _botao_ver(chamado, config),
         rodape=_rodape(chamado, config))
     ok = _mandar(conn, chamado, None, emails, f"[Chamado #{chamado['id']}] Histórico do atendimento · {chamado.get('assunto') or ''}".rstrip(" ·"),
-                 corpo, config)
+                 corpo, config, **_controle_cliente(chamado))
     if ok:
         atualizar_chamado(conn, chamado["id"], historico_enviado_em=_agora())
     return ok

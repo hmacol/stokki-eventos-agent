@@ -250,10 +250,21 @@
   }
 
   // "NF 123" (XML) ou "PED-1 · planilha" (importação por planilha, 09/09)
+  // Fluxo Cross (25/10): pedido entra com o item XD e a NF original é trocada depois.
+  const SELO_TROCA = { PENDENTE: ['NF a trocar', 'A NF original ainda vai entrar no pedido na Stokki'],
+                       FEITA: ['NF trocada', 'A NF original já está no pedido na Stokki'],
+                       ERRO: ['Troca de NF com erro', 'A Fresh Log foi avisada e vai trocar a NF à mão'] };
+  function seloCross(x) {
+    if (x.fluxo !== 'cross') return '';
+    const s = SELO_TROCA[x.troca_nf_status];
+    return ' <span class="chip" title="Fluxo Cross">Cross</span>' + (s ? ` <span class="chip" title="${esc(s[1])}">${esc(s[0])}</span>` : '');
+  }
+
   function docCurto(x) {
     const plan = x.origem === 'planilha';
     return `<span class="mono num" style="font-weight:600">${esc(x.documento_curto || x.numero_nf || x.referencia || '—')}</span>` +
       (plan ? ` <span class="chip" title="Pedido importado de planilha${x.numero_nf ? '' : ' (sem NF-e)'}">planilha</span>` : '') +
+      seloCross(x) +
       (plan && x.numero_nf && x.referencia ? `<div class="end">${esc(x.referencia)}</div>` : '');
   }
 
@@ -342,7 +353,14 @@
         p.rejeitados.map(r => `<div>• ${esc(r.rotulo || (r.numero_nf ? 'NF ' + r.numero_nf : r.arquivo))}${r.rotulo && r.arquivo && r.arquivo !== r.rotulo ? ` <span style="opacity:.7">(${esc(r.arquivo)})</span>` : ''} — ${esc(r.erro)}</div>`).join('');
     } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
     const nPlan = p.itens.filter(it => it.origem === 'planilha').length;
-    $('previa-titulo').textContent = p.itens.length ? `${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''} pronto${p.itens.length > 1 ? 's' : ''} pra enviar${nPlan ? ` (${nPlan} de planilha)` : ''}` : 'Nenhum pedido válido neste lote';
+    $('previa-titulo').textContent = (p.itens.length ? `${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''} pronto${p.itens.length > 1 ? 's' : ''} pra enviar${nPlan ? ` (${nPlan} de planilha)` : ''}` : 'Nenhum pedido válido neste lote') +
+      (p.xd && p.xd.erro && (p.fluxos_disponiveis || []).length ? ' · Cross indisponível: produto XD não encontrado (a Fresh Log foi avisada)' : '');
+    const multi = (p.fluxos_disponiveis || []).length > 1;
+    const rotFl = p.fluxo_rotulos || {};
+    $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
+      (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
+      '<th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr>';
+    const opcoesFluxo = it => (p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
       const plan = it.origem === 'planilha';
@@ -350,8 +368,12 @@
         ? `<span class="mono num" style="font-weight:600">${esc(it.referencia)}</span> <span class="chip" title="Pedido lido da planilha${it.linhas && it.linhas.length ? ' (linhas ' + it.linhas.join(', ') + ')' : ''}">planilha</span>` +
           `<div class="end">${it.numero_nf ? 'NF ' + esc(it.numero_nf) + ' · ' : ''}${it.itens} ${it.itens > 1 ? 'itens' : 'item'}${it.data_expedicao ? ' · expede ' + dataBr(it.data_expedicao) : ''}</div>`
         : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>`;
+      const ops = opcoesFluxo(it);
+      const celFluxo = !multi ? '' : (ops.length === 1
+        ? `<td class="nw" data-fluxo="${esc(ops[0])}">${esc(rotFl[ops[0]] || ops[0])}</td>`
+        : `<td class="nw"><select class="fl" aria-label="Fluxo do pedido"><option value="">escolha</option>${ops.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></td>`);
       return `<tr data-i="${i}">
-        <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
+        <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
         <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div></td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
@@ -373,6 +395,14 @@
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
   }
+
+  // "todos…" no cabeçalho da coluna Fluxo aplica a escolha nas linhas que aceitam aquele fluxo
+  $('previa-tabela').addEventListener('change', e => {
+    if (e.target.id !== 'fl-todos' || !e.target.value) return;
+    for (const sel of $('previa-tabela').querySelectorAll('select.fl')) {
+      if ([...sel.options].some(o => o.value === e.target.value)) sel.value = e.target.value;
+    }
+  });
 
   // mudar "só recebe com agendamento" reflete nas linhas daquele destinatário
   $('previa-dest').addEventListener('change', e => {
@@ -400,6 +430,11 @@
       const rotuloIt = it.rotulo || ('NF ' + it.numero_nf);
       const tr = $('previa-tabela').querySelector(`tr[data-i="${i}"]`);
       const item = { token: it.token, horario_inicio: h.ini, horario_fim: h.fim, requer_agendamento: h.ag };
+      if ((p.fluxos_disponiveis || []).length > 1) {
+        const sel = tr.querySelector('select.fl'), fixo = tr.querySelector('td[data-fluxo]');
+        item.fluxo = sel ? sel.value : (fixo ? fixo.dataset.fluxo : '');
+        if (!item.fluxo) { mensagem(`${rotuloIt}: escolha o fluxo do pedido (${p.fluxos_disponiveis.map(f => (p.fluxo_rotulos || {})[f] || f).join(', ')}).`, 'erro'); return; }
+      }
       if (aceitos.has(it.token)) item.aceita_fora_dia_fixo = true;
       if (h.ag) {
         const pend = tr.querySelector('.ag-pend'), data = tr.querySelector('.ag-data');

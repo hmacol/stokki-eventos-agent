@@ -28,6 +28,14 @@ Regras:
 Desligado por padrao (whatsapp_notificacoes.clientes.ativo). Com
 clientes.forcar_destino preenchido tudo vai pro numero do Hugo (piloto).
 
+Tela de Notificacoes (controle_notificacoes.py, tipo "whatsapp_sem_resposta"):
+vale por cima do config (que fica de fallback). NAO pela tela -> a mensagem e
+consumida (msg:<id> gravada como "bloqueado"; ligar depois nao manda aviso
+velho). PILOTO manda a copia so ao numero do piloto, uma por mensagem, gravada
+com origem propria (nao conta como recebido pelo cliente: a mensagem segue
+elegivel pro envio real). NAO por causa do config (sem linha na tela) so pula,
+como sempre.
+
 Uso:
     python avisar_cliente_sem_resposta.py [--modo-teste]
 """
@@ -44,11 +52,14 @@ sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "portal_cliente"))
 
 import chamados as ch  # noqa: E402  (portal_cliente/chamados.py)
+import controle_notificacoes  # noqa: E402
 import notificar_whatsapp as nw  # noqa: E402
 import preferencias_notificacao as pn  # noqa: E402
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 
 logger = logging.getLogger("avisar_cliente_sem_resposta")
 
+TIPO_TELA = "whatsapp_sem_resposta"   # chave na tela de Notificacoes
 MINUTOS_PADRAO = 10
 DIAS_MAX_PADRAO = 3
 
@@ -101,12 +112,31 @@ def selecionar(conn, config: dict, agora: datetime) -> list[dict]:
     return selecionados
 
 
-def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste: bool = False, **kw) -> dict:
+def _tela_tem_linha(db_path=None) -> bool:
+    """A tela de Notificacoes manda neste tipo (linha propria ou chave geral
+    desligada)? Erro de banco = nao: vale o config."""
+    try:
+        conn = controle_notificacoes.conectar(db_path)
+        try:
+            return (controle_notificacoes.estado_geral(conn) == "DESLIGADO"
+                    or controle_notificacoes.estado_tipo(conn, TIPO_TELA) is not None)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"nao leu a tela de Notificacoes ({e}); vale o config")
+        return False
+
+
+def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste: bool = False,
+             db_path=None, **kw) -> dict:
     """Uma rodada. `agora` e `kw` (ex.: dormir) so nos testes: em producao o
-    despacho usa o relogio real (o intervalo minimo entre envios depende disso)."""
+    despacho usa o relogio real (o intervalo minimo entre envios depende disso).
+    `db_path`: banco do controle da tela de Notificacoes (so nos testes)."""
     momento = agora or datetime.now()
     resumo = {"fora_horario": False, "avaliados": 0, "enviados": 0, "sem_whatsapp": 0, "pulados": 0,
-              "situacoes": []}
+              "bloqueados": 0, "copias_piloto": 0, "situacoes": []}
+    # o que o config decidiria hoje (a tela vale por cima)
+    fallback = acao_do_config(nw.clientes_ligado(config), nw._cfg_clientes(config).get("forcar_destino") or "")
     if not ch.situacao_horario(config, momento, ch.PERFIL_CLIENTE)["dentro"]:
         resumo["fora_horario"] = True
         logger.info("Fora do horario de atendimento: nada a fazer.")
@@ -118,16 +148,46 @@ def executar(config: dict, conn=None, agora: datetime | None = None, modo_teste:
         candidatos = selecionar(conn, config, momento)
         resumo["avaliados"] = len(candidatos)
         saldo = nw.saldo_clientes(conn, config, momento)
+        saldo_piloto = nw.saldo_piloto(conn, config, momento)
         for c in candidatos:
-            if saldo <= 0:
+            destino_forcado = None   # vale o whatsapp_notificacoes.clientes.forcar_destino do config
+            piloto = False
+            if not modo_teste:
+                d = decidir(TIPO_TELA, c["cnpj"], fallback_acao=fallback, canal="whatsapp", db_path=db_path)
+                if d.acao == "NAO" and d.origem == "tela" and not d.consome:
+                    # piloto sem WhatsApp de destino: nada sai e a mensagem fica pendente
+                    # (sai pro cliente quando a tela ligar)
+                    resumo["pulados"] += 1
+                    logger.info(f"Chamado #{c['chamado_id']} (msg {c['msg_id']}): nao enviado pela tela "
+                                f"de Notificacoes ({d.motivo}); fica pendente.")
+                    continue
+                if d.acao == "NAO" and d.origem == "tela":
+                    nw.registrar_bloqueado_sem_resposta(conn, momento, c["msg_id"],
+                                                        f"tela de Notificacoes: {d.motivo}")
+                    resumo["bloqueados"] += 1
+                    logger.info(f"Chamado #{c['chamado_id']} (msg {c['msg_id']}): barrado pela tela "
+                                f"de Notificacoes ({d.motivo}); mensagem consumida.")
+                    continue
+                # NAO do config (sem linha na tela) segue: nw devolve "desligado", como sempre
+                if d.origem == "tela":
+                    piloto = d.acao == "PILOTO"
+                    destino_forcado = d.destino_piloto if piloto else ""
+                    if piloto and nw.copia_piloto_sem_resposta_enviada(conn, c["msg_id"]):
+                        continue   # a copia desta mensagem ja saiu
+            if (saldo_piloto if piloto else saldo) <= 0:
                 resumo["pulados"] += 1
-                logger.info(f"Chamado #{c['chamado_id']}: teto diario dos clientes atingido, fica pra depois.")
+                logger.info(f"Chamado #{c['chamado_id']}: teto diario "
+                            f"{'das copias de piloto' if piloto else 'dos clientes'} atingido, fica pra depois.")
                 continue
             link = f"{ch.url_base(config)}/?chamado={c['chamado_id']}"
             situacao = nw.avisar_cliente_sem_resposta(c["chamado_id"], c["msg_id"], c["telefone"], link, config,
-                                                      modo_teste=modo_teste, conn=conn, agora=agora, **kw)
+                                                      modo_teste=modo_teste, conn=conn, agora=agora,
+                                                      destino_forcado=destino_forcado, **kw)
             resumo["situacoes"].append((c["chamado_id"], situacao))
-            if situacao == "enviado":
+            if situacao == "enviado" and piloto:
+                resumo["copias_piloto"] += 1   # nao conta como aviso ao cliente nem no teto dele
+                saldo_piloto -= 1
+            elif situacao == "enviado":
                 resumo["enviados"] += 1
                 saldo -= 1
             elif situacao == "numero_sem_whatsapp":
@@ -148,9 +208,14 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
-    if not nw.clientes_ligado(config) and not args.modo_teste:
-        logger.info("whatsapp_notificacoes.clientes.ativo desligado: nada a fazer.")
-        return 0
+    if not args.modo_teste:
+        if not nw.gateway_clientes_ok(config):
+            logger.info("WhatsApp desligado ou gateway OpenWA desconfigurado: nada a fazer.")
+            return 0
+        if not nw.clientes_ligado(config) and not _tela_tem_linha():
+            logger.info("whatsapp_notificacoes.clientes.ativo desligado e sem linha na tela de "
+                        "Notificacoes: nada a fazer.")
+            return 0
     resumo = executar(config, modo_teste=args.modo_teste)
     logger.info(f"Resumo: {resumo}")
     return 0

@@ -126,10 +126,18 @@ def registrar_origens(itens: list[dict], origem: str, db_path=DB_PATH) -> int:
         return 0
 
 
+CANAL_PILOTO = "piloto"        # copia so pro piloto da tela de Notificacoes
+CANAL_BLOQUEADO = "bloqueado"  # a tela barrou os dois canais: evento consumido
+
+
 def registrar_aviso(conn: sqlite3.Connection, servico: dict, data: date | None, canais: list[str],
                     agora: datetime | None = None) -> None:
-    """Um registro por codigo; o segundo e ignorado (INSERT OR IGNORE)."""
+    """Um registro por codigo; o segundo e ignorado (INSERT OR IGNORE), exceto
+    a linha so de piloto, que um aviso de verdade substitui."""
     for codigo in pedidos_dedicados.codigos_do_servico(servico):
+        if canais != [CANAL_PILOTO]:
+            conn.execute("DELETE FROM avisos_fora_dia_fixo WHERE codigo = ? AND canais = ?",
+                         (codigo, CANAL_PILOTO))
         conn.execute(
             "INSERT OR IGNORE INTO avisos_fora_dia_fixo (codigo, service_id, data, enviado_em, canais) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -139,9 +147,22 @@ def registrar_aviso(conn: sqlite3.Connection, servico: dict, data: date | None, 
 
 
 def ja_avisado(conn: sqlite3.Connection, servico: dict) -> bool:
+    """Linha so de piloto nao conta: a copia pro piloto nao e o aviso ao cliente."""
     codigos = pedidos_dedicados.codigos_do_servico(servico)
     if not codigos:
         return False
     marcadores = ",".join("?" * len(codigos))
-    return conn.execute(f"SELECT 1 FROM avisos_fora_dia_fixo WHERE codigo IN ({marcadores}) LIMIT 1",
-                        tuple(codigos)).fetchone() is not None
+    return conn.execute(
+        f"SELECT 1 FROM avisos_fora_dia_fixo WHERE codigo IN ({marcadores}) AND canais != ? LIMIT 1",
+        (*codigos, CANAL_PILOTO)).fetchone() is not None
+
+
+def aviso_so_de_piloto(conn: sqlite3.Connection, servico: dict) -> bool:
+    """Ja saiu a copia de piloto deste pedido (e nada alem dela)?"""
+    codigos = pedidos_dedicados.codigos_do_servico(servico)
+    if not codigos:
+        return False
+    marcadores = ",".join("?" * len(codigos))
+    return conn.execute(
+        f"SELECT 1 FROM avisos_fora_dia_fixo WHERE codigo IN ({marcadores}) AND canais = ? LIMIT 1",
+        (*codigos, CANAL_PILOTO)).fetchone() is not None

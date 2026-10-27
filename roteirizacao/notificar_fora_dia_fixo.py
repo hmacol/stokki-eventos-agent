@@ -14,6 +14,8 @@ Chaves do config.yaml:
   notificacoes_automaticas.ativo  só vale no envio real: desligada -> nada sai,
                                   nada é registrado (tenta de novo depois).
                                   O piloto não depende dela.
+Tela de Notificações (controle_notificacoes.py, tipo "fora_dia_fixo"): vale por
+cima destas chaves, que ficam de fallback quando a tela não tem linha pro tipo.
   whatsapp_notificacoes.clientes  ativo / forcar_destino / teto_diario
 Destinatário do e-mail: preferências do portal, tipo "agendamento" (o mesmo
 dos avisos de dia fixo; quem desligou não recebe e-mail).
@@ -45,6 +47,7 @@ import notificar_whatsapp  # noqa: E402
 import pedidos_dedicados  # noqa: E402
 import preferencias_notificacao  # noqa: E402
 import registro_dia_fixo  # noqa: E402
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -126,17 +129,22 @@ def _texto_whatsapp(item: dict) -> str:
 
 def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | None = None) -> dict:
     """Avisa os embarcadores dos itens (formato de fora_dia_fixo.pendentes_de_aviso)
-    e registra o aviso. `embarcadores` só pra teste."""
-    resultado = {"emails": 0, "falhas": 0, "whatsapp": 0, "registrados": 0, "desligado": 0}
+    e registra o aviso. `embarcadores` só pra teste.
+
+    Tela de Notificações (controle_notificacoes.py, tipo "fora_dia_fixo"): e-mail
+    e WhatsApp são decididos separadamente e a tela vale por cima do config
+    (que fica de fallback). Os dois canais NAO pela tela -> o evento é consumido
+    (linha "bloqueado"), menos "piloto sem destino" (Decisao.consome), que deixa
+    o aviso pendente. PILOTO manda a cópia só ao piloto, grava a linha
+    "piloto" (que não conta como aviso ao cliente: quando a tela ligar, o aviso
+    sai de verdade) e não repete a cópia nas rodadas seguintes."""
+    resultado = {"emails": 0, "falhas": 0, "whatsapp": 0, "registrados": 0, "desligado": 0, "bloqueados": 0}
     if not itens:
         return resultado
     forcar = forcar_destino_do_config(config)
-    # piloto (forcar_destino ausente ou preenchido) sai mesmo com a chave geral
-    # desligada; envio real ao embarcador exige a chave geral
-    if not forcar and not notificacoes_automaticas_ativas(config):
-        logger.info(f"{len(itens)} aviso(s) de data fora do dia fixo não enviados: notificações automáticas desligadas.")
-        resultado["desligado"] = len(itens)
-        return resultado
+    # o que o config decidiria hoje: piloto (forcar_destino ausente ou preenchido)
+    # sai mesmo com a chave geral desligada; envio real ao embarcador exige a chave geral
+    fallback = acao_do_config(bool(forcar) or notificacoes_automaticas_ativas(config), forcar)
     db = db_path or registro_dia_fixo.DB_PATH
     if embarcadores is None:
         try:
@@ -155,12 +163,49 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
     try:
         for sender_id, grupo in grupos.items():
             emb = embarcadores.get(sender_id) or {}
+            cnpj = emb.get("cnpj") or None
+            d_email = decidir("fora_dia_fixo", cnpj, fallback_acao=fallback, fallback_piloto=forcar,
+                              canal="email", db_path=db)
+            d_wpp = decidir("fora_dia_fixo", cnpj, fallback_acao=fallback, canal="whatsapp", db_path=db)
+            if d_email.acao == "NAO" and d_wpp.acao == "NAO":
+                if d_email.consome and d_wpp.consome:
+                    logger.info(f"{len(grupo)} aviso(s) de data fora do dia fixo do embarcador {sender_id} "
+                                f"barrados pela tela de Notificações ({d_email.motivo}); evento consumido.")
+                    for item in grupo:
+                        try:
+                            registro_dia_fixo.registrar_aviso(conn_reg, item["servico"], item["data"],
+                                                              [registro_dia_fixo.CANAL_BLOQUEADO])
+                            resultado["bloqueados"] += 1
+                        except Exception as e:
+                            resultado["falhas"] += 1
+                            logger.warning(f"aviso de {item['servico'].get('code')} sem registro ({e}); "
+                                           f"tenta de novo na proxima rodada")
+                else:
+                    logger.info(f"{len(grupo)} aviso(s) de data fora do dia fixo não enviados "
+                                f"({d_email.motivo}); ficam pendentes.")
+                    resultado["desligado"] += len(grupo)
+                continue
+            email_piloto = d_email.origem == "tela" and d_email.acao == "PILOTO"
+            wpp_piloto = d_wpp.origem == "tela" and d_wpp.acao == "PILOTO"
+            # a copia de piloto sai uma vez por pedido (nao e o aviso ao cliente, entao o
+            # pedido continua pendente; sem isto o piloto receberia a mesma copia a cada rodada)
+            ja_piloto = {}
+            for item in grupo:
+                try:
+                    ja_piloto[id(item)] = registro_dia_fixo.aviso_so_de_piloto(conn_reg, item["servico"])
+                except Exception as e:
+                    ja_piloto[id(item)] = False
+                    logger.warning(f"nao leu o aviso de piloto de {item['servico'].get('code')} ({e})")
+            itens_email = [i for i in grupo if not (email_piloto and ja_piloto[id(i)])]
             email_ok = email_falhou = False
-            if emb.get("emails") and not emb.get("desligado"):
-                destinos = [forcar] if forcar else emb["emails"]
-                corpo = envelope_html(_montar_conteudo(emb.get("nome", ""), grupo, emb["emails"] if forcar else None),
+            if d_email.acao != "NAO" and itens_email and emb.get("emails") and not emb.get("desligado"):
+                pilotado = d_email.acao == "PILOTO"
+                destinos = [d_email.destino_piloto] if pilotado else emb["emails"]
+                corpo = envelope_html(_montar_conteudo(emb.get("nome", ""), itens_email,
+                                                       emb["emails"] if pilotado else None),
                                       rodape="Mensagem automática — Agente Stokki Eventos.")
-                assunto = f"[Freshlog] Data fora do dia de visita da região — {len(grupo)} pedido(s) como envio dedicado"
+                assunto = (f"[Freshlog] Data fora do dia de visita da região — "
+                           f"{len(itens_email)} pedido(s) como envio dedicado")
                 if enviar_email(destinos, assunto, corpo, (config or {}).get("email", {})):
                     email_ok = True
                     resultado["emails"] += 1
@@ -169,23 +214,46 @@ def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | N
                     resultado["falhas"] += 1
             telefone = None
             leitura_falhou = False
-            if emb.get("cnpj"):
+            if emb.get("cnpj") and d_wpp.acao != "NAO":
                 try:
                     telefone = preferencias_notificacao.whatsapp_do_embarcador(conn_pref, emb["cnpj"])
                 except Exception as e:
                     leitura_falhou = True
                     logger.warning(f"nao leu o WhatsApp do embarcador {sender_id} ({e})")
+            if d_wpp.origem == "tela":
+                destino_forcado = d_wpp.destino_piloto if d_wpp.acao == "PILOTO" else ""
+            else:
+                destino_forcado = None   # vale o whatsapp_notificacoes.clientes.forcar_destino do config
+            ids_email = {id(i) for i in itens_email}
             for item in grupo:
                 # cada pedido independente: falha num não deixa os outros sem registro
                 # (senão o e-mail já enviado sairia de novo na próxima rodada)
                 try:
-                    canais = ["email"] if email_ok else []
-                    if telefone and notificar_whatsapp.avisar_cliente_fora_dia_fixo(
-                            _codigo(item["servico"]), telefone, _texto_whatsapp(item), config) == "enviado":
-                        canais.append("whatsapp")
+                    canais, copia_piloto = [], False
+                    if email_ok and id(item) in ids_email:
+                        if email_piloto:
+                            copia_piloto = True
+                        else:
+                            canais.append("email")
+                    if telefone and not (wpp_piloto and ja_piloto[id(item)]) and \
+                            notificar_whatsapp.avisar_cliente_fora_dia_fixo(
+                                _codigo(item["servico"]), telefone, _texto_whatsapp(item), config,
+                                destino_forcado=destino_forcado) == "enviado":
                         resultado["whatsapp"] += 1
+                        if wpp_piloto:
+                            copia_piloto = True
+                        else:
+                            canais.append("whatsapp")
+                    if copia_piloto and not canais:
+                        canais = [registro_dia_fixo.CANAL_PILOTO]
                     if (email_falhou or leitura_falhou) and not canais:
                         continue  # tenta de novo na próxima rodada
+                    if ja_piloto[id(item)] and not canais:
+                        continue  # a copia de piloto deste pedido ja saiu antes
+                    if not canais and "tela" in (d_email.origem, d_wpp.origem) and "NAO" in (d_email.acao, d_wpp.acao):
+                        # um canal barrado pela tela (ex.: piloto sem WhatsApp) e nada saiu: nao consome,
+                        # o canal barrado ainda pode sair quando a tela liberar (so os DOIS barrados consomem)
+                        continue
                     registro_dia_fixo.registrar_aviso(conn_reg, item["servico"], item["data"], canais)
                     resultado["registrados"] += 1
                 except Exception as e:

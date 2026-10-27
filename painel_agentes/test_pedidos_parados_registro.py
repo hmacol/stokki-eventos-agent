@@ -212,14 +212,45 @@ class TestListagemLocal(_Base):
 
     def test_encaminhar_pausado_nao_toca_nada(self):
         with mock.patch.object(ppt, "ENCAMINHAMENTO_DEMANDAS_ATIVO", False), \
-             mock.patch.object(ppt, "_vuupt") as v, mock.patch.object(ppt, "_sessao_freshhub") as s:
+             mock.patch.object(ppt, "_vuupt") as v:
             with self.assertRaises(ValueError):
-                ppt.encaminhar_operacao("A", "Cancelados", "x")
+                ppt.encaminhar_operacao("A", "Cancelados", "x", equipe_id=1)
         v.assert_not_called()
-        s.assert_not_called()
+
+    def test_encaminhar_cria_demanda_no_painel(self):
+        # 26/10: a demanda nasce na tela Demandas, pra equipe escolhida; nao duplica
+        import acesso_telas
+        import demandas
+        import grupos_equipe
+        for alvo in (demandas, acesso_telas, grupos_equipe):
+            p = mock.patch.object(alvo, "DB_PATH", self.db)
+            p.start()
+            self.addCleanup(p.stop)
+        c = demandas.conectar()
+        estoque = next(e["id"] for e in demandas.equipes_ativas(c) if e["nome"] == "Estoque")
+        c.close()
+        vuupt = mock.Mock()
+        vuupt.buscar_customer_por_id.return_value = {"name": "Mercado X"}
+        with mock.patch.object(ppt, "_vuupt", return_value=vuupt), \
+             mock.patch.object(ppt, "_resolver_pedido", return_value=({"customer_id": 9}, "PS-77")), \
+             mock.patch.object(ppt.tratativas, "registrar_evento") as evento:
+            with self.assertRaises(ValueError):
+                ppt.encaminhar_operacao("77", "Cancelados", "hugo")          # sem equipe
+            r = ppt.encaminhar_operacao("77", "Cancelados", "hugo", equipe_id=estoque, autor="Hugo")
+            de_novo = ppt.encaminhar_operacao("77", "Cancelados", "hugo", equipe_id=estoque)
+        self.assertFalse(r["ja_existia"])
+        self.assertEqual((de_novo["demanda_id"], de_novo["ja_existia"]), (r["demanda_id"], True))
+        self.assertEqual(evento.call_count, 1)
+        c = demandas.conectar()
+        d = c.execute("SELECT * FROM demandas WHERE id = ?", (r["demanda_id"],)).fetchone()
+        c.close()
+        self.assertEqual((d["titulo"], d["prioridade"], d["pedido_codigo"], d["origem"], d["criado_por_nome"]),
+                         ("Cancelamento de Pedido e Retorno ao Estoque — Mercado X", "ALTA", "PS-77",
+                          "pedidos_parados", "Hugo"))
 
     def test_classificar_pausado_nao_conclui(self):
         rid = ppt.registrar("A", 1, "x")["id"]
+        # classificar nunca conclui sozinho (so a acao do botao conclui)
         ppt.classificar("A", str(rid), "Cancelados", "x")
         self.assertNotEqual(ppt.registros_hoje("x")["hoje"][0]["acao_status"], "concluida")
 
@@ -230,8 +261,9 @@ class TestListagemLocal(_Base):
         p = ppt.listar_com_classificacao()[0]
         self.assertEqual((p["foto"], p["foto_id"], p["freshhub_id"]), (True, com_foto, str(sem_foto)))
 
-    def test_flag_desligada_por_padrao(self):
-        self.assertFalse(ppt.ENCAMINHAMENTO_DEMANDAS_ATIVO)
+    def test_flag_ligada_desde_26_10(self):
+        # religado pelo Hugo: o Encaminhar cria a demanda na tela Demandas do painel
+        self.assertTrue(ppt.ENCAMINHAMENTO_DEMANDAS_ATIVO)
 
 
 class TestRotas(_Base):

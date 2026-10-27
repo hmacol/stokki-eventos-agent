@@ -1,0 +1,727 @@
+{% extends "base.html" %}
+{% block titulo %}Notificações{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  button.botao.secundario { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  button.botao.secundario:hover { background: var(--superficie-hover); }
+  button.botao.perigo { background: var(--erro); }
+  button.botao.pequeno { padding: 5px 10px; font-size: 12px; }
+  .msg { font-size: 13px; color: var(--texto-suave); }
+  .msg.erro { color: var(--erro-texto); }
+
+  /* faixa do geral: vermelha quando desligado */
+  .geral { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; margin-bottom: 14px;
+           border: 1px solid var(--borda); border-radius: 10px; background: var(--superficie); }
+  .geral.desligado { border-color: var(--erro); background: var(--erro-bg); }
+  .geral .titulo { font-weight: 700; font-size: 14px; }
+  .geral .nota { color: var(--texto-suave); font-size: 13px; flex: 1 1 220px; }
+  .geral .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .pilula { display: inline-block; padding: 2px 9px; border-radius: 100px; font-size: 11px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; }
+  .pilula.LIGADO { background: var(--sucesso-bg); color: var(--acento-texto); }
+  .pilula.PILOTO { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .pilula.DESLIGADO { background: var(--nunca-bg); color: var(--texto-suave); }
+  .pilula.config { background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.erro { background: var(--erro-bg); color: var(--erro-texto); }
+
+  .tabela-rolavel { overflow-x: auto; }
+  table.tipos { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tipos th { text-align: left; color: var(--texto-suave); font-weight: 600; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--borda); }
+  table.tipos td { padding: 10px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  table.tipos tr.linha { cursor: pointer; }
+  table.tipos tr.linha:hover, table.tipos tr.linha:focus-visible { background: var(--superficie-hover); outline: none; }
+  table.tipos tr.linha.aberta { background: var(--superficie-hover); }
+  table.tipos .rotulo { font-weight: 600; }
+
+  /* painel lateral do tipo */
+  .fundo-painel { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 1990; }
+  .fundo-painel[hidden], .painel[hidden] { display: none; }
+  .painel { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--superficie);
+            border-left: 1px solid var(--borda); box-shadow: -8px 0 24px rgba(0,0,0,0.18); z-index: 1991;
+            overflow-y: auto; padding: 16px; }
+  .painel .topo { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .painel .topo h2 { flex: 1; margin: 0; font-size: 16px; }
+  .painel .meta { color: var(--texto-suave); font-size: 12px; margin: 0 0 12px; line-height: 1.5; }
+  .painel .bloco { margin-bottom: 14px; }
+  .painel .bloco h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); margin: 0 0 6px; }
+  .seletor { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seletor button { flex: 1 1 100px; font: inherit; font-size: 13px; font-weight: 600; padding: 8px 6px; border-radius: 7px;
+                    border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); cursor: pointer; }
+  .seletor button:hover { background: var(--superficie-hover); }
+  .seletor button.ativo.LIGADO { background: var(--sucesso-bg); border-color: var(--sucesso); color: var(--acento-texto); }
+  .seletor button.ativo.PILOTO { background: var(--rodando-bg); border-color: var(--rodando); color: var(--rodando-texto); }
+  .seletor button.ativo.DESLIGADO { background: var(--nunca-bg); border-color: var(--texto-suave); }
+  .nota-painel { font-size: 12px; color: var(--texto-suave); line-height: 1.5; margin: 6px 0 0; }
+  .nota-painel a { color: inherit; }
+  .busca { width: 100%; font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+           background: var(--superficie); color: inherit; margin-bottom: 8px; }
+  .rotulo-busca { display: block; font-size: 12px; color: var(--texto-suave); margin-bottom: 6px; }
+  #cartao-busca-emb .busca { margin-bottom: 0; }
+  #resultado-embarcador li:empty { display: none; }
+  #resultado-embarcador .achado { width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 7px 4px;
+                                  background: none; border: 0; color: inherit; cursor: pointer; }
+  #resultado-embarcador .achado:hover { background: var(--superficie-hover); }
+  #resultado-embarcador .achado .chave { color: var(--texto-suave); font-size: 11px; margin-left: 6px; }
+  table.situacao { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.situacao th { text-align: left; color: var(--texto-suave); font-weight: 600; font-size: 11px; padding: 4px 6px 4px 0; }
+  table.situacao td { padding: 6px 6px 6px 0; border-top: 1px solid var(--borda); vertical-align: top; }
+  ul.destinos { list-style: none; margin: 0; padding: 0; }
+  ul.destinos li { border-top: 1px solid var(--borda); padding: 8px 0; }
+  .destino-topo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .destino-topo .nome { font-weight: 600; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+  .destino-topo .chave { color: var(--texto-suave); font-size: 11px; }
+  .destino-acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .editor { margin-top: 8px; padding: 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie-hover); }
+  .editor label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--texto-suave); margin-bottom: 8px; }
+  .editor textarea, .editor input, .piloto input { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--borda);
+                                                   border-radius: 6px; background: var(--superficie); color: inherit; width: 100%; }
+  .editor textarea { min-height: 70px; resize: vertical; }
+  .linha-acoes { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .piloto .campos { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .piloto label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--texto-suave); flex: 1 1 220px; }
+
+  table.hist { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.hist th { text-align: left; color: var(--texto-suave); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--borda); }
+  table.hist td { padding: 7px 8px; border-bottom: 1px solid var(--borda); vertical-align: top; overflow-wrap: anywhere; }
+  .vazio { color: var(--texto-suave); font-size: 13px; padding: 6px 0; }
+
+  /* Disparar agora */
+  .resultado-disparo { margin-top: 8px; font-size: 12.5px; }
+  .resultado-disparo pre, dialog.janela pre { margin: 6px 0 0; padding: 8px; max-height: 240px; overflow: auto;
+                                              white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px;
+                                              background: var(--superficie-hover); border: 1px solid var(--borda); border-radius: 6px; }
+  dialog.janela { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 16px;
+                  border: 1px solid var(--borda); border-radius: 10px; background: var(--superficie); color: var(--texto); }
+  dialog.janela::backdrop { background: rgba(0,0,0,0.45); }
+  dialog.janela h2 { margin: 0 0 10px; }
+  dialog.janela fieldset { border: 0; padding: 0; margin: 0 0 10px; }
+  dialog.janela fieldset label { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; }
+  dialog.janela .busca, dialog.janela select { width: 100%; font: inherit; font-size: 13px; margin-bottom: 8px; }
+  dialog.janela .linha-acoes { margin-top: 12px; justify-content: flex-end; }
+
+  @media (max-width: 700px) {
+    .oculta-mobile { display: none; }
+    table.hist .oculta-mobile { display: none; }
+  }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+{% set ROTULO_ESTADO = {'LIGADO': 'Ligado', 'PILOTO': 'Piloto (só Hugo)', 'DESLIGADO': 'Desligado', 'config': 'segue o config'} %}
+<h1>Notificações</h1>
+<p class="sub">
+  Liga, pilota ou desliga os envios a <strong>embarcadores e transportadoras</strong>, sem mexer no config.
+  <strong>Piloto</strong> manda só para o destino de piloto (abaixo); <strong>Ligado</strong> o cliente recebe de
+  verdade. Dentro de cada tipo dá para liberar ou bloquear um destinatário. Aviso a equipe, motorista e financeiro
+  não passa por aqui. Quem desligou o tipo no portal continua sem receber, e o que não saiu enquanto estava
+  desligado não sai depois.
+</p>
+
+<div class="cartao" id="cartao-busca-emb">
+  <label class="rotulo-busca" for="busca-embarcador">Embarcador: e-mails de notificação e situação em cada tipo</label>
+  <input type="search" id="busca-embarcador" class="busca" placeholder="Buscar embarcador por nome ou CNPJ" autocomplete="off">
+  <ul class="destinos" id="resultado-embarcador"></ul>
+</div>
+
+<div class="geral{{ ' desligado' if geral == 'DESLIGADO' }}" id="geral" data-geral="{{ geral or 'config' }}">
+  <span class="titulo">Geral</span>
+  <span class="pilula {{ geral or 'config' }}">{{ ROTULO_ESTADO[geral or 'config'] }}</span>
+  <span class="nota">
+    {% if geral == 'DESLIGADO' %}Nenhum envio a cliente sai, qualquer que seja o estado dos tipos.
+    {% elif geral == 'LIGADO' %}Cada tipo vale pelo estado dele.
+    {% else %}Sem linha: o geral segue o config de hoje. Desligar aqui corta tudo de uma vez, em emergência.{% endif %}
+  </span>
+  <span class="acoes">
+    <button type="button" class="botao perigo pequeno" data-geral-acao="desligar" {{ 'disabled' if geral == 'DESLIGADO' }}>Desligar tudo</button>
+    <button type="button" class="botao pequeno" data-geral-acao="ligar" {{ 'disabled' if geral == 'LIGADO' }}>Ligar</button>
+  </span>
+  <span class="msg" id="msg-geral" role="status"></span>
+</div>
+
+<div class="cartao">
+  <div class="tabela-rolavel">
+  <table class="tipos">
+    <thead><tr><th>Tipo</th><th>Estado</th><th>Exceções</th><th class="oculta-mobile">Quando</th><th class="oculta-mobile">Último envio</th></tr></thead>
+    <tbody>
+    {% for l in lista %}
+      <tr class="linha" data-tipo="{{ l.tipo }}" tabindex="0" role="button" aria-label="Abrir {{ l.rotulo }}">
+        <td class="rotulo">{{ l.rotulo }}</td>
+        <td><span class="pilula {{ l.estado }}" data-celula="estado">{{ ROTULO_ESTADO[l.estado] }}</span></td>
+        <td data-celula="resumo">{{ l.resumo_excecoes }}</td>
+        <td class="oculta-mobile">{{ l.quando }}</td>
+        <td class="oculta-mobile">{{ l.ultimo_envio }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="cartao piloto" id="piloto">
+  <h2>Destino do piloto</h2>
+  <p class="sub" style="margin-bottom:10px">
+    Quando um tipo está em <strong>Piloto</strong>, a cópia vai para cá em vez de ir ao cliente. E-mail vazio volta
+    ao padrão; WhatsApp vazio deixa o piloto sem WhatsApp (o envio por WhatsApp não sai).
+  </p>
+  <div class="campos">
+    <label>E-mail <input type="email" name="email" value="{{ piloto.email }}" autocomplete="off"></label>
+    <label>WhatsApp (com DDD) <input type="text" name="whatsapp" value="{{ piloto.whatsapp }}" autocomplete="off" inputmode="tel"></label>
+    <span class="linha-acoes">
+      <button type="button" class="botao pequeno" data-acao="salvar-piloto">Salvar</button>
+      <span class="msg" role="status"></span>
+    </span>
+  </div>
+</div>
+
+<div class="cartao" id="historico-cartao">
+  <h2>Histórico de mudanças</h2>
+  <div class="tabela-rolavel"><table class="hist"><thead>
+    <tr><th>Quando</th><th class="oculta-mobile">Quem</th><th>O que</th><th>De → para</th><th></th></tr>
+  </thead><tbody id="historico"></tbody></table></div>
+  <p class="vazio" id="historico-vazio" hidden>Nenhuma mudança feita pela tela ainda.</p>
+  <span class="msg" id="msg-historico" role="status"></span>
+</div>
+
+<div class="fundo-painel" id="fundo-painel" hidden></div>
+<aside class="painel" id="painel" hidden aria-label="Detalhe do tipo"></aside>
+
+<script>
+(function () {
+  const URLS = {
+    geral: "{{ url_for('api_notificacoes_geral') }}",
+    estado: "{{ url_for('api_notificacoes_estado') }}",
+    excecao: "{{ url_for('api_notificacoes_excecao') }}",
+    piloto: "{{ url_for('api_notificacoes_piloto') }}",
+    desfazer: "{{ url_for('api_notificacoes_desfazer') }}",
+    historico: "{{ url_for('api_notificacoes_historico') }}",
+    tipo: "{{ url_for('api_notificacoes_tipo', tipo='__T__') }}",
+    embarcador: "{{ url_for('api_notificacoes_embarcador', cnpj='__C__') }}",
+    situacao: "{{ url_for('api_notificacoes_embarcador_situacao', cnpj='__C__') }}",
+    transportadoras: "{{ url_for('transportadoras') }}",
+    disparo: "{{ url_for('api_notificacoes_disparo_dados', tipo='__T__') }}",
+    disparar: "{{ url_for('api_notificacoes_disparo') }}",
+  };
+  const TIPOS = {{ tipos|tojson }};
+  const DISPARAVEIS = {{ disparaveis|tojson }};
+  const SEM_DISPARO = {{ sem_disparo|tojson }};
+  const SO_PELO_TIMER = {{ so_pelo_timer|tojson }};
+  const NOTA_TESTE = {{ nota_teste|tojson }};
+  const ROTULO_ALVO = { teste: "Só para mim (teste)", todos: "Todos os liberados", um: "Um embarcador" };
+  const EMBARCADORES = {{ embarcadores|tojson }};
+  const ROTULO_ESTADO = { LIGADO: "Ligado", PILOTO: "Piloto (só Hugo)", DESLIGADO: "Desligado", config: "segue o config" };
+  const ROTULO_CANAL = { email: "e-mail", whatsapp: "WhatsApp" };
+  let HISTORICO = {{ historico|tojson }};
+
+  function el(tag, props, ...filhos) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (k === "class") e.className = v;
+      else if (k === "text") e.textContent = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v === true) e.setAttribute(k, "");
+      else if (v !== false && v != null) e.setAttribute(k, v);
+    }
+    filhos.flat().forEach((f) => { if (f != null && f !== false) e.append(f); });
+    return e;
+  }
+
+  async function chamar(url, corpo) {
+    const opcoes = corpo === undefined ? {} : {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo),
+    };
+    let resp, dados = {};
+    try {
+      resp = await fetch(url, opcoes);
+      dados = await resp.json();
+    } catch (e) {
+      return { ok: false, status: resp ? resp.status : 0, dados: { erro: "Falha de rede ou resposta inválida." } };
+    }
+    return { ok: resp.ok, status: resp.status, dados };
+  }
+
+  function fmtChave(chave) {
+    return /^\d{14}$/.test(chave)
+      ? chave.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5") : chave;
+  }
+
+  function pilula(estado) {
+    return el("span", { class: "pilula " + estado, text: ROTULO_ESTADO[estado] || estado });
+  }
+
+  // hash: "t=<tipo>" ou "e=<cnpj>" reabre o painel depois do reload; null fecha tudo.
+  function recarregar(hash) {
+    if (hash) window.location.hash = hash; else history.replaceState(null, "", window.location.pathname);
+    window.location.reload();
+  }
+
+  // Texto do confirm de ligar, igual para o seletor de estado e para o Desfazer
+  // que religa (dados = corpo do 409 com a contagem).
+  function textoConfirmarLigar(dados) {
+    // volta_ao_config: Desfazer que apaga a linha (volta a seguir o config, que pode enviar de verdade)
+    if (dados.geral) {
+      const n = dados.tipos_ligados;
+      return "Ligar o geral libera os envios de cada tipo conforme o estado dele"
+        + (n ? " (" + n + " tipo(s) estão em Ligado e passam a enviar aos clientes de verdade)" : "")
+        + (dados.volta_ao_config ? "; os tipos sem estado na tela voltam a seguir o config (podem enviar de verdade)" : "")
+        + ". Confirma?";
+    }
+    const unidade = TIPOS[dados.tipo].destino === "transportadora" ? "ponto(s) de transportadora" : "destinatário(s)";
+    if (dados.volta_ao_config) {
+      return "Desfazer \"" + TIPOS[dados.tipo].rotulo + "\": volta a seguir o config (pode enviar de verdade). Se o config enviar de verdade, até "
+        + dados.destinatarios + " " + unidade + " recebem (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?";
+    }
+    return "Ligar \"" + TIPOS[dados.tipo].rotulo + "\": " + dados.destinatarios + " " + unidade
+      + " vão receber de verdade (quem tem contato no canal e não desligou no portal, menos os bloqueados). Confirma?";
+  }
+
+  // ---------------------------------------------------------------- geral
+  const msgGeral = document.getElementById("msg-geral");
+  document.querySelectorAll("[data-geral-acao]").forEach((botao) => botao.addEventListener("click", async () => {
+    const ligar = botao.dataset.geralAcao === "ligar";
+    msgGeral.className = "msg"; msgGeral.textContent = "Salvando...";
+    let r = await chamar(URLS.geral, { ligado: ligar });
+    if (r.status === 409) {
+      if (!window.confirm(textoConfirmarLigar(r.dados))) { msgGeral.textContent = ""; return; }
+      r = await chamar(URLS.geral, { ligado: true, confirmado: true });
+    }
+    if (!r.ok) { msgGeral.className = "msg erro"; msgGeral.textContent = r.dados.erro || "Falha ao salvar."; return; }
+    recarregar(null);
+  }));
+
+  // --------------------------------------------------------------- piloto
+  const cartaoPiloto = document.getElementById("piloto");
+  cartaoPiloto.querySelector("[data-acao=salvar-piloto]").addEventListener("click", async () => {
+    const aviso = cartaoPiloto.querySelector(".msg");
+    aviso.className = "msg"; aviso.textContent = "Salvando...";
+    const r = await chamar(URLS.piloto, {
+      email: cartaoPiloto.querySelector("[name=email]").value,
+      whatsapp: cartaoPiloto.querySelector("[name=whatsapp]").value,
+    });
+    if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao salvar."; return; }
+    recarregar(null);
+  });
+
+  // ------------------------------------------------------------ histórico
+  function fmtValor(h, v) {
+    if (h.alvo === "_emails") return v == null ? "—" : v;
+    if (v == null) return h.alvo === "_piloto" ? "padrão" : (h.destino ? "sem exceção" : "segue o config");
+    return h.destino == null && ROTULO_ESTADO[v] ? ROTULO_ESTADO[v] : v;
+  }
+
+  function renderHistorico() {
+    const corpo = document.getElementById("historico");
+    corpo.replaceChildren();
+    document.getElementById("historico-vazio").hidden = HISTORICO.length > 0;
+    HISTORICO.forEach((h) => {
+      let o = h.alvo_rotulo;
+      if (h.destino) o += " · " + (h.destino_nome || fmtChave(h.destino));
+      // Edição de e-mails/WhatsApp fica só no registro: sem Desfazer.
+      const botao = h.desfazivel === false ? null
+        : el("button", { type: "button", class: "botao secundario pequeno", text: "Desfazer" });
+      if (botao) botao.addEventListener("click", async () => {
+        if (!window.confirm("Desfazer: " + o + " volta para " + fmtValor(h, h.de) + "?")) return;
+        const aviso = document.getElementById("msg-historico");
+        aviso.className = "msg"; aviso.textContent = "Salvando...";
+        let r = await chamar(URLS.desfazer, { id: h.id });
+        if (r.status === 409) {
+          if (!window.confirm(textoConfirmarLigar(r.dados))) { aviso.textContent = ""; return; }
+          r = await chamar(URLS.desfazer, { id: h.id, confirmado: true });
+        }
+        if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao desfazer."; return; }
+        recarregar(painelAberto);
+      });
+      corpo.append(el("tr", {},
+        el("td", { text: (h.quando || "").replace("T", " ") }),
+        el("td", { class: "oculta-mobile", text: h.por || "" }),
+        el("td", { text: o }),
+        el("td", { text: fmtValor(h, h.de) + " → " + fmtValor(h, h.para) }),
+        el("td", {}, botao)));
+    });
+  }
+
+  async function atualizarHistorico() {
+    const r = await chamar(URLS.historico);
+    if (r.ok) { HISTORICO = r.dados; renderHistorico(); }
+  }
+
+  // ----------------------------------------------------------- painel lateral
+  const painel = document.getElementById("painel");
+  const fundo = document.getElementById("fundo-painel");
+  let painelAberto = null;
+
+  function fechar() {
+    painel.hidden = true; fundo.hidden = true; painelAberto = null;
+    document.querySelectorAll("tr.linha.aberta").forEach((l) => l.classList.remove("aberta"));
+    history.replaceState(null, "", window.location.pathname);
+  }
+  fundo.addEventListener("click", fechar);
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && painelAberto) fechar(); });
+
+  function atualizarLinha(d) {
+    const linha = document.querySelector('tr.linha[data-tipo="' + d.tipo + '"]');
+    if (!linha) return;
+    const bloqueados = d.destinos.filter((x) => x.excecao === "BLOQUEADO").length;
+    const liberados = d.destinos.filter((x) => x.excecao === "LIBERADO").length;
+    const partes = [];
+    if (bloqueados) partes.push(bloqueados + (bloqueados === 1 ? " bloqueado" : " bloqueados"));
+    if (liberados) partes.push(liberados + (liberados === 1 ? " liberado" : " liberados"));
+    linha.querySelector('[data-celula=resumo]').textContent = partes.join(" · ") || "—";
+  }
+
+  async function mudarEstado(tipo, estado, aviso) {
+    aviso.className = "msg"; aviso.textContent = "Salvando...";
+    let r = await chamar(URLS.estado, { tipo, estado });
+    if (r.status === 409) {
+      if (!window.confirm(textoConfirmarLigar(r.dados))) { aviso.textContent = ""; return; }
+      r = await chamar(URLS.estado, { tipo, estado, confirmado: true });
+    }
+    if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao salvar."; return; }
+    recarregar("t=" + tipo);
+  }
+
+  async function mudarExcecao(d, destino, regra, aviso) {
+    aviso.className = "msg"; aviso.textContent = "Salvando...";
+    const r = await chamar(URLS.excecao, { tipo: d.tipo, destino: destino.chave, regra });
+    if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao salvar."; return; }
+    aviso.textContent = "";
+    const novo = await chamar(URLS.tipo.replace("__T__", d.tipo));
+    if (novo.ok) {
+      d.destinos = novo.dados.destinos;
+      atualizarLinha(d);
+      renderLista(d);
+    }
+    atualizarHistorico();
+  }
+
+  function editorEmails(destino, caixa) {
+    const campoEmails = el("textarea", { name: "emails", placeholder: "um e-mail por linha" });
+    const campoZap = el("input", { type: "text", name: "whatsapp", inputmode: "tel", autocomplete: "off" });
+    const aviso = el("span", { class: "msg", role: "status" });
+    const dicaCadastro = el("span", { class: "msg" });
+    // Salvar so liga depois que a leitura deu certo: senao um clique cedo (ou depois
+    // de uma falha) mandaria campos vazios e apagaria a lista do cliente.
+    const salvar = el("button", { type: "button", class: "botao pequeno", text: "Salvar", disabled: true });
+    caixa.replaceChildren(
+      el("label", {}, "E-mails de notificação (a mesma lista do portal; vazio usa o e-mail do cadastro)", campoEmails),
+      dicaCadastro,
+      el("label", { style: "margin-top:8px" }, "WhatsApp (com DDD)", campoZap),
+      el("div", { class: "linha-acoes" }, salvar, aviso));
+    aviso.textContent = "Carregando...";
+    chamar(URLS.embarcador.replace("__C__", destino.chave)).then((r) => {
+      if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao carregar."; return; }
+      campoEmails.value = r.dados.emails.join("\n");
+      campoZap.value = r.dados.whatsapp || "";
+      dicaCadastro.textContent = r.dados.emails.length ? "" : "Sem e-mail próprio: usa o do cadastro ("
+        + (r.dados.emails_cadastro.join(", ") || "nenhum") + ").";
+      aviso.textContent = "";
+      salvar.disabled = false;
+    });
+    salvar.addEventListener("click", async () => {
+      if (salvar.disabled) return;
+      aviso.className = "msg"; aviso.textContent = "Salvando...";
+      const r = await chamar(URLS.embarcador.replace("__C__", destino.chave),
+        { emails: campoEmails.value, whatsapp: campoZap.value });
+      if (!r.ok) { aviso.className = "msg erro"; aviso.textContent = r.dados.erro || "Falha ao salvar."; return; }
+      campoEmails.value = r.dados.emails.join("\n");
+      campoZap.value = r.dados.whatsapp || "";
+      aviso.textContent = "Salvo.";
+    });
+  }
+
+  function itemDestino(d, destino) {
+    const ehTransp = d.destino === "transportadora";
+    const aviso = el("span", { class: "msg", role: "status" });
+    const topo = el("div", { class: "destino-topo" },
+      el("span", { class: "nome", text: destino.nome }),
+      !ehTransp ? el("span", { class: "chave", text: fmtChave(destino.chave) }) : null,
+      destino.excecao === "LIBERADO" ? el("span", { class: "pilula LIGADO", text: "liberado" }) : null,
+      destino.excecao === "BLOQUEADO" ? el("span", { class: "pilula erro", text: "bloqueado" }) : null,
+      destino.preferencia_cliente === false
+        ? el("span", { class: "pilula DESLIGADO", title: "O cliente desligou este tipo no portal: continua sem receber", text: "cliente desligou" })
+        : null,
+      destino.nao_enviar ? el("span", { class: "pilula erro", text: "Não enviar (cadastro)" }) : null);
+    const acoes = el("div", { class: "destino-acoes" });
+    const caixa = el("div", { class: "editor", hidden: true });
+    if (destino.nao_enviar) {
+      acoes.append(el("a", { href: URLS.transportadoras, class: "msg", text: "Editar no cadastro de transportadoras" }));
+    } else {
+      acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "Liberar",
+        title: "Recebe de verdade mesmo com o tipo em Piloto", disabled: destino.excecao === "LIBERADO",
+        onclick: () => mudarExcecao(d, destino, "LIBERADO", aviso) }));
+      if (!ehTransp) {
+        acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "Bloquear",
+          title: "Não recebe este tipo, em nenhum estado", disabled: destino.excecao === "BLOQUEADO",
+          onclick: () => mudarExcecao(d, destino, "BLOQUEADO", aviso) }));
+      }
+      acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "Limpar",
+        disabled: !destino.excecao, onclick: () => mudarExcecao(d, destino, null, aviso) }));
+    }
+    if (!ehTransp && /^\d{14}$/.test(destino.chave)) {
+      acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "E-mails",
+        onclick: () => {
+          caixa.hidden = !caixa.hidden;
+          if (!caixa.hidden) editorEmails(destino, caixa);
+        } }));
+    }
+    if (!ehTransp && /^\d{14}$/.test(destino.chave)) {
+      acoes.append(el("button", { type: "button", class: "botao secundario pequeno", text: "Detalhe",
+        title: "Situação deste embarcador em cada tipo", onclick: () => abrirEmbarcador(destino.chave) }));
+    }
+    acoes.append(aviso);
+    return el("li", { "data-nome": (destino.nome + " " + destino.chave).toLowerCase() }, topo, acoes, caixa);
+  }
+
+  function renderLista(d) {
+    const ul = painel.querySelector("ul.destinos");
+    const busca = painel.querySelector("input.busca");
+    const termo = (busca.value || "").trim().toLowerCase();
+    ul.replaceChildren();
+    d.destinos.forEach((destino) => {
+      const li = itemDestino(d, destino);
+      li.hidden = !!termo && !li.dataset.nome.includes(termo.replace(/[.\/-]/g, ""))
+        && !li.dataset.nome.includes(termo);
+      ul.append(li);
+    });
+    if (!d.destinos.length) ul.append(el("li", { class: "vazio", text: "Nenhum destinatário no cadastro." }));
+  }
+
+  // ------------------------------------------------------- disparar agora
+  function notaDoAlvo(d, alvo) {
+    if (alvo === "teste") return NOTA_TESTE[d.tipo] || "Vai só para o Hugo (destino de teste), qualquer que seja o estado do tipo.";
+    const quem = d.destino === "transportadora" ? "as transportadoras" : "os clientes";
+    if (d.estado === "LIGADO") return "O tipo está Ligado: " + quem + " recebem de verdade.";
+    if (d.estado === "PILOTO") return "O tipo está em Piloto: a cópia vai só para o destino de piloto.";
+    if (d.estado === "DESLIGADO") return "O tipo está Desligado: a rotina roda, mas nada sai para " + quem + ".";
+    return "O tipo segue o config de hoje: " + quem + " recebem só se o config estiver ligado.";
+  }
+
+  async function abrirJanelaDisparo(d, depois) {
+    const r = await chamar(URLS.disparo.replace("__T__", d.tipo));
+    if (!r.ok) { window.alert(r.dados.erro || "Falha ao carregar o disparo."); return; }
+    const dados = r.dados;
+    const recebeu = dados.ja_recebeu_hoje || {};
+    const dlg = el("dialog", { class: "janela", "aria-label": "Disparar " + d.rotulo });
+    const nota = el("p", { class: "nota-painel" });
+    const aviso = el("span", { class: "msg", role: "status" });
+    const confirmar = el("button", { type: "button", class: "botao pequeno", text: "Disparar" });
+    const cancelar = el("button", { type: "button", class: "botao secundario pequeno", text: "Cancelar",
+      onclick: () => dlg.close() });
+    const grupoUm = el("div", { hidden: true });
+    const busca = el("input", { type: "search", class: "busca", placeholder: "Buscar embarcador", "aria-label": "Buscar embarcador" });
+    const lista = el("select", { size: "6", "aria-label": "Embarcador" });
+    const infoRecebeu = el("p", { class: "nota-painel" });
+    const reenviar = el("input", { type: "checkbox" });
+    const caixaReenviar = el("label", { hidden: true }, reenviar, " Reenviar mesmo assim");
+    let alvo = dados.alvos[0];
+
+    function opcoes() {
+      const termo = busca.value.trim().toLowerCase();
+      lista.replaceChildren();
+      dados.embarcadores.filter((e) => !termo || e.nome.toLowerCase().includes(termo)).forEach((e) => {
+        lista.append(el("option", { value: String(e.sender_id), text: e.nome + (recebeu[e.sender_id] ? " (enviado hoje)" : "") }));
+      });
+    }
+    function atualizar() {
+      nota.textContent = notaDoAlvo(d, alvo);
+      grupoUm.hidden = alvo !== "um";
+      const sender = lista.value;
+      const hora = alvo === "um" && sender ? recebeu[sender] : null;
+      infoRecebeu.textContent = hora ? "Enviado hoje às " + hora + ". Por padrão não é enviado de novo." : "";
+      caixaReenviar.hidden = !hora;
+      if (!hora) reenviar.checked = false;
+      confirmar.disabled = alvo === "um" && (!sender || (!!hora && !reenviar.checked));
+    }
+    busca.addEventListener("input", () => { opcoes(); atualizar(); });
+    lista.addEventListener("change", atualizar);
+    reenviar.addEventListener("change", atualizar);
+    grupoUm.append(busca, lista, infoRecebeu, caixaReenviar);
+
+    const radios = el("fieldset", {}, dados.alvos.map((a) => {
+      const radio = el("input", { type: "radio", name: "alvo", value: a });
+      radio.checked = a === alvo;
+      radio.addEventListener("change", () => { alvo = a; atualizar(); });
+      return el("label", {}, radio, ROTULO_ALVO[a]);
+    }));
+
+    confirmar.addEventListener("click", async () => {
+      if (alvo !== "teste") {
+        const quem = alvo === "um" ? "para \"" + lista.selectedOptions[0].textContent.replace(" (enviado hoje)", "") + "\"" : "para todos os liberados";
+        if (!window.confirm("Disparar \"" + d.rotulo + "\" " + quem + " agora? " + notaDoAlvo(d, alvo))) return;
+      }
+      confirmar.disabled = true;
+      aviso.className = "msg"; aviso.textContent = "Iniciando...";
+      const corpo = { tipo: d.tipo, alvo };
+      if (alvo === "um") { corpo.sender_id = Number(lista.value); corpo.reenviar = reenviar.checked; }
+      const resp = await chamar(URLS.disparar, corpo);
+      if (!resp.ok) { aviso.className = "msg erro"; aviso.textContent = resp.dados.erro || "Falha ao disparar."; atualizar(); return; }
+      dlg.close();
+      depois();
+    });
+
+    dlg.addEventListener("close", () => dlg.remove());
+    // Esc fecha só a janela (o painel atrás continua aberto).
+    dlg.addEventListener("keydown", (ev) => ev.stopPropagation());
+    dlg.append(el("h2", { text: "Disparar: " + d.rotulo }), el("h3", { class: "msg", text: "Para quem?" }), radios,
+      grupoUm, nota, el("div", { class: "linha-acoes" }, cancelar, confirmar, aviso));
+    opcoes();
+    atualizar();
+    document.body.append(dlg);
+    dlg.showModal();
+  }
+
+  function blocoDisparo(d) {
+    const bloco = el("div", { class: "bloco", id: "slot-disparar", "data-tipo": d.tipo }, el("h3", { text: "Disparar agora" }));
+    if (!DISPARAVEIS[d.tipo]) {
+      bloco.append(el("p", { class: "nota-painel", text: SEM_DISPARO[d.tipo] || "Sai dentro de outra rotina." }));
+      return bloco;
+    }
+    const resultado = el("div", { class: "resultado-disparo", "aria-live": "polite" });
+    const botao = el("button", { type: "button", class: "botao pequeno", text: "Disparar agora",
+      onclick: () => abrirJanelaDisparo(d, atualizarResultado) });
+    if (SO_PELO_TIMER[d.tipo]) bloco.append(el("p", { class: "nota-painel", text: SO_PELO_TIMER[d.tipo] }));
+    bloco.append(botao, resultado);
+
+    async function atualizarResultado() {
+      const r = await chamar(URLS.disparo.replace("__T__", d.tipo));
+      if (!bloco.isConnected) return;     // painel trocado/fechado: para de consultar
+      if (!r.ok) { resultado.replaceChildren(el("span", { class: "msg erro", text: r.dados.erro || "Falha ao consultar." })); return; }
+      const u = r.dados.ultimos[0];
+      if (!u) { resultado.replaceChildren(); botao.disabled = false; return; }
+      const rodando = !u.terminado_em;
+      botao.disabled = rodando;
+      const alvo = ROTULO_ALVO[u.alvo] + (u.destino ? ": " + u.destino : "");
+      const cab = rodando
+        ? "Rodando agora (" + alvo + "), iniciado " + u.iniciado_em.replace("T", " ") + " por " + u.por + "..."
+        : "Último disparo (" + alvo + "), " + u.terminado_em.replace("T", " ") + " por " + u.por + ": "
+          + (u.codigo_saida === 0 ? "terminou sem erro (código 0)" : "terminou com erro (código " + u.codigo_saida + ")");
+      resultado.replaceChildren(el("span", { class: "msg" + (!rodando && u.codigo_saida !== 0 ? " erro" : ""), text: cab }),
+        !rodando && u.saida ? el("pre", { text: u.saida }) : null);
+      if (rodando) setTimeout(atualizarResultado, 3000);
+    }
+    atualizarResultado();
+    return bloco;
+  }
+
+  function renderPainel(d) {
+    const info = TIPOS[d.tipo];
+    const aviso = el("span", { class: "msg", role: "status" });
+    const seletor = el("div", { class: "seletor" });
+    [["DESLIGADO", "Desligado"], ["PILOTO", "Piloto (só Hugo)"], ["LIGADO", "Ligado"]].forEach(([estado, rotulo]) => {
+      seletor.append(el("button", { type: "button", class: estado + (d.estado === estado ? " ativo" : ""), text: rotulo,
+        "aria-pressed": d.estado === estado ? "true" : "false",
+        onclick: () => { if (d.estado !== estado) mudarEstado(d.tipo, estado, aviso); } }));
+    });
+    const busca = el("input", { type: "search", class: "busca", placeholder: "Buscar por nome ou CNPJ", "aria-label": "Buscar destinatário" });
+    busca.addEventListener("input", () => renderLista(d));
+    const notas = [];
+    if (d.estado === "config") {
+      notas.push(el("p", { class: "nota-painel", text: "Sem linha na tela: vale o config de hoje. A primeira mudança aqui passa a valer por cima dele." }));
+    }
+    if (d.tipo === "consulta_transportadora") {
+      notas.push(el("p", { class: "nota-painel",
+        text: "Só funciona com a consulta de transportadora ligada no sistema (consulta_transportadora.ativo): Ligado aqui não liga essa função." }));
+    }
+    if (info.destino === "transportadora") {
+      notas.push(el("p", { class: "nota-painel" }, "O \"Não enviar\" de cada ponto vem do cadastro e vale sempre: ",
+        el("a", { href: URLS.transportadoras, text: "editar em Transportadoras" }),
+        ". Aqui só dá para liberar um ponto no piloto."));
+    }
+    painel.replaceChildren(
+      el("div", { class: "topo" },
+        el("h2", { text: d.rotulo }),
+        el("button", { type: "button", class: "botao secundario pequeno", text: "Fechar", onclick: fechar })),
+      el("p", { class: "meta", text: "Quando: " + info.quando + " · Canal: " + info.canais.map((c) => ROTULO_CANAL[c]).join(" e ")
+        + " · Para: " + (info.destino === "transportadora" ? "transportadoras" : "embarcadores") }),
+      el("div", { class: "bloco" }, el("h3", { text: "Estado" }), seletor, aviso, notas),
+      blocoDisparo(d),
+      el("div", { class: "bloco" },
+        el("h3", { text: info.destino === "transportadora" ? "Pontos de transportadora" : "Embarcadores" }),
+        busca, el("ul", { class: "destinos" })));
+    renderLista(d);
+  }
+
+  // Detalhe do embarcador: e-mails/WhatsApp (editor) + uma linha por tipo, so leitura
+  // (a excecao se muda no painel do tipo).
+  async function abrirEmbarcador(chave) {
+    painelAberto = "e=" + chave;
+    document.querySelectorAll("tr.linha.aberta").forEach((l) => l.classList.remove("aberta"));
+    window.location.hash = painelAberto;
+    painel.hidden = false; fundo.hidden = false;
+    painel.replaceChildren(el("p", { class: "msg", text: "Carregando..." }));
+    const r = await chamar(URLS.situacao.replace("__C__", chave));
+    if (painelAberto !== "e=" + chave) return;
+    if (!r.ok) { painel.replaceChildren(el("p", { class: "msg erro", text: r.dados.erro || "Falha ao carregar." })); return; }
+    const caixa = el("div", { class: "editor" });
+    const corpo = el("tbody", {});
+    r.dados.situacao.forEach((l) => {
+      corpo.append(el("tr", {},
+        el("td", { text: l.rotulo }),
+        el("td", {}, pilula(l.estado)),
+        el("td", { text: l.excecao === "LIBERADO" ? "liberado" : (l.excecao === "BLOQUEADO" ? "bloqueado" : "—") }),
+        el("td", { text: l.preferencia_cliente == null ? "—" : (l.preferencia_cliente ? "ligado" : "desligou") })));
+    });
+    painel.replaceChildren(
+      el("div", { class: "topo" },
+        el("h2", { text: r.dados.nome }),
+        el("button", { type: "button", class: "botao secundario pequeno", text: "Fechar", onclick: fechar })),
+      el("p", { class: "meta", text: fmtChave(r.dados.cnpj) }),
+      el("div", { class: "bloco" }, el("h3", { text: "E-mails e WhatsApp de notificação" }), caixa),
+      el("div", { class: "bloco" }, el("h3", { text: "Situação em cada tipo" }),
+        el("table", { class: "situacao" },
+          el("thead", {}, el("tr", {}, el("th", { text: "Tipo" }), el("th", { text: "Estado" }),
+            el("th", { text: "Exceção" }), el("th", { text: "No portal" }))),
+          corpo),
+        el("p", { class: "nota-painel", text: "Só leitura. Liberar ou bloquear este embarcador se faz no painel de cada tipo." })));
+    editorEmails({ chave: r.dados.cnpj }, caixa);
+  }
+
+  const campoBusca = document.getElementById("busca-embarcador");
+  const resultadoBusca = document.getElementById("resultado-embarcador");
+  campoBusca.addEventListener("input", () => {
+    const termo = campoBusca.value.trim().toLowerCase();
+    const digitos = termo.replace(/\D/g, "");
+    resultadoBusca.replaceChildren();
+    if (!termo) return;
+    EMBARCADORES.filter((e) => e.nome.toLowerCase().includes(termo) || (digitos && e.chave.includes(digitos)))
+      .slice(0, 8).forEach((e) => {
+        resultadoBusca.append(el("li", {}, el("button", { type: "button", class: "achado",
+          onclick: () => abrirEmbarcador(e.chave) },
+          e.nome, el("span", { class: "chave", text: fmtChave(e.chave) }))));
+      });
+    if (!resultadoBusca.children.length) resultadoBusca.append(el("li", { class: "vazio", text: "Nenhum embarcador encontrado." }));
+  });
+
+  async function abrir(tipo) {
+    painelAberto = "t=" + tipo;
+    document.querySelectorAll("tr.linha").forEach((l) => l.classList.toggle("aberta", l.dataset.tipo === tipo));
+    window.location.hash = painelAberto;
+    painel.hidden = false; fundo.hidden = false;
+    painel.replaceChildren(el("p", { class: "msg", text: "Carregando..." }));
+    const r = await chamar(URLS.tipo.replace("__T__", tipo));
+    if (painelAberto !== "t=" + tipo) return;
+    if (!r.ok) { painel.replaceChildren(el("p", { class: "msg erro", text: r.dados.erro || "Falha ao carregar." })); return; }
+    renderPainel(r.dados);
+  }
+
+  document.querySelectorAll("tr.linha").forEach((linha) => {
+    linha.addEventListener("click", () => abrir(linha.dataset.tipo));
+    linha.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); abrir(linha.dataset.tipo); }
+    });
+  });
+
+  renderHistorico();
+  const aberto = /^#([te])=(\w+)$/.exec(window.location.hash);
+  if (aberto && aberto[1] === "t" && TIPOS[aberto[2]]) abrir(aberto[2]);
+  if (aberto && aberto[1] === "e") abrirEmbarcador(aberto[2]);
+})();
+</script>
+{% endblock %}

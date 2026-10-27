@@ -62,8 +62,10 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO,
     COR_ACENTO, COR_ERRO, COR_TEXTO_SUAVE,
 )
+import limite_piloto
 import preferencias_notificacao
 import tratativas
+from controle_notificacoes import acao_do_config, decidir
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +269,8 @@ def _montar_conteudo(nome_remetente: str, motivo_texto: str, pedidos: list[dict]
 
 
 def notificar_remetentes(pendentes: list[dict], config_email: dict, config_resposta: dict,
-                         modo_teste: bool = False, ignorar_preferencia: bool = False) -> dict:
+                         modo_teste: bool = False, ignorar_preferencia: bool = False,
+                         mestra: bool = True, db_path=None) -> dict:
     """
     Agrupa por (remetente, motivo) -- cada motivo tem pergunta
     diferente -- e manda 1 e-mail por combinação. Marca cada pedido
@@ -277,10 +280,22 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
     Remetente que desligou este aviso no portal (17/09) é pulado sem
     marcar nada -- a pendência continua no portal e na Torre.
     `ignorar_preferencia` é do botão 'Notificar' da Torre: ação
-    deliberada de quem opera, manda mesmo assim.
+    deliberada de quem opera, manda mesmo assim (e ignora também a tela).
+
+    Tela de Notificações (controle_notificacoes.py, tipo "insucesso"): vale
+    por cima do config. `mestra` é a chave notificacoes_automaticas.ativo e
+    só serve de fallback quando a tela não tem linha pro tipo. NAO pula o
+    grupo (conta em "desligados"); PILOTO manda só pro piloto, com faixa
+    no topo, e NÃO marca notificado nem registra evento (o remetente ainda
+    não foi perguntado). modo_teste ignora a tela (ensaio pro Hugo).
     """
     from motivos_falha import texto_do_motivo
     from fingerprint_aguardando_resposta import marcar_notificado
+
+    if modo_teste and not mestra:
+        logger.info(f"Notificações automáticas desativadas -- {len(pendentes)} pedido(s) "
+                    f"aguardando pergunta de reenvio (modo teste não envia).")
+        return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
 
     embarcadores = _carregar_embarcadores_por_sender_id()
     grupos = defaultdict(list)
@@ -299,6 +314,23 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
                         f"pelo cliente no portal, e-mail NÃO enviado.")
             desligados += 1
             continue
+        decisao = None
+        if not (modo_teste or ignorar_preferencia):
+            decisao = decidir("insucesso", emb.get("cnpj") or None,
+                              fallback_acao=acao_do_config(mestra, ""), db_path=db_path)
+            if decisao.acao == "NAO":
+                logger.info(f"  {emb['nome']}: {len(pedidos)} pedido(s) aguardando resposta -- "
+                            f"e-mail NÃO enviado pela tela de Notificações ({decisao.motivo}).")
+                desligados += 1
+                continue
+        piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia (nada e marcado, o pedido segue pendente)
+            pedidos = [p for p in pedidos
+                       if not limite_piloto.ja_enviado_hoje("piloto_insucesso", p.get("code") or p.get("id"), db_path)]
+            if not pedidos:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         motivo_texto = texto_do_motivo(failed_reason_id)
         textos = _textos_do_grupo(motivo_texto, pedidos, failed_reason_id)
@@ -312,10 +344,17 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
 
         assunto = (f"[Freshlog] {motivo_texto} — {len(pedidos)} pedido(s) com "
                    f"insucesso na entrega, aguardando retorno")
+        # a copia de piloto vai sem os botoes: eles aplicam reenviar/nao reenviar no
+        # grupo real da Vuupt
         conteudo = _montar_conteudo(emb["nome"], motivo_texto, pedidos, textos,
-                                    url_resposta=url_resposta)
+                                    url_resposta="" if piloto else url_resposta)
+        if piloto:
+            conteudo = (f'<p style="margin:0 0 16px 0;padding:8px 12px;background:{COR_FUNDO};'
+                        f'border:1px dashed {COR_BORDA};font-size:12px;color:{COR_TEXTO};">'
+                        f'Piloto: iria para {html.escape(", ".join(emb["emails"]))} '
+                        f'(cópia sem os botões de resposta)</p>') + conteudo
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
-        destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
+        destinos = [EMAIL_TESTE] if modo_teste else [decisao.destino_piloto] if piloto else emb["emails"]
 
         if modo_teste:
             logger.info(f"  [TESTE] {emb['nome']} ({motivo_texto}) -> {EMAIL_TESTE} "
@@ -324,7 +363,12 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, config_respo
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
-            if not modo_teste:
+            if piloto:
+                for p in pedidos:
+                    limite_piloto.registrar_enviado("piloto_insucesso", p.get("code") or p.get("id"), db_path)
+                logger.info(f"  {emb['nome']} ({motivo_texto}): cópia de piloto -> {destinos[0]} "
+                            f"(original: {emb['emails']}); pedidos NÃO marcados como notificados.")
+            elif not modo_teste:
                 for p in pedidos:
                     marcar_notificado(p["id"], failed_reason_id, sender_id=sender_id, code=p.get("code"))
                     if p.get("code"):

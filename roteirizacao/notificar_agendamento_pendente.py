@@ -34,7 +34,9 @@ _RAIZ_PROJETO = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ_PROJETO))
 
 from email_utils import envelope_html, enviar_email, COR_PRIMARIA, COR_ERRO, COR_TEXTO, COR_BORDA, COR_FUNDO
+import limite_piloto
 import preferencias_notificacao
+from controle_notificacoes import acao_do_config, decidir
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +104,17 @@ def _carregar_embarcadores_por_sender_id() -> dict:
     return preferencias_notificacao.carregar_embarcadores("agendamento")
 
 
+def _faixa_piloto(emails: list[str]) -> str:
+    return (f'<p style="margin:0 0 16px 0;padding:8px 12px;background:{COR_FUNDO};border:1px dashed {COR_BORDA};'
+            f'font-size:12px;color:{COR_TEXTO};">Piloto: iria para {html.escape(", ".join(emails))}</p>')
+
+
 def _codigo_pedido(servico: dict) -> str:
     return (servico.get("code", "") or "").lstrip("#")
 
 
-def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "") -> str:
+def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "",
+                     marcadores: bool = True) -> str:
     linhas = "".join(f"""
     <tr>
       <td style="padding:8px 14px;border-bottom:1px solid {COR_BORDA};">{html.escape('#' + _codigo_pedido(p))}</td>
@@ -116,13 +124,14 @@ def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "
     # Marcadores ocultos (09/09): mesmo formato do e-mail de solicitação
     # por pedido (agendamento_confirmacao.py) -- ler_respostas_agendamento
     # .py acha a thread pelo(s) pedido(s) e aplica a resposta. Sem isso a
-    # resposta a ESTE e-mail era ignorada.
+    # resposta a ESTE e-mail era ignorada. A copia de piloto vai sem eles
+    # (marcadores=False): a resposta do piloto nao vale como do embarcador.
     marcador = (
         '<div style="display:none">'
         + (f"[[AGENTE_AGENDAMENTO_EMBARCADOR:{cnpj_emb}]]" if cnpj_emb else "")
         + "".join(f"[[PEDIDO:{_codigo_pedido(p)}]]" for p in pedidos)
         + "</div>"
-    )
+    ) if marcadores else ""
 
     return f"""{marcador}
 <p style="margin:0 0 4px 0;font-size:12px;font-weight:800;color:{COR_ERRO};letter-spacing:0.5px;">URGENTE</p>
@@ -152,12 +161,25 @@ def _montar_conteudo(nome_remetente: str, pedidos: list[dict], cnpj_emb: str = "
 """
 
 
-def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: bool = False) -> dict:
+def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: bool = False,
+                         mestra: bool = True, db_path=None) -> dict:
     """
     Agrupa os pedidos pendentes por remetente (sender_id) e manda 1
     e-mail urgente por remetente. Retorna {"enviados", "falhas",
     "sem_email"} pra quem chama montar um resumo.
+
+    Tela de Notificações (controle_notificacoes.py, tipo "agendamento"):
+    vale por cima do config. `mestra` (notificacoes_automaticas.ativo) só
+    é o fallback quando a tela não tem linha pro tipo. NAO pula o grupo
+    (conta em "desligados"); PILOTO manda só pro piloto, com faixa no topo,
+    e NÃO registra a solicitação (o remetente ainda não foi perguntado).
+    modo_teste ignora a tela (ensaio pro Hugo), mas continua parado com a
+    mestra desligada, como antes.
     """
+    if modo_teste and not mestra:
+        logger.info(f"Notificações automáticas desativadas -- {len(pendentes)} pedido(s) com agendamento "
+                    f"pendente (modo teste não envia).")
+        return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
     embarcadores = _carregar_embarcadores_por_sender_id()
     grupos = defaultdict(list)
     for s in pendentes:
@@ -175,12 +197,31 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
                         f"desligado pelo cliente no portal, e-mail NÃO enviado.")
             desligados += 1
             continue
+        decisao = None
+        if not modo_teste:
+            decisao = decidir("agendamento", emb.get("cnpj") or None,
+                              fallback_acao=acao_do_config(mestra, ""), db_path=db_path)
+            if decisao.acao == "NAO":
+                logger.info(f"  {emb['nome']}: {len(pedidos)} pedido(s) pendente(s) -- e-mail NÃO enviado "
+                            f"pela tela de Notificações ({decisao.motivo}).")
+                desligados += 1
+                continue
+        piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia (nada e registrado, o pedido segue pendente)
+            pedidos = [p for p in pedidos
+                       if not limite_piloto.ja_enviado_hoje("piloto_agendamento", _codigo_pedido(p), db_path)]
+            if not pedidos:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         assunto = f"[URGENTE] Confirmação de agendamento necessária — {len(pedidos)} pedido(s)"
-        conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""))
+        conteudo = _montar_conteudo(emb["nome"], pedidos, emb.get("cnpj", ""), marcadores=not piloto)
+        if piloto:
+            conteudo = _faixa_piloto(emb["emails"]) + conteudo
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.",
                               cor_acento=COR_ERRO)
-        destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
+        destinos = [EMAIL_TESTE] if modo_teste else [decisao.destino_piloto] if piloto else emb["emails"]
 
         if modo_teste:
             logger.info(f"  [TESTE] {emb['nome']} -> {EMAIL_TESTE} (original: {emb['emails']}) | "
@@ -188,7 +229,12 @@ def notificar_remetentes(pendentes: list[dict], config_email: dict, modo_teste: 
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
-            if not modo_teste:
+            if piloto:
+                for p in pedidos:
+                    limite_piloto.registrar_enviado("piloto_agendamento", _codigo_pedido(p), db_path)
+                logger.info(f"  {emb['nome']}: cópia de piloto -> {destinos[0]} (original: {emb['emails']}); "
+                            f"solicitação NÃO registrada.")
+            elif not modo_teste:
                 _registrar_pendentes(pedidos, emb)
         else:
             falhas += 1

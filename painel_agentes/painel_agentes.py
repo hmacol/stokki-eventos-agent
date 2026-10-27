@@ -1916,6 +1916,253 @@ def api_acessos_senha():
     return jsonify({"ok": True})
 
 
+# --- Notificacoes (24/10): geral, tipo, excecao, piloto e e-mails do embarcador.
+# So nivel total (sem niveis=) e fora do catalogo de acesso_telas. Quem decide e
+# grava e controle_notificacoes; a tela e o que o Hugo usa no lugar do config.
+
+def _autor_notificacoes() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/notificacoes")
+@requer_auth
+def notificacoes():
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return render_template("notificacoes.html", geral=cn.estado_geral(conn), lista=nt.montar_lista(conn),
+                               piloto=cn.piloto(conn), historico=nt.historico_legivel(conn),
+                               embarcadores=nt.lista_embarcadores(conn),
+                               disparaveis={t: list(i["alvos"]) for t, i in nt.DISPARAVEIS.items()},
+                               sem_disparo=nt.SEM_DISPARO,
+                               so_pelo_timer=nt.SO_PELO_TIMER,
+                               nota_teste=nt.NOTA_TESTE,
+                               tipos={t: {"rotulo": i["rotulo"], "destino": i["destino"], "canais": list(i["canais"]),
+                                          "quando": i["quando"]} for t, i in cn.TIPOS.items()})
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/tipo/<tipo>")
+@requer_auth
+def api_notificacoes_tipo(tipo):
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    if tipo not in cn.TIPOS:
+        return jsonify({"erro": "Tipo de notificação desconhecido."}), 404
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.detalhe_tipo(conn, tipo))
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/historico")
+@requer_auth
+def api_notificacoes_historico():
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.historico_legivel(conn))
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/geral", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_geral():
+    """Desligar vale na hora; ligar o geral pede confirmacao (409 sem `confirmado`)."""
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    ligado = corpo.get("ligado") is True
+    conn = cn.conectar()
+    try:
+        if ligado and corpo.get("confirmado") is not True and cn.estado_geral(conn) != "LIGADO":
+            ligados = sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")
+            return jsonify({"erro": "Confirme para ligar o geral.", "confirmar": True, "geral": True,
+                            "tipos_ligados": ligados}), 409
+        cn.definir_geral(conn, ligado, _autor_notificacoes())
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/estado", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_estado():
+    """Troca o estado de um tipo. LIGADO (cliente recebe de verdade) responde
+    409 com a contagem de destinatarios ate vir `confirmado: true`."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    tipo, estado = str(corpo.get("tipo") or ""), str(corpo.get("estado") or "")
+    if tipo not in cn.TIPOS or estado not in cn.ESTADOS:
+        return jsonify({"erro": "Tipo ou estado inválido."}), 400
+    conn = cn.conectar()
+    try:
+        if estado == "LIGADO" and corpo.get("confirmado") is not True and cn.estado_tipo(conn, tipo) != "LIGADO":
+            return jsonify({"erro": "Confirme para ligar.", "confirmar": True, "tipo": tipo,
+                            "destinatarios": nt.contar_destinatarios(conn, tipo)}), 409
+        cn.definir_estado(conn, tipo, estado, _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/excecao", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_excecao():
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        cn.definir_excecao(conn, str(corpo.get("tipo") or ""), str(corpo.get("destino") or ""),
+                           corpo.get("regra"), _autor_notificacoes())
+    except (ValueError, KeyError) as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/piloto", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_piloto():
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        cn.definir_piloto(conn, str(corpo.get("email") or ""), str(corpo.get("whatsapp") or ""),
+                          _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/desfazer", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_desfazer():
+    """Volta ao valor anterior. Se isso religa um tipo (ou o geral), pede a mesma
+    confirmacao de ligar (409 com a contagem ate vir `confirmado: true`)."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        hid = int(corpo.get("id"))
+        pendente = nt.confirmacao_do_desfazer(conn, hid)   # tambem recusa item sem desfazer
+        if pendente and corpo.get("confirmado") is not True:
+            return jsonify(dict(pendente, erro="Confirme para ligar.", confirmar=True)), 409
+        cn.desfazer(conn, hid, _autor_notificacoes())
+    except (ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>")
+@requer_auth
+def api_notificacoes_embarcador(cnpj):
+    """E-mails e WhatsApp do embarcador: a mesma lista que ele edita no portal
+    (preferencias_notificacao)."""
+    import notificacoes_tela as nt
+    import preferencias_notificacao as pn
+    conn = nt.conectar_preferencias()
+    try:
+        return jsonify(pn.ler(conn, cnpj))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_embarcador_salvar(cnpj):
+    """Grava e-mails e/ou WhatsApp (chave ausente = nao mexe) como `painel:<usuario>`
+    e registra no historico do controle (so registro, sem desfazer)."""
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    try:
+        return jsonify(nt.salvar_contato(cnpj, corpo, "painel:" + _autor_notificacoes()))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>/situacao")
+@requer_auth
+def api_notificacoes_embarcador_situacao(cnpj):
+    """Detalhe do embarcador: estado de cada tipo, a excecao dele e a preferencia no portal (so leitura)."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.situacao_embarcador(conn, cnpj))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 404
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/disparo/<tipo>")
+@requer_auth
+def api_notificacoes_disparo_dados(tipo):
+    """Dados da janela Disparar agora: alvos do tipo, quem ja recebeu hoje
+    (so notas em rota e resumo), lista pro alvo "um" e os ultimos disparos."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    if tipo not in nt.DISPARAVEIS:
+        return jsonify({"erro": "Este tipo não tem disparo manual."}), 404
+    alvos = nt.DISPARAVEIS[tipo]["alvos"]
+    conn = cn.conectar()
+    try:
+        return jsonify({"alvos": list(alvos), "ja_recebeu_hoje": nt.ja_recebeu_hoje(conn, tipo),
+                        "embarcadores": nt.embarcadores_disparo(conn) if "um" in alvos else [],
+                        "ultimos": nt.ultimos_disparos(conn, tipo)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/disparo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_disparo():
+    """Roda a rotina do tipo em segundo plano (teste, todos ou um embarcador).
+    409 se ja ha disparo do mesmo tipo rodando."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    sender = corpo.get("sender_id")
+    try:
+        sender = int(sender) if sender not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Embarcador inválido."}), 400
+    conn = cn.conectar()
+    try:
+        disparo_id = nt.iniciar_disparo(conn, str(corpo.get("tipo") or ""), str(corpo.get("alvo") or ""), sender,
+                                        corpo.get("reenviar") is True, _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"erro": str(e)}), 409
+    finally:
+        conn.close()
+    return jsonify({"id": disparo_id})
+
+
 # Pedidos parados (24/10): galpao e expedicao entram pra REGISTRAR (aba
 # Registrar, no lugar do Fresh Hub do Lovable) e veem a triagem so leitura.
 NIVEIS_PP_VER = ("total", "operador", "logistica", "leitura", "atendimento", "galpao", "expedicao")
@@ -2048,6 +2295,19 @@ def api_pedidos_parados_duplicar():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/equipes-demanda")
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
+def api_pedidos_parados_equipes_demanda():
+    """Equipes ativas das Demandas pro botao Encaminhar escolher (26/10), com
+    a equipe ja sugerida por classificacao (Verificar com Cliente -> Atendimento)."""
+    conn = demandas.conectar()
+    try:
+        equipes = demandas.equipes_ativas(conn)
+    finally:
+        conn.close()
+    return jsonify({"equipes": equipes, "padrao": pedidos_parados_triagem.EQUIPE_PADRAO_POR_CLASSIFICACAO})
+
+
 @app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
@@ -2058,6 +2318,7 @@ def api_pedidos_parados_encaminhar():
     try:
         resultado = pedidos_parados_triagem.encaminhar_operacao(
             body["order_number"], body["classificacao"], session.get("usuario", "desconhecido"),
+            equipe_id=body.get("equipe_id"), autor=g.get("nome_usuario") or session.get("atendente_nome"),
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
@@ -3503,6 +3764,34 @@ def api_cancelar_rota():
     return jsonify({"ok": True, "resultados": resultados})
 
 
+@app.route("/api/planejamento/cancelar-e-notificar", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_cancelar_e_notificar():
+    """Botão "Cancelar e notificar" do card (Hugo, 27/10): cancela igual ao
+    "Cancelar rota" e, só se cancelou, avisa o grupo "Rotas canceladas" do
+    /atendimento e os embarcadores pelo chat do portal (aviso_rota_cancelada)."""
+    import aviso_rota_cancelada
+    body = request.get_json(force=True)
+    motivo = " ".join(str(body.get("motivo") or "").split())[:300]
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(body["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not motivo:
+        return jsonify({"erro": "Informe o motivo do cancelamento."}), 400
+    if not rascunho:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+
+    config = _carregar_config()
+    resultado = rascunhos_rota.cancelar_rota_enviada(rascunho["id"], config.get("vuupt_api", {}).get("token", ""))
+    if not resultado["ok"]:
+        return jsonify({"ok": False, "erro": resultado["erro"]})
+    aviso = aviso_rota_cancelada.avisar(rascunho, motivo, session.get("usuario") or g.nivel_acesso, config)
+    return jsonify({"ok": True, "aviso": aviso})
+
+
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
@@ -4460,7 +4749,8 @@ _atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exig
 
 # ── Demandas (tarefas pro time, por equipe e pessoa), 25/10 ───────────────────
 import demandas
-demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem)
+demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem,
+                   carregar_config=_carregar_config)
 
 
 if __name__ == "__main__":

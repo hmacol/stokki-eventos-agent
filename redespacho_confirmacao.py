@@ -27,6 +27,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import limite_piloto
+from controle_notificacoes import decidir
 from email_utils import enviar_email, envelope_html, COR_PRIMARIA, COR_PRIMARIA_CLARA, COR_TEXTO, COR_TEXTO_SUAVE, COR_BORDA, COR_DESTAQUE
 
 logger = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ def _registrar_solicitacao(pedido: str, cidade: str, uf: str, transportadora: st
 
 def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
                        nome_transportadora: str, email_emb: str,
-                       config_email: dict) -> tuple[bool, str]:
+                       config_email: dict, cnpj_emb: str = "", db_path=None) -> tuple[bool, str]:
     """
     Envia o e-mail pedindo ao embarcador o nome da transportadora de
     redespacho (se ainda não informada) e o endereço completo (com CEP)
@@ -103,6 +105,13 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     Retorna (enviado: bool, motivo: str) -- motivo preenchido quando
     NÃO enviado (bloqueado pelo limitador, sem e-mail cadastrado, ou
     falha no envio).
+
+    Tela de Notificações (controle_notificacoes.py, tipo "redespacho"):
+    sem linha na tela vale o de hoje (envia). NAO não envia nem registra
+    (o pedido segue segurado e a pergunta sai quando a tela ligar).
+    PILOTO manda só pro piloto, com faixa no topo e sem registrar a
+    solicitação (o embarcador ainda não foi perguntado); devolve (False,
+    motivo). `cnpj_emb` é quem a tela usa pra achar a exceção do embarcador.
     """
     if not email_emb:
         return False, "embarcador sem e-mail cadastrado"
@@ -110,6 +119,18 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     pode, motivo_bloqueio = _pode_notificar(pedido)
     if not pode:
         return False, motivo_bloqueio
+
+    decisao = decidir("redespacho", cnpj_emb or None, fallback_acao="ENVIAR", db_path=db_path)
+    if decisao.acao == "NAO":
+        return False, f"bloqueado pela tela de Notificações ({decisao.motivo})"
+    piloto = decisao.acao == "PILOTO"
+    if piloto and limite_piloto.ja_enviado_hoje("piloto_redespacho", pedido, db_path):
+        return False, "piloto: cópia de hoje já enviada"
+    faixa_piloto = (
+        f'<p style="margin:0 0 16px 0;padding:8px 12px;background-color:{COR_PRIMARIA_CLARA};'
+        f'border:1px dashed {COR_BORDA};font-size:12px;color:{COR_TEXTO};">'
+        f'Piloto: iria para {html.escape(email_emb)}</p>'
+    ) if piloto else ""
 
     assunto = f"Confirmação de redespacho necessária — {nome_dest} (Pedido #{pedido})"
 
@@ -120,6 +141,7 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     )
 
     conteudo = f"""
+    {faixa_piloto}
     <p style="margin:0 0 4px 0;font-size:20px;font-weight:700;color:{COR_PRIMARIA};">Confirmação de redespacho necessária</p>
     <p style="margin:0 0 24px 0;font-size:14px;color:{COR_TEXTO_SUAVE};">
       O endereço de entrega deste pedido está fora da área atendida diretamente pela Freshlog.
@@ -177,7 +199,11 @@ def enviar_solicitacao(pedido: str, nome_dest: str, cidade: str, uf: str,
     """
     corpo = envelope_html(conteudo, cor_acento=COR_DESTAQUE)
 
-    enviado = enviar_email([email_emb], assunto, corpo, config_email)
+    destinos = [decisao.destino_piloto] if piloto else [email_emb]
+    enviado = enviar_email(destinos, assunto, corpo, config_email)
+    if enviado and piloto:
+        limite_piloto.registrar_enviado("piloto_redespacho", pedido, db_path)
+        return False, f"piloto: cópia enviada para {destinos[0]}, embarcador não avisado"
     if enviado:
         _registrar_solicitacao(pedido, cidade, uf, nome_transportadora, email_emb)
         return True, ""

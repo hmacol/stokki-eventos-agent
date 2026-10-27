@@ -41,7 +41,9 @@ from email_utils import (
     envelope_html, enviar_email, COR_PRIMARIA, COR_TEXTO, COR_BORDA, COR_FUNDO, COR_ACENTO,
 )
 from regioes_dia_fixo import descricao_dias
+import limite_piloto
 import preferencias_notificacao
+from controle_notificacoes import acao_do_config, decidir
 
 logger = logging.getLogger(__name__)
 
@@ -116,14 +118,30 @@ def _montar_conteudo(nome_remetente: str, itens: list[dict]) -> str:
 """
 
 
+def _faixa_piloto(emails: list[str]) -> str:
+    return (f'<p style="margin:0 0 16px 0;padding:8px 12px;background:{COR_FUNDO};border:1px dashed {COR_BORDA};'
+            f'font-size:12px;color:{COR_TEXTO};">Piloto: iria para {html.escape(", ".join(emails))}</p>')
+
+
 def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
-                                    modo_teste: bool = False) -> dict:
+                                    modo_teste: bool = False, mestra: bool = True, db_path=None) -> dict:
     """
     Agrupa os agendamentos de dia fixo por remetente (sender_id) e
     manda 1 e-mail por remetente. Retorna {"enviados", "falhas",
     "sem_email"} pra quem chama montar um resumo.
+
+    Tela de Notificações (controle_notificacoes.py, tipo "agendamento"):
+    vale por cima do config. `mestra` (notificacoes_automaticas.ativo) só
+    é o fallback quando a tela não tem linha pro tipo. NAO pula o grupo
+    (conta em "desligados"); PILOTO manda só pro piloto, com faixa no topo.
+    modo_teste ignora a tela (ensaio pro Hugo), mas continua parado com a
+    mestra desligada, como antes.
     """
     if not agendados:
+        return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
+    if modo_teste and not mestra:
+        logger.info(f"Notificações automáticas desativadas -- {len(agendados)} agendamento(s) por dia fixo "
+                    f"(modo teste não envia).")
         return {"enviados": 0, "falhas": 0, "sem_email": 0, "desligados": 0}
 
     embarcadores = _carregar_embarcadores_por_sender_id()
@@ -143,11 +161,31 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
                         f"desligado pelo cliente no portal, e-mail NÃO enviado.")
             desligados += 1
             continue
+        decisao = None
+        if not modo_teste:
+            decisao = decidir("agendamento", emb.get("cnpj") or None,
+                              fallback_acao=acao_do_config(mestra, ""), db_path=db_path)
+            if decisao.acao == "NAO":
+                logger.info(f"  {emb['nome']}: {len(itens)} pedido(s) agendado(s) por dia fixo -- e-mail NÃO "
+                            f"enviado pela tela de Notificações ({decisao.motivo}).")
+                desligados += 1
+                continue
+        piloto = decisao is not None and decisao.acao == "PILOTO"
+        if piloto:
+            # no maximo 1 copia de piloto por pedido por dia
+            itens = [i for i in itens
+                     if not limite_piloto.ja_enviado_hoje("piloto_agendamento_dia_fixo",
+                                                          i["servico"].get("code"), db_path)]
+            if not itens:
+                logger.info(f"  {emb['nome']}: cópia de piloto de hoje já enviada -- pulando.")
+                continue
 
         assunto = f"[Freshlog] Entrega agendada para o dia da região — {len(itens)} pedido(s)"
         conteudo = _montar_conteudo(emb["nome"], itens)
+        if piloto:
+            conteudo = _faixa_piloto(emb["emails"]) + conteudo
         corpo = envelope_html(conteudo, rodape="Mensagem automática — Agente Stokki Eventos.")
-        destinos = [EMAIL_TESTE] if modo_teste else emb["emails"]
+        destinos = [EMAIL_TESTE] if modo_teste else [decisao.destino_piloto] if piloto else emb["emails"]
 
         if modo_teste:
             logger.info(f"  [TESTE] {emb['nome']} -> {EMAIL_TESTE} (original: {emb['emails']}) | "
@@ -155,6 +193,9 @@ def notificar_agendamentos_dia_fixo(agendados: list[dict], config_email: dict,
 
         if enviar_email(destinos, assunto, corpo, config_email):
             enviados += 1
+            if piloto:
+                for i in itens:
+                    limite_piloto.registrar_enviado("piloto_agendamento_dia_fixo", i["servico"].get("code"), db_path)
         else:
             falhas += 1
 
