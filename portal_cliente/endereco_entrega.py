@@ -56,12 +56,17 @@ def montar_endereco(campos: dict, consultar=None) -> dict:
     numero = str(campos.get("numero") or "").strip()
     if not numero:
         raise ErroEndereco("Informe o número")
-    return {
+    end = {
         "cep": cep, "logradouro": logradouro, "numero": numero,
         "complemento": str(campos.get("complemento") or "").strip(),
         "bairro": str(campos.get("bairro") or "").strip() or info.get("bairro") or "",
         "municipio": info.get("cidade") or "", "uf": info.get("uf") or "", "cmun": cmun,
     }
+    # o que o cliente vê tem de ser o que vai no XML: recusa em vez de cortar
+    for campo, nome in (("logradouro", "A rua"), ("numero", "O número"), ("complemento", "O complemento"), ("bairro", "O bairro")):
+        if len(end[campo]) > _MAX_TEXTO:
+            raise ErroEndereco(f"{nome} pode ter até {_MAX_TEXTO} caracteres")
+    return end
 
 
 def linha_endereco(end: dict) -> str:

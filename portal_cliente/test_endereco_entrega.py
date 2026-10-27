@@ -144,6 +144,31 @@ class ConsultaCepComIbge(unittest.TestCase):
             self.assertEqual(cotacao.consultar_cep("01414001")["ibge"], "")
 
 
+class RevisaoFinal(unittest.TestCase):
+    def test_brasilapi_sem_ibge_nao_fica_no_cache(self):
+        """ViaCEP fora -> BrasilAPI sem ibge; quando o ViaCEP volta, o mesmo CEP
+        tem de trazer o ibge (o cliente não pode ficar preso até reiniciar)."""
+        from unittest import mock
+        import cotacao
+        bra = {"city": "São Paulo", "state": "SP", "street": "Rua X", "neighborhood": "Y"}
+        via = {"cep": "01414-001", "logradouro": "Rua X", "bairro": "Y", "localidade": "São Paulo", "uf": "SP",
+               "ibge": "3550308"}
+        with mock.patch.dict(cotacao._CACHE_CEP, clear=True):
+            with mock.patch.object(cotacao, "_http_json", side_effect=lambda url: bra if "brasilapi" in url else None):
+                self.assertEqual(cotacao.consultar_cep("01414001")["ibge"], "")
+            with mock.patch.object(cotacao, "_http_json", side_effect=lambda url: via if "viacep" in url else None):
+                self.assertEqual(cotacao.consultar_cep("01414001")["ibge"], "3550308")
+
+    def test_texto_acima_de_60_recusa_em_vez_de_cortar(self):
+        for campo in ("complemento", "logradouro", "bairro", "numero"):
+            with self.subTest(campo=campo):
+                with self.assertRaisesRegex(ee.ErroEndereco, "até 60 caracteres"):
+                    ee.montar_endereco({"cep": "01414001", "numero": "1", campo: "x" * 61},
+                                       consultar=_consulta(CEP_HADDOCK))
+        end = ee.montar_endereco({"cep": "01414001", "numero": "1", "complemento": "x" * 60}, consultar=_consulta(CEP_HADDOCK))
+        self.assertEqual(len(end["complemento"]), 60)
+
+
 class Chave(unittest.TestCase):
     def test_entrega_ativa_padrao_desligada(self):
         self.assertIs(ee.entrega_ativa({}), False)

@@ -461,11 +461,11 @@
   function formEndereco(f) {
     return `<div class="form-ent">
       <label>CEP <input data-f="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(cepFmt(f.cep))}"></label>
-      <label class="l2">Rua / Avenida <input data-f="logradouro" placeholder="preenche pelo CEP" value="${esc(f.logradouro)}"></label>
-      <label>Número <input data-f="numero" value="${esc(f.numero)}"></label>
-      <label class="l2">Bairro <input data-f="bairro" value="${esc(f.bairro)}"></label>
+      <label class="l2">Rua / Avenida <input data-f="logradouro" maxlength="60" placeholder="preenche pelo CEP" value="${esc(f.logradouro)}"></label>
+      <label>Número <input data-f="numero" maxlength="60" value="${esc(f.numero)}"></label>
+      <label class="l2">Bairro <input data-f="bairro" maxlength="60" value="${esc(f.bairro)}"></label>
       <label class="l3">Cidade / UF <input data-f="cidade_uf" readonly tabindex="-1" value="${esc(f.cidade ? f.cidade + '/' + f.uf : '')}"></label>
-      <label class="l3">Complemento / referência <input data-f="complemento" placeholder="ex.: doca 2, entrada pela Rua X" value="${esc(f.complemento)}"></label>
+      <label class="l3">Complemento / referência <input data-f="complemento" maxlength="60" placeholder="ex.: doca 2, entrada pela Rua X" value="${esc(f.complemento)}"></label>
       <div class="ent-erro">${esc(f.erro)}</div>
       <div class="acoes-ent"><button type="button" class="botao peq" data-ent="usar">Usar este endereço</button><button type="button" class="botao-linha peq" data-ent="cancelar">Cancelar</button></div>
     </div>`;
@@ -482,14 +482,17 @@
     const f = previa.itens[i]._ent.form, d = (f.cep || '').replace(/\D/g, '');
     if (d.length !== 8) return;
     Object.assign(f, { cidade: '', uf: '', erro: '' });
+    const mudou = () => (f.cep || '').replace(/\D/g, '') !== d;  // cliente corrigiu o CEP antes da resposta
     try {
       const r = await fetch(`${BASE}/api/envios/cep/${d}`, { credentials: 'same-origin' });
       const j = await r.json();
+      if (mudou()) return;
       if (!r.ok) throw new Error(j.erro);
       if (j.logradouro) f.logradouro = j.logradouro;
       if (j.bairro) f.bairro = j.bairro;
       Object.assign(f, { cidade: j.cidade, uf: j.uf });
     } catch (e) {
+      if (mudou()) return;
       f.erro = 'CEP não encontrado';
     }
     if (!previa || !previa.itens[i]._ent.editando) return;

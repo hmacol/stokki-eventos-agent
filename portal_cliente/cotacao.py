@@ -282,8 +282,10 @@ def consultar_cep(cep: str) -> dict | None:
         if b and b.get("city"):
             resultado = {"cep": formatar_cep(d), "logradouro": b.get("street") or "", "bairro": b.get("neighborhood") or "",
                          "cidade": b.get("city") or "", "uf": b.get("state") or "", "ibge": ""}
-    if resultado is not None or v is not None:
-        # só cacheia resposta definitiva (achou, ou o ViaCEP disse que não existe)
+    if (resultado is not None and resultado["ibge"]) or (resultado is None and v is not None):
+        # só cacheia resposta definitiva (achou pelo ViaCEP, ou o ViaCEP disse
+        # que não existe); a da BrasilAPI vem sem ibge e o endereço de entrega
+        # precisa dele -- da próxima vez tenta o ViaCEP de novo
         _CACHE_CEP[d] = resultado
     return resultado
 
