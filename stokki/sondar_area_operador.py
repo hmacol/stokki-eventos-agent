@@ -60,6 +60,34 @@ def _resumo_pagina(titulo: str, html: str) -> None:
         print("   rota no script:", r)
 
 
+def _rotas_dos_scripts(page, url: str) -> None:
+    """Le (GET) os .js da propria Stokki carregados pela pagina e o JS inline,
+    e lista as rotas /provider/ e os trechos `url: ...`/`$.post(...)` que o
+    JavaScript chama -- os formularios da tela nao tem action, quem envia e o JS."""
+    html = page.content()
+    soup = BeautifulSoup(html, "html.parser")
+    fontes = ["\n".join(s.get_text() for s in soup.find_all("script") if not s.get("src"))]
+    for s in soup.find_all("script", src=True):
+        src = s["src"]
+        if src.startswith("/") or "stokki.com.br" in src:
+            alvo = src if src.startswith("http") else ei.BASE_URL + src
+            if any(lib in alvo for lib in ("jquery", "bootstrap", "select2", "datatables", "moment", "chart", "sweetalert", "toastr")):
+                continue
+            try:
+                fontes.append(page.request.get(alvo, timeout=30_000).text())
+            except Exception:
+                pass
+    texto = "\n".join(fontes)
+    rotas = sorted(set(re.findall(r"""(/pt-br/provider/[A-Za-z0-9_/\-{}.]+|/provider/[A-Za-z0-9_/\-{}.]+)""", texto)))
+    chamadas = sorted(set(m.strip()[:140] for m in re.findall(
+        r"""((?:url\s*:\s*|\$\.(?:post|get|ajax)\(\s*|fetch\(\s*|axios\.(?:post|get)\(\s*)[^,\n;]{3,120})""", texto)))
+    print(f"   [js de {url}] {len(fontes)} fonte(s), {len(rotas)} rota(s), {len(chamadas)} chamada(s)")
+    for r in rotas:
+        print("   js rota:", r)
+    for c in chamadas[:40]:
+        print("   js chamada:", c)
+
+
 @na_vez_da_provider
 def sondar(ps: str) -> None:
     config = yaml.safe_load((_RAIZ / "config.yaml").read_text(encoding="utf-8")) or {}
@@ -79,11 +107,17 @@ def sondar(ps: str) -> None:
             for m in menu:
                 print("   ", m)
             candidatas = [m for m in menu if any(k in m.lower() for k in ("pick", "separ", "confer", "check", "pack", "collect", "wave"))]
+            if "--scripts" in sys.argv:
+                candidatas = ["/pt-br/provider/operation/picking/list", "/pt-br/provider/operation/order/packaging",
+                              "/pt-br/provider/operation/order", "/pt-br/provider/operation/order/kanban",
+                              "/pt-br/provider/operation/order/v2/selection"]
             for url in candidatas[:6]:
                 page.goto(ei.BASE_URL + url, wait_until="domcontentloaded", timeout=45_000)
                 ei._aguardar_pagina_acalmar(page)
                 _resumo_pagina(url, page.content())
-            if ps:
+                if "--scripts" in sys.argv:
+                    _rotas_dos_scripts(page, url)
+            if ps and "--scripts" not in sys.argv:
                 # busca o pedido do mesmo jeito que a tela de operador busca (GET)
                 for url in candidatas[:2]:
                     page.goto(ei.BASE_URL + url + ("&" if "?" in url else "?") + "search=" + ps.replace("PS-", ""),
