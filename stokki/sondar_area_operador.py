@@ -111,6 +111,13 @@ def _acoes_da_lista(page) -> None:
             if texto or attrs:
                 print("     ", a.name, "|", texto, "|", attrs)
     inline = "\n".join(s.get_text() for s in soup.find_all("script") if not s.get("src"))
+    print("   acoes (case do switch):", sorted(set(re.findall(r"case\s+'([a-z_]+)'\s*:", inline))))
+    print("   data-action nos menus:", sorted(set(re.findall(r"""data-action=["']([a-z_]+)["']""", page.content()))))
+    m = re.search(r"\$\('#form_action'\)\.submit\(function", inline)
+    if m:
+        print("   [submit do form_action]", " ".join(inline[m.start(): m.start() + 2500].split()))
+    if "--acoes" in sys.argv:
+        return
     for chave in ("form_action", "btn_separation", "outbound/action"):
         for m in list(re.finditer(re.escape(chave), inline))[:3]:
             trecho = inline[max(0, m.start() - 250): m.end() + 450]
