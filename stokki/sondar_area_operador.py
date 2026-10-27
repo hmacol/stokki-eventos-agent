@@ -88,6 +88,35 @@ def _rotas_dos_scripts(page, url: str) -> None:
         print("   js chamada:", c)
 
 
+def _acoes_da_lista(page) -> None:
+    """Abre a Lista de Pedidos da area de operador, espera a tabela carregar e
+    mostra, nas 2 primeiras linhas do Quatro Estrelas, os itens do menu de
+    acoes (texto + onclick/data-*), e o JS que trata form_action. So le."""
+    page.goto(ei.BASE_URL + "/pt-br/provider/operation/order", wait_until="domcontentloaded", timeout=45_000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:
+        pass
+    page.wait_for_timeout(3000)
+    soup = BeautifulSoup(page.content(), "html.parser")
+    linhas = [tr for tr in soup.find_all("tr") if "QUATRO ESTRELAS" in tr.get_text(" ").upper()]
+    print(f"--- lista de pedidos: {len(soup.find_all('tr'))} linha(s) na tela, {len(linhas)} do Quatro Estrelas")
+    for tr in linhas[:2]:
+        celulas = [" ".join(td.get_text(" ", strip=True).split())[:40] for td in tr.find_all("td")]
+        print("   linha:", celulas[:2], "| situacao:", [c for c in celulas if c][-2:] if celulas else "")
+        for a in tr.find_all(["a", "button", "li"]):
+            texto = " ".join(a.get_text(" ", strip=True).split())[:50]
+            attrs = {k: (v if isinstance(v, str) else " ".join(v))[:90] for k, v in a.attrs.items()
+                     if k.startswith("data-") or k in ("onclick", "href", "id")}
+            if texto or attrs:
+                print("     ", a.name, "|", texto, "|", attrs)
+    inline = "\n".join(s.get_text() for s in soup.find_all("script") if not s.get("src"))
+    for chave in ("form_action", "btn_separation", "outbound/action"):
+        for m in list(re.finditer(re.escape(chave), inline))[:3]:
+            trecho = inline[max(0, m.start() - 250): m.end() + 450]
+            print(f"   [js perto de {chave}]", " ".join(trecho.split())[:700])
+
+
 @na_vez_da_provider
 def sondar(ps: str) -> None:
     config = yaml.safe_load((_RAIZ / "config.yaml").read_text(encoding="utf-8")) or {}
@@ -117,7 +146,9 @@ def sondar(ps: str) -> None:
                 _resumo_pagina(url, page.content())
                 if "--scripts" in sys.argv:
                     _rotas_dos_scripts(page, url)
-            if ps and "--scripts" not in sys.argv:
+            if "--acoes" in sys.argv:
+                _acoes_da_lista(page)
+            if ps and "--scripts" not in sys.argv and "--acoes" not in sys.argv:
                 # busca o pedido do mesmo jeito que a tela de operador busca (GET)
                 for url in candidatas[:2]:
                     page.goto(ei.BASE_URL + url + ("&" if "?" in url else "?") + "search=" + ps.replace("PS-", ""),
