@@ -136,6 +136,20 @@ def executar(pedido: str, etapa: str, confirmar: bool) -> int:
                 acoes = sorted(set(re.findall(rf'data-action="([a-z_]+)"[^>]*data-id="{pid}"|data-id="{pid}"[^>]*data-action="([a-z_]+)"',
                                               page.content())))
                 print(f"PARADO: a lista nao oferece '{etapa}' pro PS-{pid}. Acoes vistas pra ele: {acoes}")
+                soup = BeautifulSoup(page.content(), "html.parser")
+                for el in soup.find_all(True):
+                    if any(str(pid) in (v if isinstance(v, str) else " ".join(v)) for v in el.attrs.values()):
+                        attrs = {k: (v if isinstance(v, str) else " ".join(v))[:80] for k, v in el.attrs.items()}
+                        print("   el", el.name, "|", " ".join(el.get_text(" ", strip=True).split())[:50], "|", attrs)
+                linha = next((tr for tr in soup.find_all("tr") if str(pid) in tr.get_text(" ")), None)
+                if linha is not None:
+                    print("   linha:", [" ".join(td.get_text(" ", strip=True).split())[:30] for td in linha.find_all("td")])
+                    for el in linha.find_all(["a", "button", "li", "i", "span"]):
+                        attrs = {k: (v if isinstance(v, str) else " ".join(v))[:80] for k, v in el.attrs.items()}
+                        if attrs:
+                            print("     ", el.name, "|", " ".join(el.get_text(" ", strip=True).split())[:40], "|", attrs)
+                else:
+                    print(f"   nenhuma linha da tabela com {pid} (o filtro pode nao ter aplicado)")
                 print("print:", _print(page, f"{pid}_{etapa}_sem_acao"))
                 return 1
             item.first.dispatch_event("click")
