@@ -46,7 +46,57 @@ from stokki.sessao_uso import na_vez_da_provider  # noqa: E402
 URL_LISTA = f"{ei.BASE_URL}/pt-br/provider/operation/order"
 URL_SHOW = f"{ei.BASE_URL}/pt-br/provider/inventory/outbound/show/{{id}}"
 PASTA_PRINTS = _RAIZ / "dados" / "avancar_cross"
-ETAPAS = ("separation", "confirm_separation")
+ETAPAS = ("iniciar_separacao", "separation", "confirm_separation")
+URL_PICKING = f"{ei.BASE_URL}/pt-br/provider/operation/picking/list"
+
+
+def _sondar_iniciar_separacao(page, pid: int) -> int:
+    """Seleção de Pedidos por Lista: abre o modal 'Filtrar por pedido único'
+    e mostra os campos, e lê a lista de operadores. Não envia nada."""
+    page.goto(URL_PICKING, wait_until="domcontentloaded", timeout=45_000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:
+        pass
+    try:
+        r = page.request.get(URL_PICKING + "/operator", timeout=30_000)
+        corpo = r.text()
+        try:
+            dados = r.json()
+            print("== operadores (/picking/list/operator):", json_resumo(dados))
+        except Exception:
+            nomes = re.findall(r"<option[^>]*value=\"?([^\" >]*)\"?[^>]*>([^<]+)</option>", corpo)
+            print("== operadores (/picking/list/operator):", [(v, " ".join(t.split())) for v, t in nomes][:60] or corpo[:300])
+    except Exception as e:
+        print("operadores: falha ao ler", type(e).__name__)
+    btn = page.locator("#btn_order")
+    if btn.count():
+        btn.first.click()
+        page.wait_for_timeout(2000)
+    soup = BeautifulSoup(page.content(), "html.parser")
+    form = soup.find("form", id="form_order")
+    if form is not None:
+        for i in form.find_all(["input", "select"]):
+            if i.get("name") and i.get("name") != "_token":
+                opcoes = [(o.get("value"), " ".join(o.get_text(" ", strip=True).split())[:30]) for o in i.find_all("option")][:15]
+                print(f"   form_order.{i.get('name')}: tipo={i.get('type') or i.name} valor={i.get('value') or ''!s:.30} opcoes={opcoes}")
+    for b in soup.select("#form_order button, .modal.show button"):
+        print("   botao:", " ".join(b.get_text(" ", strip=True).split())[:40], {k: v for k, v in b.attrs.items() if k in ("id", "type")})
+    print("print:", _print(page, f"{pid}_iniciar_separacao"))
+    print("== iniciar_separacao: só leitura nesta versão; nada enviado.")
+    return 0
+
+
+def json_resumo(dados) -> str:
+    """Resumo curto (só nomes/ids) de uma resposta JSON de operadores."""
+    itens = dados if isinstance(dados, list) else next((v for v in dados.values() if isinstance(v, list)), []) if isinstance(dados, dict) else []
+    saida = []
+    for it in itens[:60]:
+        if isinstance(it, dict):
+            saida.append({k: it[k] for k in ("id", "name", "nome", "user_id") if k in it})
+        else:
+            saida.append(it)
+    return str(saida) if saida else str(dados)[:300]
 
 
 def _id_do_pedido(pedido: str) -> int:
@@ -129,6 +179,8 @@ def executar(pedido: str, etapa: str, confirmar: bool) -> int:
             ei._login_provider(page, usuario, senha)
             antes = situacao_do_pedido(page, pid)
             print(f"== PS-{pid}: situacao antes = {antes}")
+            if etapa == "iniciar_separacao":
+                return _sondar_iniciar_separacao(page, pid)
 
             _abrir_lista_filtrada(page, pid)
             item = page.locator(f'[data-action="{etapa}"][data-id="{pid}"]')
