@@ -27,6 +27,8 @@
   .b-AGUARDANDO_LIBERACAO { background: var(--erro-bg); color: var(--st-falha); }
   .bloq-txt { font-size: 11px; color: var(--st-falha); margin-top: 3px; max-width: 260px; white-space: normal; }
   .chip.dedicado { background: var(--rota-bg); color: var(--st-rota); }
+  /* NF com local de entrega (<entrega>) diferente do fiscal (24/09): só informa */
+  .end-entrega { font-size: 11px; color: var(--st-rota); margin-top: 2px; white-space: normal; }
   .acoes-linha button.cotacao { border-color: var(--st-rota); color: var(--st-rota); font-weight: 700; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 100px; background: var(--rodando-bg); color: var(--rodando-texto); white-space: nowrap; }
   .chip.falha { background: var(--erro-bg); color: var(--st-falha); }
@@ -279,7 +281,7 @@
     $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
       <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
       <td class="nw">${docCurto(x)}</td>
-      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
+      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span>${x.endereco_fiscal ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Local de entrega indicado na NF</span>` : ''}</div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
       <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>${x.dedicado.motivo ? `<div class="bloq-txt">${esc(x.dedicado.motivo)}</div>` : ''}` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
       <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
@@ -375,7 +377,7 @@
       return `<tr data-i="${i}">
         <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
-        <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div></td>
+        <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div>${it.endereco_fiscal ? `<div class="end-entrega">Local de entrega indicado na NF: é este o endereço considerado na entrega. Endereço fiscal: ${esc(it.endereco_fiscal)}</div>` : ''}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>

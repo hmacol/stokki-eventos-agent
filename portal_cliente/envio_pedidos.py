@@ -227,6 +227,8 @@ def conectar() -> sqlite3.Connection:
         "troca_nf_status": "TEXT",
         "troca_nf_em": "TEXT",
         "troca_nf_erro": "TEXT",
+        # endereço fiscal quando o XML tem <entrega> (24/09); vazio = igual
+        "endereco_fiscal": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -283,6 +285,15 @@ def _texto(el, caminho: str) -> str:
     return (achado.text or "").strip() if achado is not None and achado.text else ""
 
 
+def _endereco_linha(el) -> str:
+    """'Rua X, 10 - Compl' de um <enderDest> ou <entrega> (mesmas tags)."""
+    endereco = ", ".join(p for p in (_texto(el, "nfe:xLgr"), _texto(el, "nfe:nro")) if p)
+    compl = _texto(el, "nfe:xCpl")
+    if compl:
+        endereco = f"{endereco} - {compl}" if endereco else compl
+    return endereco
+
+
 def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
@@ -327,12 +338,22 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
     except ValueError:
         valor = 0.0
 
-    logradouro = _texto(ender, "nfe:xLgr")
-    numero = _texto(ender, "nfe:nro")
-    compl = _texto(ender, "nfe:xCpl")
-    endereco = ", ".join(p for p in (logradouro, numero) if p)
-    if compl:
-        endereco = f"{endereco} - {compl}" if endereco else compl
+    endereco = _endereco_linha(ender)
+    bairro, municipio, uf = _texto(ender, "nfe:xBairro"), _texto(ender, "nfe:xMun"), _texto(ender, "nfe:UF")
+    cep, fone = _so_digitos(_texto(ender, "nfe:CEP")), _so_digitos(_texto(ender, "nfe:fone"))
+    # Grupo <entrega> (Hugo, 24/09, caso NF 41240 Maria Dolores): local de
+    # entrega diferente do endereço fiscal. É ESSE que vale pro processo todo
+    # (a Stokki também lê como "Local de Entrega" e o pipeline prioriza); o
+    # fiscal fica em endereco_fiscal só pra tela.
+    endereco_fiscal = ""
+    entrega = inf.find("nfe:entrega", NS)
+    if entrega is not None and _texto(entrega, "nfe:xLgr"):
+        cep_fiscal = f"CEP {cep[:5]}-{cep[5:]}" if len(cep) == 8 else cep
+        endereco_fiscal = ", ".join(p for p in (endereco, bairro, f"{municipio}/{uf}".strip("/"), cep_fiscal) if p)
+        endereco = _endereco_linha(entrega)
+        bairro, municipio, uf = _texto(entrega, "nfe:xBairro"), _texto(entrega, "nfe:xMun"), _texto(entrega, "nfe:UF")
+        cep = _so_digitos(_texto(entrega, "nfe:CEP"))
+        fone = _so_digitos(_texto(entrega, "nfe:fone")) or fone
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
@@ -346,11 +367,12 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "destinatario_doc": _so_digitos(_texto(dest, "nfe:CNPJ") or _texto(dest, "nfe:CPF")),
         "destinatario_nome": _texto(dest, "nfe:xNome"),
         "destinatario_endereco": endereco,
-        "destinatario_bairro": _texto(ender, "nfe:xBairro"),
-        "destinatario_municipio": _texto(ender, "nfe:xMun"),
-        "destinatario_uf": _texto(ender, "nfe:UF"),
-        "destinatario_cep": _so_digitos(_texto(ender, "nfe:CEP")),
-        "destinatario_telefone": _so_digitos(_texto(ender, "nfe:fone")),
+        "destinatario_bairro": bairro,
+        "destinatario_municipio": municipio,
+        "destinatario_uf": uf,
+        "destinatario_cep": cep,
+        "destinatario_telefone": fone,
+        "endereco_fiscal": endereco_fiscal,
         "volumes": volumes or 1,
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
@@ -1351,6 +1373,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "destinatario_endereco": nfe["destinatario_endereco"], "destinatario_bairro": nfe["destinatario_bairro"],
             "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"],
             "destinatario_cep": nfe["destinatario_cep"], "destinatario_telefone": nfe["destinatario_telefone"],
+            "endereco_fiscal": nfe.get("endereco_fiscal") or None,
             "volumes": nfe["volumes"], "peso_kg": nfe["peso_kg"], "valor_nf": nfe["valor_nf"], "itens": nfe["itens"],
             "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else regra_xml,
             "status": STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, "tentativas": 0,
@@ -1410,6 +1433,7 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     # cliente pedir pra cancelar).
     if cancelamento_pedido:
         d["agendamento_pendente"] = 0
+    d["endereco_fiscal"] = d.get("endereco_fiscal") or ""
     d.update({
         "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
         "criado_em_br": _dt_br(d["criado_em"]),
