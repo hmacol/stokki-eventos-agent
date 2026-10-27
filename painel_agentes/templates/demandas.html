@@ -61,6 +61,9 @@
   .tempo li .quando { color: var(--texto-suave); font-size: 12px; margin-left: 6px; }
   .tempo li .texto { white-space: pre-wrap; margin-top: 3px; }
   .tempo li.comentario { background: rgba(127,127,127,.08); padding-left: 8px; border-radius: 6px; }
+  .tempo li .anexo { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .tempo li .anexo img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); }
+  .anexar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
   .membros { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; border: 1px solid var(--borda);
              border-radius: 7px; padding: 8px; }
   .membro { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 13px; color: var(--texto); }
@@ -157,6 +160,11 @@
   <form id="form-comentario" autocomplete="off" style="margin-top:12px">
     <textarea name="texto" rows="2" maxlength="4000" placeholder="Escreva um comentário" style="width:100%;box-sizing:border-box"></textarea>
     <div class="rodape" style="margin-top:6px"><button type="submit" class="botao secundario">Comentar</button></div>
+  </form>
+  <form id="form-anexo" class="anexar" autocomplete="off">
+    <label class="mini">Anexar foto ou PDF (até 10 MB)
+      <input type="file" name="arquivo" accept="image/jpeg,image/png,image/webp,application/pdf"></label>
+    <button type="submit" class="botao secundario" id="botao-anexar">Anexar</button>
   </form>
   <p class="msg-erro" id="ficha-erro" role="alert"></p>
   <ul class="tempo" id="ficha-tempo"></ul>
@@ -408,9 +416,35 @@
     $('ficha-acoes').innerHTML = Object.keys(BOTOES).filter(a => d.acoes.includes(a))
       .map(a => `<button type="button" class="${BOTOES[a][2]}" data-acao="${a}">${BOTOES[a][0]}</button>`).join('');
     $('form-comentario').hidden = !d.acoes.includes('comentar');
+    $('form-anexo').hidden = !d.acoes.includes('comentar');
     $('ficha-tempo').innerHTML = d.eventos.slice().reverse().map(e =>
-      `<li class="${e.tipo === 'comentario' ? 'comentario' : ''}"><strong>${esc(e.autor)}</strong> ${esc(e.resumo)}<span class="quando">${esc(e.quando)}</span>${e.texto ? `<div class="texto">${esc(e.texto)}</div>` : ''}</li>`).join('');
+      `<li class="${e.tipo === 'comentario' ? 'comentario' : ''}"><strong>${esc(e.autor)}</strong> ${esc(e.resumo)}<span class="quando">${esc(e.quando)}</span>${e.texto ? `<div class="texto">${esc(e.texto)}</div>` : ''}${e.anexo ? linkAnexo(e.anexo) : ''}</li>`).join('');
   }
+  function linkAnexo(a) {
+    const url = BASE_PATH + '/api/demandas/anexos/' + a.id;
+    const miniatura = a.tipo.startsWith('image/') ? `<img src="${url}" alt="" loading="lazy">` : '';
+    return `<div><a class="anexo" href="${url}" target="_blank" rel="noopener">${miniatura}${esc(a.nome)}</a></div>`;
+  }
+  $('form-anexo').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const d = atual, form = ev.target, arquivo = form.arquivo.files[0];
+    $('ficha-erro').textContent = '';
+    if (!arquivo) { $('ficha-erro').textContent = 'Escolha um arquivo.'; return; }
+    if (arquivo.size > 10 * 1024 * 1024) { $('ficha-erro').textContent = 'Arquivo muito grande (máximo 10 MB).'; return; }
+    $('botao-anexar').disabled = true;
+    try {
+      await comNome(async () => {
+        const dados = new FormData();
+        dados.append('arquivo', arquivo);
+        const r = await fetch(BASE_PATH + '/api/demandas/' + d.id + '/anexos', { method: 'POST', body: dados, credentials: 'same-origin' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { const e = new Error(j.erro || 'Não deu certo (' + r.status + ').'); e.precisaNome = !!j.precisa_nome; throw e; }
+        form.reset();
+        desenharFicha(j.demanda);
+        carregarLista();
+      }, $('ficha-erro'));
+    } finally { $('botao-anexar').disabled = false; }
+  });
   $('ficha-acoes').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button[data-acao]');
     if (!b || !atual) return;

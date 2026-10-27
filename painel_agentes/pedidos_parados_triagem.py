@@ -12,9 +12,9 @@ Origem dos registros (24/10/2026): a aba Registrar desta mesma tela,
 tabela local `pedidos_parados_registros` (funções `registrar`,
 `apagar_registro`, `registros_hoje` abaixo). Até 23/10 vinham do Fresh
 Hub do Lovable (freshhub.com.br/pedidos-parados, tabela stalled_orders);
-o histórico de lá NÃO foi importado (decisão do Hugo). O Lovable só
-continua referenciado pelo encaminhamento às Demandas, que está PAUSADO
-(ENCAMINHAMENTO_DEMANDAS_ATIVO).
+o histórico de lá NÃO foi importado (decisão do Hugo). Desde 26/10 o
+encaminhamento cria a demanda na tela Demandas do painel (não mais no
+Lovable), pra equipe escolhida no botão Encaminhar.
 
 Ver TRATATIVAS_PEDIDOS_PARADOS.md (raiz do projeto) pro contexto de
 negócio completo -- classificações, regra de prioridade (>2 dias),
@@ -60,7 +60,6 @@ import tratativas
 from retornos import MAX_FOTO_BYTES, _extensao_imagem  # mesma validação de foto dos retornos
 from vuupt_client import VuuptClient, VuuptAPIError
 from lovable.pedidos_parados import normalizar_order_number
-from lovable.tasks import criar_demanda_para_tratativa
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +72,18 @@ PRAZO_APAGAR_MIN = 15
 
 CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue")
 CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
-# Hugo, 24/10: encaminhamento às Demandas do Fresh Hub (Lovable) PAUSADO
-# junto com a saída do Lovable. Enquanto False, encaminhar_operacao recusa
+# Hugo, 24/10: encaminhamento às Demandas do Fresh Hub (Lovable) pausado
+# junto com a saída do Lovable. 26/10: religado, agora criando a demanda na
+# tela Demandas do painel (demandas.criar_de_sistema). False volta a recusar
 # e a tela conta a classificação como tratada (sem botão Encaminhar).
-# Religar = True; nada mais muda.
-ENCAMINHAMENTO_DEMANDAS_ATIVO = False
+ENCAMINHAMENTO_DEMANDAS_ATIVO = True
+# Título da demanda por classificação (as categorias que o Lovable usava) e a
+# equipe já sugerida no botão Encaminhar (as outras a pessoa escolhe na hora).
+TITULO_DEMANDA = {"Cancelados": "Cancelamento de Pedido e Retorno ao Estoque",
+                  "Devolução Parcial": "Devolução Parcial",
+                  "Descartar": "Cancelamento de Pedido e Retorno ao Estoque",
+                  "Verificar com Cliente": "Verificar Pedido com Cliente"}
+EQUIPE_PADRAO_POR_CLASSIFICACAO = {"Verificar com Cliente": "Atendimento"}
 
 DIAS_PRIORIDADE = 2  # pedido do Hugo, 24/08
 
@@ -278,12 +284,6 @@ def _migrar_chaves_com_prefixo_ps(conn) -> None:
                 )
             logger.info(f"[pedidos-parados] {tabela}: chave {bruto!r} -> {limpo!r}")
     conn.commit()
-
-
-def _sessao_freshhub():
-    """Sessão do Fresh Hub do Lovable -- hoje só pras Demandas (pausadas)."""
-    from lovable.auth import FreshHubSession
-    return FreshHubSession(_carregar_config())
 
 
 def _vuupt() -> VuuptClient:
@@ -1066,20 +1066,24 @@ def duplicar(order_number: str, usuario: str) -> dict:
     return {"ok": True, "novo_code": novo_code, "ja_existia": False}
 
 
-def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> dict:
+def encaminhar_operacao(order_number: str, classificacao: str, usuario: str, equipe_id=None,
+                        autor: str | None = None) -> dict:
     """
-    Ação das tratativas que criam Demanda no Fresh Hub (Cancelados/
-    Devolução Parcial/Descartar/Verificar com Cliente -- cada uma numa
-    área diferente, ver MOLDE_TRATATIVA em lovable/tasks.py; nunca
-    duplica na Vuupt). Resolve o nome do cliente na Vuupt só pra usar no
-    título/client_name do card -- se não conseguir, cria a Demanda com
-    um título genérico em vez de travar a ação (é mais importante quem
-    for tratar ver o card do que travar por causa de um nome que não
-    resolveu)."""
+    Ação das tratativas que criam Demanda (Cancelados/Devolução Parcial/
+    Descartar/Verificar com Cliente): desde 26/10 na tela Demandas do
+    painel, pra equipe escolhida no botão Encaminhar (nunca duplica: a
+    mesma classificação do mesmo pedido devolve a demanda que já existe).
+    Resolve o nome do cliente na Vuupt só pra usar no título -- se não
+    conseguir, cria com título genérico em vez de travar a ação (é mais
+    importante quem for tratar ver a demanda do que travar por causa de
+    um nome que não resolveu)."""
     if not ENCAMINHAMENTO_DEMANDAS_ATIVO:
         raise ValueError("Encaminhamento às Demandas pausado (Hugo, 24/10).")
     if classificacao not in CLASSIFICACOES_QUE_CRIAM_DEMANDA:
         raise ValueError(f"Classificação {classificacao!r} não cria Demanda.")
+    if not equipe_id:
+        raise ValueError("Escolha a equipe que vai receber a demanda.")
+    import demandas
 
     vuupt = _vuupt()
     servico, pedido_code = _resolver_pedido(vuupt, order_number)
@@ -1099,17 +1103,27 @@ def encaminhar_operacao(order_number: str, classificacao: str, usuario: str) -> 
             f"Demanda com título genérico mesmo assim."
         )
 
-    sessao_fh = _sessao_freshhub()
-    criada = criar_demanda_para_tratativa(sessao_fh, classificacao, client_name)
+    conn = demandas.conectar()
+    try:
+        criada = demandas.criar_de_sistema(
+            conn, titulo=f"{TITULO_DEMANDA[classificacao]} — {client_name}"[:demandas.TITULO_MAX],
+            equipe_id=int(equipe_id), origem="pedidos_parados", origem_ref=f"{order_number}:{classificacao}",
+            usuario=usuario, autor=autor or usuario, prioridade="ALTA", pedido_codigo=pedido_code or order_number,
+            descricao=f"Pedido parado {order_number} classificado como \"{classificacao}\" na triagem de Pedidos Parados.")
+    except demandas.ErroDemanda as e:
+        raise ValueError(str(e)) from None
+    finally:
+        conn.close()
 
-    if pedido_code:
+    if pedido_code and not criada["ja_existia"]:
         tratativas.registrar_evento(
             pedido_code, "PEDIDOS_PARADOS", "PEDIDO_PARADO_ENCAMINHADO_OPERACAO",
             decisao=classificacao,
-            texto=f"Demanda criada no Fresh Hub por {usuario} (id={criada.get('id')}, cliente={client_name})",
+            texto=f"Demanda #{criada['id']} criada no painel por {usuario} pra {criada['equipe']} (cliente={client_name})",
         )
-    _marcar_acao(order_number, "concluida", f"demanda criada → {criada.get('id')}")
-    return {"ok": True, "demanda_id": criada.get("id"), "client_name": client_name}
+    _marcar_acao(order_number, "concluida", f"demanda #{criada['id']} → {criada['equipe']}")
+    return {"ok": True, "demanda_id": criada["id"], "equipe": criada["equipe"], "ja_existia": criada["ja_existia"],
+            "client_name": client_name}
 
 
 def notificar_cliente_retira(order_number: str, usuario: str) -> dict:

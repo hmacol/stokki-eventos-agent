@@ -907,10 +907,11 @@
                            pedidos_parados_registros (foto em dados/pedidos_parados/<id>/;
                            apagar só o autor em 15 min); aba Triagem lê daí
                            (só o dia mais recente; dias parado desde o 1º
-                           registro). Encaminhar às Demandas do Lovable PAUSADO
-                           (ENCAMINHAMENTO_DEMANDAS_ATIVO=False: classificar
-                           Cancelados/Devolução/Descartar/Verificar já conta
-                           como tratado). Testes: test_pedidos_parados_registro.py.
+                           registro). Encaminhar (Cancelados/Devolução/Descartar/
+                           Verificar) cria demanda na tela /demandas pra equipe
+                           escolhida na hora (26/10; Verificar sugere Atendimento;
+                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
+                           test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
                            da equipe, abertos a todos do Atendimento, só texto,
@@ -937,6 +938,9 @@
                            tempo + ponteiro do aviso sonoro). Aviso no grupo do
                            /atendimento ("Demandas" ou o da equipe) só com número e
                            equipe. /api/demandas/avisos é caminho comum (acesso_telas).
+                           Fase 2 (26/10): anexos foto/PDF até 10 MB em dados/demandas/<id>/
+                           (+GCS best-effort), tabela demandas_anexos; criar_de_sistema pro
+                           Encaminhar de Pedidos Parados (origem pedidos_parados, não duplica).
  contadores_menu.py        Badges do menu lateral ('demandas' é por usuário).
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
@@ -1251,7 +1255,9 @@
                            Desde 24/10 o painel NÃO lê mais pedidos_parados.py
                            (registro é na aba Registrar do painel); só sobram
                            normalizar_order_number e tasks.py (Demandas,
-                           substituídas pela tela /demandas do painel em 25/10).
+                           substituídas pela tela /demandas do painel em 25/10;
+                           desde 26/10 o Encaminhar de Pedidos Parados cria a
+                           demanda lá e tasks.py não é mais chamado).
                            Sai de uso na Fase 1 do plano mestre.
 
  batimento/                Destino final de cada pedido (DOC_EXECUCAO_CLAUDE_BATIMENTO_PEDIDOS.md).
