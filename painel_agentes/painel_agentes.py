@@ -245,13 +245,13 @@ def _registrar_falha_login(chaves) -> None:
             _login_falhas.setdefault(chave, []).append(agora)
 
 
-# Deslogar por inatividade (24/10, Hugo): 30 min sem a pessoa mexer na tela
-# derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
+# Deslogar por inatividade (24/10, Hugo; 27/10 subiu de 30 min pra 6 h): 6 h
+# sem a pessoa mexer na tela derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
 # que o _sessao_inativa_script.html manda ao clicar, digitar, tocar ou rolar.
 # As consultas automaticas das telas (Torre, contadores do menu, status da
 # execucao a cada 2 s) NAO contam, senao ninguem cairia nunca. Galpao e
 # expedicao (logins fixos de aparelho compartilhado) ficam de fora.
-_INATIVIDADE_MAX = timedelta(minutes=30)
+_INATIVIDADE_MAX = timedelta(hours=6)
 _NIVEIS_SEM_EXPIRAR = ("galpao", "expedicao")
 
 

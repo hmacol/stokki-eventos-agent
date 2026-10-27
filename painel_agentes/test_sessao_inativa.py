@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Deslogar por inatividade (24/10): 30 min sem uso de verdade -> login.
+Deslogar por inatividade (24/10; 6 h desde 27/10): 6 h sem uso de verdade -> login.
 
     py -3.11 -m unittest test_sessao_inativa   (de dentro de painel_agentes/)
 """
@@ -54,18 +54,18 @@ class TestSessaoInativa(unittest.TestCase):
         with cliente.session_transaction() as s:
             return s.get("ultimo_uso")
 
-    def test_31_min_parado_volta_pro_login_e_api_da_401(self):
-        r = self._cliente(minutos_parado=31).get("/acessos", headers=NAVEGAR)
+    def test_6h01_parado_volta_pro_login_e_api_da_401(self):
+        r = self._cliente(minutos_parado=361).get("/acessos", headers=NAVEGAR)
         self.assertEqual(r.status_code, 302)
         self.assertTrue(r.headers["Location"].endswith("/login"))
-        r = self._cliente(minutos_parado=31).get("/api/sessao/estado")
+        r = self._cliente(minutos_parado=361).get("/api/sessao/estado")
         self.assertEqual(r.status_code, 401)
 
-    def test_29_min_parado_ainda_entra(self):
-        self.assertEqual(self._cliente(minutos_parado=29).get("/acessos", headers=NAVEGAR).status_code, 200)
+    def test_5h59_parado_ainda_entra(self):
+        self.assertEqual(self._cliente(minutos_parado=359).get("/acessos", headers=NAVEGAR).status_code, 200)
 
     def test_consulta_automatica_nao_renova(self):
-        cliente = self._cliente(minutos_parado=20)
+        cliente = self._cliente(minutos_parado=350)
         antes = self._ultimo_uso(cliente)
         r = cliente.get("/api/sessao/estado")
         self.assertEqual(r.status_code, 200)
@@ -81,7 +81,7 @@ class TestSessaoInativa(unittest.TestCase):
         cliente = self._cliente(minutos_parado=20)
         r = cliente.post("/api/sessao/atividade", headers=ORIGEM)
         self.assertEqual(r.status_code, 200)
-        self.assertGreater(r.get_json()["restante"], 29 * 60)
+        self.assertGreater(r.get_json()["restante"], 359 * 60)
 
     def test_galpao_e_expedicao_nao_caem(self):
         for nivel, url in (("galpao", "/wms"), ("expedicao", "/expedicao")):
