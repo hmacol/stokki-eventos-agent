@@ -29,6 +29,29 @@
   .chip.dedicado { background: var(--rota-bg); color: var(--st-rota); }
   /* NF com local de entrega (<entrega>) diferente do fiscal (24/09): só informa */
   .end-entrega { font-size: 11px; color: var(--st-rota); margin-top: 2px; white-space: normal; }
+  /* Endereço de entrega escolhido na prévia (27/10, spec endereco-entrega-portal) */
+  .c-end { min-width: 260px; max-width: 420px; white-space: normal; }
+  .c-end .rot { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--texto-suave); margin-bottom: 2px; }
+  .c-end .end-linha { font-size: 12.5px; color: var(--texto); line-height: 1.45; }
+  .c-end .fiscal-txt, .c-end .info-ent { font-size: 11.5px; color: var(--texto-suave); margin-top: 5px; }
+  .c-end .chip.ok { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .c-end .chip.rota { background: var(--rota-bg); color: var(--st-rota); }
+  .c-end .btn-alt { margin-top: 7px; border: 1px solid var(--st-rota); color: var(--st-rota); background: none; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .c-end .link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; }
+  .c-end .links-ent { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+  .c-end .peq { padding: 4px 10px; font-size: 12px; }
+  .c-end .sug { margin-top: 7px; border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 7px; }
+  .c-end .sug .bts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .c-end .form-ent { margin-top: 7px; border: 1px solid var(--st-rota); border-radius: 8px; padding: 9px 10px; display: grid; grid-template-columns: 105px 1fr 1fr; gap: 7px; background: var(--superficie); }
+  .c-end .form-ent label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--texto-suave); }
+  .c-end .form-ent input { border: 1px solid var(--borda); border-radius: 6px; padding: 5px 7px; font-family: inherit; font-size: 12.5px; background: var(--superficie); color: var(--texto); min-width: 0; }
+  .c-end .form-ent input[readonly] { background: var(--fundo); }
+  .c-end .form-ent .l2 { grid-column: span 2; }
+  .c-end .form-ent .l3, .c-end .ent-erro, .c-end .acoes-ent { grid-column: 1 / -1; }
+  .c-end .ent-erro { font-size: 11.5px; color: var(--st-falha); }
+  .c-end .ent-erro:empty { display: none; }
+  .c-end .acoes-ent { display: flex; gap: 8px; }
+  @media (max-width: 560px) { .c-end .form-ent { grid-template-columns: 1fr; } .c-end .form-ent .l2 { grid-column: auto; } }
   .acoes-linha button.cotacao { border-color: var(--st-rota); color: var(--st-rota); font-weight: 700; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 100px; background: var(--rodando-bg); color: var(--rodando-texto); white-space: nowrap; }
   .chip.falha { background: var(--erro-bg); color: var(--st-falha); }
@@ -281,7 +304,7 @@
     $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
       <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
       <td class="nw">${docCurto(x)}</td>
-      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span>${x.endereco_fiscal ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Local de entrega indicado na NF</span>` : ''}</div></td>
+      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span>${x.endereco_entrega_origem === 'cliente' || x.endereco_entrega_origem === 'ultima_entrega' ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Endereço de entrega alterado no envio</span>` : x.endereco_fiscal ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Local de entrega indicado na NF</span>` : ''}</div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
       <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>${x.dedicado.motivo ? `<div class="bloq-txt">${esc(x.dedicado.motivo)}</div>` : ''}` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
       <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
@@ -361,7 +384,7 @@
     const rotFl = p.fluxo_rotulos || {};
     $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
       (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
-      '<th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr>';
+      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr>`;
     const opcoesFluxo = it => (p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
@@ -377,7 +400,7 @@
       return `<tr data-i="${i}">
         <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
-        <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div>${it.endereco_fiscal ? `<div class="end-entrega">Local de entrega indicado na NF: é este o endereço considerado na entrega. Endereço fiscal: ${esc(it.endereco_fiscal)}</div>` : ''}</td>
+        <td class="c-end" data-i="${i}">${celulaEndereco(it)}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
@@ -397,6 +420,120 @@
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
   }
+
+  // ── Endereço de entrega na prévia (27/10, spec endereco-entrega-portal) ──────
+  // item.entrega.modo vem do servidor (nota | terceiros | retirada | sugestao |
+  // livre); a escolha do cliente fica em item._ent e o confirmar revalida tudo.
+  const AVISO_FISCAL = 'Se a entrega for em outro lugar, informe abaixo. Sem alteração, o pedido vai pro endereço fiscal da nota.';
+  const CAMPOS_VAZIOS = { cep: '', logradouro: '', bairro: '', numero: '', complemento: '', cidade: '', uf: '', erro: '' };
+  const cepFmt = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 8 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
+  const enderecoNota = it => [it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', ');
+
+  function celulaEndereco(it) {
+    const fiscal = enderecoNota(it), ent = it.entrega;
+    if (!previa.entrega_ativa || !ent) {
+      return `<div class="end" style="color:var(--texto)">${esc(fiscal)}</div>${it.endereco_fiscal ? `<div class="end-entrega">Local de entrega indicado na NF: é este o endereço considerado na entrega. Endereço fiscal: ${esc(it.endereco_fiscal)}</div>` : ''}`;
+    }
+    const st = it._ent || (it._ent = { escolha: '', end: null, editando: false, origem: 'cliente', form: { ...CAMPOS_VAZIOS } });
+    if (ent.modo === 'nota') {
+      return `<span class="rot">Entregar em <span class="chip ok">informado na nota</span></span><div class="end-linha">${esc(fiscal)}</div><div class="fiscal-txt">Endereço fiscal: ${esc(it.endereco_fiscal)}</div>`;
+    }
+    if (ent.modo === 'terceiros' || ent.modo === 'retirada') {
+      return `<div class="end-linha">${esc(fiscal)}</div><div class="info-ent">${ent.modo === 'retirada' ? 'Retirada' : 'Redespacho: entregue à transportadora ' + esc(ent.transportadora)}</div>`;
+    }
+    const topo = `<span class="rot">Endereço fiscal da nota</span><div class="end-linha">${esc(fiscal)}</div>`;
+    if (st.editando) return topo + formEndereco(st.form);
+    if (st.escolha === 'cliente' || st.escolha === 'ultima_entrega') {
+      const e = st.end;
+      return `<span class="rot">Entregar em <span class="chip rota">alterado por você</span></span>
+        <div class="end-linha"><b>${esc(e.logradouro)}, ${esc(e.numero)}${e.complemento ? ' - ' + esc(e.complemento) : ''}</b><br>${esc(e.bairro)}${e.bairro ? ', ' : ''}${esc(e.cidade)}/${esc(e.uf)} · ${esc(cepFmt(e.cep))}</div>
+        <div class="fiscal-txt">Endereço fiscal: <s>${esc(fiscal)}</s></div>
+        <div class="links-ent"><button type="button" class="link" data-ent="editar">Editar</button><button type="button" class="link" data-ent="voltar">Voltar pro endereço fiscal</button></div>`;
+    }
+    if (ent.modo === 'sugestao' && st.escolha !== 'fiscal') {
+      return topo + `<div class="sug"><div>No último pedido pra este destinatário (${esc(ent.sugestao.data_br)}) a entrega foi em <b>${esc(ent.sugestao.texto)}</b>. Onde entregar este?</div>
+        <div class="bts"><button type="button" class="botao peq" data-ent="repetir">Entregar lá de novo</button><button type="button" class="botao-linha peq" data-ent="fiscal">Endereço fiscal</button><button type="button" class="botao-linha peq" data-ent="outro">Outro endereço</button></div></div>`;
+    }
+    return topo + `<div class="info-ent">${AVISO_FISCAL}</div><button type="button" class="btn-alt" data-ent="abrir">Alterar endereço de entrega</button>` +
+      (ent.modo === 'sugestao' ? ` <button type="button" class="link" data-ent="rever">ver a última entrega</button>` : '');
+  }
+
+  function formEndereco(f) {
+    return `<div class="form-ent">
+      <label>CEP <input data-f="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(cepFmt(f.cep))}"></label>
+      <label class="l2">Rua / Avenida <input data-f="logradouro" placeholder="preenche pelo CEP" value="${esc(f.logradouro)}"></label>
+      <label>Número <input data-f="numero" value="${esc(f.numero)}"></label>
+      <label class="l2">Bairro <input data-f="bairro" value="${esc(f.bairro)}"></label>
+      <label class="l3">Cidade / UF <input data-f="cidade_uf" readonly tabindex="-1" value="${esc(f.cidade ? f.cidade + '/' + f.uf : '')}"></label>
+      <label class="l3">Complemento / referência <input data-f="complemento" placeholder="ex.: doca 2, entrada pela Rua X" value="${esc(f.complemento)}"></label>
+      <div class="ent-erro">${esc(f.erro)}</div>
+      <div class="acoes-ent"><button type="button" class="botao peq" data-ent="usar">Usar este endereço</button><button type="button" class="botao-linha peq" data-ent="cancelar">Cancelar</button></div>
+    </div>`;
+  }
+
+  const celula = i => $('previa-tabela').querySelector(`td.c-end[data-i="${i}"]`);
+  function redesenharEndereco(i) { const td = celula(i); if (td) td.innerHTML = celulaEndereco(previa.itens[i]); }
+  function lerForm(i) {
+    const st = previa.itens[i]._ent;
+    for (const el of celula(i).querySelectorAll('[data-f]')) if (el.dataset.f !== 'cidade_uf') st.form[el.dataset.f] = el.value.trim();
+  }
+
+  async function buscarCep(i) {
+    const f = previa.itens[i]._ent.form, d = (f.cep || '').replace(/\D/g, '');
+    if (d.length !== 8) return;
+    Object.assign(f, { cidade: '', uf: '', erro: '' });
+    try {
+      const r = await fetch(`${BASE}/api/envios/cep/${d}`, { credentials: 'same-origin' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro);
+      if (j.logradouro) f.logradouro = j.logradouro;
+      if (j.bairro) f.bairro = j.bairro;
+      Object.assign(f, { cidade: j.cidade, uf: j.uf });
+    } catch (e) {
+      f.erro = 'CEP não encontrado';
+    }
+    if (!previa || !previa.itens[i]._ent.editando) return;
+    redesenharEndereco(i);
+    const foco = celula(i).querySelector(`[data-f="${f.erro ? 'cep' : (f.logradouro ? 'numero' : 'logradouro')}"]`);
+    if (foco) foco.focus();
+  }
+
+  $('previa-tabela').addEventListener('click', e => {
+    const b = e.target.closest('[data-ent]');
+    if (!b) return;
+    const i = Number(b.closest('td.c-end').dataset.i), it = previa.itens[i], st = it._ent, acao = b.dataset.ent;
+    if (acao === 'abrir' || acao === 'outro') Object.assign(st, { form: { ...CAMPOS_VAZIOS }, origem: 'cliente', editando: true });
+    else if (acao === 'repetir') {
+      const c = it.entrega.sugestao.campos || {};
+      Object.assign(st, { form: { ...CAMPOS_VAZIOS, ...c, cidade: c.municipio || '', uf: c.uf || '' }, origem: 'ultima_entrega', editando: true });
+    } else if (acao === 'editar') Object.assign(st, { form: { ...CAMPOS_VAZIOS, ...st.end }, origem: st.escolha, editando: true });
+    else if (acao === 'fiscal') Object.assign(st, { escolha: 'fiscal', end: null });
+    else if (acao === 'rever') st.escolha = '';
+    else if (acao === 'voltar') Object.assign(st, { escolha: it.entrega.modo === 'sugestao' ? 'fiscal' : '', end: null });
+    else if (acao === 'cancelar') st.editando = false;
+    else if (acao === 'usar') {
+      lerForm(i);
+      const f = st.form;
+      f.erro = f.cep.replace(/\D/g, '').length !== 8 || !f.cidade ? 'CEP não encontrado'
+        : !f.logradouro ? 'Informe a rua' : !f.numero ? 'Informe o número' : '';
+      if (!f.erro) Object.assign(st, { end: { ...f }, escolha: st.origem, editando: false });
+    }
+    redesenharEndereco(i);
+    if (acao === 'repetir') buscarCep(i);
+    else if (st.editando && acao !== 'usar') { const c = celula(i).querySelector('[data-f="cep"]'); if (c) c.focus(); }
+  });
+
+  $('previa-tabela').addEventListener('input', e => {
+    if (e.target.dataset.f !== 'cep') return;
+    const td = e.target.closest('td.c-end'), i = Number(td.dataset.i);
+    if (e.target.value.replace(/\D/g, '').length !== 8) {  // CEP mudou: a cidade da consulta anterior não vale mais
+      Object.assign(previa.itens[i]._ent.form, { cidade: '', uf: '' });
+      td.querySelector('[data-f="cidade_uf"]').value = '';
+      return;
+    }
+    lerForm(i);
+    buscarCep(i);
+  });
 
   // "todos…" no cabeçalho da coluna Fluxo aplica a escolha nas linhas que aceitam aquele fluxo
   $('previa-tabela').addEventListener('change', e => {
@@ -445,6 +582,14 @@
         item.agendamento_hora_inicio = (tr.querySelector('.ag-ini') || {}).value;
         item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
         if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`${rotuloIt}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
+      }
+      const st = it._ent;
+      if (p.entrega_ativa && it.entrega && st) {
+        if (st.editando) { mensagem(`${rotuloIt}: termine o endereço de entrega (Usar este endereço ou Cancelar).`, 'erro'); return; }
+        if (it.entrega.modo === 'sugestao' && !st.escolha) { mensagem(`${rotuloIt}: escolha onde entregar este pedido.`, 'erro'); return; }
+        if (st.escolha) item.entrega_escolha = st.escolha;
+        if (st.end) item.entrega_endereco = { cep: st.end.cep, logradouro: st.end.logradouro, numero: st.end.numero,
+                                              complemento: st.end.complemento, bairro: st.end.bairro };
       }
       itens.push(item);
     }
