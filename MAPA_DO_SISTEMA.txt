@@ -536,6 +536,8 @@
                                O /inicio do painel mostra "Virada de mês" nos
                                últimos 7 dias (pagina_inicial.montar_virada_de_mes).
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
+ pedidos_pausados_cliente.py   Tabela pedidos_pausados_cliente (Em espera a pedido do cliente):
+                               pausado = linha aberta; separar_pausados tira da roteirizacao.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
