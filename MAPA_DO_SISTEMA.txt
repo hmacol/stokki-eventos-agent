@@ -642,9 +642,6 @@
                       Cross, 25/10; sondado só leitura, POST real ainda não provado.
  sondar_trocar_nf.py  Sonda SÓ LEITURA (cookies salvos, sem login) do _token e do
                       download do XML que a troca usa. Passo 0 do piloto do Cross.
- pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
-                      outbound/pause com _token/page do form_pause; relê a
-                      Situação). Sondado só leitura 25/10; escrita real não provada.
  ajuste_estoque.py    Ajuste Manual de estoque (CLI, --modo-teste só mostra):
                       saldo, zerar (produtos ou --todos), contagem (disponível
                       = alvo de um arquivo product_id;alvo) e transferir
@@ -1093,9 +1090,9 @@
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
  solicitacoes_execucao.py  Executar/Recusar solicitação PENDENTE do portal (tela
                            /solicitacoes-portal): cancelar (Vuupt -> Stokki),
-                           em_espera (tira da rota na Vuupt -> Pausar na Stokki),
+                           em_espera (tira da rota na Vuupt + grava pedidos_pausados_cliente; nada na Stokki),
                            reagendar (PUT serviço Vuupt). Só conclui se tudo deu
-                           certo; trava sessao_uso (60 s) em cancelar/em_espera.
+                           certo; trava sessao_uso (60 s) só em cancelar.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.

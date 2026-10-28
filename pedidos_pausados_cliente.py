@@ -29,9 +29,7 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 FINS = ("retomado", "cancelado")
 
 
-def conectar(db_path=None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path or DB_PATH), timeout=30)
-    conn.row_factory = sqlite3.Row
+def garantir_tabela(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS pedidos_pausados_cliente (
             id INTEGER PRIMARY KEY,
@@ -46,6 +44,12 @@ def conectar(db_path=None) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_pausados_cliente_codigo ON pedidos_pausados_cliente (codigo);
     """)
     conn.commit()
+
+
+def conectar(db_path=None) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path or DB_PATH), timeout=30)
+    conn.row_factory = sqlite3.Row
+    garantir_tabela(conn)
     return conn
 
 

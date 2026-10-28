@@ -102,7 +102,7 @@ class Fakes:
 
         return se.Dependencias(
             buscar_servico=buscar, cancelar_vuupt=anota("cancelar_vuupt"), cancelar_stokki=anota("cancelar_stokki"),
-            pausar_stokki=anota("pausar_stokki"), tirar_da_rota_vuupt=anota("tirar_da_rota_vuupt"),
+            tirar_da_rota_vuupt=anota("tirar_da_rota_vuupt"),
             reagendar_vuupt=anota("reagendar_vuupt"), abrir_stokki=abrir, fechar_stokki=anota("fechar_stokki", resp=False),
             agent_lalamove=agent_lalamove)
 
@@ -173,36 +173,38 @@ class Executar(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertFalse({"cancelar_vuupt", "cancelar_stokki"} & set(f.nomes()))
 
-    def test_em_espera_desligado_nao_toca_em_nada_e_nao_conclui(self):
-        conn = conn_portal()
-        novo_envio(conn)
-        sid = nova_solicitacao(conn, "em_espera")
-        f = Fakes()
-        self.assertFalse(se.EM_ESPERA_HABILITADO)
-        r = se.executar(conn, sid, f.deps())
-        self.assertFalse(r["ok"])
-        self.assertIn("Em espera ainda não pode", r["mensagem"])
-        self.assertEqual(f.nomes(), [])
-        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+    def test_em_espera_habilitado(self):
+        self.assertTrue(se.EM_ESPERA_HABILITADO)
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_em_espera_tira_da_rota_e_pausa(self):
+    def test_em_espera_abre_pausa_e_muda_status(self):
         conn = conn_portal()
         novo_envio(conn)
         sid = nova_solicitacao(conn, "em_espera", detalhes="segurar ate segunda")
         f = Fakes()
         r = se.executar(conn, sid, f.deps())
         self.assertTrue(r["ok"], r)
-        self.assertEqual(f.nomes(), ["abrir_stokki", "buscar_servico", "tirar_da_rota_vuupt", "pausar_stokki", "fechar_stokki"])
+        self.assertEqual(f.nomes(), ["buscar_servico", "tirar_da_rota_vuupt"])
         self.assertIn(("tirar_da_rota_vuupt", 777), f.chamadas)
-        self.assertIn(("pausar_stokki", 39959, "segurar ate segunda"), f.chamadas)
         self.assertEqual(solicitacao(conn, sid)["status"], "CONCLUIDA")
-        self.assertEqual(envio(conn)["status"], ep.STATUS_CRIADO)
+        self.assertEqual(envio(conn)["status"], ep.STATUS_EM_ESPERA_CLIENTE)
+        p = dict(conn.execute("SELECT * FROM pedidos_pausados_cliente").fetchone())
+        self.assertEqual((p["codigo"], p["id_stokki"], p["envio_id"], p["service_ids"], p["retomado_em"]),
+                         ("PS-39959", 39959, 50, "777", None))
+        self.assertTrue(p["pausado_em"])
         self.assertIn("tirado da rota 9001", r["mensagem"])
         self.assertIn(se.AVISO_REROTEIRIZACAO, r["mensagem"])
-        self.assertNotIn("roteirização", solicitacao(conn, sid)["resposta"])  # aviso é só pro operador
+        self.assertEqual(solicitacao(conn, sid)["resposta"],
+                         "Pedido retirado da rota e mantido em espera até você retomar pelo portal.")
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
+    def test_em_espera_nao_toca_na_stokki(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "em_espera")
+        f = Fakes()
+        self.assertTrue(se.executar(conn, sid, f.deps())["ok"])
+        self.assertFalse({"abrir_stokki", "fechar_stokki", "cancelar_stokki"} & set(f.nomes()))
+        self.assertNotIn("em_espera", se._USAM_STOKKI)
+
     def test_em_espera_ultima_parada_avisa_rota_cancelada(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -212,33 +214,7 @@ class Executar(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertIn("a rota 9001 ficou vazia e foi cancelada", r["mensagem"])
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_abrir_stokki_com_excecao_vira_ok_false(self):
-        conn = conn_portal()
-        novo_envio(conn)
-        sid = nova_solicitacao(conn, "em_espera")
-        f = Fakes(stokki_livre=sqlite3.OperationalError("database is locked"))
-        r = se.executar(conn, sid, f.deps())
-        self.assertFalse(r["ok"])
-        self.assertIn("database is locked", r["mensagem"])
-        self.assertEqual(f.nomes(), ["abrir_stokki"])
-        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
-
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_em_espera_falha_no_pausar_nao_conclui(self):
-        conn = conn_portal()
-        novo_envio(conn)
-        sid = nova_solicitacao(conn, "em_espera")
-        f = Fakes(pausar_stokki={"ok": False, "erro": "Stokki aceitou mas a situacao ficou 'Aguardando Transportador'"})
-        r = se.executar(conn, sid, f.deps())
-        self.assertFalse(r["ok"])
-        self.assertIn("fora da rota", r["mensagem"])
-        self.assertIn("Aguardando Transportador", r["mensagem"])
-        self.assertEqual(f.nomes()[-1], "fechar_stokki")
-        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
-
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_em_espera_vuupt_recusa_nao_pausa(self):
+    def test_em_espera_falhou_nao_abre_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
         sid = nova_solicitacao(conn, "em_espera")
@@ -246,11 +222,22 @@ class Executar(unittest.TestCase):
         r = se.executar(conn, sid, f.deps())
         self.assertFalse(r["ok"])
         self.assertIn("9001", r["mensagem"])
-        self.assertNotIn("pausar_stokki", f.nomes())
+        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+        self.assertEqual(envio(conn)["status"], ep.STATUS_CRIADO)
+        tabela = conn.execute("SELECT name FROM sqlite_master WHERE name = 'pedidos_pausados_cliente'").fetchone()
+        self.assertTrue(tabela is None or conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente").fetchone()[0] == 0)
+
+    def test_em_espera_excecao_na_vuupt_nao_conclui(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "em_espera")
+        f = Fakes(tirar_da_rota_vuupt=ConnectionError("timeout"))
+        r = se.executar(conn, sid, f.deps())
+        self.assertFalse(r["ok"])
+        self.assertIn("timeout", r["mensagem"])
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_em_espera_sem_servico_na_vuupt_so_pausa(self):
+    def test_em_espera_sem_servico_na_vuupt_so_grava_a_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
         sid = nova_solicitacao(conn, "em_espera")
@@ -258,19 +245,28 @@ class Executar(unittest.TestCase):
         r = se.executar(conn, sid, f.deps())
         self.assertTrue(r["ok"], r)
         self.assertNotIn("tirar_da_rota_vuupt", f.nomes())
-        self.assertIn("pausar_stokki", f.nomes())
+        p = dict(conn.execute("SELECT * FROM pedidos_pausados_cliente").fetchone())
+        self.assertEqual((p["codigo"], p["service_ids"]), ("PS-39959", ""))
+        self.assertEqual(envio(conn)["status"], ep.STATUS_EM_ESPERA_CLIENTE)
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
-    def test_excecao_numa_etapa_nao_conclui_e_libera_a_stokki(self):
+    def test_em_espera_repetida_nao_duplica_pausa(self):
         conn = conn_portal()
         novo_envio(conn)
-        sid = nova_solicitacao(conn, "em_espera")
-        f = Fakes(pausar_stokki=ConnectionError("timeout"))
+        for _ in range(2):
+            sid = nova_solicitacao(conn, "em_espera")
+            conn.execute("UPDATE portal_envios SET status = ?", (ep.STATUS_CRIADO,))
+            self.assertTrue(se.executar(conn, sid, Fakes().deps())["ok"])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente").fetchone()[0], 1)
+
+    def test_abrir_stokki_com_excecao_vira_ok_false(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "cancelar")
+        f = Fakes(stokki_livre=sqlite3.OperationalError("database is locked"))
         r = se.executar(conn, sid, f.deps())
         self.assertFalse(r["ok"])
-        self.assertIn("timeout", r["mensagem"])
-        self.assertIn("fora da rota", r["mensagem"])
-        self.assertEqual(f.nomes()[-1], "fechar_stokki")
+        self.assertIn("database is locked", r["mensagem"])
+        self.assertEqual(f.nomes(), ["abrir_stokki"])
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
     def test_reagendar_aplica_data_e_conclui(self):
@@ -371,18 +367,16 @@ class Executar(unittest.TestCase):
         self.assertNotIn("reagendar_vuupt", f.nomes())
         self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
-    @mock.patch.object(se, "EM_ESPERA_HABILITADO", True)
     def test_stokki_ocupada_nao_conclui(self):
-        for tipo in ("cancelar", "em_espera"):
-            conn = conn_portal()
-            novo_envio(conn)
-            sid = nova_solicitacao(conn, tipo)
-            f = Fakes(stokki_livre=False)
-            r = se.executar(conn, sid, f.deps())
-            self.assertFalse(r["ok"], tipo)
-            self.assertIn("Stokki ocupada", r["mensagem"])
-            self.assertEqual(f.nomes(), ["abrir_stokki"], tipo)
-            self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "cancelar")
+        f = Fakes(stokki_livre=False)
+        r = se.executar(conn, sid, f.deps())
+        self.assertFalse(r["ok"])
+        self.assertIn("Stokki ocupada", r["mensagem"])
+        self.assertEqual(f.nomes(), ["abrir_stokki"])
+        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
 
     def test_solicitacao_ja_concluida_recusa_executar(self):
         conn = conn_portal()

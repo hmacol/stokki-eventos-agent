@@ -79,6 +79,8 @@ STATUS_ERRO = "ERRO"
 STATUS_DUPLICADO = "DUPLICADO"
 STATUS_CANCELADO = "CANCELADO"
 STATUS_CANCELANDO = "CANCELANDO"   # cancelamento pedido pelo cliente, worker ainda vai executar (06/10)
+STATUS_EM_ESPERA_CLIENTE = "EM_ESPERA_CLIENTE"   # segurado a pedido do cliente (27/10); linha em pedidos_pausados_cliente
+STATUS_RETOMANDO = "RETOMANDO"   # cliente pediu pra retomar, falta a operacao/worker soltar a pausa
 # Área não atendida (Hugo, 23/09): não vai pra Stokki até a equipe liberar
 # no /atendimento do painel. O worker só pega NA_FILA, então fica parado.
 STATUS_AGUARDANDO_LIBERACAO = "AGUARDANDO_LIBERACAO"
@@ -91,6 +93,8 @@ ROTULOS_STATUS = {
     STATUS_DUPLICADO: "Já existia na Stokki",
     STATUS_CANCELADO: "Cancelado",
     STATUS_CANCELANDO: "Cancelando",
+    STATUS_EM_ESPERA_CLIENTE: "Em espera (a seu pedido)",
+    STATUS_RETOMANDO: "Retomando",
     STATUS_AGUARDANDO_LIBERACAO: "Aguardando liberação",
 }
 MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora da área atendida em SP"}
