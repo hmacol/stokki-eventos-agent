@@ -136,7 +136,6 @@ class RevisaoFinal(unittest.TestCase):
             conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_hora_inicio TEXT")
             conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_hora_fim TEXT")
             conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_aplicado_em TEXT")
-            conn.execute("ALTER TABLE portal_envios ADD COLUMN atualizado_em TEXT")
             conn.commit()
             ep.aplicar_acao(conn, envio(conn, 97), "reagendar", {"data": _amanha()}, "cliente")
             self.assertEqual(envio(conn, 97)["agendamento_data"], _amanha(), st)
