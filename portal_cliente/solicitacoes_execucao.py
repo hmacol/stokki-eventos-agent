@@ -66,7 +66,6 @@ _USAM_STOKKI = ("cancelar",)
 
 # Em espera a pedido do cliente (27/10): so tira da rota e grava a pausa; a
 # Stokki nao e tocada ("Em espera" la e a fila de entrada da Fresh Log).
-EM_ESPERA_HABILITADO = True
 
 
 @dataclass
@@ -174,7 +173,9 @@ def _cancelar(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]
 
 
 def _em_espera(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]) -> str:
-    if envio["status"] not in (ep.STATUS_CRIADO, ep.STATUS_DUPLICADO):
+    # EM_ESPERA_CLIENTE: repeticao depois de falha ao concluir (a pausa ja foi
+    # gravada); abrir() nao duplica e o resto e idempotente.
+    if envio["status"] not in (ep.STATUS_CRIADO, ep.STATUS_DUPLICADO, ep.STATUS_EM_ESPERA_CLIENTE):
         raise _Falha(f"Envio está {envio['status']}: só pedido criado na Stokki vai pra espera.")
     codigo, id_stokki = _codigo_e_id(envio)
     vivos = _servicos_vivos(conn, codigo, deps)

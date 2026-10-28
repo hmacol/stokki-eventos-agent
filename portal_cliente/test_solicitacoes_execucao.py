@@ -173,9 +173,6 @@ class Executar(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertFalse({"cancelar_vuupt", "cancelar_stokki"} & set(f.nomes()))
 
-    def test_em_espera_habilitado(self):
-        self.assertTrue(se.EM_ESPERA_HABILITADO)
-
     def test_em_espera_abre_pausa_e_muda_status(self):
         conn = conn_portal()
         novo_envio(conn)
@@ -257,6 +254,21 @@ class Executar(unittest.TestCase):
             conn.execute("UPDATE portal_envios SET status = ?", (ep.STATUS_CRIADO,))
             self.assertTrue(se.executar(conn, sid, Fakes().deps())["ok"])
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente").fetchone()[0], 1)
+
+    def test_em_espera_repete_sem_resetar_status_depois_de_falha_ao_concluir(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "em_espera")
+        with mock.patch.object(ep, "concluir_solicitacao", side_effect=RuntimeError("banco travou")):
+            with self.assertRaises(RuntimeError):
+                se.executar(conn, sid, Fakes().deps())
+        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+        self.assertEqual(envio(conn)["status"], ep.STATUS_EM_ESPERA_CLIENTE)
+        r = se.executar(conn, sid, Fakes().deps())
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(solicitacao(conn, sid)["status"], "CONCLUIDA")
+        self.assertEqual(envio(conn)["status"], ep.STATUS_EM_ESPERA_CLIENTE)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente WHERE retomado_em IS NULL").fetchone()[0], 1)
 
     def test_abrir_stokki_com_excecao_vira_ok_false(self):
         conn = conn_portal()
