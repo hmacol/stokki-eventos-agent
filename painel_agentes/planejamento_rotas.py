@@ -836,6 +836,16 @@ from nucleo.prontidao_stokki import (  # noqa: E402
 )
 
 
+def marcar_pausados_cliente(pool: list[dict], servicos_brutos: list[dict]) -> None:
+    """Em espera a pedido do cliente (27/10): só rotula o card (o pedido
+    continua na tela); quem tira da rota é a roteirização e o "Roteirizar
+    selecionados". Falha de leitura = ninguém marcado (log no módulo)."""
+    import pedidos_pausados_cliente
+    ids = pedidos_pausados_cliente.pausados_por_servico(servicos_brutos)
+    for p in pool:
+        p["pausado_cliente"] = p["service_id"] in ids
+
+
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
     """
     Busca ao vivo na VUUPT os pedidos e separa em:
@@ -976,6 +986,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
             p["segurado"] = segurados_por_id.get(p["service_id"])
+        marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
     # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
     retrato_stokki, retrato_stokki_em = carregar_retrato_stokki()
@@ -1226,6 +1237,13 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
 
     selecionados = [por_id[sid] for sid in service_ids if sid in por_id and sid not in ids_em_rascunho]
     indisponiveis = len(service_ids) - len(selecionados)
+    # Em espera a pedido do cliente (27/10): pausado selecionado à mão também
+    # fica de fora (a tela só marca o card); conta à parte de "indisponíveis".
+    import pedidos_pausados_cliente
+    selecionados, pausados = pedidos_pausados_cliente.separar_pausados(selecionados)
+    if pausados and not selecionados:
+        raise ValueError("Os pedidos selecionados estão em espera a pedido do cliente "
+                         "e não entram em rota. Retome a espera antes de roteirizar.")
     if not selecionados:
         raise ValueError("Nenhum dos pedidos selecionados está disponível pra roteirizar "
                          "(já em rascunho ou não estão mais 'not_assigned' na VUUPT). "
@@ -1263,6 +1281,7 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
         "rotas_criadas": len(rascunhos_novos),
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
+        "pedidos_pausados": len(pausados),
     }
 
 

@@ -159,8 +159,9 @@ def _servico(sid):
 class TestMainComRascunho(unittest.TestCase):
     """main() de ponta a ponta com tudo que sai do processo mockado."""
 
-    def _rodar(self, rotas, rascunhos, modo_teste=False, res_rascunho=None):
-        pool = [_servico(1), _servico(2)]
+    def _rodar(self, rotas, rascunhos, modo_teste=False, res_rascunho=None, pool=None, pausados=frozenset()):
+        pool = pool if pool is not None else [_servico(1), _servico(2)]
+        self.aplicar_dia_fixo = mock.Mock(return_value=[])
         modulos_falsos = {
             "pedidos_segurados": mock.Mock(separar_segurados=lambda s, d: (s, [])),
             "dedicados": mock.Mock(separar_dedicados=lambda s: (s, [])),
@@ -179,7 +180,8 @@ class TestMainComRascunho(unittest.TestCase):
             mock.patch.object(inc, "_data_alvo_rotas", return_value=date(2026, 10, 6)),
             mock.patch.object(inc, "listar_pool_not_assigned", return_value=pool),
             mock.patch.object(inc, "listar_rotas", return_value=rotas),
-            mock.patch.object(inc, "aplicar_regioes_dia_fixo", return_value=[]),
+            mock.patch.object(inc, "aplicar_regioes_dia_fixo", self.aplicar_dia_fixo),
+            mock.patch("pedidos_pausados_cliente.codigos_pausados", return_value=set(pausados)),
             mock.patch.object(inc, "identificar_area_nao_atendida", return_value=[]),
             mock.patch.object(inc, "carregar_clientes_agendamento", return_value=set()),
             mock.patch.object(inc, "identificar_pendentes", return_value=[]),
@@ -219,6 +221,22 @@ class TestMainComRascunho(unittest.TestCase):
         resumo = self._rodar([], [{"id": 7, "status": "ENVIADO", "paradas": []}])
         self.assertEqual(resumo["status"], "erro")
         self.inc_rascunho.assert_not_called()
+
+    # Em espera a pedido do cliente (27/10): pausado sai do pool ANTES do dia
+    # fixo (senao o dia fixo grava data e avisa o remetente de pedido pausado).
+    def test_pausado_fica_fora_do_pool_antes_do_dia_fixo(self):
+        self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}], pausados={"PS-1"})
+        self.assertEqual([s["id"] for s in self.aplicar_dia_fixo.call_args[0][0]], [2])
+        self.assertEqual([p["service_id"] for p in self.inc_rascunho.call_args[0][1]], [2])
+
+    def test_reentrega_do_pausado_fica_fora(self):
+        pool = [dict(_servico(1), code="#PS-1-R1"), _servico(2)]
+        self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}], pool=pool, pausados={"PS-1"})
+        self.assertEqual([s["id"] for s in self.aplicar_dia_fixo.call_args[0][0]], [2])
+
+    def test_pool_segue_sem_tabela(self):
+        self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}])
+        self.assertEqual([s["id"] for s in self.aplicar_dia_fixo.call_args[0][0]], [1, 2])
 
 
 if __name__ == "__main__":

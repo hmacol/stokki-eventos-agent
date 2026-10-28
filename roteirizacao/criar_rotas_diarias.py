@@ -870,6 +870,12 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         servicos_brutos = listar_pool_not_assigned(config, vuupt)
         logger.info(f"{len(servicos_brutos)} serviço(s) 'not_assigned' encontrado(s).")
 
+        # Em espera a pedido do cliente (27/10): pausado não entra em rota. Sai
+        # ANTES do dia fixo -- senão ele grava data e avisa o remetente de um
+        # pedido que está parado de propósito. Falha de leitura = segue sem filtro.
+        import pedidos_pausados_cliente
+        servicos_brutos, _pausados = pedidos_pausados_cliente.separar_pausados(servicos_brutos)
+
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
         # roda ANTES de tudo: define scheduled_start pra quem ainda
         # não tem e mora numa cidade de dia fixo, refletindo já no
