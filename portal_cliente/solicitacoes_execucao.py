@@ -182,9 +182,16 @@ def _em_espera(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str
     for s in vivos:
         _tirar_da_rota(deps, s, feito)
     ppc.garantir_tabela(conn)
-    ppc.abrir(conn, codigo, id_stokki, envio["id"], [s["vuupt_service_id"] for s in vivos], _agora())
-    conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?",
-                 (ep.STATUS_EM_ESPERA_CLIENTE, _agora(), envio["id"]))
+    # Status (com guarda) e pausa na mesma transacao: o cliente pode ter
+    # cancelado enquanto tirava da rota, e CANCELANDO/CANCELADO nunca e pisado.
+    cur = conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ? AND status IN (?, ?, ?)",
+                       (ep.STATUS_EM_ESPERA_CLIENTE, _agora(), envio["id"],
+                        ep.STATUS_CRIADO, ep.STATUS_DUPLICADO, ep.STATUS_EM_ESPERA_CLIENTE))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise _Falha("O envio mudou de situação durante a execução (o cliente cancelou?). "
+                     "Nada foi gravado: confira o pedido no portal.")
+    ppc.abrir(conn, codigo, id_stokki, envio["id"], [s["vuupt_service_id"] for s in vivos], _agora(), commit=False)
     conn.commit()
     feito.append(f"{codigo} segurado em espera (nada muda na Stokki)")
     return "Pedido retirado da rota e mantido em espera até você retomar pelo portal."

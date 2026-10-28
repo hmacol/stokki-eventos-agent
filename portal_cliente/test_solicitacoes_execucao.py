@@ -193,6 +193,23 @@ class Executar(unittest.TestCase):
         self.assertEqual(solicitacao(conn, sid)["resposta"],
                          "Pedido retirado da rota e mantido em espera até você retomar pelo portal.")
 
+    def test_em_espera_cliente_cancelou_no_meio_nao_sobrescreve_nem_abre_pausa(self):
+        conn = conn_portal()
+        novo_envio(conn)
+        sid = nova_solicitacao(conn, "em_espera")
+
+        def cliente_cancela():  # enquanto o executor tira da rota na Vuupt
+            conn.execute("UPDATE portal_envios SET status = ?", (ep.STATUS_CANCELANDO,))
+            conn.commit()
+            return Fakes.PADRAO["tirar_da_rota_vuupt"]
+
+        r = se.executar(conn, sid, Fakes(tirar_da_rota_vuupt=cliente_cancela).deps())
+        self.assertFalse(r["ok"])
+        self.assertIn("cancel", r["mensagem"].lower())
+        self.assertEqual(solicitacao(conn, sid)["status"], "PENDENTE")
+        self.assertEqual(envio(conn)["status"], ep.STATUS_CANCELANDO)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente WHERE retomado_em IS NULL").fetchone()[0], 0)
+
     def test_em_espera_nao_toca_na_stokki(self):
         conn = conn_portal()
         novo_envio(conn)

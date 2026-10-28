@@ -12,7 +12,7 @@ INSUCESSO ou se a rota dele já começou (nucleo_rotas EM_ROTA / started /
 iniciada_em) ou é da Lalamove. Atenção: nucleo_pedidos.status = EM_ROTA
 significa só "atribuído a uma rota" (status_provedor = assigned).
 
-Três fins: CANCELADO (as duas pontas), CRIADO + solicitação PENDENTE +
+Três fins: CANCELADO (as duas pontas), CRIADO (ou EM_ESPERA_CLIENTE, se o pedido veio de uma espera) + solicitação PENDENTE +
 aviso (precisa da operação ou falha técnica). Nunca fica tentando sozinho.
 """
 import html as html_mod
@@ -215,8 +215,8 @@ def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuu
 
 def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str, acao: str = "cancelamento") -> None:
     """E-mail ao atendimento + WhatsApp no grupo do atendimento. Best-effort:
-    o envio já voltou pra CRIADO com a solicitação PENDENTE; o aviso não
-    pode derrubar o ciclo."""
+    o envio já voltou pra operação (CRIADO, ou EM_ESPERA_CLIENTE se veio de uma
+    espera) com a solicitação PENDENTE; o aviso não pode derrubar o ciclo."""
     rotulo = ep.rotulo_envio(envio)
     ps = envio.get("codigo_pedido") or "(código ainda não identificado)"
     if acao == "retomada":

@@ -65,7 +65,7 @@ def _retomar_agendamento(conn, envio: dict, codigo: str, vivos: list[dict], apli
     # nos campos de agendamento (como o reagendar do portal) antes de registrar.
     conn.execute("UPDATE portal_envios SET agendamento_data = ?, agendamento_hora_inicio = ?, agendamento_hora_fim = ?, "
                  "agendamento_pendente = 0, requer_agendamento = 1, agendamento_aplicado_em = NULL WHERE id = ?",
-                 (dia, ini, fim, envio["id"]))  # sem commit: só vale junto com o registro abaixo
+                 (dia, ini, fim, envio["id"]))  # sem commit aqui; registrar_agendamento_pedido comita junto (a falha dele dá rollback)
     registrado = {**envio, "codigo_pedido": codigo, "agendamento_data": dia,
                   "agendamento_hora_inicio": ini, "agendamento_hora_fim": fim}
     if not ep.registrar_agendamento_pedido(conn, registrado, "retomada"):

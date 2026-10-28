@@ -84,6 +84,7 @@ STATUS_RETOMANDO = "RETOMANDO"   # cliente pediu pra retomar, falta a operacao/w
 # Área não atendida (Hugo, 23/09): não vai pra Stokki até a equipe liberar
 # no /atendimento do painel. O worker só pega NA_FILA, então fica parado.
 STATUS_AGUARDANDO_LIBERACAO = "AGUARDANDO_LIBERACAO"
+DIAS_MAX_AGENDAMENTO = 120  # teto da data escolhida pelo cliente (reagendar e retomar)
 STATUS_ABERTOS = (STATUS_NA_FILA, STATUS_ENVIANDO, STATUS_AGUARDANDO_LIBERACAO)
 ROTULOS_STATUS = {
     STATUS_NA_FILA: "Na fila",
@@ -1408,6 +1409,11 @@ def _dt_br(valor: str | None) -> str:
         return valor
 
 
+def _pode_reagendar(status: str, cancelamento_pedido: bool) -> bool:
+    """Regra unica do Reagendar: a tela (_linha) e o servidor (aplicar_acao) usam esta."""
+    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido
+
+
 def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     d = dict(r)
     pend = [s for s in solicitacoes.get(d["id"], []) if s["status"] == "PENDENTE"]
@@ -1441,7 +1447,7 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
                                          STATUS_EM_ESPERA_CLIENTE) and not cancelamento_pedido,
         "pode_retomar": d["status"] == STATUS_EM_ESPERA_CLIENTE and not cancelamento_pedido,
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
-        "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido,
+        "pode_reagendar": _pode_reagendar(d["status"], cancelamento_pedido),
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
     })
     d.pop("xml_path", None)
@@ -1453,7 +1459,7 @@ def listar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DI
     desde = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
     emb = _so_digitos(cnpj_embarcador)
     rows = conn.execute(
-        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO','AGUARDANDO_LIBERACAO')) "
+        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO','AGUARDANDO_LIBERACAO','EM_ESPERA_CLIENTE','RETOMANDO','CANCELANDO')) "
         "ORDER BY criado_em DESC, id DESC", (emb, desde)).fetchall()
     sol = {}
     for s in conn.execute("SELECT * FROM portal_solicitacoes WHERE cnpj_embarcador = ? AND status = 'PENDENTE'", (emb,)):
@@ -1490,6 +1496,7 @@ def resumo_envios(envios: list[dict]) -> dict:
         "na_fila": sum(1 for e in envios if e["status"] in STATUS_ABERTOS),
         "criados": sum(1 for e in envios if e["status"] == STATUS_CRIADO),
         "erros": sum(1 for e in envios if e["status"] == STATUS_ERRO),
+        "em_espera": sum(1 for e in envios if e["status"] == STATUS_EM_ESPERA_CLIENTE),  # espera o Retomar do cliente
         "agendamento_pendente": sum(1 for e in envios if e.get("agendamento_pendente") and e["status"] != STATUS_CANCELADO),
         "solicitacoes_pendentes": sum(len(e["solicitacoes_pendentes"]) for e in envios),
     }
@@ -1535,8 +1542,12 @@ def _validar_agendamento(envio: dict, dados: dict) -> tuple[date, str, str]:
         raise ErroEnvio("Informe a nova data de entrega.")
     if nova < date.today():
         raise ErroEnvio("A nova data precisa ser a partir de hoje.")
+    if nova > date.today() + timedelta(days=DIAS_MAX_AGENDAMENTO):
+        raise ErroEnvio(f"A data precisa ser em até {DIAS_MAX_AGENDAMENTO} dias.")
     ini = _hora_valida(dados.get("hora_inicio")) or envio.get("horario_inicio") or "08:00"
     fim = _hora_valida(dados.get("hora_fim")) or envio.get("horario_fim") or "18:00"
+    if fim <= ini:
+        raise ErroEnvio("O horário final precisa ser depois do inicial.")
     return nova, ini, fim
 
 
@@ -1621,7 +1632,12 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
         return {"aplicado": False, "precisa_operacao": True,
                 "mensagem": "Pedido de retirada da rota registrado. A Fresh Log vai colocar o pedido em espera e avisar aqui."}
 
-    # reagendar
+    # reagendar: o servidor aplica a mesma regra que a tela (nao basta esconder o botao)
+    cancelando = st == STATUS_CANCELANDO or conn.execute(
+        "SELECT 1 FROM portal_solicitacoes WHERE envio_id = ? AND tipo = 'cancelar' AND status = 'PENDENTE'",
+        (envio["id"],)).fetchone() is not None
+    if not _pode_reagendar(st, cancelando):
+        raise ErroEnvio("Esse pedido não pode ser reagendado agora.")
     nova, ini, fim = _validar_agendamento(envio, dados)
     conn.execute("""
         UPDATE portal_envios SET agendamento_data = ?, agendamento_hora_inicio = ?, agendamento_hora_fim = ?,

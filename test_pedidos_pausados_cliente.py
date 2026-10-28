@@ -45,6 +45,55 @@ class PedidosPausadosClienteTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_garantir_tabela_nao_comita_transacao_aberta(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db)
+        conn.execute("CREATE TABLE t (x)")
+        conn.commit()
+        conn.execute("INSERT INTO t VALUES (1)")  # transacao aberta, sem commit
+        ppc.garantir_tabela(conn)
+        ppc.garantir_tabela(conn)  # idempotente
+        conn.rollback()
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM t").fetchone()[0], 0)
+        finally:
+            conn.close()
+
+    def test_indice_unico_impede_duas_pausas_abertas_do_mesmo_codigo(self):
+        import sqlite3
+        conn = ppc.conectar(self.db)
+        try:
+            conn.execute("INSERT INTO pedidos_pausados_cliente (codigo, pausado_em) VALUES ('PS-10', ?)", (AGORA,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO pedidos_pausados_cliente (codigo, pausado_em) VALUES ('PS-10', ?)", (AGORA,))
+        finally:
+            conn.close()
+
+    def test_abrir_com_corrida_devolve_a_pausa_existente(self):
+        conn = ppc.conectar(self.db)
+        try:
+            conn.execute("INSERT INTO pedidos_pausados_cliente (codigo, pausado_em) VALUES ('PS-10', ?)", (AGORA,))
+            conn.commit()
+            existente = conn.execute("SELECT id FROM pedidos_pausados_cliente").fetchone()["id"]
+            real = conn.execute
+
+            class Espiao:  # o 1o SELECT "nao enxerga" a linha: simula o outro clique que ganhou a corrida
+                _viu = False
+
+                def __getattr__(self, n):
+                    return getattr(conn, n)
+
+                def execute(self, sql, *a):
+                    if sql.lstrip().startswith("SELECT id") and not self._viu:
+                        self._viu = True
+                        return real("SELECT NULL AS id WHERE 0")
+                    return real(sql, *a)
+
+            self.assertEqual(ppc.abrir(Espiao(), "PS-10", 1, 2, [3], AGORA), existente)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM pedidos_pausados_cliente").fetchone()[0], 1)
+        finally:
+            conn.close()
+
     def test_separar_pausados_pelo_codigo_base(self):
         self._abrir("PS-10")
         servicos = [{"id": 1, "code": "#PS-10-R1"}, {"id": 2, "code": "#PS-11"}]

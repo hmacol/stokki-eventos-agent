@@ -30,7 +30,9 @@ FINS = ("retomado", "cancelado")
 
 
 def garantir_tabela(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
+    """Idempotente e SEM commit: execute() simples (executescript comitaria a
+    transacao aberta de quem chama e quebraria o 'status + pausa juntos')."""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS pedidos_pausados_cliente (
             id INTEGER PRIMARY KEY,
             codigo TEXT NOT NULL,
@@ -40,10 +42,13 @@ def garantir_tabela(conn: sqlite3.Connection) -> None:
             pausado_em TEXT NOT NULL,
             retomado_em TEXT,
             fim TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_pausados_cliente_codigo ON pedidos_pausados_cliente (codigo);
-    """)
-    conn.commit()
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pausados_cliente_codigo ON pedidos_pausados_cliente (codigo)")
+    try:  # uma unica pausa aberta por codigo (dois cliques simultaneos)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pausados_cliente_aberta "
+                     "ON pedidos_pausados_cliente (codigo) WHERE retomado_em IS NULL")
+    except sqlite3.IntegrityError as e:  # banco com pausa aberta duplicada: segue sem o indice
+        logger.warning(f"nao criou o indice unico da pausa aberta ({e})")
 
 
 def conectar(db_path=None) -> sqlite3.Connection:
@@ -53,18 +58,23 @@ def conectar(db_path=None) -> sqlite3.Connection:
     return conn
 
 
-def abrir(conn: sqlite3.Connection, codigo: str, id_stokki, envio_id, service_ids: list[int], agora: str) -> int:
+def abrir(conn: sqlite3.Connection, codigo: str, id_stokki, envio_id, service_ids: list[int], agora: str,
+          commit: bool = True) -> int:
     """Abre a pausa. Se ja houver uma aberta pro codigo, devolve o id dela."""
     base = _codigo_base(codigo)
-    existente = conn.execute(
-        "SELECT id FROM pedidos_pausados_cliente WHERE codigo = ? AND retomado_em IS NULL", (base,)).fetchone()
+    sel = "SELECT id FROM pedidos_pausados_cliente WHERE codigo = ? AND retomado_em IS NULL"
+    existente = conn.execute(sel, (base,)).fetchone()
     if existente:
         return existente["id"]
-    cur = conn.execute(
-        "INSERT INTO pedidos_pausados_cliente (codigo, id_stokki, envio_id, service_ids, pausado_em) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (base, id_stokki, envio_id, ",".join(str(i) for i in service_ids or []), agora))
-    conn.commit()
+    try:
+        cur = conn.execute(
+            "INSERT INTO pedidos_pausados_cliente (codigo, id_stokki, envio_id, service_ids, pausado_em) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (base, id_stokki, envio_id, ",".join(str(i) for i in service_ids or []), agora))
+    except sqlite3.IntegrityError:  # outro clique abriu no meio: devolve a dele
+        return conn.execute(sel, (base,)).fetchone()["id"]
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 

@@ -20,6 +20,7 @@ COMO RODAR (dev):
 COMO RODAR (produção -- ver infra/portal-cliente.service):
     waitress-serve --host=127.0.0.1 --port=8074 app:app
 """
+import html as html_mod
 import io
 import logging
 import os
@@ -1003,16 +1004,18 @@ def _avisar_operacao_solicitacao(envio: dict, tipo: str, corpo: dict) -> None:
     if not destino:
         return
     rotulo = envios.ROTULOS_SOLICITACAO.get(tipo, tipo)
+    # tudo que o cliente digitou ou veio do XML dele entra escapado no HTML
+    esc = lambda v: html_mod.escape(str(v if v is not None else ""))  # noqa: E731
     detalhe = ""
     if tipo == "reagendar":
-        detalhe = f"<p>Nova data: <b>{'/'.join(reversed(str(corpo.get('data') or '').split('-')))} "
-        detalhe += f"{corpo.get('hora_inicio') or ''}–{corpo.get('hora_fim') or ''}</b></p>"
+        detalhe = f"<p>Nova data: <b>{esc('/'.join(reversed(str(corpo.get('data') or '').split('-'))))} "
+        detalhe += f"{esc(corpo.get('hora_inicio') or '')}–{esc(corpo.get('hora_fim') or '')}</b></p>"
     if corpo.get("motivo"):
-        detalhe += f"<p>Motivo informado: {corpo['motivo'][:300]}</p>"
+        detalhe += f"<p>Motivo informado: {esc(str(corpo['motivo'])[:300])}</p>"
     html = envelope_html(
-        f"<p><b>{_empresa_envio()['nome']}</b> (CNPJ {_empresa_envio()['cnpj_formatado']}) pediu pelo portal: <b>{rotulo}</b>.</p>"
-        f"<p>Pedido {envio.get('codigo_pedido') or '(código ainda não identificado)'} · NF {envio.get('numero_nf')} · "
-        f"{envio.get('destinatario_nome')} · situação no portal: {envios.ROTULOS_STATUS.get(envio['status'], envio['status'])}.</p>"
+        f"<p><b>{esc(_empresa_envio()['nome'])}</b> (CNPJ {esc(_empresa_envio()['cnpj_formatado'])}) pediu pelo portal: <b>{esc(rotulo)}</b>.</p>"
+        f"<p>Pedido {esc(envio.get('codigo_pedido') or '(código ainda não identificado)')} · NF {esc(envio.get('numero_nf'))} · "
+        f"{esc(envio.get('destinatario_nome'))} · situação no portal: {esc(envios.ROTULOS_STATUS.get(envio['status'], envio['status']))}.</p>"
         f"{detalhe}<p>Ao concluir, marque a solicitação como atendida: "
         f"<code>portal_cliente/gerenciar_clientes.py solicitacoes</code>.</p>",
         rodape="Fresh Log · Portal do cliente · solicitação", cor_acento="#F5A623")

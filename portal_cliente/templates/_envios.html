@@ -224,7 +224,7 @@
     $('env-regra').textContent = d.regra_xml && d.regra_xml !== 'nenhuma' ? `Regra aplicada ao XML: ${d.regra_xml_rotulo}` : '';
     if (!d.envio_ativo) mensagem('O envio de pedidos está temporariamente desativado pra sua empresa. Fale com a Fresh Log.', 'info');
     if (!PODE_ENVIAR) { $('card-enviar').classList.add('oculto'); }
-    const badge = k.erros + k.agendamento_pendente;
+    const badge = k.erros + k.agendamento_pendente + k.em_espera;
     $('vistas-badge').textContent = badge; $('vistas-badge').classList.toggle('on', badge > 0);
 
     $('env-tiles').innerHTML = `
@@ -232,8 +232,8 @@
       <div class="tile rota" data-aba="fila"><span class="rotulo">Na fila</span><span class="valor">${k.na_fila}</span><span class="sub">${k.na_fila ? 'sendo criados na Stokki' : 'nada pendente'}</span></div>
       <div class="tile bom" data-aba="criados"><span class="rotulo">Criados na Stokki</span><span class="valor">${k.criados}</span><span class="sub">últimos ${d.dias} dias</span></div>
       <div class="tile ${k.erros ? 'ruim' : ''}" data-aba="erros"><span class="rotulo">Com erro</span><span class="valor">${k.erros}</span><span class="sub">${k.erros ? 'precisam de correção' : '—'}</span></div>
-      <div class="tile" data-aba="pendencias"><span class="rotulo">Pendências</span><span class="valor">${k.agendamento_pendente + k.solicitacoes_pendentes}</span><span class="sub">${k.agendamento_pendente ? k.agendamento_pendente + ' agendamento' + (k.agendamento_pendente > 1 ? 's' : '') + ' pendente' + (k.agendamento_pendente > 1 ? 's' : '') : (k.solicitacoes_pendentes ? 'com a Fresh Log' : '—')}</span></div>`;
-    const abas = [['todos', 'Todos', k.total], ['fila', 'Na fila', k.na_fila], ['criados', 'Criados', k.criados], ['erros', 'Com erro', k.erros], ['pendencias', 'Pendências', k.agendamento_pendente + k.solicitacoes_pendentes]];
+      <div class="tile" data-aba="pendencias"><span class="rotulo">Pendências</span><span class="valor">${k.agendamento_pendente + k.solicitacoes_pendentes + k.em_espera}</span><span class="sub">${k.agendamento_pendente ? k.agendamento_pendente + ' agendamento' + (k.agendamento_pendente > 1 ? 's' : '') + ' pendente' + (k.agendamento_pendente > 1 ? 's' : '') : (k.em_espera ? k.em_espera + ' em espera pra retomar' : (k.solicitacoes_pendentes ? 'com a Fresh Log' : '—'))}</span></div>`;
+    const abas = [['todos', 'Todos', k.total], ['fila', 'Na fila', k.na_fila], ['criados', 'Criados', k.criados], ['erros', 'Com erro', k.erros], ['pendencias', 'Pendências', k.agendamento_pendente + k.solicitacoes_pendentes + k.em_espera]];
     $('env-abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
     renderTabela();
     renderLateral();
@@ -246,7 +246,7 @@
     if (aba === 'fila') lista = lista.filter(x => ['NA_FILA', 'ENVIANDO', 'AGUARDANDO_LIBERACAO'].includes(x.status));
     else if (aba === 'criados') lista = lista.filter(x => x.status === 'CRIADO' || x.status === 'DUPLICADO');
     else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
-    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO');
+    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO' || x.status === 'EM_ESPERA_CLIENTE');
     const q = busca.trim().toLowerCase();
     if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
     return lista;
@@ -613,7 +613,7 @@
   // badge na aba mesmo sem abrir a vista
   fetch(`${BASE}/api/envios`, { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(j => {
     if (!j) return;
-    if (!dados) { dados = j; const n = j.resumo.erros + j.resumo.agendamento_pendente; $('vistas-badge').textContent = n; $('vistas-badge').classList.toggle('on', n > 0); }
+    if (!dados) { dados = j; const n = j.resumo.erros + j.resumo.agendamento_pendente + (j.resumo.em_espera || 0); $('vistas-badge').textContent = n; $('vistas-badge').classList.toggle('on', n > 0); }
   }).catch(() => {});
   mostrar(secao.dataset.abaInicial === 'envios' ? 'envios' : 'acompanhamento');
 })();
