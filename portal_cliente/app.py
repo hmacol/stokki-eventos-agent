@@ -972,7 +972,7 @@ def api_envios_reenviar_erros():
 @requer_cliente
 @exige_mesma_origem
 def api_envios_acao(envio_id):
-    """Cancelar / tirar da rota / reagendar / reenviar (item 12). O que
+    """Cancelar / tirar da rota / reagendar / reenviar / retomar (item 12). O que
     não dá pra aplicar sozinho vira solicitação pra operação + e-mail."""
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}

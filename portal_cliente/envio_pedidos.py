@@ -102,6 +102,11 @@ MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora 
 ORIGEM_XML = "xml"
 ORIGEM_PLANILHA = "planilha"
 
+# Pedido do cliente pra retomar um pedido em espera (28/10): o worker le essas colunas
+COLUNAS_RETOMAR = {"retomar_modo": "TEXT", "retomar_data": "TEXT",
+                   "retomar_hora_inicio": "TEXT", "retomar_hora_fim": "TEXT"}
+MODOS_RETOMAR = ("proxima_rota", "agendamento")
+
 TIPOS_SOLICITACAO = ("cancelar", "em_espera", "reagendar", "reenviar")
 ROTULOS_SOLICITACAO = {
     "cancelar": "Cancelamento",
@@ -231,6 +236,7 @@ def conectar() -> sqlite3.Connection:
         "troca_nf_status": "TEXT",
         "troca_nf_em": "TEXT",
         "troca_nf_erro": "TEXT",
+        **COLUNAS_RETOMAR,
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -1431,7 +1437,9 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
         "bloqueio_texto": (f"Não atendemos a região de {d.get('destinatario_municipio') or '?'}/{d.get('destinatario_uf') or '?'}."
                            if d["status"] == STATUS_AGUARDANDO_LIBERACAO else ""),
         "bloqueio_chamado_id": d.get("bloqueio_chamado_id"),
-        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO) and not cancelamento_pedido,
+        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO,
+                                         STATUS_EM_ESPERA_CLIENTE) and not cancelamento_pedido,
+        "pode_retomar": d["status"] == STATUS_EM_ESPERA_CLIENTE and not cancelamento_pedido,
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
         "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido,
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
@@ -1519,16 +1527,46 @@ def _remover_dedicado(conn: sqlite3.Connection, envio_id: int, por: str) -> None
         logger.warning(f"nao removeu dedicado do envio {envio_id} ao cancelar: {e}")
 
 
+def _validar_agendamento(envio: dict, dados: dict) -> tuple[date, str, str]:
+    """Validacao de data e janela do cliente (reagendar e retomar com agendamento)."""
+    try:
+        nova = date.fromisoformat(str(dados.get("data") or ""))
+    except ValueError:
+        raise ErroEnvio("Informe a nova data de entrega.")
+    if nova < date.today():
+        raise ErroEnvio("A nova data precisa ser a partir de hoje.")
+    ini = _hora_valida(dados.get("hora_inicio")) or envio.get("horario_inicio") or "08:00"
+    fim = _hora_valida(dados.get("hora_fim")) or envio.get("horario_fim") or "18:00"
+    return nova, ini, fim
+
+
 def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, por: str) -> dict:
     """Devolve {aplicado: bool, mensagem, precisa_operacao: bool}.
     - cancelar/reenviar antes de ir pra Stokki: resolve aqui mesmo.
     - o resto (pedido já criado na Stokki) vira solicitação PENDENTE pra
       operação (e-mail é disparado por quem chama), e o acompanhamento
       mostra a pendência."""
-    if tipo not in TIPOS_SOLICITACAO:
+    if tipo != "retomar" and tipo not in TIPOS_SOLICITACAO:
         raise ErroEnvio("Ação inválida.")
     st = envio["status"]
     agora = _agora()
+    if tipo == "retomar":
+        if st != STATUS_EM_ESPERA_CLIENTE:
+            raise ErroEnvio("Só um pedido em espera a seu pedido pode ser retomado.")
+        modo = dados.get("modo")
+        if modo not in MODOS_RETOMAR:
+            raise ErroEnvio("Escolha como retomar: próxima rota ou agendamento.")
+        data = ini = fim = None
+        if modo == "agendamento":
+            nova, ini, fim = _validar_agendamento(envio, dados)
+            data = nova.isoformat()
+        _garantir_colunas(conn, "portal_envios", COLUNAS_RETOMAR)
+        conn.execute("UPDATE portal_envios SET status = ?, retomar_modo = ?, retomar_data = ?, retomar_hora_inicio = ?, "
+                     "retomar_hora_fim = ?, atualizado_em = ? WHERE id = ?",
+                     (STATUS_RETOMANDO, modo, data, ini, fim, agora, envio["id"]))
+        conn.commit()
+        return {"aplicado": False, "precisa_operacao": False, "em_andamento": True,
+                "mensagem": "Retomando… você verá aqui em instantes."}
     if tipo == "cancelar":
         if st == STATUS_ENVIANDO:
             raise ErroEnvio("Esse pedido está sendo enviado à Stokki agora -- tente de novo em alguns instantes.")
@@ -1536,6 +1574,8 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             raise ErroEnvio("Esse pedido já está cancelado.")
         if st == STATUS_CANCELANDO:
             raise ErroEnvio("O cancelamento desse pedido já está em andamento.")
+        if st == STATUS_RETOMANDO:
+            raise ErroEnvio("Esse pedido está sendo retomado agora -- tente de novo em alguns instantes.")
         if st in (STATUS_NA_FILA, STATUS_ERRO, STATUS_AGUARDANDO_LIBERACAO):
             conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELADO, agora, envio["id"]))
             _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por, status="CONCLUIDA")
@@ -1579,14 +1619,7 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
                 "mensagem": "Pedido de retirada da rota registrado. A Fresh Log vai colocar o pedido em espera e avisar aqui."}
 
     # reagendar
-    try:
-        nova = date.fromisoformat(str(dados.get("data") or ""))
-    except ValueError:
-        raise ErroEnvio("Informe a nova data de entrega.")
-    if nova < date.today():
-        raise ErroEnvio("A nova data precisa ser a partir de hoje.")
-    ini = _hora_valida(dados.get("hora_inicio")) or envio.get("horario_inicio") or "08:00"
-    fim = _hora_valida(dados.get("hora_fim")) or envio.get("horario_fim") or "18:00"
+    nova, ini, fim = _validar_agendamento(envio, dados)
     conn.execute("""
         UPDATE portal_envios SET agendamento_data = ?, agendamento_hora_inicio = ?, agendamento_hora_fim = ?,
             agendamento_pendente = 0, requer_agendamento = 1, agendamento_aplicado_em = NULL, atualizado_em = ? WHERE id = ?

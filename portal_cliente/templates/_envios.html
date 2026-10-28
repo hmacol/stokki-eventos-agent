@@ -22,6 +22,9 @@
   .b-DUPLICADO { background: var(--sucesso-bg); color: var(--st-sucesso); opacity: .8; }
   .b-ERRO { background: var(--erro-bg); color: var(--st-falha); }
   .b-CANCELADO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .b-EM_ESPERA_CLIENTE { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .b-RETOMANDO { background: var(--rodando-bg); color: var(--rodando-texto); opacity: .75; }
+  .retomar-opcao { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; }
   .b-CANCELANDO { background: var(--interrompido-bg); color: var(--interrompido-texto); opacity: .75; }
   /* área não atendida (23/09): retido até a Fresh Log liberar */
   .b-AGUARDANDO_LIBERACAO { background: var(--erro-bg); color: var(--st-falha); }
@@ -212,7 +215,7 @@
     }
     clearTimeout(timer);
     // 06/10: cancelamento roda no worker (ciclo de 20 s): recarrega enquanto houver "Cancelando"
-    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO' || x.status === 'CANCELANDO');
+    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO' || x.status === 'CANCELANDO' || x.status === 'RETOMANDO');
     timer = setTimeout(carregar, ativo ? 20000 : 120000);
   }
 
@@ -287,6 +290,7 @@
       <td><div class="acoes-linha">
         ${x.status === 'AGUARDANDO_LIBERACAO' && x.bloqueio_chamado_id ? `<button type="button" class="cotacao" data-acao="cotacao" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Solicitar cotação de envio dedicado</button><button type="button" data-acao="chat" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Falar com a equipe Fresh Log</button>` : ''}
         ${PODE_ENVIAR && x.pode_reagendar ? `<button type="button" data-acao="reagendar" data-id="${x.id}">${x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar'}</button>` : ''}
+        ${PODE_ENVIAR && x.pode_retomar ? `<button type="button" data-acao="retomar" data-id="${x.id}">Retomar entrega</button>` : ''}
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
@@ -526,16 +530,33 @@
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
       reenviar: ['Reenviar pedido', 'O pedido volta pra fila e será criado na Stokki de novo.'],
+      retomar: ['Retomar entrega', 'Escolha como o pedido volta pra rota.'],
       reagendar: [x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar entrega', 'Informe a data combinada com o destinatário e a janela de horário.'],
     }[tipo];
     modal(`<h3>${textos[0]}</h3>${cab}<p>${textos[1]}</p>
       ${tipo === 'reagendar' ? `<label>Data <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}" value="${esc(x.agendamento_data || '')}"></label>
         <div style="display:flex;gap:8px;"><label style="flex:1">Das <input type="time" id="m-ini" value="${esc(x.agendamento_hora_inicio || x.horario_inicio || '08:00')}"></label><label style="flex:1">Às <input type="time" id="m-fim" value="${esc(x.agendamento_hora_fim || x.horario_fim || '12:00')}"></label></div>` : ''}
+      ${tipo === 'retomar' ? `<label class="retomar-opcao"><input type="radio" name="m-modo" value="proxima_rota" checked> <span>Próxima rota da sua região</span></label>
+        <label class="retomar-opcao"><input type="radio" name="m-modo" value="agendamento"> <span>Agendar data e horário</span></label>
+        <div id="m-agenda" style="display:none">
+          <label>Data <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}" value=""></label>
+          <div style="display:flex;gap:8px;"><label style="flex:1">Das <input type="time" id="m-ini" value="${esc(x.horario_inicio || '08:00')}"></label><label style="flex:1">Às <input type="time" id="m-fim" value="${esc(x.horario_fim || '12:00')}"></label></div>
+        </div>` : ''}
       ${tipo === 'cancelar' || tipo === 'em_espera' ? '<label>Motivo (opcional) <textarea id="m-motivo" maxlength="300"></textarea></label>' : ''}
       <div class="msg" id="m-msg"></div>
       <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">${textos[0]}</button></div>`);
+    if (tipo === 'retomar') {
+      document.querySelectorAll('input[name="m-modo"]').forEach(r => r.addEventListener('change', () => {
+        const ag = document.querySelector('input[name="m-modo"]:checked').value === 'agendamento';
+        $('m-agenda').style.display = ag ? 'block' : 'none';
+      }));
+    }
     $('m-ok').addEventListener('click', async () => {
       const corpo = { tipo };
+      if (tipo === 'retomar') {
+        corpo.modo = document.querySelector('input[name="m-modo"]:checked').value;
+        if (corpo.modo === 'agendamento') { corpo.data = $('m-data').value; corpo.hora_inicio = $('m-ini').value; corpo.hora_fim = $('m-fim').value; }
+      }
       if (tipo === 'reagendar') { corpo.data = $('m-data').value; corpo.hora_inicio = $('m-ini').value; corpo.hora_fim = $('m-fim').value; }
       if ($('m-motivo')) corpo.motivo = $('m-motivo').value;
       $('m-ok').disabled = true;
