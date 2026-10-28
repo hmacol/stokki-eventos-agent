@@ -113,7 +113,10 @@ def _concluir(conn, envio: dict, agora: str, quando: datetime) -> None:
         conn.execute("UPDATE portal_solicitacoes SET status = 'CONCLUIDA', resposta = ?, concluido_em = ? WHERE id = ?",
                      (f"cancelado automaticamente em {quando.strftime('%d/%m %H:%M')}", agora, sol["id"]))
     ep._remover_dedicado(conn, envio["id"], "cancelamento-automatico")
-    ppc.fechar_por_envio(conn, envio["id"], "cancelado", agora)
+    try:
+        ppc.fechar_por_envio(conn, envio["id"], "cancelado", agora, commit=False)
+    except Exception as e:  # noqa: BLE001 -- pedido já cancelado na Vuupt/Stokki não pode voltar por causa da pausa
+        logger.warning(f"nao fechou a pausa do envio {envio['id']} ao cancelar: {e}")
     conn.commit()
 
 

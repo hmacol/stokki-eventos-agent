@@ -53,11 +53,11 @@ def _aplicar(aplicar_data_vuupt, s: dict, dia: str, ini: str, fim: str) -> None:
         raise _Falha(f"Vuupt ({s['codigo']}): {r.get('erro') or 'falhou sem detalhe'}")
 
 
-def _retomar_agendamento(conn, envio: dict, codigo: str, vivos: list[dict], aplicar_data_vuupt) -> None:
+def _retomar_agendamento(conn, envio: dict, codigo: str, vivos: list[dict], aplicar_data_vuupt, hoje: date) -> None:
     dia, ini, fim = envio.get("retomar_data"), envio.get("retomar_hora_inicio"), envio.get("retomar_hora_fim")
     if not (dia and ini and fim):
         raise _Falha("O envio não tem data/janela de retomada gravada.")
-    if date.fromisoformat(dia) < date.today():
+    if date.fromisoformat(dia) < hoje:
         raise _Falha(f"A data escolhida ({dia}) já passou.")
     for s in vivos:
         _aplicar(aplicar_data_vuupt, s, dia, ini, fim)
@@ -65,11 +65,11 @@ def _retomar_agendamento(conn, envio: dict, codigo: str, vivos: list[dict], apli
     # nos campos de agendamento (como o reagendar do portal) antes de registrar.
     conn.execute("UPDATE portal_envios SET agendamento_data = ?, agendamento_hora_inicio = ?, agendamento_hora_fim = ?, "
                  "agendamento_pendente = 0, requer_agendamento = 1, agendamento_aplicado_em = NULL WHERE id = ?",
-                 (dia, ini, fim, envio["id"]))
-    conn.commit()
+                 (dia, ini, fim, envio["id"]))  # sem commit: só vale junto com o registro abaixo
     registrado = {**envio, "codigo_pedido": codigo, "agendamento_data": dia,
                   "agendamento_hora_inicio": ini, "agendamento_hora_fim": fim}
     if not ep.registrar_agendamento_pedido(conn, registrado, "retomada"):
+        conn.rollback()
         raise _Falha("Agendamento do cliente não pôde ser registrado (agendamentos_pedido).")
     if vivos:  # com servico, a data ja foi aplicada acima; sem, o atualizar_agendamentos_confirmados aplica quando nascer
         conn.execute("UPDATE agendamentos_pedido SET aplicado_vuupt_em = ? WHERE pedido = ?",
@@ -86,7 +86,7 @@ def _retomar_proxima_rota(envio: dict, vivos: list[dict], aplicar_data_vuupt, pr
             _aplicar(aplicar_data_vuupt, s, dia.isoformat(), ini, fim)
 
 
-def _processar_um(conn, envio: dict, aplicar_data_vuupt, proxima_data, agora_txt: str) -> None:
+def _processar_um(conn, envio: dict, aplicar_data_vuupt, proxima_data, agora_txt: str, hoje: date) -> None:
     id_stokki = cm.id_stokki_do_codigo(envio.get("codigo_pedido"))
     if not id_stokki:
         raise _Falha("Código do pedido (PS-...) ainda não identificado.")
@@ -99,17 +99,19 @@ def _processar_um(conn, envio: dict, aplicar_data_vuupt, proxima_data, agora_txt
         if s.get("status") == "ENTREGUE":
             raise _Falha(f"Pedido já entregue ({s['codigo']}).")
     if envio.get("retomar_modo") == "agendamento":
-        _retomar_agendamento(conn, envio, codigo, vivos, aplicar_data_vuupt)
+        _retomar_agendamento(conn, envio, codigo, vivos, aplicar_data_vuupt, hoje)
     else:
         _retomar_proxima_rota(envio, vivos, aplicar_data_vuupt, proxima_data)
     # So solta se o envio ainda estiver RETOMANDO (nao pisa em mudanca no meio do caminho)
     cur = conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ? AND status = ?",
                        (ep.STATUS_CRIADO, agora_txt, envio["id"], ep.STATUS_RETOMANDO))
-    conn.commit()
     if cur.rowcount:
-        ppc.fechar_por_envio(conn, envio["id"], "retomado", agora_txt)
-        ppc.fechar(conn, codigo, "retomado", agora_txt)  # no-op se a linha de cima ja fechou
+        # status e pausa na mesma transação: ou os dois, ou nenhum (CRIADO com pausa aberta nunca roteiriza)
+        ppc.fechar_por_envio(conn, envio["id"], "retomado", agora_txt, commit=False)
+        ppc.fechar(conn, codigo, "retomado", agora_txt, commit=False)  # no-op se a linha de cima ja fechou
+        conn.commit()
     else:
+        conn.commit()
         logger.warning(f"{ep.rotulo_envio(envio)} {codigo}: status mudou durante a retomada -- pausa mantida.")
 
 
@@ -131,11 +133,12 @@ def processar_retomadas(conn: sqlite3.Connection, config: dict, aplicar_data_vuu
     for r in rows:
         envio = dict(r)
         try:
-            _processar_um(conn, envio, aplicar_data_vuupt, proxima_data, agora_txt)
+            _processar_um(conn, envio, aplicar_data_vuupt, proxima_data, agora_txt, quando.date())
             total["retomados"] += 1
         except Exception as e:  # noqa: BLE001 -- rede, Vuupt, SQLite: volta pra espera e a fila segue
             erro = str(e) if isinstance(e, _Falha) else f"{type(e).__name__}: {e}"
             logger.warning(f"{ep.rotulo_envio(envio)}: retomada falhou -- {erro}")
+            conn.rollback()
             _devolver_pra_espera(conn, envio, agora_txt)
             try:
                 avisar(envio, FALHA_TECNICA, erro)

@@ -5,7 +5,9 @@ Worker da retomada: cliente retoma pedido em espera a pedido dele (spec
 
     py -3.11 -m unittest portal_cliente.test_retomada
 """
+import sqlite3
 import sys
+import types
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -166,6 +168,101 @@ class Retomada(unittest.TestCase):
         retomada.processar_retomadas(conn, {}, aplicar_e_cancela, f.proxima_data, f.avisar, agora=AGORA)
         self.assertEqual(envio(conn, 60)["status"], ep.STATUS_CANCELADO)
         self.assertIsNone(pausa(conn)["retomado_em"])
+
+
+    def test_falha_ao_fechar_pausa_nao_deixa_criado_com_pausa_aberta(self):
+        conn = montar()
+        original = ppc.fechar_por_envio
+
+        def estoura(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+        ppc.fechar_por_envio = estoura
+        try:
+            r = Falsos().rodar(conn)
+        finally:
+            ppc.fechar_por_envio = original
+        self.assertEqual(r, {"retomados": 0, "falhas": 1})
+        self.assertEqual(envio(conn, 60)["status"], ep.STATUS_EM_ESPERA_CLIENTE)
+        self.assertIsNone(pausa(conn)["retomado_em"])
+
+    def test_registro_do_agendamento_falha_nao_deixa_agendamento_gravado(self):
+        conn = montar(modo="agendamento", data="2026-11-03", ini="09:00", fim="12:00")
+        conn.execute("DROP TABLE agendamentos_pedido")
+        conn.commit()
+        self.assertEqual(Falsos().rodar(conn), {"retomados": 0, "falhas": 1})
+        e = envio(conn, 60)
+        self.assertEqual(e["status"], ep.STATUS_EM_ESPERA_CLIENTE)
+        self.assertIsNone(e["agendamento_data"])
+
+
+class Ciclo(unittest.TestCase):
+    def test_processar_retomadas_do_ciclo_chama_o_worker(self):
+        conn = montar()
+        orig = wk.rt.processar_retomadas
+        wk.rt.processar_retomadas = lambda *a, **k: {"retomados": 1, "falhas": 0}
+        try:
+            self.assertEqual(wk.processar_retomadas_do_ciclo(conn, {}), {"retomados": 1, "falhas": 0})
+        finally:
+            wk.rt.processar_retomadas = orig
+
+    def test_ciclo_liga_retomadas_e_sobrevive_a_excecao(self):
+        conn = montar(status=ep.STATUS_CRIADO)
+        nomes = ["processar_cancelamentos_do_ciclo", "processar_retomadas_do_ciclo", "reconciliar_codigos"]
+        orig = {n: getattr(wk, n) for n in nomes}
+        orig_ep = (wk.ep.conectar, wk.ep.limpar_temporarios, wk.tq.processar_pendentes)
+        wk.ep.conectar = lambda: types.SimpleNamespace(
+            execute=conn.execute, commit=conn.commit, close=lambda: None)
+        wk.ep.limpar_temporarios = lambda: None
+        wk.tq.processar_pendentes = lambda *a, **k: {}
+        wk.processar_cancelamentos_do_ciclo = lambda *a, **k: {}
+        wk.reconciliar_codigos = lambda *a, **k: 0
+        wk.processar_retomadas_do_ciclo = lambda *a, **k: {"retomados": 2, "falhas": 0}
+        try:
+            self.assertEqual(wk.ciclo({})["retomadas"], {"retomados": 2, "falhas": 0})
+
+            def estoura(*a, **k):
+                raise RuntimeError("x")
+            wk.processar_retomadas_do_ciclo = estoura
+            r = wk.ciclo({})
+            self.assertNotIn("retomadas", r)
+            self.assertIn("lotes", r)
+        finally:
+            for n, v in orig.items():
+                setattr(wk, n, v)
+            wk.ep.conectar, wk.ep.limpar_temporarios, wk.tq.processar_pendentes = orig_ep
+
+    def test_simular_nao_toca_nada(self):
+        conn = montar()
+        self.assertEqual(wk.processar_retomadas_do_ciclo(conn, {}, simular=True), {"retomados": 0, "falhas": 0})
+        self.assertEqual(envio(conn, 60)["status"], ep.STATUS_RETOMANDO)
+
+    def test_sem_retomando_nao_faz_nada(self):
+        conn = montar(status=ep.STATUS_CRIADO)
+        self.assertEqual(wk.processar_retomadas_do_ciclo(conn, {}), {"retomados": 0, "falhas": 0})
+
+    def test_vuupt_sem_servico_e_falha_e_nao_sem_dia_fixo(self):
+        conn = montar()
+        fake = types.ModuleType("vuupt_client")
+        fake.VuuptClient = lambda token: types.SimpleNamespace(buscar_servico_por_id=lambda i: None)
+        orig_mod = sys.modules.get("vuupt_client")
+        sys.modules["vuupt_client"] = fake
+        capt = {}
+        orig_rt = wk.rt.processar_retomadas
+
+        def captura(c, config, aplicar, proxima, avisar):
+            capt["proxima"] = proxima
+            return {}
+        wk.rt.processar_retomadas = captura
+        try:
+            wk.processar_retomadas_do_ciclo(conn, {})
+            with self.assertRaises(RuntimeError):
+                capt["proxima"]({"vuupt_service_id": 901})
+        finally:
+            wk.rt.processar_retomadas = orig_rt
+            if orig_mod is not None:
+                sys.modules["vuupt_client"] = orig_mod
+            else:
+                del sys.modules["vuupt_client"]
 
 
 class Orfaos(unittest.TestCase):

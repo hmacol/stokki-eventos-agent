@@ -893,7 +893,9 @@ def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> d
         from vuupt_client import VuuptClient
         from roteirizacao.regioes_dia_fixo import proxima_data_valida, regra_dia_fixo_do_servico
         s = VuuptClient(token).buscar_servico_por_id(servico["vuupt_service_id"])
-        regra = regra_dia_fixo_do_servico(s) if s else None
+        if not s:  # não achou/falhou: NÃO é "sem dia fixo" -- a retomada falha e volta pra espera
+            raise RuntimeError(f"Vuupt não devolveu o serviço {servico['vuupt_service_id']}")
+        regra = regra_dia_fixo_do_servico(s)
         return proxima_data_valida(regra, date.today()) if regra else None
 
     def avisar(envio, motivo, erro):
@@ -915,6 +917,10 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
             total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- cancelamento não derruba a fila de envios
             logger.error(f"cancelamentos falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["retomadas"] = processar_retomadas_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- retomada não derruba a fila de envios
+            logger.error(f"retomadas falharam: {e}\n{traceback.format_exc()}")
         rows = conn.execute("SELECT * FROM portal_envios WHERE status = 'NA_FILA' ORDER BY cnpj_embarcador, criado_em, id").fetchall()
         por_cliente: dict[str, list[dict]] = {}
         for r in rows:

@@ -68,18 +68,19 @@ def abrir(conn: sqlite3.Connection, codigo: str, id_stokki, envio_id, service_id
     return cur.lastrowid
 
 
-def fechar(conn: sqlite3.Connection, codigo: str, fim: str, agora: str) -> bool:
+def fechar(conn: sqlite3.Connection, codigo: str, fim: str, agora: str, commit: bool = True) -> bool:
     """Fecha a pausa aberta do codigo. False se nao havia nenhuma."""
     if fim not in FINS:
         raise ValueError(f"fim invalido: {fim!r} (esperado {FINS})")
     cur = conn.execute(
         "UPDATE pedidos_pausados_cliente SET retomado_em = ?, fim = ? WHERE codigo = ? AND retomado_em IS NULL",
         (agora, fim, _codigo_base(codigo)))
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount > 0
 
 
-def fechar_por_envio(conn: sqlite3.Connection, envio_id, fim: str, agora: str) -> bool:
+def fechar_por_envio(conn: sqlite3.Connection, envio_id, fim: str, agora: str, commit: bool = True) -> bool:
     """Fecha a pausa aberta do envio (cancelamento concluido por quem so tem o id)."""
     if fim not in FINS:
         raise ValueError(f"fim invalido: {fim!r} (esperado {FINS})")
@@ -87,7 +88,8 @@ def fechar_por_envio(conn: sqlite3.Connection, envio_id, fim: str, agora: str) -
     cur = conn.execute(
         "UPDATE pedidos_pausados_cliente SET retomado_em = ?, fim = ? WHERE envio_id = ? AND retomado_em IS NULL",
         (agora, fim, envio_id))
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount > 0
 
 
