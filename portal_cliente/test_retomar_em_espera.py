@@ -129,6 +129,18 @@ class RevisaoFinal(unittest.TestCase):
             self.assertEqual(envio(conn, 90)["status"], st)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM portal_solicitacoes").fetchone()[0], 0)
 
+    def test_reagendar_vale_pra_erro_e_aguardando_liberacao(self):
+        # o card "Precisa da sua atencao" (Definir data) posta reagendar nesses status
+        for st in (ep.STATUS_ERRO, ep.STATUS_AGUARDANDO_LIBERACAO):
+            conn = conn_portal([(97, st, "9997", "PS-39997")])
+            conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_hora_inicio TEXT")
+            conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_hora_fim TEXT")
+            conn.execute("ALTER TABLE portal_envios ADD COLUMN agendamento_aplicado_em TEXT")
+            conn.execute("ALTER TABLE portal_envios ADD COLUMN atualizado_em TEXT")
+            conn.commit()
+            ep.aplicar_acao(conn, envio(conn, 97), "reagendar", {"data": _amanha()}, "cliente")
+            self.assertEqual(envio(conn, 97)["agendamento_data"], _amanha(), st)
+
     def test_reagendar_recusa_com_cancelamento_pendente(self):
         conn = conn_portal([(91, ep.STATUS_CRIADO, "9991", "PS-39991")])
         conn.execute("INSERT INTO portal_solicitacoes (envio_id, cnpj_embarcador, tipo, status, solicitado_por, criado_em) "

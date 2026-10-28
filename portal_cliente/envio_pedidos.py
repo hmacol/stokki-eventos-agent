@@ -1411,7 +1411,8 @@ def _dt_br(valor: str | None) -> str:
 
 def _pode_reagendar(status: str, cancelamento_pedido: bool) -> bool:
     """Regra unica do Reagendar: a tela (_linha) e o servidor (aplicar_acao) usam esta."""
-    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido
+    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO, STATUS_ERRO,
+                      STATUS_AGUARDANDO_LIBERACAO) and not cancelamento_pedido
 
 
 def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
