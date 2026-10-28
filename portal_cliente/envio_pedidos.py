@@ -1410,7 +1410,13 @@ def _dt_br(valor: str | None) -> str:
 
 
 def _pode_reagendar(status: str, cancelamento_pedido: bool) -> bool:
-    """Regra unica do Reagendar: a tela (_linha) e o servidor (aplicar_acao) usam esta."""
+    """Botao Reagendar da tabela (_linha)."""
+    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido
+
+
+def _servidor_aceita_reagendar(status: str, cancelamento_pedido: bool) -> bool:
+    """Guarda do aplicar_acao: alem dos status do botao, aceita ERRO e AGUARDANDO_LIBERACAO
+    porque o card 'Precisa da sua atencao' (Definir data) posta reagendar neles."""
     return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO, STATUS_ERRO,
                       STATUS_AGUARDANDO_LIBERACAO) and not cancelamento_pedido
 
@@ -1637,7 +1643,7 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
     cancelando = st == STATUS_CANCELANDO or conn.execute(
         "SELECT 1 FROM portal_solicitacoes WHERE envio_id = ? AND tipo = 'cancelar' AND status = 'PENDENTE'",
         (envio["id"],)).fetchone() is not None
-    if not _pode_reagendar(st, cancelando):
+    if not _servidor_aceita_reagendar(st, cancelando):
         raise ErroEnvio("Esse pedido não pode ser reagendado agora.")
     nova, ini, fim = _validar_agendamento(envio, dados)
     conn.execute("""
