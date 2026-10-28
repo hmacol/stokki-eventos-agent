@@ -61,6 +61,7 @@ import yaml
 import cancelamento as cm
 import envio_pedidos as ep
 import pedidos_dedicados
+import retomada as rt
 import trocas_nf as tq
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
@@ -781,27 +782,35 @@ def reconciliar_codigos(conn) -> int:
 
 # ── Cancelamentos pedidos pelo cliente (06/10) ────────────────────────────────
 
-def _avisar_operacao(conn, config: dict, envio: dict, motivo: str, erro: str) -> None:
+def _avisar_operacao(conn, config: dict, envio: dict, motivo: str, erro: str, acao: str = "cancelamento") -> None:
     try:
         envio = {**envio, "nome_embarcador": ep.config_stokki_cliente(conn, envio["cnpj_embarcador"], config)["nome"]}
     except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o CNPJ
         pass
-    cm.avisar_operacao(config, envio, motivo, erro)
+    cm.avisar_operacao(config, envio, motivo, erro, acao=acao)
 
 
 def resetar_orfaos(conn, avisar=None) -> None:
     """ENVIANDO órfão (worker caiu no meio) volta pra fila depois de 30 min.
     CANCELANDO órfão (Stokki ocupada por mais de 30 min ou worker parado)
-    volta pra CRIADO e AVISA a operação -- a solicitação continua PENDENTE
-    (revisão 07/10: sem aviso o pedido ficava no limbo de novo)."""
+    volta pra CRIADO (ou pra EM_ESPERA_CLIENTE, se veio de um Em espera) e
+    AVISA a operação -- a solicitação continua PENDENTE (revisão 07/10: sem
+    aviso o pedido ficava no limbo de novo). RETOMANDO órfão volta pra
+    EM_ESPERA_CLIENTE e avisa: o cliente pode retomar de novo."""
     conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
                  "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
     orfaos = [dict(r) for r in conn.execute(
         "SELECT * FROM portal_envios WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
         (ep.STATUS_CANCELANDO,))]
     for e in orfaos:
-        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') WHERE id = ?",
-                     (ep.STATUS_CRIADO, e["id"]))
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
+                     "WHERE id = ? AND status = ?", (cm.status_ao_devolver(conn, e["id"]), e["id"], ep.STATUS_CANCELANDO))
+    orfaos_retomada = [dict(r) for r in conn.execute(
+        "SELECT * FROM portal_envios WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
+        (ep.STATUS_RETOMANDO,))]
+    for e in orfaos_retomada:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
+                     "WHERE id = ? AND status = ?", (ep.STATUS_EM_ESPERA_CLIENTE, e["id"], ep.STATUS_RETOMANDO))
     conn.commit()
     for e in orfaos:
         logger.warning(f"{ep.rotulo_envio(e)}: cancelamento não executado em 30 min -- volta pra operação.")
@@ -810,6 +819,13 @@ def resetar_orfaos(conn, avisar=None) -> None:
                 avisar(e, "cancelamento não executado em 30 min (Stokki ocupada ou worker parado)", "")
             except Exception as ex:  # noqa: BLE001
                 logger.warning(f"aviso do órfão {e['id']} falhou: {ex}")
+    for e in orfaos_retomada:
+        logger.warning(f"{ep.rotulo_envio(e)}: retomada não concluída em 30 min -- volta pra espera.")
+        if avisar:
+            try:
+                avisar(e, "retomada não concluída em 30 min (worker parado)", "", acao="retomada")
+            except Exception as ex:  # noqa: BLE001
+                logger.warning(f"aviso do órfão de retomada {e['id']} falhou: {ex}")
 
 
 def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
@@ -855,6 +871,37 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
         sessao_uso.liberar(DONO_TRAVA)
 
 
+def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Retoma o que o cliente pediu (status RETOMANDO): data na Vuupt e fecha a
+    pausa. NÃO usa a Stokki, então não pega a trava de sessão."""
+    vazio = {"retomados": 0, "falhas": 0}
+    n = conn.execute("SELECT COUNT(*) FROM portal_envios WHERE status = ?", (ep.STATUS_RETOMANDO,)).fetchone()[0]
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} retomada(s) ficam como estão.")
+        return vazio
+    token = (config.get("vuupt_api") or {}).get("token", "")
+
+    def aplicar_data_vuupt(service_id, dia, ini, fim):
+        from solicitacoes_execucao import reagendar_servico_vuupt
+        return reagendar_servico_vuupt(token, service_id, dia, ini, fim)
+
+    def proxima_data(servico):
+        # dia fixo da região a partir de amanhã; sem regra = None (não mexe na Vuupt)
+        from datetime import date
+        from vuupt_client import VuuptClient
+        from roteirizacao.regioes_dia_fixo import proxima_data_valida, regra_dia_fixo_do_servico
+        s = VuuptClient(token).buscar_servico_por_id(servico["vuupt_service_id"])
+        regra = regra_dia_fixo_do_servico(s) if s else None
+        return proxima_data_valida(regra, date.today()) if regra else None
+
+    def avisar(envio, motivo, erro):
+        _avisar_operacao(conn, config, envio, motivo, erro, acao="retomada")
+
+    return rt.processar_retomadas(conn, config, aplicar_data_vuupt, proxima_data, avisar)
+
+
 # ── Ciclo ──────────────────────────────────────────────────────────────────────
 
 def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
@@ -862,7 +909,7 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
     conn = ep.conectar()
     try:
         lote_max = int(_cfg_portal(config).get("lote_maximo") or 30)
-        resetar_orfaos(conn, avisar=lambda e, m, err: _avisar_operacao(conn, config, e, m, err))
+        resetar_orfaos(conn, avisar=lambda e, m, err, acao="cancelamento": _avisar_operacao(conn, config, e, m, err, acao=acao))
         total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
         try:
             total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
@@ -909,7 +956,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"] or any((r.get("cancelamentos") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values()) or any((r.get("retomadas") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")

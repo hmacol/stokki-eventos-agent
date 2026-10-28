@@ -79,6 +79,29 @@ def fechar(conn: sqlite3.Connection, codigo: str, fim: str, agora: str) -> bool:
     return cur.rowcount > 0
 
 
+def fechar_por_envio(conn: sqlite3.Connection, envio_id, fim: str, agora: str) -> bool:
+    """Fecha a pausa aberta do envio (cancelamento concluido por quem so tem o id)."""
+    if fim not in FINS:
+        raise ValueError(f"fim invalido: {fim!r} (esperado {FINS})")
+    garantir_tabela(conn)
+    cur = conn.execute(
+        "UPDATE pedidos_pausados_cliente SET retomado_em = ?, fim = ? WHERE envio_id = ? AND retomado_em IS NULL",
+        (agora, fim, envio_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def tem_pausa_aberta(conn: sqlite3.Connection, envio_id) -> bool:
+    """O envio veio de um Em espera (pausa aberta)? Falha ao ler = False."""
+    try:
+        garantir_tabela(conn)
+        return conn.execute("SELECT 1 FROM pedidos_pausados_cliente WHERE envio_id = ? AND retomado_em IS NULL",
+                            (envio_id,)).fetchone() is not None
+    except sqlite3.Error as e:
+        logger.warning(f"nao leu a pausa do envio {envio_id} ({e})")
+        return False
+
+
 def codigos_pausados(db_path=None) -> set[str]:
     """Codigos base com pausa aberta. Erro -> vazio + log."""
     try:

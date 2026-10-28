@@ -358,6 +358,29 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
     return {"ok": True, "erro": "", "rota_id": rota_id, "rota_cancelada": rota_cancelada}
 
 
+def reagendar_servico_vuupt(token: str, service_id: int, dia: str, ini: str, fim: str) -> dict:
+    """PUT direto, como atualizar_agendamentos_confirmados (data do
+    cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
+    Também usado pelo worker da retomada (portal_cliente/retomada.py)."""
+    _caminhos_painel()
+    from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
+    inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
+    termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
+    if not inicio or not termino:
+        return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
+    vuupt = VuuptClient(token)
+    try:
+        vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
+    except VuuptAPIError as e:
+        return {"ok": False, "erro": str(e)}
+    try:
+        from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+        ressincronizar_ids(vuupt, [service_id])
+    except Exception as e:  # noqa: BLE001 -- a escrita na Vuupt já aconteceu; o timer de 15 min alcança
+        logger.warning(f"ressincronização do serviço {service_id} falhou: {e}")
+    return {"ok": True, "erro": ""}
+
+
 def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
     """Callables de produção. A sessão da Stokki só é aberta dentro da trava
     (abrir_stokki) e na primeira chamada que precisa dela."""
@@ -402,25 +425,7 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
         return _tirar_da_rota_real(token, service_id, agent_lalamove, usuario)
 
     def reagendar_vuupt(service_id, dia, ini, fim):
-        # PUT direto, como atualizar_agendamentos_confirmados (data do
-        # cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
-        _caminhos_painel()
-        from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
-        inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
-        termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
-        if not inicio or not termino:
-            return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
-        vuupt = VuuptClient(token)
-        try:
-            vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
-        except VuuptAPIError as e:
-            return {"ok": False, "erro": str(e)}
-        try:
-            from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
-            ressincronizar_ids(vuupt, [service_id])
-        except Exception as e:  # noqa: BLE001 -- a escrita na Vuupt já aconteceu; o timer de 15 min alcança
-            logger.warning(f"ressincronização do serviço {service_id} falhou: {e}")
-        return {"ok": True, "erro": ""}
+        return reagendar_servico_vuupt(token, service_id, dia, ini, fim)
 
     return Dependencias(buscar_servico=buscar_servico, cancelar_vuupt=cancelar_vuupt, cancelar_stokki=cancelar_stokki,
                         tirar_da_rota_vuupt=tirar_da_rota_vuupt,

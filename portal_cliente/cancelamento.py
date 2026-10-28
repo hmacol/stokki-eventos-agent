@@ -30,6 +30,7 @@ for _p in (_RAIZ, _AQUI):
         sys.path.insert(0, str(_p))
 
 import envio_pedidos as ep  # noqa: E402
+import pedidos_pausados_cliente as ppc  # noqa: E402
 from email_utils import enviar_email, envelope_html  # noqa: E402
 
 logger = logging.getLogger("portal_cancelamento")
@@ -93,8 +94,15 @@ def servicos_do_pedido(conn: sqlite3.Connection, codigo_base: str) -> tuple[list
     return servicos, rotas
 
 
+def status_ao_devolver(conn, envio_id) -> str:
+    """Pedido que veio de um Em espera (pausa aberta) volta pra EM_ESPERA_CLIENTE;
+    senao ele ficaria fora da rota pra sempre e sem o Retomar no portal."""
+    return ep.STATUS_EM_ESPERA_CLIENTE if ppc.tem_pausa_aberta(conn, envio_id) else ep.STATUS_CRIADO
+
+
 def _voltar_pra_operacao(conn, envio: dict, agora: str) -> None:
-    conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (ep.STATUS_CRIADO, agora, envio["id"]))
+    conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?",
+                 (status_ao_devolver(conn, envio["id"]), agora, envio["id"]))
     conn.commit()
 
 
@@ -105,6 +113,7 @@ def _concluir(conn, envio: dict, agora: str, quando: datetime) -> None:
         conn.execute("UPDATE portal_solicitacoes SET status = 'CONCLUIDA', resposta = ?, concluido_em = ? WHERE id = ?",
                      (f"cancelado automaticamente em {quando.strftime('%d/%m %H:%M')}", agora, sol["id"]))
     ep._remover_dedicado(conn, envio["id"], "cancelamento-automatico")
+    ppc.fechar_por_envio(conn, envio["id"], "cancelado", agora)
     conn.commit()
 
 
@@ -201,12 +210,14 @@ def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuu
     return total
 
 
-def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str) -> None:
+def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str, acao: str = "cancelamento") -> None:
     """E-mail ao atendimento + WhatsApp no grupo do atendimento. Best-effort:
     o envio já voltou pra CRIADO com a solicitação PENDENTE; o aviso não
     pode derrubar o ciclo."""
     rotulo = ep.rotulo_envio(envio)
     ps = envio.get("codigo_pedido") or "(código ainda não identificado)"
+    if acao == "retomada":
+        return _avisar_retomada(config, envio, motivo, erro, rotulo, ps)
     # nome do destinatário vem do XML do cliente e o erro vem da Stokki:
     # tudo escapado antes de entrar no HTML do e-mail
     esc = lambda v: html_mod.escape(str(v or ""))  # noqa: E731
@@ -230,3 +241,22 @@ def avisar_operacao(config: dict, envio: dict, motivo: str, erro: str) -> None:
         notificar_whatsapp.avisar_cancelamento_pendente(envio, motivo, erro, config)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"WhatsApp do cancelamento {envio.get('id')} falhou: {e}")
+
+
+def _avisar_retomada(config: dict, envio: dict, motivo: str, erro: str, rotulo: str, ps: str) -> None:
+    """Retomada de pedido em espera que o worker não conseguiu fazer: só e-mail
+    ao atendimento (o pedido voltou pra EM_ESPERA_CLIENTE e o cliente pode tentar de novo)."""
+    esc = lambda v: html_mod.escape(str(v or ""))  # noqa: E731
+    try:
+        email_cfg = config.get("email", {}) or {}
+        destino = email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
+        if destino:
+            html = envelope_html(
+                f"<p>O cliente <b>{esc(envio.get('nome_embarcador') or envio.get('cnpj_embarcador'))}</b> pediu pelo portal para "
+                f"<b>retomar</b> o pedido {esc(ps)} · {esc(rotulo)} · {esc(envio.get('destinatario_nome'))}, que estava em espera.</p>"
+                f"<p>O sistema não conseguiu: <b>{esc(motivo)}</b>. O pedido segue em espera e o cliente pode tentar de novo.</p>"
+                + (f"<p style='color:#B91C1C'>Erro: {esc(erro[:400])}</p>" if erro else ""),
+                rodape="Fresh Log · Portal do cliente · retomada", cor_acento="#F5A623")
+            enviar_email([destino], f"[Portal] Retomada precisa da operação · {rotulo} · {ps}", html, email_cfg)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"e-mail da retomada {envio.get('id')} falhou: {e}")

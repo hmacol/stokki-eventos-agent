@@ -121,6 +121,8 @@
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
+ Retomar pedido em espera (cliente) ........ portal_cliente/retomada.py (RETOMANDO -> worker enviar_stokki:
+                                             data na Vuupt + fecha a pausa -> CRIADO | EM_ESPERA_CLIENTE; sem Stokki)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
@@ -1088,6 +1090,12 @@
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
+ retomada.py               Retomada de pedido em espera (RETOMANDO, ciclo do enviar_stokki):
+                           agendamento = data do cliente na Vuupt + agendamentos_pedido;
+                           proxima_rota = dia fixo da região (None = não mexe); fecha a
+                           pausa 'retomado'. Falha volta EM_ESPERA_CLIENTE + e-mail.
+                           Órfão >30 min (RETOMANDO ou CANCELANDO de pedido em espera)
+                           volta pra EM_ESPERA_CLIENTE (resetar_orfaos). Sem trava da Stokki.
  solicitacoes_execucao.py  Executar/Recusar solicitação PENDENTE do portal (tela
                            /solicitacoes-portal): cancelar (Vuupt -> Stokki),
                            em_espera (tira da rota na Vuupt + grava pedidos_pausados_cliente; nada na Stokki),

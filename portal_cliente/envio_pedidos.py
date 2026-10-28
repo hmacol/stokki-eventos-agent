@@ -1561,10 +1561,13 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             nova, ini, fim = _validar_agendamento(envio, dados)
             data = nova.isoformat()
         _garantir_colunas(conn, "portal_envios", COLUNAS_RETOMAR)
-        conn.execute("UPDATE portal_envios SET status = ?, retomar_modo = ?, retomar_data = ?, retomar_hora_inicio = ?, "
-                     "retomar_hora_fim = ?, atualizado_em = ? WHERE id = ?",
-                     (STATUS_RETOMANDO, modo, data, ini, fim, agora, envio["id"]))
+        # WHERE status: o envio passado pode estar velho (cancelamento ou segundo clique no meio)
+        cur = conn.execute("UPDATE portal_envios SET status = ?, retomar_modo = ?, retomar_data = ?, retomar_hora_inicio = ?, "
+                           "retomar_hora_fim = ?, atualizado_em = ? WHERE id = ? AND status = ?",
+                           (STATUS_RETOMANDO, modo, data, ini, fim, agora, envio["id"], STATUS_EM_ESPERA_CLIENTE))
         conn.commit()
+        if cur.rowcount == 0:
+            raise ErroEnvio("Esse pedido não está mais em espera -- atualize a página.")
         return {"aplicado": False, "precisa_operacao": False, "em_andamento": True,
                 "mensagem": "Retomando… você verá aqui em instantes."}
     if tipo == "cancelar":
@@ -1713,4 +1716,9 @@ def concluir_solicitacao(conn: sqlite3.Connection, solicitacao_id: int, resposta
         conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?",
                      (STATUS_CANCELADO, _agora(), s["envio_id"]))
         _remover_dedicado(conn, s["envio_id"], "conclusao")
+        try:
+            import pedidos_pausados_cliente as ppc
+            ppc.fechar_por_envio(conn, s["envio_id"], "cancelado", _agora())
+        except Exception as e:  # noqa: BLE001 -- a pausa nao pode travar o fechamento da solicitacao
+            logger.warning(f"nao fechou a pausa do envio {s['envio_id']} ao concluir cancelamento: {e}")
     conn.commit()
