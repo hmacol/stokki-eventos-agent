@@ -207,6 +207,28 @@ class TestRodar(BaseRotina):
         chamadas_show = [c for c in sess.chamadas if "/show/" in c[0]]
         self.assertEqual(len(chamadas_show), 1)
 
+    def test_status_com_mais_que_uma_pagina_e_lido_inteiro(self):
+        # 28/10: o piloto tinha mais de 50 em "Waiting for Carrier" e a
+        # rodada lia sempre a mesma primeira pagina -- o resto nunca entrava.
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40100 + i, PILOTO_ID) for i in range(7)]
+        sess = SessaoFalsa(linhas, {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=3, modo_teste=True)
+
+        self.assertEqual(res["lidos"], 7)
+        self.assertEqual(res["do_piloto"], 7)
+
+    def test_teto_de_paginas_por_status(self):
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40200 + i, PILOTO_ID) for i in range(10)]
+        sess = SessaoFalsa(linhas, {})
+
+        with mock.patch.object(mod, "MAX_PAGINAS_POR_STATUS", 2):
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=3, modo_teste=True)
+
+        self.assertEqual(res["lidos"], 6)
+
     def test_linha_de_outro_embarcador_e_ignorada_mesmo_se_vier_na_listagem(self):
         # Rede de seguranca (correcao 2): simula uma Stokki que, apesar do
         # filtro client= no request, devolvesse tambem uma linha de outro

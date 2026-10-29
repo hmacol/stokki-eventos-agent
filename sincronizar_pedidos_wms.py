@@ -70,6 +70,7 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 # Vuupt e, pra quem sai por fora dela, pela varredura do fim desta rodada
 # (_varrer_candidatos).
 STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Ready to Pack")
+MAX_PAGINAS_POR_STATUS = 4  # com o --limite padrao (50), ate 200 pedidos por status
 
 # Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
 # folgado pro tamanho real de uma rodada (~37 pedidos hoje, so requests,
@@ -397,23 +398,25 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
     for status in STATUS_INTERESSANTES:
         # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so
         # os pedidos do piloto quando cliente=piloto_id.
-        resposta = stokki_pedidos.listar_pedidos(
-            sess, status=status, cliente=piloto_id, por_pagina=limite,
-            ordenar_coluna="1", ordenar_dir="desc")
-        linhas = resposta.get("aaData") or []
-        # Pagina cheia aqui quer dizer que pode ter sobrado pedido do
-        # piloto sem ler NESTE status -- ele so entra na proxima rodada.
-        # Ate a rodada 2 isso desligava a varredura de fim de rodada
-        # inteira, porque ela concluia por omissao numa listagem. Hoje ela
-        # confere a pagina de cada candidato, entao completude de listagem
-        # nao importa mais: pedido nao lido vira candidato, e a pagina
-        # dele diz que ainda esta em status normal -- so log. Desligar a
-        # varredura aqui desligava tambem a BAIXA, justamente nos dias de
-        # mais movimento (o .service roda sem --limite, default 50, e o
-        # piloto ja bate 30 num status so).
-        if len(linhas) >= limite:
-            logger.info("Listagem de '%s' encheu a pagina (limite %d) -- o que sobrou entra na "
-                        "proxima rodada.", status, limite)
+        # Pagina ate a listagem acabar (28/10: o piloto passou de 50 em
+        # "Waiting for Carrier" e a rodada relia sempre a mesma primeira
+        # pagina -- a ordem e fixa, entao "o que sobrou" nunca entrava).
+        # Teto de paginas por status: cada pedido lido e um GET na Stokki
+        # de sessao unica, e a rodada tem que caber no TTL da trava.
+        # Pedido que ficar de fora nao some: a varredura de fim de rodada
+        # confere a pagina de cada candidato com reserva ativa.
+        linhas = []
+        for pagina in range(MAX_PAGINAS_POR_STATUS):
+            resposta = stokki_pedidos.listar_pedidos(
+                sess, status=status, cliente=piloto_id, pagina=pagina, por_pagina=limite,
+                ordenar_coluna="1", ordenar_dir="desc")
+            pagina_linhas = resposta.get("aaData") or []
+            linhas += pagina_linhas
+            if len(pagina_linhas) < limite:
+                break
+        else:
+            logger.info("Listagem de '%s' chegou no teto de %d paginas de %d -- o resto fica de fora "
+                        "desta rodada.", status, MAX_PAGINAS_POR_STATUS, limite)
         for linha in linhas:
             res["lidos"] += 1
             id_pedido = stokki_pedidos.extrair_id_da_linha(linha)
@@ -499,7 +502,7 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--modo-teste", action="store_true", help="nao grava nada, so mostra o que faria")
-    ap.add_argument("--limite", type=int, default=50, help="pedidos por status nesta rodada")
+    ap.add_argument("--limite", type=int, default=50, help="tamanho da pagina da listagem por status (ate MAX_PAGINAS_POR_STATUS paginas)")
     ap.add_argument("--embarcador", help="sobrescreve o nome do embarcador piloto do config.yaml (so log)")
     ap.add_argument("--embarcador-id", help="sobrescreve o id (stkkc) do embarcador piloto do config.yaml")
     args = ap.parse_args(argv)
