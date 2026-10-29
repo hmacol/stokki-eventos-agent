@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def atualizar(conn, motorista_id: int, campos: dict, origem: str) -> list[dict]:
 
     agora = banco.agora()
     sets = {m["campo"]: m["para"] for m in mudancas}
-    if "ATIVO" in sets:
+    if "ATIVO" in sets and _parse_bool(atual["ATIVO"]) != _parse_bool(sets["ATIVO"]):
         sets["inativado_em"] = None if _parse_bool(sets["ATIVO"]) else agora
     sets["atualizado_em"] = agora
     conn.execute(f"UPDATE bd_motoristas SET {', '.join(f'{c} = ?' for c in sets)} WHERE id = ?",
@@ -168,8 +169,11 @@ def escrever_espelho(conn, caminho: Path | None = None) -> bool:
     """Grava a planilha-espelho (só COLUNAS, na ordem de id) via arquivo
     temporário + os.replace. Nunca levanta: erro vira log e False."""
     destino = Path(caminho) if caminho else caminho_espelho()
-    tmp = destino.with_name(destino.name + ".tmp")
+    tmp = None
     try:
+        # nome unico: dois escritores simultaneos nao se misturam no mesmo temporario
+        with tempfile.NamedTemporaryFile(dir=destino.parent, delete=False, suffix=".xlsx") as f:
+            tmp = Path(f.name)
         linhas = [[r[c] for c in COLUNAS] for r in conn.execute(
             f"SELECT {', '.join(COLUNAS)} FROM bd_motoristas ORDER BY id")]
         df = pd.DataFrame(linhas, columns=COLUNAS, dtype=object)  # object: inteiro com vazio nao vira float
@@ -179,7 +183,8 @@ def escrever_espelho(conn, caminho: Path | None = None) -> bool:
     except Exception:
         logger.exception(f"Falha ao escrever o espelho {destino}")
         try:
-            tmp.unlink(missing_ok=True)
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
         except OSError:
             pass
         return False

@@ -23,7 +23,7 @@ from zonas_sp import (
 from regras import motoristas_banco
 from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista
 from regras.tipo_veiculo import TIPOS_VEICULO
-from regras.cadastro_motoristas import listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista
+from regras.cadastro_motoristas import listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 
 ZONAS_DISPONIVEIS = [
     ZONA_NORTE, ZONA_SUL, ZONA_LESTE, ZONA_OESTE, CENTRO,

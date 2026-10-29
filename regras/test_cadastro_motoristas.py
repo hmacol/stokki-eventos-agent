@@ -167,14 +167,42 @@ class TestCadastroMotoristas(unittest.TestCase):
         cm.editar_motorista({}, mid2, {"telefone": "888"}, "hugo", conn=self.conn)
         self.assertIsNone(auth.buscar_motorista(self.conn, "98765432100"))
 
-    def test_editar_nao_repassa_tipo_veiculo_nem_vehicle_id_com_duas_linhas(self):
+    def test_editar_nao_repassa_tipo_veiculo_vehicle_id_nem_nome_com_duas_linhas(self):
         from nucleo import auth_motorista as auth
         mid = self._cadastrado()
         self._cadastrado(AGENT_ID_VUUPT=6, PLACA="BBB2222")
         self._login()
-        cm.editar_motorista({}, mid, {"tipo_veiculo": "VUC", "vehicle_id": 9, "nome": "Ana Z"}, "hugo", conn=self.conn)
+        cm.editar_motorista({}, mid, {"tipo_veiculo": "VUC", "vehicle_id": 9, "nome": "Ana Z", "telefone": "777"}, "hugo", conn=self.conn)
         login = auth.buscar_motorista(self.conn, "12345678901")
-        self.assertEqual((login["tipo_veiculo"], login["vehicle_id"], login["nome"]), ("FIORINO", None, "Ana Z"))
+        self.assertEqual((login["tipo_veiculo"], login["vehicle_id"], login["nome"], login["telefone"]),
+                         ("FIORINO", None, "Ana", "777"))
+
+    def test_repasse_sem_login_fecha_transacao(self):
+        mid = self._cadastrado()
+        cm.editar_motorista({}, mid, {"telefone": "555"}, "hugo", conn=self.conn)
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_repasse_casa_cpf_formatado_na_linha(self):
+        from nucleo import auth_motorista as auth
+        mid = self._cadastrado(CPF_MOTORISTA="123.456.789-01")
+        self._login()
+        cm.editar_motorista({}, mid, {"telefone": "555"}, "hugo", conn=self.conn)
+        self.assertEqual(auth.buscar_motorista(self.conn, "12345678901")["telefone"], "555")
+
+    def test_editar_cpf_vazio_exige_11_digitos_e_recusa_de_outro_agente(self):
+        mid = self._cadastrado(CPF_MOTORISTA=None)
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, mid, {"cpf": "123"}, "hugo", conn=self.conn)
+        self._cadastrado(AGENT_ID_VUUPT=6, CPF_MOTORISTA="98765432100")
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, mid, {"cpf": "987.654.321-00"}, "hugo", conn=self.conn)
+        self.assertIsNone(mb.listar(self.conn)[0]["CPF_MOTORISTA"])
+        cm.editar_motorista({}, mid, {"cpf": "111.222.333-44"}, "hugo", conn=self.conn)
+        self.assertEqual(mb.listar(self.conn)[0]["CPF_MOTORISTA"], "11122233344")
+        # mesmo AGENT_ID (2 carros) pode repetir o CPF
+        mid3 = self._cadastrado(CPF_MOTORISTA=None)
+        cm.editar_motorista({}, mid3, {"cpf": "11122233344"}, "hugo", conn=self.conn)
+        self.assertEqual(mb.listar(self.conn)[2]["CPF_MOTORISTA"], "11122233344")
 
     def test_editar_payload_completo_so_muda_o_que_mudou(self):
         # linha com apelido de tipo e CPF de 10 digitos: reenviar os mesmos valores nao pode mudar nada.

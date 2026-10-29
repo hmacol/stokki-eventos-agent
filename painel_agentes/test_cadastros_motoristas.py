@@ -178,6 +178,16 @@ class TestEditarMotorista(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("AGENT_ID", r.get_json()["erro"])
 
+    def test_put_id_inexistente_404_e_corpo_nao_objeto_400(self):
+        self._logar("total")
+        r = self._put({"nome": "X"}, mid=99999)
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("nao existe", r.get_json()["erro"])
+        for corpo in ([1, 2], "texto", None):
+            r = self._put(corpo)
+            self.assertEqual(r.status_code, 400, corpo)
+            self.assertIn("objeto JSON", r.get_json()["erro"])
+
     def test_botao_editar_so_para_quem_pode(self):
         self._logar("operador")
         html = self.cliente.get("/motoristas").get_data(as_text=True)

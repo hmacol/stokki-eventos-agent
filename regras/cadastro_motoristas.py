@@ -167,7 +167,7 @@ _REPASSE_LOGIN = {
     "TIPO_VEICULO": "tipo_veiculo", "VEHICLE_ID_VUUPT": "vehicle_id",
 }
 # Com 2+ carros no mesmo CPF não dá pra saber qual veículo o login leva (igual à placa).
-_SO_COM_UMA_LINHA = {"TIPO_VEICULO", "VEHICLE_ID_VUUPT"}
+_SO_COM_UMA_LINHA = {"NOME_MOTORISTA", "TIPO_VEICULO", "VEHICLE_ID_VUUPT"}
 
 
 def _repassar_ao_login(conn, motorista: dict, mudancas: list[dict]) -> None:
@@ -186,9 +186,21 @@ def _repassar_ao_login(conn, motorista: dict, mudancas: list[dict]) -> None:
     if not sets:
         return
     sets["atualizado_em"] = banco.agora()
-    cur = conn.execute(f"UPDATE motoristas SET {', '.join(f'{c} = ?' for c in sets)} WHERE cpf = ?", (*sets.values(), cpf))
-    if cur.rowcount:
-        conn.commit()
+    conn.execute(f"UPDATE motoristas SET {', '.join(f'{c} = ?' for c in sets)} WHERE cpf = ?",
+                 (*sets.values(), re.sub(r"\D", "", str(cpf))))
+    conn.commit()   # sem login (rowcount 0) a transacao implicita ficaria aberta segurando o lock durante o espelho
+
+
+class MotoristaNaoEncontrado(ValueError):
+    """Id inexistente na bd_motoristas (a rota devolve 404)."""
+
+
+def _validar_cpf_novo(conn, atual: dict, cpf: str) -> None:
+    """CPF so entra num cadastro sem CPF: 11 digitos e de outro agente nao pode ser."""
+    if len(cpf) != 11:
+        raise ValueError("CPF deve ter 11 digitos.")
+    if any(l["AGENT_ID_VUUPT"] != atual["AGENT_ID_VUUPT"] for l in motoristas_banco.por_cpf(conn, cpf)):
+        raise ValueError("Esse CPF ja esta cadastrado em outro motorista.")
 
 
 def editar_motorista(config: dict, motorista_id: int, campos: dict, usuario: str, *, conn=None) -> dict:
@@ -201,6 +213,12 @@ def editar_motorista(config: dict, motorista_id: int, campos: dict, usuario: str
         colunas["AGENT_ID_VUUPT"] = campos["agent_id"]   # atualizar() recusa qualquer troca
 
     def gravar(c):
+        atual = next((m for m in motoristas_banco.listar(c) if m["id"] == motorista_id), None)
+        if atual is None:
+            raise MotoristaNaoEncontrado(f"Motorista id={motorista_id} nao existe.")
+        cpf_novo = colunas.get("CPF_MOTORISTA")
+        if cpf_novo and not atual["CPF_MOTORISTA"]:
+            _validar_cpf_novo(c, atual, cpf_novo)
         mudancas = motoristas_banco.atualizar(c, motorista_id, colunas, f"painel:{usuario}")
         motorista = next(m for m in motoristas_banco.listar(c) if m["id"] == motorista_id)
         if mudancas:

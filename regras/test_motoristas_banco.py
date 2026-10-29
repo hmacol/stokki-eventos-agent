@@ -133,6 +133,35 @@ class TestMotoristasBanco(unittest.TestCase):
         self.assertTrue(pd.isna(df["VEHICLE_ID_VUUPT"][1]))
         self.assertEqual((df["ATIVO"][0], df["APENAS_CARGA_SECA"][0]), ("S", "S"))
 
+    def test_espelho_usa_temporario_unico_e_nao_deixa_resto(self):
+        mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM"), "teste")
+        destino = self.dir / "espelho.xlsx"
+        nomes = []
+        real = mb.pd.DataFrame.to_excel
+
+        def espiao(df, caminho, *a, **k):
+            nomes.append(Path(caminho).name)
+            return real(df, caminho, *a, **k)
+
+        with mock.patch.object(mb.pd.DataFrame, "to_excel", espiao):
+            self.assertTrue(mb.escrever_espelho(self.conn, destino))
+            self.assertTrue(mb.escrever_espelho(self.conn, destino))
+        self.assertEqual(len(set(nomes)), 2)
+        self.assertNotIn("espelho.xlsx.tmp", nomes)
+        self.assertEqual(sorted(p.name for p in self.dir.glob("*.xlsx")), ["espelho.xlsx"])
+        # falha na escrita limpa o temporario
+        with mock.patch.object(mb.pd.DataFrame, "to_excel", side_effect=OSError("x")), self.assertLogs(mb.logger, "ERROR"):
+            self.assertFalse(mb.escrever_espelho(self.conn, destino))
+        self.assertEqual(sorted(p.name for p in self.dir.glob("*.xlsx")), ["espelho.xlsx"])
+
+    def test_ativo_nao_para_n_nao_reinicia_relogio_de_inatividade(self):
+        mid = self._um()
+        mb.atualizar(self.conn, mid, {"ATIVO": "NAO"}, "teste")
+        self.conn.execute("UPDATE bd_motoristas SET inativado_em = '2026-01-01 10:00:00' WHERE id = ?", (mid,))
+        self.conn.commit()
+        mb.atualizar(self.conn, mid, {"ATIVO": "N"}, "teste")
+        self.assertEqual(mb.listar(self.conn)[0]["inativado_em"], "2026-01-01 10:00:00")
+
     def test_espelho_falha_nao_levanta(self):
         with self.assertLogs(mb.logger, "ERROR"):
             self.assertFalse(mb.escrever_espelho(self.conn, self.dir / "naoexiste" / "x.xlsx"))
