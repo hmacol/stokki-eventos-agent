@@ -905,7 +905,7 @@
                            abre conversa no chat do portal pra cada embarcador
                            (Aguardando Fresh Log). Tela Notificações, tipo
                            rota_cancelada: sem linha + forcar_destino = piloto
-                           (chat do cliente teste).
+                           (não abre conversa; prévia do texto no próprio grupo).
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.
