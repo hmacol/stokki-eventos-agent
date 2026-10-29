@@ -229,6 +229,32 @@ class EquipeNominalTest(unittest.TestCase):
             self.assertEqual(r.status_code, 302)
             self.assertIn("/equipe", r.headers["Location"])
 
+    def test_derrubar_todas_as_sessoes_derruba_o_portal(self):
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.assertEqual(self._entrar().status_code, 302)
+        self.assertEqual(self.cli.get("/equipe/cliente").status_code, 200)
+        self.telas.derrubar_sessoes(self.conn, "hugo")
+        self.assertEqual(self.cli.get("/equipe/cliente").status_code, 302)
+
+    def test_entrar_com_a_propria_senha_nao_zera_os_erros_contra_outro_login(self):
+        """Achado A1 da revisão de 29/10: errar 4 no login alheio, entrar com
+        o próprio e repetir não pode virar chute sem fim."""
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.telas.criar(self.conn, "chefe", "Chefe", "total", "senha-chefe", "hugo", set(), "Diretoria")
+        self.conn.execute("UPDATE painel_usuarios SET trocar_senha = 0, portal_equipe = 1 WHERE usuario = 'chefe'")
+        self.conn.commit()
+
+        def chute(senha):
+            return self.cli.post("/equipe", data={"usuario": "chefe", "senha": senha},
+                                 environ_base={"REMOTE_ADDR": "10.0.3.1"}).status_code
+        erros = 0
+        while erros < self.portal._MAX_ERROS_POR_LOGIN:
+            for _ in range(min(auth.MAX_TENTATIVAS - 1, self.portal._MAX_ERROS_POR_LOGIN - erros)):
+                self.assertEqual(chute("errada"), 200)
+                erros += 1
+            self.assertEqual(self._entrar().status_code, 302)   # zera o IP, não o chefe
+        self.assertEqual(chute("senha-chefe"), 429)
+
 
 if __name__ == "__main__":
     unittest.main()

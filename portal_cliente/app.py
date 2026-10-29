@@ -240,11 +240,18 @@ def _conta_nominal_portal(usuario: str, senha: str) -> dict | None:
 
 
 def _nominal_segue_valendo(equipe: dict) -> bool:
-    """Reconfere a cada request, como o painel: desmarcar, desativar ou
-    redefinir a senha derruba a sessão do portal no próximo clique."""
+    """Reconfere a cada request, como o painel: desmarcar, desativar,
+    redefinir a senha ou "Derrubar todas as sessões" (/acessos) derruba a
+    sessão do portal no próximo clique."""
     c = acesso_telas.conta(equipe.get("usuario", ""))
     return bool(c and c["ativo"] and c["portal_equipe"] and not c["trocar_senha"]
-                and c["versao_senha"] == equipe.get("v"))
+                and c["versao_senha"] == equipe.get("v")
+                and acesso_telas.rodada_sessoes()["rodada"] == equipe.get("r"))
+
+
+# Teto por login vindo de qualquer IP (mesmo do painel): o contador por IP
+# zera quando alguém entra, então sozinho não segura chute de quem tem login.
+_MAX_ERROS_POR_LOGIN = 30
 
 
 def _ip_cliente() -> str:
@@ -262,7 +269,9 @@ def equipe_login():
         ip = _ip_cliente()
         conn = auth.conectar()
         try:
-            if auth.contar_tentativas(conn, "equipe_ip", ip, auth.BLOQUEIO_MINUTOS) >= auth.MAX_TENTATIVAS:
+            if auth.contar_tentativas(conn, "equipe_ip", ip, auth.BLOQUEIO_MINUTOS) >= auth.MAX_TENTATIVAS \
+                    or auth.contar_tentativas(conn, "equipe_login", usuario.lower(),
+                                              auth.BLOQUEIO_MINUTOS) >= _MAX_ERROS_POR_LOGIN:
                 logger.warning(f"equipe login bloqueado ip={ip} usuario={usuario}")
                 erro, status = "Muitas tentativas. Tente de novo em alguns minutos.", 429
             else:
@@ -273,12 +282,17 @@ def equipe_login():
                     c = _conta_nominal_portal(usuario, senha)
                     if c:
                         nivel = "operador"
-                        equipe = {"usuario": c["usuario"], "nivel": nivel, "nominal": True, "v": c["versao_senha"]}
+                        equipe = {"usuario": c["usuario"], "nivel": nivel, "nominal": True, "v": c["versao_senha"],
+                                  "r": acesso_telas.rodada_sessoes()["rodada"]}
                 if equipe is None:
                     auth.registrar_tentativa(conn, "equipe_ip", ip)
+                    auth.registrar_tentativa(conn, "equipe_login", usuario.lower())
                     erro = "Usuário ou senha incorretos."
                 else:
+                    # Só zera o do login que entrou: entrar com a própria
+                    # senha não limpa os erros contra outro login (revisão 29/10).
                     auth.limpar_tentativas(conn, "equipe_ip", ip)
+                    auth.limpar_tentativas(conn, "equipe_login", usuario.lower())
                     session.clear()
                     session["equipe"] = equipe
                     session.permanent = True
