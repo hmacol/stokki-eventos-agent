@@ -149,6 +149,8 @@
                                              motivo, assinatura; divergência/parcial -> grupo "Alertas" do
                                              /atendimento; 07h dia útil alertar_retornos_atrasados.py.
                                              Selo "No galpão" na Torre e na Consulta. Não segura reentrega.
+ Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
+                                              usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
