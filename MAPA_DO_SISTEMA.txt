@@ -153,10 +153,10 @@
                                               usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
-                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
+                                             lote em baixas_sem_app; SEM_APP em bd_motoristas.
                                              Checklist da Vuupt (29/10): canhoto/nota de retorno em foto vao pro checklist; sem
                                              canhoto, justificativa da lista. JPEG do lote ficam em dados/checklist_fotos/lote_<id>/
-                                             (apagados ao fim se nenhum item deu erro).
+                                             (apagados ao fim do lote).
                                              Canhoto opcional na tela -> nucleo/canhotos_manuais.py
                                              (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
                                              (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
@@ -288,7 +288,10 @@
                 Início -> 1a tela liberada).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
-                /equipe com login do painel.
+                /equipe com login do painel: os pares fixos do config e, desde
+                29/10, login nominal com "Portal do cliente" marcado na /acessos
+                (coluna painel_usuarios.portal_equipe; entra como operador,
+                reconfere a cada request: desmarcar/desativar/redefinir derruba).
    app/API   -> CPF + PIN, token Bearer (nucleo/auth_motorista.py).
    atendimento -> usuários próprios em dados/atendimento.db (admin/atendente).
    links públicos (canhoto, insucesso, aceite de cotação, confirmação)
@@ -453,7 +456,8 @@
                          (apagar à mão não volta). --nao-marcar pela linha
                          de comando.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
- vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
+ vincular_veiculos_motoristas.py  Acertos dos motoristas com a Vuupt (manual); gravam na tabela
+                         bd_motoristas (placas e CPF só gravam com --aplicar).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
  classificar_clientes_cnae.py  Consulta o CNAE dos destinatários na BrasilAPI
                          e grava a categoria em clientes_cnae (manual, sem
@@ -693,7 +697,8 @@
  7. regras/ — regras de negócio (quase todas puras)
 ==============================================================================
 
- Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx), tabela
+ Fontes: planilha dados/BD_CLIENTES.xlsx, tabela bd_motoristas (motoristas;
+ BD_MOTORISTAS.xlsx é só espelho de leitura), tabela
  `interno` e, p/ transportadoras, a tabela `transportadoras` do dados.db
  (tela /transportadoras; todo leitor usa carregar_do_banco). Tabela sem
  nenhuma ATIVA = FileNotFoundError (pipeline para, como sem planilha).
@@ -718,8 +723,14 @@
                             novo; importar daqui. Visita de dia fixo em
                             feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
- preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
- cadastro_motoristas.py     Grava motorista novo na planilha.
+ motoristas_banco.py        Fonte única dos motoristas (tabela bd_motoristas + histórico
+                            bd_motoristas_alteracoes). Espelho dados/BD_MOTORISTAS.xlsx
+                            só-leitura. CLI: py -3.11 -m regras.motoristas_banco
+                            importar|conferir --planilha <xlsx> [--db]. Motorista
+                            inativo continua com acesso ao app por 30 dias.
+ preferencias_motoristas.py Catálogo de motoristas (lê a tabela bd_motoristas; planilha
+                            só se a tabela estiver vazia).
+ cadastro_motoristas.py     Grava motorista novo na tabela bd_motoristas.
  disponibilidade_motoristas.py  Férias/atestado por data.
  confirmacao_rotas.py       Estado da confirmação de rota pelo motorista.
  ofertas_rota.py            Marketplace de rotas.
@@ -859,9 +870,9 @@
                            e resetar-pin marcam trocar_pin=1).
  cadastro_motorista.py     "Meus dados" (PUT /api/eu: telefone/e-mail/PIX/placa valem
                            na hora, histórico em motoristas_alteracoes, espelho na
-                           BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
+                           bd_motoristas) e auto-cadastro (motoristas_cadastros +
                            CNH/CRLV em dados/cadastros_motoristas/; aprovação no
-                           painel /motoristas cria linha na planilha + login
+                           painel /motoristas cria linha em bd_motoristas + login
                            provisório). Aviso no WhatsApp ALERTAS. Chave
                            ve_financeiro (não é dono do carro = sem extrato no
                            app, só Despesas; marcada na tabela /motoristas).
@@ -1026,7 +1037,8 @@
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
                               login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
-                              telas de cada um / nível personalizado)
+                              telas de cada um / nível personalizado,
+                              caixa "Portal do cliente" = entra no /cliente/equipe)
    /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
                               pilota ou desliga os envios a embarcador/transportadora;
                               geral, tipo, exceção, piloto, histórico, e-mails do
@@ -1047,7 +1059,7 @@
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
-   /motoristas                motoristas.html
+   /motoristas                motoristas.html (tem Editar; grava em bd_motoristas)
    /financeiro/pedagios       pedagios.html
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
@@ -1337,8 +1349,9 @@
  manuais/                  PDFs de manuais (Vuupt).
  assets/                   Logo.
  debug/                    Fora do git; scripts descartáveis locais.
- dados/                    Runtime (gitignored, exceto BD_MOTORISTAS.xlsx e
-                           centro_expandido_sp.json): dados.db, planilhas BD_*,
+ dados/                    Runtime (gitignored, exceto
+                           centro_expandido_sp.json): dados.db, planilhas BD_*
+                           (BD_MOTORISTAS.xlsx é espelho gerado da tabela),
                            logs, canhotos, JSONs auxiliares.
                            dados/gcs-service-account.json é CREDENCIAL.
 
@@ -1356,6 +1369,8 @@
    nucleo_*                  nucleo/ (pedidos, rotas, paradas, eventos,
                              comprovantes, pedágios, reconciliações...)
    motoristas, tarifas_motorista  nucleo/banco.py
+   bd_motoristas, bd_motoristas_alteracoes  regras/motoristas_banco.py (cadastro
+                             dos motoristas; histórico de cada mudança com a origem)
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py

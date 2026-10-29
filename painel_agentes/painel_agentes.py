@@ -75,7 +75,7 @@ from planejamento_rotas import (
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
 )
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
-from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
+from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
 # Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
 # botão na Torre pra consulta interna). Mesma constante que a página usa.
@@ -1892,6 +1892,8 @@ def api_acessos():
         if "nivel" in body:
             acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por,
                                 str(body.get("equipe") or ""))
+        if "portal_equipe" in body:
+            acesso_telas.mudar_portal(conn, usuario, bool(body["portal_equipe"]), por)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -3626,6 +3628,27 @@ def api_cadastrar_motorista():
         logging.getLogger(__name__).exception("Falha ao cadastrar motorista")
         return jsonify({"erro": str(e)}), 500
     return jsonify({"ok": True, **resultado})
+
+
+@app.route("/api/motoristas/<int:motorista_id>", methods=["PUT"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_editar_motorista(motorista_id):
+    """Edita uma linha da bd_motoristas (botão Editar da tela /motoristas);
+    chave ausente = não mexe, "" = limpa. Histórico e repasse ao login do app em regras/cadastro_motoristas.py."""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"erro": "Corpo da requisição inválido: esperado um objeto JSON."}), 400
+    try:
+        resultado = editar_motorista(_carregar_config(), motorista_id, body, session.get("usuario") or g.nivel_acesso)
+    except MotoristaNaoEncontrado as e:
+        return jsonify({"erro": str(e)}), 404
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao editar motorista")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "mudancas": resultado["mudancas"], "motorista": resultado["motorista"]})
 
 
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
