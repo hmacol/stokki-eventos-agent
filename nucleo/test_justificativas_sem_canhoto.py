@@ -61,6 +61,15 @@ class TestJustificativas(unittest.TestCase):
         self.assertEqual(jus.validar("nao_assinou", "qualquer coisa"), ("nao_assinou", ""))
         self.assertEqual(jus.validar("nao_assinou", None), ("nao_assinou", ""))
 
+    def test_entrada_que_nao_e_texto_vira_valueerror(self):
+        for codigo in (["outro"], {"a": 1}, 5, ["x"]):
+            with self.assertRaises(ValueError):
+                jus.validar(codigo, None)
+        with self.assertRaises(ValueError):
+            jus.validar("outro", ["abcdefgh"])
+        with self.assertRaises(ValueError):
+            jus.rotulo(["outro"])
+
 
 if __name__ == "__main__":
     unittest.main()

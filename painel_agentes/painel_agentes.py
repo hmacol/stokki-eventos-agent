@@ -1376,7 +1376,7 @@ def baixa_sem_app():
     motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
     from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
     return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos,
-                           justificativas=JUSTIFICATIVAS)
+                           justificativas=JUSTIFICATIVAS, limite_bytes=LIMITE_REQUISICAO_BAIXA)
 
 
 @app.route("/api/baixa-sem-app", methods=["POST"])
@@ -1390,7 +1390,7 @@ def api_baixa_sem_app():
     from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
     # Recusa antes de ler: canhotos de 15 MB cada, nunca uma rota inteira de fotos gigantes.
     if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
-        return jsonify({"erro": "Envio grande demais: mande menos canhotos de cada vez ou fotos menores."}), 413
+        return jsonify({"erro": "Envio grande demais (mais de 60 MB no total): tire as fotos em resolução menor ou dê a baixa em duas etapas."}), 413
     # multipart quando vem canhoto (09/10): o JSON de antes vai no campo "dados"
     if (request.content_type or "").startswith("multipart/form-data"):
         try:
@@ -1419,6 +1419,9 @@ def api_baixa_sem_app():
         return jsonify({"erro": "pedido que não é dessa rota"}), 400
     for i in itens:
         i["codigo"] = codigo_por_id[int(i["service_id"])]
+        i.pop("aviso", None)                     # o aviso e do servidor, nunca do navegador
+        if not i.get("entregue"):
+            i.pop("justificativa", None), i.pop("texto_outro", None)
     conn = nucleo_banco.conectar()
     try:
         if bsa.lote_em_andamento(conn, route_id):

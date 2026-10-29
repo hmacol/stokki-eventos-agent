@@ -139,7 +139,7 @@ class Fotos(Lote):
         self.assertEqual(set(item["fotos"]), {"15086", "15349"})
         pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
         self.assertEqual((pasta / "1_15086.jpg").read_bytes(), b"jpgA")
-        self.assertEqual(item["fotos"]["15349"], str(pasta / "1_15349.jpg"))
+        self.assertEqual(item["fotos"]["15349"], "1_15349.jpg")     # relativo: nada de caminho absoluto
         self.assertEqual(item["status"], "pendente")
 
     def test_gravar_fotos_falha_marca_erro(self):
@@ -173,7 +173,7 @@ class Fotos(Lote):
         self.assertIsNone(vuupt.fotos[2])
         self.assertEqual(vuupt.concluidos, [(2, False, 5433)])
 
-    def test_pasta_apagada_so_sem_erro(self):
+    def test_pasta_apagada_mesmo_com_erro(self):
         vuupt = VuuptFalsa({1: "assigned"})
         lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
         pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
@@ -183,14 +183,18 @@ class Fotos(Lote):
         lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
         pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
         self.executar(vuupt, lote)
-        self.assertTrue(pasta.exists())
+        self.assertFalse(pasta.exists())      # retentativa e upload novo: nunca fica pasta pra tras
+
+    def test_sem_foto_nao_cria_pasta(self):
+        lote = self.lote_com_fotos(self.itens()[:1], {})
+        self.assertFalse((self.db.parent / "checklist_fotos").exists())
 
     def test_ja_fechado_nao_manda_foto_e_avisa(self):
         vuupt = VuuptFalsa({1: "done"})
         lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
         r = self.executar(vuupt, lote)
         self.assertEqual(r["itens"][0]["status"], "ja_fechado")
-        self.assertIn("nao foi para o checklist", r["itens"][0]["aviso"])
+        self.assertIn("não foi para o checklist", r["itens"][0]["aviso"])
 
 
 if __name__ == "__main__":

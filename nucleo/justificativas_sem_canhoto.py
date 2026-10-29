@@ -25,18 +25,18 @@ _MAX_OUTRO = 200
 
 def rotulo(codigo: str) -> str:
     """Texto que a tela mostra para o codigo; ValueError se o codigo nao esta na lista."""
-    if codigo not in JUSTIFICATIVAS:
+    if not isinstance(codigo, str) or codigo not in JUSTIFICATIVAS:
         raise ValueError("Escolha uma justificativa da lista.")
     return JUSTIFICATIVAS[codigo]
 
 
 def validar(codigo: str | None, texto_outro: str | None) -> tuple[str, str]:
     """Devolve (codigo, texto). Texto e "" fora do "outro". ValueError com mensagem para a tela."""
-    if not codigo or codigo not in JUSTIFICATIVAS:
+    if not isinstance(codigo, str) or codigo not in JUSTIFICATIVAS:
         raise ValueError("Escolha uma justificativa da lista.")
     if codigo != "outro":
         return codigo, ""
-    texto = (texto_outro or "").strip()
+    texto = texto_outro.strip() if isinstance(texto_outro, str) else ""
     if not (_MIN_OUTRO <= len(texto) <= _MAX_OUTRO):
         raise ValueError("Descreva o motivo em 5 a 200 caracteres.")
     return codigo, texto

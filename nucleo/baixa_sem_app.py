@@ -147,16 +147,16 @@ def gravar_fotos(conn: sqlite3.Connection, lote_id: int, fotos_por_servico: dict
     itens = lote["itens"]
     try:
         pasta = pasta_fotos(lote_id, db_path)
-        pasta.mkdir(parents=True, exist_ok=True)
         for item in itens:
             fotos = fotos_por_servico.get(item["service_id"])
             if not fotos:
                 continue
+            pasta.mkdir(parents=True, exist_ok=True)      # so cria a pasta se ha foto
             item["fotos"] = {}
             for campo, conteudo in fotos.items():
-                arq = pasta / f"{int(item['service_id'])}_{int(campo)}.jpg"
-                arq.write_bytes(conteudo)
-                item["fotos"][str(int(campo))] = str(arq)
+                nome = f"{int(item['service_id'])}_{int(campo)}.jpg"
+                (pasta / nome).write_bytes(conteudo)
+                item["fotos"][str(int(campo))] = nome      # relativo a pasta do lote
         _salvar_itens(conn, lote_id, itens)
     except Exception as e:  # noqa: BLE001
         for item in itens:
@@ -230,14 +230,15 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
             try:
                 fotos, info = None, {}
                 if item["entregue"] and item.get("fotos"):
-                    fotos = {int(c): Path(a).read_bytes() for c, a in item["fotos"].items()}
+                    fotos = {int(c): (pasta_fotos(lote_id, db_path) / Path(a).name).read_bytes()
+                             for c, a in item["fotos"].items()}
                 item["status"] = concluir_servico(vuupt, item["service_id"], item["entregue"],
                                                   item.get("failed_reason_id"), lote["agent_id"],
                                                   fotos=fotos, info=info)
                 if info.get("checklist_id"):
                     item["checklist_id"] = info["checklist_id"]
                 if item["status"] == "ja_fechado" and item.get("fotos"):
-                    item["aviso"] = "Ja estava concluido; a foto nao foi para o checklist."
+                    item["aviso"] = "Já estava concluído; a foto não foi para o checklist."
             except Exception as e:  # noqa: BLE001 -- um item com erro nao para os outros
                 item["status"], item["erro"] = "erro", str(e)[:200]
                 logger.warning(f"Baixa sem app lote {lote_id}: {item['codigo']} falhou: {e}")
@@ -248,8 +249,8 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"Tratativa de {item['codigo']} nao registrada: {e}")
         _salvar_itens(conn, lote_id, itens, terminado=True)
-        if not any(i["status"] == "erro" for i in itens):
-            shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
+        # Retentativa e um POST novo com upload novo: a pasta nunca fica pra tras.
+        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         feitos = [i["service_id"] for i in itens if i["status"] in ("entregue", "insucesso")]
         if feitos:
             try:

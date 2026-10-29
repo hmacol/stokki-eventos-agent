@@ -76,6 +76,27 @@ document.querySelectorAll('tr[data-id]').forEach(function (tr) {
   if (fc) fc.addEventListener('change', ajustaJust);
   if (js) js.addEventListener('change', ajustaJust);
 });
+// Foto do celular vem com 3-5 MB: reduz no navegador (lado maior 2000 px, JPEG 0.85) antes de enviar.
+// PDF ou imagem que o navegador nao decodifica (ex.: HEIC fora do Safari) vai como veio.
+function reduzirImagem(arq) {
+  if (!arq.type || arq.type.indexOf('image/') !== 0) return Promise.resolve(arq);
+  return new Promise(function (ok) {
+    var url = URL.createObjectURL(arq), img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+      var c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(function (b) {
+        ok(b ? new File([b], (arq.name || 'foto').replace(/\.[^.]*$/, '') + '.jpg', {type: 'image/jpeg'}) : arq);
+      }, 'image/jpeg', 0.85);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); ok(arq); };
+    img.src = url;
+  });
+}
+var LIMITE_BYTES = {{ limite_bytes }};
 document.getElementById('confirmar').addEventListener('click', async function () {
   var btn = this, itens = [], faltaJust = [];
   document.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -92,13 +113,24 @@ document.getElementById('confirmar').addEventListener('click', async function ()
   if (faltaJust.length) { alert('Escolha a justificativa (ou anexe o canhoto) de: ' + faltaJust.join(', ')); return; }
   if (!itens.length) return;
   var voltou = itens.filter(function (i) { return !i.entregue; }).length;
-  var fd = new FormData(), nCanhotos = 0;
+  var fd = new FormData(), nCanhotos = 0, total = 0, tarefas = [];
   fd.append('dados', JSON.stringify({rota: {{ rota.id }}, itens: itens}));
   document.querySelectorAll('tr[data-id]').forEach(function (tr) {
     var fc = tr.querySelector('.canhoto'), fn = tr.querySelector('.nota'), cb = tr.querySelector('.entregue');
-    if (fc && cb && cb.checked && fc.files.length) { fd.append('canhoto_' + tr.dataset.id, fc.files[0]); nCanhotos++; }
-    if (fn && cb && cb.checked && fn.files.length) { fd.append('nota_' + tr.dataset.id, fn.files[0]); }
+    if (fc && cb && cb.checked && fc.files.length) { tarefas.push(['canhoto_', tr.dataset.id, fc.files[0]]); nCanhotos++; }
+    if (fn && cb && cb.checked && fn.files.length) { tarefas.push(['nota_', tr.dataset.id, fn.files[0]]); }
   });
+  btn.disabled = true;
+  document.getElementById('andamento').textContent = 'Preparando as fotos…';
+  var prontos = await Promise.all(tarefas.map(function (t) { return reduzirImagem(t[2]); }));
+  prontos.forEach(function (arq, n) { fd.append(tarefas[n][0] + tarefas[n][1], arq); total += arq.size; });
+  document.getElementById('andamento').textContent = '';
+  btn.disabled = false;
+  if (total > LIMITE_BYTES * 0.95) {
+    alert('As fotos somam ' + Math.round(total / 1048576) + ' MB e passam do limite de ' + Math.round(LIMITE_BYTES / 1048576) +
+          ' MB por envio. Dê a baixa em duas etapas (rode de novo só com os pedidos que sobraram).');
+    return;
+  }
   if (!confirm('Concluir ' + (itens.length - voltou) + ' como entregue (' + nCanhotos + ' com canhoto) e ' + voltou + ' como insucesso na Vuupt?')) return;
   btn.disabled = true;
   var r = await fetch('{{ url_for("api_baixa_sem_app") }}', {method: 'POST', body: fd});

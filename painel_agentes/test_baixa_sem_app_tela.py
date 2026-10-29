@@ -201,7 +201,9 @@ class TestTelaBaixa(unittest.TestCase):
                 visto["item"] = bsa.ler_lote(conn, lote_id)["itens"][0]
             finally:
                 conn.close()
-            visto["existe"] = {c: Path(p).exists() for c, p in visto["item"]["fotos"].items()}
+            pasta = bsa.pasta_fotos(lote_id)
+            visto["existe"] = {c: (pasta / p).exists() for c, p in visto["item"]["fotos"].items()}
+            visto["jpeg"] = (pasta / visto["item"]["fotos"]["15086"]).read_bytes().startswith(b"\xff\xd8")
         with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}), \
              mock.patch("nucleo.baixa_sem_app.executar_lote", side_effect=thread_falsa), \
              mock.patch("threading.Thread") as th:
@@ -211,7 +213,8 @@ class TestTelaBaixa(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(visto["existe"], {"15086": True, "15349": True})
         self.assertNotIn("justificativa", visto["item"])        # com canhoto a justificativa e ignorada
-        self.assertTrue(Path(visto["item"]["fotos"]["15086"]).read_bytes().startswith(b"\xff\xd8"))
+        self.assertTrue(visto["jpeg"])
+        self.assertEqual(visto["item"]["fotos"]["15086"], "1_15086.jpg")
 
     def test_canhoto_pdf_so_copia_local_com_aviso(self):
         self._logar("operador")
@@ -222,6 +225,40 @@ class TestTelaBaixa(unittest.TestCase):
         item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
         self.assertNotIn("fotos", item)
         self.assertIn("PDF", item["aviso"])
+
+    def test_tela_reduz_imagem_no_navegador_antes_do_append(self):
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        self.assertIn("function reduzirImagem(", html)
+        self.assertIn("2000", html)
+        self.assertIn("'image/jpeg', 0.85", html)
+        self.assertIn("reduzirImagem(t[2])", html)
+        self.assertLess(html.index("reduzirImagem(t[2])"), html.index("fd.append(tarefas[n][0]"))
+
+    def test_insucesso_ignora_canhoto_e_nota_enviados(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar") as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [
+                {"service_id": 1, "codigo": "PS-1", "entregue": False, "failed_reason_id": 5433,
+                 "justificativa": "sem_bateria", "texto_outro": "x", "aviso": "forjado"}]},
+                {"canhoto_1": self._png(), "nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_not_called()
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        for chave in ("fotos", "justificativa", "texto_outro", "aviso"):
+            self.assertNotIn(chave, item)
+        self.assertFalse((Path(banco.DB_PATH).parent / "checklist_fotos").exists())
+
+    def test_aviso_vindo_do_navegador_e_descartado(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria", aviso="forjado")]}, {})
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("aviso", item)
+
+    def test_justificativa_de_tipo_errado_400_nao_500(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa=["outro"])]}, {})
+        self.assertEqual(r.status_code, 400)
 
     def test_nota_que_nao_e_imagem_400_sem_gravar(self):
         self._logar("operador")
