@@ -56,6 +56,25 @@ class TestAuthInatividade(unittest.TestCase):
         self.assertEqual(ctx.exception.codigo, 403)
         self.assertEqual(ctx.exception.mensagem, "Seu cadastro está inativo. Fale com a Fresh Log.")
 
+    def test_pin_errado_em_cpf_vencido_fica_generico_e_conta_tentativa(self):
+        self._linha("NAO", 31)
+        with self.assertRaises(auth.AutenticacaoInvalida) as ctx:
+            auth.autenticar(self.conn, CPF, "000000")
+        self.assertEqual(ctx.exception.mensagem, "CPF ou PIN incorretos.")
+        self.assertEqual(ctx.exception.codigo, 401)
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF)["tentativas_pin"], 1)
+
+    def test_pin_certo_em_cpf_vencido_nao_registra_login(self):
+        self._linha("NAO", 31)
+        with self.assertRaises(auth.AutenticacaoInvalida):
+            auth.autenticar(self.conn, CPF, "000000")
+        with self.assertRaises(auth.AutenticacaoInvalida) as ctx:
+            auth.autenticar(self.conn, CPF, PIN)
+        self.assertEqual(ctx.exception.codigo, 403)
+        m = auth.buscar_motorista(self.conn, CPF)
+        self.assertEqual(m["tentativas_pin"], 0)
+        self.assertIsNone(m["ultimo_login_em"])
+
     def test_reativado_entra_na_hora(self):
         mid = self._linha("NAO", 40)
         self.assertTrue(mb.login_bloqueado(self.conn, CPF))

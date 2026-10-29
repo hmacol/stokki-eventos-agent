@@ -28,7 +28,7 @@ from nucleo import banco
 
 logger = logging.getLogger(__name__)
 
-PBKDF2_ITERACOES =200_000
+PBKDF2_ITERACOES = 200_000
 MAX_TENTATIVAS = 5
 BLOQUEIO_MINUTOS = 15
 ACESSO_SEGUNDOS = 12 * 3600
@@ -162,8 +162,6 @@ def autenticar(conn: sqlite3.Connection, cpf: str, pin: str) -> dict:
     m = buscar_motorista(conn, cpf)
     if not m or not m.get("ativo"):
         raise AutenticacaoInvalida(generico)
-    if _login_bloqueado_por_inatividade(conn, m["cpf"]):
-        raise AutenticacaoInvalida("Seu cadastro está inativo. Fale com a Fresh Log.", 403)
 
     agora = datetime.now()
     bloqueado_ate = m.get("bloqueado_ate")
@@ -181,6 +179,13 @@ def autenticar(conn: sqlite3.Connection, cpf: str, pin: str) -> dict:
                      (tentativas, bloqueio, m["cpf"]))
         conn.commit()
         raise AutenticacaoInvalida(generico)
+
+    # PIN certo: so agora a inatividade pode ser revelada (nao vaza CPF a quem nao sabe o PIN).
+    # Nao conta como login (sem ultimo_login_em); zera as tentativas, pois o PIN estava certo.
+    if _login_bloqueado_por_inatividade(conn, m["cpf"]):
+        conn.execute("UPDATE motoristas SET tentativas_pin = 0, bloqueado_ate = NULL WHERE cpf = ?", (m["cpf"],))
+        conn.commit()
+        raise AutenticacaoInvalida("Seu cadastro está inativo. Fale com a Fresh Log.", 403)
 
     conn.execute("UPDATE motoristas SET tentativas_pin = 0, bloqueado_ate = NULL, ultimo_login_em = ? WHERE cpf = ?",
                  (banco.agora(), m["cpf"]))

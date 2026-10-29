@@ -107,6 +107,12 @@ class TestMotoristasBanco(unittest.TestCase):
             mb.atualizar(self.conn, mid, {"NOME_MOTORISTA": ""}, "teste")
         self.assertEqual(mb.por_cpf(self.conn, "12345678901")[0]["id"], mid)
 
+    def test_por_cpf_casa_so_pelos_digitos(self):
+        mid = mb.inserir(self.conn, _linha(NOME_MOTORISTA="A", CPF_MOTORISTA="123.456.789-01"), "teste")
+        self.assertEqual(mb.por_cpf(self.conn, "12345678901")[0]["id"], mid)
+        self.assertEqual(mb.por_cpf(self.conn, "123.456.789-01")[0]["id"], mid)
+        self.assertEqual(mb.por_cpf(self.conn, ""), [])
+
     def test_espelho_mesmas_colunas_e_ordem(self):
         mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, VEHICLE_ID_VUUPT=10, MAX_ROTAS_DIA=2, NOME_MOTORISTA="A",
                                      ATIVO="S", APENAS_CARGA_SECA="S", CPF_MOTORISTA="09474142742"), "teste")

@@ -67,8 +67,15 @@ def listar(conn) -> list[dict]:
 
 
 def por_cpf(conn, cpf: str) -> list[dict]:
+    """Casa so pelos digitos, dos dois lados (CPF formatado na tabela tambem acha)."""
+    digitos = re.sub(r"\D", "", str(cpf or ""))
+    if not digitos:
+        return []
+    col = "CPF_MOTORISTA"
+    for ch in (".", "-", "/", " "):
+        col = f"REPLACE({col}, '{ch}', '')"
     return [_linha_para_dict(r) for r in
-            conn.execute("SELECT * FROM bd_motoristas WHERE CPF_MOTORISTA = ? ORDER BY id", (cpf,))]
+            conn.execute(f"SELECT * FROM bd_motoristas WHERE {col} = ? ORDER BY id", (digitos,))]
 
 
 DIAS_ACESSO_INATIVO = 30
