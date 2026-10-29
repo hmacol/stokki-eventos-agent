@@ -136,9 +136,7 @@ def escrever_espelho(conn, caminho: Path | None = None) -> bool:
     try:
         linhas = [[r[c] for c in COLUNAS] for r in conn.execute(
             f"SELECT {', '.join(COLUNAS)} FROM bd_motoristas ORDER BY id")]
-        df = pd.DataFrame(linhas, columns=COLUNAS)
-        for c in COLUNAS:
-            df[c] = df[c].astype(object).where(df[c].notna(), None)
+        df = pd.DataFrame(linhas, columns=COLUNAS, dtype=object)  # object: inteiro com vazio nao vira float
         df.to_excel(tmp, index=False, engine="openpyxl")
         os.replace(tmp, destino)
         return True

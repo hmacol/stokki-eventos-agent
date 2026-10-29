@@ -108,8 +108,8 @@ class TestMotoristasBanco(unittest.TestCase):
         self.assertEqual(mb.por_cpf(self.conn, "12345678901")[0]["id"], mid)
 
     def test_espelho_mesmas_colunas_e_ordem(self):
-        mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM",
-                                     CPF_MOTORISTA="09474142742"), "teste")
+        mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, VEHICLE_ID_VUUPT=10, MAX_ROTAS_DIA=2, NOME_MOTORISTA="A",
+                                     ATIVO="S", APENAS_CARGA_SECA="S", CPF_MOTORISTA="09474142742"), "teste")
         mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=2, NOME_MOTORISTA="B", ATIVO="SIM"), "teste")
         destino = self.dir / "espelho.xlsx"
         self.assertTrue(mb.escrever_espelho(self.conn, destino))
@@ -118,9 +118,16 @@ class TestMotoristasBanco(unittest.TestCase):
         self.assertEqual(list(df["NOME_MOTORISTA"]), ["A", "B"])
         self.assertEqual(df["CPF_MOTORISTA"][0], "09474142742")
         self.assertEqual([p.name for p in self.dir.iterdir() if p.suffix == ".tmp"], [])
+        # inteiro com linha vazia na coluna nao vira float; "S" fica como veio
+        self.assertEqual(df["VEHICLE_ID_VUUPT"][0], "10")
+        self.assertEqual(df["AGENT_ID_VUUPT"][0], "1")
+        self.assertEqual(df["MAX_ROTAS_DIA"][0], "2")
+        self.assertTrue(pd.isna(df["VEHICLE_ID_VUUPT"][1]))
+        self.assertEqual((df["ATIVO"][0], df["APENAS_CARGA_SECA"][0]), ("S", "S"))
 
     def test_espelho_falha_nao_levanta(self):
-        self.assertFalse(mb.escrever_espelho(self.conn, self.dir / "naoexiste" / "x.xlsx"))
+        with self.assertLogs(mb.logger, "ERROR"):
+            self.assertFalse(mb.escrever_espelho(self.conn, self.dir / "naoexiste" / "x.xlsx"))
 
     def test_caminho_espelho_segue_db_path(self):
         with mock.patch.object(banco, "DB_PATH", self.dir / "t.db"):
