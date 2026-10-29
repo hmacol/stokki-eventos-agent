@@ -283,7 +283,10 @@
                 Início -> 1a tela liberada).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
-                /equipe com login do painel.
+                /equipe com login do painel: os pares fixos do config e, desde
+                29/10, login nominal com "Portal do cliente" marcado na /acessos
+                (coluna painel_usuarios.portal_equipe; entra como operador,
+                reconfere a cada request: desmarcar/desativar/redefinir derruba).
    app/API   -> CPF + PIN, token Bearer (nucleo/auth_motorista.py).
    atendimento -> usuários próprios em dados/atendimento.db (admin/atendente).
    links públicos (canhoto, insucesso, aceite de cotação, confirmação)
@@ -1027,7 +1030,8 @@
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
                               login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
-                              telas de cada um / nível personalizado)
+                              telas de cada um / nível personalizado,
+                              caixa "Portal do cliente" = entra no /cliente/equipe)
    /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
                               pilota ou desliga os envios a embarcador/transportadora;
                               geral, tipo, exceção, piloto, histórico, e-mails do

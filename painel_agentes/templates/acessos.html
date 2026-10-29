@@ -20,6 +20,7 @@
                                   border-radius: 6px; background: var(--superficie); color: inherit; min-width: 180px; }
   .modo { display: flex; gap: 16px; margin: 12px 0 4px; font-size: 13px; flex-wrap: wrap; }
   .modo label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .portal { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-size: 13px; cursor: pointer; }
   .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 18px; margin-top: 12px; }
   .grade[hidden] { display: none; }
   .grupo-telas h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); margin: 0 0 6px; }
@@ -42,7 +43,8 @@
   <strong>Personalizado</strong> vale <strong>completa</strong>: ver e todos os botões, como no acesso total.
   Muda na hora, sem a pessoa sair e entrar. Login novo e senha redefinida são <strong>provisórios</strong>:
   a pessoa escolhe a senha dela no primeiro acesso. <strong>Desativar</strong> tira o acesso na hora sem apagar
-  o login do histórico.
+  o login do histórico. <strong>Portal do cliente</strong> marcado deixa entrar em /cliente/equipe e agir em nome
+  de qualquer cliente (enviar, cancelar, preferências), seja qual for o nível.
 </p>
 
 <div class="cartao" id="sessoes">
@@ -89,6 +91,7 @@
     {% if u.nome %}<span class="login">{{ u.usuario }}</span>{% endif %}
     <span class="pilula">{{ 'personalizado' if u.telas is not none else ROTULOS.get(u.nivel, u.nivel) }}</span>
     {% if u.equipe %}<span class="pilula">{{ u.equipe }}</span>{% else %}<span class="pilula desativado" title="Escolha a equipe e salve">sem equipe</span>{% endif %}
+    {% if u.portal_equipe %}<span class="pilula">portal do cliente</span>{% endif %}
     {% if u.trocar_senha %}<span class="pilula">senha provisória</span>{% endif %}
     {% if not u.ativo %}<span class="pilula desativado">desativado</span>{% endif %}
     {% if u.atualizado_em %}<span class="quando">mudado por {{ u.atualizado_por }} em {{ u.atualizado_em }}</span>{% endif %}
@@ -124,6 +127,8 @@
     </div>
     {% endfor %}
   </div>
+  <label class="portal"><input type="checkbox" name="portal_equipe" {{ 'checked' if u.portal_equipe }}>
+    Entra no portal do cliente (/cliente/equipe) e age em nome do cliente</label>
   <div class="rodape-cartao">
     <button type="button" class="botao" data-acao="salvar">Salvar</button>
     <button type="button" class="botao secundario" data-acao="senha">Redefinir senha</button>
@@ -198,6 +203,7 @@
         nome: cartao.querySelector("[name=nome]").value,
         nivel: cartao.querySelector("[name=nivel]").value,
         equipe: cartao.querySelector("[name=equipe]").value,
+        portal_equipe: cartao.querySelector("[name=portal_equipe]").checked,
       };
       if (await enviar("/api/acessos", corpo, botao, aviso)) window.location.reload();
     });

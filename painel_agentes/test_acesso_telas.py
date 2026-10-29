@@ -248,6 +248,24 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         # so telas (sem nivel) continua valendo sem equipe
         self.assertEqual(cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["index"]}, headers=hdr).status_code, 200)
 
+    def test_portal_do_cliente_liga_sem_mexer_no_nivel(self):
+        cliente, hdr = self._chefe()
+        self.assertIn('name="portal_equipe"', cliente.get("/acessos").get_data(as_text=True))
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "portal_equipe": True}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            c = acesso_telas.conta("ana", conn)
+            self.assertTrue(c["portal_equipe"])
+            self.assertIsNone(c["telas"])            # segue o nivel
+            self.assertEqual([u["portal_equipe"] for u in acesso_telas.listar(conn) if u["usuario"] == "ana"], [True])
+            with self.assertRaises(ValueError):       # ninguem liga o proprio
+                acesso_telas.mudar_portal(conn, "ana", False, "ana")
+        finally:
+            conn.close()
+        cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "portal_equipe": False}, headers=hdr)
+        self.assertFalse(acesso_telas.conta("ana")["portal_equipe"])
+
     def test_tabela_antiga_ganha_equipe(self):
         conn = acesso_telas.conectar()
         conn.execute("DROP TABLE painel_usuarios")

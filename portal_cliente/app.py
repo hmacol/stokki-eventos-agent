@@ -51,6 +51,7 @@ import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
+from painel_agentes import acesso_telas
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("portal_cliente")
@@ -118,6 +119,9 @@ def _cliente_da_equipe(cnpj: str) -> dict | None:
 def _carregar_cliente():
     g.cliente = None
     g.equipe = session.get("equipe")
+    if g.equipe and g.equipe.get("nominal") and not _nominal_segue_valendo(g.equipe):
+        session.clear()
+        g.equipe = None
     if g.equipe:
         # Equipe Fresh Log logada (usuário do painel) escolhendo um cliente.
         cnpj = session.get("cnpj_equipe")
@@ -227,6 +231,22 @@ def _nivel_equipe(usuario: str, senha: str) -> str | None:
     return None
 
 
+def _conta_nominal_portal(usuario: str, senha: str) -> dict | None:
+    """Login nominal da /acessos com "Portal do cliente" marcado (Hugo,
+    29/10): entra com poder de operador, seja qual for o nível no painel.
+    Senha provisória não entra (quem sabe é quem redefiniu)."""
+    c = acesso_telas.conferir_senha(usuario, senha)
+    return c if c and c["portal_equipe"] and not c["trocar_senha"] else None
+
+
+def _nominal_segue_valendo(equipe: dict) -> bool:
+    """Reconfere a cada request, como o painel: desmarcar, desativar ou
+    redefinir a senha derruba a sessão do portal no próximo clique."""
+    c = acesso_telas.conta(equipe.get("usuario", ""))
+    return bool(c and c["ativo"] and c["portal_equipe"] and not c["trocar_senha"]
+                and c["versao_senha"] == equipe.get("v"))
+
+
 def _ip_cliente() -> str:
     return request.remote_addr or "?"   # IP real: ProxyFix(x_for=1) atrás do Caddy
 
@@ -246,14 +266,21 @@ def equipe_login():
                 logger.warning(f"equipe login bloqueado ip={ip} usuario={usuario}")
                 erro, status = "Muitas tentativas. Tente de novo em alguns minutos.", 429
             else:
-                nivel = _nivel_equipe(usuario, request.form.get("senha") or "")
-                if nivel is None:
+                senha = request.form.get("senha") or ""
+                nivel = _nivel_equipe(usuario, senha)
+                equipe = {"usuario": usuario, "nivel": nivel} if nivel else None
+                if equipe is None:
+                    c = _conta_nominal_portal(usuario, senha)
+                    if c:
+                        nivel = "operador"
+                        equipe = {"usuario": c["usuario"], "nivel": nivel, "nominal": True, "v": c["versao_senha"]}
+                if equipe is None:
                     auth.registrar_tentativa(conn, "equipe_ip", ip)
                     erro = "Usuário ou senha incorretos."
                 else:
                     auth.limpar_tentativas(conn, "equipe_ip", ip)
                     session.clear()
-                    session["equipe"] = {"usuario": usuario, "nivel": nivel}
+                    session["equipe"] = equipe
                     session.permanent = True
                     logger.info(f"equipe login usuario={usuario} nivel={nivel}")
                     return redirect(url_for("equipe_cliente"))

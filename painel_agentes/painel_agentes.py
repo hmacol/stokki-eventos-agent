@@ -1850,6 +1850,8 @@ def api_acessos():
         if "nivel" in body:
             acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por,
                                 str(body.get("equipe") or ""))
+        if "portal_equipe" in body:
+            acesso_telas.mudar_portal(conn, usuario, bool(body["portal_equipe"]), por)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     finally:
