@@ -318,6 +318,9 @@
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
  07-20h xx:25                comparar-pool                   nucleo/comparar_pool.py (sombra Vuupt x núcleo e, desde
                                                              25/10, Vuupt x freshhub com --fonte freshhub)
+ 07:15-08:45 (15 min)        resumo-email-whatsapp           resumo_email_whatsapp.py (lê no Gmail o "Resumo do
+                                                             e-mail · DD/MM" que a rotina na nuvem manda ~07:07
+                                                             e encaminha pro grupo grupo_resumo_email_id; 1x/dia)
  seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
  dias 1 e 16 08:00           dedicados-financeiro            notificar_dedicados_financeiro.py
  seg-sex 08:00               consulta-transportadora         lembrar_consultas_transportadora.py (lembrete diário ao
@@ -553,7 +556,14 @@
                                Em grupo separado (grupo_atendimento_id): chamado
                                do atendimento que passou a depender de gente,
                                com o link (chamados.whatsapp_para_atendimento).
+                               Em grupo só do Hugo (grupo_resumo_email_id): o
+                               resumo diário do Gmail (avisar_resumo_email).
                                Desligado por padrão.
+ resumo_email_whatsapp.py      Timer 07:15-08:45: acha por IMAP o e-mail "Resumo do
+                               e-mail · DD/MM" (escrito pela rotina na nuvem
+                               "Resumo diario do Gmail (7h)", claude.ai/code/routines)
+                               e manda o corpo pro WhatsApp. Sem o grupo no config,
+                               não faz nada.
                                Texto em linguagem simples (sem nome de unit nem
                                exceção crua) e mensagem inteira em 200 caracteres
                                (insucesso é exceção): unit nova em infra/ precisa
