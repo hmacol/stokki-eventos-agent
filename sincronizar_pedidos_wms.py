@@ -69,7 +69,7 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 # baixa -- feita pelo expedir_pedidos.py quando o pedido passa por rota da
 # Vuupt e, pra quem sai por fora dela, pela varredura do fim desta rodada
 # (_varrer_candidatos).
-STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Pack")
+STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Ready to Pack")
 
 # Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
 # folgado pro tamanho real de uma rodada (~37 pedidos hoje, so requests,
