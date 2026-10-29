@@ -456,6 +456,17 @@ class LiberarPorTransportadora(unittest.TestCase):
         self.assertNotIn("hugom", texto)  # revisao 29/10: quem classificou nao vai pro chat do cliente
         self.assertEqual(fake_ch.mensagem_sistema.call_count, 1)
 
+    def test_pelo_link_so_solta_nfs_do_embarcador_que_respondeu(self):
+        """Revisao 29/10: no link publico, um embarcador nao solta NF de outro."""
+        import bloqueio_area as ba
+        transp = {"id": 134, "situacao": "ATIVA", "tipo": "RETIRADA"}
+        with mock.patch.object(ba, "_chamados", return_value=mock.MagicMock()):
+            self.assertEqual(ba.liberar_por_transportadora(transp, "x", "00000000000000"), [])
+        self.assertEqual(self._status()["4447"], "AGUARDANDO_LIBERACAO")
+        ler = lambda conteudo, *a, **k: {"transportadora_nome": "RODOVIARIO LUZ" if b"LUZ" in conteudo else "", "transportadora_cnpj": ""}
+        with mock.patch.object(ep, "ler_nfe", side_effect=ler),              mock.patch.object(ep, "_tipo_transportadora", side_effect=lambda nome, cnpj: self.tipos.get(nome)),              mock.patch.object(ba, "_chamados", return_value=mock.MagicMock()):
+            self.assertEqual(ba.liberar_por_transportadora(transp, "x", "49874051000131"), [1])
+
     def test_terceiros_tambem_solta(self):
         self.tipos["RODOVIARIO LUZ"] = "TERCEIROS"
         liberados, _ = self._rodar({"id": 134, "situacao": "ATIVA", "tipo": "TERCEIROS"})
