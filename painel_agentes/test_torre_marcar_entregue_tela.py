@@ -153,7 +153,7 @@ class TestTemplates(_Base):
         fonte = self._fonte("planejamento_rotas.html")
         self.assertIn('rotulo: "Marcar como entregue"', fonte)
         self.assertIn('id="modal-entregue"', fonte)
-        self.assertIn('"/api/torre/marcar-entregue"', fonte)
+        self.assertIn("url_for('api_torre_marcar_entregue')", fonte)
         # em massa (23/10): botao na barra de selecao das rotas
         self.assertIn('id="botao-entregue-selecao-rotas"', fonte)
         self.assertIn("function abrirModalEntregueLote", fonte)
@@ -165,6 +165,72 @@ class TestTemplates(_Base):
         html = r.get_data(as_text=True)
         self.assertIn("/api/torre/marcar-entregue", html)
         self.assertIn("Marcar como entregue", html)
+
+
+class TestModalFotoEJustificativa(_Base):
+    """Checklist da Vuupt pelas telas (Task 4): o modal pede foto do canhoto
+    ou justificativa; a lista vem do servidor, nao do HTML."""
+
+    def _fonte(self, nome):
+        env = painel_agentes.app.jinja_env
+        return env.loader.get_source(env, nome)[0]
+
+    def _opcoes(self, html):
+        import re
+        from html import unescape
+        trecho = html.split('id="entregue-justificativa"', 1)[1].split("</select>", 1)[0]
+        return [(v, unescape(t).strip()) for v, t in re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', trecho) if v]
+
+    def _confere_modal(self, html):
+        from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+        self.assertRegex(html, r'id="entregue-foto-canhoto"[^>]*accept="image/\*,application/pdf"')
+        self.assertIn('capture="environment"', html)
+        self.assertRegex(html, r'id="entregue-foto-nota"[^>]*accept="image/\*"')
+        self.assertIn("Foto da nota de retorno (opcional)", html)
+        self.assertIn('id="entregue-texto-outro"', html)
+        self.assertIn("Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.", html)
+        self.assertEqual(self._opcoes(html), list(JUSTIFICATIVAS.items()))
+
+    def test_modal_tem_fotos_e_justificativas(self):
+        self._logar("operador")
+        r = self.cliente.get("/torre")
+        self.assertEqual(r.status_code, 200)
+        self._confere_modal(r.get_data(as_text=True))
+        r = self.cliente.get("/planejamento")
+        self.assertEqual(r.status_code, 200)
+        self._confere_modal(r.get_data(as_text=True))
+
+    def test_labels_nao_duplicados_nos_fontes(self):
+        for nome in ("torre_controle.html", "planejamento_rotas.html"):
+            fonte = self._fonte(nome)
+            self.assertNotIn("Cliente não assinou", fonte, nome)
+            self.assertIn("justificativas", fonte, nome)
+
+    def test_planejamento_usa_url_for(self):
+        fonte = self._fonte("planejamento_rotas.html")
+        self.assertIn("url_for('api_torre_marcar_entregue')", fonte)
+        self.assertNotIn('postJSON("/api/torre/marcar-entregue"', fonte)
+        self.assertNotIn('"/api/torre/marcar-entregue"', fonte)
+
+    def test_lote_mesma_foto_um_checklist_por_pedido(self):
+        fonte = self._fonte("planejamento_rotas.html")
+        corpo = fonte.split("async function confirmarEntregue(", 1)[1].split("pedido (ou lote de pedidos", 1)[0]
+        self.assertIn("for (const [i, it] of pendente.itens.entries())", corpo)
+        laco = corpo.split("for (const [i, it]", 1)[1]
+        self.assertIn("new FormData()", laco)  # um FormData por item
+        self.assertIn('fd.append("service_id"', laco)
+        self.assertIn('fd.append("foto_canhoto", fotoCanhoto)', laco)
+        self.assertIn('fd.append("foto_nota_retorno", fotoNota)', laco)
+        self.assertIn("dados.aviso", corpo)
+        self.assertNotIn("Content-Type", corpo)
+
+    def test_torre_envia_formdata_sem_content_type(self):
+        fonte = self._fonte("torre_controle.html")
+        corpo = fonte.split("async function confirmarEntregueChip(", 1)[1].split("function renderPedidosStatus", 1)[0]
+        self.assertIn("new FormData()", corpo)
+        self.assertIn('fd.append("foto_canhoto"', corpo)
+        self.assertNotIn("Content-Type", corpo)
+        self.assertNotIn("JSON.stringify", corpo)
 
 
 if __name__ == "__main__":

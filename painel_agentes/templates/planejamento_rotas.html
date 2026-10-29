@@ -1379,6 +1379,11 @@
   .modal-reagendar .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
   .modal-reagendar .campo-reagendar { margin-bottom: 10px; }
   .modal-reagendar .campo-reagendar > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-reagendar select, .modal-reagendar textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  .modal-reagendar textarea { resize: vertical; min-height: 60px; }
   .modal-reagendar .linha-horarios { display: flex; align-items: center; gap: 8px; }
   .modal-reagendar .linha-horarios label { font-size: 12px; font-weight: 400; margin: 0; }
   .modal-reagendar input[type="date"], .modal-reagendar input[type="time"] {
@@ -2062,14 +2067,32 @@
 </div>
 
 {# "Marcar como entregue" de parada em rota já enviada (Hugo, 08/10): fecha o
-   servico na VUUPT por API (POST /api/torre/marcar-entregue), sem canhoto. #}
+   servico na VUUPT por API (POST /api/torre/marcar-entregue). Com foto do
+   canhoto ela vai para o checklist da VUUPT; sem foto, justificativa da lista. #}
 <div class="modal-overlay-reagendar" id="modal-entregue">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
-    <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong> — fecha na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong></p>
+    <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo-reagendar">
-      <label for="entregue-observacao">Como a entrega foi confirmada</label>
-      <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
+      <label for="entregue-foto-canhoto">Foto do canhoto</label>
+      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" capture="environment" onchange="aoMudarFotoEntregue()">
+    </div>
+    <div class="campo-reagendar">
+      <label for="entregue-foto-nota">Foto da nota de retorno (opcional)</label>
+      <input type="file" id="entregue-foto-nota" accept="image/*">
+    </div>
+    <div class="campo-reagendar" id="entregue-campo-justificativa">
+      <label for="entregue-justificativa">Sem foto do canhoto: por quê?</label>
+      <select id="entregue-justificativa" onchange="aoMudarJustificativaEntregue()">
+        <option value="">Selecione...</option>
+        {% for codigo, rotulo in justificativas.items() %}<option value="{{ codigo }}">{{ rotulo }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo-reagendar" id="entregue-campo-outro" hidden>
+      <label for="entregue-texto-outro">Descreva</label>
+      <textarea id="entregue-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
     </div>
     <div class="acoes">
       <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
@@ -6115,10 +6138,27 @@
     document.getElementById("titulo-modal-entregue").textContent = lote ? `Marcar ${itens.length} pedidos como entregues` : "Marcar pedido como entregue";
     document.getElementById("entregue-prefixo").textContent = lote ? `${itens.length} pedidos:` : "Pedido";
     document.getElementById("entregue-codigo").textContent = itens.map(it => it.codigo).join(", ");
-    document.getElementById("entregue-observacao").value = "";
+    document.getElementById("entregue-foto-canhoto").value = "";
+    document.getElementById("entregue-foto-nota").value = "";
+    document.getElementById("entregue-justificativa").value = "";
+    document.getElementById("entregue-texto-outro").value = "";
+    aoMudarFotoEntregue();
     entreguePendente = { itens };
     document.getElementById("modal-entregue").classList.add("aberto");
-    document.getElementById("entregue-observacao").focus();
+    document.getElementById("entregue-foto-canhoto").focus();
+  }
+
+  // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
+  function aoMudarFotoEntregue() {
+    const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+    document.getElementById("entregue-campo-justificativa").hidden = temFoto;
+    aoMudarJustificativaEntregue();
+  }
+
+  function aoMudarJustificativaEntregue() {
+    const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+    const outro = !temFoto && document.getElementById("entregue-justificativa").value === "outro";
+    document.getElementById("entregue-campo-outro").hidden = !outro;
   }
 
   function fecharModalEntregue() {
@@ -6130,21 +6170,44 @@
     if (e.target.id === "modal-entregue") fecharModalEntregue();
   });
 
+  const URL_PLANEJAMENTO_MARCAR_ENTREGUE = "{{ url_for('api_torre_marcar_entregue') }}";
+
   async function confirmarEntregue(botao) {
     const pendente = entreguePendente;
     if (!pendente) return;
-    const observacao = document.getElementById("entregue-observacao").value.trim();
-    if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
+    const fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
+    const fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
+    const justificativa = document.getElementById("entregue-justificativa").value;
+    const textoOutro = document.getElementById("entregue-texto-outro").value.trim();
+    if (!fotoCanhoto) {
+      if (!justificativa) { alert("Anexe a foto do canhoto ou escolha uma justificativa."); return; }
+      if (justificativa === "outro" && (textoOutro.length < 5 || textoOutro.length > 200)) {
+        alert("Descreva o motivo em 5 a 200 caracteres."); return;
+      }
+    }
     const original = botao.textContent;
     botao.disabled = true;
-    const fechados = [], jaEstavam = [], falhas = [];
+    const fechados = [], jaEstavam = [], falhas = [], avisos = [];
     try {
+      // um FormData (e um checklist na VUUPT) por pedido; mesmos arquivos e
+      // justificativa em todos; falha de um não para os outros
       for (const [i, it] of pendente.itens.entries()) {
         botao.textContent = pendente.itens.length > 1
           ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
         try {
-          const dados = await postJSON("/api/torre/marcar-entregue", { service_id: it.serviceId, observacao });
+          const fd = new FormData();
+          fd.append("service_id", it.serviceId);
+          if (fotoCanhoto) fd.append("foto_canhoto", fotoCanhoto);
+          if (fotoNota) fd.append("foto_nota_retorno", fotoNota);
+          if (!fotoCanhoto) {
+            fd.append("justificativa", justificativa);
+            if (justificativa === "outro") fd.append("texto_outro", textoOutro);
+          }
+          const resp = await fetch(URL_PLANEJAMENTO_MARCAR_ENTREGUE, { method: "POST", body: fd });
+          const dados = await resp.json();
+          if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar como entregue.");
           (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+          if (dados.aviso) avisos.push(`${dados.codigo || it.codigo}: ${dados.aviso}`);
         } catch (e) {
           falhas.push(`${it.codigo}: ${e.message}`);
         }
@@ -6158,6 +6221,7 @@
     const linhas = [];
     if (fechados.length) linhas.push(`Marcado(s) como entregue(s) na VUUPT: ${fechados.join(", ")}`);
     if (jaEstavam.length) linhas.push(`Já constava(m) como entregue(s): ${jaEstavam.join(", ")}`);
+    if (avisos.length) linhas.push(`Avisos:\n${avisos.join("\n")}`);
     if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
     alert(linhas.join("\n\n"));
   }

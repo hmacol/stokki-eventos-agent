@@ -85,6 +85,7 @@ from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
 URL_PAGINA_COTACAO = "https://app.freshhub.com.br/cliente/cotacao"
 import rascunhos_rota
 import torre_controle
+from nucleo import justificativas_sem_canhoto
 import tratativas
 import pedidos_parados_triagem
 import consulta_expedicao
@@ -1099,6 +1100,7 @@ def planejamento():
         # de acesso (ver bloqueia_planejamento_passado pro reforço
         # equivalente no backend das rotas de mutação).
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
     )
 
 
@@ -2429,6 +2431,7 @@ def torre():
         # sem data na torre, toda rota mostrada é "de hoje em diante"
         # do ponto de vista da operação (ainda aberta).
         pode_excluir_pedido=pode_editar,
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
     )
 
 

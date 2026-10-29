@@ -639,16 +639,33 @@
 </div>
 
 {# "Marcar como entregue" do chip (Hugo, 08/10): fecha o servico na VUUPT
-   por API, sem canhoto nem checklist -- a observacao e obrigatoria e vira
-   auditoria (torre_entregas_manuais + tratativas). #}
+   por API. Com foto do canhoto (e nota de retorno opcional) ela vai para o
+   checklist da VUUPT; sem foto do canhoto, a justificativa da lista e
+   obrigatoria e vira auditoria (torre_entregas_manuais + tratativas). #}
 <div class="modal-overlay-excluir" id="modal-entregue">
   <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
     <p class="subtitulo" id="entregue-codigo">—</p>
-    <p class="subtitulo">Fecha o pedido na VUUPT agora, sem foto de canhoto. A expedição na Stokki segue como "sem comprovante".</p>
+    <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo">
-      <label for="entregue-observacao">Como a entrega foi confirmada</label>
-      <textarea id="entregue-observacao" placeholder="Ex.: motorista sem bateria, cliente confirmou por WhatsApp"></textarea>
+      <label for="entregue-foto-canhoto">Foto do canhoto</label>
+      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" capture="environment" onchange="aoMudarFotoEntregue()">
+    </div>
+    <div class="campo">
+      <label for="entregue-foto-nota">Foto da nota de retorno (opcional)</label>
+      <input type="file" id="entregue-foto-nota" accept="image/*">
+    </div>
+    <div class="campo" id="entregue-campo-justificativa">
+      <label for="entregue-justificativa">Sem foto do canhoto: por quê?</label>
+      <select id="entregue-justificativa" onchange="aoMudarJustificativaEntregue()">
+        <option value="">Selecione...</option>
+        {% for codigo, rotulo in justificativas.items() %}<option value="{{ codigo }}">{{ rotulo }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo" id="entregue-campo-outro" hidden>
+      <label for="entregue-texto-outro">Descreva</label>
+      <textarea id="entregue-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
     </div>
     <div class="acoes">
       <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
@@ -1270,9 +1287,26 @@ let chipPendenteEntregue = null;
 function abrirModalEntregue(chip) {
   chipPendenteEntregue = chip;
   document.getElementById("entregue-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
-  document.getElementById("entregue-observacao").value = "";
+  document.getElementById("entregue-foto-canhoto").value = "";
+  document.getElementById("entregue-foto-nota").value = "";
+  document.getElementById("entregue-justificativa").value = "";
+  document.getElementById("entregue-texto-outro").value = "";
+  aoMudarFotoEntregue();
   document.getElementById("modal-entregue").classList.add("aberto");
-  document.getElementById("entregue-observacao").focus();
+  document.getElementById("entregue-foto-canhoto").focus();
+}
+
+// Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
+function aoMudarFotoEntregue() {
+  const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+  document.getElementById("entregue-campo-justificativa").hidden = temFoto;
+  aoMudarJustificativaEntregue();
+}
+
+function aoMudarJustificativaEntregue() {
+  const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+  const outro = !temFoto && document.getElementById("entregue-justificativa").value === "outro";
+  document.getElementById("entregue-campo-outro").hidden = !outro;
 }
 
 function fecharModalEntregue() {
@@ -1286,22 +1320,36 @@ document.getElementById("modal-entregue").addEventListener("click", (e) => {
 
 async function confirmarEntregueChip(botao) {
   if (!chipPendenteEntregue) return;
-  const observacao = document.getElementById("entregue-observacao").value.trim();
-  if (!observacao) { alert("Informe como a entrega foi confirmada."); return; }
+  const fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
+  const fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
+  const justificativa = document.getElementById("entregue-justificativa").value;
+  const textoOutro = document.getElementById("entregue-texto-outro").value.trim();
+  if (!fotoCanhoto) {
+    if (!justificativa) { alert("Anexe a foto do canhoto ou escolha uma justificativa."); return; }
+    if (justificativa === "outro" && (textoOutro.length < 5 || textoOutro.length > 200)) {
+      alert("Descreva o motivo em 5 a 200 caracteres."); return;
+    }
+  }
+
+  const fd = new FormData();
+  fd.append("service_id", chipPendenteEntregue.dataset.serviceId);
+  if (fotoCanhoto) fd.append("foto_canhoto", fotoCanhoto);
+  if (fotoNota) fd.append("foto_nota_retorno", fotoNota);
+  if (!fotoCanhoto) {
+    fd.append("justificativa", justificativa);
+    if (justificativa === "outro") fd.append("texto_outro", textoOutro);
+  }
 
   const original = botao.textContent;
   botao.disabled = true;
   botao.textContent = "Fechando na VUUPT...";
   try {
-    const resp = await fetch(URL_TORRE_MARCAR_ENTREGUE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ service_id: Number(chipPendenteEntregue.dataset.serviceId), observacao }),
-    });
+    const resp = await fetch(URL_TORRE_MARCAR_ENTREGUE, { method: "POST", body: fd });
     const dados = await resp.json();
     if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar como entregue.");
     fecharModalEntregue();
     if (dados.ja_estava) alert(`${dados.codigo} já constava como entregue na VUUPT.`);
+    if (dados.aviso) alert(dados.aviso);
     carregarDados();
   } catch (e) {
     alert(`Falha ao marcar como entregue: ${e.message}`);
