@@ -107,6 +107,7 @@ class ChecklistTest(unittest.TestCase):
             self.assertIn("fields[0][value]", e[2]["files"])
             self.assertEqual(e[2]["data"]["fields[0][file_source]"], "gallery")
             self.assertEqual(e[2]["data"]["checklist_form_id"], 1531)
+            self.assertIsNone(e[2]["headers"]["Content-Type"])
             self.assertTrue(e[2]["data"]["fields[0][content_uuid]"])
         self.assertEqual(s.enviados, [15086, 15349])
 
@@ -149,6 +150,50 @@ class ChecklistTest(unittest.TestCase):
         with self.assertRaises(vc.ChecklistNaoGravado):   # a releitura (fake) so devolve o 900, sem arquivo
             vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
         self.assertTrue(any(c[0] == "POST" and c[1].endswith("/checklists") for c in s.chamadas))
+
+    def test_existente_incompativel_cria_novo_e_conclui(self):
+        # velho: qtd 1, 15086 ja enviado (finish falhou); retentativa manda so 15349
+        velho = {"id": 900, "checklist_form_id": 1531, "images_quantity": 1,
+                 "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
+        s = SessaoFalsa(listagem=[velho])
+        orig_post = s.post
+
+        def post(url, **kw):
+            r = orig_post(url, **kw)
+            if url.endswith("/checklists/777"):
+                s.listagem.append({"id": 777, "checklist_form_id": 1531, "images_quantity": 1,
+                                   "fields": {"data": [{"checklist_form_field_id": 15349,
+                                                        "file_url": "http://x/b.jpg"}]}})
+            return r
+        s.post = post
+        cid = vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15349: b"jpg"})
+        self.assertEqual(cid, 777)
+        self.assertTrue(any(c[0] == "POST" and c[1].endswith("/checklists") for c in s.chamadas))
+        self.assertFalse(any(c[1].endswith("/checklists/900") for c in s.chamadas))
+
+    def _completo(self, finish_status):
+        ck = {"id": 900, "checklist_form_id": 1531, "images_quantity": 1,
+              "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
+        return SessaoFalsa(listagem=[ck], finish_status=finish_status)
+
+    def test_finish_repetido_recusado_em_checklist_completo_nao_trava(self):
+        s = self._completo(409)
+        cid = vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        self.assertEqual(cid, 900)
+        self.assertFalse(any(c[0] == "POST" for c in s.chamadas))
+
+    def test_finish_repetido_recusado_mas_releitura_sem_foto_falha(self):
+        s = self._completo(409)
+        s.listagem[0]["fields"][0]["file_url"] = None
+        with self.assertRaises(vc.ChecklistNaoGravado):
+            vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+
+    def test_finish_recusado_depois_de_upload_continua_fatal(self):
+        ck = {"id": 900, "checklist_form_id": 1531, "images_quantity": 2,
+              "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
+        s = SessaoFalsa(listagem=[ck], finish_status=409)
+        with self.assertRaises(vc.ChecklistNaoGravado):
+            vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"j", 15349: b"j"})
 
     def test_sem_coordenada_usa_base(self):
         s = SessaoFalsa()

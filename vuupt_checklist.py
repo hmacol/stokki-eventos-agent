@@ -107,11 +107,17 @@ def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -
     sem_ct = {"Content-Type": None}   # form/multipart: tira o JSON da sessão (como _acao_servico)
 
     existente = checklist_entrega_do_servico(vuupt, sid)
-    if existente and int(existente.get("images_quantity") or 0) == len(fotos):
-        cid = int(existente["id"])
+    ja_enviados = set()
+    if existente:
         ja_enviados = {int(c["checklist_form_field_id"]) for c in _lista_de_campos(existente)
                        if c.get("file_url") and c.get("checklist_form_field_id") is not None}
+    # só reaproveita se o existente comporta exatamente estas fotos: mesma quantidade e
+    # nenhum campo já preenchido fora do que estamos enviando (senão o finish dá 409 pra sempre)
+    if (existente and int(existente.get("images_quantity") or 0) == len(fotos)
+            and ja_enviados <= {int(c) for c in fotos}):
+        cid = int(existente["id"])
     else:
+        ja_enviados = set()
         agora = _agora_utc()
         lat = servico.get("latitude")
         lng = servico.get("longitude")
@@ -134,11 +140,13 @@ def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -
         cid = int(((resp.json() or {}).get("checklist_answer") or {}).get("id") or 0)
         if not cid:
             raise ChecklistNaoGravado(f"Criar checklist do serviço {sid}: resposta sem id")
-        ja_enviados = set()
 
+    reaproveitado = bool(ja_enviados)
+    enviou_algo = False
     for campo, jpeg in fotos.items():
         if int(campo) in ja_enviados:
             continue
+        enviou_algo = True
         dados = {
             "checklist_form_id": FORM_ENTREGA,
             "fields[0][id]": int(campo),
@@ -155,7 +163,12 @@ def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -
 
     resp = chamar_com_retry(vuupt.session.put, f"{base}/checklists/{cid}/finish", headers=sem_ct, timeout=30)
     if not resp.ok:
-        raise ChecklistNaoGravado(f"Finalizar checklist {cid}: status {resp.status_code}: {_erro(resp)}")
+        if reaproveitado and not enviou_algo:
+            # checklist já completo de uma tentativa anterior (finish ok, check-out falhou):
+            # o finish repetido pode ser recusado; a releitura abaixo decide
+            logger.warning(f"Finish repetido do checklist {cid} recusado (status {resp.status_code}); conferindo pela releitura")
+        else:
+            raise ChecklistNaoGravado(f"Finalizar checklist {cid}: status {resp.status_code}: {_erro(resp)}")
 
     # conferência: a Vuupt aceita (200) arquivo em parte errada sem gravar nada
     relido = next((c for c in _checklists_do_servico(vuupt, sid) if int(c.get("id") or 0) == cid), None)
