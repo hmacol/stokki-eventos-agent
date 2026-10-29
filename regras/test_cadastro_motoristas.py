@@ -101,6 +101,78 @@ class TestCadastroMotoristas(unittest.TestCase):
             cm.cadastrar_motorista({}, self._dados(), conn=self.conn)
         self.assertEqual(len(mb.listar(self.conn)), 1)
 
+    def _cadastrado(self, **kw):
+        base = dict(AGENT_ID_VUUPT=5, NOME_MOTORISTA="Ana", ATIVO="SIM", ACEITA_VIAGENS="SIM",
+                    ZONAS_PREFERIDAS="SUL", TELEFONE_MOTORISTA="1111", CPF_MOTORISTA="12345678901",
+                    TIPO_VEICULO="FIORINO", PLACA="AAA1111")
+        base.update(kw)
+        return mb.inserir(self.conn, _linha(**base), "teste")
+
+    def test_editar_campo_ausente_nao_mexe_vazio_limpa(self):
+        mid = self._cadastrado()
+        r = cm.editar_motorista({}, mid, {"zonas_preferidas": ["LESTE", "NORTE"], "telefone": ""}, "hugo", conn=self.conn)
+        reg = mb.listar(self.conn)[0]
+        self.assertEqual(reg["ZONAS_PREFERIDAS"], "LESTE,NORTE")
+        self.assertIsNone(reg["TELEFONE_MOTORISTA"])
+        self.assertEqual((reg["PLACA"], reg["ACEITA_VIAGENS"], reg["TIPO_VEICULO"]), ("AAA1111", "SIM", "FIORINO"))
+        self.assertEqual({m["campo"] for m in r["mudancas"]}, {"ZONAS_PREFERIDAS", "TELEFONE_MOTORISTA"})
+        self.assertEqual(r["motorista"]["id"], mid)
+        orig = self.conn.execute("SELECT DISTINCT origem FROM bd_motoristas_alteracoes WHERE campo = 'TELEFONE_MOTORISTA'").fetchall()
+        self.assertEqual([tuple(x) for x in orig], [("painel:hugo",)])
+
+    def test_editar_traduz_booleanos_e_listas(self):
+        mid = self._cadastrado()
+        cm.editar_motorista({}, mid, {"aceita_viagens": False, "ativo": False, "apenas_carga_seca": True,
+                                      "dias_disponiveis": ["SEGUNDA", "TERCA"], "max_rotas_dia": "3"}, "hugo", conn=self.conn)
+        reg = mb.listar(self.conn)[0]
+        self.assertEqual((reg["ACEITA_VIAGENS"], reg["ATIVO"], reg["APENAS_CARGA_SECA"]), ("NAO", "NAO", "SIM"))
+        self.assertEqual((reg["DIAS_DISPONIVEIS"], reg["MAX_ROTAS_DIA"]), ("SEGUNDA,TERCA", 3))
+
+    def test_editar_agent_id_e_tipo_invalido_levantam(self):
+        mid = self._cadastrado()
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, mid, {"agent_id": 99}, "hugo", conn=self.conn)
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, mid, {"tipo_veiculo": "NAOEXISTE"}, "hugo", conn=self.conn)
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, 9999, {"nome": "x"}, "hugo", conn=self.conn)
+
+    def _login(self, cpf="12345678901"):
+        from nucleo import auth_motorista as auth
+        auth.criar_ou_atualizar_motorista(self.conn, cpf, "Ana", pin="123456", tipo_veiculo="FIORINO")
+        self.conn.execute("UPDATE motoristas SET placa = 'AAA1111' WHERE cpf = ?", (cpf,))
+        self.conn.commit()
+
+    def test_editar_repassa_tipo_veiculo_ao_login_mas_nao_ativo(self):
+        from nucleo import auth_motorista as auth
+        mid = self._cadastrado()
+        self._login()
+        cm.editar_motorista({}, mid, {"tipo_veiculo": "VUC", "ativo": False, "nome": "Ana Maria",
+                                      "placa": "zzz9999"}, "hugo", conn=self.conn)
+        login = auth.buscar_motorista(self.conn, "12345678901")
+        self.assertEqual((login["tipo_veiculo"], login["nome"], login["placa"]), ("VUC", "Ana Maria", "ZZZ9999"))
+        self.assertEqual(login["ativo"], 1)
+        self.assertEqual(mb.listar(self.conn)[0]["ATIVO"], "NAO")
+
+    def test_editar_nao_repassa_placa_com_duas_linhas_nem_sem_login(self):
+        from nucleo import auth_motorista as auth
+        mid = self._cadastrado()
+        self._cadastrado(AGENT_ID_VUUPT=6, PLACA="BBB2222")
+        self._login()
+        cm.editar_motorista({}, mid, {"placa": "CCC3333", "telefone": "999"}, "hugo", conn=self.conn)
+        login = auth.buscar_motorista(self.conn, "12345678901")
+        self.assertEqual((login["placa"], login["telefone"]), ("AAA1111", "999"))
+        # sem login: nao cria nada
+        mid2 = self._cadastrado(AGENT_ID_VUUPT=7, CPF_MOTORISTA="98765432100")
+        cm.editar_motorista({}, mid2, {"telefone": "888"}, "hugo", conn=self.conn)
+        self.assertIsNone(auth.buscar_motorista(self.conn, "98765432100"))
+
+    def test_editar_falha_do_espelho_nao_derruba(self):
+        mid = self._cadastrado()
+        with mock.patch.object(mb, "escrever_espelho", side_effect=OSError("x")), self.assertLogs(cm.logger, "ERROR"):
+            cm.editar_motorista({}, mid, {"nome": "Novo"}, "hugo", conn=self.conn)
+        self.assertEqual(mb.listar(self.conn)[0]["NOME_MOTORISTA"], "Novo")
+
 
 if __name__ == "__main__":
     unittest.main()

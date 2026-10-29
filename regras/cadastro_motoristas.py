@@ -95,6 +95,43 @@ def listar_agentes_vuupt_nao_cadastrados(config: dict, *, conn=None) -> list[dic
     return disponiveis
 
 
+def _sim_nao(valor) -> str:
+    return "SIM" if valor else "NAO"
+
+
+def _inteiro_ou_none(valor):
+    return int(valor) if valor not in (None, "") else None
+
+
+# chave do formulário -> (coluna, tradução). Só entram as chaves presentes no payload.
+_FORMULARIO = {
+    "vehicle_id": ("VEHICLE_ID_VUUPT", _inteiro_ou_none),
+    "nome": ("NOME_MOTORISTA", lambda v: str(v or "").strip()),
+    "aceita_viagens": ("ACEITA_VIAGENS", _sim_nao),
+    "dias_disponiveis": ("DIAS_DISPONIVEIS", lambda v: ",".join(v or [])),
+    "max_rotas_dia": ("MAX_ROTAS_DIA", _inteiro_ou_none),
+    "ativo": ("ATIVO", _sim_nao),
+    "zonas_preferidas": ("ZONAS_PREFERIDAS", lambda v: ",".join(v or [])),
+    "telefone": ("TELEFONE_MOTORISTA", lambda v: str(v or "").strip() or None),
+    "email": ("EMAIL_MOTORISTA", lambda v: str(v or "").strip() or None),
+    "placa": ("PLACA", lambda v: str(v or "").strip().upper() or None),
+    "cpf": ("CPF_MOTORISTA", lambda v: re.sub(r"\D", "", str(v or "")) or None),
+    "tipo_veiculo": ("TIPO_VEICULO", lambda v: str(v or "").strip().upper() or None),
+    "apenas_carga_seca": ("APENAS_CARGA_SECA", _sim_nao),
+    "sem_app": ("SEM_APP", _sim_nao),
+}
+
+
+def _colunas_do_formulario(dados: dict) -> dict:
+    """Payload do formulário -> {COLUNA: valor} só das chaves presentes
+    (ausente = não mexe; "" = limpa). ValueError pra tipo de veículo inválido."""
+    colunas = {coluna: traduzir(dados[chave]) for chave, (coluna, traduzir) in _FORMULARIO.items() if chave in dados}
+    tipo = colunas.get("TIPO_VEICULO")
+    if tipo and not tipo_por_codigo(tipo):
+        raise ValueError(f"Tipo de veículo '{tipo}' não reconhecido.")
+    return colunas
+
+
 def cadastrar_motorista(config: dict, dados: dict, *, origem: str = "painel", conn=None) -> dict:
     """Grava uma linha nova na tabela bd_motoristas a partir do payload do
     formulário de cadastro. Levanta ValueError (400 na rota) pra validação
@@ -108,27 +145,10 @@ def cadastrar_motorista(config: dict, dados: dict, *, origem: str = "painel", co
     if not nome:
         raise ValueError("Nome do motorista é obrigatório.")
 
-    vehicle_id = dados.get("vehicle_id")
-    tipo_veiculo_codigo = (dados.get("tipo_veiculo") or "").strip().upper() or None
-    if tipo_veiculo_codigo and not tipo_por_codigo(tipo_veiculo_codigo):
-        raise ValueError(f"Tipo de veículo '{tipo_veiculo_codigo}' não reconhecido.")
-
-    nova_linha = {
-        "AGENT_ID_VUUPT": agent_id,
-        "VEHICLE_ID_VUUPT": int(vehicle_id) if vehicle_id not in (None, "") else None,
-        "NOME_MOTORISTA": nome,
-        "ACEITA_VIAGENS": "SIM" if dados.get("aceita_viagens") else "NAO",
-        "DIAS_DISPONIVEIS": ",".join(dados.get("dias_disponiveis") or []),
-        "MAX_ROTAS_DIA": int(dados.get("max_rotas_dia") or 1),
-        "ATIVO": "SIM" if dados.get("ativo") else "NAO",
-        "ZONAS_PREFERIDAS": ",".join(dados.get("zonas_preferidas") or []),
-        "TELEFONE_MOTORISTA": str(dados.get("telefone") or "").strip() or None,
-        "EMAIL_MOTORISTA": str(dados.get("email") or "").strip() or None,
-        "PLACA": str(dados.get("placa") or "").strip().upper() or None,
-        "CPF_MOTORISTA": re.sub(r"\D", "", str(dados.get("cpf") or "")) or None,
-    }
-    if tipo_veiculo_codigo:
-        nova_linha["TIPO_VEICULO"] = tipo_veiculo_codigo
+    nova_linha = {"ACEITA_VIAGENS": "NAO", "ATIVO": "NAO", "MAX_ROTAS_DIA": 1,
+                  **_colunas_do_formulario(dados), "AGENT_ID_VUUPT": agent_id}
+    if not nova_linha["MAX_ROTAS_DIA"]:
+        nova_linha["MAX_ROTAS_DIA"] = 1
 
     def gravar(c):
         if agent_id in _agent_ids_cadastrados(c):
@@ -139,6 +159,55 @@ def cadastrar_motorista(config: dict, dados: dict, *, origem: str = "painel", co
     _com_conexao(conn, gravar)
     logger.info(f"Motorista cadastrado: {nome} (agent_id={agent_id}).")
     return {"agent_id": agent_id, "nome": nome}
+
+
+# coluna da bd_motoristas -> coluna do login do app (tabela motoristas). Nunca ATIVO.
+_REPASSE_LOGIN = {
+    "NOME_MOTORISTA": "nome", "TELEFONE_MOTORISTA": "telefone", "EMAIL_MOTORISTA": "email",
+    "TIPO_VEICULO": "tipo_veiculo", "VEHICLE_ID_VUUPT": "vehicle_id",
+}
+
+
+def _repassar_ao_login(conn, motorista: dict, mudancas: list[dict]) -> None:
+    """Leva ao login do app (mesmo CPF, se existir) o que mudou na edição.
+    A placa só vai se o CPF tem uma linha na tabela (com 2+ carros não dá
+    pra saber qual vale). Nunca mexe em `ativo`."""
+    cpf = motorista.get("CPF_MOTORISTA")
+    if not cpf:
+        return
+    mudou = {m["campo"]: m["para"] for m in mudancas}
+    sets = {_REPASSE_LOGIN[c]: v for c, v in mudou.items() if c in _REPASSE_LOGIN}
+    if "PLACA" in mudou and len(motoristas_banco.por_cpf(conn, cpf)) == 1:
+        sets["placa"] = mudou["PLACA"]
+    if not sets:
+        return
+    sets["atualizado_em"] = banco.agora()
+    cur = conn.execute(f"UPDATE motoristas SET {', '.join(f'{c} = ?' for c in sets)} WHERE cpf = ?", (*sets.values(), cpf))
+    if cur.rowcount:
+        conn.commit()
+
+
+def editar_motorista(config: dict, motorista_id: int, campos: dict, usuario: str, *, conn=None) -> dict:
+    """Edita uma linha da bd_motoristas pelo formulário da tela /motoristas.
+    Chave ausente = não mexe; "" = limpa. Repassa nome/contato/veículo ao
+    login do app e atualiza o espelho. Levanta ValueError (400 na rota).
+    Devolve {"mudancas": [...], "motorista": <linha>}."""
+    colunas = _colunas_do_formulario(campos)
+    if "agent_id" in campos:
+        colunas["AGENT_ID_VUUPT"] = campos["agent_id"]   # atualizar() recusa qualquer troca
+
+    def gravar(c):
+        mudancas = motoristas_banco.atualizar(c, motorista_id, colunas, f"painel:{usuario}")
+        motorista = next(m for m in motoristas_banco.listar(c) if m["id"] == motorista_id)
+        if mudancas:
+            _repassar_ao_login(c, motorista, mudancas)
+            _espelhar(c)
+        return {"mudancas": mudancas, "motorista": motorista}
+
+    resultado = _com_conexao(conn, gravar)
+    if resultado["mudancas"]:
+        logger.info(f"Motorista id={motorista_id} editado por {usuario}: {', '.join(m['campo'] for m in resultado['mudancas'])}.")
+    return resultado
 
 
 def atualizar_contato_planilha(config: dict, cpf: str, telefone=None, email=None, placa=None, *, conn=None) -> bool:

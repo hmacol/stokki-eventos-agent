@@ -128,5 +128,78 @@ class TestCadastrosMotoristas(unittest.TestCase):
         self.assertIn(self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": True}).status_code, (302, 403))
 
 
+class TestEditarMotorista(unittest.TestCase):
+    """PUT /api/motoristas/<id> e o botao Editar da tela (banco temporario)."""
+
+    def setUp(self):
+        from regras import motoristas_banco as mb
+        self.mb = mb
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.dir = Path(self._tmp.name)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", self.dir / "t.db")
+        self._patch_db.start()
+        config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL}
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
+        p.start()
+        self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        conn = banco.conectar()
+        linha = {c: None for c in mb.COLUNAS}
+        linha.update(AGENT_ID_VUUPT=5, NOME_MOTORISTA="Ana Teste", ATIVO="SIM", ACEITA_VIAGENS="SIM",
+                     ZONAS_PREFERIDAS="ZONA SUL", DIAS_DISPONIVEIS="SEGUNDA", MAX_ROTAS_DIA=1)
+        self.mid = mb.inserir(conn, linha, "teste")
+        conn.close()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "hugo"
+
+    def _put(self, corpo, mid=None):
+        return self.cliente.put(f"/api/motoristas/{mid or self.mid}", json=corpo,
+                                headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
+
+    def test_put_editar_niveis(self):
+        self._logar("leitura")
+        self.assertIn(self._put({"nome": "X"}).status_code, (302, 401, 403))
+        self._logar("operador")
+        r = self._put({"nome": "Ana Editada"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["mudancas"][0]["campo"], "NOME_MOTORISTA")
+
+    def test_put_editar_agent_id_400(self):
+        self._logar("total")
+        r = self._put({"agent_id": 99})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("AGENT_ID", r.get_json()["erro"])
+
+    def test_botao_editar_so_para_quem_pode(self):
+        self._logar("operador")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Ana Teste", html)
+        self.assertIn(f'data-id="{self.mid}"', html)
+        self.assertIn("botao-editar-motorista", html)
+        self._logar("leitura")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Ana Teste", html)
+        self.assertNotIn("botao-editar-motorista", html)
+
+    def test_editar_zona_aparece_na_tabela_e_no_espelho(self):
+        self._logar("operador")
+        r = self._put({"zonas_preferidas": ["ZONA LESTE", "CENTRO"]})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn('<span class="zona-chip">ZONA LESTE</span>', html)
+        self.assertNotIn('<span class="zona-chip">ZONA SUL</span>', html)
+        import pandas as pd
+        df = pd.read_excel(self.dir / "BD_MOTORISTAS.xlsx", dtype=str)
+        self.assertEqual(df.loc[0, "ZONAS_PREFERIDAS"], "ZONA LESTE,CENTRO")
+
+
 if __name__ == "__main__":
     unittest.main()

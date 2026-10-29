@@ -132,7 +132,7 @@
 <table class="tabela-motoristas">
   <thead>
     <tr>
-      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>
+      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -155,9 +155,12 @@
         </button>
         {% else %}{% if m.ve_financeiro %}Vê extrato{% else %}Sem extrato{% endif %}{% endif %}
       </td>
+      {% if pode_editar %}
+      <td>{% if m.id %}<button type="button" class="botao botao-editar-motorista" data-id="{{ m.id }}" data-motorista='{{ m.form | tojson }}'>Editar</button>{% endif %}</td>
+      {% endif %}
     </tr>
     {% else %}
-    <tr><td colspan="9">Nenhum motorista cadastrado.</td></tr>
+    <tr><td colspan="10">Nenhum motorista cadastrado.</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -167,11 +170,15 @@
 <div class="modal-overlay-motorista" id="modal-novo-motorista">
   <div class="modal-motorista" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-motorista">
     <h2 id="titulo-modal-motorista">Novo motorista</h2>
-    <p class="subtitulo">O motorista precisa já existir como agente no VUUPT — essa lista só mostra quem ainda não está cadastrado aqui.</p>
+    <p class="subtitulo" id="subtitulo-modal-motorista">O motorista precisa já existir como agente no VUUPT — essa lista só mostra quem ainda não está cadastrado aqui.</p>
 
-    <div class="campo-motorista">
+    <div class="campo-motorista" id="grupo-agente-novo">
       <label for="motorista-agente-vuupt">Motorista (VUUPT)</label>
       <select id="motorista-agente-vuupt"><option value="">Carregando...</option></select>
+    </div>
+    <div class="campo-motorista" id="grupo-agente-fixo" hidden>
+      <label>Agent ID (VUUPT)</label>
+      <div class="mono" id="motorista-agente-fixo"></div>
     </div>
     <div class="campo-motorista">
       <label for="motorista-nome">Nome</label>
@@ -232,6 +239,16 @@
       <label for="motorista-cpf">CPF</label>
       <input type="text" id="motorista-cpf" placeholder="opcional -- identifica o motorista no marketplace de rotas" inputmode="numeric">
     </div>
+    <div class="campo-motorista">
+      <label for="motorista-vehicle-id">Vehicle ID (VUUPT)</label>
+      <input type="number" id="motorista-vehicle-id" placeholder="opcional">
+    </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" id="motorista-carga-seca"> Apenas carga seca</label>
+    </div>
+    <div class="campo-motorista">
+      <label><input type="checkbox" id="motorista-sem-app"> Sem app Vuupt (iPhone)</label>
+    </div>
 
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-motorista">Cancelar</button>
@@ -243,9 +260,9 @@
 <script>
 const PODE_EDITAR = {{ pode_editar | tojson }};
 
-async function postJSON(url, body) {
+async function postJSON(url, body, metodo = "POST") {
   const resp = await fetch(BASE_PATH + url, {
-    method: "POST",
+    method: metodo,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -253,6 +270,8 @@ async function postJSON(url, body) {
   if (!resp.ok) throw new Error(dados.erro || `Falha em ${url}`);
   return dados;
 }
+
+const putJSON = (url, body) => postJSON(url, body, "PUT");
 
 (function () {
   const overlay = document.getElementById("modal-novo-motorista");
@@ -274,10 +293,52 @@ async function postJSON(url, body) {
     }
   }
 
+  const textoNovo = document.getElementById("subtitulo-modal-motorista").textContent;
+  const campoCpf = document.getElementById("motorista-cpf");
+  let editandoId = null;   // null = cadastro de motorista novo
+
+  // Preenche o formulário (cadastro novo: padrões; edição: valores da linha).
+  function preencherFormulario(d) {
+    campoNome.value = d.nome || "";
+    document.getElementById("motorista-max-rotas").value = d.max_rotas_dia || 1;
+    document.getElementById("motorista-tipo-veiculo").value = d.tipo_veiculo || "";
+    for (const c of document.querySelectorAll(".motorista-dia")) c.checked = d.dias_disponiveis.includes(c.value);
+    for (const c of document.querySelectorAll(".motorista-zona")) c.checked = d.zonas_preferidas.includes(c.value);
+    document.getElementById("motorista-aceita-viagens").checked = !!d.aceita_viagens;
+    document.getElementById("motorista-ativo").checked = !!d.ativo;
+    document.getElementById("motorista-telefone").value = d.telefone || "";
+    document.getElementById("motorista-email").value = d.email || "";
+    document.getElementById("motorista-placa").value = d.placa || "";
+    campoCpf.value = d.cpf || "";
+    document.getElementById("motorista-vehicle-id").value = d.vehicle_id ?? "";
+    document.getElementById("motorista-carga-seca").checked = !!d.apenas_carga_seca;
+    document.getElementById("motorista-sem-app").checked = !!d.sem_app;
+  }
+
+  function abrirEdicaoMotorista(d) {
+    editandoId = d.id;
+    preencherFormulario(d);
+    document.getElementById("titulo-modal-motorista").textContent = "Editar motorista";
+    document.getElementById("subtitulo-modal-motorista").textContent = "O Agent ID não muda; o CPF só pode ser preenchido enquanto estiver vazio. Cada alteração fica no histórico.";
+    document.getElementById("grupo-agente-novo").hidden = true;
+    document.getElementById("grupo-agente-fixo").hidden = false;
+    document.getElementById("motorista-agente-fixo").textContent = `#${d.agent_id}`;
+    campoCpf.disabled = !!d.cpf;
+    document.getElementById("botao-salvar-motorista").textContent = "Salvar";
+    overlay.classList.add("aberto");
+  }
+
   async function abrirModalMotorista() {
+    editandoId = null;
+    preencherFormulario({ dias_disponiveis: ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"], zonas_preferidas: [], ativo: true });
+    document.getElementById("titulo-modal-motorista").textContent = "Novo motorista";
+    document.getElementById("subtitulo-modal-motorista").textContent = textoNovo;
+    document.getElementById("grupo-agente-novo").hidden = false;
+    document.getElementById("grupo-agente-fixo").hidden = true;
+    campoCpf.disabled = false;
+    document.getElementById("botao-salvar-motorista").textContent = "Cadastrar";
     overlay.classList.add("aberto");
     selectAgente.innerHTML = '<option value="">Carregando...</option>';
-    campoNome.value = "";
     try {
       const resp = await fetch(BASE_PATH + "/api/motoristas/vuupt-disponiveis");
       const dados = await resp.json();
@@ -302,6 +363,9 @@ async function postJSON(url, body) {
   });
 
   document.getElementById("botao-novo-motorista").addEventListener("click", abrirModalMotorista);
+  for (const botao of document.querySelectorAll(".botao-editar-motorista")) {
+    botao.addEventListener("click", () => abrirEdicaoMotorista(JSON.parse(botao.dataset.motorista)));
+  }
   document.getElementById("botao-cancelar-motorista").addEventListener("click", fecharModalMotorista);
 
   // ── Chave "Vê extrato" por motorista com login (08/10) ──
@@ -384,17 +448,17 @@ async function postJSON(url, body) {
     const botao = ev.currentTarget;
     const agentId = Number(selectAgente.value);
     const nome = campoNome.value.trim();
-    if (!agentId || !nome) { alert("Selecione o motorista do VUUPT e confirme o nome."); return; }
+    if (editandoId === null && !agentId) { alert("Selecione o motorista do VUUPT e confirme o nome."); return; }
+    if (!nome) { alert("Informe o nome do motorista."); return; }
 
     const dias = Array.from(document.querySelectorAll(".motorista-dia:checked")).map(c => c.value);
     const zonas = Array.from(document.querySelectorAll(".motorista-zona:checked")).map(c => c.value);
 
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Cadastrando...";
+    botao.textContent = editandoId === null ? "Cadastrando..." : "Salvando...";
     try {
-      await postJSON("/api/motoristas", {
-        agent_id: agentId,
+      const corpo = {
         nome: nome,
         aceita_viagens: document.getElementById("motorista-aceita-viagens").checked,
         ativo: document.getElementById("motorista-ativo").checked,
@@ -405,12 +469,22 @@ async function postJSON(url, body) {
         telefone: document.getElementById("motorista-telefone").value.trim(),
         email: document.getElementById("motorista-email").value.trim(),
         placa: document.getElementById("motorista-placa").value.trim(),
-        cpf: document.getElementById("motorista-cpf").value.trim(),
-      });
-      alert(`Motorista "${nome}" cadastrado.`);
+        vehicle_id: document.getElementById("motorista-vehicle-id").value.trim(),
+        apenas_carga_seca: document.getElementById("motorista-carga-seca").checked,
+        sem_app: document.getElementById("motorista-sem-app").checked,
+      };
+      if (editandoId === null) {
+        corpo.agent_id = agentId;
+        corpo.cpf = campoCpf.value.trim();
+        await postJSON("/api/motoristas", corpo);
+        alert(`Motorista "${nome}" cadastrado.`);
+      } else {
+        if (!campoCpf.disabled) corpo.cpf = campoCpf.value.trim();
+        await putJSON(`/api/motoristas/${editandoId}`, corpo);
+      }
       location.reload();
     } catch (e) {
-      alert(`Falha ao cadastrar motorista: ${e.message}`);
+      alert(`Falha ao salvar motorista: ${e.message}`);
     } finally {
       botao.disabled = false;
       botao.textContent = original;
