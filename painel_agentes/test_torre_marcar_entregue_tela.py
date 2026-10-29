@@ -50,34 +50,69 @@ class _Base(unittest.TestCase):
             sess["nivel_acesso"] = nivel
             sess["usuario"] = "teste"
 
-    def _post(self, corpo, origem=True):
+    def _post(self, corpo, origem=True, arquivos=None):
+        import io
         headers = {"Origin": "http://localhost"} if origem else {}
-        return self.cliente.post("/api/torre/marcar-entregue", json=corpo, headers=headers)
+        data = dict(corpo)
+        for nome, conteudo in (arquivos or {}).items():
+            data[nome] = (io.BytesIO(conteudo), "foto.jpg")
+        return self.cliente.post("/api/torre/marcar-entregue", data=data,
+                                 content_type="multipart/form-data", headers=headers)
 
 
 class TestEndpoint(_Base):
 
-    def test_operador_chama_a_funcao_com_usuario_da_sessao(self):
+    def test_api_multipart_ok(self):
         self._logar("operador")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
-                               return_value={"ok": True, "codigo": "#PS-77"}) as fn:
-            r = self._post({"service_id": "77", "observacao": "confirmado por telefone"})
+                               return_value={"ok": True, "codigo": "#PS-77", "checklist_id": 9}) as fn:
+            r = self._post({"service_id": "77", "justificativa": "outro", "texto_outro": "porteiro recebeu"},
+                           arquivos={"foto_canhoto": b"canhoto", "foto_nota_retorno": b"nota"})
         self.assertEqual(r.status_code, 200, r.data)
-        self.assertEqual(r.get_json()["codigo"], "#PS-77")
-        fn.assert_called_once_with(77, "teste", "confirmado por telefone")
+        self.assertEqual(r.get_json()["checklist_id"], 9)
+        fn.assert_called_once_with(77, "teste", b"canhoto", b"nota", "outro", "porteiro recebeu")
+
+    def test_api_sem_arquivo_manda_none(self):
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
+                               return_value={"ok": True, "codigo": "#PS-77"}) as fn:
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
+        self.assertEqual(r.status_code, 200, r.data)
+        fn.assert_called_once_with(77, "teste", None, None, "sem_bateria", None)
+
+    def test_api_arquivo_grande_413(self):
+        self._logar("operador")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
+            # o test_client recalcula o Content-Length: baixa o limite em vez de mandar 32 MB
+            with mock.patch.object(painel_agentes, "LIMITE_REQUISICAO_ENTREGUE", 5):
+                r = self._post({"service_id": "77"}, arquivos={"foto_canhoto": b"x" * 100})
+            self.assertEqual(r.status_code, 413)
+            # arquivo acima de 15 MB dentro do limite da requisicao
+            with mock.patch("nucleo.canhotos_manuais.LIMITE_BYTES", 5):
+                r = self._post({"service_id": "77"}, arquivos={"foto_canhoto": b"x" * 100})
+            self.assertEqual(r.status_code, 413)
+        fn.assert_not_called()
 
     def test_erro_de_negocio_vira_400(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
                                return_value={"ok": False, "erro": "sem motorista"}):
-            r = self._post({"service_id": 77, "observacao": "x"})
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.get_json()["erro"], "sem motorista")
 
     def test_service_id_invalido_400_sem_chamar(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-            r = self._post({"service_id": "abc", "observacao": "x"})
+            r = self._post({"service_id": "abc"})
+        self.assertEqual(r.status_code, 400)
+        fn.assert_not_called()
+
+    def test_json_antigo_nao_vale_mais(self):
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
+            r = self.cliente.post("/api/torre/marcar-entregue", json={"service_id": 77, "observacao": "x"},
+                                  headers={"Origin": "http://localhost"})
         self.assertEqual(r.status_code, 400)
         fn.assert_not_called()
 
@@ -85,14 +120,14 @@ class TestEndpoint(_Base):
         for nivel in ("leitura", "atendimento"):
             self._logar(nivel)
             with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-                r = self._post({"service_id": 77, "observacao": "x"})
+                r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
             self.assertEqual(r.status_code, 403, nivel)
             fn.assert_not_called()
 
-    def test_sem_origem_e_csrf(self):
+    def test_api_exige_mesma_origem(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-            r = self._post({"service_id": 77, "observacao": "x"}, origem=False)
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"}, origem=False)
         self.assertEqual(r.status_code, 403)
         fn.assert_not_called()
 

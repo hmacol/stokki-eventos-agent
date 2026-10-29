@@ -2502,6 +2502,9 @@ def api_torre_excluir_pedido():
     return jsonify(resultado)
 
 
+LIMITE_REQUISICAO_ENTREGUE = 32 * 1024 * 1024  # canhoto + nota de retorno, 15 MB cada (29/10)
+
+
 @app.route("/api/torre/marcar-entregue", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
@@ -2510,14 +2513,26 @@ def api_torre_marcar_entregue():
     parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
     hora, por API, sem passar pelo app do motorista (ver
     torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
-    rota" -- muda o pedido na VUUPT."""
-    body = request.get_json(force=True) or {}
+    rota" -- muda o pedido na VUUPT. Multipart: service_id, foto_canhoto
+    e foto_nota_retorno (opcionais), justificativa e texto_outro."""
+    from nucleo import canhotos_manuais
+    # Recusa antes de ler: duas fotos de 15 MB no maximo (mesmo teto da baixa sem app).
+    if (request.content_length or 0) > LIMITE_REQUISICAO_ENTREGUE:
+        return jsonify({"erro": "Envio grande demais: mande fotos menores (até 15 MB cada)."}), 413
     try:
-        service_id = int(body["service_id"])
+        service_id = int(request.form["service_id"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    arquivos = {}
+    for campo in ("foto_canhoto", "foto_nota_retorno"):
+        arq = request.files.get(campo)
+        conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+        if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+            return jsonify({"erro": "Arquivo maior que 15 MB."}), 413
+        arquivos[campo] = conteudo or None
     resultado = torre_controle.marcar_entregue_manual(
-        service_id, session.get("usuario", ""), body.get("observacao") or "")
+        service_id, session.get("usuario", ""), arquivos["foto_canhoto"], arquivos["foto_nota_retorno"],
+        request.form.get("justificativa") or None, request.form.get("texto_outro") or None)
     if not resultado.get("ok"):
         return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
     return jsonify(resultado)
