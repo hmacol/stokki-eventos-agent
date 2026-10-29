@@ -70,8 +70,8 @@ PASTA_FOTOS = _RAIZ / "dados" / "pedidos_parados"
 # depois fica como histórico.
 PRAZO_APAGAR_MIN = 15
 
-CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue")
-CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente")
+CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue")
+CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Retornar para Estoque", "Verificar com Cliente")
 # Hugo, 24/10: encaminhamento às Demandas do Fresh Hub (Lovable) pausado
 # junto com a saída do Lovable. 26/10: religado, agora criando a demanda na
 # tela Demandas do painel (demandas.criar_de_sistema). False volta a recusar
@@ -82,6 +82,7 @@ ENCAMINHAMENTO_DEMANDAS_ATIVO = True
 TITULO_DEMANDA = {"Cancelados": "Cancelamento de Pedido e Retorno ao Estoque",
                   "Devolução Parcial": "Devolução Parcial",
                   "Descartar": "Cancelamento de Pedido e Retorno ao Estoque",
+                  "Retornar para Estoque": "Retorno ao Estoque",  # Hugo, 29/10
                   "Verificar com Cliente": "Verificar Pedido com Cliente"}
 EQUIPE_PADRAO_POR_CLASSIFICACAO = {"Verificar com Cliente": "Atendimento"}
 
