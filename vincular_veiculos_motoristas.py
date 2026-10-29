@@ -91,58 +91,60 @@ def vincular(conn, agentes: list[dict], veiculos: list[dict], dry_run: bool, put
     ja_ok, avisos, sem_placa, placa_sem_carro = 0, [], [], []
     agentes_ja_tratados: set[int] = set()  # 2ª linha do mesmo agente não disputa o vínculo principal
 
-    for linha in listar(conn):
-        agent_id = linha.get("AGENT_ID_VUUPT")
-        if agent_id is None:
-            continue
-        nome = str(linha.get("NOME_MOTORISTA") or "").strip() or f"Motorista {agent_id}"
-        placa = _norm_placa(linha.get("PLACA"))
+    try:
+        for linha in listar(conn):
+            agent_id = linha.get("AGENT_ID_VUUPT")
+            if agent_id is None:
+                continue
+            nome = str(linha.get("NOME_MOTORISTA") or "").strip() or f"Motorista {agent_id}"
+            placa = _norm_placa(linha.get("PLACA"))
 
-        if not placa:
-            sem_placa.append(nome)
-            continue
+            if not placa:
+                sem_placa.append(nome)
+                continue
 
-        matches = veiculos_por_placa.get(placa, [])
-        if not matches:
-            placa_sem_carro.append((nome, placa))
-            continue
-        if len(matches) > 1:
-            avisos.append(f"{nome}: placa {placa} bate com {len(matches)} veículos no VUUPT "
-                          f"({', '.join(str(m['id']) for m in matches)}) -- resolver lá e rodar de novo.")
-            continue
-        veiculo = matches[0]
+            matches = veiculos_por_placa.get(placa, [])
+            if not matches:
+                placa_sem_carro.append((nome, placa))
+                continue
+            if len(matches) > 1:
+                avisos.append(f"{nome}: placa {placa} bate com {len(matches)} veículos no VUUPT "
+                              f"({', '.join(str(m['id']) for m in matches)}) -- resolver lá e rodar de novo.")
+                continue
+            veiculo = matches[0]
 
-        # 1) vínculo no VUUPT (veículo principal do agente)
-        agente = agente_por_id.get(agent_id)
-        if agente is None:
-            avisos.append(f"{nome}: AGENT_ID_VUUPT {agent_id} não existe no VUUPT.")
-        elif agent_id not in agentes_ja_tratados:
-            agentes_ja_tratados.add(agent_id)
-            vinculo_atual = agente.get("vehicle_id")
-            if vinculo_atual == veiculo["id"]:
-                ja_ok += 1
-            elif vinculo_atual:
-                avisos.append(f"{nome}: agente {agent_id} já vinculado ao veículo {vinculo_atual} no VUUPT "
-                              f"(tabela aponta {veiculo['id']}/{placa}) -- NÃO sobrescrevi.")
-            else:
-                if not dry_run:
-                    put_vuupt(agent_id, veiculo["id"])
-                vinculados_vuupt.append((nome, agent_id, veiculo["id"], veiculo.get("code"), placa))
+            # 1) vínculo no VUUPT (veículo principal do agente)
+            agente = agente_por_id.get(agent_id)
+            if agente is None:
+                avisos.append(f"{nome}: AGENT_ID_VUUPT {agent_id} não existe no VUUPT.")
+            elif agent_id not in agentes_ja_tratados:
+                agentes_ja_tratados.add(agent_id)
+                vinculo_atual = agente.get("vehicle_id")
+                if vinculo_atual == veiculo["id"]:
+                    ja_ok += 1
+                elif vinculo_atual:
+                    avisos.append(f"{nome}: agente {agent_id} já vinculado ao veículo {vinculo_atual} no VUUPT "
+                                  f"(tabela aponta {veiculo['id']}/{placa}) -- NÃO sobrescrevi.")
+                else:
+                    if not dry_run:
+                        put_vuupt(agent_id, veiculo["id"])
+                    vinculados_vuupt.append((nome, agent_id, veiculo["id"], veiculo.get("code"), placa))
 
-        # 2) tabela: VEHICLE_ID_VUUPT da própria linha
-        valor_atual = linha.get("VEHICLE_ID_VUUPT")
-        if valor_atual == veiculo["id"]:
-            continue
-        if valor_atual is not None:
-            avisos.append(f"{nome}: VEHICLE_ID_VUUPT já preenchido com {valor_atual} na tabela "
-                          f"(placa {placa} aponta {veiculo['id']}) -- NÃO sobrescrevi.")
-            continue
-        if not dry_run:
-            atualizar(conn, linha["id"], {"VEHICLE_ID_VUUPT": veiculo["id"]}, ORIGEM)
-        planilha_preenchida.append((nome, veiculo["id"]))
+            # 2) tabela: VEHICLE_ID_VUUPT da própria linha
+            valor_atual = linha.get("VEHICLE_ID_VUUPT")
+            if valor_atual == veiculo["id"]:
+                continue
+            if valor_atual is not None:
+                avisos.append(f"{nome}: VEHICLE_ID_VUUPT já preenchido com {valor_atual} na tabela "
+                              f"(placa {placa} aponta {veiculo['id']}) -- NÃO sobrescrevi.")
+                continue
+            if not dry_run:
+                atualizar(conn, linha["id"], {"VEHICLE_ID_VUUPT": veiculo["id"]}, ORIGEM)
+            planilha_preenchida.append((nome, veiculo["id"]))
+    finally:  # grava o espelho mesmo se uma linha falhar no meio
+        if planilha_preenchida and not dry_run:
+            escrever_espelho(conn)
 
-    if planilha_preenchida and not dry_run:
-        escrever_espelho(conn)
     return {"vinculados_vuupt": vinculados_vuupt, "planilha_preenchida": planilha_preenchida,
             "ja_ok": ja_ok, "avisos": avisos, "sem_placa": sem_placa, "placa_sem_carro": placa_sem_carro}
 

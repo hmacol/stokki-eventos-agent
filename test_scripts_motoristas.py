@@ -128,6 +128,18 @@ class TestVincular(Base):
         self.assertEqual(len(r["avisos"]), 1)
         self.assertEqual(self.origens(antes), {"vincular_veiculos_motoristas.py"})
 
+    def test_falha_no_2o_put_ainda_gera_espelho_e_propaga(self):
+        a = self.novo(PLACA="ABC1D23")
+        b = self.novo(AGENT_ID_VUUPT=2, NOME_MOTORISTA="B", PLACA="ZZZ9Z99")
+        agentes = [{"id": 1, "vehicle_id": None}, {"id": 2, "vehicle_id": None}]
+        put = mock.Mock(side_effect=[None, RuntimeError("vuupt fora")])
+        with mock.patch.object(vv, "escrever_espelho") as espelho:
+            with self.assertRaises(RuntimeError):
+                vv.vincular(self.conn, agentes, self.VEICULOS, False, put)
+        self.assertEqual(self.linha(a)["VEHICLE_ID_VUUPT"], 10)
+        self.assertIsNone(self.linha(b)["VEHICLE_ID_VUUPT"])
+        espelho.assert_called_once_with(self.conn)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,28 +90,30 @@ def sincronizar(conn, agentes: list[dict], aplicar: bool) -> dict:
             code_nao_reconhecido[agente["id"]] = str(code)
 
     atualizados, ja_tinha, sem_dado = [], 0, []
-    for linha in listar(conn):
-        agent_id = linha.get("AGENT_ID_VUUPT")
-        if agent_id is None:
-            continue
+    try:
+        for linha in listar(conn):
+            agent_id = linha.get("AGENT_ID_VUUPT")
+            if agent_id is None:
+                continue
 
-        cpf_atual = str(linha.get("CPF_MOTORISTA") or "").strip()
-        if cpf_atual and cpf_atual.lower() != "nan":
-            ja_tinha += 1
-            continue
+            cpf_atual = str(linha.get("CPF_MOTORISTA") or "").strip()
+            if cpf_atual and cpf_atual.lower() != "nan":
+                ja_tinha += 1
+                continue
 
-        cpf_vuupt = cpf_por_agent_id.get(agent_id)
-        if cpf_vuupt:
-            if aplicar:
-                atualizar(conn, linha["id"], {"CPF_MOTORISTA": cpf_vuupt}, ORIGEM)
-            atualizados.append((agent_id, linha.get("NOME_MOTORISTA"), cpf_vuupt))
-        elif agent_id in code_nao_reconhecido:
-            sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), code_nao_reconhecido[agent_id]))
-        else:
-            sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), None))
+            cpf_vuupt = cpf_por_agent_id.get(agent_id)
+            if cpf_vuupt:
+                if aplicar:
+                    atualizar(conn, linha["id"], {"CPF_MOTORISTA": cpf_vuupt}, ORIGEM)
+                atualizados.append((agent_id, linha.get("NOME_MOTORISTA"), cpf_vuupt))
+            elif agent_id in code_nao_reconhecido:
+                sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), code_nao_reconhecido[agent_id]))
+            else:
+                sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), None))
+    finally:  # grava o espelho mesmo se uma linha falhar no meio
+        if aplicar and atualizados:
+            escrever_espelho(conn)
 
-    if aplicar and atualizados:
-        escrever_espelho(conn)
     return {"atualizados": atualizados, "ja_tinha": ja_tinha, "sem_dado": sem_dado}
 
 

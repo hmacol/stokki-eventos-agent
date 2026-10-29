@@ -11,7 +11,7 @@ veículo vinculado no VUUPT) com GET /vehicles (traz license_plate por
 vehicle_id). CONFIRMADO em 11/08: a maioria dos motoristas NÃO tem
 vehicle_id vinculado ao agente no VUUPT (só 2 de 22 na 1ª execução) --
 esse script preenche o que a API souber e AVISA quem ficou sem placa
-resolvida, pra preenchimento manual direto na planilha.
+resolvida, pra preenchimento manual na tela /motoristas.
 
 Só ATUALIZA a coluna PLACA -- nunca sobrescreve uma placa já
 preenchida manualmente (a API não é necessariamente mais
@@ -76,26 +76,28 @@ def sincronizar(conn, agentes: list[dict], veiculos: list[dict], aplicar: bool) 
             placa_por_agent_id[agente["id"]] = str(placa).strip().upper()
 
     atualizados, ja_tinha, sem_dado = [], 0, []
-    for linha in listar(conn):
-        agent_id = linha.get("AGENT_ID_VUUPT")
-        if agent_id is None:
-            continue
+    try:
+        for linha in listar(conn):
+            agent_id = linha.get("AGENT_ID_VUUPT")
+            if agent_id is None:
+                continue
 
-        placa_atual = str(linha.get("PLACA") or "").strip()
-        if placa_atual and placa_atual.lower() != "nan":
-            ja_tinha += 1
-            continue
+            placa_atual = str(linha.get("PLACA") or "").strip()
+            if placa_atual and placa_atual.lower() != "nan":
+                ja_tinha += 1
+                continue
 
-        placa_vuupt = placa_por_agent_id.get(agent_id)
-        if placa_vuupt:
-            if aplicar:
-                atualizar(conn, linha["id"], {"PLACA": placa_vuupt}, ORIGEM)
-            atualizados.append((agent_id, linha.get("NOME_MOTORISTA"), placa_vuupt))
-        else:
-            sem_dado.append((agent_id, linha.get("NOME_MOTORISTA")))
+            placa_vuupt = placa_por_agent_id.get(agent_id)
+            if placa_vuupt:
+                if aplicar:
+                    atualizar(conn, linha["id"], {"PLACA": placa_vuupt}, ORIGEM)
+                atualizados.append((agent_id, linha.get("NOME_MOTORISTA"), placa_vuupt))
+            else:
+                sem_dado.append((agent_id, linha.get("NOME_MOTORISTA")))
+    finally:  # grava o espelho mesmo se uma linha falhar no meio
+        if aplicar and atualizados:
+            escrever_espelho(conn)
 
-    if aplicar and atualizados:
-        escrever_espelho(conn)
     return {"atualizados": atualizados, "ja_tinha": ja_tinha, "sem_dado": sem_dado}
 
 
