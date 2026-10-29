@@ -1026,6 +1026,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
     o Stokki às vezes demora mais que o timeout pra renderizar o
     formulário (lento/instável). Cada tentativa recarrega a página antes
     de tentar de novo."""
+    from stokki.auth import aguardar_saida_do_login
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
@@ -1033,7 +1034,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
             page.fill("[name='email']", usuario)
             page.fill("[name='password']", senha)
             page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            aguardar_saida_do_login(page)  # 28/10: passa pela tela de sessão ativa
             return
         except Exception as e:
             ultimo_erro = e

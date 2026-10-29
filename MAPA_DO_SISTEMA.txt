@@ -1431,6 +1431,9 @@
 
  - Login concorrente na Stokki derruba a outra sessão (401). Use
    stokki/sessao_uso.py. Não chute URL da Stokki: gera login em cascata.
+   Desde 28/10 a Stokki para o login em /login/active-session ("Encerrar a
+   outra sessão e entrar"): todo login Playwright novo tem que passar por
+   stokki/auth.aguardar_saida_do_login (o importador tem a sua cópia).
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
