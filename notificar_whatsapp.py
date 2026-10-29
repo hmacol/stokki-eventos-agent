@@ -27,6 +27,11 @@ o resumo diario do Gmail que a rotina na nuvem escreve as 07h. Excecao ao
 limite de 200 caracteres (decisao dele): vai o resumo inteiro.
     resumo_email_whatsapp.py -> avisar_resumo_email
 
+Setima origem (pedido do Hugo, 28/10/2026), no grupo ALERTA LOGISTICA:
+rotas de dias anteriores com pedido sem baixa (o job das 15h45 so avisa,
+nao devolve mais ao pool). Leva numero da rota, data, motorista e contagem.
+    roteirizacao/cancelar_rotas_sem_motorista.main -> avisar_rotas_sem_baixa
+
 Origem PARA FORA da empresa (pedido do Hugo, 29/09/2026): o embarcador que
 ficou 10 min sem responder a equipe recebe o aviso no numero que ele mesmo
 cadastrou no portal. Destino individual (<numero>@c.us), teto proprio
@@ -55,6 +60,7 @@ config.yaml:
       sessao: "..."
       grupo_id: "...@g.us"
       grupo_atendimento_id: "...@g.us"   # grupo dos avisos de chamado
+      grupo_logistica_id: "...@g.us"     # ALERTA LOGISTICA: rotas sem baixa (cancelar_rotas_sem_motorista.py)
       grupo_resumo_email_id: "...@g.us"  # resumo diario do Gmail (resumo_email_whatsapp.py)
       avisar_chamados: true              # desliga so o aviso de chamado
       sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
@@ -156,7 +162,7 @@ NOMES_DAS_TAREFAS = {
     "backup-gcs": "Cópia de segurança diária dos dados",
     "batimento-pedidos": "Batimento diário dos pedidos",
     "backup-horario": "Cópia de segurança de hora em hora",
-    "cancelar-rotas-sem-motorista": "Cancelamento das rotas de hoje sem motorista",
+    "cancelar-rotas-sem-motorista": "Aviso das rotas sem baixa",
     "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
     "comparar-pool": "Conferência dos pedidos que aguardam rota",
     "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
@@ -332,6 +338,27 @@ def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     if resto > 0:
         linhas.append(f"e mais {resto}")
     linhas.append("Detalhes no e-mail e na Torre.")
+    return "\n".join(linhas)
+
+
+def texto_rotas_sem_baixa(rotas: list, agora: datetime | None = None) -> str:
+    """Cada item: {"numero", "data", "motorista", "pendentes", "iniciados"}
+    (cancelar_rotas_sem_motorista.rotas_sem_baixa). Excecao ao limite de
+    200 caracteres, como o insucesso: a lista e o que torna o aviso util."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    linhas = [f"⚠️ *Rotas sem baixa* · {quando}",
+              _plural(len(rotas), "rota", "rotas") + " de dias anteriores com pedido em aberto"]
+    for item in rotas[:MAX_INSUCESSOS]:
+        linha = (f"• {_uma_linha(item.get('numero'), 40)} {item['data']:%d/%m} · "
+                 f"{_uma_linha(item.get('motorista'), 40) or 'sem motorista'}: "
+                 + _plural(item.get("pendentes") or 0, "pedido", "pedidos"))
+        if item.get("iniciados"):
+            linha += f" ({item['iniciados']} em andamento)"
+        linhas.append(linha)
+    resto = len(rotas) - MAX_INSUCESSOS
+    if resto > 0:
+        linhas.append(f"e mais {resto}")
+    linhas.append("Nenhum volta pro pool sozinho: dê baixa ou cancele na Torre.")
     return "\n".join(linhas)
 
 
@@ -761,6 +788,23 @@ def avisar_insucessos(insucessos: list, config: dict, modo_teste: bool = False, 
             return "nao_relevante"
         return despachar(config, "expedir_pedidos", "insucesso",
                          texto_insucessos(insucessos, kw.get("agora")), modo_teste=modo_teste, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_rotas_sem_baixa(rotas: list, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Rotas de dias anteriores com pedido sem baixa (Hugo, 28/10: o job das
+    15h45 so avisa, nao devolve mais ao pool). Vai pro grupo
+    whatsapp_notificacoes.grupo_logistica_id (ALERTA LOGISTICA); sem ele,
+    cai no grupo dos alertas pra nao sumir."""
+    try:
+        if not rotas:
+            return "nao_relevante"
+        agora = kw.get("agora") or datetime.now()
+        return despachar(config, "cancelar_rotas_sem_motorista", "rotas_sem_baixa",
+                         texto_rotas_sem_baixa(rotas, agora), f"rotas_sem_baixa:{agora.date().isoformat()}",
+                         modo_teste=modo_teste, grupo_id=_cfg(config).get("grupo_logistica_id"), **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

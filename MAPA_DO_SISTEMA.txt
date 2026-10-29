@@ -99,7 +99,7 @@
  Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
                                             equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
- Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
+ Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (só avisa, 28/10)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
  Aviso de pendências no topo (faixas) ...... painel_agentes/templates/_aviso_pendencias.html (incluído no <main> de base.html/base_mobile.html;
@@ -346,11 +346,10 @@
                                                              Vuupt rotas de hoje; dia útil 03:50-18:30 todo min,
                                                              fora disso e em fim de semana/feriado :00/15/30/45)
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
-                                                             (só devolve ao pool pedido NÃO iniciado de
-                                                             rota de dia anterior; desde 05/10 NÃO cancela
-                                                             rota de hoje sem motorista; desde 09/10 pula
-                                                             motorista SEM_APP do BD_MOTORISTAS -- vai pro
-                                                             e-mail como "aguardando baixa")
+                                                             (desde 28/10 SÓ AVISA no WhatsApp ALERTA
+                                                             LOGISTICA, grupo_logistica_id, as rotas de
+                                                             dia anterior com pedido sem baixa; nada volta
+                                                             pro pool sozinho, só cancelando na mão)
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
@@ -794,7 +793,7 @@
                            rota comum também confere distância até cada
                            parada, km acumulado e 9h
                            (otimizacao_rotas.pedido_cabe_no_trajeto).
- cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
+ cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
