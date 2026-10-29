@@ -93,8 +93,8 @@ class TestPagina(Base):
         self.assertEqual(c["respondido_por"], "Maria (LOJA A) pelo link")
         self.assertEqual(c["canal_resposta"], "link")
         # Hugo 29/10: a resposta solta as NFs do portal presas no bloqueio de area
-        transp, por = self.liberar.call_args.args
-        self.assertEqual((transp["id"], transp["tipo"], por), (self.tid, "RETIRADA", "Maria (LOJA A) pelo link"))
+        transp, por, emb = self.liberar.call_args.args
+        self.assertEqual((transp["id"], transp["tipo"], por, emb), (self.tid, "RETIRADA", "Maria (LOJA A) pelo link", CNPJ_A))
 
     def test_apelido_cai_para_nome_remetente(self):
         self.client.post(self.url(self.cid_b), data={"opcao": "entrega", "nome": "Joao"})

@@ -116,7 +116,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
                 logger.warning("consulta %s: resposta recusada: %s", cid, e)
                 return _pagina("ok", erro="Não foi possível registrar agora. Fale com a equipe Fresh Log.", **ctx)
             import bloqueio_area  # Hugo 29/10: solta as NFs do portal presas no bloqueio de area por ela
-            bloqueio_area.liberar_por_transportadora(novo, por)
+            bloqueio_area.liberar_por_transportadora(novo, por, emb)  # revisao 29/10: so as NFs deste embarcador
             return _pagina("respondida_agora", transp=novo, tipo_rotulo=_ROTULOS[tipo], nome=f["nome"],
                            endereco=_endereco_texto(novo) if tipo == "TERCEIROS" else "")
         finally:

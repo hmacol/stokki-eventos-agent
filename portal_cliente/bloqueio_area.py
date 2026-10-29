@@ -90,30 +90,33 @@ TIPOS_SEM_AREA = ("RETIRADA", "TERCEIROS")
 _ROTULO_TIPO = {"RETIRADA": "retirada no galpão", "TERCEIROS": "redespacho"}
 
 
-def liberar_por_transportadora(transp: dict | None, por: str) -> list[int]:
+def liberar_por_transportadora(transp: dict | None, por: str, embarcador_cnpj: str | None = None) -> list[int]:
     """Hugo 29/10 (caso NF 4447): a 1a NF de uma transportadora nova chega com
     ela PENDENTE (sem tipo) e cai no bloqueio de area. Quando a tela
     /transportadoras (ou o embarcador pelo link) a classifica como retirada ou
     redespacho, as NFs bloqueadas cujo XML agora resolve pra esses tipos voltam
     pra NA_FILA, com mensagem no chamado. Reavalia pelo catalogo (mesma regra
     do classificar_area_envio), nao so pela transportadora salva. Nunca levanta:
-    o cadastro ja foi gravado. Devolve os ids liberados."""
+    o cadastro ja foi gravado. Devolve os ids liberados. `embarcador_cnpj`
+    (resposta pelo link publico): so solta as NFs desse embarcador."""
     if not transp or transp.get("situacao") != "ATIVA" or transp.get("tipo") not in TIPOS_SEM_AREA:
         return []
     try:
-        return _liberar_por_transportadora(por)
+        return _liberar_por_transportadora(por, embarcador_cnpj)
     except Exception:
         logger.exception(f"bloqueio: falhou ao liberar NFs pela transportadora {transp.get('id')}")
         return []
 
 
-def _liberar_por_transportadora(por: str) -> list[int]:
+def _liberar_por_transportadora(por: str, embarcador_cnpj: str | None) -> list[int]:
     import envio_pedidos as ep
     conn = ep.conectar()
     try:
-        bloqueados = [dict(r) for r in conn.execute(
-            "SELECT * FROM portal_envios WHERE status = ? AND (origem IS NULL OR origem = ?) ORDER BY id",
-            (STATUS_BLOQUEADO, ep.ORIGEM_XML))]
+        sql, params = "SELECT * FROM portal_envios WHERE status = ? AND (origem IS NULL OR origem = ?)", [STATUS_BLOQUEADO, ep.ORIGEM_XML]
+        if embarcador_cnpj is not None:
+            sql += " AND cnpj_embarcador = ?"
+            params.append(embarcador_cnpj)
+        bloqueados = [dict(r) for r in conn.execute(sql + " ORDER BY id", params)]
         liberados = []
         for envio in bloqueados:
             try:
