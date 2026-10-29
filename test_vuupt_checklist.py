@@ -7,6 +7,7 @@ Rodar: py -3.11 -m unittest test_vuupt_checklist
 """
 import io
 import unittest
+from unittest import mock
 
 from PIL import Image
 
@@ -221,6 +222,18 @@ class ChecklistTest(unittest.TestCase):
         buf = io.BytesIO()
         Image.new("RGB", (20, 20)).save(buf, "HEIF")
         self.assertEqual(vc.para_jpeg(buf.getvalue())[:2], b"\xff\xd8")
+
+    def test_para_jpeg_recusa_imagem_gigante(self):
+        with mock.patch("nucleo.canhotos_manuais.MAX_PIXELS", 100):
+            with self.assertRaisesRegex(ValueError, "grande demais"):
+                vc.para_jpeg(_img_bytes("PNG"))
+
+    def test_para_jpeg_reduz_imagem_grande(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (400, 200)).save(buf, "PNG")
+        with mock.patch("nucleo.canhotos_manuais.LADO_MAXIMO", 100):
+            saida = vc.para_jpeg(buf.getvalue())
+        self.assertEqual(Image.open(io.BytesIO(saida)).size, (100, 50))
 
     def test_pdf_nao_e_foto(self):
         with self.assertRaisesRegex(ValueError, "não é foto"):

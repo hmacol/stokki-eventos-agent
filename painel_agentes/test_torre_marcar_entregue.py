@@ -73,12 +73,14 @@ class TestMarcarEntregueManual(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.salvar = mock.Mock(return_value={})
+        self.existe = mock.Mock(return_value=False)
         self._patches = [
             mock.patch.object(torre_controle, "_RAIZ", Path(self._tmp.name)),
             mock.patch.object(torre_controle, "VuuptClient", _VuuptFalso),
             mock.patch.object(torre_controle, "_carregar_config", lambda: {"vuupt_api": {"token": "x"}}),
             mock.patch.object(torre_controle, "tratativas"),
             mock.patch("nucleo.canhotos_manuais.salvar", self.salvar),
+            mock.patch("nucleo.canhotos_manuais.existe", self.existe),
             mock.patch("nucleo.banco.conectar", lambda: mock.Mock()),
         ]
         for p in self._patches:
@@ -135,6 +137,7 @@ class TestMarcarEntregueManual(unittest.TestCase):
         r = self._marcar(canhoto=PDF)
         self.assertTrue(r["ok"], r)
         self.assertIn("PDF", r["aviso"])
+        self.assertEqual(self._entregas()[77]["observacao"], "com canhoto em PDF (só cópia local)")
         self.assertNotIn("checklist_id", r)
         self.assertFalse(_VuuptFalso.ultima["fotos"])
         self.salvar.assert_called_once()
@@ -179,7 +182,33 @@ class TestMarcarEntregueManual(unittest.TestCase):
         self.assertEqual(_VuuptFalso.chamadas, [])
         self.salvar.assert_called_once()
         self.assertEqual(self._entregas(), {})
+        # copia salva em pedido ja concluido deixa tratativa
+        evento = torre_controle.tratativas.registrar_evento.call_args
+        self.assertIn("pedido já concluído", evento.kwargs["texto"])
+        self.assertIn("hugo", evento.kwargs["texto"])
+
+    def test_ja_done_com_canhoto_existente_nao_sobrescreve(self):
+        _VuuptFalso.status = "done"
+        self.existe.return_value = True
+        r = self._marcar(canhoto=FOTO)
+        self.assertTrue(r["ok"])
+        self.assertIn("Já havia canhoto", r["aviso"])
+        self.salvar.assert_not_called()
         torre_controle.tratativas.registrar_evento.assert_not_called()
+
+    def test_nao_done_sobrescreve_copia_do_proprio_pedido(self):
+        # nova tentativa (checklist falhou antes) substitui a copia: nao consulta existe()
+        self._marcar(canhoto=FOTO)
+        self.salvar.assert_called_once()
+        self.existe.assert_not_called()
+
+    def test_erro_nomeia_o_arquivo_ruim(self):
+        r = self._marcar(canhoto=b"nao sou imagem")
+        self.assertTrue(r["erro"].startswith("Canhoto: "), r)
+        r = self._marcar(canhoto=FOTO, nota=b"nao sou imagem")
+        self.assertTrue(r["erro"].startswith("Foto da nota de retorno: "), r)
+        self.assertIn("não é foto", r["erro"])
+        self.salvar.assert_not_called()
 
     # --- justificativa ---
 

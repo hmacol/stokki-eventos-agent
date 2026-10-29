@@ -34,15 +34,23 @@ class ChecklistNaoGravado(Exception):
 
 
 def para_jpeg(conteudo: bytes) -> bytes:
-    """JPEG/PNG/HEIC -> JPEG. PDF ou qualquer não-imagem -> ValueError."""
+    """JPEG/PNG/HEIC -> JPEG reduzido (lado maior <= LADO_MAXIMO). PDF, não-imagem ou
+    foto acima de MAX_PIXELS -> ValueError."""
     from PIL import Image, ImageOps
     try:
         import pillow_heif
         pillow_heif.register_heif_opener()
     except ImportError:
         pass  # sem pillow_heif, HEIC cai no "não é foto" abaixo
+    from nucleo.canhotos_manuais import LADO_MAXIMO, MAX_PIXELS
     try:
-        img = Image.open(io.BytesIO(conteudo))
+        img = Image.open(io.BytesIO(conteudo))      # preguicoso: so le o cabecalho
+    except Exception as e:  # noqa: BLE001
+        raise ValueError("Arquivo não é foto") from e
+    if img.size[0] * img.size[1] > MAX_PIXELS:
+        raise ValueError("Foto grande demais: tire de novo com resolução menor")
+    try:
+        img.thumbnail((LADO_MAXIMO, LADO_MAXIMO))
         img = ImageOps.exif_transpose(img).convert("RGB")
     except Exception as e:  # noqa: BLE001
         raise ValueError("Arquivo não é foto") from e

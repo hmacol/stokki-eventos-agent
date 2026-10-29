@@ -85,6 +85,15 @@ def codigos_validos(codigo: str) -> list[str]:
     return cods
 
 
+def existe(conn: sqlite3.Connection, codigo: str) -> bool:
+    """Ja ha canhoto manual gravado para algum dos codigos? (salvar SOBRESCREVE: quem nao
+    pode trocar comprovante existente confere aqui antes.)"""
+    garantir_tabela(conn)
+    cods = codigos_validos(codigo)
+    marcas = ",".join("?" * len(cods))
+    return conn.execute(f"SELECT 1 FROM canhotos_manuais WHERE codigo IN ({marcas}) LIMIT 1", cods).fetchone() is not None
+
+
 def salvar(conn: sqlite3.Connection, codigo: str, service_id: int | None, pdf: bytes, por: str,
            config: dict | None = None) -> dict:
     cods = codigos_validos(codigo)

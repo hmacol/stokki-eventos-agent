@@ -411,26 +411,48 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
             canhoto_pdf = canhotos_manuais.para_pdf(foto_canhoto)
             if foto_canhoto[:5] != b"%PDF-":
                 canhoto_jpeg = para_jpeg(foto_canhoto)
+    except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
+        return {"ok": False, "erro": f"Canhoto: {e}"}
+    try:
         if foto_nota_retorno:
             nota_jpeg = para_jpeg(foto_nota_retorno)
-    except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
-        return {"ok": False, "erro": str(e)}
+    except ValueError as e:
+        return {"ok": False, "erro": f"Foto da nota de retorno: {str(e)[:1].lower()}{str(e)[1:]}"}
+
+    if status == "done":
+        # Pedido ja concluido: o canhoto manual existente e o comprovante e NUNCA e
+        # sobrescrito; so entra se ainda nao ha nenhum.
+        resultado = {"ok": True, "ja_estava": True, "codigo": codigo}
+        if not tem_foto:
+            return resultado
+        aviso = "Já estava concluído; a foto não foi para o checklist."
+        if canhoto_pdf:
+            conn = nucleo_banco.conectar()
+            try:
+                if canhotos_manuais.existe(conn, codigo):
+                    aviso += " Já havia canhoto arquivado; o enviado não foi gravado."
+                else:
+                    canhotos_manuais.salvar(conn, codigo, service_id, canhoto_pdf, usuario or "painel", config)
+                    tratativas.registrar_evento(
+                        codigo, "TORRE", "CANHOTO_ANEXADO", service_id=service_id,
+                        texto=f"Canhoto anexado pelo painel em pedido já concluído por {usuario or '?'}")
+            except canhotos_manuais.CanhotoInvalido as e:
+                return {"ok": False, "erro": f"Canhoto: {e}"}
+            finally:
+                conn.close()
+        resultado["aviso"] = aviso
+        return resultado
 
     # Copia local do canhoto antes de qualquer fechamento (a expedicao anexa na Stokki).
+    # Nova tentativa substitui a copia do proprio pedido (spec 4.3).
     if canhoto_pdf:
         conn = nucleo_banco.conectar()
         try:
             canhotos_manuais.salvar(conn, codigo, service_id, canhoto_pdf, usuario or "painel", config)
         except canhotos_manuais.CanhotoInvalido as e:
-            return {"ok": False, "erro": str(e)}
+            return {"ok": False, "erro": f"Canhoto: {e}"}
         finally:
             conn.close()
-
-    if status == "done":
-        resultado = {"ok": True, "ja_estava": True, "codigo": codigo}
-        if tem_foto:
-            resultado["aviso"] = "Já estava concluído; a foto não foi para o checklist."
-        return resultado
 
     fotos = {}
     if canhoto_jpeg:
@@ -447,7 +469,7 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
         return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {e}"}
 
     if foto_canhoto:
-        observacao = "com foto do canhoto"
+        observacao = "com foto do canhoto" if canhoto_jpeg else "com canhoto em PDF (só cópia local)"
     else:
         observacao = justificativas_sem_canhoto.rotulo(just_codigo)
         if just_texto:
@@ -1423,7 +1445,11 @@ def _conectar_tratadas():
     for nome, tipo in (("justificativa", "TEXT"), ("texto_outro", "TEXT"),
                        ("checklist_id", "INTEGER"), ("fotos", "INTEGER")):
         if nome not in colunas:
-            conn.execute(f"ALTER TABLE torre_entregas_manuais ADD COLUMN {nome} {tipo}")
+            try:
+                conn.execute(f"ALTER TABLE torre_entregas_manuais ADD COLUMN {nome} {tipo}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():   # outro processo criou antes
+                    raise
     conn.commit()
     return conn
 
