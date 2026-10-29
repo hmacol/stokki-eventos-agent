@@ -1118,7 +1118,9 @@
  link_canhoto.py           /c/<token>: canhoto sem login.
  consulta_transportadora_web.py  /transportadora/<token>: embarcador responde (retirada, redespacho,
                            entrega) sobre transportadora nova, sem login; template consulta_transportadora.html.
- bloqueio_area.py          Bloqueio de área não atendida.
+ bloqueio_area.py          Bloqueio de área não atendida. Classificar a transportadora do XML
+                           como RETIRADA/TERCEIROS (tela /transportadoras ou link) solta
+                           sozinha as NFs presas por ela (liberar_por_transportadora).
  gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
                            criar-pin-padrao (lote; pula cancelados e membros
                            de grupo; só grava com --confirmar); fluxos (lista,

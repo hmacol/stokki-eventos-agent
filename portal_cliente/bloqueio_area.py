@@ -86,6 +86,76 @@ def avisar_cancelamento(envio: dict, por: str) -> bool:
         return False
 
 
+TIPOS_SEM_AREA = ("RETIRADA", "TERCEIROS")
+_ROTULO_TIPO = {"RETIRADA": "retirada no galpão", "TERCEIROS": "redespacho"}
+
+
+def liberar_por_transportadora(transp: dict | None, por: str) -> list[int]:
+    """Hugo 29/10 (caso NF 4447): a 1a NF de uma transportadora nova chega com
+    ela PENDENTE (sem tipo) e cai no bloqueio de area. Quando a tela
+    /transportadoras (ou o embarcador pelo link) a classifica como retirada ou
+    redespacho, as NFs bloqueadas cujo XML agora resolve pra esses tipos voltam
+    pra NA_FILA, com mensagem no chamado. Reavalia pelo catalogo (mesma regra
+    do classificar_area_envio), nao so pela transportadora salva. Nunca levanta:
+    o cadastro ja foi gravado. Devolve os ids liberados."""
+    if not transp or transp.get("situacao") != "ATIVA" or transp.get("tipo") not in TIPOS_SEM_AREA:
+        return []
+    try:
+        return _liberar_por_transportadora(por)
+    except Exception:
+        logger.exception(f"bloqueio: falhou ao liberar NFs pela transportadora {transp.get('id')}")
+        return []
+
+
+def _liberar_por_transportadora(por: str) -> list[int]:
+    import envio_pedidos as ep
+    conn = ep.conectar()
+    try:
+        bloqueados = [dict(r) for r in conn.execute(
+            "SELECT * FROM portal_envios WHERE status = ? AND (origem IS NULL OR origem = ?) ORDER BY id",
+            (STATUS_BLOQUEADO, ep.ORIGEM_XML))]
+        liberados = []
+        for envio in bloqueados:
+            try:
+                nfe = ep.ler_nfe(ep.caminho_xml(envio).read_bytes())
+                tipo = ep._tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "")
+            except Exception as e:
+                logger.warning(f"bloqueio: nao reavaliou a transportadora da NF {_rotulo(envio)}: {e}")
+                continue
+            if tipo not in TIPOS_SEM_AREA:
+                continue
+            cur = conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ? AND status = ?",
+                               (ep.STATUS_NA_FILA, ep._agora(), envio["id"], STATUS_BLOQUEADO))
+            conn.commit()
+            if cur.rowcount:
+                liberados.append(envio["id"])
+                logger.info(f"bloqueio: NF {_rotulo(envio)} liberada (transportadora {tipo}, por {por})")
+                _avisar_liberacao(envio, nfe.get("transportadora_nome") or "", tipo)
+        return liberados
+    finally:
+        conn.close()
+
+
+def _avisar_liberacao(envio: dict, transportadora: str, tipo: str) -> None:
+    """Sem o `por` na mensagem (revisao 29/10): o chat e do cliente desta NF, e
+    quem classificou pode ser outro embarcador respondendo pelo link."""
+    chamado_id = envio.get("bloqueio_chamado_id")
+    if not chamado_id:
+        return
+    try:
+        ch = _chamados()
+        conn_ch = ch.conectar()
+        try:
+            chamado = ch.buscar_chamado(conn_ch, chamado_id)
+            if chamado:
+                ch.mensagem_sistema(conn_ch, chamado, f"NF {_rotulo(envio)} liberada: a transportadora {transportadora} foi "
+                                                      f"cadastrada como {_ROTULO_TIPO[tipo]}. O pedido segue para a Stokki.")
+        finally:
+            conn_ch.close()
+    except Exception as e:
+        logger.warning(f"bloqueio: NF {_rotulo(envio)} liberada, mas sem mensagem no chamado {chamado_id}: {e}")
+
+
 def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict, db_path=None) -> int | None:
     """`conn` e a conexao de envio_pedidos (portal_envios). `cliente` =
     {cnpj, sender_id, nome}. Devolve o id do chamado ou None."""

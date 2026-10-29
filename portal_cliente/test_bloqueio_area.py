@@ -399,5 +399,88 @@ class AbrirBloqueio(unittest.TestCase):
         self.assertEqual(ba.forcar_destino({}), "hugo@freshlogbr.com")
 
 
+class LiberarPorTransportadora(unittest.TestCase):
+    """Hugo 29/10 (caso NF 4447): a 1a NF de transportadora nova chega com ela
+    PENDENTE e cai no bloqueio; classificar como retirada/redespacho na tela
+    /transportadoras solta a NF presa."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        raiz = Path(self.tmp.name)
+        for alvo, valor in (("DB_PATH", raiz / "d.db"), ("_RAIZ", raiz)):
+            p = mock.patch.object(ep, alvo, valor)
+            p.start()
+            self.addCleanup(p.stop)
+        conn = ep.conectar()
+        for i, (nf, transp, status, origem) in enumerate((("4447", "RODOVIARIO LUZ", "AGUARDANDO_LIBERACAO", "xml"),
+                                                          ("4469", "", "AGUARDANDO_LIBERACAO", "xml"),
+                                                          ("4500", "RODOVIARIO LUZ", "NA_FILA", "xml"),
+                                                          ("4501", "OUTRA ENTREGA", "AGUARDANDO_LIBERACAO", "xml")), start=1):
+            tag = f"<transporta><xNome>{transp}</xNome></transporta>" if transp else ""
+            (raiz / f"{nf}.xml").write_text(tag)
+            conn.execute("INSERT INTO portal_envios (id, cnpj_embarcador, chave_nfe, numero_nf, xml_path, status, criado_em, "
+                         "atualizado_em, origem, bloqueio_motivo, bloqueio_chamado_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                         (i, "49874051000131", f"chave{nf}", nf, f"{nf}.xml", status, "2026-10-27 10:24:28",
+                          "2026-10-27 10:24:28", origem, "fora_sp", 77))
+        conn.commit()
+        conn.close()
+        self.tipos = {"RODOVIARIO LUZ": "RETIRADA", "OUTRA ENTREGA": "ENTREGA"}
+
+    def _rodar(self, transp, fake_ch=None):
+        import bloqueio_area as ba
+        fake_ch = fake_ch or mock.MagicMock()
+        fake_ch.buscar_chamado.return_value = {"id": 77}
+        ler = lambda conteudo, *a, **k: {"transportadora_nome": (conteudo.decode().split("<xNome>")[1].split("<")[0]
+                                                                 if b"<xNome>" in conteudo else ""), "transportadora_cnpj": ""}
+        with mock.patch.object(ep, "ler_nfe", side_effect=ler), \
+             mock.patch.object(ep, "_tipo_transportadora", side_effect=lambda nome, cnpj: self.tipos.get(nome)), \
+             mock.patch.object(ba, "_chamados", return_value=fake_ch):
+            return ba.liberar_por_transportadora(transp, "hugom"), fake_ch
+
+    def _status(self):
+        conn = ep.conectar()
+        try:
+            return {r["numero_nf"]: r["status"] for r in conn.execute("SELECT numero_nf, status FROM portal_envios")}
+        finally:
+            conn.close()
+
+    def test_retirada_solta_so_a_nf_dela(self):
+        liberados, fake_ch = self._rodar({"id": 134, "situacao": "ATIVA", "tipo": "RETIRADA"})
+        self.assertEqual(liberados, [1])
+        self.assertEqual(self._status(), {"4447": "NA_FILA", "4469": "AGUARDANDO_LIBERACAO", "4500": "NA_FILA",
+                                          "4501": "AGUARDANDO_LIBERACAO"})
+        texto = fake_ch.mensagem_sistema.call_args[0][2]
+        self.assertIn("NF 4447", texto)
+        self.assertIn("RODOVIARIO LUZ", texto)
+        self.assertNotIn("hugom", texto)  # revisao 29/10: quem classificou nao vai pro chat do cliente
+        self.assertEqual(fake_ch.mensagem_sistema.call_count, 1)
+
+    def test_terceiros_tambem_solta(self):
+        self.tipos["RODOVIARIO LUZ"] = "TERCEIROS"
+        liberados, _ = self._rodar({"id": 134, "situacao": "ATIVA", "tipo": "TERCEIROS"})
+        self.assertEqual(liberados, [1])
+
+    def test_entrega_pendente_ou_inativa_nao_mexe(self):
+        for transp in ({"situacao": "ATIVA", "tipo": "ENTREGA"}, {"situacao": "PENDENTE", "tipo": None},
+                       {"situacao": "INATIVA", "tipo": "RETIRADA"}, None):
+            with mock.patch.object(ep, "conectar") as conectar:
+                self.assertEqual(self._rodar(transp)[0], [])
+            conectar.assert_not_called()
+
+    def test_falha_no_chamado_nao_desfaz_a_liberacao(self):
+        fake_ch = mock.MagicMock()
+        fake_ch.conectar.side_effect = RuntimeError("chamados fora")
+        liberados, _ = self._rodar({"id": 134, "situacao": "ATIVA", "tipo": "RETIRADA"}, fake_ch)
+        self.assertEqual(liberados, [1])
+        self.assertEqual(self._status()["4447"], "NA_FILA")
+
+    def test_erro_geral_nunca_levanta(self):
+        import bloqueio_area as ba
+        with mock.patch.object(ep, "conectar", side_effect=sqlite3.OperationalError("locked")):
+            with self.assertLogs(ba.logger, level="ERROR"):
+                self.assertEqual(ba.liberar_por_transportadora({"id": 1, "situacao": "ATIVA", "tipo": "RETIRADA"}, "x"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
