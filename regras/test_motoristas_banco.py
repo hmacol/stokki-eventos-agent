@@ -6,6 +6,8 @@ Tabela bd_motoristas (planilha de motoristas no banco): importação, edição
 com histórico, ATIVO/inativado_em e espelho xlsx. SQLite e xlsx temporários.
     py -3.11 -m unittest regras.test_motoristas_banco -v
 """
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -146,6 +148,51 @@ class TestMotoristasBanco(unittest.TestCase):
     def test_caminho_espelho_segue_db_path(self):
         with mock.patch.object(banco, "DB_PATH", self.dir / "t.db"):
             self.assertEqual(mb.caminho_espelho(), self.dir / "BD_MOTORISTAS.xlsx")
+
+
+class TestCliMotoristasBanco(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.dir = Path(self._tmp.name)
+        self.db = self.dir / "t.db"
+        self.xlsx = self.dir / "BD.xlsx"
+        pd.DataFrame([
+            _linha(AGENT_ID_VUUPT=10, NOME_MOTORISTA="Ana", ATIVO="SIM", CPF_MOTORISTA="09474142742", PLACA="AAA1111"),
+            _linha(AGENT_ID_VUUPT=11, NOME_MOTORISTA="Beto", ATIVO="SIM", PLACA="BBB2222"),
+        ], columns=mb.COLUNAS).to_excel(self.xlsx, index=False)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _rodar(self, *args):
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            codigo = mb.main(list(args))
+        return codigo, saida.getvalue()
+
+    def _importar(self):
+        return self._rodar("importar", "--planilha", str(self.xlsx), "--db", str(self.db))
+
+    def test_importar_imprime_contagem_e_grava_espelho_ao_lado_do_db(self):
+        codigo, saida = self._importar()
+        self.assertEqual(codigo, 0)
+        self.assertIn("2 motoristas", saida)
+        self.assertTrue((self.dir / "BD_MOTORISTAS.xlsx").exists())
+
+    def test_conferir_igual(self):
+        self._importar()
+        codigo, saida = self._rodar("conferir", "--planilha", str(self.xlsx), "--db", str(self.db))
+        self.assertEqual((codigo, saida.strip()), (0, "IGUAL (2 motoristas)"))
+
+    def test_conferir_campo_diferente_sai_com_1(self):
+        self._importar()
+        conn = banco.conectar(self.db)
+        conn.execute("UPDATE bd_motoristas SET PLACA = 'ZZZ9999' WHERE AGENT_ID_VUUPT = 11")
+        conn.commit()
+        conn.close()
+        codigo, saida = self._rodar("conferir", "--planilha", str(self.xlsx), "--db", str(self.db))
+        self.assertEqual(codigo, 1)
+        self.assertIn("11 placa xlsx='BBB2222' banco='ZZZ9999'", saida)
 
 
 if __name__ == "__main__":

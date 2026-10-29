@@ -212,3 +212,55 @@ def importar_planilha(conn, caminho: Path, substituir: bool = False) -> int:
     except Exception:
         conn.rollback()
         raise
+
+
+def conferir(conn, caminho_planilha: Path) -> list[str]:
+    """Compara o catálogo lido da planilha com o montado das linhas da tabela
+    (campo a campo e na ordem). Devolve as diferenças; lista vazia = IGUAL."""
+    from dataclasses import asdict
+    from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista
+
+    xlsx = CatalogoMotoristas._carregar_excel(Path(caminho_planilha)).motoristas
+    do_banco = [m for m in (_construir_motorista(r) for r in listar(conn)) if m]
+    difs = []
+    if len(xlsx) != len(do_banco):
+        difs.append(f"quantidade xlsx={len(xlsx)} banco={len(do_banco)}")
+    for a, b in zip(xlsx, do_banco):
+        da, db = asdict(a), asdict(b)
+        for campo in da:
+            if da[campo] != db[campo]:
+                difs.append(f"{da.get('agent_id')} {campo} xlsx={da[campo]!r} banco={db[campo]!r}")
+    return difs
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="regras.motoristas_banco")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for nome in ("importar", "conferir"):
+        p = sub.add_parser(nome)
+        p.add_argument("--planilha", required=True)
+        p.add_argument("--db", default=None, help="banco alternativo (ensaio); padrao: dados/dados.db")
+        if nome == "importar":
+            p.add_argument("--substituir", action="store_true")
+    args = ap.parse_args(argv)
+    conn = banco.conectar(args.db)
+    try:
+        if args.cmd == "importar":
+            n = importar_planilha(conn, Path(args.planilha), substituir=args.substituir)
+            print(f"{n} motoristas importados")
+            escrever_espelho(conn, (Path(args.db).parent / "BD_MOTORISTAS.xlsx") if args.db else None)
+            return 0
+        difs = conferir(conn, Path(args.planilha))
+        if difs:
+            print("\n".join(difs))
+            return 1
+        print(f"IGUAL ({len(listar(conn))} motoristas)")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
