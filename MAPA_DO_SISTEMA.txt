@@ -419,6 +419,8 @@
 
  --- Vuupt ---
  vuupt_client.py         Cliente REST da Vuupt (serviços, skills, telefone E.164).
+ vuupt_checklist.py      Checklist de entrega da Vuupt por API (fotos canhoto/nota de retorno, 29/10); usado por
+                         VuuptClient.concluir_como_agente(fotos_checklist=...). Teste: test_vuupt_checklist.py.
  http_retry.py           Backoff para HTTP 429.
  fingerprint_importacao.py  Hash do payload enviado (não reenviar igual).
  fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned

@@ -341,21 +341,39 @@ class VuuptClient:
         return self._acao_servico(service_id, "cancel")
 
     def concluir_como_agente(self, service_id: int, sucesso: bool = True,
-                             failed_reason_id: int | None = None, status_atual: str = "") -> None:
+                             failed_reason_id: int | None = None, status_atual: str = "",
+                             fotos_checklist: dict[int, bytes] | None = None,
+                             servico: dict | None = None) -> int | None:
         """Percorre o ciclo do agente por API: accept -> start -> check-in
         -> check-out. Idempotente em relação ao status atual (pula as
-        etapas já feitas). Não gera checklist -- é pra serviço que nunca
-        passa pelo app (retirada no galpão)."""
+        etapas já feitas). Sem fotos_checklist não gera checklist -- é pra
+        serviço que nunca passa pelo app (retirada no galpão).
+        Com fotos_checklist ({campo_id: jpeg}) preenche o checklist de
+        entrega entre o check-in e o check-out (vuupt_checklist) e devolve
+        o id dele; se o checklist falhar, propaga ChecklistNaoGravado e o
+        check-out NÃO roda (pedido continua aberto)."""
+        if fotos_checklist:
+            from vuupt_checklist import ChecklistNaoGravado
+            servico = servico or self.buscar_servico_por_id(service_id)
+            if not servico:
+                raise ChecklistNaoGravado(f"Serviço {service_id} não encontrado na Vuupt")
+            if servico.get("type") != "delivery":
+                raise ChecklistNaoGravado(f"Serviço {service_id} não é entrega: sem checklist de entrega")
         ordem = ["assigned", "accepted", "on_route", "arrived"]
         etapas = [("accepted", "accept"), ("on_route", "start"), ("arrived", "check-in")]
         pos_atual = ordem.index(status_atual) if status_atual in ordem else 0
         for i, (status_alvo, acao) in enumerate(etapas):
             if i + 1 > pos_atual:
                 self._acao_servico(service_id, acao)
+        checklist_id = None
+        if fotos_checklist:
+            from vuupt_checklist import preencher_checklist_entrega
+            checklist_id = preencher_checklist_entrega(self, servico, fotos_checklist)
         data = {"accomplished": "true" if sucesso else "false"}
         if not sucesso and failed_reason_id:
             data["failed_reason_id"] = str(failed_reason_id)
         self._acao_servico(service_id, "check-out", data=data)
+        return checklist_id
 
     def listar_servicos_do_agente(self, agent_id: int, statuses: tuple[str, ...] = ("assigned", "accepted", "on_route", "arrived")) -> list[dict]:
         """Serviços atribuídos ao agente que ainda não terminaram (1 chamada por status)."""

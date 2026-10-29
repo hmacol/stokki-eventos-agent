@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""
+vuupt_checklist.py
+
+Preenche, por API, o "Checklist de Entregas com Sucesso" da Vuupt (form 1531)
+com as fotos do canhoto e da nota de retorno -- o mesmo que o app do
+motorista faz. Endpoints NÃO documentados, provados na conta real em 29/10
+(spec docs/superpowers/specs/2026-10-29-checklist-vuupt-pelas-telas-design.md,
+seção 2). Por isso a gravação é conferida relendo o checklist: a Vuupt ignora
+em silêncio (HTTP 200) arquivo enviado numa parte de nome errado.
+
+Usado por VuuptClient.concluir_como_agente (entre o check-in e o check-out).
+"""
+import io
+import logging
+import uuid
+from datetime import datetime, timezone
+
+from http_retry import chamar_com_retry
+
+logger = logging.getLogger(__name__)
+
+FORM_ENTREGA = 1531
+REGRA_ENTREGA = 1526
+GATILHO = "finished_service"
+CAMPO_CANHOTO = 15086
+CAMPO_NOTA_RETORNO = 15349
+BASE_LAT = -23.497015   # base (R. Zilda 288): usada quando o serviço não tem coordenada
+BASE_LNG = -46.660775
+
+
+class ChecklistNaoGravado(Exception):
+    """O checklist não foi gravado (erro da Vuupt ou foto ausente na releitura)."""
+
+
+def para_jpeg(conteudo: bytes) -> bytes:
+    """JPEG/PNG/HEIC -> JPEG. PDF ou qualquer não-imagem -> ValueError."""
+    from PIL import Image, ImageOps
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass  # sem pillow_heif, HEIC cai no "não é foto" abaixo
+    try:
+        img = Image.open(io.BytesIO(conteudo))
+        img = ImageOps.exif_transpose(img).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        raise ValueError("Arquivo não é foto") from e
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _lista_de_campos(checklist: dict) -> list[dict]:
+    campos = checklist.get("fields") or []
+    if isinstance(campos, dict):
+        campos = campos.get("data") or []
+    return campos
+
+
+def _checklists_do_servico(vuupt, service_id: int) -> list[dict]:
+    resp = chamar_com_retry(
+        vuupt.session.get,
+        f"{_api_base()}/checklists",
+        params={
+            "filter[0][field]": "entity_id",
+            "filter[0][operator]": "eq",
+            "filter[0][value]": service_id,
+            "include": "fields",
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        raise ChecklistNaoGravado(f"Falha ao ler checklists do serviço {service_id}: status {resp.status_code}")
+    dado = resp.json() or {}
+    lista = dado.get("data") if isinstance(dado, dict) else dado
+    return [c for c in (lista or []) if int(c.get("checklist_form_id") or 0) == FORM_ENTREGA]
+
+
+def checklist_entrega_do_servico(vuupt, service_id: int) -> dict | None:
+    """O checklist de entrega (form 1531) mais recente do serviço, ou None."""
+    achados = _checklists_do_servico(vuupt, service_id)
+    return max(achados, key=lambda c: int(c.get("id") or 0)) if achados else None
+
+
+def _api_base() -> str:
+    from vuupt_client import API_BASE_URL
+    return API_BASE_URL
+
+
+def _agora_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _erro(resp) -> str:
+    try:
+        return str(resp.json())
+    except Exception:  # noqa: BLE001
+        return resp.text
+
+
+def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -> int:
+    """Cria (ou reaproveita) o checklist de entrega do serviço, envia as fotos
+    ({campo_id: jpeg}), finaliza e confere a releitura. Devolve o id do checklist."""
+    sid = int(servico["id"])
+    base = _api_base()
+    sem_ct = {"Content-Type": None}   # form/multipart: tira o JSON da sessão (como _acao_servico)
+
+    existente = checklist_entrega_do_servico(vuupt, sid)
+    if existente and int(existente.get("images_quantity") or 0) == len(fotos):
+        cid = int(existente["id"])
+        ja_enviados = {int(c["checklist_form_field_id"]) for c in _lista_de_campos(existente)
+                       if c.get("file_url") and c.get("checklist_form_field_id") is not None}
+    else:
+        agora = _agora_utc()
+        lat = servico.get("latitude")
+        lng = servico.get("longitude")
+        if lat in (None, "") or lng in (None, ""):
+            lat, lng = BASE_LAT, BASE_LNG
+        dados = {
+            "checklist_form_id": FORM_ENTREGA,
+            "checklist_rule_id": REGRA_ENTREGA,
+            "entity_id": sid,
+            "trigger": GATILHO,
+            "latitude": str(lat),
+            "longitude": str(lng),
+            "gps_date_time": agora,
+            "filled_at": agora,
+            "images_quantity": len(fotos),
+        }
+        resp = chamar_com_retry(vuupt.session.post, f"{base}/checklists", data=dados, headers=sem_ct, timeout=30)
+        if not resp.ok:
+            raise ChecklistNaoGravado(f"Criar checklist do serviço {sid}: status {resp.status_code}: {_erro(resp)}")
+        cid = int(((resp.json() or {}).get("checklist_answer") or {}).get("id") or 0)
+        if not cid:
+            raise ChecklistNaoGravado(f"Criar checklist do serviço {sid}: resposta sem id")
+        ja_enviados = set()
+
+    for campo, jpeg in fotos.items():
+        if int(campo) in ja_enviados:
+            continue
+        dados = {
+            "checklist_form_id": FORM_ENTREGA,
+            "fields[0][id]": int(campo),
+            "fields[0][content_uuid]": str(uuid.uuid4()),
+            "fields[0][file_source]": "gallery",
+        }
+        resp = chamar_com_retry(
+            vuupt.session.post, f"{base}/checklists/{cid}",
+            data=dados, files={"fields[0][value]": ("foto.jpg", jpeg, "image/jpeg")},
+            headers=sem_ct, timeout=60,
+        )
+        if not resp.ok:
+            raise ChecklistNaoGravado(f"Enviar foto {campo} ao checklist {cid}: status {resp.status_code}: {_erro(resp)}")
+
+    resp = chamar_com_retry(vuupt.session.put, f"{base}/checklists/{cid}/finish", headers=sem_ct, timeout=30)
+    if not resp.ok:
+        raise ChecklistNaoGravado(f"Finalizar checklist {cid}: status {resp.status_code}: {_erro(resp)}")
+
+    # conferência: a Vuupt aceita (200) arquivo em parte errada sem gravar nada
+    relido = next((c for c in _checklists_do_servico(vuupt, sid) if int(c.get("id") or 0) == cid), None)
+    if relido is None:
+        raise ChecklistNaoGravado(f"Checklist {cid} não apareceu na releitura do serviço {sid}")
+    com_arquivo = {int(c["checklist_form_field_id"]) for c in _lista_de_campos(relido)
+                   if c.get("file_url") and c.get("checklist_form_field_id") is not None}
+    faltando = [int(c) for c in fotos if int(c) not in com_arquivo]
+    if faltando:
+        raise ChecklistNaoGravado(f"Checklist {cid}: foto do(s) campo(s) {faltando} não gravada(s) (sem file_url)")
+    logger.info(f"Checklist {cid} do serviço {sid} gravado com {len(fotos)} foto(s)")
+    return cid
