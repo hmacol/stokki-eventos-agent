@@ -1374,7 +1374,9 @@ def baixa_sem_app():
                          "status": s.get("status") or "",
                          "fechado": (s.get("status") or "") in ("done", "canceled", "cancelled")})
     motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
-    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos)
+    from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos,
+                           justificativas=JUSTIFICATIVAS)
 
 
 @app.route("/api/baixa-sem-app", methods=["POST"])
@@ -1422,21 +1424,56 @@ def api_baixa_sem_app():
         if bsa.lote_em_andamento(conn, route_id):
             return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
         # Canhoto ANTES do lote: a expedicao roda a cada 30 min e a Stokki
-        # nao aceita anexo em pedido ja expedido. Valida todos, depois grava.
-        from nucleo import canhotos_manuais
-        canhotos = []
+        # nao aceita anexo em pedido ja expedido. Valida e converte tudo (em
+        # memoria) antes de gravar qualquer coisa.
+        from nucleo import canhotos_manuais, justificativas_sem_canhoto
+        from vuupt_checklist import CAMPO_CANHOTO, CAMPO_NOTA_RETORNO, para_jpeg
+        canhotos, fotos_por_servico = [], {}
         for i in itens:
-            arq = request.files.get(f"canhoto_{int(i.get('service_id') or 0)}")
-            if not arq or not i.get("entregue"):
+            if not i.get("entregue"):
                 continue
+            sid = int(i.get("service_id") or 0)
+            conteudos = {}
+            for chave in ("canhoto", "nota"):
+                arq = request.files.get(f"{chave}_{sid}")
+                conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+                if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+                    return jsonify({"erro": f"{i.get('codigo')}: arquivo maior que 15 MB."}), 413
+                conteudos[chave] = conteudo or None
+            fotos = {}
             try:
-                canhotos.append((i, canhotos_manuais.para_pdf(arq.read())))
-            except canhotos_manuais.CanhotoInvalido as e:
-                return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+                if conteudos["canhoto"]:
+                    canhotos.append((i, canhotos_manuais.para_pdf(conteudos["canhoto"])))
+                    if conteudos["canhoto"][:5] == b"%PDF-":
+                        i["aviso"] = "Canhoto em PDF: ficou só como cópia local; no checklist da VUUPT vão apenas fotos."
+                    else:
+                        fotos[CAMPO_CANHOTO] = para_jpeg(conteudos["canhoto"])
+            except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
+                return jsonify({"erro": f"{i.get('codigo')}: Canhoto: {e}"}), 400
+            try:
+                if conteudos["nota"]:
+                    fotos[CAMPO_NOTA_RETORNO] = para_jpeg(conteudos["nota"])
+            except ValueError as e:
+                msg = str(e)
+                return jsonify({"erro": f"{i.get('codigo')}: Foto da nota de retorno: {msg[:1].lower()}{msg[1:]}"}), 400
+            if conteudos["canhoto"]:
+                i.pop("justificativa", None), i.pop("texto_outro", None)   # com canhoto a justificativa e ignorada
+            else:
+                try:
+                    i["justificativa"], i["texto_outro"] = justificativas_sem_canhoto.validar(
+                        i.get("justificativa"), i.get("texto_outro"))
+                except ValueError as e:
+                    return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+            if fotos:
+                fotos_por_servico[sid] = fotos
         por = session.get("usuario") or g.nivel_acesso
         for i, pdf in canhotos:
             canhotos_manuais.salvar(conn, i.get("codigo") or "", int(i["service_id"]), pdf, por, _carregar_config())
         lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
+        try:
+            bsa.gravar_fotos(conn, lote, fotos_por_servico)
+        except Exception as e:  # noqa: BLE001 -- gravar_fotos ja marcou o lote como erro
+            return jsonify({"erro": f"Não consegui guardar as fotos do checklist: {e}"}), 500
     finally:
         conn.close()
     token = (_carregar_config().get("vuupt_api") or {}).get("token", "")

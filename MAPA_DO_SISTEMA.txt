@@ -154,6 +154,9 @@
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
+                                             Checklist da Vuupt (29/10): canhoto/nota de retorno em foto vao pro checklist; sem
+                                             canhoto, justificativa da lista. JPEG do lote ficam em dados/checklist_fotos/lote_<id>/
+                                             (apagados ao fim se nenhum item deu erro).
                                              Canhoto opcional na tela -> nucleo/canhotos_manuais.py
                                              (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
                                              (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem

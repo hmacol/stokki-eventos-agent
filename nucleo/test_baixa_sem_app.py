@@ -17,17 +17,23 @@ class VuuptFalsa:
     def __init__(self, status):
         self.status = dict(status)          # service_id -> status
         self.concluidos = []
+        self.fotos = {}
 
     def buscar_servico_por_id(self, sid):
         if self.status[sid] == "sem_resposta":
             return None
         return {"id": sid, "status": self.status[sid], "route_id": 77}
 
-    def concluir_como_agente(self, sid, sucesso=True, failed_reason_id=None, status_atual=""):
+    def concluir_como_agente(self, sid, sucesso=True, failed_reason_id=None, status_atual="",
+                             fotos_checklist=None, servico=None):
         if self.status[sid] == "erro":
             raise RuntimeError("409 conflito")
+        if self.status[sid] == "checklist_falha":
+            raise RuntimeError("Checklist nao gravado")     # levanta ANTES do check-out
         self.concluidos.append((sid, sucesso, failed_reason_id))
+        self.fotos[sid] = fotos_checklist
         self.status[sid] = "done"
+        return 900 + sid if fotos_checklist else None
 
 
 class Base(unittest.TestCase):
@@ -119,6 +125,72 @@ class Lote(Base):
         self.conn.execute("UPDATE baixas_sem_app SET criado_em = '2026-01-01 00:00:00' WHERE id = ?", (lote,))
         self.conn.commit()
         self.assertFalse(b.lote_em_andamento(self.conn, 5000))   # lote velho/morto libera nova tentativa
+
+
+class Fotos(Lote):
+    def lote_com_fotos(self, itens, fotos_por_sid):
+        lote = b.criar_lote(self.conn, 5000, 50191, "hugo", itens)
+        b.gravar_fotos(self.conn, lote, fotos_por_sid, db_path=self.db)
+        return lote
+
+    def test_fotos_gravadas_antes_da_thread(self):
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA", 15349: b"jpgB"}})
+        item = b.ler_lote(self.conn, lote)["itens"][0]
+        self.assertEqual(set(item["fotos"]), {"15086", "15349"})
+        pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
+        self.assertEqual((pasta / "1_15086.jpg").read_bytes(), b"jpgA")
+        self.assertEqual(item["fotos"]["15349"], str(pasta / "1_15349.jpg"))
+        self.assertEqual(item["status"], "pendente")
+
+    def test_gravar_fotos_falha_marca_erro(self):
+        lote = b.criar_lote(self.conn, 5000, 50191, "hugo", self.itens()[:1])
+        with mock.patch.object(Path, "write_bytes", side_effect=OSError("disco cheio")):
+            with self.assertRaises(OSError):
+                b.gravar_fotos(self.conn, lote, {1: {15086: b"x"}}, db_path=self.db)
+        d = b.ler_lote(self.conn, lote)
+        self.assertEqual(d["itens"][0]["status"], "erro")
+        self.assertTrue(d["terminado"])
+
+    def test_executar_lote_passa_fotos_e_guarda_checklist_id(self):
+        vuupt = VuuptFalsa({1: "assigned"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        r = self.executar(vuupt, lote)
+        self.assertEqual(vuupt.fotos[1], {15086: b"jpgA"})
+        self.assertEqual(r["itens"][0]["status"], "entregue")
+        self.assertEqual(r["itens"][0]["checklist_id"], 901)
+
+    def test_checklist_falha_item_erro_sem_concluir(self):
+        vuupt = VuuptFalsa({1: "checklist_falha"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        r = self.executar(vuupt, lote)
+        self.assertEqual(r["itens"][0]["status"], "erro")
+        self.assertEqual(vuupt.concluidos, [])
+
+    def test_insucesso_sem_fotos(self):
+        vuupt = VuuptFalsa({2: "assigned"})
+        lote = self.lote_com_fotos(self.itens()[1:2], {2: {15086: b"jpgA"}})
+        self.executar(vuupt, lote)
+        self.assertIsNone(vuupt.fotos[2])
+        self.assertEqual(vuupt.concluidos, [(2, False, 5433)])
+
+    def test_pasta_apagada_so_sem_erro(self):
+        vuupt = VuuptFalsa({1: "assigned"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
+        self.executar(vuupt, lote)
+        self.assertFalse(pasta.exists())
+        vuupt = VuuptFalsa({1: "checklist_falha"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
+        self.executar(vuupt, lote)
+        self.assertTrue(pasta.exists())
+
+    def test_ja_fechado_nao_manda_foto_e_avisa(self):
+        vuupt = VuuptFalsa({1: "done"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        r = self.executar(vuupt, lote)
+        self.assertEqual(r["itens"][0]["status"], "ja_fechado")
+        self.assertIn("nao foi para o checklist", r["itens"][0]["aviso"])
 
 
 if __name__ == "__main__":

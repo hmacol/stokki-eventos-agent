@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-10-08-motoristas-sem-app-design.md
 """
 import json
 import logging
+import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,9 +93,13 @@ def excecoes_torre(data_iso: str, db_path: Path | None = None, hoje: date | None
 # ── Baixa ─────────────────────────────────────────────────────────────────────
 
 def concluir_servico(vuupt, service_id: int, sucesso: bool, failed_reason_id: int | None,
-                     agent_id: int | None) -> str:
+                     agent_id: int | None, fotos: dict[int, bytes] | None = None,
+                     info: dict | None = None) -> str:
     """Mesmo caminho de lalamove_integracao._concluir_na_vuupt, com insucesso.
-    GET sem resposta (429/timeout) levanta: nunca escreve num servico que nao leu."""
+    GET sem resposta (429/timeout) levanta: nunca escreve num servico que nao leu.
+    fotos (campo -> JPEG) vao pro checklist da Vuupt so na entrega: insucesso nunca
+    leva foto. Falha do checklist levanta ANTES do check-out (pedido nao conclui).
+    info recebe checklist_id quando o checklist foi gravado."""
     servico = vuupt.buscar_servico_por_id(service_id)
     if not servico:
         raise RuntimeError(f"Vuupt nao devolveu o servico {service_id}; nada foi alterado, tente de novo.")
@@ -109,8 +114,11 @@ def concluir_servico(vuupt, service_id: int, sucesso: bool, failed_reason_id: in
         elif agent_id:
             vuupt.atribuir_agente(service_id, agent_id)
             status = "assigned"
-    vuupt.concluir_como_agente(service_id, sucesso=sucesso,
-                               failed_reason_id=None if sucesso else failed_reason_id, status_atual=status)
+    checklist_id = vuupt.concluir_como_agente(
+        service_id, sucesso=sucesso, failed_reason_id=None if sucesso else failed_reason_id, status_atual=status,
+        fotos_checklist=(fotos or None) if sucesso else None, servico=servico)
+    if info is not None and checklist_id:
+        info["checklist_id"] = checklist_id
     return "entregue" if sucesso else "insucesso"
 
 
@@ -118,12 +126,43 @@ def criar_lote(conn: sqlite3.Connection, vuupt_route_id: int, agent_id: int, por
     garantir_tabela(conn)
     itens = [{"service_id": int(i["service_id"]), "codigo": i.get("codigo") or "",
               "entregue": bool(i["entregue"]), "failed_reason_id": i.get("failed_reason_id"),
-              "status": "pendente"} for i in itens]
+              "status": "pendente",
+              **{k: i[k] for k in ("justificativa", "texto_outro", "aviso") if i.get(k)}} for i in itens]
     cur = conn.execute(
         "INSERT INTO baixas_sem_app (vuupt_route_id, agent_id, criado_por, criado_em, itens_json) VALUES (?, ?, ?, ?, ?)",
         (vuupt_route_id, agent_id, por, datetime.now().strftime(FMT), json.dumps(itens, ensure_ascii=False)))
     conn.commit()
     return cur.lastrowid
+
+
+def pasta_fotos(lote_id: int, db_path: Path | None = None) -> Path:
+    return Path(db_path or banco.DB_PATH).parent / "checklist_fotos" / f"lote_{int(lote_id)}"
+
+
+def gravar_fotos(conn: sqlite3.Connection, lote_id: int, fotos_por_servico: dict[int, dict[int, bytes]],
+                 db_path: Path | None = None) -> None:
+    """Grava os JPEG em dados/checklist_fotos/lote_<id>/<sid>_<campo>.jpg (so inteiros no nome) e
+    guarda os caminhos no item, ANTES da thread. Se falhar, o lote vira erro (nao fica pendente)."""
+    lote = ler_lote(conn, lote_id)
+    itens = lote["itens"]
+    try:
+        pasta = pasta_fotos(lote_id, db_path)
+        pasta.mkdir(parents=True, exist_ok=True)
+        for item in itens:
+            fotos = fotos_por_servico.get(item["service_id"])
+            if not fotos:
+                continue
+            item["fotos"] = {}
+            for campo, conteudo in fotos.items():
+                arq = pasta / f"{int(item['service_id'])}_{int(campo)}.jpg"
+                arq.write_bytes(conteudo)
+                item["fotos"][str(int(campo))] = str(arq)
+        _salvar_itens(conn, lote_id, itens)
+    except Exception as e:  # noqa: BLE001
+        for item in itens:
+            item["status"], item["erro"] = "erro", f"Fotos nao gravadas: {str(e)[:150]}"
+        _salvar_itens(conn, lote_id, itens, terminado=True)
+        raise
 
 
 MINUTOS_LOTE_ATIVO = 10
@@ -189,8 +228,16 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
             if item["status"] != "pendente":
                 continue
             try:
+                fotos, info = None, {}
+                if item["entregue"] and item.get("fotos"):
+                    fotos = {int(c): Path(a).read_bytes() for c, a in item["fotos"].items()}
                 item["status"] = concluir_servico(vuupt, item["service_id"], item["entregue"],
-                                                  item.get("failed_reason_id"), lote["agent_id"])
+                                                  item.get("failed_reason_id"), lote["agent_id"],
+                                                  fotos=fotos, info=info)
+                if info.get("checklist_id"):
+                    item["checklist_id"] = info["checklist_id"]
+                if item["status"] == "ja_fechado" and item.get("fotos"):
+                    item["aviso"] = "Ja estava concluido; a foto nao foi para o checklist."
             except Exception as e:  # noqa: BLE001 -- um item com erro nao para os outros
                 item["status"], item["erro"] = "erro", str(e)[:200]
                 logger.warning(f"Baixa sem app lote {lote_id}: {item['codigo']} falhou: {e}")
@@ -201,6 +248,8 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"Tratativa de {item['codigo']} nao registrada: {e}")
         _salvar_itens(conn, lote_id, itens, terminado=True)
+        if not any(i["status"] == "erro" for i in itens):
+            shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         feitos = [i["service_id"] for i in itens if i["status"] in ("entregue", "insucesso")]
         if feitos:
             try:
