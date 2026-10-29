@@ -2,7 +2,7 @@
 """
 sincronizar_cpf_motoristas.py
 
-Preenche a coluna CPF_MOTORISTA de dados/BD_MOTORISTAS.xlsx a partir do
+Preenche a coluna CPF_MOTORISTA da tabela bd_motoristas a partir do
 VUUPT (pedido do Hugo, 22/08 -- identificação do motorista na página
 compartilhada do marketplace de rotas, ver regras/preferencias_motoristas.py
 e confirmacao_motoristas/app.py::escolher_rota_por_cpf).
@@ -21,19 +21,20 @@ dígito verificador de CPF de verdade -- só o formato (11 dígitos),
 suficiente pra descartar apelidos/matrículas curtas.
 
 Só ATUALIZA a coluna CPF_MOTORISTA -- nunca sobrescreve um CPF já
-preenchido manualmente na planilha (mesmo padrão protetivo de
+preenchido manualmente (mesmo padrão protetivo de
 sincronizar_placas_motoristas.py). Roda sob demanda (não é rotina
 agendada) -- execute de novo sempre que motoristas novos entrarem.
 
 COMO USAR:
-    py -3.11 sincronizar_cpf_motoristas.py
+    py -3.11 sincronizar_cpf_motoristas.py            # a seco: só mostra
+    py -3.11 sincronizar_cpf_motoristas.py --aplicar  # grava na tabela
 """
+import argparse
 import logging
 import re
 import sys
 from pathlib import Path
 
-import pandas as pd
 import requests
 import yaml
 
@@ -43,8 +44,11 @@ sys.path.insert(0, str(RAIZ))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+from nucleo.banco import conectar  # noqa: E402
+from regras.motoristas_banco import atualizar, escrever_espelho, listar  # noqa: E402
+
 API_BASE = "https://api.vuupt.com/api/v1"
-CAMINHO_PLANILHA = RAIZ / "dados" / "BD_MOTORISTAS.xlsx"
+ORIGEM = Path(__file__).name
 
 
 def _listar_tudo(endpoint: str, headers: dict) -> list[dict]:
@@ -69,18 +73,10 @@ def _cpf_valido(code) -> str | None:
     return digitos if len(digitos) == 11 else None
 
 
-def main():
-    config = yaml.safe_load(open(RAIZ / "config.yaml", encoding="utf-8"))
-    token = config.get("vuupt_api", {}).get("token", "")
-    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
-
-    if not CAMINHO_PLANILHA.exists():
-        logger.error(f"{CAMINHO_PLANILHA} não encontrada -- nada a fazer.")
-        return
-
-    agentes = _listar_tudo("/agents", headers)
-    logger.info(f"{len(agentes)} agente(s) carregado(s) do VUUPT.")
-
+def sincronizar(conn, agentes: list[dict], aplicar: bool) -> dict:
+    """Preenche CPF_MOTORISTA vazio em bd_motoristas com o 'code' do agente no
+    VUUPT (só se forem 11 dígitos; gravado só com dígitos, texto). Sem
+    `aplicar` só calcula (nada é gravado)."""
     cpf_por_agent_id: dict[int, str] = {}
     code_nao_reconhecido: dict[int, str] = {}
     for agente in agentes:
@@ -93,20 +89,10 @@ def main():
         else:
             code_nao_reconhecido[agente["id"]] = str(code)
 
-    # dtype=str evita o pandas inferir a coluna como número e perder
-    # zero à esquerda de CPF (mesmo achado de regras/preferencias_motoristas.py
-    # -- aqui importa tanto quanto lá: sem isso, uma 2ª execução deste
-    # script leria um CPF já corrompido e o trataria como "já tinha".
-    df = pd.read_excel(CAMINHO_PLANILHA, dtype={"CPF_MOTORISTA": str})
-    colunas_originais = list(df.columns)
-    if "CPF_MOTORISTA" not in colunas_originais:
-        df["CPF_MOTORISTA"] = ""
-
     atualizados, ja_tinha, sem_dado = [], 0, []
-    for idx, linha in df.iterrows():
-        try:
-            agent_id = int(float(linha.get("AGENT_ID_VUUPT")))
-        except (TypeError, ValueError):
+    for linha in listar(conn):
+        agent_id = linha.get("AGENT_ID_VUUPT")
+        if agent_id is None:
             continue
 
         cpf_atual = str(linha.get("CPF_MOTORISTA") or "").strip()
@@ -116,28 +102,50 @@ def main():
 
         cpf_vuupt = cpf_por_agent_id.get(agent_id)
         if cpf_vuupt:
-            df.at[idx, "CPF_MOTORISTA"] = cpf_vuupt
+            if aplicar:
+                atualizar(conn, linha["id"], {"CPF_MOTORISTA": cpf_vuupt}, ORIGEM)
             atualizados.append((agent_id, linha.get("NOME_MOTORISTA"), cpf_vuupt))
         elif agent_id in code_nao_reconhecido:
             sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), code_nao_reconhecido[agent_id]))
         else:
             sem_dado.append((agent_id, linha.get("NOME_MOTORISTA"), None))
 
-    colunas_finais = colunas_originais + (["CPF_MOTORISTA"] if "CPF_MOTORISTA" not in colunas_originais else [])
-    df = df[colunas_finais]
-    df.to_excel(CAMINHO_PLANILHA, index=False)
+    if aplicar and atualizados:
+        escrever_espelho(conn)
+    return {"atualizados": atualizados, "ja_tinha": ja_tinha, "sem_dado": sem_dado}
 
-    logger.info(f"{len(atualizados)} CPF(s) preenchido(s) via VUUPT, {ja_tinha} já tinham CPF cadastrado.")
-    for agent_id, nome, cpf in atualizados:
+
+def main():
+    parser = argparse.ArgumentParser(description="Preenche CPF_MOTORISTA vazio em bd_motoristas a partir do VUUPT.")
+    parser.add_argument("--aplicar", action="store_true",
+                        help="grava na tabela (sem isso só mostra o que faria)")
+    args = parser.parse_args()
+
+    config = yaml.safe_load(open(RAIZ / "config.yaml", encoding="utf-8"))
+    token = config.get("vuupt_api", {}).get("token", "")
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+
+    agentes = _listar_tudo("/agents", headers)
+    logger.info(f"{len(agentes)} agente(s) carregado(s) do VUUPT.")
+
+    conn = conectar()
+    try:
+        r = sincronizar(conn, agentes, args.aplicar)
+    finally:
+        conn.close()
+
+    rotulo = "" if args.aplicar else "[A SECO -- use --aplicar para gravar] "
+    logger.info(f"{rotulo}{len(r['atualizados'])} CPF(s) preenchido(s) via VUUPT, {r['ja_tinha']} já tinham CPF cadastrado.")
+    for agent_id, nome, cpf in r["atualizados"]:
         logger.info(f"  + {nome} (agent_id={agent_id}): ...{cpf[-4:]}")
 
-    if sem_dado:
+    if r["sem_dado"]:
         logger.warning(
-            f"{len(sem_dado)} motorista(s) SEM CPF resolvido -- preencher manualmente na coluna "
-            f"CPF_MOTORISTA de {CAMINHO_PLANILHA} (campo 'code' do VUUPT vazio, ou preenchido com "
+            f"{len(r['sem_dado'])} motorista(s) SEM CPF resolvido -- preencher manualmente na tela "
+            f"/motoristas (campo 'code' do VUUPT vazio, ou preenchido com "
             f"algo que não são 11 dígitos -- ver valor bruto abaixo quando existir):"
         )
-        for agent_id, nome, bruto in sem_dado:
+        for agent_id, nome, bruto in r["sem_dado"]:
             sufixo = f" -- campo 'code' do VUUPT tem {bruto!r} (não são 11 dígitos)" if bruto else ""
             logger.warning(f"  - {nome} (agent_id={agent_id}){sufixo}")
 
