@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +69,23 @@ def listar(conn) -> list[dict]:
 def por_cpf(conn, cpf: str) -> list[dict]:
     return [_linha_para_dict(r) for r in
             conn.execute("SELECT * FROM bd_motoristas WHERE CPF_MOTORISTA = ? ORDER BY id", (cpf,))]
+
+
+DIAS_ACESSO_INATIVO = 30
+
+
+def login_bloqueado(conn, cpf: str, hoje: datetime | None = None) -> bool:
+    """True so se o CPF tem linha(s) na tabela, nenhuma ativa, e a inativacao
+    mais recente tem mais de 30 dias. CPF sem linha, linha ativa ou
+    inativado_em vazio (data desconhecida) -> False (nao bloqueia)."""
+    linhas = por_cpf(conn, cpf)
+    if not linhas or any(_parse_bool(l.get("ATIVO")) for l in linhas):
+        return False
+    datas = [l.get("inativado_em") for l in linhas]
+    if any(not d for d in datas):
+        return False
+    mais_recente = max(datetime.strptime(d, "%Y-%m-%d %H:%M:%S") for d in datas)
+    return (hoje or datetime.now()) - mais_recente > timedelta(days=DIAS_ACESSO_INATIVO)
 
 
 def _historico(conn, motorista_id, agent_id, campo, antigo, novo, origem, quando):

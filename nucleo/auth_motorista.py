@@ -16,6 +16,7 @@ junho/2026, reaproveitada -- ver nucleo/banco.py).
 """
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 import sqlite3
@@ -25,7 +26,9 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from nucleo import banco
 
-PBKDF2_ITERACOES = 200_000
+logger = logging.getLogger(__name__)
+
+PBKDF2_ITERACOES =200_000
 MAX_TENTATIVAS = 5
 BLOQUEIO_MINUTOS = 15
 ACESSO_SEGUNDOS = 12 * 3600
@@ -141,6 +144,17 @@ def buscar_motorista(conn: sqlite3.Connection, cpf: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _login_bloqueado_por_inatividade(conn: sqlite3.Connection, cpf: str) -> bool:
+    """Inativo ha mais de 30 dias na bd_motoristas perde o app. Se a consulta
+    falhar (tabela ausente, lock), nao bloqueia o login."""
+    try:
+        from regras import motoristas_banco  # import tardio: evita ciclo com nucleo.banco
+        return motoristas_banco.login_bloqueado(conn, normalizar_cpf(cpf))
+    except Exception as e:
+        logger.warning("login_bloqueado falhou para o login do app (nao bloqueia): %s", e)
+        return False
+
+
 def autenticar(conn: sqlite3.Connection, cpf: str, pin: str) -> dict:
     """Valida CPF + PIN com trava de tentativas. Levanta AutenticacaoInvalida
     com mensagem segura (nunca diz se o CPF existe)."""
@@ -148,6 +162,8 @@ def autenticar(conn: sqlite3.Connection, cpf: str, pin: str) -> dict:
     m = buscar_motorista(conn, cpf)
     if not m or not m.get("ativo"):
         raise AutenticacaoInvalida(generico)
+    if _login_bloqueado_por_inatividade(conn, m["cpf"]):
+        raise AutenticacaoInvalida("Seu cadastro está inativo. Fale com a Fresh Log.", 403)
 
     agora = datetime.now()
     bloqueado_ate = m.get("bloqueado_ate")
@@ -201,6 +217,8 @@ def _validar_token(secret: str, token: str, salt: str, max_age: int, conn: sqlit
         raise AutenticacaoInvalida("Token inválido.")
     m = buscar_motorista(conn, payload.get("cpf", ""))
     if not m or not m.get("ativo") or payload.get("v") != _versao(m):
+        raise AutenticacaoInvalida("Sessão inválida. Entre de novo.")
+    if _login_bloqueado_por_inatividade(conn, m["cpf"]):
         raise AutenticacaoInvalida("Sessão inválida. Entre de novo.")
     return m
 
