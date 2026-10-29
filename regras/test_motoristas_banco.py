@@ -129,6 +129,14 @@ class TestMotoristasBanco(unittest.TestCase):
         with self.assertLogs(mb.logger, "ERROR"):
             self.assertFalse(mb.escrever_espelho(self.conn, self.dir / "naoexiste" / "x.xlsx"))
 
+    def test_registrar_historico_nao_muda_coluna(self):
+        mid = mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM", PLACA="AAA1111"), "teste")
+        mb.registrar_historico(self.conn, mid, "PLACA", "ZZZ9999", "app:1234:nao_repassada")
+        self.assertEqual(mb.listar(self.conn)[0]["PLACA"], "AAA1111")
+        h = self.conn.execute("SELECT campo, valor_antigo, valor_novo, origem FROM bd_motoristas_alteracoes"
+                              " WHERE motorista_id = ? AND campo = 'PLACA'", (mid,)).fetchall()
+        self.assertEqual([tuple(x) for x in h], [("PLACA", "AAA1111", "ZZZ9999", "app:1234:nao_repassada")])
+
     def test_caminho_espelho_segue_db_path(self):
         with mock.patch.object(banco, "DB_PATH", self.dir / "t.db"):
             self.assertEqual(mb.caminho_espelho(), self.dir / "BD_MOTORISTAS.xlsx")

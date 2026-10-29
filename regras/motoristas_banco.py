@@ -78,6 +78,17 @@ def _historico(conn, motorista_id, agent_id, campo, antigo, novo, origem, quando
          None if novo is None else str(novo), origem, quando))
 
 
+def registrar_historico(conn, motorista_id: int, campo: str, valor_novo, origem: str) -> None:
+    """Anota no historico sem mudar a coluna (valor_antigo = valor atual)."""
+    if campo not in COLUNAS:
+        raise ValueError(f"campo desconhecido: {campo}")
+    atual = conn.execute("SELECT * FROM bd_motoristas WHERE id = ?", (motorista_id,)).fetchone()
+    if atual is None:
+        raise ValueError(f"motorista id={motorista_id} nao existe")
+    _historico(conn, motorista_id, atual["AGENT_ID_VUUPT"], campo, atual[campo], valor_novo, origem, banco.agora())
+    conn.commit()
+
+
 def inserir(conn, registro: dict, origem: str) -> int:
     agora = banco.agora()
     valores = [_limpar(c, registro.get(c)) for c in COLUNAS]
