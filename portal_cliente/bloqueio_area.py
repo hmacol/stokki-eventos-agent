@@ -130,13 +130,15 @@ def _liberar_por_transportadora(por: str) -> list[int]:
             if cur.rowcount:
                 liberados.append(envio["id"])
                 logger.info(f"bloqueio: NF {_rotulo(envio)} liberada (transportadora {tipo}, por {por})")
-                _avisar_liberacao(envio, nfe.get("transportadora_nome") or "", tipo, por)
+                _avisar_liberacao(envio, nfe.get("transportadora_nome") or "", tipo)
         return liberados
     finally:
         conn.close()
 
 
-def _avisar_liberacao(envio: dict, transportadora: str, tipo: str, por: str) -> None:
+def _avisar_liberacao(envio: dict, transportadora: str, tipo: str) -> None:
+    """Sem o `por` na mensagem (revisao 29/10): o chat e do cliente desta NF, e
+    quem classificou pode ser outro embarcador respondendo pelo link."""
     chamado_id = envio.get("bloqueio_chamado_id")
     if not chamado_id:
         return
@@ -147,7 +149,7 @@ def _avisar_liberacao(envio: dict, transportadora: str, tipo: str, por: str) -> 
             chamado = ch.buscar_chamado(conn_ch, chamado_id)
             if chamado:
                 ch.mensagem_sistema(conn_ch, chamado, f"NF {_rotulo(envio)} liberada: a transportadora {transportadora} foi "
-                                                      f"cadastrada como {_ROTULO_TIPO[tipo]} por {por}. O pedido segue para a Stokki.")
+                                                      f"cadastrada como {_ROTULO_TIPO[tipo]}. O pedido segue para a Stokki.")
         finally:
             conn_ch.close()
     except Exception as e:

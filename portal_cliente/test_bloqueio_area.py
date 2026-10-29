@@ -453,6 +453,7 @@ class LiberarPorTransportadora(unittest.TestCase):
         texto = fake_ch.mensagem_sistema.call_args[0][2]
         self.assertIn("NF 4447", texto)
         self.assertIn("RODOVIARIO LUZ", texto)
+        self.assertNotIn("hugom", texto)  # revisao 29/10: quem classificou nao vai pro chat do cliente
         self.assertEqual(fake_ch.mensagem_sistema.call_count, 1)
 
     def test_terceiros_tambem_solta(self):
