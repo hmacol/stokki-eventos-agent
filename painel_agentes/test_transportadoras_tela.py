@@ -57,6 +57,10 @@ class TestTelaTransportadoras(unittest.TestCase):
                               return_value={"painel_agentes": {"usuario": "u", "senha": "s"}})
         p.start()
         self.addCleanup(p.stop)
+        # a liberacao das NFs bloqueadas le o dados.db real: aqui so conferimos a chamada
+        p = mock.patch("portal_cliente.bloqueio_area.liberar_por_transportadora", return_value=[])
+        self.liberar = p.start()
+        self.addCleanup(p.stop)
         conn = ct.conectar_consultas(banco)
         self.ativa = tc.criar(conn, {"nome": "ALFA", "tipo": "ENTREGA", "situacao": "ATIVA"}, "PLANILHA", "t")
         r = ct.registrar_desconhecida(conn, "BETA LOG", "11222333000181", "PS-1", "12345678000199", None,
@@ -136,6 +140,7 @@ class TestTelaTransportadoras(unittest.TestCase):
         self.assertEqual(r.get_json()["email"], "a@b.com")
         ficha = self.cliente.get(f"/api/transportadoras/{nova['id']}").get_json()
         self.assertEqual(ficha["historico"][0]["campo"], "email")
+        self.assertEqual([c.args[0]["id"] for c in self.liberar.call_args_list], [nova["id"], nova["id"]])
 
     def test_sem_origem_da_403(self):
         self._logar("total")
@@ -149,6 +154,9 @@ class TestTelaTransportadoras(unittest.TestCase):
         r = self.cliente.post(f"/api/transportadoras/{tid}/responder", json={"tipo": "RETIRADA"}, headers=ORIGEM)
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["situacao"], "ATIVA")
+        # Hugo 29/10: classificar solta as NFs do portal presas no bloqueio de area
+        transp, por = self.liberar.call_args.args
+        self.assertEqual((transp["id"], transp["tipo"], por), (tid, "RETIRADA", "teste"))
         conn = ct.conectar_consultas(tc.DB_PATH)
         try:
             self.assertEqual(ct.pedidos_parados(conn, tid), [])

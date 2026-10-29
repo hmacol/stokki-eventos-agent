@@ -1683,6 +1683,14 @@ def _autor_transportadoras() -> str:
     return session.get("usuario") or g.nivel_acesso
 
 
+def _liberar_bloqueados_transportadora(transp: dict) -> dict:
+    """Hugo 29/10: classificar como retirada/redespacho solta as NFs do portal
+    presas no bloqueio de area por essa transportadora (bloqueio_area)."""
+    from portal_cliente import bloqueio_area
+    bloqueio_area.liberar_por_transportadora(transp, _autor_transportadoras())
+    return transp
+
+
 @app.route("/api/transportadoras/<int:tid>")
 @requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_transportadora_ficha(tid):
@@ -1715,8 +1723,8 @@ def api_transportadora_criar():
     import transportadoras_tela as tt
     conn = tt.conectar()
     try:
-        return jsonify(tc.criar(conn, tt.so_campos(_corpo_dict()), "TELA",
-                                _autor_transportadoras()))
+        return jsonify(_liberar_bloqueados_transportadora(tc.criar(conn, tt.so_campos(_corpo_dict()), "TELA",
+                                                                   _autor_transportadoras())))
     except tc.ErroCadastro as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1734,8 +1742,8 @@ def api_transportadora_atualizar(tid):
     import transportadoras_tela as tt
     conn = tt.conectar()
     try:
-        return jsonify(ct.atualizar_cadastro(conn, tid, tt.so_campos(_corpo_dict()),
-                                             _autor_transportadoras(), "tela"))
+        return jsonify(_liberar_bloqueados_transportadora(ct.atualizar_cadastro(conn, tid, tt.so_campos(_corpo_dict()),
+                                                                                _autor_transportadoras(), "tela")))
     except tc.ErroCadastro as e:
         return jsonify({"erro": str(e)}), 400
     finally:
@@ -1755,8 +1763,9 @@ def api_transportadora_responder(tid):
     endereco = body.get("endereco")
     conn = tt.conectar()
     try:
-        return jsonify(ct.responder(conn, tid, str(body.get("tipo") or ""), endereco if isinstance(endereco, dict) else {},
-                                    str(body.get("email") or "").strip(), _autor_transportadoras(), "tela"))
+        return jsonify(_liberar_bloqueados_transportadora(
+            ct.responder(conn, tid, str(body.get("tipo") or ""), endereco if isinstance(endereco, dict) else {},
+                         str(body.get("email") or "").strip(), _autor_transportadoras(), "tela")))
     except tc.ErroCadastro as e:
         return jsonify({"erro": str(e)}), 400
     finally:

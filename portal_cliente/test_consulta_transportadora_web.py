@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from flask import Flask
 
@@ -14,6 +15,7 @@ _AQUI = Path(__file__).parent
 sys.path.insert(0, str(_AQUI.parent))
 sys.path.insert(0, str(_AQUI))
 
+import bloqueio_area
 import consulta_transportadora as ctr
 import consulta_transportadora_web as web
 
@@ -47,6 +49,10 @@ class Base(unittest.TestCase):
         self.cid_a, self.cid_b = r1["consulta"]["id"], r2["consulta"]["id"]
         conn.close()
         self.client = criar_app(self.db).test_client()
+        # a liberacao das NFs bloqueadas le o dados.db real: aqui so conferimos a chamada
+        p = mock.patch.object(bloqueio_area, "liberar_por_transportadora", return_value=[])
+        self.liberar = p.start()
+        self.addCleanup(p.stop)
 
     def url(self, cid):
         return f"/transportadora/{ctr.gerar_token(SEGREDO, cid)}"
@@ -86,6 +92,9 @@ class TestPagina(Base):
         c = self.consulta(self.cid_a)
         self.assertEqual(c["respondido_por"], "Maria (LOJA A) pelo link")
         self.assertEqual(c["canal_resposta"], "link")
+        # Hugo 29/10: a resposta solta as NFs do portal presas no bloqueio de area
+        transp, por = self.liberar.call_args.args
+        self.assertEqual((transp["id"], transp["tipo"], por), (self.tid, "RETIRADA", "Maria (LOJA A) pelo link"))
 
     def test_apelido_cai_para_nome_remetente(self):
         self.client.post(self.url(self.cid_b), data={"opcao": "entrega", "nome": "Joao"})
