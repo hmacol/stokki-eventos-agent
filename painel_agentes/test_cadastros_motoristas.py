@@ -189,6 +189,19 @@ class TestEditarMotorista(unittest.TestCase):
         self.assertIn("Ana Teste", html)
         self.assertNotIn("botao-editar-motorista", html)
 
+    def test_form_usa_valores_crus_cpf_invalido_e_tipo_apelido(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE bd_motoristas SET CPF_MOTORISTA = '1234567890', TIPO_VEICULO = '3/4', PLACA = 'abc-1d23' WHERE id = ?", (self.mid,))
+        conn.commit()
+        conn.close()
+        import json
+        import motoristas as mot
+        with mock.patch.object(mot, "_carregar_config", return_value={}):
+            dados = mot.dados_pagina_motoristas()
+        form = next(m for m in dados["motoristas"] if m["id"] == self.mid)["form"]
+        self.assertEqual((form["cpf"], form["tipo_veiculo"], form["placa"]), ("1234567890", "TRES_QUARTOS", "abc-1d23"))
+        json.dumps(form)
+
     def test_editar_zona_aparece_na_tabela_e_no_espelho(self):
         self._logar("operador")
         r = self._put({"zonas_preferidas": ["ZONA LESTE", "CENTRO"]})

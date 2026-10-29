@@ -315,9 +315,32 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
     document.getElementById("motorista-sem-app").checked = !!d.sem_app;
   }
 
+  // Valores atuais do formulario (o que vai no payload).
+  function lerCampos() {
+    const v = (id) => document.getElementById(id).value.trim();
+    return {
+      nome: campoNome.value.trim(),
+      aceita_viagens: document.getElementById("motorista-aceita-viagens").checked,
+      ativo: document.getElementById("motorista-ativo").checked,
+      max_rotas_dia: Number(v("motorista-max-rotas")) || 1,
+      dias_disponiveis: Array.from(document.querySelectorAll(".motorista-dia:checked")).map(c => c.value),
+      zonas_preferidas: Array.from(document.querySelectorAll(".motorista-zona:checked")).map(c => c.value),
+      tipo_veiculo: v("motorista-tipo-veiculo"),
+      telefone: v("motorista-telefone"),
+      email: v("motorista-email"),
+      placa: v("motorista-placa"),
+      cpf: campoCpf.value.trim(),
+      vehicle_id: v("motorista-vehicle-id"),
+      apenas_carga_seca: document.getElementById("motorista-carga-seca").checked,
+      sem_app: document.getElementById("motorista-sem-app").checked,
+    };
+  }
+  let camposOriginais = {};
+
   function abrirEdicaoMotorista(d) {
     editandoId = d.id;
     preencherFormulario(d);
+    camposOriginais = lerCampos();
     document.getElementById("titulo-modal-motorista").textContent = "Editar motorista";
     document.getElementById("subtitulo-modal-motorista").textContent = "O Agent ID não muda; o CPF só pode ser preenchido enquanto estiver vazio. Cada alteração fica no histórico.";
     document.getElementById("grupo-agente-novo").hidden = true;
@@ -451,36 +474,25 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
     if (editandoId === null && !agentId) { alert("Selecione o motorista do VUUPT e confirme o nome."); return; }
     if (!nome) { alert("Informe o nome do motorista."); return; }
 
-    const dias = Array.from(document.querySelectorAll(".motorista-dia:checked")).map(c => c.value);
-    const zonas = Array.from(document.querySelectorAll(".motorista-zona:checked")).map(c => c.value);
-
     const original = botao.textContent;
     botao.disabled = true;
     botao.textContent = editandoId === null ? "Cadastrando..." : "Salvando...";
     try {
-      const corpo = {
-        nome: nome,
-        aceita_viagens: document.getElementById("motorista-aceita-viagens").checked,
-        ativo: document.getElementById("motorista-ativo").checked,
-        max_rotas_dia: Number(document.getElementById("motorista-max-rotas").value) || 1,
-        dias_disponiveis: dias,
-        zonas_preferidas: zonas,
-        tipo_veiculo: document.getElementById("motorista-tipo-veiculo").value,
-        telefone: document.getElementById("motorista-telefone").value.trim(),
-        email: document.getElementById("motorista-email").value.trim(),
-        placa: document.getElementById("motorista-placa").value.trim(),
-        vehicle_id: document.getElementById("motorista-vehicle-id").value.trim(),
-        apenas_carga_seca: document.getElementById("motorista-carga-seca").checked,
-        sem_app: document.getElementById("motorista-sem-app").checked,
-      };
+      const corpo = lerCampos();
       if (editandoId === null) {
         corpo.agent_id = agentId;
         corpo.cpf = campoCpf.value.trim();
         await postJSON("/api/motoristas", corpo);
         alert(`Motorista "${nome}" cadastrado.`);
       } else {
-        if (!campoCpf.disabled) corpo.cpf = campoCpf.value.trim();
-        await putJSON(`/api/motoristas/${editandoId}`, corpo);
+        // so manda o que o usuario mudou (nada de limpar/regravar o que ele nao tocou)
+        const mudou = {};
+        for (const k of Object.keys(corpo)) {
+          if (JSON.stringify(corpo[k]) !== JSON.stringify(camposOriginais[k])) mudou[k] = corpo[k];
+        }
+        if (campoCpf.disabled) delete mudou.cpf;
+        if (!Object.keys(mudou).length) { fecharModalMotorista(); return; }
+        await putJSON(`/api/motoristas/${editandoId}`, mudou);
       }
       location.reload();
     } catch (e) {

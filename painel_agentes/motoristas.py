@@ -60,13 +60,15 @@ def dados_pagina_motoristas() -> dict:
             "cpf_login": (logins.get(m.agent_id) or {}).get("cpf"),
             "ve_financeiro": bool((logins.get(m.agent_id) or {}).get("ve_financeiro", 1)),
             "ultimo_login_em": (logins.get(m.agent_id) or {}).get("ultimo_login_em"),
-            # valores pro formulário de edição (tipo_veiculo cru: o catálogo troca vazio por FIORINO)
+            # valores pro formulário de edição: texto cru da coluna (o JS só manda o que o usuário mudar)
             "form": {
                 "id": id_, "agent_id": m.agent_id, "nome": m.nome, "aceita_viagens": m.aceita_viagens,
                 "dias_disponiveis": [codigos_dias[d] for d in sorted(m.dias_disponiveis) if 0 <= d < 7],
                 "max_rotas_dia": m.max_rotas_dia, "ativo": m.ativo, "zonas_preferidas": m.zonas_preferidas,
-                "telefone": m.telefone or "", "email": m.email or "", "placa": m.placa or "", "cpf": m.cpf or "",
-                "tipo_veiculo": (bruto.get("TIPO_VEICULO") or "").strip().upper(),
+                "telefone": bruto.get("TELEFONE_MOTORISTA") or "", "email": bruto.get("EMAIL_MOTORISTA") or "",
+                "placa": bruto.get("PLACA") or "", "cpf": bruto.get("CPF_MOTORISTA") or "",
+                # coluna preenchida -> pré-seleciona o código canônico (aceita apelido); vazia -> "Nenhum"
+                "tipo_veiculo": m.tipo_veiculo if (bruto.get("TIPO_VEICULO") or "").strip() else "",
                 "vehicle_id": m.vehicle_id if m.vehicle_id is not None else "",
                 "apenas_carga_seca": m.apenas_carga_seca, "sem_app": m.sem_app,
             },

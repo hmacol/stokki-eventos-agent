@@ -166,18 +166,22 @@ _REPASSE_LOGIN = {
     "NOME_MOTORISTA": "nome", "TELEFONE_MOTORISTA": "telefone", "EMAIL_MOTORISTA": "email",
     "TIPO_VEICULO": "tipo_veiculo", "VEHICLE_ID_VUUPT": "vehicle_id",
 }
+# Com 2+ carros no mesmo CPF não dá pra saber qual veículo o login leva (igual à placa).
+_SO_COM_UMA_LINHA = {"TIPO_VEICULO", "VEHICLE_ID_VUUPT"}
 
 
 def _repassar_ao_login(conn, motorista: dict, mudancas: list[dict]) -> None:
     """Leva ao login do app (mesmo CPF, se existir) o que mudou na edição.
-    A placa só vai se o CPF tem uma linha na tabela (com 2+ carros não dá
-    pra saber qual vale). Nunca mexe em `ativo`."""
+    Placa, tipo de veículo e vehicle_id só vão se o CPF tem uma linha na
+    tabela (com 2+ carros não dá pra saber qual vale). Nunca mexe em `ativo`."""
     cpf = motorista.get("CPF_MOTORISTA")
     if not cpf:
         return
     mudou = {m["campo"]: m["para"] for m in mudancas}
-    sets = {_REPASSE_LOGIN[c]: v for c, v in mudou.items() if c in _REPASSE_LOGIN}
-    if "PLACA" in mudou and len(motoristas_banco.por_cpf(conn, cpf)) == 1:
+    uma_linha = len(motoristas_banco.por_cpf(conn, cpf)) == 1
+    sets = {_REPASSE_LOGIN[c]: v for c, v in mudou.items()
+            if c in _REPASSE_LOGIN and (uma_linha or c not in _SO_COM_UMA_LINHA)}
+    if "PLACA" in mudou and uma_linha:
         sets["placa"] = mudou["PLACA"]
     if not sets:
         return
@@ -200,7 +204,10 @@ def editar_motorista(config: dict, motorista_id: int, campos: dict, usuario: str
         mudancas = motoristas_banco.atualizar(c, motorista_id, colunas, f"painel:{usuario}")
         motorista = next(m for m in motoristas_banco.listar(c) if m["id"] == motorista_id)
         if mudancas:
-            _repassar_ao_login(c, motorista, mudancas)
+            try:
+                _repassar_ao_login(c, motorista, mudancas)
+            except Exception:
+                logger.exception("Falha ao repassar a edicao do motorista id=%s ao login do app", motorista_id)
             _espelhar(c)
         return {"mudancas": mudancas, "motorista": motorista}
 

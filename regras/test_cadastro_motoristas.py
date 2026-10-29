@@ -167,6 +167,37 @@ class TestCadastroMotoristas(unittest.TestCase):
         cm.editar_motorista({}, mid2, {"telefone": "888"}, "hugo", conn=self.conn)
         self.assertIsNone(auth.buscar_motorista(self.conn, "98765432100"))
 
+    def test_editar_nao_repassa_tipo_veiculo_nem_vehicle_id_com_duas_linhas(self):
+        from nucleo import auth_motorista as auth
+        mid = self._cadastrado()
+        self._cadastrado(AGENT_ID_VUUPT=6, PLACA="BBB2222")
+        self._login()
+        cm.editar_motorista({}, mid, {"tipo_veiculo": "VUC", "vehicle_id": 9, "nome": "Ana Z"}, "hugo", conn=self.conn)
+        login = auth.buscar_motorista(self.conn, "12345678901")
+        self.assertEqual((login["tipo_veiculo"], login["vehicle_id"], login["nome"]), ("FIORINO", None, "Ana Z"))
+
+    def test_editar_payload_completo_so_muda_o_que_mudou(self):
+        # linha com apelido de tipo e CPF de 10 digitos: reenviar os mesmos valores nao pode mudar nada.
+        # tipo_veiculo fica de fora: o JS so o manda quando o usuario troca o select (reenviar o
+        # codigo canonico TRES_QUARTOS reescreveria o "3/4" gravado).
+        mid = self._cadastrado(TIPO_VEICULO="3/4", CPF_MOTORISTA="1234567890", TELEFONE_MOTORISTA="11 9999",
+                               DIAS_DISPONIVEIS="SEGUNDA,TERCA", MAX_ROTAS_DIA=2, VEHICLE_ID_VUUPT=44)
+        atual = mb.listar(self.conn)[0]
+        payload = {"nome": atual["NOME_MOTORISTA"], "aceita_viagens": True, "ativo": True, "max_rotas_dia": 2,
+                   "dias_disponiveis": ["SEGUNDA", "TERCA"], "zonas_preferidas": ["SUL"],
+                   "telefone": "11 9999", "email": "", "placa": "ZZZ9999", "cpf": "1234567890",
+                   "vehicle_id": "44"}   # apenas_carga_seca/sem_app tambem ficam de fora (nao mudaram)
+        r = cm.editar_motorista({}, mid, payload, "hugo", conn=self.conn)
+        self.assertEqual([m["campo"] for m in r["mudancas"]], ["PLACA"])
+
+    def test_editar_falha_do_repasse_nao_derruba_e_espelha(self):
+        mid = self._cadastrado()
+        with mock.patch.object(cm, "_repassar_ao_login", side_effect=RuntimeError("x")), \
+                mock.patch.object(mb, "escrever_espelho") as espelho, self.assertLogs(cm.logger, "ERROR"):
+            r = cm.editar_motorista({}, mid, {"nome": "Novo"}, "hugo", conn=self.conn)
+        self.assertEqual(len(r["mudancas"]), 1)
+        espelho.assert_called_once()
+
     def test_editar_falha_do_espelho_nao_derruba(self):
         mid = self._cadastrado()
         with mock.patch.object(mb, "escrever_espelho", side_effect=OSError("x")), self.assertLogs(cm.logger, "ERROR"):
