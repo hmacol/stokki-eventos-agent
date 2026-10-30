@@ -735,12 +735,13 @@ def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
 
-def buscar_servico(token: str, service_id: int) -> dict | None:
+def buscar_servico(token: str, service_id: int, incluir: str = "checklistAnswers") -> dict | None:
     """GET /services/{id} com checklist (comprovante) -- envelope
-    {"service": ...}, {"data": ...} ou sem envelope."""
+    {"service": ...}, {"data": ...} ou sem envelope. `incluir` troca o include
+    (ex.: "customer" pra alteracao de entrega)."""
     try:
         resp = chamar_com_retry(requests.get, f"{API_BASE}/services/{service_id}",
-                                headers=_headers(token), params={"include": "checklistAnswers"}, timeout=20)
+                                headers=_headers(token), params={"include": incluir}, timeout=20)
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
