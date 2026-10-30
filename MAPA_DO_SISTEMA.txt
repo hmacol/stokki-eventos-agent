@@ -1103,6 +1103,8 @@
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
                            inserido no XML do lote pelo worker (original intacto).
+alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (quem pode, avisos,
+                          data pelo dia fixo); chave portal_cliente.alteracao_entrega.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
