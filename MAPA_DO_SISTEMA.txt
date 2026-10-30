@@ -943,7 +943,7 @@
                            apagar só o autor em 15 min); aba Triagem lê daí
                            (só o dia mais recente; dias parado desde o 1º
                            registro). Encaminhar (Cancelados/Devolução/Descartar/
-                           Verificar) cria demanda na tela /demandas pra equipe
+                           Retornar p/ Estoque/Verificar) cria demanda na tela /demandas pra equipe
                            escolhida na hora (26/10; Verificar sugere Atendimento;
                            ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
                            test_pedidos_parados_registro.py.
