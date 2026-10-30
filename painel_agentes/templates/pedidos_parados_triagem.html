@@ -230,7 +230,7 @@ const PODE_REGISTRAR = {{ 'true' if pode_registrar else 'false' }};
 const ABA_INICIAL = "{{ aba_inicial }}";
 // Espelha ENCAMINHAMENTO_DEMANDAS_ATIVO em pedidos_parados_triagem.py (Hugo, 24/10).
 const ENCAMINHAMENTO_ATIVO = {{ 'true' if encaminhamento_ativo else 'false' }};
-const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue"];
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue"];
 // Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
 const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota", "Entregue": "já foi entregue" };
 // Classificações que já encerram o caso pro filtro "Mostrar só não
@@ -240,7 +240,7 @@ const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em r
 // linhas apareciam como "✓ revisado" e mesmo assim não sumiam do filtro.
 // Cliente Retira entra mesmo sem a notificação ter sido enviada.
 const CONTAM_COMO_TRATADAS = ["Cliente Retira", "Em Rota", "Agendado", "Entregue"];
-const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Verificar com Cliente"];
+const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Retornar para Estoque", "Verificar com Cliente"];
 // Encaminhar (26/10): cria a demanda na tela Demandas do painel, pra equipe
 // escolhida na hora (a sugerida vem de EQUIPE_PADRAO_POR_CLASSIFICACAO).
 

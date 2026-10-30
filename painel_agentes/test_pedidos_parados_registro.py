@@ -248,6 +248,32 @@ class TestListagemLocal(_Base):
                          ("Cancelamento de Pedido e Retorno ao Estoque — Mercado X", "ALTA", "PS-77",
                           "pedidos_parados", "Hugo"))
 
+    def test_retornar_para_estoque_classifica_e_cria_demanda(self):
+        # Hugo, 29/10: classificacao nova, mesmo fluxo do Descartar (Encaminhar cria Demanda)
+        import acesso_telas
+        import demandas
+        import grupos_equipe
+        for alvo in (demandas, acesso_telas, grupos_equipe):
+            p = mock.patch.object(alvo, "DB_PATH", self.db)
+            p.start()
+            self.addCleanup(p.stop)
+        rid = ppt.registrar("78", 1, "x")["id"]
+        ppt.classificar("78", str(rid), "Retornar para Estoque", "x")
+        self.assertEqual(ppt.registros_hoje("x")["hoje"][0]["classificacao"], "Retornar para Estoque")
+        c = demandas.conectar()
+        estoque = next(e["id"] for e in demandas.equipes_ativas(c) if e["nome"] == "Estoque")
+        c.close()
+        vuupt = mock.Mock()
+        vuupt.buscar_customer_por_id.return_value = {"name": "Mercado X"}
+        with mock.patch.object(ppt, "_vuupt", return_value=vuupt), \
+             mock.patch.object(ppt, "_resolver_pedido", return_value=({"customer_id": 9}, "PS-78")), \
+             mock.patch.object(ppt.tratativas, "registrar_evento"):
+            r = ppt.encaminhar_operacao("78", "Retornar para Estoque", "hugo", equipe_id=estoque)
+        c = demandas.conectar()
+        d = c.execute("SELECT titulo FROM demandas WHERE id = ?", (r["demanda_id"],)).fetchone()
+        c.close()
+        self.assertEqual(d["titulo"], "Retorno ao Estoque — Mercado X")
+
     def test_classificar_pausado_nao_conclui(self):
         rid = ppt.registrar("A", 1, "x")["id"]
         # classificar nunca conclui sozinho (so a acao do botao conclui)
