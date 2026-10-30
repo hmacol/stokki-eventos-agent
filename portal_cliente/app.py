@@ -704,15 +704,19 @@ def _destinatario(servico: dict) -> tuple[str, str]:
 @requer_cliente
 def api_alteracao(service_id):
     servico, _empresa = _servico_alteravel(service_id)
-    conn = envios.conectar()
     try:
-        av = _avaliar_alteracao(conn, servico)
-    finally:
-        conn.close()
-    from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
-    doc, nome = _destinatario(servico)
-    ini, fim = horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())
-    data = alterar_entrega._data_agendada(servico)
+        conn = envios.conectar()
+        try:
+            av = _avaliar_alteracao(conn, servico)
+        finally:
+            conn.close()
+        from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
+        doc, nome = _destinatario(servico)
+        ini, fim = horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())
+        data = alterar_entrega._data_agendada(servico)
+    except Exception:
+        logger.exception(f"alteracao (consulta) sid={service_id} -> erro")
+        return jsonify({"erro": f"Não foi possível consultar o pedido agora. {alterar_entrega.CHAT}"}), 502
     return jsonify({"pode": av.pode, "motivo": av.motivo, "em_rota": av.em_rota, "destinatario": nome,
                     "atual": {"endereco": servico.get("address") or "", "data": data.isoformat() if data else None,
                               "horario": {"inicio": ini, "fim": fim}}})
@@ -724,10 +728,13 @@ def api_alteracao(service_id):
 def api_alteracao_aplicar(service_id):
     _exige_pode_enviar()
     servico, empresa = _servico_alteravel(service_id)
-    corpo = request.get_json(silent=True) or {}
+    corpo = request.get_json(silent=True)
+    if not isinstance(corpo, dict):
+        corpo = {}
     por = _quem_envia()
     conn = envios.conectar()
     conn_registro = None
+    chamou_aplicar = False
     try:
         av = _avaliar_alteracao(conn, servico)   # sempre de novo: nunca confia no GET
         if not av.pode:
@@ -755,6 +762,7 @@ def api_alteracao_aplicar(service_id):
         contexto = {"cnpj_embarcador": empresa["cnpj"], "sender_id": servico.get("sender_id"), "por": por,
                     "destinatario_doc": doc, "destinatario_nome": nome, "config": _CONFIG,
                     "mapa_horarios": _mapa_horarios(), "empresa_nome": empresa["nome"]}
+        chamou_aplicar = True
         resultado = alterar_entrega.aplicar(conn, servico, validado, plano, contexto,
                                             alterar_entrega.dependencias_reais(_CONFIG, por))
     except Exception:
@@ -764,8 +772,9 @@ def api_alteracao_aplicar(service_id):
         conn.close()
         if conn_registro is not None:
             conn_registro.close()
+        if chamou_aplicar:  # a Vuupt pode ter mudado mesmo se o aplicar estourou
+            dados.invalidar_cache(servico["sender_id"])
     logger.info(f"alteracao cnpj={empresa['cnpj']} sid={service_id} por={por} -> {'ok' if resultado['ok'] else 'erro'}")
-    dados.invalidar_cache(servico["sender_id"])
     if not resultado["ok"]:
         return jsonify({"erro": resultado["mensagem"]}), 502
     return jsonify({"ok": True, "mensagem": resultado["mensagem"]})

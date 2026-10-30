@@ -232,6 +232,34 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         aplicar.assert_called_once()
 
+    def test_post_corpo_que_nao_e_objeto_400(self):
+        self._com(self._fakes())
+        r = self.cli.post("/api/pedidos/10/alteracao", json=[1], base_url=HTTPS)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Nada foi alterado.")
+
+    def test_get_com_falha_interna_devolve_json_502(self):
+        self._com(self._fakes())
+        with mock.patch.object(self.portal.cancelamento, "servicos_do_pedido", side_effect=RuntimeError("boom")):
+            r = self.cli.get("/api/pedidos/10/alteracao", base_url=HTTPS)
+        self.assertEqual(r.status_code, 502)
+        self.assertTrue(r.get_json()["erro"].endswith("Fale com a Fresh Log pelo chat do portal."))
+        self.assertNotIn("boom", r.get_json()["erro"])
+
+    def test_aplicar_que_estoura_ainda_limpa_o_cache(self):
+        self._com(self._fakes())
+        self.aplicar.side_effect = RuntimeError("boom")
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
+        self.assertEqual(r.status_code, 502)
+        self.portal.dados.invalidar_cache.assert_called_with(100)
+
+    def test_post_de_outra_origem_403(self):
+        self._com(self._fakes())
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS,
+                          headers={"Origin": "https://evil.example"})
+        self.assertEqual(r.status_code, 403)
+        self.aplicar.assert_not_called()
+
     def test_post_equipe_so_leitura_403(self):
         fakes = self._fakes()
         aplicar = self.aplicar
