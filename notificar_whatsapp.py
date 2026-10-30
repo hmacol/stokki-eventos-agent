@@ -22,6 +22,16 @@ atendimento que passou a depender de gente, com o link da tela. Leva so o
 nome do embarcador.
     portal_cliente/chamados.whatsapp_para_atendimento -> avisar_chamado
 
+Sexta origem (pedido do Hugo, 28/10/2026), em grupo SEPARADO so com ele:
+o resumo diario do Gmail que a rotina na nuvem escreve as 07h. Excecao ao
+limite de 200 caracteres (decisao dele): vai o resumo inteiro.
+    resumo_email_whatsapp.py -> avisar_resumo_email
+
+Setima origem (pedido do Hugo, 28/10/2026), no grupo ALERTA LOGISTICA:
+rotas de dias anteriores com pedido sem baixa (o job das 15h45 so avisa,
+nao devolve mais ao pool). Leva numero da rota, data, motorista e contagem.
+    roteirizacao/cancelar_rotas_sem_motorista.main -> avisar_rotas_sem_baixa
+
 Origem PARA FORA da empresa (pedido do Hugo, 29/09/2026): o embarcador que
 ficou 10 min sem responder a equipe recebe o aviso no numero que ele mesmo
 cadastrou no portal. Destino individual (<numero>@c.us), teto proprio
@@ -50,6 +60,8 @@ config.yaml:
       sessao: "..."
       grupo_id: "...@g.us"
       grupo_atendimento_id: "...@g.us"   # grupo dos avisos de chamado
+      grupo_logistica_id: "...@g.us"     # ALERTA LOGISTICA: rotas sem baixa (cancelar_rotas_sem_motorista.py)
+      grupo_resumo_email_id: "...@g.us"  # resumo diario do Gmail (resumo_email_whatsapp.py)
       avisar_chamados: true              # desliga so o aviso de chamado
       sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
       teto_diario: 20
@@ -81,6 +93,7 @@ MAX_DETALHE = 200
 MAX_MENSAGEM = 200
 MAX_ETAPAS_ERRO = 3
 MAX_INSUCESSOS = 10
+MAX_RESUMO_EMAIL = 1500
 ORIGEM_CLIENTE = "cliente_sem_resposta"
 # copias de piloto da tela de Notificacoes: nao contam como recebido pelo cliente, nem no teto dos
 # clientes, nem no teto interno (alertas de falha); tem teto proprio (clientes.teto_piloto)
@@ -149,7 +162,7 @@ NOMES_DAS_TAREFAS = {
     "backup-gcs": "Cópia de segurança diária dos dados",
     "batimento-pedidos": "Batimento diário dos pedidos",
     "backup-horario": "Cópia de segurança de hora em hora",
-    "cancelar-rotas-sem-motorista": "Cancelamento das rotas de hoje sem motorista",
+    "cancelar-rotas-sem-motorista": "Aviso das rotas sem baixa",
     "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
     "comparar-pool": "Conferência dos pedidos que aguardam rota",
     "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
@@ -171,6 +184,7 @@ NOMES_DAS_TAREFAS = {
     "pipeline-horario": "Importação de pedidos de hora em hora",
     "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
     "resumo-diario-embarcador": "E-mail da noite com o resumo do dia",
+    "resumo-email-whatsapp": "Resumo do e-mail no WhatsApp",
     "romaneios-manha": "Geração dos romaneios da manhã",
     "retornos-atrasados": "Retornos não recebidos",
     "sequencia-incremento": "Incremento das rotas das 18h",
@@ -324,6 +338,27 @@ def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     if resto > 0:
         linhas.append(f"e mais {resto}")
     linhas.append("Detalhes no e-mail e na Torre.")
+    return "\n".join(linhas)
+
+
+def texto_rotas_sem_baixa(rotas: list, agora: datetime | None = None) -> str:
+    """Cada item: {"numero", "data", "motorista", "pendentes", "iniciados"}
+    (cancelar_rotas_sem_motorista.rotas_sem_baixa). Excecao ao limite de
+    200 caracteres, como o insucesso: a lista e o que torna o aviso util."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    linhas = [f"⚠️ *Rotas sem baixa* · {quando}",
+              _plural(len(rotas), "rota", "rotas") + " de dias anteriores com pedido em aberto"]
+    for item in rotas[:MAX_INSUCESSOS]:
+        linha = (f"• {_uma_linha(item.get('numero'), 40)} {item['data']:%d/%m} · "
+                 f"{_uma_linha(item.get('motorista'), 40) or 'sem motorista'}: "
+                 + _plural(item.get("pendentes") or 0, "pedido", "pedidos"))
+        if item.get("iniciados"):
+            linha += f" ({item['iniciados']} em andamento)"
+        linhas.append(linha)
+    resto = len(rotas) - MAX_INSUCESSOS
+    if resto > 0:
+        linhas.append(f"e mais {resto}")
+    linhas.append("Nenhum volta pro pool sozinho: dê baixa ou cancele na Torre.")
     return "\n".join(linhas)
 
 
@@ -758,6 +793,23 @@ def avisar_insucessos(insucessos: list, config: dict, modo_teste: bool = False, 
         return "falhou"
 
 
+def avisar_rotas_sem_baixa(rotas: list, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Rotas de dias anteriores com pedido sem baixa (Hugo, 28/10: o job das
+    15h45 so avisa, nao devolve mais ao pool). Vai pro grupo
+    whatsapp_notificacoes.grupo_logistica_id (ALERTA LOGISTICA); sem ele,
+    cai no grupo dos alertas pra nao sumir."""
+    try:
+        if not rotas:
+            return "nao_relevante"
+        agora = kw.get("agora") or datetime.now()
+        return despachar(config, "cancelar_rotas_sem_motorista", "rotas_sem_baixa",
+                         texto_rotas_sem_baixa(rotas, agora), f"rotas_sem_baixa:{agora.date().isoformat()}",
+                         modo_teste=modo_teste, grupo_id=_cfg(config).get("grupo_logistica_id"), **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
 def chamados_ligado(config: dict) -> bool:
     cfg = _cfg(config)
     return bool(cfg.get("ativo") and cfg.get("avisar_chamados", True) and cfg.get("grupo_atendimento_id"))
@@ -1018,6 +1070,36 @@ def avisar_informativo_mensal(titulo_mes: str, feriados: list, link: str, config
         return despachar(config, "informativo_mensal", "informativo_mensal",
                          texto_informativo_mensal(titulo_mes, feriados, link, kw.get("agora")),
                          assinatura=f"informativo:{titulo_mes}", modo_teste=modo_teste, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def texto_resumo_email(corpo: str) -> str:
+    """Corpo do e-mail 'Resumo do e-mail' (ja escrito no formato do WhatsApp
+    pela rotina na nuvem): so arruma espacos e corta em MAX_RESUMO_EMAIL."""
+    linhas = [linha.rstrip() for linha in str(corpo or "").replace("\r\n", "\n").split("\n")]
+    texto = re.sub(r"\n{3,}", "\n\n", "\n".join(linhas)).strip()
+    if len(texto) <= MAX_RESUMO_EMAIL:
+        return texto
+    fim = "…\nO resto está no e-mail."
+    return texto[:MAX_RESUMO_EMAIL - len(fim)].rstrip() + fim
+
+
+def avisar_resumo_email(corpo: str, data, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Um resumo por dia no grupo whatsapp_notificacoes.grupo_resumo_email_id
+    (sem o grupo, desligado). Sem limite de tempo na repeticao: o timer roda
+    varias vezes de manha ate achar o e-mail."""
+    try:
+        grupo = _cfg(config).get("grupo_resumo_email_id")
+        texto = texto_resumo_email(corpo)
+        if not grupo or not texto:
+            return "desligado" if not grupo else "nao_relevante"
+        origem, assinatura = "resumo_email", f"resumo_email:{data.isoformat()}"
+        if _cfg(config).get("ativo") and not modo_teste and _ja_enviada_alguma_vez(kw.get("conn"), origem, assinatura):
+            return "ja_enviado"
+        return despachar(config, origem, "resumo_email", texto, assinatura, modo_teste=modo_teste,
+                         grupo_id=grupo, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

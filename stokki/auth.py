@@ -21,6 +21,7 @@ Uso:
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -57,6 +58,29 @@ MAX_TENTATIVAS_RENOVACAO = 2
 
 class SessaoExpiradaError(Exception):
     """Lançada quando não é possível renovar a sessão após MAX_TENTATIVAS_RENOVACAO."""
+
+
+# 28/10: com a conta já aberta em outro lugar, a Stokki para o login em
+# /login/active-session ("Encerrar a outra sessão e entrar"). Antes o login
+# novo derrubava a outra sessão sem perguntar. Decisão do Hugo (28/10): a
+# automação encerra a outra sessão, como era antes.
+CAMINHO_SESSAO_ATIVA = "/login/active-session"
+
+
+def aguardar_saida_do_login(page, timeout_ms: int = 30_000) -> None:
+    """Depois do clique em Entrar: espera sair da tela de login, passando
+    pela tela de sessão ativa se ela aparecer. Estoura (timeout do
+    Playwright) se o login não passar."""
+    page.wait_for_url(lambda url: "login" not in url or CAMINHO_SESSAO_ATIVA in url, timeout=timeout_ms)
+    if CAMINHO_SESSAO_ATIVA not in page.url:
+        return
+    texto = " ".join((page.evaluate("() => document.body.innerText") or "").split())
+    ip = re.search(r"\bIP\s+([0-9A-Fa-f:.]+)", texto)
+    acesso = re.search(r"Último acesso\s+(.{0,30}?\d{1,2}:\d{2})", texto)
+    logger.warning(f"Stokki: conta já conectada em outro dispositivo (IP {ip.group(1) if ip else '?'}, "
+                   f"último acesso {acesso.group(1) if acesso else '?'}) -- encerrando a outra sessão.")
+    page.click(f"form[action$='{CAMINHO_SESSAO_ATIVA}'] button[type='submit']")
+    page.wait_for_url(lambda url: "login" not in url, timeout=timeout_ms)
 
 
 class StokkiSession:
@@ -282,7 +306,7 @@ class StokkiSession:
                     page.fill("[name='email']", self._usuario)
                     page.fill("[name='password']", self._senha)
                     page.click("button[type='submit']")
-                    page.wait_for_url(lambda url: "login" not in url, timeout=30_000)
+                    aguardar_saida_do_login(page)
                     logger.info(f"Login OK. URL: {page.url}")
 
                     # Visita a area /provider/ dentro do Playwright para que

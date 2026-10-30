@@ -459,6 +459,11 @@ def main(modo_teste: bool = False):
         # continua vindo (CNPJ do destinatário resolve nível e horário).
         servicos = listar_pool_not_assigned(config, vuupt)
 
+        # Em espera a pedido do cliente (27/10): pausado não é encaixado. Sai
+        # ANTES do dia fixo (que gravaria data e avisaria o remetente).
+        import pedidos_pausados_cliente
+        servicos, _pausados = pedidos_pausados_cliente.separar_pausados(servicos)
+
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
         # já finalizadas, sem necessidade nenhuma de olhar pra elas). O

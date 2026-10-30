@@ -125,9 +125,10 @@ def conectar(caminho=None) -> sqlite3.Connection:
             atualizado_em  TEXT,
             versao_senha   INTEGER NOT NULL DEFAULT 0,
             ativo          INTEGER NOT NULL DEFAULT 1,
-            equipe         TEXT NOT NULL DEFAULT ''
+            equipe         TEXT NOT NULL DEFAULT '',
+            portal_equipe  INTEGER NOT NULL DEFAULT 0
         )""")
-    # Tabela criada antes dessas colunas (deploys de 23/10 e 25/10).
+    # Tabela criada antes dessas colunas (deploys de 23/10, 25/10 e 29/10).
     colunas = {r["name"] for r in conn.execute("PRAGMA table_info(painel_usuarios)")}
     if "versao_senha" not in colunas:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN versao_senha INTEGER NOT NULL DEFAULT 0")
@@ -135,6 +136,8 @@ def conectar(caminho=None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN ativo INTEGER NOT NULL DEFAULT 1")
     if "equipe" not in colunas:
         conn.execute("ALTER TABLE painel_usuarios ADD COLUMN equipe TEXT NOT NULL DEFAULT ''")
+    if "portal_equipe" not in colunas:
+        conn.execute("ALTER TABLE painel_usuarios ADD COLUMN portal_equipe INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS painel_sessoes_rodada (
             id     INTEGER PRIMARY KEY CHECK (id = 1),
@@ -162,7 +165,8 @@ def conta(usuario: str, conn=None):
     conn = conn or conectar()
     try:
         r = conn.execute(
-            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, u.versao_senha, u.ativo, u.equipe, t.telas "
+            "SELECT u.usuario, u.nome, u.nivel, u.trocar_senha, u.senha_hash, u.versao_senha, u.ativo, u.equipe, "
+            "u.portal_equipe, t.telas "
             "FROM painel_usuarios u "
             "LEFT JOIN painel_acesso_telas t ON t.usuario = u.usuario WHERE u.usuario = ?", (usuario,)).fetchone()
     finally:
@@ -172,7 +176,7 @@ def conta(usuario: str, conn=None):
         return None
     return {"usuario": r["usuario"], "nome": r["nome"], "nivel": r["nivel"], "trocar_senha": bool(r["trocar_senha"]),
             "senha_hash": r["senha_hash"], "versao_senha": r["versao_senha"], "ativo": bool(r["ativo"]),
-            "equipe": r["equipe"] or "", "telas": _telas_da_linha(r)}
+            "equipe": r["equipe"] or "", "portal_equipe": bool(r["portal_equipe"]), "telas": _telas_da_linha(r)}
 
 
 # Login inexistente confere contra este hash, pra responder no mesmo tempo
@@ -210,6 +214,7 @@ def listar(conn) -> list[dict]:
             "nome": r["nome"],
             "nivel": r["nivel"],
             "equipe": r["equipe"] or "",
+            "portal_equipe": bool(r["portal_equipe"]),
             "trocar_senha": bool(r["trocar_senha"]),
             "ativo": bool(r["ativo"]),
             "telas": _telas_da_linha(r),
@@ -282,6 +287,17 @@ def mudar_ativo(conn, usuario: str, ativo: bool, por: str) -> None:
     _exigir_outro(conn, usuario, por)
     conn.execute("UPDATE painel_usuarios SET ativo = ?, versao_senha = versao_senha + ?, atualizado_por = ?, "
                  "atualizado_em = ? WHERE usuario = ?", (1 if ativo else 0, 0 if ativo else 1, por, _agora(), usuario))
+    conn.commit()
+
+
+def mudar_portal(conn, usuario: str, liberado: bool, por: str) -> None:
+    """Liga/desliga a entrada no portal do cliente em nome do cliente
+    (/cliente/equipe, Hugo 29/10), com poder de operador la. Vale pra quem
+    segue o nivel e pra personalizado. Desligar derruba a sessao aberta do
+    portal no proximo clique (o portal reconfere a cada request)."""
+    _exigir_outro(conn, usuario, por)
+    conn.execute("UPDATE painel_usuarios SET portal_equipe = ?, atualizado_por = ?, atualizado_em = ? "
+                 "WHERE usuario = ?", (1 if liberado else 0, por, _agora(), usuario))
     conn.commit()
 
 

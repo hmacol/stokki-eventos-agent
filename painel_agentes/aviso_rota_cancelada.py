@@ -10,10 +10,13 @@ rota e cancelada na Vuupt (rascunhos_rota.cancelar_rota_enviada), avisa
     com a nova previsao).
 
 O aviso ao embarcador passa pela tela Notificacoes (tipo "rota_cancelada"):
-ENVIAR = chat do proprio embarcador; PILOTO = chat do cliente teste, com o
-destino real no texto; NAO = so o grupo interno. Sem linha na tela vale o
-forcar_destino dos chamados (preenchido = piloto). Falha aqui nunca desfaz o
-cancelamento.
+ENVIAR = chat do proprio embarcador; PILOTO = nao abre conversa, o texto que
+o embarcador receberia vai como previa no proprio grupo; NAO = so o grupo
+interno. Sem linha na tela vale o forcar_destino dos chamados (preenchido =
+piloto). Falha aqui nunca desfaz o cancelamento.
+
+Revisao 27/10 (M1): o piloto abria a conversa no cliente teste, conta do portal
+publico com PIN fraco, e expunha nome de cliente real; por isso a previa.
 
     py -3.11 -m unittest test_aviso_rota_cancelada   (de dentro de painel_agentes/)
 """
@@ -37,7 +40,6 @@ logger = logging.getLogger("painel.aviso_rota_cancelada")
 NOME_GRUPO = "Rotas canceladas"
 AUTOR_AVISO = "Planejamento"
 TIPO_NOTIFICACAO = "rota_cancelada"
-CNPJ_TESTE = "00000000000191"  # cliente teste do portal (reference_cliente_teste_portal)
 
 
 def _data_br(valor) -> str:
@@ -75,6 +77,9 @@ def texto_grupo(rascunho: dict, motivo: str, por: str, embarcadores: list[dict])
               f"{n} pedido(s) · {len(embarcadores)} embarcador(es):"]
     for e in embarcadores:
         linhas.append(f"{e['nome']} ({len(e['codigos'])}): {', '.join(e['codigos'])} · {e['aviso']}")
+    for e in embarcadores:
+        if e.get("previa"):
+            linhas.append(f"\nPrévia para {e['nome']}:\n{e['previa']}")
     return "\n".join(linhas)
 
 
@@ -86,7 +91,8 @@ def _embarcador_do_sender(conn, sender_id) -> dict | None:
 
 
 def _avisar_embarcador(conn_ch, rascunho: dict, motivo: str, emb: dict, config: dict, db_path) -> str:
-    """Abre a conversa no chat do portal; devolve o texto de situacao pro grupo."""
+    """Abre a conversa no chat do portal; devolve o texto de situacao pro grupo.
+    No piloto guarda o texto em emb["previa"] em vez de abrir conversa."""
     cliente = _embarcador_do_sender(conn_ch, emb["sender_id"])
     if not cliente:
         return "NÃO avisado (sem cadastro em interno)"
@@ -97,15 +103,12 @@ def _avisar_embarcador(conn_ch, rascunho: dict, motivo: str, emb: dict, config: 
     if decisao.acao == "NAO":
         return f"NÃO avisado ({decisao.motivo})"
     if decisao.acao == "PILOTO":
-        teste = auth_cliente.buscar_embarcador(conn_ch, CNPJ_TESTE)
-        if not teste:
-            return "NÃO avisado (piloto sem cliente teste)"
-        texto = f"[Piloto · destino real: {cliente['nome']}]\n{texto}"
-        cliente = teste
+        emb["previa"] = texto
+        return "piloto: não enviado, prévia abaixo"
     chamado = ch.criar_chamado(conn_ch, cliente, ch.ORIGEM_SISTEMA, ch.STATUS_AGUARDANDO_FL,
                                assunto="Rota cancelada", area="entrega", pedido_ref=emb["codigos"][0])
     ch.mensagem_sistema(conn_ch, chamado, texto)
-    return f"avisado no chat #{chamado['id']}" + (" (piloto: cliente teste)" if decisao.acao == "PILOTO" else "")
+    return f"avisado no chat #{chamado['id']}"
 
 
 def _postar_grupo(texto: str, db_path) -> None:

@@ -2888,6 +2888,10 @@
       const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
       partes.push(`<span class="badge-dedicado" title="Rota fraca: pedido adiado para ${dm(p.segurado.data_nova)}. Pode ser colocado em rota à mão.">⏸ Segurado · prazo ${dm(p.segurado.prazo_final)}</span>`);
     }
+    // em espera a pedido do cliente (27/10): fica no pool, mas a roteirização pula
+    if (p.pausado_cliente) {
+      partes.push(`<span class="badge-dedicado" title="Pausado a pedido do cliente: não entra em rota automática nem em Roteirizar selecionados.">⏸ Em espera (cliente)</span>`);
+    }
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
@@ -5105,10 +5109,11 @@
       const resp = await postJSON("/api/planejamento/roteirizar-selecionados",
         { data_alvo: DATA_ALVO_ISO, service_ids: ids, modelo_forcado: modeloForcado || null,
           max_paradas_por_rota: maxParadasPorRota });
-      if (resp.pedidos_indisponiveis) {
-        alert(`${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s). ` +
-          `${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão ` +
-          `mais disponíveis na VUUPT).`);
+      if (resp.pedidos_indisponiveis || resp.pedidos_pausados) {
+        let msg = `${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s).`;
+        if (resp.pedidos_indisponiveis) msg += ` ${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão mais disponíveis na VUUPT).`;
+        if (resp.pedidos_pausados) msg += ` ${resp.pedidos_pausados} pedido(s) em espera a pedido do cliente ficaram de fora.`;
+        alert(msg);
       }
       // depois do reload: abre direto nas rotas em rascunho (aba Rotas no
       // celular) e destaca as novas -- as que não estão na lista de agora

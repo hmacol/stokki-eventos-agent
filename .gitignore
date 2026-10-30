@@ -23,7 +23,6 @@ env/
 
 # Dados, logs e saídas geradas em runtime
 dados/*
-!dados/BD_MOTORISTAS.xlsx
 !dados/centro_expandido_sp.json
 debug/
 saida_investigacao_stokki/
@@ -42,7 +41,6 @@ output/
 
 # Planilhas e documentos de dados reais
 *.xlsx
-!dados/BD_MOTORISTAS.xlsx
 *.docx
 # Relatorios do verificador de botoes (gerados a cada rodada)
 verificador_botoes/relatorios/

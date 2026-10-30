@@ -20,6 +20,7 @@ COMO RODAR (dev):
 COMO RODAR (produção -- ver infra/portal-cliente.service):
     waitress-serve --host=127.0.0.1 --port=8074 app:app
 """
+import html as html_mod
 import io
 import logging
 import os
@@ -52,6 +53,7 @@ import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
+from painel_agentes import acesso_telas
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("portal_cliente")
@@ -119,6 +121,9 @@ def _cliente_da_equipe(cnpj: str) -> dict | None:
 def _carregar_cliente():
     g.cliente = None
     g.equipe = session.get("equipe")
+    if g.equipe and g.equipe.get("nominal") and not _nominal_segue_valendo(g.equipe):
+        session.clear()
+        g.equipe = None
     if g.equipe:
         # Equipe Fresh Log logada (usuário do painel) escolhendo um cliente.
         cnpj = session.get("cnpj_equipe")
@@ -228,6 +233,29 @@ def _nivel_equipe(usuario: str, senha: str) -> str | None:
     return None
 
 
+def _conta_nominal_portal(usuario: str, senha: str) -> dict | None:
+    """Login nominal da /acessos com "Portal do cliente" marcado (Hugo,
+    29/10): entra com poder de operador, seja qual for o nível no painel.
+    Senha provisória não entra (quem sabe é quem redefiniu)."""
+    c = acesso_telas.conferir_senha(usuario, senha)
+    return c if c and c["portal_equipe"] and not c["trocar_senha"] else None
+
+
+def _nominal_segue_valendo(equipe: dict) -> bool:
+    """Reconfere a cada request, como o painel: desmarcar, desativar,
+    redefinir a senha ou "Derrubar todas as sessões" (/acessos) derruba a
+    sessão do portal no próximo clique."""
+    c = acesso_telas.conta(equipe.get("usuario", ""))
+    return bool(c and c["ativo"] and c["portal_equipe"] and not c["trocar_senha"]
+                and c["versao_senha"] == equipe.get("v")
+                and acesso_telas.rodada_sessoes()["rodada"] == equipe.get("r"))
+
+
+# Teto por login vindo de qualquer IP (mesmo do painel): o contador por IP
+# zera quando alguém entra, então sozinho não segura chute de quem tem login.
+_MAX_ERROS_POR_LOGIN = 30
+
+
 def _ip_cliente() -> str:
     return request.remote_addr or "?"   # IP real: ProxyFix(x_for=1) atrás do Caddy
 
@@ -243,18 +271,32 @@ def equipe_login():
         ip = _ip_cliente()
         conn = auth.conectar()
         try:
-            if auth.contar_tentativas(conn, "equipe_ip", ip, auth.BLOQUEIO_MINUTOS) >= auth.MAX_TENTATIVAS:
+            if auth.contar_tentativas(conn, "equipe_ip", ip, auth.BLOQUEIO_MINUTOS) >= auth.MAX_TENTATIVAS \
+                    or auth.contar_tentativas(conn, "equipe_login", usuario.lower(),
+                                              auth.BLOQUEIO_MINUTOS) >= _MAX_ERROS_POR_LOGIN:
                 logger.warning(f"equipe login bloqueado ip={ip} usuario={usuario}")
                 erro, status = "Muitas tentativas. Tente de novo em alguns minutos.", 429
             else:
-                nivel = _nivel_equipe(usuario, request.form.get("senha") or "")
-                if nivel is None:
+                senha = request.form.get("senha") or ""
+                nivel = _nivel_equipe(usuario, senha)
+                equipe = {"usuario": usuario, "nivel": nivel} if nivel else None
+                if equipe is None:
+                    c = _conta_nominal_portal(usuario, senha)
+                    if c:
+                        nivel = "operador"
+                        equipe = {"usuario": c["usuario"], "nivel": nivel, "nominal": True, "v": c["versao_senha"],
+                                  "r": acesso_telas.rodada_sessoes()["rodada"]}
+                if equipe is None:
                     auth.registrar_tentativa(conn, "equipe_ip", ip)
+                    auth.registrar_tentativa(conn, "equipe_login", usuario.lower())
                     erro = "Usuário ou senha incorretos."
                 else:
+                    # Só zera o do login que entrou: entrar com a própria
+                    # senha não limpa os erros contra outro login (revisão 29/10).
                     auth.limpar_tentativas(conn, "equipe_ip", ip)
+                    auth.limpar_tentativas(conn, "equipe_login", usuario.lower())
                     session.clear()
-                    session["equipe"] = {"usuario": usuario, "nivel": nivel}
+                    session["equipe"] = equipe
                     session.permanent = True
                     logger.info(f"equipe login usuario={usuario} nivel={nivel}")
                     return redirect(url_for("equipe_cliente"))
@@ -1005,7 +1047,7 @@ def api_envios_reenviar_erros():
 @requer_cliente
 @exige_mesma_origem
 def api_envios_acao(envio_id):
-    """Cancelar / tirar da rota / reagendar / reenviar (item 12). O que
+    """Cancelar / tirar da rota / reagendar / reenviar / retomar (item 12). O que
     não dá pra aplicar sozinho vira solicitação pra operação + e-mail."""
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
@@ -1036,16 +1078,18 @@ def _avisar_operacao_solicitacao(envio: dict, tipo: str, corpo: dict) -> None:
     if not destino:
         return
     rotulo = envios.ROTULOS_SOLICITACAO.get(tipo, tipo)
+    # tudo que o cliente digitou ou veio do XML dele entra escapado no HTML
+    esc = lambda v: html_mod.escape(str(v if v is not None else ""))  # noqa: E731
     detalhe = ""
     if tipo == "reagendar":
-        detalhe = f"<p>Nova data: <b>{'/'.join(reversed(str(corpo.get('data') or '').split('-')))} "
-        detalhe += f"{corpo.get('hora_inicio') or ''}–{corpo.get('hora_fim') or ''}</b></p>"
+        detalhe = f"<p>Nova data: <b>{esc('/'.join(reversed(str(corpo.get('data') or '').split('-'))))} "
+        detalhe += f"{esc(corpo.get('hora_inicio') or '')}–{esc(corpo.get('hora_fim') or '')}</b></p>"
     if corpo.get("motivo"):
-        detalhe += f"<p>Motivo informado: {corpo['motivo'][:300]}</p>"
+        detalhe += f"<p>Motivo informado: {esc(str(corpo['motivo'])[:300])}</p>"
     html = envelope_html(
-        f"<p><b>{_empresa_envio()['nome']}</b> (CNPJ {_empresa_envio()['cnpj_formatado']}) pediu pelo portal: <b>{rotulo}</b>.</p>"
-        f"<p>Pedido {envio.get('codigo_pedido') or '(código ainda não identificado)'} · NF {envio.get('numero_nf')} · "
-        f"{envio.get('destinatario_nome')} · situação no portal: {envios.ROTULOS_STATUS.get(envio['status'], envio['status'])}.</p>"
+        f"<p><b>{esc(_empresa_envio()['nome'])}</b> (CNPJ {esc(_empresa_envio()['cnpj_formatado'])}) pediu pelo portal: <b>{esc(rotulo)}</b>.</p>"
+        f"<p>Pedido {esc(envio.get('codigo_pedido') or '(código ainda não identificado)')} · NF {esc(envio.get('numero_nf'))} · "
+        f"{esc(envio.get('destinatario_nome'))} · situação no portal: {esc(envios.ROTULOS_STATUS.get(envio['status'], envio['status']))}.</p>"
         f"{detalhe}<p>Ao concluir, marque a solicitação como atendida: "
         f"<code>portal_cliente/gerenciar_clientes.py solicitacoes</code>.</p>",
         rodape="Fresh Log · Portal do cliente · solicitação", cor_acento="#F5A623")

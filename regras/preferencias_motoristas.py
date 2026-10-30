@@ -6,7 +6,10 @@ Cadastro de preferências dos motoristas usado pela alocação automática
 de rotas (roteirizacao/alocacao_motoristas.py) -- doc de origem:
 DOC_EXECUCAO_CLAUDE_ALOCACAO_MOTORISTAS.md.
 
-Fonte primária: planilha dados/BD_MOTORISTAS.xlsx, colunas
+Fonte primária: tabela bd_motoristas do banco (regras/motoristas_banco.py;
+Hugo, 29/10/2026). dados/BD_MOTORISTAS.xlsx virou espelho SOMENTE LEITURA
+gerado da tabela; tabela vazia = lê a planilha como antes. Colunas (as mesmas
+da tabela, da planilha e do JSON):
     AGENT_ID_VUUPT | VEHICLE_ID_VUUPT | NOME_MOTORISTA | ACEITA_VIAGENS |
     DIAS_DISPONIVEIS | MAX_ROTAS_DIA | ATIVO | ZONAS_PREFERIDAS |
     TELEFONE_MOTORISTA | EMAIL_MOTORISTA | PLACA | TIPO_VEICULO | CPF_MOTORISTA |
@@ -274,8 +277,9 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
 
 
 class CatalogoMotoristas:
-    def __init__(self, motoristas: list[MotoristaPreferencias]):
+    def __init__(self, motoristas: list[MotoristaPreferencias], fonte: str = "vazio"):
         self.motoristas = motoristas
+        self.fonte = fonte  # "banco", "planilha", "json" ou "vazio"
 
     @classmethod
     def _carregar_excel(cls, caminho: Path) -> "CatalogoMotoristas":
@@ -295,7 +299,34 @@ class CatalogoMotoristas:
             if m:
                 motoristas.append(m)
         logger.info(f"Catálogo de motoristas carregado de {caminho}: {len(motoristas)} motorista(s).")
-        return cls(motoristas)
+        return cls(motoristas, "planilha")
+
+    @classmethod
+    def _carregar_banco(cls, conn=None) -> "CatalogoMotoristas | None":
+        """Catálogo da tabela bd_motoristas; None se a tabela está vazia ou
+        o banco falhou (o chamador cai na planilha -- ler motorista nunca
+        derruba o pipeline)."""
+        from nucleo import banco
+        from regras import motoristas_banco  # import tardio: motoristas_banco importa este módulo
+        fechar = conn is None
+        try:
+            if conn is None:
+                conn = banco.conectar()
+            if not motoristas_banco.tem_registros(conn):
+                return None
+            motoristas = []
+            for registro in motoristas_banco.listar(conn):
+                m = _construir_motorista(registro)
+                if m:
+                    motoristas.append(m)
+        except Exception as e:
+            logger.warning(f"Falha ao ler bd_motoristas ({e}) -- usando a planilha.")
+            return None
+        finally:
+            if fechar and conn is not None:
+                conn.close()
+        logger.info(f"Catálogo de motoristas carregado do banco: {len(motoristas)} motorista(s).")
+        return cls(motoristas, "banco")
 
     @classmethod
     def _carregar_json(cls, caminho: Path) -> "CatalogoMotoristas":
@@ -307,20 +338,29 @@ class CatalogoMotoristas:
             if m:
                 motoristas.append(m)
         logger.info(f"Catálogo de motoristas carregado de {caminho}: {len(motoristas)} motorista(s).")
-        return cls(motoristas)
+        return cls(motoristas, "json")
 
     @classmethod
     def carregar(cls, caminho_excel: str | Path | None,
-                caminho_json_fallback: str | Path | None = None) -> "CatalogoMotoristas":
+                caminho_json_fallback: str | Path | None = None, *, conn=None) -> "CatalogoMotoristas":
         """
         Tenta carregar de `caminho_excel` primeiro; se não existir, tenta
         `caminho_json_fallback`. Se nenhum dos dois existir, devolve um
         catálogo vazio (aviso no log) -- a alocação automática segue
         funcionando, só que sem motorista disponível pra nenhuma rota
         (fica registrado como [ALERTA_ALOCACAO]).
+
+        Se `caminho_excel` é o espelho padrão (dados/BD_MOTORISTAS.xlsx ao
+        lado do banco) e a tabela bd_motoristas tem linhas, lê da tabela.
+        `conn` só para teste (padrão: nucleo.banco.conectar()).
         """
         if caminho_excel:
+            from regras import motoristas_banco  # import tardio (ciclo)
             caminho = Path(caminho_excel)
+            if caminho.resolve() == motoristas_banco.caminho_espelho().resolve():
+                do_banco = cls._carregar_banco(conn)
+                if do_banco is not None:
+                    return do_banco
             if caminho.exists():
                 return cls._carregar_excel(caminho)
 
@@ -334,21 +374,42 @@ class CatalogoMotoristas:
             f"fallback JSON: {caminho_json_fallback!r}) -- nenhum motorista será alocado "
             f"automaticamente até a base ser criada."
         )
-        return cls([])
+        return cls([], "vazio")
 
 
 PLANILHA_PADRAO = Path(__file__).resolve().parent.parent / "dados" / "BD_MOTORISTAS.xlsx"
-_cache_sem_app: dict[tuple[str, float], set[int]] = {}
+_cache_sem_app: dict[tuple, set[int]] = {}
+
+
+def _chave_banco() -> tuple | None:
+    """(contagem, max(atualizado_em)) da tabela; None se vazia ou com falha."""
+    from nucleo import banco
+    try:
+        conn = banco.conectar()
+        try:
+            n, ultimo = conn.execute("SELECT COUNT(*), MAX(atualizado_em) FROM bd_motoristas").fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Falha ao consultar bd_motoristas ({e}) -- usando a planilha.")
+        return None
+    return ("banco", n, ultimo) if n else None
 
 
 def agent_ids_sem_app(caminho: str | Path | None = None) -> set[int]:
-    """agent_ids marcados SEM_APP na planilha (Hugo, 08/10). Planilha
-    ausente ou sem a coluna = conjunto vazio. Cache por mtime: a Torre chama
-    isto a cada carga."""
+    """agent_ids marcados SEM_APP (Hugo, 08/10). Sem motoristas ou sem a
+    coluna = conjunto vazio. Com o espelho padrão e a tabela cheia, o cache
+    é por (contagem, max(atualizado_em)) da tabela; senão, por mtime da
+    planilha. A Torre chama isto a cada carga."""
+    from regras import motoristas_banco  # import tardio (ciclo)
     caminho = Path(caminho) if caminho else PLANILHA_PADRAO
-    if not caminho.exists():
-        return set()
-    chave = (str(caminho), caminho.stat().st_mtime)
+    chave = None
+    if caminho.resolve() == motoristas_banco.caminho_espelho().resolve():
+        chave = _chave_banco()
+    if chave is None:
+        if not caminho.exists():
+            return set()
+        chave = (str(caminho), caminho.stat().st_mtime)
     if chave not in _cache_sem_app:
         catalogo = CatalogoMotoristas.carregar(caminho)
         _cache_sem_app.clear()

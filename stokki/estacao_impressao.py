@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 # 05/10: cada operação da Estação entra na fila da conta provider e
 # libera ao terminar (stokki/sessao_uso.na_vez_da_provider).
 from stokki.sessao_uso import na_vez_da_provider  # noqa: E402
+from stokki.auth import aguardar_saida_do_login  # noqa: E402
 
 BASE_URL     = "https://freshlog.stokki.com.br"
 URL_PRINTING = f"{BASE_URL}/pt-br/provider/operation/order/printing"
@@ -92,7 +93,7 @@ def _preencher_form_login(page, usuario, senha, tentativas=3, timeout_ms=15_000)
             page.fill("[name='email']", usuario)
             page.fill("[name='password']", senha)
             page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            aguardar_saida_do_login(page)  # 28/10: passa pela tela de sessão ativa
             return
         except Exception as e:
             ultimo_erro = e

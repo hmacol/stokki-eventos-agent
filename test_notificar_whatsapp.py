@@ -972,3 +972,52 @@ class TestAvisarClienteTransportadoraTravaPropria(_ComBanco):
         self.config["consulta_transportadora"] = {"forcar_destino_whatsapp": ""}
         self.assertEqual(self.avisar(), "enviado")
         self.assertEqual(self.enviar.call_args[0][1], f"{TEL}@c.us")
+
+
+def _rota_sem_baixa(numero="#1", dia=20, motorista="Hedgar Miralha Nascimento", pendentes=43, iniciados=0):
+    return {"rota_id": 1, "numero": numero, "nome": f"Planejamento - {dia}/10/2026 - {numero}",
+            "data": datetime(2026, 10, dia).date(), "motorista": motorista, "pendentes": pendentes,
+            "iniciados": iniciados}
+
+
+class TestTextoRotasSemBaixa(unittest.TestCase):
+    def test_uma_linha_por_rota(self):
+        texto = nw.texto_rotas_sem_baixa(
+            [_rota_sem_baixa(), _rota_sem_baixa("#6", 27, None, 2, 1)], agora=datetime(2026, 10, 29, 15, 45))
+        self.assertEqual(texto, "\n".join([
+            "⚠️ *Rotas sem baixa* · 29/10 15:45",
+            "2 rotas de dias anteriores com pedido em aberto",
+            "• #1 20/10 · Hedgar Miralha Nascimento: 43 pedidos",
+            "• #6 27/10 · sem motorista: 2 pedidos (1 em andamento)",
+            "Nenhum volta pro pool sozinho: dê baixa ou cancele na Torre.",
+        ]))
+
+    def test_corta_a_lista_e_diz_quantas_faltam(self):
+        rotas = [_rota_sem_baixa(f"#{n}") for n in range(1, nw.MAX_INSUCESSOS + 4)]
+        texto = nw.texto_rotas_sem_baixa(rotas, agora=AGORA)
+        self.assertEqual(texto.count("\n• "), nw.MAX_INSUCESSOS)
+        self.assertIn("e mais 3", texto)
+
+
+class TestAvisarRotasSemBaixa(_ComBanco):
+    def avisar(self, config, rotas=None):
+        return nw.avisar_rotas_sem_baixa([_rota_sem_baixa()] if rotas is None else rotas, config,
+                                         conn=self.conn, agora=AGORA, dormir=self.dormir)
+
+    def test_vai_pro_grupo_da_logistica(self):
+        self.assertEqual(self.avisar(_config(grupo_logistica_id="3@g.us")), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "3@g.us")
+        self.assertEqual(self.conn.execute("SELECT origem, tipo, assinatura FROM notificacoes_whatsapp").fetchone(),
+                         ("cancelar_rotas_sem_motorista", "rotas_sem_baixa", "rotas_sem_baixa:2026-09-16"))
+
+    def test_sem_grupo_da_logistica_cai_no_grupo_de_alertas(self):
+        self.assertEqual(self.avisar(_config()), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "1@g.us")
+
+    def test_lista_vazia_nao_envia(self):
+        self.assertEqual(self.avisar(_config(grupo_logistica_id="3@g.us"), rotas=[]), "nao_relevante")
+        self.enviar.assert_not_called()
+
+    def test_nunca_levanta(self):
+        with patch.object(nw, "despachar", side_effect=RuntimeError("bug")):
+            self.assertEqual(nw.avisar_rotas_sem_baixa([_rota_sem_baixa()], _config()), "falhou")

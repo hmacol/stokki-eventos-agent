@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara stokki-resumo-email-whatsapp.service de 15 em 15 min das 07:15 as 08:45 (a rotina na nuvem manda o e-mail ~07:07; um envio por dia)
+
+[Timer]
+OnCalendar=*-*-* 07:15,30,45:00
+OnCalendar=*-*-* 08:00,15,30,45:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

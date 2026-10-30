@@ -47,7 +47,6 @@ class _Base(unittest.TestCase):
         conn.executemany("INSERT INTO interno VALUES (?,?,?,?,?)", [
             (CNPJ_A, 101, "ALFA LTDA", "Alfa", "a@x.com"),
             (CNPJ_B, 202, "BETA LTDA", "Beta", "b@x.com"),
-            (arc.CNPJ_TESTE, 22812827, "CLIENTE TESTE", "", ""),
         ])
         conn.commit()
         conn.close()
@@ -119,12 +118,20 @@ class Avisar(_Base):
                        "Beta (1): PS-2"):
             self.assertIn(trecho, texto)
 
-    def test_sem_linha_na_tela_e_forcar_destino_vai_pro_cliente_teste(self):
+    def test_piloto_nao_abre_conversa_e_mostra_a_previa_no_grupo(self):
+        # revisao 27/10 (M1): piloto no cliente teste expunha cliente real numa conta de PIN fraco
         r = self._avisar(CONFIG_PILOTO)
-        chamados = self._chamados()
-        self.assertEqual({c["cnpj_embarcador"] for c, _ in chamados}, {arc.CNPJ_TESTE})
-        self.assertIn("[Piloto · destino real: Alfa]", chamados[0][1][0])
-        self.assertIn("piloto", r["embarcadores"][0]["aviso"])
+        self.assertEqual(self._chamados(), [])
+        self.assertEqual(r["embarcadores"][0]["aviso"], "piloto: não enviado, prévia abaixo")
+        texto = self._mensagens_grupo()[0]
+        self.assertIn("Prévia para Alfa:\nA rota de entrega de 28/10 foi cancelada", texto)
+        self.assertIn("Pedidos afetados: PS-1, PS-3.", texto)
+        self.assertIn("Prévia para Beta:", texto)
+
+    def test_ligado_nao_repete_o_texto_no_grupo(self):
+        self._estado("LIGADO")
+        self._avisar()
+        self.assertNotIn("Prévia", self._mensagens_grupo()[0])
 
     def test_desligado_so_avisa_o_grupo(self):
         self._estado("DESLIGADO")

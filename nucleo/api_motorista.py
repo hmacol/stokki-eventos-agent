@@ -230,7 +230,7 @@ def criar_app(config: dict | None = None) -> Flask:
     @requer_motorista
     def editar_eu():
         """Telefone, e-mail, chave PIX e placa valem na hora (decisão do
-        Hugo); telefone/e-mail/placa vão também pra BD_MOTORISTAS.xlsx."""
+        Hugo); telefone/e-mail/placa vão também pra tabela bd_motoristas (a placa só se o CPF tem uma linha)."""
         m, mudancas = cadastro.atualizar_meus_dados(conn(), g.motorista["cpf"], corpo())
         if mudancas:
             na_planilha = {x["campo"]: (x["para"] or "") for x in mudancas if x["campo"] in ("telefone", "email", "placa")}

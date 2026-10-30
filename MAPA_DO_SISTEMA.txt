@@ -99,7 +99,7 @@
  Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
                                             equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
- Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (passo 2)
+ Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (só avisa, 28/10)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
  Aviso de pendências no topo (faixas) ...... painel_agentes/templates/_aviso_pendencias.html (incluído no <main> de base.html/base_mobile.html;
@@ -125,6 +125,8 @@
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
+ Retomar pedido em espera (cliente) ........ portal_cliente/retomada.py (RETOMANDO -> worker enviar_stokki:
+                                             data na Vuupt + fecha a pausa -> CRIADO | EM_ESPERA_CLIENTE; sem Stokki)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
@@ -153,7 +155,7 @@
                                              Selo "No galpão" na Torre e na Consulta. Não segura reentrega.
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
-                                             lote em baixas_sem_app; SEM_APP no BD_MOTORISTAS.
+                                             lote em baixas_sem_app; SEM_APP em bd_motoristas.
                                              Canhoto opcional na tela -> nucleo/canhotos_manuais.py
                                              (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
                                              (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
@@ -285,7 +287,10 @@
                 Início -> 1a tela liberada).
                 print_agent usa header X-Token-Impressao.
    portal    -> CNPJ + PIN de 6 dígitos (auth_cliente.py); equipe entra por
-                /equipe com login do painel.
+                /equipe com login do painel: os pares fixos do config e, desde
+                29/10, login nominal com "Portal do cliente" marcado na /acessos
+                (coluna painel_usuarios.portal_equipe; entra como operador,
+                reconfere a cada request: desmarcar/desativar/redefinir derruba).
    app/API   -> CPF + PIN, token Bearer (nucleo/auth_motorista.py).
    atendimento -> usuários próprios em dados/atendimento.db (admin/atendente).
    links públicos (canhoto, insucesso, aceite de cotação, confirmação)
@@ -320,6 +325,9 @@
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
  07-20h xx:25                comparar-pool                   nucleo/comparar_pool.py (sombra Vuupt x núcleo e, desde
                                                              25/10, Vuupt x freshhub com --fonte freshhub)
+ 07:15-08:45 (15 min)        resumo-email-whatsapp           resumo_email_whatsapp.py (lê no Gmail o "Resumo do
+                                                             e-mail · DD/MM" que a rotina na nuvem manda ~07:07
+                                                             e encaminha pro grupo grupo_resumo_email_id; 1x/dia)
  seg-sex 08:00               coleta-emporio-quatro-estrelas  coleta_emporio_quatro_estrelas/lancar_coleta.py
  dias 1 e 16 08:00           dedicados-financeiro            notificar_dedicados_financeiro.py
  seg-sex 08:00               consulta-transportadora         lembrar_consultas_transportadora.py (lembrete diário ao
@@ -345,11 +353,10 @@
                                                              Vuupt rotas de hoje; dia útil 03:50-18:30 todo min,
                                                              fora disso e em fim de semana/feriado :00/15/30/45)
  15:45                       cancelar-rotas-sem-motorista    roteirizacao/cancelar_rotas_sem_motorista.py
-                                                             (só devolve ao pool pedido NÃO iniciado de
-                                                             rota de dia anterior; desde 05/10 NÃO cancela
-                                                             rota de hoje sem motorista; desde 09/10 pula
-                                                             motorista SEM_APP do BD_MOTORISTAS -- vai pro
-                                                             e-mail como "aguardando baixa")
+                                                             (desde 28/10 SÓ AVISA no WhatsApp ALERTA
+                                                             LOGISTICA, grupo_logistica_id, as rotas de
+                                                             dia anterior com pedido sem baixa; nada volta
+                                                             pro pool sozinho, só cancelando na mão)
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
@@ -446,7 +453,8 @@
                          (apagar à mão não volta). --nao-marcar pela linha
                          de comando.
  sincronizar_placas_motoristas.py / sincronizar_cpf_motoristas.py /
- vincular_veiculos_motoristas.py  Acertos da BD_MOTORISTAS com a Vuupt (manual).
+ vincular_veiculos_motoristas.py  Acertos dos motoristas com a Vuupt (manual); gravam na tabela
+                         bd_motoristas (placas e CPF só gravam com --aplicar).
  revisar_complexidade_entrega.py  Nível x tempo real, gera divergências.
  classificar_clientes_cnae.py  Consulta o CNAE dos destinatários na BrasilAPI
                          e grava a categoria em clientes_cnae (manual, sem
@@ -540,6 +548,8 @@
                                O /inicio do painel mostra "Virada de mês" nos
                                últimos 7 dias (pagina_inicial.montar_virada_de_mes).
  pedidos_dedicados.py          Tabela/regras de pedido em transporte dedicado.
+ pedidos_pausados_cliente.py   Tabela pedidos_pausados_cliente (Em espera a pedido do cliente):
+                               pausado = linha aberta; separar_pausados tira da roteirizacao.
  relatorio_operacional.py + graficos_relatorio.py  Relatório com KPIs (painel).
  alertar_falha_job.py          E-mail quando um job systemd falha.
  integracao_evolution.py       Envio de WhatsApp pela Evolution API.
@@ -553,7 +563,14 @@
                                Em grupo separado (grupo_atendimento_id): chamado
                                do atendimento que passou a depender de gente,
                                com o link (chamados.whatsapp_para_atendimento).
+                               Em grupo só do Hugo (grupo_resumo_email_id): o
+                               resumo diário do Gmail (avisar_resumo_email).
                                Desligado por padrão.
+ resumo_email_whatsapp.py      Timer 07:15-08:45: acha por IMAP o e-mail "Resumo do
+                               e-mail · DD/MM" (escrito pela rotina na nuvem
+                               "Resumo diario do Gmail (7h)", claude.ai/code/routines)
+                               e manda o corpo pro WhatsApp. Sem o grupo no config,
+                               não faz nada.
                                Texto em linguagem simples (sem nome de unit nem
                                exceção crua) e mensagem inteira em 200 caracteres
                                (insucesso é exceção): unit nova em infra/ precisa
@@ -644,9 +661,6 @@
                       Cross, 25/10; sondado só leitura, POST real ainda não provado.
  sondar_trocar_nf.py  Sonda SÓ LEITURA (cookies salvos, sem login) do _token e do
                       download do XML que a troca usa. Passo 0 do piloto do Cross.
- pausar.py            Põe pedido de saída "Em espera" (botão Pausar: POST
-                      outbound/pause com _token/page do form_pause; relê a
-                      Situação). Sondado só leitura 25/10; escrita real não provada.
  ajuste_estoque.py    Ajuste Manual de estoque (CLI, --modo-teste só mostra):
                       saldo, zerar (produtos ou --todos), contagem (disponível
                       = alvo de um arquivo product_id;alvo) e transferir
@@ -680,7 +694,8 @@
  7. regras/ — regras de negócio (quase todas puras)
 ==============================================================================
 
- Fontes: planilhas em dados/ (BD_MOTORISTAS.xlsx, BD_CLIENTES.xlsx), tabela
+ Fontes: planilha dados/BD_CLIENTES.xlsx, tabela bd_motoristas (motoristas;
+ BD_MOTORISTAS.xlsx é só espelho de leitura), tabela
  `interno` e, p/ transportadoras, a tabela `transportadoras` do dados.db
  (tela /transportadoras; todo leitor usa carregar_do_banco). Tabela sem
  nenhuma ATIVA = FileNotFoundError (pipeline para, como sem planilha).
@@ -705,8 +720,14 @@
                             novo; importar daqui. Visita de dia fixo em
                             feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
- preferencias_motoristas.py Catálogo de motoristas (leitura da BD_MOTORISTAS).
- cadastro_motoristas.py     Grava motorista novo na planilha.
+ motoristas_banco.py        Fonte única dos motoristas (tabela bd_motoristas + histórico
+                            bd_motoristas_alteracoes). Espelho dados/BD_MOTORISTAS.xlsx
+                            só-leitura. CLI: py -3.11 -m regras.motoristas_banco
+                            importar|conferir --planilha <xlsx> [--db]. Motorista
+                            inativo continua com acesso ao app por 30 dias.
+ preferencias_motoristas.py Catálogo de motoristas (lê a tabela bd_motoristas; planilha
+                            só se a tabela estiver vazia).
+ cadastro_motoristas.py     Grava motorista novo na tabela bd_motoristas.
  disponibilidade_motoristas.py  Férias/atestado por data.
  confirmacao_rotas.py       Estado da confirmação de rota pelo motorista.
  ofertas_rota.py            Marketplace de rotas.
@@ -787,7 +808,7 @@
                            rota comum também confere distância até cada
                            parada, km acumulado e 9h
                            (otimizacao_rotas.pedido_cabe_no_trajeto).
- cancelar_rotas_sem_motorista.py  15h45; só o passo 2 (rotas passadas).
+ cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
@@ -846,9 +867,9 @@
                            e resetar-pin marcam trocar_pin=1).
  cadastro_motorista.py     "Meus dados" (PUT /api/eu: telefone/e-mail/PIX/placa valem
                            na hora, histórico em motoristas_alteracoes, espelho na
-                           BD_MOTORISTAS) e auto-cadastro (motoristas_cadastros +
+                           bd_motoristas) e auto-cadastro (motoristas_cadastros +
                            CNH/CRLV em dados/cadastros_motoristas/; aprovação no
-                           painel /motoristas cria linha na planilha + login
+                           painel /motoristas cria linha em bd_motoristas + login
                            provisório). Aviso no WhatsApp ALERTAS. Chave
                            ve_financeiro (não é dono do carro = sem extrato no
                            app, só Despesas; marcada na tabela /motoristas).
@@ -908,7 +929,7 @@
                            abre conversa no chat do portal pra cada embarcador
                            (Aguardando Fresh Log). Tela Notificações, tipo
                            rota_cancelada: sem linha + forcar_destino = piloto
-                           (chat do cliente teste).
+                           (não abre conversa; prévia do texto no próprio grupo).
  expedicao.py              Tela de expedição e PDF do romaneio.
  consulta_expedicao.py     Consulta de 1 pedido (Vuupt + Stokki ao vivo, só
                            leitura): deveria estar no galpão? Não grava nada.
@@ -1013,7 +1034,8 @@
    /acessos                   acessos.html + acesso_telas.py (só total: cadastra
                               login nominal, muda nome/nível/equipe, redefine senha,
                               desativa/reativa,
-                              telas de cada um / nível personalizado)
+                              telas de cada um / nível personalizado,
+                              caixa "Portal do cliente" = entra no /cliente/equipe)
    /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
                               pilota ou desliga os envios a embarcador/transportadora;
                               geral, tipo, exceção, piloto, histórico, e-mails do
@@ -1034,7 +1056,7 @@
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
-   /motoristas                motoristas.html
+   /motoristas                motoristas.html (tem Editar; grava em bd_motoristas)
    /financeiro/pedagios       pedagios.html
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
@@ -1096,11 +1118,17 @@
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
+ retomada.py               Retomada de pedido em espera (RETOMANDO, ciclo do enviar_stokki):
+                           agendamento = data do cliente na Vuupt + agendamentos_pedido;
+                           proxima_rota = dia fixo da região (None = não mexe); fecha a
+                           pausa 'retomado'. Falha volta EM_ESPERA_CLIENTE + e-mail.
+                           Órfão >30 min (RETOMANDO ou CANCELANDO de pedido em espera)
+                           volta pra EM_ESPERA_CLIENTE (resetar_orfaos). Sem trava da Stokki.
  solicitacoes_execucao.py  Executar/Recusar solicitação PENDENTE do portal (tela
                            /solicitacoes-portal): cancelar (Vuupt -> Stokki),
-                           em_espera (tira da rota na Vuupt -> Pausar na Stokki),
+                           em_espera (tira da rota na Vuupt + grava pedidos_pausados_cliente; nada na Stokki),
                            reagendar (PUT serviço Vuupt). Só conclui se tudo deu
-                           certo; trava sessao_uso (60 s) em cancelar/em_espera.
+                           certo; trava sessao_uso (60 s) só em cancelar.
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.
@@ -1109,7 +1137,9 @@
  link_canhoto.py           /c/<token>: canhoto sem login.
  consulta_transportadora_web.py  /transportadora/<token>: embarcador responde (retirada, redespacho,
                            entrega) sobre transportadora nova, sem login; template consulta_transportadora.html.
- bloqueio_area.py          Bloqueio de área não atendida.
+ bloqueio_area.py          Bloqueio de área não atendida. Classificar a transportadora do XML
+                           como RETIRADA/TERCEIROS (tela /transportadoras ou link) solta
+                           sozinha as NFs presas por ela (liberar_por_transportadora).
  gerenciar_clientes.py     CLI: criar/ativar clientes, enviar link de PIN,
                            criar-pin-padrao (lote; pula cancelados e membros
                            de grupo; só grava com --confirmar); fluxos (lista,
@@ -1319,8 +1349,9 @@
  manuais/                  PDFs de manuais (Vuupt).
  assets/                   Logo.
  debug/                    Fora do git; scripts descartáveis locais.
- dados/                    Runtime (gitignored, exceto BD_MOTORISTAS.xlsx e
-                           centro_expandido_sp.json): dados.db, planilhas BD_*,
+ dados/                    Runtime (gitignored, exceto
+                           centro_expandido_sp.json): dados.db, planilhas BD_*
+                           (BD_MOTORISTAS.xlsx é espelho gerado da tabela),
                            logs, canhotos, JSONs auxiliares.
                            dados/gcs-service-account.json é CREDENCIAL.
 
@@ -1338,6 +1369,8 @@
    nucleo_*                  nucleo/ (pedidos, rotas, paradas, eventos,
                              comprovantes, pedágios, reconciliações...)
    motoristas, tarifas_motorista  nucleo/banco.py
+   bd_motoristas, bd_motoristas_alteracoes  regras/motoristas_banco.py (cadastro
+                             dos motoristas; histórico de cada mudança com a origem)
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
@@ -1421,6 +1454,9 @@
 
  - Login concorrente na Stokki derruba a outra sessão (401). Use
    stokki/sessao_uso.py. Não chute URL da Stokki: gera login em cascata.
+   Desde 28/10 a Stokki para o login em /login/active-session ("Encerrar a
+   outra sessão e entrar"): todo login Playwright novo tem que passar por
+   stokki/auth.aguardar_saida_do_login (o importador tem a sua cópia).
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de

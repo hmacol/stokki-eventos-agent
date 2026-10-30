@@ -96,17 +96,14 @@
     var bCan = el('button', 'botao sec', 'Cancelar'); bCan.type = 'button';
     form.appendChild(inp); form.appendChild(bOk); form.appendChild(bCan);
     var msg = el('div', 'msg');
-    // "Em espera" ainda nao e executavel por aqui (a Stokki trata como fila de entrada)
-    var soRecusar = s.tipo === 'em_espera';
-    if (soRecusar) ac.appendChild(el('div', 'suave', 'Só recusar ou tratar à mão por enquanto'));
-    else ac.appendChild(bExec);
+    ac.appendChild(bExec);
     ac.appendChild(bRec); ac.appendChild(form); ac.appendChild(msg);
     tr.appendChild(ac);
 
     function travar(v) { bExec.disabled = v; bRec.disabled = v; bOk.disabled = v; }
 
     bExec.addEventListener('click', async function () {
-      if (!confirm('Executar ' + s.rotulo + ' do pedido ' + (s.codigo_pedido || '') + '? Isso altera a Vuupt e a Stokki.')) return;
+      if (!confirm('Executar ' + s.rotulo + ' do pedido ' + (s.codigo_pedido || '') + '? Isso altera a Vuupt' + (s.tipo === 'em_espera' ? '.' : ' e a Stokki.'))) return;
       travar(true);
       msg.textContent = 'Executando…'; msg.className = 'msg suave';
       var j;

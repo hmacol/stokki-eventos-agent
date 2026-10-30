@@ -16,15 +16,14 @@ não foi -- nada é concluído.
              (outbound/cancel) -- mesma ordem e mesmos blocos do worker
              portal_cliente/cancelamento.py. Rota Lalamove não executa
              (cancelar na Vuupt não cancela na Lalamove).
-  em_espera  1º tira da rota na Vuupt (sem cancelar, como o "Excluir da
-             rota" da Expedição), 2º pausa na Stokki (stokki/pausar.py).
-             Ordem escolhida porque tirar da rota é o passo fácil de
-             desfazer (o pedido fica not_assigned e volta na próxima
-             roteirização) e é o que mais falha (rota já saiu): falhando
-             ele, nada mudou. Pausar é o difícil de desfazer (outbound/open
-             não implementado) e fica por último. Repetir depois de falha
-             parcial é seguro: serviço sem rota não é mexido de novo e
-             pedido já em espera não é pausado de novo.
+  em_espera  tira da rota na Vuupt (sem cancelar, como o "Excluir da
+             rota" da Expedição) e grava a pausa em pedidos_pausados_cliente
+             (pedidos_pausados_cliente.abrir) + portal_envios.status =
+             EM_ESPERA_CLIENTE. NADA muda na Stokki (decisão do Hugo
+             27/10): o pedido segue onde está lá e a roteirização pula quem
+             tem pausa aberta. Falhando a Vuupt, nada é gravado. Repetir
+             depois de falha parcial é seguro: serviço sem rota não é
+             mexido de novo e a pausa aberta não duplica.
   reagendar  serviço em rota sai da rota primeiro (mesma etapa do
              em_espera; data nova em serviço roteirizado não muda nada),
              depois PUT /services/{id} com a data/janela gravada no envio
@@ -36,7 +35,7 @@ não foi -- nada é concluído.
 
 Tudo que fala com fora vem em `Dependencias` (injetável nos testes);
 `dependencias_reais(config)` monta as de produção. A trava da Stokki
-(stokki/sessao_uso) é pega só por cancelar/em_espera, espera até 60 s e é
+(stokki/sessao_uso) é pega só por cancelar, espera até 60 s e é
 sempre liberada; sem vez -> "Stokki ocupada, tente em instantes", sem
 tocar na Vuupt. Monte um Dependencias novo por execução (o dono da trava
 é único por instância).
@@ -58,20 +57,15 @@ for _p in (_RAIZ, _AQUI):
 
 import cancelamento as cm  # noqa: E402
 import envio_pedidos as ep  # noqa: E402
+import pedidos_pausados_cliente as ppc  # noqa: E402
 
 logger = logging.getLogger("portal_solicitacoes_execucao")
 
 STOKKI_OCUPADA = "Stokki ocupada, tente em instantes."
-_USAM_STOKKI = ("cancelar", "em_espera")
+_USAM_STOKKI = ("cancelar",)
 
-# "Em espera" fica DESLIGADO ate o Hugo decidir: na Stokki "Em espera" e a fila
-# de entrada da Fresh Log -- a Estacao de Impressao (todo pipeline horario)
-# move pedido "Em espera" faturado pra Aguardando Transportador,
-# notificar_pedidos_em_espera.py cobra o embarcador e o vigia da fila alerta
-# >24 h. Um pedido pausado por aqui seria despausado/roteado em ~1 h.
-EM_ESPERA_HABILITADO = False
-MSG_EM_ESPERA_DESLIGADO = ("Em espera ainda não pode ser executado por aqui (a Stokki trata 'Em espera' como "
-                           "fila de entrada). Recuse com uma resposta ao cliente ou trate à mão.")
+# Em espera a pedido do cliente (27/10): so tira da rota e grava a pausa; a
+# Stokki nao e tocada ("Em espera" la e a fila de entrada da Fresh Log).
 
 
 @dataclass
@@ -81,7 +75,6 @@ class Dependencias:
     buscar_servico: Callable[[str], dict | None]
     cancelar_vuupt: Callable[[int], dict]
     cancelar_stokki: Callable[[int, str], dict]
-    pausar_stokki: Callable[[int, str], dict]
     tirar_da_rota_vuupt: Callable[[int], dict]
     reagendar_vuupt: Callable[[int, str, str, str], dict]
     abrir_stokki: Callable[[], bool]
@@ -93,8 +86,7 @@ class _Falha(Exception):
     pass
 
 
-AVISO_REROTEIRIZACAO = ("Atenção: a roteirização automática ainda pode colocar este pedido numa rota nova "
-                        "— confira no Planejamento.")
+AVISO_REROTEIRIZACAO = "Pedido segurado até o cliente retomar pelo portal."
 _AVISOS_OPERADOR = {"em_espera": AVISO_REROTEIRIZACAO}
 
 
@@ -181,14 +173,28 @@ def _cancelar(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]
 
 
 def _em_espera(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]) -> str:
-    if envio["status"] not in (ep.STATUS_CRIADO, ep.STATUS_DUPLICADO):
+    # EM_ESPERA_CLIENTE: repeticao depois de falha ao concluir (a pausa ja foi
+    # gravada); abrir() nao duplica e o resto e idempotente.
+    if envio["status"] not in (ep.STATUS_CRIADO, ep.STATUS_DUPLICADO, ep.STATUS_EM_ESPERA_CLIENTE):
         raise _Falha(f"Envio está {envio['status']}: só pedido criado na Stokki vai pra espera.")
     codigo, id_stokki = _codigo_e_id(envio)
-    for s in _servicos_vivos(conn, codigo, deps):
+    vivos = _servicos_vivos(conn, codigo, deps)
+    for s in vivos:
         _tirar_da_rota(deps, s, feito)
-    _etapa(deps.pausar_stokki(id_stokki, sol.get("detalhes") or ""), "Stokki")
-    feito.append(f"{codigo} em espera na Stokki")
-    return "Pedido retirado da rota e colocado em espera pela Fresh Log."
+    ppc.garantir_tabela(conn)
+    # Status (com guarda) e pausa na mesma transacao: o cliente pode ter
+    # cancelado enquanto tirava da rota, e CANCELANDO/CANCELADO nunca e pisado.
+    cur = conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ? AND status IN (?, ?, ?)",
+                       (ep.STATUS_EM_ESPERA_CLIENTE, _agora(), envio["id"],
+                        ep.STATUS_CRIADO, ep.STATUS_DUPLICADO, ep.STATUS_EM_ESPERA_CLIENTE))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise _Falha("O envio mudou de situação durante a execução (o cliente cancelou?). "
+                     "Nada foi gravado: confira o pedido no portal.")
+    ppc.abrir(conn, codigo, id_stokki, envio["id"], [s["vuupt_service_id"] for s in vivos], _agora(), commit=False)
+    conn.commit()
+    feito.append(f"{codigo} segurado em espera (nada muda na Stokki)")
+    return "Pedido retirado da rota e mantido em espera até você retomar pelo portal."
 
 
 def _reagendar(conn, sol: dict, envio: dict, deps: Dependencias, feito: list[str]) -> str:
@@ -241,9 +247,6 @@ def executar(conn: sqlite3.Connection, solicitacao_id: int, deps: Dependencias) 
     executor = _EXECUTORES.get(tipo)
     if not executor:
         return {"ok": False, "mensagem": f"Solicitação do tipo '{tipo}' não se executa por aqui."}
-
-    if tipo == "em_espera" and not EM_ESPERA_HABILITADO:
-        return {"ok": False, "mensagem": MSG_EM_ESPERA_DESLIGADO}
 
     usa_stokki = tipo in _USAM_STOKKI
     if usa_stokki:
@@ -362,6 +365,29 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
     return {"ok": True, "erro": "", "rota_id": rota_id, "rota_cancelada": rota_cancelada}
 
 
+def reagendar_servico_vuupt(token: str, service_id: int, dia: str, ini: str, fim: str) -> dict:
+    """PUT direto, como atualizar_agendamentos_confirmados (data do
+    cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
+    Também usado pelo worker da retomada (portal_cliente/retomada.py)."""
+    _caminhos_painel()
+    from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
+    inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
+    termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
+    if not inicio or not termino:
+        return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
+    vuupt = VuuptClient(token)
+    try:
+        vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
+    except VuuptAPIError as e:
+        return {"ok": False, "erro": str(e)}
+    try:
+        from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+        ressincronizar_ids(vuupt, [service_id])
+    except Exception as e:  # noqa: BLE001 -- a escrita na Vuupt já aconteceu; o timer de 15 min alcança
+        logger.warning(f"ressincronização do serviço {service_id} falhou: {e}")
+    return {"ok": True, "erro": ""}
+
+
 def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
     """Callables de produção. A sessão da Stokki só é aberta dentro da trava
     (abrir_stokki) e na primeira chamada que precisa dela."""
@@ -402,36 +428,13 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
         from stokki.cancelar import cancelar_pedido
         return cancelar_pedido(_sessao(), id_stokki, motivo)
 
-    def pausar_stokki(id_stokki, motivo):
-        # a Stokki não tem campo de motivo no Pausar: o motivo fica no nosso banco (detalhes da solicitação)
-        from stokki.pausar import pausar_pedido
-        return pausar_pedido(_sessao(), id_stokki)
-
     def tirar_da_rota_vuupt(service_id):
         return _tirar_da_rota_real(token, service_id, agent_lalamove, usuario)
 
     def reagendar_vuupt(service_id, dia, ini, fim):
-        # PUT direto, como atualizar_agendamentos_confirmados (data do
-        # cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
-        _caminhos_painel()
-        from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
-        inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
-        termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
-        if not inicio or not termino:
-            return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
-        vuupt = VuuptClient(token)
-        try:
-            vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
-        except VuuptAPIError as e:
-            return {"ok": False, "erro": str(e)}
-        try:
-            from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
-            ressincronizar_ids(vuupt, [service_id])
-        except Exception as e:  # noqa: BLE001 -- a escrita na Vuupt já aconteceu; o timer de 15 min alcança
-            logger.warning(f"ressincronização do serviço {service_id} falhou: {e}")
-        return {"ok": True, "erro": ""}
+        return reagendar_servico_vuupt(token, service_id, dia, ini, fim)
 
     return Dependencias(buscar_servico=buscar_servico, cancelar_vuupt=cancelar_vuupt, cancelar_stokki=cancelar_stokki,
-                        pausar_stokki=pausar_stokki, tirar_da_rota_vuupt=tirar_da_rota_vuupt,
+                        tirar_da_rota_vuupt=tirar_da_rota_vuupt,
                         reagendar_vuupt=reagendar_vuupt, abrir_stokki=abrir_stokki, fechar_stokki=fechar_stokki,
                         agent_lalamove=agent_lalamove)

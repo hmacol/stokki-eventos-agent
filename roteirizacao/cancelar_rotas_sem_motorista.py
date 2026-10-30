@@ -2,6 +2,20 @@
 """
 cancelar_rotas_sem_motorista.py
 
+28/10 (Hugo): SÓ AVISA. Às 15h45 lista as rotas de dias anteriores
+(últimos DIAS_ROTAS_PASSADAS dias, não encerradas) que ainda têm pedido
+sem baixa e manda no grupo ALERTA LOGISTICA
+(notificar_whatsapp.avisar_rotas_sem_baixa) + o resumo de sempre por
+e-mail. Nenhum pedido em rota volta pro pool sozinho: só se alguém
+cancelar a rota ou o pedido na mão. O nome do arquivo e da unit ficou
+pelo histórico; o texto abaixo é de como era antes.
+
+Caso que motivou (28/10): a #1 de 20/10 do Hedgar (47 pedidos, entrega
+na Transfrios) foi devolvida às 15h45 de 21/10 sem ninguém ter dado baixa,
+e os pedidos ficaram uma semana voltando pro rascunho.
+
+--- Histórico ---
+
 Rotina diária de proteção (15h45 desde 05/10, antes da rodada das 16h;
 ver infra/stokki-cancelar-rotas-sem-motorista.timer) -- pedido do Hugo,
 19/08, depois de achar o PS-36801 "preso" numa rota de véspera sem
@@ -57,8 +71,8 @@ NÃO é devolvida -- ele fez a rota mas nada foi registrado. Vai pro resumo
 como "aguardando baixa"; a baixa é pela Torre (nucleo/baixa_sem_app.py).
 
 COMO USAR:
-    py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py                # execução normal
-    py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py --modo-teste   # só lista, não cancela
+    py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py                # execução normal (avisa)
+    py -3.11 roteirizacao/cancelar_rotas_sem_motorista.py --modo-teste   # só loga o aviso, não envia
 """
 import argparse
 import logging
@@ -93,17 +107,17 @@ logger = logging.getLogger("cancelar_rotas_sem_motorista")
 import yaml
 
 from notificar_execucao_agente import notificar_execucao
-from rotas_client import listar_rotas, cancelar_rota, atualizar_rota
-from rascunhos_rota import reverter_por_vuupt_route_id
+from rotas_client import listar_rotas
 from mapa_util import extrair_servicos_da_rota
-import tratativas
+from nucleo.sincronizar_vuupt import _nomes_motoristas
 
 DIAS_ROTAS_PASSADAS = 14
-STATUS_SERVICO_DEVOLVIVEL = {"not_assigned", "assigned", "accepted"}
+STATUS_SERVICO_FECHADO = {"done", "canceled", "cancelled"}
 STATUS_SERVICO_INICIADO = {"on_route", "arrived", "in_progress", "started"}
 STATUS_ROTA_ENCERRADA = {"finished", "canceled"}
 
 PADRAO_DATA_START_AT = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+PADRAO_NUMERO_ROTA = re.compile(r"#\s*\d+")
 
 
 def _carregar_config() -> dict:
@@ -128,159 +142,73 @@ def _data_inicio_rota(rota: dict) -> date | None:
         return None
 
 
-def _mexeu_hoje(servicos: list[dict], hoje: date) -> bool:
-    """Algum serviço da rota teve saída/chegada/conclusão HOJE (horário da
-    Vuupt vem em UTC sem fuso -> converte pra data local)."""
-    from nucleo.normalizacao import vuupt_para_local
-    for s in servicos:
-        for campo in ("started_at", "arrived_at", "completed_at"):
-            local = vuupt_para_local(s.get(campo)) if s.get(campo) else None
-            if local and local[:10] == hoje.isoformat():
-                return True
-    return False
-
-
-def plano_devolucao(rota: dict, hoje: date | None = None) -> dict:
-    """Regra pura do passo 2 pra UMA rota de dia anterior. Retorna
-    {"acao": "nada"|"cancelar_rota"|"atualizar", "devolver": [serviços],
-     "manter_ids": [ids na ordem], "iniciados": [codes]}.
-    Rota que teve movimento HOJE ainda está rodando (rota longa, motorista
-    atrasado): a carga das paradas pendentes está no caminhão -- não mexe,
-    vai pro resumo como "em andamento" (revisão de 28/09)."""
-    vazio = {"acao": "nada", "devolver": [], "manter_ids": [], "iniciados": []}
-    if rota.get("status") in STATUS_ROTA_ENCERRADA:
-        return vazio
-    servicos = [s for s in extrair_servicos_da_rota(rota) if s.get("id")]
-    if hoje and _mexeu_hoje(servicos, hoje):
-        pendentes = [(s.get("code") or str(s["id"])).lstrip("#") for s in servicos
-                     if (s.get("status") or "") in STATUS_SERVICO_DEVOLVIVEL | STATUS_SERVICO_INICIADO]
-        return {**vazio, "iniciados": pendentes, "rodando_hoje": True}
-    devolver = [s for s in servicos if (s.get("status") or "") in STATUS_SERVICO_DEVOLVIVEL]
-    iniciados = [(s.get("code") or str(s["id"])).lstrip("#") for s in servicos
-                 if (s.get("status") or "") in STATUS_SERVICO_INICIADO]
-    if not devolver:
-        return {**vazio, "iniciados": iniciados}
-    ids_devolver = {s["id"] for s in devolver}
-    manter = [s["id"] for s in servicos if s["id"] not in ids_devolver]
-    return {"acao": "atualizar" if manter else "cancelar_rota", "devolver": devolver,
-            "manter_ids": manter, "iniciados": iniciados}
-
-
-def devolver_pendentes_de_rotas_passadas(token: str, hoje: date, modo_teste: bool,
-                                         sem_app: set[int] | None = None) -> dict:
-    """Passo 2 (ver docstring do módulo). Retorna o resumo pro e-mail.
-    `sem_app`: agent_ids de motorista sem app (iPhone, BD_MOTORISTAS
-    SEM_APP; Hugo, 08/10) -- a rota deles NUNCA é devolvida: o motorista
-    fez a entrega mas nada foi registrado; a baixa é pela Torre."""
-    sem_app = sem_app or set()
-    prefixo = "[MODO TESTE] " if modo_teste else ""
-    filtro = [
-        {"field": "start_at", "operator": "gte",
-         "value": (hoje - timedelta(days=DIAS_ROTAS_PASSADAS)).strftime("%Y-%m-%d") + " 00:00:00"},
-        {"field": "start_at", "operator": "lt", "value": hoje.strftime("%Y-%m-%d") + " 00:00:00"},
-    ]
-    rotas = listar_rotas(token, include=["services"], filtro=filtro)
-    resumo = {"devolvidos": [], "iniciados": [], "erros": [], "aguardando_baixa": []}
-    ids_devolvidos = []
+def rotas_sem_baixa(rotas: list[dict], hoje: date, nomes: dict[int, str]) -> list[dict]:
+    """Rotas de dia ANTERIOR, não encerradas, com pedido ainda aberto (nem
+    done nem cancelado). Não mexe em nada: é só a lista do aviso.
+    Cada item: {"rota_id", "numero", "nome", "data", "motorista",
+    "pendentes", "iniciados"}; ordenado por data e número."""
+    resultado = []
     for rota in rotas:
         data_rota = _data_inicio_rota(rota)
-        if data_rota is None or data_rota >= hoje:
+        if data_rota is None or data_rota >= hoje or rota.get("status") in STATUS_ROTA_ENCERRADA:
             continue
-        if rota.get("agent_id") in sem_app:
-            abertos = [s for s in extrair_servicos_da_rota(rota)
-                       if s.get("id") and (s.get("status") or "") not in ("done", "canceled", "cancelled")]
-            if rota.get("status") not in STATUS_ROTA_ENCERRADA and abertos:
-                resumo["aguardando_baixa"].append(
-                    f"{rota.get('name') or rota.get('id')} (agent {rota.get('agent_id')}, "
-                    f"{data_rota:%d/%m}, {len(abertos)} pedido(s))")
+        abertos = [s for s in extrair_servicos_da_rota(rota)
+                   if s.get("id") and (s.get("status") or "") not in STATUS_SERVICO_FECHADO]
+        if not abertos:
             continue
-        plano = plano_devolucao(rota, hoje)
         nome = rota.get("name") or f"rota {rota.get('id')}"
-        rotulo = f"{nome}, ainda rodando hoje" if plano.get("rodando_hoje") else nome
-        resumo["iniciados"] += [f"{c} ({rotulo})" for c in plano["iniciados"]]
-        if plano["acao"] == "nada":
-            continue
-        codes = [(s.get("code") or str(s["id"])).lstrip("#") for s in plano["devolver"]]
-        logger.info(f"{prefixo}Rota {rota.get('id')} '{nome}' ({data_rota}): devolvendo {codes} "
-                    f"({plano['acao']}).")
-        if modo_teste:
-            resumo["devolvidos"] += codes
-            continue
-        try:
-            if plano["acao"] == "cancelar_rota":
-                cancelar_rota(token, rota["id"], services_action="unassign")
-                reverter_por_vuupt_route_id(rota["id"])
-            else:
-                atualizar_rota(token, rota["id"], plano["manter_ids"])
-        except Exception as e:
-            logger.error(f"  FALHA ao devolver pedidos da rota {rota.get('id')} '{nome}': {e}")
-            resumo["erros"].append(f"{nome} ({e})")
-            continue
-        resumo["devolvidos"] += codes
-        ids_devolvidos += [s["id"] for s in plano["devolver"]]
-        for s, code in zip(plano["devolver"], codes):
-            try:
-                tratativas.registrar_evento(
-                    code, "ROTAS_PASSADAS", "DEVOLVIDO_AO_POOL", service_id=s["id"],
-                    texto=f"Rota '{nome}' de {data_rota:%d/%m} não terminou -- pedido não iniciado "
-                          f"voltou pro pool antes da roteirização das 16h.")
-            except Exception as e:
-                logger.warning(f"  Tratativa de {code} não registrada: {e}")
+        numero = PADRAO_NUMERO_ROTA.search(nome)
+        resultado.append({
+            "rota_id": rota.get("id"), "numero": numero.group(0).replace(" ", "") if numero else nome,
+            "nome": nome, "data": data_rota, "motorista": nomes.get(rota.get("agent_id")),
+            "pendentes": len(abertos),
+            "iniciados": sum(1 for s in abertos if s.get("status") in STATUS_SERVICO_INICIADO),
+        })
 
-    # Espelho do núcleo já reflete a devolução (o pool das 16h pode ler de
-    # lá). Best-effort: o timer de 15 min alcança se falhar.
-    if ids_devolvidos:
-        try:
-            from vuupt_client import VuuptClient
-            from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
-            ressincronizar_ids(VuuptClient(token), ids_devolvidos)
-        except Exception as e:
-            logger.warning(f"Ressincronização do núcleo falhou (o timer alcança): {e}")
-    return resumo
+    def _ordem(item):
+        n = re.search(r"\d+", item["numero"])
+        return item["data"], int(n.group(0)) if n else 0, item["nome"]
+    return sorted(resultado, key=_ordem)
 
 
-def main(modo_teste: bool = False):
+def main(modo_teste: bool = False, hoje: date | None = None):
     inicio = time.time()
     prefixo = "[MODO TESTE] " if modo_teste else ""
-    logger.info(f"{prefixo}Devolução de pedidos de rotas passadas iniciada.")
+    hoje = hoje or date.today()
+    logger.info(f"{prefixo}Aviso de rotas sem baixa iniciado.")
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     resumo_etapas = {}
-
-    # 05/10 (Hugo): o passo 1 (cancelar rota de HOJE sem motorista e
-    # devolver os pedidos ao pool) saiu -- rota enviada à VUUPT fica,
-    # mesmo sem motorista. Fica só o passo 2 (rotas de dias anteriores).
-    try:
-        from regras.preferencias_motoristas import agent_ids_sem_app
-        sem_app = agent_ids_sem_app()
-    except Exception as e:
-        logger.warning(f"BD_MOTORISTAS (SEM_APP) ilegível -- segue sem exceção de motorista: {e}")
-        sem_app = set()
+    etapa = "Pedidos sem baixa em rotas de dias anteriores"
 
     try:
         if not token:
             raise RuntimeError("config.yaml sem vuupt_api.token.")
-        dev = devolver_pendentes_de_rotas_passadas(token, date.today(), modo_teste, sem_app)
-        detalhe = f"{prefixo}{len(dev['devolvidos'])} pedido(s) devolvido(s) ao pool"
-        if dev["devolvidos"]:
-            detalhe += f": {', '.join(dev['devolvidos'])}"
-        if dev["iniciados"]:
-            detalhe += (f". CONFERIR (iniciados em rota antiga, não mexidos -- pode ter sido entregue "
-                        f"sem baixa): {'; '.join(dev['iniciados'])}")
-        if dev["aguardando_baixa"]:
-            detalhe += (f". Rotas de motorista sem app aguardando baixa na Torre (não devolvidas): "
-                        f"{'; '.join(dev['aguardando_baixa'])}")
-        if dev["erros"]:
-            detalhe += f". [ALERTA_DEVOLUCAO] {len(dev['erros'])} falha(s): {'; '.join(dev['erros'])}"
-        resumo_etapas["Pedidos presos em rotas de dias anteriores"] = {
-            "status": "erro" if dev["erros"] else "ok", "detalhe": detalhe + "."}
+        filtro = [
+            {"field": "start_at", "operator": "gte",
+             "value": (hoje - timedelta(days=DIAS_ROTAS_PASSADAS)).strftime("%Y-%m-%d") + " 00:00:00"},
+            {"field": "start_at", "operator": "lt", "value": hoje.strftime("%Y-%m-%d") + " 00:00:00"},
+        ]
+        rotas = rotas_sem_baixa(listar_rotas(token, include=["services"], filtro=filtro), hoje,
+                                _nomes_motoristas(config))
+        for r in rotas:
+            logger.info(f"  {r['nome']} ({r['data']:%d/%m}, {r['motorista'] or 'sem motorista'}): "
+                        f"{r['pendentes']} pedido(s) sem baixa, {r['iniciados']} em andamento.")
+        detalhe = (f"{prefixo}{len(rotas)} rota(s) de dias anteriores com pedido sem baixa -- nada devolvido "
+                   f"ao pool (só cancelando na mão)")
+        if rotas:
+            detalhe += ": " + "; ".join(f"{r['nome']} ({r['motorista'] or 'sem motorista'}, "
+                                        f"{r['pendentes']} pedido(s))" for r in rotas)
+        from notificar_whatsapp import avisar_rotas_sem_baixa
+        situacao = avisar_rotas_sem_baixa(rotas, config, modo_teste=modo_teste)
+        resumo_etapas[etapa] = {"status": "ok", "detalhe": f"{detalhe}. WhatsApp: {situacao}."}
     except Exception as e:
-        logger.exception(f"Erro ao devolver pedidos de rotas passadas: {e}")
-        resumo_etapas["Pedidos presos em rotas de dias anteriores"] = {"status": "erro", "detalhe": str(e)}
+        logger.exception(f"Erro ao levantar rotas sem baixa: {e}")
+        resumo_etapas[etapa] = {"status": "erro", "detalhe": str(e)}
 
     duracao = time.time() - inicio
-    logger.info(f"{prefixo}Devolução de pedidos de rotas passadas finalizada em {duracao:.1f}s.")
+    logger.info(f"{prefixo}Aviso de rotas sem baixa finalizado em {duracao:.1f}s.")
 
     try:
         notificar_execucao(resumo_etapas, duracao, modo_teste, config)
@@ -290,10 +218,10 @@ def main(modo_teste: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Devolve ao pool os pedidos não iniciados de rotas de dias anteriores.",
+        description="Avisa as rotas de dias anteriores com pedido sem baixa (não devolve nada).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--modo-teste", action="store_true",
-                        help="Só lista o que devolveria, não mexe em nada de verdade.")
+                        help="Só loga o aviso, não manda WhatsApp.")
     args = parser.parse_args()
     main(modo_teste=args.modo_teste)

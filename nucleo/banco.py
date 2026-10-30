@@ -381,6 +381,48 @@ _COLUNAS_ROTAS_NOVAS = [
 ]
 
 
+# Cadastro de motoristas no banco (Hugo, 29/10/2026): a BD_MOTORISTAS.xlsx
+# vira espelho somente leitura gerado daqui (regras/motoristas_banco.py).
+# AGENT_ID_VUUPT pode repetir de propósito (sem UNIQUE); a chave é o id.
+_DDL_BD_MOTORISTAS = """
+CREATE TABLE IF NOT EXISTS bd_motoristas (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    AGENT_ID_VUUPT     INTEGER,
+    VEHICLE_ID_VUUPT   INTEGER,
+    NOME_MOTORISTA     TEXT,
+    ACEITA_VIAGENS     TEXT,
+    DIAS_DISPONIVEIS   TEXT,
+    MAX_ROTAS_DIA      INTEGER,
+    ATIVO              TEXT,
+    ZONAS_PREFERIDAS   TEXT,
+    TELEFONE_MOTORISTA TEXT,
+    EMAIL_MOTORISTA    TEXT,
+    PLACA              TEXT,
+    CPF_MOTORISTA      TEXT,
+    TIPO_VEICULO       TEXT,
+    APENAS_CARGA_SECA  TEXT,
+    SEM_APP            TEXT,
+    inativado_em       TEXT,
+    criado_em          TEXT NOT NULL,
+    atualizado_em      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_agent ON bd_motoristas(AGENT_ID_VUUPT);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_cpf ON bd_motoristas(CPF_MOTORISTA);
+
+CREATE TABLE IF NOT EXISTS bd_motoristas_alteracoes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    motorista_id  INTEGER NOT NULL,
+    agent_id      INTEGER,
+    campo         TEXT NOT NULL,
+    valor_antigo  TEXT,
+    valor_novo    TEXT,
+    origem        TEXT NOT NULL,
+    alterado_em   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_alt_mot ON bd_motoristas_alteracoes(motorista_id);
+"""
+
+
 def agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -398,6 +440,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
     conn.executescript(_DDL)
     conn.executescript(_DDL_CADASTRO)
+    conn.executescript(_DDL_BD_MOTORISTAS)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
     # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
     # CREATE IF NOT EXISTS não acrescenta coluna.
