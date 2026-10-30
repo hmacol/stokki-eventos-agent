@@ -1466,6 +1466,12 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    outra sessão e entrar"): todo login Playwright novo tem que passar por
    stokki/auth.aguardar_saida_do_login (o importador tem a sua cópia).
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
+ - Importação horária (pipeline.aplicar_alteracoes_do_cliente): o endereço que
+   o cliente alterou no portal (alteracoes_entrega_portal) vence o da NF, com as
+   coordenadas gravadas (sem geocodificar), e o ajuste manual de horário de
+   recebimento (ajustes_complexidade_cliente, inclusive os feitos no
+   Planejamento) vence o horário extraído das mensagens da Stokki. Teste:
+   test_pipeline_alteracao_portal.py.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
