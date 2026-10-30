@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import alterar_entrega as ae  # noqa: E402
+import regioes_dia_fixo as rdf  # noqa: E402
 
 HOJE = date(2026, 11, 9)  # segunda; terca 10/11 e quarta 11/11 sao dias uteis
 SANTOS = "Rua A, 10, Centro, Santos - SP, 11010-000, Brasil"  # Baixada Santista: terca
@@ -32,8 +33,16 @@ class Avaliar(unittest.TestCase):
             (servico(title="[RETIRADA] #PS-1"), {}, None),
             (servico(status="on_route"), {}, None),
             (servico(status="done"), {}, None),
+            (servico(status="arrived"), {}, None),
+            (servico(status="algo_novo"), {}, None),
+            (servico(status=None), {}, None),
             (servico(), {}, "INSUCESSO"),
+            (servico(), {}, "ENTREGUE"),
             (servico(route_id=7), {7: {"iniciada_em": "2026-11-10 08:00:00"}}, None),
+            (servico(route_id=7), {7: {"status": "EM_ROTA"}}, None),
+            (servico(route_id=7), {7: {"status_provedor": "started"}}, None),
+            (servico(route_id=7), {}, None),
+            (servico(route_id=7), {8: {"agent_id": 3}}, None),
             (servico(route_id=7), {7: {"agent_id": 99}}, None),
         ]
         for s, rotas, nucleo in casos:
@@ -50,6 +59,18 @@ class Avaliar(unittest.TestCase):
         self.assertTrue(r.em_rota)
         self.assertEqual(r.rota_id, 55)
 
+    def test_avaliar_route_id_texto_acha_rota_do_nucleo(self):
+        r = ae.avaliar(servico(status="assigned", route_id="55"), {55: {"status": "RASCUNHO"}}, None, 99)
+        self.assertTrue(r.pode)
+        self.assertEqual(r.rota_id, 55)
+        r = ae.avaliar(servico(route_id="55"), {55: {"iniciada_em": "2026-11-10 08:00:00"}}, None, 99)
+        self.assertFalse(r.pode)
+
+    def test_avaliar_rota_fora_do_nucleo_pede_tentar_depois(self):
+        r = ae.avaliar(servico(route_id=7), {}, None, 99)
+        self.assertEqual(r.motivo, "A rota desse pedido ainda está sendo atualizada, "
+                                   "tente de novo em alguns minutos. " + CHAT)
+
 
 class Validar(unittest.TestCase):
     def test_validar_recusa(self):
@@ -64,6 +85,11 @@ class Validar(unittest.TestCase):
         with self.assertRaises(ae.ErroAlteracao) as c:
             ae.validar({}, HOJE, cep_falso)
         self.assertEqual(str(c.exception), "Nada foi alterado.")
+
+    def test_validar_bloco_que_nao_e_dict(self):
+        for corpo in ({"endereco": "Rua X"}, {"horario": "08:00"}, {"horario": ["08:00", "10:00"]}):
+            with self.assertRaises(ae.ErroAlteracao):
+                ae.validar(corpo, HOJE, cep_falso)
 
     def test_validar_aceita(self):
         v = ae.validar({"endereco": {"cep": "11010000", "numero": "10"}, "data": "2026-11-10",
@@ -132,11 +158,19 @@ class Planejar(unittest.TestCase):
         s = servico()  # terca 10/11, gravada pelo dia fixo
         registrar_origem(self.conn, s, date(2026, 11, 10), ORIGEM_DIA_FIXO)
         p = ae.planejar(s, validado(endereco=END_CAMPINAS), self.fora, self.conn, HOJE)
-        regra = ae.rdf.regra_dia_fixo_do_servico({"address": p.endereco_str})
-        self.assertEqual(p.data_final, ae.rdf.proxima_data_valida(regra, date(2026, 11, 10)))
+        regra = rdf.regra_dia_fixo_do_servico({"address": p.endereco_str})
+        self.assertEqual(p.data_final, rdf.proxima_data_valida(regra, date(2026, 11, 10)))
         self.assertEqual(p.data_final, date(2026, 11, 11))
         self.assertEqual(p.origem_data, "DIA_FIXO")
         self.assertEqual(p.avisos, [])
+
+    def test_planejar_so_endereco_amanha_valido_e_escolhido(self):
+        from registro_dia_fixo import ORIGEM_DIA_FIXO, registrar_origem
+        hoje = date(2026, 11, 10)  # terca; amanha (quarta 11/11) e dia de Campinas
+        s = servico()  # terca 10/11, invalida em Campinas
+        registrar_origem(self.conn, s, date(2026, 11, 10), ORIGEM_DIA_FIXO)
+        p = ae.planejar(s, validado(endereco=END_CAMPINAS), self.fora, self.conn, hoje)
+        self.assertEqual(p.data_final, date(2026, 11, 11))
 
     def test_planejar_so_endereco_data_do_cliente_avisa_dedicado(self):
         p = ae.planejar(servico(), validado(endereco=END_CAMPINAS), self.fora, self.conn, HOJE)
