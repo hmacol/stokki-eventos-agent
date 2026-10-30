@@ -246,6 +246,14 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.assertTrue(r.get_json()["erro"].endswith("Fale com a Fresh Log pelo chat do portal."))
         self.assertNotIn("boom", r.get_json()["erro"])
 
+    def test_dependencias_reais_que_falha_502_sem_aplicar(self):
+        self._com(self._fakes())
+        with mock.patch.object(self.portal.alterar_entrega, "dependencias_reais", side_effect=ImportError("boom")):
+            r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("boom", r.get_json()["erro"])
+        self.aplicar.assert_not_called()
+
     def test_aplicar_que_estoura_ainda_limpa_o_cache(self):
         self._com(self._fakes())
         self.aplicar.side_effect = RuntimeError("boom")

@@ -163,6 +163,8 @@ class Planejar(unittest.TestCase):
         self.assertEqual(p.data_final, date(2026, 11, 11))
         self.assertEqual(p.origem_data, "DIA_FIXO")
         self.assertEqual(p.avisos, [])
+        # a data nova vai pro PUT: o pedido tem de sair da rota/rascunho mesmo fora de rota na Vuupt
+        self.assertTrue(p.tirar_da_rota)
 
     def test_planejar_so_endereco_amanha_valido_e_escolhido(self):
         from registro_dia_fixo import ORIGEM_DIA_FIXO, registrar_origem

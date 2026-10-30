@@ -188,6 +188,7 @@ def planejar(servico: dict, validado: dict, avaliacao: Avaliacao, conn_registro,
         if registro_dia_fixo.data_nao_e_do_cliente(conn_registro, servico, atual):
             plano.data_final = rdf.proxima_data_valida(regra, hoje)
             plano.origem_data = "DIA_FIXO"
+            plano.tirar_da_rota = True  # a data nova vai pro PUT: o pedido sai da rota/rascunho como na data do cliente
         else:
             plano.avisos.append(_aviso_dedicado(regra, rdf))
     return plano
@@ -390,23 +391,25 @@ def _avisar(deps: Dependencias, servico: dict, contexto: dict, codigo: str, rota
 # ── Produção ───────────────────────────────────────────────────────────────
 
 def dependencias_reais(config: dict, usuario: str) -> Dependencias:
-    """Callables de producao. Imports dentro das funcoes: o processo web do
-    portal importa este modulo e nao deve carregar painel/Vuupt/Google a toa."""
+    """Callables de producao. O processo web do portal importa este modulo e nao
+    deve carregar painel/Vuupt/Google a toa: os imports ficam aqui dentro (por
+    chamada), mas todos ANTES de qualquer mudanca -- se faltar modulo, levanta
+    daqui e a rota responde 502 sem ter mexido no pedido."""
+    import solicitacoes_execucao
+    solicitacoes_execucao._caminhos_painel()
+    import geocodificacao
+    import planejamento_rotas
+    from roteirizacao.cancelar_servico import rascunho_do_servico
+    from vuupt_client import VuuptClient
     token = (config.get("vuupt_api") or {}).get("token", "")
     agent_lalamove = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
     chave_google = (config.get("google_maps") or {}).get("api_key", "")
 
     def tirar_da_rota(service_id):
-        import solicitacoes_execucao
         return solicitacoes_execucao._tirar_da_rota_real(token, service_id, agent_lalamove, usuario)
 
     def gravar_endereco(service_id, texto, dados):
-        import solicitacoes_execucao
-        solicitacoes_execucao._caminhos_painel()
         try:
-            import planejamento_rotas
-            from roteirizacao.cancelar_servico import rascunho_do_servico
-            from vuupt_client import VuuptClient
             rascunho_id, _ = rascunho_do_servico(service_id)
             planejamento_rotas._gravar_endereco_pedido(VuuptClient(token), service_id, texto, dados, rascunho_id)
         except Exception as e:  # noqa: BLE001 -- vira {"ok": False} pro aplicar parar e registrar
@@ -414,21 +417,16 @@ def dependencias_reais(config: dict, usuario: str) -> Dependencias:
         return {"ok": True, "erro": ""}
 
     def reagendar(service_id, dia, ini, fim):
-        import solicitacoes_execucao
         return solicitacoes_execucao.reagendar_servico_vuupt(token, service_id, dia, ini, fim)
 
     def atualizar_horario_contato(customer_id, ini, fim):
-        import solicitacoes_execucao
-        solicitacoes_execucao._caminhos_painel()
         try:
-            from vuupt_client import VuuptClient
             VuuptClient(token).atualizar_customer(customer_id, {"operating_hour_start": ini, "operating_hour_end": fim})
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "erro": str(e)}
         return {"ok": True, "erro": ""}
 
     def geocodificar(texto):
-        import geocodificacao
         return geocodificacao.geocodificar(texto, chave_google)
 
     def avisar_equipe(info):
