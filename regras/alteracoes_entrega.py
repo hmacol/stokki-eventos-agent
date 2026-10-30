@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS alteracoes_entrega_portal (
     status TEXT NOT NULL,
     erro TEXT DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_alteracoes_entrega_codigo_base
-    ON alteracoes_entrega_portal (codigo_base);
+CREATE INDEX IF NOT EXISTS idx_alteracoes_entrega_codigo_sender
+    ON alteracoes_entrega_portal (codigo_base, sender_id);
 """
 
 
@@ -75,15 +75,16 @@ def registrar(conn, *, cnpj_embarcador, sender_id, service_id, codigo, por,
     return cur.lastrowid
 
 
-def endereco_vigente(conn, codigo) -> dict | None:
-    """Endereco da ultima alteracao APLICADA com endereco, valendo tambem pra reentrega."""
+def endereco_vigente(conn, codigo, sender_id: int) -> dict | None:
+    """Endereco da ultima alteracao APLICADA com endereco, valendo tambem pra reentrega.
+    Filtra pelo embarcador (sender_id): o mesmo codigo nao vaza entre clientes."""
     base = codigo_base(codigo)
     if not base:
         return None
     row = conn.execute(
         "SELECT endereco_json, latitude, longitude FROM alteracoes_entrega_portal"
-        " WHERE codigo_base=? AND status='APLICADA' AND endereco_json IS NOT NULL"
-        " ORDER BY id DESC LIMIT 1", (base,)).fetchone()
+        " WHERE codigo_base=? AND sender_id=? AND status='APLICADA' AND endereco_json IS NOT NULL"
+        " ORDER BY id DESC LIMIT 1", (base, sender_id)).fetchone()
     if not row:
         return None
     return {"endereco": json.loads(row["endereco_json"]),
