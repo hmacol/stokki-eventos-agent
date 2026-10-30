@@ -47,7 +47,7 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -153,12 +153,12 @@ def _codigo_da_resposta(resp: dict | None) -> str:
     return f"PS-{m.group(1)}" if m else ""
 
 
-def _buscar_codigos_na_listagem(page, numeros_nf: list[str], client_id: str) -> dict[str, str]:
+def _buscar_codigos_na_listagem(page, numeros_nf: list[str], client_id: str = "") -> dict[str, str]:
     """Depois de criar, pergunta à listagem de pedidos (outbound/table)
     pelo número da NF pra descobrir o PS-xxxxx -- usa a sessão do próprio
-    navegador (sem novo login). Best-effort. Filtra pelo cliente da Stokki:
-    o número da NF se repete entre embarcadores."""
-    from stokki.trocar_nf import localizar_pedido_por_nf
+    navegador (sem novo login). Best-effort. Filtra pelo embarcador: o
+    número da NF se repete entre embarcadores."""
+    from stokki import pedidos as stokki_pedidos
 
     class _Sessao:
         def get(self, url, params=None, headers=None):
@@ -180,12 +180,18 @@ def _buscar_codigos_na_listagem(page, numeros_nf: list[str], client_id: str) -> 
     sessao = _Sessao()
     for nf in numeros_nf:
         try:
-            pedido = localizar_pedido_por_nf(sessao, nf, client_id)
+            dados = stokki_pedidos.listar_pedidos(sessao, status="", cliente=str(client_id or ""), busca=nf,
+                                                  por_pagina=20, ordenar_coluna="1", ordenar_dir="desc")
         except Exception as e:
             logger.info(f"   (listagem por NF {nf} falhou: {e})")
             continue
-        if pedido:
-            achados[nf] = pedido["codigo"]
+        for linha in dados.get("aaData", []) or []:
+            texto = " ".join(str(v) for v in (linha.values() if isinstance(linha, dict) else linha))
+            if re.search(rf"(?<!\d){re.escape(nf)}(?!\d)", re.sub(r"<[^>]+>", " ", texto)):
+                codigo = stokki_pedidos.extrair_codigo_ps_da_linha(linha)
+                if codigo:
+                    achados[nf] = codigo
+                    break
     return achados
 
 
@@ -459,7 +465,8 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
             criados = [e for e in envios if codigos.get(e["chave_nfe"]) is None and respostas.get(e["chave_nfe"], {}).get("status", 0) in range(200, 300)]
             if criados:
                 try:
-                    achados = _buscar_codigos_na_listagem(page, [x["referencia"] for x in criados if x.get("referencia")])
+                    achados = _buscar_codigos_na_listagem(page, [x["referencia"] for x in criados if x.get("referencia")],
+                                                          cfg["client_id"])
                     for x in criados:
                         if achados.get(x.get("referencia")):
                             codigos[x["chave_nfe"]] = achados[x["referencia"]]
@@ -748,21 +755,68 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     return None
 
 
-def reconciliar_codigos(conn) -> int:
-    """Pedidos criados sem código: procura pelo número da NF nas tabelas
-    que o pipeline já alimenta (documentos_processados, pedidos_historico).
-    Com o código em mãos, o agendamento informado no portal entra em
-    agendamentos_pedido."""
+INTERVALO_BUSCA_STOKKI_SEGUNDOS = 10 * 60
+MAX_BUSCAS_STOKKI_POR_CICLO = 10
+DIAS_BUSCA_STOKKI = 7
+_ultima_busca_stokki: dict[int, float] = {}
+
+
+def _codigos_na_stokki(conn, config: dict, envios: list[dict], localizar=None, fabrica_sessao=None,
+                       agora: float | None = None) -> dict[int, str]:
+    """PS direto da listagem da Stokki (NF + embarcador) pros envios que a
+    criação não conseguiu identificar -- antes o código só vinha depois,
+    quando a DANFE do pedido passava pelo fluxo de documentos (Hugo, 29/10).
+    O worker roda a cada 20 s: cada envio é consultado no máximo a cada 10
+    min, até 10 por ciclo, e só com a trava da sessão livre (sem fila).
+    Envio com mais de 7 dias fica fora: o pedido sumiu da listagem
+    (cancelado na Stokki, duplicado de setembro) e nunca vai aparecer."""
+    agora = time.monotonic() if agora is None else agora
+    desde = (datetime.now() - timedelta(days=DIAS_BUSCA_STOKKI)).strftime("%Y-%m-%d %H:%M:%S")
+    vencidos = [e for e in envios if (e.get("criado_em") or "") >= desde
+                and agora - _ultima_busca_stokki.get(e["id"], float("-inf")) >= INTERVALO_BUSCA_STOKKI_SEGUNDOS]
+    vencidos = vencidos[:MAX_BUSCAS_STOKKI_POR_CICLO]
+    if not vencidos or not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=5 * 60, esperar_segundos=0, alternativa=True):
+        return {}
+    if localizar is None:
+        from stokki.trocar_nf import localizar_pedido_por_nf as localizar
+    achados: dict[int, str] = {}
+    try:
+        sessao = (fabrica_sessao or (lambda: StokkiSession(config)))()
+        for e in vencidos:
+            _ultima_busca_stokki[e["id"]] = agora
+            try:
+                client_id = ep.config_stokki_cliente(conn, e["cnpj_embarcador"], config)["client_id"]
+                achado = localizar(sessao, e["numero_nf"], client_id) if client_id else None
+            except Exception as ex:  # noqa: BLE001 -- um envio ruim não para os outros
+                logger.info(f"envio {e['id']}: busca do PS na Stokki falhou ({ex})")
+                continue
+            if achado and achado.get("codigo"):
+                achados[e["id"]] = achado["codigo"]
+    except Exception as ex:  # noqa: BLE001 -- Stokki fora: fica pros documentos e pro próximo ciclo
+        logger.info(f"busca de PS na Stokki indisponível ({ex})")
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+    return achados
+
+
+def reconciliar_codigos(conn, config: dict | None = None, localizar=None, fabrica_sessao=None) -> int:
+    """Pedidos criados sem código: pergunta à Stokki pela NF + embarcador
+    (com config); se ela não responder, procura pelo número da NF nas
+    tabelas que o pipeline já alimenta (documentos_processados,
+    pedidos_historico). Com o código em mãos, o agendamento informado no
+    portal entra em agendamentos_pedido."""
     rows = conn.execute("SELECT * FROM portal_envios WHERE status IN ('CRIADO','DUPLICADO') AND codigo_pedido IS NULL "
                         "AND numero_nf IS NOT NULL AND numero_nf != ''").fetchall()
+    na_stokki = _codigos_na_stokki(conn, config, [dict(r) for r in rows], localizar, fabrica_sessao) if config and rows else {}
     achados = 0
     for r in rows:
         e = dict(r)
-        codigo = None
-        try:
-            codigo = _codigo_em_documentos(conn, e)
-        except Exception:
-            pass
+        codigo = na_stokki.get(e["id"])
+        if not codigo:
+            try:
+                codigo = _codigo_em_documentos(conn, e)
+            except Exception:
+                pass
         if not codigo:
             try:
                 emb = re.sub(r"\D", "", e["cnpj_embarcador"])
@@ -940,7 +994,7 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001 -- troca de NF não derruba a fila de envios
             logger.error(f"trocas de NF falharam: {e}\n{traceback.format_exc()}")
         try:
-            total["conciliados"] = reconciliar_codigos(conn)
+            total["conciliados"] = reconciliar_codigos(conn, None if simular else config)
         except Exception as e:
             logger.warning(f"conciliação de códigos falhou: {e}")
         return total
