@@ -945,7 +945,9 @@
                            registro). Encaminhar (Cancelados/Devolução/Descartar/
                            Retornar p/ Estoque/Verificar) cria demanda na tela /demandas pra equipe
                            escolhida na hora (26/10; Verificar sugere Atendimento;
-                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
+                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). "Na Vuupt" (30/10)
+                           = no pool sem rota, fica pendente; o Consultar Vuupt
+                           preenche sozinho. Testes:
                            test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos

@@ -164,7 +164,7 @@
   <button class="botao-copiar" id="botao-exportar-csv" onclick="exportarCsv()">Exportar CSV</button>
   {% if pode_editar %}
   <button class="botao-copiar" id="botao-verificar-stokki" onclick="verificarStokki()" title="Consulta status e transportadora de todos os pedidos em tela na Stokki; Cancelado vira 'Cancelados'; CLIENTE RETIRA ou transportadora de RETIRADA (BD) vira 'Cliente Retira' automaticamente (a de RETIRADA sem notificação ao cliente)">Consultar Stokki (cancelados / cliente retira)</button>
-  <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; atribuído/aceito/em deslocamento/chegou ao cliente ou não atribuído sem agendamento/agendado pra hoje vira 'Em Rota', agendado pra depois de hoje vira 'Agendado', concluído com sucesso vira 'Entregue'">Consultar Vuupt (em rota / agendado / entregue)</button>
+  <button class="botao-copiar" id="botao-verificar-vuupt" onclick="verificarVuupt()" title="Consulta status e agendamento de todos os pedidos em tela na Vuupt; atribuído/aceito/em deslocamento/chegou ao cliente vira 'Em Rota', não atribuído sem agendamento/agendado pra hoje ou antes vira 'Na Vuupt', agendado pra depois de hoje vira 'Agendado', concluído com sucesso vira 'Entregue'">Consultar Vuupt (na vuupt / em rota / agendado / entregue)</button>
   {% endif %}
   <span class="carimbo" id="carimbo">Carregando…</span>
 </div>
@@ -230,7 +230,9 @@ const PODE_REGISTRAR = {{ 'true' if pode_registrar else 'false' }};
 const ABA_INICIAL = "{{ aba_inicial }}";
 // Espelha ENCAMINHAMENTO_DEMANDAS_ATIVO em pedidos_parados_triagem.py (Hugo, 24/10).
 const ENCAMINHAMENTO_ATIVO = {{ 'true' if encaminhamento_ativo else 'false' }};
-const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue"];
+const CLASSIFICACOES = ["Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Na Vuupt", "Em Rota", "Cliente Retira", "Entregue"];
+// "Na Vuupt" (Hugo, 30/10): no pool da Vuupt, fora de rota. Fica pendente de
+// propósito (fora de SO_REVISA e CONTAM_COMO_TRATADAS) até entrar numa rota.
 // Classificações que só marcam como revisado, sem duplicar nem criar Demanda.
 const SO_REVISA = { "Agendado": "manter agendamento", "Em Rota": "já está em rota", "Entregue": "já foi entregue" };
 // Classificações que já encerram o caso pro filtro "Mostrar só não
@@ -552,7 +554,7 @@ async function verificarStokki() {
 async function verificarVuupt() {
   const linhas = linhasFiltradas();
   if (!linhas.length) { alert("Nenhum pedido em tela para consultar."); return; }
-  if (!confirm(`Consultar ${linhas.length} pedido(s) na Vuupt?\n\nAtribuído/aceito/em deslocamento/chegou ao cliente, ou não atribuído sem agendamento ou agendado pra hoje, vira "Em Rota"; agendado pra depois de hoje vira "Agendado"; concluído com sucesso vira "Entregue". Pedidos já classificados de outra forma não são alterados.`)) return;
+  if (!confirm(`Consultar ${linhas.length} pedido(s) na Vuupt?\n\nAtribuído/aceito/em deslocamento/chegou ao cliente vira "Em Rota"; não atribuído sem agendamento ou agendado pra hoje ou antes vira "Na Vuupt" (continua pendente); agendado pra depois de hoje vira "Agendado"; concluído com sucesso vira "Entregue". Pedidos já classificados de outra forma não são alterados.`)) return;
 
   const botao = document.getElementById("botao-verificar-vuupt");
   const original = botao.textContent;
@@ -568,6 +570,7 @@ async function verificarVuupt() {
     const lista = a => a.length ? ` (${a.join(", ")})` : "";
     const partes = [
       `${j.consultados} pedido(s) consultado(s) na Vuupt.`,
+      `Classificados como Na Vuupt (sem rota): ${j.na_vuupt.length}${lista(j.na_vuupt)}`,
       `Classificados como Em Rota: ${j.em_rota.length}${lista(j.em_rota)}`,
       `Classificados como Agendado: ${j.agendado.length}${lista(j.agendado)}`,
       `Classificados como Entregue: ${j.entregue.length}${lista(j.entregue)}`,

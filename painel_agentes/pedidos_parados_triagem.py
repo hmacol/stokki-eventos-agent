@@ -70,7 +70,7 @@ PASTA_FOTOS = _RAIZ / "dados" / "pedidos_parados"
 # depois fica como histórico.
 PRAZO_APAGAR_MIN = 15
 
-CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Em Rota", "Cliente Retira", "Entregue")
+CLASSIFICACOES_VALIDAS = ("Cancelados", "Devolução Parcial", "Reenvio", "Agendado", "Descartar", "Retornar para Estoque", "Verificar com Cliente", "Na Vuupt", "Em Rota", "Cliente Retira", "Entregue")
 CLASSIFICACOES_QUE_CRIAM_DEMANDA = ("Cancelados", "Devolução Parcial", "Descartar", "Retornar para Estoque", "Verificar com Cliente")
 # Hugo, 24/10: encaminhamento às Demandas do Fresh Hub (Lovable) pausado
 # junto com a saída do Lovable. 26/10: religado, agora criando a demanda na
@@ -991,23 +991,6 @@ def classificar(order_number: str, freshhub_id: str, classificacao: str, usuario
     )
 
 
-def _desfazer_classificacao(order_number: str, usuario: str, motivo: str) -> None:
-    """Volta o pedido pra "sem classificação" (aparece de novo em "só não
-    tratados"). Usado quando a Vuupt desmente a classificação."""
-    conn = _conectar()
-    conn.execute("""
-        UPDATE pedidos_parados_classificacao
-           SET classificacao = NULL, acao_status = NULL, acao_detalhe = NULL, acao_em = NULL
-         WHERE order_number = ?
-    """, (order_number,))
-    conn.commit()
-    conn.close()
-    tratativas.registrar_evento(
-        order_number, "PEDIDOS_PARADOS", "PEDIDO_PARADO_CLASSIFICADO",
-        decisao="", texto=f"Classificação desfeita por {usuario} -- Vuupt: {motivo}",
-    )
-
-
 def duplicar(order_number: str, usuario: str) -> dict:
     """
     Ação da tratativa "Reenvio": resolve o pedido na Vuupt e duplica --
@@ -1487,14 +1470,15 @@ def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
 #
 # Botão "Consultar Vuupt" da triagem (pedido do Hugo, 28/08). Regras dele,
 # literais, pra serviço **não atribuído** (status 'not_assigned'):
-#   - sem agendamento (scheduled_start vazio)            -> "Em Rota"
-#   - agendamento com data de HOJE                       -> "Em Rota"
+#   - sem agendamento (scheduled_start vazio)            -> "Na Vuupt"
+#   - agendamento com data de HOJE                       -> "Na Vuupt"
+#   - agendamento com data ANTERIOR a hoje (vencido)     -> "Na Vuupt"
 #   - agendamento com data DEPOIS de hoje                -> "Agendado"
-# Lacunas que ele não cobriu, tratadas de forma conservadora (só
-# reportadas, sem classificar): agendamento com data ANTERIOR a hoje
-# (vencido) e serviço em qualquer outro status (atribuído/em rota/
-# concluído/cancelado). Segue a cadeia de reentregas (mesmo fingerprint
-# de buscar_sucesso_vuupt) e avalia o serviço MAIS RECENTE da cadeia.
+# "Na Vuupt" (Hugo, 30/10) = está no pool, fora de rota; NÃO conta como
+# tratado (segue em "só não tratados" até entrar numa rota). Outros
+# status sem regra (insucesso, cancelado) só são reportados. Segue a
+# cadeia de reentregas (mesmo fingerprint de buscar_sucesso_vuupt) e
+# avalia o serviço MAIS RECENTE da cadeia.
 #
 # Não sobrescreve classificação que veio de outra fonte (Cancelados,
 # Cliente Retira, Reenvio...): só preenche vazio ou troca Em Rota <->
@@ -1505,7 +1489,7 @@ def verificar_na_stokki(pedidos: list[dict], usuario: str) -> dict:
 # entra no ciclo de 60s da tela), e qualquer erro da Vuupt encerra a
 # rodada em vez de insistir (lição do 429 de 25/08).
 VUUPT_PAUSA_ENTRE_CONSULTAS_SEG = 0.3
-CLASSIFICACOES_AUTO_VUUPT = ("Em Rota", "Agendado", "Entregue")
+CLASSIFICACOES_AUTO_VUUPT = ("Na Vuupt", "Em Rota", "Agendado", "Entregue")
 
 # Status de serviço que o Hugo mandou tratar como "Em Rota" (28/08):
 # Atribuído, Aceito, Em deslocamento, Chegou ao cliente. Na API os dois
@@ -1562,16 +1546,16 @@ def _sugestao_vuupt(servico: dict, hoje: date) -> tuple[str | None, str]:
         return None, f"status '{status}' (não é 'não atribuído')"
     data_ag = _data_agendamento_local(servico.get("scheduled_start"))
     # 28/09: 'not_assigned' sem agendamento (ou agendado pra hoje) está
-    # no POOL, não em rota. Antes virava "Em Rota", que conta como tratado
-    # e some do "só não tratados" -- pedido parado no galpão e esquecido
-    # no pool ficava rotulado como resolvido. Agora fica sem sugestão.
+    # no POOL, não em rota -- não pode virar "Em Rota" (conta como tratado
+    # e o pedido esquecido no pool sumia do "só não tratados"). 30/10:
+    # vira "Na Vuupt", que fica pendente.
     if data_ag is None:
-        return None, MOTIVO_NO_POOL + "sem agendamento"
+        return "Na Vuupt", MOTIVO_NO_POOL + "sem agendamento"
     if data_ag == hoje:
-        return None, MOTIVO_NO_POOL + f"agendado pra hoje ({data_ag:%d/%m})"
+        return "Na Vuupt", MOTIVO_NO_POOL + f"agendado pra hoje ({data_ag:%d/%m})"
     if data_ag > hoje:
         return "Agendado", f"não atribuído, agendado pra {data_ag:%d/%m/%Y}"
-    return None, f"não atribuído, agendamento vencido ({data_ag:%d/%m/%Y})"
+    return "Na Vuupt", MOTIVO_NO_POOL + f"agendamento vencido ({data_ag:%d/%m/%Y})"
 
 
 def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
@@ -1591,7 +1575,7 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
             conn.close()
 
         resumo = {"consultados": 0, "nao_encontrados": [], "erros": [], "interrompido": None,
-                  "em_rota": [], "agendado": [], "entregue": [], "sem_acao": [], "divergentes": [], "detalhes": []}
+                  "na_vuupt": [], "em_rota": [], "agendado": [], "entregue": [], "sem_acao": [], "divergentes": [], "detalhes": []}
         carimbo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         for i, p in enumerate(pedidos):
@@ -1632,12 +1616,6 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
             resumo["detalhes"].append({"order_number": numero, "code": code, "status": status,
                                        "scheduled_start": scheduled_start, "sugestao": alvo, "motivo": motivo})
             if not alvo:
-                atual_local = locais.get(numero, {}).get("classificacao")
-                if motivo.startswith(MOTIVO_NO_POOL) and atual_local == "Em Rota":
-                    # "Em Rota" é falso: o serviço está no pool. Desfaz pra
-                    # o pedido voltar pro "só não tratados" (28/09).
-                    _desfazer_classificacao(numero, f"{usuario} (auto via Vuupt)", motivo)
-                    motivo += " (classificação 'Em Rota' desfeita)"
                 resumo["sem_acao"].append(f"{numero}: {motivo}")
                 continue
 
@@ -1655,7 +1633,7 @@ def verificar_na_vuupt(pedidos: list[dict], usuario: str) -> dict:
                 service_id=servico.get("id"), decisao=alvo,
                 texto=f"Classificado automaticamente como {alvo} por {usuario} -- Vuupt: {motivo}",
             )
-            {"Em Rota": resumo["em_rota"], "Agendado": resumo["agendado"], "Entregue": resumo["entregue"]}[alvo].append(numero)
+            {"Na Vuupt": resumo["na_vuupt"], "Em Rota": resumo["em_rota"], "Agendado": resumo["agendado"], "Entregue": resumo["entregue"]}[alvo].append(numero)
 
         return resumo
     finally:
