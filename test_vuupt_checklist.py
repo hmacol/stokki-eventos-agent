@@ -251,6 +251,16 @@ class ChecklistTest(unittest.TestCase):
         Image.new("RGB", (20, 20)).save(buf, "HEIF")
         self.assertEqual(vc.para_jpeg(buf.getvalue())[:2], b"\xff\xd8")
 
+    def test_para_jpeg_registra_heif_e_sem_lib_recusa_heic(self):
+        heic = b"\x00\x00\x00\x18ftypheic" + b"0" * 50
+        with mock.patch("nucleo.canhotos_manuais.heif_disponivel", return_value=False) as h:
+            with self.assertRaisesRegex(ValueError, "não é foto"):
+                vc.para_jpeg(heic)
+        h.assert_called_once()
+        falso = Image.new("RGB", (20, 20))
+        with mock.patch("nucleo.canhotos_manuais.heif_disponivel", return_value=True),                 mock.patch("PIL.Image.open", return_value=falso):
+            self.assertEqual(vc.para_jpeg(heic)[:2], b"\xff\xd8")
+
     def test_para_jpeg_recusa_imagem_gigante(self):
         with mock.patch("nucleo.canhotos_manuais.MAX_PIXELS", 100):
             with self.assertRaisesRegex(ValueError, "grande demais"):

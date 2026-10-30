@@ -40,6 +40,18 @@ class ParaPdf(unittest.TestCase):
         with self.assertRaises(cm.CanhotoInvalido):
             cm.para_pdf(b"nao sou imagem")
 
+    def test_heic_recusado_sem_pillow_heif(self):
+        with mock.patch.object(cm, "heif_disponivel", return_value=False):
+            with self.assertRaisesRegex(cm.CanhotoInvalido, "HEIC"):
+                cm.para_pdf(b"\x00\x00\x00\x18ftypheic" + b"0" * 50)
+
+    def test_heic_aceito_com_pillow_heif(self):
+        falso = Image.new("RGB", (40, 20), "white")
+        with mock.patch.object(cm, "heif_disponivel", return_value=True),                 mock.patch("PIL.Image.open", return_value=falso) as abrir:
+            pdf = cm.para_pdf(b"\x00\x00\x00\x18ftypheic" + b"0" * 50)
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertIn("HEIF", abrir.call_args.kwargs["formats"])
+
     def test_eps_disfarcado_e_recusado_sem_ghostscript(self):
         from PIL import EpsImagePlugin
         eps = (b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 20 20\n"

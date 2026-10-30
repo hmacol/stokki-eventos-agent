@@ -41,12 +41,8 @@ def para_jpeg(conteudo: bytes) -> bytes:
     """JPEG/PNG/HEIC -> JPEG reduzido (lado maior <= LADO_MAXIMO). PDF, não-imagem ou
     foto acima de MAX_PIXELS -> ValueError."""
     from PIL import Image, ImageOps
-    try:
-        import pillow_heif
-        pillow_heif.register_heif_opener()
-    except ImportError:
-        pass  # sem pillow_heif, HEIC cai no "não é foto" abaixo
-    from nucleo.canhotos_manuais import LADO_MAXIMO, MAX_PIXELS
+    from nucleo.canhotos_manuais import LADO_MAXIMO, MAX_PIXELS, heif_disponivel
+    heif_disponivel()  # sem pillow_heif, HEIC cai no "não é foto" abaixo
     try:
         # so formatos de foto: EPS/PS disfarcado nunca chega ao Ghostscript
         img = Image.open(io.BytesIO(conteudo), formats=FORMATOS_FOTO)   # preguicoso: so le o cabecalho
