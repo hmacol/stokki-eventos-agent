@@ -361,7 +361,10 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
         rota_cancelada = bool(r.get("rota_cancelada"))
     if rascunho_id:
         import rascunhos_rota
-        rascunhos_rota.remover_parada(rascunho_id, service_id)
+        try:
+            rascunhos_rota.remover_parada(rascunho_id, service_id)
+        except Exception as e:  # noqa: BLE001 -- a Vuupt ja tirou; nao perder o rota_id por falha local
+            logger.warning(f"servico {service_id} saiu da rota na Vuupt, mas o rascunho {rascunho_id} nao foi limpo: {e}")
     return {"ok": True, "erro": "", "rota_id": rota_id, "rota_cancelada": rota_cancelada}
 
 
