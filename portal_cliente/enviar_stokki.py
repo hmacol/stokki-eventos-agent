@@ -208,11 +208,13 @@ def _buscar_codigos_na_listagem(page, numeros_nf: list[str], client_id: str = ""
 
 
 def executar_wizard(cfg: dict, usuario: str, senha: str, arquivos: list[Path], pasta_logs: Path, wiz,
-                    headless: bool = True) -> tuple[list[dict], dict, dict[str, str]]:
+                    headless: bool = True, nf_por_chave: dict[str, str] | None = None
+                    ) -> tuple[list[dict], dict, dict[str, str]]:
     """Mesma sequência de importar_stokki.importar_pedidos, mas com os
     parâmetros vindos do banco (por embarcador) em vez do config.yaml do
     importador. Devolve (resultados por XML, respostas HTTP por chave,
-    códigos PS por número de NF)."""
+    códigos PS por número de NF). nf_por_chave: os arquivos do lote se
+    chamam <chave>.xml e a listagem da Stokki só acha pelo número da NF."""
     from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
     pasta_logs.mkdir(parents=True, exist_ok=True)
@@ -249,7 +251,9 @@ def executar_wizard(cfg: dict, usuario: str, senha: str, arquivos: list[Path], p
             page.screenshot(path=str(pasta_logs / f"{ts}_final.png"), full_page=True)
             respostas = wiz.ler_respostas_capturadas(page)
             resultados = wiz.coletar_resultados(page, caminhos, respostas)
-            criados_nf = [Path(r["arquivo"]).stem for r in resultados if r["criado"]]
+            nf_por_chave = nf_por_chave or {}
+            criados_nf = [nf_por_chave[Path(r["arquivo"]).stem] for r in resultados
+                          if r["criado"] and Path(r["arquivo"]).stem in nf_por_chave]
             codigos: dict[str, str] = {}
             if criados_nf:
                 try:
@@ -638,7 +642,9 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resultados, respostas, codigos = [], {}, {}
                 if arquivos:
                     logger.info(f"[{cfg['nome']}] enviando {len(arquivos)} XML(s) à Stokki (client_id={cfg['client_id']}, regra={cfg['regra_xml']})...")
-                    r1, resp1, cod1 = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless)
+                    r1, resp1, cod1 = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless,
+                                                      nf_por_chave={e["chave_nfe"]: str(e["numero_nf"])
+                                                                    for e in prontos_xml if e.get("numero_nf")})
                     resultados += r1
                     respostas.update(resp1)
                     codigos.update(cod1)
