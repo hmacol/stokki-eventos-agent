@@ -1,4 +1,5 @@
 """Testes de pipeline.aplicar_alteracoes_do_cliente (sem rede; banco em memoria)."""
+import contextlib
 import sqlite3
 import unittest
 from unittest import mock
@@ -61,6 +62,18 @@ class AplicarAlteracoesDoClienteTest(unittest.TestCase):
                 "PS-1234567", 77, DOC, NF, HOR_NF, conn=object())
         self.assertEqual((end, hor, coords), (NF, HOR_NF, None))
 
+    def test_fecha_a_conexao_que_abriu_sozinha(self):
+        conn = mock.Mock()
+        with mock.patch.object(pipeline.alteracoes_entrega, "conectar", return_value=conn),              mock.patch.object(pipeline.alteracoes_entrega, "endereco_vigente", return_value=None):
+            pipeline.aplicar_alteracoes_do_cliente("PS-1234567", 77, DOC, NF, HOR_NF, ajustes={})
+        conn.close.assert_called_once()
+
+    def test_nao_fecha_conexao_recebida(self):
+        conn = mock.Mock()
+        with mock.patch.object(pipeline.alteracoes_entrega, "endereco_vigente", return_value=None):
+            pipeline.aplicar_alteracoes_do_cliente("PS-1234567", 77, DOC, NF, HOR_NF, conn=conn, ajustes={})
+        conn.close.assert_not_called()
+
     def test_conexao_propria_falha_nao_derruba(self):
         with mock.patch.object(pipeline.alteracoes_entrega, "conectar", side_effect=OSError("sem banco")), \
              mock.patch.object(pipeline, "carregar_ajustes_manuais", return_value={}), \
@@ -85,11 +98,27 @@ class ProcessarPedidoUsaAlteracaoDoClienteTest(unittest.TestCase):
             captura.update(kw)
             return {"customer": {"address": "x"}, "title": "t"}
 
-        with mock.patch.object(pipeline, "ja_confirmado_atribuido", return_value=False),              mock.patch.object(pipeline.stokki_pedidos, "obter_detalhe", return_value=detalhe),              mock.patch.object(pipeline, "resolver_endereco_entrega", return_value=res_end),              mock.patch.object(pipeline, "config_consulta", return_value={"ativo": False}),              mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={"sender_id": 77}),              mock.patch.object(pipeline.alteracoes_entrega, "conectar", return_value=object()),              mock.patch.object(pipeline.alteracoes_entrega, "endereco_vigente", return_value=VIGENTE),              mock.patch.object(pipeline, "carregar_ajustes_manuais", return_value={
-                 "12345678000190": {"nivel_dificuldade": 2, "horario_atendimento_inicio": "09:00",
-                                    "horario_atendimento_fim": "17:00"}}),              mock.patch.object(pipeline, "buscar_confirmacao", return_value=None),              mock.patch.object(pipeline, "montar_payload_vuupt", side_effect=_montar),              mock.patch.object(pipeline, "geocodificar") as geo:
+        patches = [
+            mock.patch.object(pipeline, "ja_confirmado_atribuido", return_value=False),
+            mock.patch.object(pipeline.stokki_pedidos, "obter_detalhe", return_value=detalhe),
+            mock.patch.object(pipeline, "resolver_endereco_entrega", return_value=res_end),
+            mock.patch.object(pipeline, "config_consulta", return_value={"ativo": False}),
+            mock.patch.object(pipeline, "_buscar_dados_embarcador_banco", return_value={"sender_id": 77}),
+            mock.patch.object(pipeline.alteracoes_entrega, "conectar", return_value=mock.Mock()),
+            mock.patch.object(pipeline.alteracoes_entrega, "endereco_vigente", return_value=VIGENTE),
+            mock.patch.object(pipeline, "carregar_ajustes_manuais", return_value={
+                "12345678000190": {"nivel_dificuldade": 2, "horario_atendimento_inicio": "09:00",
+                                   "horario_atendimento_fim": "17:00"}}),
+            mock.patch.object(pipeline, "buscar_confirmacao", return_value=None),
+            mock.patch.object(pipeline, "montar_payload_vuupt", side_effect=_montar),
+        ]
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            geo = stack.enter_context(mock.patch.object(pipeline, "geocodificar"))
             r = pipeline.processar_pedido(1, "PS-1234567", object(), object(), vuupt, "", False)
         self.assertIsNone(r["erro"], r)
+        self.assertTrue(r["endereco_cliente_portal"])
         self.assertEqual(captura["endereco_resolvido"]["logradouro"], "Av Nova, 250")
         self.assertEqual(captura["horario_entrega"], {"inicio": "09:00", "fim": "17:00"})
         geo.assert_not_called()
