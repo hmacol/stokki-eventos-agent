@@ -40,6 +40,15 @@ class ParaPdf(unittest.TestCase):
         with self.assertRaises(cm.CanhotoInvalido):
             cm.para_pdf(b"nao sou imagem")
 
+    def test_eps_disfarcado_e_recusado_sem_ghostscript(self):
+        from PIL import EpsImagePlugin
+        eps = (b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 20 20\n"
+               b"%%EndComments\nnewpath 0 0 moveto 20 20 lineto stroke\nshowpage\n%%EOF\n")
+        with mock.patch.object(EpsImagePlugin.EpsImageFile, "load", side_effect=OSError("gs")) as gs:
+            with self.assertRaises(cm.CanhotoInvalido):
+                cm.para_pdf(eps)
+        gs.assert_not_called()
+
     def test_imagem_gigante_e_recusada(self):
         with mock.patch.object(cm, "MAX_PIXELS", 100):
             with self.assertRaises(cm.CanhotoInvalido):

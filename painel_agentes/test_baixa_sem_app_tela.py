@@ -264,12 +264,55 @@ class TestTelaBaixa(unittest.TestCase):
         self._logar("operador")
         with mock.patch("nucleo.canhotos_manuais.salvar") as salvar, \
              mock.patch("nucleo.baixa_sem_app.criar_lote") as criar:
-            r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria")]},
-                                     {"nota_1": b"%PDF-1.4 x"})
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]},
+                                     {"canhoto_1": self._png(), "nota_1": b"%PDF-1.4 x"})
         self.assertEqual(r.status_code, 400)
         self.assertIn("Foto da nota de retorno", r.get_json()["erro"])
         salvar.assert_not_called()
         criar.assert_not_called()
+
+    # ── nota so com a foto do canhoto (Hugo, 30/10) ──
+    AVISO_NOTA = "A foto da nota de retorno só vai junto da foto do canhoto."
+
+    def test_nota_sem_canhoto_descartada_com_aviso(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria")]},
+                                 {"nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("fotos", item)
+        self.assertEqual(item["aviso"], self.AVISO_NOTA)
+        self.assertEqual(item["justificativa"], "sem_bateria")
+        self.assertFalse((Path(banco.DB_PATH).parent / "checklist_fotos").exists())
+
+    def test_canhoto_pdf_com_nota_descarta_a_nota(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}) as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]},
+                                     {"canhoto_1": b"%PDF-1.4 x", "nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_called_once()
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("fotos", item)
+        self.assertIn("PDF", item["aviso"])
+        self.assertIn(self.AVISO_NOTA, item["aviso"])
+
+    def test_tela_nota_presa_ao_canhoto_e_sem_capture(self):
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        self.assertNotIn("capture=", html)
+        self.assertRegex(html, r'<input type="file" class="nota"[^>]*disabled')
+        corpo = html.split("function ajustaJust()", 1)[1].split("if (cb) cb.addEventListener", 1)[0]
+        self.assertIn("fn.disabled", corpo)
+        self.assertIn("fn.value = ''", corpo)
+
+    def test_reduzir_imagem_sempre_resolve(self):
+        # try/catch dentro do onload: canvas/toBlob que estoura cai no arquivo original
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        corpo = html.split("img.onload = function", 1)[1].split("img.onerror", 1)[0]
+        self.assertIn("try {", corpo)
+        self.assertIn("catch (e)", corpo)
 
     def test_arquivo_maior_que_15mb_413(self):
         self._logar("operador")
@@ -283,9 +326,12 @@ class TestTelaBaixa(unittest.TestCase):
     def test_falha_ao_gravar_fotos_500_e_lote_erro(self):
         self._logar("operador")
         with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}), \
-             mock.patch.object(Path, "write_bytes", side_effect=OSError("disco cheio")):
+             mock.patch.object(Path, "write_bytes",
+                               side_effect=OSError(28, "No space left on device", "/opt/x/checklist_fotos/lote_1/1.jpg")):
             r = self._post_multipart({"rota": 5000, "itens": [self._item()]}, {"canhoto_1": self._png()})
         self.assertEqual(r.status_code, 500)
+        self.assertNotIn("/opt/x", r.get_json()["erro"])           # caminho do servidor nunca vai pra tela
+        self.assertNotIn("No space", r.get_json()["erro"])
         conn = banco.conectar()
         try:
             from nucleo import baixa_sem_app as bsa

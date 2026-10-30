@@ -29,6 +29,10 @@ BASE_LAT = -23.497015   # base (R. Zilda 288): usada quando o serviço não tem 
 BASE_LNG = -46.660775
 
 
+FORMATOS_FOTO = ["JPEG", "PNG", "WEBP", "HEIF"]   # HEIF so existe com pillow_heif instalado
+LIMITE_ERRO_VUUPT = 200     # corpo de erro da Vuupt mostrado ao usuario (o completo vai pro log)
+
+
 class ChecklistNaoGravado(Exception):
     """O checklist não foi gravado (erro da Vuupt ou foto ausente na releitura)."""
 
@@ -44,7 +48,8 @@ def para_jpeg(conteudo: bytes) -> bytes:
         pass  # sem pillow_heif, HEIC cai no "não é foto" abaixo
     from nucleo.canhotos_manuais import LADO_MAXIMO, MAX_PIXELS
     try:
-        img = Image.open(io.BytesIO(conteudo))      # preguicoso: so le o cabecalho
+        # so formatos de foto: EPS/PS disfarcado nunca chega ao Ghostscript
+        img = Image.open(io.BytesIO(conteudo), formats=FORMATOS_FOTO)   # preguicoso: so le o cabecalho
     except Exception as e:  # noqa: BLE001
         raise ValueError("Arquivo não é foto") from e
     if img.size[0] * img.size[1] > MAX_PIXELS:
@@ -82,7 +87,17 @@ def _checklists_do_servico(vuupt, service_id: int) -> list[dict]:
         raise ChecklistNaoGravado(f"Falha ao ler checklists do serviço {service_id}: status {resp.status_code}")
     dado = resp.json() or {}
     lista = dado.get("data") if isinstance(dado, dict) else dado
-    return [c for c in (lista or []) if int(c.get("checklist_form_id") or 0) == FORM_ENTREGA]
+    # A API pode ignorar o filtro em silencio (testar_fluxo_agente_vuupt.py ja desconfiava):
+    # so vale checklist deste servico, nunca o de outro pedido da conta.
+    return [c for c in (lista or []) if _inteiro(c.get("checklist_form_id")) == FORM_ENTREGA
+            and _inteiro(c.get("entity_id")) == int(service_id)]
+
+
+def _inteiro(valor) -> int:
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return 0
 
 
 def checklist_entrega_do_servico(vuupt, service_id: int) -> dict | None:
@@ -101,10 +116,13 @@ def _agora_utc() -> str:
 
 
 def _erro(resp) -> str:
+    """Corpo do erro da Vuupt: completo no log, curto para a tela (pagina HTML de 502 vira alert enorme)."""
     try:
-        return str(resp.json())
+        corpo = str(resp.json())
     except Exception:  # noqa: BLE001
-        return resp.text
+        corpo = resp.text or ""
+    logger.warning(f"Vuupt respondeu {resp.status_code} no checklist: {corpo}")
+    return corpo[:LIMITE_ERRO_VUUPT]
 
 
 def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -> int:

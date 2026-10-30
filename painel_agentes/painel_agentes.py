@@ -1443,16 +1443,22 @@ def api_baixa_sem_app():
                 if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
                     return jsonify({"erro": f"{i.get('codigo')}: arquivo maior que 15 MB."}), 413
                 conteudos[chave] = conteudo or None
-            fotos = {}
+            fotos, avisos = {}, []
             try:
                 if conteudos["canhoto"]:
                     canhotos.append((i, canhotos_manuais.para_pdf(conteudos["canhoto"])))
                     if conteudos["canhoto"][:5] == b"%PDF-":
-                        i["aviso"] = "Canhoto em PDF: ficou só como cópia local; no checklist da VUUPT vão apenas fotos."
+                        avisos.append("Canhoto em PDF: ficou só como cópia local; no checklist da VUUPT vão apenas fotos.")
                     else:
                         fotos[CAMPO_CANHOTO] = para_jpeg(conteudos["canhoto"])
             except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
                 return jsonify({"erro": f"{i.get('codigo')}: Canhoto: {e}"}), 400
+            # Hugo, 30/10: a nota de retorno so vai junto da FOTO do canhoto (nunca sozinha nem com PDF)
+            if conteudos["nota"] and CAMPO_CANHOTO not in fotos:
+                conteudos["nota"] = None
+                avisos.append(torre_controle.AVISO_NOTA_SEM_CANHOTO)
+            if avisos:
+                i["aviso"] = " ".join(avisos)
             try:
                 if conteudos["nota"]:
                     fotos[CAMPO_NOTA_RETORNO] = para_jpeg(conteudos["nota"])
@@ -1475,8 +1481,8 @@ def api_baixa_sem_app():
         lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
         try:
             bsa.gravar_fotos(conn, lote, fotos_por_servico)
-        except Exception as e:  # noqa: BLE001 -- gravar_fotos ja marcou o lote como erro
-            return jsonify({"erro": f"Não consegui guardar as fotos do checklist: {e}"}), 500
+        except Exception:  # noqa: BLE001 -- gravar_fotos ja marcou o lote como erro e logou o motivo
+            return jsonify({"erro": "Não consegui guardar as fotos do checklist no servidor. Tente de novo."}), 500
     finally:
         conn.close()
     token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
@@ -2568,6 +2574,11 @@ def api_torre_marcar_entregue():
         service_id = int(request.form["service_id"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    # lote do Planejamento com foto: os itens 2..N mandam o 1o como referencia (Hugo, 30/10)
+    try:
+        lote_referencia = int(request.form["lote_referencia"]) if request.form.get("lote_referencia") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "lote_referencia inválido."}), 400
     arquivos = {}
     for campo in ("foto_canhoto", "foto_nota_retorno"):
         arq = request.files.get(campo)
@@ -2577,10 +2588,32 @@ def api_torre_marcar_entregue():
         arquivos[campo] = conteudo or None
     resultado = torre_controle.marcar_entregue_manual(
         service_id, session.get("usuario", ""), arquivos["foto_canhoto"], arquivos["foto_nota_retorno"],
-        request.form.get("justificativa") or None, request.form.get("texto_outro") or None)
+        request.form.get("justificativa") or None, request.form.get("texto_outro") or None,
+        lote_referencia=lote_referencia)
     if not resultado.get("ok"):
         return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
     return jsonify(resultado)
+
+
+@app.route("/api/torre/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_torre_validar_lote_foto():
+    """Foto em massa no Planejamento (Hugo, 30/10): so para pedidos do mesmo
+    embarcador e do mesmo destinatario ou local de entrega
+    (torre_controle.mesmo_destino_para_foto). A tela chama uma vez antes do
+    laco de marcar-entregue; sem foto o lote segue livre. JSON {service_ids}."""
+    ids = (request.get_json(silent=True) or {}).get("service_ids")
+    try:
+        if not isinstance(ids, list) or not ids:
+            raise ValueError
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({"erro": "service_ids ausente ou inválido."}), 400
+    resultado = torre_controle.validar_lote_foto(ids)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado["erro"], "fora": resultado.get("fora", [])}), 400
+    return jsonify({"ok": True})
 
 
 @app.route("/api/torre/encerrar-rota", methods=["POST"])

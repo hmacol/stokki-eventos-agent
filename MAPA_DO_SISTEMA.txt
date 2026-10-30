@@ -917,6 +917,13 @@
                            fecha na Vuupt por API (concluir_como_agente, sem
                            canhoto; expedição sai "sem comprovante"). Auditoria
                            em torre_entregas_manuais + tratativas ENTREGUE_MANUAL.
+                           Foto em massa (30/10): POST /api/torre/validar-lote-foto
+                           (Planejamento chama antes do laço) e lote_referencia no
+                           marcar-entregue; regra em mesmo_destino_para_foto (mesmo
+                           sender_id E mesmo customer_id ou endereço/até 50 m).
+                           Nota de retorno só junto da foto do canhoto. Foto
+                           reduzida no navegador: templates/_reduzir_imagem.js.html
+                           (Torre, Planejamento e /baixa-sem-app).
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);

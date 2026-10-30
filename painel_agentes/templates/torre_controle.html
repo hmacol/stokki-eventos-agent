@@ -649,11 +649,11 @@
     <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo">
       <label for="entregue-foto-canhoto">Foto do canhoto</label>
-      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" capture="environment" onchange="aoMudarFotoEntregue()">
+      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" onchange="aoMudarFotoEntregue()">
     </div>
     <div class="campo">
-      <label for="entregue-foto-nota">Foto da nota de retorno (opcional)</label>
-      <input type="file" id="entregue-foto-nota" accept="image/*">
+      <label for="entregue-foto-nota">Foto da nota de retorno (opcional) — só com a foto do canhoto</label>
+      <input type="file" id="entregue-foto-nota" accept="image/*" disabled>
     </div>
     <div class="campo" id="entregue-campo-justificativa">
       <label for="entregue-justificativa">Sem foto do canhoto: por quê?</label>
@@ -744,6 +744,7 @@ function alternarVisaoRotas() {
 }
 
 {% include "_torre_filtro_embarcador.js.html" %}
+{% include "_reduzir_imagem.js.html" %}
 
 // ── Alarme sonoro de novas ações na fila ────────────────────────────
 let alarmeMutado = localStorage.getItem("torre_alarme_mutado") === "1";
@@ -1297,8 +1298,13 @@ function abrirModalEntregue(chip) {
 }
 
 // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
+// A nota de retorno só vai junto da FOTO do canhoto (Hugo, 30/10): sem ela (ou PDF) fica travada e vazia.
 function aoMudarFotoEntregue() {
-  const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+  const canhoto = document.getElementById("entregue-foto-canhoto").files[0];
+  const temFoto = !!canhoto;
+  const nota = document.getElementById("entregue-foto-nota");
+  nota.disabled = !canhoto || canhoto.type === "application/pdf";
+  if (nota.disabled) nota.value = "";
   document.getElementById("entregue-campo-justificativa").hidden = temFoto;
   aoMudarJustificativaEntregue();
 }
@@ -1331,19 +1337,22 @@ async function confirmarEntregueChip(botao) {
     }
   }
 
-  const fd = new FormData();
-  fd.append("service_id", chipPendenteEntregue.dataset.serviceId);
-  if (fotoCanhoto) fd.append("foto_canhoto", fotoCanhoto);
-  if (fotoNota) fd.append("foto_nota_retorno", fotoNota);
-  if (!fotoCanhoto) {
-    fd.append("justificativa", justificativa);
-    if (justificativa === "outro") fd.append("texto_outro", textoOutro);
-  }
-
   const original = botao.textContent;
   botao.disabled = true;
-  botao.textContent = "Fechando na VUUPT...";
   try {
+    // reduz no navegador antes de enviar (mesma reduzirImagem da baixa sem app)
+    botao.textContent = "Preparando a foto...";
+    const canhotoEnvio = fotoCanhoto ? await reduzirImagem(fotoCanhoto) : null;
+    const notaEnvio = fotoNota ? await reduzirImagem(fotoNota) : null;
+    const fd = new FormData();
+    fd.append("service_id", chipPendenteEntregue.dataset.serviceId);
+    if (canhotoEnvio) fd.append("foto_canhoto", canhotoEnvio);
+    if (notaEnvio) fd.append("foto_nota_retorno", notaEnvio);
+    if (!fotoCanhoto) {
+      fd.append("justificativa", justificativa);
+      if (justificativa === "outro") fd.append("texto_outro", textoOutro);
+    }
+    botao.textContent = "Fechando na VUUPT...";
     const resp = await fetch(URL_TORRE_MARCAR_ENTREGUE, { method: "POST", body: fd });
     const dados = await resp.json();
     if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar como entregue.");

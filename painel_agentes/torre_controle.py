@@ -349,10 +349,74 @@ def notificar_ocorrencia_manual(service_id: int, codigo: str) -> dict:
 # os unicos que concluir_como_agente consegue levar ate 'done'.
 _STATUS_SERVICO_ABERTO_COM_MOTORISTA = ("assigned", "accepted", "on_route", "arrived")
 
+# Foto em massa (Hugo, 30/10): a mesma foto so vale para pedidos do mesmo
+# embarcador (sender_id) E do mesmo destinatario (customer_id) ou do mesmo
+# local de entrega (lote deixado numa transportadora): endereco igual depois
+# de normalizado ou coordenadas a ate 50 m. Sem foto (so justificativa) o
+# lote segue livre.
+MSG_FOTO_EM_MASSA = ("Foto em massa só para pedidos do mesmo embarcador e do mesmo "
+                     "destinatário ou local de entrega.")
+AVISO_NOTA_SEM_CANHOTO = "A foto da nota de retorno só vai junto da foto do canhoto."
+DISTANCIA_MESMO_LOCAL_M = 50
+LIMITE_ERRO_TELA = 200      # texto de erro da Vuupt mostrado ao usuario (o completo vai pro log)
+
+
+def _endereco_normalizado(servico: dict) -> str:
+    import unicodedata
+    texto = unicodedata.normalize("NFKD", str(servico.get("address") or ""))
+    texto = texto.encode("ascii", "ignore").decode().lower()
+    return " ".join(re.findall(r"[a-z0-9]+", texto))
+
+
+def _coordenada(servico: dict) -> tuple[float, float] | None:
+    try:
+        lat, lng = float(servico.get("latitude")), float(servico.get("longitude"))
+    except (TypeError, ValueError):
+        return None
+    return (lat, lng) if (lat, lng) != (0.0, 0.0) else None
+
+
+def _distancia_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    import math
+    lat1, lng1, lat2, lng2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 2 * 6_371_000 * math.asin(math.sqrt(h))
+
+
+def mesmo_destino_para_foto(servico_a: dict, servico_b: dict) -> bool:
+    """A mesma foto pode valer para os dois servicos da Vuupt? Mesmo embarcador
+    E (mesmo destinatario OU mesmo endereco normalizado OU ate 50 m)."""
+    sender = servico_a.get("sender_id")
+    if not sender or str(sender) != str(servico_b.get("sender_id") or ""):
+        return False
+    cliente = servico_a.get("customer_id")
+    if cliente and str(cliente) == str(servico_b.get("customer_id") or ""):
+        return True
+    endereco = _endereco_normalizado(servico_a)
+    if endereco and endereco == _endereco_normalizado(servico_b):
+        return True
+    ca, cb = _coordenada(servico_a), _coordenada(servico_b)
+    return bool(ca and cb and _distancia_m(ca, cb) <= DISTANCIA_MESMO_LOCAL_M)
+
+
+def validar_lote_foto(service_ids: list[int]) -> dict:
+    """Le cada servico na Vuupt e compara com o 1o (o mesmo que a API de
+    marcar-entregue confere por lote_referencia). {"ok": True} ou
+    {"ok": False, "erro": MSG_FOTO_EM_MASSA, "fora": [codigos]}."""
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    servicos = [(int(sid), vuupt.buscar_servico_por_id(int(sid))) for sid in service_ids]
+    referencia = servicos[0][1] if servicos else None
+    fora = [(s or {}).get("code") or f"#{sid}" for sid, s in servicos
+            if not s or not referencia or not mesmo_destino_para_foto(referencia, s)]
+    if fora:
+        return {"ok": False, "erro": MSG_FOTO_EM_MASSA, "fora": fora}
+    return {"ok": True}
+
 
 def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | None = None,
                            foto_nota_retorno: bytes | None = None, justificativa: str | None = None,
-                           texto_outro: str | None = None) -> dict:
+                           texto_outro: str | None = None, lote_referencia: int | None = None) -> dict:
     """
     Fecha um pedido como ENTREGUE direto na Vuupt, sem passar pelo app
     do motorista -- "Marcar como entregue" do menu de contexto da Torre
@@ -367,6 +431,11 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
     de fechar, pra expedicao anexar na Stokki. Canhoto em PDF so vira
     copia local: o checklist da Vuupt aceita apenas foto.
 
+    Regras do Hugo (30/10): a nota de retorno so vai junto da FOTO do
+    canhoto (sem canhoto, ou canhoto em PDF, ela e descartada com aviso);
+    em massa, lote_referencia (o 1o pedido do lote) so aceita foto se os
+    dois forem do mesmo embarcador e destino (mesmo_destino_para_foto).
+
     Travas: so servico com motorista e ainda aberto. 'done' devolve ok
     sem mexer na Vuupt (ja_estava=True); not_assigned, canceled e failed
     recusam -- insucesso tem o caminho dele (Duplicar), nao e pra virar
@@ -374,6 +443,11 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
     """
     from nucleo import banco as nucleo_banco, canhotos_manuais, justificativas_sem_canhoto
     from vuupt_checklist import CAMPO_CANHOTO, CAMPO_NOTA_RETORNO, ChecklistNaoGravado, para_jpeg
+
+    avisos = []
+    if foto_nota_retorno and (not foto_canhoto or foto_canhoto[:5] == b"%PDF-"):
+        foto_nota_retorno = None      # descartada antes de abrir: nunca vai pro checklist
+        avisos.append(AVISO_NOTA_SEM_CANHOTO)
 
     just_codigo, just_texto = "", ""
     if not foto_canhoto:
@@ -403,6 +477,11 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
     tem_foto = bool(foto_canhoto or foto_nota_retorno)
     if tem_foto and servico.get("type") != "delivery":
         return {"ok": False, "erro": f"Pedido {codigo} não é uma entrega: foto de canhoto/nota só em entrega."}
+    if tem_foto and lote_referencia and int(lote_referencia) != int(service_id):
+        # rede de seguranca do lote do Planejamento: a tela ja validou o lote todo antes
+        referencia = vuupt.buscar_servico_por_id(int(lote_referencia))
+        if not referencia or not mesmo_destino_para_foto(referencia, servico):
+            return {"ok": False, "erro": MSG_FOTO_EM_MASSA}
 
     # Converte tudo ANTES de gravar ou tocar na Vuupt: arquivo ruim recusa o pedido inteiro.
     canhoto_pdf = canhoto_jpeg = nota_jpeg = None
@@ -424,6 +503,8 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
         # sobrescrito; so entra se ainda nao ha nenhum.
         resultado = {"ok": True, "ja_estava": True, "codigo": codigo}
         if not tem_foto:
+            if avisos:
+                resultado["aviso"] = " ".join(avisos)
             return resultado
         aviso = "Já estava concluído; a foto não foi para o checklist."
         if canhoto_pdf:
@@ -440,7 +521,7 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
                 return {"ok": False, "erro": f"Canhoto: {e}"}
             finally:
                 conn.close()
-        resultado["aviso"] = aviso
+        resultado["aviso"] = " ".join([aviso, *avisos])
         return resultado
 
     # Copia local do canhoto antes de qualquer fechamento (a expedicao anexa na Stokki).
@@ -464,9 +545,11 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
             service_id, sucesso=True, status_atual=status,
             fotos_checklist=fotos or None, servico=servico)
     except ChecklistNaoGravado as e:
-        return {"ok": False, "erro": f"Checklist não gravado na VUUPT: {e}"}
+        logger.warning(f"Marcar entregue {codigo}: checklist nao gravado: {e}")
+        return {"ok": False, "erro": f"Checklist não gravado na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
     except Exception as e:
-        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {e}"}
+        logger.warning(f"Marcar entregue {codigo}: falha ao fechar na VUUPT: {e}")
+        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
 
     if foto_canhoto:
         observacao = "com foto do canhoto" if canhoto_jpeg else "com canhoto em PDF (só cópia local)"
@@ -486,7 +569,9 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
     if checklist_id:
         resultado["checklist_id"] = checklist_id
     if foto_canhoto and not canhoto_jpeg:
-        resultado["aviso"] = "O canhoto em PDF ficou só como cópia local; no checklist da VUUPT vão apenas fotos."
+        avisos.insert(0, "O canhoto em PDF ficou só como cópia local; no checklist da VUUPT vão apenas fotos.")
+    if avisos:
+        resultado["aviso"] = " ".join(avisos)
     return resultado
 
 

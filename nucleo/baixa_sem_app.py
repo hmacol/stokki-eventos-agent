@@ -159,8 +159,11 @@ def gravar_fotos(conn: sqlite3.Connection, lote_id: int, fotos_por_servico: dict
                 item["fotos"][str(int(campo))] = nome      # relativo a pasta do lote
         _salvar_itens(conn, lote_id, itens)
     except Exception as e:  # noqa: BLE001
+        # o erro completo (com o caminho do servidor) so vai pro log; a pasta parcial nao fica pra tras
+        logger.warning(f"Baixa sem app lote {lote_id}: fotos nao gravadas: {e}")
+        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         for item in itens:
-            item["status"], item["erro"] = "erro", f"Fotos nao gravadas: {str(e)[:150]}"
+            item["status"], item["erro"] = "erro", "Fotos nao gravadas no servidor; tente de novo."
         _salvar_itens(conn, lote_id, itens, terminado=True)
         raise
 
@@ -202,9 +205,19 @@ def _registrar_tratativa(item: dict, por: str) -> None:
     import tratativas
     from insucesso_entrega.motivos_falha import texto_do_motivo
     if item["status"] == "entregue":
+        # como a Torre: diz como a entrega foi comprovada
+        detalhe = ""
+        if item.get("justificativa"):
+            from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+            detalhe = JUSTIFICATIVAS.get(item["justificativa"], item["justificativa"])
+            if item.get("texto_outro"):
+                detalhe += f": {item['texto_outro']}"
+        elif item.get("checklist_id"):
+            detalhe = "com foto no checklist da VUUPT"
         tratativas.registrar_evento(item["codigo"], "BAIXA_SEM_APP", "BAIXA_SEM_APP",
                                     service_id=item["service_id"],
-                                    texto=f"Baixa de motorista sem app por {por}: entregue.")
+                                    texto=f"Baixa de motorista sem app por {por}: entregue"
+                                          + (f" ({detalhe})." if detalhe else "."))
     elif item["status"] == "insucesso":
         motivo = texto_do_motivo(item["failed_reason_id"])
         tratativas.registrar_evento(item["codigo"], "BAIXA_SEM_APP", "BAIXA_SEM_APP",
@@ -230,8 +243,12 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
             try:
                 fotos, info = None, {}
                 if item["entregue"] and item.get("fotos"):
-                    fotos = {int(c): (pasta_fotos(lote_id, db_path) / Path(a).name).read_bytes()
-                             for c, a in item["fotos"].items()}
+                    try:
+                        fotos = {int(c): (pasta_fotos(lote_id, db_path) / Path(a).name).read_bytes()
+                                 for c, a in item["fotos"].items()}
+                    except OSError as e:      # mensagem fixa: o caminho do servidor so vai pro log
+                        logger.warning(f"Baixa sem app lote {lote_id}: foto de {item['codigo']} ilegivel: {e}")
+                        raise RuntimeError("Fotos do checklist nao encontradas no servidor; tente de novo.") from e
                 item["status"] = concluir_servico(vuupt, item["service_id"], item["entregue"],
                                                   item.get("failed_reason_id"), lote["agent_id"],
                                                   fotos=fotos, info=info)
@@ -249,8 +266,6 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"Tratativa de {item['codigo']} nao registrada: {e}")
         _salvar_itens(conn, lote_id, itens, terminado=True)
-        # Retentativa e um POST novo com upload novo: a pasta nunca fica pra tras.
-        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         feitos = [i["service_id"] for i in itens if i["status"] in ("entregue", "insucesso")]
         if feitos:
             try:
@@ -259,4 +274,7 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
                 logger.warning(f"Ressincronizacao do nucleo falhou: {e}")
         return ler_lote(conn, lote_id)
     finally:
+        # Retentativa e um POST novo com upload novo: a pasta nunca fica pra tras,
+        # nem quando o lote estoura no meio (SQLite travado, painel reiniciando).
+        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         conn.close()

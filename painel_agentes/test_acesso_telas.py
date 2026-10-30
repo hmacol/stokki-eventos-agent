@@ -59,6 +59,12 @@ class TestCatalogo(unittest.TestCase):
         self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
         self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
 
+    def test_planejamento_valida_foto_em_massa(self):
+        # o modal do Planejamento chama a validacao do lote antes do marcar-entregue (30/10)
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/validar-lote-foto", ["planejamento"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/marcar-entregue", ["planejamento"]))
+        self.assertFalse(acesso_telas.caminho_liberado("/api/torre/dados", ["planejamento"]))
+
     def test_galpao_nao_abre_estoque_nem_expedicao_abre_consulta(self):
         self.assertFalse(acesso_telas.caminho_liberado("/wms/estoque", ["wms"]))
         self.assertTrue(acesso_telas.caminho_liberado("/wms/etiquetas.pdf", ["wms"]))

@@ -1384,6 +1384,7 @@
     font-size: 12.5px; background: var(--fundo); color: var(--texto); font-family: inherit;
   }
   .modal-reagendar textarea { resize: vertical; min-height: 60px; }
+  .modal-reagendar input[type="file"] { width: 100%; max-width: 100%; box-sizing: border-box; font-size: 12px; }
   .modal-reagendar .linha-horarios { display: flex; align-items: center; gap: 8px; }
   .modal-reagendar .linha-horarios label { font-size: 12px; font-weight: 400; margin: 0; }
   .modal-reagendar input[type="date"], .modal-reagendar input[type="time"] {
@@ -2076,11 +2077,11 @@
     <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo-reagendar">
       <label for="entregue-foto-canhoto">Foto do canhoto</label>
-      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" capture="environment" onchange="aoMudarFotoEntregue()">
+      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" onchange="aoMudarFotoEntregue()">
     </div>
     <div class="campo-reagendar">
-      <label for="entregue-foto-nota">Foto da nota de retorno (opcional)</label>
-      <input type="file" id="entregue-foto-nota" accept="image/*">
+      <label for="entregue-foto-nota">Foto da nota de retorno (opcional) — só com a foto do canhoto</label>
+      <input type="file" id="entregue-foto-nota" accept="image/*" disabled>
     </div>
     <div class="campo-reagendar" id="entregue-campo-justificativa">
       <label for="entregue-justificativa">Sem foto do canhoto: por quê?</label>
@@ -6149,8 +6150,13 @@
   }
 
   // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
+  // A nota de retorno só vai junto da FOTO do canhoto (Hugo, 30/10): sem ela (ou PDF) fica travada e vazia.
   function aoMudarFotoEntregue() {
-    const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+    const canhoto = document.getElementById("entregue-foto-canhoto").files[0];
+    const temFoto = !!canhoto;
+    const nota = document.getElementById("entregue-foto-nota");
+    nota.disabled = !canhoto || canhoto.type === "application/pdf";
+    if (nota.disabled) nota.value = "";
     document.getElementById("entregue-campo-justificativa").hidden = temFoto;
     aoMudarJustificativaEntregue();
   }
@@ -6171,12 +6177,31 @@
   });
 
   const URL_PLANEJAMENTO_MARCAR_ENTREGUE = "{{ url_for('api_torre_marcar_entregue') }}";
+  const URL_PLANEJAMENTO_VALIDAR_LOTE_FOTO = "{{ url_for('api_torre_validar_lote_foto') }}";
+
+{% include "_reduzir_imagem.js.html" %}
+
+  // Foto em massa (Hugo, 30/10): só pedidos do mesmo embarcador e do mesmo
+  // destinatário ou local de entrega. Uma chamada antes do laço; sem foto o
+  // lote segue livre. Devolve null (ok) ou a mensagem de recusa.
+  async function validarLoteFoto(itens) {
+    const resp = await fetch(URL_PLANEJAMENTO_VALIDAR_LOTE_FOTO, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_ids: itens.map(it => it.serviceId) }),
+    });
+    let dados = {};
+    try { dados = await resp.json(); } catch (e) {}
+    if (resp.ok) return null;
+    const fora = (dados.fora || []).length ? `\nFora da regra: ${dados.fora.join(", ")}` : "";
+    return `${dados.erro || "Falha ao conferir o lote."}${fora}\n\nRemova a foto e use uma justificativa, ou marque um a um.`;
+  }
 
   async function confirmarEntregue(botao) {
     const pendente = entreguePendente;
     if (!pendente) return;
-    const fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
-    const fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
+    let fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
+    let fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
     const justificativa = document.getElementById("entregue-justificativa").value;
     const textoOutro = document.getElementById("entregue-texto-outro").value.trim();
     if (!fotoCanhoto) {
@@ -6189,14 +6214,34 @@
     botao.disabled = true;
     const fechados = [], jaEstavam = [], falhas = [], avisos = [];
     try {
+      if (fotoCanhoto && pendente.itens.length > 1) {
+        botao.textContent = "Conferindo o lote...";
+        const recusa = await validarLoteFoto(pendente.itens);
+        if (recusa) { alert(recusa); return; }   // modal fica aberto: remover a foto ou marcar um a um
+      }
+      // reduz uma vez no navegador e reaproveita o mesmo File em todos os POSTs
+      botao.textContent = "Preparando a foto...";
+      fotoCanhoto = fotoCanhoto ? await reduzirImagem(fotoCanhoto) : null;
+      fotoNota = fotoNota ? await reduzirImagem(fotoNota) : null;
+    } catch (e) {
+      alert(`Falha ao conferir o lote: ${e.message}`);
+      return;
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    botao.disabled = true;
+    try {
       // um FormData (e um checklist na VUUPT) por pedido; mesmos arquivos e
-      // justificativa em todos; falha de um não para os outros
+      // justificativa em todos; falha de um não para os outros. Com foto, os
+      // itens 2..N levam o 1o como lote_referencia (o servidor confere de novo).
       for (const [i, it] of pendente.itens.entries()) {
         botao.textContent = pendente.itens.length > 1
           ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
         try {
           const fd = new FormData();
           fd.append("service_id", it.serviceId);
+          if (fotoCanhoto && i > 0) fd.append("lote_referencia", pendente.itens[0].serviceId);
           if (fotoCanhoto) fd.append("foto_canhoto", fotoCanhoto);
           if (fotoNota) fd.append("foto_nota_retorno", fotoNota);
           if (!fotoCanhoto) {

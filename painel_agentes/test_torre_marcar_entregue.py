@@ -49,15 +49,21 @@ class _VuuptFalso:
     chamadas = []
     ultima = None
     retorno = 555
+    outros = {}      # service_id -> campos diferentes (outros pedidos de um lote); None = nao existe
+    lidos = []
 
     def __init__(self, token):
         self.token = token
 
     def buscar_servico_por_id(self, service_id):
-        if not _VuuptFalso.servico:
+        _VuuptFalso.lidos.append(service_id)
+        extra = _VuuptFalso.outros.get(service_id, {})
+        if not _VuuptFalso.servico or extra is None:
             return None
-        return {"id": service_id, "code": "#PS-77", "status": _VuuptFalso.status,
-                "title": "Cliente Exemplo", "type": _VuuptFalso.tipo}
+        return {"id": service_id, "code": f"#PS-{service_id}", "status": _VuuptFalso.status,
+                "title": "Cliente Exemplo", "type": _VuuptFalso.tipo,
+                "sender_id": 10, "customer_id": 20, "address": "Rua Zilda, 288 - São Paulo",
+                "latitude": -23.497015, "longitude": -46.660775, **extra}
 
     def concluir_como_agente(self, service_id, sucesso=True, failed_reason_id=None, status_atual="",
                              fotos_checklist=None, servico=None):
@@ -91,6 +97,8 @@ class TestMarcarEntregueManual(unittest.TestCase):
         _VuuptFalso.falha = None
         _VuuptFalso.chamadas = []
         _VuuptFalso.ultima = None
+        _VuuptFalso.outros = {}
+        _VuuptFalso.lidos = []
 
     def tearDown(self):
         for p in self._patches:
@@ -100,8 +108,9 @@ class TestMarcarEntregueManual(unittest.TestCase):
     def _entregas(self):
         return torre_controle._buscar_entregas_manuais([77])
 
-    def _marcar(self, canhoto=None, nota=None, justificativa=None, texto=None):
-        return torre_controle.marcar_entregue_manual(77, "hugo", canhoto, nota, justificativa, texto)
+    def _marcar(self, canhoto=None, nota=None, justificativa=None, texto=None, lote_referencia=None):
+        return torre_controle.marcar_entregue_manual(77, "hugo", canhoto, nota, justificativa, texto,
+                                                     lote_referencia=lote_referencia)
 
     # --- foto no checklist ---
 
@@ -143,11 +152,34 @@ class TestMarcarEntregueManual(unittest.TestCase):
         self.salvar.assert_called_once()
         self.assertEqual(self.salvar.call_args.args[3], PDF)
 
-    def test_pdf_com_nota_manda_so_a_nota(self):
+    def test_pdf_com_nota_descarta_a_nota(self):
+        # regra do Hugo (30/10): a nota so vai junto da FOTO do canhoto; PDF nao e foto
         r = self._marcar(canhoto=PDF, nota=FOTO)
         self.assertTrue(r["ok"], r)
-        self.assertEqual(list(_VuuptFalso.ultima["fotos"]), [CAMPO_NOTA_RETORNO])
-        self.assertEqual(r["checklist_id"], 555)
+        self.assertFalse(_VuuptFalso.ultima["fotos"])
+        self.assertNotIn("checklist_id", r)
+        self.assertIn("A foto da nota de retorno só vai junto da foto do canhoto.", r["aviso"])
+        self.assertIn("PDF", r["aviso"])
+        self.assertEqual(self._entregas()[77]["fotos"], 0)
+
+    def test_nota_sem_canhoto_descartada_e_conclui_pela_justificativa(self):
+        r = self._marcar(nota=FOTO, justificativa="sem_bateria")
+        self.assertTrue(r["ok"], r)
+        self.assertFalse(_VuuptFalso.ultima["fotos"])
+        self.assertNotIn("checklist_id", r)
+        self.assertEqual(r["aviso"], "A foto da nota de retorno só vai junto da foto do canhoto.")
+
+    def test_nota_sem_canhoto_nem_e_decodificada(self):
+        # descartada antes de abrir: arquivo ruim na nota sozinha nao recusa o pedido
+        r = self._marcar(nota=b"nao sou imagem", justificativa="sem_bateria")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("só vai junto da foto do canhoto", r["aviso"])
+
+    def test_nota_sem_canhoto_em_pedido_ja_concluido_tambem_avisa(self):
+        _VuuptFalso.status = "done"
+        r = self._marcar(nota=FOTO, justificativa="sem_bateria")
+        self.assertTrue(r["ja_estava"])
+        self.assertEqual(r["aviso"], "A foto da nota de retorno só vai junto da foto do canhoto.")
 
     def test_arquivo_que_nao_e_foto_recusa_sem_tocar_em_nada(self):
         r = self._marcar(canhoto=b"nao sou imagem")
@@ -234,12 +266,17 @@ class TestMarcarEntregueManual(unittest.TestCase):
         registro = self._entregas()[77]
         self.assertEqual(registro["justificativa"], "outro")
         self.assertEqual(registro["texto_outro"], "Cliente retirou na porta")
-        self.assertEqual(registro["checklist_id"], 555)
-        self.assertEqual(registro["fotos"], 1)
+        self.assertIsNone(registro["checklist_id"])     # nota sem canhoto nao vai pro checklist
+        self.assertEqual(registro["fotos"], 0)
         self.assertIn("Cliente retirou na porta", registro["observacao"])
         texto = torre_controle.tratativas.registrar_evento.call_args.kwargs["texto"]
         self.assertIn("hugo", texto)
-        self.assertIn("checklist", texto)
+        self.assertNotIn("checklist", texto)
+        # com a foto do canhoto o id do checklist e gravado
+        self._marcar(canhoto=FOTO, nota=FOTO)
+        registro = self._entregas()[77]
+        self.assertEqual(registro["checklist_id"], 555)
+        self.assertEqual(registro["fotos"], 2)
 
     def test_tratativa_cita_a_justificativa(self):
         self._marcar(justificativa="confirmado_contato")
@@ -297,6 +334,62 @@ class TestMarcarEntregueManual(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("encontrado", r["erro"].lower())
 
+    def test_erro_longo_da_vuupt_truncado(self):
+        _VuuptFalso.falha = RuntimeError("check-out do servico 77: status 502: <html>" + "x" * 5000)
+        r = self._marcar(justificativa="sem_bateria")
+        self.assertFalse(r["ok"])
+        self.assertLessEqual(len(r["erro"]), 260)
+        self.assertIn("502", r["erro"])
+
+    # --- foto em massa (regra do Hugo, 30/10) ---
+
+    def test_lote_com_referencia_compativel_conclui(self):
+        _VuuptFalso.outros = {12: {"customer_id": 20}}
+        r = self._marcar(canhoto=FOTO, lote_referencia=12)
+        self.assertTrue(r["ok"], r)
+        self.assertIn(12, _VuuptFalso.lidos)
+
+    def test_lote_com_embarcador_diferente_recusa_sem_tocar_em_nada(self):
+        _VuuptFalso.outros = {12: {"sender_id": 99}}
+        r = self._marcar(canhoto=FOTO, lote_referencia=12)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["erro"], torre_controle.MSG_FOTO_EM_MASSA)
+        self.assertEqual(_VuuptFalso.chamadas, [])
+        self.salvar.assert_not_called()
+
+    def test_lote_com_destino_diferente_recusa(self):
+        _VuuptFalso.outros = {12: {"customer_id": 21, "address": "Av. Paulista, 1000",
+                                   "latitude": -23.5614, "longitude": -46.6559}}
+        r = self._marcar(canhoto=FOTO, lote_referencia=12)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["erro"], torre_controle.MSG_FOTO_EM_MASSA)
+
+    def test_lote_sem_foto_nao_confere_referencia(self):
+        _VuuptFalso.outros = {12: {"sender_id": 99}}
+        r = self._marcar(justificativa="sem_bateria", lote_referencia=12)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn(12, _VuuptFalso.lidos)
+
+    def test_lote_referencia_sumida_recusa(self):
+        _VuuptFalso.outros = {12: None}
+        r = self._marcar(canhoto=FOTO, lote_referencia=12)
+        self.assertFalse(r["ok"])
+        self.assertEqual(_VuuptFalso.chamadas, [])
+
+    def test_validar_lote_foto(self):
+        _VuuptFalso.outros = {1: {}, 2: {"customer_id": 21}, 3: {"sender_id": 99}}
+        self.assertEqual(torre_controle.validar_lote_foto([1, 2]), {"ok": True})
+        r = torre_controle.validar_lote_foto([1, 2, 3])
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["erro"], torre_controle.MSG_FOTO_EM_MASSA)
+        self.assertEqual(r["fora"], ["#PS-3"])
+
+    def test_validar_lote_foto_pedido_sumido_fica_fora(self):
+        _VuuptFalso.outros = {1: {}, 2: None}
+        r = torre_controle.validar_lote_foto([1, 2])
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["fora"], ["#2"])
+
     def test_falha_na_vuupt_nao_registra(self):
         _VuuptFalso.falha = RuntimeError("check-out do servico 77: status 500")
         r = self._marcar(justificativa="sem_bateria")
@@ -321,6 +414,47 @@ class TestMarcarEntregueManual(unittest.TestCase):
         colunas = {r[1] for r in c.execute("PRAGMA table_info(torre_entregas_manuais)")}
         c.close()
         self.assertTrue({"justificativa", "texto_outro", "checklist_id", "fotos"} <= colunas)
+
+
+class TestMesmoDestinoParaFoto(unittest.TestCase):
+    """Regra pura da foto em massa: mesmo embarcador (sender_id) E mesmo
+    destinatario (customer_id) OU mesmo local (endereco normalizado ou ate 50 m)."""
+
+    A = {"sender_id": 10, "customer_id": 20, "address": "Rua Zilda, 288 - São Paulo",
+         "latitude": -23.497015, "longitude": -46.660775}
+
+    def _b(self, **kw):
+        return {**self.A, **kw}
+
+    def test_mesmo_destinatario(self):
+        self.assertTrue(torre_controle.mesmo_destino_para_foto(
+            self.A, self._b(address="outro", latitude=-23.6, longitude=-46.7)))
+
+    def test_destinatario_diferente_mesmo_endereco(self):
+        # lote entregue numa transportadora: clientes diferentes, mesmo endereco
+        self.assertTrue(torre_controle.mesmo_destino_para_foto(
+            self.A, self._b(customer_id=21, address="  rua ZILDA 288, sao paulo ", latitude=None, longitude=None)))
+
+    def test_destinatario_diferente_a_menos_de_50_m(self):
+        # ~30 m ao norte, endereco escrito diferente (coordenada em texto, como a Vuupt manda as vezes)
+        self.assertTrue(torre_controle.mesmo_destino_para_foto(
+            self.A, self._b(customer_id=21, address="R. Zilda 300", latitude="-23.496745", longitude="-46.660775")))
+
+    def test_embarcador_diferente(self):
+        self.assertFalse(torre_controle.mesmo_destino_para_foto(self.A, self._b(sender_id=11)))
+
+    def test_mais_de_50_m(self):
+        # ~80 m e endereco diferente
+        self.assertFalse(torre_controle.mesmo_destino_para_foto(
+            self.A, self._b(customer_id=21, address="R. Zilda 380", latitude=-23.496295, longitude=-46.660775)))
+
+    def test_sem_embarcador_nao_prova_nada(self):
+        self.assertFalse(torre_controle.mesmo_destino_para_foto(
+            self._b(sender_id=None), self._b(sender_id=None)))
+
+    def test_sem_destinatario_nem_endereco_nem_coordenada(self):
+        vazio = {"sender_id": 10}
+        self.assertFalse(torre_controle.mesmo_destino_para_foto(vazio, dict(vazio)))
 
 
 if __name__ == "__main__":

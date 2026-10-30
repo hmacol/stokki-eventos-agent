@@ -151,6 +151,45 @@ class Fotos(Lote):
         self.assertEqual(d["itens"][0]["status"], "erro")
         self.assertTrue(d["terminado"])
 
+    def test_gravar_fotos_falha_no_meio_apaga_a_pasta_e_nao_mostra_caminho(self):
+        lote = b.criar_lote(self.conn, 5000, 50191, "hugo", self.itens()[:1])
+        pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
+        original = Path.write_bytes
+        chamadas = []
+
+        def grava_um_e_falha(caminho, dados):
+            chamadas.append(caminho)
+            if len(chamadas) > 1:
+                raise OSError(28, "No space left on device", str(caminho))
+            return original(caminho, dados)
+        with mock.patch.object(Path, "write_bytes", grava_um_e_falha):
+            with self.assertRaises(OSError):
+                b.gravar_fotos(self.conn, lote, {1: {15086: b"a", 15349: b"b"}}, db_path=self.db)
+        self.assertEqual(len(chamadas), 2)          # a 1a foto chegou a ser gravada
+        self.assertFalse(pasta.exists())
+        erro = b.ler_lote(self.conn, lote)["itens"][0]["erro"]
+        self.assertNotIn(str(self.db.parent), erro)
+        self.assertNotIn("checklist_fotos", erro)
+
+    def test_foto_sumida_do_disco_erro_sem_caminho(self):
+        vuupt = VuuptFalsa({1: "assigned"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        (self.db.parent / "checklist_fotos" / f"lote_{lote}" / "1_15086.jpg").unlink()
+        r = self.executar(vuupt, lote)
+        self.assertEqual(r["itens"][0]["status"], "erro")
+        self.assertNotIn(str(self.db.parent), r["itens"][0]["erro"])
+        self.assertNotIn(".jpg", r["itens"][0]["erro"])
+        self.assertEqual(vuupt.concluidos, [])
+
+    def test_excecao_no_meio_do_lote_ainda_apaga_a_pasta(self):
+        vuupt = VuuptFalsa({1: "assigned"})
+        lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
+        pasta = self.db.parent / "checklist_fotos" / f"lote_{lote}"
+        with mock.patch.object(b, "_salvar_itens", side_effect=RuntimeError("database is locked")):
+            with self.assertRaises(RuntimeError):
+                self.executar(vuupt, lote)
+        self.assertFalse(pasta.exists())
+
     def test_executar_lote_passa_fotos_e_guarda_checklist_id(self):
         vuupt = VuuptFalsa({1: "assigned"})
         lote = self.lote_com_fotos(self.itens()[:1], {1: {15086: b"jpgA"}})
@@ -195,6 +234,28 @@ class Fotos(Lote):
         r = self.executar(vuupt, lote)
         self.assertEqual(r["itens"][0]["status"], "ja_fechado")
         self.assertIn("não foi para o checklist", r["itens"][0]["aviso"])
+
+
+class Tratativa(unittest.TestCase):
+    """O texto da tratativa de um item entregue diz como foi comprovado, como a Torre."""
+
+    def _texto(self, **item):
+        base = {"status": "entregue", "codigo": "PS-1", "service_id": 1, "failed_reason_id": None}
+        with mock.patch("tratativas.registrar_evento") as reg:
+            b._registrar_tratativa({**base, **item}, "hugo")
+        return reg.call_args.kwargs["texto"]
+
+    def test_justificativa_entra_no_texto(self):
+        texto = self._texto(justificativa="sem_bateria")
+        self.assertIn("entregue", texto)
+        self.assertIn("sem celular ou sem bateria", texto)
+
+    def test_outro_leva_o_texto_digitado(self):
+        texto = self._texto(justificativa="outro", texto_outro="porteiro recebeu")
+        self.assertIn("Outro: porteiro recebeu", texto)
+
+    def test_com_checklist(self):
+        self.assertIn("com foto no checklist", self._texto(checklist_id=901))
 
 
 if __name__ == "__main__":

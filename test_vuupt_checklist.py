@@ -49,7 +49,7 @@ class SessaoFalsa:
             campos = [{"checklist_form_field_id": c,
                        "file_url": ("http://x/%d.jpg" % c) if self.gravar_arquivo else None}
                       for c in self.enviados]
-            return Resp(200, {"data": [{"id": 777, "checklist_form_id": 1531,
+            return Resp(200, {"data": [{"id": 777, "checklist_form_id": 1531, "entity_id": 5,
                                         "images_quantity": len(self.enviados),
                                         "fields": {"data": campos}}]})
         return Resp(200, {"service": {"id": 5, "type": "delivery"}})
@@ -129,7 +129,7 @@ class ChecklistTest(unittest.TestCase):
             vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
 
     def test_reaproveita_checklist_existente_do_servico(self):
-        existente = {"id": 900, "checklist_form_id": 1531, "images_quantity": 1,
+        existente = {"id": 900, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 1,
                      "fields": [{"checklist_form_field_id": "15086", "file_url": None}]}
         s = SessaoFalsa(listagem=[existente])
         orig_get = s.get
@@ -146,7 +146,7 @@ class ChecklistTest(unittest.TestCase):
         self.assertTrue(any(c[1].endswith("/checklists/900") for c in s.chamadas))
 
     def test_existente_com_quantidade_diferente_cria_novo(self):
-        existente = {"id": 900, "checklist_form_id": 1531, "images_quantity": 2, "fields": []}
+        existente = {"id": 900, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 2, "fields": []}
         s = SessaoFalsa(listagem=[existente])
         with self.assertRaises(vc.ChecklistNaoGravado):   # a releitura (fake) so devolve o 900, sem arquivo
             vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
@@ -154,7 +154,7 @@ class ChecklistTest(unittest.TestCase):
 
     def test_existente_incompativel_cria_novo_e_conclui(self):
         # velho: qtd 1, 15086 ja enviado (finish falhou); retentativa manda so 15349
-        velho = {"id": 900, "checklist_form_id": 1531, "images_quantity": 1,
+        velho = {"id": 900, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 1,
                  "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
         s = SessaoFalsa(listagem=[velho])
         orig_post = s.post
@@ -162,7 +162,7 @@ class ChecklistTest(unittest.TestCase):
         def post(url, **kw):
             r = orig_post(url, **kw)
             if url.endswith("/checklists/777"):
-                s.listagem.append({"id": 777, "checklist_form_id": 1531, "images_quantity": 1,
+                s.listagem.append({"id": 777, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 1,
                                    "fields": {"data": [{"checklist_form_field_id": 15349,
                                                         "file_url": "http://x/b.jpg"}]}})
             return r
@@ -173,7 +173,7 @@ class ChecklistTest(unittest.TestCase):
         self.assertFalse(any(c[1].endswith("/checklists/900") for c in s.chamadas))
 
     def _completo(self, finish_status):
-        ck = {"id": 900, "checklist_form_id": 1531, "images_quantity": 1,
+        ck = {"id": 900, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 1,
               "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
         return SessaoFalsa(listagem=[ck], finish_status=finish_status)
 
@@ -190,7 +190,7 @@ class ChecklistTest(unittest.TestCase):
             vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
 
     def test_finish_recusado_depois_de_upload_continua_fatal(self):
-        ck = {"id": 900, "checklist_form_id": 1531, "images_quantity": 2,
+        ck = {"id": 900, "checklist_form_id": 1531, "entity_id": 5, "images_quantity": 2,
               "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
         s = SessaoFalsa(listagem=[ck], finish_status=409)
         with self.assertRaises(vc.ChecklistNaoGravado):
@@ -210,6 +210,34 @@ class ChecklistTest(unittest.TestCase):
         self.assertEqual(p["filter[0][field]"], "entity_id")
         self.assertEqual(p["filter[0][value]"], 5)
         self.assertEqual(p["include"], "fields")
+
+    def test_filtro_ignorado_nao_usa_checklist_de_outro_servico(self):
+        # a Vuupt ignorou o filtro e devolveu o checklist de OUTRO pedido (entity_id 6)
+        alheio = {"id": 900, "checklist_form_id": 1531, "entity_id": 6, "images_quantity": 1,
+                  "fields": [{"checklist_form_field_id": 15086, "file_url": "http://x/a.jpg"}]}
+        s = SessaoFalsa(listagem=[alheio])
+        self.assertIsNone(vc.checklist_entrega_do_servico(vuupt_falso(s), 5))
+        # nem reaproveitado nem prova na releitura: cria o proprio e falha por nao reler o 777
+        with self.assertRaises(vc.ChecklistNaoGravado):
+            vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        self.assertTrue(any(c[0] == "POST" and c[1].endswith("/checklists") for c in s.chamadas))
+        self.assertFalse(any("/checklists/900" in c[1] for c in s.chamadas))
+
+    def test_erro_da_vuupt_truncado_para_o_usuario(self):
+        # pagina HTML de 502 do proxy da Vuupt: o usuario ve no maximo 200 caracteres, o log ve tudo
+        s = SessaoFalsa(finish_status=502)
+        s.put = lambda url, **kw: Resp(502, "<html>" + "x" * 5000 + "</html>")
+        with self.assertLogs("vuupt_checklist", level="WARNING") as log:
+            with self.assertRaises(vc.ChecklistNaoGravado) as ctx:
+                vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        corpo = str(ctx.exception).split("502: ", 1)[1]
+        self.assertLessEqual(len(corpo), 201)
+        self.assertTrue(any("x" * 5000 in linha for linha in log.output))
+
+    def test_entity_id_em_texto_vale(self):
+        ck = {"id": 901, "checklist_form_id": "1531", "entity_id": "5", "fields": []}
+        s = SessaoFalsa(listagem=[ck])
+        self.assertEqual(vc.checklist_entrega_do_servico(vuupt_falso(s), 5)["id"], 901)
 
     def test_para_jpeg_png_e_heic(self):
         self.assertEqual(vc.para_jpeg(_img_bytes("PNG"))[:2], b"\xff\xd8")
@@ -240,6 +268,22 @@ class ChecklistTest(unittest.TestCase):
             vc.para_jpeg(b"%PDF-1.4 abc")
         with self.assertRaises(ValueError):
             vc.para_jpeg(b"texto qualquer")
+
+    def test_eps_disfarcado_nao_e_foto(self):
+        # cabecalho minimo de EPS: o Pillow reconheceria (e chamaria o Ghostscript no load)
+        eps = (b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 20 20\n"
+               b"%%EndComments\nnewpath 0 0 moveto 20 20 lineto stroke\nshowpage\n%%EOF\n")
+        from PIL import EpsImagePlugin
+        with mock.patch.object(EpsImagePlugin.EpsImageFile, "load", side_effect=OSError("gs")) as gs:
+            with self.assertRaisesRegex(ValueError, "não é foto"):
+                vc.para_jpeg(eps)
+        gs.assert_not_called()      # nem chega a reconhecer como EPS (Ghostscript nunca roda)
+
+    def test_formatos_aceitos_no_open(self):
+        with mock.patch("PIL.Image.open", side_effect=OSError("x")) as aberto:
+            with self.assertRaises(ValueError):
+                vc.para_jpeg(b"qualquer")
+        self.assertEqual(aberto.call_args.kwargs["formats"], ["JPEG", "PNG", "WEBP", "HEIF"])
 
 
 class ConcluirTest(unittest.TestCase):

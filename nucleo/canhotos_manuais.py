@@ -46,7 +46,8 @@ def para_pdf(conteudo: bytes) -> bytes:
         raise CanhotoInvalido("Foto em HEIC não é aceita: tire a foto pela própria tela ou envie JPG/PDF.")
     try:
         from PIL import Image, ImageOps
-        img = Image.open(io.BytesIO(conteudo))      # preguicoso: so le o cabecalho
+        # so formatos de foto: EPS/PS disfarcado nunca chega ao Ghostscript
+        img = Image.open(io.BytesIO(conteudo), formats=["JPEG", "PNG", "WEBP", "HEIF"])
     except Exception as e:  # noqa: BLE001
         raise CanhotoInvalido("Formato não aceito: envie foto (JPG/PNG) ou PDF.") from e
     if img.size[0] * img.size[1] > MAX_PIXELS:
