@@ -252,8 +252,8 @@
                 redefinida é provisória: requer_auth manda pra /trocar-senha.
                 Nível/nome lidos do banco a cada request (muda sem novo login).
                 Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
-                /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
-                (em memória no processo do painel; restart zera).
+                /login: sem trava de senha errada desde 29/10 (Hugo tirou a de
+                15 min; o portal e o app do motorista mantêm a deles).
                 Inatividade (24/10; 6 h desde 27/10): 6 h sem uso -> sessão cai (requer_auth,
                 _INATIVIDADE_MAX). Uso = navegar pra página (Sec-Fetch-Mode
                 navigate) ou POST /api/sessao/atividade que o
