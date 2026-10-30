@@ -59,6 +59,7 @@ for _p in (_RAIZ, _AQUI):
 import yaml
 
 import cancelamento as cm
+import endereco_entrega
 import envio_pedidos as ep
 import pedidos_dedicados
 import retomada as rt
@@ -127,6 +128,17 @@ def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "a
     if fn is None:
         raise ValueError(f"Regra de XML '{regra}' não existe no importador (TRANSFORMACOES).")
     fn(origem, destino)
+
+
+def aplicar_entrega_no_lote(e: dict, destino: Path) -> None:
+    """Endereço de entrega escolhido no envio (27/10): grupo <entrega> no XML
+    do lote (cópia), nunca no original do cliente. Fiscal e nota: nada a fazer
+    (a nota já traz o <entrega> dela)."""
+    if e.get("endereco_entrega_origem") not in ("cliente", "ultima_entrega"):
+        return
+    end = json.loads(e.get("endereco_entrega_json") or "{}")
+    destino.write_bytes(endereco_entrega.inserir_entrega_xml(destino.read_bytes(), end, end.get("documento") or "",
+                                                             end.get("nome") or ""))
 
 
 # ── Wizard da Stokki ───────────────────────────────────────────────────────────
@@ -589,6 +601,7 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     else:
                         transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
                                         fluxo=e.get("fluxo") or "armazenagem", xd=xd)
+                    aplicar_entrega_no_lote(e, destino)
                     arquivos.append(destino)
                     prontos_xml.append(e)
                 prontos.append(e)

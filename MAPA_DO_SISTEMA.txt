@@ -113,6 +113,10 @@
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Endereço de entrega conferido no envio .... portal_cliente/endereco_entrega.py (prévia: casos nota/
+                                             terceiros/sugestao/livre; <entrega> no XML do lote);
+                                             chave portal_cliente.envios.endereco_entrega_ativo
+                                             (padrão desligado; spec 2026-10-27-endereco-entrega-portal)
  Fluxo Cross (item XD + troca de NF) ....... nucleo/fluxo_embarcador.py (interno.fluxos, XD achado em
                                              wms_produtos) -> regra "cross" do importador -> fila
                                              portal_cliente/trocas_nf.py -> stokki/trocar_nf.py; virada:
@@ -1094,6 +1098,9 @@
                            carga, e-mails e WhatsApp.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
+                           entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
+                           inserido no XML do lote pelo worker (original intacto).
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
