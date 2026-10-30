@@ -97,8 +97,10 @@ def endereco_vigente(conn, codigo, sender_id: int) -> dict | None:
 
 
 def houve_alteracao_desde(conn, minutos: int, agora: datetime | None = None) -> bool:
+    """True se, nos ultimos `minutos`, houve alteracao APLICADA ou uma que ja
+    tirou o pedido da rota (mesmo FALHOU): nos dois casos so a Vuupt tem o estado certo."""
     agora = agora or datetime.now()
     corte = (agora - timedelta(minutes=minutos)).strftime(_FMT)
     return conn.execute(
-        "SELECT 1 FROM alteracoes_entrega_portal WHERE status='APLICADA'"
+        "SELECT 1 FROM alteracoes_entrega_portal WHERE (status='APLICADA' OR rota_id_tirada IS NOT NULL)"
         " AND criado_em >= ? LIMIT 1", (corte,)).fetchone() is not None

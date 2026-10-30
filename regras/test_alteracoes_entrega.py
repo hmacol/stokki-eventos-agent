@@ -17,16 +17,16 @@ class AlteracoesEntregaTest(unittest.TestCase):
         self.conn.close()
         os.remove(self.path)
 
-    def _reg(self, codigo="#PS-1234", endereco=None, status="APLICADA", lat=None, lon=None, sender_id=1):
+    def _reg(self, codigo="#PS-1234", endereco=None, status="APLICADA", lat=None, lon=None, sender_id=1, rota_id_tirada=None):
         return ae.registrar(
             self.conn, cnpj_embarcador="00000000000191", sender_id=sender_id, service_id=10,
             codigo=codigo, por="teste", antes={}, depois={}, endereco=endereco,
-            latitude=lat, longitude=lon, rota_id_tirada=None, status=status)
+            latitude=lat, longitude=lon, rota_id_tirada=rota_id_tirada, status=status)
 
     def test_codigo_base_tira_hash_e_reentrega(self):
         self.assertEqual(ae.codigo_base("#PS-1234-R1"), "PS-1234")
         self.assertEqual(ae.codigo_base("ps-1234"), "PS-1234")
-        self.assertEqual(ae.codigo_base("PS-1234-C2"), "PS-1234", 1)
+        self.assertEqual(ae.codigo_base("PS-1234-C2"), "PS-1234")
         self.assertIsNone(ae.codigo_base(""))
 
     def test_endereco_vigente_pega_a_ultima_aplicada(self):
@@ -56,6 +56,13 @@ class AlteracoesEntregaTest(unittest.TestCase):
         self.conn.execute("UPDATE alteracoes_entrega_portal SET criado_em='2026-10-29 15:10:00'")
         self.conn.commit()
         self.assertFalse(ae.houve_alteracao_desde(self.conn, 60, agora=agora))
+
+    def test_houve_alteracao_desde_falhou_que_ja_tirou_da_rota(self):
+        agora = datetime(2026, 10, 29, 15, 50)
+        self._reg(status="FALHOU", rota_id_tirada=55)
+        self.conn.execute("UPDATE alteracoes_entrega_portal SET criado_em='2026-10-29 15:10:00'")
+        self.conn.commit()
+        self.assertTrue(ae.houve_alteracao_desde(self.conn, 60, agora=agora))
 
     def test_houve_alteracao_desde(self):
         self._reg()
